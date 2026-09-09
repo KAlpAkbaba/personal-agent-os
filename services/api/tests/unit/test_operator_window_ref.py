@@ -53,8 +53,9 @@ NOTEPAD = window_id_for(1)
 CALCULATOR = window_id_for(2)
 
 
-def _focus(factory, entries: list[tuple[str, str]]) -> None:
-    """Write a focus stack, oldest first, on explicit staggered instants."""
+def _remember(factory, entries: list[tuple[str, str]]) -> None:
+    """Write a focus stack, oldest first, on explicit staggered instants. Memory ONLY:
+    a window in here may have been closed since."""
     base = datetime.now(UTC)
     with factory() as db:
         for index, (object_id, label) in enumerate(entries):
@@ -66,6 +67,20 @@ def _focus(factory, entries: list[tuple[str, str]]) -> None:
                 source="t",
                 now=base + timedelta(seconds=index),
             )
+
+
+def _on_desktop(device, entries: list[tuple[str, str]]) -> None:
+    """What ``window.list`` answers: the windows that actually exist right now."""
+    device.results["window.list"] = _ok(
+        windows=[{"window_id": wid, "title": title} for wid, title in entries]
+    )
+
+
+def _focus(factory, entries: list[tuple[str, str]], device=None) -> None:
+    """The ordinary case: these windows are open AND the owner has been in them."""
+    _remember(factory, entries)
+    if device is not None:
+        _on_desktop(device, entries)
 
 
 def _window_ids_sent(device) -> list[str]:
@@ -83,7 +98,7 @@ def test_typing_into_a_window_named_by_title_types_into_it() -> None:
     """The incident, end to end: Notepad is open and focused, the model names it by
     title, and the owner's text reaches the keyboard."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -98,7 +113,7 @@ def test_no_window_name_is_ever_sent_to_the_device_as_an_id() -> None:
     """The guard that would have caught it on its own: whatever the model says, every
     ``window_id`` that leaves the server has the device's shape."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
     _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
@@ -111,7 +126,7 @@ def test_no_window_name_is_ever_sent_to_the_device_as_an_id() -> None:
 
 def test_window_control_named_by_title_acts_on_that_window() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi"), (NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi"), (NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -128,7 +143,7 @@ def test_window_control_named_by_title_acts_on_that_window() -> None:
 
 def test_an_unknown_window_name_asks_and_names_what_is_open() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -144,7 +159,7 @@ def test_an_unknown_window_name_asks_and_names_what_is_open() -> None:
 
 def test_a_name_matching_two_differently_titled_windows_asks_which() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "not.txt - Not Defteri"), (NOTEPAD, "Notlarım")])
+    _focus(factory, [(CALCULATOR, "not.txt - Not Defteri"), (NOTEPAD, "Notlarım")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -153,14 +168,16 @@ def test_a_name_matching_two_differently_titled_windows_asks_which() -> None:
     assert call["status"] == "needs_clarification", call
     body = call["result"]
     assert "not.txt - Not Defteri" in body["speech"] and "Notlarım" in body["speech"]
-    assert device.calls == [], "the name matched what was remembered; nothing to ask"
+    assert [c for c in device.capabilities_called() if c != "window.list"] == [], (
+        "asked the owner AND still acted on a window"
+    )
 
 
 def test_two_windows_sharing_one_title_take_the_most_recent() -> None:
     """Two untitled Notepads look identical to the owner too; asking "which?" would be a
     question they cannot answer. Recency is the owner's own last interaction."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Adsız - Not Defteri"), (NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(CALCULATOR, "Adsız - Not Defteri"), (NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -172,7 +189,7 @@ def test_two_windows_sharing_one_title_take_the_most_recent() -> None:
 
 def test_a_name_is_matched_case_insensitively_in_turkish() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -187,7 +204,7 @@ def test_a_name_is_matched_case_insensitively_in_turkish() -> None:
 
 def test_a_real_window_id_is_still_used_verbatim() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -199,7 +216,7 @@ def test_a_real_window_id_is_still_used_verbatim() -> None:
 
 def test_no_target_still_means_the_focused_window() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi"), (NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi"), (NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
@@ -216,7 +233,7 @@ def test_a_run_that_never_reached_the_keyboard_does_not_blame_verification() -> 
     """The owner reported "metni doğrulayamıyormuş" for a run in which no key was ever
     pressed. A failure before ``keyboard.type`` must say which step stopped it."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     device.results["window.activate"] = _refusal("ui_target_not_found", "window is gone")
     sid = _create(client)
     _say(client, sid, NEUTRAL)
@@ -231,7 +248,7 @@ def test_a_run_that_never_reached_the_keyboard_does_not_blame_verification() -> 
 
 def test_a_run_that_typed_but_could_not_read_it_back_still_says_so() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     device.results["ui.inspect"] = _ok(root={"value": "something else"})
     sid = _create(client)
     _say(client, sid, NEUTRAL)
@@ -346,7 +363,7 @@ def _notepad_tree(text: str) -> dict:
 
 def test_typing_into_notepad_verifies_against_the_control_that_holds_the_text() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     device.results["keyboard.type"] = _ok(typed_chars=20, window_id=NOTEPAD)
     device.results["ui.inspect"] = _ok(**_notepad_tree("merhaba"))
     sid = _create(client)
@@ -365,7 +382,7 @@ def test_text_absent_from_the_whole_tree_is_still_a_failure() -> None:
     """The postcondition moved; it did not soften. Nothing in the device's tree carrying
     the text is still 'I could not verify it'."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     device.results["keyboard.type"] = _ok(typed_chars=20, window_id=NOTEPAD)
     device.results["ui.inspect"] = _ok(**_notepad_tree("bambaska bir sey"))
     sid = _create(client)
@@ -379,7 +396,7 @@ def test_text_absent_from_the_whole_tree_is_still_a_failure() -> None:
 
 def test_a_malformed_tree_does_not_crash_the_verification() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     device.results["keyboard.type"] = _ok(typed_chars=20, window_id=NOTEPAD)
     device.results["ui.inspect"] = _ok(root={"name": "x", "children": None, "value": None})
     sid = _create(client)
@@ -403,7 +420,7 @@ def _open_on_the_desktop(*windows: tuple[str, str]):
 
 def test_a_window_the_owner_opened_by_hand_is_found_by_asking_the_device() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])  # the operator never saw Notepad
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")], device)  # the operator never saw Notepad
     device.results["window.list"] = _open_on_the_desktop(
         (CALCULATOR, "Hesap Makinesi"), (NOTEPAD, "Adsız - Not Defteri")
     )
@@ -416,21 +433,53 @@ def test_a_window_the_owner_opened_by_hand_is_found_by_asking_the_device() -> No
     assert device.payload_for("window.activate") == {"window_id": NOTEPAD}
 
 
-def test_the_device_is_asked_only_when_memory_does_not_answer() -> None:
-    """A round trip per turn is not free. The remembered window wins when it matches."""
+def test_a_remembered_window_that_was_closed_is_never_offered() -> None:
+    """Measured on the real device: the focus stack held two Notepads from earlier runs,
+    both long closed, and the owner was asked which of the two they meant. Memory says
+    what WAS; only the device says what IS."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    _remember(factory, [(CALCULATOR, "Adsız - Not Defteri")])  # closed since
+    _on_desktop(device, [(NOTEPAD, "Adsız - Not Defteri")])  # the one really open
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
+
+    assert call["status"] == "succeeded", call
+    assert device.payload_for("window.activate") == {"window_id": NOTEPAD}
+
+
+def test_notepads_unsaved_marker_does_not_make_a_second_window() -> None:
+    """The real question the owner was asked, which they could not answer:
+    "Hangisi efendim: Adsız - Not Defteri, *Adsız - Not Defteri?" — one window, one
+    keystroke apart."""
+    client, factory, device, _operator = _wired()
+    _remember(factory, [(CALCULATOR, "Adsız - Not Defteri"), (NOTEPAD, "Adsız - Not Defteri")])
+    _on_desktop(device, [(CALCULATOR, "Adsız - Not Defteri"), (NOTEPAD, "*Adsız - Not Defteri")])
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
+
+    assert call["status"] == "succeeded", call["result"].get("speech")
+    assert device.payload_for("window.activate") == {"window_id": NOTEPAD}  # most recent
+
+
+def test_a_name_is_resolved_against_windows_that_exist() -> None:
+    """One device call per named resolution, and it is the source of the candidates."""
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")], device)
     sid = _create(client)
     _say(client, sid, NEUTRAL)
 
     _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
 
-    assert "window.list" not in device.capabilities_called()
+    assert device.count("window.list") == 1, device.capabilities_called()
 
 
 def test_the_device_is_asked_exactly_once_per_resolution() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")], device)
     device.results["window.list"] = _open_on_the_desktop((CALCULATOR, "Hesap Makinesi"))
     sid = _create(client)
     _say(client, sid, NEUTRAL)
@@ -444,7 +493,7 @@ def test_the_device_is_asked_exactly_once_per_resolution() -> None:
 def test_the_question_names_what_the_DEVICE_says_is_open() -> None:
     """Not what this operator happens to remember — the owner is looking at the desktop."""
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")], device)
     device.results["window.list"] = _open_on_the_desktop((NOTEPAD, "Word - Rapor.docx"))
     sid = _create(client)
     _say(client, sid, NEUTRAL)
@@ -458,7 +507,7 @@ def test_the_question_names_what_the_DEVICE_says_is_open() -> None:
 
 def test_a_device_that_cannot_answer_still_asks_rather_than_guessing() -> None:
     client, factory, device, _operator = _wired()
-    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")], device)
     device.results["window.list"] = _refusal("device_unreachable", "no")
     sid = _create(client)
     _say(client, sid, NEUTRAL)

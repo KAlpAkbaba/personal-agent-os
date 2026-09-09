@@ -8319,3 +8319,38 @@ Bounded on purpose: the device is asked only when a name was given AND memory di
 answer it, exactly once per resolution (the same list serves both the match and the
 question), and a device that cannot answer produces a question, never a guess. Five
 regressions cover those five sentences; removing the lookup fails four of them, watched.
+
+### ADR-0100 addendum 3 — memory is not the desktop (2026-09-09)
+
+Addendum 2 shipped, and the real device answered:
+
+```
+operator.type { content = '...'; target = 'Not Defteri' }
+  status : needs_clarification
+  speech : Hangisi efendim: Adsız - Not Defteri, *Adsız - Not Defteri?
+```
+
+Two defects in one sentence, both mine, both found only because the probe ran against the
+real machine.
+
+**The candidates were remembered, not real.** Addendum 2 asked the device only when memory
+matched *nothing*. Here memory matched two — two Notepads from earlier probe runs, both
+closed minutes before. The owner was asked to choose between windows that did not exist.
+A focus stack is a record of what WAS; only the device knows what IS. A name is now always
+resolved against the device's live `window.list`, and the focus stack supplies nothing but
+the recency ORDER of those live windows.
+
+**The two titles were one window.** "Adsız - Not Defteri" and "*Adsız - Not Defteri" differ
+by Notepad's unsaved-changes marker — one keystroke, not a second window. `_identity_title`
+strips it before deciding whether a name was ambiguous; the question, if one is still
+needed, shows the real titles.
+
+Cost: one `window.list` per named resolution, where addendum 2 paid it only sometimes. That
+is the right trade — the previous saving was buying stale answers.
+
+Regressions: `test_a_remembered_window_that_was_closed_is_never_offered` and
+`test_notepads_unsaved_marker_does_not_make_a_second_window`, each proven RED against its
+own mutation in isolation (mutating both at once masks one behind the other — worth knowing
+before trusting a combined revert). Two earlier tests asserted addendum 2's design and were
+rewritten to state this one; both were claims about behaviour that the real device refuted,
+not assertions weakened to pass.

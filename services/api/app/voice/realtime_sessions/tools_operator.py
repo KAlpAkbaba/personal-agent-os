@@ -311,13 +311,25 @@ def _title_matches(name: str, title: str) -> bool:
     return bool(needle and label and (needle in label or label in needle))
 
 
-def _named_windows(db: Session, name: str) -> list[tuple[str, str]]:
-    """``(window_id, title)`` for the REMEMBERED windows matching ``name``, recent first."""
-    return [
-        (entry.object_id, entry.label)
-        for entry in focus_module.stack(db, FOCUS_KIND_WINDOW)
-        if _title_matches(name, entry.label)
-    ]
+def _identity_title(title: str) -> str:
+    """A title with the decoration that is not identity removed.
+
+    Notepad prefixes "*" while a document has unsaved changes, so ONE window is called
+    "Adsız - Not Defteri" and then "*Adsız - Not Defteri" a keystroke later. Treating those
+    as two different windows produced a question the owner could not answer — measured on
+    the real device: "Hangisi efendim: Adsız - Not Defteri, *Adsız - Not Defteri?"
+    """
+    return turkish_casefold(title).strip().lstrip("*").strip()
+
+
+def _recency(db: Session) -> dict[str, int]:
+    """window_id -> how recently the owner was in it (0 = most recent), from the focus
+    stack. This is ALL the remembered stack is used for now: it is a memory of what was,
+    and a window it remembers may have been closed minutes ago."""
+    return {
+        entry.object_id: index
+        for index, entry in enumerate(focus_module.stack(db, FOCUS_KIND_WINDOW))
+    }
 
 
 def _live_windows(list_windows: Callable[[], list[dict[str, Any]]] | None) -> list[dict[str, Any]]:
@@ -335,12 +347,22 @@ def _live_windows(list_windows: Callable[[], list[dict[str, Any]]] | None) -> li
         return []
 
 
-def _named_live_windows(live: list[dict[str, Any]], name: str) -> list[tuple[str, str]]:
-    return [
+def _named_live_windows(
+    db: Session, live: list[dict[str, Any]], name: str
+) -> list[tuple[str, str]]:
+    """``(window_id, title)`` for the windows OPEN RIGHT NOW whose title matches ``name``,
+    most recently focused first.
+
+    Only live windows are candidates. The focus stack used to supply them, and it remembers
+    windows that were closed long ago — on the real device that produced a question about
+    two Notepads that no longer existed."""
+    matched = [
         (str(window.get("window_id") or ""), str(window.get("title") or ""))
         for window in live
         if window.get("window_id") and _title_matches(name, str(window.get("title") or ""))
     ]
+    recency = _recency(db)
+    return sorted(matched, key=lambda pair: recency.get(pair[0], len(recency) + 1))
 
 
 def _resolve_window_id(
@@ -366,26 +388,26 @@ def _resolve_window_id(
     opened it. Nothing was ever typed. The module docstring's promise ("never a window id
     the model guessed") is now what the code does.
 
-    Several windows may match a spoken name. When they all carry the SAME title the owner
-    cannot tell them apart either, so the most recent one wins — recency is the owner's
-    own last interaction, which is the whole reason the focus stack is ordered. When the
-    matching titles DIFFER the name was genuinely ambiguous, and this asks.
+    A NAME is resolved against the windows the DEVICE says are open right now, ordered by
+    the focus stack's recency. The remembered stack is not a source of candidates: it holds
+    windows this operator once observed, including ones closed long ago, and on the real
+    device that produced "Hangisi efendim: Adsız - Not Defteri, *Adsız - Not Defteri?" —
+    a question about two Notepads that no longer existed, and which differed only by
+    Notepad's unsaved-changes marker. One device call answers both which windows exist and
+    what to call them.
+
+    Several live windows may still match. When they carry the same title (ignoring that
+    marker) the owner cannot tell them apart either, so the most recently focused one wins.
+    When the titles genuinely DIFFER, this asks.
     """
     if window_ref not in ("current", "previous") and window_ref:
         if _is_window_id(window_ref):
             return window_ref, None
-        matched = _named_windows(db, window_ref)
-        live: list[dict[str, Any]] = []
-        if not matched:
-            # The focus stack only holds windows this operator itself observed, so a
-            # window the OWNER opened by hand is not in it. Ask the device what is
-            # actually on the desktop before telling the owner it is not there — ONCE,
-            # and reuse the same answer for the question we may have to ask them.
-            live = _live_windows(list_windows)
-            matched = _named_live_windows(live, window_ref)
+        live = _live_windows(list_windows)
+        matched = _named_live_windows(db, live, window_ref)
         if not matched:
             return None, _speech_no_window_named(db, window_ref, live)
-        labels = {turkish_casefold(label).strip() for _id, label in matched}
+        labels = {_identity_title(label) for _id, label in matched}
         if len(labels) > 1:
             return None, _speech_ambiguous_window(matched)
         return matched[0][0], None
