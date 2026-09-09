@@ -79,6 +79,23 @@ def _window_of(result: DeviceRunResult) -> dict[str, Any]:
     return window if isinstance(window, dict) else {}
 
 
+def _any_value_ends_with(node: Any, text: str) -> bool:
+    """True when any node of a ``ui.inspect`` subtree has a ``value`` ending with ``text``.
+
+    The device's own tree, walked as it was returned. It is already bounded by the
+    companion (``MaxDepth``/``MaxNodes``), so this needs no depth limit of its own — but
+    it must not assume a shape: ``children`` may be absent, null, or not a list.
+    """
+    if not isinstance(node, dict):
+        return False
+    if str(node.get("value") or "").endswith(text):
+        return True
+    children = node.get("children")
+    if not isinstance(children, list):
+        return False
+    return any(_any_value_ends_with(child, text) for child in children)
+
+
 def open_application(name: str) -> list[OperatorStep]:
     """``app.launch`` then ``window.current`` (spec §4): postcondition, a foreground
     window of the pid ``app.launch`` returned."""
@@ -226,9 +243,22 @@ def type_text(window_id: str, text: str) -> list[OperatorStep]:
         return bool(typed)
 
     def _value_ends_with_text(result: DeviceRunResult) -> bool:
+        """The text is somewhere in the tree the device reported for THIS window.
+
+        It used to read only ``root["value"]``, which is the window's own value. Notepad's
+        window has none — its text lives one node down, in the "Metin Düzenleyici" edit
+        control — so every real typing run into Notepad failed this postcondition even
+        though the device had reported ``typed_chars: 20`` and the title had turned
+        "*Adsız - Not Defteri". The owner was told "metni doğrulayamadım" about text that
+        was on their screen (2026-09-09, ADR-0100).
+
+        This is the same claim, read where the device actually put the answer: still the
+        device's own read-back, still required to END with what was asked for, and still
+        confined to the inspected window's bounded subtree (the companion caps it at
+        ``MaxDepth``/``MaxNodes``).
+        """
         root = result.result.get("root") if isinstance(result.result, dict) else None
-        value = str((root or {}).get("value") or "") if isinstance(root, dict) else ""
-        return value.endswith(text)
+        return _any_value_ends_with(root, text)
 
     return [
         OperatorStep(

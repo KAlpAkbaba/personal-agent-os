@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -37,6 +38,7 @@ from app.actions.receipt import (
     record_receipt,
 )
 from app.ledger.vocabulary import SUBSYSTEM_OPERATOR
+from app.logging import get_logger
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_WINDOW
 from app.operator.plans import (
@@ -142,6 +144,8 @@ SPEECH_TYPE_NOT_ATTEMPTED: Final = "Yazamadım efendim; pencereyi öne getiremed
 SPEECH_IP_FAILURE: Final = "IP adresini okuyamadım efendim."
 SPEECH_HOSTNAME_FAILURE: Final = "Bilgisayarın adını okuyamadım efendim."
 
+logger = get_logger("app.voice.realtime_sessions.tools_operator")
+
 ERROR_UNKNOWN_APPLICATION: Final = "unknown_application"
 ERROR_SECRET_REFUSED: Final = "secret_refused"
 
@@ -151,18 +155,49 @@ _LONG_MAX: Final = 2**63 - 1
 _ULONG_MAX: Final = 2**64 - 1
 
 
-def _speech_no_window_named(db: Session, name: str) -> str:
-    """No known window carries that title. Name what IS open rather than asking blindly:
-    the owner can then point at one of them."""
-    known = [entry.label for entry in focus_module.stack(db, FOCUS_KIND_WINDOW) if entry.label]
+def _speech_no_window_named(db: Session, name: str, live: list[dict[str, Any]]) -> str:
+    """No window carries that title. Name what IS open rather than asking blindly: the
+    owner can then point at one of them.
+
+    ``live`` is the DEVICE's own list, already fetched by the caller — the desktop as it is
+    now, including windows this operator never opened. It is preferred over the remembered
+    stack, and the caller asks for it ONCE per resolution.
+    """
+    known = [title for title in (str(w.get("title") or "") for w in live) if title] or [
+        entry.label for entry in focus_module.stack(db, FOCUS_KIND_WINDOW) if entry.label
+    ]
     if not known:
         return SPEECH_NO_WINDOW
-    return f"'{name}' diye bir pencere görmüyorum efendim; açık olanlar: {', '.join(known)}."
+    listed = ", ".join(dict.fromkeys(known))
+    return f"'{name}' diye bir pencere görmüyorum efendim; açık olanlar: {listed}."
 
 
-def _speech_ambiguous_window(matched: list[focus_module.FocusEntry]) -> str:
-    titles = ", ".join(dict.fromkeys(entry.label for entry in matched if entry.label))
+def _speech_ambiguous_window(matched: list[tuple[str, str]]) -> str:
+    titles = ", ".join(dict.fromkeys(title for _id, title in matched if title))
     return f"Hangisi efendim: {titles}?"
+
+
+def _window_lister(ctx: ToolContext) -> Callable[[], list[dict[str, Any]]] | None:
+    """A closure that asks the DEVICE for its open windows, or ``None`` when there is no
+    device to ask. Called at most once per resolution, and only when a spoken name matched
+    nothing this operator already remembers."""
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return None
+
+    def _list() -> list[dict[str, Any]]:
+        result = device_action.run(
+            capability="window.list",
+            payload={},
+            idempotency_key=f"window-list-{uuid.uuid4()}",
+            timeout_s=10.0,
+        )
+        if not getattr(result, "ok", False):
+            return []
+        windows = result.result.get("windows") if isinstance(result.result, dict) else None
+        return list(windows) if isinstance(windows, list) else []
+
+    return _list
 
 
 def _allowlist_speech() -> str:
@@ -268,25 +303,52 @@ def _is_window_id(value: str) -> bool:
     return 0 < handle <= _LONG_MAX and int(match.group("tick")) <= _ULONG_MAX
 
 
-def _named_windows(db: Session, name: str) -> list[focus_module.FocusEntry]:
-    """The known windows whose title matches the spoken ``name``, most recent first.
-
-    Matching is Turkish-case-insensitive and containment in either direction, because an
-    owner says "not defteri" for a window whose real title is "Adsız - Not Defteri".
-    """
+def _title_matches(name: str, title: str) -> bool:
+    """Turkish-case-insensitive containment in either direction, because an owner says
+    "not defteri" for a window whose real title is "Adsız - Not Defteri"."""
     needle = turkish_casefold(name).strip()
-    if not needle:
+    label = turkish_casefold(title).strip()
+    return bool(needle and label and (needle in label or label in needle))
+
+
+def _named_windows(db: Session, name: str) -> list[tuple[str, str]]:
+    """``(window_id, title)`` for the REMEMBERED windows matching ``name``, recent first."""
+    return [
+        (entry.object_id, entry.label)
+        for entry in focus_module.stack(db, FOCUS_KIND_WINDOW)
+        if _title_matches(name, entry.label)
+    ]
+
+
+def _live_windows(list_windows: Callable[[], list[dict[str, Any]]] | None) -> list[dict[str, Any]]:
+    """What the DEVICE says is open right now, or ``[]`` when it cannot be asked.
+
+    A window the owner opened by hand was never observed by this operator, so it is not in
+    the focus stack. It IS on the desktop, and the device will say so.
+    """
+    if list_windows is None:
         return []
-    matched = []
-    for entry in focus_module.stack(db, FOCUS_KIND_WINDOW):
-        label = turkish_casefold(entry.label).strip()
-        if label and (needle in label or label in needle):
-            matched.append(entry)
-    return matched
+    try:
+        return [window for window in list_windows() if isinstance(window, dict)]
+    except Exception:  # noqa: BLE001 - a lookup that fails is "I don't know", never a crash
+        logger.warning("operator_window_list_failed")
+        return []
+
+
+def _named_live_windows(live: list[dict[str, Any]], name: str) -> list[tuple[str, str]]:
+    return [
+        (str(window.get("window_id") or ""), str(window.get("title") or ""))
+        for window in live
+        if window.get("window_id") and _title_matches(name, str(window.get("title") or ""))
+    ]
 
 
 def _resolve_window_id(
-    db: Session, *, action: str, window_ref: str
+    db: Session,
+    *,
+    action: str,
+    window_ref: str,
+    list_windows: Callable[[], list[dict[str, Any]]] | None = None,
 ) -> tuple[str | None, str | None]:
     """(window_id, refusal_speech).
 
@@ -313,12 +375,20 @@ def _resolve_window_id(
         if _is_window_id(window_ref):
             return window_ref, None
         matched = _named_windows(db, window_ref)
+        live: list[dict[str, Any]] = []
         if not matched:
-            return None, _speech_no_window_named(db, window_ref)
-        labels = {turkish_casefold(entry.label).strip() for entry in matched}
+            # The focus stack only holds windows this operator itself observed, so a
+            # window the OWNER opened by hand is not in it. Ask the device what is
+            # actually on the desktop before telling the owner it is not there — ONCE,
+            # and reuse the same answer for the question we may have to ask them.
+            live = _live_windows(list_windows)
+            matched = _named_live_windows(live, window_ref)
+        if not matched:
+            return None, _speech_no_window_named(db, window_ref, live)
+        labels = {turkish_casefold(label).strip() for _id, label in matched}
         if len(labels) > 1:
             return None, _speech_ambiguous_window(matched)
-        return matched[0].object_id, None
+        return matched[0][0], None
     if action == "previous" or window_ref == "previous":
         entry = focus_module.previous(db, FOCUS_KIND_WINDOW)
         if entry is None:
@@ -410,7 +480,12 @@ def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict
         )
     window_ref = turn.get("window_ref") or arguments.get("window") or "current"
     db = _require_db(ctx, TOOL_WINDOW_CONTROL)
-    window_id, refusal = _resolve_window_id(db, action=action, window_ref=str(window_ref))
+    window_id, refusal = _resolve_window_id(
+        db,
+        action=action,
+        window_ref=str(window_ref),
+        list_windows=_window_lister(ctx),
+    )
     if window_id is None:
         return _clarification(refusal or SPEECH_NO_WINDOW)
     device_action = ctx.live.get("device_action")
@@ -476,7 +551,12 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         return _clarification(SPEECH_NO_TEXT)
     db = _require_db(ctx, TOOL_TYPE)
     window_ref = turn.get("window_ref") or arguments.get("target") or "current"
-    window_id, refusal = _resolve_window_id(db, action="activate", window_ref=str(window_ref))
+    window_id, refusal = _resolve_window_id(
+        db,
+        action="activate",
+        window_ref=str(window_ref),
+        list_windows=_window_lister(ctx),
+    )
     if window_id is None:
         return _clarification(refusal or SPEECH_NO_WINDOW)
     device_action = ctx.live.get("device_action")

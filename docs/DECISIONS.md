@@ -8262,3 +8262,60 @@ each other" discipline, applied across the language boundary this incident cross
 **Consequences.** A window name from any source now either resolves to a real id or becomes a
 question. Nothing that is not a device-shaped id can reach a device payload from these tools, and
 a structural test says so over the whole family.
+
+### ADR-0100 addendum 1 — the verification was looking at the wrong node (2026-09-09)
+
+The fix above was proven on the real device by `scripts/core/probe-window-by-name.ps1`: the
+model named the window "Not Defteri", the server resolved it to `w-10619508-367744968`, and
+`keyboard.type` **succeeded**. The 2026-09-09 refusal is gone.
+
+The probe still failed three of its checks, and they were right to fail. The receipt said
+`execution_status: failed`, and the owner's sentence was still
+"Yazamadım efendim; metni doğrulayamadım." A direct capability run settled why:
+
+```
+type     : succeeded  {"typed_chars": 20, ...}
+title now: '*Adsız - Not Defteri'          <- Notepad's own dirty marker
+ui.inspect root : name "*Adsız - Not Defteri"     (no value)
+        └ child : name "Metin Düzenleyici"  value "ADR0100 gorunuyor mu"
+```
+
+The text was on the owner's screen. `type_text`'s verify postcondition read
+`result["root"]["value"]` — the WINDOW's value — and a window has none. Notepad's text lives
+one node down, in its edit control. So **every** typing run into Notepad has always failed
+its own verification, and the owner has always been told the text could not be verified.
+That is the second half of "not defterine yazı yazılamıyor": first nothing was typed, and
+once that was fixed, something was typed and denied.
+
+`_any_value_ends_with` now walks the tree the device returned. This moves where the claim is
+read, not how strong it is: still the device's own read-back, still required to END with what
+was asked for, still confined to the inspected window's bounded subtree.
+
+**The fixture was again kinder than the device.** `happy_operator_device_results()`'s
+`ui.inspect` returned a flat `root` that carried the value directly — a shape no real window
+has. It now returns the tree captured from the owner's Notepad. With that one change, an
+EXISTING test (`test_type_writes_the_owners_words_and_verifies_the_value`) goes red against
+the old postcondition, which is what it should have been doing all along. Three checks were
+added: the real Notepad tree verifies; text absent from the whole tree is still a failure;
+a malformed tree is a refusal, not an exception. Reverting the postcondition fails 3 of them,
+watched.
+
+### ADR-0100 addendum 2 — a window the owner opened is still a window (2026-09-09)
+
+Resolving a spoken name against the durable focus stack fixes the incident, but the focus
+stack is written only by `OperatorService._maybe_set_window_focus`, from operator steps.
+So it knows about windows **this operator opened or acted on**, and nothing else. A Notepad
+the owner opened by hand is not in it — and "not defterine yaz" would have answered
+"'Not Defteri' diye bir pencere görmüyorum", about a window on the owner's screen.
+
+That is the product invariant failing in a quieter way: the owner would have had to learn
+that the assistant can only act on windows it opened itself, and work around it. So when a
+spoken name matches nothing remembered, the resolver now asks the DEVICE — one
+`window.list` — and matches against the desktop as it actually is. If that still finds
+nothing, the question it asks names the windows the **device** reported, not the ones this
+operator happens to remember.
+
+Bounded on purpose: the device is asked only when a name was given AND memory did not
+answer it, exactly once per resolution (the same list serves both the match and the
+question), and a device that cannot answer produces a question, never a guess. Five
+regressions cover those five sentences; removing the lookup fails four of them, watched.

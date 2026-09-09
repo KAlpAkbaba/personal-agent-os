@@ -138,7 +138,8 @@ def test_an_unknown_window_name_asks_and_names_what_is_open() -> None:
     body = call["result"]
     assert "Excel" in body["speech"]
     assert "Adsız - Not Defteri" in body["speech"]
-    assert device.calls == [], "asked the owner AND still poked the device"
+    # A read is allowed (the resolver asks the device what is open); ACTING is not.
+    assert device.capabilities_called() == ["window.list"], device.capabilities_called()
 
 
 def test_a_name_matching_two_differently_titled_windows_asks_which() -> None:
@@ -152,7 +153,7 @@ def test_a_name_matching_two_differently_titled_windows_asks_which() -> None:
     assert call["status"] == "needs_clarification", call
     body = call["result"]
     assert "not.txt - Not Defteri" in body["speech"] and "Notlarım" in body["speech"]
-    assert device.calls == []
+    assert device.calls == [], "the name matched what was remembered; nothing to ask"
 
 
 def test_two_windows_sharing_one_title_take_the_most_recent() -> None:
@@ -315,3 +316,155 @@ def _refusal(error_class: str, message: str):
     from app.routines.dispatch import DeviceRunResult
 
     return DeviceRunResult(False, error_class, message)
+
+
+# --------------------------------------------- verifying text where the device put it
+
+
+#: Notepad's REAL ui.inspect answer, captured from the owner's device on 2026-09-09 after
+#: a successful keyboard.type: the window root carries NO value, and the text is one node
+#: down in the edit control. Every typing run into Notepad failed its verification against
+#: this shape while the text sat on the owner's screen.
+def _notepad_tree(text: str) -> dict:
+    return {
+        "root": {
+            "name": "*Adsız - Not Defteri",
+            "bounds": {"x": 100, "y": 100, "width": 800, "height": 600},
+            "enabled": True,
+            "children": [
+                {
+                    "name": "Metin Düzenleyici",
+                    "value": text,
+                    "control_type": "Edit",
+                    "enabled": True,
+                    "children": [{"name": "Yatay Kaydırma Çubuğu", "enabled": True}],
+                }
+            ],
+        }
+    }
+
+
+def test_typing_into_notepad_verifies_against_the_control_that_holds_the_text() -> None:
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    device.results["keyboard.type"] = _ok(typed_chars=20, window_id=NOTEPAD)
+    device.results["ui.inspect"] = _ok(**_notepad_tree("merhaba"))
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba"})
+
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "executed", body
+    assert body["terminal_status"] == "verified", body
+    assert body["speech"] == tools_operator.SPEECH_TYPE_SUCCESS
+
+
+def test_text_absent_from_the_whole_tree_is_still_a_failure() -> None:
+    """The postcondition moved; it did not soften. Nothing in the device's tree carrying
+    the text is still 'I could not verify it'."""
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    device.results["keyboard.type"] = _ok(typed_chars=20, window_id=NOTEPAD)
+    device.results["ui.inspect"] = _ok(**_notepad_tree("bambaska bir sey"))
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba"})
+
+    assert call["result"]["execution_status"] != "executed"
+    assert call["result"]["speech"] == tools_operator.SPEECH_TYPE_FAILURE
+
+
+def test_a_malformed_tree_does_not_crash_the_verification() -> None:
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    device.results["keyboard.type"] = _ok(typed_chars=20, window_id=NOTEPAD)
+    device.results["ui.inspect"] = _ok(root={"name": "x", "children": None, "value": None})
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba"})
+
+    assert call["status"] == "succeeded", call  # a refusal, not an exception
+    assert call["result"]["speech"] == tools_operator.SPEECH_TYPE_FAILURE
+
+
+# ------------------------------------- a window the OWNER opened, not this operator
+
+
+#: What the device answers for ``window.list``. The focus stack cannot know about these:
+#: it is written only when an operator STEP observes a foreground window, so a Notepad the
+#: owner opened by hand is invisible to it. The desktop is not.
+def _open_on_the_desktop(*windows: tuple[str, str]):
+    return _ok(windows=[{"window_id": wid, "title": title} for wid, title in windows])
+
+
+def test_a_window_the_owner_opened_by_hand_is_found_by_asking_the_device() -> None:
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])  # the operator never saw Notepad
+    device.results["window.list"] = _open_on_the_desktop(
+        (CALCULATOR, "Hesap Makinesi"), (NOTEPAD, "Adsız - Not Defteri")
+    )
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
+
+    assert call["status"] == "succeeded", call
+    assert device.payload_for("window.activate") == {"window_id": NOTEPAD}
+
+
+def test_the_device_is_asked_only_when_memory_does_not_answer() -> None:
+    """A round trip per turn is not free. The remembered window wins when it matches."""
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
+
+    assert "window.list" not in device.capabilities_called()
+
+
+def test_the_device_is_asked_exactly_once_per_resolution() -> None:
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    device.results["window.list"] = _open_on_the_desktop((CALCULATOR, "Hesap Makinesi"))
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Excel"})
+
+    assert call["status"] == "needs_clarification", call
+    assert device.count("window.list") == 1, device.capabilities_called()
+
+
+def test_the_question_names_what_the_DEVICE_says_is_open() -> None:
+    """Not what this operator happens to remember — the owner is looking at the desktop."""
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    device.results["window.list"] = _open_on_the_desktop((NOTEPAD, "Word - Rapor.docx"))
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Excel"})
+
+    speech = call["result"]["speech"]
+    assert "Word - Rapor.docx" in speech, speech
+    assert "Hesap Makinesi" not in speech, speech
+
+
+def test_a_device_that_cannot_answer_still_asks_rather_than_guessing() -> None:
+    client, factory, device, _operator = _wired()
+    _focus(factory, [(CALCULATOR, "Hesap Makinesi")])
+    device.results["window.list"] = _refusal("device_unreachable", "no")
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    call = _tool(client, sid, "operator.type", {"content": "merhaba", "target": "Not Defteri"})
+
+    assert call["status"] == "needs_clarification", call
+    assert "window.activate" not in device.capabilities_called()
+    assert "keyboard.type" not in device.capabilities_called()

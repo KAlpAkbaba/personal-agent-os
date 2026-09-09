@@ -186,12 +186,23 @@ def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
         "window.restore": ok(window={**_OPERATOR_WINDOW, "state": "normal"}),
         "window.close": ok(closed=True),
         "keyboard.type": ok(typed_chars=8, window_id=window_id(1)),
+        # The shape a REAL ui.inspect of a Notepad window returns (captured from the
+        # owner's device, 2026-09-09): the window root carries no value of its own and the
+        # text sits one node down in the edit control. The flat root-with-a-value this
+        # fixture used to return is a shape no window actually has, and it hid a
+        # verification that looked in the wrong place (ADR-0100).
         "ui.inspect": ok(
             root={
-                "automation_id": "15",
-                "name": "Edit",
-                "control_type": "Edit",
-                "value": "merhaba",
+                "name": "*Adsız - Not Defteri",
+                "enabled": True,
+                "children": [
+                    {
+                        "automation_id": "15",
+                        "name": "Metin Düzenleyici",
+                        "control_type": "Edit",
+                        "value": "merhaba",
+                    }
+                ],
             }
         ),
         "terminal.execute": ok(
