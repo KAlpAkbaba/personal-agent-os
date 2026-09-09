@@ -25,7 +25,13 @@ import pytest
 
 from app.news import provider as provider_module
 from app.news.page_fetch import MAX_PAGE_BYTES, USER_AGENT, PageFetchError, fetch_channel_page
-from app.news.provider import FEED_ATTEMPTS, ProviderUnavailableError, fetch_feed_bytes
+from app.news.provider import (
+    FEED_ATTEMPTS,
+    FEED_RETRY_BACKOFF_S,
+    MAX_FEED_RETRY_DELAY_S,
+    ProviderUnavailableError,
+    fetch_feed_bytes,
+)
 
 
 def _repo_root() -> Path:
@@ -130,6 +136,52 @@ def test_a_persistent_feed_failure_is_still_reported_honestly(monkeypatch) -> No
     with pytest.raises(ProviderUnavailableError):
         fetch_feed_bytes("https://example.invalid/f", timeout_s=1.0, max_bytes=1024)
     assert len(calls) == FEED_ATTEMPTS
+
+
+# ------------------------------- the retry budget, held to a bound a voice turn can absorb
+
+
+def test_the_retry_budget_is_bounded_by_what_a_spoken_answer_can_wait_for() -> None:
+    """The declared bound and the schedule that produces it must be the same number.
+
+    `MAX_FEED_RETRY_DELAY_S` is what the comment above `FEED_ATTEMPTS` promises the owner:
+    at most this many seconds of silence added to a voice turn before the news answer or
+    the honest refusal. Raising the attempts without raising the bound - or raising the
+    bound past what a spoken turn can absorb - should fail here rather than in the owner's
+    ears.
+    """
+    scheduled = sum(FEED_RETRY_BACKOFF_S * n for n in range(1, FEED_ATTEMPTS))
+    assert scheduled == MAX_FEED_RETRY_DELAY_S
+    assert MAX_FEED_RETRY_DELAY_S <= 4.0
+
+
+def test_the_budget_survives_the_flap_that_was_actually_measured(monkeypatch) -> None:
+    """Two refusals then an answer - the shape the endpoint produced on 2026-09-09.
+
+    The previous budget was two attempts, which gives up exactly one request before this
+    succeeds. That is not a hypothetical: the production run reported the provider
+    unavailable, and asking again seconds later returned fifteen candidates.
+    """
+    monkeypatch.setattr(provider_module, "FEED_RETRY_BACKOFF_S", 0.0)
+    answers = [
+        ProviderUnavailableError("channel feed request failed: 404 Not Found"),
+        ProviderUnavailableError("channel feed request failed: 500 Internal Server Error"),
+        b"<feed/>",
+    ]
+    calls: list[int] = []
+
+    def flapping(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
+        calls.append(1)
+        answer = answers[len(calls) - 1]
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(provider_module, "_fetch_feed_once", flapping)
+    assert (
+        fetch_feed_bytes("https://example.invalid/f", timeout_s=1.0, max_bytes=1024) == b"<feed/>"
+    )
+    assert len(calls) == 3
 
 
 # ------------------------------------- the marker whose description CI did not keep

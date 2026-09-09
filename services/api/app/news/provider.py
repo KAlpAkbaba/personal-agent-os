@@ -129,20 +129,33 @@ def _parse_feed(channel_id: str, xml_bytes: bytes) -> list[VideoCandidate]:
     return out
 
 
-#: ONE extra attempt, and the number came down rather than up as the evidence came in.
+#: TWO extra attempts, and the number moved because the measurement did.
 #:
-#: A single 404 followed by an immediate success looked transient, so three attempts looked
-#: prudent. Kept probing and the endpoint refused NINE consecutive honest requests, from the
-#: owner's own machine and from the Cloud Core alike, having answered perfectly minutes
-#: earlier. It rate-limits per IP over a window - so a retry is three times the pressure on
-#: the thing that is already refusing, and the actual fix is not to ask so often
-#: (`app.news.resolve_service.RESOLUTION_TTL_S`).
+#: It was three, then two: nine consecutive refusals looked like a per-IP rate limiter, and
+#: against a limiter a retry is only more pressure on something already refusing. Measured
+#: again on 2026-09-09, from the Cloud Core AND from the owner's machine, that reading does
+#: not survive. Six consecutive requests for the owner's channel answered
+#: `404, 200, 200, 200, 200, 200`; another round answered `500`; and YouTube's own channel
+#: (`UCBR8-60-B28hp2BmDPdntcQ`) flaps in the same seconds, from both networks. A limiter does
+#: not let five of six through, does not answer 500, and does not treat two unrelated
+#: networks asking for YouTube's own feed identically. It is server-side instability, and the
+#: answer to that is one more attempt rather than one fewer.
 #:
-#: What is NOT done here, in either direction: no browser User-Agent to get past the limit
-#: (an anti-bot evasion, which the owner's directive forbids), and no unbounded retry. When
-#: it refuses, that is reported.
-FEED_ATTEMPTS: Final = 2
-FEED_RETRY_BACKOFF_S: Final = 2.0
+#: What keeps the budget small is not politeness to a limiter but the owner: a voice turn has
+#: to answer. Three attempts at 1s and 2s is at most `MAX_FEED_RETRY_DELAY_S` of added
+#: latency, and one success covers the next `RESOLUTION_TTL_S` of asking.
+#:
+#: What is NOT done here, in either direction: no browser User-Agent (an anti-bot evasion the
+#: owner's directive forbids), and no unbounded retry. When it refuses for good, that is what
+#: the owner is told - never a guess at which video is "the latest".
+FEED_ATTEMPTS: Final = 3
+FEED_RETRY_BACKOFF_S: Final = 1.0
+
+#: The whole retry budget, in seconds of added latency, as a bound a test can hold us to.
+#: `sum(FEED_RETRY_BACKOFF_S * n for n in 1..FEED_ATTEMPTS-1)`. It exists so that raising
+#: the attempt count silently past what a spoken answer can absorb fails the suite instead
+#: of the owner's patience.
+MAX_FEED_RETRY_DELAY_S: Final = 3.0
 
 
 def fetch_feed_bytes(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
@@ -231,6 +244,9 @@ def looks_like_channel_id(value: str) -> bool:
 
 __all__ = [
     "CHANNEL_ID_RE",
+    "FEED_ATTEMPTS",
+    "FEED_RETRY_BACKOFF_S",
+    "MAX_FEED_RETRY_DELAY_S",
     "YOUTUBE_FEED_URL_TEMPLATE",
     "FixtureNewsProvider",
     "NewsUploadProvider",

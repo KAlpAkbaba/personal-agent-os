@@ -163,7 +163,8 @@ def news(open_browser: bool) -> dict[str, Any]:
     result["resolved"] = {
         "reason": res.reason,
         "answered_by": res.answered_by,
-        "considered": res.considered,
+        "candidates_considered": res.candidates_considered,
+        "ambiguous": res.ambiguous,
         "rejected": [{"video": v, "why": w} for v, w in res.rejected],
         "selected": None
         if selected is None

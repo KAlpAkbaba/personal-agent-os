@@ -1,0 +1,141 @@
+{
+  "checked_at": "2026-09-09T06:39:35.264905Z",
+  "wake_alarm": {
+    "route": {
+      "utterance": "Yarın 07:30'da beni uyandır.",
+      "intent": "alarm_create",
+      "matched": "uyandır",
+      "alarm_minutes": null,
+      "weather_place": null,
+      "news_source_ref": null
+    },
+    "approved_wake_song": {
+      "url": "https://www.youtube.com/watch?v=ehmppOyS72s&list=RDehmppOyS72s&start_radio=1",
+      "title": "Night Winter Jazz Bar - 1930s Cozy Jazz Playlist"
+    },
+    "owner_asked_for": {
+      "kind": "tone"
+    },
+    "will_actually_play": {
+      "kind": "youtube",
+      "url": "https://www.youtube.com/watch?v=ehmppOyS72s&list=RDehmppOyS72s&start_radio=1",
+      "title": "Night Winter Jazz Bar - 1930s Cozy Jazz Playlist"
+    },
+    "plays_youtube_not_tone": true,
+    "url_is_the_saved_song": true,
+    "side_effects": "none - no alarm created, nothing scheduled"
+  },
+  "weather": {
+    "route": {
+      "utterance": "Hava nasıl?",
+      "intent": "weather_query",
+      "matched": "hava nasıl",
+      "alarm_minutes": null,
+      "weather_place": null,
+      "news_source_ref": null
+    },
+    "resolution": {
+      "resolved": true,
+      "reason": "owner_default",
+      "city": "İstanbul",
+      "source": "owner_default",
+      "confidence": "high"
+    },
+    "answer": {
+      "execution": "executed",
+      "terminal": "verified",
+      "speech": "İstanbul: genelde açık, 23°C. Bugün en yüksek 26°C, en düşük 20°C. Yağış olasılığı yüzde 0.",
+      "location_source": "owner_default",
+      "provider": "open_meteo",
+      "observed_at": "2026-09-09T09:30:00+00:00"
+    }
+  },
+  "news": {
+    "route": {
+      "utterance": "Haberleri aç.",
+      "intent": "news_open",
+      "matched": "haberleri aç",
+      "alarm_minutes": null,
+      "weather_place": null,
+      "news_source_ref": null
+    },
+    "source": {
+      "news_source_id": "show-ana-haber",
+      "display_name": "Show Ana Haber",
+      "channel_id": "UC7DDcxd92wR0LzlMKIcHDAA",
+      "identity_status": "resolved",
+      "content_type": "latest_main_news"
+    },
+    "resolved": {
+      "reason": "bulletin_marker",
+      "answered_by": "channel_feed",
+      "candidates_considered": 15,
+      "ambiguous": false,
+      "rejected": [
+        {
+          "video": "0vr0nZJ8EzM",
+          "why": "shorts_excluded"
+        },
+        {
+          "video": "TAc17Z234xw",
+          "why": "shorts_excluded"
+        },
+        {
+          "video": "5bDZzLo1L6E",
+          "why": "shorts_excluded"
+        },
+        {
+          "video": "1blO6vLzBKs",
+          "why": "not_selected"
+        },
+        {
+          "video": "Q0lAWKRW33Q",
+          "why": "not_selected"
+        },
+        {
+          "video": "28P6AXeIhZM",
+          "why": "not_selected"
+        },
+        {
+          "video": "PVZNy65Ajuw",
+          "why": "not_selected"
+        },
+        {
+          "video": "JpTRjUy-6oA",
+          "why": "not_selected"
+        },
+        {
+          "video": "FMyVrpCW94A",
+          "why": "not_selected"
+        },
+        {
+          "video": "J2W34owrQBs",
+          "why": "not_selected"
+        },
+        {
+          "video": "36ZG01Bl8Ow",
+          "why": "not_selected"
+        },
+        {
+          "video": "EM9HOgExbxQ",
+          "why": "not_selected"
+        },
+        {
+          "video": "9uM6Mxm5PhA",
+          "why": "not_selected"
+        },
+        {
+          "video": "UBk1ODUrYts",
+          "why": "not_selected"
+        }
+      ],
+      "selected": {
+        "video_id": "ESt4kGMdGhA",
+        "title": "Show Ana Haber 8 Eylül 2026",
+        "published_at": "2026-09-08T18:06:32+00:00"
+      }
+    },
+    "opened_browser": false
+  },
+  "_note": "Captured from the production container pagentos-prod-api-blue on 2026-09-09 by scripts/core/verify-owner-preferences.py. Log lines emitted before the document were stripped."
+}

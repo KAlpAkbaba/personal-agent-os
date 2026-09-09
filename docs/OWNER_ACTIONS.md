@@ -111,7 +111,7 @@ it is why this is your call and not mine.
 Nothing is blocked by it: `"İstanbul'da hava nasıl?"` works right now, because the place is
 in the sentence.
 
-### 36. The exact YouTube channel for "Show Ana Haber" — **`READY_FOR_OWNER` (Latest News Mode, docs/M26_LATEST_NEWS_MODE_SPEC.md)**
+### 36. The exact YouTube channel for "Show Ana Haber" — **DONE (2026-09-09): `PROVEN_REAL` on production — your channel, the real latest bulletin, selected by a positive policy match**
 
 Latest News Mode is built, tested and merge-ready (fixtures, the resolver, source
 configuration, governed playback on the browser worker's own `news` profile, and a
@@ -124,18 +124,32 @@ against a fixture channel and, for the live path, against any channel whose iden
 you (or a canonical channel-page link) actually confirm — this is the one channel it
 will not guess.
 
-Paste the exact URL here (from YouTube, `Kanal` → `Paylaş` → `Kopyala`, or the
-address bar on the channel's own page — a `/channel/UC...`, `/@handle`, `/c/...` or
-`/user/...` URL, not a search result):
+You gave `https://www.youtube.com/showanahaber`. It resolved through
+`app.news.identity.resolve_channel_identity` from the channel page's own canonical link —
+an authoritative signal, not a search result — and `UC7DDcxd92wR0LzlMKIcHDAA` is persisted
+against `news_source_id = "show-ana-haber"` on production, `identity_status: resolved`.
 
-```
-Show Ana Haber channel URL: <paste here>
-```
+"Haberleri aç." then answered, on production, from the live channel feed
+(`docs/evidence/owner-preferences-production-2026-09-09.json`):
 
-Once given, `PATCH /v1/news/sources/show-ana-haber {"channel_input": "<url>"}` resolves
-and records the canonical channel id (`app.news.identity.resolve_channel_identity`) and
-the source becomes usable by voice ("Show Ana Haber'i aç.") and REST alike. No account,
-no login, no payment — one URL.
+| | |
+| --- | --- |
+| selected | **Show Ana Haber 8 Eylül 2026** |
+| published | 2026-09-08T18:06:32Z — the real upload time, not a guess |
+| why | `bulletin_marker` — a positive match on the policy's own vocabulary, not the fallback |
+| candidates considered | 15, `ambiguous: false` |
+| answered by | `channel_feed` |
+
+Nothing here is waiting on you.
+
+**One thing to know, because you may see it before I finish fixing it.** YouTube's feed
+endpoint is presently unreliable — six consecutive requests for your channel on 2026-09-09
+answered `404, 200, 200, 200, 200, 200`, and another round returned `500`; YouTube's own
+channel flaps identically, so it is not your channel and not us. When it refuses, the
+system says the provider is unavailable rather than inventing an order and calling some
+video "the latest", which is the behaviour the news spec insists on — but it means
+"Haberleri aç." can occasionally answer "şu anda ulaşamadım" and then work when you ask
+again. Making the client ride that out is a code fix, in progress, not an owner action.
 
 ### 25. The wake alarm, end to end — **M18.3 qualification B — `READY_FOR_OWNER_AUDIO_TEST` (one Cloud Core release and one elevated agent update, both inside the run; the whole path is proven end to end without ears, ADR-0078 — only the audibility is yours)**
 
