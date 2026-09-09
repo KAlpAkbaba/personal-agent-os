@@ -3,7 +3,7 @@
 /**
  * The Cockpit's client for the Native Application Factory (M28 spec §4, §6).
  *
- * ONE route, and deliberately only one: a GET of `/v1/native/builds`, the
+ * ONE route, and deliberately only one: a GET of `/v1/native`, the
  * `native_builds` rows. Each row says which application was asked for, which
  * of the five artefacts it is, the stack §3's rule chose, the step it
  * reached, and — for a build that produced something — the artefact's name,
@@ -32,7 +32,20 @@ import { type Loaded, load } from "./api";
 
 // ---------------------------------------------------------------- the route
 
-export const NATIVE_BUILDS_PATH = "/v1/native/builds";
+/**
+ * The list route, as `app/nativefactory/routes.py` really serves it: an
+ * `APIRouter(prefix="/v1/native")` with `@router.get("")` answering
+ * `{"builds": [...]}`.
+ *
+ * Spelled from the router rather than from the spec's prose. `/v1/native/builds`
+ * — the obvious guess, and what this file said first — is not a 404 there: the
+ * router's next route is `@router.get("/{build_id}")` typed `uuid.UUID`, so the
+ * word "builds" is parsed as a build id and answered 422. The panel would have
+ * said "Alınamadı: HTTP 422" for ever, which is worse than "henüz yok" because
+ * it looks like an outage rather than a route that was never asked for
+ * correctly.
+ */
+export const NATIVE_BUILDS_PATH = "/v1/native";
 
 /** The list's URL as the browser would address it — for the absent notice, never fetched by a link. */
 export function nativeBuildsUrl(): string {

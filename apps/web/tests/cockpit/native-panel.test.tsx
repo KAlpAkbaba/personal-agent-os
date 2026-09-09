@@ -163,8 +163,14 @@ function readout(events: ReturnType<typeof event>[], at = T0) {
 // -------------------------------------------------------------- the client
 
 describe("the client reads the row as the route sent it", () => {
-  it("asks the one route and nothing else", () => {
-    expect(NATIVE_BUILDS_PATH).toBe("/v1/native/builds");
+  it("asks the route the Cloud Core actually serves", () => {
+    // `app/nativefactory/routes.py` is `APIRouter(prefix="/v1/native")` with
+    // `@router.get("")`. The obvious guess, `/v1/native/builds`, is NOT a 404
+    // there: the next route is `@router.get("/{build_id}")` typed `uuid.UUID`,
+    // so "builds" is parsed as a build id and answered 422 — and the panel
+    // would have shown "Alınamadı" for ever, which reads as an outage rather
+    // than as a route nobody asked for correctly.
+    expect(NATIVE_BUILDS_PATH).toBe("/v1/native");
   });
 
   it("takes a row's identity, its step and the artefact's measured facts", () => {
@@ -315,6 +321,7 @@ describe("the Yerel Uygulamalar panel", () => {
 
   it("says 'henüz yok' for a Cloud Core without the route, never an empty list", () => {
     const html = panel({ kind: "absent", detail: `Bu Cloud Core sürümünde ${NATIVE_BUILDS_PATH} yok (HTTP 404).` });
+
     expect(html).toContain("Henüz yok.");
     expect(html).toContain(NATIVE_BUILDS_PATH);
     expect(html).not.toContain(NATIVE_EMPTY);
