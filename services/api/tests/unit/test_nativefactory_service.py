@@ -381,3 +381,37 @@ def test_the_channel_says_verified_only_when_the_verdict_did(db, tmp_path, monke
     final = [e for e in published if e.state == UiState.NATIVE_BUILD][-1]
     assert final.metadata["state"] == "mismatch"
     assert final.metadata["verdict_ok"] is False
+
+
+# ------------------------------------------------- a Windows path, read on a Linux core
+
+
+def test_a_windows_artifact_path_yields_its_file_name_on_any_os() -> None:
+    r"""CI run 34339398396: ``assert 'C:\builds\...\notlarim.exe' == 'notlarim.exe'``.
+
+    ``pathlib.Path`` is ``PosixPath`` on the Cloud Core's Linux, where a backslash is an
+    ordinary character - so ``Path(windows_path).name`` is the WHOLE STRING. The owner's
+    Windows machine can never catch this, because there the same call is right, which is
+    exactly why these assertions are written against literal strings.
+    """
+    from app.nativefactory.service import artifact_file_name
+
+    assert artifact_file_name(r"C:\builds\notlarim\out\notlarim.exe") == "notlarim.exe"
+    assert artifact_file_name(r"C:\builds\notlarim\out\notlarim.msix") == "notlarim.msix"
+    # A POSIX path still resolves, so nothing breaks for a path produced anywhere else.
+    assert artifact_file_name("/srv/builds/notlarim/notlarim.exe") == "notlarim.exe"
+    assert artifact_file_name(None) is None
+    assert artifact_file_name("") is None
+
+
+def test_the_receipt_speaks_a_file_name_not_a_whole_path(db) -> None:
+    """What the owner would have HEARD before the fix: the entire Windows path read out
+    where a file name belongs."""
+    row = plan_build(db, WINDOWS, facts=FULL)[0]
+    row.state = STATE_VERIFIED
+    row.artifact_path = r"C:\builds\notlarim\out\notlarim.exe"
+    row.artifact_json = {"size_bytes": 162304, "sha256": "b" * 64, "version": "0.1.0"}
+
+    spoken = receipt_for(row)
+    assert "notlarim.exe" in spoken
+    assert "C:" not in spoken

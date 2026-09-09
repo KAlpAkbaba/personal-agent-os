@@ -62,7 +62,7 @@ def _row_dict(row: NativeBuildRow) -> dict[str, Any]:
         "state": row.state,
         "attempt": row.attempt,
         "artifact": {
-            "name": Path(str(row.artifact_path)).name if row.artifact_path else None,
+            "name": native_service.artifact_file_name(row.artifact_path),
             "size_bytes": artifact.get("size_bytes"),
             "sha256": artifact.get("sha256"),
             "version": artifact.get("version"),

@@ -28,7 +28,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Final, Protocol
 
 from sqlalchemy import select
@@ -94,6 +94,19 @@ class BuildRunner(Protocol):
     def run(self, argv: list[str], cwd: Path, *, timeout_s: int) -> RunResult: ...
 
 
+def artifact_file_name(path: str | None) -> str | None:
+    """The file name of a path a WINDOWS DEVICE produced, read on any OS.
+
+    `pathlib.Path` is `PosixPath` on the Cloud Core's Linux, where a backslash is an
+    ordinary character - so `Path(r"C:\\x\\y.exe").name` is the whole string, and the
+    owner would have been shown a full Windows path where a file name belongs. CI caught
+    it; the owner's Windows machine never could, because there the same call is right.
+    """
+    if not path:
+        return None
+    return PureWindowsPath(path).name or None
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -147,7 +160,7 @@ def _publish(row: NativeBuildRow) -> None:
     if row.verdict_json is not None:
         metadata["verdict_ok"] = bool(row.verdict_json.get("ok"))
     if artifact:
-        metadata["artifact_name"] = Path(str(row.artifact_path or "")).name or None
+        metadata["artifact_name"] = artifact_file_name(row.artifact_path)
         metadata["artifact_size_bytes"] = artifact.get("size_bytes")
         metadata["artifact_sha256"] = str(artifact.get("sha256") or "")[:16] or None
     if row.error_class:
@@ -419,7 +432,7 @@ def receipt_for(row: NativeBuildRow) -> str:
         size = int(facts.get("size_bytes") or 0)
         digest = str(facts.get("sha256") or "")[:8]
         return (
-            f"{row.display_name} hazır efendim: {Path(str(row.artifact_path or '')).name}, "
+            f"{row.display_name} hazır efendim: {artifact_file_name(row.artifact_path)}, "
             f"{size // 1024} KB, sürüm {facts.get('version') or row.version}, "
             f"sha256 {digest}. Bağımsız okuyucu doğruladı."
         )
@@ -486,6 +499,7 @@ __all__ = [
     "plan_build",
     "publish_and_validate",
     "read_application_log",
+    "artifact_file_name",
     "receipt_for",
     "subprocess_runner",
 ]
