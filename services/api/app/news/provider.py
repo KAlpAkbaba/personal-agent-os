@@ -33,6 +33,7 @@ from typing import Final, Protocol
 # expansion, external entities and DTDs outright; the size cap below bounds the rest.
 from defusedxml import ElementTree as ET
 
+from app.logging import get_logger
 from app.news.classification import VideoCandidate
 from app.news.models import ANSWERED_BY_CHANNEL_FEED, ANSWERED_BY_FIXTURE
 
@@ -45,6 +46,9 @@ _ATOM_NS = {
     "yt": "http://www.youtube.com/xml/schemas/2015",
     "media": "http://search.yahoo.com/mrss/",
 }
+
+
+logger = get_logger("app.news.provider")
 
 
 class ProviderUnavailableError(RuntimeError):
@@ -125,7 +129,36 @@ def _parse_feed(channel_id: str, xml_bytes: bytes) -> list[VideoCandidate]:
     return out
 
 
+#: The live endpoint answers 404 to an honest client under rate limiting, then succeeds
+#: seconds later. Measured 2026-09-09 against two different channels. Two extra attempts
+#: with a short backoff turn that into a non-event; a channel that is genuinely absent still
+#: 404s three times and is still reported honestly, because the alternative - retrying
+#: forever, or dressing the request up as a browser to get past the limit - would be either
+#: a hang or an anti-bot evasion, and this project does neither.
+FEED_ATTEMPTS: Final = 3
+FEED_RETRY_BACKOFF_S: Final = 2.0
+
+
 def fetch_feed_bytes(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
+    """Bounded, retried for the transient case, honest about the persistent one."""
+    import time
+
+    last: ProviderUnavailableError | None = None
+    for attempt in range(1, FEED_ATTEMPTS + 1):
+        try:
+            return _fetch_feed_once(url, timeout_s=timeout_s, max_bytes=max_bytes)
+        except ProviderUnavailableError as exc:
+            last = exc
+            if attempt < FEED_ATTEMPTS:
+                logger.info(
+                    "news_feed_retry", attempt=attempt, of=FEED_ATTEMPTS, reason=str(exc)[:120]
+                )
+                time.sleep(FEED_RETRY_BACKOFF_S * attempt)
+    assert last is not None
+    raise last
+
+
+def _fetch_feed_once(url: str, *, timeout_s: float, max_bytes: int) -> bytes:
     """The ONE place this module talks to the network, named so a test can replace it.
 
     Streamed and capped rather than `response.content`, which buffers the whole body

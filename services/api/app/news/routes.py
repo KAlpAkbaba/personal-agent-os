@@ -17,6 +17,7 @@ from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.news import sources_service
 from app.news.models import CONTENT_TYPES, PROVIDER_YOUTUBE
+from app.news.page_fetch import fetch_channel_page
 from app.news.playback_service import PlaybackOutcome, close_playback, open_latest_news
 from app.news.resolve_service import NewsResolveError, resolve_for_source
 from app.news.sources_service import NewsSourceError
@@ -97,6 +98,12 @@ async def create_source(request: Request, body: CreateSourceRequest) -> dict[str
                     content_type=body.content_type,
                     priority=body.priority,
                     enabled=body.enabled,
+                    # The REAL fetcher. Identity resolution is the ONE thing this family
+                    # refuses to guess, and until an owner configures a source there is
+                    # nothing to resolve - so this seam sat empty and every handle or
+                    # custom URL was left `needs_identity`. It is passed only here, on the
+                    # owner's own configuration call, and never on a read path.
+                    fetch_page=fetch_channel_page,
                 )
             except NewsSourceError as exc:
                 raise HTTPException(
@@ -151,6 +158,7 @@ async def update_source(
                     content_type=body.content_type,
                     priority=body.priority,
                     enabled=body.enabled,
+                    fetch_page=fetch_channel_page,
                 )
             except NewsSourceError as exc:
                 raise HTTPException(
