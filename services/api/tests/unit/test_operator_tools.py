@@ -33,6 +33,7 @@ from app.operator import focus as operator_focus
 from app.operator.models import FOCUS_KIND_WINDOW, ObjectFocusRow
 from app.operator.service import OperatorService
 from app.operator.task import STATUS_RUNNING, OperatorTask
+from app.routines.dispatch import DeviceRunResult
 from app.voice.models import VoiceProfile
 from app.voice.realtime_sessions.models import RealtimeSessionRow, RealtimeToolCall
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
@@ -158,11 +159,32 @@ def _tool(client, sid: str, name: str, arguments: dict) -> dict:
     return response.json()
 
 
-def _focus_window(factory, *, window_id: str = window_id_for(1)) -> None:
+def _focus_window(factory, *, window_id: str = window_id_for(1), device=None) -> None:
+    """Remember a window AND, when a device is given, put it on that device's desktop.
+
+    A remembered window that is not open is a contradiction the fixture should not be able
+    to state silently: the resolver holds "current" against the real window list before
+    anything acts on it, because the owner closes windows (ADR-0101).
+    """
     with factory() as db:
         operator_focus.set_focus(
             db, FOCUS_KIND_WINDOW, window_id, label="Adsız - Not Defteri", source="test"
         )
+    if device is not None:
+        # The same window.list answers two different questions at two different moments:
+        # "which windows exist?" before a plan acts, and "is it gone?" after a close. A
+        # single canned answer cannot be right for both, so this one reads the device's own
+        # call log -- the closest a fake gets to a desktop that changes.
+        row = {"window_id": window_id, "title": "Adsız - Not Defteri", "foreground": True}
+
+        def _listing(_payload, _device=device, _id=window_id, _row=row):
+            closed = any(
+                call["capability"] == "window.close" and call["payload"].get("window_id") == _id
+                for call in _device.calls
+            )
+            return DeviceRunResult(True, result={"windows": [] if closed else [_row]})
+
+        device.results["window.list"] = _listing
 
 
 # --------------------------------------------------------------------------- app_open
@@ -228,14 +250,14 @@ def test_no_device_action_is_a_capability_missing_receipt() -> None:
 
 def test_window_close_resolves_the_current_window_through_focus() -> None:
     client, factory, device, _operator = _wired()
-    _focus_window(factory)
+    _focus_window(factory, device=device)
     sid = _create(client)
     _say(client, sid, "Bunu kapat.")
     call = _tool(client, sid, "operator.window_control", {})
     assert call["status"] == "succeeded", call
     body = call["result"]
     assert body["execution_status"] == "executed"
-    assert device.capabilities_called() == ["window.close", "window.list"]
+    assert device.capabilities_called() == ["window.list", "window.close", "window.list"]
     assert "kapat" in body["speech"].lower()
 
 
@@ -246,24 +268,24 @@ def test_window_close_with_no_focus_asks_which_window_and_touches_nothing() -> N
     call = _tool(client, sid, "operator.window_control", {})
     assert call["status"] == "needs_clarification", call
     assert call["result"]["speech"] == "Hangi pencere?"
-    assert device.calls == []
+    assert [c for c in device.capabilities_called() if c != "window.list"] == []
 
 
 def test_window_maximize_and_minimize_verify_the_observed_state() -> None:
     client, factory, device, _operator = _wired()
-    _focus_window(factory)
+    _focus_window(factory, device=device)
     sid = _create(client)
     _say(client, sid, "Pencereyi büyüt.")
     call = _tool(client, sid, "operator.window_control", {})
     assert call["status"] == "succeeded", call
-    assert device.capabilities_called() == ["window.maximize"]
+    assert device.capabilities_called() == ["window.list", "window.maximize"]
 
     sid2 = _create(client)
     device.reset()
     _say(client, sid2, "Bu pencereyi küçült.")
     call2 = _tool(client, sid2, "operator.window_control", {})
     assert call2["status"] == "succeeded", call2
-    assert device.capabilities_called() == ["window.minimize"]
+    assert device.capabilities_called() == ["window.list", "window.minimize"]
 
 
 def test_window_previous_activates_the_older_window() -> None:
@@ -288,7 +310,7 @@ def test_window_previous_activates_the_older_window() -> None:
     _say(client, sid, "Önceki pencereye dön.")
     call = _tool(client, sid, "operator.window_control", {})
     assert call["status"] == "succeeded", call
-    assert device.capabilities_called() == ["window.activate"]
+    assert device.capabilities_called() == ["window.list", "window.activate"]
     assert device.payload_for("window.activate") == {"window_id": window_id_for(0)}
 
 
@@ -297,7 +319,7 @@ def test_window_previous_activates_the_older_window() -> None:
 
 def test_type_refuses_a_secret_looking_request_and_never_touches_the_keyboard() -> None:
     client, factory, device, _operator = _wired()
-    _focus_window(factory)
+    _focus_window(factory, device=device)
     sid = _create(client)
     _say(client, sid, "Buraya şifremi yaz.")
     call = _tool(client, sid, "operator.type", {})
@@ -311,18 +333,25 @@ def test_type_refuses_a_secret_looking_request_and_never_touches_the_keyboard() 
 
 def test_type_writes_the_owners_words_and_verifies_the_value() -> None:
     client, factory, device, _operator = _wired()
-    _focus_window(factory)
+    _focus_window(factory, device=device)
     sid = _create(client)
     _say(client, sid, "Buraya merhaba yaz.")
     call = _tool(client, sid, "operator.type", {})
     assert call["status"] == "succeeded", call
-    assert device.capabilities_called() == ["window.activate", "keyboard.type", "ui.inspect"]
+    # window.list first: "current" is held against the real desktop before anything acts on
+    # it. Then the plan itself, unchanged.
+    assert device.capabilities_called() == [
+        "window.list",
+        "window.activate",
+        "keyboard.type",
+        "ui.inspect",
+    ]
     assert device.payload_for("keyboard.type")["text"] == "merhaba"
 
 
 def test_type_with_no_text_at_all_asks_rather_than_guesses() -> None:
     client, factory, device, _operator = _wired()
-    _focus_window(factory)
+    _focus_window(factory, device=device)
     sid = _create(client)
     _say(client, sid, "Şuraya yazar mısın?")
     call = _tool(client, sid, "operator.type", {})

@@ -517,3 +517,102 @@ def test_a_device_that_cannot_answer_still_asks_rather_than_guessing() -> None:
     assert call["status"] == "needs_clarification", call
     assert "window.activate" not in device.capabilities_called()
     assert "keyboard.type" not in device.capabilities_called()
+
+
+# ------------------------- an application that hands off to an instance already running
+
+
+#: What ``app.launch`` REALLY answered for chrome on the owner's device (2026-09-09
+#: 19:58:12): a launcher process that had already exited, no window of its own, and the
+#: command still reported success. Chrome was open and in front the whole time — under a
+#: different pid.
+def _handoff_launch(pid: int = 36836, exe: str = r"C:\Program Files\Google\Chrome\chrome.exe"):
+    return _ok(
+        pid=pid,
+        title=None,
+        executable=exe,
+        observed={"window": None, "process_alive": False, "window_appeared": False},
+    )
+
+
+def _foreground(window_id: str, title: str, pid: int, image: str):
+    return _ok(window={
+        "window_id": window_id,
+        "title": title,
+        "pid": pid,
+        "image": image,
+        "state": "normal",
+        "foreground": True,
+    })
+
+
+CHROME = window_id_for(3)
+
+
+def test_opening_an_app_that_hands_off_to_a_running_instance_succeeds() -> None:
+    """The pid that starts is not the pid that owns the window. The claim is "a window of
+    the application I launched is in front", not "a window of the process I spawned"."""
+    client, factory, device, _operator = _wired()
+    device.results["app.launch"] = _handoff_launch()
+    device.results["window.current"] = _foreground(CHROME, "YouTube - Chrome", 9088, "chrome.exe")
+    sid = _create(client)
+    _say(client, sid, "Chrome'u aç.")
+
+    call = _tool(client, sid, "operator.app_open", {"application": "Chrome"})
+
+    assert call["status"] == "succeeded", call
+    assert call["result"]["execution_status"] == "executed", call["result"]
+
+
+def test_that_open_moves_the_focus_to_the_app_that_was_opened() -> None:
+    """The consequence that made it dangerous: focus is written only for steps whose
+    postcondition passed, so a failing open left the focus on the PREVIOUS window."""
+    client, factory, device, _operator = _wired()
+    _remember(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    device.results["app.launch"] = _handoff_launch()
+    device.results["window.current"] = _foreground(CHROME, "YouTube - Chrome", 9088, "chrome.exe")
+    sid = _create(client)
+    _say(client, sid, "Chrome'u aç.")
+    _tool(client, sid, "operator.app_open", {"application": "Chrome"})
+
+    with factory() as db:
+        current = operator_focus.current(db, FOCUS_KIND_WINDOW)
+    assert current is not None and current.object_id == CHROME, current
+
+
+def test_a_url_is_never_typed_into_the_window_the_owner_stopped_using() -> None:
+    """The owner asked for Chrome and then said "youtube.com". It went into the Notepad
+    they had used minutes earlier, twice, and was reported as done."""
+    client, factory, device, _operator = _wired()
+    _remember(factory, [(NOTEPAD, "Adsız - Not Defteri")])
+    device.results["app.launch"] = _handoff_launch()
+    device.results["window.current"] = _foreground(CHROME, "YouTube - Chrome", 9088, "chrome.exe")
+    _on_desktop(device, [(CHROME, "YouTube - Chrome")])
+    sid = _create(client)
+    _say(client, sid, "Chrome'u aç.")
+    _tool(client, sid, "operator.app_open", {"application": "Chrome"})
+    device.reset()
+
+    _say(client, sid, "Buraya youtube.com yaz.")
+    _tool(client, sid, "operator.type", {"content": "youtube.com"})
+
+    typed = device.payload_for("keyboard.type")
+    assert typed is not None, device.capabilities_called()
+    assert typed["window_id"] == CHROME, f"typed into {typed['window_id']}, not Chrome"
+
+
+def test_a_remembered_current_window_that_is_gone_never_gets_the_keystrokes() -> None:
+    """Measured: window.activate on the remembered current answered ui_target_not_found
+    twice. Whatever is really in front is the honest reading of "current"."""
+    client, factory, device, _operator = _wired()
+    _remember(factory, [(NOTEPAD, "Adsız - Not Defteri")])  # closed since
+    device.results["window.list"] = _ok(windows=[
+        {"window_id": CHROME, "title": "YouTube - Chrome", "foreground": True}
+    ])
+    sid = _create(client)
+    _say(client, sid, NEUTRAL)
+
+    _tool(client, sid, "operator.type", {"content": "merhaba"})
+
+    typed = device.payload_for("keyboard.type")
+    assert typed is not None and typed["window_id"] == CHROME

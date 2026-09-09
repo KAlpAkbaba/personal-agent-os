@@ -79,6 +79,16 @@ def _window_of(result: DeviceRunResult) -> dict[str, Any]:
     return window if isinstance(window, dict) else {}
 
 
+def _executable_name(path: str) -> str:
+    """The bare executable file name, case-folded: "C:\\...\\chrome.exe" -> "chrome.exe".
+
+    Split on both separators by hand rather than through ``pathlib``: this compares a
+    WINDOWS path reported by the device against a WINDOWS image name, and the server runs
+    on Linux, where ``PurePath`` would treat the backslashes as ordinary characters.
+    """
+    return path.replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+
+
 def _any_value_ends_with(node: Any, text: str) -> bool:
     """True when any node of a ``ui.inspect`` subtree has a ``value`` ending with ``text``.
 
@@ -98,19 +108,41 @@ def _any_value_ends_with(node: Any, text: str) -> bool:
 
 def open_application(name: str) -> list[OperatorStep]:
     """``app.launch`` then ``window.current`` (spec §4): postcondition, a foreground
-    window of the pid ``app.launch`` returned."""
+    window belonging to the application that was launched.
+
+    Deliberately NOT "a window of the pid ``app.launch`` returned". Chrome, Edge, Explorer
+    and anything else that launches through a broker hand the request to an instance that
+    is already running and exit at once, so the pid that starts is not the pid that owns
+    the window. Measured on the owner's device (2026-09-09 19:58): ``app.launch`` for
+    chrome returned pid 36836 with ``process_alive: false`` and ``window_appeared: false``,
+    while the foreground window a second later was chrome.exe under pid 9088. The old
+    postcondition compared those two pids, failed, and took the whole open_application task
+    down with it — with Chrome open and in front of the owner.
+
+    That failure was not cosmetic. ``OperatorService`` writes window focus only for steps
+    whose postcondition PASSED, so the focus stack never learned about Chrome; the owner's
+    next sentence, "youtube.com", was typed into the Notepad they had used minutes earlier,
+    twice, and reported as done (ADR-0101).
+    """
     launched: dict[str, Any] = {}
 
     def _launch_ok(result: DeviceRunResult) -> bool:
-        pid = result.result.get("pid") if isinstance(result.result, dict) else None
+        payload = result.result if isinstance(result.result, dict) else {}
+        pid = payload.get("pid")
         if pid is None:
             return False
         launched["pid"] = pid
+        launched["image"] = _executable_name(str(payload.get("executable") or ""))
         return True
 
     def _window_ok(result: DeviceRunResult) -> bool:
         window = _window_of(result)
-        return bool(window.get("foreground") and window.get("pid") == launched.get("pid"))
+        if not window.get("foreground"):
+            return False
+        if window.get("pid") == launched.get("pid"):
+            return True
+        image = launched.get("image") or ""
+        return bool(image) and _executable_name(str(window.get("image") or "")) == image
 
     return [
         OperatorStep(

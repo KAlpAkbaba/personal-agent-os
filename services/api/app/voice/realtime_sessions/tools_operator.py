@@ -415,11 +415,43 @@ def _resolve_window_id(
         entry = focus_module.previous(db, FOCUS_KIND_WINDOW)
         if entry is None:
             return None, SPEECH_NO_PREVIOUS_WINDOW
-        return entry.object_id, None
+        return _confirm_alive(entry.object_id, list_windows, fall_back_to_foreground=False)
     entry = focus_module.current(db, FOCUS_KIND_WINDOW)
     if entry is None:
+        return _confirm_alive(None, list_windows, fall_back_to_foreground=True)
+    return _confirm_alive(entry.object_id, list_windows, fall_back_to_foreground=True)
+
+
+def _confirm_alive(
+    window_id: str | None,
+    list_windows: Callable[[], list[dict[str, Any]]] | None,
+    *,
+    fall_back_to_foreground: bool,
+) -> tuple[str | None, str | None]:
+    """Hold a REMEMBERED window id against the desktop before anything acts on it.
+
+    The focus stack is a memory, and the owner closes windows. On 2026-09-09 20:00 the
+    remembered "current" window had been closed and the device answered
+    ``ui_target_not_found`` twice. Worse, a minute earlier the remembered current window
+    was a Notepad while the owner was talking about the Chrome they had just asked for,
+    and "youtube.com" was typed into the Notepad (ADR-0101).
+
+    For "current" the honest fallback is the window the device says is in FRONT right now —
+    that is what "current" means. For "previous" there is no such fallback: a previous
+    window that is gone is gone, and this asks instead of picking something else.
+    """
+    live = _live_windows(list_windows)
+    if not live:
+        # Nothing to check against: keep the remembered answer rather than inventing one.
+        return (window_id, None) if window_id else (None, SPEECH_NO_WINDOW)
+    if window_id and any(str(w.get("window_id") or "") == window_id for w in live):
+        return window_id, None
+    if not fall_back_to_foreground:
+        return None, SPEECH_NO_PREVIOUS_WINDOW
+    foreground = next((w for w in live if w.get("foreground")), None)
+    if foreground is None or not foreground.get("window_id"):
         return None, SPEECH_NO_WINDOW
-    return entry.object_id, None
+    return str(foreground["window_id"]), None
 
 
 def _require_db(ctx: ToolContext, tool: str) -> Session:

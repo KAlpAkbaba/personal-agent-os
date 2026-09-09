@@ -8354,3 +8354,60 @@ own mutation in isolation (mutating both at once masks one behind the other — 
 before trusting a combined revert). Two earlier tests asserted addendum 2's design and were
 rewritten to state this one; both were claims about behaviour that the real device refuted,
 not assertions weakened to pass.
+
+## ADR-0101 — The URL that went into Notepad: a pid that was never going to match (2026-09-09)
+
+**Owner report.** "chrome'dan web sitesi açtırmak istedim ama browser'a yazamadı."
+
+**What actually happened**, from `device_commands` on the owner's device:
+
+| 19:58:12 | `app.launch {"application": "chrome"}` | succeeded — `pid 36836`, `title: null`, `observed.window: null`, **`process_alive: false`**, **`window_appeared: false`** |
+| 19:58:23 | `window.current` ×2 | succeeded — the foreground window is `chrome.exe`, **pid 9088** |
+| 19:59:04 | `window.activate {"window_id": "w-20513744-368775671"}` | succeeded — **notepad.exe** |
+| 19:59:05 | `keyboard.type {"text": "youtube.com"}` | succeeded — into that Notepad |
+| 19:59:33 | the same two again | the owner tried once more |
+| 20:00:22 | `window.activate` on the same id ×2 | `ui_target_not_found` — by then they had closed it |
+
+The owner asked for a website in Chrome. Chrome was open and in front. "youtube.com" was
+typed into a Notepad, twice, and reported as done.
+
+**Root cause.** `open_application`'s postcondition was
+
+```python
+return bool(window.get("foreground") and window.get("pid") == launched.get("pid"))
+```
+
+Chrome was already running, so the process `app.launch` started handed the request to the
+existing instance and exited immediately — the device said so in the result nobody was
+reading: `process_alive: false`, `window_appeared: false`. The window belongs to pid 9088;
+the launched pid was 36836. Those two numbers were never going to be equal, for Chrome,
+Edge, Explorer, or anything else that launches through a broker. **Two identities for one
+thing** — the same shape as ADR-0100's title-versus-id, one layer down.
+
+**Why that was not merely cosmetic.** `OperatorService` writes window focus only for steps
+whose postcondition PASSED (`service.py:181`). A failing open therefore leaves the focus
+stack pointing at whatever the owner was using BEFORE. The next sentence — "youtube.com" —
+resolved `window_ref: "current"`, read that stale entry, and typed a URL into a text
+editor. The `object_focus` rows show it exactly: the last window row before the typing is
+`w-20513744-368775671 / *Adsız - Not Defteri`, and there is no Chrome row at all.
+
+**Fix.**
+1. `open_application`'s postcondition asks the right question: is a foreground window of
+   the APPLICATION I launched here? The pid still counts, and the executable name now
+   counts too (`_executable_name`, comparing the device's `image` to the basename of the
+   `executable` `app.launch` reported). Chrome now opens successfully, and focus follows it.
+2. `"current"` is held against the desktop before anything acts on it (`_confirm_alive`).
+   A remembered window that no longer exists is not acted on; for "current" the honest
+   fallback is the window the device says is in front, which is what the word means. For
+   "previous" there is no fallback — it asks.
+
+**Regression.** Four checks in `tests/unit/test_operator_window_ref.py`, including
+`test_a_url_is_never_typed_into_the_window_the_owner_stopped_using`, driven from the real
+`app.launch` payload above. Reverting the postcondition fails three; reverting the liveness
+check fails the fourth. Both watched.
+
+**The fixture lesson, a third time.** `_focus_window` remembered a window while the fake
+device's desktop was empty — a state that cannot exist. It now puts the window on the
+desktop too, and `window.list` reads the device's own call log so that "which windows
+exist?" and "is it gone after the close?" get different, correct answers. Three incidents
+in one day have had the same second half: **the fake was kinder than the machine.**
