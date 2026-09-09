@@ -1002,6 +1002,68 @@
   color: var(--text);
 }
 
+/*
+ * M27: the row's lines stack.
+ *
+ * `.panel li` is a plain block and a row's lines are sibling spans, which are
+ * inline by default and run into one another: "uyuşmazlık — ölçü tutmadı"
+ * followed by "640×480" reads as one word, which presents two separate
+ * published facts as one string. Each line is its own statement, so each gets
+ * its own line. Scoped to this panel's own class rather than to `.panel li
+ * span`, because the same shape on the earlier panels is main's to change,
+ * not a parallel milestone's.
+ */
+.creative-run > span {
+  display: block;
+}
+
+/*
+ * M27: the before and the after, side by side.
+ *
+ * A grid rather than a flex row so the two pictures get the SAME width
+ * whatever their proportions: the owner is comparing them, and a source that
+ * drew twice as wide as its output would be this page suggesting a size
+ * change nobody measured. Each image keeps its own aspect ratio inside its
+ * cell. On a narrow panel the pair stacks, still in the before -> after
+ * order, which is the only order that reads correctly.
+ */
+.creative-images {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.creative-images figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.creative-images figcaption {
+  font-size: 0.75rem;
+}
+
+.creative-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  /* A portrait output beside a landscape source would otherwise take over the
+     panel. A max-height alone bounds a replaced element WITHOUT distorting it:
+     the intrinsic ratio still governs, so the owner still reads true geometry
+     off both pictures - which an object-fit crop or a fixed height would take
+     away, and this family is about what the comparison actually measured. */
+  max-height: 220px;
+  margin-top: 0.2rem;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  background: var(--core-ground);
+}
+
+.approval-pair .core-chip[data-creative-action]:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 /* ---------------------------------------------------- reduced motion */
 
 /*

@@ -27,6 +27,7 @@ import {
   isArtifactState,
   isCalendarState,
   isCoreChannel,
+  isCreativeState,
   isDocumentState,
   isExecutiveState,
   isGenesisState,
@@ -367,6 +368,18 @@ export function sceneClaim(truth: CoreTruth, now: number): Claim {
  */
 export function executiveClaim(truth: CoreTruth, now: number): Claim {
   return claimFor(newestWhere(truth, isExecutiveState), now);
+}
+
+/**
+ * The Creative Tools Operator's own claim (v12): the newest
+ * `creative.activity`, by membership. Returned expired or not, for the
+ * executive claim's reason: the panel words the age, and an expired creative
+ * event is one we stopped hearing about — the runs themselves are rows on
+ * `/v1/creative/runs`, which do not expire, and the before/after images the
+ * Cockpit shows come from such a row.
+ */
+export function creativeClaim(truth: CoreTruth, now: number): Claim {
+  return claimFor(newestWhere(truth, isCreativeState), now);
 }
 
 /**

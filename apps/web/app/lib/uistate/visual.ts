@@ -52,6 +52,7 @@ import { type DocumentFacts, documentCaption, documentFacts } from "./documents"
 import { type GenesisFacts, genesisCaption, genesisFacts, genesisPosture } from "./genesis";
 import { type MailFacts, mailCaption, mailFacts } from "./mail";
 import { type SceneFacts, sceneCaption, sceneFacts, scenePosture } from "./scenes";
+import { type CreativeFacts, creativeCaption, creativeFacts, creativePosture } from "./creative";
 import { type ExecutiveFacts, executiveCaption, executiveFacts, executivePosture } from "./executive";
 import { operatorCaption, operatorFacts } from "./operator";
 import type { VoiceUiState } from "../voice/controller";
@@ -189,7 +190,29 @@ export type CoreVisualKind =
    * A bar only when the publisher counted BOTH `done` and `total`, and the
    * step, the state and the counts as the caption.
    */
-  | "executive_run";
+  | "executive_run"
+  /**
+   * v12 (M27): the Core making a picture for the owner — the input image
+   * analysed, a plan built as DATA, its operations applied through the most
+   * structured interface the installed application really offers, the output
+   * reopened by an INDEPENDENT reader, exported, and compared with what was
+   * asked. A READING posture at `analysing` and `inspecting`, the two steps
+   * that draw inward because an image is being read; a planning posture
+   * while the plan is data and no file has been touched; a making posture
+   * while the operations run; a distinct EXPORTING posture, because writing
+   * a file in a format is not the same act as making what goes in it; a
+   * COMPARING posture, because that step is where every "doğrulandı" in
+   * this family comes from; a `correcting` posture that works but is held,
+   * because something has already been found wrong; still and bright at
+   * `verified` and at nothing else; `unverified` settled and plain, neither
+   * verified nor disagreed with; `mismatch` held under restraint and NAMED
+   * by its defect; `unavailable` SETTLED and dim with no agitation whatever
+   * — an application that is not installed is a fact about this machine, not
+   * a fault in the agent (ADR-0093 decision 3) — and `failed` under the same
+   * restraint. Calm, nothing that could be read as progress, and the
+   * application, the operation, the step and the comparison as the caption.
+   */
+  | "creative_activity";
 
 /**
  * Which of the two evidence sources produced the intent (ADR-0061 §4).
@@ -513,6 +536,18 @@ export type VisualIntent = {
    */
   executive: ExecutiveFacts | null;
 
+  // -------------------------------- v12: the Creative Tools Operator (M27 §6)
+  /**
+   * The published facts about the picture being made — the application, the
+   * plan operation, the step, the comparison's bounded aggregate and the
+   * defect it named — each `null` when the publisher sent none, and the
+   * whole thing `null` outside the `creative_activity` kind (kept on its
+   * last-known shape). Words and one fraction, not channels: `similarity`
+   * moves nothing here, because a comparison's score is not a progress bar
+   * (ADR-0052 §2) and a run of unknown length gets no bar at all.
+   */
+  creative: CreativeFacts | null;
+
   palette: PaletteToken;
 };
 
@@ -603,6 +638,7 @@ function blank(kind: CoreVisualKind, palette: PaletteToken): VisualIntent {
     genesis: null,
     scene: null,
     executive: null,
+    creative: null,
     palette,
   };
 }
@@ -1421,6 +1457,94 @@ function forLiveState(event: UiStateEvent, claim: Claim): VisualIntent {
       };
     }
 
+    case "creative.activity": {
+      // Eleven postures (M27 §3, §6), each from the published step alone.
+      // READING (`analysing`, `inspecting`): the document Core's shape,
+      // drawing INWARD — an image is being read, either the owner's input
+      // before the plan or the output after it, and every claim downstream
+      // rests on what was read. PLANNING: still, in the planning palette,
+      // with nothing flowing anywhere — a plan is data, and no file has been
+      // touched yet. MAKING (`executing`): the app factory's shape, a
+      // lattice being laid with the paths carrying the plan OUT to the
+      // provider. EXPORTING: the scene family's rendering posture, and for
+      // its reason — the lattice stands and one steady stream goes out,
+      // because writing a file in a format is one long write rather than a
+      // structure taking shape. COMPARING: inward again but bright, because
+      // this is the step every "doğrulandı" in this family comes from.
+      // CORRECTING: the making shape held at half restraint — work is
+      // running, and something has already been found wrong; drawing it
+      // exactly like a first pass would hide that. VERIFIED: still and
+      // bright in the ready palette, and reachable from that ONE word.
+      // UNVERIFIED: just as still, in the plain making palette with no
+      // brightness — nothing was asked that could be measured, so there is
+      // nothing to be bright about and nothing to hold under restraint
+      // either. MISMATCH: held under restraint and named. UNAVAILABLE:
+      // settled and dim under restraint with NO agitation and no error
+      // palette at all — an application that is not installed is a fact
+      // about this machine (ADR-0093 decision 3), and drawing it as a fault
+      // would be the Core telling the owner something broke. FAILED: the
+      // same restraint. A step this build cannot read, or none at all, is
+      // the making posture with the bare caption. No pulse, no constellation
+      // and no progress: `similarity` is a comparison's score, not a
+      // fraction of the work done, and a bar from it would be an invented
+      // claim of the kind ADR-0052 §2 forbids.
+      const facts = creativeFacts(event);
+      const posture = creativePosture(facts.state);
+      const reading = posture === "reading";
+      const planning = posture === "planning";
+      const exporting = posture === "exporting";
+      const comparing = posture === "comparing";
+      const correcting = posture === "correcting";
+      const verified = posture === "verified";
+      const unverified = posture === "unverified";
+      const mismatch = posture === "mismatch";
+      const unavailable = posture === "unavailable";
+      const failed = posture === "failed";
+      const still = planning || verified || unverified || mismatch || unavailable || failed;
+      const palette: PaletteToken = unavailable
+        ? "held"
+        : verified
+          ? "ready"
+          : reading || comparing
+            ? "reading"
+            : planning
+              ? "planning"
+              : "making";
+      const glowBase = verified
+        ? 0.42
+        : comparing
+          ? 0.34
+          : exporting
+            ? 0.36
+            : mismatch
+              ? 0.22
+              : failed
+                ? 0.22
+                : unavailable
+                  ? 0.12
+                  : unverified
+                    ? 0.2
+                    : planning
+                      ? 0.24
+                      : 0.3;
+      return {
+        ...base("creative_activity", palette),
+        label: creativeCaption(facts),
+        scale: unavailable ? 0.96 : exporting ? 1.05 : still ? 1.02 : 1.04,
+        topology: reading || comparing ? 0.1 : unavailable ? 0 : exporting ? 0.3 : still ? 0.15 : 0.2,
+        breathAmplitude: unavailable ? 0.015 : 0.03,
+        breathHz: unavailable ? 0.1 : exporting ? 0.18 : verified || unverified || planning ? 0.14 : 0.24,
+        energy: e,
+        glow: glowOf(glowBase, e),
+        inwardFlow: reading ? 0.3 : comparing ? 0.2 : 0,
+        shellSpread: unavailable ? 0.1 : exporting ? 0.35 : still ? 0.2 : 0.3,
+        ringSpin: unavailable ? 0.02 : exporting ? 0.04 : still ? IDLE_RING_SPIN : 0.18,
+        flowRate: exporting ? 0.4 : still ? 0 : reading || comparing ? 0.15 : 0.3,
+        restraint: unavailable ? 0.6 : mismatch || failed ? 0.5 : correcting ? 0.5 : 0,
+        creative: facts,
+      };
+    }
+
     default:
       // Reached only by a contract state this table has not been taught. Both
       // gates upstream (`isKnownState`, and `coreClaim`'s agent/lab filter)
@@ -1547,7 +1671,11 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
   // al" runs `scene.render`, and the bus knows the tool, the scene and the
   // step (M25 §5, §6). v11 extends it to Executive Autonomy: "Ne
   // yapıyorsun?" and the start of a run go through the same router, and the
-  // bus knows the run, the step and how far along it is (M26 §5, §6).
+  // bus knows the run, the step and how far along it is (M26 §5, §6). v12
+  // extends it to the Creative Tools Operator: "Bu resmi Paint'te yeniden
+  // çiz" runs a creative tool through the ONE router, and the bus knows the
+  // application, the operation, the step and what the comparison measured
+  // (M27 §5, §6) — where the local leg knows only that some tool is running.
   if (
     voice.state === "tool_running" &&
     (isOperatorActing(bus) ||
@@ -1558,7 +1686,8 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
       isAppBuilding(bus) ||
       isGenesisWorking(bus) ||
       isSceneWorking(bus) ||
-      isExecutiveRunning(bus))
+      isExecutiveRunning(bus) ||
+      isCreativeWorking(bus))
   )
     return bus;
   const local = (kind: CoreVisualKind, palette: PaletteToken): VisualIntent => ({
@@ -1903,4 +2032,32 @@ export function isExecutiveRunning(intent: VisualIntent): boolean {
  */
 export function isExecutivePaused(intent: VisualIntent): boolean {
   return isExecutiveRunning(intent) && intent.executive !== null && executivePosture(intent.executive.state) === "paused";
+}
+
+/** True while the Core body is a LIVE creative event (v12) — reading, planning, making, exporting, comparing, correcting, settled or unreadable; a last-known shape is not. */
+export function isCreativeWorking(intent: VisualIntent): boolean {
+  return intent.kind === "creative_activity";
+}
+
+/**
+ * True while the Core body is a LIVE creative event whose publisher said
+ * `verified`. The one door to "doğrulandı" on the Core, and it is a
+ * membership test on the published word rather than a reading of the
+ * geometry or of the similarity figure — ADR-0093 decision 4 makes the
+ * comparison the proof, and a renderer that decided verification from a
+ * score would be inventing the claim.
+ */
+export function isCreativeVerified(intent: VisualIntent): boolean {
+  return isCreativeWorking(intent) && intent.creative !== null && creativePosture(intent.creative.state) === "verified";
+}
+
+/**
+ * True while the Core body is a LIVE creative event whose publisher said the
+ * application could not be driven at all. Named separately so a harness —
+ * and the cockpit — can tell "Photoshop is not installed" from "something
+ * failed" without reading the geometry, which is exactly the distinction
+ * ADR-0093 decision 3 asks the Core to keep.
+ */
+export function isCreativeUnavailable(intent: VisualIntent): boolean {
+  return isCreativeWorking(intent) && intent.creative !== null && creativePosture(intent.creative.state) === "unavailable";
 }

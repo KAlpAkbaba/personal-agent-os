@@ -710,6 +710,46 @@ export const EXECUTIVE_RUN = (
 export const EXECUTIVE_RUN_BARE = () =>
   event({ state: "executive.run", subsystem: "executive", task_id: "exec-task-2" });
 
+// ------------------------- v12: the Creative Tools Operator (M27 §3, §6)
+
+/**
+ * `creative.activity` as the M27 spec §3/§6 has the Cloud Core publish it at
+ * every arrow of one creative run, from the run's own row: subsystem
+ * `creative`, the task id, and in metadata the application being driven
+ * (`paint` | `photoshop` | `illustrator` | `figma`), the plan operation from
+ * §2's closed vocabulary, the step (`analysing` | `planning` | `executing` |
+ * `inspecting` | `exporting` | `comparing` | `correcting` | `verified` |
+ * `unverified` | `mismatch` | `unavailable` | `failed`), and — once the
+ * output was compared — the bounded aggregate the comparison measured and
+ * the defect it named.
+ */
+export const CREATIVE_ACTIVITY = (
+  tool: string | null = "paint",
+  operation: string | null = "draw",
+  state: string | null = "executing",
+  similarity: number | null = null,
+  defect: string | null = null,
+  extra: Record<string, unknown> = {},
+) =>
+  event({
+    state: "creative.activity",
+    subsystem: "creative",
+    task_id: "creative-task-1",
+    status: state ?? "creative",
+    metadata: {
+      ...(tool === null ? {} : { tool }),
+      ...(operation === null ? {} : { operation }),
+      ...(state === null ? {} : { state }),
+      ...(similarity === null ? {} : { similarity }),
+      ...(defect === null ? {} : { defect }),
+      ...(extra as Record<string, string | number | boolean>),
+    },
+  });
+
+/** A creative event whose publisher sent no metadata at all. */
+export const CREATIVE_ACTIVITY_BARE = () =>
+  event({ state: "creative.activity", subsystem: "creative", task_id: "creative-task-2" });
+
 /** The owner-authorised release path, mid-deployment (ADR-0055). */
 export const RELEASE_DEPLOYING = () =>
   event({

@@ -54,6 +54,7 @@ import {
 import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
 import { type AppProjectRow, fetchApps } from "./apps";
 import { type ArtifactRow, fetchArtifacts } from "./artifacts";
+import { type CreativeRunRow, fetchCreativeRuns } from "./creative";
 import { type ExecutiveRunRow, fetchExecutiveRuns } from "./executive";
 import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
 import { type SceneRow, fetchScenes } from "./scenes";
@@ -133,6 +134,16 @@ export type CockpitData = {
    * explanation is the run's OWN route — neither is here.
    */
   executiveRuns: Loaded<ExecutiveRunRow[]>;
+  /**
+   * M27 §6: the creative runs, from `/v1/creative/runs`, each with its
+   * application, the operation it is on, the step it reached, what the
+   * comparison measured and whether a before and an after image exist. The
+   * Cloud Core half lands on a parallel track (ADR-0093); until it does the
+   * route answers "absent", which the panel says in words. The run's
+   * transitions are on the bus, and the images are the owner-session-gated
+   * image route's — neither is here.
+   */
+  creativeRuns: Loaded<CreativeRunRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -159,6 +170,7 @@ const INITIAL: CockpitData = {
   genesisRuns: { kind: "loading" },
   scenes: { kind: "loading" },
   executiveRuns: { kind: "loading" },
+  creativeRuns: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -194,6 +206,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         genesisRuns,
         scenes,
         executiveRuns,
+        creativeRuns,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -219,6 +232,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchGenesisRuns(),
         fetchScenes(),
         fetchExecutiveRuns(),
+        fetchCreativeRuns(),
       ]);
       if (stopped.current) return;
       setData({
@@ -245,6 +259,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         genesisRuns,
         scenes,
         executiveRuns,
+        creativeRuns,
       });
     } finally {
       inFlight.current = false;

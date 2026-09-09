@@ -120,6 +120,14 @@ const EXPECTED_KIND: Record<string, CoreVisualKind> = {
   // paused run, a settled `completed` and a `partial` that says what is
   // missing rather than rounding up to done.
   "executive.run": "executive_run",
+  // v12 (M27): making a picture for the owner — analysing the input, planning
+  // the edit as data, applying it through the most structured interface the
+  // installed application really offers, reopening the output with an
+  // independent reader and comparing it with what was asked — is the agent's
+  // own work: a core state with its own reading, planning, making, exporting
+  // and comparing postures, a `verified` reachable from the comparison alone,
+  // and a settled `unavailable` for an application that is not installed.
+  "creative.activity": "creative_activity",
 };
 
 describe("a visual state is entered only by its own event", () => {
