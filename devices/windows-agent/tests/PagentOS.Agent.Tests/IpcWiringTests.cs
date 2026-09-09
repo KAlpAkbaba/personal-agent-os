@@ -315,8 +315,11 @@ public class IpcWiringTests
             Assert.DoesNotContain("S-1-1-0", sddl);      // Everyone
             Assert.DoesNotContain("S-1-5-11", sddl);     // Authenticated Users
 
-            // And the audit row a verifier reads must carry the same SDDL.
-            var audit = LiveLog.Read(auditPath);
+            // And the audit row a verifier reads must carry the same SDDL. Waited for, not
+            // assumed: LastPipeSddl above is set in MEMORY at creation while the row is
+            // appended by a different path, so the loop that proved the first says nothing
+            // about the second. CI run 34363259200 read an empty file here.
+            var audit = await LiveLog.WaitForAsync(auditPath, "ipc_pipe_created");
             Assert.Contains("ipc_pipe_created", audit, StringComparison.Ordinal);
             Assert.Contains(sddl, audit, StringComparison.Ordinal);
         }

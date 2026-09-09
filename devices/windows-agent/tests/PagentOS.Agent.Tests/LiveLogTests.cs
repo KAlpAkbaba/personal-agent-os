@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using System.Threading.Tasks;
 
 using PagentOS.Agent.Tests.Support;
 
@@ -77,5 +79,49 @@ public class LiveLogTests
         var path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".jsonl");
         Assert.False(File.Exists(path));
         Assert.Equal(string.Empty, LiveLog.Read(path));
+    }
+
+    [Fact]
+    public async Task Waiting_returns_as_soon_as_the_row_arrives()
+    {
+        // The reason WaitForAsync exists: a test that waited for an IN-MEMORY signal read the
+        // audit file microseconds later and found it empty (CI 34363259200). The row is
+        // appended by a different path, so the file has to be asked, not assumed.
+        var path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".jsonl");
+        var writer = Task.Run(async () =>
+        {
+            await Task.Delay(120);
+            File.AppendAllText(path, "{\"event\":\"ipc_pipe_created\"}" + Environment.NewLine);
+        });
+        try
+        {
+            var content = await LiveLog.WaitForAsync(path, "ipc_pipe_created", TimeSpan.FromSeconds(10));
+            Assert.Contains("ipc_pipe_created", content, System.StringComparison.Ordinal);
+        }
+        finally
+        {
+            await writer;
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task A_row_that_never_arrives_returns_what_IS_there_so_the_callers_assertion_fails
+        ()
+    {
+        // Never a throw of its own: the caller wrote the assertion, and the caller's message -
+        // with the real content - is what should be read when it fails.
+        var path = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".jsonl");
+        File.WriteAllText(path, "{\"event\":\"something_else\"}" + Environment.NewLine);
+        try
+        {
+            var content = await LiveLog.WaitForAsync(path, "never_written", TimeSpan.FromMilliseconds(200));
+            Assert.DoesNotContain("never_written", content, System.StringComparison.Ordinal);
+            Assert.Contains("something_else", content, System.StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

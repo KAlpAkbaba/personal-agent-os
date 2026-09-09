@@ -762,7 +762,9 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Equal(ErrorClasses.UiTargetNotFound, failed["status"]!.GetValue<string>());
         Assert.Matches(@"request_id=[0-9a-f]{32}; duration_ms=\d+; retryable=false", failed["detail"]!.GetValue<string>());
 
-        var content = LiveLog.Read(auditPath);
+        // The positive assertion is waited for, the negative ones are not and cannot be:
+        // "this row arrived" is a race against the writer, "this text never appears" is not.
+        var content = await LiveLog.WaitForAsync(auditPath, "browser_worker_started");
         Assert.DoesNotContain(PayloadMarker, content, StringComparison.Ordinal);
         Assert.DoesNotContain("RESULT-MARKER", content, StringComparison.Ordinal);
         Assert.DoesNotContain("example.org", content, StringComparison.Ordinal);

@@ -189,4 +189,31 @@ public static class LiveLog
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }
+
+    /// <summary>
+    /// The contents of <paramref name="path"/> once they contain <paramref name="needle"/>,
+    /// or whatever they hold when the deadline passes — so the CALLER's assertion is what
+    /// fails, with the real text, rather than this method throwing.
+    /// </summary>
+    /// <remarks>
+    /// Two clocks for one decision, which is this repository's most recurrent bug shape. A
+    /// test that has waited for an IN-MEMORY signal (a server's <c>LastPipeSddl</c>, a
+    /// worker's pid) has learned nothing about whether the audit ROW has reached the disk:
+    /// the row is appended by a different path, and CI run 34363259200 read an empty file
+    /// microseconds after the pipe reported its SDDL. Waiting for the file to say what the
+    /// test is about to assert removes the second clock; a row that never arrives still
+    /// fails, just with the assertion the test actually wrote.
+    /// </remarks>
+    public static async Task<string> WaitForAsync(string path, string needle, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(15));
+        var content = Read(path);
+        while (!content.Contains(needle, StringComparison.Ordinal) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+            content = Read(path);
+        }
+
+        return content;
+    }
 }
