@@ -7584,3 +7584,76 @@ matches no configured source refuses rather than falling back to the default; ev
 route is owner-gated at the router; and the migration is expand-only with real CHECK
 constraints.
 
+## ADR-0093 — M27 Creative Tools Operator: the document model first, the application second, and an application that is not there is named (2026-09-09)
+
+**Context.** The owner's master directive asks for creative-tool operation: analyse an image,
+plan an edit, execute it in the right application, export, compare against what was asked,
+and correct. The tools were MEASURED before anything was designed
+(`docs/evidence/m27-m28-tool-detection-2026-09-08.json`, 2026-09-08 10:25Z): classic
+`mspaint.exe` is present; Photoshop, Illustrator, GIMP and the Figma desktop app are NOT
+installed (Creative Cloud 6.6 and Acrobat are, so the owner's licence may add Adobe later);
+Pillow is available. That measurement is what this milestone is built around, and it is why
+the marks differ per provider rather than being claimed uniformly.
+
+**Decision.**
+
+1. **The document model is the structured interface, and it comes first.** Paint has no
+   scripting surface: its document/object model IS the bitmap. So a Paint edit is performed
+   on the FILE with Pillow - deterministic, inspectable, testable - and Paint is then opened
+   on the result through the M19 operator so the owner sees it where they asked for it. This
+   is the browser rule (`CLAUDE.md`: API > DOM > accessibility > UI Automation > vision >
+   coordinates) applied to a creative application: the file is the API. Pointer drawing is
+   never used. What M19's UI Automation is for is what only Paint can do for the owner - the
+   window, open, save-as.
+
+2. **Every provider advertises the subset it really supports**, and the router is offered
+   only the union of the INSTALLED providers' subsets. Paint today: everything except
+   `layer`. A request for a capability no installed provider has answers `capability_missing`
+   naming the provider, never a silent substitution.
+
+3. **An application that is not installed is named, never imitated.** `PhotoshopProvider`
+   and `IllustratorProvider` ship complete - detection, capability list, a fixed `.jsx`
+   driver reading a JSON plan, and a lab - and answer `dependency_unavailable` carrying the
+   detection facts until the owner installs them. The same lab runs the real application the
+   day they exist, with no code change. A provider that finds an application UNLICENSED says
+   so; no licence check is bypassed, no login is automated, and the assistant types no
+   credential anywhere. Figma is the same shape over its REST API with a DPAPI-stored owner
+   token, plus the M13 browser path on an owner-authorised file only.
+
+4. **The comparison is measured with Pillow alone, and is called what it is.** The spec's
+   own draft said "SSIM via PIL+numpy". numpy is NOT a dependency of this repository and
+   adding one to the Cloud Core image for a single function is not a trade this milestone
+   needs to make. `app/creative/compare.py` therefore measures: exact dimensions; per-TILE
+   mean colour distance over a fixed grid; the presence of asked-for shapes and text by
+   colour masks over their planned regions; and a bounded aggregate similarity derived from
+   those tiles. That aggregate is **not SSIM** and is not called SSIM anywhere in the code,
+   the receipts or the gate - naming it so would be the same class of overclaim this project
+   keeps catching in reviews. What it does measure, it measures exactly, and a wrong size, a
+   missing region, a colour drift beyond tolerance and an empty output are each their own
+   named defect.
+
+5. **The owner's originals are never touched.** Every output is a NEW file beside the source
+   (`<name>-pagentos-<n>.<ext>`) under the documents family's authorised roots; nothing is
+   overwritten and nothing is deleted, and the corpus measures it by hashing every source
+   file before and after every case.
+
+6. **No script is ever generated from owner or model text.** The Adobe drivers are FIXED
+   files with pinned hashes that read a JSON plan, exactly as M25's Blender and Unity drivers
+   do; text asked for by the owner is drawn as PIXELS by Pillow or passed as a JSON string a
+   driver treats as data. There is no path by which a sentence becomes code.
+
+7. **Self-correction is bounded and evidence-driven.** A comparison that finds a defect
+   produces a follow-up plan, at most three rounds, and every round's metrics are recorded.
+   A run that still disagrees after three says so and shows the numbers; it does not keep
+   going and it does not claim success.
+
+**Consequences.** Paint is the real path on this machine today and the one the gate can mark
+`PROVEN_REAL`; Adobe and Figma are honest `PROVEN_PROXY` with their detection facts spoken,
+and become real without a code change when the owner's licences do. The comparison is
+weaker than SSIM and says so. The originals are safe by construction rather than by care.
+
+**Named gaps at kickoff, stated before the work rather than discovered at the gate**: the
+device's own `creative.export_check` (reopening an exported file with an independent reader
+ON the device) needs the elevated agent update the owner has not run (item 28), so until
+then the export is validated on the Cloud Core side only; and a Paint round trip THROUGH the
+owner's device on production is gated on the same item.
