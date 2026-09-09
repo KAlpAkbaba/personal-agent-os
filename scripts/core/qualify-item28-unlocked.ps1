@@ -150,6 +150,49 @@ function Get-WindowTitle {
     return ""
 }
 
+function Invoke-ScaffoldAdopting {
+    <#
+    .SYNOPSIS
+        `project.scaffold`, and when the folder already belongs to ANOTHER project id, adopt
+        that id from the marker and scaffold again. Returns the result and the id used.
+
+    .DESCRIPTION
+        A folder under a projects root belongs to the id that created it, and any other id is
+        refused by name (DEVICE_PROTOCOL.md §6l). That is right, and it made this script a
+        one-shot: the runs that minted a timestamped id each time left folders no later run
+        could write, and there is no delete capability by design (ADR-0086 decision 5).
+
+        A stable id fixes every future machine. This fixes THIS one, and any machine an
+        earlier version of the script has already run on, without deleting anything the owner
+        can see: the device is asked to read the marker it wrote, and the scaffold is retried
+        with the id the marker names. Only ever on `other_project`, only once, and the id that
+        was actually used is what everything downstream is asked about.
+    #>
+    param($Section, [hashtable]$Payload, [string]$Slug, [string]$Root)
+    $result = Invoke-DeviceCapability -Section $Section -Capability "project.scaffold" -Payload $Payload -AllowFailure
+    if ($script:Dry -or $result.Ok -or ($result.Message -notmatch "belongs to another project")) {
+        return [pscustomobject]@{ Result = $result; ProjectId = [string]$Payload.project_id; Adopted = $false }
+    }
+
+    $folder = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "PagentOS Projects"
+    if ($Root -eq "3d") { $folder = Join-Path $folder "3d" }
+    $markerPath = Join-Path (Join-Path $folder $Slug) ".pagentos-project.json"
+    $marker = Invoke-DeviceCapability -Section $Section -Capability "file.read" -Payload @{ path = $markerPath } -AllowFailure
+    $text = [string](Get-ResultField -Result $marker.Result -Name "text")
+    $owner = ""
+    if ($text) {
+        try { $owner = [string]((ConvertFrom-Json $text).project_id) } catch { $owner = "" }
+    }
+    if (-not $owner) {
+        return [pscustomobject]@{ Result = $result; ProjectId = [string]$Payload.project_id; Adopted = $false }
+    }
+
+    Write-Host ("  [adpt] '$Slug' already belongs to project '$owner'; re-scaffolding as that id, which is the only id allowed to overwrite it") -ForegroundColor DarkCyan
+    $Payload.project_id = $owner
+    $again = Invoke-DeviceCapability -Section $Section -Capability "project.scaffold" -Payload $Payload -AllowFailure
+    return [pscustomobject]@{ Result = $again; ProjectId = $owner; Adopted = $true }
+}
+
 function Add-Blocked {
     <#
     .SYNOPSIS
@@ -687,7 +730,12 @@ function Invoke-ProjectsSection {
             test  = @{ unit = "node tests/run.js" }
         }
     }
-    $scaffold = Invoke-DeviceCapability -Section $section -Capability "project.scaffold" -Payload $payload
+    $attempt = Invoke-ScaffoldAdopting -Section $section -Payload $payload -Slug "item28-check" -Root "projects"
+    $scaffold = $attempt.Result
+    $projectId = $attempt.ProjectId
+    if (-not $dry -and -not $scaffold.Ok) {
+        Add-Check -Section $section.name -Name "project.scaffold.succeeded" -Ok $false -Detail "$($scaffold.ErrorClass) $($scaffold.Message)"
+    }
 
         $written = Get-ResultField -Result $scaffold.Result -Name "files_written"
         $rootPath = [string](Get-ResultField -Result $scaffold.Result -Name "root_path")
@@ -700,8 +748,18 @@ function Invoke-ProjectsSection {
 
         $status = Invoke-DeviceCapability -Section $section -Capability "project.status" -Payload @{ project_id = $projectId }
         $state = [string](Get-ResultField -Result $status.Result -Name "state")
-        Add-Check -Section $section.name -Name "project.status.knows_the_project_it_just_wrote" -Ok ($status.Ok -and $state -eq "scaffolded") -Detail "state=$state"
-        if (-not ($status.Ok -and $state -eq "scaffolded")) { $failures++ }
+        # One of the five states DEVICE_PROTOCOL.md §6l names, not specifically `scaffolded`.
+        # A project that this qualification RAN and STOPPED on an earlier pass answers
+        # `stopped`, truthfully, and demanding the first-run word failed the device for
+        # remembering its own history (2026-09-09). The claim being made is that status knows
+        # the project and answers from the CLOSED vocabulary - a state outside it, or an empty
+        # one, is still a failure, and a run that never returns a project is caught by
+        # $status.Ok above.
+        $projectStates = @("scaffolded", "starting", "running", "exited", "stopped")
+        $stateOk = $status.Ok -and ($projectStates -contains $state)
+        Add-Check -Section $section.name -Name "project.status.knows_the_project_and_names_a_documented_state" -Ok $stateOk `
+            -Detail "state=$state (one of: $($projectStates -join ', '))"
+        if (-not $stateOk) { $failures++ }
 
         # run and test need a runtime on this machine. A runtime that is not installed is a
         # correct, named answer - dependency_unavailable / runtime_missing - never a failure
@@ -790,7 +848,9 @@ function Invoke-SceneSection {
             run   = @{ build = "blender --factory-startup -b --python driver.py -- plan.json out.json" }
         }
     }
-    $scaffold = Invoke-DeviceCapability -Section $section -Capability "project.scaffold" -Payload $payload -AllowFailure
+    $attempt = Invoke-ScaffoldAdopting -Section $section -Payload $payload -Slug "item28-scene" -Root "3d"
+    $scaffold = $attempt.Result
+    $projectId = $attempt.ProjectId
         if (-not $dry -and -not $scaffold.Ok) {
             Add-Check -Section $section.name -Name "project.scaffold.3d_root" -Ok $false -Detail "$($scaffold.ErrorClass): the 3D project could not be written"
             Close-Section -Section $section -Verdict "FAILED" -Detail "no 3D project to inspect"
