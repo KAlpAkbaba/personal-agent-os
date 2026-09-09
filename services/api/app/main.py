@@ -46,6 +46,7 @@ from app.devices.status import get_status_registry
 from app.documents.service import DocumentService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
+from app.executive import reconcile as executive_reconcile
 from app.executive.routes import router as executive_router
 from app.experience.routes import router as experience_router
 from app.genesis.routes import router as genesis_router
@@ -334,6 +335,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             evolution_tick=lambda session, now: evolution.supervisor.scan(
                 session, now=now, evolution_service=evolution.evolution_service
             ),
+            executive_tick=executive_reconcile.executive_tick,
             interval_s=settings.routine_clock_interval_s,
             enabled=settings.routine_clock_enabled,
         )

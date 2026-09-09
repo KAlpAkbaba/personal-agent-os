@@ -92,6 +92,7 @@ class RoutineClock:
         alarm_tick: Callable[[Session, datetime], Any] | None = None,
         ambient_tick: Callable[[Session, datetime], Any] | None = None,
         evolution_tick: Callable[[Session, datetime], Any] | None = None,
+        executive_tick: Callable[[Session, datetime], Any] | None = None,
         interval_s: float = DEFAULT_INTERVAL_S,
         enabled: bool = True,
     ) -> None:
@@ -102,6 +103,11 @@ class RoutineClock:
         #: M18.4 (spec §3.4): the Evolution Supervisor's scan. Last, and only after the
         #: owner-facing ticks ran, so a slow scan can never delay an alarm.
         self._evolution_tick = evolution_tick
+        #: M26 review finding, second caller: a run whose steps all settled under a build
+        #: that could not settle the run will never settle itself, because no step of it
+        #: will ever settle again. The recompute needs a cadence as well as an event.
+        #: Last, with the evolution scan, for the same reason - never ahead of an alarm.
+        self._executive_tick = executive_tick
         self._interval_s = max(MIN_INTERVAL_S, float(interval_s))
         self._enabled = enabled
         self._task: asyncio.Task[None] | None = None
@@ -170,6 +176,8 @@ class RoutineClock:
                 self._ambient_tick(session, moment)
             if self._evolution_tick is not None:
                 self._evolution_tick(session, moment)
+            if self._executive_tick is not None:
+                self._executive_tick(session, moment)
             self._health.last_error = None
         except Exception as exc:  # noqa: BLE001 - a failing tick must not stop the clock
             self._health.last_error = f"{type(exc).__name__}: {exc}"[:200]
