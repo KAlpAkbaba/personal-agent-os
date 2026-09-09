@@ -55,6 +55,25 @@ REASON_OWNER_LIKELY_ASLEEP: Final = "owner_likely_asleep"
 REASON_NOT_HELD_LONG_ENOUGH: Final = "not_held_long_enough"
 REASON_NO_CONDITION_MET: Final = "no_condition_met"
 REASON_OWNER_TEST: Final = "owner_test"
+
+#: Two owner-initiated darkenings, two holdoffs, because they are not the same act.
+#:
+#: The device refuses ``desktop.display_off`` while input is recent. That is right for the
+#: AUTOMATIC path - the system must not darken a screen someone is working at - and exactly
+#: wrong for a command the owner just gave, because giving it IS recent input.
+#:
+#: ``OWNER_COMMAND_HOLDOFF_S`` is 0: "kapat" means now. The device accepts 0
+#: (``MinHoldoffSeconds``) and its guard reads ``idle < holdoff``, so no recency can refuse
+#: it - while the separate ``alarm_active`` refusal still stands, which is the one an owner
+#: cannot have meant to override. Sending the automatic 120 s here made the owner's own
+#: command refusable for two minutes after they issued it: three attempts on 2026-09-09 were
+#: refused at 3.8 s, 67.6 s and 88.8 s idle, the screens never went dark, and the only thing
+#: the owner could say was "ekran kapama çalışmadı".
+#:
+#: ``OWNER_TEST_HOLDOFF_S`` stays 5. That path ARMS a darkening for a later tick after warning
+#: the owner, so a small guard is deliberate there and its behaviour is already qualified.
+OWNER_COMMAND_HOLDOFF_S: Final = 0
+OWNER_TEST_HOLDOFF_S: Final = 5
 REASON_OWNER_RETURNED: Final = "owner_returned"
 #: ADR-0079 §7: "Ekranı açık tut." is in force.
 REASON_OWNER_KEEP_ON: Final = "owner_keep_on"
@@ -405,6 +424,8 @@ __all__ = [
     "REASON_OWNER_KEEP_ON",
     "REASON_OWNER_RETURNED",
     "REASON_OWNER_TEST",
+    "OWNER_COMMAND_HOLDOFF_S",
+    "OWNER_TEST_HOLDOFF_S",
     "REASON_PERCEPTION_STALE",
     "REASON_POLICY_DISABLED",
     "REASON_UNCERTAIN",

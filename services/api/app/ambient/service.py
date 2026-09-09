@@ -40,6 +40,7 @@ from app.ambient.holdoff import (
 )
 from app.ambient.policy import (
     ACTION_DISPLAY_OFF,
+    OWNER_TEST_HOLDOFF_S,
     REASON_OWNER_RETURNED,
     REASON_OWNER_TEST,
     AmbientInputs,
@@ -334,7 +335,7 @@ def tick(
         # request IS recent input. A short device holdoff (not the automatic policy's 120 s)
         # lets the test run; the automatic path below keeps the long one.
         step = sequence.display_off(
-            session, reason=REASON_OWNER_TEST, holdoff_s=5, now=moment
+            session, reason=REASON_OWNER_TEST, holdoff_s=OWNER_TEST_HOLDOFF_S, now=moment
         )
         _publish_display_intent(step, reason=REASON_OWNER_TEST)
         return AmbientTickResult(

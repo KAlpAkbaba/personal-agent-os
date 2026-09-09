@@ -31,6 +31,7 @@ from app.alarms import speech as alarm_speech
 from app.alarms.models import STATE_CANCELLED, STATE_SNOOZED, STATE_STOPPED
 from app.alarms.sequence import WakeSequence
 from app.alarms.tr_time import parse_when_struct
+from app.ambient import policy
 from app.ambient import service as ambient_service
 from app.ambient.holdoff import SOURCE_INPUT, HoldoffRegistry, set_holdoffs
 from app.ledger.models import ActivityEventRow
@@ -392,6 +393,36 @@ def test_display_off_returns_the_devices_receipt(ctx, session, device) -> None:
     assert result["terminal_status"] == TERMINAL_VERIFIED
     assert result["speech"] == alarm_speech.DISPLAY_OFF_VERIFIED_TR
     assert device.count("desktop.display_off") == 1
+
+
+def test_the_owner_asking_gets_the_OWNER_holdoff_not_the_automatic_one(
+    ctx, session, device
+) -> None:
+    """The owner's own command must be able to succeed while the owner is present.
+
+    2026-09-09, from the device rows: three `desktop.display_off` commands sent as
+    `{"reason": "owner_command", "holdoff_s": 120}` and refused every time -
+    `{"refused": "recent_input", "input_idle_s": 3.8 / 67.6 / 88.8}`. The screens never went
+    dark, and the owner said only "ekran kapama çalışmadı".
+
+    The device refuses while input is recent, and that is right for the AUTOMATIC path: the
+    system must not darken a screen someone is working at. It is exactly wrong here. Asking
+    for the screen to go off IS recent input, so sending the automatic 120 s made the owner's
+    command refusable for two minutes after they issued it, and grantable only if they then
+    sat perfectly still. `app.ambient.service`'s owner-test path already knew this and passed
+    the short holdoff with a comment saying why; this path did not.
+    """
+    tools_ambient.display_off(ctx, {})
+
+    payload = device.payload_for("desktop.display_off")
+    assert payload is not None
+    assert payload["holdoff_s"] == policy.OWNER_COMMAND_HOLDOFF_S
+    # Zero, and it has to be: the device's guard reads `idle < holdoff`, so anything above
+    # zero can still refuse a command the owner gave a moment ago. Five would have refused
+    # the owner's first attempt, which came in at 3.8 s idle.
+    assert policy.OWNER_COMMAND_HOLDOFF_S == 0
+    # The ARMED test is a different act and keeps its own small guard.
+    assert policy.OWNER_TEST_HOLDOFF_S > 0
 
 
 def test_a_device_refusal_is_spoken_and_starts_the_input_holdoff(

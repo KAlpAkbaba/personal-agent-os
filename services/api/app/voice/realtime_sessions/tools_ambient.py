@@ -44,6 +44,7 @@ from app.alarms.tr_time import (
     parse_when_text,
 )
 from app.ambient import service as ambient_service
+from app.ambient.policy import OWNER_COMMAND_HOLDOFF_S
 from app.ledger.vocabulary import SUBSYSTEM_AMBIENT, SUBSYSTEM_ROUTINE
 from app.logging import get_logger
 from app.voice.errors import VoiceError, VoiceErrorClass
@@ -406,7 +407,21 @@ def display_off(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             speech=alarm_speech.DISPLAY_OFF_NO_DEVICE_TR,
             error_class=ERROR_NO_CAPABLE_DEVICE,
         )
-    step = sequence.display_off(db, reason=reason, action_id=_action_id(ctx), now=ctx.now)
+    # The OWNER asked, so the owner's holdoff - not the automatic policy's 120 s.
+    #
+    # The device refuses while input is recent, which protects a screen someone is working
+    # at. Asking for the screen to go off IS recent input, so sending the automatic holdoff
+    # made this command refusable for two minutes after the owner issued it and grantable
+    # only if they then sat still. Three attempts on 2026-09-09 were refused at 3.8 s, 67.6 s
+    # and 88.8 s idle. The ambient module already knew this - its owner-test path passes the
+    # short holdoff with a comment saying exactly why - and this path did not.
+    step = sequence.display_off(
+        db,
+        reason=reason,
+        holdoff_s=OWNER_COMMAND_HOLDOFF_S,
+        action_id=_action_id(ctx),
+        now=ctx.now,
+    )
     policy = ambient_service.get_policy(db)
     ambient_service.note_display_refusal(step.reason, policy=policy, now=ctx.now)
     speech = alarm_speech.display_off_speech(
