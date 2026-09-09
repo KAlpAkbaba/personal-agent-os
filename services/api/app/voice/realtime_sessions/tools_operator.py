@@ -21,6 +21,7 @@ fakes the same way, docs/M18_ACTION_CONTRACT.md §4).
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -55,7 +56,7 @@ from app.operator.plans import type_text as build_type_text_steps
 from app.operator.service import Plan
 from app.operator.task import STATUS_SUCCEEDED
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intents import contains_secret_reference, normalize_transcript
+from app.voice.intents import contains_secret_reference, normalize_transcript, turkish_casefold
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -132,12 +133,36 @@ SPEECH_NOTHING_RUNNING: Final = "Şu anda çalışan bir işlem yok efendim."
 SPEECH_CANCELLED: Final = "İptal ettim efendim."
 SPEECH_NOT_DOING_ANYTHING: Final = "Şu anda bir şey yapmıyorum efendim."
 SPEECH_TYPE_SUCCESS: Final = "Yazdım efendim."
+#: Only for a run that REACHED the keyboard and could not read the text back afterwards.
+#: A plan that never got that far says which step stopped it instead — telling the owner
+#: "metni doğrulayamadım" when no key was ever pressed sends them looking in the wrong
+#: place, which is exactly what happened on 2026-09-09.
 SPEECH_TYPE_FAILURE: Final = "Yazamadım efendim; metni doğrulayamadım."
+SPEECH_TYPE_NOT_ATTEMPTED: Final = "Yazamadım efendim; pencereyi öne getiremedim."
 SPEECH_IP_FAILURE: Final = "IP adresini okuyamadım efendim."
 SPEECH_HOSTNAME_FAILURE: Final = "Bilgisayarın adını okuyamadım efendim."
 
 ERROR_UNKNOWN_APPLICATION: Final = "unknown_application"
 ERROR_SECRET_REFUSED: Final = "secret_refused"
+
+#: ``w-<positive long handle>-<ulong creation tick>`` — the device's own window id shape.
+_WINDOW_ID_SHAPE: Final = re.compile(r"^w-(?P<handle>[0-9]+)-(?P<tick>[0-9]+)$")
+_LONG_MAX: Final = 2**63 - 1
+_ULONG_MAX: Final = 2**64 - 1
+
+
+def _speech_no_window_named(db: Session, name: str) -> str:
+    """No known window carries that title. Name what IS open rather than asking blindly:
+    the owner can then point at one of them."""
+    known = [entry.label for entry in focus_module.stack(db, FOCUS_KIND_WINDOW) if entry.label]
+    if not known:
+        return SPEECH_NO_WINDOW
+    return f"'{name}' diye bir pencere görmüyorum efendim; açık olanlar: {', '.join(known)}."
+
+
+def _speech_ambiguous_window(matched: list[focus_module.FocusEntry]) -> str:
+    titles = ", ".join(dict.fromkeys(entry.label for entry in matched if entry.label))
+    return f"Hangisi efendim: {titles}?"
 
 
 def _allowlist_speech() -> str:
@@ -224,13 +249,76 @@ def _clarification(speech: str) -> dict[str, Any]:
     return {"status": "needs_clarification", "speech": speech, "candidates": []}
 
 
+def _is_window_id(value: str) -> bool:
+    """True when the device's own parser would accept ``value`` as a window id.
+
+    Faithful to ``WindowRegistry.TryParseHandle`` on the Windows companion
+    (devices/windows-agent/.../Operator/WindowRegistry.cs): split on "-", exactly three
+    parts, the literal "w", a POSITIVE ``long`` handle and a ``ulong`` creation tick, all
+    decimal digits (``NumberStyles.None`` — no sign, no whitespace, no separators). A
+    structural test reads that C# source so the two halves cannot drift apart.
+
+    This exists because a window TITLE is not a window id, and the device says so with a
+    non-retryable ``validation_error`` before it looks at any window at all.
+    """
+    match = _WINDOW_ID_SHAPE.match(value)
+    if match is None:
+        return False
+    handle = int(match.group("handle"))
+    return 0 < handle <= _LONG_MAX and int(match.group("tick")) <= _ULONG_MAX
+
+
+def _named_windows(db: Session, name: str) -> list[focus_module.FocusEntry]:
+    """The known windows whose title matches the spoken ``name``, most recent first.
+
+    Matching is Turkish-case-insensitive and containment in either direction, because an
+    owner says "not defteri" for a window whose real title is "Adsız - Not Defteri".
+    """
+    needle = turkish_casefold(name).strip()
+    if not needle:
+        return []
+    matched = []
+    for entry in focus_module.stack(db, FOCUS_KIND_WINDOW):
+        label = turkish_casefold(entry.label).strip()
+        if label and (needle in label or label in needle):
+            matched.append(entry)
+    return matched
+
+
 def _resolve_window_id(
     db: Session, *, action: str, window_ref: str
 ) -> tuple[str | None, str | None]:
-    """(window_id, refusal_speech). ``window_ref`` outside {"current", "previous"} is
-    already a literal window id (a direct caller/test target)."""
+    """(window_id, refusal_speech).
+
+    ``window_ref`` outside {"current", "previous"} is a window id ONLY when it has the
+    device's shape; otherwise it is a NAME the owner or the model said, and this resolves
+    it against the durable focus stack — the server's own record of real windows, written
+    from real device receipts (``app.operator.service._maybe_set_window_focus``).
+
+    It never forwards an unrecognised string as an id. Doing so was a real owner-visible
+    defect (2026-09-09): the model passed ``target: "Not Defteri"``, this function handed
+    it to the device verbatim, and eight ``window.activate`` calls were refused with
+    ``'Not Defteri' is not a window id (expected w-<hwnd>-<tick>)`` while the correct id
+    for that very window — ``w-10160952-365601875``, labelled "Adsız - Not Defteri" —
+    sat in the focus stack, written thirteen seconds earlier by the ``app.launch`` that
+    opened it. Nothing was ever typed. The module docstring's promise ("never a window id
+    the model guessed") is now what the code does.
+
+    Several windows may match a spoken name. When they all carry the SAME title the owner
+    cannot tell them apart either, so the most recent one wins — recency is the owner's
+    own last interaction, which is the whole reason the focus stack is ordered. When the
+    matching titles DIFFER the name was genuinely ambiguous, and this asks.
+    """
     if window_ref not in ("current", "previous") and window_ref:
-        return window_ref, None
+        if _is_window_id(window_ref):
+            return window_ref, None
+        matched = _named_windows(db, window_ref)
+        if not matched:
+            return None, _speech_no_window_named(db, window_ref)
+        labels = {turkish_casefold(entry.label).strip() for entry in matched}
+        if len(labels) > 1:
+            return None, _speech_ambiguous_window(matched)
+        return matched[0].object_id, None
     if action == "previous" or window_ref == "previous":
         entry = focus_module.previous(db, FOCUS_KIND_WINDOW)
         if entry is None:
@@ -401,8 +489,24 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         steps=build_type_text_steps(window_id, text),
     )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
-    speech = SPEECH_TYPE_SUCCESS if task.status == STATUS_SUCCEEDED else SPEECH_TYPE_FAILURE
-    return {**(task.action_receipt or {}), "speech": speech}
+    return {**(task.action_receipt or {}), "speech": _type_speech(task)}
+
+
+def _type_speech(task: Any) -> str:
+    """The sentence the owner hears for a typing run — the step that actually stopped it.
+
+    ``type_text`` is activate -> type -> verify, and the old code read only the task's
+    final status, so EVERY failure said "metni doğrulayamadım" (I could not verify the
+    text). On 2026-09-09 the owner was told exactly that for a run whose first step never
+    reached the keyboard: the plan died on ``window.activate`` and no key was pressed.
+    A sentence about verification is only honest once something was typed.
+    """
+    if task.status == STATUS_SUCCEEDED:
+        return SPEECH_TYPE_SUCCESS
+    typed = any(
+        receipt.ok and receipt.capability == "keyboard.type" for receipt in (task.receipts or [])
+    )
+    return SPEECH_TYPE_FAILURE if typed else SPEECH_TYPE_NOT_ATTEMPTED
 
 
 # ------------------------------------------------------------------------ shell
@@ -535,15 +639,26 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
                 "pencereyi küçült'), eski haline getirir, ya da önceki pencereye döner "
                 "('önceki pencereye dön'). 'action' alanına close/maximize/minimize/"
                 "restore/activate/previous'tan birini ver; hangi pencere olduğunu sunucu "
-                "kendi odak kaydından çözer. Sunucu bir pencere bulamazsa "
-                "'needs_clarification' döner - o soruyu aynen sor. Dönen 'speech' metnini "
-                "aynen oku."
+                "kendi odak kaydından çözer. 'window' alanını NORMALDE HİÇ VERME. "
+                "Yalnızca sahip birden fazla pencere arasından belirli birini "
+                "söylediyse o pencerenin ADINI yaz; sunucu adı kendi kaydıyla eşler. "
+                "Pencere kimliği UYDURMA. Sunucu bir pencere bulamazsa ya da ad birden "
+                "fazla pencereye uyuyorsa 'needs_clarification' döner - o soruyu aynen "
+                "sor. Dönen 'speech' metnini aynen oku."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "action": {"type": "string", "enum": list(_WINDOW_ACTIONS)},
-                    "window": {"type": "string", "maxLength": 128},
+                    "window": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "description": (
+                            "Optional. The window's NAME as the owner said it, or an id "
+                            "'w-<handle>-<tick>' returned by an earlier result. Omit it "
+                            "to act on the focused window."
+                        ),
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -557,16 +672,26 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
                 "Odaktaki pencereye METİN YAZAR: 'buraya X yaz', 'bu kutuya X yaz', "
                 "'seçili yere X yaz'. 'content' alanına yazılacak metni ver. Şifre, "
                 "parola ya da PIN gibi görünen bir metin YAZMA İSTEĞİNİ HER ZAMAN "
-                "REDDET; sunucu da kendi tarafında reddeder. Sunucu hangi pencereye "
-                "yazacağını bilemezse ya da ne yazılacağı belli değilse "
-                "'needs_clarification' döner - o soruyu aynen sor. Dönen 'speech' "
-                "metnini aynen oku."
+                "REDDET; sunucu da kendi tarafında reddeder. 'target' alanını NORMALDE "
+                "HİÇ VERME - sunucu odaktaki pencereyi kendi kaydından bilir. Yalnızca "
+                "sahip belirli bir pencere söylediyse o pencerenin ADINI yaz; pencere "
+                "kimliği UYDURMA. Sunucu hangi pencereye yazacağını bilemezse ya da ne "
+                "yazılacağı belli değilse 'needs_clarification' döner - o soruyu aynen "
+                "sor. Dönen 'speech' metnini aynen oku."
             ),
             parameters={
                 "type": "object",
                 "properties": {
                     "content": {"type": "string", "maxLength": 2000},
-                    "target": {"type": "string", "maxLength": 128},
+                    "target": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "description": (
+                            "Optional. The window's NAME as the owner said it, or an id "
+                            "'w-<handle>-<tick>' returned by an earlier result. Omit it "
+                            "to type into the focused window."
+                        ),
+                    },
                 },
                 "additionalProperties": False,
             },

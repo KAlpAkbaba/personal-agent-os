@@ -8188,3 +8188,77 @@ session carries no stale marker. What this ADR does **not** close is the real-br
 web shell's login gate needs the owner's credential, which is theirs to enter, and the realtime
 provider has no credits (item 29). The running dev server was verified to be serving all four
 parts of the fix, so the next connect exercises it without a restart.
+
+## ADR-0100 — A title is not a window id: the model's helpful argument, forwarded verbatim (2026-09-09)
+
+**Owner report.** "not defterine yazı yazılamıyor" — Notepad opens, nothing can be typed into
+it. Then, unprompted: "validation error hatası varmış metni doğrulayamıyormuş."
+
+**What the production rows say.** Three minutes of `device_commands` on the owner's device
+tell the whole story, and they contain their own control case:
+
+| 19:03:02 | `app.launch {"application": "notepad"}` | succeeded, `window_id: w-10160952-365601875`, title "Adsız - Not Defteri" |
+| 19:03:02 | `window.current` | succeeded, same id |
+| 19:03:15 … 19:04:53 | `window.activate {"window_id": "Not Defteri"}` × 8 | **failed, `validation_error`** — `'Not Defteri' is not a window id (expected w-<hwnd>-<tick>)` |
+| 19:06:42 → 19:06:47 | `window.close` → `window.list` → `app.launch` → `window.current` → `window.activate {"window_id": "w-16058812-365824437"}` → `keyboard.type` → `ui.inspect` ×2 | **all succeeded** |
+
+Same device, same Notepad, four minutes apart. The run that used a real id typed the text; the
+run that used the window's *title* never reached the keyboard. Eight rows, not four, because
+`app.operator.plans.activate_window` carries `retries=1`.
+
+**Root cause.** `tools_operator._resolve_window_id` read:
+
+```python
+if window_ref not in ("current", "previous") and window_ref:
+    return window_ref, None   # "already a literal window id (a direct caller/test target)"
+```
+
+That comment was true of the only callers it was written for — tests. In production the value
+is the MODEL's optional `target`/`window` argument, and the model, asked to type into Notepad,
+filled it with what it knew Notepad was called. The string went to the device as an id.
+
+The module's own docstring promised the opposite — "never a window id the model guessed" — and
+the tool description told the model "hangi pencere olduğunu sunucu kendi odak kaydından çözer"
+while the JSON schema beside it offered a free-form `window` string. **The model resolved that
+contradiction the only way it could: by filling the field.** A schema is half of what a model
+reads; prose that contradicts it does not win.
+
+**The server already knew the answer.** `object_focus` held
+`w-10160952-365601875 / "Adsız - Not Defteri" / operator_launch`, written thirteen seconds
+before the first refusal by `OperatorService._maybe_set_window_focus` from the `app.launch`
+receipt itself. The correct id was one lookup away for every one of those eight calls.
+
+**Second defect, found while reading the first.** Every failure of the three-step `type_text`
+plan (activate → type → verify) spoke one sentence: "Yazamadım efendim; metni doğrulayamadım."
+The owner repeated it back to me. It was false — no key was ever pressed, so there was no text
+to verify. The plan's LAST step was narrating a failure that happened in its FIRST. The same
+cause-vs-consequence overwrite ADR-0099 fixed in the realtime overlay.
+
+**Fix.**
+1. `_resolve_window_id` accepts a literal id only when it *has the device's shape*
+   (`_is_window_id`, faithful to `WindowRegistry.TryParseHandle`). Anything else is a NAME:
+   resolved against the durable focus stack, Turkish-case-insensitively, containment either way
+   ("not defteri" finds "Adsız - Not Defteri"). No match, or matches with DIFFERENT titles →
+   `needs_clarification` naming what is open. Matches sharing ONE title → the most recent, because
+   two untitled Notepads are indistinguishable to the owner too and "which one?" is a question
+   they cannot answer.
+2. `operator.type`'s failure speech is chosen from the receipts: a run that never reached
+   `keyboard.type` says `SPEECH_TYPE_NOT_ATTEMPTED`, never "metni doğrulayamadım".
+3. Both tool schemas now carry a `description` on `window`/`target` saying what the field takes,
+   and the prose tells the model not to invent an id (`UYDURMA`).
+
+**Why no test caught it.** `tests.alarms_support.FakeDeviceAction` accepted any `window_id`, and
+every fixture id in the repo — `"w-1"`, `"w-0"`, `"w-2"` — is one the real device REFUSES
+(`w-0` is a zero handle; the rest have two parts, not three). The suite was green because the
+fake was kinder than the thing it stood in for. The fake now returns the device's own
+`validation_error` for an id the device would reject, and the fixtures use device-shaped ids.
+
+**Regression.** `tests/unit/test_operator_window_ref.py`, 13 checks. Reverting the two fixes
+fails 8 of them, watched. Among them a structural guard reading
+`devices/windows-agent/.../WindowRegistry.cs` and asserting the server's `_is_window_id` and the
+test fake's copy both still match the C# parser's four rules — the "contract halves must read
+each other" discipline, applied across the language boundary this incident crossed.
+
+**Consequences.** A window name from any source now either resolves to a real id or becomes a
+question. Nothing that is not a device-shaped id can reach a device payload from these tools, and
+a structural test says so over the whole family.

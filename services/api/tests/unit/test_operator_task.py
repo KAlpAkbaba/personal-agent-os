@@ -24,6 +24,7 @@ from app.operator.task import (
     run_task,
 )
 from app.routines.dispatch import DeviceRunResult
+from tests.alarms_support import window_id as window_id_for
 
 
 @dataclass
@@ -171,7 +172,7 @@ def test_a_modal_in_the_result_fails_the_task_naming_the_dialog() -> None:
     device = SequencedDeviceAction(
         queues={"app.close": [ok(closed=False, modal={"title": "Save changes?"})]}
     )
-    task = _task([OperatorStep(capability="app.close", payload={"window_id": "w-1"})])
+    task = _task([OperatorStep(capability="app.close", payload={"window_id": window_id_for(1)})])
     run_task(task, device)
 
     assert task.status == STATUS_FAILED

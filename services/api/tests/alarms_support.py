@@ -7,6 +7,7 @@ Nothing here opens a browser, plays audio, changes a volume or touches a display
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -43,9 +44,38 @@ def build_session_factory() -> sessionmaker[Session]:
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 
+#: The Windows companion's own window-id shape, restated here from its source rather than
+#: imported from the server it is meant to police: ``WindowRegistry.TryParseHandle`` splits
+#: on "-", demands exactly three parts, the literal "w", a POSITIVE ``long`` handle and a
+#: ``ulong`` creation tick, all plain decimal digits. ``tests/unit/test_operator_window_ref``
+#: reads the C# and asserts this and the server's copy both still match it.
+_DEVICE_WINDOW_ID = re.compile(r"^w-(?P<handle>[0-9]+)-(?P<tick>[0-9]+)$")
+
+
+def device_window_id_ok(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = _DEVICE_WINDOW_ID.match(value)
+    if match is None:
+        return False
+    return 0 < int(match.group("handle")) <= 2**63 - 1 and int(match.group("tick")) <= 2**64 - 1
+
+
+#: A device-shaped id for tests. The literal ids this file used to hand out ("w-1", "w-0")
+#: were ones the REAL device refuses outright, which is why a whole suite stayed green
+#: while production spent an owner's turn on ``validation_error`` (2026-09-09).
+def window_id(n: int = 1) -> str:
+    return f"w-{9000 + n}-365601875"
+
+
 @dataclass
 class FakeDeviceAction:
     """A ``DeviceActionPort`` that records every call and answers from a script.
+
+    It REFUSES a ``window_id`` the real device would refuse, with that device's own
+    ``validation_error``. A fake that is kinder than the thing it stands in for does not
+    catch anything: on 2026-09-09 the server sent the model's window TITLE where an id
+    belongs, every test passed, and the owner's Notepad never received a keystroke.
 
     ``results`` maps a capability name to the ``DeviceRunResult`` it should return; anything
     unscripted succeeds with an empty result, which is deliberately the LEAST informative
@@ -77,6 +107,12 @@ class FakeDeviceAction:
                 "timeout_s": timeout_s,
             }
         )
+        if "window_id" in payload and not device_window_id_ok(payload["window_id"]):
+            return DeviceRunResult(
+                False,
+                "validation_error",
+                f"'{payload['window_id']}' is not a window id (expected w-<hwnd>-<tick>)",
+            )
         scripted = self.results.get(capability, DeviceRunResult(True, result={}))
         return scripted(payload) if callable(scripted) else scripted
 
@@ -115,7 +151,7 @@ def refused(reason: str, **extra: Any) -> DeviceRunResult:
 #: is EMPTY (the window already gone) because the only plan that calls it is
 #: ``close_window``'s second step, and its postcondition is "the window is gone".
 _OPERATOR_WINDOW: dict[str, Any] = {
-    "window_id": "w-1",
+    "window_id": window_id(1),
     "pid": 4242,
     "title": "Adsız - Not Defteri",
     "state": "normal",
@@ -132,14 +168,14 @@ _OPERATOR_WINDOW: dict[str, Any] = {
 #: hostname's spoken value.
 def _activate_result(payload: dict[str, Any]) -> DeviceRunResult:
     """Echoes back the requested ``window_id`` (M19: a plan that resolved the PREVIOUS
-    window's id must see THAT id come back foreground, not always "w-1")."""
-    window_id = str(payload.get("window_id") or "w-1")
-    return ok(window={**_OPERATOR_WINDOW, "window_id": window_id, "foreground": True})
+    window's id must see THAT id come back foreground, not always the same one)."""
+    requested = str(payload.get("window_id") or window_id(1))
+    return ok(window={**_OPERATOR_WINDOW, "window_id": requested, "foreground": True})
 
 
 def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
     return {
-        "app.launch": ok(pid=4242, window_id="w-1", title="Adsız - Not Defteri"),
+        "app.launch": ok(pid=4242, window_id=window_id(1), title="Adsız - Not Defteri"),
         "window.current": ok(window=dict(_OPERATOR_WINDOW)),
         "window.list": ok(windows=[]),
         "window.activate": _activate_result,
@@ -149,7 +185,7 @@ def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
         ),
         "window.restore": ok(window={**_OPERATOR_WINDOW, "state": "normal"}),
         "window.close": ok(closed=True),
-        "keyboard.type": ok(typed_chars=8, window_id="w-1"),
+        "keyboard.type": ok(typed_chars=8, window_id=window_id(1)),
         "ui.inspect": ok(
             root={
                 "automation_id": "15",

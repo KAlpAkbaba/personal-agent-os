@@ -148,6 +148,7 @@ from app.weather.models import WeatherQueryEvidenceRow
 from app.weather.providers import FakeWeatherProvider
 from app.weather.service import WeatherService
 from tests.alarms_support import FakeDeviceAction, happy_device_results
+from tests.alarms_support import window_id as window_id_for
 from tests.appfactory_support import appfactory_capability_results
 from tests.artifacts_support import artifact_capability_results
 from tests.creative3d_support import FakeCreative3DDevice
@@ -577,15 +578,15 @@ class Harness:
                 disable_eye(db, reason="corpus_context", action_id="corpus-eye-off")
                 db.commit()
         elif context == CTX_WINDOW_FOCUSED:
-            # Two DISTINCT rows: "w-0" (an older window) then "w-1" (current), so both
-            # focus.current() -> "w-1" and focus.previous() -> "w-0" resolve to something
+            # Two DISTINCT rows: an older window then the current one, so both
+            # focus.current() and focus.previous() resolve to something
             # real ("Önceki pencereye dön." needs a genuine previous window to activate).
             with self.factory() as db:
                 base = datetime.now(UTC) - timedelta(seconds=5)
                 operator_focus.set_focus(
                     db,
                     FOCUS_KIND_WINDOW,
-                    "w-0",
+                    window_id_for(0),
                     label="Hesap Makinesi",
                     source="test_context",
                     now=base,
@@ -593,7 +594,7 @@ class Harness:
                 operator_focus.set_focus(
                     db,
                     FOCUS_KIND_WINDOW,
-                    "w-1",
+                    window_id_for(1),
                     label="Adsız - Not Defteri",
                     source="test_context",
                     now=base + timedelta(seconds=1),
@@ -772,7 +773,7 @@ class Harness:
                 operator_focus.set_focus(
                     db,
                     FOCUS_KIND_WINDOW,
-                    "w-1",
+                    window_id_for(1),
                     label="Adsız - Not Defteri",
                     source="test_context",
                     now=datetime.now(UTC),

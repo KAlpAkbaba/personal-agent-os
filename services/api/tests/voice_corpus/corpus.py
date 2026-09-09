@@ -46,7 +46,7 @@ CTX_ALARM_WAKE_SONG_SET: Final = "alarm_wake_song_set"
 #: item H: never the owner's real song). A corpus-only fixture id, never a real video.
 CTX_ALARM_WAKE_SONG_URL: Final = "https://www.youtube.com/watch?v=CorpusApprovedWakeSong"
 CTX_EYE_DISABLED: Final = "eye_disabled"
-#: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §5): a window ("w-1", and an older "w-0") is
+#: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §5): a window (and an older one) is
 #: already the durable object focus - the window-control and type-text families resolve
 #: their target through it, never through a window id the model guessed.
 CTX_WINDOW_FOCUSED: Final = "window_focused"

@@ -38,7 +38,11 @@ from app.voice.realtime_sessions.models import RealtimeSessionRow, RealtimeToolC
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
-from tests.alarms_support import FakeDeviceAction, happy_operator_device_results
+from tests.alarms_support import (
+    FakeDeviceAction,
+    happy_operator_device_results,
+)
+from tests.alarms_support import window_id as window_id_for
 from tests.identity_support import IDENTITY_TABLES
 
 VENDOR_KEY = "unit-test-vendor-key-sentinel-must-never-leave-the-server"
@@ -154,7 +158,7 @@ def _tool(client, sid: str, name: str, arguments: dict) -> dict:
     return response.json()
 
 
-def _focus_window(factory, *, window_id: str = "w-1") -> None:
+def _focus_window(factory, *, window_id: str = window_id_for(1)) -> None:
     with factory() as db:
         operator_focus.set_focus(
             db, FOCUS_KIND_WINDOW, window_id, label="Adsız - Not Defteri", source="test"
@@ -179,7 +183,7 @@ def test_app_open_launches_notepad_and_focuses_its_window() -> None:
 
     with factory() as db:
         current = operator_focus.current(db, FOCUS_KIND_WINDOW)
-    assert current is not None and current.object_id == "w-1"
+    assert current is not None and current.object_id == window_id_for(1)
 
 
 def test_app_open_never_reaches_the_browser_worker() -> None:
@@ -270,12 +274,12 @@ def test_window_previous_activates_the_older_window() -> None:
     base = datetime.now(UTC)
     with factory() as db:
         operator_focus.set_focus(
-            db, FOCUS_KIND_WINDOW, "w-0", label="Hesap Makinesi", source="t", now=base
+            db, FOCUS_KIND_WINDOW, window_id_for(0), label="Hesap Makinesi", source="t", now=base
         )
         operator_focus.set_focus(
             db,
             FOCUS_KIND_WINDOW,
-            "w-1",
+            window_id_for(1),
             label="Not Defteri",
             source="t",
             now=base + timedelta(seconds=1),
@@ -285,7 +289,7 @@ def test_window_previous_activates_the_older_window() -> None:
     call = _tool(client, sid, "operator.window_control", {})
     assert call["status"] == "succeeded", call
     assert device.capabilities_called() == ["window.activate"]
-    assert device.payload_for("window.activate") == {"window_id": "w-0"}
+    assert device.payload_for("window.activate") == {"window_id": window_id_for(0)}
 
 
 # --------------------------------------------------------------------------------- type
