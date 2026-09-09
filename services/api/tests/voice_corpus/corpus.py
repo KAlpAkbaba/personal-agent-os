@@ -4164,7 +4164,7 @@ def _news_negative_cases() -> list[UtteranceCase]:
             side_effects=SIDE_EFFECTS_DISPLAY_WAKE,
             category="news",
             source="regression",
-            regression_issue_id="Latest News Mode spec §6: 'haber' noun required, never a bare 'aç'",
+            regression_issue_id="news spec §6: 'haber' noun required, never a bare 'aç'",
         ),
         UtteranceCase(
             case_id="n.neg.eye_enable_untouched",
@@ -4174,7 +4174,7 @@ def _news_negative_cases() -> list[UtteranceCase]:
             expected_response=RESPONSE_OK,
             category="news",
             source="regression",
-            regression_issue_id="Latest News Mode spec §6: 'haber' noun required, never a bare 'aç'",
+            regression_issue_id="news spec §6: 'haber' noun required, never a bare 'aç'",
         ),
     ]
 
