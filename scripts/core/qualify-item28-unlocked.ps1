@@ -966,31 +966,36 @@ function Invoke-NativeAppSection {
         }
     }
 
-    # LAUNCH, through `file.open` rather than `app.launch`, and the difference is the point.
+    # LAUNCH, through `app.launch` with the absolute path - the ONE capability that can start
+    # an application this system built (ADR-0098).
     #
-    # `app.launch` allowlists a NAME, or an absolute path under Program Files / Windows, so
-    # it cannot start a freshly built application. `file.open` takes `payload.path` through
-    # RequireAuthorisedPath - resolve-then-contain against the owner's authorised roots -
-    # and with no `application` runs it with ShellExecute, answering with pid, window_id and
-    # the window it observed. The native root IS an authorised root (the M28 device work
-    # added it: "where a compiler runs and where the artefact it produced is read back
-    # from"), so this needs no device change and widens no authority: the file must already
-    # be inside a root the owner authorised, which is the same root a compiler runs in.
+    # This section used to send `file.open`, on the reasoning that the native root is an
+    # authorised root and `file.open` resolves-then-contains against those roots. The live run
+    # on 2026-09-09 answered that reasoning in one line: *"'notlarim.exe' is executable;
+    # file.open opens documents, app.launch runs programs"*. It refuses executables BY NAME and
+    # always did. `app.launch` then refused too - *"nor an absolute .exe under Program Files /
+    # Windows"* - and between the two of them nothing on the device could start what the
+    # factory had just built. ADR-0098 gave `app.launch` the native root, resolve-then-contain
+    # against that ONE root and no other, so this is the call that exercises it.
+    #
+    # An absolute path takes NO arguments (ArgumentPolicy.None), which is what this sends.
     # PowerShell 5.1: no null-coalescing operator, on purpose (docs/OWNER_ACTIONS.md).
     $launchTarget = if ($exe) { $exe } else { "<the freshly built EXE>" }
-    $launch = Invoke-DeviceCapability -Section $section -Capability "file.open" -Payload @{ path = $launchTarget } -AllowFailure
+    $launch = Invoke-DeviceCapability -Section $section -Capability "app.launch" -Payload @{ application = $launchTarget } -AllowFailure
     if (-not $dry -and -not $launch.Ok) {
-        Add-Check -Section $section.name -Name "native.launch.started_from_the_authorised_root" -Ok $false `
-            -Detail "file.open refused the built application with '$($launch.ErrorClass)': $($launch.Message)"
+        Add-Check -Section $section.name -Name "native.launch.started_from_the_native_root" -Ok $false `
+            -Detail "app.launch refused the built application with '$($launch.ErrorClass)': $($launch.Message)"
         Close-Section -Section $section -Verdict "FAILED" -Detail "built and validated; the device would not start it"
         return $section
     }
+    Add-Check -Section $section.name -Name "native.launch.started_from_the_native_root" -Ok ($dry -or $launch.Ok) `
+        -Detail "app.launch started $launchTarget - the capability ADR-0098 taught to reach the native root"
 
     $launchPid = Get-ResultField -Result $launch.Result -Name "pid"
     $windowId = [string](Get-ResultField -Result $launch.Result -Name "window_id")
     if (-not $dry -and -not $windowId -and $launchPid) {
-        # file.open waits only three seconds for a window, and a self-contained WPF
-        # application's first cold start can take longer. A missing window_id here is a
+        # app.launch waits at most ten seconds for a top-level window, and a self-contained
+        # WPF application's first cold start can take longer. A missing window_id here is a
         # slow start, not a failure - so ask again by pid rather than concluding anything.
         Start-Sleep -Seconds 5
         $listed = Invoke-DeviceCapability -Section $section -Capability "window.list" -Payload @{ pid = [int]$launchPid } -AllowFailure
@@ -1016,7 +1021,7 @@ function Invoke-NativeAppSection {
     # persistence the generated project's own tests prove headlessly, now through a window.
     [void](Invoke-DeviceCapability -Section $section -Capability "window.close" -Payload @{ window_id = $windowId } -AllowFailure)
     Start-Sleep -Seconds 2
-    $relaunch = Invoke-DeviceCapability -Section $section -Capability "file.open" -Payload @{ path = $launchTarget } -AllowFailure
+    $relaunch = Invoke-DeviceCapability -Section $section -Capability "app.launch" -Payload @{ application = $launchTarget } -AllowFailure
     $reWindow = [string](Get-ResultField -Result $relaunch.Result -Name "window_id")
     $rePid = Get-ResultField -Result $relaunch.Result -Name "pid"
     if (-not $dry -and -not $reWindow -and $rePid) {

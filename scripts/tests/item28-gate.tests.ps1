@@ -136,6 +136,36 @@ finally {
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# --------------------------------- the two halves of the launch, held against each other
+# The qualification asks the device to start what it built; the device decides whether it may.
+# Both sides can be green while they drift apart, and on 2026-09-09 they did: the script sent
+# `file.open`, which refuses executables BY NAME, and the device's own rule knew only Program
+# Files. So each half is asserted against the OTHER FILE's source here.
+Write-Host ""
+Write-Host "the launch, as both halves spell it"
+
+$qualifier = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\core\qualify-item28-unlocked.ps1") -Raw
+$launchSites = @([regex]::Matches($qualifier, 'Capability "app\.launch" -Payload @\{ application = \$launchTarget')).Count
+Assert-True ($launchSites -eq 2) `
+    "BOTH the launch and the relaunch start the built application with app.launch and an absolute path ($launchSites site(s)) - a count, because a single -match is satisfied by either one of them alone"
+Assert-True (-not ($qualifier -match 'Capability "file\.open" -Payload @\{ path = \$launchTarget')) `
+    "...and never with file.open, which answers 'file.open opens documents, app.launch runs programs'"
+
+$companion = Get-Content -LiteralPath (Join-Path $repoRoot "devices\windows-agent\src\PagentOS.SessionCompanion\Operator\OperatorCapabilities.cs") -Raw
+Assert-True ($companion -match "ResolveNativeBuiltExecutable") `
+    "the device half exists: app.launch resolves an application built under the native root (ADR-0098)"
+Assert-True ($companion -match "IsWithin\(resolvedExe, resolvedRoot\)") `
+    "...by resolve-then-contain against that ONE root, not a prefix compare"
+Assert-True ($companion -match "EffectiveProjectsRootNative") `
+    "...and the root it uses is the configured native root, not a literal path"
+
+$lab = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\tests\native-windows-lab.py") -Raw
+Assert-True ($lab -match "--workdir") `
+    "the lab can build where the device can reach, instead of only in a temp directory"
+Assert-True ($qualifier.Contains('"PagentOS Projects\native"')) `
+    "and the qualification points it at the native root"
+
+
 Write-Host ""
 if ($script:Failed -eq 0) { Write-Host "item28-gate tests: $script:Passed passed, 0 failed" -ForegroundColor Green; exit 0 }
 Write-Host "item28-gate tests: $script:Passed passed, $script:Failed failed" -ForegroundColor Red
