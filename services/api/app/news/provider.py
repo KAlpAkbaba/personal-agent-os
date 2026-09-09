@@ -129,13 +129,19 @@ def _parse_feed(channel_id: str, xml_bytes: bytes) -> list[VideoCandidate]:
     return out
 
 
-#: The live endpoint answers 404 to an honest client under rate limiting, then succeeds
-#: seconds later. Measured 2026-09-09 against two different channels. Two extra attempts
-#: with a short backoff turn that into a non-event; a channel that is genuinely absent still
-#: 404s three times and is still reported honestly, because the alternative - retrying
-#: forever, or dressing the request up as a browser to get past the limit - would be either
-#: a hang or an anti-bot evasion, and this project does neither.
-FEED_ATTEMPTS: Final = 3
+#: ONE extra attempt, and the number came down rather than up as the evidence came in.
+#:
+#: A single 404 followed by an immediate success looked transient, so three attempts looked
+#: prudent. Kept probing and the endpoint refused NINE consecutive honest requests, from the
+#: owner's own machine and from the Cloud Core alike, having answered perfectly minutes
+#: earlier. It rate-limits per IP over a window - so a retry is three times the pressure on
+#: the thing that is already refusing, and the actual fix is not to ask so often
+#: (`app.news.resolve_service.RESOLUTION_TTL_S`).
+#:
+#: What is NOT done here, in either direction: no browser User-Agent to get past the limit
+#: (an anti-bot evasion, which the owner's directive forbids), and no unbounded retry. When
+#: it refuses, that is reported.
+FEED_ATTEMPTS: Final = 2
 FEED_RETRY_BACKOFF_S: Final = 2.0
 
 
