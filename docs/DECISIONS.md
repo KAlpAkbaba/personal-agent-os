@@ -7823,3 +7823,85 @@ reported `creative3d` as a word the web had never heard of while it sat in the f
 is the guard's own recurring failure mode one level down, and the reason every check added
 here was watched failing first: the four cross-file assertions were each broken on the web
 side, observed red, and restored byte-identically before the work was committed.
+
+### ADR-0095 addendum 2 — the device half of M28, and the bound that would have killed honest builds (2026-09-09)
+
+**Context.** Built while the Cloud Core and Living Core halves were landing on parallel
+tracks. The Cloud Core compiles for real — `scripts/tests/native-windows-lab.py` produces a
+162,304-byte EXE, a 59.5 MB portable zip and a 60.6 MB MSIX — but it shells out with a
+direct subprocess. Production has to run those builds the way M23's `project.*` family
+already runs everything else: as bounded Job Object children of the owner-session companion.
+Wire contract: `packages/protocol/DEVICE_PROTOCOL.md` §6n.
+
+1. **No new capability name, and that is the decision.** M25's shape, one root further: the
+   .NET toolchain rides the projects family's manifest allowlist and its runner, so a build
+   is a batch `project.run` and a `dotnet test` is a `project.test`. A `native.*` family
+   would have been a new surface a command aimed at the device could ask for, reachable only
+   through gates the device already has, and it would have moved the advertised manifest
+   from 85 to 89 with `-Operator` — re-qualifying arithmetic that
+   `scripts/qualify-staged-update.ps1` and `scripts/core/qualify-item28-unlocked.ps1` both
+   assert, and that `docs/OWNER_ACTIONS.md` item 28 quotes to the owner, for no capability
+   the device did not already possess. The manifest is unchanged (40 / 85) and the staged
+   update still qualifies at 71 checks. Cloud Core's `native.build` is a Living Core
+   UI-state word (`app/uistate/contract.py` v13), not a device capability; the two
+   vocabularies do not meet and neither routes by the other.
+
+2. **A third root, and only four shapes in it.** `%USERPROFILE%\Documents\PagentOS
+   Projects\native`, always an authorised root, resolved-then-contained on every use. The
+   allowlist gains `dotnet build|test <p.csproj> -c Release`, `dotnet publish <p.csproj> -c
+   Release -r win-x64 --self-contained true -o <dir>` and `makeappx pack /d <dir> /p
+   <p.msix> /o /nv`, matched token for token, stored as argument lists, named by a manifest
+   KEY — and admitted under that root only. In exchange the three web runtimes are **refused**
+   there: the one root where a compiler may run should not also be somewhere a server can
+   start. `-c` may name only `Release`, `-r` only `win-x64`; an MSBuild property
+   (`-p:PreBuildEvent=…`) is a command line a caller composed by another name and is refused
+   as one; a `-o` or `/d` under `.pagentos/` is refused because a build would otherwise write
+   over the log recording it.
+
+3. **The CPU bound is deliberately NOT the wall bound, and this is the finding.** Every
+   other job in this agent sets `JOB_OBJECT_LIMIT_JOB_TIME` to its wall-clock limit. That
+   flag terminates the whole job when the SUM of its processes' user time passes it, and
+   MSBuild compiles in parallel: on an eight-core machine an honest fifteen-minute build
+   burns two hours of user time. Copying the established pattern would therefore have killed
+   honest builds and reported it as a limit — an assertion true of every run, which is
+   exactly the failure shape ADR-0096 decision 1 named. The wall clock is the real bound (the
+   runner ends the job at 20 minutes, the Cloud Core's own `BUILD_TIMEOUT_S`, read from
+   `service.py` by a test rather than restated), and the CPU bound is what that wall clock
+   could legitimately consume on this machine: the limit times its processor count, clamped.
+
+4. **`project.test`'s bound follows the runtime now, not the family.** Five minutes fits a
+   node runner and does not fit a `dotnet test`, which restores and compiles before it runs
+   anything. The service's ceilings for `project.run` and `project.test` both move to 20 min
+   30 s; a web run still answers within its 20 s port probe and a node test still times out
+   at its own five minutes, because a ceiling is not a wait and the companion is what decides
+   which bound applies.
+
+5. **Signing is absent in four places rather than one.** The Cloud Core produces an unsigned
+   MSIX on purpose (`packaging.py`: signing needs a certificate and the owner's identity is
+   theirs), and the device half is the same claim held structurally, because there is no run
+   to observe — the point is that no run exists. `signtool`, `certutil`, `certmgr`,
+   `makecert`, `pvk2pfx` and `certreq` are refused BY NAME at parse time before anything is
+   matched or scoped; `ProjectRunner.RequireNoSigner` refuses them again against the resolved
+   executable and the materialised arguments; `NativeTools` walks the same Windows Kits
+   directory that holds `signtool.exe` and has no function that returns it; and a test scans
+   every companion source and fails if a signer is named outside the three files that refuse
+   one. The packaging shape's `/nv` is part of this: semantic validation is what would refuse
+   an unsigned manifest, and unsigned is the honest state of a package nobody signed.
+
+6. **Both halves read each other's source.** `NativeRootTests` parses `NATIVE_SUBDIR` and
+   `PROJECTS_FOLDER` out of `app/nativefactory/roots.py` and `BUILD_TIMEOUT_S` out of
+   `service.py`. Restating those values would have produced two suites that stay green while
+   the halves drift, which this repository has recorded happening more than once. Three
+   assertions were watched failing first: the root-name mirror (red when the device says
+   `natives`), the signing scan (red when a companion file names `signtool`), and the
+   Release-only rule (red when `-c Debug` is admitted).
+
+**Consequences.** The agent suite is 970 green (was 902), including a real `dotnet build`,
+`dotnet test` and self-contained `dotnet publish` and a real `makeappx pack` driven through
+`project.scaffold` → marker → `project.run`, with the EXE read back by its MZ header and the
+`.msix` opened as a zip carrying no `AppxSignature.p7x`. All twenty PowerShell 5.1 suites,
+`item28-gate` (35) and the staged-update qualification (71, STAGED UPDATE QUALIFIED) are
+unchanged and green. **None of it is proven against the installed runtime**: that is still
+`1.0.0+a3cb04e` with 29 capabilities, and it stays that way until the owner runs item 28's
+one elevated command. What is proven is the agent's own suite, which is where the projects
+and scenes families are proven too.
