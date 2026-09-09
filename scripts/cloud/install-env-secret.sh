@@ -78,6 +78,30 @@ if ! "${compose[@]}" config 2>/dev/null | grep -Eq "^[[:space:]]*$name:"; then
 fi
 echo "compose valid; $name is wired"
 
+# A BLUE/GREEN host does not have a container called "api" serving anything: one of
+# api-blue / api-green is behind pagentos-prod-edge, and the edge owns port 8001. The
+# single-container "api" service binds 8001 DIRECTLY, so recreating it here cannot start
+# ("Bind for ...:8001 failed: port is already allocated"), leaves a dead container behind,
+# and changes nothing about what is actually serving. That is what happened to the owner
+# installing an Anthropic key on 2026-09-10.
+active=""
+for colour in blue green; do
+    if [ -n "$(docker ps --filter "name=pagentos-prod-api-$colour" --filter status=running --format '{{.Names}}' 2>/dev/null)" ]; then
+        active="pagentos-prod-api-$colour"
+    fi
+done
+
+if [ -n "$active" ] && [ "$recreate" = "1" ]; then
+    echo "$name is INSTALLED in $envf (posture verified), but this host runs blue/green:"
+    echo "  $active is serving behind pagentos-prod-edge, which owns port 8001."
+    echo "This installer recreates the single-container 'api' service, which binds 8001"
+    echo "directly - so recreating it here would fail and change nothing that is serving."
+    echo "Finish with the zero-downtime path, which brings the IDLE colour up on the new"
+    echo "environment, verifies it, hands the device sessions over and switches:"
+    echo "    .\scripts\cloud\release-cloud-core.ps1 -BlueGreen -Force"
+    exit 73
+fi
+
 if [ "$recreate" = "1" ]; then
     # Only the api workload. Never PostgreSQL/Redis/MinIO/Temporal.
     "${compose[@]}" up -d --no-deps --force-recreate --wait api 2>&1 | tail -3

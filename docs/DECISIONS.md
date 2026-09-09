@@ -8615,3 +8615,48 @@ terminal, the scrollback and the screenshot. It no longer echoes anything (the d
 value-shaped argument is now recognised for what it is: the error says `-Set` takes the name,
 shows the exact command, and says the value just typed is in the shell's history and should
 be treated as exposed.
+
+### ADR-0104 addendum 2 — the secret installer did not know the host is blue/green (2026-09-10)
+
+The owner ran `set-cloud-secret.ps1` for the Anthropic key. The value was written correctly
+and then:
+
+```
+host: Container pagentos-prod-api Created
+host: Container pagentos-prod-api Starting
+host: Error response from daemon: ... Bind for 100.90.158.26:8001 failed: port is already allocated
+set-cloud-secret FAILED (exit 1): ssh/remote install failed with exit 1; nothing verified
+```
+
+`install-env-secret.sh` recreates the compose service `api` — the SINGLE-container shape,
+which publishes 8001 directly. This host has run blue/green since M18.4: `api-green` (or
+`api-blue`) serves behind `pagentos-prod-edge`, and the EDGE owns 8001. So the recreate could
+never start, left a dead `pagentos-prod-api` behind, and changed nothing about what was
+actually serving. The assistant had hit the identical wall hours earlier by running
+`release-cloud-core.ps1` without `-BlueGreen`; the secret installer was simply never taught
+the same lesson.
+
+**Fix.** The installer asks docker which colour is running. If one is, it stops after the env
+file is written — with its own exit code (73), an explanation, and the command that finishes
+the job the zero-downtime way:
+
+```
+.\scripts\cloud\release-cloud-core.ps1 -BlueGreen -Force
+```
+
+It deliberately does NOT attempt the colour swap itself. That transaction — idle colour up on
+the new environment, health, device-session handoff, upstream switch, drain, rollback on any
+failure — already exists in `release-cloud-core-bluegreen.sh`, and a second, thinner copy of
+it inside a secret installer is exactly how two implementations of one idea drift apart (see
+the `icacls` half of this ADR, which is the same story).
+
+**Regression.** `cloud-secret.tests.ps1` grew a `FAKE_BLUEGREEN` knob on the fake docker and
+four checks: exit 73, the value IS in the env file first, nothing serving is recreated, and
+the message names the finishing command. Removing the refusal fails three of them, watched.
+42 checks, 0 failed.
+
+**What actually happened to the owner's key.** It reached `/opt/pagentos/.env` (posture
+600:root) on the first, failed run. The stray container was removed, the blue/green release
+was repeated with `-Force`, and the key was verified inside the running container the way
+this system always verifies a secret — length and SHA-256 prefix, never the value:
+`length=108 sha256=9b94b1dc…`.

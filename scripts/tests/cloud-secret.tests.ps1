@@ -205,6 +205,17 @@ try {
         Assert-True ($h7.Exit -eq 65 -and $h7.EnvFile -notmatch "has space") "an unsafe value is refused before the env file is touched"
         $h8 = Invoke-HostInstall -Value ""
         Assert-True ($h8.Exit -eq 64) "empty stdin -> exit 64"
+
+        # A blue/green host has no serving container called "api": one colour sits behind
+        # pagentos-prod-edge, which owns 8001, and the single-container "api" service binds
+        # 8001 directly. Recreating it there cannot start, leaves a dead container and
+        # changes nothing that serves -- which is what the owner hit on 2026-09-10 while
+        # installing an Anthropic key.
+        $h9 = Invoke-HostInstall -Value "bluegreen-value" -Env @{ FAKE_BLUEGREEN = "1" }
+        Assert-True ($h9.Exit -eq 73) "a blue/green host stops with its own exit code, not a confusing docker error"
+        Assert-True ($h9.EnvFile -match "bluegreen-value") "the value IS installed in the env file first"
+        Assert-True (-not ($h9.Calls -match " up ")) "nothing serving is recreated on a blue/green host"
+        Assert-True ($h9.Output -match "release-cloud-core\.ps1 -BlueGreen -Force") "it names the command that finishes the job"
     }
 }
 finally {

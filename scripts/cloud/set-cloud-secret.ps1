@@ -130,6 +130,7 @@ $meanings = @{
     70  = "the real provider self-test from the host FAILED (details above; no secret shown)"
     71  = "docker compose config is INVALID on the host; nothing was recreated"
     72  = "the host env file is not 600 root:root after the update"
+    73  = "$Name IS installed in $HostEnvFile, but this host runs blue/green and nothing serving was recreated. Finish with: .\scripts\cloud\release-cloud-core.ps1 -BlueGreen -Force"
     127 = "the host tree has no scripts/cloud/install-env-secret.sh yet. Release the current Cloud Core first: .\scripts\cloud\release-cloud-core.ps1"
     255 = "ssh could not reach ${CloudUser}@${BrokerHost} (Tailscale up? key-based auth in BatchMode?)"
 }
