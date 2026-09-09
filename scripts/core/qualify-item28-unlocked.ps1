@@ -142,7 +142,10 @@ function New-Section {
 }
 
 function Close-Section {
-    param([hashtable]$Section, [string]$Verdict, [string]$Detail = "")
+    # IDictionary, never [hashtable]: a section is an [ordered] dictionary, and binding one
+    # to a [hashtable] parameter CONVERTS it - PowerShell hands the function a copy, and
+    # every mutation lands on the copy while the caller's object stays as it was.
+    param([System.Collections.IDictionary]$Section, [string]$Verdict, [string]$Detail = "")
     $Section.verdict = $Verdict
     $Section.detail = $Detail
     $script:evidence.sections += $Section
@@ -244,7 +247,9 @@ function Invoke-DeviceCapability {
         Ok, Status, ErrorClass, Result, Record
     #>
     param(
-        [Parameter(Mandatory = $true)][hashtable]$Section,
+        # See Close-Section: [hashtable] here would copy the section and every step record
+        # this function appends would be written to an object nobody reads.
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Section,
         [Parameter(Mandatory = $true)][string]$Capability,
         [hashtable]$Payload = @{},
         [switch]$AllowFailure
@@ -256,10 +261,15 @@ function Invoke-DeviceCapability {
         # section's own logic keeps running and every later payload is built and recorded
         # too - the point of a dry run is to exercise this script, not to guess at a device.
         # Add-Check refuses to turn a judgement over these values into a result.
-        $script:evidence.plan += [ordered]@{
+        $planned = [ordered]@{
             step = $script:Step; section = $Section.name; capability = $Capability
             payload = $Payload
         }
+        $script:evidence.plan += $planned
+        # Attached to the SECTION as well, so the section really is the object this function
+        # writes into. A [hashtable] parameter here would silently copy the section and this
+        # line would land nowhere; the gate suite asserts it lands.
+        $Section.steps += $planned
         Write-Host ("  [plan] {0,-26} {1}" -f $Capability, ((ConvertTo-Json -InputObject $Payload -Compress -Depth 6)))
         return [pscustomobject]@{
             Ok = $true; Status = "not-sent"; ErrorClass = ""; Record = $null
@@ -468,7 +478,6 @@ function Invoke-DocumentsSection {
     param([string]$FixtureRoot)
     $section = New-Section -Name "documents" -Milestone "M20" -Title "the documents family, against this repository's own fixtures"
     $failures = 0
-    $section.steps = @()
 
     $search = Invoke-DeviceCapability -Section $section -Capability "file.search" -Payload @{
         pattern = "sozlesme"; roots = @($FixtureRoot); max = 50

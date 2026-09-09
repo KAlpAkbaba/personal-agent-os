@@ -110,6 +110,17 @@ try {
         Assert-True ($capabilities -notcontains "desktop.alarm_start" -and $capabilities -notcontains "desktop.play_audio") "...and never makes a sound"
         # A dry run judges nothing: the answers it saw came from no device.
         Assert-True (@($dry.Evidence.checks).Count -eq 0) "a dry run records NO checks - a judgement over answers no device gave is not evidence"
+        # Every call is attached to the SECTION it belongs to, not only to the flat plan.
+        # This is the guard for a PowerShell trap that produced exactly nothing visible: a
+        # section is an [ordered] dictionary, and binding one to a [hashtable] parameter
+        # CONVERTS it, so the callee mutates a copy and every step record is lost.
+        $sectionsWithSteps = @(@($dry.Evidence.sections) | Where-Object { @($_.steps).Count -gt 0 })
+        Assert-True (@($sectionsWithSteps).Count -eq @($dry.Evidence.sections).Count) `
+            "every section carries its own calls ($(@($sectionsWithSteps).Count) of $(@($dry.Evidence.sections).Count)) - the section is the object the recorder writes into, not a copy of it"
+        $stepTotal = 0
+        foreach ($s in @($dry.Evidence.sections)) { $stepTotal += @($s.steps).Count }
+        $planCalls = @(@($dry.Evidence.plan) | Where-Object { $_.PSObject.Properties.Name -contains "capability" }).Count
+        Assert-True ($stepTotal -eq $planCalls) "and the sections' calls and the flat plan are the same $planCalls calls, counted twice"
     }
     else { Assert-True $false "the dry run wrote no evidence file" }
 
