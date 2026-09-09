@@ -86,6 +86,10 @@ PROTECTED_ENDPOINTS = [
     # edit runs against the owner's own images — never one unauthenticated HTTP call
     # away; the listing names the owner's own runs and their last output.
     ("creative", "get", "/v1/creative"),
+    ("native", "get", "/v1/native"),
+    ("native-toolchain", "get", "/v1/native/toolchain"),
+    ("native-build", "get", f"/v1/native/{uuid.uuid4()}"),
+    ("native-artifact", "get", f"/v1/native/{uuid.uuid4()}/artifact"),
     ("creative-run", "get", f"/v1/creative/{uuid.uuid4()}"),
     ("creative-output", "get", f"/v1/creative/{uuid.uuid4()}/output"),
     # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §8): a generated capability's

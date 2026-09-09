@@ -73,6 +73,7 @@ from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
+from app.nativefactory.routes import router as native_router
 from app.news.routes import router as news_router
 from app.operator.service import OperatorService, register_operator_service
 from app.presence.routes import router as presence_router
@@ -529,6 +530,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # gated, the same require_owner_session dependency every other router applies.
     app.include_router(scenes_router)
     app.include_router(creative_router)
+    app.include_router(native_router)
     # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §6): executive.* reads the SAME
     # ExecutiveService the voice tools (app.executive.tools_executive) drive.
     app.include_router(executive_router)
