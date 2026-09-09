@@ -790,7 +790,12 @@ export class VoiceSessionController {
       await this.openLeg(payload, options.deviceId);
     } catch (error) {
       this.fail(`Medya bağlantısı kurulamadı: ${describe(error)}`, linesOf(error));
-      await this.closeServerSession("connect_failed");
+      // WHICH half failed, not just that one did. The server's close reason is a lowercase
+      // token (`^[a-z_]+$`, 64 chars) and it is audited, so it is the one channel that
+      // survives a session we are about to close - the reporter's own POST does not, which
+      // is why four consecutive failures on the owner's machine were recorded as
+      // `connect_failed` with no hint of the cause and cost a day of guessing.
+      await this.closeServerSession(closeReasonFor(error));
       return;
     }
     this.reportInputReadBack();
@@ -2484,6 +2489,29 @@ export class VoiceSessionController {
   flushEvents(): Promise<unknown> {
     return this.reporter?.flush() ?? Promise.resolve(null);
   }
+}
+
+/**
+ * Which half of the media handshake failed, as one lowercase token the server will accept and
+ * audit (`^[a-z_]+$`). Deliberately coarse: it names the STEP, never the provider's text,
+ * because the reason travels into an audit row and a message can carry anything.
+ *
+ * The reporter cannot carry this. A failed connect closes the session, so the reporter's own
+ * POST answers 410 and the message never lands - which is exactly what happened on the owner's
+ * machine: four consecutive failures audited as `connect_failed`, `lifetime_ms` about 1500,
+ * and nothing at all about the cause.
+ */
+export function closeReasonFor(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (/sdp_exchange_url|data_channel name|event dialect|cannot open a/i.test(text)) {
+    return "connect_failed_descriptor";
+  }
+  if (/SDP exchange failed/i.test(text)) return "connect_failed_sdp_exchange";
+  if (/data channel/i.test(text)) return "connect_failed_data_channel";
+  if (/NotAllowed|NotFound|NotReadable|microphone|getUserMedia|Permission/i.test(text)) {
+    return "connect_failed_microphone";
+  }
+  return "connect_failed";
 }
 
 function describe(error: unknown): string {

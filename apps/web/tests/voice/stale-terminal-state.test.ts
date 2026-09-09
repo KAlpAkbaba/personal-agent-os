@@ -19,7 +19,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VoiceSessionApi } from "../../app/lib/voice/api";
-import { VoiceSessionController } from "../../app/lib/voice/controller";
+import { VoiceSessionController, closeReasonFor } from "../../app/lib/voice/controller";
 import {
   FakeCloudCore,
   FakeMicrophone,
@@ -76,6 +76,42 @@ async function reportFailure(t: ReturnType<typeof setup>, status: number, detail
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("the close reason says which half failed", () => {
+  // The server's audit is the only channel that survives a session we are closing: the
+  // reporter's POST answers 410 and its message never lands. Four consecutive failures on the
+  // owner's machine were therefore audited as `connect_failed`, lifetime ~1500 ms, with no
+  // hint of the cause - descriptor? provider? microphone? - and that cost a day.
+  //
+  // The vocabulary must satisfy the server's own pattern (^[a-z_]+$, 64 chars), which these
+  // assertions hold as literally as the route does.
+  it("names the step, in tokens the server will accept", () => {
+    expect(closeReasonFor(new Error("transport descriptor has no sdp_exchange_url; the provider adapter must return one")))
+      .toBe("connect_failed_descriptor");
+    expect(closeReasonFor(new Error("SDP exchange failed: HTTP 401"))).toBe("connect_failed_sdp_exchange");
+    expect(closeReasonFor(new Error("data channel did not open in time"))).toBe("connect_failed_data_channel");
+    expect(closeReasonFor(new Error("transport closed before the data channel opened"))).toBe("connect_failed_data_channel");
+    const denied = new Error("Permission denied");
+    denied.name = "NotAllowedError";
+    expect(closeReasonFor(denied)).toBe("connect_failed_microphone");
+    expect(closeReasonFor(new Error("something else entirely"))).toBe("connect_failed");
+  });
+
+  it("every token the classifier can produce is one the server accepts", () => {
+    const server = /^[a-z_]+$/;
+    const produced = [
+      closeReasonFor(new Error("transport descriptor has no sdp_exchange_url")),
+      closeReasonFor(new Error("SDP exchange failed: HTTP 429")),
+      closeReasonFor(new Error("data channel error")),
+      closeReasonFor(new Error("NotReadableError")),
+      closeReasonFor("a string, not an Error"),
+    ];
+    for (const reason of produced) {
+      expect(reason).toMatch(server);
+      expect(reason.length).toBeLessThanOrEqual(64);
+    }
+  });
 });
 
 describe("a listening session carries no stale terminal marker", () => {
