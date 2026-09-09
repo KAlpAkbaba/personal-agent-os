@@ -254,6 +254,11 @@ def require_live(
             f"session is {row.state}",
             details={"state": row.state},
         )
+    # No expiry recorded means the owner ends this session and nothing else does. The check
+    # below is the ONLY path in the system that expires one (nothing sweeps in the
+    # background), so skipping it here is the whole of "hic kapanmasin" (ADR-0105).
+    if row.expires_at is None:
+        return row
     expires = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=UTC)
     if expires <= now:
         row.state = REALTIME_STATE_EXPIRED
@@ -377,7 +382,9 @@ def create_session(
         # explicit, microsecond-precision creation time: the server default renders at
         # one-second resolution on SQLite and "newest first" then breaks on ties
         created_at=now,
-        expires_at=now + timedelta(seconds=session_ttl_s),
+        # A ttl of 0 or less means NO expiry, and that is stored as the absence of one
+        # rather than as a date far enough away to look like never (ADR-0105).
+        expires_at=(now + timedelta(seconds=session_ttl_s)) if session_ttl_s > 0 else None,
         updated_at=now,
     )
     db.add(row)

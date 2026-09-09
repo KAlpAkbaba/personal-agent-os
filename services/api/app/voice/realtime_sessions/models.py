@@ -78,7 +78,10 @@ class RealtimeSessionRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: NULL means "no expiry": this session ends when the OWNER ends it. A fixed horizon
+    #: written at creation and never renewed is what killed every web session at exactly
+    #: one hour, mid-conversation (migration 0038, owner directive 2026-09-10).
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

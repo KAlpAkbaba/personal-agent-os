@@ -103,7 +103,12 @@ class Settings(BaseSettings):
     # record itself expires after its TTL.
     voice_realtime_provider_preference: tuple[str, ...] = ("openai-realtime", "simulator")
     voice_realtime_credential_ttl_s: int = 600
-    voice_realtime_session_ttl_s: int = 3600
+    #: 0 (the default) means a voice session NEVER expires on a timer -- it ends when the
+    #: owner ends it. Any positive value restores a fixed horizon measured from creation,
+    #: which is what closed the owner's conversations at exactly one hour while they were
+    #: still talking (ADR-0105). It is not a keepalive interval and never was: nothing
+    #: renewed it, so a larger number would only move the surprise further out.
+    voice_realtime_session_ttl_s: int = 0
     # The deterministic simulator is a GATE, not a product path (ADR-0036 §2). It
     # is registered as a ConversationRealtime candidate only in environment=dev,
     # or when this flag is set explicitly, so a production session can never be

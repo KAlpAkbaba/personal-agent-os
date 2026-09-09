@@ -253,6 +253,9 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "evolution.control",
         "evolution.status",
         "release.rollback",
+        # ADR-0103: what to call instead of saying "bunu yapamiyorum" -- an unmet request
+        # becomes a real capability_gaps row before it becomes a sentence.
+        "capability.propose",
         # M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §3): the Digital Operator.
         "operator.app_open",
         "operator.window_control",
@@ -1474,3 +1477,69 @@ def test_listing_is_newest_first_even_within_the_same_second(wired) -> None:
         # the property that failed: ascending order is NOT newest-first
         ascending = [str(r.id) for r in sorted(rows, key=lambda r: r.created_at)]
         assert ascending == ids and ascending != [s["session_id"] for s in listing[:3]]
+
+
+# ------------------------------- a session the owner ends, and nothing else does
+
+
+def test_a_session_created_with_no_ttl_never_expires(wired) -> None:
+    """Owner directive 2026-09-10: "ses oturumu hic kapanmasin ben kapatmadigim surece."
+
+    Three consecutive production sessions had died at exactly one hour -- 17:35:43 ->
+    18:35:44, 18:36:13 -> 19:36:16, 20:15:57 -> 21:15:58 -- the last with a real client
+    event eight minutes before it was expired. expires_at was written once at creation and
+    nothing renewed it: the clock that decided death was BIRTH, not use.
+    """
+    client, runtime = wired[0], wired[1]
+    sid = _create(client)["session_id"]
+
+    with runtime.session() as db:
+        row = db.get(RealtimeSessionRow, uuid.UUID(sid))
+        assert row.expires_at is None, "no expiry is stored as the ABSENCE of one, not a far date"
+
+    # Long past any horizon the old code would have written.
+    response = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/events",
+        json={"events": [{"kind": "end_of_turn", "t_ms": 60 * 60 * 24 * 365 * 1000}]},
+    )
+    assert response.status_code == 200, response.text
+    assert client.get(f"/v1/voice/realtime/sessions/{sid}").json()["state"] != "expired"
+    assert _audit_rows(runtime, sid, service.ACTION_SESSION_EXPIRED) == []
+
+
+def test_the_owner_can_still_close_it(wired) -> None:
+    """"Never expires" must not become "cannot be ended"."""
+    client = wired[0]
+    sid = _create(client)["session_id"]
+
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/close").status_code == 200
+    assert client.get(f"/v1/voice/realtime/sessions/{sid}").json()["state"] == "closed"
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/events",
+            json={"events": [{"kind": "end_of_turn", "t_ms": 1}]},
+        ).status_code
+        == 410
+    )
+
+
+def test_an_explicit_ttl_still_expires(wired) -> None:
+    """The horizon is not removed, only defaulted off: a caller that asks for one gets it,
+    so the behaviour every existing expiry test relies on is still reachable."""
+    client, runtime = wired[0], wired[1]
+    sid = _create(client, session_ttl_s=60)["session_id"]
+
+    with runtime.session() as db:
+        row = db.get(RealtimeSessionRow, uuid.UUID(sid))
+        assert row.expires_at is not None
+        row.expires_at = service.utcnow() - service.timedelta(seconds=1)
+        db.commit()
+
+    assert (
+        client.post(
+            f"/v1/voice/realtime/sessions/{sid}/events",
+            json={"events": [{"kind": "end_of_turn", "t_ms": 1}]},
+        ).status_code
+        == 410
+    )
+    assert client.get(f"/v1/voice/realtime/sessions/{sid}").json()["state"] == "expired"

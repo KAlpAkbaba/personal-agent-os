@@ -8660,3 +8660,58 @@ the message names the finishing command. Removing the refusal fails three of the
 was repeated with `-Force`, and the key was verified inside the running container the way
 this system always verifies a secret — length and SHA-256 prefix, never the value:
 `length=108 sha256=9b94b1dc…`.
+
+## ADR-0105 — The voice session that died at exactly one hour, mid-sentence (2026-09-10)
+
+**Owner report.** "neden ses kendiliğinden kapanıyor" — then, once the cause was shown:
+"ses oturumu hiç kapanmasın ben kapatmadığım sürece."
+
+**The evidence, and how unambiguous it was.** Three consecutive `realtime_sessions` rows,
+each closed exactly one hour after it was created:
+
+```
+e556c433  17:35:43  ->  expired 18:35:44
+b7bdedf1  18:36:13  ->  expired 19:36:16
+fe2f4d5d  20:15:57  ->  expired 21:15:58
+```
+
+The last one's final client event was at 21:07:26 — turn 31, `t_ms 3,088,981` — a
+`LISTENING` state eight minutes before it was killed. The owner was talking to it.
+
+**Root cause.** `expires_at` was written ONCE, at creation, as `created_at + 3600`
+(`service.py:380`), and nothing anywhere renewed it. `_require_live` is the only code in the
+system that expires a session — there is no background sweeper — and it compares that fixed
+instant to now on every request. **The clock that decided death was BIRTH, not use.** The
+same "two clocks for one decision" shape this repository keeps producing, wearing a
+different hat: the horizon was measured from an event that had nothing to do with whether
+the session was alive.
+
+**Why not a sliding renewal.** That was the first proposal and it is the conventional
+answer, but it still closes a session the owner walked away from and came back to. They
+asked for something simpler and stated it plainly, so that is what was built.
+
+**Fix.** "No expiry" is expressed as the ABSENCE of an expiry, not as a date far enough away
+to look like never: migration 0038 makes `realtime_sessions.expires_at` nullable, `NULL`
+means the session ends when the owner ends it, and `_require_live` returns early on `NULL`.
+`voice_realtime_session_ttl_s` defaults to `0` meaning never; a positive value still produces
+a real horizon, so the behaviour every existing expiry test relies on stays reachable and
+tested.
+
+Storing a sentinel year instead would have been the cheaper change and the wrong one: two
+places would then have had to agree on which date means "never", and that disagreement is
+precisely the defect being fixed.
+
+**Regression.** Three checks: a session created with no ttl stores `NULL` and survives an
+event a year past any old horizon with no `voice_session_expired` audit row; the owner can
+still close it, and it is 410 afterwards ("never expires" must not become "cannot be
+ended"); an explicit ttl still expires. Reverting the change fails the first, watched.
+
+**Migration.** Expand-only (dropping NOT NULL widens what the column accepts; no existing row
+is touched). The downgrade gives expiry-less rows the historical one-hour horizon from their
+own creation instant rather than inventing a future for them.
+
+**Caught on the way.** `capability.propose` (ADR-0103) had changed the realtime contract's
+tool manifest, and `test_create_selects_by_capability_and_returns_the_contract` pins that set
+exactly — which is what it is for. The name was added deliberately. No contract version bump:
+`contract_version.py` says to bump on a change to the accepted fields of a request body, and
+a new tool is not one.
