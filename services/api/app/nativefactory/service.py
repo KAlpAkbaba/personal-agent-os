@@ -56,8 +56,12 @@ from app.nativefactory.models import (
     STATE_VERIFIED,
     NativeBuildRow,
 )
+from app.nativefactory.models_wire import wire_step
+from app.nativefactory.roots import check_extensions, native_root, resolve_within
 from app.nativefactory.spec import NativeAppSpec, NativeFactoryError, parse_spec
 from app.nativefactory.stacks import ToolchainFacts, choose, detect
+from app.uistate import publish as publish_ui_state
+from app.uistate.contract import NATIVE_BUILD_STEPS, UiState
 
 logger = get_logger("app.nativefactory.service")
 
@@ -94,6 +98,12 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+#: The Living Core subsystem this factory publishes under. Deliberately not M23's
+#: `appfactory`: a web app scaffolded and run and a signed EXE read back from its PE header
+#: are different claims, and one name for both would hide which was made.
+SUBSYSTEM_NATIVE: Final = "nativefactory"
+
+
 def _touch(db: Session, row: NativeBuildRow, state: str, **fields: Any) -> NativeBuildRow:
     row.state = state
     for key, value in fields.items():
@@ -101,7 +111,54 @@ def _touch(db: Session, row: NativeBuildRow, state: str, **fields: Any) -> Nativ
     row.updated_at = _now()
     db.commit()
     logger.info("native_build_state", build_id=str(row.id), state=state, slug=row.slug)
+    _publish(row)
     return row
+
+
+def _publish(row: NativeBuildRow) -> None:
+    """One `native.build` event for the row as it now stands.
+
+    Published from `_touch`, which every transition already funnels through, so the channel
+    cannot drift from the row: the event's `state` is `wire_step(row.state)` computed from
+    the row that was just committed, not from what a caller intended to write.
+
+    Never fails the owner's build over a UI concern (`app.creative.service._publish`'s own
+    rule): an unknown step is logged and dropped, because a word the web build cannot read
+    draws a finished build as one still being made, and saying nothing is the smaller lie.
+    """
+    try:
+        step = wire_step(row.state)
+    except Exception:  # noqa: BLE001 - an unmapped state is a bug to log, not to raise here
+        logger.error("native_build_unknown_wire_state", state=row.state, build_id=str(row.id))
+        return
+    if step not in NATIVE_BUILD_STEPS:  # pragma: no cover - wire_step is total over them
+        logger.error("native_build_unknown_activity_step", step=step)
+        return
+
+    artifact = row.artifact_json or {}
+    metadata: dict[str, object] = {
+        "state": step,
+        "target": row.target,
+        "stack": row.stack,
+        "version": row.version,
+    }
+    # Only what the row HOLDS. `verdict_ok` comes from the verdict the reader produced,
+    # never from `state == "verified"` - the web half reads it the same way, on purpose.
+    if row.verdict_json is not None:
+        metadata["verdict_ok"] = bool(row.verdict_json.get("ok"))
+    if artifact:
+        metadata["artifact_name"] = Path(str(row.artifact_path or "")).name or None
+        metadata["artifact_size_bytes"] = artifact.get("size_bytes")
+        metadata["artifact_sha256"] = str(artifact.get("sha256") or "")[:16] or None
+    if row.error_class:
+        metadata["error_class"] = row.error_class
+
+    publish_ui_state(
+        UiState.NATIVE_BUILD,
+        subsystem=SUBSYSTEM_NATIVE,
+        label=row.display_name[:64],
+        metadata={k: v for k, v in metadata.items() if v is not None},
+    )
 
 
 def plan_build(
@@ -144,7 +201,13 @@ def plan_build(
     return rows
 
 
-def generate(db: Session, row: NativeBuildRow, workdir: Path) -> NativeBuildRow:
+def generate(
+    db: Session,
+    row: NativeBuildRow,
+    workdir: Path,
+    *,
+    allow_outside_root: bool = False,
+) -> NativeBuildRow:
     """Render the template and write it, after the policy has accepted every file."""
     _touch(db, row, STATE_GENERATING)
     spec = NativeAppSpec.model_validate(row.spec_json)
@@ -153,6 +216,16 @@ def generate(db: Session, row: NativeBuildRow, workdir: Path) -> NativeBuildRow:
     except NativeFactoryError as exc:
         return _touch(
             db, row, STATE_UNAVAILABLE, error_class=exc.error_class, error_message=exc.speech
+        )
+
+    try:
+        # The native addition to M23's policy: a build EXECUTES what it is given, so a
+        # rendered tree must contain source and nothing a build step could be pointed at
+        # and told to run (roots.py).
+        check_extensions(project)
+    except NativeFactoryError as exc:
+        return _touch(
+            db, row, STATE_FAILED, error_class=exc.error_class, error_message=exc.speech
         )
 
     try:
@@ -169,6 +242,18 @@ def generate(db: Session, row: NativeBuildRow, workdir: Path) -> NativeBuildRow:
             error_class="policy_refused",
             error_message="; ".join(report.errors)[:1000],
         )
+
+    # Containment BEFORE anything is written: resolve-then-contain, so `..`, a symlink
+    # or an absolute path handed in by a caller cannot put a compiler's output somewhere
+    # the authorised root does not cover. `allow_outside_root` exists for the tests and
+    # the lab, which build in a temp directory on purpose and say so.
+    if not allow_outside_root:
+        try:
+            resolve_within(native_root(), workdir)
+        except NativeFactoryError as exc:
+            return _touch(
+                db, row, STATE_FAILED, error_class=exc.error_class, error_message=exc.speech
+            )
 
     workdir.mkdir(parents=True, exist_ok=True)
     for file in project.files:

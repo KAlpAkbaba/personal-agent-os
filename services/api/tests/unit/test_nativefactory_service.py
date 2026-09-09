@@ -97,7 +97,10 @@ PASSED = RunResult(0, "Passed!  - Failed: 0, Passed: 5, Skipped: 0, Total: 5")
 
 def _planned(db: Session, tmp_path: Path) -> NativeBuildRow:
     row = plan_build(db, WINDOWS, facts=FULL)[0]
-    return generate(db, row, tmp_path / "project")
+    # `allow_outside_root` is the escape hatch the lab and these tests use DELIBERATELY:
+    # they build in a temp directory on purpose. Production callers pass nothing, and the
+    # test below proves what happens to them if they point somewhere else.
+    return generate(db, row, tmp_path / "project", allow_outside_root=True)
 
 
 # ------------------------------------------------------------------------- planning
@@ -286,3 +289,95 @@ def test_the_runner_is_only_ever_given_a_fixed_argv(db, tmp_path) -> None:
         assert argv[0] == "dotnet"
         assert argv[1] in ("build", "test", "publish")
         assert not any(" " in part and part.endswith((".csproj", ".exe")) for part in argv)
+
+
+def test_generating_outside_the_authorised_root_is_refused(db, tmp_path) -> None:
+    """The guard the tests above opt out of, proven to bite when nobody opts out.
+
+    Containment is applied BEFORE anything is written, so a caller pointing a build at a
+    directory the authorised root does not cover gets a refused row and an empty disk -
+    not a compiler's output somewhere nobody agreed to.
+    """
+    row = plan_build(db, WINDOWS, facts=FULL)[0]
+    target = tmp_path / "somewhere-nobody-agreed-to"
+
+    row = generate(db, row, target)
+
+    assert row.state == STATE_FAILED
+    assert row.error_class == "path_outside_root"
+    assert row.project_path is None
+    assert not target.exists(), "the guard let files be written before refusing"
+
+
+# ------------------------------------------------------------- the Living Core channel
+
+
+def test_every_transition_publishes_native_build(db, tmp_path) -> None:
+    """A channel nobody speaks is the failure M25 shipped.
+
+    Both halves can agree on a vocabulary perfectly while nothing ever publishes it - and
+    no guard notices, because the two lists are still identical. So this asserts the
+    channel is SPOKEN, from the events a real lifecycle actually emitted.
+    """
+    from app.uistate.contract import NATIVE_BUILD_STEPS, UiState
+    from app.uistate.publisher import UiStatePublisher, set_publisher
+
+    bus = UiStatePublisher(tail_size=64)
+    set_publisher(bus)
+    try:
+        row = plan_build(db, WINDOWS, facts=FULL)[0]
+        row = generate(db, row, tmp_path / "project", allow_outside_root=True)
+        row = build_and_test(db, row, FakeRunner(RunResult(0, ""), PASSED), dotnet="dotnet")
+        published = bus.tail(limit=64)
+    finally:
+        set_publisher(UiStatePublisher())
+
+    native = [e for e in published if e.state == UiState.NATIVE_BUILD]
+    assert native, "the lifecycle never published native.build at all"
+    for event in native:
+        assert event.subsystem == "nativefactory"
+        # The word on the wire is always one the web half can read.
+        assert event.metadata["state"] in NATIVE_BUILD_STEPS
+        assert event.metadata["target"] == "windows_exe"
+
+    # ...and the steps it actually walked are on the wire, in order.
+    assert [e.metadata["state"] for e in native][:3] == ["generating", "planned", "building"]
+
+
+def test_the_channel_says_verified_only_when_the_verdict_did(db, tmp_path, monkeypatch) -> None:
+    """`verdict_ok` is read from the reader's verdict, never inferred from the state - the
+    web half reads it the same way, on purpose, so neither can imply agreement the reader
+    did not give."""
+    from app.nativefactory import service as service_module
+    from app.nativefactory.artifacts import ArtifactFacts
+    from app.uistate.contract import UiState
+    from app.uistate.publisher import UiStatePublisher, set_publisher
+
+    row = plan_build(db, WINDOWS, facts=FULL)[0]
+    row = generate(db, row, tmp_path / "project", allow_outside_root=True)
+    row = build_and_test(db, row, FakeRunner(RunResult(0, ""), PASSED), dotnet="dotnet")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "notlarim.exe").write_bytes(b"MZ")
+    monkeypatch.setattr(
+        service_module,
+        "read_artifact",
+        lambda path, **kw: ArtifactFacts(
+            path=str(path), kind="pe", size_bytes=162304, sha256="c" * 64,
+            version="0.0.9", architecture="x64", subsystem="windows_gui",
+        ),
+    )
+
+    bus = UiStatePublisher(tail_size=64)
+    set_publisher(bus)
+    try:
+        publish_and_validate(
+            db, row, FakeRunner(RunResult(0, "")), dotnet="dotnet", out_dir=out
+        )
+        published = bus.tail(limit=64)
+    finally:
+        set_publisher(UiStatePublisher())
+
+    final = [e for e in published if e.state == UiState.NATIVE_BUILD][-1]
+    assert final.metadata["state"] == "mismatch"
+    assert final.metadata["verdict_ok"] is False
