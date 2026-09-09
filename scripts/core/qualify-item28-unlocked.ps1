@@ -1067,10 +1067,16 @@ function Invoke-NativeAppSection {
 
     # DRIVE. Type a note, press the button, and read the COUNT back out of the application's
     # own status line - not out of the list, which would be counting our own typing.
+    #
+    # depth 5 is UiAutomationInspector.MaxDepth, and asking for 6 is a validation_error the
+    # device raises before it touches a window. The first live run of this section did exactly
+    # that and read an empty status line twice (2026-09-09) - the device refusing correctly,
+    # and this script asking for something the contract does not offer. item28-gate now reads
+    # that constant out of the companion's own source and holds these payloads to it.
     $note = "item28 dogrulama notu"
     [void](Invoke-DeviceCapability -Section $section -Capability "ui.set_value" -Payload @{ window_id = $windowId; automation_id = "NoteInput"; value = $note })
     [void](Invoke-DeviceCapability -Section $section -Capability "ui.invoke" -Payload @{ window_id = $windowId; automation_id = "AddButton" })
-    $status = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $windowId; depth = 6; max_nodes = 200 } -AllowFailure
+    $status = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $windowId; depth = 5; max_nodes = 200 } -AllowFailure
     $statusText = [string](Get-UiNodeText -Tree $status.Result -AutomationId "StatusText")
     $driveOk = $dry -or ($status.Ok -and $statusText -match "\d+\s+not")
     Add-Check -Section $section.name -Name "native.drive.status_line_read_back" -Ok $driveOk `
@@ -1090,7 +1096,7 @@ function Invoke-NativeAppSection {
         $reWindows = Get-ResultField -Result $reListed.Result -Name "windows"
         if ($reWindows -and @($reWindows).Count -gt 0) { $reWindow = [string](@($reWindows)[0].window_id) }
     }
-    $reStatus = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $reWindow; depth = 6; max_nodes = 200 } -AllowFailure
+    $reStatus = Invoke-DeviceCapability -Section $section -Capability "ui.inspect" -Payload @{ window_id = $reWindow; depth = 5; max_nodes = 200 } -AllowFailure
     $reText = [string](Get-UiNodeText -Tree $reStatus.Result -AutomationId "StatusText")
     $persistOk = $dry -or ($reStatus.Ok -and $reText -match "[1-9]\d*\s+not")
     Add-Check -Section $section.name -Name "native.relaunch.note_survived" -Ok $persistOk `

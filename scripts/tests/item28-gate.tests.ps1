@@ -159,6 +159,22 @@ Assert-True ($companion -match "IsWithin\(resolvedExe, resolvedRoot\)") `
 Assert-True ($companion -match "EffectiveProjectsRootNative") `
     "...and the root it uses is the configured native root, not a literal path"
 
+# Every ui.inspect payload this script sends must stay inside the bounds the COMPANION
+# declares, read from its own source rather than restated here. Asking for depth 6 against a
+# MaxDepth of 5 is a validation_error raised before the device touches a window, and it cost
+# two steps of the M28 section on its first live run.
+$inspector = Get-Content -LiteralPath (Join-Path $repoRoot "devices\windows-agent\src\PagentOS.SessionCompanion\Operator\UiAutomationInspector.cs") -Raw
+$maxDepth = 0
+if ($inspector -match "public const int MaxDepth = (\d+);") { $maxDepth = [int]$Matches[1] }
+$maxNodes = 0
+if ($inspector -match "public const int MaxNodes = (\d+);") { $maxNodes = [int]$Matches[1] }
+Assert-True ($maxDepth -gt 0 -and $maxNodes -gt 0) "the companion's own inspector bounds were read from its source (MaxDepth=$maxDepth, MaxNodes=$maxNodes)"
+$depths = @([regex]::Matches($qualifier, "depth = (\d+)") | ForEach-Object { [int]$_.Groups[1].Value })
+$nodes = @([regex]::Matches($qualifier, "max_nodes = (\d+)") | ForEach-Object { [int]$_.Groups[1].Value })
+Assert-True (@($depths).Count -ge 3) "the qualification sends ui.inspect with an explicit depth ($(@($depths).Count) site(s))"
+Assert-True (@($depths | Where-Object { $_ -gt $maxDepth }).Count -eq 0) "no ui.inspect asks for a depth beyond the companion's MaxDepth of $maxDepth (asked: $($depths -join ', '))"
+Assert-True (@($nodes | Where-Object { $_ -gt $maxNodes }).Count -eq 0) "and none asks for more nodes than its MaxNodes of $maxNodes (asked: $($nodes -join ', '))"
+
 $lab = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\tests\native-windows-lab.py") -Raw
 Assert-True ($lab -match "--workdir") `
     "the lab can build where the device can reach, instead of only in a temp directory"
