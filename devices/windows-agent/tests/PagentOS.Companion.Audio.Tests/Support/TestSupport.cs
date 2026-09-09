@@ -7,7 +7,20 @@ public static class TestSupport
     public static readonly AudioFormat Format = AudioFormat.Pcm16Mono24k;
 
     /// <summary>Polls until the condition holds or the timeout passes; returns whether it held.</summary>
-    public static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs = 3000)
+    /// <summary>
+    /// Polls until <paramref name="condition"/> holds, or gives up.
+    /// </summary>
+    /// <remarks>
+    /// The bound is a HANG GUARD, not a latency budget. Every caller writes
+    /// <c>Assert.True(await WaitForAsync(...))</c> - nothing in this suite asserts that a wait
+    /// TIMES OUT - so the number only decides how long a genuinely stuck loop takes to be
+    /// reported. At three seconds it was also deciding whether a busy CI runner passed: on run
+    /// 34379161742 the orchestrator's return to Idle did not arrive inside it and the suite
+    /// failed with "condition never held" about a loop that was merely slow. The poll's own
+    /// `Task.Delay(3)` continuation is queued on the same starved pool, so the effective poll
+    /// rate collapses exactly when the machine is busiest.
+    /// </remarks>
+    public static async Task<bool> WaitForAsync(Func<bool> condition, int timeoutMs = 30_000)
     {
         var deadline = Environment.TickCount64 + timeoutMs;
         while (!condition())

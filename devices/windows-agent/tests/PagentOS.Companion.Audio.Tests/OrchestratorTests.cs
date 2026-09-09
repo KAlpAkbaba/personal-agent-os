@@ -86,7 +86,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
             await Task.Delay(1);
         }
 
-        Assert.True(await TestSupport.WaitForAsync(condition, 1000), "condition never held");
+        Assert.True(await TestSupport.WaitForAsync(condition, 30_000), "condition never held");
         await _orchestrator!.DrainAsync();
     }
 
@@ -95,7 +95,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
     /// REST of that handler (reports posted, commands submitted, state recorded) has finished
     /// too. Every assertion on "what the orchestrator did about X" follows this, never a sleep.
     /// </summary>
-    private async Task SettleAsync(Func<bool> condition, int timeoutMs = 3000)
+    private async Task SettleAsync(Func<bool> condition, int timeoutMs = 30_000)
     {
         Assert.True(await TestSupport.WaitForAsync(condition, timeoutMs), "condition never held");
         await _orchestrator!.DrainAsync();
@@ -445,7 +445,7 @@ public sealed class OrchestratorTests : IAsyncDisposable
 
         Speak(300); // the first report's ack carries the backlog
 
-        Assert.True(await TestSupport.WaitForAsync(() => Leg.Commands.OfType<SayCommand>().Any(), 5000));
+        Assert.True(await TestSupport.WaitForAsync(() => Leg.Commands.OfType<SayCommand>().Any(), 30_000));
         Assert.Equal("Kuyruktan geldi.", Leg.Commands.OfType<SayCommand>().Single().Text);
         Assert.Contains("say", o.PushesHandled);
     }
