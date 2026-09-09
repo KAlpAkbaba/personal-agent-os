@@ -239,7 +239,9 @@ def test_every_key_the_windows_verifier_reads_is_a_key_the_row_carries(
     """
     source = _verifier_source()
     read_by_verifier = set(re.findall(r'Get-ManifestMember \$[Rr]ow "([a-z_]+)"', source))
-    assert read_by_verifier, "the verifier reads no device-row key at all; the regex or the reader moved"
+    assert read_by_verifier, (
+        "the verifier reads no device-row key at all; the regex or the reader moved"
+    )
 
     device = _enroll(db)
     broker_service.apply_hello(
