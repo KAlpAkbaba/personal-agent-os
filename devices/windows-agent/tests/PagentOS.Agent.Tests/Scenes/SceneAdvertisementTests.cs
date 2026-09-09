@@ -71,9 +71,10 @@ public sealed class SceneAdvertisementTests
     {
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(SceneCapabilityNames.Inspect));
 
-        // M25 raised project.run's ceiling to the longest 3D batch bound plus headroom; the
-        // rest of the projects family is untouched.
-        Assert.Equal(SceneCapabilityNames.UnityRunLimit + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectRun));
+        // M25 raised project.run's ceiling to the longest batch bound plus headroom; M28's
+        // 20 min build bound took that place. The rest of the projects family is untouched.
+        Assert.Equal(NativeCapabilityNames.RunLimit + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectRun));
+        Assert.True(NativeCapabilityNames.RunLimit > SceneCapabilityNames.UnityRunLimit, "a ceiling that no longer covers Unity's own bound would time a licensed Unity run out mid-import");
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStatus));
 
         var transport = new CountingTransport();

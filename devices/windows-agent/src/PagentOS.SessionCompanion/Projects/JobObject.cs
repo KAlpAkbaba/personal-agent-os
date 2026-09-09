@@ -114,6 +114,17 @@ public sealed class JobObject : IDisposable
         {
             ProjectRuntime.Blender => Create(SceneCapabilityNames.BlenderMemoryLimitBytes, SceneCapabilityNames.BlenderRunLimit, Max3dProcessesPerJob),
             ProjectRuntime.Unity => Create(SceneCapabilityNames.UnityMemoryLimitBytes, SceneCapabilityNames.UnityRunLimit, Max3dProcessesPerJob),
+            // M28: 4 GiB and 64 processes, and a CPU-time bound that is NOT the wall-clock
+            // bound. `JOB_OBJECT_LIMIT_JOB_TIME` ends the job when the SUM of its processes'
+            // user time passes the limit, and MSBuild compiles in parallel: on an eight-core
+            // machine an honest fifteen-minute build burns two hours of user time, so a CPU
+            // bound set to the wall bound would kill honest builds and call it a limit. The
+            // wall clock is the bound here (ProjectRunner ends the job at NativeLimit); the
+            // CPU bound is what that wall clock could legitimately consume on THIS machine.
+            ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx => Create(
+                NativeCapabilityNames.MemoryLimitBytes,
+                NativeCapabilityNames.CpuTimeLimitFor(Environment.ProcessorCount),
+                NativeCapabilityNames.MaxProcessesPerJob),
             _ => CreateBounded(),
         };
 

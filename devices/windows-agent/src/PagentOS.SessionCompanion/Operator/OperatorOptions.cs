@@ -28,6 +28,11 @@ namespace PagentOS.SessionCompanion.Operator;
 /// owner's own project folders are never under it: an M23 project lives at
 /// <c>&lt;ProjectsRoot&gt;\&lt;slug&gt;</c> and the owner's real work lives wherever the owner
 /// put it — <c>blender</c> and <c>unity</c> are refused anywhere but here.</item>
+/// <item><c>ProjectsRootNative</c> (M28, DEVICE_PROTOCOL.md §6n) — the ONE directory a
+/// COMPILER may run under; empty means <c>&lt;ProjectsRoot&gt;\native</c>. The same rules as
+/// the 3D root, one directory over: always an authorised root, resolved-then-contained on
+/// every use, and the only scope in which the four <c>dotnet</c>/<c>makeappx</c> shapes are
+/// admitted at all.</item>
 /// </list>
 /// </summary>
 public sealed record OperatorOptions(
@@ -36,7 +41,8 @@ public sealed record OperatorOptions(
     IReadOnlyList<string> AuthorisedRoots,
     string? DownloadsRoot = null,
     string? ProjectsRoot = null,
-    string? ProjectsRoot3d = null)
+    string? ProjectsRoot3d = null,
+    string? ProjectsRootNative = null)
 {
     /// <summary>The fixture folder the operator lab uses (M19_DIGITAL_OPERATOR_SPEC.md §5); a default root so the lab runs against the default configuration.</summary>
     public static string FixtureRoot => Path.Combine(Path.GetTempPath(), "pagentos-operator-fixture");
@@ -54,8 +60,10 @@ public sealed record OperatorOptions(
         var downloads = configuration["DownloadsRoot"];
         var projects = configuration["ProjectsRoot"];
         var projects3d = configuration["ProjectsRoot3d"];
+        var projectsNative = configuration["ProjectsRootNative"];
         var projectsRoot = string.IsNullOrWhiteSpace(projects) ? DefaultProjectsRoot() : projects.Trim();
         var projectsRoot3d = string.IsNullOrWhiteSpace(projects3d) ? Default3dRoot(projectsRoot) : projects3d.Trim();
+        var projectsRootNative = string.IsNullOrWhiteSpace(projectsNative) ? DefaultNativeRoot(projectsRoot) : projectsNative.Trim();
 
         // M23: the Projects root is an authorised root whatever the owner configured — the
         // family writes there and nowhere else, and the operator must be able to open and
@@ -66,13 +74,15 @@ public sealed record OperatorOptions(
         var effectiveRoots = new List<string>(roots.Count == 0 ? DefaultRoots() : roots);
         Add(effectiveRoots, projectsRoot);
         Add(effectiveRoots, projectsRoot3d);
+        Add(effectiveRoots, projectsRootNative);
         return new OperatorOptions(
             enabled,
             allowlist.Count == 0 ? TerminalRunner.DefaultAllowlist : allowlist,
             effectiveRoots,
             string.IsNullOrWhiteSpace(downloads) ? null : downloads.Trim(),
             projectsRoot,
-            projectsRoot3d);
+            projectsRoot3d,
+            projectsRootNative);
     }
 
     /// <summary>The directory <c>file.fetch</c> writes into: the configured one, else the owner's Downloads folder; null when the machine has neither.</summary>
@@ -84,9 +94,16 @@ public sealed record OperatorOptions(
     /// <summary>M25: the directory the two 3D runtimes may run under — the configured one, else <c>&lt;Projects root&gt;\3d</c>; null when there is no Projects root at all.</summary>
     public string? EffectiveProjectsRoot3d => string.IsNullOrWhiteSpace(ProjectsRoot3d) ? Default3dRoot(EffectiveProjectsRoot) : ProjectsRoot3d;
 
+    /// <summary>M28: the directory a compiler may run under — the configured one, else <c>&lt;Projects root&gt;\native</c>; null when there is no Projects root at all.</summary>
+    public string? EffectiveProjectsRootNative => string.IsNullOrWhiteSpace(ProjectsRootNative) ? DefaultNativeRoot(EffectiveProjectsRoot) : ProjectsRootNative;
+
     /// <summary><c>%USERPROFILE%\Documents\PagentOS Projects\3d</c> (M25_CREATIVE_3D_SPEC.md §1), or null when there is no Projects root.</summary>
     public static string? Default3dRoot(string? projectsRoot)
         => string.IsNullOrWhiteSpace(projectsRoot) ? null : Path.Combine(projectsRoot, Agent.Core.Protocol.SceneCapabilityNames.Root3dFolderName);
+
+    /// <summary><c>%USERPROFILE%\Documents\PagentOS Projects\native</c> (M28_NATIVE_APP_FACTORY_SPEC.md §5), or null when there is no Projects root.</summary>
+    public static string? DefaultNativeRoot(string? projectsRoot)
+        => string.IsNullOrWhiteSpace(projectsRoot) ? null : Path.Combine(projectsRoot, Agent.Core.Protocol.NativeCapabilityNames.RootNativeFolderName);
 
     /// <summary><c>%USERPROFILE%\Documents\PagentOS Projects</c> (M23_APP_FACTORY_SPEC.md §1), or null when the owner has no Documents folder.</summary>
     public static string? DefaultProjectsRoot()
@@ -118,6 +135,9 @@ public sealed record OperatorOptions(
         // for the same reason.
         Add(roots, DefaultProjectsRoot());
         Add(roots, Default3dRoot(DefaultProjectsRoot()));
+        // M28: and the native root, for the same reason again — it is where a compiler runs
+        // and where the artefact it produced is read back from.
+        Add(roots, DefaultNativeRoot(DefaultProjectsRoot()));
         return roots;
     }
 
@@ -156,14 +176,30 @@ public sealed record OperatorOptions(
         return this with { AuthorisedRoots = roots, ProjectsRoot = root3d, ProjectsRoot3d = root3d };
     }
 
-    /// <summary>These options with the projects root replaced (a lab points it inside its run directory); the 3D root follows it unless it was configured on its own.</summary>
+    /// <summary>
+    /// M28: these options seen from the native root — the same gate, allowlist and authorised
+    /// roots, with <c>ProjectsRoot</c> pointing at <see cref="EffectiveProjectsRootNative"/>.
+    /// The native half builds its <c>ProjectRoots</c> from this, so a native project gets the
+    /// M23 resolve-then-contain, marker and id rules unchanged, one directory lower.
+    /// </summary>
+    public OperatorOptions NativeOptions()
+    {
+        var rootNative = EffectiveProjectsRootNative;
+        var roots = new List<string>(AuthorisedRoots);
+        Add(roots, rootNative);
+        return this with { AuthorisedRoots = roots, ProjectsRoot = rootNative, ProjectsRootNative = rootNative };
+    }
+
+    /// <summary>These options with the projects root replaced (a lab points it inside its run directory); the 3D and native roots follow it unless each was configured on its own.</summary>
     public OperatorOptions WithProjectsRoot(string projectsRoot)
     {
         var roots = new List<string>(AuthorisedRoots);
         Add(roots, projectsRoot);
         var root3d = string.IsNullOrWhiteSpace(ProjectsRoot3d) ? Default3dRoot(projectsRoot) : ProjectsRoot3d;
+        var rootNative = string.IsNullOrWhiteSpace(ProjectsRootNative) ? DefaultNativeRoot(projectsRoot) : ProjectsRootNative;
         Add(roots, root3d);
-        return this with { AuthorisedRoots = roots, ProjectsRoot = projectsRoot, ProjectsRoot3d = root3d };
+        Add(roots, rootNative);
+        return this with { AuthorisedRoots = roots, ProjectsRoot = projectsRoot, ProjectsRoot3d = root3d, ProjectsRootNative = rootNative };
     }
 
     private static IReadOnlyList<string> SplitList(string? raw)

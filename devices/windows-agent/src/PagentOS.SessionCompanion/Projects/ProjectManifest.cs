@@ -9,7 +9,7 @@ using PagentOS.SessionCompanion.Operator;
 
 namespace PagentOS.SessionCompanion.Projects;
 
-/// <summary>The runtime a manifest command runs under — the only five there are (M25 added the two 3D editors).</summary>
+/// <summary>The runtime a manifest command runs under — the only seven there are (M25 added the two 3D editors, M28 the two native build tools).</summary>
 public enum ProjectRuntime
 {
     Python,
@@ -21,6 +21,12 @@ public enum ProjectRuntime
 
     /// <summary>M25: <c>Unity.exe -batchmode -nographics -quit</c>, running the shipped editor driver. A BATCH runtime.</summary>
     Unity,
+
+    /// <summary>M28: <c>dotnet.exe build|test|publish</c> in Release, on one project file of the native project. A BATCH runtime.</summary>
+    Dotnet,
+
+    /// <summary>M28: the Windows Kits' <c>makeappx.exe pack</c>, on one directory of the native project. A BATCH runtime.</summary>
+    MakeAppx,
 }
 
 /// <summary>
@@ -35,6 +41,14 @@ public enum ProjectScope
 {
     Web,
     ThreeD,
+
+    /// <summary>
+    /// M28 (M28_NATIVE_APP_FACTORY_SPEC.md §5, ADR-0095 decision 4): a project under the
+    /// <c>native</c> root, the ONLY scope in which a compiler runs. The four <c>dotnet</c> /
+    /// <c>makeappx</c> shapes are admitted here and nowhere else, and the web and 3D runtimes
+    /// are refused here — a native project is compiled, not served.
+    /// </summary>
+    Native,
 }
 
 /// <summary>
@@ -49,9 +63,10 @@ public sealed record ProjectCommand(string Key, ProjectRuntime Runtime, IReadOnl
     /// <summary>
     /// M25: whether this command is a BATCH run — a process that does its work and ends,
     /// rather than a server the run waits for on a port. The two 3D editors are batch runs:
-    /// <c>project.run</c> waits for the exit and answers with it. Nothing else is.
+    /// <c>project.run</c> waits for the exit and answers with it. M28's two build tools are
+    /// batch runs for the same reason: a compiler binds no port. Nothing else is.
     /// </summary>
-    public bool IsBatch => Runtime is ProjectRuntime.Blender or ProjectRuntime.Unity;
+    public bool IsBatch => Runtime is ProjectRuntime.Blender or ProjectRuntime.Unity or ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx;
 
     public IReadOnlyList<string> Materialise(string projectRoot)
         => [.. Arguments.Select(a => a == ProjectManifest.RootPlaceholder ? projectRoot : a)];
@@ -80,10 +95,20 @@ public sealed record ProjectCommand(string Key, ProjectRuntime Runtime, IReadOnl
 /// PagentOS.SceneDriver.Run -planPath &lt;plan.json&gt; -outPath &lt;out.json&gt; -logFile
 /// &lt;log&gt;</c> — the method is the one shipped driver's entry point and nothing else.</item>
 /// </list>
+/// Since M28 (M28_NATIVE_APP_FACTORY_SPEC.md §5, ADR-0095 decision 4) a project under the
+/// native root — and ONLY there (<see cref="ProjectScope.Native"/>), where in exchange the
+/// three web runtimes are refused — may draw on four more shapes, matched the same way:
+/// <list type="bullet">
+/// <item><c>dotnet build &lt;project.csproj&gt; -c Release</c> (run);</item>
+/// <item><c>dotnet test &lt;project.csproj&gt; -c Release</c> (test);</item>
+/// <item><c>dotnet publish &lt;project.csproj&gt; -c Release -r win-x64 --self-contained true
+/// -o &lt;dir&gt;</c> (run);</item>
+/// <item><c>makeappx pack /d &lt;dir&gt; /p &lt;package.msix&gt; /o /nv</c> (run).</item>
+/// </list>
 /// Anything else — another program, a shell, a composition character, an absolute path, a
-/// <c>..</c> — is <c>permission_denied</c> at parse time, before any process exists. The
-/// payload of <c>project.run</c> / <c>project.test</c> names a KEY into these maps; a
-/// command line never crosses the pipe.
+/// <c>..</c> — is <c>permission_denied</c> at parse time, before any process exists, and the
+/// signing tools are refused by NAME before even that. The payload of <c>project.run</c> /
+/// <c>project.test</c> names a KEY into these maps; a command line never crosses the pipe.
 /// </summary>
 public sealed class ProjectManifest
 {
@@ -189,7 +214,9 @@ public sealed class ProjectManifest
     private static int ReadPort(JsonObject manifest, ProjectScope scope)
     {
         var node = manifest["port"];
-        if (scope == ProjectScope.ThreeD && (node is null || IsNoPort(node)))
+        // M28: a native manifest omits `port` for the same reason a 3D one does — every one of
+        // its commands is a batch run that binds nothing.
+        if (scope != ProjectScope.Web && (node is null || IsNoPort(node)))
         {
             // A batch run binds nothing. Requiring a port of a 3D manifest would be requiring
             // a number nothing ever checks, and every 3D project would have to invent one.
@@ -294,6 +321,24 @@ public sealed class ProjectManifest
 
         var program = tokens[0].ToLowerInvariant();
         var portText = port.ToString(CultureInfo.InvariantCulture);
+
+        // M28 §9: the signing tools are refused BY NAME, before anything is matched, resolved
+        // or scoped. Every other refusal in this method is "that is not one of the shapes";
+        // this one is "this device does not run that program at all", and it is stated
+        // separately so that widening a shape can never widen these in by accident.
+        if (NativeCapabilityNames.IsForbiddenProgram(program))
+        {
+            throw Refuse(key, text, $"'{program}' is a signing or certificate tool, and this device signs nothing — an unsigned package is the honest state of a package nobody signed, and the owner's signing identity is theirs");
+        }
+
+        // M28: the native root compiles applications and does nothing else. Stated as its own
+        // refusal so a native project cannot quietly become a web server under the one root
+        // where a compiler is allowed to run.
+        if (scope == ProjectScope.Native && program is "python" or "node" or "npm")
+        {
+            throw Refuse(key, text, $"'{program}' runs only under the Projects root; the '{NativeCapabilityNames.RootNativeFolderName}' root admits the four build shapes and nothing else");
+        }
+
         switch (program)
         {
             case "python" when !isTest
@@ -421,8 +466,101 @@ public sealed class ProjectManifest
             case SceneCapabilityNames.UnityProgram:
                 throw Refuse(key, text, $"the only unity form is '{SceneCapabilityNames.UnityProgram} -batchmode -nographics -quit -projectPath {RootPlaceholder} -executeMethod {SceneCapabilityNames.UnityDriverMethod} -planPath <plan{SceneCapabilityNames.JsonExtension}> -outPath <out{SceneCapabilityNames.JsonExtension}> -logFile <log{SceneCapabilityNames.LogExtension}>'");
 
+            // -------------------------------------------------- M28: the native build tools
+
+            case NativeCapabilityNames.DotnetProgram when scope != ProjectScope.Native:
+            case NativeCapabilityNames.MakeAppxProgram when scope != ProjectScope.Native:
+                throw Refuse(key, text, $"a compiler runs only under the '{NativeCapabilityNames.RootNativeFolderName}' root, never in a project of the Projects root or the 3D root");
+
+            // dotnet build <project.csproj> -c Release   /   dotnet test <project.csproj> -c Release
+            //    0     1           2         3     4
+            case NativeCapabilityNames.DotnetProgram when tokens.Length == 5
+                && (tokens[1] == "build" || tokens[1] == "test")
+                && tokens[3] == "-c"
+                && tokens[4] == NativeCapabilityNames.Configuration:
+                {
+                    // `build` is a run command and `test` is a test command, and neither may
+                    // stand in for the other: a `project.test` whose manifest key resolves to
+                    // `dotnet build` would report a compile as a passing test suite.
+                    if (isTest != (tokens[1] == "test"))
+                    {
+                        throw Refuse(key, text, $"'dotnet {tokens[1]}' is a {(tokens[1] == "test" ? "test" : "run")} command; it is not admitted in the {(isTest ? "test" : "run")} section");
+                    }
+
+                    var project = InsideProject(key, text, tokens[2], NativeCapabilityNames.ProjectExtension, "the project file");
+                    return new ProjectCommand(
+                        key,
+                        ProjectRuntime.Dotnet,
+                        [tokens[1], project, "-c", NativeCapabilityNames.Configuration],
+                        $"{NativeCapabilityNames.DotnetProgram} {tokens[1]} {project} -c {NativeCapabilityNames.Configuration}");
+                }
+
+            // dotnet publish <project.csproj> -c Release -r win-x64 --self-contained true -o <dir>
+            //    0      1           2          3    4     5    6            7          8   9   10
+            //
+            // NOT PublishSingleFile: measured 2026-09-09, single-file needs
+            // `Microsoft.NET.ILLink.Tasks`, which does not restore on this machine (NU1100).
+            // The self-contained FOLDER publish produces the same real EXE and is what the
+            // portable zip packages anyway.
+            case NativeCapabilityNames.DotnetProgram when tokens.Length == 11
+                && tokens[1] == "publish"
+                && tokens[3] == "-c"
+                && tokens[4] == NativeCapabilityNames.Configuration
+                && tokens[5] == "-r"
+                && tokens[6] == NativeCapabilityNames.RuntimeIdentifier
+                && tokens[7] == "--self-contained"
+                && tokens[8] == "true"
+                && tokens[9] == "-o":
+                {
+                    if (isTest)
+                    {
+                        throw Refuse(key, text, "'dotnet publish' is a run command; it is not admitted in the test section");
+                    }
+
+                    var project = InsideProject(key, text, tokens[2], NativeCapabilityNames.ProjectExtension, "the project file");
+                    var output = InsideProject(key, text, tokens[10], extension: null, "the publish directory");
+                    return new ProjectCommand(
+                        key,
+                        ProjectRuntime.Dotnet,
+                        ["publish", project, "-c", NativeCapabilityNames.Configuration, "-r", NativeCapabilityNames.RuntimeIdentifier, "--self-contained", "true", "-o", output],
+                        $"{NativeCapabilityNames.DotnetProgram} publish {project} -c {NativeCapabilityNames.Configuration} -r {NativeCapabilityNames.RuntimeIdentifier} --self-contained true -o {output}");
+                }
+
+            case NativeCapabilityNames.DotnetProgram:
+                throw Refuse(key, text, $"the only dotnet forms are '{NativeCapabilityNames.DotnetProgram} build|test <project{NativeCapabilityNames.ProjectExtension}> -c {NativeCapabilityNames.Configuration}' and '{NativeCapabilityNames.DotnetProgram} publish <project{NativeCapabilityNames.ProjectExtension}> -c {NativeCapabilityNames.Configuration} -r {NativeCapabilityNames.RuntimeIdentifier} --self-contained true -o <dir>', every path relative and inside the project");
+
+            // makeappx pack /d <dir> /p <package.msix> /o /nv
+            //    0      1    2   3   4        5        6   7
+            //
+            // `/o` overwrites the package this project made before; `/nv` skips semantic
+            // validation, which is what refuses an UNSIGNED manifest — and unsigned is
+            // deliberate here (M28 §9), so the tool must not be asked to judge it.
+            case NativeCapabilityNames.MakeAppxProgram when tokens.Length == 8
+                && tokens[1] == "pack"
+                && tokens[2] == "/d"
+                && tokens[4] == "/p"
+                && tokens[6] == "/o"
+                && tokens[7] == "/nv":
+                {
+                    if (isTest)
+                    {
+                        throw Refuse(key, text, $"'{NativeCapabilityNames.MakeAppxProgram} pack' is a run command; it is not admitted in the test section");
+                    }
+
+                    var source = InsideProject(key, text, tokens[3], extension: null, "the package source directory");
+                    var package = InsideProject(key, text, tokens[5], NativeCapabilityNames.PackageExtension, "the package");
+                    return new ProjectCommand(
+                        key,
+                        ProjectRuntime.MakeAppx,
+                        ["pack", "/d", source, "/p", package, "/o", "/nv"],
+                        $"{NativeCapabilityNames.MakeAppxProgram} pack /d {source} /p {package} /o /nv");
+                }
+
+            case NativeCapabilityNames.MakeAppxProgram:
+                throw Refuse(key, text, $"the only makeappx form is '{NativeCapabilityNames.MakeAppxProgram} pack /d <dir> /p <package{NativeCapabilityNames.PackageExtension}> /o /nv', both paths relative and inside the project");
+
             default:
-                throw Refuse(key, text, "only python, node, npm and — under the 3D root — blender and unity run here");
+                throw Refuse(key, text, $"only python, node, npm, — under the 3D root — blender and unity, and — under the '{NativeCapabilityNames.RootNativeFolderName}' root — dotnet and makeappx run here");
         }
     }
 
@@ -434,7 +572,8 @@ public sealed class ProjectManifest
     /// nothing absolute is ever accepted — which is what keeps a <c>.blend</c> of the owner's
     /// own out of reach before any process exists.
     /// </summary>
-    private static string InsideProject(string key, string text, string token, string extension, string what)
+    /// <param name="extension">The extension the position requires, or null (M28) when the position is a DIRECTORY, which has none.</param>
+    private static string InsideProject(string key, string text, string token, string? extension, string what)
     {
         string path;
         try
@@ -446,14 +585,25 @@ public sealed class ProjectManifest
             throw Refuse(key, text, $"{what} must be a relative path inside the project (no '..', no drive, no separator first)");
         }
 
-        if (!path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+        if (extension is not null && !path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
         {
             throw Refuse(key, text, $"{what} must be a {extension} file");
+        }
+
+        // M28: `.pagentos` is the companion's own folder inside a project — the bounded run and
+        // test logs live there, and the runner holds a handle on one of them while the child
+        // runs. A `-o` or a `/d` pointing at it would have a build write over the log that is
+        // recording it. The scaffold already refuses a FILE there (`RequireWritableName`); this
+        // is the same rule for the one place a command names a path of its own.
+        var first = path.Contains('/') ? path[..path.IndexOf('/')] : path;
+        if (string.Equals(first, ProjectRoots.StateFolderName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw Refuse(key, text, $"{what} is under '{ProjectRoots.StateFolderName}/', which is the companion's own folder inside a project");
         }
 
         return path;
     }
 
     private static Exception Refuse(string key, string text, string reason)
-        => DocumentErrors.Denied($"manifest command '{key}' is not in the runtime allowlist: {reason} (python -m http.server {PortPlaceholder} --bind {Loopback} | node <entry> | npm --prefix {RootPlaceholder} run start|test with a lockfile | under the 3D root {SceneCapabilityNames.BlenderProgram} -b … --python … | {SceneCapabilityNames.UnityProgram} -batchmode …); nothing was run", "command_not_allowlisted");
+        => DocumentErrors.Denied($"manifest command '{key}' is not in the runtime allowlist: {reason} (python -m http.server {PortPlaceholder} --bind {Loopback} | node <entry> | npm --prefix {RootPlaceholder} run start|test with a lockfile | under the 3D root {SceneCapabilityNames.BlenderProgram} -b … --python … | {SceneCapabilityNames.UnityProgram} -batchmode … | under the {NativeCapabilityNames.RootNativeFolderName} root {NativeCapabilityNames.DotnetProgram} build|test|publish … | {NativeCapabilityNames.MakeAppxProgram} pack …); nothing was run", "command_not_allowlisted");
 }

@@ -221,7 +221,8 @@ public sealed class ProjectRunner : IDisposable
     /// <param name="maxRunning">Concurrent runs (and, separately, concurrent tests); default <see cref="ProjectCapabilityNames.MaxRunningProjects"/>.</param>
     /// <param name="blenderLimit">M25: the wall-clock bound on a Blender batch run; default <see cref="SceneCapabilityNames.BlenderRunLimit"/> (a lab shortens it to prove the job ends the child).</param>
     /// <param name="unityLimit">M25: the wall-clock bound on a Unity batch run; default <see cref="SceneCapabilityNames.UnityRunLimit"/>.</param>
-    public ProjectRunner(ILogger logger, Func<ProcessStartInfo, Process?>? start = null, TimeSpan? lifetime = null, TimeSpan? testTimeout = null, TimeSpan? portWait = null, int? maxRunning = null, TimeSpan? blenderLimit = null, TimeSpan? unityLimit = null)
+    /// <param name="nativeLimit">M28: the wall-clock bound on a <c>dotnet</c> / <c>makeappx</c> run; default <see cref="NativeCapabilityNames.RunLimit"/> (a lab shortens it to prove the job ends the child).</param>
+    public ProjectRunner(ILogger logger, Func<ProcessStartInfo, Process?>? start = null, TimeSpan? lifetime = null, TimeSpan? testTimeout = null, TimeSpan? portWait = null, int? maxRunning = null, TimeSpan? blenderLimit = null, TimeSpan? unityLimit = null, TimeSpan? nativeLimit = null)
     {
         _logger = logger;
         _start = start ?? Process.Start;
@@ -231,6 +232,7 @@ public sealed class ProjectRunner : IDisposable
         MaxRunning = maxRunning ?? ProjectCapabilityNames.MaxRunningProjects;
         BlenderLimit = blenderLimit ?? SceneCapabilityNames.BlenderRunLimit;
         UnityLimit = unityLimit ?? SceneCapabilityNames.UnityRunLimit;
+        NativeLimit = nativeLimit ?? NativeCapabilityNames.RunLimit;
     }
 
     /// <summary>M25: the most a Blender batch run may take before its job is ended.</summary>
@@ -239,12 +241,23 @@ public sealed class ProjectRunner : IDisposable
     /// <summary>M25: the most a Unity batch run may take before its job is ended.</summary>
     public TimeSpan UnityLimit { get; }
 
-    /// <summary>The wall-clock bound for a batch runtime.</summary>
+    /// <summary>M28: the most a native build run — a compile, a test, a publish, a pack — may take before its job is ended.</summary>
+    public TimeSpan NativeLimit { get; }
+
+    /// <summary>
+    /// The wall-clock bound for a runtime. M28 makes this the bound <c>project.test</c> uses
+    /// too, rather than a flat <see cref="TestTimeout"/>: a <c>dotnet test</c> restores, compiles
+    /// and then runs, which is not something five minutes reliably holds, while a node runner
+    /// that has not finished in five minutes has not failed in a way twenty more would fix.
+    /// The bound follows the RUNTIME the manifest named, which is the only thing that knows
+    /// which of those two a command is.
+    /// </summary>
     public TimeSpan LimitFor(ProjectRuntime runtime)
         => runtime switch
         {
             ProjectRuntime.Blender => BlenderLimit,
             ProjectRuntime.Unity => UnityLimit,
+            ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx => NativeLimit,
             _ => TestTimeout,
         };
 
@@ -388,6 +401,13 @@ public sealed class ProjectRunner : IDisposable
                 // installed Blender, not whatever is called blender.exe earliest on PATH.
                 return (Scenes.SceneTools.Require(runtime).Executable, []);
 
+            case ProjectRuntime.Dotnet:
+            case ProjectRuntime.MakeAppx:
+                // M28: detected the way the Cloud Core detects them (NativeTools) — the .NET
+                // installer's own directory before PATH, and the Windows Kits' layout for
+                // makeappx, which is never on PATH.
+                return (Native.NativeTools.Require(runtime).Executable, []);
+
             default:
                 throw new CapabilityException(ErrorClasses.InternalBug, $"unknown runtime {runtime}", retryable: false);
         }
@@ -488,8 +508,42 @@ public sealed class ProjectRunner : IDisposable
         run.Log.Pump(process.StandardError);
     }
 
+    /// <summary>
+    /// M28 §9, the last gate before a process exists: this runner never starts a signing or
+    /// certificate tool, and never passes one as an argument to something else. The manifest
+    /// allowlist already refuses those programs by name at parse time; this repeats the refusal
+    /// against the RESOLVED executable and the materialised argument list, so a detection that
+    /// went wrong, or a shape widened later, still cannot end in a signer. The device produces
+    /// UNSIGNED packages on purpose (the Cloud Core's <c>packaging.py</c> says why): signing
+    /// needs a certificate, and the owner's signing identity is theirs.
+    /// </summary>
+    public static void RequireNoSigner(string executable, IReadOnlyList<string> arguments)
+    {
+        if (NativeCapabilityNames.IsForbiddenProgram(Path.GetFileName(executable)))
+        {
+            throw new CapabilityException(
+                ErrorClasses.PermissionDenied,
+                $"'{Path.GetFileName(executable)}' is a signing or certificate tool; this device signs nothing and never starts one",
+                retryable: false,
+                new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "command_not_allowlisted" });
+        }
+
+        foreach (var argument in arguments)
+        {
+            if (NativeCapabilityNames.IsForbiddenProgram(Path.GetFileName(argument.TrimEnd('"', '\''))))
+            {
+                throw new CapabilityException(
+                    ErrorClasses.PermissionDenied,
+                    $"argument '{argument}' names a signing or certificate tool; this device signs nothing",
+                    retryable: false,
+                    new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "command_not_allowlisted" });
+            }
+        }
+    }
+
     private ProcessStartInfo BuildStartInfo(string executable, IReadOnlyList<string> arguments, string workingDirectory)
     {
+        RequireNoSigner(executable, arguments);
         var startInfo = new ProcessStartInfo(executable)
         {
             WorkingDirectory = workingDirectory,
@@ -988,7 +1042,11 @@ public sealed class ProjectRunner : IDisposable
             log.Pump(process.StandardOutput);
             log.Pump(process.StandardError);
 
-            var wait = TestTimeout;
+            // M28: the runtime's bound, not a flat five minutes — a `dotnet test` restores and
+            // compiles before it runs anything, and the bound that fits a node runner does not
+            // fit that. Every other runtime still gets TestTimeout, which is what LimitFor
+            // answers for them.
+            var wait = LimitFor(command.Runtime);
             if (budget > TimeSpan.Zero && budget < wait)
             {
                 wait = budget;

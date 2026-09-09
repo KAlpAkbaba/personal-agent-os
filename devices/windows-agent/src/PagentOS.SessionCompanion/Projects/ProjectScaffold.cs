@@ -197,11 +197,15 @@ public static class ProjectScaffold
         return new ScaffoldRequest(projectId, slug, files, manifest, scope);
     }
 
+    /// <summary>The word <c>root</c> takes for a scope, and the word the result echoes back.</summary>
+    public const string WebScopeWord = "projects";
+
     /// <summary>
-    /// M25: which root the payload asks for — <c>root: "projects"</c> (the default, M23's
-    /// Projects root) or <c>root: "3d"</c> (the 3D root, the only place the two editors run).
-    /// It is a CLOSED vocabulary of two words, never a path: the destination directory is the
-    /// companion's configuration, and the payload only chooses between the two it holds.
+    /// M25/M28: which root the payload asks for — <c>root: "projects"</c> (the default, M23's
+    /// Projects root), <c>root: "3d"</c> (the 3D root, the only place the two editors run) or
+    /// <c>root: "native"</c> (M28's native root, the only place a compiler runs). It is a
+    /// CLOSED vocabulary of three words, never a path: the destination directory is the
+    /// companion's configuration, and the payload only chooses between the three it holds.
     /// </summary>
     public static ProjectScope ReadScope(JsonObject payload)
     {
@@ -214,11 +218,21 @@ public static class ProjectScaffold
         var value = node.GetValueKind() == JsonValueKind.String ? node.GetValue<string>() : null;
         return value switch
         {
-            "projects" => ProjectScope.Web,
+            WebScopeWord => ProjectScope.Web,
             SceneCapabilityNames.Root3dFolderName => ProjectScope.ThreeD,
-            _ => throw DocumentErrors.Invalid($"payload.root must be 'projects' or '{SceneCapabilityNames.Root3dFolderName}'"),
+            NativeCapabilityNames.RootNativeFolderName => ProjectScope.Native,
+            _ => throw DocumentErrors.Invalid($"payload.root must be '{WebScopeWord}', '{SceneCapabilityNames.Root3dFolderName}' or '{NativeCapabilityNames.RootNativeFolderName}'"),
         };
     }
+
+    /// <summary>The <c>root</c> word for a scope — <see cref="ReadScope"/> read the other way, so the two cannot drift.</summary>
+    public static string ScopeWord(ProjectScope scope)
+        => scope switch
+        {
+            ProjectScope.ThreeD => SceneCapabilityNames.Root3dFolderName,
+            ProjectScope.Native => NativeCapabilityNames.RootNativeFolderName,
+            _ => WebScopeWord,
+        };
 
     /// <summary>Writes the validated set under <c>Projects\&lt;slug&gt;</c> and returns the folder and the hashes.</summary>
     public static ScaffoldOutcome Write(ProjectRoots roots, ScaffoldRequest request, CancellationToken cancellationToken)

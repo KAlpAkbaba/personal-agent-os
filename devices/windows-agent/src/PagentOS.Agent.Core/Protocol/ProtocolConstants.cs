@@ -503,17 +503,25 @@ public static class ProjectCapabilityNames
     /// <summary>The service's per-command cap for scaffold, status and stop — the operator family's 30 s.</summary>
     public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
 
-    /// <summary>The service's cap for <c>project.test</c> alone: the test bound plus headroom for the typed answer.</summary>
-    public static readonly TimeSpan TestCommandTimeoutCap = TestTimeout + TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// The service's cap for <c>project.test</c> alone. It was <see cref="TestTimeout"/> plus
+    /// headroom; M28 raises it to the longest test bound there is, because a <c>dotnet test</c>
+    /// under the native root is bounded by <see cref="NativeCapabilityNames.RunLimit"/> and not
+    /// by the 5 minutes a node runner gets. A web project's test still answers within its own
+    /// 5 min bound — the cap is a ceiling, not a wait — and the companion is what decides which
+    /// bound applies, from the runtime the manifest named.
+    /// </summary>
+    public static readonly TimeSpan TestCommandTimeoutCap = NativeCapabilityNames.CommandTimeoutCap;
 
     /// <summary>
     /// M25: the service's cap for <c>project.run</c> alone. A web run still answers within
     /// <see cref="PortWait"/> — the cap is a ceiling, not a wait — but a 3D run is a BATCH run
-    /// the companion waits out (<see cref="SceneCapabilityNames.UnityRunLimit"/> is the
-    /// longest), so the ceiling has to be the longest runtime's bound plus headroom for the
-    /// typed answer, or the service would synthesise a timeout while Unity was still working.
+    /// the companion waits out, so the ceiling has to be the longest runtime's bound plus
+    /// headroom for the typed answer, or the service would synthesise a timeout while the tool
+    /// was still working. M28's builds are batch runs too, and their 20 min bound is now the
+    /// longest, so the ceiling is theirs.
     /// </summary>
-    public static readonly TimeSpan RunCommandTimeoutCap = SceneCapabilityNames.UnityRunLimit + TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan RunCommandTimeoutCap = NativeCapabilityNames.CommandTimeoutCap;
 
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 }
@@ -604,6 +612,95 @@ public static class SceneCapabilityNames
     public static readonly TimeSpan CommandTimeoutCap = TimeSpan.FromSeconds(30);
 
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
+}
+
+/// <summary>
+/// M28_NATIVE_APP_FACTORY_SPEC.md §5/§9 and ADR-0095 decision 4 — the native build toolchain.
+/// Like M25, this adds NO capability name to the wire: a native build is a BATCH
+/// <c>project.run</c> (and <c>project.test</c>) of a command the manifest allowlist admits,
+/// under a third root the companion holds. The wire contract is
+/// <c>packages/protocol/DEVICE_PROTOCOL.md</c> §6n; change the document first.
+///
+/// The owner's rule made structural: a compiler runs on this machine only under the
+/// <c>native</c> root, only as one of FOUR argv shapes matched token for token, and never as
+/// a command line anything composed. A native project cannot name its own compiler
+/// invocation — which is the whole reason M23's manifest carries a KEY.
+///
+/// Nothing here signs anything (<see cref="ForbiddenPrograms"/>). The Cloud Core's
+/// <c>app/nativefactory/packaging.py</c> says why in as many words: signing needs a
+/// certificate, and the owner's real signing identity is theirs. An unsigned MSIX is the
+/// honest state of a package nobody signed.
+/// </summary>
+public static class NativeCapabilityNames
+{
+    /// <summary>§5: the folder under the Projects root that holds the native projects — the ONLY place a compiler runs. It matches <c>app/nativefactory/roots.py</c>'s <c>NATIVE_SUBDIR</c>, and a test reads that file rather than restating the word.</summary>
+    public const string RootNativeFolderName = "native";
+
+    /// <summary>The first token of the three .NET shapes (resolved to the installed <c>dotnet.exe</c>).</summary>
+    public const string DotnetProgram = "dotnet";
+
+    /// <summary>The first token of the packaging shape (resolved to the Windows Kits' <c>makeappx.exe</c> — detected, never searched for on PATH).</summary>
+    public const string MakeAppxProgram = "makeappx";
+
+    /// <summary>The ONE configuration a native build may name. A Debug build is not a distributable application.</summary>
+    public const string Configuration = "Release";
+
+    /// <summary>The ONE runtime identifier <c>dotnet publish</c> may name.</summary>
+    public const string RuntimeIdentifier = "win-x64";
+
+    /// <summary>The extension the <c>&lt;project&gt;</c> token of the three .NET shapes must carry.</summary>
+    public const string ProjectExtension = ".csproj";
+
+    /// <summary>The extension the <c>/p</c> token of the packaging shape must carry.</summary>
+    public const string PackageExtension = ".msix";
+
+    /// <summary>
+    /// §9: programs this device never runs, at any point, under any root. Signing is the
+    /// first of them and the reason the list exists: an autonomous build does not reach for
+    /// the owner's certificate store, and a "run-local test certificate" is still a
+    /// certificate this code is not the thing that should be creating. They are refused by
+    /// NAME at manifest-parse time, before any resolution, so widening a shape can never
+    /// widen them in by accident.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ForbiddenPrograms =
+    [
+        "signtool", "certutil", "certmgr", "makecert", "pvk2pfx", "certreq",
+    ];
+
+    /// <summary>§5: a native build is ended by its job after this long. It is the Cloud Core's own <c>BUILD_TIMEOUT_S</c>, and a test reads that file.</summary>
+    public static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(20);
+
+    /// <summary>§5: a native build job's committed-memory bound (M25's Unity bound; a compiler with a Roslyn server and NuGet is not small).</summary>
+    public const long MemoryLimitBytes = 4L * 1024 * 1024 * 1024;
+
+    /// <summary>
+    /// §5: the most processes one build job may hold. Higher than M25's 32 because MSBuild
+    /// forks a node per core and adds VBCSCompiler, NuGet and the SDK's own resolvers — but
+    /// still a fixed, small cap, never a fork bomb.
+    /// </summary>
+    public const int MaxProcessesPerJob = 64;
+
+    /// <summary>
+    /// The CPU-time bound for a build job, which — unlike every other job in this agent — is
+    /// NOT the wall-clock bound. <c>JOB_OBJECT_LIMIT_JOB_TIME</c> terminates the whole job when
+    /// the SUM of its processes' user time passes the limit, and MSBuild compiles in parallel:
+    /// on an eight-core machine a perfectly legitimate fifteen-minute build burns two hours of
+    /// user time. Setting the CPU bound to the wall bound would therefore kill honest builds
+    /// and call it a limit. The wall clock is the real bound here (the runner ends the job at
+    /// <see cref="RunLimit"/>), and the CPU bound is what that wall clock could legitimately
+    /// consume: the limit times the processors this machine actually has.
+    /// </summary>
+    public static TimeSpan CpuTimeLimitFor(int processorCount) => RunLimit * Math.Clamp(processorCount, 1, 64);
+
+    /// <summary>The service's cap for a command that may carry a build: the bound plus headroom for the typed answer.</summary>
+    public static readonly TimeSpan CommandTimeoutCap = RunLimit + TimeSpan.FromSeconds(30);
+
+    /// <summary>Whether <paramref name="program"/> is one this device never runs (case-insensitively, with or without <c>.exe</c>).</summary>
+    public static bool IsForbiddenProgram(string program)
+    {
+        var stem = program.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? program[..^4] : program;
+        return ForbiddenPrograms.Contains(stem, StringComparer.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>

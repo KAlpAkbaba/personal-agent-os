@@ -33,13 +33,14 @@ public sealed class ProjectCapabilities : IDisposable
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
 
-    public ProjectCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, ProjectRunner? runner = null, ProjectRoots? roots = null, ProjectRoots? roots3d = null)
+    public ProjectCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, ProjectRunner? runner = null, ProjectRoots? roots = null, ProjectRoots? roots3d = null, ProjectRoots? rootsNative = null)
     {
         _options = options;
         _logger = logger;
         _audit = audit;
         Roots = roots ?? new ProjectRoots(options);
         Roots3d = roots3d ?? new ProjectRoots(options.Scene3dOptions());
+        RootsNative = rootsNative ?? new ProjectRoots(options.NativeOptions());
         Runner = runner ?? new ProjectRunner(logger);
     }
 
@@ -51,6 +52,9 @@ public sealed class ProjectCapabilities : IDisposable
     /// <summary>M25: the same rules, one directory lower — the 3D root, where and only where the two editors run.</summary>
     public ProjectRoots Roots3d { get; }
 
+    /// <summary>M28: the same rules again — the native root, where and only where a compiler runs.</summary>
+    public ProjectRoots RootsNative { get; }
+
     public ProjectRunner Runner { get; }
 
     /// <summary>The Projects root as configured (for the log).</summary>
@@ -58,6 +62,9 @@ public sealed class ProjectCapabilities : IDisposable
 
     /// <summary>M25: the 3D root as configured (for the log).</summary>
     public string? ProjectsRoot3d => _options.EffectiveProjectsRoot3d;
+
+    /// <summary>M28: the native root as configured (for the log).</summary>
+    public string? ProjectsRootNative => _options.EffectiveProjectsRootNative;
 
     // ================================================================== entry point
 
@@ -134,15 +141,22 @@ public sealed class ProjectCapabilities : IDisposable
     private JsonObject Scaffold(JsonObject payload, CancellationToken cancellationToken)
     {
         var request = ProjectScaffold.Parse(payload);
-        // M25: the payload's `root` chooses between the two roots this companion HOLDS, never
-        // a path — a 3D project is written under the 3D root and a web project under the
-        // Projects root, and each is parsed against its own half of the runtime allowlist.
-        var roots = request.Scope == ProjectScope.ThreeD ? Roots3d : Roots;
+        // M25/M28: the payload's `root` chooses between the three roots this companion HOLDS,
+        // never a path — a 3D project is written under the 3D root, a native project under the
+        // native root and a web project under the Projects root, and each is parsed against its
+        // own part of the runtime allowlist.
+        var roots = RootsFor(request.Scope);
         if (request.Scope == ProjectScope.Web && Is3dRootName(request.Slug))
         {
             // The 3D root lives at <Projects root>\3d by default, so a web project called "3d"
             // would be asking to become it. Refused by name, before anything is resolved.
             throw DocumentErrors.Invalid($"payload.slug '{request.Slug}' is the 3D root's own folder; scaffold with root='{SceneCapabilityNames.Root3dFolderName}' to make a 3D project");
+        }
+
+        if (request.Scope == ProjectScope.Web && IsNativeRootName(request.Slug))
+        {
+            // M28: and the same for the native root, one folder over.
+            throw DocumentErrors.Invalid($"payload.slug '{request.Slug}' is the native root's own folder; scaffold with root='{NativeCapabilityNames.RootNativeFolderName}' to make a native project");
         }
 
         var outcome = ProjectScaffold.Write(roots, request, cancellationToken);
@@ -162,24 +176,39 @@ public sealed class ProjectCapabilities : IDisposable
             ["files_written"] = outcome.Files.Count,
             ["sha256_by_path"] = hashes,
             ["manifest"] = request.Manifest.Json.DeepClone(),
-            ["root"] = request.Scope == ProjectScope.ThreeD ? SceneCapabilityNames.Root3dFolderName : "projects",
+            ["root"] = ProjectScaffold.ScopeWord(request.Scope),
         };
     }
 
+    /// <summary>The roots object for a scope — the one place the three are chosen between.</summary>
+    private ProjectRoots RootsFor(ProjectScope scope)
+        => scope switch
+        {
+            ProjectScope.ThreeD => Roots3d,
+            ProjectScope.Native => RootsNative,
+            _ => Roots,
+        };
+
     /// <summary>M25: whether a slug names the 3D root's own folder under the Projects root.</summary>
     private bool Is3dRootName(string slug)
+        => IsNestedRootName(slug, SceneCapabilityNames.Root3dFolderName, ProjectsRoot3d);
+
+    /// <summary>M28: whether a slug names the native root's own folder under the Projects root.</summary>
+    private bool IsNativeRootName(string slug)
+        => IsNestedRootName(slug, NativeCapabilityNames.RootNativeFolderName, ProjectsRootNative);
+
+    private bool IsNestedRootName(string slug, string defaultFolderName, string? nestedRoot)
     {
-        if (string.Equals(slug, SceneCapabilityNames.Root3dFolderName, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(slug, defaultFolderName, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
 
-        var root3d = ProjectsRoot3d;
         var root = ProjectsRoot;
-        return root3d is not null
+        return nestedRoot is not null
             && root is not null
-            && string.Equals(Path.GetDirectoryName(root3d), root, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(Path.GetFileName(root3d), slug, StringComparison.OrdinalIgnoreCase);
+            && string.Equals(Path.GetDirectoryName(nestedRoot), root, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(Path.GetFileName(nestedRoot), slug, StringComparison.OrdinalIgnoreCase);
     }
 
     // ================================================================== project.run
@@ -394,8 +423,17 @@ public sealed class ProjectCapabilities : IDisposable
         var scope = ProjectScope.Web;
         if (folder is null)
         {
-            folder = Roots3d.Find(projectId) ?? throw DocumentErrors.NotFound("no scaffolded project carries payload.project_id; scaffold it first");
+            folder = Roots3d.Find(projectId);
             scope = ProjectScope.ThreeD;
+        }
+
+        if (folder is null)
+        {
+            // M28: and last the native root. The order matters only for a folder that could be
+            // found twice, which cannot happen: the roots are disjoint directories and a
+            // project lives DIRECTLY under exactly one of them.
+            folder = RootsNative.Find(projectId) ?? throw DocumentErrors.NotFound("no scaffolded project carries payload.project_id; scaffold it first");
+            scope = ProjectScope.Native;
         }
 
         var marker = ProjectRoots.ReadMarker(folder) ?? throw DocumentErrors.NotFound("the project's marker is gone; scaffold it again");

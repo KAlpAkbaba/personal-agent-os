@@ -121,12 +121,20 @@ public sealed class AdvertisementTests
         Assert.Equal(["hostname", "Get-Date", "ipconfig /all"], options.TerminalAllowlist);
         // M23: the Projects root is an authorised root whatever the owner listed — appended,
         // never replacing an entry — so the family has a place to write and the operator can
-        // open what it wrote. M25 appends the 3D root beneath it for the same reason.
+        // open what it wrote. M25 appends the 3D root beneath it for the same reason, and M28
+        // the native root beside that one.
         Assert.Equal(
-            [@"D:\Owner", @"E:\Projects", OperatorOptions.DefaultProjectsRoot()!, OperatorOptions.Default3dRoot(OperatorOptions.DefaultProjectsRoot())!],
+            [
+                @"D:\Owner",
+                @"E:\Projects",
+                OperatorOptions.DefaultProjectsRoot()!,
+                OperatorOptions.Default3dRoot(OperatorOptions.DefaultProjectsRoot())!,
+                OperatorOptions.DefaultNativeRoot(OperatorOptions.DefaultProjectsRoot())!,
+            ],
             options.AuthorisedRoots);
         Assert.Equal(OperatorOptions.DefaultProjectsRoot(), options.EffectiveProjectsRoot);
         Assert.EndsWith(@"\Documents\PagentOS Projects", options.EffectiveProjectsRoot, StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith(@"\Documents\PagentOS Projects\native", options.EffectiveProjectsRootNative, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

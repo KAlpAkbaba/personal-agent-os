@@ -69,12 +69,14 @@ public sealed class ProjectAdvertisementTests
     public async Task The_service_caps_the_family_and_refuses_it_before_the_pipe_when_operator_is_off()
     {
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectScaffold));
-        // M25: project.run's ceiling is the longest 3D batch bound plus headroom (a web run
-        // still answers within its 20 s port wait; the cap is a ceiling, not a wait).
-        Assert.Equal(SceneCapabilityNames.UnityRunLimit + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectRun));
+        // M25 raised project.run's ceiling to the longest batch bound plus headroom (a web run
+        // still answers within its 20 s port wait; the cap is a ceiling, not a wait). M28's
+        // 20 min build bound is now the longest, and project.test's ceiling is the same one
+        // because a `dotnet test` restores and compiles before it runs anything.
+        Assert.Equal(TimeSpan.FromMinutes(20) + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectRun));
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStatus));
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStop));
-        Assert.Equal(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectTest));
+        Assert.Equal(TimeSpan.FromMinutes(20) + TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectTest));
 
         var transport = new CountingTransport();
         var executor = new InteractiveCapabilityExecutor(transport, operatorEnabled: false);
@@ -92,8 +94,8 @@ public sealed class ProjectAdvertisementTests
         await enabled.ExecuteAsync(TestCommands.New(ProjectCapabilityNames.ProjectStatus, new JsonObject(), expiresIn: TimeSpan.FromMinutes(10)), CancellationToken.None);
         Assert.Equal(1, transport.Calls);
         Assert.Equal(TimeSpan.FromSeconds(30), transport.LastTimeout);
-        await enabled.ExecuteAsync(TestCommands.New(ProjectCapabilityNames.ProjectTest, new JsonObject(), expiresIn: TimeSpan.FromMinutes(10)), CancellationToken.None);
-        Assert.Equal(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(30), transport.LastTimeout);
+        await enabled.ExecuteAsync(TestCommands.New(ProjectCapabilityNames.ProjectTest, new JsonObject(), expiresIn: TimeSpan.FromMinutes(30)), CancellationToken.None);
+        Assert.Equal(TimeSpan.FromMinutes(20) + TimeSpan.FromSeconds(30), transport.LastTimeout);
 
         var configuration = new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string?>("OperatorEnabled", "true")]).Build();
         var options = AgentServiceOptions.FromConfiguration(configuration);

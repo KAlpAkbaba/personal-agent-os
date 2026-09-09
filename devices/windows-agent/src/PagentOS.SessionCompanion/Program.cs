@@ -352,6 +352,21 @@ public static class Program
                 SceneCapabilityNames.UnityMemoryLimitBytes / (1024 * 1024),
                 SceneCapabilityNames.UnityRunLimit.TotalMinutes,
                 Scenes.SceneTools.Describe());
+
+            // M28 (M28_NATIVE_APP_FACTORY_SPEC.md §5/§9, ADR-0095): the four build shapes ride
+            // the same object, the same flag and the same job containment, one root over. The
+            // toolchain is DETECTED here, before anything is asked of it, for the same reason
+            // M25 detects the editors — and nothing here signs, so the log says that too.
+            logger.LogInformation(
+                "native builds: ENABLED - no new capability name; native root={RootNative}; builds bounded to {Memory} MiB / {Minutes:F0} min / {Processes} processes, CPU {Cpu:F0} min on {Cores} cores; tools: {Tools}; SIGNS NOTHING ({Forbidden} refused by name)",
+                projectCapabilities.ProjectsRootNative ?? "(no Documents folder: every native build is refused)",
+                NativeCapabilityNames.MemoryLimitBytes / (1024 * 1024),
+                NativeCapabilityNames.RunLimit.TotalMinutes,
+                NativeCapabilityNames.MaxProcessesPerJob,
+                NativeCapabilityNames.CpuTimeLimitFor(Environment.ProcessorCount).TotalMinutes,
+                Environment.ProcessorCount,
+                Native.NativeTools.Describe(),
+                string.Join(", ", NativeCapabilityNames.ForbiddenPrograms));
         }
         else
         {
