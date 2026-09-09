@@ -32,7 +32,16 @@ only you can cross, and each says exactly what it turns from PROVEN_PROXY into P
 1. **Item 28** — the elevated agent update. This is the big one now. The deployed Windows
    agent still advertises 29 capabilities and none of the 3D ones, so a scene cannot be
    started from production at all, and the same update carries the Digital Operator and
-   documents families. One UAC prompt.
+   documents families. One UAC prompt, and it is this exact line — both switches, one
+   prompt, in an elevated PowerShell at the repository root:
+
+   ```powershell
+   .\scripts\install-device-service.ps1 -DisplayPower -Operator
+   ```
+
+   Run `scripts\qualify-staged-update.ps1` first (no elevation, nothing touched); it must
+   print `STAGED UPDATE QUALIFIED`. The full item 28 section below has all three steps,
+   including the post-install run that proves everything the update unlocks by itself.
 
    > **Your 2026-09-08 attempt was not your fault, and the reason is fixed.** Candidate
    > 0.6.0 staged, promoted and ran correctly — Cloud Core saw it with all 40 of its
@@ -68,7 +77,7 @@ have a quiet ten minutes with audio, but nothing is blocked on it.
 | I | 31 — the Tailscale SSH check to `pagentos-core` — **DONE (2026-09-08 ~08:00Z: the check was fresh again; the M21 Cloud Core 571ddb2, then M22 c2f1904, then M23 f7baf19 shipped through the blue/green path the same morning, each PASS 16/0; production runs f7baf19)** | done | — |
 | H | 30 — put a mail account and a calendar on the Cloud Core host for M21 (`/opt/pagentos/.env`: `PAGENTOS_MAIL_IMAP_HOST/PORT/USER/PASSWORD`, `PAGENTOS_MAIL_SMTP_HOST/PORT/USER/PASSWORD`, `PAGENTOS_MAIL_FROM`, and `PAGENTOS_CALDAV_URL/USER/PASSWORD` or `PAGENTOS_CALENDAR_ICS_URL`; leave `PAGENTOS_MAIL_SEND_ENABLED` and `PAGENTOS_CALENDAR_WRITE_ENABLED` unset until you want real sends), then restart the api colour; until then every mail/calendar question answers "Tanımlı bir posta hesabı yok" truthfully (ADR-0084) | `READY_FOR_OWNER` (an account password on the host; an OAuth provider such as Gmail/Graph needs a later provider) | 10 min |
 | G | 29 — the OpenAI account behind `PAGENTOS_VOICE_OPENAI_API_KEY` has no credits left (429 'no credits remaining' on 2026-09-07 23:09Z, `docs/evidence/tts-loopback-2026-09-07-230910.json`): add credits so the TTS → STT loopback proxy (`scripts/voice/tts-loopback-qualification.ps1`) can re-sample the documents answers; until then the loopback mark for M20 rests on the first sample and the harness reports PROVIDER_UNAVAILABLE honestly | `READY_FOR_OWNER` (a paid account) | 2 min |
-| F | 28 — the same elevated update with `-Operator` turns on the M19 Digital Operator family (app/window/keyboard/pointer/ui/screen/file/terminal) the M20 documents family (file.search/locate/inspect/read/compare, document.extract), the M22 `file.fetch` and the M23 `projects` family (project.scaffold/run/status/stop/test in a Windows Job Object) on your agent — the deployed agent is still 0.4.0 while main is 0.5.0; until then the voice answers "Bu bilgisayarda operatör yetkisi yok" truthfully (ADR-0082) | `READY_FOR_OWNER` (folded into D's one UAC prompt: `install-device-service.ps1 -DisplayPower -Operator`) | 0 extra |
+| F | 28 — the same elevated update with `-Operator` turns on the M19 Digital Operator family (app/window/keyboard/pointer/ui/screen/file/terminal) the M20 documents family (file.search/locate/inspect/read/compare, document.extract), the M22 `file.fetch` and the M23 `projects` family (project.scaffold/run/status/stop/test in a Windows Job Object) and the M25 `scene.inspect` on your agent — the deployed agent advertises 29 capabilities; this update advertises 85, and the qualification proves `-Operator` adds 45 and subtracts nothing; until then the voice answers "Bu bilgisayarda operatör yetkisi yok" truthfully (ADR-0082) | `READY_FOR_OWNER` (folded into D's one UAC prompt: `.\scripts\install-device-service.ps1 -DisplayPower -Operator` — see item 28) | 0 extra |
 | J | 32 — Unity's editor license: `Unity.exe -batchmode` exited 198 on 2026-09-08 09:55Z ("No valid Unity Editor license found"; the licensing client answered 404 for the entitlement — `docs/evidence/m25-tool-detection-2026-09-08.json`). Open Unity Hub and sign in (a browser login) so the personal entitlement refreshes; nothing else. Until then M25's Unity half is honest PROVEN_PROXY (the driver, the provider and the lab exist; the lab reports the refusal) and the voice says "Unity lisansı yok" instead of pretending; Blender needs nothing (headless works today) | `READY_FOR_OWNER` (a browser login, no UAC) | 2 min |
 | K | 33 — a JDK for Android builds: the Android SDK is here (adb, the emulator, build-tools 30.0.3/33.0.0, system images for API 23/33) but there is no Java on this machine (no `java`, no `JAVA_HOME`, no Android Studio, no `cmdline-tools`, no AVD — `docs/evidence/m27-m28-tool-detection-2026-09-08.json`), so an APK/AAB build (Gradle, `javac`/`kotlinc`, `apksigner`, `avdmanager`) cannot run. Install Android Studio (brings its own JDK and the command-line tools) or a JDK 17 and set `JAVA_HOME`; the assistant never starts a download itself. Until then M28's Android half is honest PROVEN_PROXY (the provider, the template and the emulator driver exist; the lab reports the refusal) and the voice says "Android için Java yok" instead of pretending; Windows EXE/portable/MSIX need nothing (.NET 10 and makeappx are here) | `READY_FOR_OWNER` (an installer; Android Studio asks for one UAC) | 10 min |
 | E | 27 — the same elevated update now verifies itself: the staged candidate against its manifest before the swap, then Cloud Core must see the device online as 0.2.0 with every promised capability, else the engine rolls back (`install-device-service.ps1`; ADR-0081 addendum 3) | `READY_FOR_OWNER` (folded into D's one UAC prompt; watch for "candidate manifest verified" and "Cloud Core sees the candidate") | 0 extra |
@@ -87,6 +96,59 @@ owner-selected item playing on the real chain) and the display-off qualification
 is implemented and merged (ADR-0065); item 22 is your look at it, when you like.
 
 ---
+
+### 28. The elevated agent update — 29 capabilities become 85 — **`READY_FOR_OWNER` (one UAC prompt; qualified in advance, ADR-0090)**
+
+Two commands, and the first one is not the install.
+
+**1 — prove it first (no elevation, nothing touched).** This runs the whole staged-update
+chain in a sandbox against the DeviceService this checkout builds: the candidate names
+itself, the complete capability manifest, promotion of the service, the companion *and*
+the browser worker, the live worker proven from the companion's own audit, Cloud Core
+seeing the candidate's version and every capability, and a rollback that restores all
+three trees. It must print `STAGED UPDATE QUALIFIED` before you go on:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\qualify-staged-update.ps1
+```
+
+It does. As of 2026-09-09 it passes 71 checks against `0.6.0+64c990e`, built clean from
+this checkout, and it runs on every commit in CI.
+
+**2 — the one elevated command.** In a PowerShell started with *Run as administrator*, at
+the repository root. Both switches, one UAC prompt, nothing else:
+
+```powershell
+.\scripts\install-device-service.ps1 -DisplayPower -Operator
+```
+
+That is the whole of item 28, and of items 26, 27 and F. `-DisplayPower` adds
+`desktop.display_off` (the service and the companion gate it independently, so the
+installer writes the flag into both); `-Operator` adds the 45 names of the Digital
+Operator, documents, fetch, projects and scenes families. The qualification proves
+`-Operator` **adds and subtracts nothing**: every name the `-DisplayPower` manifest
+advertises is still there. 40 capabilities without it, 85 with it, against 29 today.
+
+Watch for `candidate manifest verified file by file`, `live browser worker proven`, and
+`Cloud Core sees the candidate` — the three lines that were missing or wrong on
+2026-09-08. If any of them fails the installer rolls back to the release you are running
+now and says so; you cannot be left with a broken agent.
+
+**3 — everything the update unlocks then proves itself, with nothing further from you:**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\core\qualify-item28-unlocked.ps1
+```
+
+It refuses to run against the old runtime rather than reporting a false success, then
+exercises the M19 Digital Operator path (launch a real allowlisted app, move and read
+back a real window, read and drive real UI elements), the M20 documents path against this
+repository's own fixtures, the M23 projects path (scaffold, run, test), the M25 scene
+path, the M27 Paint path, and the display/input/ambient/alarm device paths — using the
+existing test and holdoff mechanisms, so nothing blanks your screens or makes a sound
+without you. Anything that genuinely needs your eyes or ears is written into the evidence
+file as `READY_FOR_OWNER` instead of being run. One JSON file lands in
+`docs\evidence\item28-unlocked-<timestamp>.json`.
 
 ### 35. `SET_DEFAULT_WEATHER_LOCATION` — where "Hava nasıl?" should mean, when you do not say — **`READY_FOR_OWNER` (Owner Location Context, ADR-0091)**
 

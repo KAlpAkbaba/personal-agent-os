@@ -45,6 +45,7 @@ from app.devices.types import DEVICE_IDENTITY_KEYS
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 AGENT_UPDATE_PS1 = REPO_ROOT / "scripts" / "lib" / "AgentUpdate.ps1"
+QUALIFY_STAGED_UPDATE_PS1 = REPO_ROOT / "scripts" / "qualify-staged-update.ps1"
 
 BROKER_TABLES = [
     Device.__table__,
@@ -217,3 +218,88 @@ def test_the_windows_verifier_still_requires_presence_and_capabilities() -> None
     check = source[source.index("function Test-AgentHeartbeatOnCore") :]
     assert "not online" in check
     assert "the device does not advertise" in check
+
+
+def test_every_key_the_windows_verifier_reads_is_a_key_the_row_carries(
+    db: Session, runtime: BrokerRuntime
+) -> None:
+    """The general form of the 2026-09-08 bug, not just its one instance.
+
+    The fix pinned ``software_version``. It left four other names --
+    ``device_id``, ``presence``, ``capabilities``, ``last_seen_at``, plus the
+    ``status`` and ``health`` fallbacks -- read by
+    ``scripts/lib/AgentUpdate.ps1`` off a row this file shapes, with nothing
+    asserting the two spellings agree. Renaming any of them here would repeat
+    the incident exactly: the verifier reads nothing, reports the device as
+    "'', not online" or "does not advertise ...", and the engine rolls a
+    healthy candidate back after 90 s.
+
+    So: collect every device-row key the verifier reads, out of its source, and
+    require each one to exist on the row Cloud Core really emits.
+    """
+    source = _verifier_source()
+    read_by_verifier = set(re.findall(r'Get-ManifestMember \$[Rr]ow "([a-z_]+)"', source))
+    assert read_by_verifier, "the verifier reads no device-row key at all; the regex or the reader moved"
+
+    device = _enroll(db)
+    broker_service.apply_hello(
+        db, device.id, capabilities=["desktop.open_application"], software_version="0.6.0"
+    )
+    broker_service.touch_last_seen(db, device.id)
+    payload = devices_service.get_device_view(db, runtime, device.id).as_dict()  # type: ignore[union-attr]
+
+    unserved = sorted(read_by_verifier - set(payload))
+    assert not unserved, (
+        f"the Windows installer's verifier reads device-row keys Cloud Core does not emit: "
+        f"{unserved}. That is the 2026-09-08 failure verbatim -- it read row['software_version'] "
+        f"off a row that had no such key and rolled a healthy 0.6.0 back."
+    )
+    # And the canonical identity is genuinely consulted, not merely emitted.
+    assert {"device_id", "presence", "software_version", "capabilities"} <= read_by_verifier
+
+
+# ------------------- the staged-update qualification's own fake Cloud Core
+
+
+def _qualification_source() -> str:
+    if not QUALIFY_STAGED_UPDATE_PS1.exists():  # pragma: no cover - partial checkout
+        pytest.skip(f"{QUALIFY_STAGED_UPDATE_PS1} is not present in this checkout")
+    return QUALIFY_STAGED_UPDATE_PS1.read_text(encoding="utf-8")
+
+
+def test_the_staged_update_qualification_derives_its_row_from_this_file() -> None:
+    """The qualification's fake Cloud Core is the same hazard, one level up.
+
+    ``scripts/qualify-staged-update.ps1`` runs in CI on every commit and judges
+    a candidate against a ``/v1/devices`` document it writes itself -- which is
+    exactly the thing that made 2026-09-08 invisible ("the PowerShell half
+    tested itself against a device row it had invented"). A fake is safe only
+    while it is DERIVED from the source that really serves it, so the script
+    parses ``DEVICE_IDENTITY_KEYS`` out of ``app/devices/types.py`` and checks
+    its own row against it (gate 0). This test is what keeps that gate there.
+    """
+    source = _qualification_source()
+    assert "function Get-CloudCoreIdentityKeys" in source, (
+        "qualify-staged-update.ps1 no longer reads the canonical identity keys out of "
+        "app/devices/types.py; its fake device row is then an invention again"
+    )
+    reader = source[source.index("function Get-CloudCoreIdentityKeys") :]
+    reader = reader[: reader.index("function New-QualificationBrowserTree")]
+    # It must PARSE this file, not merely mention it: the name it looks for and the path
+    # it looks in are both load-bearing.
+    assert "DEVICE_IDENTITY_KEYS" in reader, (
+        "the qualification's reader no longer looks for DEVICE_IDENTITY_KEYS by name"
+    )
+    assert 'services\\api\\app\\devices\\types.py' in source, (
+        "the qualification no longer reads app/devices/types.py"
+    )
+    assert "Get-CloudCoreIdentityKeys -TypesPath" in source, (
+        "the qualification parses the canonical keys but never uses them"
+    )
+    listing = source[source.index("function New-CoreListing") :]
+    listing = listing[: listing.index("function Get-CloudCoreIdentityKeys")]
+    missing = [key for key in DEVICE_IDENTITY_KEYS if f"{key} " not in listing]
+    assert not missing, (
+        f"the qualification's fake device row does not carry the canonical identity keys "
+        f"{missing}; a candidate judged against it is judged against a row nobody serves"
+    )
