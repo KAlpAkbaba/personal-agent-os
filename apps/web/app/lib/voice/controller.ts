@@ -499,6 +499,8 @@ export class VoiceSessionController {
   private sessionId: string | null = null;
   private descriptor: TransportDescriptor | null = null;
   private closing = false;
+  /** This controller asked the server to end the session; a later 410 is our own doing. */
+  private closedByUs = false;
 
   // turn / speech tracking
   private ownerSpeaking = false;
@@ -702,6 +704,7 @@ export class VoiceSessionController {
       return;
     }
     this.closing = false;
+    this.closedByUs = false;
     this.t0 = this.deps.now();
     this.metrics = { ...EMPTY_COUNTERS };
     this.turnJudgement = null;
@@ -937,6 +940,10 @@ export class VoiceSessionController {
 
   private async closeServerSession(reason: string): Promise<void> {
     if (!this.sessionId) return;
+    // Remember that WE ended it. The reporter still has a POST in flight against this
+    // session; when it answers 410 the gone-branch must not overwrite the reason we already
+    // know with the consequence of our own close - see onReportFailure.
+    this.closedByUs = true;
     try {
       await this.deps.api.close(this.sessionId, reason);
     } catch {
@@ -2439,7 +2446,17 @@ export class VoiceSessionController {
       if (error.gone) {
         // Terminal. The reporter has already ended itself on the 410; this records the
         // state for the owner WITHOUT going back through the channel that just failed.
-        this.fail("Oturum sunucuda kapanmış.", [], { viaReporter: false });
+        //
+        // But NOT when we closed the session ourselves. A media leg that fails ends with
+        // `fail("Medya bağlantısı kurulamadı: …")` - which carries the provider's own
+        // sentence, the only line that says WHY - and then closes the server session. The
+        // reporter's trailing POST then answers 410 and used to replace that reason with
+        // "the session closed on the server", which is true, useless, and a consequence of
+        // our own action. Ten consecutive sessions on the owner's machine died in ~1.5 s
+        // and every one of them reported the consequence instead of the cause.
+        if (!this.closedByUs) {
+          this.fail("Oturum sunucuda kapanmış.", [], { viaReporter: false });
+        }
         this.teardownLeg("gone");
         this.patch({ state: "closed" });
         return;

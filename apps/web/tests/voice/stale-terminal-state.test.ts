@@ -142,6 +142,49 @@ describe("a listening session carries no stale terminal marker", () => {
     expect(snapshot.lastError).toContain("data channel did not open in time");
   });
 
+  it("keeps the REASON a media leg failed, not the consequence of our own close", async () => {
+    // The owner's real state on 2026-09-09: ten consecutive sessions died 1.3-2.3 s after
+    // creation, in IDLE, with no utterance - the media leg never opened. The controller says
+    // so ("Medya bağlantısı kurulamadı: …", carrying the provider's own sentence), then closes
+    // the server session. The reporter's trailing POST answers 410, and the gone-branch used to
+    // replace that reason with "Oturum sunucuda kapanmış." - true, useless, and caused by us.
+    // The owner spent the day being told the consequence.
+    const log: string[] = [];
+    const scheduler = new FakeScheduler();
+    const core = new FakeCloudCore({ transport: "webrtc" });
+    const controller = new VoiceSessionController({
+      api: new VoiceSessionApi(core.fetcher),
+      transportFactory: () => {
+        const transport = new FakeTransport({ log: (op) => log.push(op), now: scheduler.now });
+        transport.connect = async () => {
+          throw new Error("SDP exchange failed: HTTP 401");
+        };
+        return transport;
+      },
+      playback: new FakePlayback(scheduler.now, (op) => log.push(op)),
+      network: new FakeNetwork(),
+      microphone: new FakeMicrophone(),
+      localSpeech: new FakeSpeechDetector(),
+      now: scheduler.now,
+      scheduler,
+      flushIntervalMs: 250,
+      reattach: { maxAttempts: 3, baseDelayMs: 100 },
+      log: (op) => log.push(op),
+    });
+
+    await controller.connect();
+    // Everything the reporter still had in flight lands against a session we just closed.
+    core.failNext("/events", 410, { detail: "session gone" });
+    scheduler.advance(300);
+    await tick(10);
+
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.lastError).toMatch(/Medya bağlantısı kurulamadı/);
+    expect(snapshot.lastError).toContain("HTTP 401");
+    // The consequence must not have replaced the cause.
+    expect(snapshot.lastError).not.toContain("Oturum sunucuda kapanmış");
+  });
+
   it("still shows the failure when the session is genuinely broken", async () => {
     // The fix must not become "never show errors". A session that could NOT recover keeps its
     // marker, because there the marker is the truth.
