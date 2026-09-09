@@ -8057,3 +8057,59 @@ capabilities, and M28 row 26.15 is untouched. What this run did prove, for real 
 owner's machine, is the staged update's safety property: a candidate that fails verification
 for *any* reason — including a defect in the verifier itself — leaves the owner on a working
 agent, with all three trees restored and the journal saying so.
+
+## ADR-0098 — A factory that cannot start what it built: `app.launch` and the native root (2026-09-09)
+
+Status: Accepted. Follows ADR-0095 (M28) and ADR-0097 (the install that made this testable at
+all). Touches `devices/windows-agent/src/PagentOS.SessionCompanion/Operator/OperatorCapabilities.cs`,
+`packages/protocol/DEVICE_PROTOCOL.md` §6i, `scripts/tests/native-windows-lab.py`,
+`scripts/core/qualify-item28-unlocked.ps1` and a new `Operator/NativeLaunchTests.cs`.
+
+**Context.** The owner's second install landed and the item-28 qualification finally ran
+against a device advertising all 85 capabilities. M20, M23, M25, M27, M18.3's display and
+alarm paths each came back `PROVEN_REAL`. M28's did not, and the reason was not the build: the
+lab produced the same real 162,304-byte `notlarim.exe`, read back independently. The device
+refused to start it, **twice, correctly, and for two different reasons**:
+
+    file.open   'notlarim.exe' is executable; file.open opens documents, app.launch runs programs
+    app.launch  ... nor an absolute .exe under Program Files / Windows
+
+I had claimed in the M28 report that `file.open` could start it "from an authorised root", and
+withdrew an earlier claim that nothing could. **The earlier claim was right and the withdrawal
+was the error** — `file.open` refuses executables by name, and it says so. A factory that
+produces an application nothing can run has not finished producing it.
+
+**Decision — `app.launch` accepts an absolute `.exe` whose resolved path lies inside the
+resolved native root.** Narrowly, and by resolve-then-contain rather than the prefix compare
+the Program Files branch uses, because that root is owner-writable: a junction planted inside
+it is followed before the comparison, and `native2` is not under `native`.
+
+**Why this grants no authority the family does not already hold.** The native root is not
+where the owner keeps downloads; it is the ONE directory the native factory compiles under
+(§6n). Two routes put bytes there. `project.scaffold(root:"native")` writes **text only** and
+refuses every launcher extension. `project.run` runs **four fixed commands** — and one of
+them, `dotnet test`, ALREADY executes code compiled from that same scaffolded source. Being
+able to start the finished application is a narrower act than one the family performs on every
+test run, behind the same `OperatorEnabled` gate. What would have been wrong is the shape I
+did not build: "an absolute `.exe` under any authorised root" would have made every executable
+in Documents, Desktop and Downloads launchable, which is a different decision entirely.
+
+**The rule is separated from its caller so it can be falsified.** `ResolveNativeBuiltExecutable`
+is a static function of a path and a root, tested against real directories, real files and a
+real junction without starting a process — the same reason `BrowserCandidateRequest.IsUnder`
+exists. Eight tests; replacing the containment with a lexical `StartsWith` turns two of them
+red (the sibling `native2`, and the `..` escape), which is the pair that matters.
+
+**Two harness defects went with it**, both found by the same run and both mine. The lab built
+into `%TEMP%`, where nothing is allowed to reach, so it now takes `--workdir` and the
+qualification points it at the native root — the artefact is where the protocol says a
+compiler's output is "read back from". And the qualification's device-call result carried no
+`Message` property while one caller read `$launch.Message`, which under StrictMode is
+terminating: the M28 section died mid-run and its whole verdict was lost instead of one check
+failing. The dry-run branch then needed the same field, and the gate suite caught that in
+seconds — which is what it is for.
+
+**Consequences.** The device changed, so this needs one more elevated install before row 26.15
+can be proven. That is stated plainly rather than worked around: the alternative is to claim a
+launch that has not happened. Everything else the qualification measures is already
+`PROVEN_REAL` against the runtime now installed.

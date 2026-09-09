@@ -79,6 +79,11 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $dry = [bool]$DryRun -or $WhatIfPreference
 $script:Dry = $dry
+#: Whether a THIRD party held the desktop foreground while the operator section ran, and
+#: which one. Initialised here because StrictMode makes reading an unset variable a
+#: terminating error, and the verdict at the end of that section reads both.
+$script:OperatorForeignForeground = $false
+$script:OperatorForeground = ""
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
 $BaseUrl = $BaseUrl.TrimEnd('/')
 
@@ -102,6 +107,8 @@ $evidence = [ordered]@{
     plan        = @()
     checks      = @()
     ready_for_owner = @()
+    #: Measurements the environment prevented - see Add-Blocked. Never counted as passes.
+    blocked = @()
     verdict     = "NOT_RUN"
 }
 try { $evidence.repo_head = (Get-RepoHead -RepoRoot $repoRoot) } catch { $evidence.repo_head = "" }
@@ -126,6 +133,45 @@ function Add-Check {
     $color = "Red"
     if ($Ok) { $mark = "ok  "; $color = "Green" }
     Write-Host ("  [{0}] {1}: {2}" -f $mark, $Name, $Detail) -ForegroundColor $color
+}
+
+function Get-WindowTitle {
+    <#  One window's CURRENT title, asked of the window list by id - never of whatever
+        happens to be in front, which is a different window's title whenever a third party
+        holds the foreground.  #>
+    param($Section, [string]$WindowId, $ProcessId)
+    if ($script:Dry -or -not $WindowId) { return "" }
+    $listed = Invoke-DeviceCapability -Section $Section -Capability "window.list" -Payload @{ pid = [int]$ProcessId } -AllowFailure
+    foreach ($w in @(Get-ResultField -Result $listed.Result -Name "windows")) {
+        if ([string](Get-ResultField -Result $w -Name "window_id") -eq $WindowId) {
+            return [string](Get-ResultField -Result $w -Name "title")
+        }
+    }
+    return ""
+}
+
+function Add-Blocked {
+    <#
+    .SYNOPSIS
+        A measurement the ENVIRONMENT prevented - neither a pass nor a product failure.
+
+    .DESCRIPTION
+        The third answer, and it has to exist. On 2026-09-09 the owner's Windows Search
+        flyout held the foreground while this section ran; `window.activate` could not take
+        it (Windows does not let a background process steal the foreground from another
+        application) and the operator's focus guard then refused to type into a window that
+        was not in front - which is precisely what that guard is FOR. Both were recorded as
+        product failures. They were not: the device behaved correctly and said so, naming the
+        window that held the foreground.
+
+        A run that cannot measure something must say "could not measure", never "measured and
+        it was fine" and never "measured and it was broken". This is only ever used where the
+        device's OWN answer identifies the interference - never as a way to excuse a failure.
+    #>
+    param([string]$Section, [string]$Name, [string]$Detail)
+    if ($script:Dry) { return }
+    $script:evidence.blocked += [ordered]@{ section = $Section; name = $Name; detail = $Detail }
+    Write-Host ("  [blkd] {0}: {1}" -f $Name, $Detail) -ForegroundColor DarkYellow
 }
 
 function Add-ReadyForOwner {
@@ -244,7 +290,7 @@ function Invoke-DeviceCapability {
         recorded in the plan and a null result returned - so the caller's own logic still
         runs and can be read.
     .OUTPUTS
-        Ok, Status, ErrorClass, Result, Record
+        Ok, Status, ErrorClass, Message, Result, Record
     #>
     param(
         # See Close-Section: [hashtable] here would copy the section and every step record
@@ -272,7 +318,11 @@ function Invoke-DeviceCapability {
         $Section.steps += $planned
         Write-Host ("  [plan] {0,-26} {1}" -f $Capability, ((ConvertTo-Json -InputObject $Payload -Compress -Depth 6)))
         return [pscustomobject]@{
-            Ok = $true; Status = "not-sent"; ErrorClass = ""; Record = $null
+            # Message belongs on BOTH returns or on neither: the live one gained it and this
+            # one did not, so the dry run - the mode that exists to exercise this script
+            # without a device - crashed on the very property that was added to stop a crash.
+            # The gate suite caught it in seconds, which is what it is for.
+            Ok = $true; Status = "not-sent"; ErrorClass = ""; Message = ""; Record = $null
             Result = [pscustomobject]@{
                 window_id = "w-dryrun-0"; pid = 0; files_written = 0; root_path = ""
                 state = "scaffolded"; url = ""; stopped = $false; armed = $false
@@ -328,6 +378,12 @@ function Invoke-DeviceCapability {
     }
     return [pscustomobject]@{
         Ok = ($status -eq "succeeded"); Status = $status; ErrorClass = $errorClass
+        # The device's own sentence. It was computed here and thrown away, and one caller read
+        # `$launch.Message` off an object that had no such property - which under StrictMode is
+        # a terminating error, so the M28 section died mid-run and its whole verdict was lost
+        # instead of one check failing (2026-09-09). A result that carries a failure must carry
+        # the reason with it: these messages are the most useful thing the device produces.
+        Message = $errorMessage
         Result = $result; Record = $record
     }
 }
@@ -363,13 +419,45 @@ function Invoke-OperatorSection {
             return $section
         }
 
-        $activated = Invoke-DeviceCapability -Section $section -Capability "window.activate" -Payload @{ window_id = $windowId }
+        # Windows will not let a background process take the foreground away from an
+        # application that owns it, so activation is retried before anything is concluded -
+        # a flyout that is closing, or an animation, is a second, not a verdict.
+        $activated = $null
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $activated = Invoke-DeviceCapability -Section $section -Capability "window.activate" -Payload @{ window_id = $windowId } -AllowFailure
+            if ($activated.Ok) { break }
+            Start-Sleep -Seconds 2
+        }
         $current = Invoke-DeviceCapability -Section $section -Capability "window.current" -Payload @{}
         $currentWindow = Get-ResultField -Result $current.Result -Name "window"
         $currentId = [string](Get-ResultField -Result $currentWindow -Name "window_id")
-        Add-Check -Section $section.name -Name "window.activate.read_back_by_window_current" -Ok ($activated.Ok -and $currentId -eq $windowId) `
-            -Detail "window.current says $currentId; the window activated was $windowId"
-        if ($currentId -ne $windowId) { $failures++ }
+        $currentPid = Get-ResultField -Result $currentWindow -Name "pid"
+        $currentImage = [string](Get-ResultField -Result $currentWindow -Name "image")
+        $currentTitle = [string](Get-ResultField -Result $currentWindow -Name "title")
+
+        # Whether a THIRD party holds the foreground is the device's own answer, not a guess:
+        # window.current names the process. If it is not the one this run launched, the
+        # measurement was prevented rather than failed (2026-09-09: searchapp.exe, "Arama").
+        $foreignForeground = ($currentId -ne $windowId) -and ($null -ne $currentPid) -and
+            ($null -ne $launchPid) -and ([int]$currentPid -ne [int]$launchPid)
+        $script:OperatorForeignForeground = $foreignForeground
+        $script:OperatorForeground = "$currentImage ""$currentTitle"" pid=$currentPid"
+
+        if ($foreignForeground) {
+            Add-Blocked -Section $section.name -Name "window.activate.read_back_by_window_current" `
+                -Detail "another application holds the foreground and Windows will not let it be taken: $script:OperatorForeground. The device refused correctly and named it; nothing here is a statement about window.activate."
+        }
+        else {
+            # -AllowFailure above suppresses the automatic "<capability>.succeeded" check, so
+            # it is made here - after the retries, and only when no third party is holding the
+            # foreground. Otherwise a real activation defect would go unrecorded.
+            Add-Check -Section $section.name -Name "window.activate.succeeded" -Ok $activated.Ok `
+                -Detail "$($activated.Status) $($activated.ErrorClass) $($activated.Message)"
+            if (-not $activated.Ok) { $failures++ }
+            Add-Check -Section $section.name -Name "window.activate.read_back_by_window_current" -Ok ($activated.Ok -and $currentId -eq $windowId) `
+                -Detail "window.current says $currentId; the window activated was $windowId"
+            if ($currentId -ne $windowId) { $failures++ }
+        }
 
         # move and resize, each re-observed from the RESULT the device returned, not assumed
         $moved = Invoke-DeviceCapability -Section $section -Capability "window.move" -Payload @{ window_id = $windowId; x = 120; y = 90 }
@@ -434,18 +522,23 @@ function Invoke-OperatorSection {
 
         # keyboard.type through the focus guard, read back through a DIFFERENT capability:
         # an unsaved editor marks its own title.
-        $titleBefore = [string](Get-ResultField -Result $currentWindow -Name "title")
-        $typed = Invoke-DeviceCapability -Section $section -Capability "keyboard.type" -Payload @{ window_id = $windowId; text = " (28)" }
-        $after = Invoke-DeviceCapability -Section $section -Capability "window.list" -Payload @{ pid = $launchPid }
-        $titleAfter = ""
-        $windows = @(Get-ResultField -Result $after.Result -Name "windows")
-        foreach ($w in $windows) {
-            if ([string](Get-ResultField -Result $w -Name "window_id") -eq $windowId) { $titleAfter = [string](Get-ResultField -Result $w -Name "title") }
+        # The title BEFORE must be this window's own, read from the window list. It used to be
+        # read from window.current - which, when a third party held the foreground, was that
+        # third party's title, so the check compared "Arama" against Notepad's and called the
+        # difference a success condition it had not measured (2026-09-09).
+        $titleBefore = Get-WindowTitle -Section $section -WindowId $windowId -ProcessId $launchPid
+        if ($script:OperatorForeignForeground) {
+            Add-Blocked -Section $section.name -Name "keyboard.type.changed_the_document_the_title_reports" `
+                -Detail "not attempted: $script:OperatorForeground holds the foreground, and typing into a window that is not in front is exactly what the operator's focus guard refuses. Nothing was sent, which is correct."
         }
-        $typedOk = $typed.Ok -and $titleAfter -and ($titleAfter -ne $titleBefore)
-        Add-Check -Section $section.name -Name "keyboard.type.changed_the_document_the_title_reports" -Ok $typedOk `
-            -Detail "title '$titleBefore' -> '$titleAfter' (typed_chars=$(Get-ResultField -Result $typed.Result -Name 'typed_chars'))"
-        if (-not $typedOk) { $failures++ }
+        else {
+            $typed = Invoke-DeviceCapability -Section $section -Capability "keyboard.type" -Payload @{ window_id = $windowId; text = " (28)" }
+            $titleAfter = Get-WindowTitle -Section $section -WindowId $windowId -ProcessId $launchPid
+            $typedOk = $typed.Ok -and $titleAfter -and ($titleAfter -ne $titleBefore)
+            Add-Check -Section $section.name -Name "keyboard.type.changed_the_document_the_title_reports" -Ok $typedOk `
+                -Detail "title '$titleBefore' -> '$titleAfter' (typed_chars=$(Get-ResultField -Result $typed.Result -Name 'typed_chars'))"
+            if (-not $typedOk) { $failures++ }
+        }
 
         # Leave nothing behind: the process this run started is the process it ends.
         $closed = Invoke-DeviceCapability -Section $section -Capability "app.close" -Payload @{ pid = $launchPid; force = $true } -AllowFailure
@@ -454,8 +547,14 @@ function Invoke-OperatorSection {
         if (-not ($closed.Ok -and -not [bool]$alive)) { $failures++ }
 
     if ($dry) { Close-Section -Section $section -Verdict "PLANNED" -Detail "payloads recorded; nothing sent" }
-    elseif ($failures -eq 0) { Close-Section -Section $section -Verdict "PROVEN_REAL" -Detail "launch, window geometry and state, the UI tree, typing and close - each read back" }
-    else { Close-Section -Section $section -Verdict "FAILED" -Detail "$failures effect(s) did not read back" }
+    elseif ($failures -gt 0) { Close-Section -Section $section -Verdict "FAILED" -Detail "$failures effect(s) did not read back" }
+    elseif ($script:OperatorForeignForeground) {
+        # Everything that COULD be measured was, and it passed. What could not be measured is
+        # named rather than counted either way: this is not PROVEN_REAL and it is not FAILED.
+        Close-Section -Section $section -Verdict "BLOCKED" `
+            -Detail "geometry, state, the UI tree and close all read back; foreground-dependent steps were prevented by $script:OperatorForeground. Re-run with the desktop idle."
+    }
+    else { Close-Section -Section $section -Verdict "PROVEN_REAL" -Detail "launch, window geometry and state, the UI tree, typing and close - each read back" }
     return $section
 }
 
@@ -565,7 +664,13 @@ function Invoke-ProjectsSection {
     <#  M23: a real project written, run, tested and stopped - or an honest runtime refusal.  #>
     $section = New-Section -Name "projects" -Milestone "M23" -Title "the projects family, scaffolded and driven on the device"
     $failures = 0
-    $projectId = "item28-" + (Get-Date -Format "HHmmss")
+    # STABLE, not timestamped. A folder under the Projects root belongs to the project id
+    # that created it, and a re-scaffold of the SAME id overwrites its own files while any
+    # other id is refused by name (DEVICE_PROTOCOL.md 6l). A new id each run therefore
+    # qualified once and then failed for ever after with "'item28-check' belongs to another
+    # project" - which is the device being right about ownership, and this script being
+    # unable to run twice on the same machine (2026-09-09, the second live run).
+    $projectId = "item28-check"
     $port = 51987
     $payload = @{
         project_id = $projectId
@@ -658,7 +763,9 @@ function Invoke-SceneSection {
     #>
     $section = New-Section -Name "scene" -Milestone "M25" -Title "scene.inspect over a scaffolded 3D project"
     $failures = 0
-    $projectId = "item28-scene-" + (Get-Date -Format "HHmmss")
+    #: Stable for the same reason as the projects section above: the folder belongs to the id
+    #: that made it, so a timestamped id passes once and is refused by name every run after.
+    $projectId = "item28-scene"
     $inspection = '{"objects":[{"name":"Cube","type":"MESH","location":[0,0,0]}],"frame":1,"engine":"CYCLES"}'
     $payload = @{
         project_id = $projectId
@@ -667,11 +774,20 @@ function Invoke-SceneSection {
         files      = @(
             @{ path = "out.json"; text = $inspection }
             @{ path = "plan.json"; text = '{"steps":[]}' }
+            # Named by the manifest below, and never run here: this section proves
+            # scene.inspect's READ path. Scaffolding the file the command names is what makes
+            # the manifest honest rather than a form that satisfies a validator.
+            @{ path = "driver.py"; text = "# item 28: named by the manifest, never run - this section only reads out.json`n" }
         )
         manifest   = @{
             entry = "plan.json"
             port  = 51988
-            run   = @{ build = "blender -b --python driver.py" }
+            # The ONE allowlisted Blender form, eight tokens without a scene file. The first
+            # attempt wrote `blender -b --python driver.py` and the device refused it by name
+            # (2026-09-09) - correctly, and with a message that listed every accepted shape.
+            # --factory-startup is never optional: without it the owner's installed add-ons
+            # are loaded into the run, and one of them never lets the editor exit.
+            run   = @{ build = "blender --factory-startup -b --python driver.py -- plan.json out.json" }
         }
     }
     $scaffold = Invoke-DeviceCapability -Section $section -Capability "project.scaffold" -Payload $payload -AllowFailure
@@ -810,7 +926,17 @@ function Invoke-NativeAppSection {
     else {
         # BUILD. The real pipeline, the real compiler, the real independent reader - the
         # same script the milestone's evidence comes from, so this is not a second path.
-        $labOut = & $python $lab --keep 2>&1
+        #
+        # Built INTO THE NATIVE ROOT, because the device can only start what lies inside one
+        # of the owner's authorised roots. The first live run of this section built a perfect
+        # 162,304-byte EXE into %TEMP% and `file.open` refused it with permission_denied
+        # (2026-09-09) - the device was right, and the artefact was simply somewhere nothing
+        # was allowed to reach. The native root is where the protocol says a compiler's output
+        # is "read back from" (DEVICE_PROTOCOL.md 6n), so this widens no authority at all.
+        $nativeRoot = Join-Path ([Environment]::GetFolderPath("MyDocuments")) "PagentOS Projects\native"
+        $buildDir = Join-Path $nativeRoot "item28-build"
+        New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+        $labOut = & $python $lab --workdir $buildDir 2>&1
         $labExit = $LASTEXITCODE
         $keptLine = ($labOut | Where-Object { $_ -match "kept_at|notlarim\.exe" } | Select-Object -First 1)
         Add-Check -Section $section.name -Name "native.build.exe_produced" -Ok ($labExit -eq 0) `
@@ -1200,6 +1326,10 @@ switch ($evidence.verdict) {
         if ($dry) { Write-Host "  (dry run: $(@($evidence.plan).Count) capability calls were planned and none sent; the refusal is the result.)" -ForegroundColor Yellow }
     }
     default { Write-Host "ITEM 28 QUALIFICATION $($evidence.verdict): $failedCount of $($passed + $failedCount) checks failed." -ForegroundColor Red }
+}
+if (@($evidence.blocked).Count -gt 0) {
+    Write-Host "PREVENTED ($(@($evidence.blocked).Count)): measurements the environment did not allow - neither passes nor product failures." -ForegroundColor DarkYellow
+    foreach ($b in @($evidence.blocked)) { Write-Host "  - $($b.name): $($b.detail)" -ForegroundColor DarkYellow }
 }
 if (@($evidence.ready_for_owner).Count -gt 0) {
     Write-Host "READY_FOR_OWNER ($(@($evidence.ready_for_owner).Count)): steps only a person can see or hear - each names its harness in the evidence."

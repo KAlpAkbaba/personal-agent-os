@@ -85,7 +85,21 @@ def run(cmd: list[str], cwd: Path, *, timeout: int = 900) -> tuple[int, str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--keep", action="store_true", help="leave the project on disk")
+    parser.add_argument(
+        "--workdir",
+        default=None,
+        help=(
+            "build here instead of a fresh temp directory. The device can only START what "
+            "lies inside one of the owner's authorised roots, and a temp directory is not "
+            "one: on 2026-09-09 the item-28 qualification built a real EXE and `file.open` "
+            "refused it with permission_denied, correctly. Point this at the native root "
+            "(<Documents>/PagentOS Projects/native) and the artefact is reachable. Implies "
+            "--keep, because a directory the caller named is the caller's to clean up."
+        ),
+    )
     args = parser.parse_args()
+    if args.workdir:
+        args.keep = True
 
     if not DOTNET.exists():
         print(f"FAIL: no dotnet at {DOTNET}")
@@ -118,7 +132,11 @@ def main() -> int:
     print(f"    policy ok: {report.file_count} files, {report.total_bytes:,} bytes")
     evidence["policy"] = {"accepted": True, "files": report.file_count, "bytes": report.total_bytes}
 
-    workdir = Path(tempfile.mkdtemp(prefix="pagentos-m28-"))
+    if args.workdir:
+        workdir = Path(args.workdir)
+        workdir.mkdir(parents=True, exist_ok=True)
+    else:
+        workdir = Path(tempfile.mkdtemp(prefix="pagentos-m28-"))
     try:
         for file in project.files:
             target = workdir / file.path
@@ -198,11 +216,15 @@ def main() -> int:
             evidence["kept_at"] = str(publish_dir)
 
         evidence["m19_launch"] = {
-            "status": "NOT_YET_PROVEN",
+            "status": "NOT_PROVEN_HERE",
             "why": (
-                "Launching the produced EXE and driving its window is M19's path through the "
-                "device runtime. The installed runtime is 1.0.0+a3cb04e and advertises 29 "
-                "capabilities with no app.launch/window.*/ui.*; it arrives with owner item 28."
+                "This lab builds and reads back; it never launches. Launching the produced EXE "
+                "and driving its window is M19's path through the device runtime, and "
+                "scripts/core/qualify-item28-unlocked.ps1 is what proves it - which needs the "
+                "artefact to lie inside an authorised root, hence --workdir. (This field used "
+                "to assert the installed runtime was 1.0.0+a3cb04e with 29 capabilities. That "
+                "stopped being true the moment owner item 28 landed on 2026-09-09, which is "
+                "what a hardcoded fact about a moving runtime always does.)"
             ),
         }
         _write(evidence)

@@ -1,0 +1,91 @@
+{
+  "kind": "m28_native_windows_lab",
+  "measured_at": "2026-09-09T13:13:19.559497Z",
+  "machine": "the owner's Windows machine",
+  "request": {
+    "name": "Notlarim",
+    "title": "Notlarım",
+    "template": "notes-desktop",
+    "targets": [
+      "windows_exe"
+    ],
+    "version": "0.1.0",
+    "persistence": "local_file",
+    "features": [
+      "add_item",
+      "list_items",
+      "delete_item",
+      "persist_local"
+    ]
+  },
+  "spec": {
+    "slug": "notlarim",
+    "stack": "dotnet_wpf",
+    "version": "0.1.0",
+    "targets": [
+      "windows_exe"
+    ]
+  },
+  "generated_files": [
+    "manifest.json",
+    "src/notlarim/App.xaml",
+    "src/notlarim/App.xaml.cs",
+    "src/notlarim/MainWindow.xaml",
+    "src/notlarim/MainWindow.xaml.cs",
+    "src/notlarim/NoteStore.cs",
+    "src/notlarim/notlarim.csproj",
+    "tests/notlarim.Tests/NoteStoreTests.cs",
+    "tests/notlarim.Tests/notlarim.Tests.csproj"
+  ],
+  "policy": {
+    "accepted": true,
+    "files": 9,
+    "bytes": 12193
+  },
+  "manifest": {
+    "name": "notlarim",
+    "title": "Notlarım",
+    "version": "0.1.0",
+    "stack": "dotnet_wpf",
+    "entry": "src/notlarim/notlarim.csproj",
+    "tests": "tests/notlarim.Tests/notlarim.Tests.csproj",
+    "artifact": "notlarim.exe"
+  },
+  "build": {
+    "exit": 0,
+    "project": "src/notlarim/notlarim.csproj"
+  },
+  "tests": {
+    "exit": 0,
+    "summary": "Passed!  - Failed:     0, Passed:     6, Skipped:     0, Total:     6, Duration: 250 ms - notlarim.Tests.dll (net10.0)"
+  },
+  "publish": {
+    "exit": 0
+  },
+  "artifact": {
+    "ok": true,
+    "mismatches": [],
+    "facts": {
+      "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-m28-llr9ihcs\\out\\notlarim.exe",
+      "kind": "pe",
+      "size_bytes": 162304,
+      "sha256": "175164a9e06475daa0b3e658a8daaefd88752ae7cd31bf374e0716fac64f85ce",
+      "version": "0.1.0",
+      "architecture": "x64",
+      "subsystem": "windows_gui",
+      "identity": null,
+      "display_name": "Notlarım",
+      "detail": {
+        "ProductName": "Notlarım",
+        "FileDescription": "Notlarım",
+        "CompanyName": "notlarim",
+        "pe_format": "PE32+"
+      }
+    }
+  },
+  "kept_at": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-m28-llr9ihcs\\out",
+  "m19_launch": {
+    "status": "NOT_YET_PROVEN",
+    "why": "Launching the produced EXE and driving its window is M19's path through the device runtime. The installed runtime is 1.0.0+a3cb04e and advertises 29 capabilities with no app.launch/window.*/ui.*; it arrives with owner item 28."
+  }
+}

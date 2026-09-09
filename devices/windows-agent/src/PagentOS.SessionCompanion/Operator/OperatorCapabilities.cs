@@ -1317,12 +1317,82 @@ public sealed class OperatorCapabilities
 
                 return full;
             }
+
+            // M28: and an application THIS SYSTEM BUILT — an absolute .exe whose resolved path
+            // lies inside the resolved native root.
+            //
+            // Without this there is no way to start one at all, which the item-28 qualification
+            // proved on the owner's machine on 2026-09-09 by being refused twice, correctly and
+            // for different reasons: `file.open` answers "'notlarim.exe' is executable; file.open
+            // opens documents, app.launch runs programs", and `app.launch` answered "nor an
+            // absolute .exe under Program Files / Windows". A factory that can produce an
+            // application nothing can run has not finished producing it.
+            //
+            // Why this widens no trust that is not already granted. The native root is not a
+            // place the owner keeps downloads: it is the ONE directory the native factory
+            // compiles under (DEVICE_PROTOCOL.md §6n), reachable only through
+            // `project.scaffold(root:"native")`, which writes TEXT ONLY and refuses every
+            // launcher extension. An .exe gets there by exactly one route — `dotnet publish`,
+            // one of the four allowlisted commands — and the sibling of that command,
+            // `dotnet test`, ALREADY runs code compiled from the same scaffolded source. Being
+            // able to start the finished application is therefore a narrower act than one the
+            // family already performs, not a broader one, and it is behind the same
+            // `OperatorEnabled` gate as everything else here.
+            //
+            // Resolve-then-contain, not a prefix compare. The Program Files branch above may
+            // use StartsWith because those directories are not owner-writable; this root is,
+            // so a junction planted inside it must be followed BEFORE the comparison, and an
+            // .exe that resolves anywhere else is refused however its path is spelled.
+            var built = ResolveNativeBuiltExecutable(full, _options.EffectiveProjectsRootNative);
+            if (built is not null)
+            {
+                return built;
+            }
         }
 
         throw new CapabilityException(
             ErrorClasses.PermissionDenied,
-            $"'{application}' is not an allowlisted application ({string.Join(",", _applications.Keys.OrderBy(k => k, StringComparer.Ordinal))}) nor an absolute .exe under Program Files / Windows",
+            $"'{application}' is not an allowlisted application ({string.Join(",", _applications.Keys.OrderBy(k => k, StringComparer.Ordinal))}), nor an absolute .exe under Program Files / Windows, nor one this system built under the native root",
             retryable: false);
+    }
+
+    /// <summary>
+    /// The RESOLVED path of an application this system built, or null when
+    /// <paramref name="fullPath"/> is not one.
+    ///
+    /// Separated from <see cref="ResolveApplication"/> so the decision can be tested against
+    /// real directories, real files and real junctions without starting a process — the same
+    /// reason <c>BrowserCandidateRequest.IsUnder</c> exists.
+    ///
+    /// Resolve-then-contain: what the path really opens is compared with what the root really
+    /// is, so a junction planted inside the native root that points elsewhere is refused, and
+    /// so is a sibling directory whose name merely starts with the root's.
+    /// </summary>
+    public static string? ResolveNativeBuiltExecutable(string fullPath, string? nativeRoot)
+    {
+        if (string.IsNullOrWhiteSpace(nativeRoot))
+        {
+            return null;
+        }
+
+        // Fully qualified: this class has an AuthorisedRoots PROPERTY, which hides the type of
+        // the same name inside it, and a static method cannot read an instance property.
+        var resolvedRoot = Operator.AuthorisedRoots.ResolveFinal(nativeRoot);
+        var resolvedExe = Operator.AuthorisedRoots.ResolveFinal(fullPath);
+        if (resolvedRoot is null || resolvedExe is null)
+        {
+            return null;
+        }
+
+        if (!Operator.AuthorisedRoots.IsWithin(resolvedExe, resolvedRoot))
+        {
+            return null;
+        }
+
+        // An .exe that resolves inside the root but is not there is not a launchable thing;
+        // "does not exist" is the truthful answer and it is the caller's to raise, so that a
+        // missing artefact is never confused with an unauthorised one.
+        return File.Exists(resolvedExe) ? resolvedExe : null;
     }
 
     /// <summary>

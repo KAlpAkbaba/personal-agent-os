@@ -1,0 +1,1959 @@
+{
+    "run_id":  "item28-unlocked-20260909-162121",
+    "started_at":  "2026-09-09T13:21:21.7536594Z",
+    "mode":  "live",
+    "cloud":  "http://100.90.158.26:8001",
+    "repo_head":  "cc6f4ee73fd5a822943efae4e9401451847f417e (refs/heads/main)",
+    "runtime":  {
+                    "present":  true,
+                    "exe":  "C:\\Program Files\\PagentOS\\agent\\service\\PagentOS.DeviceService.exe",
+                    "product_version":  "0.6.0+cc6f4ee73fd5a822943efae4e9401451847f417e",
+                    "build":  "cc6f4ee73fd5a822943efae4e9401451847f417e",
+                    "installed_at":  "2026-09-09T13:05:44.4691268Z"
+                },
+    "gate":  {
+                 "ok":  true,
+                 "reasons":  [
+
+                             ],
+                 "advertised":  85,
+                 "minimum":  40,
+                 "superseded_build":  "a3cb04e",
+                 "operator_families_missing":  [
+
+                                               ]
+             },
+    "device":  {
+                   "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                   "name":  "MAIL",
+                   "presence":  "online",
+                   "software_version":  "0.6.0",
+                   "capabilities":  85
+               },
+    "sections":  [
+                     {
+                         "name":  "operator",
+                         "milestone":  "M19",
+                         "title":  "the Digital Operator, against a real allowlisted application",
+                         "verdict":  "BLOCKED",
+                         "detail":  "geometry, state, the UI tree and close all read back; foreground-dependent steps were prevented by searchapp.exe \"Arama\" pid=10344. Re-run with the desktop idle.",
+                         "steps":  [
+                                       {
+                                           "step":  1,
+                                           "capability":  "app.launch",
+                                           "command_id":  "d22014d7-981c-4a01-b6e5-cdae94d95344",
+                                           "trace_id":  "item28-unlocked-20260909-162121-1",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "application":  "notepad"
+                                                       },
+                                           "result":  {
+                                                          "pid":  17844,
+                                                          "title":  "Adsız - Not Defteri",
+                                                          "observed":  {
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  120,
+                                                                                                       "y":  90,
+                                                                                                       "width":  700,
+                                                                                                       "height":  480
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      },
+                                                                           "process_alive":  true,
+                                                                           "window_appeared":  true
+                                                                       },
+                                                          "window_id":  "w-2099860-345102781",
+                                                          "executable":  "C:\\Windows\\System32\\notepad.exe"
+                                                      }
+                                       },
+                                       {
+                                           "step":  2,
+                                           "capability":  "window.activate",
+                                           "command_id":  "b4f3a72b-956e-40d8-aef0-c113953141ae",
+                                           "trace_id":  "item28-unlocked-20260909-162121-2",
+                                           "status":  "failed",
+                                           "error_class":  "postcondition_failed",
+                                           "error_message":  "w-2099860-345102781 did not become the foreground window (foreground is w-131712-344597546 pid=10344 image=searchapp.exe title=\"Arama\")",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781"
+                                                       },
+                                           "result":  null
+                                       },
+                                       {
+                                           "step":  3,
+                                           "capability":  "window.activate",
+                                           "command_id":  "b75592d3-6bc2-4d91-af27-ca145f5cb14b",
+                                           "trace_id":  "item28-unlocked-20260909-162121-3",
+                                           "status":  "failed",
+                                           "error_class":  "postcondition_failed",
+                                           "error_message":  "w-2099860-345102781 did not become the foreground window (foreground is w-131712-344597546 pid=10344 image=searchapp.exe title=\"Arama\")",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781"
+                                                       },
+                                           "result":  null
+                                       },
+                                       {
+                                           "step":  4,
+                                           "capability":  "window.activate",
+                                           "command_id":  "ac3ad841-8373-44c3-aab5-7d8611a111dc",
+                                           "trace_id":  "item28-unlocked-20260909-162121-4",
+                                           "status":  "failed",
+                                           "error_class":  "postcondition_failed",
+                                           "error_message":  "w-2099860-345102781 did not become the foreground window (foreground is w-131712-344597546 pid=10344 image=searchapp.exe title=\"Arama\")",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781"
+                                                       },
+                                           "result":  null
+                                       },
+                                       {
+                                           "step":  5,
+                                           "capability":  "window.current",
+                                           "command_id":  "7e7eeb1d-ddcf-44b1-b064-7953bd6eec41",
+                                           "trace_id":  "item28-unlocked-20260909-162121-5",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+
+                                                       },
+                                           "result":  {
+                                                          "window":  {
+                                                                         "pid":  10344,
+                                                                         "rect":  {
+                                                                                      "x":  48,
+                                                                                      "y":  760,
+                                                                                      "width":  784,
+                                                                                      "height":  680
+                                                                                  },
+                                                                         "image":  "searchapp.exe",
+                                                                         "owned":  false,
+                                                                         "state":  "normal",
+                                                                         "title":  "Arama",
+                                                                         "window_id":  "w-131712-344597546",
+                                                                         "class_name":  "Windows.UI.Core.CoreWindow",
+                                                                         "foreground":  true
+                                                                     },
+                                                          "observed":  {
+                                                                           "window":  {
+                                                                                          "pid":  10344,
+                                                                                          "rect":  {
+                                                                                                       "x":  48,
+                                                                                                       "y":  760,
+                                                                                                       "width":  784,
+                                                                                                       "height":  680
+                                                                                                   },
+                                                                                          "image":  "searchapp.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Arama",
+                                                                                          "window_id":  "w-131712-344597546",
+                                                                                          "class_name":  "Windows.UI.Core.CoreWindow",
+                                                                                          "foreground":  true
+                                                                                      }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  6,
+                                           "capability":  "window.move",
+                                           "command_id":  "c0abcf57-d5f8-4c54-ab62-67045297bf26",
+                                           "trace_id":  "item28-unlocked-20260909-162121-6",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781",
+                                                           "y":  90,
+                                                           "x":  120
+                                                       },
+                                           "result":  {
+                                                          "window":  {
+                                                                         "pid":  17844,
+                                                                         "rect":  {
+                                                                                      "x":  120,
+                                                                                      "y":  90,
+                                                                                      "width":  700,
+                                                                                      "height":  480
+                                                                                  },
+                                                                         "image":  "notepad.exe",
+                                                                         "owned":  false,
+                                                                         "state":  "normal",
+                                                                         "title":  "Adsız - Not Defteri",
+                                                                         "window_id":  "w-2099860-345102781",
+                                                                         "class_name":  "Notepad",
+                                                                         "foreground":  false
+                                                                     },
+                                                          "observed":  {
+                                                                           "state":  "normal",
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  120,
+                                                                                                       "y":  90,
+                                                                                                       "width":  700,
+                                                                                                       "height":  480
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  7,
+                                           "capability":  "window.resize",
+                                           "command_id":  "5909b363-ee22-4de7-a824-2ae022d1550f",
+                                           "trace_id":  "item28-unlocked-20260909-162121-7",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781",
+                                                           "width":  700,
+                                                           "height":  480
+                                                       },
+                                           "result":  {
+                                                          "window":  {
+                                                                         "pid":  17844,
+                                                                         "rect":  {
+                                                                                      "x":  120,
+                                                                                      "y":  90,
+                                                                                      "width":  700,
+                                                                                      "height":  480
+                                                                                  },
+                                                                         "image":  "notepad.exe",
+                                                                         "owned":  false,
+                                                                         "state":  "normal",
+                                                                         "title":  "Adsız - Not Defteri",
+                                                                         "window_id":  "w-2099860-345102781",
+                                                                         "class_name":  "Notepad",
+                                                                         "foreground":  false
+                                                                     },
+                                                          "observed":  {
+                                                                           "state":  "normal",
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  120,
+                                                                                                       "y":  90,
+                                                                                                       "width":  700,
+                                                                                                       "height":  480
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  8,
+                                           "capability":  "window.minimize",
+                                           "command_id":  "155b1dcd-4905-4a42-a6f4-5b6fe739f8d1",
+                                           "trace_id":  "item28-unlocked-20260909-162121-8",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781"
+                                                       },
+                                           "result":  {
+                                                          "window":  {
+                                                                         "pid":  17844,
+                                                                         "rect":  {
+                                                                                      "x":  -32000,
+                                                                                      "y":  -32000,
+                                                                                      "width":  160,
+                                                                                      "height":  28
+                                                                                  },
+                                                                         "image":  "notepad.exe",
+                                                                         "owned":  false,
+                                                                         "state":  "minimized",
+                                                                         "title":  "Adsız - Not Defteri",
+                                                                         "window_id":  "w-2099860-345102781",
+                                                                         "class_name":  "Notepad",
+                                                                         "foreground":  false
+                                                                     },
+                                                          "observed":  {
+                                                                           "state":  "minimized",
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  -32000,
+                                                                                                       "y":  -32000,
+                                                                                                       "width":  160,
+                                                                                                       "height":  28
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "minimized",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  9,
+                                           "capability":  "window.maximize",
+                                           "command_id":  "284cfa8a-30a3-4838-8bf8-e134fdc3019a",
+                                           "trace_id":  "item28-unlocked-20260909-162121-9",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781"
+                                                       },
+                                           "result":  {
+                                                          "window":  {
+                                                                         "pid":  17844,
+                                                                         "rect":  {
+                                                                                      "x":  -8,
+                                                                                      "y":  -8,
+                                                                                      "width":  2576,
+                                                                                      "height":  1416
+                                                                                  },
+                                                                         "image":  "notepad.exe",
+                                                                         "owned":  false,
+                                                                         "state":  "maximized",
+                                                                         "title":  "Adsız - Not Defteri",
+                                                                         "window_id":  "w-2099860-345102781",
+                                                                         "class_name":  "Notepad",
+                                                                         "foreground":  false
+                                                                     },
+                                                          "observed":  {
+                                                                           "state":  "maximized",
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  -8,
+                                                                                                       "y":  -8,
+                                                                                                       "width":  2576,
+                                                                                                       "height":  1416
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "maximized",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  10,
+                                           "capability":  "window.restore",
+                                           "command_id":  "bf2f3a78-da55-447c-a3e0-548c52ae87e5",
+                                           "trace_id":  "item28-unlocked-20260909-162121-10",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781"
+                                                       },
+                                           "result":  {
+                                                          "window":  {
+                                                                         "pid":  17844,
+                                                                         "rect":  {
+                                                                                      "x":  120,
+                                                                                      "y":  90,
+                                                                                      "width":  700,
+                                                                                      "height":  480
+                                                                                  },
+                                                                         "image":  "notepad.exe",
+                                                                         "owned":  false,
+                                                                         "state":  "normal",
+                                                                         "title":  "Adsız - Not Defteri",
+                                                                         "window_id":  "w-2099860-345102781",
+                                                                         "class_name":  "Notepad",
+                                                                         "foreground":  false
+                                                                     },
+                                                          "observed":  {
+                                                                           "state":  "normal",
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  120,
+                                                                                                       "y":  90,
+                                                                                                       "width":  700,
+                                                                                                       "height":  480
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  11,
+                                           "capability":  "ui.inspect",
+                                           "command_id":  "d9f5e5a0-4b16-48f3-83a2-5bc0fae33338",
+                                           "trace_id":  "item28-unlocked-20260909-162121-11",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781",
+                                                           "depth":  4,
+                                                           "max_nodes":  120
+                                                       },
+                                           "result":  {
+                                                          "root":  {
+                                                                       "name":  "Adsız - Not Defteri",
+                                                                       "bounds":  {
+                                                                                      "x":  120,
+                                                                                      "y":  90,
+                                                                                      "width":  700,
+                                                                                      "height":  480
+                                                                                  },
+                                                                       "enabled":  true,
+                                                                       "children":  [
+                                                                                        {
+                                                                                            "name":  "Metin Düzenleyici",
+                                                                                            "value":  "",
+                                                                                            "bounds":  {
+                                                                                                           "x":  128,
+                                                                                                           "y":  141,
+                                                                                                           "width":  684,
+                                                                                                           "height":  398
+                                                                                                       },
+                                                                                            "enabled":  true,
+                                                                                            "children":  [
+                                                                                                             {
+                                                                                                                 "name":  "Yatay Kaydırma Çubuğu",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  128,
+                                                                                                                                "y":  522,
+                                                                                                                                "width":  667,
+                                                                                                                                "height":  17
+                                                                                                                            },
+                                                                                                                 "enabled":  false,
+                                                                                                                 "children":  [
+                                                                                                                                  {
+                                                                                                                                      "name":  "Küçük miktarda geri",
+                                                                                                                                      "bounds":  "@{x=128; y=522; width=17; height=17}",
+                                                                                                                                      "enabled":  false,
+                                                                                                                                      "children":  "",
+                                                                                                                                      "class_name":  "",
+                                                                                                                                      "control_type":  "Button",
+                                                                                                                                      "automation_id":  "SmallDecrement"
+                                                                                                                                  },
+                                                                                                                                  {
+                                                                                                                                      "name":  "Küçük miktarda ileri",
+                                                                                                                                      "bounds":  "@{x=778; y=522; width=17; height=17}",
+                                                                                                                                      "enabled":  false,
+                                                                                                                                      "children":  "",
+                                                                                                                                      "class_name":  "",
+                                                                                                                                      "control_type":  "Button",
+                                                                                                                                      "automation_id":  "SmallIncrement"
+                                                                                                                                  }
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "ScrollBar",
+                                                                                                                 "automation_id":  "Horizontal ScrollBar"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Dikey Kaydırma Çubuğu",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  795,
+                                                                                                                                "y":  141,
+                                                                                                                                "width":  17,
+                                                                                                                                "height":  381
+                                                                                                                            },
+                                                                                                                 "enabled":  false,
+                                                                                                                 "children":  [
+                                                                                                                                  {
+                                                                                                                                      "name":  "Küçük miktarda geri",
+                                                                                                                                      "bounds":  "@{x=795; y=141; width=17; height=17}",
+                                                                                                                                      "enabled":  false,
+                                                                                                                                      "children":  "",
+                                                                                                                                      "class_name":  "",
+                                                                                                                                      "control_type":  "Button",
+                                                                                                                                      "automation_id":  "SmallDecrement"
+                                                                                                                                  },
+                                                                                                                                  {
+                                                                                                                                      "name":  "Küçük miktarda ileri",
+                                                                                                                                      "bounds":  "@{x=795; y=505; width=17; height=17}",
+                                                                                                                                      "enabled":  false,
+                                                                                                                                      "children":  "",
+                                                                                                                                      "class_name":  "",
+                                                                                                                                      "control_type":  "Button",
+                                                                                                                                      "automation_id":  "SmallIncrement"
+                                                                                                                                  }
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "ScrollBar",
+                                                                                                                 "automation_id":  "Vertical ScrollBar"
+                                                                                                             }
+                                                                                                         ],
+                                                                                            "class_name":  "Edit",
+                                                                                            "control_type":  "Document",
+                                                                                            "automation_id":  "15"
+                                                                                        },
+                                                                                        {
+                                                                                            "name":  "Durum Çubuğu",
+                                                                                            "bounds":  {
+                                                                                                           "x":  128,
+                                                                                                           "y":  539,
+                                                                                                           "width":  684,
+                                                                                                           "height":  23
+                                                                                                       },
+                                                                                            "enabled":  true,
+                                                                                            "children":  [
+                                                                                                             {
+                                                                                                                 "name":  "",
+                                                                                                                 "value":  "",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  128,
+                                                                                                                                "y":  541,
+                                                                                                                                "width":  254,
+                                                                                                                                "height":  21
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Edit",
+                                                                                                                 "automation_id":  "StatusBar.Pane0"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "  St 1, Stn 1",
+                                                                                                                 "value":  "  St 1, Stn 1",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  384,
+                                                                                                                                "y":  541,
+                                                                                                                                "width":  138,
+                                                                                                                                "height":  21
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Edit",
+                                                                                                                 "automation_id":  "StatusBar.Pane1"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  " 100%",
+                                                                                                                 "value":  " 100%",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  524,
+                                                                                                                                "y":  541,
+                                                                                                                                "width":  48,
+                                                                                                                                "height":  21
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Edit",
+                                                                                                                 "automation_id":  "StatusBar.Pane2"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  " Windows (CRLF)",
+                                                                                                                 "value":  " Windows (CRLF)",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  574,
+                                                                                                                                "y":  541,
+                                                                                                                                "width":  118,
+                                                                                                                                "height":  21
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Edit",
+                                                                                                                 "automation_id":  "StatusBar.Pane3"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  " UTF-8",
+                                                                                                                 "value":  " UTF-8",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  694,
+                                                                                                                                "y":  541,
+                                                                                                                                "width":  102,
+                                                                                                                                "height":  21
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Edit",
+                                                                                                                 "automation_id":  "StatusBar.Pane4"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  796,
+                                                                                                                                "y":  546,
+                                                                                                                                "width":  16,
+                                                                                                                                "height":  16
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Custom",
+                                                                                                                 "automation_id":  "StatusBar.Grip"
+                                                                                                             }
+                                                                                                         ],
+                                                                                            "class_name":  "msctls_statusbar32",
+                                                                                            "control_type":  "StatusBar",
+                                                                                            "automation_id":  "StatusBar"
+                                                                                        },
+                                                                                        {
+                                                                                            "name":  "Adsız - Not Defteri",
+                                                                                            "bounds":  {
+                                                                                                           "x":  128,
+                                                                                                           "y":  98,
+                                                                                                           "width":  684,
+                                                                                                           "height":  23
+                                                                                                       },
+                                                                                            "enabled":  true,
+                                                                                            "children":  [
+                                                                                                             {
+                                                                                                                 "name":  "Sistem Menü Çubuğu",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  128,
+                                                                                                                                "y":  98,
+                                                                                                                                "width":  22,
+                                                                                                                                "height":  22
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+                                                                                                                                  {
+                                                                                                                                      "name":  "Sistem",
+                                                                                                                                      "bounds":  "@{x=128; y=98; width=22; height=22}",
+                                                                                                                                      "enabled":  true,
+                                                                                                                                      "children":  "",
+                                                                                                                                      "class_name":  "",
+                                                                                                                                      "control_type":  "MenuItem",
+                                                                                                                                      "automation_id":  "Item 1"
+                                                                                                                                  }
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "MenuBar",
+                                                                                                                 "automation_id":  "SystemMenuBar"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Simge Durumuna Küçült",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  673,
+                                                                                                                                "y":  91,
+                                                                                                                                "width":  47,
+                                                                                                                                "height":  30
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Button",
+                                                                                                                 "automation_id":  "Minimize"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Ekranı Kapla",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  720,
+                                                                                                                                "y":  91,
+                                                                                                                                "width":  46,
+                                                                                                                                "height":  30
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Button",
+                                                                                                                 "automation_id":  "Maximize"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Kapat",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  766,
+                                                                                                                                "y":  91,
+                                                                                                                                "width":  47,
+                                                                                                                                "height":  30
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "Button",
+                                                                                                                 "automation_id":  "Close"
+                                                                                                             }
+                                                                                                         ],
+                                                                                            "class_name":  "",
+                                                                                            "control_type":  "TitleBar",
+                                                                                            "automation_id":  "TitleBar"
+                                                                                        },
+                                                                                        {
+                                                                                            "name":  "Uygulama",
+                                                                                            "bounds":  {
+                                                                                                           "x":  128,
+                                                                                                           "y":  121,
+                                                                                                           "width":  684,
+                                                                                                           "height":  19
+                                                                                                       },
+                                                                                            "enabled":  true,
+                                                                                            "children":  [
+                                                                                                             {
+                                                                                                                 "name":  "Dosya",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  128,
+                                                                                                                                "y":  121,
+                                                                                                                                "width":  46,
+                                                                                                                                "height":  19
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "MenuItem",
+                                                                                                                 "automation_id":  "Item 1"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Düzen",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  174,
+                                                                                                                                "y":  121,
+                                                                                                                                "width":  47,
+                                                                                                                                "height":  19
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "MenuItem",
+                                                                                                                 "automation_id":  "Item 2"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Biçim",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  221,
+                                                                                                                                "y":  121,
+                                                                                                                                "width":  44,
+                                                                                                                                "height":  19
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "MenuItem",
+                                                                                                                 "automation_id":  "Item 3"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Görünüm",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  265,
+                                                                                                                                "y":  121,
+                                                                                                                                "width":  65,
+                                                                                                                                "height":  19
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "MenuItem",
+                                                                                                                 "automation_id":  "Item 4"
+                                                                                                             },
+                                                                                                             {
+                                                                                                                 "name":  "Yardım",
+                                                                                                                 "bounds":  {
+                                                                                                                                "x":  330,
+                                                                                                                                "y":  121,
+                                                                                                                                "width":  51,
+                                                                                                                                "height":  19
+                                                                                                                            },
+                                                                                                                 "enabled":  true,
+                                                                                                                 "children":  [
+
+                                                                                                                              ],
+                                                                                                                 "class_name":  "",
+                                                                                                                 "control_type":  "MenuItem",
+                                                                                                                 "automation_id":  "Item 5"
+                                                                                                             }
+                                                                                                         ],
+                                                                                            "class_name":  "",
+                                                                                            "control_type":  "MenuBar",
+                                                                                            "automation_id":  "MenuBar"
+                                                                                        }
+                                                                                    ],
+                                                                       "class_name":  "Notepad",
+                                                                       "control_type":  "Window",
+                                                                       "automation_id":  ""
+                                                                   },
+                                                          "depth":  4,
+                                                          "observed":  {
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  120,
+                                                                                                       "y":  90,
+                                                                                                       "width":  700,
+                                                                                                       "height":  480
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       },
+                                                          "truncated":  false,
+                                                          "window_id":  "w-2099860-345102781",
+                                                          "node_count":  27
+                                                      }
+                                       },
+                                       {
+                                           "step":  12,
+                                           "capability":  "ui.set_value",
+                                           "command_id":  "79715b48-8a2a-474c-a304-a0eb769aab3b",
+                                           "trace_id":  "item28-unlocked-20260909-162121-12",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "window_id":  "w-2099860-345102781",
+                                                           "control_type":  "Document",
+                                                           "value":  "Item 28: ğüşöçı 123"
+                                                       },
+                                           "result":  {
+                                                          "element":  {
+                                                                          "name":  "Metin Düzenleyici",
+                                                                          "value":  "Item 28: ğüşöçı 123",
+                                                                          "bounds":  {
+                                                                                         "x":  128,
+                                                                                         "y":  141,
+                                                                                         "width":  684,
+                                                                                         "height":  398
+                                                                                     },
+                                                                          "enabled":  true,
+                                                                          "class_name":  "Edit",
+                                                                          "control_type":  "Document",
+                                                                          "automation_id":  "15"
+                                                                      },
+                                                          "observed":  {
+                                                                           "value":  "Item 28: ğüşöçı 123",
+                                                                           "window":  {
+                                                                                          "pid":  17844,
+                                                                                          "rect":  {
+                                                                                                       "x":  120,
+                                                                                                       "y":  90,
+                                                                                                       "width":  700,
+                                                                                                       "height":  480
+                                                                                                   },
+                                                                                          "image":  "notepad.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Adsız - Not Defteri",
+                                                                                          "window_id":  "w-2099860-345102781",
+                                                                                          "class_name":  "Notepad",
+                                                                                          "foreground":  false
+                                                                                      }
+                                                                       },
+                                                          "window_id":  "w-2099860-345102781",
+                                                          "observed_value":  "Item 28: ğüşöçı 123"
+                                                      }
+                                       },
+                                       {
+                                           "step":  13,
+                                           "capability":  "window.list",
+                                           "command_id":  "72a67f15-09ec-4b23-a1ef-8ad06d3f2e0c",
+                                           "trace_id":  "item28-unlocked-20260909-162121-13",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "pid":  17844
+                                                       },
+                                           "result":  {
+                                                          "windows":  [
+                                                                          {
+                                                                              "pid":  17844,
+                                                                              "rect":  {
+                                                                                           "x":  120,
+                                                                                           "y":  90,
+                                                                                           "width":  700,
+                                                                                           "height":  480
+                                                                                       },
+                                                                              "image":  "notepad.exe",
+                                                                              "owned":  false,
+                                                                              "state":  "normal",
+                                                                              "title":  "Adsız - Not Defteri",
+                                                                              "window_id":  "w-2099860-345102781",
+                                                                              "class_name":  "Notepad",
+                                                                              "foreground":  false
+                                                                          }
+                                                                      ],
+                                                          "observed":  {
+                                                                           "count":  1,
+                                                                           "foreground":  {
+                                                                                              "pid":  10344,
+                                                                                              "rect":  {
+                                                                                                           "x":  48,
+                                                                                                           "y":  760,
+                                                                                                           "width":  784,
+                                                                                                           "height":  680
+                                                                                                       },
+                                                                                              "image":  "searchapp.exe",
+                                                                                              "owned":  false,
+                                                                                              "state":  "normal",
+                                                                                              "title":  "Arama",
+                                                                                              "window_id":  "w-131712-344597546",
+                                                                                              "class_name":  "Windows.UI.Core.CoreWindow",
+                                                                                              "foreground":  true
+                                                                                          }
+                                                                       }
+                                                      }
+                                       },
+                                       {
+                                           "step":  14,
+                                           "capability":  "app.close",
+                                           "command_id":  "15cd751c-0dc9-42e5-8fe2-bc6e6fd9ee2f",
+                                           "trace_id":  "item28-unlocked-20260909-162121-14",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "force":  true,
+                                                           "pid":  17844
+                                                       },
+                                           "result":  {
+                                                          "pid":  17844,
+                                                          "closed":  true,
+                                                          "method":  "wm_close",
+                                                          "observed":  {
+                                                                           "windows":  [
+
+                                                                                       ],
+                                                                           "process_alive":  false
+                                                                       }
+                                                      }
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "documents",
+                         "milestone":  "M20",
+                         "title":  "the documents family, against this repository\u0027s own fixtures",
+                         "verdict":  "PROVEN_REAL",
+                         "detail":  "search, inspect, read and extract, each checked against truth.json, plus the roots refusal",
+                         "steps":  [
+                                       {
+                                           "step":  15,
+                                           "capability":  "file.search",
+                                           "command_id":  "8f460d8c-b063-44d4-8c1f-f766f9d0df23",
+                                           "trace_id":  "item28-unlocked-20260909-162121-15",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "pattern":  "sozlesme",
+                                                           "max":  50,
+                                                           "roots":  [
+                                                                         "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents"
+                                                                     ]
+                                                       },
+                                           "result":  {
+                                                          "files":  [
+                                                                        {
+                                                                            "name":  "sozlesmeler__2025__sozlesme.docx.extract.json",
+                                                                            "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\expected\\sozlesmeler__2025__sozlesme.docx.extract.json",
+                                                                            "size":  2299,
+                                                                            "mtime":  "2026-09-07T21:36:42.8599597Z",
+                                                                            "file_id":  "file:e4779f4ec7945da32233a616772f86c6",
+                                                                            "extension":  ".json"
+                                                                        },
+                                                                        {
+                                                                            "name":  "sozlesmeler__2026__sozlesme.docx.extract.json",
+                                                                            "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\expected\\sozlesmeler__2026__sozlesme.docx.extract.json",
+                                                                            "size":  2299,
+                                                                            "mtime":  "2026-09-07T21:36:42.8939886Z",
+                                                                            "file_id":  "file:76d5fb8f643f8e0b33730b51b3cab68b",
+                                                                            "extension":  ".json"
+                                                                        },
+                                                                        {
+                                                                            "name":  "sozlesme.docx",
+                                                                            "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\sozlesmeler\\2025\\sozlesme.docx",
+                                                                            "size":  37178,
+                                                                            "mtime":  "2026-09-07T21:36:43.0935194Z",
+                                                                            "file_id":  "file:d19e142ad0f9388c19d33356869400be",
+                                                                            "extension":  ".docx"
+                                                                        },
+                                                                        {
+                                                                            "name":  "sozlesme.docx",
+                                                                            "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\sozlesmeler\\2026\\sozlesme.docx",
+                                                                            "size":  37179,
+                                                                            "mtime":  "2026-09-07T21:36:43.1264776Z",
+                                                                            "file_id":  "file:6897aa76991d24f3cae3737324e01b2d",
+                                                                            "extension":  ".docx"
+                                                                        }
+                                                                    ],
+                                                          "truncated":  false,
+                                                          "entries_walked":  24,
+                                                          "searched_roots":  [
+                                                                                 "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents"
+                                                                             ]
+                                                      }
+                                       },
+                                       {
+                                           "step":  16,
+                                           "capability":  "file.inspect",
+                                           "command_id":  "b84c5b3a-6d8d-42df-bb15-2a4f15d76e19",
+                                           "trace_id":  "item28-unlocked-20260909-162121-16",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\rapor.pdf"
+                                                       },
+                                           "result":  {
+                                                          "file":  {
+                                                                       "name":  "rapor.pdf",
+                                                                       "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\rapor.pdf",
+                                                                       "size":  21419,
+                                                                       "mtime":  "2026-09-07T21:36:43.0368814Z",
+                                                                       "sha256":  "8bc53301674573c8f3388fe122c46046fd01e701d016aa2e0748dcf9ea44eb81",
+                                                                       "file_id":  "file:16de71bbd7f0a62db4c0aa7fbfa865f1",
+                                                                       "extension":  ".pdf"
+                                                                   },
+                                                          "kind":  "pdf",
+                                                          "pages":  5,
+                                                          "title":  "Yıllık Rapor 2026",
+                                                          "is_text":  false
+                                                      }
+                                       },
+                                       {
+                                           "step":  17,
+                                           "capability":  "file.inspect",
+                                           "command_id":  "7140b0db-a623-4818-ac95-8e0d7c5ecc3e",
+                                           "trace_id":  "item28-unlocked-20260909-162121-17",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\butce-2026.xlsx"
+                                                       },
+                                           "result":  {
+                                                          "file":  {
+                                                                       "name":  "butce-2026.xlsx",
+                                                                       "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\butce-2026.xlsx",
+                                                                       "size":  5681,
+                                                                       "mtime":  "2026-09-07T21:36:42.6762058Z",
+                                                                       "sha256":  "2d3d437d35e4ec24ee1bd22a882efb2dfdb7c86a37bad9fb562ea98e2905cdb4",
+                                                                       "file_id":  "file:0eb4c5c69ad0a358e3323326ef9294c6",
+                                                                       "extension":  ".xlsx"
+                                                                   },
+                                                          "kind":  "xlsx",
+                                                          "title":  "butce-2026",
+                                                          "sheets":  [
+                                                                         "Ozet",
+                                                                         "Detay"
+                                                                     ],
+                                                          "is_text":  false
+                                                      }
+                                       },
+                                       {
+                                           "step":  18,
+                                           "capability":  "file.read",
+                                           "command_id":  "251276b3-6eed-4206-8fb3-06e5f2ac3cfe",
+                                           "trace_id":  "item28-unlocked-20260909-162121-18",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\kod.py",
+                                                           "length":  4096
+                                                       },
+                                           "result":  {
+                                                          "file":  {
+                                                                       "name":  "kod.py",
+                                                                       "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\kod.py",
+                                                                       "size":  419,
+                                                                       "mtime":  "2026-09-07T21:36:42.9763301Z",
+                                                                       "sha256":  "3a07e4210feb6bc9f43a9cf89a0293c608f0c7fc279b0b5e07161eecfcf77565",
+                                                                       "file_id":  "file:6cda9cba162785a8aa5b1b0f2f2e6b31",
+                                                                       "extension":  ".py"
+                                                                   },
+                                                          "text":  "\"\"\"Örnek modül: bütçe hesapları.\"\"\"\n\n\ndef hesapla(kira: int, maas: int, yazilim: int) -\u003e int:\n    \"\"\"Üç kalemin toplamı.\"\"\"\n    return kira + maas + yazilim\n\n\ndef kdv(tutar: int, oran: float = 0.2) -\u003e float:\n    return tutar * oran\n\n\nclass Butce:\n    def __init__(self, kalemler: dict[str, int]) -\u003e None:\n        self.kalemler = kalemler\n\n    def toplam(self) -\u003e int:\n        return sum(self.kalemler.values())\n",
+                                                          "offset":  0,
+                                                          "encoding":  "utf-8",
+                                                          "truncated":  false,
+                                                          "total_chars":  411
+                                                      }
+                                       },
+                                       {
+                                           "step":  19,
+                                           "capability":  "document.extract",
+                                           "command_id":  "e9f06308-5113-492a-9c9d-9097a087bf76",
+                                           "trace_id":  "item28-unlocked-20260909-162121-19",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\notlar.md"
+                                                       },
+                                           "result":  {
+                                                          "file":  {
+                                                                       "name":  "notlar.md",
+                                                                       "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\notlar.md",
+                                                                       "size":  386,
+                                                                       "mtime":  "2026-09-07T21:36:43.0100872Z",
+                                                                       "sha256":  "5cf1c183cc498f941d88ef2d7baa071fbbd24382043062a793d79e141ae295db",
+                                                                       "file_id":  "file:17384ecdae0cda466f4a6744262b4bd0",
+                                                                       "extension":  ".md"
+                                                                   },
+                                                          "kind":  "md",
+                                                          "title":  "Toplantı Notları",
+                                                          "blocks":  [
+                                                                         {
+                                                                             "ref":  "h1:Toplantı Notları",
+                                                                             "kind":  "section",
+                                                                             "text":  "Tarih: 8 Eylül 2026. Katılımcılar: Alp, sistem.",
+                                                                             "level":  1,
+                                                                             "title":  "Toplantı Notları"
+                                                                         },
+                                                                         {
+                                                                             "ref":  "h2:Giriş",
+                                                                             "kind":  "section",
+                                                                             "text":  "M20 belge zekâsı kapsamı konuşuldu. Dosyalar sahibin makinesinde kalır.",
+                                                                             "level":  2,
+                                                                             "title":  "Giriş"
+                                                                         },
+                                                                         {
+                                                                             "ref":  "h2:Kararlar",
+                                                                             "kind":  "section",
+                                                                             "text":  "- Bütçe onaylandı. - Her yanıt dosyayı ve yeri adıyla söyler. - Silme yeteneği bu aşamada yoktur.",
+                                                                             "level":  2,
+                                                                             "title":  "Kararlar"
+                                                                         },
+                                                                         {
+                                                                             "ref":  "h2:Sonraki adımlar",
+                                                                             "kind":  "section",
+                                                                             "text":  "Sabitler üretilir, cihaz çıkarımı doğrulanır, ses derlemi genişletilir.",
+                                                                             "level":  2,
+                                                                             "title":  "Sonraki adımlar"
+                                                                         }
+                                                                     ],
+                                                          "doc_id":  "doc:5cf1c183cc498f941d88ef2d7baa071fbbd24382043062a793d79e141ae295db",
+                                                          "structure":  {
+                                                                            "headings":  [
+                                                                                             "Toplantı Notları",
+                                                                                             "Giriş",
+                                                                                             "Kararlar",
+                                                                                             "Sonraki adımlar"
+                                                                                         ]
+                                                                        },
+                                                          "truncated":  false
+                                                      }
+                                       },
+                                       {
+                                           "step":  20,
+                                           "capability":  "document.extract",
+                                           "command_id":  "1804015b-5c3b-49bf-b91e-86bd177368f4",
+                                           "trace_id":  "item28-unlocked-20260909-162121-20",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "page_range":  [
+                                                                              3,
+                                                                              3
+                                                                          ],
+                                                           "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\rapor.pdf"
+                                                       },
+                                           "result":  {
+                                                          "file":  {
+                                                                       "name":  "rapor.pdf",
+                                                                       "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\rapor.pdf",
+                                                                       "size":  21419,
+                                                                       "mtime":  "2026-09-07T21:36:43.0368814Z",
+                                                                       "sha256":  "8bc53301674573c8f3388fe122c46046fd01e701d016aa2e0748dcf9ea44eb81",
+                                                                       "file_id":  "file:16de71bbd7f0a62db4c0aa7fbfa865f1",
+                                                                       "extension":  ".pdf"
+                                                                   },
+                                                          "kind":  "pdf",
+                                                          "title":  "Yıllık Rapor 2026",
+                                                          "blocks":  [
+                                                                         {
+                                                                             "ref":  "p3",
+                                                                             "kind":  "page",
+                                                                             "text":  "Bölüm 2 - Belgeler Üçüncü sayfada yer alan bu cümle referans testidir. Belge zekâsı her yanıtta dosyayı ve yeri adıyla söyler."
+                                                                         }
+                                                                     ],
+                                                          "doc_id":  "doc:8bc53301674573c8f3388fe122c46046fd01e701d016aa2e0748dcf9ea44eb81",
+                                                          "structure":  {
+                                                                            "pages":  5
+                                                                        },
+                                                          "truncated":  false
+                                                      }
+                                       },
+                                       {
+                                           "step":  21,
+                                           "capability":  "file.inspect",
+                                           "command_id":  "6c49ec74-33dd-4dac-bf39-8e716035a7d0",
+                                           "trace_id":  "item28-unlocked-20260909-162121-21",
+                                           "status":  "failed",
+                                           "error_class":  "permission_denied",
+                                           "error_message":  "payload.path does not resolve to a path inside the owner\u0027s authorised roots (C:\\Users\\alpak\\Documents;C:\\Users\\alpak\\Desktop;C:\\Users\\alpak\\Downloads;C:\\Users\\alpak\\Pictures;C:\\Users\\alpak\\Videos;C:\\Users\\alpak\\Music;C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture;C:\\Users\\alpak\\Documents\\PagentOS Projects;C:\\Users\\alpak\\Documents\\PagentOS Projects\\3d;C:\\Users\\alpak\\Documents\\PagentOS Projects\\native); every junction and link is followed before the comparison, and a path that cannot be resolved is refused",
+                                           "payload":  {
+                                                           "path":  "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\CLAUDE.md"
+                                                       },
+                                           "result":  null
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "projects",
+                         "milestone":  "M23",
+                         "title":  "the projects family, scaffolded and driven on the device",
+                         "verdict":  "FAILED",
+                         "detail":  "the project was never written; nothing further could be driven",
+                         "steps":  [
+                                       {
+                                           "step":  22,
+                                           "capability":  "project.scaffold",
+                                           "command_id":  "1055f1dc-e60e-4bc8-a293-88e7d34cf119",
+                                           "trace_id":  "item28-unlocked-20260909-162121-22",
+                                           "status":  "failed",
+                                           "error_class":  "permission_denied",
+                                           "error_message":  "\u0027item28-check\u0027 belongs to another project; nothing was written [other_project]",
+                                           "payload":  {
+                                                           "manifest":  {
+                                                                            "port":  51987,
+                                                                            "run":  {
+                                                                                        "serve":  "python -m http.server \u003cport\u003e --bind 127.0.0.1"
+                                                                                    },
+                                                                            "entry":  "index.html",
+                                                                            "test":  {
+                                                                                         "unit":  "node tests/run.js"
+                                                                                     }
+                                                                        },
+                                                           "root":  "projects",
+                                                           "files":  [
+                                                                         {
+                                                                             "text":  "\u003c!doctype html\u003e\u003ctitle\u003eitem 28\u003c/title\u003e\u003cp\u003emerhaba\u003c/p\u003e",
+                                                                             "path":  "index.html"
+                                                                         },
+                                                                         {
+                                                                             "text":  "if (1 + 1 !== 2) { process.exit(1); }\nconsole.log(\u00271 passed, 0 failed\u0027);\n",
+                                                                             "path":  "tests/run.js"
+                                                                         }
+                                                                     ],
+                                                           "slug":  "item28-check",
+                                                           "project_id":  "item28-162144"
+                                                       },
+                                           "result":  null
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "scene",
+                         "milestone":  "M25",
+                         "title":  "scene.inspect over a scaffolded 3D project",
+                         "verdict":  "PROVEN_REAL",
+                         "detail":  "the inspection read path, its bounds and its render declaration",
+                         "steps":  [
+                                       {
+                                           "step":  23,
+                                           "capability":  "project.scaffold",
+                                           "command_id":  "1a5cc6de-3adc-425c-8f2f-c7be2026e8c8",
+                                           "trace_id":  "item28-unlocked-20260909-162121-23",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "manifest":  {
+                                                                            "port":  51988,
+                                                                            "run":  {
+                                                                                        "build":  "blender --factory-startup -b --python driver.py -- plan.json out.json"
+                                                                                    },
+                                                                            "entry":  "plan.json"
+                                                                        },
+                                                           "root":  "3d",
+                                                           "files":  [
+                                                                         {
+                                                                             "text":  "{\"objects\":[{\"name\":\"Cube\",\"type\":\"MESH\",\"location\":[0,0,0]}],\"frame\":1,\"engine\":\"CYCLES\"}",
+                                                                             "path":  "out.json"
+                                                                         },
+                                                                         {
+                                                                             "text":  "{\"steps\":[]}",
+                                                                             "path":  "plan.json"
+                                                                         },
+                                                                         {
+                                                                             "text":  "# item 28: named by the manifest, never run - this section only reads out.json\n",
+                                                                             "path":  "driver.py"
+                                                                         }
+                                                                     ],
+                                                           "slug":  "item28-scene",
+                                                           "project_id":  "item28-scene-162145"
+                                                       },
+                                           "result":  {
+                                                          "root":  "3d",
+                                                          "slug":  "item28-scene",
+                                                          "manifest":  {
+                                                                           "run":  {
+                                                                                       "build":  "blender --factory-startup -b --python driver.py -- plan.json out.json"
+                                                                                   },
+                                                                           "port":  51988,
+                                                                           "test":  {
+
+                                                                                    },
+                                                                           "entry":  "plan.json"
+                                                                       },
+                                                          "root_path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\3d\\item28-scene",
+                                                          "project_id":  "item28-scene-162145",
+                                                          "files_written":  3,
+                                                          "sha256_by_path":  {
+                                                                                 "out.json":  "2182a82cb7f747da84e4bd2712c7729d7b5e180172b10f5ed4f484d0e45b0fda",
+                                                                                 "driver.py":  "453d53ee31a98297a519a4f03a6d85f89c8507cf618ba20bb3fc9d51f637a017",
+                                                                                 "plan.json":  "4430e7786edc0f8419f02e909c15422ebf572287a58132d8f6f33250ce053121"
+                                                                             }
+                                                      }
+                                       },
+                                       {
+                                           "step":  24,
+                                           "capability":  "scene.inspect",
+                                           "command_id":  "3a40e7b6-71bf-4179-89fd-7f93e03f0fae",
+                                           "trace_id":  "item28-unlocked-20260909-162121-24",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "project_id":  "item28-scene-162145"
+                                                       },
+                                           "result":  {
+                                                          "slug":  "item28-scene",
+                                                          "render":  null,
+                                                          "root_path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\3d\\item28-scene",
+                                                          "inspection":  {
+                                                                             "frame":  1,
+                                                                             "engine":  "CYCLES",
+                                                                             "objects":  [
+                                                                                             {
+                                                                                                 "name":  "Cube",
+                                                                                                 "type":  "MESH",
+                                                                                                 "location":  [
+                                                                                                                  0,
+                                                                                                                  0,
+                                                                                                                  0
+                                                                                                              ]
+                                                                                             }
+                                                                                         ]
+                                                                         },
+                                                          "project_id":  "item28-scene-162145",
+                                                          "inspection_path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\3d\\item28-scene\\out.json"
+                                                      }
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "paint",
+                         "milestone":  "M27",
+                         "title":  "Paint, opened on the production route",
+                         "verdict":  "PROVEN_REAL",
+                         "detail":  "Paint opened the device\u0027s own image and was closed again",
+                         "steps":  [
+                                       {
+                                           "step":  25,
+                                           "capability":  "app.launch",
+                                           "command_id":  "31b0dd0f-c4a9-4ca3-ba1d-1b6c7808b88c",
+                                           "trace_id":  "item28-unlocked-20260909-162121-25",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "application":  "mspaint",
+                                                           "args":  [
+                                                                        "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\item28-export.png"
+                                                                    ]
+                                                       },
+                                           "result":  {
+                                                          "pid":  36548,
+                                                          "title":  "Paint",
+                                                          "observed":  {
+                                                                           "window":  {
+                                                                                          "pid":  36548,
+                                                                                          "rect":  {
+                                                                                                       "x":  255,
+                                                                                                       "y":  143,
+                                                                                                       "width":  2048,
+                                                                                                       "height":  1152
+                                                                                                   },
+                                                                                          "image":  "mspaint.exe",
+                                                                                          "owned":  false,
+                                                                                          "state":  "normal",
+                                                                                          "title":  "Paint",
+                                                                                          "window_id":  "w-9964196-345128984",
+                                                                                          "class_name":  "MSPaintApp",
+                                                                                          "foreground":  false
+                                                                                      },
+                                                                           "process_alive":  true,
+                                                                           "window_appeared":  true
+                                                                       },
+                                                          "window_id":  "w-9964196-345128984",
+                                                          "executable":  "C:\\Windows\\System32\\mspaint.exe"
+                                                      }
+                                       },
+                                       {
+                                           "step":  26,
+                                           "capability":  "app.close",
+                                           "command_id":  "e737e9d1-f393-4567-8e6f-dc8388745be8",
+                                           "trace_id":  "item28-unlocked-20260909-162121-26",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "force":  true,
+                                                           "pid":  36548
+                                                       },
+                                           "result":  {
+                                                          "pid":  36548,
+                                                          "closed":  true,
+                                                          "method":  "wm_close",
+                                                          "observed":  {
+                                                                           "windows":  [
+
+                                                                                       ],
+                                                                           "process_alive":  false
+                                                                       }
+                                                      }
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "nativeapp",
+                         "milestone":  "M28",
+                         "title":  "an application this system built, launched and driven",
+                         "verdict":  "FAILED",
+                         "detail":  "built and validated; the device would not start it",
+                         "steps":  [
+                                       {
+                                           "step":  27,
+                                           "capability":  "file.open",
+                                           "command_id":  "d7d94ce0-cb03-4818-8128-375827f07faa",
+                                           "trace_id":  "item28-unlocked-20260909-162121-27",
+                                           "status":  "failed",
+                                           "error_class":  "permission_denied",
+                                           "error_message":  "\u0027notlarim.exe\u0027 is executable; file.open opens documents, app.launch runs programs",
+                                           "payload":  {
+                                                           "path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\native\\item28-build\\out\\notlarim.exe"
+                                                       },
+                                           "result":  null
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "ambient",
+                         "milestone":  "M18.3",
+                         "title":  "display, activity and the ambient policy (nothing is darkened)",
+                         "verdict":  "PROVEN_REAL",
+                         "detail":  "display state, the activity contract, a wake receipt and the policy",
+                         "steps":  [
+                                       {
+                                           "step":  28,
+                                           "capability":  "desktop.display_status",
+                                           "command_id":  "cc75dbb4-e2b2-46cd-8248-ad6ed354e700",
+                                           "trace_id":  "item28-unlocked-20260909-162121-28",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+
+                                                       },
+                                           "result":  {
+                                                          "monitors":  [
+                                                                           {
+                                                                               "top":  0,
+                                                                               "left":  0,
+                                                                               "index":  0,
+                                                                               "width":  2560,
+                                                                               "height":  1440,
+                                                                               "primary":  true
+                                                                           },
+                                                                           {
+                                                                               "top":  -1107,
+                                                                               "left":  -1440,
+                                                                               "index":  1,
+                                                                               "width":  1440,
+                                                                               "height":  2560,
+                                                                               "primary":  false
+                                                                           }
+                                                                       ],
+                                                          "observed_at":  "2026-09-09T13:06:24.4115922+00:00",
+                                                          "input_idle_s":  30.9,
+                                                          "observed_state":  "on"
+                                                      }
+                                       },
+                                       {
+                                           "step":  29,
+                                           "capability":  "desktop.activity_status",
+                                           "command_id":  "4ec6eeb8-9524-4179-bb87-b0fa105e08ef",
+                                           "trace_id":  "item28-unlocked-20260909-162121-29",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+
+                                                       },
+                                           "result":  {
+                                                          "armed_alarms":  0,
+                                                          "input_idle_s":  31.6,
+                                                          "alarm_ringing":  false,
+                                                          "display_state":  "on",
+                                                          "next_alarm_at":  null,
+                                                          "ringing_alarm_id":  null,
+                                                          "display_observed_at":  "2026-09-09T13:06:24.4115922+00:00"
+                                                      }
+                                       },
+                                       {
+                                           "step":  30,
+                                           "capability":  "desktop.display_wake",
+                                           "command_id":  "29ee3299-8679-45ff-b1e1-743b05113f58",
+                                           "trace_id":  "item28-unlocked-20260909-162121-30",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "reason":  "item28_qualification"
+                                                       },
+                                           "result":  {
+                                                          "woken":  true,
+                                                          "method":  "display_needed+pointer_move_zero",
+                                                          "observed_at":  "2026-09-09T13:06:24.4115922+00:00",
+                                                          "input_idle_s":  0,
+                                                          "observed_state":  "on"
+                                                      }
+                                       }
+                                   ]
+                     },
+                     {
+                         "name":  "alarm",
+                         "milestone":  "M18.3",
+                         "title":  "the alarm device path, armed and disarmed in silence",
+                         "verdict":  "PROVEN_REAL",
+                         "detail":  "arm, observe, disarm - and the device was left exactly as it was found",
+                         "steps":  [
+                                       {
+                                           "step":  31,
+                                           "capability":  "desktop.activity_status",
+                                           "command_id":  "0abf4a71-5061-4925-b9dd-09e240d9494a",
+                                           "trace_id":  "item28-unlocked-20260909-162121-31",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+
+                                                       },
+                                           "result":  {
+                                                          "armed_alarms":  0,
+                                                          "input_idle_s":  0.8,
+                                                          "alarm_ringing":  false,
+                                                          "display_state":  "on",
+                                                          "next_alarm_at":  null,
+                                                          "ringing_alarm_id":  null,
+                                                          "display_observed_at":  "2026-09-09T13:06:24.4115922+00:00"
+                                                      }
+                                       },
+                                       {
+                                           "step":  32,
+                                           "capability":  "desktop.alarm_arm",
+                                           "command_id":  "1e7da3a6-c4ab-4c89-a4d0-6b8f0356671f",
+                                           "trace_id":  "item28-unlocked-20260909-162121-32",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "label":  "item 28 qualification (never rings)",
+                                                           "grace_s":  60,
+                                                           "alarm_id":  "item28-3ad2c230b296",
+                                                           "fire_at":  "2026-09-09T14:22:03.3964160Z"
+                                                       },
+                                           "result":  {
+                                                          "armed":  true,
+                                                          "fire_at":  "2026-09-09T14:22:03.3964160+00:00",
+                                                          "grace_s":  60,
+                                                          "alarm_id":  "item28-3ad2c230b296",
+                                                          "replaced":  false,
+                                                          "armed_count":  1,
+                                                          "fire_local_at":  "2026-09-09T14:23:03.3964160+00:00"
+                                                      }
+                                       },
+                                       {
+                                           "step":  33,
+                                           "capability":  "desktop.activity_status",
+                                           "command_id":  "a7e41a66-a925-4dfa-b471-3e54fb02dfc2",
+                                           "trace_id":  "item28-unlocked-20260909-162121-33",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+
+                                                       },
+                                           "result":  {
+                                                          "armed_alarms":  1,
+                                                          "input_idle_s":  2.1,
+                                                          "alarm_ringing":  false,
+                                                          "display_state":  "on",
+                                                          "next_alarm_at":  "2026-09-09T14:23:03.3964160+00:00",
+                                                          "ringing_alarm_id":  null,
+                                                          "display_observed_at":  "2026-09-09T13:06:24.4115922+00:00"
+                                                      }
+                                       },
+                                       {
+                                           "step":  34,
+                                           "capability":  "desktop.alarm_disarm",
+                                           "command_id":  "a2bdf193-5479-47e6-9d78-5e0cf29b3f0d",
+                                           "trace_id":  "item28-unlocked-20260909-162121-34",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+                                                           "alarm_id":  "item28-3ad2c230b296"
+                                                       },
+                                           "result":  {
+                                                          "alarm_id":  "item28-3ad2c230b296",
+                                                          "disarmed":  true,
+                                                          "was_armed":  true,
+                                                          "armed_count":  0
+                                                      }
+                                       },
+                                       {
+                                           "step":  35,
+                                           "capability":  "desktop.activity_status",
+                                           "command_id":  "cff56941-a563-419b-b779-846266649ced",
+                                           "trace_id":  "item28-unlocked-20260909-162121-35",
+                                           "status":  "succeeded",
+                                           "error_class":  "",
+                                           "error_message":  "",
+                                           "payload":  {
+
+                                                       },
+                                           "result":  {
+                                                          "armed_alarms":  0,
+                                                          "input_idle_s":  3.5,
+                                                          "alarm_ringing":  false,
+                                                          "display_state":  "on",
+                                                          "next_alarm_at":  null,
+                                                          "ringing_alarm_id":  null,
+                                                          "display_observed_at":  "2026-09-09T13:06:24.4115922+00:00"
+                                                      }
+                                       }
+                                   ]
+                     }
+                 ],
+    "plan":  [
+
+             ],
+    "checks":  [
+                   {
+                       "section":  "gate",
+                       "name":  "runtime.is_not_the_superseded_build",
+                       "ok":  true,
+                       "detail":  "0.6.0+cc6f4ee73fd5a822943efae4e9401451847f417e"
+                   },
+                   {
+                       "section":  "gate",
+                       "name":  "runtime.advertises_the_unlocked_manifest",
+                       "ok":  true,
+                       "detail":  "85 capabilities"
+                   },
+                   {
+                       "section":  "gate",
+                       "name":  "cloud_core.sees_the_updated_device",
+                       "ok":  true,
+                       "detail":  "0.6.0 with 85 capabilities"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "app.launch.window_observed",
+                       "ok":  true,
+                       "detail":  "pid=17844 window_id=w-2099860-345102781 window_appeared=True"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "window.move.read_back",
+                       "ok":  true,
+                       "detail":  "asked for (120,90), the device re-observed (120,90)"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "window.resize.read_back",
+                       "ok":  true,
+                       "detail":  "asked for 700x480, the device re-observed 700x480"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "window.minimize.read_back",
+                       "ok":  true,
+                       "detail":  "the device re-observed state \u0027minimized\u0027, asked for \u0027minimized\u0027"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "window.maximize.read_back",
+                       "ok":  true,
+                       "detail":  "the device re-observed state \u0027maximized\u0027, asked for \u0027maximized\u0027"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "window.restore.read_back",
+                       "ok":  true,
+                       "detail":  "the device re-observed state \u0027normal\u0027, asked for \u0027normal\u0027"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "ui.inspect.returned_the_windows_tree",
+                       "ok":  true,
+                       "detail":  "node_count=27"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "ui.set_value.read_back_exactly",
+                       "ok":  true,
+                       "detail":  "the document re-read as \u0027Item 28: ğüşöçı 123\u0027"
+                   },
+                   {
+                       "section":  "operator",
+                       "name":  "app.close.left_nothing_running",
+                       "ok":  true,
+                       "detail":  "process_alive=False"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "file.search.found_both_contracts",
+                       "ok":  true,
+                       "detail":  "4 file(s): sozlesmeler__2025__sozlesme.docx.extract.json, sozlesmeler__2026__sozlesme.docx.extract.json, sozlesme.docx, sozlesme.docx"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "file.inspect.pdf_page_count_matches_the_oracle",
+                       "ok":  true,
+                       "detail":  "pages=5, truth.json says 5"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "file.inspect.sha256_is_this_checkouts_file",
+                       "ok":  true,
+                       "detail":  "device 8bc53301674573c8f3388fe122c46046fd01e701d016aa2e0748dcf9ea44eb81 vs checkout 8bc53301674573c8f3388fe122c46046fd01e701d016aa2e0748dcf9ea44eb81"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "file.inspect.xlsx_names_its_sheets",
+                       "ok":  true,
+                       "detail":  "sheets=Ozet, Detay"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "file.read.returned_the_functions_source",
+                       "ok":  true,
+                       "detail":  "kod.py carries \u0027hesapla\u0027: True"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "document.extract.reference_scheme_names_the_place",
+                       "ok":  true,
+                       "detail":  "4 block(s); \u0027h2:Kararlar\u0027 present: True"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "document.extract.page_3_is_the_sentence_the_oracle_names",
+                       "ok":  true,
+                       "detail":  "page 3 carries the reference sentence: True"
+                   },
+                   {
+                       "section":  "documents",
+                       "name":  "file.inspect.refuses_a_path_outside_the_authorised_roots",
+                       "ok":  true,
+                       "detail":  "the checkout is outside the roots and answered \u0027permission_denied\u0027"
+                   },
+                   {
+                       "section":  "projects",
+                       "name":  "project.scaffold.succeeded",
+                       "ok":  false,
+                       "detail":  "failed permission_denied \u0027item28-check\u0027 belongs to another project; nothing was written [other_project]"
+                   },
+                   {
+                       "section":  "projects",
+                       "name":  "project.scaffold.wrote_the_project",
+                       "ok":  false,
+                       "detail":  "files_written= root_path="
+                   },
+                   {
+                       "section":  "scene",
+                       "name":  "scene.inspect.returned_the_drivers_own_document",
+                       "ok":  true,
+                       "detail":  "1 object(s); inspection_path=C:\\Users\\alpak\\Documents\\PagentOS Projects\\3d\\item28-scene\\out.json"
+                   },
+                   {
+                       "section":  "scene",
+                       "name":  "scene.inspect.render_is_null_when_none_is_declared",
+                       "ok":  true,
+                       "detail":  "the inspection declared no render, and none was invented"
+                   },
+                   {
+                       "section":  "paint",
+                       "name":  "app.launch.mspaint_opened_the_exported_image",
+                       "ok":  true,
+                       "detail":  "pid=36548 window_id=w-9964196-345128984 image=C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-162121\\documents\\item28-export.png"
+                   },
+                   {
+                       "section":  "paint",
+                       "name":  "app.close.paint_left_nothing_running",
+                       "ok":  true,
+                       "detail":  "process_alive=False"
+                   },
+                   {
+                       "section":  "paint",
+                       "name":  "creative.export_check.is_not_a_device_capability_in_this_checkout",
+                       "ok":  true,
+                       "detail":  "no such capability is implemented (it appears only in M27 prose); Paint\u0027s open path is what item 28 unlocks today"
+                   },
+                   {
+                       "section":  "nativeapp",
+                       "name":  "native.build.exe_produced",
+                       "ok":  true,
+                       "detail":  "the lab exited 0;     notlarim.exe: 162,304 bytes, x64, windows_gui, version \u00270.1.0\u0027"
+                   },
+                   {
+                       "section":  "nativeapp",
+                       "name":  "native.build.independently_validated",
+                       "ok":  true,
+                       "detail":  "the reader saw x64 windows_gui version 0.1.0, sha256 175164a9e06475da"
+                   },
+                   {
+                       "section":  "nativeapp",
+                       "name":  "native.launch.started_from_the_authorised_root",
+                       "ok":  false,
+                       "detail":  "file.open refused the built application with \u0027permission_denied\u0027: \u0027notlarim.exe\u0027 is executable; file.open opens documents, app.launch runs programs"
+                   },
+                   {
+                       "section":  "ambient",
+                       "name":  "desktop.display_status.observed_a_real_state",
+                       "ok":  true,
+                       "detail":  "observed_state=on"
+                   },
+                   {
+                       "section":  "ambient",
+                       "name":  "desktop.activity_status.carries_exactly_the_seven_documented_keys",
+                       "ok":  true,
+                       "detail":  "7 key(s)"
+                   },
+                   {
+                       "section":  "ambient",
+                       "name":  "desktop.display_wake.is_a_receipt_not_a_no_op",
+                       "ok":  true,
+                       "detail":  "woken=True method=display_needed+pointer_move_zero"
+                   },
+                   {
+                       "section":  "ambient",
+                       "name":  "ambient.policy.answers_for_itself",
+                       "ok":  true,
+                       "detail":  "{\"ambient_version\":1,\"policy\":{\"auto_off_enabled\":false,\"off_when_away\":true,\"off_when_asleep\":true,\"wake_on_return\":true,\"away_after_s\":900,\"asleep_after_s\":600,\"asleep_min_confidence\":0.7,\"input_holdoff_s\":600,\"command_holdoff_s\":900,\"alarm_holdoff_s\":1800,\"return_holdoff_s\":600,\"quiet_hours\":null,\"keep_on\":false,\"asleep_after_outside_quiet_s\":1800,\"camera_unknown_grace_s\":120},\"decision\":{\"action\":\"none\",\"reason\":\"holdoff:input\",\"evidence\":{\"presence\":\"present\",\"confidence\":0.85,\"held_s\":38.5,\"eye_enabled\":false,\"display_on\":true,\"perception_age_s\":null,\"quiet_hours\":\"unset\",\"holdoff_until\":\"2026-09-09T13:31:24.960307+00:00\"}},\"holdoffs\":{\"input\":\"2026-09-09T13:31:24.960307Z\"},\"display\":\"on\",\"pending_display_test_at\":null}"
+                   },
+                   {
+                       "section":  "alarm",
+                       "name":  "desktop.alarm_arm.accepted_the_instant",
+                       "ok":  true,
+                       "detail":  "fire_at=2026-09-09T14:22:03.3964160+00:00 armed_count=1"
+                   },
+                   {
+                       "section":  "alarm",
+                       "name":  "desktop.activity_status.saw_the_alarm_the_arm_registered",
+                       "ok":  true,
+                       "detail":  "armed_alarms 0 -\u003e 1, next_alarm_at=2026-09-09T14:23:03.3964160+00:00"
+                   },
+                   {
+                       "section":  "alarm",
+                       "name":  "arming_made_no_sound",
+                       "ok":  true,
+                       "detail":  "alarm_ringing=False throughout"
+                   },
+                   {
+                       "section":  "alarm",
+                       "name":  "desktop.alarm_disarm.left_the_device_as_it_found_it",
+                       "ok":  true,
+                       "detail":  "armed_alarms back to 0 (was 0 before this run)"
+                   }
+               ],
+    "ready_for_owner":  [
+                            {
+                                "section":  "paint",
+                                "what":  "the visual confirmation that Paint shows the exported image",
+                                "why":  "only a person can see what is on the screen",
+                                "harness":  "look at the Paint window, or docs/evidence/m27-paint-lab-*.json"
+                            },
+                            {
+                                "section":  "ambient",
+                                "what":  "displays actually going dark, and one keypress waking them",
+                                "why":  "only a person can see a blank screen and press a key; this script never darkens a display",
+                                "harness":  "scripts\\core\\owner-m18-3-display.ps1 (arms the real receipt through POST /v1/ambient/test-display and warns first)"
+                            },
+                            {
+                                "section":  "alarm",
+                                "what":  "an alarm actually ringing, and the wake music",
+                                "why":  "only a person can hear it; this script never issues desktop.alarm_start or desktop.play_audio",
+                                "harness":  "scripts\\core\\owner-m18-3-alarm.ps1 -MusicUrl \u003cyour song\u003e (creates a \"test\" alarm through Cloud Core and warns first)"
+                            },
+                            {
+                                "section":  "alarm",
+                                "what":  "desktop.play_audio on the real render endpoint",
+                                "why":  "it needs a WAV served from the dialled broker origin with its sha256; level:0 is the silent lever if a later run wants it",
+                                "harness":  "scripts\\core\\owner-m18-3-alarm.ps1"
+                            }
+                        ],
+    "blocked":  [
+                    {
+                        "section":  "operator",
+                        "name":  "window.activate.read_back_by_window_current",
+                        "detail":  "another application holds the foreground and Windows will not let it be taken: searchapp.exe \"Arama\" pid=10344. The device refused correctly and named it; nothing here is a statement about window.activate."
+                    },
+                    {
+                        "section":  "operator",
+                        "name":  "keyboard.type.changed_the_document_the_title_reports",
+                        "detail":  "not attempted: searchapp.exe \"Arama\" pid=10344 holds the foreground, and typing into a window that is not in front is exactly what the operator\u0027s focus guard refuses. Nothing was sent, which is correct."
+                    }
+                ],
+    "verdict":  "FAILED",
+    "finished_at":  "2026-09-09T13:22:06.8321062Z"
+}
