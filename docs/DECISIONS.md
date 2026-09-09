@@ -8058,6 +8058,68 @@ owner's machine, is the staged update's safety property: a candidate that fails 
 for *any* reason — including a defect in the verifier itself — leaves the owner on a working
 agent, with all three trees restored and the journal saying so.
 
+**Addendum to Decision 4 (2026-09-09, same day) — the same lesson, the second guard.**
+Decision 4 fixed one hand-typed file list. It did not go looking for the others, and there was
+another: `scripts/tests/installer-strictmode.tests.ps1` lints for bare `$x.Count` — the class
+where reading `.Count` on `$null` or on a scalar throws under `Set-StrictMode -Version Latest`
+— over a list of exactly **six** files typed by hand. Sixteen of the nineteen libraries in
+`scripts/lib` were never linted, `AgentUpdate.ps1` among them: the same file that Decision 4
+found unguarded, unguarded a second time by a second guard, for a different defect class, on
+the same day. The list is now read from disk exactly as Decision 4's is — the three installer
+scripts plus every `scripts/lib/*.ps1`, 22 files today — and a new test asserts that the
+enumeration happened, so an empty list cannot pass as a clean one.
+
+Widening it exposed **22 bare reads**: `VoiceShell.ps1` 15, `AgentUpdate.ps1` 6,
+`BrowserSmokeEvidence.ps1` 1. Twenty were the ordinary fix, `@($x).Count`. The other two are
+the reason this is written down rather than merely done:
+
+* **Two were maps, where the guard's own remedy is wrong.** `AgentUpdate.ps1` reads `.Count`
+  on a tree's file hashes and on a manifest's file map, both `IDictionary`. `@( )` does not
+  enumerate a dictionary, so `@($map).Count` is **1** for a map of any size. Applied
+  mechanically, `file_count` would have become 1 in every candidate manifest, and
+  `if ($expected.Count -eq 0)` — "component lists no file" — would have read `1 -eq 0` and
+  never fired again. The first would have been caught (`agent-update.tests.ps1` asserts
+  `file_count -eq 3`); the second had **no test at all** and would have shipped silently. It
+  has one now. The remedy for a map is `@($map.Keys).Count`, and rather than excluding these
+  sites the lint's failure message now names **both** remedies, so the next person to trip it
+  on a dictionary is not told to write the wrong thing. No exclusion list exists: per
+  Decision 4, a guard that has to be suppressed where the fix lives is a dead guard.
+* **"Wrap the assignment too" is not free, and broke a test while proving it.** Wrapping
+  `$all = Get-ArrayProperty ...` in `@( )` looked like belt-and-braces. But that helper
+  already returns a real array through the `, @( )` idiom, and re-wrapping it turns the empty
+  case into a **one-element array holding `@( )`** — so `Get-SessionRouterSummary` reported a
+  phantom intent instead of "none". `owner-explain.tests.ps1` 14 and 15 caught it. The rule
+  learned: fix the **read**, not the assignment, wherever the producer already guarantees an
+  array. Both traps — `@($map).Count` being 1, and the re-wrap — are now pinned as assertions
+  in the lint's own suite, so a future "simplification" back to either one goes red.
+
+**A third blind spot, found while fixing the second.** The lint could not see `.Count` inside
+an expandable string: `ParseFile`'s top-level token stream does not contain a
+`StringExpandableToken`'s nested tokens, so `"at depth $($stack.Count)"` walked straight past
+a guard whose whole purpose is that read — and one such read was live in
+`BrowserSmokeEvidence.ps1`, **one line below** a read the lint did flag. A guard a `"$( )"`
+evades is not a guard, so the scan now recurses into nested token streams. This was not
+deferred because it turned out to be one line of guard and exactly **one** offender across all
+22 files; a bigger blast radius would have earned its own work item. Its own probe test pins
+both directions — the interpolated read is caught, the remedy and a plain string are not.
+
+Two things fell out of writing it, both worth the ink. The recursion first read `.Kind` off a
+`$null`, because `NestedTokens` is `$null` for a string with nothing to expand and `@($null)`
+is a one-element array holding `$null` — the lint tripping over its own defect class, and the
+second time in one change that `@( )` was mistaken for a null-collapse. And `[array]::IndexOf`,
+used to find each token's neighbours, returns the FIRST equal token, so two `.Count` reads on
+one line resolved to the same position; the walk is indexed positionally now.
+
+**Falsification.** A bare `$Items.Count` added to `scripts/lib/SecretStore.ps1` — a library
+the old six never covered — turns the lint red, naming `SecretStore.ps1:126`, and the suite
+exits 1; removed, 24/24 green. Under the old hand-typed list the same line passes unnoticed.
+An interpolated `$($Items.Count)` added to `scripts/lib/DevBroker.ps1` is caught the same way,
+naming `DevBroker.ps1:104`; under the previous scan it was invisible in every file, the old six
+included. Green after the change: `installer-strictmode` 24/24, `harness-symbols` 65/65,
+`agent-update` 27/27, `core-verifier-scope` 20/20, `owner-harness` 15/15, `owner-explain`
+61/61, `browser-smoke-evidence` 9/9, `script-syntax` 100/100, and `qualify-staged-update.ps1`
+**STAGED UPDATE QUALIFIED: 85 checks passed**.
+
 ## ADR-0098 — A factory that cannot start what it built: `app.launch` and the native root (2026-09-09)
 
 Status: Accepted. Follows ADR-0095 (M28) and ADR-0097 (the install that made this testable at

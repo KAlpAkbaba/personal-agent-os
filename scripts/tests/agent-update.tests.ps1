@@ -70,6 +70,16 @@ try {
     $vFresh = Test-AgentCandidateManifest -Manifest $manifest -StagingRoot $staging
     Assert-True ($vFresh.Ok) "...and against the in-memory manifest too"
 
+    # ADR-0097 Decision 4 addendum (2026-09-09): the installer's .Count lint now reads its file
+    # list from disk, so it covers AgentUpdate.ps1, and this branch reads .Count on a MAP. The
+    # lint's usual remedy - @($expected).Count - is WRONG here: @( ) does not enumerate an
+    # IDictionary, so the test would read `1 -eq 0` and a component listing no file would
+    # qualify silently, unnoticed, because nothing exercised this branch. It does now.
+    $noFiles = Read-AgentCandidateManifest -Path $path
+    $noFiles.components.service.files = [pscustomobject]@{}
+    $vNoFiles = Test-AgentCandidateManifest -Manifest $noFiles -StagingRoot $staging
+    Assert-True (-not $vNoFiles.Ok -and ($vNoFiles.Reasons -join " ") -match "component 'service' lists no file") "a component whose manifest lists no file is refused, and named"
+
     [IO.File]::WriteAllText((Join-Path $staging "service\sub\lib.dll"), "tampered")
     $v2 = Test-AgentCandidateManifest -Manifest $back -StagingRoot $staging
     Assert-True (-not $v2.Ok -and ($v2.Reasons -join " ") -match "service/sub/lib.dll changed since it was staged") "a changed file is refused and named"

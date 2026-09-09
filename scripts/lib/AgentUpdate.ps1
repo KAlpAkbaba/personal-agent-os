@@ -104,7 +104,10 @@ function New-AgentCandidateManifest {
         }
         $hashes = Get-TreeFileHashes -Root $tree
         $componentTable[$component] = [ordered]@{
-            file_count = $hashes.Count
+            # A MAP, so @($hashes).Count would be 1 for a tree of any size, not the file
+            # count. Counting the keys is both the honest read and the one the installer's
+            # .Count lint accepts (scripts\tests\installer-strictmode.tests.ps1).
+            file_count = @($hashes.Keys).Count
             files      = $hashes
         }
     }
@@ -205,7 +208,7 @@ function Test-AgentCandidateManifest {
         if (-not (Get-ManifestMember $Manifest "capability_manifest_version")) { $reasons += "the candidate carries no capability manifest fingerprint" }
     }
     $capabilities = @(Get-ManifestMember $Manifest "capabilities" | ForEach-Object { [string]$_ })
-    if ($capabilities.Count -eq 0) { $reasons += "the candidate advertises no capability" }
+    if (@($capabilities).Count -eq 0) { $reasons += "the candidate advertises no capability" }
     foreach ($required in $RequireCapabilities) {
         if ($capabilities -notcontains $required) { $reasons += "the candidate does not advertise $required" }
     }
@@ -233,7 +236,9 @@ function Test-AgentCandidateManifest {
             continue
         }
         $expected = ConvertTo-StringMap (Get-ManifestMember $entry "files")
-        if ($expected.Count -eq 0) { $reasons += "component '$name' lists no file"; continue }
+        # Keys again, not @($expected): a map never enumerates, so the list remedy would make
+        # this test read `1 -eq 0` and a component listing no file would qualify silently.
+        if (@($expected.Keys).Count -eq 0) { $reasons += "component '$name' lists no file"; continue }
         $actual = ConvertTo-StringMap (Get-TreeFileHashes -Root $tree)
         foreach ($key in ($expected.Keys | Sort-Object)) {
             if (-not $actual.ContainsKey($key)) { $reasons += "$name/$key is in the manifest but missing from staging" }
@@ -448,7 +453,7 @@ function Test-AgentHeartbeatOnCore {
             $caps = @(Get-ManifestMember $row "capabilities" | ForEach-Object { [string]$_ })
             $observed.presence = $presence
             $observed.software_version = $version
-            $observed.capability_count = $caps.Count
+            $observed.capability_count = @($caps).Count
             $observed.last_seen_at = [string](Get-ManifestMember $row "last_seen_at")
             if ($presence -ne "online") { $reasons += "the device is '$presence', not online" }
             if (-not $version) {
@@ -459,10 +464,10 @@ function Test-AgentHeartbeatOnCore {
             }
             elseif ($version -ne $ExpectedVersion) { $reasons += "the device reports software version '$version', the candidate is $ExpectedVersion" }
             $missing = @($ExpectedCapabilities | Where-Object { $caps -notcontains $_ })
-            if ($missing.Count -gt 0) { $reasons += "the device does not advertise: $($missing -join ', ')" }
+            if (@($missing).Count -gt 0) { $reasons += "the device does not advertise: $($missing -join ', ')" }
         }
         $elapsed = ((& $Now) - $started).TotalSeconds
-        if ($reasons.Count -eq 0) {
+        if (@($reasons).Count -eq 0) {
             return [pscustomobject]@{ Ok = $true; VerifierFault = $false; Reasons = @(); Observed = $observed; Waited = [math]::Round($elapsed, 1); Attempts = $attempt }
         }
         if ($elapsed -ge $TimeoutSeconds) {

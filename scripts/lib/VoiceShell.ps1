@@ -149,7 +149,7 @@ function Get-ListeningProcess {
     param([Parameter(Mandatory = $true)][int]$Port)
     $conn = $null
     try { $conn = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) } catch { $conn = @() }
-    if ($conn.Count -eq 0) { return $null }
+    if (@($conn).Count -eq 0) { return $null }
     $owner = [int]$conn[0].OwningProcess
     $proc = $null
     try { $proc = Get-Process -Id $owner -ErrorAction SilentlyContinue } catch { $proc = $null }
@@ -252,7 +252,7 @@ function Select-QualificationSession {
         $selId = [string]$selSession.session_id
         if (-not $selId) { continue }
         $selKind = [string]$selSession.client_kind
-        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains $selKind) { continue }
+        if (@($ClientKinds).Count -gt 0 -and $ClientKinds -notcontains $selKind) { continue }
         $selStarted = ConvertTo-SessionInstant -Raw ([string]$selSession.started_at)
         if ($null -eq $selStarted) { continue }
         $selAccepted = ($AcceptIds -contains $selId)
@@ -303,7 +303,7 @@ function Test-ExplainQualification {
     # the string comparison would match nothing (owner-explain.tests.ps1 caught it).
     $calls = Get-SucceededToolCalls -Activity $Activity
     $explained = @($calls | Where-Object { [string]$_.name -eq "activity.explain" })
-    return ($explained.Count -gt 0)
+    return (@($explained).Count -gt 0)
 }
 
 function Get-CoreQualifyingTools {
@@ -322,7 +322,7 @@ function Test-CoreQualification {
     $tools = Get-CoreQualifyingTools
     $calls = Get-SucceededToolCalls -Activity $Activity
     $hits = @($calls | Where-Object { $tools -contains [string]$_.name })
-    return ($hits.Count -gt 0)
+    return (@($hits).Count -gt 0)
 }
 
 function Get-SessionRouterSummary {
@@ -346,15 +346,18 @@ function Get-SessionRouterSummary {
         $intents += ("{0}/{1}" -f (Get-OptionalProperty -InputObject $i -Name "intent"), (Get-OptionalProperty -InputObject $i -Name "klass"))
     }
     $last = "none"
+    # NOT @( Get-ArrayProperty ... ): that helper already returns a real array via `, @( )`,
+    # and wrapping it again nests the empty case into a ONE-element array holding @( ), so
+    # the branch below runs on a phantom intent. Only the .Count reads take the @( ).
     $all = Get-ArrayProperty -InputObject $Activity -Name "intents"
-    if ($all.Count -gt 0) {
-        $i = $all[$all.Count - 1]
+    if (@($all).Count -gt 0) {
+        $i = $all[@($all).Count - 1]
         $last = "{0} klass={1} query_kind={2} capability={3}" -f (Get-OptionalProperty -InputObject $i -Name "intent"), (Get-OptionalProperty -InputObject $i -Name "klass"), (Get-OptionalProperty -InputObject $i -Name "query_kind"), (Get-OptionalProperty -InputObject $i -Name "capability")
     }
     return [pscustomobject]@{
-        ToolCalls = $(if ($calls.Count) { $calls -join ", " } else { "none" })
-        Intents   = $(if ($intents.Count) { $intents -join ", " } else { "none" })
-        Receipts  = $(if ($receipts.Count) { $receipts -join ", " } else { "none" })
+        ToolCalls = $(if (@($calls).Count) { $calls -join ", " } else { "none" })
+        Intents   = $(if (@($intents).Count) { $intents -join ", " } else { "none" })
+        Receipts  = $(if (@($receipts).Count) { $receipts -join ", " } else { "none" })
         LastKind  = $last
     }
 }
@@ -571,12 +574,12 @@ function Wait-QualificationSession {
         }
         $waitNew = Get-NewSessions -Sessions $waitSessions -BaselineIds $BaselineIds -ReadyAt $ReadyAt -AcceptIds $waitAccept
         $waitNewest = $null
-        if ($waitNew.Count -gt 0) {
+        if (@($waitNew).Count -gt 0) {
             $waitSorted = @($waitNew | Sort-Object -Property { ConvertTo-SessionInstant -Raw ([string]$_.started_at) } -Descending)
             $waitNewest = $waitSorted[0]
             if ($null -eq $waitConnectedAt) { $waitConnectedAt = $waitElapsed }
         }
-        if ($ConnectWaitSec -gt 0 -and $waitNew.Count -eq 0 -and $waitElapsed -ge $ConnectWaitSec) {
+        if ($ConnectWaitSec -gt 0 -and @($waitNew).Count -eq 0 -and $waitElapsed -ge $ConnectWaitSec) {
             $waitReason = "no web voice session connected within $ConnectWaitSec s (sessions of this run: 0; connect voice on /core)"
             return [pscustomobject]@{ Selected = $null; Attempts = $waitAttempts; ElapsedSec = $waitElapsed; GaveUp = $waitReason; Progress = $waitProgress }
         }
@@ -622,7 +625,7 @@ function Get-NewSessions {
     foreach ($nsSession in $Sessions) {
         $nsId = [string]$nsSession.session_id
         if (-not $nsId) { continue }
-        if ($ClientKinds.Count -gt 0 -and $ClientKinds -notcontains [string]$nsSession.client_kind) { continue }
+        if (@($ClientKinds).Count -gt 0 -and $ClientKinds -notcontains [string]$nsSession.client_kind) { continue }
         $nsStarted = ConvertTo-SessionInstant -Raw ([string]$nsSession.started_at)
         if ($null -eq $nsStarted) { continue }
         if ($AcceptIds -notcontains $nsId) {
@@ -677,7 +680,7 @@ function Get-EyeReceiptSteps {
         # The receipt stores the trace at its top level (the server clips it there); the
         # client's relay carries it under local. Either, top level first.
         $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $c -Name "action_trace")
-        if ($trace.Count -eq 0 -and $null -ne $local) { $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $local -Name "action_trace") }
+        if (@($trace).Count -eq 0 -and $null -ne $local) { $trace = ConvertTo-Array -Value (Get-OptionalProperty -InputObject $local -Name "action_trace") }
         $receipts += [pscustomobject]@{
             Name       = $name
             CallId     = [string](Get-OptionalProperty -InputObject $c -Name "call_id")
@@ -695,10 +698,10 @@ function Get-EyeReceiptSteps {
     $satisfied = 0
     $matched = @()
     foreach ($r in $receipts) {
-        if ($satisfied -ge $Expected.Count) { break }
+        if ($satisfied -ge @($Expected).Count) { break }
         if ($r.Name -eq $Expected[$satisfied] -and $r.Terminal -eq "verified") { $matched += $r; $satisfied++ }
     }
-    return [pscustomobject]@{ Receipts = $receipts; Satisfied = $satisfied; Matched = $matched; Expected = $Expected; Done = ($satisfied -ge $Expected.Count) }
+    return [pscustomobject]@{ Receipts = $receipts; Satisfied = $satisfied; Matched = $matched; Expected = $Expected; Done = ($satisfied -ge @($Expected).Count) }
 }
 
 function Test-HiddenEyeMutation {

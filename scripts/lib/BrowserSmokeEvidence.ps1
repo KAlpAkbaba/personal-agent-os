@@ -150,8 +150,8 @@ function Test-EvidenceKeysUnique {
             '{' { $stack.Push((New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::Ordinal))) }
             '}' { [void]$stack.Pop() }
             ':' {
-                if ($stack.Count -gt 0 -and $null -ne $lastString) {
-                    if (-not $stack.Peek().Add($lastString)) { throw "duplicate evidence key '$lastString' at depth $($stack.Count)" }
+                if (@($stack).Count -gt 0 -and $null -ne $lastString) {
+                    if (-not $stack.Peek().Add($lastString)) { throw "duplicate evidence key '$lastString' at depth $(@($stack).Count)" }
                 }
             }
         }
