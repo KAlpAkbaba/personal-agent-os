@@ -75,7 +75,8 @@ describe("event reporting shape", () => {
     const posted: ClientEvent[][] = [];
     let fail = true;
     const reporter = new EventReporter(
-      async (events) => {
+      "sess-A",
+      async (_sessionId, events) => {
         if (fail) throw new Error("network");
         posted.push(events);
         return okResponse(events);
@@ -104,7 +105,8 @@ describe("event reporting shape", () => {
     const scheduler = new FakeScheduler();
     const sizes: number[] = [];
     const reporter = new EventReporter(
-      async (events) => {
+      "sess-A",
+      async (_sessionId, events) => {
         sizes.push(events.length);
         return okResponse(events);
       },
@@ -129,7 +131,8 @@ describe("event reporting shape", () => {
       at: "2026-09-02T00:00:00Z",
     };
     const reporter = new EventReporter(
-      async (events) => okResponse(events, [frame]),
+      "sess-A",
+      async (_sessionId, events) => okResponse(events, [frame]),
       scheduler.now,
       { flushIntervalMs: 10, scheduler },
     );

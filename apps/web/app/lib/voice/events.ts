@@ -34,7 +34,23 @@ export type ReportInput = {
   text?: string;
 };
 
-export type EventsPoster = (events: ClientEvent[]) => Promise<EventsResponse>;
+/**
+ * The reporter hands its OWN session id to the poster.
+ *
+ * It used to take only the events, and `VoiceController`'s closure read
+ * `this.sessionId` at SEND time - so a reporter belonging to a dead session would post
+ * its stale queue into whatever session happened to be current. Passing the id the
+ * reporter was built for makes that structurally impossible rather than merely unlikely.
+ */
+export type EventsPoster = (sessionId: string, events: ClientEvent[]) => Promise<EventsResponse>;
+
+/** Why a reporter stopped. All three are terminal; none of them ever sends again. */
+export type ReporterEndReason = "gone" | "closed" | "superseded" | "exhausted";
+
+/** Bounded retries for an ordinary transient failure, so nothing loops for ever. */
+export const MAX_TRANSIENT_ATTEMPTS = 5;
+/** Bounded backoff for a genuine 429, used only when the server sends no Retry-After. */
+export const RATE_LIMIT_BACKOFF_MS = [1_000, 4_000, 15_000] as const;
 
 export type Scheduler = {
   setTimeout(fn: () => void, ms: number): unknown;
@@ -124,6 +140,14 @@ export class EventReporter {
   private queue: ClientEvent[] = [];
   private timer: unknown = null;
   private flushing: Promise<EventsResponse | null> | null = null;
+  /** Set once, never cleared. A reporter that has ended never sends again. */
+  private endedReason: ReporterEndReason | null = null;
+  /** True while failure sinks run: a sink's own `report()` must not re-arm the timer. */
+  private notifyingFailure = false;
+  private transientAttempts = 0;
+  private rateLimitAttempts = 0;
+  /** The delay the next arm should use, set by the failure branch that decided it. */
+  private nextDelayMs: number | null = null;
   private sidebandSinks = new Set<(frame: SidebandFrame) => void>();
   private responseSinks = new Set<(response: EventsResponse) => void>();
   private failureSinks = new Set<(error: unknown) => void>();
@@ -131,6 +155,7 @@ export class EventReporter {
   accepted = 0;
 
   constructor(
+    private readonly sessionId: string,
     private readonly post: EventsPoster,
     private readonly now: () => number,
     private readonly options: { flushIntervalMs: number; scheduler?: Scheduler } = {
@@ -157,17 +182,67 @@ export class EventReporter {
     return () => this.failureSinks.delete(sink);
   }
 
+  /** The session this reporter is bound to, for the whole of its life. */
+  get session(): string {
+    return this.sessionId;
+  }
+
+  /** True once this reporter has ended. It will never send again. */
+  get ended(): boolean {
+    return this.endedReason !== null;
+  }
+
+  get endReason(): ReporterEndReason | null {
+    return this.endedReason;
+  }
+
+  /**
+   * End this reporter, terminally.
+   *
+   * The queue is DROPPED rather than kept: every one of these reasons means the events
+   * cannot be delivered where they belong, and the one thing worse than losing telemetry
+   * is posting one conversation's events into another (M18.2's own rule that a session is
+   * the unit of correlation). `dispose()` used to clear only the timer and leave both the
+   * queue and the ability to send, which is what let a dead session keep talking.
+   */
+  end(reason: ReporterEndReason): void {
+    if (this.endedReason !== null) return;
+    this.endedReason = reason;
+    this.queue = [];
+    if (this.timer !== null) {
+      this.scheduler.clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+
   /** Queue one event; returns the shaped event (its t_ms is what was recorded). */
   report(input: ReportInput): ClientEvent {
     const event = buildClientEvent(input, this.now());
+    // Ended: shape it (callers read the return value) but never queue or schedule.
+    if (this.endedReason !== null) return event;
     this.queue.push(event);
-    if (this.timer === null) {
-      this.timer = this.scheduler.setTimeout(() => {
-        this.timer = null;
-        void this.flush();
-      }, this.options.flushIntervalMs);
-    }
+    // While failure sinks are running, a sink's own report() must not re-arm the timer:
+    // that is the recursion the 2026-09-09 incident rode. The event is queued and will go
+    // out with the next legitimate flush, if this reporter is still alive by then.
+    if (this.timer === null && !this.notifyingFailure) this.arm(this.options.flushIntervalMs);
     return event;
+  }
+
+  private arm(delayMs: number): void {
+    if (this.endedReason !== null || this.timer !== null) return;
+    this.timer = this.scheduler.setTimeout(() => {
+      this.timer = null;
+      void this.flush();
+    }, delayMs);
+  }
+
+  private notifyFailure(error: unknown): void {
+    this.notifyingFailure = true;
+    try {
+      for (const sink of this.failureSinks) sink(error);
+    } finally {
+      this.notifyingFailure = false;
+    }
   }
 
   get pending(): number {
@@ -176,6 +251,7 @@ export class EventReporter {
 
   /** Send everything queued. Never throws; a failed batch stays queued. */
   flush(): Promise<EventsResponse | null> {
+    if (this.endedReason !== null) return Promise.resolve(null);
     // A flush already on the wire: run again after it, so anything queued
     // since then is delivered too (not just the batch already in flight).
     if (this.flushing) return this.flushing.then(() => this.flush());
@@ -185,9 +261,11 @@ export class EventReporter {
     }
     if (this.queue.length === 0) return Promise.resolve(null);
     const batch = this.queue.slice(0, MAX_EVENTS_PER_REQUEST);
-    this.flushing = this.post(batch)
+    this.flushing = this.post(this.sessionId, batch)
       .then((response) => {
         this.queue = this.queue.slice(batch.length);
+        this.transientAttempts = 0;
+        this.rateLimitAttempts = 0;
         this.accepted += response.accepted;
         for (const frame of response.pending_sideband ?? []) {
           for (const sink of this.sidebandSinks) sink(frame);
@@ -196,26 +274,76 @@ export class EventReporter {
         return response;
       })
       .catch((error: unknown) => {
-        for (const sink of this.failureSinks) sink(error);
+        const status = statusOf(error);
+        // 410 GONE is terminal for this session, and it is decided BEFORE the sinks run:
+        // whatever a sink does - including reporting the failure, which is what the
+        // controller used to do - it cannot revive an ended reporter.
+        if (status === 410) {
+          this.end("gone");
+        } else if (status === 429) {
+          this.rateLimitAttempts += 1;
+          if (this.rateLimitAttempts > RATE_LIMIT_BACKOFF_MS.length) this.end("exhausted");
+          else this.nextDelayMs = retryAfterMs(error) ?? RATE_LIMIT_BACKOFF_MS[this.rateLimitAttempts - 1];
+        } else {
+          this.transientAttempts += 1;
+          if (this.transientAttempts >= MAX_TRANSIENT_ATTEMPTS) this.end("exhausted");
+          else this.nextDelayMs = this.options.flushIntervalMs;
+        }
+        this.notifyFailure(error);
         return null;
       })
       .finally(() => {
         this.flushing = null;
-        if (this.queue.length > 0 && this.timer === null) {
-          this.timer = this.scheduler.setTimeout(() => {
-            this.timer = null;
-            void this.flush();
-          }, this.options.flushIntervalMs);
-        }
+        const delay = this.nextDelayMs ?? this.options.flushIntervalMs;
+        this.nextDelayMs = null;
+        if (this.endedReason === null && this.queue.length > 0) this.arm(delay);
       });
     return this.flushing;
   }
 
-  /** Stop the timer; queued events stay for an explicit final flush. */
+  /**
+   * End this reporter because its session is closing normally.
+   *
+   * Kept as `dispose()` for its callers, but it is now TERMINAL: it used to clear only the
+   * timer and leave the queue and the ability to send, so a delayed callback that fired
+   * after a successful close still posted to a closed session (the race the incident's
+   * §7 names). Flush before disposing if the final batch matters - `VoiceController.close`
+   * does exactly that.
+   */
   dispose(): void {
-    if (this.timer !== null) {
-      this.scheduler.clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this.end("closed");
   }
+}
+
+/**
+ * The HTTP status behind a rejection, or `null` when it was not an HTTP failure.
+ *
+ * Deliberately duck-typed rather than importing `VoiceApiError`: this module is the one
+ * `app/lib/voice/api.ts` posts THROUGH, and importing the error class back would be a
+ * cycle. A network failure has no status and is treated as transient, which is right - the
+ * browser will say when it is back.
+ */
+export function statusOf(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
+/**
+ * `Retry-After` in milliseconds, when the server sent one we can trust.
+ *
+ * Honoured over our own backoff because the server knows its own window. Seconds and
+ * HTTP-date forms are both accepted; anything else, or a value outside a sane bound, falls
+ * through to the local schedule rather than letting a header park the client for an hour.
+ */
+export function retryAfterMs(error: unknown, nowMs: number = Date.now()): number | null {
+  if (typeof error !== "object" || error === null) return null;
+  const raw = (error as { retryAfter?: unknown }).retryAfter;
+  if (raw === undefined || raw === null) return null;
+  const text = String(raw).trim();
+  if (text === "") return null;
+  const seconds = Number(text);
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(text) - nowMs;
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  return Math.min(ms, 60_000);
 }

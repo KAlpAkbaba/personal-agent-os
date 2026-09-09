@@ -83,6 +83,14 @@ export class VoiceApiError extends Error {
     readonly status: number,
     readonly path: string,
     readonly detail: unknown,
+    /**
+     * The server's `Retry-After` header, verbatim, when it sent one.
+     *
+     * `EventReporter` prefers it over its own backoff on a 429: the server knows the
+     * shape of its own window and we do not. Optional because most failures have no
+     * such header, and because every existing caller predates it.
+     */
+    readonly retryAfter: string | null = null,
   ) {
     super(`${path}: HTTP ${status}`);
     this.name = "VoiceApiError";
@@ -222,7 +230,12 @@ export class VoiceSessionApi {
       } catch {
         /* no body */
       }
-      const error = new VoiceApiError(response.status, path, detail);
+      const error = new VoiceApiError(
+        response.status,
+        path,
+        detail,
+        response.headers?.get("Retry-After") ?? null,
+      );
       this.record({ ...meta, status: response.status, ok: false, detail: error.lines, error: null });
       throw error;
     }

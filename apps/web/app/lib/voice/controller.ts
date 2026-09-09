@@ -559,6 +559,10 @@ export class VoiceSessionController {
   // reconnect
   private reattachAttempts = 0;
   private reattachTimer: unknown = null;
+  /** The reconnect series currently running, so a second trigger joins it. */
+  private reattachRun: Promise<void> | null = null;
+  /** The `POST .../attach` currently on the wire, so callers share one request. */
+  private attachInFlight: Promise<void> | null = null;
 
   // continuity
   private recentLines: string[] = [];
@@ -737,12 +741,18 @@ export class VoiceSessionController {
       this.fail(`Oturum oluşturulamadı: ${describe(error)}`, linesOf(error));
       return;
     }
+    // A new session supersedes the old one ATOMICALLY: the previous reporter is ended
+    // before the new one exists, so no timer, no in-flight retry and no queued event from
+    // the old conversation can outlive it. This used to just overwrite the field, leaving
+    // the old reporter's timer running - and because its poster read `this.sessionId` at
+    // SEND time, its stale queue would have gone into the NEW session.
+    this.reporter?.end("superseded");
     this.sessionId = payload.session_id;
     this.reporter = new EventReporter(
-      (events) => {
-        if (!this.sessionId) return Promise.reject(new Error("no session"));
-        return this.deps.api.events(this.sessionId, events);
-      },
+      payload.session_id,
+      // The id comes from the reporter, not from `this`: a reporter can only ever post to
+      // the session it was built for.
+      (sessionId, events) => this.deps.api.events(sessionId, events),
       () => this.now(),
       { flushIntervalMs: this.deps.flushIntervalMs ?? 250, scheduler: this.scheduler },
     );
@@ -920,8 +930,24 @@ export class VoiceSessionController {
     }
   }
 
-  private fail(message: string, lines: string[] = []): void {
+  /**
+   * Put the controller in its error state and, where it is safe, tell the server.
+   *
+   * `viaReporter: false` is the whole point. On 2026-09-09 this method was reached FROM
+   * `onReportFailure`, and its last line reported the failure through the very reporter
+   * whose POST had just failed - pushing another event onto the queue that had failed to
+   * drain, which re-armed the flush timer, which POSTed again, which failed again. One
+   * request per flush interval against a session the server had already declared gone,
+   * until the rate limiter answered 429 and `/core` said `connect_failed`.
+   *
+   * The reporter now refuses to be revived on its own account, so this is the second wall
+   * rather than the only one - but a failure in the telemetry channel must not be
+   * announced through that same channel, and saying so here makes the rule visible where
+   * someone would otherwise reintroduce it.
+   */
+  private fail(message: string, lines: string[] = [], { viaReporter = true } = {}): void {
     this.patch({ state: "error", lastError: message, lastErrorLines: lines });
+    if (!viaReporter) return;
     this.reporter?.report({ kind: "error", payload: { error_class: "client_error", message } });
   }
 
@@ -2315,7 +2341,24 @@ export class VoiceSessionController {
     if (this.deps.network.online) void this.reattachLoop();
   }
 
-  private async reattachLoop(): Promise<void> {
+  /**
+   * Run the reconnect series, or join the one already running.
+   *
+   * Three things decide a reconnect is needed - the backoff timer, a network-lost, and
+   * the network coming back - and before this guard each of them started its own series,
+   * with its own attach in flight and its own attempt count. A flapping network produced
+   * a burst of concurrent attaches; §6 of the 2026-09-09 report calls for exactly one.
+   */
+  private reattachLoop(): Promise<void> {
+    if (this.reattachRun) return this.reattachRun;
+    const run = this.runReattachLoop().finally(() => {
+      this.reattachRun = null;
+    });
+    this.reattachRun = run;
+    return run;
+  }
+
+  private async runReattachLoop(): Promise<void> {
     const policy = this.deps.reattach ?? { maxAttempts: 5, baseDelayMs: 500 };
     try {
       await this.reattach();
@@ -2340,8 +2383,23 @@ export class VoiceSessionController {
     }
   }
 
-  /** `POST .../attach`: fresh credential, replayed sideband, new media leg. */
-  private async reattach(): Promise<void> {
+  /**
+   * `POST .../attach`: fresh credential, replayed sideband, new media leg.
+   *
+   * Single-flight. A tool relay that meets a stale leg and a reconnect series can both
+   * want an attach at the same instant; they share the one on the wire rather than
+   * minting two credentials and moving the leg twice.
+   */
+  private reattach(): Promise<void> {
+    if (this.attachInFlight) return this.attachInFlight;
+    const run = this.runAttach().finally(() => {
+      this.attachInFlight = null;
+    });
+    this.attachInFlight = run;
+    return run;
+  }
+
+  private async runAttach(): Promise<void> {
     if (!this.sessionId || !this.reporter) throw new Error("no session");
     const payload = await this.deps.api.attach(this.sessionId, { transport: this.descriptor?.kind });
     this.log("api.attach");
@@ -2365,9 +2423,17 @@ export class VoiceSessionController {
     if (this.closing) return;
     if (error instanceof VoiceApiError) {
       if (error.gone) {
-        this.fail("Oturum sunucuda kapanmış.");
+        // Terminal. The reporter has already ended itself on the 410; this records the
+        // state for the owner WITHOUT going back through the channel that just failed.
+        this.fail("Oturum sunucuda kapanmış.", [], { viaReporter: false });
         this.teardownLeg("gone");
         this.patch({ state: "closed" });
+        return;
+      }
+      if (error.status === 429) {
+        // The reporter backs off on its own (bounded, honouring Retry-After). Say so, and
+        // do NOT reconnect: a reconnect storm is what made this a 429 in the first place.
+        this.patch({ lastError: "Sunucu hız sınırı uyguluyor; bekleniyor." });
         return;
       }
       if (error.legMismatch && this.snapshot.state !== "reconnecting") {
