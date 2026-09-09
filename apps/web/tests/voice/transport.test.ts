@@ -389,6 +389,35 @@ describe("WebRTC transport", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("carries the provider's own reason, not just the status", async () => {
+    // The owner's screen read "SDP exchange failed: HTTP 429" for a day. A 429 from a realtime
+    // provider is either "slow down" or "you have no quota left", and those ask opposite
+    // things of the owner. The provider says which; the client was throwing it away.
+    const pc = new FakePeerConnection();
+    const transport = new WebRtcTransport({
+      peerConnectionFactory: () => pc as unknown as RTCPeerConnection,
+      fetchImpl: (async () =>
+        new Response(
+          [
+            "{",
+            '  "error": {',
+            '    "message": "You exceeded your current quota.",',
+            '    "type": "insufficient_quota"',
+            "  }",
+            "}",
+          ].join("\n"),
+          { status: 429 },
+        )) as unknown as typeof fetch,
+    });
+
+    await expect(transport.connect(descriptor, credential)).rejects.toThrow(/HTTP 429/);
+    await expect(transport.connect(descriptor, credential)).rejects.toThrow(/insufficient_quota/);
+    // Bounded and on one line: an error body is the provider's, and it goes on a screen.
+    const error = await transport.connect(descriptor, credential).catch((e: Error) => e);
+    expect((error as Error).message.length).toBeLessThan(400);
+    expect((error as Error).message).not.toContain("\n");
+  });
+
   it("uses multipart with the server-provided session config when asked", async () => {
     const pc = new FakePeerConnection();
     let body: FormData | null = null;

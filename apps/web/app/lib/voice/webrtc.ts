@@ -189,7 +189,24 @@ export class WebRtcTransport implements RealtimeTransport {
       body,
     });
     if (!response.ok) {
-      throw new Error(`SDP exchange failed: HTTP ${response.status}`);
+      // The STATUS alone is not actionable. A 429 from a realtime provider is either
+      // "slow down" or "you have no quota left", and those ask opposite things of the owner:
+      // wait, or buy credits. The provider says which in the body, so a bounded excerpt of it
+      // travels with the status - the owner's screen read "SDP exchange failed: HTTP 429" for
+      // an entire day without ever saying which one it was.
+      //
+      // Bounded and inert: the body of an error response from an SDP endpoint is the
+      // provider's own diagnostic JSON. Nothing this client holds is echoed back into it, and
+      // the credential travels in a header, never in a body the provider returns.
+      let detail = "";
+      try {
+        detail = (await response.text()).replace(/\s+/g, " ").trim().slice(0, 300);
+      } catch {
+        /* a body we cannot read is not worth failing differently for */
+      }
+      throw new Error(
+        `SDP exchange failed: HTTP ${response.status}${detail ? ` - ${detail}` : ""}`,
+      );
     }
     return await response.text();
   }
