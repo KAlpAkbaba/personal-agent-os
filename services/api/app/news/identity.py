@@ -21,7 +21,10 @@ from dataclasses import dataclass
 from typing import Final
 from urllib.parse import urlparse
 
+from app.logging import get_logger
 from app.news.provider import CHANNEL_ID_RE, looks_like_channel_id
+
+logger = get_logger("app.news.identity")
 
 RESOLVED_BY_DIRECT_ID = "direct_id"
 RESOLVED_BY_CHANNEL_URL = "channel_url"
@@ -99,12 +102,26 @@ def resolve_channel_identity(
         return None
     try:
         html = fetch_page(text if "://" in text else f"https://{text}")  # type: ignore[operator]
-    except Exception:
+    except Exception as exc:
+        # Still `None` - an unresolved identity is an unresolved identity, and this module
+        # will not invent one. But the REASON is no longer lost: configuring the owner's
+        # own source produced `needs_identity` with nothing to act on, because a consent
+        # wall, a network failure and a page with no canonical link all arrived here as the
+        # same silent `None`. They are different things to be told.
+        logger.warning(
+            "news_channel_identity_lookup_failed",
+            reason=f"{type(exc).__name__}: {exc}"[:300],
+        )
         return None
     if not isinstance(html, str):
         return None
     match = _CANONICAL_LINK_RE.search(html) or _CHANNEL_ID_META_RE.search(html)
     if match is None:
+        logger.warning(
+            "news_channel_identity_not_in_page",
+            reason="the page carried no canonical channel link and no channel-id meta tag",
+            bytes=len(html),
+        )
         return None
     return ChannelIdentity(match.group(1), RESOLVED_BY_PROVIDER_LOOKUP)
 

@@ -19,6 +19,7 @@ It is deliberately small and deliberately suspicious:
 
 from __future__ import annotations
 
+import re
 from typing import Final
 
 from app.logging import get_logger
@@ -36,6 +37,39 @@ USER_AGENT: Final = "PersonalAgentOS/1.0 (owner-configured news source identity 
 
 class PageFetchError(RuntimeError):
     """The page could not be fetched, for a reason worth telling the owner."""
+
+
+class ConsentWallError(PageFetchError):
+    """YouTube served a consent interstitial instead of the page.
+
+    Measured 2026-09-09 from the Cloud Core in Hetzner NBG1: the channel page came back as
+    34 KB titled "Bevor Sie zu YouTube weitergehen" - the EU consent form - where the
+    owner's own machine received 2.1 MB of channel. This is its own error class because it
+    has its own ANSWER: the owner can paste a `/channel/UC...` URL, which needs no fetch at
+    all. It is never bypassed - not with a CONSENT cookie, not with a browser User-Agent -
+    which is both this project's rule and the M26 spec's own words about consent walls.
+    """
+
+
+#: Markers of the interstitial, in the languages the datacentre's region can serve it in.
+#: Matched against the TITLE only, so a channel whose description happens to discuss
+#: cookies is not mistaken for a consent wall.
+_CONSENT_TITLE_MARKERS: Final[tuple[str, ...]] = (
+    "before you continue",
+    "bevor sie zu youtube weitergehen",
+    "avant de continuer",
+    "antes de continuar",
+    "prima di continuare",
+    "youtube'a devam etmeden",
+)
+
+
+def _looks_like_consent_wall(html: str) -> bool:
+    match = re.search(r"<title[^>]*>(.*?)</title>", html, re.S | re.I)
+    if match is None:
+        return False
+    title = " ".join(match.group(1).split()).casefold()
+    return any(marker in title for marker in _CONSENT_TITLE_MARKERS)
 
 
 def fetch_channel_page(url: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> str:
@@ -75,11 +109,20 @@ def fetch_channel_page(url: str, *, timeout_s: float = DEFAULT_TIMEOUT_S) -> str
     except httpx.HTTPError as exc:
         raise PageFetchError(f"channel page request failed: {exc}") from exc
 
-    return body.decode("utf-8", errors="replace")
+    html = body.decode("utf-8", errors="replace")
+    if _looks_like_consent_wall(html):
+        logger.warning("news_channel_page_consent_wall", url=url[:120], bytes=len(body))
+        raise ConsentWallError(
+            "YouTube served a consent page to this server instead of the channel; it was "
+            "NOT bypassed. Give a https://www.youtube.com/channel/UC... URL instead - the "
+            "id is in the URL and needs no page fetch."
+        )
+    return html
 
 
 __all__ = [
     "DEFAULT_TIMEOUT_S",
+    "ConsentWallError",
     "MAX_PAGE_BYTES",
     "MAX_REDIRECTS",
     "USER_AGENT",
