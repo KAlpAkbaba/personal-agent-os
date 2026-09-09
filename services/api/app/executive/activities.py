@@ -57,7 +57,6 @@ from app.calendar.service import CalendarService
 from app.config import get_settings
 from app.creative3d.models import STATE_APPLIED, STATE_RENDERED, SceneRow, wire_step
 from app.creative3d.service import SceneService
-from app.db import build_engine, build_session_factory
 from app.devices.commands import DeviceCommandClient
 from app.documents.service import DocumentService
 from app.executive.models import (
@@ -147,14 +146,24 @@ class StepError(Exception):
 # services themselves hold no long-lived state beyond a DB engine's connection pool,
 # module docstring) and a plain function is what a test monkeypatches — the identical
 # seam shape ``app.research.activities.get_provider`` already establishes for this
-# codebase. A worker-lifetime shared engine is a later performance pass, not a
-# correctness requirement: every kind below opens and closes its own session per call,
-# exactly like ``app.research.browser_activities`` already does for ITS activities.
+# codebase.
+#
+# This comment used to end "a worker-lifetime shared engine is a later performance
+# pass, not a correctness requirement". Production disagreed, during M26's own
+# runtime verification (run 4f9e50cd, step research.synthesize):
+#
+#     FATAL:  sorry, too many clients already
+#
+# An Engine owns a connection POOL, and one was built per call - here and in
+# ``build_artifact_context`` - so a single executive run opened dozens against one
+# Postgres and never disposed them. The engine is shared per database URL now
+# (``app.artifacts.runtime._shared_engine``); the session per call is unchanged, and
+# that was never the problem.
 
 
 def _session_factory():
-    engine = build_engine(get_settings().database_url)
-    return build_session_factory(engine)
+    factory, _store = build_artifact_context(get_settings())
+    return factory
 
 
 def get_device_action() -> DeviceActionPort:

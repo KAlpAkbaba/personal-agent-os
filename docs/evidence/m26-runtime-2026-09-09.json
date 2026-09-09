@@ -1,35 +1,35 @@
 ﻿{
-    "checked_at":  "2026-09-09T01:30:50Z",
+    "checked_at":  "2026-09-09T01:37:17Z",
     "base_url":  "http://pagentos-core:8001",
     "release":  {
-                    "version":  "824265445a7f5d18e4c3d70bba236b36446cc78f",
-                    "last_known_good":  "5d08c6db0b602cbcfb8736c2b8503ad428e9163d",
+                    "version":  "52d5ddb3e52dc1861a40810670734166db273ab3",
+                    "last_known_good":  "824265445a7f5d18e4c3d70bba236b36446cc78f",
                     "app_version":  "0.1.0",
                     "ui_state":  11,
                     "action":  12,
                     "status":  "ok",
-                    "uptime_s":  80.721334
+                    "uptime_s":  78.226045
                 },
     "news_sources":  [
 
                      ],
     "executive_run":  {
-                          "run":  "ef6d685c-9521-4a7d-b19b-617f5da1512c",
+                          "run":  "4f9e50cd-6677-4841-a8dd-b6e303bdbf36",
                           "state":  "partial",
-                          "done":  4,
+                          "done":  3,
                           "total":  4,
                           "steps":  [
                                         {
                                             "id":  "s1",
                                             "kind":  "research.run",
-                                            "state":  "failed",
-                                            "error_class":  "internal_error"
+                                            "state":  "failed_recoverable",
+                                            "error_class":  "dependency_unavailable"
                                         },
                                         {
                                             "id":  "s2",
                                             "kind":  "research.synthesize",
                                             "state":  "failed",
-                                            "error_class":  "verification_failed"
+                                            "error_class":  "internal_error"
                                         },
                                         {
                                             "id":  "s3",

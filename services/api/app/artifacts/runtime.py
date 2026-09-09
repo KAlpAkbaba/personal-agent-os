@@ -7,6 +7,7 @@ persistence + render-store code is identical in-process and in the worker.
 
 import contextlib
 from collections.abc import Iterator
+from functools import lru_cache
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -79,9 +80,34 @@ class ArtifactRuntime:
         }
 
 
+@lru_cache(maxsize=8)
+def _shared_engine(database_url: str) -> Engine:
+    """ONE engine - and therefore one connection pool - per database URL, per process.
+
+    This used to build a fresh `Engine` on every call, and an Engine holds a pool (5
+    connections plus 10 overflow by default) that nothing here ever disposed. The function
+    is called 27 times across this codebase and more than twenty of those are inside
+    `app/executive/activities.py` - `_prepare`, `_bump_attempt`, `_finalize`,
+    `_recompute_run_progress` and every kind handler each built their own - so ONE
+    executive run opened dozens of pools against one Postgres and kept them.
+
+    Production said so, in the plainest possible words, during M26's runtime verification
+    (run `4f9e50cd`, step `research.synthesize`):
+
+        FATAL:  sorry, too many clients already
+
+    The bound is small (8) on purpose: this is a per-URL cache, not a general one, and in
+    this single-owner system the only URLs are production's and a test's.
+    """
+    return build_engine(database_url)
+
+
 def build_artifact_context(settings: Settings) -> tuple[sessionmaker[Session], S3ObjectStore]:
-    """Session factory + object store for use inside Temporal activities."""
-    engine = build_engine(settings.database_url)
-    factory = build_session_factory(engine)
+    """Session factory + object store for use inside Temporal activities.
+
+    The FACTORY is per call (free - it only binds a name to the engine); the ENGINE is
+    shared, because it owns the connection pool. See `_shared_engine`.
+    """
+    factory = build_session_factory(_shared_engine(settings.database_url))
     store = S3ObjectStore.from_settings(settings)
     return factory, store

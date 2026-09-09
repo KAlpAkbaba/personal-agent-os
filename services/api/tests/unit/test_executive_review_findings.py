@@ -467,3 +467,51 @@ def test_the_heartbeat_interval_leaves_margin_under_the_workflow_bound() -> None
     from app.executive.activities import HEARTBEAT_EVERY_S
 
     assert HEARTBEAT_EVERY_S * 4 <= 90
+
+
+# -------------------- the pool per call that exhausted production's database (live)
+
+
+def test_the_artifact_context_shares_one_engine_per_database_url() -> None:
+    """The M26 runtime verification's third production finding.
+
+    Run `4f9e50cd`, step `research.synthesize`, in the plainest words a database has:
+
+        FATAL:  sorry, too many clients already
+
+    `build_artifact_context` called `create_engine` EVERY time, and an Engine owns a
+    connection pool (5 + 10 overflow) that nothing here ever disposed. It is called 27
+    times across this codebase and more than twenty of those are in
+    `app/executive/activities.py` - `_prepare`, `_bump_attempt`, `_finalize`,
+    `_recompute_run_progress` and every kind handler each built their own. One executive
+    run therefore opened dozens of pools against one Postgres and kept them open.
+
+    The defect predates M26; M26 is simply the first caller to make dozens of these calls
+    inside a single run, which is why production found it here.
+    """
+    from app.artifacts.runtime import build_artifact_context
+    from app.config import get_settings
+
+    settings = get_settings()
+    first, _ = build_artifact_context(settings)
+    second, _ = build_artifact_context(settings)
+
+    assert first.kw["bind"] is second.kw["bind"], (
+        "a fresh Engine per call means a fresh connection pool per call - "
+        "this is how production ran out of clients"
+    )
+
+
+def test_every_executive_activity_goes_through_that_one_context() -> None:
+    """The fix is only worth what it covers. `app/executive/activities.py` must reach the
+    database through `build_artifact_context` and nowhere else - a handler that called
+    `create_engine`/`build_engine` directly would keep the old behaviour and nobody would
+    notice until the next production run."""
+    from pathlib import Path
+
+    from app.executive import activities
+
+    text = Path(activities.__file__).read_text(encoding="utf-8")
+    assert "build_artifact_context" in text
+    assert "create_engine" not in text, "an activity builds its own engine"
+    assert "build_engine" not in text, "an activity builds its own engine"
