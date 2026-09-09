@@ -104,6 +104,44 @@ describe("a listening session carries no stale terminal marker", () => {
     expect(snapshot.lastErrorLines).toEqual([]);
   });
 
+  it("a media leg that never opens does NOT become LISTENING", async () => {
+    // Owner question B. The claim being tested is not "the timeout works" but "the word the
+    // owner reads means the transport the owner needs is usable": a transport whose connect
+    // never succeeds must leave a controlled failure state, not `Dinliyor`.
+    const log: string[] = [];
+    const scheduler = new FakeScheduler();
+    const core = new FakeCloudCore({ transport: "webrtc" });
+    const controller = new VoiceSessionController({
+      api: new VoiceSessionApi(core.fetcher),
+      transportFactory: () => {
+        const transport = new FakeTransport({ log: (op) => log.push(op), now: scheduler.now });
+        // The media leg opens no data channel: exactly the shape of the owner's 15 s failure.
+        transport.connect = async () => {
+          throw new Error("data channel did not open in time");
+        };
+        return transport;
+      },
+      playback: new FakePlayback(scheduler.now, (op) => log.push(op)),
+      network: new FakeNetwork(),
+      microphone: new FakeMicrophone(),
+      localSpeech: new FakeSpeechDetector(),
+      now: scheduler.now,
+      scheduler,
+      flushIntervalMs: 250,
+      reattach: { maxAttempts: 3, baseDelayMs: 100 },
+      log: (op) => log.push(op),
+    });
+
+    await controller.connect();
+    await tick(10);
+
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.state).not.toBe("listening");
+    // ...and the owner is told, in a state the UI can offer a retry from - not a crash.
+    expect(snapshot.lastError).toMatch(/Medya bağlantısı kurulamadı/);
+    expect(snapshot.lastError).toContain("data channel did not open in time");
+  });
+
   it("still shows the failure when the session is genuinely broken", async () => {
     // The fix must not become "never show errors". A session that could NOT recover keeps its
     // marker, because there the marker is the truth.

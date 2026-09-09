@@ -363,6 +363,32 @@ describe("WebRTC transport", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("does not wait for an onopen that has already been and gone", async () => {
+    // Owner question D: can the channel open before the handler is assigned? Today it cannot -
+    // the handler goes on before the SDP exchange - but the code no longer depends on that
+    // ordering staying true, and this is what says so.
+    vi.useFakeTimers();
+    const pc = new FakePeerConnection();
+    pc.createDataChannel = (label: string) => {
+      const channel = new FakeDataChannel(label);
+      channel.readyState = "open"; // already open, and no event will ever fire
+      pc.channels.push(channel);
+      return channel;
+    };
+    const transport = new WebRtcTransport({
+      peerConnectionFactory: () => pc as unknown as RTCPeerConnection,
+      fetchImpl: (async () => new Response("v=0 answer", { status: 200 })) as unknown as typeof fetch,
+      openTimeoutMs: 1_000,
+    });
+    const events: string[] = [];
+    transport.onEvent((e) => events.push(e.type));
+
+    await transport.connect(descriptor, credential);
+
+    expect(events).toEqual(["connected"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("uses multipart with the server-provided session config when asked", async () => {
     const pc = new FakePeerConnection();
     let body: FormData | null = null;

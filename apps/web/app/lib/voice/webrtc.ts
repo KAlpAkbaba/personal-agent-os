@@ -130,6 +130,11 @@ export class WebRtcTransport implements RealtimeTransport {
       };
       channel.onopen = () => settle();
       channel.onerror = () => settle(new Error("data channel error"));
+      // If it is somehow already open, no `onopen` is ever coming and the handler would wait
+      // for an event that has been and gone. Assigning the handler before the SDP exchange
+      // makes this unreachable today; asking the channel what it IS costs one comparison and
+      // does not depend on that ordering staying true.
+      if (channel.readyState === "open") settle();
     });
     // A rejection this promise can reach is ALWAYS observed, whether or not the code below
     // ever got as far as awaiting it. One no-op handler costs nothing and is the difference
