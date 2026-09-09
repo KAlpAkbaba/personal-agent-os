@@ -52,6 +52,25 @@ fingerprint of the superset manifest — never hand-bump it.
   which the old release predates by definition. Without it the log accuses a correct rollback of
   a capability regression.
 
+**A gate that asserts an effect must be shown to fail when the effect is absent (2026-09-09,
+ADR-0096).** `qualify-staged-update.ps1` gate 4 claimed "the browser worker proof was required
+before the commit" while the proof was a counter the health handler incremented on itself, in a
+sandbox that staged only `service` and `companion`. The installer really deploys
+`-Components service,companion,browser -NonExecutableComponents browser`. Gate 4b now falsifies
+the handler on purpose. Two reusable levers found doing it:
+
+- `Test-LiveBrowserWorker` takes `-Processes` (Win32_Process shaped: ProcessId, Name,
+  ExecutablePath, CommandLine, CreationDate), so the live-worker proof is drivable from a script
+  with no python at all. `Get-ExpectedWorkerRelease` needs only a `browser_agent\worker.py` with
+  a `WORKER_VERSION = "x.y.z"` line, and the module path must sit under `<BrowserRoot>\.venv`.
+- **Never nest `.GetNewClosure()` inside a closure.** It copies only the CURRENT scope, so
+  variables living in the enclosing closure's module scope arrive as `$null`. A plain script
+  block keeps the session state and resolves them.
+
+**`[hashtable]` silently copies an `[ordered]` dictionary** bound to it, so a function that
+mutates the parameter mutates a copy. Use `[System.Collections.IDictionary]` for any recorder
+that appends to a caller's ordered dictionary.
+
 **Why:** these are the exact links that were each individually correct while the chain was
 broken, and the arithmetic is what makes an install log readable at a glance.
 
