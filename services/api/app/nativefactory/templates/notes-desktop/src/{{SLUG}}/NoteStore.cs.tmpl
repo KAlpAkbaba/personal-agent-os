@@ -1,0 +1,94 @@
+using System.IO;
+using System.Text;
+using System.Text.Json;
+
+namespace {{NAMESPACE}};
+
+/// <summary>
+/// The notes, and the file they live in. Separated from the window ON PURPOSE: this is the
+/// part with rules, so this is the part with tests, and a headless test run can prove the
+/// persistence the owner will later verify by closing and reopening the window.
+/// </summary>
+public sealed class NoteStore
+{
+    private readonly string _path;
+    private readonly List<string> _notes = new();
+
+    public NoteStore(string path)
+    {
+        _path = path;
+        Load();
+    }
+
+    /// <summary>Where a store keeps its notes when the application does not say.</summary>
+    public static string DefaultPath()
+    {
+        var dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "{{SLUG}}");
+        Directory.CreateDirectory(dir);
+        return Path.Combine(dir, "notes.json");
+    }
+
+    public IReadOnlyList<string> Notes => _notes;
+
+    /// <summary>Add one note. Blank is not a note; a duplicate is allowed (people repeat).</summary>
+    public bool Add(string text)
+    {
+        var trimmed = (text ?? string.Empty).Trim();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        _notes.Add(trimmed);
+        Save();
+        return true;
+    }
+
+    public bool RemoveAt(int index)
+    {
+        if (index < 0 || index >= _notes.Count)
+        {
+            return false;
+        }
+
+        _notes.RemoveAt(index);
+        Save();
+        return true;
+    }
+
+    private void Load()
+    {
+        if (!File.Exists(_path))
+        {
+            return;
+        }
+
+        try
+        {
+            var json = File.ReadAllText(_path, Encoding.UTF8);
+            var loaded = JsonSerializer.Deserialize<List<string>>(json);
+            if (loaded is not null)
+            {
+                _notes.AddRange(loaded);
+            }
+        }
+        catch (Exception)
+        {
+            // A corrupt store is not a crash: the owner keeps a working application and
+            // loses the unreadable file's contents, which is the better of the two.
+        }
+    }
+
+    private void Save()
+    {
+        var directory = Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        File.WriteAllText(_path, JsonSerializer.Serialize(_notes), Encoding.UTF8);
+    }
+}

@@ -1,0 +1,68 @@
+using System.IO;
+
+using Xunit;
+
+using {{NAMESPACE}};
+
+namespace {{NAMESPACE}}.Tests;
+
+public class NoteStoreTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+
+    private string StorePath => Path.Combine(_dir, "notes.json");
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_dir))
+        {
+            Directory.Delete(_dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_note_is_kept()
+    {
+        var store = new NoteStore(StorePath);
+        Assert.True(store.Add("ilk not"));
+        Assert.Equal(new[] { "ilk not" }, store.Notes);
+    }
+
+    [Fact]
+    public void Blank_is_not_a_note()
+    {
+        var store = new NoteStore(StorePath);
+        Assert.False(store.Add("   "));
+        Assert.Empty(store.Notes);
+    }
+
+    [Fact]
+    public void Notes_survive_a_restart()
+    {
+        // The persistence the owner verifies by closing and reopening the window, proven
+        // here without one: a second store over the same file is a restart.
+        new NoteStore(StorePath).Add("kalici not");
+        var reopened = new NoteStore(StorePath);
+        Assert.Equal(new[] { "kalici not" }, reopened.Notes);
+    }
+
+    [Fact]
+    public void Deleting_out_of_range_changes_nothing()
+    {
+        var store = new NoteStore(StorePath);
+        store.Add("bir");
+        Assert.False(store.RemoveAt(7));
+        Assert.False(store.RemoveAt(-1));
+        Assert.Single(store.Notes);
+    }
+
+    [Fact]
+    public void A_corrupt_store_does_not_crash_the_application()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(StorePath, "this is not json");
+        var store = new NoteStore(StorePath);
+        Assert.Empty(store.Notes);
+        Assert.True(store.Add("kurtarildi"));
+    }
+}

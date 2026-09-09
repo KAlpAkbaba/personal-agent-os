@@ -1,0 +1,72 @@
+using System.IO;
+using System.Windows;
+
+namespace {{NAMESPACE}};
+
+public partial class MainWindow : Window
+{
+    private readonly NoteStore _store;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        _store = new NoteStore(NoteStore.DefaultPath());
+        Refresh();
+        Log("started");
+    }
+
+    private void AddButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_store.Add(NoteInput.Text))
+        {
+            NoteInput.Text = string.Empty;
+            Refresh();
+            Log("note added");
+        }
+    }
+
+    private void DeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_store.RemoveAt(NoteList.SelectedIndex))
+        {
+            Refresh();
+            Log("note removed");
+        }
+    }
+
+    private void Refresh()
+    {
+        NoteList.Items.Clear();
+        foreach (var note in _store.Notes)
+        {
+            NoteList.Items.Add(note);
+        }
+
+        // Read by the operator to verify the count WITHOUT counting list items itself.
+        StatusText.Text = $"{_store.Notes.Count} not";
+    }
+
+    /// <summary>
+    /// The application's own log, under its data directory. The M28 lifecycle reads it
+    /// after a run (spec §5), so a crash the owner never saw is still evidence.
+    /// </summary>
+    private static void Log(string message)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(NoteStore.DefaultPath());
+            if (string.IsNullOrEmpty(dir))
+            {
+                return;
+            }
+
+            File.AppendAllText(
+                Path.Combine(dir, "app.log"),
+                $"{DateTime.UtcNow:O} {message}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+            // Logging must never be the reason an application fails to start.
+        }
+    }
+}

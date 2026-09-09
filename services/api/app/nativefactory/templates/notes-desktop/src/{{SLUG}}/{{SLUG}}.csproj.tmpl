@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>{{NAMESPACE}}</RootNamespace>
+    <AssemblyName>{{SLUG}}</AssemblyName>
+    <!-- Read back OUT of the produced binary by app.nativefactory.artifacts. A build
+         that cannot say which build it is cannot be validated against the spec that
+         asked for it. -->
+    <Version>{{VERSION}}</Version>
+    <AssemblyVersion>{{ASSEMBLY_VERSION}}</AssemblyVersion>
+    <FileVersion>{{ASSEMBLY_VERSION}}</FileVersion>
+    <Product>{{TITLE}}</Product>
+    <AssemblyTitle>{{TITLE}}</AssemblyTitle>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>
