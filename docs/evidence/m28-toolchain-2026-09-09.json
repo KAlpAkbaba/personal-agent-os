@@ -1,0 +1,65 @@
+{
+  "kind": "m28_toolchain_detection",
+  "measured_at": "2026-09-09T07:23:15.115119Z",
+  "machine": "the owner's Windows 10 machine",
+  "note": "read-only detection; nothing installed, nothing downloaded",
+  "dotnet": {
+    "path": "C:\\Program Files/dotnet/dotnet.exe",
+    "sdk": "10.0.400",
+    "workloads_raw": "Ä°ÅŸ yÃ¼kÃ¼ sÃ¼rÃ¼mÃ¼: 10.0.400-manifests.330ea142\n\nYÃ¼klÃ¼ Ä°ÅŸ YÃ¼kÃ¼ KimliÄŸi      Bildirim SÃ¼rÃ¼mÃ¼      YÃ¼kleme KaynaÄŸÄ±\n---------------------------------------------------------------\n\nYÃ¼klenecek ek iÅŸ yÃ¼klerini bulmak iÃ§in `dotnet workload search` kullanÄ±n.",
+    "maui_workload": false,
+    "has_wpf": true,
+    "has_winforms": true,
+    "rids_selfcontained_supported": true
+  },
+  "java": {
+    "on_path": null,
+    "JAVA_HOME": null,
+    "version": null,
+    "candidate_dirs": [
+      "C:\\Program Files\\Microsoft\\AzureAttestService",
+      "C:\\Program Files\\Microsoft\\OneDrive"
+    ]
+  },
+  "android": {
+    "root": "C:\\Users\\alpak\\AppData\\Local\\Android\\Sdk",
+    "exists": true,
+    "adb": true,
+    "emulator": true,
+    "cmdline_tools": [],
+    "build_tools": [
+      "30.0.3",
+      "33.0.0"
+    ],
+    "platforms": [
+      "android-32",
+      "android-33"
+    ],
+    "system_images": [
+      "android-23",
+      "android-33"
+    ],
+    "avds": [],
+    "aapt2": "C:\\Users\\alpak\\AppData\\Local\\Android\\Sdk\\build-tools\\33.0.0\\aapt2.exe"
+  },
+  "android_studio": false,
+  "packaging": {
+    "makeappx": "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\makeappx.exe",
+    "signtool": "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\signtool.exe",
+    "inno_setup": false,
+    "wix": false
+  },
+  "other": {
+    "node": "C:\\Program Files/nodejs/node.exe",
+    "cargo": "C:\\Users\\alpak\\.cargo\\bin\\cargo.exe",
+    "flutter": null,
+    "python_pefile": "not importable: ModuleNotFoundError"
+  },
+  "verdict": {
+    "windows_exe": "REAL-capable",
+    "windows_msix": "REAL-capable",
+    "android_build": "GATED on a JDK (owner item 33)",
+    "android_emulator_binaries": true,
+    "ios": "IMPOSSIBLE here (no macOS/Xcode) - classified NOT BUILT, never claimed"
+  }
+}
