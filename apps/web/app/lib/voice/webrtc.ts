@@ -42,6 +42,8 @@ export class WebRtcTransport implements RealtimeTransport {
   private audioSinks = new Set<(output: AudioOutput) => void>();
   private now: () => number = () => performance.now();
   private closed = false;
+  /** Settles the in-flight open promise exactly once; null when none is armed. */
+  private settleOpen: ((error?: Error) => void) | null = null;
   private outbox: unknown[] = [];
 
   constructor(private readonly options: WebRtcTransportOptions = {}) {}
@@ -98,26 +100,60 @@ export class WebRtcTransport implements RealtimeTransport {
     channel.onclose = () => {
       if (!this.closed) this.emit({ type: "disconnected", at: this.now(), reason: "data_channel_closed" });
     };
+    // The open promise is armed HERE because `onopen` can fire before the SDP exchange
+    // returns, and a handler installed afterwards would miss it. What that used to cost is
+    // the reason for everything below: the promise was created with a fifteen-second timer
+    // and only awaited on the LAST line, so every other way out of this method - an SDP
+    // exchange that fails, a `close()` while the handshake is in flight - abandoned it with
+    // the timer still running. Fifteen seconds later the timer rejected a promise nobody was
+    // holding, and an unhandled rejection became the Next runtime overlay on whatever page
+    // the owner had reached by then. On 2026-09-09 that page was /core, which had not asked
+    // for a connection at all.
+    //
+    // So the settle path is owned by the instance and is idempotent: whoever gets there
+    // first - the channel, an error, the timeout, or close() - clears the timer and settles
+    // the promise once. `connect()` cannot return, in either direction, leaving a timer.
+    let settle!: (error?: Error) => void;
     const opened = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(
-        () => reject(new Error("data channel did not open in time")),
+        () => settle(new Error("data channel did not open in time")),
         this.options.openTimeoutMs ?? 15_000,
       );
-      channel.onopen = () => {
+      let done = false;
+      settle = (error?: Error) => {
+        if (done) return;
+        done = true;
         clearTimeout(timeout);
-        resolve();
+        this.settleOpen = null;
+        if (error) reject(error);
+        else resolve();
       };
-      channel.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error("data channel error"));
-      };
+      channel.onopen = () => settle();
+      channel.onerror = () => settle(new Error("data channel error"));
     });
+    // A rejection this promise can reach is ALWAYS observed, whether or not the code below
+    // ever got as far as awaiting it. One no-op handler costs nothing and is the difference
+    // between a transport error and a runtime overlay on a page that asked for nothing; the
+    // real `await` still sees the rejection, because attaching a handler does not consume it.
+    void opened.catch(() => undefined);
+    // close() reaches it through here, so a session torn down mid-handshake ends its caller's
+    // wait immediately instead of leaving it to the timeout.
+    this.settleOpen = settle;
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const answer = await this.exchangeSdp(descriptor, credential, offer.sdp ?? "");
-    await pc.setRemoteDescription({ type: "answer", sdp: answer });
-    await opened;
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const answer = await this.exchangeSdp(descriptor, credential, offer.sdp ?? "");
+      await pc.setRemoteDescription({ type: "answer", sdp: answer });
+      await opened;
+    } catch (error) {
+      // Cancel, do not reject. The caller learns what happened from the `throw` below; if the
+      // handshake failed before `await opened` was reached there is nobody on that promise,
+      // and rejecting it would invent exactly the unobserved rejection this is about. All
+      // that is wanted here is that no timer outlives the call.
+      settle();
+      throw error;
+    }
     for (const message of this.outbox.splice(0)) this.send(message);
     this.emit({ type: "connected", at: this.now() });
   }
@@ -250,6 +286,9 @@ export class WebRtcTransport implements RealtimeTransport {
   close(): void {
     this.closed = true;
     this.outbox = [];
+    // End any handshake still waiting, NOW. Without this the caller's promise had only the
+    // fifteen-second timeout left, and nobody was holding it by then.
+    this.settleOpen?.(new Error("transport closed before the data channel opened"));
     try {
       this.channel?.close();
     } catch {

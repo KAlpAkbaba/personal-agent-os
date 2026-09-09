@@ -674,7 +674,21 @@ export class VoiceSessionController {
   }
 
   private setState(state: VoiceUiState, fsm?: FsmState): void {
-    this.patch({ state });
+    // Arriving at `listening` clears the failure marker, whichever path we arrived by.
+    //
+    // Only `connect()` used to clear it, so a marker written at any other moment outlived its
+    // cause: the owner's screen on 2026-09-09 showed `Dinliyor` and `Oturum sunucuda
+    // kapanmış.` together, and neither line was going to remove the other. A session that is
+    // listening is not a session that failed, and the owner cannot be asked to work out which
+    // of two contradictory statements is current.
+    //
+    // It clears on ARRIVAL rather than on every patch, so a failure recorded about a session
+    // that is broken still stands - see the second test in stale-terminal-state.test.ts.
+    if (state === "listening" && this.snapshot.lastError !== null) {
+      this.patch({ state, lastError: null, lastErrorLines: [] });
+    } else {
+      this.patch({ state });
+    }
     if (fsm && this.reporter) {
       this.reporter.report({ kind: "state", turn: this.snapshot.turn, payload: { state: fsm } });
     }

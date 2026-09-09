@@ -11,7 +11,7 @@
  * v3, or v2) is read normally, because v5 only added.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   DOCUMENT_STATES,
@@ -81,6 +81,18 @@ import {
   resetSequence,
   response,
 } from "./fixtures";
+
+// The sequence counter is module-level, and `truthOf` resets it AFTER its argument list has
+// already been evaluated - JavaScript builds `[DOCUMENT_ANSWERED(...), ...]` before the call.
+// So the reset never applied to the events being passed in; it applied to the NEXT caller's,
+// and every assertion about an absolute `sequence` was really an assertion that the previous
+// test had left the counter at zero. Run in a different order - which `--sequence.shuffle`
+// does - and `expect(sequence).toBe(1)` saw 4.
+//
+// Resetting before each test makes the numbering a property of the test rather than of the
+// file's declaration order. The reset inside `truthOf` stays: it is what lets a single test
+// build two independent truths and have both start at 1.
+beforeEach(resetSequence);
 
 function truthOf(events: ReturnType<typeof event>[], at = T0) {
   resetSequence();

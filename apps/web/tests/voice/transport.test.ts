@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SessionCredential } from "../../app/lib/voice/contract";
 import { dialectFor, knownDialects } from "../../app/lib/voice/dialects";
@@ -254,6 +254,113 @@ describe("WebRTC transport", () => {
     ]);
     transport.close();
     expect(pc.closed).toBe(true);
+  });
+
+  // --------------------------------------------------- the timer that outlived its promise
+  //
+  // The owner's 2026-09-09 report: /voice was connected and LISTENING, and opening /core threw
+  // "data channel did not open in time" into the Next runtime overlay - a page that had not
+  // asked for a connection at all. The overlay is what an UNHANDLED rejection looks like.
+  //
+  // `connect()` arms a 15 s timer and hands its promise to `await opened` at the very END of
+  // the method. Every path that leaves before that line - an SDP exchange that fails, a
+  // `close()` while the handshake is in flight - abandons the promise while its timer is still
+  // running. Fifteen seconds later the timer rejects something nobody is awaiting, on
+  // whichever page happens to be mounted by then.
+  //
+  // So the invariant is stated as one a test can see: when connect() has returned, in EITHER
+  // direction, this transport owns no pending timer.
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("leaves no timer behind when the SDP exchange fails", async () => {
+    vi.useFakeTimers();
+    const pc = new FakePeerConnection();
+    // The channel never opens - the exchange fails first, which is the real ordering.
+    pc.createDataChannel = (label: string) => {
+      const channel = new FakeDataChannel(label);
+      pc.channels.push(channel);
+      return channel;
+    };
+    const transport = new WebRtcTransport({
+      peerConnectionFactory: () => pc as unknown as RTCPeerConnection,
+      fetchImpl: (async () => {
+        throw new Error("network down");
+      }) as unknown as typeof fetch,
+    });
+
+    await expect(transport.connect(descriptor, credential)).rejects.toThrow(/network down/);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("leaves no timer behind when the session is closed mid-handshake", async () => {
+    vi.useFakeTimers();
+    const pc = new FakePeerConnection();
+    pc.createDataChannel = (label: string) => {
+      const channel = new FakeDataChannel(label);
+      pc.channels.push(channel);
+      return channel;
+    };
+    // A box, not a bare `let`: TypeScript narrows a `let` initialised to null and never sees
+    // the assignment that happens inside the fetch closure, so `release?.()` below becomes a
+    // call on `never`.
+    const gate: { release: (() => void) | null } = { release: null };
+    const transport = new WebRtcTransport({
+      peerConnectionFactory: () => pc as unknown as RTCPeerConnection,
+      fetchImpl: (async () =>
+        new Promise((resolve) => {
+          gate.release = () => resolve(new Response("v=0 answer", { status: 200 }));
+        })) as unknown as typeof fetch,
+    });
+
+    let outcome: string | null = null;
+    void transport.connect(descriptor, credential).then(
+      () => {
+        outcome = "resolved";
+      },
+      () => {
+        outcome = "rejected";
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    transport.close();
+    gate.release?.();
+    // A SMALL advance on purpose: closing must settle the connect now, not fifteen seconds
+    // from now. Before the fix the caller is still waiting on a promise whose only remaining
+    // path is the timeout, which is precisely the abandoned promise this is about.
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(outcome).toBe("rejected");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a channel that never opens still fails the connect, bounded", async () => {
+    // The timeout itself is not the defect and is not weakened: a channel that never opens
+    // must still end the connect, once, through the promise the caller is holding.
+    vi.useFakeTimers();
+    const pc = new FakePeerConnection();
+    pc.createDataChannel = (label: string) => {
+      const channel = new FakeDataChannel(label);
+      pc.channels.push(channel);
+      return channel;
+    };
+    const transport = new WebRtcTransport({
+      peerConnectionFactory: () => pc as unknown as RTCPeerConnection,
+      fetchImpl: (async () => new Response("v=0 answer", { status: 200 })) as unknown as typeof fetch,
+      openTimeoutMs: 1_000,
+    });
+
+    const settled = transport.connect(descriptor, credential).then(
+      () => "resolved",
+      (error: unknown) => (error as Error).message,
+    );
+    await vi.advanceTimersByTimeAsync(1_200);
+
+    expect(await settled).toMatch(/did not open in time/);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("uses multipart with the server-provided session config when asked", async () => {
