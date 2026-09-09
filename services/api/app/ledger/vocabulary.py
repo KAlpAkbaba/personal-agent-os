@@ -91,6 +91,20 @@ SUBSYSTEM_GENESIS = "genesis"
 #: answerable without separating it from the M23 App Factory rows a scene's own device
 #: calls (project.scaffold/project.run) happen to share.
 SUBSYSTEM_CREATIVE3D = "creative3d"
+#: Owner Location Context (docs/DECISIONS.md ADR-0091): where the owner is, by
+#: provenance — a resolution, a default set, a device observation. Its own subsystem so
+#: "how do you know where I am?" is answerable without separating it from the weather
+#: rows that happen to consume the same resolution in the same turn.
+SUBSYSTEM_LOCATION = "location"
+#: Live weather (ADR-0091): a real provider call and the location it was answered for.
+#: Its own subsystem so "what did you tell me the weather was, and for where?" is
+#: answerable without separating it from location rows.
+SUBSYSTEM_WEATHER = "weather"
+#: The morning briefing (ADR-0091): one row per assembled/delivered briefing, naming
+#: which real sources answered and which could not. Its own subsystem so "what did you
+#: tell me this morning?" is answerable without separating it from the weather/location/
+#: evolution rows a briefing's own assembly happens to read.
+SUBSYSTEM_BRIEFING = "briefing"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -116,6 +130,9 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_APPFACTORY,
     SUBSYSTEM_GENESIS,
     SUBSYSTEM_CREATIVE3D,
+    SUBSYSTEM_LOCATION,
+    SUBSYSTEM_WEATHER,
+    SUBSYSTEM_BRIEFING,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -385,6 +402,12 @@ EVENT_TYPE_SCENE_FAILED = "scene.failed"
 EVENT_TYPE_SCENE_MISMATCH = "scene.mismatch"
 EVENT_TYPE_SCENE_UNITY_UNAVAILABLE = "scene.unity_unavailable"
 EVENT_TYPE_SCENE_LISTED = "scene.list"
+#: Owner Location Context / Live Weather / Morning Briefing (ADR-0091). One row per
+#: durable default write, one per resolved-and-answered weather query (never per failed
+#: attempt with nothing to show), one per assembled morning briefing.
+EVENT_TYPE_LOCATION_DEFAULT_SET = "location.default_set"
+EVENT_TYPE_WEATHER_QUERIED = "weather.query"
+EVENT_TYPE_MORNING_BRIEFING_DELIVERED = "briefing.morning_delivered"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -502,6 +525,9 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_SCENE_FAILED,
     EVENT_TYPE_SCENE_UNITY_UNAVAILABLE,
     EVENT_TYPE_SCENE_LISTED,
+    EVENT_TYPE_LOCATION_DEFAULT_SET,
+    EVENT_TYPE_WEATHER_QUERIED,
+    EVENT_TYPE_MORNING_BRIEFING_DELIVERED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the

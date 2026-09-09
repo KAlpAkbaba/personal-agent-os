@@ -1,24 +1,18 @@
 # Memory Index
 
 - [Worktree venv bootstrap and test speed](env_worktree_venv_and_test_speed.md) — `uv sync` per worktree (~2min, once); warm gates are fast (~20s / ~160s); needs PYTHONIOENCODING=utf-8 for Turkish
-- [Test suite speed and tooling](feedback_test_suite_speed_and_tooling.md) — use absolute uv.exe path, never bare `python`; older slowness/hang notes superseded by the timings above
-- [Pre-existing unit failure](project_preexisting_unit_failure.md) — test_identity_enforcement's allowlist fails on main (alarms audio route); verify before chasing it
+- [Test suite speed and tooling](feedback_test_suite_speed_and_tooling.md) — worktree's own .venv python -m pytest; full unit suite ~4-5min, full voice corpus ~13min; update exact-vocabulary tripwire tests on a new tool/UiState
+- [Pre-existing unit failure](project_preexisting_unit_failure.md) — RESOLVED 2026-09-08; suite is fully green on main/f7d632f; cautionary example, always re-confirm before reporting "pre-existing"
 - [Allowed-paths overrides finding text](feedback_allowed_paths_override_finding_text.md) — a finding naming an out-of-scope file is context, not a mandate to edit it
-- [git stash / worktree gotchas](reference_git_stash_untracked_gotcha.md) — use `git stash -u` for a true baseline; never `cd`/`-C` outside the assigned worktree
+- [git stash / worktree gotchas](reference_git_stash_untracked_gotcha.md) — use `git stash -u` for a true baseline; git commands (not other executables) DO work cross-worktree, see the isolation reference below
 - [M13 security review status](project_m13_security_review_status.md) — branch fix/m13-security-review @ af7b11e, all 12 findings applied, tests green, not merged/pushed
 - [Personal Agent OS overview](project_pagentos_overview.md) — repo layout, spec-first workflow, where contracts/decisions/state live
 - [PROVEN_REAL discipline](feedback_proven_real_discipline.md) — never claim PROVEN_REAL in BUILD_STATE.json without a real device/Chrome/OS run
 - [Temporal activity idempotency-key reuse bug pattern](feedback_temporal_activity_idempotency.md) — a retry/reopen must use a NEW idempotency key or it just replays the old failure
 - [Test commands and gates](reference_test_commands_and_gates.md) — exact uv/pnpm/docker paths, DB safety (never touch pagentos_e2e_m13), live-API-on-8001 gotcha
-- [Worktree venv bootstrap and test speed](env_worktree_venv_and_test_speed.md) — `uv sync` needed per worktree; FastAPI TestClient tests are ~8-10s/test here
-- [Test suite speed and tooling](feedback_test_suite_speed_and_tooling.md) — use absolute uv.exe path; TestClient-heavy tests are slow; test_health_endpoint.py can hang (env issue, not a regression signal)
 - [Worktree can lag behind main](project_worktree_lag_behind_main.md) — sibling agent worktrees merge into main continuously; ff-merge before trusting "ADR doesn't exist yet"
 - [Research module patterns](feedback_research_module_patterns.md) — app/research/* conventions: pure decision fns, policy-stored-once-in-plan_json, workflow.now(), field-name collision checks, min(caller,policy) ceilings
 - [Pre-existing clock-resolution flakiness](project_preexisting_clock_flakiness.md) — presence/research_focus/voice_eye_tools tests race on Windows wall-clock ties; not a regression
-- [Worktree venv bootstrap and test speed](env_worktree_venv_and_test_speed.md) — `uv sync` per worktree (~2min, once); warm gates are fast; needs PYTHONIOENCODING=utf-8 for Turkish
-- [Test suite speed and tooling](feedback_test_suite_speed_and_tooling.md) — use bare `uv` (PATH), not a quoted absolute .exe path; full suite ~4-4.5min; two exact-vocabulary tripwire tests to update on new UiState/tool
-- [Pre-existing unit failure](project_preexisting_unit_failure.md) — RESOLVED 2026-09-08; suite is fully green on main/f7d632f; cautionary example, always re-confirm before reporting "pre-existing"
-- [git stash / worktree gotchas](reference_git_stash_untracked_gotcha.md) — use `git stash -u` for a true baseline; git commands (not other executables) DO work cross-worktree, see the isolation reference below
 - [Worktree isolation and cross-worktree transplant](reference_worktree_isolation_and_cross_worktree_transplant.md) — Bash blocks non-git commands referencing paths outside your worktree; recipe for doing real dev work "in" another linked worktree via scratch branch + `git reset --hard`
 - [M20 core track status](project_m20_core_track_status.md) — completed 2026-09-08 on branch m20-core @ 50b65aa in E:\AI\pagentos-wt-m20-core, 8 commits ahead of main, not merged/pushed
 - [M21 core track status](project_m21_core_track_status.md) — completed 2026-09-08 on branch m21-core @ 6da0d06, 5366/5367 unit tests + 804 corpus cases green, 5 real bugs found+fixed, not merged/pushed
@@ -28,3 +22,5 @@
 - [M26 Cloud Core status](project_m26_cloud_core_status.md) — completed 2026-09-08 @ b406bc8; full-repo suite confirmed 6751 passed/2 skipped/2 expected-fail after one real miss fixed; re-confirm full-green next session first
 - [Temporal worker-restart test hang](feedback_temporal_worker_restart_test_hang.md) — killing/replacing a Worker against the time-skipping env hangs two different ways; test idempotent replay + fresh-handle reattachment instead
 - [Executive workflow scheduling gap](feedback_executive_workflow_scheduling_gap.md) — gate step readiness on dependency SETTLED, never VERIFIED, or any failure deadlocks everything downstream forever
+- [Owner Location/Weather/Briefing status](project_owner_location_weather_briefing_status.md) — completed 2026-09-09 on branch worktree-agent-a6616e449e5a5cf7e (ADR-0091), not merged; live weather NOT_YET_PROVEN (no outbound network here)
+- [Intents prefix-collision risk](feedback_intents_prefix_collision_risk.md) — `_has()` matches by token PREFIX; a new short stem can silently steal an existing word's utterances ("konu" vs "konum"); grep for collisions first, prefer `_has_exact` with real inflected forms

@@ -22,6 +22,12 @@ _API_ROOT = Path(__file__).resolve().parents[1]
 #: provider order decide.
 _RESEARCH_SEARCH_PROVIDERS = ("duckduckgo", "google", "auto")
 
+#: ADR-0091. Mirrors app.weather.providers.WEATHER_PROVIDERS as a literal (not an
+#: import) — the same reason _RESEARCH_SEARCH_PROVIDERS above is a literal rather than
+#: importing app.research.*: this settings module must not gain a heavier import chain
+#: just to validate one string.
+_WEATHER_PROVIDERS = ("open_meteo", "none")
+
 
 def _default_identity_root_dir() -> str:
     return str(_API_ROOT / "var" / "identity")
@@ -246,6 +252,33 @@ class Settings(BaseSettings):
     caldav_password: str = ""
     calendar_ics_url: str = ""
     calendar_write_enabled: bool = False
+
+    # Owner Location Context / Live Weather (docs/DECISIONS.md ADR-0091). Open-Meteo needs
+    # no signup and no API key for non-commercial use (verified against the vendor's own
+    # docs, 2026-09-08) — unlike a credential, defaulting to it is not "inventing a key"
+    # (app.weather.providers module docstring); set PAGENTOS_WEATHER_PROVIDER=none to turn
+    # live weather off (the honest dependency_unavailable path) without removing the code.
+    weather_provider: str = "open_meteo"
+    weather_open_meteo_forecast_url: str = "https://api.open-meteo.com/v1/forecast"
+    weather_open_meteo_geocoding_url: str = "https://geocoding-api.open-meteo.com/v1/search"
+    weather_request_timeout_s: float = 10.0
+    # Coarse IP geolocation (tier 5 of app.location.service.LocationService.resolve).
+    # Empty means "not configured" (dependency_unavailable at that tier only — the
+    # resolver still falls through to "unresolved" honestly): unlike the weather provider,
+    # generic IP-geolocation vendors commonly gate anything beyond trivial use behind
+    # registration/ToS, so this stays an explicit owner action rather than a hardcoded
+    # default vendor (app.location.providers module docstring).
+    location_ip_geo_url: str = ""
+    location_ip_geo_timeout_s: float = 5.0
+
+    @field_validator("weather_provider")
+    @classmethod
+    def _validate_weather_provider(cls, v: str) -> str:
+        if v not in _WEATHER_PROVIDERS:
+            raise ValueError(
+                f"PAGENTOS_WEATHER_PROVIDER must be one of {_WEATHER_PROVIDERS}, got {v!r}"
+            )
+        return v
 
 
 @lru_cache

@@ -54,6 +54,7 @@ from app.voice.realtime_sessions.tools_artifacts import (
     ARTIFACT_TOOL_NAMES,
     register_artifacts_tools,
 )
+from app.voice.realtime_sessions.tools_briefing import register_briefing_tools
 from app.voice.realtime_sessions.tools_calendar import (
     CALENDAR_TOOL_NAMES,
     register_calendar_tools,
@@ -74,6 +75,10 @@ from app.voice.realtime_sessions.tools_genesis import (
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
+from app.voice.realtime_sessions.tools_weather import (
+    WEATHER_TOOL_NAMES,
+    register_weather_tools,
+)
 
 logger = get_logger("app.voice.realtime_sessions.tools")
 
@@ -583,6 +588,12 @@ SCENE_CLARIFYING_TOOLS: frozenset[str] = frozenset(SCENE_TOOL_NAMES)
 #: above already gets, never a second copy of it.
 EXECUTIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(EXECUTIVE_TOOL_NAMES)
 
+#: ADR-0091 (Owner Location Context / Live Weather / Morning Briefing): ``location.
+#: set_default`` may answer "Hangi şehri varsayılan yapmamı istersiniz?" rather than a
+#: receipt when the owner named no city (task brief §1: "Do NOT invent one") — the same
+#: non-research extension of the ADR-0077 contract every family above already gets.
+WEATHER_CLARIFYING_TOOLS: frozenset[str] = frozenset(WEATHER_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -629,6 +640,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | GENESIS_CLARIFYING_TOOLS
             | SCENE_CLARIFYING_TOOLS
             | EXECUTIVE_CLARIFYING_TOOLS
+            | WEATHER_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -1682,6 +1694,10 @@ def default_registry() -> ToolRegistry:
     register_scene_tools(reg)
     # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy's voice tools.
     register_executive_tools(reg)
+    # ADR-0091: Owner Location Context, Live Weather and the Morning Briefing's own
+    # voice tools.
+    register_weather_tools(reg)
+    register_briefing_tools(reg)
     return reg
 
 

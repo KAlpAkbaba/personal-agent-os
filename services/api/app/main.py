@@ -27,6 +27,7 @@ from app.artifacts.render_fetch_store import get_render_fetch_store
 from app.artifacts.routes import device_router as artifacts_device_router
 from app.artifacts.routes import router as artifacts_router
 from app.artifacts.runtime import ArtifactRuntime
+from app.briefing.service import BriefingService
 from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import router as broker_ws_router
@@ -54,6 +55,11 @@ from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
 from app.ledger.routes import router as ledger_router
+from app.location.providers import (
+    build_ip_coarse_location_provider,
+    build_windows_location_provider,
+)
+from app.location.service import LocationService
 from app.logging import configure_logging, get_logger
 from app.mail.providers import build_mail_provider, build_mail_sender
 from app.mail.routes import router as mail_router
@@ -96,6 +102,8 @@ from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.routes import router as voice_router
 from app.voice.runtime import VoiceRuntime
+from app.weather.providers import build_weather_provider
+from app.weather.service import WeatherService
 from app.worldmodel.routes import router as world_router
 
 configure_logging()
@@ -207,6 +215,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     calendar_service = CalendarService(
         build_calendar_provider(settings), build_calendar_writer(settings)
     )
+    # ADR-0091 (Owner Location Context / Live Weather / Morning Briefing): the location
+    # resolver (no live device provider yet - measured unavailable, app.location.
+    # providers module docstring - and an owner-configured IP provider, None until set),
+    # the weather service (Open-Meteo by default - genuinely keyless, never a fabricated
+    # answer), and the briefing service that reads both plus the ledger/release/device
+    # telemetry every other family above already exposes.
+    location_service = LocationService(
+        windows_provider=build_windows_location_provider(settings),
+        ip_provider=build_ip_coarse_location_provider(settings),
+    )
+    weather_service = WeatherService(
+        location_service=location_service, provider=build_weather_provider(settings)
+    )
+    briefing_service = BriefingService()
     # M23 (docs/M23_APP_FACTORY_SPEC.md §1-§4, ADR-0086): the App Factory's own service,
     # reading the SAME device port every other family holds — one desktop authority,
     # never a second path. The browser gateway is the M13 seam
@@ -247,6 +269,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): scene.* reads the SAME SceneService
         # the REST surface (app/creative3d/routes.py) drives.
         creative3d_service=creative3d_service,
+        # ADR-0091: weather.*/location.*/briefing.* read the SAME services this
+        # process builds above — one location/weather/briefing authority, never a
+        # second one for the voice path.
+        weather_service=weather_service,
+        location_service=location_service,
+        briefing_service=briefing_service,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:
@@ -411,6 +439,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.calendar_service = calendar_service
     app.state.app_factory_service = app_factory_service
     app.state.creative3d_service = creative3d_service
+    app.state.location_service = location_service
+    app.state.weather_service = weather_service
+    app.state.briefing_service = briefing_service
     # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §4): POST /v1/artifacts/{id}/open reaches
     # the device through the SAME BrokerDeviceAction object the wake sequence, the
     # operator and the documents/mail/calendar families already hold above — one device

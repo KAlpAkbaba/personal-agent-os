@@ -1360,6 +1360,11 @@ def record_client_events(
                     intent.tokens, query_kind=intent.query_kind
                 ),
                 "reference": (intent.reference.as_dict() if intent.reference is not None else None),
+                # ADR-0091 (Owner Location Context / Live Weather / Morning Briefing):
+                # the place/city the owner's WORDS carried, for the same "owner's words
+                # win over the model's argument" reason every other family above follows.
+                "weather_place": intent.weather_place,
+                "location_default_city": intent.location_default_city,
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}

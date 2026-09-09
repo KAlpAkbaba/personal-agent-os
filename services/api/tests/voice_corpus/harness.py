@@ -52,6 +52,8 @@ from app.artifacts.models import (
 )
 from app.artifacts.runtime import ArtifactRuntime
 from app.artifacts.spec import ArtifactSpec
+from app.briefing.models import BriefingPreferencesRow
+from app.briefing.service import BriefingService
 from app.broker import service as broker_service
 from app.broker.models import AuditEvent, Device, DeviceCommand, DeviceSession, EnrollmentToken
 from app.broker.runtime import BrokerRuntime, DeviceConnection
@@ -80,6 +82,8 @@ from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
+from app.location.models import LocationContextRow
+from app.location.service import LocationService
 from app.mail.models import MailDraftRow, MailIndexRow
 from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
@@ -121,6 +125,9 @@ from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnou
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
 from app.voice.realtime_sessions.sideband import RecordingSideband
 from app.voice.simulator import SimulatedRealtimeProvider
+from app.weather.models import WeatherQueryEvidenceRow
+from app.weather.providers import FakeWeatherProvider
+from app.weather.service import WeatherService
 from tests.alarms_support import FakeDeviceAction, happy_device_results
 from tests.appfactory_support import appfactory_capability_results
 from tests.artifacts_support import artifact_capability_results
@@ -205,6 +212,9 @@ TABLES = (
     SceneRow.__table__,
     ExecutiveRunRow.__table__,
     ExecutiveStepRow.__table__,
+    LocationContextRow.__table__,
+    WeatherQueryEvidenceRow.__table__,
+    BriefingPreferencesRow.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -277,6 +287,9 @@ class Harness:
     browser_gateway: FakeBrowserGateway
     genesis: GenesisRuntime
     creative3d: SceneService
+    location: LocationService
+    weather: WeatherService
+    briefing: BriefingService
     ids: dict[str, str] = field(default_factory=dict)
     #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the live fixture application
     #: (CounterBoxServer/LampBoxServer) a CTX_COUNTERBOX_RUNNING/CTX_LAMPBOX_RUNNING case
@@ -1021,6 +1034,22 @@ def build_harness() -> Harness:
     # in-memory object store artifacts already uses (task brief: no network).
     creative3d_service = SceneService(object_store=artifacts.store)
     app.state.creative3d_service = creative3d_service
+    # ADR-0091 (Owner Location Context / Live Weather / Morning Briefing): the FAKE
+    # weather provider (never real network in a corpus run — task brief: no network),
+    # with a durable default location set so "Hava nasıl?" has a deterministic answer
+    # the same way every other family's fixture gives one; explicit-place cases
+    # ("İstanbul'da hava nasıl?", "Ankara'da...") exercise the resolver's tier 1
+    # regardless of this default.
+    location_service = LocationService()
+    weather_service = WeatherService(
+        location_service=location_service, provider=FakeWeatherProvider()
+    )
+    briefing_service = BriefingService()
+    with broker.session() as _db:
+        location_service.set_default(_db, city="İstanbul")
+    app.state.location_service = location_service
+    app.state.weather_service = weather_service
+    app.state.briefing_service = briefing_service
     runtime.register_live(
         wake_sequence=sequence,
         device_statuses=statuses,
@@ -1036,6 +1065,9 @@ def build_harness() -> Harness:
         browser_gateway=browser_gateway,
         genesis_service=genesis.service,
         creative3d_service=creative3d_service,
+        location_service=location_service,
+        weather_service=weather_service,
+        briefing_service=briefing_service,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -1082,6 +1114,9 @@ def build_harness() -> Harness:
         browser_gateway=browser_gateway,
         genesis=genesis,
         creative3d=creative3d_service,
+        location=location_service,
+        weather=weather_service,
+        briefing=briefing_service,
     )
 
 

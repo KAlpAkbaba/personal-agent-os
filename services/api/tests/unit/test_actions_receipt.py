@@ -425,6 +425,44 @@ def test_a_refusal_is_recorded_as_a_notice_and_a_failure_as_a_warning(session) -
     assert by_action["eye.enable"].severity == "warning"
 
 
+def test_a_ledger_write_failure_never_poisons_the_callers_session(session) -> None:
+    """BUG (found 2026-09-08 building the Owner Location Context / Live Weather /
+    Morning Briefing capability, docs/DECISIONS.md ADR-0091): ``WeatherService.current``
+    passed a raw ``datetime`` into a receipt's ``observed_after.server``, which this
+    function writes into the ledger's ``JSON`` ``detail_json`` column. The insert failed
+    inside ``ledger_service.record``'s own ``session.commit()``, and this function's
+    ``except`` block logged the failure and returned ``None`` WITHOUT rolling back — so
+    the caller's session was left in SQLAlchemy's "needs an explicit rollback()" state,
+    and the caller's own SUBSEQUENT, unrelated work (a second call to
+    ``WeatherService.last_evidence`` in the same request) raised ``PendingRollbackError``
+    instead of running. The docstring already promised "never a dependency of it"; this
+    proves it for the one case the promise did not yet hold. The real bug (never pass a
+    raw datetime into a JSON field) is fixed at its source in
+    ``app.weather.service._observation_dict``; this asserts the independent hardening -
+    a best-effort write's failure degrades to "no ledger row", never to a broken session -
+    holds for ANY future mistake of the same shape, not only this one."""
+    import datetime as datetime_module
+
+    receipt = _receipt(
+        session_id="s1",
+        observed_at=NOW,
+        observed_after={
+            "server": {"bad": datetime_module.datetime(2026, 9, 8)},  # not JSON-serialisable
+            "local": {},
+        },
+    )
+    result = record_receipt(session, receipt, SUBSYSTEM_PRESENCE)
+    assert result is None  # the failure is real and reported, not swallowed silently
+
+    # the session must still be usable for the caller's own, unrelated next write
+    other = _receipt(action_id="call_2", session_id="s1", observed_at=NOW)
+    row = record_receipt(session, other, SUBSYSTEM_PRESENCE)
+    assert row is not None
+    rows = ledger_service.query(session, event_types=[EVENT_TYPE_ACTION_RECEIPT])
+    assert len(rows) == 1  # only the SECOND (valid) receipt made it to the ledger
+    assert rows[0].detail_json["action_id"] == "call_2"
+
+
 # ------------------------------------------------------------------ persona (§6)
 
 

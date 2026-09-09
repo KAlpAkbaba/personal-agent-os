@@ -1,6 +1,6 @@
 ---
 name: feedback-test-suite-speed-and-tooling
-description: services/api's TestClient-heavy unit tests are slow (~2-3 min per handful of files) and test_health_endpoint.py can hang for minutes in this sandbox; use uv directly with the absolute uv.exe path and generous foreground timeouts, not the bare `python`/`pytest` on PATH
+description: services/api's TestClient-heavy unit tests are slow; test_health_endpoint.py can hang; use the worktree's own .venv/Scripts/python.exe -m pytest (PYTHONPATH=services/api, PYTHONIOENCODING=utf-8); full unit suite ~4-5min, full voice corpus (tests/unit/test_owner_utterance_corpus.py) ~13min; adding a new voice tool/intent means updating the exact-vocabulary tripwire tests too
 metadata:
   type: feedback
 ---
@@ -45,3 +45,25 @@ shared vocabulary or contract file's own "the exact set is X" test) rather than 
 suite — the full suite is safe but slow enough that background-and-wait is the practical
 mode, and `test_health_endpoint.py` specifically should be run alone, last, and not treated
 as a blocker if it hangs.
+
+**Update 2026-09-09 (building the Owner Location Context / Live Weather / Morning Briefing
+capability, [[project_pagentos_overview]]):**
+- Use the worktree's own `.venv/Scripts/python.exe -m pytest`, not a global `uv`/`python`,
+  with `PYTHONPATH=.` (from `services/api`) and `PYTHONIOENCODING=utf-8` set (Turkish text
+  in test output/asserts needs it on Windows). `.venv` needs `uv sync` once per fresh
+  worktree (~2 min).
+- `tests/unit/test_owner_utterance_corpus.py` (the full voice corpus, ~1500 parametrized
+  cases) took **776 s (~13 min)** to run to completion in a warm worktree — budget a
+  background run, not a foreground timeout, whenever a change touches
+  `app/voice/intents.py`, `tests/voice_corpus/corpus.py` or `harness.py`. A much faster
+  sanity check for JUST the categories you touched: import
+  `tests.voice_corpus.corpus.all_cases` and `tests.voice_corpus.harness.{build_harness,
+  run_case}` directly in a `python -c` one-liner, filter `all_cases()` by `c.category`, and
+  call `run_case(c, harness=None)` per case (each `run_case(..., harness=None)` builds its
+  OWN fresh harness, so this is still one harness-build per case — cheap for one category's
+  ~100-150 cases, too slow to do this for all ~1500 cases in the foreground).
+- Adding a new voice tool changes the FULL registered-tool-name set, which at least one
+  test asserts exactly (`test_voice_realtime_sessions.py`'s
+  `test_create_selects_by_capability_and_returns_the_contract` lists every tool name
+  literally) — this is the "exact-vocabulary tripwire" to update whenever
+  `default_registry()` gains a `register_*_tools(reg)` line.
