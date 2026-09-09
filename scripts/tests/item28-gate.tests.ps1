@@ -1,0 +1,131 @@
+<#
+.SYNOPSIS
+    The one thing scripts\core\qualify-item28-unlocked.ps1 must never do: report success
+    against the runtime item 28 replaces.
+
+.DESCRIPTION
+    That script exists to run itself the moment the owner's elevated install lands, with no
+    further owner involvement. Its whole value rests on a refusal: if it ever printed a green
+    report while the device was still the 2026-09-06 build (1.0.0+a3cb04e, 29 capabilities),
+    the owner would have evidence for six milestones that was measured against the release
+    the 2026-09-08 rollback restored - worse than no evidence at all.
+
+    So these tests drive the real script, with no device, no Cloud Core and no elevation:
+
+      * blocked, and it says WHY, naming the superseded build;
+      * blocked in live mode exits NON-ZERO, so a scheduled or chained run cannot mistake
+        the refusal for a pass;
+      * blocked in dry-run mode exits ZERO - that is the mode that qualifies the script
+        itself before the runtime it needs exists;
+      * a dry run records a PLAN and records NO CHECKS, because a judgement computed over
+        answers no device gave is not evidence;
+      * the evidence file is written on every path, so a refusal is as recorded as a pass.
+
+    Windows PowerShell 5.1. Nothing here touches the live install: every run is pointed at a
+    directory that does not exist.
+#>
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+$PSNativeCommandUseErrorActionPreference = $false
+
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$script = Join-Path $repoRoot "scripts\core\qualify-item28-unlocked.ps1"
+$powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$sandbox = Join-Path $env:TEMP "pagentos-item28-gate-$([guid]::NewGuid().ToString('N'))"
+New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+
+$script:Passed = 0
+$script:Failed = 0
+function Assert-True {
+    param([bool]$Condition, [string]$Message)
+    if ($Condition) { $script:Passed++; Write-Host "  ok    $Message" }
+    else { $script:Failed++; Write-Host "  FAIL  $Message" -ForegroundColor Red }
+}
+
+function Invoke-Qualification {
+    <#  The real script, against an install root that does not exist. Returns exit code + evidence.  #>
+    param([string]$Name, [switch]$Dry)
+    $outFile = Join-Path $sandbox "$Name.json"
+    $arguments = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script,
+        "-InstallRoot", (Join-Path $sandbox "no-such-install"),
+        "-OutFile", $outFile
+    )
+    if ($Dry) { $arguments += "-DryRun" }
+    $output = & $powershell @arguments 2>&1
+    $code = $LASTEXITCODE
+    $evidence = $null
+    if (Test-Path -LiteralPath $outFile) { $evidence = Get-Content -LiteralPath $outFile -Raw | ConvertFrom-Json }
+    return [pscustomobject]@{ ExitCode = $code; Evidence = $evidence; Output = ($output -join "`n"); OutFile = $outFile }
+}
+
+try {
+    Write-Host "item 28 post-install qualification - the refusal"
+    Assert-True (Test-Path -LiteralPath $script) "scripts\core\qualify-item28-unlocked.ps1 is in this checkout"
+
+    # ------------------------------------------------------------------ the source itself
+    $source = [System.IO.File]::ReadAllText($script)
+    Assert-True ($source -match 'SupersededBuild\s*=\s*"a3cb04e"') "it names the superseded build it must never report against (a3cb04e)"
+    Assert-True ($source -match 'MinimumCapabilities\s*=\s*40') "it names the capability floor item 28 promises (40)"
+    Assert-True ($source -match 'install-device-service\.ps1 -DisplayPower -Operator') "and it prints the exact elevated command that fixes the refusal"
+    # The refusal must come first: the gate is evaluated before anything can be sent.
+    # The CALL SITE, not the function definition, which is necessarily earlier in the file.
+    $gateAt = $source.IndexOf("Test-RuntimeUnlocked -Runtime")
+    $sendAt = $source.IndexOf("[void](Invoke-OperatorSection)")
+    Assert-True ($gateAt -gt 0 -and $sendAt -gt $gateAt) "the runtime gate is evaluated before any section is invoked"
+
+    # ------------------------------------------------------------------------- live mode
+    Write-Host ""
+    Write-Host "live mode, no runtime installed"
+    $live = Invoke-Qualification -Name "live"
+    Assert-True ($live.ExitCode -ne 0) "a blocked live run exits NON-ZERO (got $($live.ExitCode)), so nothing downstream reads it as a pass"
+    Assert-True ($live.Output -match "REFUSED") "...and says REFUSED in as many words"
+    Assert-True ($null -ne $live.Evidence) "the evidence file is written even when the run refuses"
+    if ($null -ne $live.Evidence) {
+        Assert-True ($live.Evidence.verdict -eq "BLOCKED") "the verdict is BLOCKED, never PROVEN_REAL ($($live.Evidence.verdict))"
+        Assert-True (@($live.Evidence.gate.reasons).Count -gt 0) "the gate records why: $(@($live.Evidence.gate.reasons) -join '; ')"
+        Assert-True ($live.Evidence.gate.minimum -eq 40) "the evidence carries the floor it judged against"
+        Assert-True (@($live.Evidence.sections).Count -eq 0) "no section ran, so no milestone can be claimed"
+    }
+
+    # -------------------------------------------------------------------------- dry run
+    Write-Host ""
+    Write-Host "dry run, no runtime installed"
+    $dry = Invoke-Qualification -Name "dry" -Dry
+    Assert-True ($dry.ExitCode -eq 0) "a blocked dry run exits CLEANLY (got $($dry.ExitCode)) - this is how the script is qualified before the runtime exists"
+    Assert-True ($dry.Output -match "REFUSED") "...while still refusing, in the same words"
+    if ($null -ne $dry.Evidence) {
+        Assert-True ($dry.Evidence.verdict -eq "BLOCKED") "the verdict is still BLOCKED, not PLANNED-as-success ($($dry.Evidence.verdict))"
+        Assert-True ($dry.Evidence.mode -eq "dry-run") "the evidence says which mode produced it"
+        $plan = @($dry.Evidence.plan)
+        Assert-True ($plan.Count -gt 30) "it plans the whole run rather than the first step only ($($plan.Count) entries)"
+        $capabilities = @($plan | Where-Object { $_.PSObject.Properties.Name -contains "capability" } | ForEach-Object { [string]$_.capability })
+        foreach ($required in @("app.launch", "window.move", "ui.inspect", "file.search", "document.extract", "project.scaffold", "scene.inspect", "desktop.alarm_arm", "desktop.alarm_disarm")) {
+            Assert-True ($capabilities -contains $required) "the plan covers $required"
+        }
+        Assert-True ($capabilities -notcontains "desktop.display_off") "the plan NEVER darkens a display"
+        Assert-True ($capabilities -notcontains "desktop.alarm_start" -and $capabilities -notcontains "desktop.play_audio") "...and never makes a sound"
+        # A dry run judges nothing: the answers it saw came from no device.
+        Assert-True (@($dry.Evidence.checks).Count -eq 0) "a dry run records NO checks - a judgement over answers no device gave is not evidence"
+    }
+    else { Assert-True $false "the dry run wrote no evidence file" }
+
+    # ------------------------------------------------- the harnesses it defers to must exist
+    Write-Host ""
+    Write-Host "what it refuses to do itself"
+    foreach ($harness in @("scripts\core\owner-m18-3-display.ps1", "scripts\core\owner-m18-3-alarm.ps1")) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $repoRoot $harness)) "$harness exists, so a READY_FOR_OWNER row points somewhere real"
+        Assert-True ($source -match [regex]::Escape($harness)) "...and the script names it"
+    }
+}
+finally {
+    Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ""
+if ($script:Failed -eq 0) { Write-Host "item28-gate tests: $script:Passed passed, 0 failed" -ForegroundColor Green; exit 0 }
+Write-Host "item28-gate tests: $script:Passed passed, $script:Failed failed" -ForegroundColor Red
+exit 1

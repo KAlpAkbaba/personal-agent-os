@@ -25,6 +25,10 @@ public sealed class ArgumentPolicyTests : IDisposable
     {
         Assert.Same(ArgumentPolicy.OnePathUnderRoots, ArgumentPolicy.For("notepad"));
         Assert.Same(ArgumentPolicy.OnePathUnderRoots, ArgumentPolicy.For("Explorer"));
+        // M27: Paint opens an image the device itself exported, so it gets notepad's policy -
+        // one absolute path that must RESOLVE inside the roots - and never a flag.
+        Assert.Same(ArgumentPolicy.OnePathUnderRoots, ArgumentPolicy.For("mspaint"));
+        Assert.Same(ArgumentPolicy.OnePathUnderRoots, ArgumentPolicy.For("MSPaint"));
         Assert.Same(ArgumentPolicy.None, ArgumentPolicy.For("calc"));
         Assert.Same(ArgumentPolicy.None, ArgumentPolicy.For("powershell"));
         Assert.Same(ArgumentPolicy.BrowserUrls, ArgumentPolicy.For("chrome"));
@@ -51,6 +55,12 @@ public sealed class ArgumentPolicyTests : IDisposable
         Refused(() => policy.Apply("notepad", [Path.Combine(_fx.Root, "missing.txt")], roots), "missing.txt");
         Refused(() => policy.Apply("notepad", ["/A"], roots), "/A");
         Refused(() => policy.Apply("explorer", ["/select," + _fx.GenuineFile], roots), "/select,");
+
+        // The same for Paint, which is on the allowlist only so M27's export check can open
+        // the image the device just wrote - never an arbitrary file, never through a junction.
+        Assert.Equal([Path.GetFullPath(_fx.GenuineFile)], policy.Apply("mspaint", [_fx.GenuineFile], roots), StringComparer.OrdinalIgnoreCase);
+        Refused(() => policy.Apply("mspaint", [_fx.SecretThroughJunction], roots), "secret.txt");
+        Refused(() => policy.Apply("mspaint", [_fx.GenuineFile, _fx.GenuineFile], roots), "at most one");
     }
 
     [Fact]

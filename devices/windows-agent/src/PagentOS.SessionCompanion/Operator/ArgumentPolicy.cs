@@ -23,7 +23,7 @@ public abstract class ArgumentPolicy
     /// <summary>No arguments at all: <c>calc</c>, <c>powershell</c> (the governed path is <c>terminal.execute</c>), an absolute executable path, an unknown name.</summary>
     public static readonly ArgumentPolicy None = new NonePolicy();
 
-    /// <summary>At most one argument, an absolute path inside the authorised roots, resolved: <c>notepad</c>, <c>explorer</c>.</summary>
+    /// <summary>At most one argument, an absolute path inside the authorised roots, resolved: <c>notepad</c>, <c>explorer</c>, <c>mspaint</c>.</summary>
     public static readonly ArgumentPolicy OnePathUnderRoots = new OnePathPolicy();
 
     /// <summary>Only <c>http://</c> / <c>https://</c> URLs and <c>--new-window</c>: <c>chrome</c>, <c>msedge</c>.</summary>
@@ -36,7 +36,10 @@ public abstract class ArgumentPolicy
     public static ArgumentPolicy For(string application)
         => application.ToLowerInvariant() switch
         {
-            "notepad" or "explorer" => OnePathUnderRoots,
+            // mspaint takes the same shape as notepad for the same reason: the only argument
+            // it is ever given is one image to open, and it must be a real path inside the
+            // authorised roots (M27's export check opens a PNG the device itself produced).
+            "notepad" or "explorer" or "mspaint" => OnePathUnderRoots,
             "chrome" or "msedge" => BrowserUrls,
             _ => None,
         };

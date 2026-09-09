@@ -60,12 +60,17 @@ public class AllowlistTests
     }
 
     [Fact]
-    public void Default_allowlist_contains_notepad_and_calc_full_paths()
+    public void Default_allowlist_contains_notepad_calc_and_paint_full_paths()
     {
         var allowlist = AppLauncher.DefaultAllowlist();
-        Assert.Equal(2, allowlist.Count);
+        Assert.Equal(3, allowlist.Count);
         Assert.EndsWith(@"System32\notepad.exe", allowlist["notepad"], StringComparison.OrdinalIgnoreCase);
         Assert.EndsWith(@"System32\calc.exe", allowlist["calc"], StringComparison.OrdinalIgnoreCase);
+        // M27 (docs/QUALIFICATION.md 25.12): opening an exported image in Paint was the one
+        // step of the creative path no device could take - mspaint was on neither allowlist,
+        // so desktop.open_application answered capability_missing and the whole M27 device
+        // half stayed PROVEN_PROXY behind owner item 28.
+        Assert.EndsWith(@"System32\mspaint.exe", allowlist["mspaint"], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

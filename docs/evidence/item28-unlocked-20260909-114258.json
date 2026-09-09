@@ -1,0 +1,637 @@
+{
+    "run_id":  "item28-unlocked-20260909-114258",
+    "started_at":  "2026-09-09T08:42:58.2490087Z",
+    "mode":  "dry-run",
+    "cloud":  "http://pagentos-core:8001",
+    "repo_head":  "8a0ca063f1d4c3a7ca244bb467201f0ed27f170e (refs/heads/worktree-agent-ae828288cd55539ef)",
+    "runtime":  {
+                    "present":  true,
+                    "exe":  "C:\\Program Files\\PagentOS\\agent\\service\\PagentOS.DeviceService.exe",
+                    "product_version":  "1.0.0+a3cb04ea2f0cbbd734a304632c020329e583a5f4",
+                    "build":  "a3cb04ea2f0cbbd734a304632c020329e583a5f4",
+                    "installed_at":  "2026-09-06T09:42:12.8667951Z"
+                },
+    "gate":  {
+                 "ok":  false,
+                 "reasons":  [
+                                 "blocked: runtime is a3cb04e - the installed service is still 1.0.0+a3cb04ea2f0cbbd734a304632c020329e583a5f4, the release item 28 replaces",
+                                 "blocked: the installed runtime advertises 29 capabilities, fewer than the 40 item 28 promises"
+                             ],
+                 "advertised":  29,
+                 "minimum":  40,
+                 "superseded_build":  "a3cb04e",
+                 "operator_families_missing":  [
+                                                   "app.launch",
+                                                   "window.list",
+                                                   "ui.inspect",
+                                                   "file.search",
+                                                   "document.extract",
+                                                   "project.scaffold",
+                                                   "scene.inspect"
+                                               ]
+             },
+    "device":  null,
+    "sections":  [
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "operator",
+                         "title":  "the Digital Operator, against a real allowlisted application",
+                         "milestone":  "M19"
+                     },
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "documents",
+                         "title":  "the documents family, against this repository\u0027s own fixtures",
+                         "milestone":  "M20"
+                     },
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "projects",
+                         "title":  "the projects family, scaffolded and driven on the device",
+                         "milestone":  "M23"
+                     },
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "scene",
+                         "title":  "scene.inspect over a scaffolded 3D project",
+                         "milestone":  "M25"
+                     },
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "paint",
+                         "title":  "Paint, opened on the production route",
+                         "milestone":  "M27"
+                     },
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "ambient",
+                         "title":  "display, activity and the ambient policy (nothing is darkened)",
+                         "milestone":  "M18.3"
+                     },
+                     {
+                         "steps":  [
+
+                                   ],
+                         "verdict":  "PLANNED",
+                         "detail":  "payloads recorded; nothing sent",
+                         "name":  "alarm",
+                         "title":  "the alarm device path, armed and disarmed in silence",
+                         "milestone":  "M18.3"
+                     }
+                 ],
+    "plan":  [
+                 {
+                     "step":  1,
+                     "section":  "operator",
+                     "capability":  "app.launch",
+                     "payload":  {
+                                     "application":  "notepad"
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "app.launch.window_observed"
+                 },
+                 {
+                     "step":  2,
+                     "section":  "operator",
+                     "capability":  "window.activate",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0"
+                                 }
+                 },
+                 {
+                     "step":  3,
+                     "section":  "operator",
+                     "capability":  "window.current",
+                     "payload":  {
+
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "window.activate.read_back_by_window_current"
+                 },
+                 {
+                     "step":  4,
+                     "section":  "operator",
+                     "capability":  "window.move",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0",
+                                     "y":  90,
+                                     "x":  120
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "window.move.read_back"
+                 },
+                 {
+                     "step":  5,
+                     "section":  "operator",
+                     "capability":  "window.resize",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0",
+                                     "width":  700,
+                                     "height":  480
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "window.resize.read_back"
+                 },
+                 {
+                     "step":  6,
+                     "section":  "operator",
+                     "capability":  "window.minimize",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0"
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "window.minimize.read_back"
+                 },
+                 {
+                     "step":  7,
+                     "section":  "operator",
+                     "capability":  "window.maximize",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0"
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "window.maximize.read_back"
+                 },
+                 {
+                     "step":  8,
+                     "section":  "operator",
+                     "capability":  "window.restore",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0"
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "window.restore.read_back"
+                 },
+                 {
+                     "step":  9,
+                     "section":  "operator",
+                     "capability":  "ui.inspect",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0",
+                                     "depth":  4,
+                                     "max_nodes":  120
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "ui.inspect.returned_the_windows_tree"
+                 },
+                 {
+                     "step":  10,
+                     "section":  "operator",
+                     "capability":  "ui.set_value",
+                     "payload":  {
+                                     "window_id":  "w-dryrun-0",
+                                     "control_type":  "Document",
+                                     "value":  "Item 28: ğüşöçı 123"
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "ui.set_value.read_back_exactly"
+                 },
+                 {
+                     "step":  11,
+                     "section":  "operator",
+                     "capability":  "keyboard.type",
+                     "payload":  {
+                                     "text":  " (28)",
+                                     "window_id":  "w-dryrun-0"
+                                 }
+                 },
+                 {
+                     "step":  12,
+                     "section":  "operator",
+                     "capability":  "window.list",
+                     "payload":  {
+                                     "pid":  0
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "keyboard.type.changed_the_document_the_title_reports"
+                 },
+                 {
+                     "step":  13,
+                     "section":  "operator",
+                     "capability":  "app.close",
+                     "payload":  {
+                                     "force":  true,
+                                     "pid":  0
+                                 }
+                 },
+                 {
+                     "section":  "operator",
+                     "check":  "app.close.left_nothing_running"
+                 },
+                 {
+                     "step":  14,
+                     "section":  "documents",
+                     "capability":  "file.search",
+                     "payload":  {
+                                     "pattern":  "sozlesme",
+                                     "max":  50,
+                                     "roots":  [
+                                                   "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents"
+                                               ]
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "file.search.found_both_contracts"
+                 },
+                 {
+                     "step":  15,
+                     "section":  "documents",
+                     "capability":  "file.inspect",
+                     "payload":  {
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents\\rapor.pdf"
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "file.inspect.pdf_page_count_matches_the_oracle"
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "file.inspect.sha256_is_this_checkouts_file"
+                 },
+                 {
+                     "step":  16,
+                     "section":  "documents",
+                     "capability":  "file.inspect",
+                     "payload":  {
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents\\butce-2026.xlsx"
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "file.inspect.xlsx_names_its_sheets"
+                 },
+                 {
+                     "step":  17,
+                     "section":  "documents",
+                     "capability":  "file.read",
+                     "payload":  {
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents\\kod.py",
+                                     "length":  4096
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "file.read.returned_the_functions_source"
+                 },
+                 {
+                     "step":  18,
+                     "section":  "documents",
+                     "capability":  "document.extract",
+                     "payload":  {
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents\\notlar.md"
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "document.extract.reference_scheme_names_the_place"
+                 },
+                 {
+                     "step":  19,
+                     "section":  "documents",
+                     "capability":  "document.extract",
+                     "payload":  {
+                                     "page_range":  [
+                                                        3,
+                                                        3
+                                                    ],
+                                     "path":  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents\\rapor.pdf"
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "document.extract.page_3_is_the_sentence_the_oracle_names"
+                 },
+                 {
+                     "step":  20,
+                     "section":  "documents",
+                     "capability":  "file.inspect",
+                     "payload":  {
+                                     "path":  "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\.claude\\worktrees\\agent-ae828288cd55539ef\\CLAUDE.md"
+                                 }
+                 },
+                 {
+                     "section":  "documents",
+                     "check":  "file.inspect.refuses_a_path_outside_the_authorised_roots"
+                 },
+                 {
+                     "step":  21,
+                     "section":  "projects",
+                     "capability":  "project.scaffold",
+                     "payload":  {
+                                     "manifest":  {
+                                                      "port":  51987,
+                                                      "run":  {
+                                                                  "serve":  "python -m http.server \u003cport\u003e --bind 127.0.0.1"
+                                                              },
+                                                      "entry":  "index.html",
+                                                      "test":  {
+                                                                   "unit":  "node tests/run.js"
+                                                               }
+                                                  },
+                                     "root":  "projects",
+                                     "files":  [
+                                                   {
+                                                       "text":  "\u003c!doctype html\u003e\u003ctitle\u003eitem 28\u003c/title\u003e\u003cp\u003emerhaba\u003c/p\u003e",
+                                                       "path":  "index.html"
+                                                   },
+                                                   {
+                                                       "text":  "if (1 + 1 !== 2) { process.exit(1); }\nconsole.log(\u00271 passed, 0 failed\u0027);\n",
+                                                       "path":  "tests/run.js"
+                                                   }
+                                               ],
+                                     "slug":  "item28-check",
+                                     "project_id":  "item28-114258"
+                                 }
+                 },
+                 {
+                     "section":  "projects",
+                     "check":  "project.scaffold.wrote_the_project"
+                 },
+                 {
+                     "step":  22,
+                     "section":  "projects",
+                     "capability":  "project.status",
+                     "payload":  {
+                                     "project_id":  "item28-114258"
+                                 }
+                 },
+                 {
+                     "section":  "projects",
+                     "check":  "project.status.knows_the_project_it_just_wrote"
+                 },
+                 {
+                     "step":  23,
+                     "section":  "projects",
+                     "capability":  "project.run",
+                     "payload":  {
+                                     "project_id":  "item28-114258"
+                                 }
+                 },
+                 {
+                     "section":  "projects",
+                     "check":  "project.run.served_on_its_own_port"
+                 },
+                 {
+                     "step":  24,
+                     "section":  "projects",
+                     "capability":  "project.stop",
+                     "payload":  {
+                                     "project_id":  "item28-114258"
+                                 }
+                 },
+                 {
+                     "section":  "projects",
+                     "check":  "project.stop.ended_what_it_started"
+                 },
+                 {
+                     "step":  25,
+                     "section":  "projects",
+                     "capability":  "project.test",
+                     "payload":  {
+                                     "project_id":  "item28-114258"
+                                 }
+                 },
+                 {
+                     "section":  "projects",
+                     "check":  "project.test.parsed_the_run"
+                 },
+                 {
+                     "step":  26,
+                     "section":  "scene",
+                     "capability":  "project.scaffold",
+                     "payload":  {
+                                     "manifest":  {
+                                                      "port":  51988,
+                                                      "run":  {
+                                                                  "build":  "blender -b --python driver.py"
+                                                              },
+                                                      "entry":  "plan.json"
+                                                  },
+                                     "root":  "3d",
+                                     "files":  [
+                                                   {
+                                                       "text":  "{\"objects\":[{\"name\":\"Cube\",\"type\":\"MESH\",\"location\":[0,0,0]}],\"frame\":1,\"engine\":\"CYCLES\"}",
+                                                       "path":  "out.json"
+                                                   },
+                                                   {
+                                                       "text":  "{\"steps\":[]}",
+                                                       "path":  "plan.json"
+                                                   }
+                                               ],
+                                     "slug":  "item28-scene",
+                                     "project_id":  "item28-scene-114258"
+                                 }
+                 },
+                 {
+                     "step":  27,
+                     "section":  "scene",
+                     "capability":  "scene.inspect",
+                     "payload":  {
+                                     "project_id":  "item28-scene-114258"
+                                 }
+                 },
+                 {
+                     "section":  "scene",
+                     "check":  "scene.inspect.returned_the_drivers_own_document"
+                 },
+                 {
+                     "section":  "scene",
+                     "check":  "scene.inspect.render_is_null_when_none_is_declared"
+                 },
+                 {
+                     "step":  28,
+                     "section":  "paint",
+                     "capability":  "app.launch",
+                     "payload":  {
+                                     "application":  "mspaint",
+                                     "args":  [
+                                                  "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-operator-fixture\\item28-unlocked-20260909-114258\\documents\\item28-export.png"
+                                              ]
+                                 }
+                 },
+                 {
+                     "section":  "paint",
+                     "check":  "app.launch.mspaint_opened_the_exported_image"
+                 },
+                 {
+                     "section":  "paint",
+                     "check":  "creative.export_check.is_not_a_device_capability_in_this_checkout"
+                 },
+                 {
+                     "step":  29,
+                     "section":  "ambient",
+                     "capability":  "desktop.display_status",
+                     "payload":  {
+
+                                 }
+                 },
+                 {
+                     "step":  30,
+                     "section":  "ambient",
+                     "capability":  "desktop.activity_status",
+                     "payload":  {
+
+                                 }
+                 },
+                 {
+                     "step":  31,
+                     "section":  "ambient",
+                     "capability":  "desktop.display_wake",
+                     "payload":  {
+                                     "reason":  "item28_qualification"
+                                 }
+                 },
+                 {
+                     "section":  "ambient",
+                     "check":  "desktop.display_status.observed_a_real_state"
+                 },
+                 {
+                     "section":  "ambient",
+                     "check":  "desktop.activity_status.carries_exactly_the_seven_documented_keys"
+                 },
+                 {
+                     "section":  "ambient",
+                     "check":  "desktop.display_wake.is_a_receipt_not_a_no_op"
+                 },
+                 {
+                     "section":  "ambient",
+                     "check":  "ambient.policy.answers_for_itself"
+                 },
+                 {
+                     "step":  32,
+                     "section":  "alarm",
+                     "capability":  "desktop.activity_status",
+                     "payload":  {
+
+                                 }
+                 },
+                 {
+                     "step":  33,
+                     "section":  "alarm",
+                     "capability":  "desktop.alarm_arm",
+                     "payload":  {
+                                     "label":  "item 28 qualification (never rings)",
+                                     "grace_s":  60,
+                                     "alarm_id":  "item28-6a974d64dd71",
+                                     "fire_at":  "2026-09-09T09:42:58.7081040Z"
+                                 }
+                 },
+                 {
+                     "step":  34,
+                     "section":  "alarm",
+                     "capability":  "desktop.activity_status",
+                     "payload":  {
+
+                                 }
+                 },
+                 {
+                     "step":  35,
+                     "section":  "alarm",
+                     "capability":  "desktop.alarm_disarm",
+                     "payload":  {
+                                     "alarm_id":  "item28-6a974d64dd71"
+                                 }
+                 },
+                 {
+                     "step":  36,
+                     "section":  "alarm",
+                     "capability":  "desktop.activity_status",
+                     "payload":  {
+
+                                 }
+                 },
+                 {
+                     "section":  "alarm",
+                     "check":  "desktop.alarm_arm.accepted_the_instant"
+                 },
+                 {
+                     "section":  "alarm",
+                     "check":  "desktop.activity_status.saw_the_alarm_the_arm_registered"
+                 },
+                 {
+                     "section":  "alarm",
+                     "check":  "arming_made_no_sound"
+                 },
+                 {
+                     "section":  "alarm",
+                     "check":  "desktop.alarm_disarm.left_the_device_as_it_found_it"
+                 }
+             ],
+    "checks":  [
+
+               ],
+    "ready_for_owner":  [
+                            {
+                                "section":  "paint",
+                                "what":  "the visual confirmation that Paint shows the exported image",
+                                "why":  "only a person can see what is on the screen",
+                                "harness":  "look at the Paint window, or docs/evidence/m27-paint-lab-*.json"
+                            },
+                            {
+                                "section":  "ambient",
+                                "what":  "displays actually going dark, and one keypress waking them",
+                                "why":  "only a person can see a blank screen and press a key; this script never darkens a display",
+                                "harness":  "scripts\\core\\owner-m18-3-display.ps1 (arms the real receipt through POST /v1/ambient/test-display and warns first)"
+                            },
+                            {
+                                "section":  "alarm",
+                                "what":  "an alarm actually ringing, and the wake music",
+                                "why":  "only a person can hear it; this script never issues desktop.alarm_start or desktop.play_audio",
+                                "harness":  "scripts\\core\\owner-m18-3-alarm.ps1 -MusicUrl \u003cyour song\u003e (creates a \"test\" alarm through Cloud Core and warns first)"
+                            },
+                            {
+                                "section":  "alarm",
+                                "what":  "desktop.play_audio on the real render endpoint",
+                                "why":  "it needs a WAV served from the dialled broker origin with its sha256; level:0 is the silent lever if a later run wants it",
+                                "harness":  "scripts\\core\\owner-m18-3-alarm.ps1"
+                            }
+                        ],
+    "verdict":  "BLOCKED",
+    "finished_at":  "2026-09-09T08:42:58.7261625Z"
+}

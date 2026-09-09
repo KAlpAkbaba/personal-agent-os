@@ -188,6 +188,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\owner-explain.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\item28-gate.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1
       # The staged update, end to end, against the REAL DeviceService this job just built:
       # candidate identity, the complete capability manifest (40 with -DisplayPower and a

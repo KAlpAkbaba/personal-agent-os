@@ -27,6 +27,11 @@ public sealed class AppLauncher
     {
         ["notepad"] = Environment.ExpandEnvironmentVariables(@"%WINDIR%\System32\notepad.exe"),
         ["calc"] = Environment.ExpandEnvironmentVariables(@"%WINDIR%\System32\calc.exe"),
+        // M27 (docs/QUALIFICATION.md 25.12): opening an exported image in Paint was the one
+        // step of the creative path that no device could take, because mspaint was on neither
+        // allowlist. It is a System32 viewer with no arguments on this path - desktop.* passes
+        // none - and the governed, argument-bearing route is app.launch's OnePathUnderRoots.
+        ["mspaint"] = Environment.ExpandEnvironmentVariables(@"%WINDIR%\System32\mspaint.exe"),
     };
 
     /// <summary>Payload: {"application": "&lt;name&gt;", "args": [...]?}. Result: {"pid": int, "executable": path}.</summary>
@@ -54,6 +59,12 @@ public sealed class AppLauncher
                 retryable: false);
         }
 
+        // NOTE (2026-09-09): this legacy route passes `args` through unfiltered, while
+        // app.launch - the governed spelling of the same act - confines a path to the
+        // authorised roots (ArgumentPolicy, ADR-0082 addendum 2). The asymmetry predates
+        // mspaint and is a protocol-level change (DEVICE_PROTOCOL.md §6 declares `args`
+        // here), so it is not made silently in passing; every caller in the repo today
+        // sends no args, and the voice/operator plan uses app.launch.
         var startInfo = new ProcessStartInfo(executable) { UseShellExecute = false };
         if (payload["args"] is JsonArray args)
         {

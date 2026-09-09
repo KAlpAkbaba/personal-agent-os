@@ -136,6 +136,10 @@ public sealed class OperatorCapabilities
         {
             ["notepad"] = Path.Combine(windows, "System32", "notepad.exe"),
             ["calc"] = Path.Combine(windows, "System32", "calc.exe"),
+            // M27: the creative export check opens an image the device itself just wrote, in
+            // the viewer every Windows carries. Same argument policy as notepad - one absolute
+            // path inside the authorised roots - so it can never be given anything else.
+            ["mspaint"] = Path.Combine(windows, "System32", "mspaint.exe"),
             ["explorer"] = Path.Combine(windows, "explorer.exe"),
             ["powershell"] = TerminalRunner.DefaultPowerShellPath(),
             ["chrome"] = chrome,
