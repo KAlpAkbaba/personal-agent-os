@@ -241,6 +241,13 @@ class Intent(StrEnum):
     NEWS_SUMMARIZE = "news_summarize"  # Haberleri özetle / Bugünkü haberleri özetle
     NEWS_QUERY_LATEST = "news_query_latest"  # Son haber ne zaman yüklenmiş?
 
+    # ADR-0112: media the OWNER named. Deliberately NARROW - it fires only when the
+    # words carry an explicit media marker ("youtube", "şarkı", "müzik", "klip") - so
+    # that "haberleri aç" stays NEWS_OPEN, "Chrome'u aç" stays APP_OPEN and "perdeleri
+    # aç" stays whatever it already was. A play verb alone means nothing here.
+    MEDIA_PLAY = "media_play"  # YouTube'dan X aç / X şarkısını aç / X çal
+    MEDIA_STOP = "media_stop"  # Durdur (yalnızca bu araçla açılanı)
+
     # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): the Creative Tools Operator.
     # Every one of these targets app.creative through tools_creative - never a second
     # image-editing path. Checked EARLY in resolve_intent (before the alarm/ambient
@@ -390,6 +397,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     # mutations (a browser opens/plays; a research task is created) - the same class
     # every other family above gets.
     Intent.NEWS_OPEN: "news.open",
+    Intent.MEDIA_PLAY: "media.play",
+    Intent.MEDIA_STOP: "media.stop",
     Intent.NEWS_SUMMARIZE: "news.summarize",
     # M27 (spec §5): planning and executing a creative-tool edit is a real mutation
     # (a file is produced, compared and stored) - the same class every other family
@@ -798,6 +807,13 @@ class ResolvedIntent:
     #: win only when they actually said something" rule ``app_ref``/``scene_ref``
     #: already follow.
     news_source_ref: str | None = None
+    #: ADR-0112: for MEDIA_PLAY, the title the owner's WORDS named ("YouTube'dan
+    #: 'Doğum günün kutlu olsun Kadir' aç." -> "doğum günün kutlu olsun kadir"), or
+    #: None when they named a medium but no title ("müzik aç") - which the tool turns
+    #: into a question, never a search for the word "müzik". The model's own ``query``
+    #: argument is the fallback for turns the router did not classify, never the
+    #: preference: a title said out loud must not be paraphrased.
+    media_query: str | None = None
     #: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): for the Creative Tools family, the
     #: tool word the owner's WORDS carried ("paint" / "photoshop" / "illustrator" /
     #: "figma"), or None when no tool word was said at all - the tool then falls back
@@ -872,6 +888,7 @@ class ResolvedIntent:
             "artifact_title": self.artifact_title,
             "spoken_numbers": list(self.spoken_numbers) if self.spoken_numbers else None,
             "news_source_ref": self.news_source_ref,
+            "media_query": self.media_query,
             "native_target": self.native_target,
             "native_ref": self.native_ref,
         }
@@ -1503,9 +1520,7 @@ def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool | int] | N
         # 1.._MAX_SPOKEN_MINUTES, and a bound restated here could only ever drift from it.
         minutes = spoken_minutes(tokens)
         if minutes is not None:
-            field = (
-                "asleep_after_s" if _has(tokens, *_ASLEEP_STEMS) else "away_after_s"
-            )
+            field = "asleep_after_s" if _has(tokens, *_ASLEEP_STEMS) else "away_after_s"
             changes[field] = minutes * 60
     return changes or None
 
@@ -4131,6 +4146,226 @@ def _news_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     return None
 
 
+# ------------------------------------------------------ owner-requested media
+
+# ADR-0112. The device has always been able to open YouTube (the wake alarm does it
+# every morning); what was missing was a way for the OWNER to ask. This matcher is
+# deliberately the narrowest thing that can carry the request, because the verb it
+# needs -- "aç" -- is the most overloaded word in this resolver: it already opens
+# applications, windows, displays, documents, news, the eye and the curtains.
+#
+# So a play verb is NEVER enough on its own. An explicit media marker must be present,
+# and the news noun must not be: "haberleri aç" is Latest News Mode's, decided one
+# block above this one and never reached here.
+
+#: Words that say "this is media", not an application, a window or a document.
+#: Stems, cut short of Turkish consonant softening: "müzik" becomes "müziği", "klip"
+#: becomes "klibi". Matching the full word missed "Müziği kapat." entirely, which is
+#: how the owner would actually say it.
+_MEDIA_MARKER_STEMS: Final[tuple[str, ...]] = (
+    "youtube",
+    "şarkı",
+    "sarki",
+    "müzi",
+    "muzi",
+    "klip",
+    "klib",
+    "parça",
+    "parca",
+)
+#: Play verbs. "aç" is included but is inert without a marker (see above).
+_MEDIA_PLAY_VERB_STEMS: Final[tuple[str, ...]] = ("çal", "cal", "oynat", "aç", "ac", "dinlet")
+#: "Durdur." on its own is the ambient/alarm family's; MEDIA_STOP needs the media noun
+#: too ("şarkıyı durdur", "müziği kapat"), so a bare "durdur" keeps its old meaning.
+_MEDIA_STOP_VERB_STEMS: Final[tuple[str, ...]] = ("durdur", "kapat", "sustur")
+
+#: Stripped from the spoken payload: the markers, the verbs, and the connective words
+#: that carry no part of a title. Everything that survives is what the owner named.
+_MEDIA_STRIP_PHRASES: Final[tuple[str, ...]] = (
+    "youtube'dan",
+    "youtube'da",
+    "youtube'a",
+    "youtubedan",
+    "youtube'tan",
+    "youtube",
+    "bana",
+    "bir",
+    "şu",
+    "su",
+    "şarkısını",
+    "sarkisini",
+    "şarkısı",
+    "sarkisi",
+    "şarkıyı",
+    "sarkiyi",
+    "şarkı",
+    "sarki",
+    "müziğini",
+    "muzigini",
+    "müziği",
+    "muzigi",
+    "müzik",
+    "muzik",
+    "klibini",
+    "klibi",
+    "klip",
+    "parçasını",
+    "parcasini",
+    "parçayı",
+    "parcayi",
+    "parça",
+    "parca",
+    "videosunu",
+    "videoyu",
+    "video",
+)
+#: Verbs dropped wherever they appear, not only at the end: "Şu şarkıyı çal: Sezen
+#: Aksu" puts the verb in the middle, and leaving it in searches for the word "çal".
+_MEDIA_DROPPED_VERBS: Final[frozenset[str]] = frozenset(
+    {"çal", "cal", "oynat", "dinlet", "aç", "ac", "açsana", "acsana", "çalsana", "calsana"}
+)
+#: Trailing verbs to drop once the payload is isolated.
+_MEDIA_TRAILING_VERBS: Final[tuple[str, ...]] = (
+    "açar mısın",
+    "acar misin",
+    "çalar mısın",
+    "calar misin",
+    "oynatır mısın",
+    "oynatir misin",
+    "aç",
+    "ac",
+    "çal",
+    "cal",
+    "oynat",
+    "dinlet",
+    "açsana",
+    "acsana",
+)
+
+
+#: "Şarkıyı TEKRAR çal." is not a new request, it is REPEAT -- an existing intent this
+#: matcher stole the moment it was written, caught by the corpus regression suite the
+#: same minute. A word that points BACK at something already playing keeps its old
+#: meaning; only a fresh naming reaches this family.
+_MEDIA_BACKREFERENCE_STEMS: Final[tuple[str, ...]] = (
+    "tekrar",
+    "yeniden",
+    "devam",
+    "sürdür",
+    "surdur",
+    "duraklat",
+)
+
+
+#: A time reference turns "play this song" into "play this song AT". "Sabah yedi
+#: otuzda bu şarkıyı çal" is an alarm the owner is trying to create, not a song to
+#: start now, and the corpus expects it to stay unrouted rather than become a
+#: playback -- sixteen cases said so the first time this matcher was written.
+_MEDIA_SCHEDULE_STEMS: Final[tuple[str, ...]] = (
+    "sabah",
+    "akşam",
+    "aksam",
+    "gece",
+    "öğle",
+    "ogle",
+    "yarın",
+    "yarin",
+    "saat",
+    "alarm",
+    "uyandır",
+    "uyandir",
+    "kur",
+    "sonra",
+    "dakika",
+)
+
+
+def _media_match(tokens: tuple[str, ...], utterance: str = "") -> tuple[Intent, str] | None:
+    """MEDIA_PLAY/MEDIA_STOP, or None -- and None is the common answer by design."""
+    if _news_noun(tokens) is not None:
+        return None
+    if _has(tokens, *_MEDIA_BACKREFERENCE_STEMS):
+        return None
+    if _has(tokens, *_MEDIA_SCHEDULE_STEMS):
+        return None
+    if utterance and _CLOCK_RE.search(utterance):
+        return None
+    marker = _has(tokens, *_MEDIA_MARKER_STEMS)
+    if marker is None:
+        return None
+    if _is_question(tokens):
+        return None
+    if _has(tokens, *_MEDIA_STOP_VERB_STEMS):
+        return Intent.MEDIA_STOP, f"{marker} durdur"
+    if _has(tokens, *_MEDIA_PLAY_VERB_STEMS):
+        return Intent.MEDIA_PLAY, f"{marker} aç"
+    return None
+
+
+def _extract_media_query(utterance: str) -> str | None:
+    """What the owner NAMED, read off the raw text rather than the token list.
+
+    A song title is the owner's own words, capitals, apostrophes and all, and it is
+    what goes to a search engine -- so it is taken from the utterance, the same rule
+    ``_extract_type_text`` follows for the text to be typed. ``None`` when the words
+    named a medium but no title ("müzik aç"), which the tool turns into a question
+    rather than a search for the word "müzik".
+    """
+    if not utterance:
+        return None
+    text = turkish_casefold(utterance).strip().strip(".!?")
+    quoted = _quoted_span(text)
+    if quoted is not None:
+        return quoted[:200]
+    kept: list[str] = []
+    for raw in text.replace(",", " ").replace(":", " ").split():
+        word = raw.strip(' ,.:;!?"')
+        if not word or word in _MEDIA_STRIP_PHRASES or word in _MEDIA_DROPPED_VERBS:
+            continue
+        kept.append(word)
+    payload = " ".join(kept).strip(' ,.:;"')
+    for verb in _MEDIA_TRAILING_VERBS:
+        if payload.endswith(" " + verb):
+            payload = payload[: -(len(verb) + 1)].strip(' ,.:;"')
+            break
+        if payload == verb:
+            payload = ""
+            break
+    return payload[:200] or None
+
+
+def _quoted_span(text: str) -> str | None:
+    """A quoted title, when the quotation marks are really quotation marks.
+
+    The apostrophe is the reason this is a function and not two ``find`` calls.
+    In Turkish it separates a suffix from a proper noun -- ``YouTube'dan``,
+    ``Show'un`` -- so the naive reading of "YouTube'dan 'Doğum günün kutlu olsun
+    Kadir' aç" opened its quote inside the FIRST word and returned ``dan`` as the
+    song title. A quote only counts when it stands free: preceded by the start of
+    the line or a space, and closed by a mark followed by the end, a space or
+    punctuation.
+    """
+    for opener, closer in (("“", "”"), ('"', '"'), ("'", "'")):
+        start = -1
+        while True:
+            start = text.find(opener, start + 1)
+            if start < 0:
+                break
+            if start > 0 and not text[start - 1].isspace():
+                continue
+            end = start
+            while True:
+                end = text.find(closer, end + 1)
+                if end < 0:
+                    break
+                after = text[end + 1 : end + 2]
+                if after == "" or after.isspace() or after in ",.:;!?":
+                    inner = text[start + 1 : end].strip()
+                    return inner or None
+            break
+    return None
+
+
 # ------------------------------------------------- research interaction classes
 
 #: A research word in any Turkish inflection: "araştır", "araştırma", "araştırmayı",
@@ -5170,6 +5405,21 @@ def resolve_intent(
             scope=SCOPE_CONVERSATION,
             matched=news_matched_text,
             news_source_ref=_news_source_ref(tokens),
+            **base,
+        )
+
+    # 0e-4. ADR-0112: media the owner named. AFTER the news block on purpose - "haberleri
+    #       aç" is Latest News Mode's and _media_match refuses outright when the news noun
+    #       is present - and after the M19 application/window families for the same reason
+    #       in reverse: this matcher needs an explicit media marker, so "Chrome'u aç" and
+    #       "pencereyi aç" never reach it at all.
+    if media_matched := _media_match(tokens, text):
+        media_intent, media_matched_text = media_matched
+        return ResolvedIntent(
+            media_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=media_matched_text,
+            media_query=(_extract_media_query(text) if media_intent is Intent.MEDIA_PLAY else None),
             **base,
         )
 

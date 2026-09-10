@@ -77,6 +77,7 @@ from app.voice.realtime_sessions.tools_genesis import (
     register_genesis_tools,
 )
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
+from app.voice.realtime_sessions.tools_media import register_media_tools
 from app.voice.realtime_sessions.tools_native import (
     NATIVE_TOOL_NAMES,
     register_native_tools,
@@ -1724,6 +1725,10 @@ def default_registry() -> ToolRegistry:
     register_briefing_tools(reg)
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode's voice tools.
     register_news_tools(reg)
+    # ADR-0112: the owner's own media. The device could open YouTube all along -- the
+    # alarm does it every morning -- but nothing let the OWNER ask, so the request fell
+    # through to capability.propose and was written down instead of done.
+    register_media_tools(reg)
     # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools Operator's voice tools.
     register_creative_tools(reg)
     # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory's voice tools.

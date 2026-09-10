@@ -319,7 +319,7 @@ def test_the_four_answers_come_from_the_rows(wired) -> None:
             _ctx(session, runtime, settings, utterance="Hangi sürüm çalışıyor?"), {}
         )
         assert "dışa aktarılmamış" in version["speech"]
-        assert "eylem sözleşmesi 12" in version["speech"]
+        assert "eylem sözleşmesi 13" in version["speech"]
         fix = tools_evolution.evolution_status(
             _ctx(session, runtime, settings, utterance="Son hangi hatayı düzelttin?"), {}
         )

@@ -286,6 +286,17 @@ SIDE_EFFECTS_NEWS_OPEN: Final[frozenset[str]] = frozenset(
     {"browser.session_open", "browser.media_play"}
 )
 
+#: ADR-0112: the owner's OWN media. Three calls, in this order, on one isolated media
+#: session: open, SEARCH (the news surface never searches - it resolves from a channel
+#: feed - so this is the one thing that tells the two families apart in the device
+#: trail), then play. Never ``desktop.alarm_*``: a song the owner asked for must not
+#: touch the wake alarm's tone or its dedicated browser profile.
+SIDE_EFFECTS_MEDIA_PLAY: Final[frozenset[str]] = frozenset(
+    {"browser.session_open", "browser.search", "browser.media_play"}
+)
+#: "Şarkıyı durdur." stops the session this family opened -- nothing else.
+SIDE_EFFECTS_MEDIA_STOP: Final[frozenset[str]] = frozenset({"browser.media_stop"})
+
 #: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, §7, ADR-0093): the Creative Tools Operator
 #: reaches the FAKE DEVICE never at all in this Cloud Core half — Paint's own edit runs
 #: entirely in-process with Pillow, against the object store, never a device call
@@ -4106,6 +4117,93 @@ def _news_open_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _media_cases() -> list[UtteranceCase]:
+    """ADR-0112. The first two are the owner's OWN words, from 2026-09-10, when the
+    system twice answered "geliştirme listeme aldım" and did nothing."""
+    canonical = [
+        ("m.play.1", "YouTube'dan 'Doğum günün kutlu olsun Kadir' aç."),
+        ("m.play.3", "YouTube'dan Sezen Aksu Gülümse aç."),
+        ("m.play.4", "Bana bir Tarkan şarkısı aç."),
+        ("m.play.5", "Şu şarkıyı çal: Müslüm Gürses Nilüfer."),
+    ]
+    cases: list[UtteranceCase] = []
+    for case_id, text in canonical:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="media_play",
+                    expected_tool="media.play",
+                    expected_response=RESPONSE_OK,
+                    # Negative assertions: the owner's song must never start a research
+                    # crawl, never open the news surface and never touch the alarm.
+                    forbidden_tools=("research.start", "news.open", "alarm.create"),
+                    side_effects=SIDE_EFFECTS_MEDIA_PLAY,
+                    category="media",
+                )
+            )
+        )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="m.play.no_title.1",
+                utterance="Müzik aç.",
+                # A medium with no title. Searching for the word "müzik" and playing
+                # whatever came back would be the machine choosing for the owner; the
+                # honest answer is the question "Neyi açayım efendim?".
+                expected_intent="media_play",
+                expected_tool="media.play",
+                expected_response=RESPONSE_REFUSED,
+                side_effects=SIDE_EFFECTS_NONE,
+                category="media",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="m.stop.1",
+                utterance="Şarkıyı durdur.",
+                expected_intent="media_stop",
+                expected_tool="media.stop",
+                expected_response=RESPONSE_OK,
+                forbidden_tools=("alarm.stop",),
+                # Stopping opens nothing; the play in the preceding turn does, and its
+                # calls are the ones this policy has to allow alongside the stop.
+                side_effects=SIDE_EFFECTS_MEDIA_PLAY | SIDE_EFFECTS_MEDIA_STOP,
+                category="media",
+                # A stop needs something to stop. Run a real play first, in the SAME
+                # session -- the durable row it leaves behind is what "durdur" names.
+                preceding_turns=(("YouTube'dan Sezen Aksu Gülümse aç.", "media.play"),),
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="m.play.compound.1",
+                utterance="Chrome aç, YouTube'a gir, bir şey aç.",
+                # A KNOWN LIMITATION, recorded rather than hidden. Three commands in
+                # one breath: the router takes the first verb it understands and opens
+                # Chrome, which is a real and useful half -- before ADR-0112 the whole
+                # sentence became "geliştirme listeme aldım" and nothing happened at
+                # all. Splitting a compound utterance into a plan is its own feature
+                # and does not exist; when it does, this case's expectation changes
+                # and the change will be visible here.
+                expected_intent="app_open",
+                expected_tool="operator.app_open",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_OPERATOR_APP_OPEN,
+                category="media",
+                regression_issue_id="compound utterance: only the first command runs",
+                notes="ADR-0112 known limitation",
+            )
+        )
+    )
+    return cases
+
+
 def _news_summarize_cases() -> list[UtteranceCase]:
     canonical = [
         ("n.sum.1", "Haberleri özetle.", "canonical"),
@@ -4279,6 +4377,7 @@ def _news_refusal_cases() -> list[UtteranceCase]:
 def _news_cases() -> list[UtteranceCase]:
     return [
         *_news_open_cases(),
+        *_media_cases(),
         *_news_summarize_cases(),
         *_news_query_cases(),
         *_news_asr_noise_regression_cases(),
@@ -4930,10 +5029,16 @@ def _native_create_windows_cases() -> list[UtteranceCase]:
     side of that line."""
     cases: list[UtteranceCase] = []
     for case_id, text, source in (
-        ("nativeapps.create.win.canonical", "Bana Windows için masaüstü uygulaması yap.",
-         "canonical"),
-        ("nativeapps.create.win.para",
-         "Windows için bir masaüstü uygulaması yapar mısın?", "paraphrase"),
+        (
+            "nativeapps.create.win.canonical",
+            "Bana Windows için masaüstü uygulaması yap.",
+            "canonical",
+        ),
+        (
+            "nativeapps.create.win.para",
+            "Windows için bir masaüstü uygulaması yapar mısın?",
+            "paraphrase",
+        ),
         ("nativeapps.create.win.short", "Masaüstü uygulaması yap.", "paraphrase"),
         ("nativeapps.create.win.asr", "windows icin masaustu uygulamasi yap", "asr_noise"),
     ):

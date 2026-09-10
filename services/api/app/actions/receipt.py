@@ -161,7 +161,14 @@ TERMINAL_CLAIMABLE: Final[frozenset[str]] = frozenset({TERMINAL_VERIFIED, TERMIN
 #: from the ledger after a restart, an explicit `display.wake` starting the command
 #: holdoff, and the alarm-wake holdoff actually started by `fire_alarm` (it had no
 #: caller on v10).
-ACTION_CONTRACT_VERSION: Final = 12
+#: v13 (2026-09-10, ADR-0112): `media.play` / `media.stop` - the owner may finally ask
+#: for a video by name. The device could always do it (the wake alarm opens YouTube
+#: every morning, and Latest News Mode plays a bulletin) but no tool let the OWNER ask,
+#: so "YouTube'dan ... aç" fell through to `capability.propose` and was written down
+#: instead of done - twice, on 2026-09-10, while the owner watched. The receipt carries
+#: the same distinction the news surface draws: `verified` only when the worker proved
+#: the element advanced, `unverified` when a browser opened and it could not.
+ACTION_CONTRACT_VERSION: Final = 13
 
 FAKE_COMPLETION_PHRASES: Final[tuple[str, ...]] = (
     "yapmış gibi düşün",

@@ -1278,8 +1278,7 @@ def record_client_events(
                     from app.nativefactory.models import NativeBuildRow
 
                     native_build_focused_known = (
-                        db.execute(select(NativeBuildRow.id).limit(1)).scalars().first()
-                        is not None
+                        db.execute(select(NativeBuildRow.id).limit(1)).scalars().first() is not None
                     )
                 except Exception:  # noqa: BLE001 - a deployment without the native tables
                     native_build_focused_known = False
@@ -1334,6 +1333,14 @@ def record_client_events(
                 "extensions": intent.extensions,
                 # M21 (spec §3): the mail/calendar fields the owner's WORDS carried, for
                 # the same "owner's words win over the model's argument" reason.
+                # ADR-0112: the title the owner NAMED, for the same reason -- a song
+                # said out loud must not be paraphrased by the model on its way to a
+                # search engine. This list is explicit, so a field added to
+                # ResolvedIntent and not added HERE never reaches the tool: exactly
+                # what happened the first time media.play was wired, caught by the
+                # corpus and not by the tool's own unit test (which builds the turn
+                # record by hand and so cannot prove the field travels).
+                "media_query": intent.media_query,
                 "mail_ref": intent.mail_ref,
                 "calendar_ref": intent.calendar_ref,
                 # M22 (spec §5): the artifact fields the owner's WORDS carried, for the

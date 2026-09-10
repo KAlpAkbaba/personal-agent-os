@@ -9227,3 +9227,108 @@ stopped. The lock is now held by a helper thread and released on a deadline, so 
 version answers 200 and the test fails on the status in fifteen seconds. Same lesson as the
 `stop()` assertion above, and the same one `a-stopwatch-is-not-an-assertion` records: the
 mutation has to produce a failure, not an absence.
+
+## ADR-0112 — It could open YouTube all along; nobody could ask it to (2026-09-10)
+
+**What the owner did.** Twice, at 16:26 and again minutes later, they asked for a song:
+"YouTube'dan 'Doğum günün kutlu olsun Kadir' aç." and "Chrome aç, YouTube'a gir, bir şey
+aç." Both times the answer was *"Bunu şu an yapamıyorum efendim, ama geliştirme listeme
+aldım ve üzerinde çalışacağım."* Then they looked at the cockpit and saw nothing, and asked
+whether the work had started.
+
+**What the machine actually did, from its own rows.** It recorded the request properly and
+reasoned about it well:
+
+```
+capability_gaps          request_text  "YouTube'dan 'Doğum günün kutlu olsun Kadir' aç."
+                         resolution    generation          status  open      16:26:05Z
+  request_received       recorded
+  existing_capability    insufficient
+  composition            insufficient
+  configuration          insufficient
+  extension              insufficient
+  component_adaptation   insufficient
+  new_skill              SATISFIED
+  product_core_change    not_applicable
+evolution_opportunities  source=capability_gap  status=idea                  16:28:04Z
+```
+
+Every step of that is right except the conclusion. A new skill was not needed.
+
+**The device has been able to do this since M18.3.** `app/alarms/sequence.py` opens YouTube
+every morning for the wake song, and `app/news/playback_service.py` plays a news bulletin,
+both through `browser.session_open` + `browser.media_play`. The device advertises the whole
+toolkit — `browser.navigate`, `browser.search`, `browser.find`, `browser.extract`,
+`browser.media_play/volume/status/stop`. What did not exist was a way for the OWNER to ask:
+none of the 115 registered voice tools opened a web page or played a video the owner named,
+and `tools_operator.py` explicitly instructs the model *"browser.session_open ya da
+browser.navigate ÇAĞIRMA"*. The model could see the door and was forbidden to open it, so
+every such request fell through to `capability.propose`, which wrote it down.
+
+**So this is a route, not a capability.** `media.play` / `media.stop`, and the whole feature
+fits inside Cloud Core — no device change, no protocol version.
+
+**The session profile, decided by reading the worker rather than guessing.** A media session
+may not use the `research` profile (the worker refuses it), must not take `alarm` (a song
+the owner asked for is not the wake song) and may not take `news` (enforced as Latest News
+Mode's alone). The worker's own refusal message names the third option — *"use profile
+'alarm', 'news' (or 'isolated')"* — and `isolated` is right for an ad-hoc request: fresh,
+non-persistent, nothing kept. One session does the search AND the playback, because a media
+session carries the same risk classes as a research one (READ + NAVIGATE) and
+`browser.search` is NAVIGATE. Checking that before writing it is the difference between
+this and the 2026-09-09 typing defect, which was a payload the device refused.
+
+**What is claimed, and what is not.** `browser.media_play`'s own `verified` field — the
+element's `currentTime` advanced — is the only thing this calls "playing". A browser that
+opened without proving anything is `unverified`, its own status and its own sentence
+("Açtım efendim ama çaldığını doğrulayamadım"), never folded into either neighbour. The
+choice of video is a pure function over the device's search results: only a real
+`youtube.com/watch?v=` (a lookalike host, a Short, a channel page and a playlist are all
+refused), first in the engine's own rank order, and the URL played is REBUILT from the video
+id so a SERP's tracking parameters never reach the device.
+
+**Four defects in my own work, each found by a test rather than by reading.**
+
+1. The Turkish apostrophe is a suffix separator, not a quote. "YouTube'dan 'X' aç" opened
+   its quote inside the first word and returned `dan` as the song title.
+2. `_has` is prefix-matched and Turkish softens consonants: "müzik" becomes "müziği", so
+   "Müziği kapat." matched nothing at all.
+3. **The corpus caught what the unit tests could not.** `media_query` is carried to the tool
+   through an explicit field list in `service.py`, and a field added to `ResolvedIntent` and
+   not added THERE never arrives. The tool's own test builds the turn record by hand, so it
+   passed; sixteen corpus cases did not. The same shape as every "built and never wired"
+   defect this repository has recorded, at the smallest possible scale.
+4. `long_running=True` made the tool answer "running" when the work was already done, so
+   the owner would have been told nothing.
+
+**And two regressions in utterances that were already working**, both caught by the corpus
+within minutes of the matcher being written: "Şarkıyı tekrar çal" is REPEAT, not a new
+request, and "Sabah yedi otuzda bu şarkıyı çal" is an alarm the owner is creating. The
+matcher now refuses outright on a back-reference or a time. It was written narrow on purpose
+— an explicit media marker is required, so "haberleri aç", "Chrome'u aç", "ekranı aç" and
+"pencereyi aç" never reach it — and it still took two guards to stop it stealing.
+
+**A known limitation, recorded rather than hidden.** "Chrome aç, YouTube'a gir, bir şey aç."
+is three commands in one breath. The router takes the first verb it understands and opens
+Chrome — a real and useful half, where before the whole sentence became a note in a list —
+but the media half is not reached. Splitting a compound utterance into a plan is its own
+feature and does not exist. The corpus case `m.play.compound.1` states the current
+behaviour, so the day that changes it changes visibly.
+
+**What this does NOT fix, said plainly.** The owner asked why the development had not
+started and whether they would be told when it finished. Neither is answered by this ADR:
+nothing drives an `idea` forward on a timer (`EvolutionService.advance` has two callers,
+both request-driven), and `pending_briefings` holds fourteen undelivered rows, every one of
+them expired, because the queue has a filler and no deliverer. Those are the next two work
+items and they are named here so the gap is not mistaken for this feature's edge.
+
+**A fifth defect, and the gate found it rather than a reviewer.** Bumping
+`ACTION_CONTRACT_VERSION` to 13 and updating the health endpoint's own assertion was not
+enough: two more tests pin the contract deliberately, and both went red.
+`test_create_selects_by_capability_and_returns_the_contract` fixes the EXACT set of tool
+names a session is created with, so `media.play`/`media.stop` arrived as "extra items in
+the left set"; `test_the_four_answers_come_from_the_rows` fixes the sentence the owner
+hears when they ask which version is running, which names the action contract out loud.
+Neither is redundant with the health check — one guards what the MODEL is handed, the other
+what the OWNER is told — and adding a voice tool means updating all four places. Recorded
+here because the next tool family will need the same list.

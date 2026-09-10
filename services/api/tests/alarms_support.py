@@ -226,6 +226,20 @@ def happy_device_results() -> dict[str, DeviceRunResult]:
         "desktop.alarm_stop": ok(stopped=True),
         "desktop.play_audio": ok(played=True, duration_ms=2500),
         "browser.session_open": ok(opened=True),
+        # ADR-0112: the owner's own media asks the device to SEARCH first, then plays
+        # the first real watch URL the results carry. One YouTube result and one
+        # decoy, so a corpus case proves the picker skipped the decoy rather than
+        # taking whatever came back first.
+        "browser.search": ok(
+            results=[
+                {"rank": 1, "url": "https://example.com/lyrics", "title": "sozler"},
+                {
+                    "rank": 2,
+                    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    "title": "Dogum Gunun Kutlu Olsun",
+                },
+            ]
+        ),
         "browser.media_play": ok(playing=True, verified=True, current_time_s=1.2),
         "browser.media_volume": ok(applied=True, level_to=0.6),
         "browser.media_status": ok(present=True, playing=True, ended=False),

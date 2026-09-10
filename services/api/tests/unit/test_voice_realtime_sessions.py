@@ -337,6 +337,9 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode.
         "news.open",
         "news.close",
+        # ADR-0112: the owner may ask for a video by name.
+        "media.play",
+        "media.stop",
         "news.summarize",
         "news.query_latest",
         # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools Operator.

@@ -111,6 +111,11 @@ SUBSYSTEM_BRIEFING = "briefing"
 #: and from which channel?" is answerable without separating it from the M13 research
 #: rows a summary's own device calls happen to share.
 SUBSYSTEM_NEWS = "news"
+#: ADR-0112: media the OWNER asked for by name, played in its own isolated browser
+#: session. Its own subsystem, not ``news`` and not ``routine``: "bana ne açtın?" must
+#: not return the morning's wake song or a news bulletin, and the alarm's playback is
+#: already filed under ``routine`` because the alarm IS a routine's action.
+SUBSYSTEM_MEDIA = "media"
 #: M27 Creative Tools Operator (docs/M27_CREATIVE_TOOLS_SPEC.md, ADR-0093): a creative
 #: edit (Paint/Photoshop/Illustrator/Figma) the assistant planned, executed and
 #: compared against what was asked. Its own subsystem so "what did you edit for me, in
@@ -155,6 +160,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_WEATHER,
     SUBSYSTEM_BRIEFING,
     SUBSYSTEM_NEWS,
+    SUBSYSTEM_MEDIA,
     SUBSYSTEM_CREATIVE,
     SUBSYSTEM_NATIVEFACTORY,
 )
@@ -443,6 +449,14 @@ EVENT_TYPE_NEWS_PLAYBACK_FAILED = "news.playback_failed"
 EVENT_TYPE_NEWS_CLOSED = "news.closed"
 EVENT_TYPE_NEWS_SUMMARIZED = "news.summarized"
 
+# ADR-0112 owner-requested playback. ``opened`` means the worker PROVED the element
+# advanced; ``unverified`` is its own row rather than a weaker ``opened``, because the
+# difference is the whole honesty of the feature.
+EVENT_TYPE_MEDIA_OPENED = "media.opened"
+EVENT_TYPE_MEDIA_UNVERIFIED = "media.playback_unverified"
+EVENT_TYPE_MEDIA_FAILED = "media.playback_failed"
+EVENT_TYPE_MEDIA_STOPPED = "media.stopped"
+
 # M27 Creative Tools Operator (docs/M27_CREATIVE_TOOLS_SPEC.md §3, §4, ADR-0093): one
 # row per creative-run lifecycle transition — the same "one row per transition"
 # discipline app.creative3d's own scene rows already give M25.
@@ -581,6 +595,10 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_NEWS_PLAYBACK_FAILED,
     EVENT_TYPE_NEWS_CLOSED,
     EVENT_TYPE_NEWS_SUMMARIZED,
+    EVENT_TYPE_MEDIA_OPENED,
+    EVENT_TYPE_MEDIA_UNVERIFIED,
+    EVENT_TYPE_MEDIA_FAILED,
+    EVENT_TYPE_MEDIA_STOPPED,
     EVENT_TYPE_CREATIVE_CREATED,
     EVENT_TYPE_CREATIVE_APPLIED,
     EVENT_TYPE_CREATIVE_VERIFIED,
@@ -738,6 +756,10 @@ def validate_production_state(value: str) -> str:
 
 __all__ = [
     "ALARM_EVENT_TYPE_BY_STATE",
+    "EVENT_TYPE_MEDIA_FAILED",
+    "EVENT_TYPE_MEDIA_OPENED",
+    "EVENT_TYPE_MEDIA_STOPPED",
+    "EVENT_TYPE_MEDIA_UNVERIFIED",
     "EVENT_TYPES",
     "EVOLUTION_EVENT_TYPES",
     "GENESIS_EVENT_TYPE_BY_STATE",

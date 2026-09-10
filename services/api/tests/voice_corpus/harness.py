@@ -98,6 +98,7 @@ from app.mail.models import MailDraftRow, MailIndexRow
 from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
 from app.main import create_app
+from app.media.models import OwnerMediaPlaybackRow
 from app.narration.models import NarrationSession, PronunciationEntry
 from app.nativefactory.models import NativeBuildRow
 from app.nativefactory.service import RunResult, build_and_test, generate, plan_build
@@ -323,6 +324,7 @@ TABLES = (
     NewsSourceRow.__table__,
     NewsResolutionRow.__table__,
     NewsPlaybackContextRow.__table__,
+    OwnerMediaPlaybackRow.__table__,  # ADR-0112
     NativeBuildRow.__table__,
 )
 
@@ -953,9 +955,7 @@ class Harness:
             # CTX_CREATIVE_PAINT already uses). Their existence is also the caller fact
             # ``native_build_focused`` the router reads for the three spec §6 utterances
             # that carry no native noun.
-            payload = (
-                NATIVE_ANDROID_SPEC if context == CTX_NATIVE_ANDROID else NATIVE_WINDOWS_SPEC
-            )
+            payload = NATIVE_ANDROID_SPEC if context == CTX_NATIVE_ANDROID else NATIVE_WINDOWS_SPEC
             with self.factory() as db:
                 rows = plan_build(db, payload, facts=NATIVE_TOOLCHAIN)
                 row = rows[0]
