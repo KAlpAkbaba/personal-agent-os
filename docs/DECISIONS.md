@@ -9017,3 +9017,52 @@ parsing, and an installer that did not know its own host was blue/green — and 
 them came from moving fast at the end of a long stretch. A pipeline that edits the product's
 own source is the last thing to build in that state. The design above is the work item; it
 begins with file selection, and it stops at `shadow_ready` exactly as everything else does.
+
+## ADR-0110 — It found the defects and told no one (2026-09-10)
+
+**Owner directive.** "yanlış yola gidiyorsa bunu sen düzeltme, kendisinin sana gelerek
+düzeltmesini istiyorum."
+
+**The evidence that made the point better than any argument.** Three rows from
+`evolution_opportunities`, with their own timestamps:
+
+```
+2026-09-09 19:04:06   Tekrarlayan eylem hatası: operator.type_text (validation_error)
+2026-09-09 19:42:37   Tekrarlayan eylem hatası: operator.type_text (postcondition_fail)
+2026-09-10 04:32:43   Tekrarlayan eylem hatası: display.wake  (no_capable_device)
+```
+
+The first is the Notepad defect the owner reported at almost the same minute. The third is
+the 07:30 alarm: it had failed to wake anything at 04:30, and the Supervisor knew at 04:32.
+The owner found out at 08:10, by being startled awake by it ringing forty minutes late.
+
+**Every one of those was recorded and none was carried.** `queue_briefing` — a complete
+queue with policies, priorities, expiry and a Turkish sentence per event — had exactly two
+callers in the entire product, and both were in `research/browser_activities.py`. The
+machinery to bring a finding to the owner existed and was wired to one subsystem.
+
+**A design that was tried and abandoned, because it was wrong.** The obvious hook is
+`ledger.service.record` — the one choke point every event passes through. It fails on
+contact: `queue_briefing` itself records a `briefing_queued` event, so recording would
+record, and eleven ledger tests went red counting rows that were suddenly doubled. A ledger
+is a record, not a notifier. Reverted rather than papered over by adjusting the counts.
+
+**Where it belongs.** `EvolutionService._record_ledger` — the one place every opportunity
+transition is written, including `IDEA` and the `owner_approval_required` event that
+`shadow_ready` emits. The finding is made there; the carrying belongs there. No recursion,
+no change to what `record` means, and the spec §4 policy table decides the rest: ordinary
+transitions become a digest, and `shadow_ready` — the moment the engine has done everything
+it may do alone — is spoken once.
+
+**Regression.** Three checks in `test_evolution_backlog.py`, and the fixture now creates
+`pending_briefings` so the suite exercises the real path rather than swallowing it (the
+first version of the wire passed 417 tests precisely because the table was absent and the
+failure was caught quietly). Removing the call fails two of them, watched. 507 tests across
+the ledger and evolution suites.
+
+**Half, and it is worth naming which half.** The queue now fills. Delivery — a sweeper that
+speaks a pending briefing into a live session or pushes it to the phone — is a third
+announcer alongside `ResearchToolCallAnnouncer` and `ArtifactReadyAnnouncer`, and it does
+not exist yet. Until it does, the findings are reachable at `GET /v1/ledger/briefings`
+rather than arriving on their own. The owner asked for arrival; this is the prerequisite it
+was missing, not the whole of it.

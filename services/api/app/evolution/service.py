@@ -91,6 +91,7 @@ from app.evolution.backlog import (
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
 from app.evolution.risk import SECOND_CONFIRMATION_FLOOR, RiskTier, derive_risk_tier
 from app.evolution.scoring import SCORE_FIELDS, score_from_mapping, weights
+from app.ledger import briefing as ledger_briefing
 from app.ledger.service import ActivityEvent
 from app.ledger.service import record as record_activity
 from app.ledger.vocabulary import (
@@ -544,6 +545,16 @@ def _verify_lesson(session: Session, ref: str) -> bool | None:
 
 
 # ------------------------------------------------------------------ service
+
+
+
+def _queue_briefing_quietly(session: Any, row: Any) -> None:
+    """Never raises. The ledger row is the durable evidence; a briefing sits on top of it,
+    and the courtesy failing must not cost the record."""
+    try:
+        ledger_briefing.queue_briefing(session, row)
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.warning("evolution_briefing_not_queued", event_type=getattr(row, "event_type", "?"))
 
 
 class EvolutionService:
@@ -1054,7 +1065,19 @@ class EvolutionService:
         try:
             with self._session_factory() as session:
                 for event in events:
-                    record_activity(session, event)
+                    row = record_activity(session, event)
+                    # ...and then CARRY it. Recording is evidence; a queued briefing is the
+                    # only thing the owner ever hears. Until 2026-09-10 queue_briefing had
+                    # exactly two callers and both were in the research pipeline, so every
+                    # finding this engine made died in a table: "operator.type_text
+                    # (validation_error)" at 19:04:06 on 2026-09-09 was the Notepad defect,
+                    # and "display.wake (no_capable_device)" at 04:32:43 the next morning
+                    # was the alarm that had failed to wake anything two minutes earlier.
+                    # The owner reported the first himself and was startled awake by the
+                    # second at 08:10. The spec §4 policy table decides which of these is
+                    # worth a sentence; most transitions are a digest, and shadow_ready --
+                    # the moment the engine asks for permission -- is spoken once.
+                    _queue_briefing_quietly(session, row)
         except Exception:  # noqa: BLE001 - audit failure is logged, never silent
             logger.error(
                 "evolution_ledger_write_failed",

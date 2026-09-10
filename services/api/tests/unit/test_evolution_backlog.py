@@ -22,6 +22,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.evolution import service as evolution_service_module
 from app.evolution.authority import (
     Grant,
     LabAuthority,
@@ -46,7 +47,9 @@ from app.evolution.service import (
     EvolutionService,
     RecordingUiStatePublisher,
 )
-from app.ledger.models import ActivityEventRow
+from app.ledger import briefing as briefing_service
+from app.ledger import service as ledger_service
+from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.selfhealing.models import Incident
 from tests.unit.test_evolution_authority import FakeSession
 
@@ -55,6 +58,7 @@ TABLES = [
     CapabilityGap.__table__,
     ActivityEventRow.__table__,
     Incident.__table__,
+    PendingBriefingRow.__table__,
 ]
 
 SCORES = {
@@ -872,3 +876,60 @@ def test_the_published_policy_is_derived_from_the_guards_not_retyped() -> None:
     assert "sorted(str(s) for s in OWNER_ONLY_STATUSES)" in source
     assert "sorted(str(s) for s in LAB_FORBIDDEN_STATUSES)" in source
     assert "sorted(str(s) for s in RELEASE_REQUIRED_STATUSES)" in source
+
+
+# ----------------- a finding the owner actually hears about (ADR-0110)
+
+
+def test_opening_an_opportunity_queues_something_for_the_owner(stack) -> None:
+    """The defect this exists for, with its own timestamps.
+
+    The Supervisor opened "operator.type_text (validation_error)" at 19:04:06 on
+    2026-09-09 -- the Notepad bug -- and "display.wake (no_capable_device)" at 04:32:43 the
+    next morning, two minutes after the owner's 07:30 alarm had failed to wake anything.
+    Both were recorded. Neither was carried anywhere: ``queue_briefing`` had exactly two
+    callers and both were in the research pipeline. The owner reported the first himself
+    and was startled awake by the second at 08:10.
+    """
+    session_scope, _service, _ui = stack
+    make_opportunity(stack)
+
+    with session_scope() as session:
+        queued = briefing_service.pending(session)
+
+    assert queued, "the engine made a finding and carried it nowhere"
+    assert any(b.policy == briefing_service.POLICY_DIGEST for b in queued)
+
+
+def test_reaching_the_wall_is_spoken_once_not_buried_in_a_digest(stack) -> None:
+    """``shadow_ready`` is the moment the engine has done everything it may do alone and
+    needs the owner. A digest entry is the wrong shape for a question."""
+    session_scope, service, _ui = stack
+    opportunity = make_opportunity(stack)
+    for status in ("researching", "design_ready", "building", "testing", "evaluating",
+                   "shadow_ready"):
+        service.advance(
+            opportunity["opportunity_id"], target=status, actor=ActorKind.LAB, reason="t"
+        )
+
+    with session_scope() as session:
+        queued = briefing_service.pending(session)
+
+    once = [b for b in queued if b.policy == briefing_service.POLICY_ONCE]
+    assert once, "the owner is never asked; the engine just stops"
+
+
+def test_a_queue_that_cannot_be_written_never_costs_the_ledger_row(stack, monkeypatch) -> None:
+    """The ledger row is the durable evidence. A briefing sits on top of it, and the
+    courtesy failing must not lose the record."""
+    session_scope, _service, _ui = stack
+
+    def _explode(_session, _row):
+        raise RuntimeError("queue is down")
+
+    monkeypatch.setattr(evolution_service_module.ledger_briefing, "queue_briefing", _explode)
+    opportunity = make_opportunity(stack)
+
+    assert opportunity["opportunity_id"]
+    with session_scope() as session:
+        assert ledger_service.query(session, event_types=["evolution.idea_created"])
