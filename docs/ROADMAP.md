@@ -361,6 +361,22 @@ a demonstration.
    expired. Done = a briefing spoken into a live session or pushed to the phone, and the row
    marked delivered by the thing that actually delivered it. (Named as the missing half in
    ADR-0110; still missing.)
+
+   **Half done, 2026-09-11 (ADR-0114 + its amendments, `667b9fb` in production).** The
+   deliverer exists, runs on the app's own lifespan, and the sentence now actually reaches a
+   client's buffer: production holds one `say` frame carrying its three briefing receipts,
+   on the `web` session rather than the `cli` one, with five `already_queued` refusals
+   behind it proving no second copy is ever added. The row is stamped by the drain — by the
+   thing that delivered it — and not by the queue.
+
+   **What is still missing, and it is architectural.** A `web` session is pull-only. The
+   shell drains `pending_sideband` on a re-attach or when the owner speaks, never on a
+   timer, and the only server-initiated channel in this system is the device broker's
+   WebSocket, which a browser session does not have. So a briefing waits until the owner
+   next talks — which is not "reaches the owner out loud" when they are asleep and the row
+   expires first. Closing this needs a real push to the browser (SSE or a WebSocket for
+   realtime sessions), or the phone push path, and neither exists yet. Until one does, this
+   item is honest but not finished.
 2. **"Güldür Güldür aç." without saying "YouTube'dan".** The ADR-0112 matcher requires an
    explicit media marker, deliberately, and it is too narrow: "video", "şov", "dizi", "film"
    are missing, and a bare title with a play verb is not reachable at all. Done = the owner's
