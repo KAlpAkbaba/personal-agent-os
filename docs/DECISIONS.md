@@ -8950,3 +8950,70 @@ original test, watched.
 
 That test would have gone green again by itself tomorrow morning, which is the worst
 property a failing test can have.
+
+## ADR-0109 — "Add a feature" and "fix the core" are the same boundary, and a correction (2026-09-10)
+
+**Owner directive.** "ekle dediğimde eklesin, birde eğer core'da hata varsa bunu da
+düzeltmeli."
+
+**A correction first.** The previous answer to "why can it not write a new feature?" was
+"the skill-generator seat is empty — `ClaudeSkillGenerator` is a CLI stub, and its HTTP
+equivalent is the missing piece." That was wrong, and reading the choke point rather than
+the seam is what showed it:
+
+```python
+# SkillSpec.parse
+if operation not in OPERATIONS:
+    # An operation outside the controlled allowlist is NOT a validation
+    # nicety: it is the boundary of what a deterministic generator may emit at all.
+    raise EvolutionError(GENERATION_FAILED, "operation is not in the controlled generator allowlist")
+```
+
+A `SkillSpec` **cannot be constructed** for an operation the product does not already know,
+so no generator — deterministic, Anthropic-backed or otherwise — is ever reached for a new
+one. And `Operation` carries `reference: Callable`: the ground truth for a capability is a
+Python function **in the product's source**. An `AnthropicSkillGenerator` would therefore
+only rewrite implementations of operations that already exist and already have a correct
+deterministic implementation. It would have been effort spent on the wrong wall.
+
+**So the two requests collapse into one.** Adding a genuinely new capability means adding an
+`Operation` to `OPERATIONS`. Fixing today's Notepad verification meant changing a
+postcondition in `app/operator/plans.py`. Both are edits to the product's own source; both
+resolve to `product_change_required`; both are refused by the engine for the same reason,
+and it is the right reason.
+
+**The constitution does not forbid this. It prescribes the shape.**
+
+> Never implement self-improvement as "model edits production source and restarts".
+> Required path: Gap/incident -> issue/spec -> isolated branch/worktree -> code -> tests ->
+> review -> build -> sandbox -> canary/shadow -> metrics -> promote or rollback.
+> The Recovery Supervisor and its last-known-good metadata must survive a broken main
+> application release.
+
+What the owner is asking for is that path, built. Not a switch, and specifically not the
+one shape the constitution names.
+
+**Every stage of it already exists in the hands that did today's work**, which is the
+argument for building it rather than a reason to be nervous:
+
+| stage | what would serve it |
+| --- | --- |
+| gap/incident | the Supervisor, live — it found today's two Notepad defects unaided |
+| isolated worktree | `git worktree`; nothing in the product drives one yet |
+| code | `AnthropicCodingBackend`, built today and proven red-then-green against the real model |
+| tests | ruff + the suites, exactly as run all day |
+| review | an independent reviewer, the discipline `DeterministicReviewer` already enforces |
+| build/canary/promote/rollback | the blue/green release with last-known-good, used six times today |
+
+**What is genuinely missing, precisely.** The coding backend reads a release directory —
+bounded at 40 files — and asks for complete rewrites. A repository does not fit that shape.
+The missing primitive is **file selection**: turning an incident into the handful of files
+that could possibly be responsible, so the request stays inside the bounds that make its
+output checkable. Everything after that is orchestration of pieces that exist.
+
+**Not started in this session, deliberately.** Today produced four defects that reached the
+owner's hands — a bare `icacls`, a bare `powershell`, an em-dash that stopped a script
+parsing, and an installer that did not know its own host was blue/green — and every one of
+them came from moving fast at the end of a long stretch. A pipeline that edits the product's
+own source is the last thing to build in that state. The design above is the work item; it
+begins with file selection, and it stops at `shadow_ready` exactly as everything else does.
