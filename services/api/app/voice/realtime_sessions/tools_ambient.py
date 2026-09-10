@@ -238,7 +238,18 @@ def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _target_alarm(db: Any, arguments: dict[str, Any], *, ringing_only: bool = False) -> Any:
+def _target_alarm(
+    db: Any, arguments: dict[str, Any], *, ringing_only: bool = False, now: Any = None
+) -> Any:
+    """The alarm a bare "iptal et" means.
+
+    ``now`` is the TURN's instant and it matters: this module resolves "yarın 07:30" with
+    ``ctx.now`` (``parse_when_text(..., now=ctx.now)``), so a cancel that fell back to the
+    wall clock was answering a different question than the create had asked. It showed up
+    as a test that was green all evening and red the next morning -- the alarm was written
+    for 07:30 and, once real time passed 07:30, ``next_alarm`` stopped seeing it. One
+    clock per decision (ADR-0108).
+    """
     raw = arguments.get("alarm_id")
     if isinstance(raw, str) and raw.strip():
         try:
@@ -248,13 +259,13 @@ def _target_alarm(db: Any, arguments: dict[str, Any], *, ringing_only: bool = Fa
     if ringing_only:
         ringing = alarms_service.alarms_ringing(db)
         return ringing[0] if ringing else None
-    return alarms_service.next_alarm(db)
+    return alarms_service.next_alarm(db, now=now)
 
 
 def alarm_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """"Alarmı iptal et." Defaults to the NEXT scheduled alarm (spec §3.8)."""
     db = _db(ctx, TOOL_ALARM_CANCEL)
-    alarm = _target_alarm(db, arguments)
+    alarm = _target_alarm(db, arguments, now=ctx.now)
     if alarm is None:
         return _receipt(
             ctx,
@@ -293,7 +304,7 @@ def alarm_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 def alarm_stop(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """"Alarmı kapat." Idempotent (spec §3.8): nothing ringing is a truthful, calm answer."""
     db = _db(ctx, TOOL_ALARM_STOP)
-    alarm = _target_alarm(db, arguments, ringing_only=True)
+    alarm = _target_alarm(db, arguments, ringing_only=True, now=ctx.now)
     if alarm is None:
         return _receipt(
             ctx,
@@ -321,7 +332,7 @@ def alarm_stop(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 def alarm_snooze(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """"Beş dakika ertele." Only while the alarm is actually ringing (spec §3.8)."""
     db = _db(ctx, TOOL_ALARM_SNOOZE)
-    alarm = _target_alarm(db, arguments, ringing_only=True)
+    alarm = _target_alarm(db, arguments, ringing_only=True, now=ctx.now)
     if alarm is None:
         return _receipt(
             ctx,
@@ -492,7 +503,7 @@ _POLICY_ARGUMENTS = (
 _POLICY_TURN_TTL_S = 600.0
 
 
-def _turn_policy_changes(ctx: ToolContext) -> dict[str, bool] | None:
+def _turn_policy_changes(ctx: ToolContext) -> dict[str, bool | int] | None:
     """The policy fields the owner's WORDS set on this turn (ADR-0079 §7), from the record
     the ONE router wrote on the session - never from the model's paraphrase."""
     record = dict(ctx.context.get("last_utterance") or {})
@@ -510,7 +521,16 @@ def _turn_policy_changes(ctx: ToolContext) -> dict[str, bool] | None:
     changes = record.get("policy_changes")
     if not isinstance(changes, dict) or not changes:
         return None
-    return {str(k): bool(v) for k, v in changes.items() if isinstance(v, bool)}
+    # Switches AND waits. This used to coerce every value with ``bool(v)`` behind an
+    # ``isinstance(v, bool)`` filter, so a duration the router had correctly derived was
+    # silently dropped on the way to the only code that could apply it.
+    kept: dict[str, bool | int] = {}
+    for key, value in changes.items():
+        if isinstance(value, bool):
+            kept[str(key)] = value
+        elif isinstance(value, int):
+            kept[str(key)] = value
+    return kept or None
 
 
 def _turn_alarm_minutes(ctx: ToolContext) -> int | None:
@@ -564,6 +584,15 @@ _POLICY_SPEECH: tuple[tuple[str, str, str], ...] = (
 def _policy_speech(applied: dict[str, Any], requested: dict[str, Any]) -> str:
     """What changed, in the owner's own terms; a repeat that changed nothing still
     confirms the preference that stands ("Siz yokken ekranları kapatmayacağım")."""
+    # A wait says its own number back. "Tamam" would leave the owner not knowing whether
+    # five minutes or fifty landed, and the whole point of asking was the number.
+    for field_name, phrase in (
+        ("away_after_s", "Ben yokken ekranları {n} dakika sonra kapatacağım efendim."),
+        ("asleep_after_s", "Uyuduğumda ekranları {n} dakika sonra kapatacağım efendim."),
+    ):
+        seconds = applied.get(field_name, requested.get(field_name))
+        if isinstance(seconds, int) and not isinstance(seconds, bool):
+            return phrase.format(n=seconds // 60)
     for field_name, on_tr, off_tr in _POLICY_SPEECH:
         if field_name in applied:
             return on_tr if applied[field_name] else off_tr

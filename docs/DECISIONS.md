@@ -8896,3 +8896,57 @@ observed rather than asserted.
 text. The extraction loop already skipped to the `text` block, so it was correct by
 accident rather than by intent; it now says why in a comment, because the next person to
 read it would have had no way to know that ordering was considered.
+
+## ADR-0108 — A wait the owner can change by saying it, and a clock that disagreed with itself (2026-09-10)
+
+**Owner directive.** "alarmlarda veya otomasyonlarda belirli bir bekleme süresi var, mesela
+bilgisayar başında 15 dakika değilken ekranlar otomatik kapanıyor; ben bu süreyi 5 dakika
+olarak değiştir dediğimde değiştirebilmeli."
+
+**It was two lines short, not a feature short.** `away_after_s` (default 900 — the fifteen
+minutes the owner named) has been in `ambient.service._EDITABLE_FIELDS` all along, stored,
+validated and applied. No sentence could reach it because the path narrowed twice:
+
+- `intents.ambient_policy_changes` returned `dict[str, bool]` — switches only;
+- `tools_ambient._turn_policy_changes` then filtered with `isinstance(v, bool)` and coerced
+  with `bool(v)`, so an integer that *had* been derived would have been dropped on the last
+  step before the only code that could apply it.
+
+Both now carry `bool | int`, and the confirmation says the number back — "Ben yokken
+ekranları 5 dakika sonra kapatacağım efendim." A bare "tamam" would leave the owner not
+knowing whether five minutes or fifty had landed, and the number was the whole request.
+
+**The dangerous half of this was routing, not plumbing.** `_ambient_policy_match`'s own
+docstring says it exists because "uyurken ekranları kapat" and "ekranları kapat" are one
+word apart and the difference is whether the screens go dark in two seconds or in twenty
+minutes. A duration alone must NOT enter that matcher: "Ekranları 5 dakika sonra kapat." is
+a command for later. So the threshold branch is anchored on the word the owner uses for it —
+`süre` — and the deferred command still resolves to `DISPLAY_OFF`, asserted.
+
+**A number silently misread is worse than one refused.** Adding tens to the number table
+made "doksan dakika" work; adding `yüz` made "iki yüz dakika" resolve to **one hundred**,
+because the compounder joins a round ten to a unit and knows nothing of hundreds. Caught by
+testing the change rather than assuming it. `yüz` is gone, with the reason written where the
+next person will add it back. And the invented `MIN/MAX_POLICY_MINUTES` bounds were deleted:
+`spoken_minutes` already refuses anything outside `1.._MAX_SPOKEN_MINUTES`, and a second
+ceiling restated beside it could only ever drift from the first.
+
+### The defect this uncovered, which had nothing to do with the request
+
+`test_alarm_cancel_defaults_to_the_next_alarm` was failing on the committed tree — not from
+this change; it was checked against a stash. It had been green the previous evening.
+
+`alarm_create` resolves "yarın 07:30" against `ctx.now` (the turn's instant, pinned to
+2026-09-09 06:00 by the fixture). `alarm_cancel` called `alarms_service.next_alarm(db)` with
+no `now=` at all, so it fell back to `utcnow()`. The two agreed until real time crossed
+07:30 on 2026-09-10 — after which a cancel could not see the alarm a create in the same turn
+had just written. **Two clocks for one decision**, this repository's most recurrent bug
+shape, and the reason it hid for so long is that it only appears between 07:30 and midnight.
+
+`_target_alarm` now takes the turn's clock and every caller passes `ctx.now`. The regression
+asserts it in the only way that cannot rot: it makes the wall clock wrong on purpose — ten
+years out — and requires the cancel to work anyway. Reverting the fix fails it and the
+original test, watched.
+
+That test would have gone green again by itself tomorrow morning, which is the worst
+property a failing test can have.

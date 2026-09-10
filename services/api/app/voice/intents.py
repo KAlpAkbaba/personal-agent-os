@@ -632,7 +632,7 @@ class ResolvedIntent:
     #: ADR-0079 §7: for an AMBIENT_POLICY_SET utterance, the policy fields the owner's
     #: WORDS set (``ambient_policy_changes``) - derived in the one router, recorded on the
     #: turn, and preferred by the tool over whatever booleans the model passed.
-    policy_changes: dict[str, bool] | None = None
+    policy_changes: dict[str, bool | int] | None = None
     #: For an ALARM_SNOOZE utterance, the minutes the owner SAID (``spoken_minutes``);
     #: None when no count was spoken, and the alarm's own default applies.
     alarm_minutes: int | None = None
@@ -1241,6 +1241,15 @@ _MINUTE_WORDS: Final[dict[str, int]] = {
     "elli": 50,
     "altmış": 60,
     "altmis": 60,
+    "yetmiş": 70,
+    "yetmis": 70,
+    "seksen": 80,
+    "doksan": 90,
+    # No "yüz". The compounder above only joins a round TEN to a unit, so "iki yüz dakika"
+    # would read as the bare "yüz" and become a hundred minutes -- a number the owner never
+    # said, applied silently. Refusing to parse it is the honest failure; misreading it is
+    # not. Tens to ninety are enough for a wait, and ninety-nine is the ceiling this
+    # vocabulary can actually express.
 }
 _MAX_SPOKEN_MINUTES: Final = 180
 
@@ -1451,7 +1460,7 @@ _AUTO_ON_FORMS: Final[tuple[str, ...]] = (
 _AUTO_OFF_FORMS: Final[tuple[str, ...]] = ("kapat", "kapatsana", "kapa", "durdur")
 
 
-def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool] | None:
+def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool | int] | None:
     """The policy fields the owner's WORDS set (ADR-0079 §7), or None.
 
     Deterministic and in the one router, so "Uyuduğumda ekranları kapatma." cannot be
@@ -1461,7 +1470,7 @@ def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool] | None:
     a half leaves the switch alone. "Ekranı açık tut." is its own preference and
     outranks the rest (``keep_on``); "açık tutma" lifts it.
     """
-    changes: dict[str, bool] = {}
+    changes: dict[str, bool | int] = {}
     if (
         _screen_noun(tokens) is not None
         and _has_exact(tokens, *_KEEP_VERB_FORMS)
@@ -1484,6 +1493,20 @@ def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool] | None:
             changes["auto_off_enabled"] = True
         elif _has_exact(tokens, *_AUTO_OFF_FORMS) or _has(tokens, "devre"):
             changes["auto_off_enabled"] = False
+    # The WAITS, not just the switches. ``away_after_s`` and ``asleep_after_s`` have been
+    # editable at the service layer all along (``ambient.service._EDITABLE_FIELDS``); no
+    # sentence could reach them, because this function returned booleans and the reader
+    # dropped anything that was not one. The owner's example was the plain case: the
+    # screens go dark after fifteen minutes away and they want five.
+    if not negated:
+        # No second ceiling: ``spoken_minutes`` already refuses anything outside
+        # 1.._MAX_SPOKEN_MINUTES, and a bound restated here could only ever drift from it.
+        minutes = spoken_minutes(tokens)
+        if minutes is not None:
+            field = (
+                "asleep_after_s" if _has(tokens, *_ASLEEP_STEMS) else "away_after_s"
+            )
+            changes[field] = minutes * 60
     return changes or None
 
 
@@ -1518,6 +1541,12 @@ def _ambient_policy_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
         return Intent.AMBIENT_TEST_DISPLAY, "ekran testi"
     if _has_exact(tokens, *_KEEP_VERB_FORMS) and _has_exact(tokens, "açık", "acik"):
         return Intent.AMBIENT_POLICY_SET, "açık tut"
+    # "Ekran kapanma SÜRESİNİ 5 dakika yap." A duration alone is not enough to come here:
+    # "Ekranları 5 dakika sonra kapat." is a command for later, and this function's own
+    # docstring is about exactly that distance -- two seconds versus twenty minutes. The
+    # word the owner uses for the threshold is what anchors it.
+    if _has(tokens, "süre", "sure") and spoken_minutes(tokens) is not None:
+        return Intent.AMBIENT_POLICY_SET, "süre"
     if _has(tokens, *_ASLEEP_STEMS):
         return Intent.AMBIENT_POLICY_SET, "uyurken"
     if _has_exact(tokens, *_AWAY_FORMS):

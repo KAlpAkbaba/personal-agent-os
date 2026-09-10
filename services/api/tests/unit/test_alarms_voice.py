@@ -581,3 +581,28 @@ def test_a_tool_without_a_database_fails_loudly(sequence) -> None:
     )
     with pytest.raises(VoiceError):
         tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın 07:30'da uyandır."})
+
+
+def test_cancel_uses_the_turn_clock_not_the_wall_clock(ctx, session) -> None:
+    """Green all evening, red the next morning (2026-09-10).
+
+    ``alarm_create`` resolves "yarın 07:30" against ``ctx.now``; ``alarm_cancel`` looked up
+    the next alarm with no ``now`` at all and fell back to ``utcnow()``. The two agreed
+    until real time crossed 07:30, and then a cancel could not see the alarm a create in
+    the same turn had just written. One clock per decision.
+
+    This asserts it the only way that cannot rot: by making the wall clock WRONG on
+    purpose, far from the fixture's instant, and requiring the cancel to work anyway.
+    """
+    tools_ambient.alarm_create(ctx, {"when_spoken": "Yarın sabah 07:30'da beni uyandır."})
+
+    real_utcnow = alarms_service.utcnow
+    try:
+        # Ten years on: any path still consulting the wall clock finds nothing scheduled.
+        alarms_service.utcnow = lambda: NOW + timedelta(days=3650)
+        result = tools_ambient.alarm_cancel(ctx, {})
+    finally:
+        alarms_service.utcnow = real_utcnow
+
+    assert result["speech"] == alarm_speech.ALARM_CANCELLED_TR
+    assert alarms_service.list_alarms(session, include_terminal=True)[0].state == STATE_CANCELLED

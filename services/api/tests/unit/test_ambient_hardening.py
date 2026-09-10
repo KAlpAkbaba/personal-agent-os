@@ -630,3 +630,43 @@ def test_no_device_call_in_the_display_path_can_sleep_lock_or_shut_down_the_host
     forbidden = ("sleep", "hibernate", "shutdown", "lock", "logoff", "reboot", "suspend")
     for capability in RECEIPT_BY_DEVICE_CALL:
         assert not any(word in capability.lower() for word in forbidden), capability
+
+
+def test_a_spoken_wait_reaches_the_policy_and_is_said_back(session, holdoffs) -> None:
+    """The owner's own example, end to end: the screens go dark after fifteen minutes away
+    and they want five. Every piece of this existed except the two lines that carried the
+    number -- the router returned booleans, and the tool's reader dropped anything that was
+    not one (ADR-0108)."""
+    assert ambient_service.get_policy(session).away_after_s == 900
+
+    context = {
+        "last_utterance": {
+            "at": NIGHT.isoformat().replace("+00:00", "Z"),
+            "intent": "ambient_policy_set",
+            "policy_changes": resolve_intent("Ekran kapanma süresini 5 dakika yap.").policy_changes,
+        }
+    }
+    result = tools_ambient.ambient_set_policy(_ctx(session, context=context), {})
+
+    assert ambient_service.get_policy(session).away_after_s == 300
+    assert result["observed_after"]["server"]["changed"] == {"away_after_s": 300}
+    # It says the number back: "tamam" would leave the owner not knowing which one landed.
+    assert "5 dakika" in result["speech"]
+
+
+def test_a_wait_the_reader_used_to_drop_is_no_longer_dropped(session, holdoffs) -> None:
+    """The narrow guard on the exact line that lost it: a bool-only filter over the
+    recorded changes. With ints dropped, the tool would have raised "needs at least one
+    of" on a sentence the router had understood perfectly."""
+    context = {
+        "last_utterance": {
+            "at": NIGHT.isoformat().replace("+00:00", "Z"),
+            "intent": "ambient_policy_set",
+            "policy_changes": {"asleep_after_s": 1200},
+        }
+    }
+    result = tools_ambient.ambient_set_policy(_ctx(session, context=context), {})
+
+    assert result["observed_after"]["server"]["derived_from_turn"] is True
+    assert ambient_service.get_policy(session).asleep_after_s == 1200
+    assert "20 dakika" in result["speech"]

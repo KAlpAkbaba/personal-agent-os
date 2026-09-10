@@ -483,3 +483,67 @@ def test_owner_phrases_that_are_not_about_research_carry_no_research_class(text:
     for has_completed in (False, True):
         resolved = resolve_intent(text, has_completed_research=has_completed)
         assert resolved.research_class is None, resolved
+
+
+# ------------------------------------- a WAIT the owner can change out loud (ADR-0108)
+
+
+def test_the_screen_wait_can_be_set_by_saying_it() -> None:
+    """Owner, 2026-09-10: "bilgisayar başında 15 dakika değilken ekranlar otomatik
+    kapanıyor, ben bu süreyi 5 dakika olarak değiştir dediğimde değiştirebilmeli."
+
+    ``away_after_s`` has been editable at the service layer all along; no sentence could
+    reach it, because the router returned booleans and the tool's reader dropped anything
+    that was not one.
+    """
+    resolved = resolve_intent("Ekran kapanma süresini 5 dakika yap.")
+
+    assert resolved.intent is Intent.AMBIENT_POLICY_SET
+    assert resolved.policy_changes == {"away_after_s": 300}
+
+
+def test_the_asleep_wait_is_its_own_field() -> None:
+    resolved = resolve_intent("Uyurken ekran kapanma süresini 20 dakika yap.")
+
+    assert resolved.intent is Intent.AMBIENT_POLICY_SET
+    assert resolved.policy_changes is not None
+    assert resolved.policy_changes["asleep_after_s"] == 1200
+
+
+def test_a_deferred_command_is_still_a_command_not_a_policy() -> None:
+    """The distance this whole matcher exists for: "Ekranları 5 dakika sonra kapat." asks
+    for darkness in five minutes. Reading it as a THRESHOLD would leave the screens on and
+    quietly change a setting the owner never mentioned."""
+    resolved = resolve_intent("Ekranları 5 dakika sonra kapat.")
+
+    assert resolved.intent is Intent.DISPLAY_OFF
+    assert resolved.policy_changes is None
+
+
+def test_a_bare_switch_still_carries_no_wait() -> None:
+    resolved = resolve_intent("Uyurken ekranları kapat.")
+
+    assert resolved.policy_changes == {"off_when_asleep": True, "auto_off_enabled": True}
+
+
+def test_a_number_this_vocabulary_cannot_express_is_refused_not_misread() -> None:
+    """"iki yüz dakika" must not become a hundred. The compounder joins a round ten to a
+    unit and knows nothing of hundreds, so a "yüz" entry in the number table would have
+    read the bare word and applied a number the owner never said."""
+    for said in ("Ekran süresini 200 dakika yap.", "Ekran süresini 100 dakika yap."):
+        resolved = resolve_intent(said)
+        assert resolved.policy_changes is None, said
+
+
+def test_every_wait_the_resolver_produces_is_one_the_service_can_apply() -> None:
+    """The two halves, held to each other: a field name this router invents that
+    ``ambient.service`` does not accept would be dropped in silence."""
+    from app.ambient.service import _EDITABLE_FIELDS
+
+    for said in (
+        "Ekran kapanma süresini 5 dakika yap.",
+        "Uyurken ekran kapanma süresini 20 dakika yap.",
+    ):
+        changes = resolve_intent(said).policy_changes or {}
+        for field_name in changes:
+            assert field_name in _EDITABLE_FIELDS, f"{field_name} is not editable"
