@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -141,6 +142,10 @@ def test_promotion_class_is_derived_from_the_risk_table_never_chosen() -> None:
     assert sup.component_for_capability("alarm.stop") == "alarms"
     assert sup.component_for_capability("display.off") == "ambient"
     assert sup.component_for_capability("eye.disable") == "presence"
+    assert sup.component_for_capability("operator.type") == "operator"
+    assert sup.component_for_capability("operator.app_open") == "operator"
+    assert sup.component_for_capability("operator.window_control") == "operator"
+    assert sup.component_for_capability("operator.shell") == "operator"
 
 
 def test_an_incident_becomes_one_p0_opportunity_with_verified_evidence(db, service) -> None:
@@ -357,3 +362,89 @@ def test_status_reads_the_rows_alone(db, service) -> None:
     assert status["last_fix"]["fixed_release_id"] == fixed["fixed_release_id"]
     assert status["running"] == {"version": "65459a4"}
     assert status["last_scan"]["status"] == "scanned"
+
+
+# --------------------------------------------------------- the operator component
+
+
+def test_operator_incidents_are_filed_against_the_operators_own_code() -> None:
+    """Every ``operator.*`` capability had fallen through to ``voice_tools``, whose single
+    path is the GENERIC tool registry — a file containing none of the operator's code. A
+    fix pipeline pointed there is reading the wrong file (ADR-0114)."""
+    for capability in (
+        "operator.type",
+        "operator.app_open",
+        "operator.window_control",
+        "operator.shell",
+        "operator.status",
+        "operator.cancel",
+    ):
+        assert sup.component_for_capability(capability) == "operator", capability
+
+    paths = sup.paths_for_component("operator")
+    assert "services/api/app/voice/realtime_sessions/tools.py" not in paths
+    assert set(paths) == {
+        "services/api/app/operator/service.py",
+        "services/api/app/operator/task.py",
+        "services/api/app/operator/plans.py",
+        "services/api/app/operator/focus.py",
+        "services/api/app/voice/realtime_sessions/tools_operator.py",
+    }
+
+    # A table of paths is worthless if the paths have rotted away: this is the same
+    # bug shape one step further on (the old entry named a file that EXISTS but holds
+    # none of the operator's code; a stale entry names one that is not there at all).
+    repo_root = Path(__file__).resolve().parents[4]
+    for path in paths:
+        assert (repo_root / path).is_file(), f"{path} does not exist under {repo_root}"
+
+
+def test_naming_the_operators_own_code_does_not_move_the_promotion_decision() -> None:
+    """The new row must not buy the operator a cheaper promotion class than the wrong
+    component gave it. Both sides are tier 3 / OWNER_APPROVAL_REQUIRED; the assertion is
+    the EQUALITY, so a future path added to the entry cannot quietly lower the tier."""
+    operator = sup.promotion_class_for(sup.paths_for_component("operator"))
+    voice_tools = sup.promotion_class_for(sup.paths_for_component("voice_tools"))
+    assert operator == voice_tools
+    assert operator[0] == sup.PROMOTION_OWNER_APPROVAL_REQUIRED
+    assert operator[1] == 3
+
+
+def test_the_operator_entry_names_behaviour_files_never_the_schema_module() -> None:
+    """``app/operator/models.py`` is a real ORM module and the risk table classifies any
+    ``models.py`` as tier 4 (schema/deployment mechanics), which is NEVER_AUTO_PROMOTE.
+    The table's own convention already excludes schema modules — ``alarms`` and
+    ``research`` both have a ``models.py`` and neither entry names it — so a routine
+    operator behaviour fix is not classified as a migration. This test is what makes
+    that exclusion deliberate rather than an oversight."""
+    assert not [p for p in sup.paths_for_component("operator") if p.endswith("/models.py")]
+    assert not [p for p in sup.paths_for_component("alarms") if p.endswith("/models.py")]
+
+    # ...and it is a real escalation, not a hypothetical one.
+    with_schema = (*sup.paths_for_component("operator"), "services/api/app/operator/models.py")
+    assert sup.promotion_class_for(with_schema)[1] == 4
+    assert sup.promotion_class_for(with_schema)[0] == sup.PROMOTION_NEVER_AUTO_PROMOTE
+
+
+def test_recurring_operator_failures_reach_the_operators_code_end_to_end(db, service) -> None:
+    """Through the real ledger and the real signal collector, not the table alone."""
+    with db() as session:
+        _failed_receipt(
+            session,
+            capability="operator.type",
+            error_class="postcondition_failed",
+            at=NOW - timedelta(days=1),
+        )
+        _failed_receipt(
+            session,
+            capability="operator.type",
+            error_class="postcondition_failed",
+            at=NOW - timedelta(hours=1),
+        )
+        signals = sup.collect_signals(session, now=NOW)
+
+    assert [(s.kind, s.priority, s.component) for s in signals] == [
+        (sup.SIGNAL_ACTION_FAILURE, sup.PRIORITY_P1, "operator")
+    ]
+    assert "services/api/app/operator/task.py" in signals[0].paths
+    assert sup.promotion_class_for(signals[0].paths)[0] == sup.PROMOTION_OWNER_APPROVAL_REQUIRED

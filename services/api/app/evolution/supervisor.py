@@ -103,6 +103,19 @@ _COMPONENT_PATHS: dict[str, tuple[str, ...]] = {
     "ambient": ("services/api/app/ambient/service.py",),
     "presence": ("services/api/app/presence/eye.py",),
     "voice_tools": ("services/api/app/voice/realtime_sessions/tools.py",),
+    #: The Digital Operator (M19). Deliberately NOT "app/operator/models.py": that is a
+    #: real ORM module and the risk table reads any ``models.py`` as tier 4 (schema and
+    #: deployment mechanics = NEVER_AUTO_PROMOTE), which would classify every routine
+    #: "typing went to the wrong window" fix as a migration. Naming behaviour files and
+    #: not the schema is what every other entry here already does - "alarms" and
+    #: "research" both HAVE a models.py and neither names it.
+    "operator": (
+        "services/api/app/operator/service.py",
+        "services/api/app/operator/task.py",
+        "services/api/app/operator/plans.py",
+        "services/api/app/operator/focus.py",
+        "services/api/app/voice/realtime_sessions/tools_operator.py",
+    ),
     "generated_skill": ("var/evolution/skills/candidate/skill.py",),
 }
 
@@ -112,6 +125,7 @@ _CAPABILITY_COMPONENTS: tuple[tuple[str, str], ...] = (
     ("ambient.", "ambient"),
     ("eye.", "presence"),
     ("research.", "research"),
+    ("operator.", "operator"),
 )
 
 
