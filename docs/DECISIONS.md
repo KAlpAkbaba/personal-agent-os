@@ -8775,3 +8775,68 @@ the morning surface, and that is the next work item on this thread.
 43-minute ring (wrong — three minutes) and a device ignoring `max_duration_s` (wrong — it
 honoured it). Both were plausible from the server's rows alone. The server can say what it
 asked for and what it heard back; only the device can say what it did.
+
+## ADR-0107 — The backend that writes the patch, and the gate that makes its claim an observation (2026-09-10)
+
+**Owner directive.** "daha sonra yamayı yazan düzeltmeleri yapan kısmı ekle."
+
+**Why not the CLI seam that already existed.** `ClaudeCodingBackend` shells out to a Claude
+CLI. That CLI would have to live inside the production api container — where
+`/srv/pagentos/app` is writable by the runtime user, because the Dockerfile does
+`chown -R pagentos:pagentos /srv/pagentos` and runs as that user. A coding agent with a
+shell in that container can rewrite the source of the application it is running inside,
+which is the constitution's one named prohibition: "never implement self-improvement as
+'model edits production source and restarts'". It would also put Node and an npm tree in
+the image that serves the owner's API.
+
+The `CodingBackend` protocol never asked for a shell. It asks for four methods. So
+`AnthropicCodingBackend` speaks the Messages API over HTTP, owns no subprocess beyond the
+regression runner every backend shares, and can only write inside the work directory the
+pipeline hands it.
+
+**The model is trusted with nothing.** Its reply is a proposal that must survive:
+
+| gate | what it stops |
+| --- | --- |
+| path must already exist in the release | inventing files; this backend modifies, never adds |
+| no `..`, no absolute, no drive, then RESOLVE-and-contain | escaping the release |
+| suffix allowlist | rewriting something that is not code |
+| `ast.parse` on every `.py` and on the test | source that cannot even load |
+| file count, per-file bytes, total bytes | a "patch" that is a rewrite of everything |
+
+**And then the gate that matters.** Before `implement_change` returns, the generated
+regression test is RUN twice: it must FAIL against the broken release and PASS against the
+candidate. A patch whose own test cannot go red on the bug it claims to fix is refused with
+an error naming which direction failed. The pipeline runs the same test afterwards and an
+independent reviewer decides promotion — this is not that. This is the difference between
+"the model said it fixed it" and "the fix was observed", asserted where the claim is made.
+
+**`review_change` refuses on purpose.** The pipeline holds a separate `reviewer` and gates
+on that verdict, so this method is never called by it — and the reason it is never called is
+the reason it refuses. A builder is not a witness to its own work, and an approving
+`ReviewResult` returned from here would be believed by anything that did call it.
+
+**`analyze_issue` makes no model call at all.** Everything `IssueAnalysis` holds is already
+in the incident the monitor wrote. Asking a model to restate it would buy nothing and add
+both a failure mode and an injection surface — the incident evidence arrives over the
+UNAUTHENTICATED ingest surface, so the less of it that steers control flow, the better. It
+reaches the model as data, framed as data, and the gates above hold regardless of whether
+the model ignored anything embedded in it.
+
+**Not the default, deliberately.** `PAGENTOS_SELFHEALING_BACKEND=anthropic` selects it;
+unset stays deterministic. Turning on a loop that writes code is an owner decision, not a
+deployment side effect. Selected without a key it is INERT and says which owner action
+installs one — it does not silently fall back to the deterministic backend, which would
+leave the owner believing the loop was on while one fault class was quietly handled forever.
+
+**Regressions.** 35 checks (`test_selfhealing_anthropic_backend.py`), driving the real
+parse/validate/write/verify path against a real release directory with a real defect and a
+real subprocess; only the model's reply is faked, which is the one thing a test cannot
+obtain honestly. Removing the red/green gate fails three, watched.
+
+**A finding worth recording.** Removing the resolve-and-contain check failed NOTHING: every
+traversal case in the suite is caught earlier by the lexical checks, so the containment
+check itself was untested — a guard that looked right and proved nothing. The case only it
+can catch is a symlink inside the release, and that test now exists. It SKIPS on this
+Windows account (no symlink privilege) and runs in CI on Linux; the skip says so rather than
+passing quietly.

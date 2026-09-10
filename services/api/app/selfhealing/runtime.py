@@ -12,10 +12,17 @@ app.config change — config.py is outside this module's ownership):
                                           default: <repo>/staging/workspaces
     PAGENTOS_SELFHEALING_SUPERVISOR       supervisor.py path override
     PAGENTOS_SELFHEALING_TARGET_SERVICE   demo target service.py path override
-    PAGENTOS_SELFHEALING_BACKEND          "deterministic" (default) | "claude"
+    PAGENTOS_SELFHEALING_BACKEND          "deterministic" (default) | "anthropic" | "claude"
     PAGENTOS_SELFHEALING_CLAUDE_CLI       Claude CLI path; without it the
                                           claude backend stays inert (typed
                                           backend_not_configured error).
+
+The "anthropic" backend is the one that actually writes patches (ADR-0107). It needs no
+path and no CLI: it speaks the Messages API over HTTP and takes its key from
+``Settings.anthropic_api_key`` (PAGENTOS_ANTHROPIC_API_KEY). Without that key it is inert
+in exactly the same way, and says which owner action installs one. It is deliberately NOT
+the default: turning on a loop that writes code is an owner decision, not a deployment
+side effect.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.config import Settings
 from app.db import build_engine, build_session_factory
 from app.logging import get_logger
+from app.selfhealing.anthropic_backend import AnthropicCodingBackend
 from app.selfhealing.backends import (
     ClaudeCodingBackend,
     CodingBackend,
@@ -98,6 +106,9 @@ class SelfHealingRuntime:
 
     @property
     def backend(self) -> CodingBackend:
+        if self._backend_name == "anthropic":
+            # Inert without PAGENTOS_ANTHROPIC_API_KEY (typed error naming the fix).
+            return AnthropicCodingBackend(self.settings.anthropic_api_key)
         if self._backend_name == "claude":
             # Inert without PAGENTOS_SELFHEALING_CLAUDE_CLI (typed error on use).
             return ClaudeCodingBackend(cli_path=self._claude_cli)
