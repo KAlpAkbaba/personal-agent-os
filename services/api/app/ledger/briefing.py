@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.alarms.speech import capitalize_tr
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.ledger.vocabulary import (
@@ -83,7 +84,11 @@ def speech_for(event: ActivityEventRow | ledger_service.ActivityEvent) -> str:
     detail = event.detail_json or {}
     if policy == POLICY_COMPLETION and event.event_type == EVENT_TYPE_RESEARCH_COMPLETED:
         findings_n = int(detail.get("findings", 0) or 0)
-        words = cardinal(findings_n).capitalize() if findings_n else "Sıfır"
+        # capitalize_tr, not str.capitalize(): "iki" must become "İki", and Python's
+        # capitalize() gives the dotless "Iki" -- a different letter, a spelling mistake
+        # to the owner and a mispronunciation to the TTS. Found on 2026-09-11 by the
+        # deliverer's own test, the first thing that ever read this sentence back.
+        words = capitalize_tr(cardinal(findings_n)) if findings_n else "Sıfır"
         return (
             f"Efendim, bilginize; araştırma tamamlandı. {words} önemli sonuç çıkardım. "
             "İsterseniz özetini anlatabilirim."

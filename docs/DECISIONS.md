@@ -9468,3 +9468,55 @@ the answer.
 all five `profile: owner`, no fallback: `session_open` -> `tab_new` -> `search` ->
 `media_play` -> `media_stop`, for "Güldür Güldür". A new tab, their own signed-in browser,
 their existing tabs untouched.
+
+## ADR-0114 — The queue had a filler and no deliverer (2026-09-11)
+
+ADR-0110 wired the system's own findings into `pending_briefings` and said, in its last
+paragraph, which half was missing: *"Delivery — a sweeper that speaks a pending briefing
+into a live session or pushes it to the phone — is a third announcer, and it does not exist
+yet."* This is that announcer.
+
+**What the owner saw in the meantime.** On 2026-09-10 the table held fourteen undelivered
+rows, every one of them expired — research runs that finished while they were asleep, and
+the findings about their own broken typing command. The owner asked directly: "bitince
+sesli bana söylüyor mu?" The answer was no, and the reason was not policy or judgement, it
+was that nothing read the table.
+
+**What "delivered" means, and it is the whole design.** Exactly what `SidebandPusher.push`
+returned — the rule `RealtimeSayBriefing` already states for the alarm. No live session, no
+bound device, a transport that failed, a speaker that raised: every one of them leaves the
+row alone, so it is spoken on the next pass rather than stamped as heard by nobody. The
+mutation that stamps regardless reds two tests.
+
+**One thing per pass.** The constitution: *"A completed task must not automatically force a
+long result onto the owner. Default: notify briefly and wait."* So the urgent policies
+(`immediate`/`completion`/`once`) are spoken as themselves, highest priority first, one per
+pass. `digest` rows are the opposite — ordinary autonomous activity — and reading nine of
+them aloud is exactly the flood that sentence forbids, so they become ONE sentence naming
+how many there are and offering the detail. That is what the spec means by "accumulated and
+summarized at delivery time". The mutation that reads them one by one reds two more.
+
+**Expired rows are never spoken.** `pending()` already filters them and this relies on it
+deliberately: the fourteen stale rows must not become fourteen sentences the day a deliverer
+finally arrives. Stale news is not news.
+
+**One way to talk to the owner, not two.** `RealtimeSayBriefingSpeaker` is a thin adapter
+over the port the alarm already uses, rather than a second implementation of "find the live
+session and push a frame". Two of those would be two things to keep true.
+
+**A prerequisite that was silently broken, and by my own hand.** `RealtimeSayBriefing`
+finds the owner's session with `expires_at > now`. ADR-0105 made that column NULLable so a
+session could last until the owner ends it — and SQL comparison with NULL is NULL, never
+true, so the query excluded exactly the sessions that never expire. Production held an
+ACTIVE one. The alarm's spoken briefing would have answered `no_live_session` to an owner
+sitting in front of an open session: truthful and useless. ADR-0105 changed a column and
+did not go looking for its readers. Found here because delivery needs the same lookup;
+fixed with `or_(expires_at.is_(None), ...)`, and the mutation back to the NULL-blind filter
+reds its regression.
+
+**And a Turkish spelling mistake in the sentence itself.** `speech_for` built the research
+count with `str.capitalize()`, which turns "iki" into "Iki" — the dotless capital, a
+different letter, a spelling error on screen and a mispronunciation out loud.
+`app.alarms.speech.capitalize_tr` has existed for this since M18.3. The deliverer's own
+test was the first thing that ever read that sentence back, which is how a sentence written
+to be spoken went five days without being heard by anything.

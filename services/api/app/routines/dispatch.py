@@ -45,7 +45,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.devices.commands import (
@@ -191,12 +191,27 @@ class RealtimeSayBriefing:
 
     @staticmethod
     def _live_session(session: Session) -> RealtimeSessionRow | None:
+        """The owner's one live session, INCLUDING one that never expires.
+
+        ``expires_at IS NULL`` means "this session ends when the owner ends it"
+        (ADR-0105, the owner's "ses oturumu hiç kapanmasın"). SQL comparison with
+        NULL is NULL, never true, so the original ``expires_at > now`` excluded
+        exactly the sessions that outlive everything -- and production held an
+        ACTIVE one the moment the two changes met. The alarm's spoken briefing
+        would have found nobody to talk to and reported ``no_live_session``,
+        truthfully and uselessly. Caught on 2026-09-11 while wiring the briefing
+        delivery, which needs the same lookup; ADR-0105 changed the column and
+        never went looking for its readers.
+        """
         now = datetime.now(UTC)
         stmt = (
             select(RealtimeSessionRow)
             .where(
                 RealtimeSessionRow.state.in_((REALTIME_STATE_CREATED, REALTIME_STATE_ACTIVE)),
-                RealtimeSessionRow.expires_at > now,
+                or_(
+                    RealtimeSessionRow.expires_at.is_(None),
+                    RealtimeSessionRow.expires_at > now,
+                ),
             )
             .order_by(RealtimeSessionRow.created_at.desc())
         )

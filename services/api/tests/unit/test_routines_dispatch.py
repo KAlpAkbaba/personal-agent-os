@@ -426,6 +426,37 @@ def test_realtime_say_briefing_delivers_when_a_live_session_is_bound_to_a_device
     assert frame["payload"]["text"]
 
 
+def test_realtime_say_briefing_finds_a_session_that_never_expires(
+    realtime_session_factory,
+) -> None:
+    """ADR-0105 made ``expires_at`` NULLABLE -- NULL means "this ends when the owner
+    ends it", which is what the owner asked for ("ses oturumu hiç kapanmasın").
+
+    SQL comparison with NULL is NULL, never true, so ``expires_at > now`` excluded
+    exactly those sessions: the ones that outlive everything. Production held an ACTIVE
+    one the moment the two changes met, and the alarm's spoken briefing would have
+    answered ``no_live_session`` -- truthfully, and uselessly, to an owner sitting in
+    front of an open session. ADR-0105 changed the column and never went looking for
+    its readers; this is that reader.
+    """
+    device_id = uuid.uuid4()
+    session_id = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=device_id,
+        expires_at=None,
+    )
+    sideband = RecordingSideband(deliver=True)
+    briefing = RealtimeSayBriefing(session_factory=realtime_session_factory, sideband=sideband)
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.delivered is True
+    pushed_device_id, frame = sideband.frames[0]
+    assert pushed_device_id == device_id
+    assert frame["session_id"] == str(session_id)
+
+
 def test_realtime_say_briefing_not_delivered_with_no_live_session(realtime_session_factory) -> None:
     sideband = RecordingSideband(deliver=True)
     briefing = RealtimeSayBriefing(session_factory=realtime_session_factory, sideband=sideband)

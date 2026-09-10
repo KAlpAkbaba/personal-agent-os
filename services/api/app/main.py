@@ -57,6 +57,10 @@ from app.health import run_health_checks
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
+from app.ledger.briefing_announcer import (
+    PendingBriefingAnnouncer,
+    RealtimeSayBriefingSpeaker,
+)
 from app.ledger.routes import router as ledger_router
 from app.location.providers import (
     build_ip_coarse_location_provider,
@@ -310,6 +314,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     routine_dispatcher = _build_routine_dispatcher()
+    # The half ADR-0110 named and did not build. queue_briefing filled pending_briefings
+    # for five days and nothing read it -- fourteen rows, all undelivered, all expired.
+    # Speaks through the SAME port the alarm's own briefing uses, so there is one way to
+    # talk to the owner, not two. Runs off the request path; failures are logged.
+    briefing_announcer = PendingBriefingAnnouncer(
+        artifacts.session,
+        RealtimeSayBriefingSpeaker(
+            RealtimeSayBriefing(
+                session_factory=dispatch_session_factory, sideband=voice_realtime.sideband
+            )
+        ),
+    )
 
     def _build_routine_clock() -> RoutineClock:
         """M18.3 spec §3.3. The three ticks, in order, each in the same worker thread and
@@ -378,6 +394,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await mobile.announcer.start()
         await research_tool_call_announcer.start()
         await selfmodel_refresher.start()
+        await briefing_announcer.start()
         await embedded_worker.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
@@ -410,6 +427,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await embedded_worker.stop()
+            await briefing_announcer.stop()
             await selfmodel_refresher.stop()
             await research_tool_call_announcer.stop()
             await mobile.announcer.stop()
@@ -451,6 +469,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.voice_realtime = voice_realtime
     app.state.embedded_worker = embedded_worker
     app.state.selfmodel_refresher = selfmodel_refresher
+    app.state.briefing_announcer = briefing_announcer
     # M18.3: the routes and the voice tools reach the device through these, injected
     # rather than imported as singletons (docs/M18_ACTION_CONTRACT.md §4).
     app.state.wake_sequence = wake_sequence
