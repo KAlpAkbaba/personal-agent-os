@@ -6791,7 +6791,7 @@ Marks: all three PROVEN_REAL in the lab on this machine (78/78 under `--filter O
 Status: Accepted. Scope: `app/operator/`, `app/voice/realtime_sessions/tools_operator.py`, the `operator` voice-corpus category. Five reversible calls the spec left to the implementer, each because building them surfaced a real constraint or defect the spec text did not anticipate.
 
 1. **`operator.type`'s wire argument is named `content`, not `text`.** `app.voice.realtime_sessions.service.FORBIDDEN_KEY_PARTS` refuses any tool-call argument key that is audio/transcript/text-shaped at the HTTP boundary (a 422 before the handler runs) — a platform-wide privacy guard predating M19, not something this track may weaken. The device capability `keyboard.type` itself keeps the M19 spec's own `text` field name (that payload is server-built, never a client argument); only the voice tool's own schema uses `content`.
-2. **The operator's own `ActionReceipt.capability` is `"operator.<plan_name>"`** (`open_application`, `close_window`, `type_text`, `shell_query_ip`, ...), not the voice tool's name (`operator.app_open`, `operator.window_control`, ...): the receipt names the concrete action taken, the tool name is the dispatch bucket. `OperatorService.start_task` builds this receipt (speech left empty); the tool overlays its Turkish sentence onto the returned dict — one place decides the execution/terminal-status mapping, never duplicated per tool.
+2. ~~**The operator's own `ActionReceipt.capability` is `"operator.<plan_name>"`**~~ — **SUPERSEDED BY ADR-0114 (2026-09-10).** (`open_application`, `close_window`, `type_text`, `shell_query_ip`, ...), not the voice tool's name (`operator.app_open`, `operator.window_control`, ...): the receipt names the concrete action taken, the tool name is the dispatch bucket. `OperatorService.start_task` builds this receipt (speech left empty); the tool overlays its Turkish sentence onto the returned dict — one place decides the execution/terminal-status mapping, never duplicated per tool. **What this call did not anticipate:** the plan name was interpolated at runtime, so the receipt's capability was a string in no file — and it is the receipt's capability that the Evolution Supervisor puts into an incident title, which meant the owner's real incidents were filed under names nothing could look up. The distinction it was reaching for (which concrete action ran) was worth keeping, and ADR-0114 keeps it as `observed_after.server.plan`; the receipt's *identity* is now the registered tool capability.
 3. **A device-selection miss (`no_capable_device`, `app.routines.dispatch.BrokerDeviceAction`'s own vocabulary) is reported to the owner as `capability_missing`**, translated at the operator's own receipt boundary (`OperatorService._receipt`) — "no device advertises this capability" and "there is no operator authority on this machine" are the same fact from the owner's chair, and `capability_missing` is this codebase's existing name for it (the eye tools, `research.start`).
 4. **The router classifies `APP_OPEN` only on a recognised allowlist alias** (`app.operator.plans.resolve_app_alias`); an unrecognised app name ("Winamp'ı aç.") resolves to no M19 intent at all and is left to the model's own free-form tool choice — the same trust already placed in the model for `research.start`. The refusal an unknown name earns is the TOOL's (naming the allowlist), proven by calling `operator.app_open` directly; the router cannot know every app name in advance and was never asked to guess.
 5. **`app.operator.focus.set_focus`'s default timestamp is nudged monotonically, never left to `datetime.now(UTC)` alone.** Two focus writes from the same process (two operator steps a few milliseconds apart) can land on an identical wall-clock reading on Windows' coarser default resolution, and the append-only stack's secondary sort key (row id) is not chronological — "most recent" must never fall back to a random UUID tiebreak. `_next_default_selected_at()` guards a process-wide last-assigned timestamp and advances it by one microsecond on a tie; a caller that already has a real, meaningful moment (a device receipt's own timestamp) passes `now=` explicitly and bypasses the guard entirely. The identical failure mode was found, independently, pre-existing in three unrelated test files during this track's own full-suite run (`test_presence_eye_invalidation.py`, `test_research_focus.py`, `test_voice_eye_tools.py` — all order-flaky on the same coarse-clock tie, confirmed reproducible with none of this track's changes loaded); those were left alone as out of scope.
@@ -9430,3 +9430,101 @@ profile; the running worker carries `--owner-enrollment-file`; the enrollment re
 real profile directory; and the attach was driven end to end through
 `ExistingSessionBackend` — connected (`authenticated_session=True`, `existing_tabs=True`),
 navigated, then detached with the browser still running.
+## ADR-0114 — Two names for one action, and the incident that pointed at neither (2026-09-10)
+
+**Measured, in production.** `evolution_opportunities` held
+
+```
+2026-09-09 19:04:06   Tekrarlayan eylem hatası: operator.type_text (validation_error)
+2026-09-09 19:42:37   Tekrarlayan eylem hatası: operator.type_text (postcondition_fail)
+```
+
+and `GET /v1/selfmodel/capabilities/operator.type_text` answered 404 with
+`['operator.app_open', 'operator.cancel', 'operator.shell']`. The defect those two rows
+describe lives behind `operator.type`. The owner's own incident record named a capability
+that could not be looked up, because the name in it had never been a string in any file.
+
+**Where the second name came from.** `app/operator/service.py` minted the task-level receipt
+as `capability=f"operator.{task.plan_name}"`, and the plan names are the tool's internal step
+sequences — `type_text`, `open_application`, `activate_window`. The voice registry declares
+six names (`ToolSpec(name=TOOL_TYPE)` = `operator.type`); the ledger recorded ten different
+ones. `app/evolution/supervisor.py` reads a failed receipt's `capability` straight into an
+incident title, so the ledger's vocabulary is the one the owner ends up holding.
+
+Worse than a rename: the SAME tool wrote receipts under BOTH names depending on which way it
+ended. `operator.type`'s refusal paths (`_capability_missing`, the secret refusal) already
+used the registered name; only a run that reached the device got `operator.type_text`. The
+Supervisor therefore counted refusals and real failures of one tool as two unrelated
+recurring-failure buckets, and neither carried the other's evidence.
+
+**One clock, not two synchronised.** This is the shape this file already calls *two clocks
+for one decision*, and the answer that keeps working is to delete the second one rather than
+to reconcile it. Option (a) of the three considered:
+
+- (a) mint under the registered tool capability, carry the plan as detail — **chosen**;
+- (b) declare the plan names as capability constants too — keeps both vocabularies, keeps
+  the split buckets, and makes a reader ask which of two names an incident meant;
+- (c) an alias map both sides consult — institutionalises the drift; every new plan needs a
+  new alias row, and the incident title would still have said `operator.type_text`.
+
+`app/operator/capabilities.py` is the one declared source: `RECEIPT_BY_PLAN` maps every plan
+this package can run to the capability its receipt and its activity event are recorded under,
+exactly as `RECEIPT_BY_DEVICE_CALL` does for `app/alarms/sequence.py`. The activity event
+(`app/operator/service.py:250`, which had the same f-string) moved with it, so filtering the
+ledger for what `operator.type` did returns the receipt and the lifecycle rows together —
+which was not true before. The plan is not lost: it travels as
+`observed_after.server.plan` and as the activity event's `detail_json.plan`.
+
+**Where the failure now lands.** `Plan.__post_init__` refuses a name the table does not
+carry. That is deliberately earlier than the receipt: at receipt time the action has already
+happened, and a plan whose outcome cannot be named is one that ran and left an unlookupable
+row. Refused at construction, it never touches a device.
+
+**The rows already written are evidence and stay as they are.** `RETIRED_RECEIPT_CAPABILITIES`
+is a CLOSED list of the ten names operator receipts were ever minted under, each mapped to the
+capability that answers it now. Its keys are literals in a module-level dict because that is
+the shape `app/selfmodel/indexer.py::_mapped_capabilities` indexes (ADR-0111) — so a
+two-year-old incident title resolves to a file without the ledger being rewritten to make a
+query tidy. Nothing appends to it: a plan added after today mints under the tool capability
+from its first run, and a structural test asserts the list is exactly these ten.
+
+**Regression, watched RED.** `tests/unit/test_operator_capability_regression.py` fills a
+ledger by driving all ten plans through the real `OperatorService` and the real
+`record_receipt`, then runs the owner's own
+`SELECT DISTINCT detail_json->>'capability' … WHERE event_type='action.receipt'` and requires
+each name to resolve through `app.selfmodel.query.where_is_capability`. Reverting the two
+lines that caused this — the f-string mint, and retired names built by a comprehension
+instead of written as literals — fails seven checks, including the Supervisor one, whose
+message reads back the owner's production row verbatim:
+`Tekrarlayan eylem hatası: operator.type_text (validation_error)`.
+
+`tests/unit/test_operator_capability_vocabulary.py` is the structural half, copying
+`test_alarms_structure.py`'s discipline: every `Plan(name=…)` in the tools must resolve
+statically to a declared plan name, the table has no dead rows, and — repository-wide, not
+just here — **no action receipt anywhere in `app/` may be minted under a capability assembled
+from parts**. `app/operator/service.py` was the only place in the service that did it, and
+that one line was enough to make every operator incident the owner ever had a dead end.
+
+**Measured after.** All 74 capability names this service can put in an `action.receipt`,
+retired ones included, resolve to a file. Before: the ten operator names resolved to nothing,
+with the six real tools offered as candidates.
+
+**This is the follow-up ADR-0111 named.** That work took the index from locating 14 of the 25
+capability names production receipts carry to locating 21, and said of the remaining four:
+"`app/operator/service.py:279` mints the receipt as `f"operator.{task.plan_name}"`, so the
+name the Supervisor files the incident under is not a string anywhere in the source and no
+honest static index can contain it. … Making them meet is a change to the product's naming,
+not to the map, and is tracked separately." This is that change, and it takes the count to
+25 of 25. It depends on ADR-0111 in the other direction too: `where_is_capability` and the
+index's capability layer are what make the proof above runnable at all, and
+`_mapped_capabilities` — added there for `RECEIPT_BY_DEVICE_CALL` — is why declaring the
+retired names as literal dict keys is enough to make them findable, with no new indexer
+rule and no import from the map into the subsystem it maps.
+
+**Supersedes ADR-0082 addendum 4, item 2**, which chose the plan-name receipt on purpose:
+"the receipt names the concrete action taken, the tool name is the dispatch bucket." That
+reasoning is sound and is kept — the concrete action is still recorded, as
+`observed_after.server.plan`. What it did not anticipate is that the name it chose was
+built by an f-string, and that the receipt's capability is what an incident title is made
+of. A distinction worth keeping was made the row's identity, and the identity is the part
+that has to be findable.

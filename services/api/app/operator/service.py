@@ -43,6 +43,7 @@ from app.ledger.vocabulary import (
 )
 from app.logging import get_logger
 from app.operator import focus as focus_module
+from app.operator.capabilities import RECEIPT_BY_PLAN, receipt_capability_for_plan
 from app.operator.models import FOCUS_KIND_WINDOW
 from app.operator.task import (
     STATUS_CANCELLED,
@@ -73,11 +74,27 @@ _LEDGER_EVENT_BY_STATUS: dict[str, str] = {
 
 @dataclass(frozen=True, slots=True)
 class Plan:
-    """The fixed step sequence and identity a voice tool asks the service to run."""
+    """The fixed step sequence and identity a voice tool asks the service to run.
+
+    ``name`` must be one ``app.operator.capabilities.RECEIPT_BY_PLAN`` carries. The check
+    is here, at construction, rather than at the receipt: by the time a receipt is minted
+    the plan has already run, and a plan whose outcome cannot be recorded under a declared
+    capability is an action that would go into the ledger under a name nothing can look up
+    — which is exactly the defect this table was added to end. Refusing it before the
+    first device call turns that into an authoring error instead of a silent one.
+    """
 
     name: str
     goal: str
     steps: list[OperatorStep]
+
+    def __post_init__(self) -> None:
+        if self.name not in RECEIPT_BY_PLAN:
+            raise ValueError(
+                f"operator plan {self.name!r} has no receipt capability; add it to "
+                "app.operator.capabilities.RECEIPT_BY_PLAN "
+                f"(known: {sorted(RECEIPT_BY_PLAN)})"
+            )
 
 
 class OperatorService:
@@ -139,8 +156,10 @@ class OperatorService:
         """Run ``plan`` to completion (spec §7: every voice plan is <= 3 steps, so this
         always returns synchronously) and record the trail: one ``operator.task.*``
         ledger row per lifecycle transition, and one ``ActionReceipt`` (capability
-        ``"operator.<plan.name>"``, subsystem ``operator``, ``observed_after.local`` the
-        last OBSERVE). ``speech`` is left empty here — the voice tool that called this
+        ``app.operator.capabilities.RECEIPT_BY_PLAN[plan.name]`` — the registered tool
+        name, subsystem ``operator``, ``observed_after.local`` the last OBSERVE, the plan
+        itself under ``observed_after.server.plan``).
+        ``speech`` is left empty here — the voice tool that called this
         knows the Turkish sentence and overlays it onto the returned receipt dict
         (``task.action_receipt``); the shape and the statuses are decided in one place.
         """
@@ -241,16 +260,26 @@ class OperatorService:
     ) -> None:
         if db is None:
             return
+        # The SAME capability the receipt carries (app.operator.capabilities): a reader
+        # filtering the ledger for everything ``operator.type`` did gets the activity
+        # events and the receipt in one query, which was not true while this line built
+        # its own name from the plan. The plan is detail about the action, and travels as
+        # detail.
+        capability = receipt_capability_for_plan(task.plan_name)
         try:
             ledger_service.record(
                 db,
                 ledger_service.ActivityEvent(
                     event_type=event_type,
                     subsystem=SUBSYSTEM_OPERATOR,
-                    action=f"operator.{task.plan_name}",
-                    factual_summary=f"operator.{task.plan_name} -> {task.status}",
+                    action=capability,
+                    factual_summary=f"{capability} ({task.plan_name}) -> {task.status}",
                     occurred_at=occurred_at,
-                    detail_json={"task_id": str(task.id), "step_count": len(task.steps)},
+                    detail_json={
+                        "task_id": str(task.id),
+                        "step_count": len(task.steps),
+                        "plan": task.plan_name,
+                    },
                     source="live",
                     source_ref=f"operator_task:{task.id}:{event_type}",
                 ),
@@ -274,13 +303,23 @@ class OperatorService:
         error_class = task.error_class
         if error_class == "no_capable_device":
             error_class = "capability_missing"
+        # The capability the owner COMMANDED, from the one declared table
+        # (app.operator.capabilities). Until 2026-09-10 this was f"operator.{plan_name}",
+        # which put a name into the ledger that existed nowhere in the source: the tool
+        # registry said ``operator.type``, the receipt said ``operator.type_text``, and the
+        # incident the Supervisor raised from the receipt named a capability the self-model
+        # could not find. The plan is still recorded — as ``observed_after.server.plan``,
+        # detail about the action rather than the identity of it.
         receipt = ActionReceipt(
             action_id=str(task.id),
-            capability=f"operator.{task.plan_name}",
+            capability=receipt_capability_for_plan(task.plan_name),
             requested_state=task.status,
             execution_status=execution,
             terminal_status=terminal,
-            observed_after={"server": {"status": task.status}, "local": dict(task.last_observed)},
+            observed_after={
+                "server": {"status": task.status, "plan": task.plan_name},
+                "local": dict(task.last_observed),
+            },
             evidence_refs=[{"kind": "operator_task", "ref": str(task.id)}],
             error_class=error_class if task.status != STATUS_SUCCEEDED else None,
             speech="",
