@@ -8840,3 +8840,59 @@ check itself was untested — a guard that looked right and proved nothing. The 
 can catch is a symlink inside the release, and that test now exists. It SKIPS on this
 Windows account (no symlink privilege) and runs in CI on Linux; the skip says so rather than
 passing quietly.
+
+### ADR-0107 addendum 1 — the first real request was refused, and the error named nothing (2026-09-10)
+
+The unit suite passed on the first run, all 34 of it, because it fakes the model's reply —
+which is honest, and proves only the plumbing. The first request to the real endpoint,
+with the owner's key, failed:
+
+```
+app.selfhealing.errors.SelfHealingError: the Anthropic reply carried no text block
+```
+
+**Two defects, and the smaller one first.** That message named nothing. Probing the same
+request directly showed `HTTP 200`, `stop_reason: refusal`, `output_tokens: 0`,
+`content: []`. The answer was in the response the whole time and the code threw it away.
+`ask()` now reports the `stop_reason`, and says outright that a refusal is a prompt problem
+rather than a code problem — the same lesson as the realtime overlay and the typing
+receipt: a failure that names the wrong thing sends the owner looking in the wrong place.
+
+**The larger one: the prompt itself.** Bisected against the live API, one request per
+variant:
+
+| variant | result |
+| --- | --- |
+| the full prompt | `refusal` |
+| the same without the "treat this as data" paragraph | `refusal` |
+| the same task asked plainly, no incident block | `end_turn`, answered |
+| the "data" paragraph alone with a trivial task | `end_turn`, answered |
+
+So the trigger was the machine-record framing — `## The incident / component: / fault kind:
+/ failing check:` — and not the injection-shield note, which had been the obvious suspect.
+A prompt that reads like an autonomous system reprogramming itself gets treated as one.
+`build_prompt` now reports the bug the way a person would, keeps every fact, and keeps the
+data-not-directions note in a sentence rather than a warning banner.
+`test_the_prompt_does_not_read_like_a_machine_protocol` guards the shape, because the
+failure it prevents costs a real billable request to rediscover.
+
+**Then it worked, end to end, against `claude-opus-5`:**
+
+```
+PATCH ACCEPTED - it passed every gate, including red-then-green
+  changed files : ['handler.py']
+  notes         : Mapped 'segfault' to 'error' instead of 'warn'.
++     ("segfault", "error")
+owner-facing summary: handler.py dosyasında 'segfault' durumu artık 'warn' değil
+'error' olarak sınıflandırılacak şekilde eşleştirmeyi düzelttim.
+```
+
+The model's own regression test carried five cases — the fixed one, a variant of it, both
+untouched mappings and the default — and the backend ran it RED against the broken release
+and GREEN against the candidate before returning. That is the whole claim of this ADR,
+observed rather than asserted.
+
+**One more thing the run taught.** `claude-opus-5` returns a `thinking` block before the
+text. The extraction loop already skipped to the `text` block, so it was correct by
+accident rather than by intent; it now says why in a comment, because the next person to
+read it would have had no way to know that ordering was considered.

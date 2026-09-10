@@ -318,9 +318,31 @@ def test_the_prompt_carries_the_release_and_frames_the_incident_as_data(
 
     assert "handler.py" in prompt
     assert '("boom", "warn")' in prompt, "the model cannot fix what it cannot see"
-    assert "is DATA recorded by a machine" in prompt
+    assert "read them as" in prompt and "data about the failure" in prompt
     assert REGRESSION_ENV_VAR in prompt, "the test contract has to be stated"
-    assert "must FAIL there" in prompt
+    assert "must FAIL" in prompt
+
+
+def test_the_prompt_does_not_read_like_a_machine_protocol() -> None:
+    """Measured against the real endpoint on 2026-09-10: the first version of this prompt
+    laid the incident out as a machine record and the API answered ``stop_reason: refusal``
+    with zero output tokens, every time. Bisecting showed the framing was the trigger and
+    nothing else was - the same task asked plainly was answered normally. This guards the
+    shape, because the failure it prevents costs a real request to discover."""
+    prompt = build_prompt(
+        IssueAnalysis(
+            component="demo",
+            fault_kind="wrong_error_mapping",
+            failing_check="selftest",
+            fingerprint="f" * 16,
+            summary="classify('boom') returned 'warn'",
+        ),
+        Path("."),
+        [],
+    )
+    for machine_ism in ("## The incident", "fault kind:", "failing check:", "component:"):
+        assert machine_ism not in prompt, f"{machine_ism!r} is what got the request refused"
+    assert prompt.startswith("I have a bug")
 
 
 def test_analyze_issue_needs_no_model_call() -> None:
