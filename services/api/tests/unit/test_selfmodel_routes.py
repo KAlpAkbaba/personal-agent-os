@@ -14,6 +14,7 @@ field, which is exactly the property being protected.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,8 @@ from tests.identity_support import authenticate
 from tests.selfmodel_support import (
     FIXTURE_MODULE,
     FIXTURE_PACKAGE,
+    FIXTURE_PLANS_MODULE,
+    FIXTURE_TOOLS_MODULE,
     make_engine,
     write_fixture_tree,
 )
@@ -90,6 +93,7 @@ def indexed_client(client: TestClient, engine, repo: Path) -> TestClient:
         ("get", "/v1/selfmodel/modules"),
         ("get", "/v1/selfmodel/modules/app.observer"),
         ("get", "/v1/selfmodel/modules/app.observer/problems"),
+        ("get", "/v1/selfmodel/capabilities/observer.look"),
         ("get", "/v1/selfmodel/search?q=observer"),
     ],
 )
@@ -107,7 +111,7 @@ def test_policy_reports_the_contract(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
 
-    assert body["selfmodel_version"] == SELFMODEL_VERSION == 1
+    assert body["selfmodel_version"] == SELFMODEL_VERSION == 2
     assert set(body["truth_kinds"]) == {"source", "installed", "runtime", "evidence"}
     assert "route" in body["symbol_kinds"]
     assert "released_as" in body["edge_kinds"]
@@ -229,3 +233,91 @@ def test_search_returns_modules_and_symbols(indexed_client: TestClient) -> None:
 def test_search_requires_a_query(indexed_client: TestClient) -> None:
     assert indexed_client.get("/v1/selfmodel/search").status_code == 422
     assert indexed_client.get("/v1/selfmodel/search", params={"q": ""}).status_code == 422
+
+
+# ------------------------------------------------------------ capabilities
+
+
+def test_a_capability_resolves_to_the_file_that_answers_it(indexed_client: TestClient) -> None:
+    """ADR-0111. "observer.look failed" -> a module, a path, a line."""
+    response = indexed_client.get("/v1/selfmodel/capabilities/observer.look")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["capability"] == "observer.look"
+    assert body["implemented_by"]["module_id"] == FIXTURE_TOOLS_MODULE
+    assert body["implemented_by"]["path"] == "services/api/app/observer/tools.py"
+    assert body["implemented_by"]["lineno"] > 0
+    assert body["implemented_by"]["signature"] == "observer.look -> observer_look()"
+    assert body["confidence"] == 1.0
+
+
+def test_a_device_capability_names_the_file_that_dispatches_it(
+    indexed_client: TestClient,
+) -> None:
+    """Nothing in Cloud Core ANSWERS ``screen.read``; the device does. So the
+    answer is the dispatcher, and the answer says that is what it is."""
+    response = indexed_client.get("/v1/selfmodel/capabilities/screen.read")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["implemented_by"] is None
+    assert [d["module_id"] for d in body["dispatched_by"]] == [FIXTURE_PLANS_MODULE]
+    assert "no_module_in_this_service_implements_it" in body["unknown"]
+
+
+def test_an_unknown_capability_is_a_404_carrying_what_the_index_does_have(
+    indexed_client: TestClient,
+) -> None:
+    response = indexed_client.get("/v1/selfmodel/capabilities/observer.telepathy")
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+
+    assert detail["reason"] == "capability_not_indexed"
+    assert "observer.look" in detail["candidates"]
+
+
+def test_post_index_refuses_while_the_background_refresher_holds_the_index(
+    client: TestClient, repo: Path
+) -> None:
+    """The route's own lock cannot see the refresher (ADR-0111 review finding 2).
+
+    ``build_index`` serialises on a process-wide lock, so an overlapping POST is
+    safe either way -- but waiting out a repository walk with no explanation is
+    not an answer. The route reads the real lock and says so.
+
+    The lock is held from ANOTHER thread and released on a deadline rather than
+    held across the request: holding it here would make the un-wired version
+    block forever on it, and a hanging test proves nothing (it did, on the first
+    attempt). Released, the wrong version answers 200 and this fails on the
+    status -- a red, not a stall.
+    """
+    import threading
+
+    from app.selfmodel import indexer
+
+    release = threading.Event()
+
+    def hold_the_index() -> None:
+        with indexer._INDEX_LOCK:
+            release.wait(timeout=10.0)
+
+    holder = threading.Thread(target=hold_the_index, daemon=True)
+    holder.start()
+    try:
+        deadline = time.perf_counter() + 5.0
+        while not indexer.index_running() and time.perf_counter() < deadline:
+            time.sleep(0.01)
+        assert indexer.index_running(), "the helper thread never took the lock"
+
+        response = client.post("/v1/selfmodel/index")
+    finally:
+        release.set()
+        holder.join(timeout=10.0)
+    assert not holder.is_alive()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["error_class"] == "conflict"
+
+    # ...and the refusal is not permanent: once the run finishes, it works.
+    assert client.post("/v1/selfmodel/index").status_code == 200

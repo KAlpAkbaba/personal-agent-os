@@ -28,7 +28,9 @@ from app.selfmodel.query import REQUIRED_GATES, is_stale, normalize_key
 from tests.selfmodel_support import (
     FIXTURE_MODULE,
     FIXTURE_PACKAGE,
+    FIXTURE_PLANS_MODULE,
     FIXTURE_TEST_MODULE,
+    FIXTURE_TOOLS_MODULE,
     make_engine,
     write_fixture_tree,
 )
@@ -572,3 +574,58 @@ def test_an_underscore_query_does_not_match_everything(sessions) -> None:
         assert query.search(session, "___")["modules"] == []
         found = query.search(session, "ledger")["modules"]
         assert [m["module_id"] for m in found] == ["app.ledger.service"]
+
+
+# --------------------------------------------- where_is_capability (ADR-0111)
+
+
+def test_where_is_capability_names_the_file_line_and_handler(indexed) -> None:
+    with indexed() as session:
+        answer = query.where_is_capability(session, "observer.look").to_dict()
+
+    assert answer["found"] is True
+    assert answer["confidence"] == 1.0
+    assert answer["implemented_by"]["module_id"] == FIXTURE_TOOLS_MODULE
+    assert answer["implemented_by"]["path"] == "services/api/app/observer/tools.py"
+    assert answer["implemented_by"]["lineno"] > 0
+    assert answer["implemented_by"]["signature"] == "observer.look -> observer_look()"
+    assert {"kind": "symbol", "ref": mock_symbol_id()} in answer["evidence_refs"]
+
+
+def mock_symbol_id() -> str:
+    from app.selfmodel.models import SYMBOL_KIND_CAPABILITY, symbol_id_for
+
+    return symbol_id_for(FIXTURE_TOOLS_MODULE, SYMBOL_KIND_CAPABILITY, "observer.look")
+
+
+def test_answering_and_dispatching_are_kept_apart(indexed) -> None:
+    """One failure, two files: on 2026-09-09 ``tools_operator`` said "I could not
+    verify the text" for a run that died inside ``plans`` before a key was
+    pressed. Collapsing these would point the fix at the wrong half."""
+    with indexed() as session:
+        answers = query.where_is_capability(session, "observer.look").to_dict()
+        dispatches = query.where_is_capability(session, "screen.read").to_dict()
+
+    assert answers["implemented_by"]["module_id"] == FIXTURE_TOOLS_MODULE
+    assert answers["dispatched_by"] == []
+    assert dispatches["implemented_by"] is None
+    assert [d["module_id"] for d in dispatches["dispatched_by"]] == [FIXTURE_PLANS_MODULE]
+    assert "no_module_in_this_service_implements_it" in dispatches["unknown"]
+
+
+def test_an_unregistered_capability_gets_candidates_not_a_guess(indexed) -> None:
+    with indexed() as session:
+        answer = query.where_is_capability(session, "observer.telepathy").to_dict()
+
+    assert answer["found"] is False
+    assert answer["reason"] == "capability_not_indexed"
+    assert "observer.look" in answer["candidates"]
+    assert answer["confidence"] == 0.0
+
+
+def test_an_empty_capability_is_refused_rather_than_matched(indexed) -> None:
+    with indexed() as session:
+        answer = query.where_is_capability(session, "   ").to_dict()
+
+    assert answer["found"] is False
+    assert answer["unknown"] == ["capability_not_given"]

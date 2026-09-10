@@ -19,12 +19,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.ledger.models import ActivityEventRow
 from app.selfhealing.models import Release
 from app.selfmodel import indexer
+from app.selfmodel import query as selfmodel_query
 from app.selfmodel.indexer import IndexConfig, build_index, targets_for_test_module
 from app.selfmodel.models import (
     EDGE_CALLS,
     EDGE_DOCUMENTED_BY,
+    EDGE_IMPLEMENTS_CAPABILITY,
     EDGE_IMPORTS,
     EDGE_TESTS,
+    EDGE_USES_CAPABILITY,
     MODULE_KIND_CLIENT,
     MODULE_KIND_MODULE,
     MODULE_KIND_PACKAGE,
@@ -33,6 +36,7 @@ from app.selfmodel.models import (
     PRODUCTION_STATE_INSTALLED,
     PRODUCTION_STATE_RUNNING,
     PRODUCTION_STATE_SOURCE_ONLY,
+    SYMBOL_KIND_CAPABILITY,
     SYMBOL_KIND_CLASS,
     SYMBOL_KIND_CONSTANT,
     SYMBOL_KIND_FUNCTION,
@@ -51,7 +55,9 @@ from app.selfmodel.progress import PHASES, SUBSYSTEM_SELF_MODEL, IndexProgress
 from tests.selfmodel_support import (
     FIXTURE_MODULE,
     FIXTURE_PACKAGE,
+    FIXTURE_PLANS_MODULE,
     FIXTURE_TEST_MODULE,
+    FIXTURE_TOOLS_MODULE,
     make_engine,
     write_fixture_tree,
 )
@@ -262,6 +268,117 @@ def test_unparsable_python_degrades_to_one_row(sessions, repo: Path) -> None:
     with sessions() as session:
         row = session.get(CodeModule, "app.observer.broken")
         assert row is not None and row.detail_json["note"].startswith("unparsed:")
+
+
+# ------------------------------------------------------- capability layer
+#
+# Until 2026-09-10 the indexer looked for a ``@capability`` decorator, which this
+# repository has never used, so every one of these assertions would have failed
+# against a table holding 222 modules and 3813 symbols: "which file answers
+# operator.type?" had no answer, and the Notepad defect of 2026-09-09 was
+# localized by reading the tree.
+
+
+def test_a_registered_tool_becomes_a_capability_the_index_can_be_asked_about(
+    sessions, repo: Path
+) -> None:
+    """``ToolSpec(name=..., handler=...)`` -> a symbol, a line, and an edge."""
+    _index(sessions, repo)
+    with sessions() as session:
+        symbols = _symbols(session, FIXTURE_TOOLS_MODULE)
+        look = symbols[(SYMBOL_KIND_CAPABILITY, "observer.look")]
+        assert look.signature == "observer.look -> observer_look()"
+        assert look.lineno > 0
+
+        edges = {(e.from_module, e.to_module) for e in session.scalars(select(CodeEdge))}
+        assert (FIXTURE_TOOLS_MODULE, "capability:observer.look") in edges
+
+
+def test_all_three_ways_a_capability_id_is_written_are_read(sessions, repo: Path) -> None:
+    """A literal, a constant here, and a constant in another file.
+
+    The third is the one that cannot be answered while the file is open, and it
+    is not a corner case: ``release.promote`` -- the capability that promotes a
+    release -- is named that way in the real tree.
+    """
+    _index(sessions, repo)
+    with sessions() as session:
+        symbols = _symbols(session, FIXTURE_TOOLS_MODULE)
+    names = {name for kind, name in symbols if kind == SYMBOL_KIND_CAPABILITY}
+    assert names == {"observer.look", "observer.deep", "observer.status"}
+
+
+def test_a_string_that_is_not_a_capability_id_is_not_recorded_as_one(sessions, repo: Path) -> None:
+    """The fixture registers ``names.UNRELATED_TEXT`` ("not a capability id").
+
+    It resolves to a real string, and is still refused: the shape of the value
+    decides, not the fact that a lookup succeeded. A row here would be fiction in
+    a table whose only purpose is to be trusted.
+    """
+    _index(sessions, repo)
+    with sessions() as session:
+        values = {row.name for row in session.scalars(select(CodeSymbol))}
+    assert "not a capability id" not in values
+
+
+def test_a_dispatched_device_capability_says_which_file_put_it_on_the_wire(
+    sessions, repo: Path
+) -> None:
+    """The other half. A device refusal names ``screen.read``; only this edge
+    reaches the file that sent it."""
+    _index(sessions, repo)
+    with sessions() as session:
+        edges = {(e.from_module, e.to_module, e.kind) for e in session.scalars(select(CodeEdge))}
+    assert (FIXTURE_PLANS_MODULE, "capability:screen.read", EDGE_USES_CAPABILITY) in edges
+    assert (FIXTURE_PLANS_MODULE, "capability:window.list", EDGE_USES_CAPABILITY) in edges
+    # ``Step(capability=target)`` is a variable. Not knowable without running the
+    # program, so it is absent rather than guessed at.
+    assert not any(
+        kind == EDGE_USES_CAPABILITY and to == "capability:target" for _, to, kind in edges
+    )
+    # and dispatching is not implementing
+    assert not any(
+        frm == FIXTURE_PLANS_MODULE and kind == EDGE_IMPLEMENTS_CAPABILITY for frm, _, kind in edges
+    )
+
+
+def test_a_foreign_constant_still_resolves_when_its_file_is_not_reopened(
+    sessions, repo: Path
+) -> None:
+    """The incremental promise, applied to the hardest case.
+
+    ``names.py`` holds the id; ``tools.py`` registers it. Editing only ``tools.py``
+    must not force ``names.py`` to be reparsed, and must still produce
+    ``observer.deep`` -- which means the value has to survive in the table between
+    runs, not just in the memory of a full run.
+    """
+    _index(sessions, repo)
+    tools = repo / "services/api/app/observer/tools.py"
+    tools.write_text(tools.read_text("utf-8") + "\n\nEXTRA = 1\n", encoding="utf-8")
+    future = time.time() + 5
+    import os
+
+    os.utime(tools, (future, future))
+
+    report = _index(sessions, repo)
+    assert report.modules_reparsed == 1, "only tools.py was touched"
+    with sessions() as session:
+        symbols = _symbols(session, FIXTURE_TOOLS_MODULE)
+        assert (SYMBOL_KIND_CAPABILITY, "observer.deep") in symbols
+        assert symbols[(SYMBOL_KIND_CAPABILITY, "observer.deep")].signature == (
+            "observer.deep -> observer_deep()"
+        )
+
+
+def test_a_string_constant_keeps_its_value(sessions, repo: Path) -> None:
+    """Why: the value is what a later incremental run resolves a foreign
+    reference against. ``TOOL_OBSERVE`` alone would not be enough."""
+    _index(sessions, repo)
+    with sessions() as session:
+        symbols = _symbols(session, FIXTURE_TOOLS_MODULE)
+    assert symbols[(SYMBOL_KIND_CONSTANT, "TOOL_OBSERVE")].signature == (
+        "TOOL_OBSERVE = 'observer.look'"
+    )
 
 
 # ------------------------------------------------------------- incremental
@@ -616,6 +733,95 @@ def test_indexes_this_repository_for_real() -> None:
         engine.dispose()
 
 
+def test_the_index_knows_every_tool_the_running_registry_knows() -> None:
+    """The two halves are made to read each other.
+
+    One side is ``ast`` over the checkout, the other is ``default_registry()``
+    actually constructed in this process. Set equality both ways, so the test
+    fails when a tool is added and the indexer cannot see how it was declared,
+    AND when the indexer invents one. A count would let a swap pass.
+
+    This is the assertion that would have caught the empty capability layer on
+    the day it shipped: 115 registered, 0 indexed.
+    """
+    repo_root = indexer.default_repo_root()
+    if not (repo_root / "services/api/app/ledger/models.py").is_file():
+        pytest.skip("not running from a full checkout")
+
+    from app.voice.realtime_sessions.tools import default_registry
+
+    engine = make_engine()
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with factory() as session:
+            build_index(session, repo_root=repo_root)
+            session.commit()
+            indexed = {
+                row.name
+                for row in session.scalars(
+                    select(CodeSymbol).where(CodeSymbol.kind == SYMBOL_KIND_CAPABILITY)
+                )
+            }
+        registered = set(default_registry().names())
+        assert registered, "the registry itself is empty; this test proves nothing"
+        assert indexed == registered
+    finally:
+        engine.dispose()
+
+
+def test_a_real_incident_resolves_to_a_file_without_reading_the_tree() -> None:
+    """The whole point, on the two capabilities that actually failed.
+
+    ``operator.type`` is what the owner's "not defterine yaz" reaches, and
+    ``keyboard.type`` is what the device refused underneath it on 2026-09-09.
+    The first must name the file that answers the request, the second the file
+    that sent the device call -- and they are different files.
+    """
+    repo_root = indexer.default_repo_root()
+    if not (repo_root / "services/api/app/operator/plans.py").is_file():
+        pytest.skip("not running from a full checkout")
+
+    engine = make_engine()
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    try:
+        with factory() as session:
+            build_index(session, repo_root=repo_root)
+            session.commit()
+
+            answered_by = {
+                edge.from_module
+                for edge in session.scalars(
+                    select(CodeEdge).where(
+                        CodeEdge.to_module == "capability:operator.type",
+                        CodeEdge.kind == EDGE_IMPLEMENTS_CAPABILITY,
+                    )
+                )
+            }
+            assert answered_by == {"app.voice.realtime_sessions.tools_operator"}
+
+            symbol = session.scalars(
+                select(CodeSymbol).where(
+                    CodeSymbol.kind == SYMBOL_KIND_CAPABILITY,
+                    CodeSymbol.name == "operator.type",
+                )
+            ).one()
+            assert symbol.signature == "operator.type -> operator_type()"
+            assert symbol.lineno > 0
+
+            dispatched_by = {
+                edge.from_module
+                for edge in session.scalars(
+                    select(CodeEdge).where(
+                        CodeEdge.to_module == "capability:keyboard.type",
+                        CodeEdge.kind == EDGE_USES_CAPABILITY,
+                    )
+                )
+            }
+            assert dispatched_by == {"app.operator.plans"}
+    finally:
+        engine.dispose()
+
+
 # ------------------------------- defects found by independent review (2026-09-05)
 
 
@@ -667,3 +873,166 @@ def test_the_walk_never_leaves_the_tree_through_a_junction(tmp_path) -> None:
             found = {p.name for p in _iter_files(root, (".py",))}
             assert "inside.py" in found
             assert "secret_module.py" not in found, "the walk left the tree through a junction"
+
+
+# ------------------- defects found by independent review (2026-09-10, ADR-0111)
+
+
+def test_a_secret_shaped_constant_never_reaches_the_index(sessions, repo: Path) -> None:
+    """Storing a constant's VALUE is new; the redaction rule was not.
+
+    ``code_symbols.signature`` is returned verbatim by ``GET /v1/selfmodel/search``,
+    so ``API_KEY = "sk-live-..."`` would have travelled source -> canonical
+    database -> backups -> HTTP. The same pattern that redacts a secret-shaped
+    function default (``_SECRET_PARAM_RE``) now decides here too, at the write
+    site -- which is also what ``_persisted_constant`` reads back.
+    """
+    _index(sessions, repo)
+    with sessions() as session:
+        symbols = _symbols(session, "app.observer.names")
+        every_signature = " ".join(row.signature for row in session.scalars(select(CodeSymbol)))
+
+    assert "NOT-A-REAL-SECRET" not in every_signature
+    for name in ("DEFAULT_API_KEY", "UPSTREAM_PASSWORD", "SESSION_TOKEN_SEED"):
+        assert symbols[(SYMBOL_KIND_CONSTANT, name)].signature == f"{name} = '<redacted>'"
+    # ...and an ordinary constant is untouched, so this is redaction and not a
+    # blanket refusal to store values (which would break the cross-file path).
+    assert symbols[(SYMBOL_KIND_CONSTANT, "TOOL_OBSERVER_DEEP")].signature == (
+        "TOOL_OBSERVER_DEEP = 'observer.deep'"
+    )
+
+
+def test_two_index_runs_cannot_overlap(sessions, repo: Path) -> None:
+    """``POST /v1/selfmodel/index`` and the background refresher both call
+    ``build_index``, and the route's asyncio lock could not see the refresher at
+    all. Each run diffs edges against its own snapshot, so an overlap is a lost
+    update or a duplicate-key error -- silent on the refresher's side.
+    """
+    import threading
+
+    inside = 0
+    peak = 0
+    guard = threading.Lock()
+    real_run = indexer.Indexer.run
+
+    def watched(self, session):
+        nonlocal inside, peak
+        with guard:
+            inside += 1
+            peak = max(peak, inside)
+        try:
+            time.sleep(0.05)
+            return real_run(self, session)
+        finally:
+            with guard:
+                inside -= 1
+
+    indexer.Indexer.run = watched
+    try:
+        threads = [
+            threading.Thread(target=lambda: _index(sessions, repo), daemon=True) for _ in range(4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+            assert not thread.is_alive(), "an index run never finished; the lock deadlocked"
+    finally:
+        indexer.Indexer.run = real_run
+
+    assert peak == 1, f"{peak} index runs were inside build_index at once"
+
+
+def test_the_two_capability_patterns_are_made_to_read_each_other() -> None:
+    """``indexer._CAPABILITY_ID_RE`` is a deliberate COPY of
+    ``app.evolution.tokens.CAPABILITY_ID_RE`` -- a map of the system must not
+    depend on the subsystem it maps. A copy with nothing holding it to the
+    original is this repository's most recurrent bug shape: two sources of one
+    fact, drifting quietly (the review named it on sight, 2026-09-10). So the
+    copy is checked against the original here, and against real ids, so a
+    divergence is a failing test rather than a capability that stops resolving.
+    """
+    from app.evolution.tokens import CAPABILITY_ID_RE
+
+    assert indexer._CAPABILITY_ID_RE.pattern == CAPABILITY_ID_RE.pattern
+
+    for accepted in ("operator.type", "keyboard.type", "browser.session_open", "a.b.c.d.e"):
+        assert indexer._CAPABILITY_ID_RE.match(accepted), accepted
+        assert CAPABILITY_ID_RE.match(accepted), accepted
+    for refused in ("operator", "Operator.Type", "not a capability id", "", "a..b"):
+        assert not indexer._CAPABILITY_ID_RE.match(refused), refused
+        assert not CAPABILITY_ID_RE.match(refused), refused
+
+
+def test_a_capability_that_exists_only_as_a_mapping_value_is_still_located(
+    sessions, repo: Path
+) -> None:
+    """The vocabulary the owner's incidents are actually filed under.
+
+    ``app/alarms/sequence.py`` declares ``alarm.arm`` and ``media.play`` nowhere
+    but as VALUES in ``RECEIPT_BY_DEVICE_CALL``; ``app/voice/intents.py`` maps an
+    utterance to the capability it means the same way. Before this rule, 7 of the
+    25 capability names production receipts carry resolved to nothing at all
+    (measured 2026-09-10).
+    """
+    _index(sessions, repo)
+    with sessions() as session:
+        edges = {(e.from_module, e.to_module, e.kind) for e in session.scalars(select(CodeEdge))}
+
+    # a value...
+    assert (FIXTURE_PLANS_MODULE, "capability:observer.snapshot", EDGE_USES_CAPABILITY) in edges
+    # ...and a literal key, since a mapping between vocabularies names both sides
+    assert (FIXTURE_PLANS_MODULE, "capability:observer.windows", EDGE_USES_CAPABILITY) in edges
+    # ...and a string in the same dict that is not a capability id stays out
+    assert not any(
+        to.startswith("capability:also") or to.startswith("capability:not") for _, to, _ in edges
+    )
+
+
+def test_the_deployed_layout_gets_the_capability_layer_too(sessions, tmp_path: Path) -> None:
+    """The branch production takes, which no test took.
+
+    The image ships ``app`` and nothing above it, so ``detect_layout`` says
+    "deployed" and only ``DEPLOYED_TREES`` runs -- a different tree spec, a
+    different module-id rooting, no docs and no tests. Everything asserted above
+    was asserted against a repo checkout.
+
+    Verified against a real copy of this service's own ``app`` tree before
+    release: 424 modules, 115 capability symbols, 115 implements and 214 uses
+    edges, and ``operator.type`` resolving to
+    ``app/voice/realtime_sessions/tools_operator.py``. This keeps the shape of
+    that check without copying 423 files on every run.
+    """
+    from tests.selfmodel_support import write_deployed_tree
+
+    repo = write_deployed_tree(tmp_path / "srv")
+    assert indexer.detect_layout(repo) == "deployed"
+
+    report = _index(sessions, repo, trees=indexer.DEPLOYED_TREES)
+    assert report.modules_discovered > 0
+
+    with sessions() as session:
+        symbols = _symbols(session, FIXTURE_TOOLS_MODULE)
+        assert symbols[(SYMBOL_KIND_CAPABILITY, "observer.look")].signature == (
+            "observer.look -> observer_look()"
+        )
+        # the cross-file name resolves here too: nothing about it depends on the
+        # repo layout, and that is worth pinning rather than assuming.
+        assert (SYMBOL_KIND_CAPABILITY, "observer.deep") in symbols
+
+        edges = {(e.from_module, e.to_module, e.kind) for e in session.scalars(select(CodeEdge))}
+        assert (
+            FIXTURE_TOOLS_MODULE,
+            "capability:observer.look",
+            EDGE_IMPLEMENTS_CAPABILITY,
+        ) in edges
+        assert (FIXTURE_PLANS_MODULE, "capability:screen.read", EDGE_USES_CAPABILITY) in edges
+
+        # and the answer is honest about what a deployed image cannot carry
+        answer = selfmodel_query.where_is_capability(session, "observer.look").to_dict()
+        assert answer["implemented_by"]["path"] == "app/observer/tools.py"
+        assert answer["docs"] == [] and answer["tests"] == []
+
+    # the incremental promise holds in this layout as well
+    again = _index(sessions, repo, trees=indexer.DEPLOYED_TREES)
+    assert again.modules_reparsed == 0 and again.writes == 0

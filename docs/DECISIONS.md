@@ -9066,3 +9066,164 @@ announcer alongside `ResearchToolCallAnnouncer` and `ArtifactReadyAnnouncer`, an
 not exist yet. Until it does, the findings are reachable at `GET /v1/ledger/briefings`
 rather than arriving on their own. The owner asked for arrival; this is the prerequisite it
 was missing, not the whole of it.
+
+## ADR-0111 — The map was five days old and did not contain the bug (2026-09-10)
+
+**Owner directive.** "yazılım kendi modülünde neyin nerede olduğunun her şeyini detaylı
+bilmeli ve yeni bir şey eklendiğinde veya silindiğinde kendini bununla güncellemeli;
+böylece tüm root'u aramaktansa voice ile ilgili bir sorun olduğunda ilk önce hata loglarına
+bakıp daha sonra sorunun nerede olacağını bilecektir."
+
+The thing the owner described already existed: `app/selfmodel/` — a deterministic AST index
+of the checkout, four tables, incremental on `(size, mtime_ns)`, with a question-shaped read
+API. It had been built in PHASE 6 and it worked. Two things were wrong with it, and both
+were invisible, because a stale row and a fresh row look exactly alike.
+
+**Defect 1 — nothing ever rebuilt it.** `build_index` had one caller in the product:
+`POST /v1/selfmodel/index`, which runs when a human asks. Production's index was written
+once, on 2026-09-05 at 16:35 UTC, and never again. Measured on 2026-09-10:
+
+```
+indexed modules              222
+modules in the checkout      423
+missing from the map         201   including:
+                                     app.voice.realtime_sessions.tools_operator
+                                     app.operator.plans
+                                     app.selfhealing.defects
+                                     app.selfhealing.anthropic_backend
+                                     app.evolution.proposals
+```
+
+The first two are both files of the typing defect the owner reported on 2026-09-09. A map
+that cannot contain the bug cannot be used to find the bug.
+
+**Defect 2 — the capability layer held zero rows.** `code_symbols WHERE kind='capability'`
+returned 0; there were no `implements_capability` edges at all, against 222 modules, 3813
+symbols and 1385 edges of everything else. The cause: the indexer looked for a
+`@capability` / `@register_capability` decorator, and this repository has never declared a
+capability that way. It declares them as
+
+```python
+reg.register(ToolSpec(name=TOOL_TYPE, ..., handler=operator_type))
+```
+
+so the one query worth having — "which file answers `operator.type`?" — had no answer.
+
+**What was built.**
+
+*Extraction.* The indexer now reads the form the repository actually uses. A capability id
+is taken from a literal, from a module-level constant in the same file, or — the case that
+cannot be answered while the file is open, since exactly one file is held at a time — from
+a constant in another file, carried unresolved out of the parse and settled once every
+module has been seen. Four of the 115 tools are named that way, `release.promote` among
+them, so the shape could not be skipped. String constants now keep their value in their
+signature, which is what lets an *incremental* run resolve a foreign reference without
+reopening the file that defines it.
+
+*A second edge kind.* `implements_capability` is "the owner can ask for this here";
+`uses_capability` is "this file dispatches that name to the device". They are deliberately
+not merged: on 2026-09-09 one failure lived in two files — `tools_operator.py` said "metni
+doğrulayamadım" for a run that died inside `plans.py` before a key was pressed — and an
+answer that collapsed them would point a fix at the wrong half.
+
+*The question.* `query.where_is_capability` and `GET /v1/selfmodel/capabilities/{name}`:
+given a capability from an incident, return the file that answers it with its line, the
+files that dispatch it, the tests linked to it, its open incidents and its ADRs. This is the
+file-selection primitive the product-source change pipeline was missing.
+
+*Freshness.* `SelfModelRefresher` (`app/selfmodel/refresh.py`), started by the lifespan.
+One pass shortly after startup — in an immutable image the source changes exactly when the
+process is replaced, so that is the trigger that matters — and then on an interval, because
+a developer checkout changes underneath a running process. Measured on this repository: a
+cold pass is 2.7 s and 14 773 writes; an unchanged pass is 0.3 s and **zero** writes.
+Failures are logged and swallowed: an aid to diagnosis must not be able to take Cloud Core
+down.
+
+**This is not self-modification.** Nothing here writes source, proposes a change or restarts
+anything. It reads the checkout and writes four tables that describe it. The constitution's
+self-development path is untouched and still required for any change to code.
+
+**Proof.** The decisive test is a cross-check that makes the two halves read each other: the
+index is built by `ast` over the checkout, `default_registry()` is constructed in the same
+process, and the two capability sets must be equal in both directions — 115 = 115, no drift
+either way. Under version 1 that assertion read 115 registered against 0 indexed. Alongside
+it, `operator.type` must resolve to `tools_operator.py` and `keyboard.type` to
+`app.operator.plans`, and they must be different files.
+
+Every new assertion was watched fail: emptying `_CAPABILITY_CONSTRUCTORS` (the pre-fix
+behaviour) reds 5; removing the cross-file settle reds 3; dropping the constant value reds
+the incremental case only; removing `start()` from the lifespan reds the wiring test.
+Removing `stop()` did **not** — the TestClient's event loop closes on the way out, so
+`running` reads false whether the lifespan cancelled the task or abandoned it. The
+assertion was rewritten to watch the call itself, and only then failed.
+
+**A known limitation, recorded rather than hidden.** `test_operator_tools.py` links to
+`app.operator`, not to `app.voice.realtime_sessions.tools_operator`, because
+`targets_for_test_module` walks the longest existing module prefix and stops. So
+`where_is_capability("operator.type")` honestly answers `no_linked_tests` for the most
+edited module in the tree. That is a separate defect in test linking, not in this one, and
+the answer says so rather than offering a plausible neighbour.
+
+**A second limitation, in the deployed image only.** `services/api/Dockerfile` ships
+`app`, `alembic` and `scripts`; `docs/` and `tests/` live above the build context and are
+not in the image. So in production `where_is_capability` returns the file, the line and the
+dispatchers, and an empty `docs`/`tests` — locally it returns `ADR-0082` and
+`M19_DIGITAL_OPERATOR_SPEC.md` for the same capability. `detect_layout()` already accounts
+for this (a deployed root indexes `app` only), so nothing lies; it is a smaller answer,
+and shipping the two directories is a release-engineering change, not this one.
+
+**What the independent review found, and what it changed.** Three real defects, all in the
+new code, all fixed and each proven by watching a mutation fail:
+
+1. **A secret-shaped module constant would have been served over HTTP.** Storing a
+   constant's *value* is new; the redaction rule was not. `_redact_secret_defaults` has
+   protected secret-shaped function defaults since M8, and the new constant path did not go
+   through it — while `code_symbols.signature` is returned verbatim by
+   `GET /v1/selfmodel/search`. So `API_KEY = "sk-live-…"` in any indexed file would have
+   travelled source → canonical database → backups → HTTP. The same `_SECRET_PARAM_RE` now
+   decides at the write site, which is also what `_persisted_constant` reads back. The
+   fixture tree grew three secret-shaped constants and the assertion is repository-wide:
+   no signature anywhere contains the marker.
+2. **The background refresher and `POST /index` could race.** The route's `asyncio.Lock`
+   made a second POST a 409 and could not see the refresher at all, which calls
+   `build_index` from a worker thread. Each run diffs edges against its own snapshot, so an
+   overlap is a lost update or a duplicate key — silently, on the refresher's side. The
+   lock moved into `app.selfmodel.indexer`, beside the only function that writes those
+   tables, rather than beside one of its two callers: a lock a caller can forget to take is
+   the bug it was meant to prevent. The regression runs four concurrent `build_index` calls
+   and asserts the peak concurrency is 1; without the lock it fails with exactly the error
+   the review predicted, `UNIQUE constraint failed: code_modules.module_id`.
+3. **Unbounded per-module structures.** `string_constants` and `capability_refs` had only
+   the 400 KB file ceiling behind them, against `MAX_SYMBOLS_PER_MODULE = 400` for symbols;
+   both are capped now, and a constant signature is truncated like every other.
+
+The review also named the `_CAPABILITY_ID_RE` copy as a two-clocks risk on sight. It is
+byte-identical to `app.evolution.tokens.CAPABILITY_ID_RE` today and now has a contract test
+holding it there, so a divergence is a failing test rather than a capability that quietly
+stops resolving.
+
+**The measurement that says how much of this is actually finished.** Of the 25 distinct
+capability names production receipts carry, the index locates **21**. Getting from 14 to 21
+needed a third declaration form: a name that exists only as a *value in a module-level
+mapping*. `app/alarms/sequence.py` declares `alarm.arm`, `media.play` and `greeting.play`
+nowhere else, and `app/voice/intents.py` maps an utterance to the capability it means the
+same way — so "alarm.snooze does not work" now answers with both the file that implements
+it (`tools_ambient`) and the file that decides those words mean it (`voice.intents`).
+
+**The 4 it still cannot locate, and why that is not an indexer defect.**
+`operator.type_text`, `operator.open_application`, `operator.activate_window`,
+`operator.close_window`. `app/operator/service.py:279` mints the receipt as
+`f"operator.{task.plan_name}"`, so the name the Supervisor files the incident under is not
+a string anywhere in the source and no honest static index can contain it. That is a second
+vocabulary for one capability — the registry says `operator.type`, the receipt says
+`operator.type_text` — with nothing reconciling them: two clocks, in name form. Making them
+meet is a change to the product's naming, not to the map, and is tracked separately.
+
+**One more test that had to be rewritten before it proved anything.** The 409 for "an index
+run is already in progress" is now read from the indexer's own lock, so the route can see
+the refresher. The first version of its regression held that lock across the request — and
+the un-wired version then blocked on it forever. A hang is not a red: the suite simply
+stopped. The lock is now held by a helper thread and released on a deadline, so the wrong
+version answers 200 and the test fails on the status in fifteen seconds. Same lesson as the
+`stop()` assertion above, and the same one `a-stopwatch-is-not-an-assertion` records: the
+mutation has to produce a failure, not an absence.

@@ -43,7 +43,9 @@ from app.selfmodel.models import (
     EDGE_DOCUMENTED_BY,
     EDGE_RELEASED_AS,
     EDGE_TESTS,
+    EDGE_USES_CAPABILITY,
     PRODUCTION_STATE_RUNNING,
+    SYMBOL_KIND_CAPABILITY,
     TRUTH_EVIDENCE,
     TRUTH_INSTALLED,
     TRUTH_RUNTIME,
@@ -829,6 +831,138 @@ def search(session: Session, q: str, *, limit: int = 25) -> dict[str, Any]:
     }
 
 
+def where_is_capability(session: Session, capability: str) -> Answer:
+    """Given a capability that failed, the files to open (ADR-0111).
+
+    This is the question the capability layer exists for, and the one nothing
+    could ask until 2026-09-10. An incident names a capability -- the voice tool
+    the owner reached, or the device call that was refused underneath it -- and
+    the answer has to be a file, a line, and the tests that cover it, without
+    anything reading 423 modules to find out.
+
+    Two different answers, kept apart on purpose:
+
+    ``implemented_by``  the file that ANSWERS the request. Where a wrong reply,
+                        a bad argument or a missing branch lives.
+    ``dispatched_by``   the file(s) that PUT IT ON THE WIRE. Where a device
+                        refusal lives.
+
+    On 2026-09-09 those were two different files for one failure --
+    ``tools_operator.py`` said "I could not verify the text" for a run that died
+    in ``plans.py`` before a key was pressed -- so an answer that collapsed them
+    into one would point at the wrong half of the bug.
+
+    A capability nobody registered gets ``capability_not_indexed`` and the
+    nearest names, never a guess.
+    """
+    wanted = (capability or "").strip().lower()
+    resolution = Resolution(query=capability, normalized=wanted)
+    if not wanted:
+        return Answer(
+            question="where_is_capability",
+            resolution=resolution,
+            unknown=["capability_not_given"],
+            facts={"capability": capability, "reason": "capability_not_given"},
+        )
+
+    symbol = session.scalars(
+        select(CodeSymbol).where(
+            CodeSymbol.kind == SYMBOL_KIND_CAPABILITY, CodeSymbol.name == wanted
+        )
+    ).first()
+    dispatched_by = sorted(
+        {
+            edge.from_module
+            for edge in session.scalars(
+                select(CodeEdge).where(
+                    CodeEdge.to_module == f"capability:{wanted}",
+                    CodeEdge.kind == EDGE_USES_CAPABILITY,
+                )
+            )
+        }
+    )
+
+    if symbol is None and not dispatched_by:
+        near = session.scalars(
+            select(CodeSymbol.name)
+            .where(
+                CodeSymbol.kind == SYMBOL_KIND_CAPABILITY,
+                CodeSymbol.name.ilike(f"%{wanted.split('.')[0]}%"),
+            )
+            .limit(MAX_CANDIDATES)
+        ).all()
+        return Answer(
+            question="where_is_capability",
+            resolution=Resolution(
+                query=capability, normalized=wanted, candidates=tuple(sorted(near))
+            ),
+            unknown=["capability_not_indexed"],
+            facts={
+                "capability": wanted,
+                "reason": "capability_not_indexed",
+                "candidates": sorted(near),
+            },
+        )
+
+    implemented_by: dict[str, Any] | None = None
+    evidence_refs: list[dict[str, Any]] = []
+    tests: list[str] = []
+    open_incidents: list[dict[str, Any]] = []
+    docs: list[str] = []
+    if symbol is not None:
+        module = session.get(CodeModule, symbol.module_id)
+        implemented_by = {
+            "module_id": symbol.module_id,
+            "path": module.path if module is not None else None,
+            "lineno": symbol.lineno,
+            "signature": symbol.signature,
+            "purpose": module.purpose if module is not None else None,
+            "production_state": module.production_state if module is not None else None,
+        }
+        evidence_refs.append({"kind": "symbol", "ref": symbol.symbol_id})
+        tests = _test_modules(session, symbol.module_id)
+        open_incidents = _incidents(session, symbol.module_id, open_only=True)
+        if module is not None:
+            docs = [*(module.adr_refs or []), *(module.spec_refs or [])]
+
+    dispatchers = []
+    for module_id in dispatched_by:
+        row = session.get(CodeModule, module_id)
+        dispatchers.append({"module_id": module_id, "path": row.path if row is not None else None})
+        evidence_refs.append({"kind": "edge", "ref": f"{module_id}->capability:{wanted}"})
+
+    unknown: list[str] = []
+    if implemented_by is None:
+        # Real and common: a DEVICE capability. Nothing in Cloud Core answers
+        # ``keyboard.type``; the Windows agent does. Saying so is the answer,
+        # not a failure to find one.
+        unknown.append("no_module_in_this_service_implements_it")
+    if not tests and implemented_by is not None:
+        unknown.append("no_linked_tests")
+
+    return Answer(
+        question="where_is_capability",
+        resolution=Resolution(
+            query=capability,
+            normalized=wanted,
+            module_id=implemented_by["module_id"] if implemented_by else None,
+            matched_by="capability",
+            confidence=1.0 if implemented_by else 0.6,
+        ),
+        confidence=1.0 if implemented_by else 0.6,
+        unknown=unknown,
+        evidence_refs=evidence_refs,
+        facts={
+            "capability": wanted,
+            "implemented_by": implemented_by,
+            "dispatched_by": dispatchers,
+            "tests": tests,
+            "open_incidents": open_incidents,
+            "docs": docs,
+        },
+    )
+
+
 def list_modules(
     session: Session, *, kind: str | None = None, limit: int = 100
 ) -> list[dict[str, Any]]:
@@ -877,5 +1011,6 @@ __all__ = [
     "resolve_module",
     "search",
     "what_is_running",
+    "where_is_capability",
     "why_written",
 ]

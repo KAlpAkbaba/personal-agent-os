@@ -32,6 +32,7 @@ import ast
 import hashlib
 import os
 import re
+import threading
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -50,6 +51,7 @@ from app.selfmodel.models import (
     EDGE_IMPORTS,
     EDGE_RELEASED_AS,
     EDGE_TESTS,
+    EDGE_USES_CAPABILITY,
     EVIDENCE_ONLY_TRUTHS,
     MODULE_KIND_CLIENT,
     MODULE_KIND_MODULE,
@@ -130,6 +132,38 @@ HTTP_VERBS: Final[frozenset[str]] = frozenset(
 _CAPABILITY_DECORATORS: Final[frozenset[str]] = frozenset({"capability", "register_capability"})
 _TOOL_DECORATORS: Final[frozenset[str]] = frozenset({"tool", "register_tool"})
 _CONSTANT_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Z][A-Z0-9_]{1,}$")
+
+#: How a capability is DECLARED in this repository. The decorator sets above are
+#: kept -- they cost nothing -- but nothing here has ever used them, which is why
+#: the capability layer of this index held zero rows from the day it was written
+#: until 2026-09-10, while the other layers held 222 modules and 3813 symbols.
+#: The real form is a constructor call::
+#:
+#:     reg.register(ToolSpec(name=TOOL_TYPE, ..., handler=operator_type))
+#:
+#: ``name`` is the capability the owner's voice reaches; ``handler`` is the
+#: function that answers it, in this same file. That pair is the whole point of
+#: the layer: "operator.type failed" has to become a file and a line without
+#: reading the tree.
+_CAPABILITY_CONSTRUCTORS: Final[frozenset[str]] = frozenset({"ToolSpec"})
+#: Deliberately a copy of ``app.evolution.tokens.CAPABILITY_ID_RE`` rather than an
+#: import: a map of the system must not depend on the subsystem it maps.
+_CAPABILITY_ID_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[a-z][a-z0-9]{0,31}(\.[a-z][a-z0-9_]{0,31}){1,4}$"
+)
+#: A constant's value is kept in its signature only up to here. Long enough for
+#: every capability id in the repository, short enough that no file's contents
+#: can be smuggled into the index one constant at a time.
+MAX_CONSTANT_VALUE_CHARS: Final[int] = 120
+#: ...and only this many constants per module are carried, for the same reason
+#: ``MAX_SYMBOLS_PER_MODULE`` exists. Highest in this repository: 118.
+MAX_CONSTANTS_PER_MODULE: Final[int] = 400
+#: Unresolved cross-file capability names carried out of one parse. Highest in
+#: this repository: 4.
+MAX_CAPABILITY_REFS_PER_MODULE: Final[int] = 100
+#: Capability ids read out of module-level dict literals. Highest in this
+#: repository: 108 (``app/voice/intents.py``'s utterance-to-capability tables).
+MAX_MAPPED_CAPABILITIES_PER_MODULE: Final[int] = 400
 
 
 # -------------------------------------------------------------- tree layout
@@ -305,6 +339,23 @@ class SymbolFact:
     tags: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityRef:
+    """A capability declared by a constant that lives in another file.
+
+    ``ToolSpec(name=actions.TOOL_STATE_NOW, handler=state_now)`` -- the id is a
+    string, but not one this parse can read, because exactly one file is open at
+    a time and it is not that one. Four of this repository's tools are named this
+    way, ``release.promote`` among them, so dropping the shape would leave a hole
+    in the map precisely where self-development lives.
+    """
+
+    #: dotted reference, e.g. ``app.voice.realtime_sessions.actions.TOOL_STATE_NOW``
+    ref: str
+    handler: str | None
+    lineno: int
+
+
 @dataclass(slots=True)
 class ModuleFacts:
     """Everything the indexer keeps about one file after the file is closed."""
@@ -322,7 +373,16 @@ class ModuleFacts:
     #: raw dotted import targets, resolved against known module ids later.
     imports: list[str] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
+    #: capability ids this file ANSWERS -- one per registered tool.
     capabilities: list[str] = field(default_factory=list)
+    #: capability ids this file DISPATCHES, to the device or another executor.
+    capabilities_used: list[str] = field(default_factory=list)
+    #: ``ToolSpec`` declarations whose capability id is a constant defined in
+    #: another file; carried unresolved out of the parse and settled in
+    #: :meth:`Indexer._settle_capability_refs`, where every module is available.
+    capability_refs: list[CapabilityRef] = field(default_factory=list)
+    #: module-level ``NAME = "value"`` bindings, for that same resolution.
+    string_constants: dict[str, str] = field(default_factory=dict)
     #: set when the file was skipped (too large / unparsable) -- recorded, never
     #: silently dropped, so an unindexed file is a visible fact.
     note: str | None = None
@@ -506,6 +566,159 @@ def _collect_imports(tree: ast.Module, package: str) -> tuple[list[str], dict[st
     return targets, bindings
 
 
+def _string_constants(tree: ast.Module) -> dict[str, str]:
+    """Module-level ``NAME = "value"`` bindings, values only, capped and redacted.
+
+    Only the top level: a name bound inside a function or a class is not a
+    module constant and reading it as one would put a guess in the table.
+
+    A secret-shaped NAME gets :data:`REDACTED_DEFAULT` as its value, by the same
+    rule and the same pattern as a secret-shaped function default
+    (:func:`_redact_secret_defaults`). That rule existed and this path did not go
+    through it: storing a constant's value is new, and ``code_symbols.signature``
+    is returned verbatim by ``GET /v1/selfmodel/search``, so ``API_KEY = "..."``
+    would have travelled from the source into the canonical database, into its
+    backups, and back out over HTTP (independent security review, 2026-09-10).
+    Redacting at the WRITE site is what makes it hold: it is also what
+    :func:`_persisted_constant` later reads back.
+    """
+    found: dict[str, str] = {}
+    for node in tree.body:
+        if len(found) >= MAX_CONSTANTS_PER_MODULE:
+            break
+        if isinstance(node, ast.Assign):
+            targets: list[ast.expr] = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        value = node.value
+        if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            continue
+        if len(value.value) > MAX_CONSTANT_VALUE_CHARS:
+            continue
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if _SECRET_PARAM_RE.search(target.id):
+                found[target.id] = REDACTED_DEFAULT
+            else:
+                found[target.id] = value.value
+    return found
+
+
+def _capability_id(node: ast.expr | None, constants: dict[str, str]) -> str | None:
+    """The capability id this expression names, or ``None``.
+
+    A literal, or a constant defined in this same file. Anything else -- a
+    variable, an attribute of an object, an f-string -- is genuinely not
+    knowable without running the program, and returns ``None`` rather than a
+    plausible-looking reconstruction.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        text: str = node.value
+    elif isinstance(node, ast.Name):
+        text = constants.get(node.id, "")
+    else:
+        return None
+    return text if _CAPABILITY_ID_RE.match(text) else None
+
+
+def _capability_ref(node: ast.expr | None, bindings: dict[str, str]) -> str | None:
+    """``actions.TOOL_STATE_NOW`` -> the dotted reference to that constant."""
+    if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+        return None
+    root = bindings.get(node.value.id)
+    return f"{root}.{node.attr}" if root else None
+
+
+def _callee_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _handler_name(node: ast.expr | None) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _collect_capabilities(
+    tree: ast.Module, constants: dict[str, str], bindings: dict[str, str]
+) -> tuple[list[tuple[str, str | None, int]], list[CapabilityRef], list[str]]:
+    """The two halves of a capability: what this file answers, what it dispatches.
+
+    Returns ``(implemented, unresolved, used)``. ``implemented`` carries the line
+    the registration is on, so "operator.type is broken" resolves to a file AND a
+    line. ``used`` drops anything this same file implements: passing your own tool
+    name to a helper (``_capability_missing(ctx, capability=TOOL_TYPE)``) is not
+    dispatching it.
+    """
+    implemented: list[tuple[str, str | None, int]] = []
+    unresolved: list[CapabilityRef] = []
+    used: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        keywords = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+        if _callee_name(node.func) in _CAPABILITY_CONSTRUCTORS:
+            named = keywords.get("name")
+            handler = _handler_name(keywords.get("handler"))
+            capability = _capability_id(named, constants)
+            if capability is not None:
+                implemented.append((capability, handler, node.lineno))
+            elif len(unresolved) < MAX_CAPABILITY_REFS_PER_MODULE:
+                ref = _capability_ref(named, bindings)
+                if ref is not None:
+                    unresolved.append(CapabilityRef(ref=ref, handler=handler, lineno=node.lineno))
+        if "capability" in keywords:
+            dispatched = _capability_id(keywords["capability"], constants)
+            if dispatched is not None:
+                used.append(dispatched)
+
+    # A third form, and the one that carries the names the owner's incidents are
+    # actually filed under: a module-level MAPPING between vocabularies.
+    # ``app/alarms/sequence.py``'s ``RECEIPT_BY_DEVICE_CALL`` translates a device
+    # call into the receipt capability the ledger records, so "alarm.arm",
+    # "media.play" and "greeting.play" exist only as values in that dict -- and
+    # ``app/voice/intents.py`` maps an utterance to the capability it means the
+    # same way. Without this, 7 of the 25 capability names production receipts
+    # carry resolved to nothing (measured 2026-09-10). Keys and values both: in
+    # a mapping BETWEEN capability vocabularies, both sides are names this file
+    # is where you go to change.
+    used.extend(_mapped_capabilities(tree))
+
+    answered = {capability for capability, _, _ in implemented}
+    return implemented, unresolved, [c for c in used if c not in answered]
+
+
+def _mapped_capabilities(tree: ast.Module) -> list[str]:
+    """Capability ids appearing as literals in a module-level dict literal."""
+    found: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign | ast.AnnAssign):
+            value = node.value
+        else:
+            continue
+        if not isinstance(value, ast.Dict):
+            continue
+        for item in (*value.keys, *value.values):
+            if len(found) >= MAX_MAPPED_CAPABILITIES_PER_MODULE:
+                return found
+            if (
+                isinstance(item, ast.Constant)
+                and isinstance(item.value, str)
+                and _CAPABILITY_ID_RE.match(item.value)
+            ):
+                found.append(item.value)
+    return found
+
+
 def _collect_calls(tree: ast.Module, bindings: dict[str, str]) -> list[str]:
     called: set[str] = set()
     for node in ast.walk(tree):
@@ -542,6 +755,7 @@ def analyze_python(source: str, module_id: str, package: str) -> dict[str, Any]:
             symbols.append(fact)
 
     capabilities: list[str] = []
+    constants = _string_constants(tree)
 
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
@@ -612,21 +826,74 @@ def analyze_python(source: str, module_id: str, package: str) -> dict[str, Any]:
                         SymbolFact(
                             name=target.id,
                             kind=SYMBOL_KIND_CONSTANT,
-                            signature=target.id,
+                            signature=_constant_signature(target.id, constants),
                             lineno=node.lineno,
                         )
                     )
 
     imports, bindings = _collect_imports(tree, package)
+    implemented, unresolved, used = _collect_capabilities(tree, constants, bindings)
+    for capability, handler, lineno in implemented:
+        capabilities.append(capability)
+        add(
+            SymbolFact(
+                name=capability,
+                kind=SYMBOL_KIND_CAPABILITY,
+                signature=f"{capability} -> {handler}()" if handler else capability,
+                lineno=lineno,
+                tags=["registered"],
+            )
+        )
     return {
         "purpose": _first_line(ast.get_docstring(tree), 400),
         "symbols": symbols,
         "imports": imports,
         "calls": _collect_calls(tree, bindings),
         "capabilities": capabilities,
+        "capabilities_used": used,
+        "capability_refs": unresolved,
+        "string_constants": constants,
         "note": None,
         "module_id": module_id,
     }
+
+
+def _persisted_constant(session: Session, module_id: str, name: str) -> str | None:
+    """Read a string constant's value back out of a previous run's symbol row.
+
+    The value was written into the signature as ``NAME = 'value'``;
+    :func:`ast.literal_eval` reads it back, and reads nothing else -- the input
+    is a repr this indexer produced, and a signature that is not one (an older
+    row from before values were stored, a name with no value) yields ``None``.
+    """
+    row = session.scalars(
+        select(CodeSymbol).where(
+            CodeSymbol.symbol_id == symbol_id_for(module_id, SYMBOL_KIND_CONSTANT, name)
+        )
+    ).first()
+    if row is None:
+        return None
+    _, separator, literal = (row.signature or "").partition(" = ")
+    if not separator:
+        return None
+    try:
+        value = ast.literal_eval(literal)
+    except (ValueError, SyntaxError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _constant_signature(name: str, constants: dict[str, str]) -> str:
+    """``TOOL_TYPE = 'operator.type'`` rather than bare ``TOOL_TYPE``.
+
+    The value is kept because a capability id is frequently written once, as a
+    constant, and referred to from another file. Persisting it is what lets an
+    INCREMENTAL run -- one where the defining file was not reopened -- still
+    resolve ``actions.TOOL_STATE_NOW`` to a capability.
+    """
+    value = constants.get(name)
+    signature = f"{name} = {value!r}" if value is not None else name
+    return signature[:MAX_SIGNATURE_CHARS]
 
 
 # ------------------------------------------------------------------- walking
@@ -959,8 +1226,72 @@ class Indexer:
         facts.imports = list(extracted.get("imports") or [])
         facts.calls = list(extracted.get("calls") or [])
         facts.capabilities = list(extracted.get("capabilities") or [])
+        facts.capabilities_used = list(extracted.get("capabilities_used") or [])
+        facts.capability_refs = list(extracted.get("capability_refs") or [])
+        facts.string_constants = dict(extracted.get("string_constants") or {})
         facts.note = extracted.get("note")
         return facts
+
+    def _settle_capability_refs(self, session: Session, fresh: dict[str, ModuleFacts]) -> None:
+        """Resolve ``ToolSpec(name=<other module>.CONSTANT)`` now that all files are parsed.
+
+        Two places hold the answer and both are consulted, in this order: the
+        modules parsed by THIS run, and the constant symbols already in the table
+        from an earlier one. The second is what keeps the incremental promise --
+        editing ``tools.py`` must not require reopening ``actions.py`` to know
+        what ``actions.TOOL_STATE_NOW`` says.
+
+        A reference that resolves to nothing is left out and counted. It is not
+        approximated by the constant's NAME: ``TOOL_STATE_NOW`` is not a
+        capability id, and a table whose job is to be trusted may not contain one
+        that merely looks like an answer.
+        """
+        wanted: set[str] = set()
+        for facts in fresh.values():
+            for ref in facts.capability_refs:
+                wanted.add(ref.ref)
+        if not wanted:
+            return
+
+        resolved: dict[str, str] = {}
+        missing: list[tuple[str, str]] = []
+        for reference in sorted(wanted):
+            module_id, _, name = reference.rpartition(".")
+            value = (fresh[module_id].string_constants.get(name)) if module_id in fresh else None
+            if value is None:
+                value = _persisted_constant(session, module_id, name)
+            if value is not None and _CAPABILITY_ID_RE.match(value):
+                resolved[reference] = value
+            else:
+                missing.append((module_id, name))
+
+        for facts in fresh.values():
+            for ref in facts.capability_refs:
+                capability = resolved.get(ref.ref)
+                if capability is None or capability in facts.capabilities:
+                    continue
+                facts.capabilities.append(capability)
+                facts.symbols.append(
+                    SymbolFact(
+                        name=capability,
+                        kind=SYMBOL_KIND_CAPABILITY,
+                        signature=(
+                            f"{capability} -> {ref.handler}()" if ref.handler else capability
+                        ),
+                        lineno=ref.lineno,
+                        tags=["registered"],
+                    )
+                )
+            facts.capabilities_used = [
+                c for c in facts.capabilities_used if c not in facts.capabilities
+            ]
+
+        if missing:
+            logger.warning(
+                "selfmodel_capability_ref_unresolved",
+                count=len(missing),
+                sample=[f"{module}.{name}" for module, name in missing[:5]],
+            )
 
     # -- database half -------------------------------------------------------
 
@@ -1005,6 +1336,9 @@ class Indexer:
                 self.progress.phase("parsing", done=position, total=len(discovered))
 
         self.progress.phase("parsing", done=len(discovered), total=len(discovered))
+
+        # 1b. capability ids that live in another file ------------------------
+        self._settle_capability_refs(session, fresh)
 
         # 2. upsert the changed modules and their symbols --------------------
         now = datetime.now(UTC)
@@ -1087,7 +1421,12 @@ class Indexer:
         scope: set[tuple[str, str]] = set()
 
         for module_id, facts in fresh.items():
-            for edge_kind in (EDGE_IMPORTS, EDGE_CALLS, EDGE_IMPLEMENTS_CAPABILITY):
+            for edge_kind in (
+                EDGE_IMPORTS,
+                EDGE_CALLS,
+                EDGE_IMPLEMENTS_CAPABILITY,
+                EDGE_USES_CAPABILITY,
+            ):
                 scope.add((module_id, edge_kind))
             for target in dict.fromkeys(facts.imports):
                 resolved = _resolve_import(target, known_ids)
@@ -1099,6 +1438,8 @@ class Indexer:
                     desired[(module_id, resolved, EDGE_CALLS)] = {}
             for capability in dict.fromkeys(facts.capabilities):
                 desired[(module_id, f"capability:{capability}", EDGE_IMPLEMENTS_CAPABILITY)] = {}
+            for capability in dict.fromkeys(facts.capabilities_used):
+                desired[(module_id, f"capability:{capability}", EDGE_USES_CAPABILITY)] = {}
 
         for module_id in known_ids:
             if not module_id.startswith("tests."):
@@ -1539,6 +1880,30 @@ def _apply_production_states(session: Session, known: set[str]) -> None:
             row.production_state = state
 
 
+#: One index run at a time in this process, whoever started it.
+#:
+#: ``app/selfmodel/routes.py`` had an ``asyncio.Lock`` that made a second POST a
+#: 409 -- and it could not see the background refresher at all, which arrived in
+#: ADR-0111 and calls ``build_index`` directly from a worker thread. Two runs on
+#: the same tables each compute ``desired``/``scope`` against their own snapshot,
+#: so the overlap is a lost update or an IntegrityError on the same primary key,
+#: silently in the refresher's case (independent review, 2026-09-10). The lock
+#: lives HERE, next to the only function that writes those tables, rather than
+#: next to one of the two callers -- a lock a caller can forget to take is the
+#: bug it was meant to prevent.
+#:
+#: ``threading`` rather than ``asyncio``: both callers already run this in a
+#: worker thread, so nothing blocks the event loop.
+_INDEX_LOCK: Final[threading.Lock] = threading.Lock()
+
+
+def index_running() -> bool:
+    """Whether an index run is in progress in this process. Advisory only --
+    ``build_index`` takes the lock itself; this is for a caller that would rather
+    say "busy" than wait (``POST /v1/selfmodel/index`` answers 409)."""
+    return _INDEX_LOCK.locked()
+
+
 def build_index(
     session: Session,
     *,
@@ -1552,6 +1917,8 @@ def build_index(
     ``DEFAULT_TREES``; a deployed image, which ships only the ``services/api`` subtree,
     gets ``DEPLOYED_TREES`` - otherwise every spec misses and the index is silently empty.
     An explicitly supplied ``config.trees`` is always honoured.
+
+    Serialised on :data:`_INDEX_LOCK`; a second caller waits rather than racing.
     """
     if config is not None:
         cfg = config
@@ -1559,7 +1926,8 @@ def build_index(
         root = repo_root or default_repo_root()
         trees = DEPLOYED_TREES if detect_layout(root) == "deployed" else DEFAULT_TREES
         cfg = IndexConfig(repo_root=root, trees=trees)
-    return Indexer(cfg, progress=progress).run(session)
+    with _INDEX_LOCK:
+        return Indexer(cfg, progress=progress).run(session)
 
 
 __all__ = [
@@ -1582,6 +1950,7 @@ __all__ = [
     "display_name_for",
     "discover",
     "has_table",
+    "index_running",
     "record_evidence_provenance",
     "scan_docs",
     "targets_for_test_module",

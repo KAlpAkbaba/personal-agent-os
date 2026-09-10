@@ -4,6 +4,7 @@
 - ``GET  /modules``                   list, filterable by kind
 - ``GET  /modules/{key}``             module status (the four truths included)
 - ``GET  /modules/{key}/problems``    open incidents + failed tests + limits
+- ``GET  /capabilities/{name}``       which files answer / dispatch a capability
 - ``GET  /search?q=``                 module and symbol search
 - ``GET  /policy``                    version and vocabularies
 
@@ -30,7 +31,7 @@ from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.selfmodel import SELFMODEL_VERSION
 from app.selfmodel import query as selfmodel_query
-from app.selfmodel.indexer import build_index, default_repo_root
+from app.selfmodel.indexer import build_index, default_repo_root, index_running
 from app.selfmodel.models import (
     EDGE_KINDS,
     MODULE_KINDS,
@@ -51,8 +52,11 @@ MAX_LIMIT = 500
 MAX_KEY_CHARS = 300
 MAX_QUERY_CHARS = 200
 
-#: One index run at a time per process. A second concurrent rebuild would do the
-#: same work twice and race on the same rows for no benefit.
+#: One index run at a time *from this route*. The real mutual exclusion lives in
+#: ``app.selfmodel.indexer`` and covers the background refresher too; this lock
+#: only lets a second POST fail fast with 409 instead of queueing behind the
+#: first. Before ADR-0111 this was the only lock, and it could not see the
+#: refresher at all (independent review, 2026-09-10).
 _index_lock = asyncio.Lock()
 
 
@@ -98,9 +102,18 @@ async def rebuild_index(request: Request) -> dict[str, Any]:
 
     Incremental: an unchanged checkout reports ``writes: 0``. Publishes
     THINKING for the ``self_model`` subsystem while it runs, with counters only.
+
+    Overlapping the background refresher is safe -- ``build_index`` serialises on
+    its own process-wide lock -- so this call waits out a refresh rather than
+    racing it. A second POST is refused instead of queued.
     """
     source = _session_source(request)
-    if _index_lock.locked():
+    # Both conditions, because there are two ways a run can already be under way
+    # and this route can only see one of them: another POST (its own lock) and
+    # the background refresher (the indexer's). Answering 409 for the second is
+    # the truthful answer -- the alternative is a caller waiting out a repository
+    # walk with no idea why.
+    if _index_lock.locked() or index_running():
         raise HTTPException(
             status_code=409,
             detail={"error_class": "conflict", "message": "an index run is already in progress"},
@@ -144,6 +157,28 @@ async def list_modules(
             return selfmodel_query.list_modules(session, kind=kind, limit=limit)
 
     return {"modules": await asyncio.to_thread(load)}
+
+
+@router.get("/capabilities/{capability}")
+async def where_is_capability(request: Request, capability: str) -> dict[str, Any]:
+    """Which files does a failing capability live in? (ADR-0111)
+
+    The read the self-healing pipeline makes before it selects files to send to
+    a coding backend, and the read ``app.explain`` makes to answer the owner in
+    Turkish. 404 when nothing in the index registers or dispatches the name,
+    carrying the nearest capability names rather than a nearest-neighbour guess.
+    """
+    source = _session_source(request)
+    key = _check_key(capability)
+
+    def load() -> dict[str, Any]:
+        with source.session() as session:
+            return selfmodel_query.where_is_capability(session, key).to_dict()
+
+    answer = await asyncio.to_thread(load)
+    if answer.get("reason") == "capability_not_indexed":
+        raise HTTPException(status_code=404, detail=answer)
+    return answer
 
 
 @router.get("/search")

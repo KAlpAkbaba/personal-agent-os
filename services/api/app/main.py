@@ -97,6 +97,7 @@ from app.security.runtime import SecurityRuntime
 from app.selfhealing.defects import register_defect_sink
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
+from app.selfmodel.refresh import SelfModelRefresher
 from app.selfmodel.routes import router as selfmodel_router
 from app.state.routes import router as state_router
 from app.uistate import UiState
@@ -164,6 +165,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     research_tool_call_announcer = ResearchToolCallAnnouncer(
         voice_realtime.session, voice_realtime.sideband
     )
+    # ADR-0111: the self-model index describes the code this process is running,
+    # and until now nothing ever rebuilt it — production's map was five days and
+    # six releases old, and did not contain the two modules the owner's 2026-09-09
+    # typing defect lived in. Runs off the request path, failures are logged.
+    selfmodel_refresher = SelfModelRefresher(artifacts.session)
 
     def _routine_label(routine_id: Any) -> str | None:
         """Best-effort alarm label lookup (ADR-0060) — never raises: a routine name is a
@@ -371,6 +377,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # this drains READY-but-unannounced tasks (app/mobile/announcer.py).
         await mobile.announcer.start()
         await research_tool_call_announcer.start()
+        await selfmodel_refresher.start()
         await embedded_worker.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
@@ -403,6 +410,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             await embedded_worker.stop()
+            await selfmodel_refresher.stop()
             await research_tool_call_announcer.stop()
             await mobile.announcer.stop()
             await routine_clock.stop()
@@ -442,6 +450,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.mobile = mobile
     app.state.voice_realtime = voice_realtime
     app.state.embedded_worker = embedded_worker
+    app.state.selfmodel_refresher = selfmodel_refresher
     # M18.3: the routes and the voice tools reach the device through these, injected
     # rather than imported as singletons (docs/M18_ACTION_CONTRACT.md §4).
     app.state.wake_sequence = wake_sequence

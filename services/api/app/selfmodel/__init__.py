@@ -16,10 +16,19 @@ network, never a whole file held in memory beyond the one being parsed).
 engine (``app.explain``) will call to answer the owner's Turkish questions --
 this package returns structured facts with evidence refs and an explicit
 confidence, never wording and never a guess.
+
+``app.selfmodel.refresh`` is what keeps all of it true. The index is only worth
+consulting if it describes the code that is running, and for the first five days
+of its life nothing rebuilt it (ADR-0111).
 """
 
 from __future__ import annotations
 
-SELFMODEL_VERSION = 1
+#: 1 = PHASE 6, the four tables and the question API.
+#: 2 = ADR-0111: the capability layer is actually populated (it held zero rows
+#:     under version 1), the ``uses_capability`` edge kind exists, string
+#:     constants carry their value, and ``GET /capabilities/{name}`` answers
+#:     "which files does this failing capability live in".
+SELFMODEL_VERSION = 2
 
 __all__ = ["SELFMODEL_VERSION"]

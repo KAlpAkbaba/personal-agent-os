@@ -122,6 +122,12 @@ EDGE_IMPORTS = "imports"
 EDGE_CALLS = "calls"
 EDGE_TESTS = "tests"
 EDGE_IMPLEMENTS_CAPABILITY = "implements_capability"
+#: The other half of a capability. ``implements_capability`` is "the owner can
+#: ask for this here"; ``uses_capability`` is "this file dispatches that name to
+#: the device". A device refusal names a capability, and only the second edge
+#: says which file put it on the wire -- ``keyboard.type`` was refused on
+#: 2026-09-09 and nothing in the index could reach ``app.operator.plans``.
+EDGE_USES_CAPABILITY = "uses_capability"
 EDGE_DOCUMENTED_BY = "documented_by"
 EDGE_RELEASED_AS = "released_as"
 
@@ -130,6 +136,7 @@ EDGE_KINDS: Final[tuple[str, ...]] = (
     EDGE_CALLS,
     EDGE_TESTS,
     EDGE_IMPLEMENTS_CAPABILITY,
+    EDGE_USES_CAPABILITY,
     EDGE_DOCUMENTED_BY,
     EDGE_RELEASED_AS,
 )
@@ -330,6 +337,7 @@ __all__ = [
     "EDGE_KINDS",
     "EDGE_RELEASED_AS",
     "EDGE_TESTS",
+    "EDGE_USES_CAPABILITY",
     "EVIDENCE_ONLY_TRUTHS",
     "MODULE_KINDS",
     "MODULE_KIND_CLIENT",

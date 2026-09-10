@@ -36,6 +36,11 @@ from app.selfmodel.models import CodeEdge, CodeModule, CodeSymbol, ModuleProvena
 FIXTURE_MODULE = "app.observer.diagnostic_observer"
 FIXTURE_PACKAGE = "app.observer"
 FIXTURE_TEST_MODULE = "tests.unit.test_observer_diagnostic_observer"
+#: Registers capabilities; the module a "observer.look is broken" report must
+#: resolve to without anything reading the tree.
+FIXTURE_TOOLS_MODULE = "app.observer.tools"
+#: Dispatches device capabilities; the module a device REFUSAL must resolve to.
+FIXTURE_PLANS_MODULE = "app.observer.plans"
 
 _OBSERVER_SOURCE = '''"""Watches subsystem health and records what it saw.
 
@@ -85,6 +90,76 @@ def normalize(value: str) -> str:
     return value.strip().lower()
 '''
 
+#: Capability ids declared the three ways this repository really declares them:
+#: a literal, a constant in the same file, and a constant in another file.
+_NAMES_SOURCE = '''"""Capability ids, defined once and imported."""
+
+TOOL_OBSERVER_DEEP = "observer.deep"
+UNRELATED_TEXT = "not a capability id"
+# A module constant now carries its VALUE into the index, and the index is
+# served over HTTP. These three must never arrive there (review, 2026-09-10).
+DEFAULT_API_KEY = "sk-live-NOT-A-REAL-SECRET-CONSTANT"
+UPSTREAM_PASSWORD = "hunter2-NOT-A-REAL-SECRET"
+SESSION_TOKEN_SEED = "seed-NOT-A-REAL-SECRET"
+'''
+
+_OBSERVER_TOOLS_SOURCE = '''"""What the owner can ask the observer to do."""
+
+from app.observer import names
+from app.observer.plans import ToolSpec, look_steps
+
+TOOL_OBSERVE = "observer.look"
+
+
+def observer_look(ctx, arguments):
+    """Answer observer.look."""
+    return {"steps": look_steps(arguments["target"])}
+
+
+def observer_deep(ctx, arguments):
+    """Answer observer.deep."""
+    return {"deep": True}
+
+
+def observer_status(ctx, arguments):
+    """Answer observer.status."""
+    return {"status": "ok"}
+
+
+def register(reg):
+    reg.register(ToolSpec(name=TOOL_OBSERVE, handler=observer_look))
+    reg.register(ToolSpec(name=names.TOOL_OBSERVER_DEEP, handler=observer_deep))
+    reg.register(ToolSpec(name="observer.status", handler=observer_status))
+    reg.register(ToolSpec(name=names.UNRELATED_TEXT, handler=observer_status))
+'''
+
+_OBSERVER_PLANS_SOURCE = '''"""The steps the observer puts on the wire to the device."""
+
+CAPABILITY_SCREEN_READ = "screen.read"
+
+#: The receipt vocabulary: names that exist ONLY as values in a mapping, which is
+#: how ``app/alarms/sequence.py`` declares "alarm.arm" and "media.play" -- the
+#: names the owner's incidents are filed under.
+RECEIPT_BY_DEVICE_CALL = {
+    CAPABILITY_SCREEN_READ: "observer.snapshot",
+    "window.list": "observer.windows",
+    "not a capability": "also not one",
+}
+
+
+class ToolSpec:
+    """Stand-in for the real registry spec."""
+
+
+def look_steps(target):
+    """One device call per step."""
+    return [
+        Step(capability=CAPABILITY_SCREEN_READ, target=target),
+        Step(capability="window.list"),
+        Step(capability=target),
+    ]
+'''
+
 _PACKAGE_SOURCE = '''"""Diagnostic observation subsystem."""
 '''
 
@@ -131,6 +206,9 @@ def write_fixture_tree(root: Path) -> Path:
         "services/api/app/observer/__init__.py": _PACKAGE_SOURCE,
         "services/api/app/observer/diagnostic_observer.py": _OBSERVER_SOURCE,
         "services/api/app/observer/helpers.py": _HELPERS_SOURCE,
+        "services/api/app/observer/names.py": _NAMES_SOURCE,
+        "services/api/app/observer/tools.py": _OBSERVER_TOOLS_SOURCE,
+        "services/api/app/observer/plans.py": _OBSERVER_PLANS_SOURCE,
         "services/api/tests/__init__.py": "",
         "services/api/tests/unit/__init__.py": "",
         "services/api/tests/unit/test_observer_diagnostic_observer.py": _TEST_SOURCE,
@@ -166,6 +244,31 @@ ALL_TABLES = [
 ]
 
 
+def write_deployed_tree(root: Path) -> Path:
+    """The shape PRODUCTION actually indexes: an ``app`` package and nothing else.
+
+    ``services/api/Dockerfile`` ships ``app``, ``alembic`` and ``scripts``; there
+    is no ``services/``, no ``docs/`` and no ``tests/`` above them, so
+    ``detect_layout`` returns ``"deployed"`` and only ``DEPLOYED_TREES`` runs.
+    Every other fixture here is a repo checkout, which means the branch the
+    running system takes was the one branch no test exercised.
+    """
+    files = {
+        "app/__init__.py": '"""Fixture API package."""\n',
+        "app/observer/__init__.py": _PACKAGE_SOURCE,
+        "app/observer/diagnostic_observer.py": _OBSERVER_SOURCE,
+        "app/observer/helpers.py": _HELPERS_SOURCE,
+        "app/observer/names.py": _NAMES_SOURCE,
+        "app/observer/tools.py": _OBSERVER_TOOLS_SOURCE,
+        "app/observer/plans.py": _OBSERVER_PLANS_SOURCE,
+    }
+    for rel, content in files.items():
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    return root
+
+
 def make_engine(*, with_evidence_tables: bool = True) -> Engine:
     """A SQLite engine with the self-model tables created from metadata.
 
@@ -186,6 +289,9 @@ __all__ = [
     "FIXTURE_MODULE",
     "FIXTURE_PACKAGE",
     "FIXTURE_TEST_MODULE",
+    "FIXTURE_PLANS_MODULE",
+    "FIXTURE_TOOLS_MODULE",
     "make_engine",
+    "write_deployed_tree",
     "write_fixture_tree",
 ]
