@@ -349,3 +349,50 @@ qualification completes. Only after real use:
 - HA cloud;
 - advanced screen-history learning;
 - proactive workflow automation.
+
+## Owner's queue, spoken 2026-09-10/11 (in this order)
+
+Recorded verbatim in intent because a list only I hold is a list that stops existing when a
+session ends. Each line says what "done" means, so none of them can be reported finished on
+a demonstration.
+
+1. **The system's own findings reach the owner out loud.** `pending_briefings` fills and
+   nothing delivers: fourteen rows on 2026-09-10, every one undelivered and every one
+   expired. Done = a briefing spoken into a live session or pushed to the phone, and the row
+   marked delivered by the thing that actually delivered it. (Named as the missing half in
+   ADR-0110; still missing.)
+2. **"Güldür Güldür aç." without saying "YouTube'dan".** The ADR-0112 matcher requires an
+   explicit media marker, deliberately, and it is too narrow: "video", "şov", "dizi", "film"
+   are missing, and a bare title with a play verb is not reachable at all. Done = the owner's
+   natural phrasing routes, with corpus cases, and "haberleri aç" / "Chrome'u aç" /
+   "ekranı aç" still route where they always did.
+3. **Something advances an idea.** `EvolutionService.advance()` has two callers and neither
+   runs on a timer, so a recorded opportunity sits at `idea` for ever — which is what the
+   owner watched happen to "YouTube'dan 'Doğum günün kutlu olsun Kadir' aç." Done = a
+   recorded idea moves through the lab's own lifecycle without anyone asking it to, and
+   stops where the constitution says it stops (`shadow_ready`).
+4. **Real sleep detection.** Asked for on 2026-09-11 after seeing why the screen never
+   turned off for sleep: `likely_asleep` needs posture + wakefulness, both of which come
+   from the camera, and the camera has never reported once — production has only ever held
+   `unknown`, `present` and `away`. The waits are three minutes now (owner's number) but the
+   asleep path has no trigger behind it. Done = `likely_asleep` is reached from real
+   observations, with the privacy posture stated and the owner's own switch over it.
+5. **It answers only the owner's voice**, and a listen-only mode until a second command.
+   Corrected by the owner on 2026-09-11: "ses algılamadan kastımda sadece benim sesimi
+   tanıyacak" — this is SPEAKER VERIFICATION, not sound detection, and CLAUDE.md's voice
+   rule already keeps the two apart.
+
+   What exists: `app/voice/crypto.py`, written to encrypt a derived speaker embedding so
+   that "neither raw audio nor a plaintext voiceprint is persisted". What does not exist:
+   the embedding itself. `VoiceProfile` has no `embedding_ref` column and nothing in the
+   tree compares one voice to another. The same shape as the capability layer, the media
+   route and the attach backend before them — machinery present, nothing wired to it.
+
+   The binding constraint is in M12's own table: `VoiceIdentity` is "augment-only; never a
+   sole root of authentication". So done = the system can tell the owner's voice from
+   another and SAYS which it heard, while a voice alone still authorises nothing; enrolment
+   is the owner's deliberate act; the stored artefact is an encrypted embedding and never
+   audio; and a stranger speaking is a recorded, answerable event rather than silence.
+
+   Listen-only rides on top: "sadece dinle" stops it acting, a second command releases it,
+   and the boundary between hearing and acting is visible rather than implied.

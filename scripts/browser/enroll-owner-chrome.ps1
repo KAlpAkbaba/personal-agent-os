@@ -10,8 +10,9 @@
     running cannot be given the port afterwards: a second chrome.exe with the flag simply
     hands the command line to the running instance and exits, and the flag is ignored.
     So this script closes Chrome (asking first) and relaunches it with the port bound to
-    127.0.0.1 on a random high port, using the owner's own profile - their tabs, their
-    logins, their extensions.
+    127.0.0.1 on a FIXED loopback port, using the owner's own profile - their tabs, their
+    logins, their extensions - and writes a shortcut that launches it the same way, so a
+    restart does not silently end the authorization.
 
     Then it writes a BrowserEnrollment record: the authorization the browser worker reads
     before it will attach to anything at all. No record, no attach; the worker has no
@@ -20,8 +21,8 @@
     WHAT THIS GRANTS, in plain words: the agent can act as you on every site you are
     signed into - read your mail, click, fill forms, submit them, buy things. That is what
     was asked for, twice, in full knowledge. Anything else on this machine that can reach
-    127.0.0.1 on the chosen port can drive the browser the same way; the port is random
-    and loopback-only, which is a bound, not a lock.
+    127.0.0.1 on the chosen port can drive the browser the same way; loopback is a bound,
+    not a lock.
 
     To undo it: close Chrome, start it normally from the Start menu, and run this script
     with -Revoke (which deletes the record; the worker then refuses the 'owner' profile).
@@ -44,7 +45,16 @@ param(
     # same directory makes it work. Measured both ways on 2026-09-10 before this line
     # existed, and the script's own probe below is what caught it.
     [string]$UserDataDir = "$env:LOCALAPPDATA\Google\Chrome\User Data",
-    [int]$Port = 0,
+    # FIXED, not random. The first version picked a random high port so the endpoint
+    # would not be a well-known address -- which was security theatre: the port is
+    # loopback-only either way, and anything already running on this machine can
+    # enumerate ports in milliseconds. What the randomness DID buy was a broken feature
+    # every time Chrome restarted, because the recorded endpoint pointed at a port
+    # nothing was listening on any more. That happened within an hour, on 2026-09-10,
+    # and the owner's answer to "play a song" became "tarayıcıyı açamadı". A fixed port
+    # plus the shortcut written below means a restart through that shortcut keeps the
+    # enrollment valid.
+    [int]$Port = 19222,
     [switch]$Revoke,
     [switch]$Force
 )
@@ -81,11 +91,6 @@ if (-not $chrome) {
 }
 Write-Step "chrome  : $chrome"
 
-if ($Port -le 0) {
-    # A random high port, so the endpoint is not a well-known address something else
-    # on this machine can assume. Loopback-only either way.
-    $Port = Get-Random -Minimum 19000 -Maximum 19999
-}
 $endpoint = "http://127.0.0.1:$Port"
 Write-Step "endpoint: $endpoint  (loopback only)"
 
@@ -187,9 +192,40 @@ Write-Step "recorded: $EnrollmentFile"
 $acl = "$env:SystemRoot\System32\icacls.exe"
 & $acl $EnrollmentFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" /grant:r "SYSTEM:(R,W)" | Out-Null
 
+# A shortcut that launches Chrome the SAME way this script just did.
+#
+# Without it the enrollment lasts exactly as long as this Chrome process: the owner
+# closes the browser, Windows or an update reopens it the ordinary way, the port is gone,
+# and the next "play me a song" answers "I could not reach your browser". With a fixed
+# port and this shortcut, restarting through it puts the port back where the enrollment
+# already says it is. Desktop and Start Menu, so it is where a browser is looked for.
+$shortcutTargets = @(
+    (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Chrome (PagentOS).lnk'),
+    (Join-Path ([Environment]::GetFolderPath('StartMenu')) 'Programs\Chrome (PagentOS).lnk')
+)
+$shell = New-Object -ComObject WScript.Shell
+foreach ($target in $shortcutTargets) {
+    $parent = Split-Path -Parent $target
+    if (-not (Test-Path -LiteralPath $parent)) { continue }
+    try {
+        $link = $shell.CreateShortcut($target)
+        $link.TargetPath = $chrome
+        $link.Arguments = "--remote-debugging-port=$Port --remote-debugging-address=127.0.0.1 --user-data-dir=`"$UserDataDir`""
+        $link.WorkingDirectory = Split-Path -Parent $chrome
+        $link.IconLocation = "$chrome,0"
+        $link.Description = "Chrome the agent can attach to (PagentOS, loopback port $Port)"
+        $link.Save()
+        Write-Step "shortcut: $target"
+    }
+    catch {
+        Write-Step "could not write $target ($($_.Exception.Message))"
+    }
+}
+
 Write-Host ""
 Write-Host "The agent may now attach to your Chrome." -ForegroundColor Green
-Write-Host "Keep using this Chrome window normally; do not close and reopen it from the"
-Write-Host "Start menu, or the port is gone and this script has to be run again."
+Write-Host "From now on open Chrome with the 'Chrome (PagentOS)' shortcut on your desktop"
+Write-Host "or in the Start menu. Opened any other way, the debugging port is not there and"
+Write-Host "the agent will say so instead of quietly using a blank browser."
 Write-Host ""
 Write-Host "Undo at any time:  .\scripts\browser\enroll-owner-chrome.ps1 -Revoke"

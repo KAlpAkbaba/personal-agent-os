@@ -23,6 +23,7 @@ What is asserted, in the order the alarm actually needs it:
 from __future__ import annotations
 
 import json
+import pathlib
 from pathlib import Path
 from typing import Any
 
@@ -1063,9 +1064,7 @@ class TestMediaStatus:
         result = await worker._execute("browser.media_status", {"session_id": "alarm-abc"})
         assert result["ended"] is True and result["playing"] is False
 
-    async def test_no_element_reports_absence_rather_than_a_fabricated_reading(
-        self, waits
-    ) -> None:
+    async def test_no_element_reports_absence_rather_than_a_fabricated_reading(self, waits) -> None:
         worker = Worker(build_arg_parser().parse_args(["--data-dir", "."]))
         _register_session(worker, _FakeBrowserSession(_FakePage(video=None)))
         result = await worker._execute("browser.media_status", {"session_id": "alarm-abc"})
@@ -1236,3 +1235,79 @@ class TestMediaBoundaries:
         source = Path(media.__file__).read_text(encoding="utf-8")
         for forbidden in (".click(", "document.cookie", "localStorage", "sessionStorage"):
             assert forbidden not in source
+
+
+# ---------------- the two backends must answer the same surface (2026-09-10)
+
+
+def test_both_backends_answer_every_attribute_the_worker_asks_a_backend_for() -> None:
+    """``session_open`` treats a backend polymorphically; only one of them was complete.
+
+    ``native_browser`` was defined on ``ManagedBackend`` alone, and the worker reads it
+    right after ``connect()`` to report the browser version. The first REAL attach to the
+    owner's Chrome therefore died with
+    ``AttributeError: 'ExistingSessionBackend' object has no attribute 'native_browser'``
+    -- in production, on the owner's machine, after four green worker tests.
+
+    Those tests could not catch it: their attach fails at ``connect()`` on a port with
+    nothing behind it, so the line after ``connect()`` was never executed. And a fake
+    carrying the attribute would have been worse than useless, passing while the real
+    class failed.
+
+    So the list of attributes is READ OUT OF THE WORKER'S OWN SOURCE rather than restated
+    here -- a name the worker starts using tomorrow is checked tomorrow, without anyone
+    remembering to add it.
+    """
+    import ast
+
+    from browser_agent import worker as worker_module
+    from browser_agent.backends import ExistingSessionBackend, ManagedBackend
+
+    tree = ast.parse(pathlib.Path(worker_module.__file__).read_text(encoding="utf-8"))
+    asked: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "backend"
+        ):
+            asked.add(node.attr)
+    assert asked, "no backend.<attr> access found; this test would prove nothing"
+
+    # Three names belong to LAUNCHING and the worker only touches them on the branch
+    # that launched something. An attached browser was not started by this worker, owns
+    # no profile directory to relaunch and joins no Windows job object, so it answers
+    # none of them and does not need to.
+    launch_only = {"breaker", "job_object_assigned", "last_launch_kind"}
+    # INSTANCES, not classes: several of these are set in __init__, so a class-level
+    # hasattr would report them missing on both and prove nothing about either.
+    from browser_agent.enrollment import BrowserEnrollment
+
+    backends = (
+        (ManagedBackend(), asked),
+        (
+            ExistingSessionBackend(
+                BrowserEnrollment.cdp_loopback("http://127.0.0.1:19222", name="surface-test")
+            ),
+            asked - launch_only,
+        ),
+    )
+    for backend, expected in backends:
+        missing = sorted(name for name in expected if not hasattr(backend, name))
+        assert not missing, (
+            f"{type(backend).__name__} cannot answer {missing}, "
+            "which worker.py asks a backend for"
+        )
+
+
+def test_the_attached_backend_reports_its_browser_the_way_session_open_reads_it() -> None:
+    """The exact expression that crashed, on the real class, before it is connected:
+    ``backend.native_browser`` must be readable and simply None."""
+    from browser_agent.backends import ExistingSessionBackend
+    from browser_agent.enrollment import BrowserEnrollment
+
+    backend = ExistingSessionBackend(
+        BrowserEnrollment.cdp_loopback("http://127.0.0.1:19222", name="test")
+    )
+
+    assert backend.native_browser is None

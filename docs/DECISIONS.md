@@ -9430,3 +9430,41 @@ profile; the running worker carries `--owner-enrollment-file`; the enrollment re
 real profile directory; and the attach was driven end to end through
 `ExistingSessionBackend` — connected (`authenticated_session=True`, `existing_tabs=True`),
 navigated, then detached with the browser still running.
+
+**Four more crashes, in one chain, found by the owner and then by a test that reads the
+source.** The first real attach that got past `connect()` died with
+`AttributeError: 'ExistingSessionBackend' object has no attribute 'native_browser'` --
+`session_open` reads it to report the browser version, and it was defined on
+`ManagedBackend` alone. Behind it stood three more: `main_pid`, `last_launch_kind` and
+`launch_lock_name`, all read by `_lifecycle_info`, which runs on EVERY session-scoped
+command. A successful attach would have crashed on the next step regardless.
+
+The four worker tests could not have caught any of them: their attach fails at `connect()`
+on a port with nothing behind it, so nothing after `connect()` ever ran. They proved
+"attach never launches" and never once proved "attach works". A hand-written fake would
+have been worse -- it would have carried the attribute and passed while the real class
+failed.
+
+So the guard reads `worker.py` with `ast`, collects every `backend.<attr>` it accesses,
+and asserts BOTH real backends answer them; three launch-only names (`breaker`,
+`job_object_assigned`, `last_launch_kind`) are exempted for the attached one with a stated
+reason. It found all four at once, and a name the worker starts using tomorrow is checked
+tomorrow without anyone remembering. The four now live on the shared base with answers
+that are TRUE for an attached browser rather than absent -- and `job_object_assigned` is
+`False` there permanently, because the owner's Chrome must never join this worker's
+kill-on-close job object.
+
+**And the enrollment itself was fragile by my own choice.** The port was random, so it
+died on every Chrome restart -- within the hour, and the owner's "play me a song" became
+"tarayıcıyı açamadı". The randomness bought nothing: loopback is the bound, and anything
+on the machine can enumerate ports. It is a fixed port now, with a `Chrome (PagentOS)`
+shortcut on the desktop and in the Start menu that launches Chrome the same way, so a
+restart through it keeps the authorization valid. And an unreachable browser no longer
+refuses: it falls back and SAYS which browser it is in and that re-authorising is one
+command -- the refusal was the right instinct about silence and the wrong conclusion about
+the answer.
+
+**Proven live, in the owner's own Chrome (2026-09-10 20:58).** Five `session_open` calls,
+all five `profile: owner`, no fallback: `session_open` -> `tab_new` -> `search` ->
+`media_play` -> `media_stop`, for "Güldür Güldür". A new tab, their own signed-in browser,
+their existing tabs untouched.

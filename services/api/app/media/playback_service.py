@@ -94,6 +94,11 @@ ERROR_NO_VIDEO_FOUND: Final = "no_video_found"
 ERROR_PLAYBACK_FAILED: Final = "playback_failed"
 ERROR_PLAYBACK_UNVERIFIED: Final = "playback_unverified"
 ERROR_NOTHING_PLAYING: Final = "nothing_playing"
+#: The owner DID enrol a browser and that browser is gone -- which is what happens every
+#: time Chrome restarts without the debugging port. Its own class, because the answer is
+#: a specific one-command fix and not "something went wrong": telling them it was never
+#: set up would send them looking for something they already did.
+ERROR_OWNER_BROWSER_GONE: Final = "owner_browser_unreachable"
 
 #: One Turkish sentence per outcome. They live here, next to the code that
 #: decides which one is true, rather than in the tool -- the tool reads a
@@ -241,7 +246,7 @@ def play_request(
     db.commit()
 
     prefix = f"owner-media:{row.id}"
-    profile, open_result = _open_session(device_action, row.session_id, prefix)
+    profile, open_result, fallback_reason = _open_session(device_action, row.session_id, prefix)
     if not open_result.ok:
         translated = _translate(open_result.error_class, ERROR_PLAYBACK_FAILED)
         return _fail(db, row, translated, open_result.message)
@@ -347,7 +352,7 @@ def play_request(
         ok=True,
         playback_id=str(row.id),
         status=PLAYBACK_STATUS_PLAYING,
-        speech=_playing_speech(row.video_title, profile),
+        speech=_playing_speech(row.video_title, profile, fallback_reason),
         video_id=candidate.video_id,
         title=row.video_title,
         url=candidate.url,
@@ -383,11 +388,26 @@ def _open_session(device_action: DeviceActionPort, session_id: str, prefix: str)
         timeout_s=TIMEOUT_SESSION_OPEN_S,
     )
     if attached.ok:
-        return OWNER_ATTACHED_PROFILE, attached
-    if attached.error_class != "capability_missing":
-        return OWNER_ATTACHED_PROFILE, attached
+        return OWNER_ATTACHED_PROFILE, attached, ""
+    # Two ways the owner's browser is not there, and both are configuration facts they
+    # can fix in one command -- so both fall back rather than leaving them with silence:
+    #
+    #   capability_missing      nothing was ever enrolled
+    #   dependency_unavailable  something WAS enrolled and that browser is gone, which is
+    #                           what happens every time Chrome restarts without the port
+    #
+    # The first version refused outright on the second, reasoning that a dead endpoint
+    # must not be silently worked around. The reasoning was right and the conclusion was
+    # wrong: on 2026-09-10 the owner asked for a song, heard "tarayıcıyı açamadı", and had
+    # no way to know that re-authorising takes one command. Falling back is fine. Falling
+    # back QUIETLY is what must not happen, and the sentence the owner hears is where that
+    # difference lives.
+    if attached.error_class not in ("capability_missing", "dependency_unavailable"):
+        return OWNER_ATTACHED_PROFILE, attached, ""
     logger.info(
-        "owner_media_not_enrolled", detail=attached.message[:200] if attached.message else ""
+        "owner_media_attach_unavailable",
+        error_class=attached.error_class,
+        detail=attached.message[:200] if attached.message else "",
     )
     fallback = device_action.run(
         capability=CAPABILITY_SESSION_OPEN,
@@ -395,10 +415,15 @@ def _open_session(device_action: DeviceActionPort, session_id: str, prefix: str)
         idempotency_key=f"{prefix}:session_open_fallback",
         timeout_s=TIMEOUT_SESSION_OPEN_S,
     )
-    return OWNER_MEDIA_PROFILE, fallback
+    reason = (
+        ERROR_OWNER_BROWSER_GONE
+        if attached.error_class == "dependency_unavailable"
+        else ERROR_CAPABILITY_MISSING
+    )
+    return OWNER_MEDIA_PROFILE, fallback, reason
 
 
-def _playing_speech(title: str, profile: str) -> str:
+def _playing_speech(title: str, profile: str, reason: str = "") -> str:
     """Say WHAT is playing, not just that something is.
 
     The owner named a song from memory; hearing the title back is how they learn
@@ -412,10 +437,18 @@ def _playing_speech(title: str, profile: str) -> str:
     clean = " ".join((title or "").split())
     where = ""
     if profile != OWNER_ATTACHED_PROFILE:
-        where = (
-            " Kendi tarayıcınıza bağlı değilim, ayrı bir pencerede açtım; "
-            "bağlanmamı isterseniz Chrome yetkilendirmesini bir kez yapmamız gerekiyor."
-        )
+        if reason == ERROR_OWNER_BROWSER_GONE:
+            # They DID authorise one; that browser is simply gone. Telling them "we
+            # never set it up" would send them looking for something they already did.
+            where = (
+                " Kendi tarayıcınıza ulaşamadım efendim, ayrı bir pencerede açtım; "
+                "Chrome yeniden başlamış olmalı, yetkilendirmeyi tazelememiz yeter."
+            )
+        else:
+            where = (
+                " Kendi tarayıcınıza bağlı değilim, ayrı bir pencerede açtım; "
+                "bağlanmamı isterseniz Chrome yetkilendirmesini bir kez yapmamız gerekiyor."
+            )
     if not clean:
         return f"Açtım efendim, çalıyor.{where}"
     return f"Açtım efendim, çalıyor: {clean[:120]}.{where}"
@@ -490,6 +523,7 @@ __all__ = [
     "ERROR_NOTHING_REQUESTED",
     "ERROR_NO_DEVICE",
     "ERROR_NO_VIDEO_FOUND",
+    "ERROR_OWNER_BROWSER_GONE",
     "ERROR_PLAYBACK_FAILED",
     "ERROR_PLAYBACK_UNVERIFIED",
     "ERROR_SEARCH_FAILED",

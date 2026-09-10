@@ -207,6 +207,47 @@ class _PlaywrightBackendBase(BrowserBackend):
         self._page = None
         self._main_pid = None
 
+    # -- the lifecycle surface every session-scoped result carries ------- #
+    #
+    # ``worker._lifecycle_info`` builds this block for EVERY session-scoped command, and
+    # ``session_close`` reads ``main_pid`` too. All of it lived on ManagedBackend alone,
+    # so the first REAL attach to the owner's Chrome died with
+    # ``AttributeError: 'ExistingSessionBackend' object has no attribute 'native_browser'``
+    # (2026-09-10) -- and the three below were the next three crashes queued behind it.
+    #
+    # The worker tests could not catch any of them: their attach fails at ``connect()``
+    # on a port with nothing behind it, so nothing after ``connect()`` ever ran. They are
+    # here now with answers that are TRUE for an attached browser rather than absent:
+    # a browser this worker did not start has no launch kind, holds no launch lock and
+    # joins no job object, and saying so is different from raising.
+
+    #: Diagnostics/testing only (e.g. crash injection); never used for control.
+    @property
+    def native_browser(self) -> Browser | None:
+        return self._browser
+
+    @property
+    def main_pid(self) -> int | None:
+        """OS pid of the browser process behind this backend (M13 lifecycle
+        session-identity proof), or ``None`` before ``connect()``/if it could not be
+        determined. Both backends know it: the base is what records it."""
+        return self._main_pid
+
+    #: ``None`` unless something was launched. Plain class attributes, not properties:
+    #: ``ManagedBackend`` ASSIGNS both on the instance, and a property without a setter
+    #: would turn that assignment into an AttributeError.
+    last_launch_kind: str | None = None
+    #: ``False`` here, and it must stay false for an attached browser: the owner's Chrome
+    #: is not in this worker's kill-on-close job object, or ending a session would end
+    #: their browser.
+    job_object_assigned: bool = False
+
+    @property
+    def launch_lock_name(self) -> str | None:
+        """``None`` here: the launch lock exists to stop two workers launching the same
+        profile, and this backend launches nothing. ``ManagedBackend`` overrides it."""
+        return None
+
     # -- page/tab surface ------------------------------------------------ #
 
     @property
@@ -558,13 +599,6 @@ class ManagedBackend(_PlaywrightBackendBase):
         except Exception:
             return None
 
-    @property
-    def main_pid(self) -> int | None:
-        """OS pid of the browser process this backend owns (M13 lifecycle
-        session-identity proof), or ``None`` before ``connect()``/if it could
-        not be determined."""
-        return self._main_pid
-
     async def is_alive(self) -> bool:
         if self._closed or self._context is None or self._context_closed:
             return False
@@ -629,11 +663,6 @@ class ManagedBackend(_PlaywrightBackendBase):
         self.job_object_assigned = False
         if self._launch_lock is not None:
             self._launch_lock.release()
-
-    # Diagnostics/testing only (e.g. crash injection); never used for control.
-    @property
-    def native_browser(self) -> Browser | None:
-        return self._browser
 
 
 # --------------------------------------------------------------------------- #

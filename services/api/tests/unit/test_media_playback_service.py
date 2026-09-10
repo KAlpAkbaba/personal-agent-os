@@ -385,3 +385,38 @@ def test_a_failed_new_tab_refuses_rather_than_using_the_owners_tab(db: Session) 
     assert outcome.ok is False
     assert CAPABILITY_SEARCH not in device.capabilities()
     assert CAPABILITY_MEDIA_PLAY not in device.capabilities()
+
+
+def test_an_enrolled_browser_that_is_gone_falls_back_AND_names_the_fix(db: Session) -> None:
+    """The owner DID authorise a browser; Chrome then restarted without the port.
+
+    On 2026-09-10 this refused outright and the owner heard "tarayıcıyı açamadı" with no
+    way to know that re-authorising is one command. The refusal was the right instinct
+    about silence and the wrong conclusion about the answer: the song plays, and the
+    sentence says which browser it is in and why.
+    """
+    device = FakeDeviceAction(
+        results={
+            CAPABILITY_SESSION_OPEN: lambda payload: (
+                DeviceRunResult(
+                    False,
+                    error_class="dependency_unavailable",
+                    message="existing_session_connect: browser or CDP endpoint is not reachable",
+                )
+                if payload["profile"] == "owner"
+                else DeviceRunResult(True, result={"opened": True})
+            ),
+            CAPABILITY_SEARCH: _found(),
+            CAPABILITY_MEDIA_PLAY: _playing(),
+        }
+    )
+
+    outcome = play_request(db, device, request_text=SPOKEN)
+
+    assert outcome.ok
+    assert outcome.profile == OWNER_MEDIA_PROFILE
+    # ...and it does NOT say "we never set it up", which would send them looking for
+    # something they already did.
+    assert "ulaşamadım" in outcome.speech
+    assert "yeniden başlamış" in outcome.speech
+    assert "bağlı değilim" not in outcome.speech
