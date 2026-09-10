@@ -39,10 +39,10 @@ capability that does not exist on the device side yet:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -102,7 +102,14 @@ class BriefingDelivery:
 
 
 class BriefingPort(Protocol):
-    def narrate(self, *, text: str, routine_id: UUID, firing_id: UUID) -> BriefingDelivery: ...
+    def narrate(
+        self,
+        *,
+        text: str,
+        routine_id: UUID,
+        firing_id: UUID,
+        briefing_ids: Sequence[UUID] = (),
+    ) -> BriefingDelivery: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +156,54 @@ class WakeAlarmPort(Protocol):
 # --------------------------------------------------------------- real: voice briefing
 
 
+#: Client kinds whose shell drains ``pending_sideband`` and speaks what it finds
+#: (``apps/web/app/lib/voice/controller.ts``). A ``cli`` session is deliberately absent:
+#: nothing in this repository reads that buffer from a CLI, so queueing to one would be
+#: a delivery nobody performs.
+DRAINING_CLIENT_KINDS: Final[frozenset[str]] = frozenset({"web", "mobile", "desktop"})
+
+
+def _already_queued(row: RealtimeSessionRow, briefing_ids: Sequence[UUID]) -> bool:
+    """Is one of these briefings still waiting, unheard, in this session's buffer?
+
+    The buffer is capped at fifty frames and drops the oldest, so a frame that was
+    evicted before the owner ever spoke reads as "not queued" here and is queued again --
+    which is right: it was never heard.
+    """
+    wanted = {str(one) for one in briefing_ids}
+    for frame in (row.context_json or {}).get("pending_sideband") or []:
+        if not isinstance(frame, dict) or frame.get("event") != SB_SAY:
+            continue
+        carried = (frame.get("payload") or {}).get("briefing_ids") or []
+        if wanted.intersection(str(one) for one in carried):
+            return True
+    return False
+
+
+def _reachability_rank(row: RealtimeSessionRow) -> tuple[int, float]:
+    """Sort key, lowest wins. Can this session actually put a sentence in the air?
+
+    0 -- a bound device: ``SidebandPusher.push`` reaches hardware that speaks.
+    1 -- a client whose shell drains the session buffer on its next poll.
+    2 -- anything else: still queued rather than refused, because a buffer that may be
+    read later beats certain silence, but never chosen over one that will be.
+
+    Ties break on recency, as the plain ``created_at DESC`` ordering did before.
+    """
+    if row.device_id is not None:
+        tier = 0
+    elif row.client_kind in DRAINING_CLIENT_KINDS:
+        tier = 1
+    else:
+        tier = 2
+    # ``updated_at``, not ``created_at``: it is set by ``_touch`` in the SAME call that
+    # drains the buffer, so it says when this session last actually talked to us. A tab
+    # opened yesterday and used a minute ago is a better listener than one opened an hour
+    # ago and silent since.
+    seen = row.updated_at or row.created_at
+    return (tier, -seen.timestamp() if seen is not None else 0.0)
+
+
 class RealtimeSayBriefing:
     """Narrates a ``voice_briefing`` action over the owner's live realtime companion.
 
@@ -159,39 +214,108 @@ class RealtimeSayBriefing:
     in ``app.voice.realtime_sessions.sideband`` with no producer anywhere in the codebase
     before this; this is its first one.
 
-    ``delivered`` is exactly ``SidebandPusher.push(...)``'s boolean return — never "a
-    session existed" or "the frame was built". A caller with no live realtime session, no
-    device bound to it, or a push that fails at the transport all get ``delivered=False``:
-    the honest answer is "nobody heard this", not "we tried".
+    ``delivered`` is exactly what reached a client — never "a session existed" or "the
+    frame was built". No live realtime session means ``delivered=False``: the honest
+    answer is "nobody heard this", not "we tried".
+
+    There are two clients, and both count. A device-bound session takes the frame over
+    ``SidebandPusher.push`` (``reason="delivered"``). A session with no device — which is
+    every session this owner has ever opened, ``web`` or ``cli``, 94 of them in production
+    on 2026-09-11 — takes it in its own durable ``pending_sideband`` buffer, which the
+    browser shell drains on its next poll (``reason="queued_to_session"``). Refusing the
+    second case as ``no_bound_device`` was truthful about the device and wrong about the
+    owner: it meant the morning briefing was never once spoken to the client they use.
+    The two reasons stay distinct because the owner is entitled to know which happened.
     """
 
     def __init__(self, *, session_factory: sessionmaker[Session], sideband: SidebandPusher) -> None:
         self._session_factory = session_factory
         self._sideband = sideband
 
-    def narrate(self, *, text: str, routine_id: UUID, firing_id: UUID) -> BriefingDelivery:
+    def narrate(
+        self,
+        *,
+        text: str,
+        routine_id: UUID,
+        firing_id: UUID,
+        briefing_ids: Sequence[UUID] = (),
+    ) -> BriefingDelivery:
         session = self._session_factory()
         try:
             normalized = normalize(text, mode="narration", pronunciation=pronunciation_map(session))
             row = self._live_session(session)
             if row is None:
                 return BriefingDelivery(False, "no_live_session")
-            if row.device_id is None:
-                return BriefingDelivery(False, "no_bound_device", {"session_id": str(row.id)})
-            frame = sideband_frame(
-                row.id,
-                SB_SAY,
-                {"text": normalized, "routine_id": str(routine_id), "firing_id": str(firing_id)},
-            )
-            delivered = self._sideband.push(device_id=row.device_id, frame=frame)
-            reason = "delivered" if delivered else "push_failed"
-            return BriefingDelivery(delivered, reason, {"session_id": str(row.id)})
+            payload: dict[str, Any] = {
+                "text": normalized,
+                "routine_id": str(routine_id),
+                "firing_id": str(firing_id),
+            }
+            if briefing_ids:
+                # The receipt travels WITH the sentence. Whoever takes this frame out of
+                # the buffer is the one that delivered it, and stamps these rows -- which
+                # is what the roadmap's own done-condition asks for: "the row marked
+                # delivered by the thing that actually delivered it".
+                payload["briefing_ids"] = [str(one) for one in briefing_ids]
+            frame = sideband_frame(row.id, SB_SAY, payload)
+            # A device push when there IS a device, and the session's own durable
+            # sideband buffer when there is not.
+            #
+            # Every realtime session this owner has ever opened is `web` or `cli` and
+            # NONE of them is device-bound (94 rows in production on 2026-09-11) -- they
+            # talk through the browser shell, which drains `pending_sideband` on its next
+            # poll (apps/web/app/lib/voice/controller.ts). Refusing with
+            # "no_bound_device" therefore meant the morning briefing was never once
+            # spoken to the client the owner actually uses. Queuing is not a weaker
+            # delivery here, it is THE delivery for that client -- and it is durable,
+            # capped and audited by `_deliver` exactly like a push.
+            #
+            # The two are still told apart, because the owner is entitled to know which
+            # happened: `reason` is "delivered" for a device and "queued_to_session" for
+            # the buffer.
+            if row.device_id is not None:
+                pushed = self._sideband.push(device_id=row.device_id, frame=frame)
+                if pushed:
+                    return BriefingDelivery(True, "delivered", {"session_id": str(row.id)})
+            if briefing_ids and _already_queued(row, briefing_ids):
+                # It is still sitting in the buffer from a previous pass, unheard. Adding
+                # a second copy would mean the owner hears the same sentence twice the
+                # moment they next speak -- and fifty times if they stay quiet for a
+                # quarter of an hour. Nothing to do but wait for the drain.
+                return BriefingDelivery(False, "already_queued", {"session_id": str(row.id)})
+            # Imported HERE, not at module scope: app.voice.realtime_sessions.service
+            # reaches app.alarms.sequence through the ambient tools, and that module
+            # imports this one. A module-level import closes the loop and nothing starts.
+            from app.voice.realtime_sessions.service import queue_sideband_frame
+
+            try:
+                queue_sideband_frame(session, row, frame)
+            except Exception:  # noqa: BLE001 - a write that failed is not a delivery
+                # The alarm's dispatcher does not catch anything from this method, so an
+                # escaping exception would abandon a firing mid-dispatch rather than
+                # report it. A database that would not take the frame is a failed
+                # delivery like any other: the briefing row is left unstamped and spoken
+                # on the next pass.
+                logger.exception("briefing_queue_failed", session_id=str(row.id))
+                return BriefingDelivery(False, "queue_failed", {"session_id": str(row.id)})
+            # NOT delivered. A web session is pull-only -- there is no server-initiated
+            # channel to it at all (the only push in this system is the device broker's
+            # WebSocket), and the shell drains this buffer when the owner next speaks or
+            # the leg re-attaches, never on a timer. Calling that "delivered" would stamp
+            # the row permanently for a sentence nobody has heard yet, and for a tab the
+            # owner closed an hour ago it would never be heard at all: nothing in this
+            # system closes an abandoned session (`require_live`: "nothing sweeps in the
+            # background"), so it would sit ACTIVE for ever, swallowing every briefing
+            # after it while the ledger insisted the owner had been told.
+            return BriefingDelivery(False, "queued_to_session", {"session_id": str(row.id)})
         finally:
             session.close()
 
     @staticmethod
     def _live_session(session: Session) -> RealtimeSessionRow | None:
-        """The owner's one live session, INCLUDING one that never expires.
+        """The owner's live session that can actually reach them -- not merely the newest.
+
+        INCLUDING one that never expires.
 
         ``expires_at IS NULL`` means "this session ends when the owner ends it"
         (ADR-0105, the owner's "ses oturumu hiç kapanmasın"). SQL comparison with
@@ -202,20 +326,29 @@ class RealtimeSayBriefing:
         truthfully and uselessly. Caught on 2026-09-11 while wiring the briefing
         delivery, which needs the same lookup; ADR-0105 changed the column and
         never went looking for its readers.
+
+        **Newest is not the same as reachable.** Production held two live sessions the
+        day this was written: a ``web`` one and a ``cli`` one, neither device-bound.
+        Ordering by ``created_at`` alone means whichever was opened last wins -- and if
+        that is the ``cli`` session the frame goes into a buffer with no reader (nothing
+        in this repository drains ``pending_sideband`` from a CLI; those rows come from
+        qualification harnesses) while the briefing row is stamped delivered. That is a
+        silent loss, which is the exact failure the queueing fallback exists to end. So
+        the session is chosen by whether the frame can reach a human:
+        :func:`_reachability_rank`.
         """
         now = datetime.now(UTC)
-        stmt = (
-            select(RealtimeSessionRow)
-            .where(
-                RealtimeSessionRow.state.in_((REALTIME_STATE_CREATED, REALTIME_STATE_ACTIVE)),
-                or_(
-                    RealtimeSessionRow.expires_at.is_(None),
-                    RealtimeSessionRow.expires_at > now,
-                ),
-            )
-            .order_by(RealtimeSessionRow.created_at.desc())
+        stmt = select(RealtimeSessionRow).where(
+            RealtimeSessionRow.state.in_((REALTIME_STATE_CREATED, REALTIME_STATE_ACTIVE)),
+            or_(
+                RealtimeSessionRow.expires_at.is_(None),
+                RealtimeSessionRow.expires_at > now,
+            ),
         )
-        return session.execute(stmt).scalars().first()
+        rows = list(session.execute(stmt).scalars().all())
+        if not rows:
+            return None
+        return min(rows, key=_reachability_rank)
 
 
 # ---------------------------------------------------------------- real: device action

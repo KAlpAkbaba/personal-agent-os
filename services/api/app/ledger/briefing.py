@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Final
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -158,6 +159,12 @@ def pending(session: Session, now: datetime | None = None) -> list[PendingBriefi
     return list(session.execute(stmt).scalars().all())
 
 
+#: What ``delivered_via`` says when the owner HEARD it -- written by whichever half of
+#: the voice path actually put the sentence in the air: a device push, or the browser
+#: shell draining the frame out of its session buffer.
+VIA_VOICE: Final[str] = "voice"
+
+
 def mark_delivered(
     session: Session, briefing_id: uuid.UUID, via: str, now: datetime | None = None
 ) -> PendingBriefingRow | None:
@@ -195,6 +202,7 @@ __all__: list[str] = [
     "POLICY_IMMEDIATE",
     "POLICY_LEDGER_ONLY",
     "POLICY_ONCE",
+    "VIA_VOICE",
     "classify_policy",
     "mark_delivered",
     "pending",

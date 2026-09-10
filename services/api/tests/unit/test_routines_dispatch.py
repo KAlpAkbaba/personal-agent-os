@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.routines.dispatch as dispatch_mod
+from app.broker.models import AuditEvent
 from app.devices.selection import NoCapableDeviceError
 from app.narration.models import PronunciationEntry
 from app.routines.actions import (
@@ -381,23 +382,32 @@ def realtime_session_factory():
     )
     RealtimeSessionRow.__table__.create(engine)
     PronunciationEntry.__table__.create(engine)
+    # The queue path audits exactly like the push path does. Leaving this table out
+    # would have let the queueing tests pass against a half-built world.
+    AuditEvent.__table__.create(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     yield factory
     engine.dispose()
 
 
-def _make_realtime_session(factory, *, state, device_id, expires_at) -> uuid.UUID:
+def _make_realtime_session(
+    factory, *, state, device_id, expires_at, client_kind="web", created_at=None, updated_at=None
+) -> uuid.UUID:
     with factory() as session:
         row = RealtimeSessionRow(
             id=uuid.uuid4(),
             provider="sim",
             transport="simulated",
-            client_kind="web",
+            client_kind=client_kind,
             device_id=device_id,
             owner_session_id=uuid.uuid4(),
             state=state,
             expires_at=expires_at,
         )
+        if created_at is not None:
+            row.created_at = created_at
+        if updated_at is not None:
+            row.updated_at = updated_at
         session.add(row)
         session.commit()
         return row.id
@@ -468,10 +478,19 @@ def test_realtime_say_briefing_not_delivered_with_no_live_session(realtime_sessi
     assert sideband.frames == []
 
 
-def test_realtime_say_briefing_not_delivered_when_session_has_no_bound_device(
+def test_a_session_with_no_bound_device_is_queued_not_refused(
     realtime_session_factory,
 ) -> None:
-    _make_realtime_session(
+    """The bug this file used to pin shut.
+
+    Every realtime session this owner has ever opened is ``web`` or ``cli`` with
+    ``device_id IS NULL`` -- 94 of them in production on 2026-09-11, not one bound to a
+    device. ``SB_SAY`` targets a device, so the old ``no_bound_device`` refusal was
+    correct about the device and wrong about the owner: the morning briefing was never
+    once spoken to the client they actually use. The browser shell drains
+    ``pending_sideband`` on its next poll, so for that client the buffer IS the delivery.
+    """
+    session_id = _make_realtime_session(
         realtime_session_factory,
         state=REALTIME_STATE_CREATED,
         device_id=None,
@@ -482,19 +501,32 @@ def test_realtime_say_briefing_not_delivered_when_session_has_no_bound_device(
 
     delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
 
-    assert delivery.delivered is False
-    assert delivery.reason == "no_bound_device"
-    assert sideband.frames == []
+    assert delivery.delivered is False, "a queue is not a delivery; the drain is"
+    assert delivery.reason == "queued_to_session"
+    assert sideband.frames == [], "there is no device; nothing may be pushed to one"
+
+    # The frame is really in the session's buffer, normalized, and reachable by the drain
+    # the browser shell calls -- not merely reported as queued.
+    with realtime_session_factory() as db:
+        row = db.get(RealtimeSessionRow, session_id)
+        (frame,) = row.context_json["pending_sideband"]
+    assert frame["event"] == SB_SAY
+    assert frame["session_id"] == str(session_id)
+    assert frame["payload"]["text"]
+    assert frame["payload"]["routine_id"] == str(ROUTINE_ID)
+    assert frame["payload"]["firing_id"] == str(FIRING_ID)
 
 
-def test_realtime_say_briefing_not_delivered_when_the_push_itself_fails(
+def test_a_device_push_that_fails_falls_back_to_the_session_buffer(
     realtime_session_factory,
 ) -> None:
-    device_id = uuid.uuid4()
-    _make_realtime_session(
+    """A bound device that did not take the frame is not a reason for silence: the
+    session is still live and its buffer still reaches the owner. ``reason`` says which
+    of the two happened, because the owner is entitled to know."""
+    session_id = _make_realtime_session(
         realtime_session_factory,
         state=REALTIME_STATE_ACTIVE,
-        device_id=device_id,
+        device_id=uuid.uuid4(),
         expires_at=datetime.now(UTC) + timedelta(hours=1),
     )
     sideband = RecordingSideband(deliver=False)  # push() itself reports failure
@@ -503,7 +535,34 @@ def test_realtime_say_briefing_not_delivered_when_the_push_itself_fails(
     delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
 
     assert delivery.delivered is False
-    assert delivery.reason == "push_failed"
+    assert delivery.reason == "queued_to_session"
+    assert sideband.events() == [SB_SAY], "it tried the device first"
+    with realtime_session_factory() as db:
+        row = db.get(RealtimeSessionRow, session_id)
+        assert len(row.context_json["pending_sideband"]) == 1
+
+
+def test_a_device_that_takes_the_frame_is_reported_as_delivered_and_queues_nothing(
+    realtime_session_factory,
+) -> None:
+    """The other side of the fallback: a successful push must NOT also queue, or the
+    owner hears the same sentence twice -- once now and once on the next drain."""
+    session_id = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=uuid.uuid4(),
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.reason == "delivered"
+    with realtime_session_factory() as db:
+        row = db.get(RealtimeSessionRow, session_id)
+        assert not (row.context_json or {}).get("pending_sideband")
 
 
 def test_realtime_say_briefing_ignores_an_expired_session(realtime_session_factory) -> None:
@@ -521,3 +580,233 @@ def test_realtime_say_briefing_ignores_an_expired_session(realtime_session_facto
 
     assert delivery.delivered is False
     assert delivery.reason == "no_live_session"
+
+
+# ------------------------------------------- which live session, when there are several
+
+
+def test_the_newest_session_loses_to_one_that_can_actually_be_heard(
+    realtime_session_factory,
+) -> None:
+    """Production, 2026-09-11: two live sessions, a ``web`` one and a ``cli`` one,
+    neither device-bound. ``created_at DESC`` alone picks whichever was opened last.
+
+    Nothing in this repository drains ``pending_sideband`` from a CLI -- those rows come
+    from qualification harnesses -- so queueing to the CLI session would stamp the
+    briefing delivered and put the sentence somewhere no one reads. Silent loss is the
+    failure the fallback exists to end, so it must not be reintroduced by the lookup.
+    """
+    now = datetime.now(UTC)
+    web_id = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+        created_at=now - timedelta(hours=10),  # older
+    )
+    _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="cli",
+        created_at=now,  # newer, and unreachable
+    )
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.reason == "queued_to_session"
+    assert delivery.detail["session_id"] == str(web_id), "the CLI buffer has no reader"
+    with realtime_session_factory() as db:
+        assert len(db.get(RealtimeSessionRow, web_id).context_json["pending_sideband"]) == 1
+
+
+def test_a_bound_device_wins_over_a_newer_browser_session(realtime_session_factory) -> None:
+    """A device speaks the sentence now; a buffer speaks it on the next poll. When both
+    exist the owner should hear it now."""
+    now = datetime.now(UTC)
+    device_id = uuid.uuid4()
+    _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=device_id,
+        expires_at=None,
+        client_kind="desktop",
+        created_at=now - timedelta(days=2),
+    )
+    _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+        created_at=now,
+    )
+    sideband = RecordingSideband(deliver=True)
+    briefing = RealtimeSayBriefing(session_factory=realtime_session_factory, sideband=sideband)
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.reason == "delivered"
+    assert sideband.frames[0][0] == device_id
+
+
+def test_a_cli_session_alone_is_still_queued_rather_than_dropped(
+    realtime_session_factory,
+) -> None:
+    """Last resort, not a refusal: a buffer that may be read later still beats certain
+    silence. Only the *preference* changes when something better exists."""
+    session_id = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="cli",
+    )
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.reason == "queued_to_session"
+    assert delivery.detail["session_id"] == str(session_id)
+
+
+def test_among_equals_the_one_that_talked_to_us_most_recently_wins(
+    realtime_session_factory,
+) -> None:
+    """The tie-break is recency, but recency means ``updated_at`` -- the field ``_touch``
+    sets in the SAME call that drains the buffer. A tab opened this morning and used a
+    minute ago is a better listener than one opened an hour ago and silent since; ordering
+    by ``created_at`` gets that exactly backwards."""
+    now = datetime.now(UTC)
+    talkative = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+        created_at=now - timedelta(hours=3),
+        updated_at=now,
+    )
+    _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+        created_at=now,
+        updated_at=now - timedelta(hours=2),
+    )
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.detail["session_id"] == str(talkative)
+
+
+def test_a_write_that_fails_is_a_failed_delivery_not_an_escaping_exception(
+    realtime_session_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ActionDispatcher._voice_briefing`` does not catch anything from ``narrate``, so
+    an exception escaping here abandons an alarm firing mid-dispatch instead of
+    reporting it. A database that would not take the frame is a failed delivery like any
+    other: the briefing row stays unstamped and is spoken on the next pass."""
+    import app.voice.realtime_sessions.service as realtime_service
+
+    _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+    )
+
+    def explode(db, row, frame):
+        raise RuntimeError("the database said no")
+
+    monkeypatch.setattr(realtime_service, "queue_sideband_frame", explode)
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+
+    delivery = briefing.narrate(text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID)
+
+    assert delivery.delivered is False
+    assert delivery.reason == "queue_failed"
+
+
+def test_the_same_briefing_is_never_queued_twice_while_it_waits(
+    realtime_session_factory,
+) -> None:
+    """The announcer sweeps every twenty seconds and a web session may not be drained for
+    an hour. Without this, the owner would hear one sentence a hundred and eighty times
+    the moment they next spoke -- and the buffer caps at fifty, so everything else queued
+    behind it would be silently evicted."""
+    one = uuid.uuid4()
+    session_id = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+    )
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+
+    first = briefing.narrate(
+        text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID, briefing_ids=[one]
+    )
+    second = briefing.narrate(
+        text="Günaydın", routine_id=ROUTINE_ID, firing_id=uuid.uuid4(), briefing_ids=[one]
+    )
+
+    assert first.reason == "queued_to_session"
+    assert second.reason == "already_queued"
+    with realtime_session_factory() as db:
+        row = db.get(RealtimeSessionRow, session_id)
+        assert len(row.context_json["pending_sideband"]) == 1
+
+
+def test_a_frame_evicted_before_it_was_ever_heard_is_queued_again(
+    realtime_session_factory,
+) -> None:
+    """The buffer keeps the last fifty frames. A briefing pushed out by a burst of tool
+    progress was never heard, so "already queued" must read the buffer rather than
+    remember that it once wrote there -- otherwise the eviction is a permanent silence."""
+    one = uuid.uuid4()
+    session_id = _make_realtime_session(
+        realtime_session_factory,
+        state=REALTIME_STATE_ACTIVE,
+        device_id=None,
+        expires_at=None,
+        client_kind="web",
+    )
+    briefing = RealtimeSayBriefing(
+        session_factory=realtime_session_factory, sideband=RecordingSideband(deliver=True)
+    )
+    briefing.narrate(
+        text="Günaydın", routine_id=ROUTINE_ID, firing_id=FIRING_ID, briefing_ids=[one]
+    )
+
+    with realtime_session_factory() as db:  # the eviction, as the cap would do it
+        row = db.get(RealtimeSessionRow, session_id)
+        row.context_json = dict(row.context_json or {}) | {"pending_sideband": []}
+        db.commit()
+
+    again = briefing.narrate(
+        text="Günaydın", routine_id=ROUTINE_ID, firing_id=uuid.uuid4(), briefing_ids=[one]
+    )
+
+    assert again.reason == "queued_to_session"
+    with realtime_session_factory() as db:
+        row = db.get(RealtimeSessionRow, session_id)
+        assert len(row.context_json["pending_sideband"]) == 1

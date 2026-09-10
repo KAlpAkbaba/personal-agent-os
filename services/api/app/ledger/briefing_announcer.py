@@ -27,13 +27,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from typing import Any, Final, Protocol
 
 from sqlalchemy.orm import Session
 
-from app.ledger.briefing import POLICY_DIGEST, mark_delivered, pending
+from app.ledger.briefing import POLICY_DIGEST, VIA_VOICE, mark_delivered, pending
 from app.ledger.models import PendingBriefingRow
 from app.logging import get_logger
 from app.narration.numbers import cardinal
@@ -43,21 +43,26 @@ logger = get_logger("app.ledger.briefing_announcer")
 #: Often enough that a research run finishing feels answered, rare enough that an idle
 #: machine is not asking the database for work every second.
 DEFAULT_INTERVAL_S: Final[float] = 20.0
-#: How the delivery is recorded on the row.
-VIA_VOICE: Final[str] = "voice"
 #: More digest rows than this and the sentence stops naming a number the owner can hold
 #: in their head; it says "several" instead. Deliberately small.
 MAX_DIGEST_COUNTED: Final[int] = 20
 
 
 class BriefingSpeaker(Protocol):
-    """Says one sentence to the owner. ``True`` iff it actually reached them.
+    """Says one sentence to the owner. ``True`` iff it reached them THERE AND THEN.
 
     Deliberately narrower than ``BriefingPort``: that one carries a routine and a
     firing because a routine is what asked. Nothing asked for these.
+
+    ``briefing_ids`` rides along so the sentence carries its own receipt. A device push
+    is heard immediately and returns ``True``, and this class stamps the rows. A web
+    session is pull-only: the frame waits in the session buffer until the owner next
+    speaks, so ``say`` returns ``False`` and the rows are stamped by the drain instead --
+    by the thing that actually delivered them. ``False`` here therefore means "not yet",
+    not "lost": the row stays pending and the next pass sees it is already queued.
     """
 
-    def say(self, text: str) -> bool: ...
+    def say(self, text: str, briefing_ids: Sequence[uuid.UUID]) -> bool: ...
 
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
@@ -112,26 +117,30 @@ class PendingBriefingAnnouncer:
             urgent = [row for row in rows if row.policy != POLICY_DIGEST]
             if urgent:
                 # ``pending`` orders by priority then age, so the first is the one that
-                # matters most and has waited longest at that level.
+                # matters most and has waited longest at that level. It also BLOCKS the
+                # ones behind it while it waits in a session buffer, and that is right:
+                # stacking a second sentence on one the owner has not heard yet is the
+                # flood the constitution forbids.
                 target = urgent[0]
-                if not self._speak(target.speech):
+                if not self._speak(target.speech, [target.briefing_id]):
                     return 0
                 mark_delivered(session, target.briefing_id, VIA_VOICE)
                 logger.info("briefing_delivered", policy=target.policy, count=1)
                 return 1
 
             digests = [row for row in rows if row.policy == POLICY_DIGEST]
-            if not self._speak(digest_sentence(digests)):
+            ids = [row.briefing_id for row in digests]
+            if not self._speak(digest_sentence(digests), ids):
                 return 0
-            for row in digests:
-                mark_delivered(session, row.briefing_id, VIA_VOICE)
+            for briefing_id in ids:
+                mark_delivered(session, briefing_id, VIA_VOICE)
             logger.info("briefing_delivered", policy=POLICY_DIGEST, count=len(digests))
             return len(digests)
 
-    def _speak(self, text: str) -> bool:
+    def _speak(self, text: str, briefing_ids: Sequence[uuid.UUID]) -> bool:
         """Never lets a speaker's failure look like a delivery, or stop the loop."""
         try:
-            return bool(self._speaker.say(text))
+            return bool(self._speaker.say(text, briefing_ids))
         except Exception:  # noqa: BLE001 - a transport fault is not a delivery
             logger.warning("briefing_say_failed")
             return False
@@ -183,11 +192,12 @@ class RealtimeSayBriefingSpeaker:
     def __init__(self, briefing_port: Any) -> None:
         self._port = briefing_port
 
-    def say(self, text: str) -> bool:
+    def say(self, text: str, briefing_ids: Sequence[uuid.UUID] = ()) -> bool:
         delivery = self._port.narrate(
             text=text,
             routine_id=self.SYSTEM_ORIGIN,
             firing_id=uuid.uuid4(),
+            briefing_ids=list(briefing_ids),
         )
         if not delivery.delivered:
             logger.info("briefing_not_delivered", reason=delivery.reason)

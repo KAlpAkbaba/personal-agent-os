@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.broker.audit import record_audit_event
 from app.identity.service import SessionContext
 from app.ledger import service as ledger_service
+from app.ledger.briefing import VIA_VOICE, mark_delivered
 from app.ledger.vocabulary import (
     EVENT_TYPE_VOICE_SESSION_ATTACHED,
     EVENT_TYPE_VOICE_SESSION_CLOSED,
@@ -63,6 +64,7 @@ from app.voice.realtime_sessions.persona import build_instructions
 from app.voice.realtime_sessions.sideband import (
     SB_LEG_CLOSED,
     SB_NARRATION_CURSOR,
+    SB_SAY,
     SB_TOOL_COMPLETED,
     SidebandPusher,
     sideband_frame,
@@ -550,6 +552,68 @@ def _deliver(
         metadata={"event": event, "queued": len(ctx["pending_sideband"])},
     )
     return False
+
+
+def queue_sideband_frame(db: Session, row: RealtimeSessionRow, frame: dict[str, Any]) -> None:
+    """Put one frame in a session's durable sideband buffer, or raise.
+
+    No boolean: it either stores the frame or the write fails loudly. Returning a
+    ``True`` that is never ``False`` would give the caller a branch it can never take
+    and an error it never actually handles.
+
+    The queue half of :func:`_deliver`, exposed on its own for the caller that has no
+    device to push to and is not in the middle of a tool call. The browser shell is
+    exactly that caller: every realtime session this owner has opened is ``web`` or
+    ``cli`` and none is device-bound, and the shell drains this buffer on its next poll
+    (``apps/web/app/lib/voice/controller.ts``). Same cap, same audit trail, same context
+    write as the push path -- one buffer, not a second mechanism beside it.
+    """
+    ctx = dict(row.context_json or {})
+    pending = list(ctx.get("pending_sideband") or [])
+    pending.append(frame)
+    ctx["pending_sideband"] = pending[-MAX_PENDING_SIDEBAND:]
+    _set_context(row, ctx)
+    _audit(
+        db,
+        ACTION_SIDEBAND_QUEUED,
+        row,
+        trace_id=None,
+        metadata={"event": frame.get("event"), "queued": len(ctx["pending_sideband"])},
+    )
+    db.commit()
+
+
+def _stamp_delivered_briefings(
+    db: Session, drained: list[dict[str, Any]], *, now: datetime
+) -> None:
+    """A briefing frame handed to the client is a briefing the owner has now heard.
+
+    This is the other half of ``queue_sideband_frame``. Queueing is not delivery -- a web
+    session is pull-only, and the frame sits in ``context_json`` until the owner next
+    speaks or the leg re-attaches. THIS is the moment it leaves for a client that will
+    say it out loud, so this is where ``pending_briefings`` is stamped. The spec's rule
+    ("the row marked delivered by the thing that actually delivered it") is the reason
+    the stamp is here and not at the queue site: a row marked delivered on the way IN
+    would be a permanent claim about a sentence nobody had heard, and for a session the
+    owner abandoned it would never be true at all.
+
+    Never raises: a briefing bookkeeping failure must not cost the owner the client
+    events they just reported, which are the point of this request.
+    """
+    ids: list[uuid.UUID] = []
+    for frame in drained:
+        if not isinstance(frame, dict) or frame.get("event") != SB_SAY:
+            continue
+        for raw in (frame.get("payload") or {}).get("briefing_ids") or []:
+            try:
+                ids.append(uuid.UUID(str(raw)))
+            except (ValueError, AttributeError, TypeError):
+                logger.warning("briefing_id_unreadable")
+    for briefing_id in ids:
+        try:
+            mark_delivered(db, briefing_id, VIA_VOICE, now=now)
+        except Exception:  # noqa: BLE001 - see the docstring
+            logger.exception("briefing_stamp_failed", briefing_id=str(briefing_id))
 
 
 def drain_pending_sideband(row: RealtimeSessionRow) -> list[dict[str, Any]]:
@@ -1509,6 +1573,7 @@ def record_client_events(
     ctx["pending_sideband"] = []
     _set_context(row, ctx)
     _touch(row, now)
+    _stamp_delivered_briefings(db, pending, now=now)
     db.commit()
     return {
         "accepted": accepted,

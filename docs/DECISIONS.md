@@ -9482,11 +9482,12 @@ the findings about their own broken typing command. The owner asked directly: "b
 sesli bana söylüyor mu?" The answer was no, and the reason was not policy or judgement, it
 was that nothing read the table.
 
-**What "delivered" means, and it is the whole design.** Exactly what `SidebandPusher.push`
-returned — the rule `RealtimeSayBriefing` already states for the alarm. No live session, no
-bound device, a transport that failed, a speaker that raised: every one of them leaves the
-row alone, so it is spoken on the next pass rather than stamped as heard by nobody. The
-mutation that stamps regardless reds two tests.
+**What "delivered" means, and it is the whole design.** Exactly what reached a client —
+the rule `RealtimeSayBriefing` already states for the alarm. No live session, a transport
+that failed with nowhere else to put the frame, a speaker that raised: every one of them
+leaves the row alone, so it is spoken on the next pass rather than stamped as heard by
+nobody. The mutation that stamps regardless reds two tests. (Written first as "no bound
+device" too — see the amendment below, which is why that clause is no longer here.)
 
 **One thing per pass.** The constitution: *"A completed task must not automatically force a
 long result onto the owner. Default: notify briefly and wait."* So the urgent policies
@@ -9520,3 +9521,138 @@ different letter, a spelling error on screen and a mispronunciation out loud.
 `app.alarms.speech.capitalize_tr` has existed for this since M18.3. The deliverer's own
 test was the first thing that ever read that sentence back, which is how a sentence written
 to be spoken went five days without being heard by anything.
+
+### Amendment, same day: it deployed, and it still delivered nothing
+
+Gate 8165 green, `4727967` promoted blue/green, device handoff 1/1 — and the queue did not
+move. Production, minutes later:
+
+| policy | bekleyen | teslim |
+|---|---|---|
+| digest | 3 | 0 |
+| completion | 0 | 0 |
+
+and the reason, one query further down:
+
+| client_kind | transport | state | cihaz | count |
+|---|---|---|---|---|
+| web | webrtc | closed | f | 69 |
+| web | webrtc | active | f | 14 |
+| cli | webrtc | active | f | 5 |
+
+Ninety-four realtime sessions, every one `web` or `cli`, **not one of them bound to a
+device**. `SB_SAY` is pushed to a device, so `RealtimeSayBriefing` answered `no_bound_device`
+every pass and correctly refused to stamp the row. The deliverer was right about the device
+and wrong about the owner. The paragraph above — "no bound device … leaves the row alone" —
+was not a safety rule for this owner, it was the bug, written down and called a design.
+
+This is the same shape one layer up from the one this ADR was written to fix: built,
+tested, deployed, and unable to reach the person it was built for. The queue had a filler
+and no deliverer; the deliverer had a transport and no listener.
+
+**The fix is one path, not a second mechanism.** `_deliver` in
+`app.voice.realtime_sessions.service` has always had a fallback for exactly this: when a
+push fails it appends the frame to the session's own `pending_sideband` buffer, capped at
+`MAX_PENDING_SIDEBAND`, audited, durable in `context_json`. And the browser shell already
+drains it — `apps/web/app/lib/voice/controller.ts:2435`. For a `web` session that buffer is
+not a weaker delivery, it *is* the delivery. So the queue half is exposed as
+`queue_sideband_frame(db, row, frame)` and `narrate` uses it: push to a device when there is
+one, buffer when there is not, and buffer when the push itself failed but the session is
+still live. A successful push queues nothing — otherwise the owner hears the same sentence
+twice, once now and once on the next drain, and there is a test whose only job is that.
+
+`reason` still tells the two apart (`delivered` vs `queued_to_session`) because the owner is
+entitled to know which happened, and because collapsing them would be the "two clocks for
+one decision" mistake in reverse: one word covering two different physical events.
+
+**Proven by watching it fail.** Three mutations: putting the `no_bound_device` refusal back
+reds the queueing test *and* the new end-to-end test; making a successful push also queue
+reds the double-delivery test. The end-to-end test is the one that matters — it runs the
+real `PendingBriefingAnnouncer` through the real `RealtimeSayBriefingSpeaker` into the real
+`RealtimeSayBriefing`, against a session shaped exactly like production's (`web`, `webrtc`,
+`device_id NULL`, `expires_at NULL`), and asserts the sentence is in the buffer the shell
+drains. Every test that shipped with `4727967` faked the speaker, because the speaker is the
+transport — which is precisely how a green gate shipped a deliverer that delivered nothing.
+The lesson is not "fake less"; it is that at least one test must join the halves over data
+shaped like the real world.
+
+**The import that would not close.** `narrate` imports `queue_sideband_frame` inside the
+method, not at module scope: `voice.realtime_sessions.service` → `tools` → `tools_ambient` →
+`ambient.service` → `alarms.sequence` → back to `routines.dispatch`. A module-level import
+closes that loop and the application does not start at all — `python -c "import app.main"`
+was the check that caught it, before any test ran.
+
+**Two more defects the fix itself produced, found before it shipped.**
+
+*Newest is not reachable.* `_live_session` took the newest live session. Production held
+two — a `web` one and a `cli` one, neither device-bound — so whichever was opened last won.
+Nothing in this repository drains `pending_sideband` from a CLI; those rows come from
+qualification harnesses. A newer `cli` session would therefore have taken the frame into a
+buffer with no reader while the briefing row was stamped delivered: silent loss, the exact
+failure the fallback exists to end, reintroduced one layer up. The session is now chosen by
+`_reachability_rank` — a bound device first, then a client whose shell drains the buffer
+(`DRAINING_CLIENT_KINDS`), then anything else, recency breaking ties as before. A lone CLI
+session is still queued to rather than refused: a buffer that may be read later beats
+certain silence; it is only never *preferred*. Three mutations, three reds.
+
+*A boolean that was never false.* `queue_sideband_frame` returned `True` unconditionally, so
+`narrate`'s `if not queued` branch could not execute — a handled error that was not handled.
+It is now a command returning nothing, and `narrate` catches the write failing, because
+`ActionDispatcher._voice_briefing` catches nothing from `narrate` and an escaping exception
+would abandon an alarm firing mid-dispatch rather than report it. `reason="queue_failed"`,
+the row left unstamped, spoken on the next pass. The mutation that removes the `try` reds
+its test.
+
+### The review that caught the fix telling a comfortable lie
+
+The independent review before release asked one question the implementation had not:
+*after* the frame goes into the buffer, what reads it?
+
+The answer is worse than assumed, and my own code comment said otherwise. **There is no
+poll.** The browser shell drains `pending_sideband` in exactly two places — `runAttach`
+(`apps/web/app/lib/voice/controller.ts:2435`, a reconnect) and the event reporter's flush
+(`events.ts:270`), which returns early when its queue is empty (`events.ts:261`). An open
+but silent tab drains nothing. And the only server-initiated channel in this system is the
+device broker's WebSocket; a `web` session has none. A web session is pull-only.
+
+Meanwhile `require_live` states plainly that "nothing sweeps in the background": with
+`expires_at IS NULL` (ADR-0105, the owner's "hiç kapanmasın"), a session whose tab was
+closed an hour ago stays `ACTIVE` for ever. So the shipped-as-drafted fix would have:
+queued every briefing into that dead row, reported `delivered=True`, called
+`mark_delivered` — which is deliberately one-shot — and let the frame fall off the end of
+the fifty-frame cap. The owner hears nothing and the ledger insists, permanently, that they
+were told. That is strictly worse than the bug it replaced, where the system at least said
+so honestly.
+
+**Queueing is not delivering.** `narrate` now returns `delivered=False, reason=
+"queued_to_session"`. The sentence carries its own receipt — `payload.briefing_ids` — and
+`record_client_events` stamps those rows at the moment it hands the frame to the client
+(`_stamp_delivered_briefings`). That is the spec's own sentence enforced rather than
+quoted: *the row marked delivered by the thing that actually delivered it*. Two stampers,
+both truthful: the device push, and the drain.
+
+Three consequences, each with a test:
+
+- **No second copy.** The announcer sweeps every twenty seconds; a quiet web session could
+  collect a hundred and eighty copies of one sentence in an hour, evicting everything else
+  behind the fifty-frame cap. `_already_queued` reads the buffer and answers
+  `already_queued` instead.
+- **An evicted frame is queued again.** `_already_queued` reads the buffer rather than
+  remembering that it once wrote there, so a briefing pushed out by a burst of tool
+  progress — never heard — comes back. Eviction is not silence.
+- **Recency means `updated_at`, not `created_at`.** `_touch` sets `updated_at` in the same
+  call that drains the buffer, so it is literally "when this session last talked to us". A
+  tab opened this morning and used a minute ago is a better listener than one opened an
+  hour ago and silent since; the original ordering had that backwards.
+
+The alarm's own spoken briefing now reports `briefing_not_delivered:queued_to_session` for
+a web session. That is not a regression — it reported `no_bound_device` before — and it is
+the truth: a briefing meant to wake someone at seven, sitting in a buffer until they speak,
+did not wake them.
+
+Eleven mutations across the three rounds, eleven reds. The end-to-end test is the one that
+earns its keep: it runs the real announcer through the real speaker into the real session
+buffer and then through the real `record_client_events`, asserting the row is *still
+pending* after the queue and stamped only after the drain. Every test that shipped with
+`4727967` faked the speaker, because the speaker is the transport — and the transport was
+the bug, twice.
