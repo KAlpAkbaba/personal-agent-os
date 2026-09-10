@@ -45,9 +45,10 @@ from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from . import launch_guard, lifecycle, media, policy, release, search_engines
-from .backends import ManagedBackend
+from .backends import ExistingSessionBackend, ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
+from .enrollment import BrowserEnrollment, EnrollmentRegistry, Transport
 from .errors import BrowserError, ErrorClass, Phase, map_playwright_error, redact_url
 from .extraction import (
     build_links,
@@ -500,6 +501,12 @@ class Worker:
         media.require_distinct_news_profile(
             self._news_profile_dir, self._profile_dir, self._alarm_profile_dir
         )
+        # v1.4 (ADR-0113): where the owner's attach authorization is recorded. Not a
+        # profile directory -- the owner's Chrome owns itself; this is only the file
+        # that says the agent may connect to it, and the absence of that file is a
+        # refusal, never a default.
+        owner_file = getattr(args, "owner_enrollment_file", None)
+        self._owner_enrollment_file: Path | None = Path(owner_file) if owner_file else None
         self._default_channel: str | None = args.channel
         self._default_visible = bool(args.visible) and not args.headless
         self._idle_timeout_s = args.idle_timeout_s
@@ -539,6 +546,47 @@ class Worker:
     # top-level lifecycle
     # ------------------------------------------------------------------ #
 
+    def _require_owner_enrollment(self) -> BrowserEnrollment:
+        """The owner's attach authorization, or a refusal that says how to grant it.
+
+        Read from disk on EVERY open rather than cached at start-up: the endpoint
+        changes whenever the owner's Chrome restarts on a new port, and a worker
+        that had to be restarted to notice would be a worker the owner has to
+        think about.
+
+        The refusals below are the whole gate. There is no default endpoint, no
+        "try the usual port", no discovery: an attach happens because the owner
+        recorded that it may, or it does not happen.
+        """
+        if self._owner_enrollment_file is None:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "session_open: profile 'owner' needs an enrollment registry; this worker "
+                "was started without --owner-enrollment-file",
+                retryable=False,
+            )
+        if not self._owner_enrollment_file.exists():
+            raise BrowserError(
+                ErrorClass.CAPABILITY_MISSING,
+                "session_open: no browser is enrolled for attach yet; run "
+                "scripts/browser/enroll-owner-chrome.ps1 on the owner's machine",
+                retryable=False,
+            )
+        registry = EnrollmentRegistry(self._owner_enrollment_file)
+        enrollments = [e for e in registry.list() if e.transport is Transport.CDP_LOOPBACK]
+        if not enrollments:
+            raise BrowserError(
+                ErrorClass.CAPABILITY_MISSING,
+                "session_open: the enrollment registry holds no cdp_loopback record; "
+                "the owner's Chrome must be started with a loopback debugging port "
+                "(scripts/browser/enroll-owner-chrome.ps1)",
+                retryable=False,
+            )
+        # Newest wins: re-enrolling after a Chrome restart writes a new record and
+        # the old endpoint is dead, so preferring the latest is preferring the one
+        # that can actually answer.
+        return max(enrollments, key=lambda e: e.created_at)
+
     def _persistent_profile_dir(self, profile: str) -> Path | None:
         """The directory a ``profile`` name resolves to, or ``None`` for
         ``isolated`` (a fresh non-persistent context that owns no directory).
@@ -554,6 +602,8 @@ class Worker:
             return self._alarm_profile_dir
         if profile == media.NEWS_PROFILE:
             return self._news_profile_dir
+        # ``owner`` (v1.4) falls through with the rest: the profile is the
+        # owner's own and this worker neither owns nor may open its directory.
         return None
 
     def _lock_for(self, session_id: str) -> asyncio.Lock:
@@ -1101,25 +1151,43 @@ class Worker:
                 },
             )
 
-        default_classes = (
-            policy.MEDIA_SESSION_CLASSES
-            if session_kind == media.MEDIA_SESSION_KIND
-            else policy.RESEARCH_SESSION_CLASSES
-        )
+        if profile == media.OWNER_PROFILE:
+            # v1.4 (ADR-0113). The owner's own browser is already signed in
+            # everywhere; narrowing the classes here would be a comforting
+            # fiction, since the session is theirs either way. The grant is the
+            # enrollment, not the class list -- and a caller may still request a
+            # narrower set for one session.
+            default_classes = policy.OWNER_SESSION_CLASSES
+        else:
+            default_classes = (
+                policy.MEDIA_SESSION_CLASSES
+                if session_kind == media.MEDIA_SESSION_KIND
+                else policy.RESEARCH_SESSION_CLASSES
+            )
         allowed = requested_classes if requested_classes is not None else default_classes
         profile_dir = self._persistent_profile_dir(profile)
         # The autoplay preference is applied ONLY here, to a media session's own
         # window (browser_agent.media documents why it is a preference and not
         # an anti-bot measure). A research launch is byte-for-byte what it was.
         browser_args = media.media_launch_args(session_kind)
-        backend = ManagedBackend(
-            headless=not visible,
-            profile_dir=profile_dir,
-            channel=channel,
-            browser_args=browser_args or None,
-        )
-        if profile_dir is not None:
-            backend.breaker = self._breaker
+        backend: ManagedBackend | ExistingSessionBackend
+        if profile == media.OWNER_PROFILE:
+            # ATTACH, never launch. The owner's Chrome is not ours to start, not
+            # ours to configure and -- this is the part that matters on close --
+            # not ours to kill: ExistingSessionBackend.close() disconnects and
+            # leaves the browser running. No breaker either: the circuit breaker
+            # exists to stop this worker relaunching a profile it keeps crashing,
+            # and there is nothing here to relaunch.
+            backend = ExistingSessionBackend(self._require_owner_enrollment())
+        else:
+            backend = ManagedBackend(
+                headless=not visible,
+                profile_dir=profile_dir,
+                channel=channel,
+                browser_args=browser_args or None,
+            )
+            if profile_dir is not None:
+                backend.breaker = self._breaker
         # A single, non-retried launch attempt (ManagedBackend._launch reaps
         # any orphan on profile_dir first); any BrowserError here — including
         # browser_lifecycle_violation if the profile is still locked after
@@ -2556,6 +2624,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "research profile's sibling '<profile-dir>-news'). It must not be, or "
             "contain, the research OR the alarm profile — and like every profile here it "
             "may never be a real browser profile tree."
+        ),
+    )
+    parser.add_argument(
+        "--owner-enrollment-file",
+        default=None,
+        help=(
+            "Path to the BrowserEnrollment registry authorising attach to the OWNER's "
+            "own running Chrome (contract v1.4, profile 'owner'). Without it, and "
+            "without a cdp_loopback record inside it, session_open refuses that profile "
+            "outright. Written by scripts/browser/enroll-owner-chrome.ps1."
         ),
     )
     parser.add_argument(

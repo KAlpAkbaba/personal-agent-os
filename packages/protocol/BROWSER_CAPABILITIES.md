@@ -1,6 +1,6 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.3** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.4** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
 
 - v1 (M13, ADR-0050): the family, sessions, risk classes, the error taxonomy, §3's payloads.
@@ -12,6 +12,13 @@ Status: contract **v1.3** — binding for `services/api` (Cloud Core), `devices/
   result is unchanged. The worker advertises `contracts["browser.media"] = 1`; a consumer
   checks it BEFORE planning a media wake, so an agent installed before M18.3 produces a named
   contract mismatch and the local tone fallback rather than a failure inside a firing alarm.
+- **v1.4 (2026-09-10, ADR-0113): the OWNER's own Chrome, as a profile** — `owner` (§2). No
+  new operation names and no new payload field: an attached session serves the same
+  `navigate`/`click`/`fill`/`search`/`media_*` family it always did, on the browser the
+  owner is signed into. Additive, and INERT until the owner enrolls one: a worker without
+  `--owner-enrollment-file`, or with a registry holding no `cdp_loopback` record, refuses
+  the profile. This is the contract version the owner asked for twice, in full knowledge
+  that an attached session can act as them wherever they are signed in.
 - **v1.3 (2026-09-08, Latest News Mode): a THIRD persistent profile, `news`** (§2). No new
   operation names: news playback reuses the existing `media_play`/`media_volume`/
   `media_status`/`media_stop` family verbatim with `profile: "news"` instead of `"alarm"` —
@@ -85,10 +92,27 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 - `profile`: `research` (the dedicated PagentOS agent profile, persistent, never the owner's
   `User Data`), `alarm` (v1.2 — a SECOND dedicated persistent profile, for alarm media only),
   `news` (v1.3 — a THIRD dedicated persistent profile, for Latest News Mode playback only - enforced bidirectionally, exactly as `alarm` is: a session naming this profile without `session_kind: "media"` is refused at `session_open`;
-  `session_id` convention `news-<news_media_context_id>`) or `isolated` (fresh non-persistent
-  context). The owner's real Chrome session is NOT reachable through this contract in v1; it
-  stays behind `BrowserEnrollment` + `owner_authorized_for_research` (ADR-0035 §4) and a
-  later contract version.
+  `session_id` convention `news-<news_media_context_id>`), `isolated` (fresh non-persistent
+  context) or `owner` (v1.4 — see below).
+- **`owner` (v1.4, ADR-0113): the owner's OWN running Chrome.** Their tabs, their logins,
+  their extensions. The worker ATTACHES to a loopback CDP endpoint recorded in a
+  `BrowserEnrollment` and never launches, configures or terminates that browser;
+  `session_close` disconnects and leaves it running. It owns no profile directory, so
+  `ManagedBackend`'s refusal to open a real browser profile tree is untouched — this path
+  does not go through `ManagedBackend` at all.
+
+  Three refusals guard it, and all three are the point. A worker started without
+  `--owner-enrollment-file` answers `validation_error`; a registry with no `cdp_loopback`
+  record answers `capability_missing` naming
+  `scripts/browser/enroll-owner-chrome.ps1`; a non-loopback endpoint is refused outright
+  (ADR-0019 — an endpoint reachable from off the machine is not an owner browser).
+
+  Default risk classes are ALL of them, unlike every other profile: an attached session
+  is the owner's own browser, already signed in everywhere, and pretending otherwise
+  would be a comforting fiction. A caller may still request a NARROWER set for one
+  session, and `media.play` does exactly that (READ + NAVIGATE). The owner asked for this
+  twice on 2026-09-10, having been told in concrete terms that it lets the agent act as
+  them on every site they are signed into.
 - `session_kind` (v1.2, optional, default `research`): `research` — everything v1.1 did,
   unchanged — or `media`, the alarm surface (§3b).
 - `policy.allowed_risk_classes`: the classes this session may execute (§4). A research session

@@ -68,8 +68,19 @@ ALARM_PROFILE = "alarm"
 #: on ``alarm`` (the guard below only ties ``alarm`` to requiring ``media``, and only
 #: refuses ``media`` on ``research`` - a media session on ``news`` was never excluded).
 NEWS_PROFILE = "news"
+#: v1.4 (ADR-0113): the owner's OWN running Chrome, reached by attaching to a loopback
+#: CDP endpoint recorded in a ``BrowserEnrollment`` -- never launched by this worker and
+#: never terminated by it. It owns NO profile directory: the profile is the owner's, and
+#: ``ManagedBackend``'s refusal to open a real browser profile tree is left exactly as it
+#: is, because this path does not go through ``ManagedBackend`` at all.
+#:
+#: The owner asked for this twice, on 2026-09-10, having been told in plain terms what it
+#: means: an attached session can act as them on every site they are signed into. It is
+#: therefore gated on an enrollment record that only they can create, and the worker
+#: refuses the profile outright when no enrollment is registered.
+OWNER_PROFILE = "owner"
 PROFILES: frozenset[str] = frozenset(
-    {RESEARCH_PROFILE, ISOLATED_PROFILE, ALARM_PROFILE, NEWS_PROFILE}
+    {RESEARCH_PROFILE, ISOLATED_PROFILE, ALARM_PROFILE, NEWS_PROFILE, OWNER_PROFILE}
 )
 
 #: Chrome switch applied ONLY to a media session's own dedicated window.
@@ -506,6 +517,7 @@ __all__ = [
     "MEDIA_SESSION_KIND",
     "MIN_VERIFY_SECONDS",
     "NEWS_PROFILE",
+    "OWNER_PROFILE",
     "PROFILES",
     "RAMP_AWAIT_CEILING_S",
     "RAMP_HANDLE_PROPERTY",

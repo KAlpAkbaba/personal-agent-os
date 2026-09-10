@@ -9332,3 +9332,101 @@ hears when they ask which version is running, which names the action contract ou
 Neither is redundant with the health check — one guards what the MODEL is handed, the other
 what the OWNER is told — and adding a voice tool means updating all four places. Recorded
 here because the next tool family will need the same list.
+
+## ADR-0113 — The owner's own browser, because they asked twice (2026-09-10)
+
+**What was asked.** Minutes after `media.play` shipped, the owner said: "bunun için benim var
+olan browserımı kullanmalı." The isolated profile I had chosen is a blank Chrome — signed
+into nothing, no subscriptions, a consent wall where the song should be.
+
+**What was in the way, in three places, all of them deliberate.**
+
+1. The contract: profiles were `research` / `isolated` / `alarm` / `news`, and
+   BROWSER_CAPABILITIES.md said in as many words that the owner's real Chrome "is NOT
+   reachable through this contract in v1".
+2. The worker imported only `ManagedBackend`. `ExistingSessionBackend` — which attaches to
+   a running browser through a `BrowserEnrollment` over loopback — has existed since M2 and
+   the worker never once constructed it. Built, tested, not routed: the same shape as the
+   media tool itself, one layer down.
+3. `ManagedBackend` actively refuses to open a real Chrome/Edge/Brave profile tree. Not an
+   oversight — a guard, and it is still there, untouched, because this path does not go
+   through `ManagedBackend`.
+
+Against that, CLAUDE.md's browser rule says existing logged-in sessions **should** be
+supportable. So: machinery present, route absent, product requirement unmet.
+
+**The decision was the owner's and it was taken twice.** The first question named the
+trade-off (their own Chrome vs a dedicated persistent profile they log into once). They
+chose their own Chrome. The second confirmation named the consequence in concrete terms —
+the agent can act as them on every site they are signed into, mail and bank included — and
+offered a narrowed grant (READ + NAVIGATE only) as the recommended option. They chose every
+class. Three facts were put in front of them before either answer: that Chrome only accepts
+`--remote-debugging-port` at LAUNCH, so their running Chrome has to be closed and reopened
+through a shortcut from now on; that an attached session is them, everywhere; and that
+anything else on the machine able to reach loopback can drive the same browser, which is
+exactly why ADR-0019 declined to make this a production dependency.
+
+That last point is the one this ADR supersedes, narrowly: ADR-0019 said raw debug-port
+exposure on the owner's default profile is not a production dependency, and it still is not
+— it is an OPT-IN the owner performs with a script, recorded in a file they can delete, and
+absent that file every part of this is inert.
+
+**What was built.** Contract v1.4 adds one profile name, `owner`, and nothing else: no new
+operation, no new payload field. The worker attaches rather than launches, and on close
+disconnects rather than kills. `--owner-enrollment-file` names the registry; the FILE is the
+grant, never the path. `scripts/browser/enroll-owner-chrome.ps1` closes Chrome (asking
+first), relaunches it on a random loopback port, proves the port answers before writing
+anything, records the enrollment owner-readable only, and takes `-Revoke`.
+
+Cloud Core asks for `owner` FIRST, every time — this is not a setting anyone has to
+remember. When the worker answers `capability_missing` (nothing enrolled) it falls back to
+the blank browser and **says so in the spoken sentence**, because a consent wall instead of
+a song is not a surprise the owner should have to diagnose. Any OTHER refusal — a Chrome
+that died, a revoked endpoint, a port that stopped answering — is returned as it came:
+quietly opening a different browser would tell the owner a song is playing somewhere they
+never opened.
+
+**Proof.** Four worker tests: refused with no registry, refused with an empty one (naming
+the script), attach-never-launch (the attach fails on a dead port and the launch recorder
+stays empty), and a non-loopback endpoint refused — ADR-0019's rule enforced on the path
+that finally uses it. Three service tests: owner first, honest fallback, and a real failure
+not worked around. Every one watched fail: removing the gate reds the first, replacing the
+attach with a launch reds three, and pointing the service at `isolated` reds all three of
+its own. 416 browser tests, 985 C# tests, and the media suites.
+
+**What the owner still has to do themselves, because nobody else can.** Run
+`enroll-owner-chrome.ps1`. It closes Chrome. Everything else is installed and inert until
+they do.
+
+**Three defects that only a real run could show, and one that only reading could.**
+
+*Chrome 152 ignores the debugging port on the default profile.* The first enrollment run
+started nineteen Chrome processes and opened no port. This is Chrome's own change (136+):
+`--remote-debugging-port` is refused when `--user-data-dir` is left IMPLICIT. Naming the
+very same directory explicitly makes it work — measured both ways before the fix was
+written. The script's own probe is what caught it: it proves the port answers before it
+records anything, so no false authorization was ever written.
+
+*PowerShell 5.1 writes a byte-order mark.* `Out-File -Encoding utf8` always does, and the
+Python registry loader refused the file outright. The writer no longer emits one and the
+reader now accepts one anyway, because a human opening that file in Notepad would put it
+back.
+
+*Closing Chrome is not one thing.* Renderer processes have no main window, so
+`CloseMainWindow` never reaches them, and ONE survivor is enough to make the relaunch hand
+its command line to the old instance and drop the flag. The script now loops until the
+count is zero and says so plainly if it will not get there.
+
+*And the one found by reading the backend instead of running it.* `ExistingSessionBackend`
+attaches to `context.pages[0]` — the browser's FIRST EXISTING TAB. Playing a song would
+therefore have driven whatever the owner had open in that tab to a search engine and then
+to YouTube: their work, gone, to play music. `media.play` now opens a NEW tab
+(`browser.tab_new`, already in the contract, which selects it) before anything navigates,
+and refuses outright if that tab cannot be opened rather than falling back onto theirs.
+Three tests hold it, and the mutation that removes the new tab reds all three.
+
+**Proven live, on the owner's own machine.** Installed worker 0.5.0 with the `owner`
+profile; the running worker carries `--owner-enrollment-file`; the enrollment records the
+real profile directory; and the attach was driven end to end through
+`ExistingSessionBackend` — connected (`authenticated_session=True`, `existing_tabs=True`),
+navigated, then detached with the browser still running.

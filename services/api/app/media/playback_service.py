@@ -5,12 +5,17 @@ later, a REST route -- come through here, the same discipline
 ``app.news.playback_service`` and ``app.artifacts.open_service`` state: two
 surfaces must never drift on what "playing" means.
 
-Three device calls, in this order, on ONE ``isolated``/``media`` session:
+Three device calls, in this order, on ONE ``media`` session:
 
-1. ``browser.session_open``  -- a fresh non-persistent context. Not ``research``
-   (a live research run may be using it, and the worker refuses media there
-   anyway), not ``alarm`` (the owner's ad-hoc song is not the wake song), not
-   ``news``.
+1. ``browser.session_open``  -- the OWNER's own Chrome (profile ``owner``,
+   contract v1.4), attached through the enrollment they authorised, so the song
+   plays in the browser they are signed into. When no browser is enrolled the
+   worker answers ``capability_missing`` and this falls back to ``isolated`` -- a
+   blank context that works and is signed into nothing -- and SAYS so, because a
+   consent wall instead of a song is not a surprise the owner should have to
+   diagnose. Never ``research`` (a live research run may hold it, and the worker
+   refuses media there), never ``alarm`` (an ad-hoc song is not the wake song),
+   never ``news``.
 2. ``browser.search``        -- the device's own web search. A media session
    carries the same risk classes as a research one (READ + NAVIGATE, and
    ``browser.search`` is NAVIGATE), so this needs no second session.
@@ -53,11 +58,19 @@ logger = get_logger("app.media.playback_service")
 CAPABILITY_SESSION_OPEN: Final = "browser.session_open"
 CAPABILITY_SESSION_CLOSE: Final = "browser.session_close"
 CAPABILITY_SEARCH: Final = "browser.search"
+CAPABILITY_TAB_NEW: Final = "browser.tab_new"
 CAPABILITY_MEDIA_PLAY: Final = "browser.media_play"
 CAPABILITY_MEDIA_STOP: Final = "browser.media_stop"
 
-#: See the package docstring. The worker's own refusal message names this as the
-#: third legal profile for a media session.
+#: The owner's OWN Chrome (contract v1.4, ADR-0113): their tabs, their logins, their
+#: extensions. Asked for twice on 2026-09-10 after being told in concrete terms what it
+#: means, and gated on the device by an enrollment record only the owner can create.
+OWNER_ATTACHED_PROFILE: Final = "owner"
+#: The fallback when no browser is enrolled: a fresh non-persistent context. It works,
+#: and it is signed into nothing -- so a request that lands here is ANSWERED DIFFERENTLY
+#: rather than silently, because "I played it in a blank browser you are not signed into"
+#: and "I played it in yours" are not the same thing and the owner can hear the
+#: difference the moment a consent wall appears instead of the song.
 OWNER_MEDIA_PROFILE: Final = "isolated"
 OWNER_MEDIA_SESSION_KIND: Final = "media"
 #: ``session_id`` convention, mirroring ``news-<id>`` and ``alarm-<id>``.
@@ -118,6 +131,8 @@ class PlaybackOutcome:
     video_id: str | None = None
     title: str = ""
     url: str | None = None
+    #: WHICH browser this happened in -- the owner's own, or the blank fallback.
+    profile: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +143,7 @@ class PlaybackOutcome:
             "video_id": self.video_id,
             "title": self.title,
             "url": self.url,
+            "profile": self.profile,
         }
 
 
@@ -225,22 +241,31 @@ def play_request(
     db.commit()
 
     prefix = f"owner-media:{row.id}"
-    open_result = device_action.run(
-        capability=CAPABILITY_SESSION_OPEN,
-        payload={
-            "session_id": row.session_id,
-            "profile": OWNER_MEDIA_PROFILE,
-            "session_kind": OWNER_MEDIA_SESSION_KIND,
-            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
-            "channel": "chrome",
-        },
-        idempotency_key=f"{prefix}:session_open",
-        timeout_s=TIMEOUT_SESSION_OPEN_S,
-    )
+    profile, open_result = _open_session(device_action, row.session_id, prefix)
     if not open_result.ok:
-        return _fail(
-            db, row, _translate(open_result.error_class, ERROR_PLAYBACK_FAILED), open_result.message
+        translated = _translate(open_result.error_class, ERROR_PLAYBACK_FAILED)
+        return _fail(db, row, translated, open_result.message)
+
+    if profile == OWNER_ATTACHED_PROFILE:
+        # A NEW TAB, before anything navigates. Attaching hands this session the
+        # browser's FIRST EXISTING tab (``ExistingSessionBackend`` takes
+        # ``context.pages[0]``), so searching would drive whatever the owner
+        # happens to have open there to Google and then to YouTube -- their work,
+        # gone, to play a song. ``tab_new`` opens one and selects it, so every
+        # step after this happens somewhere that did not exist a moment ago.
+        #
+        # Not needed for ``isolated``: that context is ours and starts blank.
+        tab = device_action.run(
+            capability=CAPABILITY_TAB_NEW,
+            payload={"session_id": row.session_id},
+            idempotency_key=f"{prefix}:tab_new",
+            timeout_s=TIMEOUT_SESSION_OPEN_S,
         )
+        if not tab.ok:
+            # Refuse rather than fall back onto the owner's tab.
+            _close_session(device_action, row.session_id, prefix)
+            translated = _translate(tab.error_class, ERROR_PLAYBACK_FAILED)
+            return _fail(db, row, translated, tab.message)
 
     search_result = device_action.run(
         capability=CAPABILITY_SEARCH,
@@ -316,29 +341,84 @@ def play_request(
             video_id=candidate.video_id,
             title=row.video_title,
             url=candidate.url,
+            profile=profile,
         )
     return PlaybackOutcome(
         ok=True,
         playback_id=str(row.id),
         status=PLAYBACK_STATUS_PLAYING,
-        speech=_playing_speech(row.video_title),
+        speech=_playing_speech(row.video_title, profile),
         video_id=candidate.video_id,
         title=row.video_title,
         url=candidate.url,
+        profile=profile,
     )
 
 
-def _playing_speech(title: str) -> str:
+def _open_session(device_action: DeviceActionPort, session_id: str, prefix: str) -> tuple[str, Any]:
+    """The owner's own Chrome first; the blank one only if nothing is enrolled.
+
+    ``capability_missing`` is the worker's answer when no browser is enrolled for
+    attach -- a configuration fact, not a failure of this request -- so it is the
+    ONE error that earns a second attempt. Every other refusal is real and is
+    returned as it came: a Chrome that has died, a port that stopped answering
+    and an endpoint that was revoked must not be quietly worked around, or the
+    owner would be told a song is playing in a browser they never opened.
+
+    The risk classes stay READ + NAVIGATE even in the owner's own browser, which
+    is narrower than that profile's default. Playing a video needs nothing more,
+    and a session may always be narrowed; the wider grant the owner authorised
+    belongs to the tools that actually need to click and type.
+    """
+    payload = {
+        "session_id": session_id,
+        "session_kind": OWNER_MEDIA_SESSION_KIND,
+        "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
+        "channel": "chrome",
+    }
+    attached = device_action.run(
+        capability=CAPABILITY_SESSION_OPEN,
+        payload={**payload, "profile": OWNER_ATTACHED_PROFILE},
+        idempotency_key=f"{prefix}:session_open",
+        timeout_s=TIMEOUT_SESSION_OPEN_S,
+    )
+    if attached.ok:
+        return OWNER_ATTACHED_PROFILE, attached
+    if attached.error_class != "capability_missing":
+        return OWNER_ATTACHED_PROFILE, attached
+    logger.info(
+        "owner_media_not_enrolled", detail=attached.message[:200] if attached.message else ""
+    )
+    fallback = device_action.run(
+        capability=CAPABILITY_SESSION_OPEN,
+        payload={**payload, "profile": OWNER_MEDIA_PROFILE},
+        idempotency_key=f"{prefix}:session_open_fallback",
+        timeout_s=TIMEOUT_SESSION_OPEN_S,
+    )
+    return OWNER_MEDIA_PROFILE, fallback
+
+
+def _playing_speech(title: str, profile: str) -> str:
     """Say WHAT is playing, not just that something is.
 
     The owner named a song from memory; hearing the title back is how they learn
     the machine heard the same one, and it is what makes "hayır, diğeri" a
     sentence they can say.
+
+    And WHERE, when it is not where they expect. A blank browser is signed into
+    nothing, so what they will actually see is a consent wall rather than their
+    own YouTube; saying so costs one clause and saves them diagnosing it.
     """
     clean = " ".join((title or "").split())
+    where = ""
+    if profile != OWNER_ATTACHED_PROFILE:
+        where = (
+            " Kendi tarayıcınıza bağlı değilim, ayrı bir pencerede açtım; "
+            "bağlanmamı isterseniz Chrome yetkilendirmesini bir kez yapmamız gerekiyor."
+        )
     if not clean:
-        return "Açtım efendim, çalıyor."
-    return f"Açtım efendim, çalıyor: {clean[:120]}."
+        return f"Açtım efendim, çalıyor.{where}"
+    return f"Açtım efendim, çalıyor: {clean[:120]}.{where}"
 
 
 def _close_session(device_action: DeviceActionPort, session_id: str, prefix: str) -> None:
@@ -403,6 +483,7 @@ __all__ = [
     "CAPABILITY_MEDIA_PLAY",
     "CAPABILITY_MEDIA_STOP",
     "CAPABILITY_SEARCH",
+    "CAPABILITY_TAB_NEW",
     "CAPABILITY_SESSION_OPEN",
     "DEFAULT_VOLUME",
     "ERROR_NOTHING_PLAYING",
@@ -412,6 +493,7 @@ __all__ = [
     "ERROR_PLAYBACK_FAILED",
     "ERROR_PLAYBACK_UNVERIFIED",
     "ERROR_SEARCH_FAILED",
+    "OWNER_ATTACHED_PROFILE",
     "OWNER_MEDIA_PROFILE",
     "OWNER_MEDIA_SESSION_KIND",
     "SESSION_PREFIX",

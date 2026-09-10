@@ -501,7 +501,10 @@ class TestSessionOpen:
                 {"profile": "research", "session_kind": "media"},
                 "may not use the research profile",
             ),
-            ({"profile": "owner"}, "profile must be one of"),
+            # "owner" became a REAL profile in v1.4 (ADR-0113); an unknown one still
+            # has to be refused, so the case keeps its point with a name that is
+            # genuinely not in the vocabulary.
+            ({"profile": "karaoke"}, "profile must be one of"),
             ({"session_kind": "karaoke"}, "session_kind must be one of"),
         ],
     )
@@ -520,6 +523,122 @@ class TestSessionOpen:
         assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
         assert fragment in exc.value.message
         assert recording_backend.instances == [], "nothing may be launched by a refused open"
+
+    # ------------------------------------------------- the owner's own browser (v1.4)
+
+    async def test_the_owner_profile_is_refused_when_the_worker_has_no_registry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        """ADR-0113. Attaching to the owner's signed-in Chrome is the most powerful
+        thing this worker can do, so the default is that it cannot: a worker started
+        without ``--owner-enrollment-file`` has no way to reach it at all."""
+        worker = _make_worker(tmp_path, monkeypatch)
+        await worker._print_hello()
+
+        with pytest.raises(BrowserError) as exc:
+            await worker._execute(
+                "browser.session_open", {"session_id": "owner-media-1", "profile": "owner"}
+            )
+
+        assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
+        assert "--owner-enrollment-file" in exc.value.message
+        assert recording_backend.instances == [], "nothing may be launched by a refused open"
+
+    async def test_the_owner_profile_is_refused_until_the_owner_enrolls_a_browser(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        """Passing the PATH grants nothing. The FILE is the grant, and the refusal
+        names the script that creates it rather than leaving the owner to guess."""
+        registry = tmp_path / "owner-enrollment.json"
+        worker = _make_worker(tmp_path, monkeypatch, owner_enrollment_file=str(registry))
+        await worker._print_hello()
+
+        with pytest.raises(BrowserError) as exc:
+            await worker._execute(
+                "browser.session_open", {"session_id": "owner-media-1", "profile": "owner"}
+            )
+
+        assert exc.value.error_class == ErrorClass.CAPABILITY_MISSING
+        assert "enroll-owner-chrome" in exc.value.message
+        assert recording_backend.instances == [], "nothing may be launched by a refused open"
+
+    async def test_the_owner_profile_never_launches_a_browser_it_attaches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        """The owner's Chrome is not ours to start -- and, on close, not ours to kill.
+        A launch here would be a SECOND Chrome, which is the whole thing this profile
+        exists to avoid."""
+        import json
+
+        registry = tmp_path / "owner-enrollment.json"
+        registry.write_text(
+            json.dumps(
+                {
+                    "enrollments": [
+                        {
+                            "id": "e1",
+                            "name": "owner-chrome",
+                            "transport": "cdp_loopback",
+                            "endpoint": "http://127.0.0.1:19123",
+                            "capability_overrides": {},
+                            "created_at": "2026-09-10T18:00:00+00:00",
+                            "owner_authorized_for_research": False,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        worker = _make_worker(tmp_path, monkeypatch, owner_enrollment_file=str(registry))
+        await worker._print_hello()
+
+        # Nothing is listening on that port, so the attach fails -- which is the
+        # point: it FAILED TRYING TO CONNECT, and never once tried to launch.
+        with pytest.raises(BrowserError):
+            await worker._execute(
+                "browser.session_open", {"session_id": "owner-media-1", "profile": "owner"}
+            )
+
+        assert recording_backend.instances == [], "attach must never launch a browser"
+
+    async def test_a_non_loopback_enrollment_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        """ADR-0019's rule, still enforced on the path that finally uses it: a CDP
+        endpoint reachable from off this machine is not an owner browser, it is an
+        open door."""
+        import json
+
+        registry = tmp_path / "owner-enrollment.json"
+        registry.write_text(
+            json.dumps(
+                {
+                    "enrollments": [
+                        {
+                            "id": "e1",
+                            "name": "somewhere-else",
+                            "transport": "cdp_loopback",
+                            "endpoint": "http://10.0.0.5:19123",
+                            "capability_overrides": {},
+                            "created_at": "2026-09-10T18:00:00+00:00",
+                            "owner_authorized_for_research": False,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        worker = _make_worker(tmp_path, monkeypatch, owner_enrollment_file=str(registry))
+        await worker._print_hello()
+
+        with pytest.raises(BrowserError) as exc:
+            await worker._execute(
+                "browser.session_open", {"session_id": "owner-media-1", "profile": "owner"}
+            )
+
+        assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
+        assert "loopback" in exc.value.message
+        assert recording_backend.instances == []
 
     async def test_a_reopen_may_not_turn_a_research_session_into_a_media_one(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend

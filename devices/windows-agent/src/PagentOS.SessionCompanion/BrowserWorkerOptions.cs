@@ -38,9 +38,30 @@ public sealed record BrowserWorkerOptions
     /// <summary>Start the worker when the companion starts instead of on the first <c>browser.*</c> request.</summary>
     public bool Eager { get; init; }
 
+    /// <summary>
+    /// Where the owner's attach authorization is recorded (contract v1.4, ADR-0113): the
+    /// <c>BrowserEnrollment</c> registry that lets <c>session_open</c> with profile
+    /// <c>owner</c> connect to the owner's OWN running Chrome. Default
+    /// <c>&lt;ProgramData&gt;/PagentOS/browser/owner-enrollment.json</c>, which is where
+    /// <c>scripts/browser/enroll-owner-chrome.ps1</c> writes it.
+    ///
+    /// The path is always passed; the FILE is what grants anything, and until the owner
+    /// creates it the worker refuses that profile outright. Passing a path is not a grant.
+    /// </summary>
+    public required string OwnerEnrollmentFile { get; init; }
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(WorkerCommand);
 
     public static string DefaultDataDir(string companionDataDir) => Path.Combine(companionDataDir, "browser");
+
+    /// <summary>
+    /// Machine-wide, not per-session: the owner enrolls their Chrome once and the
+    /// companion finds the record wherever it runs from.
+    /// </summary>
+    public static string DefaultOwnerEnrollmentDir() => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "PagentOS",
+        "browser");
 
     public static BrowserWorkerOptions FromConfiguration(IConfiguration configuration, string companionDataDir)
     {
@@ -72,6 +93,11 @@ public sealed record BrowserWorkerOptions
             idle = parsedIdle;
         }
 
+        var ownerEnrollment = configuration["BrowserOwnerEnrollmentFile"];
+        var ownerEnrollmentFile = string.IsNullOrWhiteSpace(ownerEnrollment)
+            ? Path.Combine(DefaultOwnerEnrollmentDir(), "owner-enrollment.json")
+            : Path.GetFullPath(Environment.ExpandEnvironmentVariables(ownerEnrollment));
+
         var command = configuration["BrowserWorkerCommand"];
         return new BrowserWorkerOptions
         {
@@ -83,6 +109,7 @@ public sealed record BrowserWorkerOptions
             Visible = ParseBool(configuration["BrowserVisible"], defaultValue: true),
             IdleTimeoutS = idle,
             Eager = ParseBool(configuration["BrowserWorkerEager"], defaultValue: false),
+            OwnerEnrollmentFile = ownerEnrollmentFile,
         };
     }
 
@@ -97,6 +124,7 @@ public sealed record BrowserWorkerOptions
         {
             "--data-dir", DataDir,
             "--profile-dir", ProfileDir,
+            "--owner-enrollment-file", OwnerEnrollmentFile,
             "--channel", Channel,
             Visible ? "--visible" : "--headless",
             "--idle-timeout-s", IdleTimeoutS.ToString(CultureInfo.InvariantCulture),

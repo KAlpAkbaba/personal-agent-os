@@ -29,12 +29,14 @@ from app.media.playback_service import (
     CAPABILITY_MEDIA_STOP,
     CAPABILITY_SEARCH,
     CAPABILITY_SESSION_OPEN,
+    CAPABILITY_TAB_NEW,
     ERROR_NO_DEVICE,
     ERROR_NO_VIDEO_FOUND,
     ERROR_NOTHING_PLAYING,
     ERROR_NOTHING_REQUESTED,
     ERROR_PLAYBACK_UNVERIFIED,
     ERROR_SEARCH_FAILED,
+    OWNER_ATTACHED_PROFILE,
     OWNER_MEDIA_PROFILE,
     OWNER_MEDIA_SESSION_KIND,
     SESSION_PREFIX,
@@ -115,24 +117,71 @@ def _device(**scripted: Any) -> FakeDeviceAction:
 # ------------------------------------------------------------------- the wire
 
 
-def test_the_session_is_isolated_and_media_which_is_what_the_worker_allows(db: Session) -> None:
-    """The three legal profiles for a media session are ``alarm``, ``news`` and
-    ``isolated`` (the worker's own refusal message names them). An ad-hoc song may
-    not take the ``research`` profile a live research run could be using, must not
-    share the ``alarm`` profile, and ``news`` is Latest News Mode's alone.
-    """
+def test_it_asks_for_the_owners_own_browser_first(db: Session) -> None:
+    """ADR-0113. The owner asked for their own Chrome -- signed in, their tabs --
+    and the point of the whole change is that this is the FIRST thing tried, not a
+    setting somebody has to remember to turn on."""
     device = _device()
 
     outcome = play_request(db, device, request_text=SPOKEN)
 
     assert outcome.ok
+    assert outcome.profile == OWNER_ATTACHED_PROFILE == "owner"
     capability, payload = device.calls[0]
     assert capability == CAPABILITY_SESSION_OPEN
-    assert payload["profile"] == OWNER_MEDIA_PROFILE == "isolated"
+    assert payload["profile"] == "owner"
     assert payload["session_kind"] == OWNER_MEDIA_SESSION_KIND == "media"
     assert payload["session_id"].startswith(SESSION_PREFIX)
+    # Narrower than the owner profile's own default, and deliberately: playing a
+    # video needs nothing more, and a session may always be narrowed. The wider
+    # grant belongs to the tools that actually click and type.
     assert payload["policy"]["allowed_risk_classes"] == ["READ", "NAVIGATE"]
     assert payload["policy"]["visible"] is True
+
+
+def test_when_no_browser_is_enrolled_it_falls_back_AND_says_so(db: Session) -> None:
+    """A blank browser is signed into nothing, so the owner meets a consent wall
+    instead of their own YouTube. Playing it anyway and saying nothing would make
+    them diagnose that themselves."""
+    device = FakeDeviceAction(
+        results={
+            CAPABILITY_SESSION_OPEN: lambda payload: (
+                DeviceRunResult(False, error_class="capability_missing", message="not enrolled")
+                if payload["profile"] == "owner"
+                else DeviceRunResult(True, result={"opened": True})
+            ),
+            CAPABILITY_SEARCH: _found(),
+            CAPABILITY_MEDIA_PLAY: _playing(),
+        }
+    )
+
+    outcome = play_request(db, device, request_text=SPOKEN)
+
+    assert outcome.ok
+    assert outcome.profile == OWNER_MEDIA_PROFILE == "isolated"
+    opens = [p["profile"] for c, p in device.calls if c == CAPABILITY_SESSION_OPEN]
+    assert opens == ["owner", "isolated"]
+    assert "Kendi tarayıcınıza bağlı değilim" in outcome.speech
+
+
+def test_a_real_attach_failure_is_not_worked_around(db: Session) -> None:
+    """``capability_missing`` means "nothing is enrolled" -- a configuration fact.
+    Anything else (a Chrome that died, a revoked endpoint, a port that stopped
+    answering) is real, and quietly opening a different browser instead would tell
+    the owner a song is playing somewhere they never opened."""
+    device = FakeDeviceAction(
+        results={
+            CAPABILITY_SESSION_OPEN: DeviceRunResult(
+                False, error_class="browser_unavailable", message="connection refused"
+            )
+        }
+    )
+
+    outcome = play_request(db, device, request_text=SPOKEN)
+
+    assert outcome.ok is False
+    opens = [p["profile"] for c, p in device.calls if c == CAPABILITY_SESSION_OPEN]
+    assert opens == ["owner"], "it must not silently retry in another browser"
 
 
 def test_search_then_play_on_the_same_session(db: Session) -> None:
@@ -142,14 +191,15 @@ def test_search_then_play_on_the_same_session(db: Session) -> None:
 
     assert device.capabilities() == [
         CAPABILITY_SESSION_OPEN,
+        CAPABILITY_TAB_NEW,
         CAPABILITY_SEARCH,
         CAPABILITY_MEDIA_PLAY,
     ]
     sessions = {payload["session_id"] for _, payload in device.calls}
     assert len(sessions) == 1, "one session does the search AND the playback"
-    _, search_payload = device.calls[1]
+    _, search_payload = device.calls[2]
     assert search_payload["query"] == f"{SPOKEN} youtube"
-    _, play_payload = device.calls[2]
+    _, play_payload = device.calls[3]
     assert play_payload["url"] == WATCH
 
 
@@ -272,3 +322,66 @@ def test_a_second_request_stops_the_first_rather_than_stacking(db: Session) -> N
     ).scalars()
     statuses = [row.status for row in rows]
     assert statuses == [PLAYBACK_STATUS_CLOSED, PLAYBACK_STATUS_PLAYING]
+
+
+# --------------------------------- the owner's own tabs (ADR-0113, found 2026-09-10)
+
+
+def test_it_opens_a_new_tab_before_touching_the_owners_browser(db: Session) -> None:
+    """Attaching hands the session the browser's FIRST EXISTING tab.
+
+    ``ExistingSessionBackend`` takes ``context.pages[0]``, so without this the search
+    would drive whatever the owner has open in tab one to Google and then to YouTube --
+    their work, gone, to play a song. Caught by reading the backend before the first
+    real run, not by a user losing a tab.
+    """
+    device = _device()
+
+    play_request(db, device, request_text=SPOKEN)
+
+    ordered = device.capabilities()
+    assert ordered == [
+        CAPABILITY_SESSION_OPEN,
+        CAPABILITY_TAB_NEW,
+        CAPABILITY_SEARCH,
+        CAPABILITY_MEDIA_PLAY,
+    ]
+    assert ordered.index(CAPABILITY_TAB_NEW) < ordered.index(CAPABILITY_SEARCH)
+
+
+def test_the_blank_browser_needs_no_new_tab(db: Session) -> None:
+    """The isolated context is ours and starts empty; a tab there would just be litter."""
+    device = FakeDeviceAction(
+        results={
+            CAPABILITY_SESSION_OPEN: lambda payload: (
+                DeviceRunResult(False, error_class="capability_missing", message="not enrolled")
+                if payload["profile"] == "owner"
+                else DeviceRunResult(True, result={"opened": True})
+            ),
+            CAPABILITY_SEARCH: _found(),
+            CAPABILITY_MEDIA_PLAY: _playing(),
+        }
+    )
+
+    play_request(db, device, request_text=SPOKEN)
+
+    assert CAPABILITY_TAB_NEW not in device.capabilities()
+
+
+def test_a_failed_new_tab_refuses_rather_than_using_the_owners_tab(db: Session) -> None:
+    device = FakeDeviceAction(
+        results={
+            CAPABILITY_SESSION_OPEN: DeviceRunResult(True, result={"opened": True}),
+            CAPABILITY_TAB_NEW: DeviceRunResult(
+                False, error_class="browser_lifecycle_violation", message="max tabs"
+            ),
+            CAPABILITY_SEARCH: _found(),
+            CAPABILITY_MEDIA_PLAY: _playing(),
+        }
+    )
+
+    outcome = play_request(db, device, request_text=SPOKEN)
+
+    assert outcome.ok is False
+    assert CAPABILITY_SEARCH not in device.capabilities()
+    assert CAPABILITY_MEDIA_PLAY not in device.capabilities()

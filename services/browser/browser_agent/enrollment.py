@@ -218,7 +218,13 @@ class EnrollmentRegistry:
     def _load(self) -> None:
         assert self._path is not None
         try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
+            # ``utf-8-sig`` rather than ``utf-8``: this file is written by a PowerShell
+            # script on the owner's machine, and PowerShell 5.1's own UTF-8 writer emits
+            # a byte-order mark -- as does Notepad, if the owner ever opens it. Refusing
+            # the whole registry over three leading bytes made attaching to their browser
+            # impossible the first time it ran for real (2026-09-10). The BOM is stripped
+            # by the codec; everything after it is parsed exactly as strictly as before.
+            data = json.loads(self._path.read_text(encoding="utf-8-sig"))
             records = data["enrollments"]
         except (json.JSONDecodeError, KeyError, OSError) as exc:
             raise BrowserError(

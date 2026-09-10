@@ -292,7 +292,18 @@ SIDE_EFFECTS_NEWS_OPEN: Final[frozenset[str]] = frozenset(
 #: trail), then play. Never ``desktop.alarm_*``: a song the owner asked for must not
 #: touch the wake alarm's tone or its dedicated browser profile.
 SIDE_EFFECTS_MEDIA_PLAY: Final[frozenset[str]] = frozenset(
-    {"browser.session_open", "browser.search", "browser.media_play"}
+    {
+        "browser.session_open",
+        # ADR-0113: a NEW TAB before anything navigates. Attaching to the owner's own
+        # Chrome hands the session their FIRST EXISTING tab, so without this the search
+        # would drive whatever they had open there to a search engine. Declared HERE
+        # because this policy is the list of device calls one utterance may make, and an
+        # undeclared one is exactly the kind of silent extra reach it exists to catch --
+        # it caught this one.
+        "browser.tab_new",
+        "browser.search",
+        "browser.media_play",
+    }
 )
 #: "Şarkıyı durdur." stops the session this family opened -- nothing else.
 SIDE_EFFECTS_MEDIA_STOP: Final[frozenset[str]] = frozenset({"browser.media_stop"})

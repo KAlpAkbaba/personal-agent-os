@@ -55,6 +55,7 @@ public static class FakeWorkerLauncher
             WorkerArgs = joined,
             DataDir = dataDir,
             ProfileDir = Path.Combine(dataDir, "profile"),
+            OwnerEnrollmentFile = Path.Combine(dataDir, "owner-enrollment.json"),
             Channel = "chrome",
             Visible = visible,
             IdleTimeoutS = 600,

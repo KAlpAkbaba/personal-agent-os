@@ -115,6 +115,14 @@ RESEARCH_SESSION_CLASSES: frozenset[RiskClass] = frozenset({RiskClass.READ, Risk
 #: session does not already have.
 MEDIA_SESSION_CLASSES: frozenset[RiskClass] = frozenset({RiskClass.READ, RiskClass.NAVIGATE})
 
+#: The owner's own attached browser (v1.4, ADR-0113): EVERY class, because the owner
+#: asked for every class after being told twice, in concrete terms, that it means the
+#: agent can click, fill and submit as them on every site they are signed into. The
+#: narrower default is still one line away (``RESEARCH_SESSION_CLASSES``) and a
+#: ``session_open`` may always request a narrower set for a single session -- widening is
+#: what is impossible, not narrowing.
+OWNER_SESSION_CLASSES: frozenset[RiskClass] = frozenset(RiskClass)
+
 #: All classes — used to validate a session_open payload's requested set.
 ALL_RISK_CLASSES: frozenset[RiskClass] = frozenset(RiskClass)
 
@@ -253,6 +261,7 @@ __all__ = [
     "CAPABILITY_NAME_RE_SOURCE",
     "CAPABILITY_RISK_CLASS",
     "MEDIA_SESSION_CLASSES",
+    "OWNER_SESSION_CLASSES",
     "RESEARCH_SESSION_CLASSES",
     "ResolvedElement",
     "RiskClass",

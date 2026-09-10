@@ -646,7 +646,7 @@ public sealed class BrowserWorkerHostTests : IDisposable
     [Fact]
     public async Task An_unconfigured_host_answers_capability_missing_without_starting_anything()
     {
-        var options = new BrowserWorkerOptions { WorkerCommand = null, DataDir = _dir, ProfileDir = Path.Combine(_dir, "profile") };
+        var options = new BrowserWorkerOptions { WorkerCommand = null, DataDir = _dir, ProfileDir = Path.Combine(_dir, "profile"), OwnerEnrollmentFile = Path.Combine(_dir, "owner-enrollment.json") };
         await using var host = new BrowserWorkerHost(options, _log);
 
         Assert.False(host.IsConfigured);

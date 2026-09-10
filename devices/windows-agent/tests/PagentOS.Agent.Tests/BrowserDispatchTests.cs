@@ -182,9 +182,13 @@ public sealed class BrowserDispatchTests : IDisposable
         Assert.False(configured.Visible);
         Assert.Equal(90, configured.IdleTimeoutS);
         Assert.True(configured.Eager);
+        // v1.4 (ADR-0113): --owner-enrollment-file rides every launch. Passing the PATH
+        // grants nothing; the worker refuses profile 'owner' until the FILE exists, which
+        // only the owner can create.
         Assert.Equal(
-            new[] { "-m", "browser_agent.worker", "--data-dir", Path.Combine(_dir, "bdata"), "--profile-dir", Path.Combine(_dir, "bdata", "profile"), "--channel", "chromium", "--headless", "--idle-timeout-s", "90" },
+            new[] { "-m", "browser_agent.worker", "--data-dir", Path.Combine(_dir, "bdata"), "--profile-dir", Path.Combine(_dir, "bdata", "profile"), "--owner-enrollment-file", configured.OwnerEnrollmentFile, "--channel", "chromium", "--headless", "--idle-timeout-s", "90" },
             configured.BuildArgumentList());
+        Assert.EndsWith(Path.Combine("PagentOS", "browser", "owner-enrollment.json"), configured.OwnerEnrollmentFile);
     }
 
     // ------------------------------------------------------------- service routing + cap
