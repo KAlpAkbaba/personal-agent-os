@@ -47,7 +47,19 @@ public sealed class AlarmArmController : IDisposable
     public const int MaxGraceSeconds = 3600;
 
     /// <summary>Past this much lateness, an overdue arm is expired instead of rung.</summary>
-    public static readonly TimeSpan StaleAfter = TimeSpan.FromHours(2);
+    /// <remarks>
+    /// <para>Five minutes, not the two hours this used to be. Measured on the owner's machine
+    /// on 2026-09-10: a 07:30 alarm was armed the night before, the PC slept through the alarm
+    /// time, and the companion started at 08:10 - whereupon it reloaded the overdue arm and
+    /// rang it, 39 minutes and 39 seconds late. The log line it writes for an over-stale arm
+    /// calls it "too late to be a wake-up", which was exactly right and exactly what a
+    /// two-hour horizon failed to catch.</para>
+    /// <para>An alarm is a request to be woken AT a time. A couple of minutes late still serves
+    /// that - a slow resume, a busy boot, the cloud losing a race - so the horizon is not zero.
+    /// Forty minutes late serves nothing: the owner is already awake, or was never going to be
+    /// woken by this, and the only thing the noise does is startle them.</para>
+    /// </remarks>
+    public static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
 
     private readonly ArmedAlarmStore _store;
     private readonly AlarmController? _alarm;

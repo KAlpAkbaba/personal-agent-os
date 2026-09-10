@@ -372,8 +372,12 @@ public sealed class LivingCoreCapabilityTests
             });
         }
 
-        // The companion was down when the alarm came due; it starts twenty minutes late.
-        clock.Advance(TimeSpan.FromMinutes(31));
+        // The companion was down when the alarm came due; it starts two minutes late - still
+        // inside StaleAfter, so this stays a test of the ONCE-ONLY property rather than of the
+        // horizon. Twenty minutes was the lateness here until 2026-09-10, when the owner was
+        // rung 39 minutes late by a machine that had slept through the alarm; that case is
+        // An_alarm_the_machine_slept_through_does_not_ring_when_it_wakes_up.
+        clock.Advance(TimeSpan.FromMinutes(13));
 
         using (var second = new ArmScope(path, clock))
         {
@@ -411,6 +415,54 @@ public sealed class LivingCoreCapabilityTests
         Assert.Equal(1, second.Arms.Expired);
         Assert.Null(second.Alarm.RingingAlarmId);
         Assert.Equal(0, second.Arms.ArmedCount);
+    }
+
+    [Fact]
+    public void An_alarm_the_machine_slept_through_does_not_ring_when_it_wakes_up()
+    {
+        // The owner's own morning, 2026-09-10. A 07:30 alarm was armed the night before; the
+        // PC slept through it; the companion started at 08:10 and rang the overdue arm
+        // 00:39:39 late. The horizon was two hours, so nothing stopped it. An alarm is a
+        // request to be woken AT a time, and forty minutes later is not that time.
+        var path = Path.Combine(TestPaths.NewTempDir(), "armed-alarms.json");
+        var clock = new ManualTimeProvider();
+        var fireAt = clock.GetUtcNow() + TimeSpan.FromMinutes(1);
+
+        using (var first = new ArmScope(path, clock))
+        {
+            first.Arms.Arm(new JsonObject { ["alarm_id"] = "wake-0730", ["fire_at"] = fireAt.ToString("O") });
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(1) + TimeSpan.FromSeconds(39 * 60 + 39));
+
+        using var second = new ArmScope(path, clock);
+        Assert.Equal(0, second.Arms.ReloadOnStart());
+        Assert.Equal(1, second.Arms.Expired);
+        Assert.Null(second.Alarm.RingingAlarmId);
+        Assert.Equal(0, second.Arms.ArmedCount);
+    }
+
+    [Fact]
+    public void An_alarm_only_slightly_late_still_rings()
+    {
+        // The horizon is not zero, and must not become zero: a slow resume or a busy boot is
+        // still a wake-up the owner asked for. This is the other side of the line above, and
+        // it is what stops the fix for one incident from silently disabling the feature.
+        var path = Path.Combine(TestPaths.NewTempDir(), "armed-alarms.json");
+        var clock = new ManualTimeProvider();
+        var fireAt = clock.GetUtcNow() + TimeSpan.FromMinutes(1);
+
+        using (var first = new ArmScope(path, clock))
+        {
+            first.Arms.Arm(new JsonObject { ["alarm_id"] = "wake-slow-resume", ["fire_at"] = fireAt.ToString("O") });
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(1) + TimeSpan.FromMinutes(2));
+
+        using var second = new ArmScope(path, clock);
+        Assert.Equal(1, second.Arms.ReloadOnStart());
+        Assert.Equal(0, second.Arms.Expired);
+        Assert.Equal("wake-slow-resume", second.Alarm.RingingAlarmId);
     }
 
     [Fact]

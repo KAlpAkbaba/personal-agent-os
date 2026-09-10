@@ -8715,3 +8715,63 @@ tool manifest, and `test_create_selects_by_capability_and_returns_the_contract` 
 exactly — which is what it is for. The name was added deliberately. No contract version bump:
 `contract_version.py` says to bump on a change to the accepted fields of a request body, and
 a new tool is not one.
+
+## ADR-0106 — The alarm that rang forty minutes after the owner needed it (2026-09-10)
+
+**Owner report.** "birde bip bip alarm takıldı."
+
+**What the server said, and why it was misleading.** The 07:30 alarm was `FAILED` three
+seconds after its fire time, `terminal_reason` "Şu anda çevrimiçi bir cihaz bulunamadı." ×5,
+`playing_since` empty. Read alone, that says the alarm never rang. Meanwhile
+`desktop.alarm_stop` answered `was_ringing: true` forty-three minutes later. Two halves,
+both telling the truth about different things.
+
+**What the device's own log said.** This is the record that settled it, and it contradicted
+the first two hypotheses (a 43-minute ring; a device ignoring `max_duration_s`):
+
+```
+21:58:40  alarm d9e7529f armed locally for 2026-09-10T04:30:45
+05:10:23  1 armed alarm(s) RELOADED from armed-alarms.json
+05:10:24  alarm started: ramp 0.15->0.6 over 20s, max 600s
+05:10:24  WARNING: rang from the LOCAL fallback: no cloud alarm_start
+          arrived within 45s of 04:30:00 (late 00:39:38.9896192)
+05:13:45  stopped (owner_stop)
+```
+
+The machine slept through 07:30 local. The companion started at 08:10, reloaded an arm whose
+ring time had passed **39 minutes and 39 seconds** earlier, and rang it. It rang for three
+minutes, not forty-three, and `max_duration_s` was correctly carried and would have stopped
+it at ten. Everything worked exactly as written. What was written was wrong.
+
+**Root cause.** `AlarmArmController.StaleAfter` was two hours. The reload path already asks
+"is this still worth ringing?" and logs an over-stale arm as "too late to be a wake-up" —
+the right question and the right words, behind a horizon so wide it never fired. Two hours
+after 07:30 is 09:30; there is no sense in which a 09:30 noise is the 07:30 wake-up the owner
+asked for.
+
+**Fix.** Five minutes. An alarm is a request to be woken AT a time: a slow resume or a busy
+boot still serves it, so the horizon is not zero; forty minutes serves nothing but a startle.
+
+**Regression.** Two, and they are a pair on purpose. `An_alarm_the_machine_slept_through…`
+encodes the owner's own morning — armed, 39 min 39 s late, expired without ringing — and it
+is an ABSOLUTE claim, unlike the pre-existing staleness test which advances
+`StaleAfter + 1 hour` and therefore passes at any horizon, including the one that failed the
+owner. `An_alarm_only_slightly_late_still_rings` is the other side: two minutes late still
+rings, so a fix for one incident cannot quietly disable the feature. Restoring the two-hour
+horizon fails the first, watched.
+
+`A_restart_rings_a_recently_overdue_arm_once_and_never_a_second_time` moved from 20 minutes
+late to 2. Its subject is the once-only guarantee; the lateness was incidental and is now a
+different behaviour, covered above. 850 device tests, 0 failed.
+
+**Not fixed here, and it is the bigger half.** The owner was not woken at 07:30 and nothing
+ever told them so. The Cloud Core knew — it wrote `FAILED / no online device` at 04:30:02 —
+and that knowledge reached no one. An alarm that silently does not ring is worse than one
+that rings late. The device now expires a stale arm with an audit row; carrying that to the
+owner ("alarmınız çalamadı, bilgisayar kapalıydı") needs a path from the device's audit to
+the morning surface, and that is the next work item on this thread.
+
+**Method note.** Two hypotheses were formed and discarded before the device log was read: a
+43-minute ring (wrong — three minutes) and a device ignoring `max_duration_s` (wrong — it
+honoured it). Both were plausible from the server's rows alone. The server can say what it
+asked for and what it heard back; only the device can say what it did.
