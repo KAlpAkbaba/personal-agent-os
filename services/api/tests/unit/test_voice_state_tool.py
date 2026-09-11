@@ -171,12 +171,28 @@ def test_a_stale_presence_is_spoken_as_stale(session) -> None:
 
 
 def test_health_results_from_a_caller_become_the_core_fact(session) -> None:
-    degraded = {"db": {"status": "ok"}, "redis": {"status": "fail"}}
+    degraded = {"db": {"status": "ok"}, "temporal": {"status": "fail"}}
     result = compose_live_state(session, now=NOW, health=degraded)
     assert _facts(result)[KEY_CORE_HEALTH]["value"] == "degraded"
     assert result["speech"].startswith("Cloud Core kısmen sağlıklı")
     ok = compose_live_state(session, now=NOW, health=lambda: {"db": {"status": "ok"}})
     assert _facts(ok)[KEY_CORE_HEALTH]["value"] == "ok"
+
+
+def test_the_spoken_health_agrees_with_the_health_endpoint(session) -> None:
+    """One rule for both readers (app.health.is_degraded). A `skipped` check (the embedded
+    worker when it is not embedded) and Redis (advisory: nothing uses it) are not failures
+    on /v1/system/health, so the owner must not hear "kismen saglikli" about them either."""
+    from app.health import is_degraded
+
+    for health in (
+        {"db": {"status": "ok"}, "redis": {"status": "fail"}},
+        {"db": {"status": "ok"}, "temporal_worker": {"status": "skipped"}},
+        {"db": "ok", "redis": "fail"},
+    ):
+        result = compose_live_state(session, now=NOW, health=health)
+        assert is_degraded(health) is False
+        assert _facts(result)[KEY_CORE_HEALTH]["value"] == "ok", health
 
 
 def test_eye_scope_sentences(session) -> None:

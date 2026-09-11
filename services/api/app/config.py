@@ -157,6 +157,11 @@ class Settings(BaseSettings):
     #: at most every ``evolution_supervisor_interval_s``; disabled means no scan at all.
     evolution_supervisor_enabled: bool = True
     evolution_supervisor_interval_s: float = 300.0
+    #: Phase 8 (2026-09-11): the memory / owner-session / authorised-asset expiry sweeps
+    #: that existed and nothing ran (app.maintenance). 0 disables; the first pass waits
+    #: the initial delay so a booting process is not doing housekeeping.
+    retention_sweep_interval_s: float = 3600.0
+    retention_sweep_initial_delay_s: float = 300.0
     # M18.3 §3.7: the origin the COMPANION uses to fetch a greeting WAV. Empty means "the
     # same origin the device already talks to"; the Device Service validates the URL's
     # origin against its own configured broker REST origin before forwarding, so a wrong
