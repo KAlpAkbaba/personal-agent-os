@@ -279,17 +279,106 @@ try {
     Write-Host ""
     Write-Host "static lint: the pattern itself, across the installer scripts"
 
+    function Add-BareCountOffender {
+        <#
+            Every bare .Count in one token stream, appended to $Offenders as "file:line: text".
+
+            Recursive, because ParseFile's top-level stream does NOT contain the tokens inside
+            an expandable string: "at depth $($stack.Count)" throws exactly like the bare read
+            beside it, and the lint could not see it. A guard a `"$( )"` can walk straight past
+            is not a guard, so the nested streams are walked too.
+        #>
+        param($Tokens, [string]$Relative, $Offenders)
+        $all = @($Tokens)
+        for ($i = 0; $i -lt $all.Count; $i++) {
+            $token = $all[$i]
+
+            if ($token -is [System.Management.Automation.Language.StringExpandableToken]) {
+                # NestedTokens is $null for a string with nothing to expand, and @($null) is a
+                # ONE-element array holding $null - so recursing unguarded reads .Kind off a
+                # null and throws. This lint tripped over its own defect class while being
+                # written; the assertion below keeps the empty case exercised.
+                if ($null -ne $token.NestedTokens) {
+                    Add-BareCountOffender -Tokens $token.NestedTokens -Relative $Relative -Offenders $Offenders
+                }
+                continue
+            }
+            if ($token.Kind -eq [System.Management.Automation.Language.TokenKind]::Comment) { continue }
+            if ($token.Kind -ne [System.Management.Automation.Language.TokenKind]::Identifier) { continue }
+            if ($token.Text -ne "Count") { continue }
+
+            # The token before an identifier member access is the '.' operator; the one
+            # before that tells us whether the expression was parenthesised, i.e. @(...).
+            # Indexed positionally rather than by [array]::IndexOf, which finds the FIRST
+            # equal token and so mis-locates the second `.Count` on one line.
+            $before = if ($i -ge 2) { $all[$i - 2] } else { $null }
+            if ($null -eq $before -or $before.Kind -ne [System.Management.Automation.Language.TokenKind]::RParen) {
+                $line = $token.Extent.StartLineNumber
+                [void]$Offenders.Add("$Relative`:$line`: $($token.Extent.StartScriptPosition.Line.Trim())")
+            }
+        }
+    }
+
+    # ------------------------------------------------------- the second hand-typed list (ADR-0097 D4)
+    # This list used to name six files by hand: the three installer scripts and three of the
+    # libraries. ADR-0097 Decision 4 had already found and fixed exactly this weakness in a
+    # DIFFERENT guard — harness-symbols.tests.ps1 never had scripts\lib\AgentUpdate.ps1 added
+    # to its hand-typed list, and three days later that file shipped the very defect the guard
+    # existed to catch. The same lesson, unapplied here, left SIXTEEN of the nineteen libraries
+    # unlinted, including VoiceShell.ps1 (15 bare reads) and AgentUpdate.ps1 (6) — the same
+    # file that Decision 4 found unguarded, unguarded again by a second guard.
+    #
+    # So the list is READ FROM DISK, the way harness-symbols.tests.ps1 and gate 8 of
+    # qualify-staged-update.ps1 now do: the three top-level installer scripts plus every
+    # scripts\lib\*.ps1. A new library is covered the moment it exists.
+    $lintTargets = @(
+        "scripts\install-device-service.ps1",
+        "scripts\uninstall-device-service.ps1",
+        "scripts\verify-device-service.ps1"
+    )
+    foreach ($lib in @(Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts\lib") -Filter *.ps1 -File | Sort-Object -Property Name)) {
+        $lintTargets += "scripts\lib\$($lib.Name)"
+    }
+
+    Test-Case "the .Count lint sees through a `"`$( )`" and clears the plain string beside it" {
+        # The lint is only as good as what it can see. Before this, ParseFile's top-level
+        # token stream hid every read inside an expandable string, so `"depth `$(`$x.Count)`"
+        # walked straight past it - and one such read was live in BrowserSmokeEvidence.ps1,
+        # a line below a read the lint DID flag. Both halves are asserted: it catches the
+        # interpolated offender, and it does not fire on a plain string or on the remedy.
+        $probe = Join-Path $env:TEMP ("count-lint-probe-" + [guid]::NewGuid().ToString("N") + ".ps1")
+        try {
+            $body = '$plain = "no interpolation at all, and the word Count in prose"' + "`r`n" +
+                    '$bad = "there are $($items.Count) of them"' + "`r`n" +
+                    '$good = "there are $(@($items).Count) of them"' + "`r`n" +
+                    '$alsoBad = $items.Count' + "`r`n" +
+                    '$alsoGood = @($items).Count' + "`r`n"
+            [System.IO.File]::WriteAllText($probe, $body)
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($probe, [ref]$tokens, [ref]$errors)
+            $hits = New-Object System.Collections.ArrayList
+            Add-BareCountOffender -Tokens $tokens -Relative "probe.ps1" -Offenders $hits
+            Assert-Equal -Expected 2 -Actual @($hits).Count -Because "exactly the interpolated read and the bare one: $($hits -join ' | ')"
+            Assert-True -Condition (@($hits | Where-Object { $_ -match ":2:" }).Count -eq 1) -Because "the read inside `"`$( )`" on line 2 must be caught"
+            Assert-True -Condition (@($hits | Where-Object { $_ -match ":4:" }).Count -eq 1) -Because "the bare read on line 4 must be caught"
+            Assert-True -Condition (@($hits | Where-Object { $_ -match ":3:|:5:" }).Count -eq 0) -Because "neither remedy may be reported"
+        }
+        finally { Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue }
+    }
+
+    Test-Case "the .Count lint reads its file list from disk, not from a list someone must remember to update" {
+        Assert-True -Condition (@($lintTargets).Count -ge 15) `
+            -Because "only $(@($lintTargets).Count) files - scripts\lib did not enumerate"
+        foreach ($mustCover in @("scripts\lib\AgentUpdate.ps1", "scripts\lib\VoiceShell.ps1", "scripts\lib\ServiceInstall.ps1")) {
+            Assert-True -Condition ($lintTargets -contains $mustCover) -Because "$mustCover is not covered by the lint"
+        }
+    }
+
     Test-Case "no bare `$x.Count anywhere in the installer scripts" {
         # Mechanical, so a future edit cannot reintroduce the class. Every .Count must be
         # written @(...).Count, which is correct for `$null, a scalar and an array alike.
-        $scripts = @(
-            "scripts\install-device-service.ps1",
-            "scripts\uninstall-device-service.ps1",
-            "scripts\verify-device-service.ps1",
-            "scripts\lib\InstallAcl.ps1",
-            "scripts\lib\NativeProcess.ps1",
-            "scripts\lib\ServiceInstall.ps1"
-        )
+        $scripts = $lintTargets
 
         # Comments are excluded through the PowerShell parser rather than by guessing at '#'
         # — the documentation in these files quotes the bug itself inside <# #> blocks, and a
@@ -301,25 +390,56 @@ try {
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
             Assert-True -Condition (@($errors).Count -eq 0) -Because "$relative does not parse"
-
-            foreach ($token in @($tokens)) {
-                if ($token.Kind -eq [System.Management.Automation.Language.TokenKind]::Comment) { continue }
-                if ($token.Kind -ne [System.Management.Automation.Language.TokenKind]::Identifier) { continue }
-                if ($token.Text -ne "Count") { continue }
-
-                # The token before an identifier member access is the '.' operator; the one
-                # before that tells us whether the expression was parenthesised, i.e. @(...).
-                $index = [array]::IndexOf($tokens, $token)
-                $before = if ($index -ge 2) { $tokens[$index - 2] } else { $null }
-                if ($null -eq $before -or $before.Kind -ne [System.Management.Automation.Language.TokenKind]::RParen) {
-                    $line = $token.Extent.StartLineNumber
-                    [void]$offenders.Add("$relative`:$line`: $($token.Extent.StartScriptPosition.Line.Trim())")
-                }
-            }
+            Add-BareCountOffender -Tokens $tokens -Relative $relative -Offenders $offenders
         }
 
-        Assert-Equal -Expected 0 -Actual $offenders.Count `
-            -Because "these read .Count without @( ) and will throw on `$null or a scalar:`n          $($offenders -join "`n          ")"
+        # The remedy differs by shape, and naming both here is what keeps the guard honest:
+        # for a LIST write @(`$x).Count; for a MAP write @(`$x.Keys).Count, because @( ) does
+        # not enumerate an IDictionary and @(`$map).Count is 1 for a map of any size.
+        Assert-Equal -Expected 0 -Actual @($offenders).Count `
+            -Because "these read .Count without @( ) and will throw on `$null or a scalar - write @(`$x).Count for a list, @(`$x.Keys).Count for a map:`n          $($offenders -join "`n          ")"
+    }
+
+    Test-Case "the lint's two remedies are the right ones: @(`$x).Count for a list, @(`$x.Keys).Count for a map" {
+        # Why the map remedy is spelled out above rather than left to whoever next trips the
+        # lint: AgentUpdate.ps1 reads .Count on two IDictionary values (a tree's file hashes,
+        # and a manifest's file map). Applying the list remedy mechanically there would have
+        # turned a real count into the constant 1 - file_count wrong in every manifest, and
+        # "component lists no file" never firing again. This pins both answers.
+        $map = [ordered]@{ a = "1"; b = "2"; c = "3" }
+        Assert-Equal -Expected 1 -Actual @($map).Count -Because "@( ) does not enumerate a map - this is the trap, and it must stay reproduced"
+        Assert-Equal -Expected 3 -Actual @($map.Keys).Count -Because "the map remedy counts keys"
+        Assert-Equal -Expected 0 -Actual @(([ordered]@{}).Keys).Count -Because "and answers 0 for an empty map, which is the branch the lint protects"
+
+        # The list remedy, at the three shapes the header describes. Note what @( ) does and
+        # does not promise: it stops the THROW at every shape, which is the whole point, but
+        # @(`$null).Count is 1, not 0 - a null wrapped in @( ) is a one-element list holding a
+        # null. Only a call that emits NOTHING collapses to 0. So @(`$x).Count -eq 0 is a test
+        # for emptiness ONLY where `$x was itself assigned @( ... ); every site rewritten for
+        # this lint was checked against that, and none of them can hold a bare `$null.
+        Assert-Equal -Expected 1 -Actual @($null).Count -Because "a literal null wrapped in @( ) is ONE element, not zero - the remedy prevents the throw, it does not mean 'empty'"
+        Assert-Equal -Expected 0 -Actual @(& { }).Count -Because "a call that emits nothing is what actually collapses to 0"
+        Assert-Equal -Expected 1 -Actual @("scalar").Count -Because "scalar -> 1"
+        Assert-Equal -Expected 2 -Actual @(@("a", "b")).Count -Because "array -> its length"
+
+        # The third thing to know, learned the hard way while applying this lint to
+        # VoiceShell.ps1: "just @( )-wrap the assignment too" is NOT free. A helper that
+        # already returns a real array through the `, @( )` idiom must be assigned BARE -
+        # wrapping its call re-nests the empty case into a one-element array holding @( ),
+        # and the caller then iterates one phantom element. Fix the READ, not the assignment,
+        # whenever the producer already guarantees an array.
+        function Get-ProbeArray { param($Value) if ($null -eq $Value) { return , @() } return , @($Value) }
+        $bare = Get-ProbeArray -Value $null
+        $rewrapped = @(Get-ProbeArray -Value $null)
+        Assert-Equal -Expected 0 -Actual @($bare).Count -Because "assigned bare, the empty case really is empty"
+        Assert-Equal -Expected 1 -Actual @($rewrapped).Count -Because "re-wrapped, it is a one-element array holding @( ) - this is the trap, and it must stay reproduced"
+
+        # And the two shapes that made this suite exist: each throws without the remedy.
+        foreach ($shape in @(@{ N = "null"; V = $null }, @{ N = "scalar"; V = "x" })) {
+            $threw = $false
+            try { $null = $shape.V.Count } catch { $threw = ($_.FullyQualifiedErrorId -match "PropertyNotFoundStrict") }
+            Assert-True -Condition $threw -Because "a bare .Count on a $($shape.N) must still throw here, or this whole suite is vacuous"
+        }
     }
 
     Test-Case "every collection-returning library function is unrolling-safe" {
