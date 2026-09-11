@@ -10178,3 +10178,69 @@ tier 4/5 on paper becomes lower.
 detector): the security path reverted, the agent path reverted, the `risk.py` rule removed,
 the `infra/systemd/` rule removed. Every suite that depends on tiers passes (evolution
 routes, approval center, authorize, supervisor, release preflight/execution).
+
+## ADR-0122 — Backups that are restored, not just taken (2026-09-11)
+
+**Context.** Until this change production had no backup of anything. The four databases
+(the product's, Temporal's two, the maintenance one), the owner's artefacts in MinIO, the env
+file and the owner-credential root existed only on the Hetzner data volume: a lost volume, a
+bad migration or a mistaken delete was unrecoverable. The takeover audit rated it P0, and
+continuous rollback (ADR-0121) does not help - it recovers a broken release, not a lost
+database. `docs/CLOUD_INFRASTRUCTURE.md` section 7 always required nightly encrypted backups
+and "periodic restore test, not merely backup-success check".
+
+**Decision.**
+- **Tool and place.** restic from Ubuntu's signed archive; the repository on the ROOT disk
+  (`/var/lib/pagentos-backup/restic`), a different disk from the data volume it protects;
+  a `restic copy` to a second repository whenever `/opt/pagentos/backup-offhost.env` names
+  one. Encryption and authentication are restic's own (AES-256 + Poly1305).
+- **Contents.** Every non-template database (`pg_dump -Fc`) and the roles; every bucket
+  through the MinIO API (inside the container, with its own credentials, so no secret crosses
+  the shell); `.env`, `RELEASE`/`LAST_KNOWN_GOOD`/`LAST_RECONCILE`, the owner-credential root,
+  the edge state, the recovery bundle, the pagentos unit files. Not the images (rebuilt from
+  their commits) and not the repository password (it would be locked inside what it opens).
+- **Integrity that means something.** Each snapshot carries a manifest of every file's
+  sha256, and per database a fingerprint - per table the row count and the sha256 of its rows
+  *sorted* - computed FROM THE DUMP. A restore is judged by re-dumping the restored database
+  and comparing fingerprints, so it proves the restored database holds exactly the backup's
+  rows, whatever physical order it stores them in. Row counts taken from the live database
+  would drift with every write between the dump and the count. `restic check
+  --read-data-subset=100%` after every backup reads the repository's data back.
+- **Retention.** Scheduled: daily 14 / weekly 8 / monthly 6 (the infrastructure document's
+  starting values); pre-migration: last 10; manual: last 5.
+- **Schedule and provenance.** Nightly at 00:30 UTC (03:30 in Turkey) and a weekly drill,
+  both systemd timers running copies pinned under `/opt/pagentos-backup` whose SHA256SUMS
+  systemd checks before every run - never the application tree a release swaps.
+- **A safety point before every migration.** Both release paths take a `pre-migration`
+  snapshot labelled with the release before `alembic upgrade`; if it fails the release stops
+  there, before the migration, with the active colour serving and the tree restored (exit 74
+  blue/green, 67 single-container). A host without the tooling migrates with a loud warning.
+- **Restore.** `--drill` restores into scratch containers beside production - no network,
+  throwaway credentials, the same images - verifies files, databases and objects (loaded into
+  a scratch MinIO and read back out through its API), measures each step, writes a report and
+  tears everything down; production is untouched. `--apply` is the real restore: it refuses
+  without `--confirm "RESTORE <id> OVER PRODUCTION"` naming that snapshot, takes a
+  `pre-restore` backup first, holds the backup lock and the blue/green lock, stops both
+  colours and Temporal, restores every database and bucket, verifies the databases against the
+  backup's fingerprints, starts Temporal and hands the colours to the reconcile. It does not
+  overwrite the live env file or credential root - they are in the snapshot for a rebuilt host;
+  replacing live secrets is a decision, not a side effect. On any failure it names the
+  pre-restore snapshot and the exact command that puts production back.
+- **Install proves itself.** `install-backup.sh` takes one backup and restores it in a drill
+  before it enables any timer; an install whose first backup cannot be restored installs
+  nothing worth having.
+- **The password leaves the host.** Generated on the host, root-only, never printed;
+  `escrow-backup-key.ps1` copies it into the owner's PC DPAPI store and proves the copy by
+  comparing SHA-256 fingerprints computed on each side.
+
+**Consequence.** The off-host copy needs a repository the owner creates (a paid account or
+credential - an owner boundary). Until then the backups survive a lost data volume or a bad
+migration, not a lost host.
+
+**Evidence (offline).** 27 tests with fake docker/restic/flock/systemctl/apt-get and the real
+scripts, snapshot layout and fingerprint helper, on Windows and in a Linux container; 3
+blue/green and 1 single-container harness cases for the pre-migration stop. Mutations, each
+red: fingerprints that always agree (2), `--apply` without the confirmation (1), timers
+enabled before the proof (1), a manifest mismatch ignored (1), a failed pre-migration backup
+not stopping the release (1). What no fake can prove - that the real pg_dump, pg_restore,
+mc and restic agree with each other on the real host - is the measured drill on production.

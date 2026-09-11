@@ -19,6 +19,7 @@
 #   (--preflight stops here: reports, removes app.next, changes nothing)
 #   swap trees: app -> app.prev, app.next -> app (rollback restores them)
 #   build the image for THIS sha (pagentos/cloud-core:SHA; the old image is untouched)
+#   pre-migration backup (ADR-0122; a warning, not a stop, when not installed)     74
 #   alembic upgrade head (expand-only migrations, gated by test_migration_compatibility)
 #   record the idle colour's image + release sha in the env file
 #   up the IDLE colour only (--no-deps --wait); the active colour keeps serving
@@ -527,6 +528,23 @@ upsert_env "PAGENTOS_IMAGE_$IDLE" "$sha"
 upsert_env "PAGENTOS_RELEASE_$IDLE" "$sha"
 upsert_env "PAGENTOS_EDGE_DIR" "$edge_dir"
 [ -n "$previous_sha" ] && upsert_env "PAGENTOS_LAST_KNOWN_GOOD" "$previous_sha"
+
+# ADR-0122: a safety point before any schema change. The pinned backup (install-backup.sh)
+# takes a pre-migration snapshot; if it cannot, the release stops HERE - before the
+# migration, with the active colour untouched and the trees restored by on_exit.
+backup_bin=${PAGENTOS_BACKUP_BIN:-/opt/pagentos-backup}/backup-cloud-core.sh
+if [ -f "$backup_bin" ]; then
+    echo "pre-migration backup..."
+    backup_log="$base/.pre-migration-backup.log"
+    if ! bash "$backup_bin" --kind pre-migration --label "release-$(printf '%s' "$sha" | cut -c1-12)" > "$backup_log" 2>&1; then
+        tail -5 "$backup_log" >&2
+        echo "pre-migration backup FAILED; the release stops before any migration" >&2
+        exit 74
+    fi
+    tail -1 "$backup_log"
+else
+    echo "WARNING: no backup tooling at $backup_bin; migrating WITHOUT a safety point (install-backup.sh)" >&2
+fi
 
 echo "applying migrations (expand-only)..."
 compose run --rm --no-deps --entrypoint uv "api-$idle" run alembic upgrade head 2>&1 | tail -2

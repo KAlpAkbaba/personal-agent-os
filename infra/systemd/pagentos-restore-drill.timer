@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly PagentOS Cloud Core restore drill
+
+[Timer]
+# Sunday 01:30 UTC - an hour after that night's backup, so the drill restores a fresh one.
+OnCalendar=Sun *-*-* 01:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=pagentos-restore-drill.service
+
+[Install]
+WantedBy=timers.target

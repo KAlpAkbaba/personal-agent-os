@@ -241,6 +241,26 @@ try {
         $r0 = Invoke-Release
         Assert-True ($r0.Exit -eq 0 -and $r0.Output -match "device handoff: no device session on api-blue; nothing to move") "with no device connected the handoff has nothing to wait for"
 
+        # ADR-0122: the pre-migration safety point. A fake backup records into the same call
+        # log as the fake docker, so its place in the order is visible.
+        Write-Host "pre-migration backup (ADR-0122)"
+        Assert-True ($r.Output -match "WARNING: no backup tooling at .*; migrating WITHOUT a safety point") "a host without the backup installed is told, and the release still goes through"
+
+        Reset-Host
+        $backupBin = Join-Path $hostBase "backup-bin"
+        New-Item -ItemType Directory -Force -Path $backupBin | Out-Null
+        [IO.File]::WriteAllText((Join-Path $backupBin "backup-cloud-core.sh"), "#!/usr/bin/env bash`necho `"backup `$*`" >> `"`$FAKE_STATE/calls.log`"`necho `"BACKUP OK: snapshot abc (pre-migration)`"`nexit `${FAKE_BACKUP_EXIT:-0}`n")
+        $rb = Invoke-Release -Env @{ PAGENTOS_BACKUP_BIN = (& $u $backupBin) }
+        $iBackup = [array]::IndexOf($rb.Calls, ($rb.Calls | Where-Object { $_ -match "^backup " } | Select-Object -First 1))
+        $iMigrateB = [array]::IndexOf($rb.Calls, ($rb.Calls | Where-Object { $_ -match "alembic upgrade head" } | Select-Object -First 1))
+        Assert-True ($rb.Exit -eq 0 -and $iBackup -ge 0 -and $iBackup -lt $iMigrateB -and $rb.Calls[$iBackup] -eq "backup --kind pre-migration --label release-222222222222" -and $rb.Output -match "BACKUP OK: snapshot abc") "with the backup installed, a pre-migration snapshot labelled with the release is taken BEFORE the migration"
+
+        Reset-Host
+        New-Item -ItemType Directory -Force -Path $backupBin | Out-Null
+        [IO.File]::WriteAllText((Join-Path $backupBin "backup-cloud-core.sh"), "#!/usr/bin/env bash`necho `"backup `$*`" >> `"`$FAKE_STATE/calls.log`"`necho `"BACKUP FAILED (92): pg_dump pagentos_prod failed`" >&2`nexit 92`n")
+        $rf2 = Invoke-Release -Env @{ PAGENTOS_BACKUP_BIN = (& $u $backupBin) }
+        Assert-True ($rf2.Exit -eq 74 -and $rf2.Output -match "pre-migration backup FAILED; the release stops before any migration" -and $rf2.Output -match "pg_dump pagentos_prod failed" -and -not ($rf2.Calls -match "alembic upgrade head") -and (Get-Active) -eq "blue" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a failed pre-migration backup stops the release before any migration: the active colour keeps serving and the old tree is back"
+
         Reset-Host
         $rl = Invoke-Release -Env @{ FAKE_DRAIN_UNSUPPORTED = "blue" }
         if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $rl.Output }

@@ -1,0 +1,27 @@
+# PagentOS Cloud Core: the nightly backup (ADR-0122). Every database, the artefact store,
+# the host's configuration and release/recovery metadata, into the encrypted restic
+# repository under /var/lib/pagentos-backup (the root disk, not the data volume it
+# protects), and off the host when /opt/pagentos/backup-offhost.env names a repository.
+#
+# The scripts run from their pinned, digest-checked copy under /opt/pagentos-backup, never
+# from the application tree a release swaps.
+#
+# Install:   /opt/pagentos/app/scripts/cloud/install-backup.sh
+# Last run:  cat /var/lib/pagentos-backup/LAST_BACKUP.json
+#            journalctl -u pagentos-backup.service -n 30
+# Pause:     systemctl disable --now pagentos-backup.timer
+[Unit]
+Description=PagentOS Cloud Core backup (databases, objects, host configuration)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+Nice=10
+IOSchedulingClass=idle
+ExecStartPre=/usr/bin/sha256sum --check --quiet /opt/pagentos-backup/SHA256SUMS
+ExecStart=/bin/bash /opt/pagentos-backup/backup-cloud-core.sh --kind scheduled
+NoNewPrivileges=true
+PrivateTmp=true
