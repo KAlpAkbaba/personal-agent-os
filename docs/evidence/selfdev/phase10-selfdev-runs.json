@@ -1,0 +1,270 @@
+{
+  "phase": "10 - self-development acceptance on a genuine defect",
+  "defect": "supervisor-dead-component-paths",
+  "model": "claude-opus-5 via app.selfdev.anthropic_model (forced tool calls)",
+  "budget": {
+    "max_attempts": 3,
+    "max_seconds": 1800,
+    "max_tokens": 200000
+  },
+  "runs": [
+    {
+      "run_id": "20260911-195808-supervisor-dead-component-paths-34ec67",
+      "status": "CRASHED",
+      "record": null,
+      "engine_commit": "0fe8d9b",
+      "why": "TypeError: string indices must be integers in generate_patch; the engine let it escape, so no record was written and the worktree was left (removed clean at c309065).",
+      "fixed_by": "a305dc1"
+    },
+    {
+      "run_id": "20260911-202211-supervisor-dead-component-paths-332fd2",
+      "status": "STOPPED_BY_OPERATOR",
+      "record": null,
+      "engine_commit": "0aa0d35",
+      "why": "stopped before any model call: run-selfdev.ps1 under -File passed '-Test a,b' as ONE path; the worktree was removed clean at c309065.",
+      "fixed_by": "3259047"
+    },
+    {
+      "run_id": "20260911-202420-supervisor-dead-component-paths-b1e5a6",
+      "status": "REFUSED",
+      "reason": "the plan changes services/api/tests/unit/test_evolution_supervisor_component_paths.py, outside the defect's scope",
+      "engine_commit": "3259047",
+      "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+      "base_ci": {
+        "state": "success",
+        "detail": "success https://github.com/KAlpAkbaba/personal-agent-os/actions/runs/34634651698"
+      },
+      "attempts": [],
+      "candidate_sha": "",
+      "branch": "selfdev/20260911-202420-supervisor-dead-component-paths-b1e5a6",
+      "risk_at_run_time": {},
+      "promotion_class_at_run_time": "",
+      "worktree_kept": null,
+      "model": {
+        "name": "anthropic",
+        "calls": 2,
+        "input_tokens": 26582,
+        "output_tokens": 3716
+      },
+      "seconds": 70.8,
+      "record": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1.selfdev-runs\\20260911-202420-supervisor-dead-component-paths-b1e5a6\\record.json"
+    },
+    {
+      "run_id": "20260911-202808-supervisor-dead-component-paths-9d1691",
+      "status": "QUARANTINED",
+      "reason": "model: patch: replacements is a string that is not a JSON array",
+      "engine_commit": "f92aa07",
+      "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+      "base_ci": {
+        "state": "success",
+        "detail": "success https://github.com/KAlpAkbaba/personal-agent-os/actions/runs/34634651698"
+      },
+      "attempts": [],
+      "candidate_sha": "",
+      "branch": "selfdev/20260911-202808-supervisor-dead-component-paths-9d1691",
+      "risk_at_run_time": {},
+      "promotion_class_at_run_time": "",
+      "worktree_kept": null,
+      "model": {
+        "name": "anthropic",
+        "calls": 3,
+        "input_tokens": 42780,
+        "output_tokens": 6159
+      },
+      "seconds": 101.8,
+      "record": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1.selfdev-runs\\20260911-202808-supervisor-dead-component-paths-9d1691\\record.json"
+    },
+    {
+      "run_id": "20260911-203704-supervisor-dead-component-paths-aeec76",
+      "status": "QUARANTINED",
+      "reason": "attempts: 3 of 3 used; last failure: regression_green: ...F                                                                     [100%]\n================================== FAILURES ===================================\n______________ test_browser_worker_falls_under_the_browser_rule _______________\n\n    def test_browser_worker_falls_under_t",
+      "engine_commit": "d6450f8",
+      "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+      "base_ci": {
+        "state": "success",
+        "detail": "success https://github.com/KAlpAkbaba/personal-agent-os/actions/runs/34634651698"
+      },
+      "attempts": [
+        {
+          "n": 1,
+          "checks": {
+            "regression_red_on_base": true,
+            "scope": true,
+            "regression_green": true,
+            "targeted_tests": true,
+            "lint": false
+          },
+          "structural": "",
+          "model_review_approved": null
+        },
+        {
+          "n": 2,
+          "checks": {
+            "regression_red_on_base": false
+          },
+          "structural": "",
+          "model_review_approved": null
+        },
+        {
+          "n": 3,
+          "checks": {
+            "regression_red_on_base": true,
+            "scope": true,
+            "regression_green": false,
+            "targeted_tests": true,
+            "lint": true
+          },
+          "structural": "",
+          "model_review_approved": null
+        }
+      ],
+      "candidate_sha": "",
+      "branch": "selfdev/20260911-203704-supervisor-dead-component-paths-aeec76",
+      "risk_at_run_time": {},
+      "promotion_class_at_run_time": "",
+      "worktree_kept": true,
+      "model": {
+        "name": "anthropic",
+        "calls": 7,
+        "input_tokens": 76686,
+        "output_tokens": 12579
+      },
+      "seconds": 203.7,
+      "record": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1.selfdev-runs\\20260911-203704-supervisor-dead-component-paths-aeec76\\record.json"
+    },
+    {
+      "run_id": "20260911-204631-supervisor-dead-component-paths-922175",
+      "status": "QUARANTINED",
+      "reason": "attempts: 3 of 3 used; last failure: model review: Plan sapması (kapsam): Plan `_RUNTIME_GENERATED_ROOTS` adıyla modül-içi (alt çizgili) bir sabit ve `__all__`'ın genişletilmemesini açıkça şart koşuyordu ('_RUNTIME_GENERATED_ROOTS ve _COMPONENT_PATHS modül-içi (alt çizgili) kalır - test bunları modülden okur, __all__ genişletilmez'). D",
+      "engine_commit": "c9e8079",
+      "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+      "base_ci": {
+        "state": "success",
+        "detail": "success https://github.com/KAlpAkbaba/personal-agent-os/actions/runs/34634651698"
+      },
+      "attempts": [
+        {
+          "n": 1,
+          "checks": {
+            "regression_red_on_base": true,
+            "autofix": true,
+            "scope": true,
+            "regression_green": true,
+            "targeted_tests": true,
+            "lint": true
+          },
+          "structural": "",
+          "model_review_approved": false
+        },
+        {
+          "n": 2,
+          "checks": {
+            "regression_red_on_base": false
+          },
+          "structural": "",
+          "model_review_approved": null
+        },
+        {
+          "n": 3,
+          "checks": {
+            "regression_red_on_base": true,
+            "autofix": true,
+            "scope": true,
+            "regression_green": true,
+            "targeted_tests": true,
+            "lint": true
+          },
+          "structural": "",
+          "model_review_approved": false
+        }
+      ],
+      "candidate_sha": "",
+      "branch": "selfdev/20260911-204631-supervisor-dead-component-paths-922175",
+      "risk_at_run_time": {},
+      "promotion_class_at_run_time": "",
+      "worktree_kept": true,
+      "model": {
+        "name": "anthropic",
+        "calls": 9,
+        "input_tokens": 96192,
+        "output_tokens": 18933
+      },
+      "seconds": 307.9,
+      "record": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1.selfdev-runs\\20260911-204631-supervisor-dead-component-paths-922175\\record.json"
+    },
+    {
+      "run_id": "20260911-205513-supervisor-dead-component-paths-70b883",
+      "status": "STOPPED_AT_POLICY_BOUNDARY",
+      "reason": "",
+      "engine_commit": "7ca40fc",
+      "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+      "base_ci": {
+        "state": "success",
+        "detail": "success https://github.com/KAlpAkbaba/personal-agent-os/actions/runs/34634651698"
+      },
+      "attempts": [
+        {
+          "n": 1,
+          "checks": {
+            "regression_red_on_base": true,
+            "autofix": true,
+            "scope": true,
+            "regression_green": true,
+            "targeted_tests": true,
+            "lint": true
+          },
+          "structural": "",
+          "model_review_approved": true
+        }
+      ],
+      "candidate_sha": "db9ed85e5cfc10f54769d0978e2f39969955ae76",
+      "branch": "selfdev/20260911-205513-supervisor-dead-component-paths-70b883",
+      "risk_at_run_time": {
+        "tier": 2,
+        "reasons": [
+          "no path matched a named risk pattern; classified as internal logic"
+        ],
+        "requires_second_confirmation": false
+      },
+      "promotion_class_at_run_time": "AUTO_CANARY",
+      "worktree_kept": false,
+      "model": {
+        "name": "anthropic",
+        "calls": 5,
+        "input_tokens": 55255,
+        "output_tokens": 8970
+      },
+      "seconds": 155.1,
+      "record": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1.selfdev-runs\\20260911-205513-supervisor-dead-component-paths-70b883\\record.json"
+    }
+  ],
+  "accepted": {
+    "run_id": "20260911-205513-supervisor-dead-component-paths-70b883",
+    "status": "STOPPED_AT_POLICY_BOUNDARY",
+    "candidate_sha": "db9ed85e5cfc10f54769d0978e2f39969955ae76",
+    "branch": "selfdev/20260911-205513-supervisor-dead-component-paths-70b883",
+    "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+    "changed_paths": [
+      "services/api/app/evolution/supervisor.py",
+      "services/api/tests/unit/test_evolution_supervisor_component_paths.py"
+    ],
+    "merged_or_pushed_by_engine": false,
+    "classification_at_run_time": {
+      "tier": 2,
+      "class": "AUTO_CANARY"
+    },
+    "classification_under_corrected_table": {
+      "tier": 5,
+      "class": "NEVER_AUTO_PROMOTE",
+      "table_commit": "aa942e3",
+      "why": "app/evolution/supervisor.py is the promotion law's input; ADR-0124 addendum"
+    },
+    "files": [
+      "docs/evidence/selfdev/20260911-205513-supervisor-dead-component-paths-70b883/record.json",
+      "docs/evidence/selfdev/20260911-205513-supervisor-dead-component-paths-70b883/candidate.diff",
+      "docs/evidence/selfdev/20260911-205513-supervisor-dead-component-paths-70b883/model-exchanges.json"
+    ]
+  },
+  "proof_mark": "PROVEN_REAL",
+  "proof_basis": "a real model, a real repository, real worktrees and real test/lint runs; the engine's own record, diff and model exchanges are copied here unedited"
+}

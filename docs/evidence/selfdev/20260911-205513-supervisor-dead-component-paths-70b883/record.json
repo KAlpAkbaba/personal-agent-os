@@ -1,0 +1,131 @@
+{
+  "run_id": "20260911-205513-supervisor-dead-component-paths-70b883",
+  "defect": {
+    "defect_id": "supervisor-dead-component-paths",
+    "title": "The Evolution supervisor maps three components to files that do not exist",
+    "evidence": "A check of every path in app.evolution.supervisor._COMPONENT_PATHS against the repository (git ls-files) on the base commit reports three paths that do not exist:\n  DEAD windows-agent  windows-agent/DeviceService/Program.cs\n  DEAD browser-worker services/browser/pagentos_browser/worker.py\n  DEAD generated_skill var/evolution/skills/candidate/skill.py\nEvery other mapped path exists.\n\nWhy it matters: paths_for_component() feeds derive_risk_tier() and promotion_class_for(), and the map claims to name where a change would land. Measured with promotion_class_for on the base commit:\n  windows-agent/DeviceService/Program.cs (dead)                        -> AUTO_CANARY, tier 2\n  devices/windows-agent/src/PagentOS.DeviceService/Program.cs (real)   -> NEVER_AUTO_PROMOTE, tier 4\n  services/browser/pagentos_browser/worker.py (dead)                   -> AUTO_CANARY, tier 2\n  services/browser/browser_agent/worker.py (real)                      -> AUTO_CANARY, tier 2\n  var/evolution/skills/candidate/skill.py (dead)                       -> AUTO_CANARY, tier 2\n  skills/generated/x/1/src/x.py (a real generated-skill path)          -> AUTO_CANARY, tier 2\nSo the Windows agent is misclassified - tier 2 (AUTO_CANARY) instead of tier 4 (NEVER_AUTO_PROMOTE), because the risk table's rule ^devices/windows-agent/ never sees the dead path. The browser worker and the generated skill are NOT misclassified: the risk table has no rule for either, so both are tier 2 with the real path as with the dead one. Their paths must still be real, but a test must not assert any other tier for them.\n\nFacts about where these components really live in the repository (from git ls-files):\n  - the Windows device service entry point is devices/windows-agent/src/PagentOS.DeviceService/Program.cs\n  - the browser worker is services/browser/browser_agent/worker.py\n  - generated skills are published at runtime by EvolutionRuntime.skills_root under skills/generated/<skill>/<version>/src/<skill>.py; the directory skills/generated/ is tracked (it holds a README), its contents are generated and ignored, so a generated skill's file legitimately does not exist in a checkout.\n\nThe regression test must prove that every mapped path either exists in the repository or lies under a declared runtime-generated root, and that the Windows agent's component now classifies as NEVER_AUTO_PROMOTE (tier 4).",
+    "scope": [
+      "services/api/app/evolution/supervisor.py"
+    ],
+    "failing_test": null
+  },
+  "base_sha": "c309065e570b688d73b56fcaf6ad9e8602394846",
+  "started_at": "2026-09-11T20:55:13.361227Z",
+  "status": "STOPPED_AT_POLICY_BOUNDARY",
+  "reason": "",
+  "branch": "selfdev/20260911-205513-supervisor-dead-component-paths-70b883",
+  "worktree": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1.selfdev-worktrees\\20260911-205513-supervisor-dead-component-paths-70b883",
+  "worktree_kept": false,
+  "base_ci": {
+    "state": "success",
+    "detail": "success https://github.com/KAlpAkbaba/personal-agent-os/actions/runs/34634651698"
+  },
+  "analysis": {
+    "summary": "`_COMPONENT_PATHS` içindeki üç bileşen (windows-agent, browser-worker, generated_skill) depoda var olmayan dosyalara işaret ediyor. Bu harita, `paths_for_component()` üzerinden `derive_risk_tier()` ve `promotion_class_for()`'a besleniyor; yani bir değişikliğin nereye ineceğini iddia ediyor ve risk tablosunun kuralları bu yollar üzerinden eşleşiyor.\n\nÖlçülen etki:\n- `windows-agent` → `windows-agent/DeviceService/Program.cs` (ölü yol). Risk tablosundaki `^devices/windows-agent/` kuralı bu yolu hiç görmediği için bileşen varsayılana (internal logic) düşüyor ve AUTO_CANARY / tier 2 çıkıyor. Gerçek yol olan `devices/windows-agent/src/PagentOS.DeviceService/Program.cs` ile doğru sonuç NEVER_AUTO_PROMOTE / tier 4. Bu, gerçek bir yanlış sınıflandırmadır: Windows cihaz servisi otomatik canary'ye uygun sayılıyor.\n- `browser-worker` → `services/browser/pagentos_browser/worker.py` (ölü yol). Gerçek yol `services/browser/browser_agent/worker.py`. Risk tablosunda ikisi için de kural yok, dolayısıyla her iki halde de tier 2 / AUTO_CANARY. Sınıflandırma yanlış değil, ama harita yalan söylüyor.\n- `generated_skill` → `var/evolution/skills/candidate/skill.py` (ölü yol). Üretilen yetenekler çalışma zamanında `EvolutionRuntime.skills_root` altında `skills/generated/<skill>/<version>/src/<skill>.py` olarak yayımlanıyor; `skills/generated/` dizini depoda izleniyor (README taşıyor), içeriği üretilip yok sayılıyor. Burada doğru yol, çalışma zamanında üretilen köke (`skills/generated/`) ait temsilî bir yoldur; bir checkout'ta dosyanın bulunmaması meşrudur. Bu da tier 2 / AUTO_CANARY kalır.\n\nDüzeltme: haritadaki üç girdiyi gerçek yollarla değiştirmek ve üretilen yeteneklerin altında yaşadığı çalışma zamanı kökünü açıkça ilan etmek (testin \"var olmayan ama meşru\" yolu ayırt edebilmesi için). Windows agent girdisi düzeltildiğinde risk tablosunun `^devices/windows-agent/` kuralı devreye girer ve bileşen NEVER_AUTO_PROMOTE / tier 4 olur; diğer ikisi tier 2 olarak kalır ve regresyon testi onlar için başka bir tier iddia etmemelidir.\n\nRegresyon testi, haritadaki her yolun ya depoda var olduğunu ya da ilan edilmiş bir çalışma zamanı üretim kökü altında bulunduğunu, ve `windows-agent` bileşeninin artık NEVER_AUTO_PROMOTE (tier 4) olarak sınıflandığını kanıtlamalıdır.",
+    "relevant_paths": [
+      "services/api/app/evolution/supervisor.py",
+      "services/api/app/evolution/risk.py",
+      "devices/windows-agent/src/PagentOS.DeviceService/Program.cs",
+      "services/browser/browser_agent/worker.py",
+      "skills/generated/"
+    ],
+    "root_cause": "`_COMPONENT_PATHS` içindeki üç yol, deponun gerçek yerleşimiyle senkron değil: `windows-agent/DeviceService/Program.cs` yerine gerçek yol `devices/windows-agent/src/PagentOS.DeviceService/Program.cs`, `services/browser/pagentos_browser/worker.py` yerine `services/browser/browser_agent/worker.py`, üretilen yetenek için ise `var/evolution/skills/candidate/skill.py` yerine `EvolutionRuntime.skills_root` altındaki `skills/generated/<skill>/<version>/src/<skill>.py` düzeni geçerli. Harita hiçbir yerde depoya karşı doğrulanmadığı için yollar taşındıktan/yeniden adlandırıldıktan sonra sessizce ölü kaldı. Sonuç olarak `derive_risk_tier()`, `^devices/windows-agent/` kuralını hiç eşleştiremiyor ve Windows cihaz servisi tier 4 (NEVER_AUTO_PROMOTE) yerine tier 2 (AUTO_CANARY) olarak sınıflanıyor; diğer iki ölü yol tier'ı değiştirmiyor ama haritanın \"değişiklik nereye iner\" iddiasını geçersiz kılıyor."
+  },
+  "plan": {
+    "summary": "## Ne bozuk\n\n`services/api/app/evolution/supervisor.py` içindeki `_COMPONENT_PATHS` haritası üç bileşeni depoda var olmayan dosyalara bağlıyor:\n\n- `windows-agent` → `windows-agent/DeviceService/Program.cs` (gerçeği: `devices/windows-agent/src/PagentOS.DeviceService/Program.cs`)\n- `browser-worker` → `services/browser/pagentos_browser/worker.py` (gerçeği: `services/browser/browser_agent/worker.py`)\n- `generated_skill` → `var/evolution/skills/candidate/skill.py` (gerçeği: `EvolutionRuntime.skills_root` altında `skills/generated/<skill>/<version>/src/<skill>.py`)\n\nBu harita `paths_for_component()` üzerinden `derive_risk_tier()` ve `promotion_class_for()`'a besleniyor. Ölü yol yüzünden risk tablosunun `^devices/windows-agent/` kuralı hiç eşleşmiyor ve Windows cihaz servisi tier 2 / AUTO_CANARY olarak sınıflanıyor; doğrusu tier 4 / NEVER_AUTO_PROMOTE. Diğer iki ölü yol için risk tablosunda kural yok, yani tier'ı (2 / AUTO_CANARY) değiştirmiyorlar — ama harita \"değişiklik nereye iner\" iddiasında yanlış bilgi veriyor.\n\n## Düzeltme (en küçük değişiklik)\n\n`services/api/app/evolution/supervisor.py`, yalnızca `_COMPONENT_PATHS` bloğu ve onun hemen öncesindeki üretim kökü ilanı:\n\n1. Üç girdiyi gerçek yollara çevir:\n   - `\"windows-agent\": (\"devices/windows-agent/src/PagentOS.DeviceService/Program.cs\",)`\n   - `\"browser-worker\": (\"services/browser/browser_agent/worker.py\",)`\n   - `\"generated_skill\": (\"skills/generated/candidate/1/src/candidate.py\",)`\n2. Üretilen yeteneklerin çalışma zamanı kökünü açıkça ilan et; harita üstündeki yorum gibi tek satırlık, aynı yoğunlukta:\n\n```python\n#: Roots whose contents are published at runtime (EvolutionRuntime.skills_root): a mapped\n#: path under one of these legitimately does not exist in a checkout.\n_RUNTIME_GENERATED_ROOTS: tuple[str, ...] = (\"skills/generated/\",)\n```\n\n`generated_skill` girdisine, yolun neden checkout'ta bulunmadığını söyleyen kısa bir yorum eklenir (`_RUNTIME_GENERATED_ROOTS` altında, `skills/generated/<skill>/<version>/src/<skill>.py` düzeni).\n\n3. `_RUNTIME_GENERATED_ROOTS` ve `paths_for_component` `__all__`'a eklenir ki test ilan edilmiş kökü modülden okuyabilsin (harita ve kök tek kaynaktan doğrulanır, test kendi kopyasını tutmaz).\n\nRisk tablosuna, `paths_for_component()`'e, `derive_risk_tier()`'a veya tarama akışına dokunulmaz. Windows agent düzeltmesiyle `^devices/windows-agent/` kuralı devreye girer ve sınıf kendiliğinden NEVER_AUTO_PROMOTE / tier 4 olur.\n\n## Kanıt\n\nYeni test `services/api/tests/unit/test_evolution_supervisor_component_paths.py`:\n\n- Haritadaki **her** yolu, depo kökünü `supervisor.__file__`'dan yukarı çıkarak bulup dosya sistemine karşı doğrular: yol ya var olmalı ya da `_RUNTIME_GENERATED_ROOTS`'taki bir kökün altında olmalı. Başarısızlık mesajı ölü bileşen/yol çiftlerini listeler.\n- İlan edilen her üretim kökünün kendisinin depoda izlenen bir dizin olduğunu doğrular (kök, keyfi bir kaçış deliği olmasın).\n- `promotion_class_for(paths_for_component(\"windows-agent\"))` → `(\"NEVER_AUTO_PROMOTE\", 4)`.\n- `browser-worker` ve `generated_skill` için yalnızca mevcut davranışı sabitler: tier 2 / AUTO_CANARY (defect notu gereği başka tier iddia edilmez).\n\nDüzeltilmemiş kodda ilk iki iddia da, Windows iddiası da başarısız; düzeltilmiş kodda hepsi geçer.",
+    "paths_to_change": [
+      "services/api/app/evolution/supervisor.py"
+    ],
+    "regression_test_path": "services/api/tests/unit/test_evolution_supervisor_component_paths.py",
+    "regression_test_rationale": "Test iki şeyi birden kanıtlar. (1) Canlılık: `_COMPONENT_PATHS`'teki her yol için, depo kökü `supervisor.__file__` üzerinden bulunarak dosyanın var olduğu ya da `_RUNTIME_GENERATED_ROOTS` içinde ilan edilmiş bir çalışma zamanı üretim kökü altında kaldığı doğrulanır; ayrıca ilan edilen köklerin kendileri depoda bulunan dizinler olmak zorundadır, böylece \"kök ilan et, kontrolü atla\" kaçamağı kapanır. Düzeltilmemiş kodda `windows-agent/DeviceService/Program.cs`, `services/browser/pagentos_browser/worker.py` ve `var/evolution/skills/candidate/skill.py` üçü de ne var ne de ilan edilmiş bir kök altında olduğu için test başarısız olur. (2) Sınıflandırma: `promotion_class_for(paths_for_component(\"windows-agent\"))` NEVER_AUTO_PROMOTE / tier 4 vermelidir — düzeltilmemiş kodda ölü yol `^devices/windows-agent/` kuralını kaçırdığı için AUTO_CANARY / tier 2 döner ve iddia düşer. `browser-worker` ile `generated_skill` için defect kanıtına uygun olarak yalnızca bugünkü tier 2 / AUTO_CANARY sabitlenir, başka bir tier iddia edilmez; bu, yol düzeltmelerinin risk sınıflandırmasını sessizce kaydırmadığını da gösterir. Test dosya sistemini okur, veritabanı ya da ledger'a ihtiyaç duymaz, bu yüzden unit dizininde hızlı ve deterministiktir."
+  },
+  "attempts": [
+    {
+      "n": 1,
+      "paths": [
+        "services/api/app/evolution/supervisor.py",
+        "services/api/tests/unit/test_evolution_supervisor_component_paths.py"
+      ],
+      "checks": [
+        {
+          "name": "regression_red_on_base",
+          "passed": true,
+          "detail": "the regression test failed on the base, as it must"
+        },
+        {
+          "name": "autofix",
+          "passed": true,
+          "detail": "All checks passed!\n"
+        },
+        {
+          "name": "scope",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "regression_green",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "targeted_tests",
+          "passed": true,
+          "detail": ""
+        },
+        {
+          "name": "lint",
+          "passed": true,
+          "detail": ""
+        }
+      ],
+      "model_review": {
+        "approved": true,
+        "findings": [
+          "Bloklamayan: Test `supervisor.promotion_class_for(...)` dönüşünü üç değere (`promotion, tier, _reasons`) açıyor ve `supervisor.PROMOTION_NEVER_AUTO_PROMOTE` / `supervisor.PROMOTION_AUTO_CANARY` sabitlerini kullanıyor; ne diff'te ne kanıtta bu imza veya bu sabit adları gösterildi (kanıtta yalnızca `('NEVER_AUTO_PROMOTE', 4)` ve `AUTO_CANARY, tier 2` biçiminde çıktı var, modülde `PROMOTION_CLASSES` ihraç ediliyor). İmza 2'li tuple ise ya da sabitler farklı adlanmışsa test toplama/çalışma anında hata verir. Testi modülün gerçek imzasına ve sabit adlarına göre bir kez doğrulayın; gerekirse `promotion_class_for(...)[:2] == (\"NEVER_AUTO_PROMOTE\", 4)` gibi kanıtta görülen düz string değerlerine dayanın.",
+          "Bloklamayan: `_RUNTIME_GENERATED_ROOTS` ve `_COMPONENT_PATHS` alt çizgiyle başlayan iç ayrıntılar; `_RUNTIME_GENERATED_ROOTS`'u `__all__`'a eklemek 'özel ama ihraç edilmiş' gibi bir tuhaflık yaratıyor. Plan tek kaynaktan doğrulama gerekçesini verdiği için kabul edilebilir, ancak ileride alt çizgisiz bir ad (örn. `RUNTIME_GENERATED_ROOTS`) daha tutarlı olurdu. Test `_COMPONENT_PATHS`'a da zaten doğrudan eriştiği için `__all__` eklemesi kesin gerekli değil.",
+          "Bloklamayan: `_repo_root()` içindeki `(candidate / \"services\" / \"api\").is_dir()` yedeği, `.git` olmayan kurulumlarda (ör. paket olarak kurulmuş kopya) yanlış bir kök seçip testi sessizce 'ölü yol' raporlamaya itebilir. `Path(supervisor.__file__).parents` üzerinden `services/api/app/evolution/supervisor.py` göreli konumunu sayarak sabit sayıda yukarı çıkmak daha deterministik olurdu.",
+          "Bloklamayan: `generated_skill` için seçilen temsilci yol `skills/generated/candidate/1/src/candidate.py`; kanıttaki gerçek örnek `skills/generated/x/1/src/x.py` düzenine uyuyor ve risk tablosunda kural olmadığı için tier 2 davranışı değişmiyor - doğru. Yine de bu yolun hiçbir zaman var olmayacağı, testin `startswith` muafiyetiyle örtülüyor; ileride `skills/generated/` altına gerçek bir örnek dosya eklenirse muafiyetin kapsamı gözden geçirilmeli.",
+          "Olumlu: Değişiklik `_COMPONENT_PATHS` bloğu ve üretim kökü ilanıyla sınırlı; risk tablosu, `paths_for_component()`, `derive_risk_tier()` ve tarama akışı dokunulmamış. Test, hem üç ölü yolu yakalıyor (düzeltilmemiş kodda `_RUNTIME_GENERATED_ROOTS` yokluğundan `AttributeError`/başarısızlık, düzeltilmişte geçiyor) hem de Windows agent'ın tier 4 / NEVER_AUTO_PROMOTE sınıfını kanıtlıyor; browser-worker ve generated_skill için kanıtın izin verdiğinden fazla iddia (başka tier) yok. Kök ilanının gerçek dizin olması şartı, muafiyetin keyfi kaçış deliğine dönüşmesini engelliyor - kontrolü zayıflatma yok."
+        ]
+      }
+    }
+  ],
+  "model_review": {
+    "approved": true,
+    "findings": [
+      "Bloklamayan: Test `supervisor.promotion_class_for(...)` dönüşünü üç değere (`promotion, tier, _reasons`) açıyor ve `supervisor.PROMOTION_NEVER_AUTO_PROMOTE` / `supervisor.PROMOTION_AUTO_CANARY` sabitlerini kullanıyor; ne diff'te ne kanıtta bu imza veya bu sabit adları gösterildi (kanıtta yalnızca `('NEVER_AUTO_PROMOTE', 4)` ve `AUTO_CANARY, tier 2` biçiminde çıktı var, modülde `PROMOTION_CLASSES` ihraç ediliyor). İmza 2'li tuple ise ya da sabitler farklı adlanmışsa test toplama/çalışma anında hata verir. Testi modülün gerçek imzasına ve sabit adlarına göre bir kez doğrulayın; gerekirse `promotion_class_for(...)[:2] == (\"NEVER_AUTO_PROMOTE\", 4)` gibi kanıtta görülen düz string değerlerine dayanın.",
+      "Bloklamayan: `_RUNTIME_GENERATED_ROOTS` ve `_COMPONENT_PATHS` alt çizgiyle başlayan iç ayrıntılar; `_RUNTIME_GENERATED_ROOTS`'u `__all__`'a eklemek 'özel ama ihraç edilmiş' gibi bir tuhaflık yaratıyor. Plan tek kaynaktan doğrulama gerekçesini verdiği için kabul edilebilir, ancak ileride alt çizgisiz bir ad (örn. `RUNTIME_GENERATED_ROOTS`) daha tutarlı olurdu. Test `_COMPONENT_PATHS`'a da zaten doğrudan eriştiği için `__all__` eklemesi kesin gerekli değil.",
+      "Bloklamayan: `_repo_root()` içindeki `(candidate / \"services\" / \"api\").is_dir()` yedeği, `.git` olmayan kurulumlarda (ör. paket olarak kurulmuş kopya) yanlış bir kök seçip testi sessizce 'ölü yol' raporlamaya itebilir. `Path(supervisor.__file__).parents` üzerinden `services/api/app/evolution/supervisor.py` göreli konumunu sayarak sabit sayıda yukarı çıkmak daha deterministik olurdu.",
+      "Bloklamayan: `generated_skill` için seçilen temsilci yol `skills/generated/candidate/1/src/candidate.py`; kanıttaki gerçek örnek `skills/generated/x/1/src/x.py` düzenine uyuyor ve risk tablosunda kural olmadığı için tier 2 davranışı değişmiyor - doğru. Yine de bu yolun hiçbir zaman var olmayacağı, testin `startswith` muafiyetiyle örtülüyor; ileride `skills/generated/` altına gerçek bir örnek dosya eklenirse muafiyetin kapsamı gözden geçirilmeli.",
+      "Olumlu: Değişiklik `_COMPONENT_PATHS` bloğu ve üretim kökü ilanıyla sınırlı; risk tablosu, `paths_for_component()`, `derive_risk_tier()` ve tarama akışı dokunulmamış. Test, hem üç ölü yolu yakalıyor (düzeltilmemiş kodda `_RUNTIME_GENERATED_ROOTS` yokluğundan `AttributeError`/başarısızlık, düzeltilmişte geçiyor) hem de Windows agent'ın tier 4 / NEVER_AUTO_PROMOTE sınıfını kanıtlıyor; browser-worker ve generated_skill için kanıtın izin verdiğinden fazla iddia (başka tier) yok. Kök ilanının gerçek dizin olması şartı, muafiyetin keyfi kaçış deliğine dönüşmesini engelliyor - kontrolü zayıflatma yok."
+    ]
+  },
+  "candidate_sha": "db9ed85e5cfc10f54769d0978e2f39969955ae76",
+  "changed_paths": [
+    "services/api/app/evolution/supervisor.py",
+    "services/api/tests/unit/test_evolution_supervisor_component_paths.py"
+  ],
+  "risk": {
+    "tier": 2,
+    "reasons": [
+      "no path matched a named risk pattern; classified as internal logic"
+    ],
+    "requires_second_confirmation": false
+  },
+  "promotion_class": "AUTO_CANARY",
+  "next_step": "eligible for a canary release once CI is green on this exact SHA",
+  "candidate_ci": {
+    "state": "none",
+    "detail": "no CI run for db9ed85e5cfc"
+  },
+  "explanation": "Sorun neydi: Evolution nöbetçisindeki bileşen–dosya haritası üç bileşeni depoda hiç bulunmayan yollara bağlıyordu (windows-agent, browser-worker ve üretilen yetenek). Bu yollar risk tablosuna besleniyor; ölü yol hiçbir kuralla eşleşmediği için Windows cihaz servisi yanlışlıkla tier 2 / AUTO_CANARY, yani otomatik kanarya ile yayınlanabilir sayılıyordu. Doğrusu tier 4 / NEVER_AUTO_PROMOTE, yani asla otomatik yükseltilmemesi.\n\nNe değişti: Haritadaki üç girdi gerçek yerlerine çevrildi — Windows cihaz servisi devices/windows-agent/src/PagentOS.DeviceService/Program.cs, tarayıcı işçisi services/browser/browser_agent/worker.py, üretilen yetenek ise çalışma anında yazıldığı skills/generated/... düzenine. Üretilen dosyaların checkout'ta bulunmaması meşru olduğu için bu kök modülde açıkça ilan edildi. Risk tablosuna, tarama akışına veya sınıflandırma mantığına dokunulmadı; Windows agent yolu düzeltilince mevcut kural kendiliğinden devreye girdi.\n\nKanıt: Yeni regresyon testi haritadaki her yolun ya depoda var olduğunu ya da ilan edilmiş üretim kökü altında kaldığını, ilan edilen kökün de gerçek bir dizin olduğunu doğruluyor; ayrıca Windows agent'ın artık NEVER_AUTO_PROMOTE / tier 4 verdiğini, diğer iki bileşenin tier'ının ise değişmediğini sabitliyor. Bu test düzeltilmemiş kodda başarısız, düzeltilmiş kodda geçiyor.",
+  "error": "",
+  "model": {
+    "name": "anthropic",
+    "calls": 5,
+    "input_tokens": 55255,
+    "output_tokens": 8970
+  },
+  "seconds": 155.1,
+  "finished_at": "2026-09-11T20:57:48.502244Z"
+}

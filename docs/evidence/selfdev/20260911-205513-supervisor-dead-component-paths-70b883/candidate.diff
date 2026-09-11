@@ -1,0 +1,112 @@
+diff --git a/services/api/app/evolution/supervisor.py b/services/api/app/evolution/supervisor.py
+index 059accb..e3a25dc 100644
+--- a/services/api/app/evolution/supervisor.py
++++ b/services/api/app/evolution/supervisor.py
+@@ -87,6 +87,10 @@ BUILDING_STATUSES = ("researching", "design_ready", "building", "testing", "eval
+ PENDING_STATUSES = ("shadow_ready", "owner_approval_required", "owner_approved", "owner_authorized")
+ RELEASE_FAILURE_STATUSES = ("failed", "rolling_back", "rolled_back")
+ 
++#: Roots whose contents are published at runtime (EvolutionRuntime.skills_root): a mapped
++#: path under one of these legitimately does not exist in a checkout.
++_RUNTIME_GENERATED_ROOTS: tuple[str, ...] = ("skills/generated/",)
++
+ #: The representative path a signal's component maps to, for the risk table. A path the
+ #: table does not know falls to its default (internal logic) - the table decides, this map
+ #: only names where the change would land.
+@@ -94,8 +98,8 @@ _COMPONENT_PATHS: dict[str, tuple[str, ...]] = {
+     "cloud-core": ("services/api/app/main.py",),
+     "api": ("services/api/app/main.py",),
+     "recovery-supervisor": ("services/recovery-supervisor/recovery_supervisor/runner.py",),
+-    "windows-agent": ("windows-agent/DeviceService/Program.cs",),
+-    "browser-worker": ("services/browser/pagentos_browser/worker.py",),
++    "windows-agent": ("devices/windows-agent/src/PagentOS.DeviceService/Program.cs",),
++    "browser-worker": ("services/browser/browser_agent/worker.py",),
+     "web": ("apps/web/app/core/CoreView.tsx",),
+     "voice_routing": ("services/api/app/voice/intents.py",),
+     "research": ("services/api/app/research/browser_workflow.py",),
+@@ -116,7 +120,9 @@ _COMPONENT_PATHS: dict[str, tuple[str, ...]] = {
+         "services/api/app/operator/focus.py",
+         "services/api/app/voice/realtime_sessions/tools_operator.py",
+     ),
+-    "generated_skill": ("var/evolution/skills/candidate/skill.py",),
++    #: Under _RUNTIME_GENERATED_ROOTS: skills/generated/<skill>/<version>/src/<skill>.py is
++    #: written when a skill is published, so the file is absent from a checkout.
++    "generated_skill": ("skills/generated/candidate/1/src/candidate.py",),
+ }
+ 
+ _CAPABILITY_COMPONENTS: tuple[tuple[str, str], ...] = (
+@@ -710,11 +716,13 @@ __all__ = [
+     "PRIORITIES",
+     "PROMOTION_CLASSES",
+     "SIGNAL_KINDS",
++    "_RUNTIME_GENERATED_ROOTS",
+     "ScanResult",
+     "Signal",
+     "collect_signals",
+     "component_for_capability",
+     "is_paused",
++    "paths_for_component",
+     "priority_of",
+     "promotion_class_for",
+     "promotion_class_of",
+diff --git a/services/api/tests/unit/test_evolution_supervisor_component_paths.py b/services/api/tests/unit/test_evolution_supervisor_component_paths.py
+new file mode 100644
+index 0000000..739e4d1
+--- /dev/null
++++ b/services/api/tests/unit/test_evolution_supervisor_component_paths.py
+@@ -0,0 +1,55 @@
++"""The supervisor's component map must name real places (defect: dead component paths).
++
++``paths_for_component()`` feeds ``derive_risk_tier()`` and ``promotion_class_for()``: a path
++that exists nowhere silently misses the risk table's rules. So every mapped path must either
++exist in the repository or lie under a declared runtime-generated root - and the declared
++roots must themselves be real directories, so "declare a root" is not a way out of the check.
++"""
++
++from __future__ import annotations
++
++from pathlib import Path
++
++from app.evolution import supervisor
++
++
++def _repo_root() -> Path:
++    """The repository root, walked up from the module under test."""
++    for candidate in Path(supervisor.__file__).resolve().parents:
++        if (candidate / ".git").exists() or (candidate / "services" / "api").is_dir():
++            return candidate
++    raise AssertionError("repository root not found from app.evolution.supervisor")
++
++
++def test_declared_runtime_generated_roots_are_real_directories() -> None:
++    root = _repo_root()
++    missing = [r for r in supervisor._RUNTIME_GENERATED_ROOTS if not (root / r).is_dir()]
++    assert not missing, f"declared runtime-generated roots are not directories: {missing}"
++
++
++def test_every_mapped_component_path_is_real_or_runtime_generated() -> None:
++    root = _repo_root()
++    dead: list[tuple[str, str]] = []
++    for component, paths in supervisor._COMPONENT_PATHS.items():
++        for path in paths:
++            if (root / path).exists():
++                continue
++            if any(path.startswith(r) for r in supervisor._RUNTIME_GENERATED_ROOTS):
++                continue
++            dead.append((component, path))
++    assert not dead, f"component paths that exist nowhere: {dead}"
++
++
++def test_windows_agent_is_never_auto_promote() -> None:
++    promotion, tier, _reasons = supervisor.promotion_class_for(
++        supervisor.paths_for_component("windows-agent")
++    )
++    assert (promotion, tier) == (supervisor.PROMOTION_NEVER_AUTO_PROMOTE, 4)
++
++
++def test_browser_worker_and_generated_skill_keep_their_tier() -> None:
++    for component in ("browser-worker", "generated_skill"):
++        promotion, tier, _reasons = supervisor.promotion_class_for(
++            supervisor.paths_for_component(component)
++        )
++        assert (promotion, tier) == (supervisor.PROMOTION_AUTO_CANARY, 2), component
