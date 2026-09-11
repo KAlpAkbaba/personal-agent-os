@@ -10277,6 +10277,22 @@ enabled before the proof (1), a manifest mismatch ignored (1), a failed pre-migr
 not stopping the release (1). What no fake can prove - that the real pg_dump, pg_restore,
 mc and restic agree with each other on the real host - is the measured drill on production.
 
+### Addendum — the pre-migration backup is bounded (2026-09-12)
+
+The third independent review of the recovery supervisor (ADR-0121) found this hook running
+unbounded under the operation lock the recovery timer needs: a backup that hung would defer
+every takeover for as long as it hung - at the moment risk is highest, just before a schema
+change. Both release scripts now run it under `timeout --kill-after=60`
+(`PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S`, default 1800 s), and a backup that outlives its
+bound is a failed backup: `pre-migration backup did not finish within N s`, the release stops
+before any migration (74 blue/green, 67 single-container), the active colour keeps serving.
+The default is a ceiling to be replaced by a measured one: the first real backup on the host
+records its duration in `LAST_BACKUP.json`. A killed backup can leave a restic lock that would
+fail every later prune, so a backup now runs `restic unlock` (stale locks only, never
+`--remove-all`) under its own lock before it writes. Tests: both release harnesses gained the
+case (red before, 49/49 and 34/34 after); the backup suite gained the unlock-before-write
+case (red before; 53 passed after).
+
 ## ADR-0123 — The reliability sweep: what was promised, now enforced (2026-09-11)
 
 **Context.** Phase 8 of the post-audit recovery directive: the takeover audit listed six
@@ -10325,6 +10341,19 @@ exists (worker, health endpoint, state tool, app sweeper, REST routes, voice rel
 mutation-proven red on its branch: the research grant check (1), the advisory flag ignored (2),
 each of the five orphan-closing calls removed (5), long-running calls not spared (1), planned
 builds counted as in flight (1).
+
+### Addendum — the corpus leaned on the orphans this ADR removed (2026-09-12)
+
+CI on `0aa0d35` failed 47 owner-utterance corpus cases, every one an `exec.*` case whose
+preceding turn starts an executive run through the real tool. The follow-up connects to
+Temporal; CI has none, the start fails, and since this ADR a run whose workflow never started
+is failed - so "pause", "cancel" and "amend" found no running job. Before, the same failed
+start left the run RUNNING as an orphan, and the corpus had been passing in CI on that orphan.
+The local gate passed because a real Temporal was up in the dev stack. The corpus judges
+routing and never runs a durable workflow, so `run_case` now hands every workflow start -
+research or executive - to a client that accepts it and runs nothing: the same "started" on
+any machine. Reproduced locally with Temporal pointed at a closed port: 47 failed, 73 passed
+without the change; 120 passed with it; the full corpus 1891 passed.
 
 ## ADR-0124 — A self-development engine that fixes real code and then stops (2026-09-11)
 
@@ -10435,3 +10464,29 @@ unterminated block, a new file never closed - each is a problem carried in `Patc
 never skipped. And a run quarantined before it wrote anything frees its worktree (the record
 and the exchanges are all there is to inspect); one that wrote keeps it, `worktree_kept` says
 which. Six parser mutations and the slot rule's mutation, each red.
+
+**Addendum (2026-09-12) - the fourth to sixth real runs, and the first accepted candidate.**
+The fourth run went end to end and was quarantined by its budget, showing two engine defects:
+asked for "the corrected patch", the model re-sent only the file it corrected and lost the
+fix it had made (a fix now edits the candidate as it stands and carries every change it does
+not touch); and an unsorted import block cost an attempt (the reviewer now applies ruff's
+safe fixes to the changed files before judging - never `--unsafe-fixes`). Its third attempt
+failed on MY defect spec, which claimed the browser worker was misclassified like the Windows
+agent; measured, it is not - the risk table has no browser rule - and the spec now carries the
+measured tiers. The fifth run's candidates passed every run check and were refused by a model
+review told only to be "strict"; `REVIEW_POLICY` now says what blocks (a wrong fix, a test that
+does not test the defect, changes the fix does not need, uncited claims, a weakened check) and
+what is listed and approved, and the patch model is told not to restyle and to cite nothing it
+was not shown.
+
+The sixth run - base `c309065`, CI green - stopped at the policy boundary on its first
+attempt: candidate `db9ed85` on `selfdev/20260911-205513-supervisor-dead-component-paths-70b883`,
+every run check passed, the model review approved with non-blocking findings, 5 calls,
+64 225 tokens, 155 s. It changed `app/evolution/supervisor.py` and the table called that tier
+2, AUTO_CANARY - the component map the table reads and the tier -> class mapping, classified as
+ordinary logic: the same lower-then-promote hole ADR-0120 closed for `risk.py`. Both
+`app/evolution/supervisor.py` and `app/selfdev/` (the engine's own gates) are tier 5 now. The
+candidate's commit subject was the first 200 characters of a Markdown plan; it is the defect's
+title now, the plan in the body. The accepted candidate is evidence of the engine, and is not
+merged by it: under the corrected table it is NEVER_AUTO_PROMOTE, and what happens to it is the
+owner's decision.

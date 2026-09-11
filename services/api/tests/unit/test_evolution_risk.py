@@ -97,6 +97,23 @@ def test_tier_5_the_risk_law_itself() -> None:
     assert any("risk classification law" in r for r in assessment.reasons)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "services/api/app/evolution/supervisor.py",
+        "services/api/app/selfdev/engine.py",
+        "services/api/app/selfdev/reviewer.py",
+    ],
+)
+def test_tier_5_the_promotion_law_and_the_engine_that_proposes_under_it(path: str) -> None:
+    # Phase 10's first accepted candidate changed supervisor.py - the component map this
+    # table reads, and the tier -> promotion-class mapping - and was classified tier 2,
+    # AUTO_CANARY. The engine's own gates (reviewer, budgets, scope) were tier 3: a
+    # candidate could loosen the gates that judge the next candidate.
+    assessment = derive_risk_tier([path])
+    assert assessment.tier == RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY, assessment.reasons
+
+
 def _tracked_files() -> list[str]:
     completed = subprocess.run(
         ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True

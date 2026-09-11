@@ -339,9 +339,9 @@ class SelfDevEngine:
         except (_Exhausted, ModelError):
             # The candidate is judged by what was run; the explanation is only prose about it.
             record.explanation = ""
-        record.candidate_sha = self.workspace.commit(
-            worktree, f"selfdev({defect.defect_id}): {plan.summary}"[:200]
-        )
+        # A subject a person reads in `git log` - the defect's title - and the plan as the body.
+        subject = f"selfdev({defect.defect_id}): {defect.title}"[:72]
+        record.candidate_sha = self.workspace.commit(worktree, f"{subject}\n\n{plan.summary}")
         assessment = derive_risk_tier(record.changed_paths)
         record.risk = {
             "tier": int(assessment.tier),

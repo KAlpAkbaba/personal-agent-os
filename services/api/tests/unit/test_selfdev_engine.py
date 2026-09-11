@@ -174,6 +174,11 @@ def test_a_defect_becomes_a_verified_candidate_on_its_own_branch_and_the_engine_
     assert record.branch.startswith("selfdev/")
     assert _git(repo, "rev-parse", record.branch) == record.candidate_sha
     assert _git(repo, "show", f"{record.candidate_sha}:{CALC}") == FIXED.strip()
+    # A subject a person can read in `git log`: the defect's title, the plan in the body. The
+    # first accepted real candidate's subject was the first 200 characters of a Markdown plan.
+    message = _git(repo, "log", "-1", "--format=%B", record.candidate_sha)
+    assert message.splitlines()[0] == "selfdev(calc-add): add() subtracts"
+    assert message.splitlines()[2] == "add adds"
     assert _git(repo, "rev-parse", "main") == record.base_sha
     assert (repo / CALC).read_text(encoding="utf-8") == BUGGY  # the owner's checkout untouched
     # The policy boundary, from the paths the candidate touched: app code is tier 3.

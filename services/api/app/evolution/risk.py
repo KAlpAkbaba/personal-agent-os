@@ -133,6 +133,22 @@ RISK_RULES: Final[tuple[RiskRule, ...]] = (
         RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY,
         "changes the risk classification law itself (app/evolution/risk.py)",
     ),
+    _rule(
+        # The rest of that law: the component -> path map this table reads, and the tier ->
+        # promotion-class mapping. The self-development engine's first accepted candidate
+        # (Phase 10) changed this file and was classified tier 2, AUTO_CANARY - the same
+        # lower-then-promote hole risk.py had.
+        r"^services/api/app/evolution/supervisor\.py$",
+        RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY,
+        "changes the promotion law (app/evolution/supervisor.py: component paths, classes)",
+    ),
+    _rule(
+        # The engine that proposes candidates also judges them (reviewer, budgets, scope). A
+        # candidate that loosened those gates would be judged by them the next time.
+        r"^services/api/app/selfdev/",
+        RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY,
+        "changes the self-development engine's own gates (app/selfdev)",
+    ),
     # ---- tier 4: schema and deployment mechanics ---------------------------
     _rule(
         r"^services/api/alembic/versions/",
