@@ -10236,3 +10236,48 @@ the new suite (18 red), the RELEASE gate removed (6), the root units dropped fro
 comparison (2), any SHA shape accepted (5), the uninstaller not waiting for a running
 reconcile (1), the uninstaller `rm -rf`-ing the bundle directory (1), the uninstaller leaving
 the timer enabled (2).
+
+### Addendum — second independent review (2026-09-11)
+
+The re-review of the fixed candidate returned NOT_READY again, with two blockers; both are
+closed on this branch and every other finding is answered below.
+
+**Blocker 1 - provenance checked, then trusted through an unlocked wait.** The installer
+checked the RELEASE markers and bytes once, then waited up to 120 s for a running reconcile
+before copying, never holding the operation lock release/rollback/reconcile share. A release
+finishing in that window would have swapped `app/` under it: the bundle copied from an
+unreviewed tree while `APPROVED_SHA` named the approved one. The installer now takes the same
+kernel lock (`flock -w`, 1200 s) before the provenance check and holds it through the last
+copied byte, then releases it before the proof run - which is itself a reconcile and takes
+the lock. A Linux-only test with the real `flock` probes the lock from inside the fake
+systemctl: held during the copy wait, free at the proof run (mutations: lock kept -> red;
+lock never taken -> red). Run with util-linux in a Linux container: 32 passed, 2 skipped (the
+two privilege-refusal cases cannot be observed as root).
+
+**Blocker 2 - the risk-table fix was not on this branch.** It was on main as ADR-0120 and
+arrives with the next merge of main; the branch is not offered for approval without it.
+
+**3. A release that changes the pinned Compose/edge inputs silently degrades the timer.**
+The release now compares what it shipped with the bundle and, when they differ, says so
+(`RECOVERY BUNDLE STALE: ...`) and leaves `/opt/pagentos/RECOVERY_BUNDLE_STALE`; a matching
+release clears it; a host without the timer hears nothing. Three harness cases (55/55).
+
+**4. Wait budgets shorter than the unit's own 600 s.** Install and uninstall now wait 660 s
+for a running reconcile, and 1200 s for the lock.
+
+**5. Degraded-but-serving never fails over** - reviewed as sound and deliberate (finding 4 of
+the first addendum).
+
+**6. The shell reads health with an anchored sed.** A test now reads that expression out of
+the script and applies it to the real `/v1/system/health` body, for `ok` and `degraded`
+(mutation: `status` moved after `version` -> red).
+
+**7. `Persistent=true` has no effect on monotonic timers.** Kept (harmless); to be observed
+on the host.
+
+**Must be proven ON THE HOST during the approved install** (cannot be settled offline):
+that a failed run (80/81/83/84) still re-arms `OnUnitInactiveSec=60s`; that
+`ExecStartPre`'s digest check, `NoNewPrivileges` and `PrivateTmp` work against the real docker
+socket and nginx reload; that `OnBootSec=2min` is enough after a real reboot and a first
+run failing because docker is not up yet is retried; and the real duration of the takeover
+and degraded paths against the wait budgets.

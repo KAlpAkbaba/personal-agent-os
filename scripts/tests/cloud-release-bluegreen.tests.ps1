@@ -291,6 +291,28 @@ try {
         $rg = Invoke-Release
         Assert-True ($rg.Exit -eq 0 -and (Get-Active) -eq "blue" -and (Test-UpstreamBoth "blue") -and (Test-Up "blue") -and -not (Test-Up "green")) "from green the release lands on blue"
 
+        # The recovery timer's pinned bundle vs. what a release ships (owner-approval review,
+        # finding 3): a release that changes the Compose file or the edge policy must say so.
+        Reset-Host
+        $bundle = Join-Path $hostBase "recovery-bundle"
+        New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+        [IO.File]::WriteAllText((Join-Path $bundle "docker-compose.prod.yml"), "services: {}`n")
+        [IO.File]::WriteAllText((Join-Path $bundle "nginx.conf"), "# old edge config`n")
+        $stale = Invoke-Release -Env @{ PAGENTOS_RECOVERY_ROOT = (& $u $bundle) }
+        Assert-True ($stale.Exit -eq 0 -and $stale.Output -match "RECOVERY BUNDLE STALE: $sha changed" -and (Test-Path (Join-Path $hostBase "RECOVERY_BUNDLE_STALE"))) "a release that changes the edge policy the recovery timer pinned says so and leaves a marker - and still completes"
+
+        Reset-Host
+        New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+        [IO.File]::WriteAllText((Join-Path $bundle "docker-compose.prod.yml"), "services: {}`n")
+        [IO.File]::WriteAllText((Join-Path $bundle "nginx.conf"), "# new edge config`n")
+        [IO.File]::WriteAllText((Join-Path $hostBase "RECOVERY_BUNDLE_STALE"), "earlier`n")
+        $fresh = Invoke-Release -Env @{ PAGENTOS_RECOVERY_ROOT = (& $u $bundle) }
+        Assert-True ($fresh.Exit -eq 0 -and $fresh.Output -notmatch "RECOVERY BUNDLE STALE" -and -not (Test-Path (Join-Path $hostBase "RECOVERY_BUNDLE_STALE"))) "a release whose inputs still match the pinned bundle clears the marker and says nothing"
+
+        Reset-Host
+        $none = Invoke-Release
+        Assert-True ($none.Exit -eq 0 -and $none.Output -notmatch "RECOVERY BUNDLE STALE") "a host without the recovery timer hears nothing about it"
+
         Reset-Host
         [IO.File]::AppendAllText((Join-Path $hostBase ".env"), "PAGENTOS_IMAGE_GREEN=0000000000000000000000000000000000000000`nPAGENTOS_RELEASE_GREEN=0000000000000000000000000000000000000000`n")
         $rr = Invoke-Release -Mode "--rollback" -Env @{ }

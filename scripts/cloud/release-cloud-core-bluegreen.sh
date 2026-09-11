@@ -703,4 +703,19 @@ fi
 echo "$sha" > "$base/RELEASE"
 [ -n "$previous_sha" ] && echo "$previous_sha" > "$base/LAST_KNOWN_GOOD"
 trap - EXIT
+# The recovery timer runs only with the Compose file and edge policy its owner-approved
+# bundle pinned (exit 83 otherwise). A release that changes either leaves that bundle behind:
+# the timer reconciles with the PREVIOUS tree's inputs while app.prev still matches, and
+# refuses every run after the next such release. Said now, loudly, and left as a marker a
+# health reader can see - never discovered later as a silent 83 in the journal.
+recovery_root=${PAGENTOS_RECOVERY_ROOT:-/opt/pagentos-recovery}
+if [ -f "$recovery_root/docker-compose.prod.yml" ]; then
+    if cmp -s "$cur/infra/docker/docker-compose.prod.yml" "$recovery_root/docker-compose.prod.yml" \
+        && cmp -s "$cur/infra/docker/edge/nginx.conf" "$recovery_root/nginx.conf"; then
+        rm -f "$base/RECOVERY_BUNDLE_STALE"
+    else
+        date -u +%Y-%m-%dT%H:%M:%SZ > "$base/RECOVERY_BUNDLE_STALE"
+        echo "RECOVERY BUNDLE STALE: $sha changed the Compose file or the edge policy the recovery timer pinned; it reconciles with the previous tree's inputs until the owner re-runs install-recovery-supervisor.sh $sha, and refuses (83) after the next such release" >&2
+    fi
+fi
 echo "RELEASE OK: $sha is running as api-$idle behind the edge (previous ${previous_sha:-none} kept as last known good)"

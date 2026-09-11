@@ -30,7 +30,8 @@ fi
 # longer exists; the timer is disabled, so waiting cannot start another run.
 waited=0
 while "$systemctl_bin" is-active --quiet "$service_name" >/dev/null 2>&1; do
-    if [[ "$waited" -ge "${PAGENTOS_RECOVERY_WAIT_TRIES:-120}" ]]; then
+    # The unit allows a run 600 s (TimeoutStartSec); a slow run is not a stuck one.
+    if [[ "$waited" -ge "${PAGENTOS_RECOVERY_WAIT_TRIES:-660}" ]]; then
         echo "a recovery run is still active; nothing was removed (the timer is disabled, retry when it finishes)" >&2
         exit 6
     fi

@@ -87,10 +87,27 @@ def _fake_systemctl(path: Path, body: str = "") -> Path:
     return path
 
 
+def _fake_flock(tmp_path: Path) -> Path:
+    """Git for Windows has no flock. The fake records that the lock was asked for (into the
+    same call log as systemctl, so the ORDER is visible) and answers PAGENTOS_TEST_FLOCK_EXIT.
+    The real kernel lock is exercised by the Linux-only test below."""
+    fake = tmp_path / "flock"
+    if not fake.exists():
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf 'flock %s\\n' \"$*\" >> \"$PAGENTOS_TEST_CALLS\"\n"
+            "exit \"${PAGENTOS_TEST_FLOCK_EXIT:-0}\"\n",
+            encoding="utf-8",
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
 def _install_env(tmp_path: Path, app_root: Path, **extra: str) -> dict[str, str]:
     return {
         **os.environ,
         "PAGENTOS_ALLOW_NONROOT": "1",
+        "PAGENTOS_FLOCK": _shell_path(_fake_flock(tmp_path)),
         "PAGENTOS_BASE": _shell_path(app_root.parent),
         "PAGENTOS_APP_ROOT": _shell_path(app_root),
         "PAGENTOS_SYSTEMD_DIR": _shell_path(tmp_path / "systemd"),
@@ -222,6 +239,8 @@ def test_installer_proves_recovery_before_enabling_timer(tmp_path: Path) -> None
     digest = (recovery_root / "reconcile.sha256").read_text(encoding="utf-8")
     assert "reconcile.sh" in digest
     assert calls.read_text(encoding="utf-8").splitlines() == [
+        # The operation lock first: nothing is checked or touched outside it.
+        "flock -w 1200 9",
         "is-enabled --quiet pagentos-bluegreen-reconcile.timer",
         "is-active --quiet pagentos-bluegreen-reconcile.timer",
         "stop pagentos-bluegreen-reconcile.timer",
@@ -344,6 +363,76 @@ def test_run_from_the_deployed_tree_provenance_is_the_commit_not_a_self_comparis
     assert accepted.returncode == 0, accepted.stderr
     recovery_root = tmp_path / "recovery"
     assert (recovery_root / "APPROVED_SHA").read_text(encoding="utf-8").strip() == APPROVED
+
+
+def test_the_installer_waits_for_the_operation_lock_and_touches_nothing_without_it(
+    tmp_path: Path,
+) -> None:
+    # A release, rollback or reconcile still holding the lock after the wait: refuse, with
+    # the host exactly as it was.
+    app_root = tmp_path / "host" / "app"
+    _seed_app_root(app_root)
+    fake = _fake_systemctl(tmp_path / "systemctl")
+
+    completed = _run(
+        INSTALLER,
+        APPROVED,
+        env=_install_env(
+            tmp_path, app_root, PAGENTOS_SYSTEMCTL=_shell_path(fake), PAGENTOS_TEST_FLOCK_EXIT="1"
+        ),
+    )
+
+    assert completed.returncode == 6, completed.stderr
+    assert "still holds" in completed.stderr
+    assert not (tmp_path / "systemd").exists()
+    assert not (tmp_path / "recovery").exists()
+    assert (tmp_path / "systemctl.calls").read_text(encoding="utf-8").splitlines() == [
+        "flock -w 1200 9"
+    ]
+
+
+def test_the_lock_is_held_through_the_copy_and_free_for_the_proof_run(tmp_path: Path) -> None:
+    # The review's TOCTOU: provenance was checked once and the copy came up to 660 s later.
+    # A release finishing in between would have swapped app/ under the installer. With the
+    # real kernel lock a release cannot even start then - and the proof run, which IS a
+    # reconcile and takes the same lock, must still be able to.
+    if os.name == "nt":
+        pytest.skip("Git for Windows has no flock; Linux CI exercises the kernel lock")
+    if shutil.which("flock") is None:
+        pytest.skip("util-linux flock is required by the production host contract")
+    app_root = tmp_path / "host" / "app"
+    _seed_app_root(app_root)
+    lock = app_root.parent / ".bluegreen-operation.lock"
+    probe = tmp_path / "probe.log"
+    fake = tmp_path / "systemctl"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$PAGENTOS_TEST_CALLS\"\n"
+        "try_lock() { if flock -n \"$PAGENTOS_TEST_LOCK\" true; then echo \"$1 free\"; "
+        "else echo \"$1 held\"; fi >> \"$PAGENTOS_TEST_PROBE\"; }\n"
+        "if [ \"$*\" = 'is-active --quiet pagentos-bluegreen-reconcile.service' ]; then "
+        "try_lock during-copy-wait; exit 1; fi\n"
+        "if [ \"$*\" = 'start pagentos-bluegreen-reconcile.service' ]; then "
+        "try_lock at-proof-run; fi\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    env = _install_env(
+        tmp_path,
+        app_root,
+        PAGENTOS_SYSTEMCTL=_shell_path(fake),
+        PAGENTOS_TEST_LOCK=_shell_path(lock),
+        PAGENTOS_TEST_PROBE=_shell_path(probe),
+    )
+    env.pop("PAGENTOS_FLOCK")  # the real one
+
+    completed = _run(INSTALLER, APPROVED, env=env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert probe.read_text(encoding="utf-8").splitlines() == [
+        "during-copy-wait held",
+        "at-proof-run free",
+    ]
 
 
 @pytest.mark.parametrize(

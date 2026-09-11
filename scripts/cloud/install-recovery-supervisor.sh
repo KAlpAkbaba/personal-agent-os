@@ -25,6 +25,7 @@ set -Eeuo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 systemd_dir="${PAGENTOS_SYSTEMD_DIR:-/etc/systemd/system}"
 systemctl_bin="${PAGENTOS_SYSTEMCTL:-systemctl}"
+flock_bin="${PAGENTOS_FLOCK:-flock}"
 base="${PAGENTOS_BASE:-/opt/pagentos}"
 app_root="${PAGENTOS_APP_ROOT:-$base/app}"
 recovery_root="${PAGENTOS_RECOVERY_ROOT:-/opt/pagentos-recovery}"
@@ -59,6 +60,19 @@ for relative in "${relative_inputs[@]}"; do
         exit 2
     fi
 done
+
+# Everything from the provenance check to the last copied byte happens under the SAME
+# kernel lock release, rollback and reconcile hold (release-cloud-core-bluegreen.sh). Without
+# it a release finishing during the wait below would swap app/ to another commit after the
+# check had passed, and the bundle would be copied from that tree while APPROVED_SHA named
+# the approved one. Waiting for the lock is waiting for any release/rollback/reconcile in
+# flight; it is released before the proof run, which takes it itself.
+lock_file="$base/.bluegreen-operation.lock"
+exec 9>"$lock_file"
+if ! "$flock_bin" -w "${PAGENTOS_RECOVERY_LOCK_WAIT_S:-1200}" 9; then
+    echo "refusing: a release, rollback or reconcile still holds $lock_file; nothing was changed" >&2
+    exit 6
+fi
 
 completed_sha="$(tr -d '[:space:]' 2>/dev/null < "$base/RELEASE" || true)"
 tree_sha="$(tr -d '[:space:]' 2>/dev/null < "$app_root/RELEASE" || true)"
@@ -138,7 +152,8 @@ trap rollback_install ERR
 # join that old job and masquerade as proof of the new pinned action.
 waited=0
 while "$systemctl_bin" is-active --quiet "$service_name" >/dev/null 2>&1; do
-    if [[ "$waited" -ge "${PAGENTOS_RECOVERY_WAIT_TRIES:-120}" ]]; then
+    # The unit allows a run 600 s (TimeoutStartSec); a slow run is not a stuck one.
+    if [[ "$waited" -ge "${PAGENTOS_RECOVERY_WAIT_TRIES:-660}" ]]; then
         echo "running recovery service did not finish; pinned files were not replaced" >&2
         false
     fi
@@ -158,6 +173,9 @@ printf '%s\n' "$expected_sha" > "$recovery_root/APPROVED_SHA"
 chmod 0600 "$recovery_root/APPROVED_SHA"
 install -m 0644 "$app_root/infra/systemd/$service_name" "$systemd_dir/$service_name"
 install -m 0644 "$app_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name"
+
+# The copy is done; the proof run below is a reconcile, and a reconcile takes this lock.
+exec 9>&-
 
 "$systemctl_bin" daemon-reload
 # Prove the pinned action once before scheduling it.
