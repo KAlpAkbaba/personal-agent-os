@@ -10138,3 +10138,43 @@ cannot yet: the installed agent predates `PeImageReader`, so it reports no PE bl
 real run today would land honestly on `unverified`. Reinstalling the agent needs elevation
 and is therefore an owner item — recorded rather than worked around.
 
+## ADR-0120 — The risk table names paths that exist (2026-09-11)
+
+**Context.** `app/evolution/risk.py` derives a candidate's risk tier from the paths it
+touches; tiers 4 and 5 are never auto-promoted. The security review of Astra's recovery
+timer found that `infra/systemd/` - the root unit the timer is - matched no rule, so a
+candidate editing it classified as tier 2. Checking every rule against `git ls-files` found
+the same defect twice more, older and worse: `^app/security/` and `^windows-agent/` match
+**no file in the repository** (the real paths are `services/api/app/security/` and
+`devices/windows-agent/`). The privileged Windows service classified as tier 2 and the
+security policy/remediation surface as tier 3 (by the backend catch-all). Every test stayed
+green because each asserted a path invented to satisfy its rule -
+`"windows-agent/service/main.cs"` does not exist.
+
+The audit found one more: `risk.py` itself sat under the catch-all's `evolution/` exclusion
+and defaulted to tier 2. The law that decides every other tier could be lowered by one
+unremarkable candidate and exploited by the next.
+
+**Decision.**
+- `^services/api/app/security/` (tier 5, as always intended) and `^devices/windows-agent/`
+  (tier 4) replace the two dead patterns.
+- `services/api/app/evolution/risk.py` is tier 5, beside `authority.py`.
+- New tier-4 rules: `infra/systemd/` (root units on the production host),
+  `infra/docker/docker-compose.prod.yml` and `infra/docker/edge/` (the production container
+  and edge definition - the dev compose stays tier 2), the device install/update/ACL scripts
+  (`install-`/`uninstall-device-service.ps1`, `lib/AgentUpdate`, `lib/ServiceInstall`,
+  `lib/InstallAcl`), and `packages/schemas/device-protocol.schema.json` (the wire contract
+  both sides must agree on - ADR-0118's addendum is what a drift there costs).
+- **The table is held to the tree.** `test_every_rule_names_a_path_that_exists` fails when
+  any rule matches no tracked file, and the tier-4 test asserts each of its example paths is
+  a real file. A rule that matches nothing never fires; a test that invents its path cannot
+  tell.
+
+**Consequence.** More of the tree needs a second confirmation or never auto-promotes.
+That is the table saying what was always intended, not a new policy: nothing that was
+tier 4/5 on paper becomes lower.
+
+**Evidence.** Four mutations, each two red (the targeted tier test and the dead-rule
+detector): the security path reverted, the agent path reverted, the `risk.py` rule removed,
+the `infra/systemd/` rule removed. Every suite that depends on tiers passes (evolution
+routes, approval center, authorize, supervisor, release preflight/execution).
