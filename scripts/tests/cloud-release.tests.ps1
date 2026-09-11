@@ -192,6 +192,14 @@ try {
         Assert-True ((Test-Path (Join-Path $hostBase "app\OLD_TREE")) -and -not (Test-Path (Join-Path $hostBase "app.prev"))) "...restoring the previous tree"
         Assert-True (($rb.Calls -match "^docker tag pagentos/cloud-core:prev pagentos/cloud-core:local").Count -eq 1 -and @($rb.Calls | Where-Object { $_ -match " up " }).Count -eq 2) "...retagging the previous image and recreating the api from it"
 
+        # ADR-0122: the same pre-migration safety point as the blue/green path.
+        Reset-Host
+        $legacyBackup = Join-Path $hostBase "backup-bin"
+        New-Item -ItemType Directory -Force -Path $legacyBackup | Out-Null
+        [IO.File]::WriteAllText((Join-Path $legacyBackup "backup-cloud-core.sh"), "#!/usr/bin/env bash`necho `"backup `$*`" >> `"`$FAKE_STATE/calls.log`"`necho `"BACKUP FAILED (94): restic check found the repository damaged`" >&2`nexit 94`n")
+        $r67 = Invoke-HostRelease -Env @{ PAGENTOS_BACKUP_BIN = (& $u $legacyBackup) }
+        Assert-True ($r67.Exit -eq 67 -and $r67.Output -match "pre-migration backup FAILED; the release stops before any migration" -and -not ($r67.Calls -match "alembic upgrade head") -and ($r67.Calls -match "^backup --kind pre-migration --label release-0123456789ab$").Count -eq 1 -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a failed pre-migration backup stops the single-container release before the migration and rolls the tree back"
+
         Reset-Host
         $r68 = Invoke-HostRelease -Env @{ FAKE_NEVER_PRESENT = "1" }
         Assert-True ($r68.Exit -eq 68 -and $r68.Output -match "MISSING inside" -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "key on host but not in the recreated container -> exit 68 and rollback"

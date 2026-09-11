@@ -11,6 +11,7 @@
 #   keep the previous image as pagentos/cloud-core:prev
 #   swap trees: app -> app.prev, app.next -> app
 #   build api image
+#   pre-migration backup (ADR-0122; a warning, not a stop, when not installed)     67
 #   alembic upgrade head (additive migrations; never downgraded on rollback)
 #   recreate ONLY the api workload (--no-deps --force-recreate --wait)
 #   health on loopback
@@ -96,6 +97,20 @@ cd "$cur/infra/docker"
 compose=(docker compose -f docker-compose.prod.yml --env-file "$envf")
 echo "building the api image..."
 "${compose[@]}" build api 2>&1 | tail -2
+# ADR-0122: a safety point before any schema change; the same rule as the blue/green path.
+backup_bin=${PAGENTOS_BACKUP_BIN:-/opt/pagentos-backup}/backup-cloud-core.sh
+if [ -f "$backup_bin" ]; then
+    echo "pre-migration backup..."
+    backup_log="$base/.pre-migration-backup.log"
+    if ! bash "$backup_bin" --kind pre-migration --label "release-$(printf '%s' "$sha" | cut -c1-12)" > "$backup_log" 2>&1; then
+        tail -5 "$backup_log" >&2
+        echo "pre-migration backup FAILED; the release stops before any migration" >&2
+        exit 67
+    fi
+    tail -1 "$backup_log"
+else
+    echo "WARNING: no backup tooling at $backup_bin; migrating WITHOUT a safety point (install-backup.sh)" >&2
+fi
 echo "applying migrations..."
 "${compose[@]}" run --rm --no-deps --entrypoint uv api run alembic upgrade head 2>&1 | tail -2
 echo "recreating the api workload (dependencies untouched)..."

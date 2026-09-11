@@ -1,0 +1,22 @@
+# PagentOS Cloud Core: the weekly restore drill (ADR-0122). Restores the newest snapshot
+# into scratch containers beside production - no network, throwaway credentials, the same
+# images - and verifies every file, every database row and every object, then tears the
+# scratch copies down. A backup nobody has restored is a hope; this is the check that it
+# is not. Reports: /var/lib/pagentos-backup/drills/*.json
+#
+# Run now:   systemctl start pagentos-restore-drill.service
+# Pause:     systemctl disable --now pagentos-restore-drill.timer
+[Unit]
+Description=PagentOS Cloud Core restore drill (scratch containers; production untouched)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+Nice=10
+IOSchedulingClass=idle
+ExecStartPre=/usr/bin/sha256sum --check --quiet /opt/pagentos-backup/SHA256SUMS
+ExecStart=/bin/bash /opt/pagentos-backup/restore-cloud-core.sh --drill
+NoNewPrivileges=true
+PrivateTmp=true
