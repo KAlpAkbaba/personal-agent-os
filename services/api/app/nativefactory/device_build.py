@@ -44,7 +44,7 @@ from app.nativefactory.models import (
     STATE_GENERATING,
     STATE_TESTING,
     STATE_UNAVAILABLE,
-    STATE_VERIFIED,
+    STATE_UNVERIFIED,
     NativeBuildRow,
 )
 from app.nativefactory.roots import check_extensions
@@ -233,11 +233,61 @@ def build_on_device(
     if not inspected.ok:
         return _fail(db, row, inspected, step="file.inspect")
 
-    artifact = {
-        "size_bytes": inspected.result.get("size_bytes"),
-        "sha256": inspected.result.get("sha256"),
+    # `file.inspect` nests the file record under "file" (FileIdentity.ToJson: file_id, path,
+    # name, extension, size, mtime, sha256). Reading `size_bytes`/`sha256` off the TOP of the
+    # result -- which this did until 2026-09-11 -- produced None for both, and the row was
+    # still stamped `verified`. A verdict with literally nothing behind it.
+    record = inspected.result.get("file")
+    record = record if isinstance(record, dict) else {}
+    artifact: dict[str, Any] = {
+        "size_bytes": record.get("size"),
+        "sha256": record.get("sha256"),
+        "kind": inspected.result.get("kind"),
         "read_back_by": "device file.inspect",
     }
+
+    # The state this run has EARNED, and no more.
+    #
+    # `validate_against_spec` calls the version check "the point of the whole module": an
+    # artefact that cannot prove which build it is cannot be trusted to be the build that was
+    # just made. `file.inspect` answers size, hash and kind -- it does not open the PE and it
+    # does not read a version -- so this path cannot run that check, and therefore may not
+    # reach `verified`. It says so in the row rather than quietly borrowing a word the local
+    # path earns by reading the file.
+    #
+    # `unverified` is the state the local path already uses for exactly this shape: produced,
+    # and nobody could read it. The honest middle, with the reason, so nobody later reads
+    # silence as agreement.
+    missing: list[str] = []
+    if artifact["size_bytes"] is None:
+        missing.append("size")
+    if not artifact["sha256"]:
+        missing.append("sha256")
+    if artifact["size_bytes"] == 0:
+        missing.append("the file is empty")
+
+    verdict = {
+        "ok": False,
+        "checked_by": "device file.inspect",
+        "not_checked": [
+            "version (the spec's version was never compared against the artefact's)",
+            "architecture",
+            "subsystem",
+        ],
+        "reason": (
+            "the device reported the file, not its identity: file.inspect returns size, hash "
+            "and kind, so app.nativefactory.artifacts.validate_against_spec could not run. "
+            "Until the device can report a PE's own version, a device-dispatched build is "
+            "unverified by construction, never verified."
+        ),
+    }
+    if missing:
+        verdict["reason"] = (
+            "the device's file.inspect answered nothing usable about the artefact ("
+            + ", ".join(missing)
+            + "); "
+            + str(verdict["reason"])
+        )
     tests = {
         "exit_code": exit_code,
         "passed": tested.result.get("passed"),
@@ -245,9 +295,10 @@ def build_on_device(
     }
     row.artifact_path = artifact_path
     row.artifact_json = artifact
+    row.verdict_json = verdict
     row.tests_json = tests
     row.updated_at = datetime.now(UTC)
-    _touch(db, row, STATE_VERIFIED)
+    _touch(db, row, STATE_UNVERIFIED)
     return DeviceBuildOutcome(
         ok=True,
         root_path=root_path,

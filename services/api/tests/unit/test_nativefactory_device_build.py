@@ -29,6 +29,7 @@ from app.nativefactory.device_build import (
 )
 from app.nativefactory.models import (
     STATE_FAILED,
+    STATE_UNVERIFIED,
     STATE_VERIFIED,
     NativeBuildRow,
 )
@@ -101,7 +102,25 @@ def _healthy() -> FakeDevice:
         project_test=DeviceRunResult(True, result={"exit_code": 0, "passed": 3, "failed": 0}),
         project_run_publish=DeviceRunResult(True, result={"command_key": "publish"}),
         file_inspect=DeviceRunResult(
-            True, result={"size_bytes": 162304, "sha256": "a" * 64}
+            # The shape the REAL device returns: DocumentCapabilities.Inspect wraps
+            # FileIdentity.ToJson under "file" and names the size `size`. The fake used to
+            # answer {"size_bytes": …, "sha256": …} at the top level, which the device has
+            # never produced -- so this test proved the reader against a shape that does not
+            # exist, and the reader was reading None for both while stamping `verified`.
+            True,
+            result={
+                "file": {
+                    "file_id": "f1",
+                    "path": ROOT + chr(92) + "out" + chr(92) + "notlarim.exe",
+                    "name": "notlarim.exe",
+                    "extension": ".exe",
+                    "size": 162304,
+                    "mtime": "2026-09-09T19:07:00.0000000Z",
+                    "sha256": "a" * 64,
+                },
+                "kind": "binary",
+                "is_text": False,
+            },
         ),
     )
 
@@ -176,12 +195,52 @@ def test_the_artefact_is_read_back_by_the_device_not_inferred_from_an_exit_code(
 
     outcome = build_on_device(db, row, device)
 
-    assert row.state == STATE_VERIFIED
-    assert outcome.artifact["size_bytes"] == 162304
+    # NOT `verified`. `file.inspect` answers size, hash and kind; it never opens the PE and
+    # never reads a version, so `validate_against_spec` -- whose version check that module
+    # calls "the point of the whole module" -- cannot run on this path. A row that said
+    # `verified` here would be borrowing a word the local path earns by reading the file.
+    assert row.state == STATE_UNVERIFIED
+    assert row.verdict_json["ok"] is False
+    assert "version" in row.verdict_json["not_checked"][0]
+    assert "file.inspect returns size, hash and kind" in row.verdict_json["reason"]
+    assert outcome.artifact["size_bytes"] == 162304, "read from file.size, where the device puts it"
+    assert outcome.artifact["sha256"] == "a" * 64
     assert outcome.artifact["read_back_by"] == "device file.inspect"
     assert row.artifact_path == ROOT + r"\out\notlarim.exe"
     assert device.payload_for("file.inspect")["path"] == row.artifact_path
     assert row.tests_json == {"exit_code": 0, "passed": 3, "failed": 0}
+
+
+def test_an_inspect_that_answers_nothing_usable_is_named_not_stamped(db):
+    """The bypass, in its worst form. Before 2026-09-11 this path read `size_bytes`/`sha256`
+    off the TOP of the result -- keys the device has never emitted -- so both were None and
+    the row was stamped `verified` anyway: a verdict with literally nothing behind it."""
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(True, result={"kind": "binary"})
+    row = _row(db)
+
+    outcome = build_on_device(db, row, device)
+
+    assert row.state == STATE_UNVERIFIED
+    assert outcome.artifact["size_bytes"] is None and outcome.artifact["sha256"] is None
+    assert "answered nothing usable" in row.verdict_json["reason"]
+    assert "size" in row.verdict_json["reason"] and "sha256" in row.verdict_json["reason"]
+
+
+def test_an_empty_artefact_is_never_a_success(db):
+    """`publish exited 0` plus a zero-byte file is the failure this milestone exists to
+    refuse; the local path names it and so must this one."""
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(
+        True,
+        result={"file": {"size": 0, "sha256": "b" * 64, "name": "notlarim.exe"}, "kind": "binary"},
+    )
+    row = _row(db)
+
+    build_on_device(db, row, device)
+
+    assert row.state == STATE_UNVERIFIED
+    assert "the file is empty" in row.verdict_json["reason"]
 
 
 # ------------------------------------------------------------------ the refusal matrix
