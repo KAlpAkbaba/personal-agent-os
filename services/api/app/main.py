@@ -53,7 +53,7 @@ from app.genesis.routes import router as genesis_router
 from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
 from app.goals.routes import router as goals_router
-from app.health import run_health_checks
+from app.health import is_degraded, run_health_checks
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -609,8 +609,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # when one was configured and is not running, which is exactly the state in which
         # no alarm would ever fire.
         checks["routine_clock"] = routine_clock_health()
-        degraded = any(check["status"] not in ("ok", "skipped") for check in checks.values())
-        status = "degraded" if degraded else "ok"
+        status = "degraded" if is_degraded(checks) else "ok"
         logger.info("health_checked", status=status, checks=checks)
         # M18.4 (spec §2): WHAT is running - the release sha (or "unknown"), the app
         # version and every contract this process serves - so "hangi sürüm çalışıyor?"

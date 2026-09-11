@@ -122,15 +122,79 @@ def test_health_broker_fails_without_lifespan(monkeypatch) -> None:
 
 
 def test_health_degraded_still_200(monkeypatch) -> None:
+    # A REQUIRED dependency. This test used to fail Redis to show "degraded" - which is the
+    # false dependency the next test removes.
     checks = dict(ALL_OK)
-    checks["redis"] = {"status": "fail", "latency_ms": 2000.0, "error": "TimeoutError: timeout"}
+    checks["db"] = {"status": "fail", "latency_ms": 2000.0, "error": "TimeoutError: timeout"}
     with make_client(monkeypatch, checks) as client:
         response = client.get("/v1/system/health")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "degraded"
+    assert body["checks"]["db"]["status"] == "fail"
+    assert "error" in body["checks"]["db"]
+
+
+def test_redis_down_is_reported_but_degrades_nothing(monkeypatch) -> None:
+    """Nothing in Cloud Core uses Redis (CLAUDE.md: ephemeral only; today not even a cache).
+    Its failure is visible in its own check and marked advisory - and the process is `ok`,
+    so a Redis restart no longer fails a release's exact `ok` gate."""
+    import app.health as health
+
+    checks = dict(ALL_OK)
+    checks["redis"] = {"status": "fail", "latency_ms": 2000.0, "error": "ConnectionError: down"}
+    for name in health.ADVISORY_CHECKS & checks.keys():
+        checks[name]["required"] = False  # what run_health_checks marks
+    with make_client(monkeypatch, checks) as client:
+        body = client.get("/v1/system/health").json()
+    assert body["status"] == "ok"
     assert body["checks"]["redis"]["status"] == "fail"
-    assert "error" in body["checks"]["redis"]
+    assert body["checks"]["redis"]["required"] is False
+
+
+def test_run_health_checks_marks_only_the_advisory_ones(monkeypatch) -> None:
+    import asyncio
+
+    import app.health as health
+
+    async def down(settings) -> None:  # noqa: ANN001
+        raise ConnectionError("down")
+
+    async def up(settings) -> None:  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(health, "check_redis", down)
+    for name in ("check_db", "check_object_store", "check_temporal"):
+        monkeypatch.setattr(health, name, up)
+    checks = asyncio.run(health.run_health_checks(Settings(_env_file=None)))
+    assert checks["redis"]["status"] == "fail" and checks["redis"]["required"] is False
+    assert all("required" not in checks[n] for n in ("db", "object_store", "temporal"))
+    assert health.is_degraded(checks) is False
+    checks["db"] = {"status": "fail"}
+    assert health.is_degraded(checks) is True
+
+
+def test_an_advisory_check_is_one_nothing_in_the_app_depends_on() -> None:
+    """The day code starts using Redis, it stops being advisory. This reads app/ for a Redis
+    client anywhere but the health probe itself, so that day cannot pass unnoticed."""
+    from pathlib import Path
+
+    import app.health as health
+
+    assert health.ADVISORY_CHECKS == frozenset({"redis"})
+    app_root = Path(health.__file__).resolve().parent
+    users = [
+        path.relative_to(app_root).as_posix()
+        for path in app_root.rglob("*.py")
+        if path.name != "health.py"
+        and any(
+            marker in path.read_text(encoding="utf-8")
+            for marker in ("import redis", "from redis", "aioredis", "settings.redis_url")
+        )
+    ]
+    # worldmodel/state.py reports the configured URL as a fact about the process; it opens
+    # no connection.
+    assert users == ["worldmodel/state.py"], users
 
 
 def test_health_never_crashes_when_all_down(monkeypatch) -> None:
