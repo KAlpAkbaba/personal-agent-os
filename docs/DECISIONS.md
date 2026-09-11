@@ -10411,3 +10411,15 @@ Evidence: 19 seam tests and 21 engine tests green; nine mutations, each red - JS
 decode removed, `bool()` of a string flag, a truncated answer used, an ambiguous replacement
 applied, an unexpected exception escaping, a `ModelError` not named as one, an explanation
 failure sinking a green candidate, the exchanges not written, rejected edits not refused.
+
+**Addendum (2026-09-11) - the second real run was refused by the engine, not the model.** With
+the seam hardened, the run on `supervisor-dead-component-paths` wrote its record: the analysis
+and plan were right (three dead paths, the Windows agent classified tier 2 instead of tier 4,
+the real paths named), and the engine REFUSED the plan because it listed the regression test
+it would add among the paths it changes - which `_validate_plan` called out of scope while the
+write check (`allowed`) two lines later permits exactly that path. The regression test is now
+the one path a plan may change outside the scope, in both checks. The same run showed a plan
+refused before any write kept its worktree, holding one of the three live slots with nothing
+to inspect; it is removed now. `--test` also takes `a,b`, because `run-selfdev.ps1` under
+`-File` passes `-Test a,b` as one string. Each fix has a test that was red first; the two
+engine fixes were mutation-checked red.

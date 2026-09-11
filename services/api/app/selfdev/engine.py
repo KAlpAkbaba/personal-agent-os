@@ -189,10 +189,13 @@ class SelfDevEngine:
     def _validate_plan(
         plan: ChangePlan, in_scope: Callable[[str], bool], package_tests: str
     ) -> str | None:
-        for path in plan.paths_to_change:
-            if not in_scope(safe_relative_path(path)):
-                return f"the plan changes {path}, outside the defect's scope"
         test_path = safe_relative_path(plan.regression_test_path)
+        for path in plan.paths_to_change:
+            # The regression test is the one path a plan may change outside the scope - the
+            # same exception the write check (``allowed``) makes.
+            relative = safe_relative_path(path)
+            if relative != test_path and not in_scope(relative):
+                return f"the plan changes {path}, outside the defect's scope"
         if not test_path.startswith(package_tests) or not test_path.endswith(".py"):
             return f"the regression test {test_path} is not a test file under {package_tests}"
         return None
@@ -264,6 +267,9 @@ class SelfDevEngine:
         record.plan = asdict(plan)
         problem = self._validate_plan(plan, in_scope, package_tests)
         if problem:
+            # Refused before a byte was written: nothing to inspect, so the slot is freed
+            # rather than held against the bound on live worktrees.
+            self.workspace.remove(worktree)
             return self._finish(record, meter, STATUS_REFUSED, problem)
         allowed = lambda p: in_scope(p) or p == plan.regression_test_path  # noqa: E731
         patch: Patch = self._ask(meter, lambda: self.model.generate_patch(defect, plan, files))

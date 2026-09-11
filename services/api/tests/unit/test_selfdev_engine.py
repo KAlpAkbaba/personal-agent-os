@@ -296,6 +296,20 @@ def test_a_plan_that_leaves_the_scope_is_refused_before_any_patch(
     assert record.status == STATUS_REFUSED
     assert "outside the defect's scope" in record.reason
     assert "generate_patch" not in model.calls
+    # Nothing was written, so there is nothing to inspect: the slot is freed, not held.
+    assert not Path(record.worktree).exists()
+    assert record.worktree not in _git(repo, "worktree", "list")
+
+
+def test_a_plan_that_names_its_own_regression_test_among_its_paths_is_not_refused(
+    repo: Path, tmp_path: Path
+) -> None:
+    """The second real run: the model listed the regression test it would add among the paths
+    it changes - which it does - and the plan check refused it as out of scope, while the
+    write check two lines later allows exactly that path."""
+    model = _model(_patch(FIXED), plan_paths=(CALC, REGRESSION))
+    record = _engine(repo, tmp_path, model).run(_defect(), base_sha=_base(repo), targeted_tests=[])
+    assert record.status == STATUS_STOPPED_AT_POLICY, record.reason
 
 
 def test_a_base_ci_calls_red_is_no_base_to_judge_a_candidate_against(
