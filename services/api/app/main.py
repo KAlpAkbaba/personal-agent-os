@@ -71,6 +71,7 @@ from app.logging import configure_logging, get_logger
 from app.mail.providers import build_mail_provider, build_mail_sender
 from app.mail.routes import router as mail_router
 from app.mail.service import MailService
+from app.maintenance import RetentionSweeper
 from app.memory.routes import router as memory_router
 from app.memory.runtime import MemoryRuntime
 from app.middleware import TraceIdMiddleware
@@ -374,6 +375,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     routine_clock = _build_routine_clock()
 
+    # Phase 8 (2026-09-11): three retention sweeps existed and nothing ran them. Lambdas, so
+    # nothing is touched until a sweep actually runs (app.maintenance).
+    retention_sweeper = RetentionSweeper(
+        {
+            "memory": lambda: memory.backend.sweep_expired(),
+            "identity_sessions": lambda: identity.service.sweep_expired(),
+            "security_assets": lambda: security.registry.sweep_expired(),
+        },
+        interval_s=settings.retention_sweep_interval_s,
+        initial_delay_s=settings.retention_sweep_initial_delay_s,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await broker.start()
@@ -396,6 +409,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await selfmodel_refresher.start()
         await briefing_announcer.start()
         await embedded_worker.start()
+        await retention_sweeper.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -426,6 +440,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            await retention_sweeper.stop()
             await embedded_worker.stop()
             await briefing_announcer.stop()
             await selfmodel_refresher.stop()
@@ -470,6 +485,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.embedded_worker = embedded_worker
     app.state.selfmodel_refresher = selfmodel_refresher
     app.state.briefing_announcer = briefing_announcer
+    app.state.retention_sweeper = retention_sweeper
     # M18.3: the routes and the voice tools reach the device through these, injected
     # rather than imported as singletons (docs/M18_ACTION_CONTRACT.md §4).
     app.state.wake_sequence = wake_sequence
@@ -609,6 +625,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # when one was configured and is not running, which is exactly the state in which
         # no alarm would ever fire.
         checks["routine_clock"] = routine_clock_health()
+        # Phase 8: advisory - housekeeping that has not run yet is not an outage.
+        checks["retention"] = retention_sweeper.health_check()
         status = "degraded" if is_degraded(checks) else "ok"
         logger.info("health_checked", status=status, checks=checks)
         # M18.4 (spec §2): WHAT is running - the release sha (or "unknown"), the app

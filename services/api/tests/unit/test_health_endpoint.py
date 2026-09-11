@@ -46,6 +46,8 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     # configured clock that is not running is the state in which no alarm would ever
     # fire, and that must be visible rather than silent.
     "routine_clock",
+    # Phase 8 (2026-09-11): the retention sweeps nothing ran (app.maintenance); advisory.
+    "retention",
 }
 # "skipped" (temporal_worker when worker_mode != embedded) is a legitimate
 # non-degraded status alongside "ok" — see app.main's degraded computation.
@@ -88,8 +90,11 @@ def test_health_ok_shape(monkeypatch) -> None:
         # rather than a probe (M18.3 spec §3.3: running, interval, ticks, last error) —
         # neither has a round trip to time, and inventing a zero for one would be a
         # latency this endpoint never measured.
-        if name not in ("temporal_worker", "routine_clock"):
+        if name not in ("temporal_worker", "routine_clock", "retention"):
             assert isinstance(check["latency_ms"], int | float)
+    retention = body["checks"]["retention"]
+    assert retention["required"] is False
+    assert retention["sweeps"] == ["memory", "identity_sessions", "security_assets"]
     clock = body["checks"]["routine_clock"]
     assert set(clock) == {
         "status",
