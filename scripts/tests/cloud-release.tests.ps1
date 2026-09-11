@@ -201,6 +201,12 @@ try {
         Assert-True ($r67.Exit -eq 67 -and $r67.Output -match "pre-migration backup FAILED; the release stops before any migration" -and -not ($r67.Calls -match "alembic upgrade head") -and ($r67.Calls -match "^backup --kind pre-migration --label release-0123456789ab$").Count -eq 1 -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a failed pre-migration backup stops the single-container release before the migration and rolls the tree back"
 
         Reset-Host
+        New-Item -ItemType Directory -Force -Path $legacyBackup | Out-Null
+        [IO.File]::WriteAllText((Join-Path $legacyBackup "backup-cloud-core.sh"), "#!/usr/bin/env bash`necho `"backup `$*`" >> `"`$FAKE_STATE/calls.log`"`nsleep 30`necho `"BACKUP OK: too late`"`n")
+        $r67t = Invoke-HostRelease -Env @{ PAGENTOS_BACKUP_BIN = (& $u $legacyBackup); PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S = "2" }
+        Assert-True ($r67t.Exit -eq 67 -and $r67t.Output -match "pre-migration backup did not finish within 2 s" -and -not ($r67t.Calls -match "alembic upgrade head") -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a pre-migration backup that outlives its bound stops the single-container release before the migration"
+
+        Reset-Host
         $r68 = Invoke-HostRelease -Env @{ FAKE_NEVER_PRESENT = "1" }
         Assert-True ($r68.Exit -eq 68 -and $r68.Output -match "MISSING inside" -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "key on host but not in the recreated container -> exit 68 and rollback"
 

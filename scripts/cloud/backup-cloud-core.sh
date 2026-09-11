@@ -169,6 +169,10 @@ if ! "$restic_bin" cat config >/dev/null 2>&1; then
     say "repository $RESTIC_REPOSITORY does not exist yet; initialising it"
     "$restic_bin" init >/dev/null || fail 94 "restic init failed"
 fi
+# A backup cut short (the release bounds its pre-migration backup with `timeout`) can leave a
+# restic lock behind, and a lock left behind fails every later prune. Under the backup lock no
+# other backup or restore of ours is running; plain `unlock` removes only stale locks.
+"$restic_bin" unlock >/dev/null 2>&1 || true
 tags=(--tag pagentos --tag "$kind")
 [ -n "$label" ] && tags+=(--tag "$label")
 summary=$("$restic_bin" backup --json --host "$host_name" "${tags[@]}" "$staging" | tail -1) \

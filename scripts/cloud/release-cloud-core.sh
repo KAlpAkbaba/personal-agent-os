@@ -97,13 +97,21 @@ cd "$cur/infra/docker"
 compose=(docker compose -f docker-compose.prod.yml --env-file "$envf")
 echo "building the api image..."
 "${compose[@]}" build api 2>&1 | tail -2
-# ADR-0122: a safety point before any schema change; the same rule as the blue/green path.
+# ADR-0122: a safety point before any schema change; the same rule as the blue/green path,
+# bounded the same way.
 backup_bin=${PAGENTOS_BACKUP_BIN:-/opt/pagentos-backup}/backup-cloud-core.sh
+backup_timeout_s=${PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S:-1800}
 if [ -f "$backup_bin" ]; then
     echo "pre-migration backup..."
     backup_log="$base/.pre-migration-backup.log"
-    if ! bash "$backup_bin" --kind pre-migration --label "release-$(printf '%s' "$sha" | cut -c1-12)" > "$backup_log" 2>&1; then
+    backup_rc=0
+    timeout --kill-after=60 "$backup_timeout_s" bash "$backup_bin" --kind pre-migration \
+        --label "release-$(printf '%s' "$sha" | cut -c1-12)" > "$backup_log" 2>&1 || backup_rc=$?
+    if [ "$backup_rc" -ne 0 ]; then
         tail -5 "$backup_log" >&2
+        if [ "$backup_rc" -eq 124 ] || [ "$backup_rc" -eq 137 ]; then
+            echo "pre-migration backup did not finish within $backup_timeout_s s" >&2
+        fi
         echo "pre-migration backup FAILED; the release stops before any migration" >&2
         exit 67
     fi
