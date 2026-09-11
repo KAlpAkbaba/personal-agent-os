@@ -28,7 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.selfdev")
     parser.add_argument("--defect", required=True, type=Path)
     parser.add_argument("--base", required=True, help="the exact base commit SHA")
-    parser.add_argument("--test", action="append", default=[], help="targeted test path")
+    parser.add_argument(
+        "--test", action="append", default=[], help="targeted test path(s): repeated or a,b"
+    )
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[4])
     parser.add_argument("--worktrees", type=Path, default=None)
     parser.add_argument("--runs", type=Path, default=None)
@@ -58,7 +60,9 @@ def main(argv: list[str] | None = None) -> int:
         runs_dir=runs,
         budget=Budget(args.max_attempts, args.max_seconds, args.max_tokens),
     )
-    record = engine.run(defect, base_sha=args.base, targeted_tests=list(args.test))
+    # run-selfdev.ps1 run with -File passes "-Test a,b" as ONE string; take both shapes.
+    targeted = [path.strip() for value in args.test for path in value.split(",") if path.strip()]
+    record = engine.run(defect, base_sha=args.base, targeted_tests=targeted)
     print(
         json.dumps(
             {
