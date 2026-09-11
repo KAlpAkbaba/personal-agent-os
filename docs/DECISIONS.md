@@ -10490,3 +10490,29 @@ candidate's commit subject was the first 200 characters of a Markdown plan; it i
 title now, the plan in the body. The accepted candidate is evidence of the engine, and is not
 merged by it: under the corrected table it is NEVER_AUTO_PROMOTE, and what happens to it is the
 owner's decision.
+
+## ADR-0125 — Object storage from a registry that serves it, pinned by digest (2026-09-12)
+
+**Context.** CI's integration job on `5829489` failed before a test ran: `docker pull
+minio/minio:RELEASE.2025-04-22T22-12-26Z` was refused ("pull access denied ... may require
+docker login") while every other image pulled; the same job had passed on `c309065` hours
+earlier. `docker manifest inspect` confirms Docker Hub no longer serves that repository to an
+anonymous client. Production kept running only because the image was already in the host's
+cache: a fresh host, or a disaster recovery onto a new VM (ADR-0122's restore path), could not
+have started object storage at all.
+
+**Decision.** Both stacks name MinIO as
+`quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa...`. quay.io serves the
+same release under the SAME manifest-list digest production runs (`docker buildx imagetools
+inspect`), and a pull from quay.io yields the identical image ID - so the bits do not change,
+only where they come from; the digest pin means no tag can be repointed underneath us. A
+release does not recreate MinIO (`--no-deps` on the api colours and the edge), so this changes
+nothing on the running host until MinIO is next brought up; the restore drill uses the image
+the running container has.
+
+**Guard.** `test_compose_images.py`: both stacks pull object storage from quay.io pinned by
+that digest, and dev and production name the same bits (red before the change).
+
+**Not settled here.** MinIO's community distribution is winding down; if quay.io stops too,
+the next step is our own copy in GHCR (the project's registry, ADR on CI/release) by the same
+digest, or a different S3-compatible server behind the existing storage interface.
