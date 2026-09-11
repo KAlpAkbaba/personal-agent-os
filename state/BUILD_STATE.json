@@ -4,7 +4,7 @@
   "current_milestone": "M28_IN_PROGRESS_AWAITING_ROW_26_16",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
   "last_completed_milestone": "M27_CREATIVE_TOOLS_OPERATOR",
-  "last_updated": "2026-09-11T18:00:00Z",
+  "last_updated": "2026-09-12T00:30:00Z",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -37,7 +37,7 @@
     "owner_run_2026_09_03": "Cloud Core release succeeded (0012/0013, health). Agent update FAILED silently: installer's inline swap refused by NTFS under running processes (same as the 2026-09-01 incident); fixed by wiring the installer through the journaled deployment engine with real runtime handlers, transcript, evidence block and fail-loud M13 assertion. 6b.1/6b.2 remain NOT_YET_PROVEN until the owner's rerun. UPDATE 18:xx: after the engine-based installer the owner's verify-device-service.ps1 reports 6b.1 and 6b.2 PROVEN_REAL (worker as the owner from the installed tree, Chrome available, 24 ops + browser.chrome agree). Next: item 11, real browser smoke through the owner path (scripts/browser/real-browser-smoke.ps1). Owner smoke (real-browser-smoke.ps1) PASSED on the real chain -> 9.2 PROVEN_REAL.",
     "search_provider": "Google primary, DuckDuckGo fallback (owner decision 2026-09-03 evening): provider abstraction in services/browser/browser_agent/search_engines.py with evidence fields (requested_provider/provider/fallback/fallback_reason/query/result_count/attempts), Google organic parser, interstitial/consent detection (never answered), locale hl/gl from payload/--locale/user locale; Cloud Core records the evidence in research run events and discovered_by=browser_search:<provider>. Live from this address on 2026-09-03: Google served its 'unusual traffic' interstitial (network-level, after a day of probe traffic) -> fallback duckduckgo recorded; owner qualification item 12 pending (9.12). Owner's first search-mode run hit a STALE installed worker (11:32 build; installer last ran 19:10, provider commit 19:52): no provider evidence, missing-property error - not a Google outcome. Fix: worker 0.2.0 with contracts {browser.search: 2} on hello/status, schema_version on results, Cloud Core SearchEvidence.contract_ok + CONTRACT MISMATCH event, smoke refuses a lower contract and -UpdateAgentFirst runs the journaled installer before qualifying."
   },
-  "owner_actions_pending": "Evening sequence 2026-09-07 (docs/OWNER_ACTIONS.md 'Now'): A = item 23b (READY_FOR_OWNER_AUDIO_TEST; ~2 min; releases contract v10 once) - B = item 24 Living Core (READY_FOR_OWNER_VISUAL_TEST; ~2 min) - C = item 25 wake alarm / YouTube / Gunaydin (READY_FOR_OWNER_AUDIO_TEST; ~3 min) - D = item 26 display off -> one key wakes (READY_FOR_OWNER_PHYSICAL_TEST; ~3 min; one UAC prompt for the agent update with -DisplayPower; can run before C). Nothing else needs the owner. CI runs on every push.",
+  "owner_actions_pending": "2026-09-12: (1) approve the Tailscale SSH check link (release + backup install run unattended after it); (2) after the release, reinstall the agent from an elevated PowerShell (26.16); (3) decide the recovery supervisor install (READY_FOR_OWNER_APPROVAL, codex/astra-p0-reliability 2561f84); (4) decide the self-development candidate db9ed85. Nothing else needs the owner.",
   "quality_gate": {
     "status": "PASS - full gate on the merged M13 tree (282ec79): every step PASS incl. API unit 1935 + integration, PS5.1 suites (installer-browser 16, installer-invocation 32), browser 246 unit + 57 e2e, Windows agent 272 + 135, web build",
     "last_run": "2026-09-03",
@@ -458,5 +458,42 @@
     "m28_row_26_15": "PROVEN_REAL. notlarim.exe built (162,304 bytes, x64, windows_gui, sha256 175164a9...) and read back by a reader that did not build it; app.launch started it from the native root (pid 21404, window observed); ui.set_value typed the note and ui.invoke pressed Add; ui.inspect read the application's OWN status line as '2 not'; closed; relaunched and the status line still said '2 not' - the state survived the restart; file.read returned its own data/app.log with the startup line. Closed cleanly.",
     "ready_for_owner": "Four, all of them things only a person can perceive: a display actually going dark and a keypress waking it, an alarm actually ringing, the wake music, and the visual confirmation that Paint shows the exported image. Each names the harness that arms it; this run darkened nothing and made no sound.",
     "owner_action": "None outstanding for item 28."
+  },
+  "post_audit_recovery_2026_09_11": {
+    "directive": "POST-AUDIT RECOVERY AND CLOSURE DIRECTIVE (2026-09-11); M29 not started",
+    "provenance": {
+      "SOURCE_SHA": "61726e71e4b0f5a582d3b1484f613405d8b730a5",
+      "ORIGIN_SHA": "61726e71e4b0f5a582d3b1484f613405d8b730a5",
+      "CI_RUN_ID": "34650638462",
+      "CI_CONCLUSION": "success",
+      "PRODUCTION_SHA": "cc0212b (release #1 this session, blue/green; LAST_KNOWN_GOOD 699c165) - to be re-read from /opt/pagentos/RELEASE when Tailscale SSH is re-approved",
+      "local_quality_gate": "PASS on aa942e3 (8801 unit, 103 integration, all script suites)"
+    },
+    "phases": {
+      "1_preserve_and_reconcile": "DONE",
+      "2_source_origin_ci": "DONE - main pushed without history rewrite; CI on the exact SHA above. Two CI-only failures found and fixed on the way: the owner corpus leaned on orphaned RUNNING rows (d9d6097, ADR-0123 addendum) and Docker Hub stopped serving the pinned MinIO image (61726e7, ADR-0125).",
+      "3_build_device_provenance": "DONE - tolerant hello (cc0212b, ADR-0118 addendum)",
+      "4_m28_evidence": "DONE",
+      "5_row_26_16": "NOT_YET_PROVEN - engineering complete (ADR-0119 + addendum); needs the Cloud Core release carrying the planning fix, then the owner's agent reinstall, then scripts/core/qualify-native-production.ps1",
+      "6_astra_p0_reliability": "READY_FOR_OWNER_APPROVAL - codex/astra-p0-reliability at 2561f84 (main merged); three independent reviews, the third READY_FOR_OWNER_APPROVAL; its finding 1 fixed on the branch (8a29e81), finding 2 on main (793427a). Windows 86 passed / 4 skipped, Linux container with real flock 63 passed / 2 skipped, blue/green harness 59/59. NOT deployed.",
+      "7_backup_restore": "PROVEN_AUTOMATED - PROVEN_REAL needs install-backup.sh on the host (proof backup + restore drill) after the release; off-host copy not configured (one owner credential, asked only when the local path is proven)",
+      "8_reliability_bugs": "PROVEN_AUTOMATED - merged (c309065, 0faf479), CI green",
+      "9_selfdev_engine": "PROVEN_AUTOMATED - ADR-0124 and addenda; 52 selfdev tests; mutation-checked",
+      "10_selfdev_acceptance": "PROVEN_REAL - docs/evidence/selfdev/phase10-selfdev-runs.json: seven runs on the real defect 'supervisor-dead-component-paths'; the seventh (20260911-205513-...-70b883) STOPPED_AT_POLICY_BOUNDARY on its first attempt with candidate db9ed85 on its own branch, never merged or pushed by the engine. Every failure on the way was an engine or spec defect, fixed with a test red first."
+    },
+    "owner_decisions_open": [
+      "Tailscale SSH check approval (external account) - unblocks release, backup install and the 26.16 run",
+      "agent reinstall (UAC) after the release - unblocks 26.16",
+      "approve or decline installing the recovery supervisor (high-risk production promotion) - codex/astra-p0-reliability 2561f84",
+      "decide the self-development candidate db9ed85 (tier 5, NEVER_AUTO_PROMOTE under the corrected table)"
+    ],
+    "m29_gate": {
+      "READY_FOR_M29": "NO",
+      "blockers": [
+        "PRODUCTION_SHA != SOURCE_SHA: the release is waiting on Tailscale SSH approval",
+        "row 26.16 NOT_YET_PROVEN (release + agent reinstall + qualification run)",
+        "backup/restore not PROVEN_REAL on the host (install-backup.sh after the release)"
+      ]
+    }
   }
 }
