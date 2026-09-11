@@ -10040,6 +10040,49 @@ config, the browser worker's Python — does not move it. The browser worker alr
 its own release identity through the candidate manifest (`package_sha256`), and the two are
 compared separately; nothing here widens or replaces that.
 
+### Addendum — the announcement must not be able to refuse the connection (2026-09-11)
+
+**What happened.** The owner installed the first agent carrying `build_id` while production
+still ran a Cloud Core from before this ADR (`699c165`). That Cloud Core's `HelloFrame`
+forbade fields it did not know, so the hello was refused (`extra_forbidden`), the handshake
+ended in `auth_error`, the device went offline, and the staged installer — correctly — rolled
+the agent back after 92 s. Nothing was lost and the device came back on its previous build.
+The installer did its job; the rule was wrong.
+
+**The defect, precisely.** An *additive* field from a newer agent could take a device off the
+network. It was not only an ordering accident ("release Cloud Core first"): after a release
+the previous Cloud Core stays last-known-good, so any Cloud Core rollback would have stranded
+every agent newer than it — at exactly the moment the owner most needs the device.
+
+**The rule now.** `hello` — and only `hello` — ignores top-level fields it does not know.
+Every field it does know is validated exactly as before (type, bounds, capability names, the
+required set); an unknown field is dropped unread and has no effect on authentication, which
+signs the nonce and the device id and nothing in this frame. The dropped names are kept
+(sorted, at most 16, each cut to 64 characters, because hello arrives before authentication)
+and logged as `broker_hello_fields_ignored` only **after** the device has authenticated, so a
+build/Core skew is a visible fact and an unauthenticated peer cannot write into the log. Every
+other inbound frame keeps `extra="forbid"`: each already has a designated extension point
+(`heartbeat.status`, `command_ack.result`), and hello was the one frame without one.
+
+**The second half of the drift.** `packages/schemas/device-protocol.schema.json` — which calls
+itself the authoritative contract — never received `build_id` or `source_revision`. The C#
+test named `Serialized_field_names_match_schema` compared against a list typed into the test,
+not against the schema, so nothing noticed. The schema now declares both, with a `$comment`
+carrying both halves of the rule (emitters stay closed, receivers ignore). Two tests now read
+the schema instead of restating it: Python (`HelloFrame`'s fields are exactly the schema's
+properties and the required sets are equal) and C# (every field the agent's real hello
+serialises is declared).
+
+**The rollout order that follows.** This tolerance protects only a Cloud Core that has it.
+So: release Cloud Core with it, release again so last-known-good has it too, and only then
+install the agent that announces `build_id`. After that, a future additive hello field needs
+no ordering at all.
+
+**Proven by watching it fail.** Five mutations on the Cloud Core side, each red: hello
+forbidding again (4 tests), the name bound removed (1), every inbound frame opened (4), the
+log moved before authentication (1), `build_id` removed from the schema (1). On the agent
+side, `source_revision` removed from the schema turns the new C# contract test red.
+
 ## ADR-0119 — The build belongs to the machine that has a compiler (2026-09-11)
 
 Row 26.16 asked for one thing M28 never had: a native build **startable from production**.

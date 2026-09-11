@@ -265,6 +265,16 @@ async def device_connect(websocket: WebSocket) -> None:
         return
 
     device_id = device.id
+    if hello.ignored_fields:
+        # ADR-0118 addendum: a newer build announced fields this Cloud Core does not know,
+        # and they were dropped unread. Logged only now, after authentication, because until
+        # then the names were an unauthenticated peer's strings.
+        logger.info(
+            "broker_hello_fields_ignored",
+            device_id=str(device_id),
+            software_version=hello.software_version,
+            fields=list(hello.ignored_fields),
+        )
 
     def start_session() -> uuid.UUID:
         with runtime.session() as db:

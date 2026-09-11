@@ -5,6 +5,11 @@ contract) as pydantic models with `extra="forbid"`, so the broker validates
 every inbound frame to the same constraints without a runtime dependency on
 the schema file's location.
 
+One deliberate exception: `hello` IGNORES top-level fields it does not know
+(ADR-0118 addendum). It is the frame a build announces itself with, so it is
+the frame most likely to grow, and refusing it refuses the whole connection.
+Every field it does know is validated exactly as strictly as before.
+
 `parse_frame` never raises: a malformed frame yields a protocol `error` frame
 payload with class `validation_error` (referencing `command_id` when it is
 parseable), and the caller keeps the connection open per DEVICE_PROTOCOL.md §5.
@@ -16,7 +21,16 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
 PROTOCOL_VERSION = 1
 
@@ -80,7 +94,36 @@ class ErrorObject(_Frame):
         return value
 
 
+#: How many ignored hello field names are kept, and how much of each. The hello arrives
+#: BEFORE authentication, so until auth succeeds every name here is a stranger's string.
+MAX_IGNORED_HELLO_FIELDS = 16
+MAX_IGNORED_HELLO_FIELD_CHARS = 64
+
+
 class HelloFrame(_Frame):
+    """The handshake's first frame: who this device is, which build, what it can do.
+
+    **Unknown top-level fields are ignored, not refused (ADR-0118 addendum).** On 2026-09-11
+    an agent carrying ADR-0118's ``build_id`` met the Cloud Core still in production, whose
+    hello forbade extra fields: the handshake was refused as ``auth_error``, the device fell
+    offline, and the staged installer rolled the new agent back. The installer did its job;
+    the defect was that an ADDITIVE announcement from a newer build could take a device off
+    the network. Worse, the same Cloud Core stays last-known-good after a release, so a
+    Cloud Core rollback would have stranded any agent newer than it.
+
+    So an older Cloud Core now accepts a newer agent's hello: every field it KNOWS is
+    validated as strictly as before (type, bounds, capability names), and a field it does
+    not know is dropped unread -- no effect on authentication, which signs the nonce and the
+    device id and nothing in this frame. The dropped names are kept, bounded, and logged
+    once the device has authenticated (``broker_hello_fields_ignored``), so a build/Core
+    skew is a visible fact rather than a silent one.
+
+    Only ``hello``. Every other inbound frame keeps ``extra="forbid"`` and grows through its
+    designated extension point (``heartbeat.status``, ``command_ack.result``).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
     type: Literal["hello"]
     protocol_version: int = Field(ge=1)
     device_id: uuid.UUID
@@ -93,6 +136,13 @@ class HelloFrame(_Frame):
     source_revision: str | None = Field(default=None, max_length=64)
     capabilities: list[str] = Field(max_length=128)
 
+    _ignored_fields: tuple[str, ...] = PrivateAttr(default=())
+
+    @property
+    def ignored_fields(self) -> tuple[str, ...]:
+        """Top-level keys this Cloud Core did not know and dropped; sorted, bounded."""
+        return self._ignored_fields
+
     @field_validator("capabilities")
     @classmethod
     def _valid_capability_names(cls, value: list[str]) -> list[str]:
@@ -100,6 +150,20 @@ class HelloFrame(_Frame):
             if not re.match(CAPABILITY_PATTERN, cap):
                 raise ValueError(f"invalid capability name: {cap!r}")
         return value
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _remember_ignored_fields(
+        cls, data: Any, handler: ValidatorFunctionWrapHandler
+    ) -> "HelloFrame":
+        frame = handler(data)
+        if isinstance(data, dict):
+            unknown = sorted(str(key) for key in data if key not in cls.model_fields)
+            frame._ignored_fields = tuple(
+                key[:MAX_IGNORED_HELLO_FIELD_CHARS]
+                for key in unknown[:MAX_IGNORED_HELLO_FIELDS]
+            )
+        return frame
 
 
 class AuthFrame(_Frame):
