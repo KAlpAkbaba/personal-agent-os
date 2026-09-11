@@ -9672,3 +9672,98 @@ buffer and then through the real `record_client_events`, asserting the row is *s
 pending* after the queue and stamped only after the drain. Every test that shipped with
 `4727967` faked the speaker, because the speaker is the transport — and the transport was
 the bug, twice.
+
+## ADR-0115 — Every Digital Operator defect was filed against a file that contains none of its code (2026-09-11)
+
+**What was measured, before anything was changed.** `component_for_capability` in
+`app/evolution/supervisor.py` maps a receipt's capability to the component an
+`EvolutionOpportunity` is filed against, from a five-row prefix table. There was no
+`operator.` row, so all four Digital Operator capabilities fell through to the default:
+
+```
+operator.type            -> component=voice_tools  paths=('services/api/app/voice/realtime_sessions/tools.py',)
+operator.app_open        -> component=voice_tools  paths=('services/api/app/voice/realtime_sessions/tools.py',)
+operator.window_control  -> component=voice_tools  paths=('services/api/app/voice/realtime_sessions/tools.py',)
+operator.shell           -> component=voice_tools  paths=('services/api/app/voice/realtime_sessions/tools.py',)
+```
+
+`tools.py` is the GENERIC tool registry. The operator's code is `app/operator/`
+(service.py, task.py, plans.py, focus.py) and `voice/realtime_sessions/tools_operator.py`.
+The registry's only connection to the operator is the one import line that registers its
+family — none of its behaviour is there.
+
+**This is not hypothetical; the rows exist.** ADR-0110 quotes two of them from the live
+`evolution_opportunities` table:
+
+```
+2026-09-09 19:04:06   Tekrarlayan eylem hatası: operator.type_text (validation_error)
+2026-09-09 19:42:37   Tekrarlayan eylem hatası: operator.type_text (postcondition_fail)
+```
+
+Both were the Notepad defect the owner reported. Both were filed against `voice_tools`.
+
+**The fix, and the one line of it that took the longest.** A `("operator.", "operator")`
+row, and an `_COMPONENT_PATHS["operator"]` naming the five files an operator fix actually
+touches. `app/operator/models.py` is deliberately NOT among them. It is a real ORM module
+(canonical schema in `alembic/versions/20260907_0025_object_focus.py`), and the risk table
+classifies any `models.py` as tier 4 — schema and deployment mechanics, which is
+`NEVER_AUTO_PROMOTE`. Naming it would have re-classified every routine "the typing went to
+the wrong window" fix as a migration. That exclusion is the table's own established
+convention rather than a special case invented here: `alarms` and `research` both HAVE a
+`models.py` and neither entry names it.
+
+**The safety property that was checked rather than assumed.** The whole point of deriving
+the tier from paths is that it cannot be talked down. A new path set is an opportunity to
+lower it by accident, so the promotion class was measured on both sides and asserted EQUAL,
+not merely asserted to be tier 3:
+
+```
+voice_tools : ('OWNER_APPROVAL_REQUIRED', 3, ['changes production backend logic'])
+operator    : ('OWNER_APPROVAL_REQUIRED', 3, ['changes production backend logic'])
+```
+
+Unchanged, as intended. A test also proves the tier-4 escalation is real by adding
+`models.py` back and watching the class become `NEVER_AUTO_PROMOTE` — so the exclusion is
+documented as a decision, and a future contributor "helpfully" adding the schema module
+fails a test that explains why.
+
+**What this actually buys, stated narrowly.** `paths_for_component` has exactly one
+consumer today — `Signal.paths` feeding `promotion_class_for`, inside this same module.
+Nothing downstream reads the paths to open a file yet. So the fix corrects two things now:
+the component recorded on every operator opportunity (the owner-facing attribution, and
+what ADR-0111's self-model reads), and the footprint the risk tier is derived from. It puts
+the right paths in place for the day a coding backend does read them; it does not today
+redirect an editor that was opening the wrong file, and claiming otherwise would overstate
+it.
+
+**Regression.** Four tests in `tests/unit/test_evolution_supervisor.py`. Three were watched
+RED before the fix, including one that runs through the real ledger and `collect_signals`
+rather than the table alone — two failed `operator.type` receipts must produce a signal
+whose component is `operator` and whose paths contain `app/operator/task.py`. The other two
+are invariants that pass either way by design (the unknown-component fallback,
+`app/operator/service.py`, is also tier 3); their job is to hold the tier still, not to
+reproduce the defect.
+
+Four mutations, each watched, each restored from a copy rather than `git checkout`:
+
+```
+M1  the ("operator.", "operator") row deleted     -> 3 failed
+M2  one path pointed at a file that is not there  -> 2 failed
+M3  paths lowered to a tier-1 docs/ path          -> AUTO_SAFE (1)          -> 3 failed
+M4  app/operator/models.py added back             -> NEVER_AUTO_PROMOTE (4) -> 4 failed
+```
+
+M3 is the one that matters. The safety claim of this change is "the promotion class does
+not move", and the equality assertion is what enforces it: a path set that would let an
+operator fix promote itself automatically reds the test rather than shipping. 8156 tests,
+5 skipped, in the full unit suite.
+
+**Found on the way, not fixed here.** Three entries in the same table name paths that do
+not exist: `windows-agent/DeviceService/Program.cs` (the agent lives at
+`devices/windows-agent/src/PagentOS.DeviceService/Program.cs`),
+`services/browser/pagentos_browser/worker.py` (the package is `browser_agent`), and
+`var/evolution/skills/candidate/skill.py` (a runtime artifact, legitimately absent from a
+checkout). Neither of the first two changes its tier, so no promotion decision is currently
+wrong because of them — but they are the same defect one step further on, and each needs a
+determination of the correct path for a subsystem this work item did not study. Recorded
+here rather than guessed at.
