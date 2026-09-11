@@ -156,8 +156,15 @@ def executive_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
             await executive_service.start_run_workflow(
                 client, run, task_queue=task_queue, artifacts=artifacts_runtime
             )
-        except Exception:  # noqa: BLE001 - reported via the run row, never raised here
+        except Exception as exc:  # noqa: BLE001 - reported via the run row, never raised here
             logger.exception("voice_executive_workflow_start_failed", run_id=str(run_id))
+            # Phase 8: "reported via the run row" - and until 2026-09-11 nothing wrote it, so
+            # the run stayed active for ever and counted against the two-run bound.
+            if artifacts_runtime is not None:
+                with artifacts_runtime.session() as db_run:
+                    executive_service.fail_unstarted_run(
+                        db_run, run_id, detail=f"{type(exc).__name__}: {exc}"
+                    )
 
     ctx.add_followup(_start_workflow_followup)
     return {

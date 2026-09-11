@@ -45,6 +45,10 @@ from app.executive.models import (
 from app.executive.planner import PlanningClarificationNeeded, RuleBasedExecutivePlanner
 from app.executive.spec import MAX_ACTIVE_RUNS, STEP_KIND_PROFILES, Step, TaskGraph
 from app.executive.workflow import ExecutiveRunRequest, ExecutiveWorkflow
+from app.logging import get_logger
+
+logger = get_logger("app.executive.service")
+
 
 
 class ExecutiveServiceError(Exception):
@@ -56,6 +60,7 @@ class ExecutiveServiceError(Exception):
         self.error_class = error_class
         self.speech = speech
         super().__init__(speech)
+
 
 
 def workflow_id_for(run_id: uuid.UUID) -> str:
@@ -223,6 +228,36 @@ async def start_run_workflow(
             activities.publish_run_state(fresh)
 
     await asyncio.to_thread(persist)
+
+
+#: Said when the durable-workflow service (Temporal) does not answer for an executive run.
+WORKFLOW_UNAVAILABLE_TR = "İş akışı servisine ulaşamadım efendim; iş başlamadı."
+ERROR_WORKFLOW_START_FAILED = "workflow_start_failed"
+
+
+def fail_unstarted_run(db: Session, run_id: uuid.UUID, *, detail: str) -> bool:
+    """Close a run whose workflow never started (Phase 8, 2026-09-11).
+
+    ``start_run_db`` records the run ``running`` before the workflow starts (its own comment
+    says why), and ``start_run_workflow`` writes ``workflow_id`` only once the start
+    succeeded - so a run with no workflow id is exactly a run whose workflow never started.
+    When the start failed, the voice path only logged it - its own comment said the failure
+    was "reported via the run row", and nothing wrote the row - so the run stayed
+    ``running`` for ever. It counts as ACTIVE against the two-run bound
+    (``_count_active_runs``): two Temporal outages and the owner could never start another
+    run, told only that two were already going. Returns whether it closed the run.
+    """
+    run = db.get(ExecutiveRunRow, run_id)
+    if run is None or run.workflow_id is not None or run.state in TERMINAL_RUN_STATES:
+        return False
+    run.state = STATE_FAILED
+    run.error_class = ERROR_WORKFLOW_START_FAILED
+    run.error_message = detail[:1000]
+    run.updated_at = datetime.now(UTC)
+    db.commit()
+    activities.publish_run_state(run)
+    logger.info("executive_unstarted_run_closed", run_id=str(run_id))
+    return True
 
 
 async def start_run(

@@ -70,20 +70,40 @@ async def start_run(request: Request, payload: dict[str, Any]) -> dict[str, Any]
         )
     folder = payload.get("folder")
     artifacts = _artifacts(request)
-    client = await _temporal_client(request)
+    unavailable = HTTPException(
+        status_code=503,
+        detail={
+            "code": "dependency_unavailable",
+            "message": executive_service.WORKFLOW_UNAVAILABLE_TR,
+        },
+    )
+    try:
+        client = await _temporal_client(request)
+    except Exception as exc:  # noqa: BLE001 - Phase 8: a typed refusal, not an untyped 500
+        raise unavailable from exc
     owner_session_id = str(request.state.owner_session.session_id)
     try:
         with artifacts.session() as db:
-            run = await executive_service.start_run(
-                client,
+            run = executive_service.start_run_db(
                 db,
                 directive=directive,
                 folder=folder if isinstance(folder, str) else None,
                 source="rest",
                 session_id=owner_session_id,
-                task_queue=artifacts.settings.temporal_task_queue,
-                artifacts=artifacts,
             )
+            try:
+                await executive_service.start_run_workflow(
+                    client,
+                    run,
+                    task_queue=artifacts.settings.temporal_task_queue,
+                    artifacts=artifacts,
+                )
+            except Exception as exc:  # noqa: BLE001 - the run is closed, then refused typed
+                executive_service.fail_unstarted_run(
+                    db, run.id, detail=f"{type(exc).__name__}: {exc}"
+                )
+                raise unavailable from exc
+            db.refresh(run)
             return _run_dict(run)
     except ExecutiveServiceError as exc:
         raise _error_response(exc) from exc

@@ -401,10 +401,16 @@ def news_summarize(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
                 synthesis=synthesis,
                 search_provider=search_provider,
             )
-        except Exception:  # noqa: BLE001 - reported as a failed tool call, never raised here
+        except Exception as exc:  # noqa: BLE001 - reported as a failed tool call, never raised here
             logger.exception("news_summarize_workflow_start_failed", task_id=str(task_id))
             from app.voice.realtime_sessions.models import RealtimeSessionRow
             from app.voice.realtime_sessions.service import complete_tool_call_system
+
+            # Phase 8: the task opened for this run must not stay CREATED for ever.
+            with artifacts_runtime.session() as db_task:
+                research_service.fail_unstarted_research(
+                    db_task, task_id, detail=f"{type(exc).__name__}: {exc}"
+                )
 
             with voice_runtime.session() as db2:
                 row2 = db2.get(RealtimeSessionRow, session_id)
