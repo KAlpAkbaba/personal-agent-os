@@ -316,7 +316,8 @@ def test_the_body_opens_the_way_the_reconcile_reads_it(monkeypatch) -> None:
     here (a key before `status`, pretty-printed JSON) would make every periodic reconcile
     read every colour as unhealthy. Owner-approval review of ADR-0121, finding 6."""
     reader = _reconcile_status_reader()
-    for checks, expected in ((ALL_OK, "ok"), ({**ALL_OK, "redis": {"status": "fail"}}, "degraded")):
+    # "degraded" through a REQUIRED dependency: Redis is advisory since ADR-0123.
+    for checks, expected in ((ALL_OK, "ok"), ({**ALL_OK, "db": {"status": "fail"}}, "degraded")):
         with make_client(monkeypatch, checks) as client:
             body = client.get("/v1/system/health").text
         assert "\n" not in body.strip()
