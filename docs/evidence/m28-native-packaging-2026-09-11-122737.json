@@ -1,0 +1,100 @@
+{
+  "generated_at": "2026-09-11T12:27:37.936364Z",
+  "note": "Durable evidence for QUALIFICATION row 26.7. Packaging only - the EXE was built by scripts/tests/native-windows-lab.py and is reused here. Both artefacts are produced by app.nativefactory.packaging (the shipped code) and read back by app.nativefactory.artifacts, which did not write them.",
+  "spec": {
+    "name": "notlarim",
+    "title": "Notlarım",
+    "template": "notes-desktop",
+    "stack": "dotnet_wpf",
+    "targets": [
+      "windows_exe",
+      "windows_portable",
+      "windows_msix"
+    ],
+    "version": "0.1.0",
+    "persistence": "local_file"
+  },
+  "publish_dir": "C:\\Users\\alpak\\Documents\\PagentOS Projects\\native\\item28-build\\out",
+  "publish_input": {
+    "file_count": 246,
+    "total_bytes": 137471215,
+    "exe_present": true,
+    "exe_size_bytes": 162304,
+    "exe_sha256": "175164a9e06475daa0b3e658a8daaefd88752ae7cd31bf374e0716fac64f85ce"
+  },
+  "work_dir": "C:\\Users\\alpak\\AppData\\Local\\Temp\\m28-pkg-x8ts2a7x",
+  "windows_portable": {
+    "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\m28-pkg-x8ts2a7x\\notlarim-portable.zip",
+    "size_bytes": 59575142,
+    "sha256": "07d2e0a92132331bd704f143695110dc36023e467aba800b01ad7d59a16716c6",
+    "read_back": {
+      "status": "read",
+      "reader": "zipfile (stdlib), not the writer",
+      "entry_count": 246,
+      "first_corrupt_entry": null,
+      "crc_table_ok": true,
+      "exe_entry_present": true,
+      "exe_sha256_in_package": "175164a9e06475daa0b3e658a8daaefd88752ae7cd31bf374e0716fac64f85ce",
+      "exe_sha256_on_disk": "175164a9e06475daa0b3e658a8daaefd88752ae7cd31bf374e0716fac64f85ce",
+      "exe_matches_published": true
+    },
+    "signed": false,
+    "status": "BUILT"
+  },
+  "makeappx": "C:\\Program Files (x86)\\Windows Kits\\10\\bin\\10.0.26100.0\\x64\\makeappx.exe",
+  "windows_msix": {
+    "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\m28-pkg-x8ts2a7x\\notlarim.msix",
+    "size_bytes": 60593196,
+    "sha256": "d309111f5b738ee0351f0a79b1329c936a994c1d01f1fa5c0e15b9214437ffad",
+    "read_back": {
+      "status": "read",
+      "facts": {
+        "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\m28-pkg-x8ts2a7x\\notlarim.msix",
+        "kind": "msix",
+        "size_bytes": 60593196,
+        "sha256": "d309111f5b738ee0351f0a79b1329c936a994c1d01f1fa5c0e15b9214437ffad",
+        "version": "0.1.0.0",
+        "architecture": "x64",
+        "subsystem": null,
+        "identity": "PagentOS.notlarim",
+        "display_name": "Notlarım",
+        "detail": {
+          "payload_entries": "252"
+        }
+      }
+    },
+    "verdict": {
+      "ok": true,
+      "mismatches": [],
+      "facts": {
+        "path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\m28-pkg-x8ts2a7x\\notlarim.msix",
+        "kind": "msix",
+        "size_bytes": 60593196,
+        "sha256": "d309111f5b738ee0351f0a79b1329c936a994c1d01f1fa5c0e15b9214437ffad",
+        "version": "0.1.0.0",
+        "architecture": "x64",
+        "subsystem": null,
+        "identity": "PagentOS.notlarim",
+        "display_name": "Notlarım",
+        "detail": {
+          "payload_entries": "252"
+        }
+      }
+    },
+    "signed": false,
+    "status": "BUILT"
+  },
+  "status": "PROVEN_REAL",
+  "summary": {
+    "built": [
+      "windows_portable",
+      "windows_msix"
+    ],
+    "spec_verdict_agrees": [
+      "windows_msix"
+    ],
+    "unreadable": [],
+    "portable_opened_and_matches": true,
+    "duration_s": 10.488
+  }
+}
