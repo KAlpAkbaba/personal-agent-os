@@ -23,6 +23,11 @@ public static class AgentInfo
     // 0.6.0 (M25, ADR-0088): the two 3D runtimes on the projects family's manifest allowlist
     // (Blender headless and Unity batch mode, under the 3D root only) and scene.inspect —
     // the tool's own read-back and its render — behind the same operator gate.
+    // 0.6.0 stays put through M28 (ADR-0095 addendum 2 §1): the native factory added the
+    // `native` root, a project scope and four argv shapes, but NO new capability name, so the
+    // advertised manifest is unchanged at 40/85 and the qualification arithmetic holds. What
+    // M28 exposed instead is that a product version cannot also serve as a build identity —
+    // see BuildId.
     public const string SoftwareVersion = "0.6.0";
     public const string Platform = "windows";
 
@@ -64,6 +69,109 @@ public static class AgentInfo
             var digest = System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(superset));
             return Convert.ToHexString(digest)[..12].ToLowerInvariant();
+        }
+    }
+
+    /// <summary>
+    /// The commit this binary was built from, or an empty string when it cannot be known.
+    /// </summary>
+    /// <remarks>
+    /// Read from <c>AssemblyInformationalVersionAttribute</c>, whose <c>+metadata</c> the
+    /// .NET SDK stamps from the git checkout automatically — the installed agent carries
+    /// <c>0.6.0+72843b21…</c> without anything in this repository configuring it. It is
+    /// PROVENANCE, not identity: two builds of the same commit share it, and a build from a
+    /// dirty tree names the commit it was not quite built from. <see cref="BuildId"/> is the
+    /// identity; this is how a human finds the source.
+    /// </remarks>
+    public static string SourceRevision
+    {
+        get
+        {
+            var informational = typeof(AgentInfo).Assembly
+                .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>()
+                .FirstOrDefault()?.InformationalVersion ?? string.Empty;
+            var plus = informational.IndexOf('+');
+            return plus >= 0 ? informational[(plus + 1)..] : string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// What this build IS: 16 hex characters over the content of the agent's own assemblies.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The 2026-09-08 incident rolled a healthy release back because the staged updater
+    /// compares what the device ANNOUNCES, and the only identity it announced was
+    /// <see cref="SoftwareVersion"/>. That field is a product version and is meant to stay
+    /// still across builds: on 2026-09-11 the deployed agent advertised the full 85-capability
+    /// M28 manifest while announcing <c>0.6.0</c>, which is the M25 number. Two different
+    /// builds were therefore indistinguishable to the one comparison that decides whether a
+    /// staged update took — so "Cloud Core sees the candidate" could not be proven, only
+    /// assumed.
+    /// </para>
+    /// <para>
+    /// This is the missing half, and it is deliberately NOT a second version number to
+    /// maintain. It is derived — every <c>PagentOS.*.dll</c> beside this assembly, sorted by
+    /// name, each file's SHA-256 folded into one digest — so it cannot drift, cannot be
+    /// forgotten, and changes by construction when any of the agent's own code changes. The
+    /// .NET runtime files next to it are excluded: a runtime patch is not a new agent build.
+    /// </para>
+    /// <para>
+    /// Semantic versioning is untouched. <see cref="SoftwareVersion"/> still answers "which
+    /// product release is this" and <c>AgentIdentityTests</c> still holds it equal to the
+    /// assembly version; <see cref="BuildId"/> answers "which build is this", which is the
+    /// question the staged updater was actually asking.
+    /// </para>
+    /// <para>
+    /// Never throws. A host where the directory cannot be read answers <c>"unknown"</c>, and
+    /// a comparison against <c>"unknown"</c> is treated by the updater as "no build identity
+    /// available", never as a match.
+    /// </para>
+    /// </remarks>
+    public static string BuildId => _buildId.Value;
+
+    /// <summary>What <see cref="BuildId"/> answers when the agent's own files cannot be read.</summary>
+    public const string UnknownBuildId = "unknown";
+
+    private static readonly Lazy<string> _buildId = new(ComputeBuildId);
+
+    private static string ComputeBuildId()
+    {
+        try
+        {
+            var home = System.IO.Path.GetDirectoryName(typeof(AgentInfo).Assembly.Location);
+            if (string.IsNullOrEmpty(home))
+            {
+                return UnknownBuildId;
+            }
+
+            var files = System.IO.Directory
+                .GetFiles(home, "PagentOS.*.dll", System.IO.SearchOption.TopDirectoryOnly)
+                .OrderBy(path => System.IO.Path.GetFileName(path), StringComparer.Ordinal)
+                .ToArray();
+            if (files.Length == 0)
+            {
+                return UnknownBuildId;
+            }
+
+            using var fold = System.Security.Cryptography.IncrementalHash.CreateHash(
+                System.Security.Cryptography.HashAlgorithmName.SHA256);
+            foreach (var file in files)
+            {
+                // The name is folded in as well as the bytes, so adding or removing an
+                // assembly changes the identity even if the remaining bytes are untouched.
+                fold.AppendData(System.Text.Encoding.UTF8.GetBytes(System.IO.Path.GetFileName(file)));
+                fold.AppendData(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(file)));
+            }
+
+            return Convert.ToHexString(fold.GetHashAndReset())[..16].ToLowerInvariant();
+        }
+        catch (Exception)
+        {
+            // An identity that throws would take the handshake down with it. A build that
+            // cannot say which build it is says so.
+            return UnknownBuildId;
         }
     }
 }

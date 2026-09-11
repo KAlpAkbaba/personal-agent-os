@@ -32,6 +32,21 @@ public sealed record HelloMessage : ProtocolMessage
     [JsonPropertyName("software_version")]
     public required string SoftwareVersion { get; init; }
 
+    /// <summary>
+    /// What this build IS — 16 hex characters derived from the agent's own assemblies, or
+    /// <c>"unknown"</c>. Optional in the wire contract so an older agent still handshakes;
+    /// Cloud Core stores whatever arrives and the staged updater refuses to treat a missing
+    /// or <c>"unknown"</c> identity as a match.
+    /// </summary>
+    [JsonPropertyName("build_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BuildId { get; init; }
+
+    /// <summary>The commit this build came from, when the SDK could stamp it. Provenance only.</summary>
+    [JsonPropertyName("source_revision")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceRevision { get; init; }
+
     [JsonPropertyName("capabilities")]
     public required IReadOnlyList<string> Capabilities { get; init; }
 }

@@ -151,7 +151,9 @@ try {
 
     function New-CoreRow {
         <#  The real /v1/devices row shape: identity at the top, health nested.  #>
-        param([string]$Presence, [string]$Version, [string[]]$Caps, [switch]$NoTopLevelVersion, [switch]$NoVersionAnywhere)
+        param([string]$Presence, [string]$Version, [string[]]$Caps, [switch]$NoTopLevelVersion, [switch]$NoVersionAnywhere,
+            [string]$BuildId = "",
+            [switch]$NestedBuildIdOnly)
         $health = [pscustomobject]@{
             last_hello_at = "2026-09-08T20:23:00Z"
             software_version = $(if ($NoVersionAnywhere) { $null } else { $Version })
@@ -170,6 +172,9 @@ try {
             health = $health
         }
         if (-not $NoTopLevelVersion -and -not $NoVersionAnywhere) { $row["software_version"] = $Version }
+        if ($BuildId) {
+            # $health is a [pscustomobject]: indexing does not add a property, Add-Member does.
+            if ($NestedBuildIdOnly) { $health | Add-Member -NotePropertyName "build_id" -NotePropertyValue $BuildId -Force } else { $row["build_id"] = $BuildId } }
         return [pscustomobject]@{ devices = @([pscustomobject]$row) }
     }
 
@@ -199,6 +204,44 @@ try {
     $preMedia = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps @("desktop.open_application", "browser.chrome") }
     $hb10 = Test-AgentHeartbeatOnCore -FetchDevices $preMedia -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
     Assert-True (-not $hb10.Ok -and ($hb10.Reasons -join " ") -match "browser.media_play") "the right version with the wrong capability manifest still fails, naming the missing browser media operations"
+    # --------------------------------------------------------- ADR-0118: build identity
+    #
+    # The 2026-09-08 incident is above: a healthy candidate rolled back because the verifier
+    # could not read the version. This is the OTHER half of the same field being asked to do
+    # too much - a product version is meant to STAY STILL across builds, so matching it can
+    # never prove the swap took. The deployed agent announced 0.6.0 while advertising the
+    # 85-capability M28 manifest; two different builds were indistinguishable to this check.
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $sameVersionOldBuild = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 -BuildId "aaaaaaaaaaaaaaaa" }
+    $hbB1 = Test-AgentHeartbeatOnCore -FetchDevices $sameVersionOldBuild -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedBuildId "bbbbbbbbbbbbbbbb" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True (-not $hbB1.Ok -and ($hbB1.Reasons -join " ") -match "reports build 'aaaaaaaaaaaaaaaa', the candidate is 'bbbbbbbbbbbbbbbb'" -and ($hbB1.Reasons -join " ") -notmatch "software version") "THE POINT: same product version, different BUILD -> the swap is correctly reported as not taken, and NOT as a version mismatch"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $sameVersionNewBuild = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 -BuildId "bbbbbbbbbbbbbbbb" }
+    $hbB2 = Test-AgentHeartbeatOnCore -FetchDevices $sameVersionNewBuild -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedBuildId "bbbbbbbbbbbbbbbb" -ExpectedCapabilities $m183 -TimeoutSeconds 90 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True ($hbB2.Ok -and $hbB2.Observed.build_id -eq "bbbbbbbbbbbbbbbb") "and the candidate's own build passes, with the identity recorded in Observed"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $nestedBuild = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 -BuildId "bbbbbbbbbbbbbbbb" -NestedBuildIdOnly }
+    $hbB3 = Test-AgentHeartbeatOnCore -FetchDevices $nestedBuild -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedBuildId "bbbbbbbbbbbbbbbb" -ExpectedCapabilities $m183 -TimeoutSeconds 90 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True ($hbB3.Ok -and $hbB3.Observed.build_id -eq "bbbbbbbbbbbbbbbb") "the identity is read from health as a FALLBACK too - a one-location reader is the 2026-09-08 defect with a new field name"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $noBuildAtAll = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 }
+    $hbB4 = Test-AgentHeartbeatOnCore -FetchDevices $noBuildAtAll -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedBuildId "bbbbbbbbbbbbbbbb" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True (-not $hbB4.Ok -and ($hbB4.Reasons -join " ") -match "carries no build identity") "a row with NO build identity never passes on the product version alone - an agent older than ADR-0118 cannot prove a swap"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $unknownBuild = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 -BuildId "unknown" }
+    $hbB5 = Test-AgentHeartbeatOnCore -FetchDevices $unknownBuild -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedBuildId "bbbbbbbbbbbbbbbb" -ExpectedCapabilities $m183 -TimeoutSeconds 6 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True (-not $hbB5.Ok -and ($hbB5.Reasons -join " ") -match "announces build identity 'unknown'") "an agent that could not read its own assemblies says 'unknown', and 'unknown' is never a match"
+
+    $script:clock = [datetime]"2026-09-08T20:22:00Z"
+    $legacyCaller = { New-CoreRow -Presence "online" -Version "0.6.0" -Caps $m183 }
+    $hbB6 = Test-AgentHeartbeatOnCore -FetchDevices $legacyCaller -DeviceId $device -ExpectedVersion "0.6.0" -ExpectedCapabilities $m183 -TimeoutSeconds 90 -PollSeconds 3 -Sleep $sleep -Now $now
+    Assert-True ($hbB6.Ok) "a caller that passes no -ExpectedBuildId keeps the pre-ADR-0118 behaviour exactly: the new check is opt-in, so nothing that worked stops working"
+
 
     Write-Host "the candidate's identity (component, stamped version, capability fingerprint)"
     $staging3 = New-Staging "c"

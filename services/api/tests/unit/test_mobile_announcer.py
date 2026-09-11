@@ -256,3 +256,26 @@ def test_a_partial_batch_failure_only_settles_the_delivered_tasks(session_factor
     with session_factory() as session:
         assert session.get(Task, good).announced_at is not None
         assert session.get(Task, bad).announced_at is None
+
+
+def test_a_boolean_where_a_count_belongs_is_not_proof_of_delivery(session_factory) -> None:
+    """`delivered` is a COUNT on `NotificationResult`, and Python's `bool` is an `int`
+    subclass -- so `True > 0` holds, and a notifier that answered `delivered=True` would slip
+    through a plain `isinstance(delivered, int)` check as "one delivery".
+
+    The reader refuses it: a boolean in a count field is a type confusion, and the only
+    conservative reading of a receipt this module cannot interpret is "not proven". The task
+    stays unstamped and is retried rather than marked delivered on a value that means
+    something other than what the field says.
+
+    Added at the handover review (2026-09-11). The guard was already in the code and no test
+    held it -- removing `not isinstance(delivered, bool)` left the whole suite green.
+    """
+    task_id = _seed(session_factory, status=TASK_STATUS_READY, title="Bool Receipt")
+    announcer = ArtifactReadyAnnouncer(
+        session_factory, lambda *_args: _DeliveryReceipt(delivered=True)  # type: ignore[arg-type]
+    )
+
+    assert announcer.sweep_once() == 0
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is None

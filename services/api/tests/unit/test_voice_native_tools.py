@@ -171,12 +171,18 @@ def test_a_build_whose_artefact_nobody_could_read_never_says_hazir() -> None:
     assert "hazır efendim" not in body["speech"]
 
 
-def test_a_build_with_no_compiler_registered_refuses_and_says_why() -> None:
-    """Today's Cloud Core: the build belongs to the device (spec §5), so with no runner
-    injected the only truthful answer is that nothing was built."""
+def test_a_build_with_no_compiler_anywhere_refuses_and_says_why() -> None:
+    """The build belongs to a machine with a compiler (spec §5). There are two such machines
+    -- a locally injected runner, and the owner's enrolled device -- and with NEITHER the only
+    truthful answer is that nothing was built.
+
+    Both are cleared here deliberately. Clearing only the local runner no longer describes
+    "no compiler": since M28 row 26.16 that is the ordinary production shape, and the device
+    path answers it (see the test below).
+    """
     h = build_harness()
     h.seed(CTX_NATIVE_PLANNED)
-    h.runtime.register_live(native_runner=None, native_root=None)
+    h.runtime.register_live(native_runner=None, native_root=None, device_action=None)
     sid = h.new_session()
     h.say(sid, "Bunu EXE olarak çıkar.")
     body = h.tool(sid, "c-1", "native.build", {})["result"]
@@ -184,6 +190,35 @@ def test_a_build_with_no_compiler_registered_refuses_and_says_why() -> None:
     assert body["error_class"] == "dependency_unavailable"
     assert body["speech"] == SPEECH_NO_RUNNER
     assert body["build"]["state"] == "planned"  # untouched: nothing pretended to happen
+
+
+def test_with_no_local_runner_the_build_goes_to_the_enrolled_device() -> None:
+    """M28 row 26.16, the production chain.
+
+    Cloud Core is a Linux host with no .NET SDK; the machine with one is the owner's device.
+    So "no local runner" is not a refusal in production -- it is the normal case, and the
+    build is dispatched through the SAME device port every other family uses. What this pins
+    is that the ask reaches the device at all, in the order the device will admit.
+    """
+    h = build_harness()
+    h.seed(CTX_NATIVE_PLANNED)
+    h.runtime.register_live(native_runner=None, native_root=None)
+    sid = h.new_session()
+    h.say(sid, "Bunu EXE olarak çıkar.")
+
+    body = h.tool(sid, "c-1", "native.build", {})["result"]
+
+    assert body["execution_status"] != "refused", body.get("speech")
+    assert body["built_on"] == "device"
+    # The device was actually asked, in the one order it admits (DEVICE_PROTOCOL §6n).
+    asked = h.device.capabilities_called()
+    assert asked[:2] == ["project.scaffold", "project.run"]
+    assert "file.inspect" in asked
+    # And the row reaches `verified` -- EARNED, not inferred from the path taken. The device
+    # reported the PE's own version and Cloud Core ran the same `validate_against_spec` the
+    # lab path runs. A device that reported no identity would leave this `unverified`; the
+    # matrix for that lives in test_nativefactory_device_build.py.
+    assert body["build"]["state"] == "verified"
 
 
 def test_an_apk_build_names_the_two_facts_separately_and_the_owner_item() -> None:

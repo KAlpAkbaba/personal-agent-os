@@ -53,6 +53,7 @@
       "additionalProperties": false
     },
     "hello": {
+      "$comment": "ADR-0118 + addendum. An EMITTER sends only the properties declared here (additionalProperties false). A RECEIVER must ignore undeclared top-level properties of hello and validate every declared one strictly: hello is how a build announces itself, and refusing it refuses the whole connection, so a newer agent must still handshake with an older Cloud Core. build_id / source_revision are optional so an agent built before ADR-0118 still handshakes.",
       "type": "object",
       "required": ["type", "protocol_version", "device_id", "software_version", "capabilities"],
       "properties": {
@@ -60,6 +61,8 @@
         "protocol_version": { "type": "integer", "minimum": 1 },
         "device_id": { "type": "string", "format": "uuid" },
         "software_version": { "type": "string", "maxLength": 64 },
+        "build_id": { "type": ["string", "null"], "maxLength": 64 },
+        "source_revision": { "type": ["string", "null"], "maxLength": 64 },
         "capabilities": {
           "type": "array",
           "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.]{1,63}$" },

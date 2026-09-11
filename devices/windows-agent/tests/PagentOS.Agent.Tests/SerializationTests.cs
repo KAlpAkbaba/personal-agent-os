@@ -54,7 +54,12 @@ public class SerializationTests
     }
 
     [Theory]
+    // Two hello shapes, deliberately. ADR-0118 added `build_id`/`source_revision` as OPTIONAL
+    // fields: an agent older than that still handshakes, so the old shape must round-trip with
+    // no null keys added to it, and the new shape must actually carry them. One fixture would
+    // only ever pin half of that.
     [InlineData("hello.json", new[] { "type", "protocol_version", "device_id", "software_version", "capabilities" })]
+    [InlineData("hello_with_build_identity.json", new[] { "type", "protocol_version", "device_id", "software_version", "build_id", "source_revision", "capabilities" })]
     [InlineData("challenge.json", new[] { "type", "nonce" })]
     [InlineData("auth.json", new[] { "type", "signature" })]
     [InlineData("welcome.json", new[] { "type", "session_id", "heartbeat_interval_s" })]
@@ -68,6 +73,40 @@ public class SerializationTests
         var reserialized = ProtocolJson.Serialize(ProtocolJson.Deserialize(json));
         var fields = JsonNode.Parse(reserialized)!.AsObject().Select(pair => pair.Key).ToHashSet();
         Assert.Equal(expectedFields.ToHashSet(), fields);
+    }
+
+    [Fact]
+    public void Every_field_the_agent_puts_in_its_hello_is_one_the_schema_declares()
+    {
+        // ADR-0118 addendum. The theory above pins what the agent SENDS against a list typed
+        // into this file; nothing read the schema that calls itself authoritative, and
+        // build_id reached the agent and Cloud Core without ever reaching it. This builds the
+        // hello the way AgentConnection does, with every optional field set, and reads the
+        // schema for the names.
+        var hello = new HelloMessage
+        {
+            ProtocolVersion = ProtocolConstants.Version,
+            DeviceId = Guid.NewGuid().ToString(),
+            SoftwareVersion = "0.6.0",
+            BuildId = "ac0ad30ca7a0c4a1",
+            SourceRevision = "ef5cd12",
+            Capabilities = new[] { "desktop.open_application" },
+        };
+        var sent = JsonNode.Parse(ProtocolJson.Serialize(hello))!.AsObject()
+            .Select(pair => pair.Key)
+            .ToList();
+
+        var schema = JsonNode.Parse(File.ReadAllText(SchemaPath()))!;
+        var declared = schema["$defs"]!["hello"]!["properties"]!.AsObject()
+            .Select(pair => pair.Key)
+            .ToHashSet();
+
+        Assert.Contains("build_id", sent);
+        Assert.Contains("source_revision", sent);
+        foreach (var field in sent)
+        {
+            Assert.Contains(field, declared);
+        }
     }
 
     [Fact]

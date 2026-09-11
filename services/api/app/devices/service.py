@@ -95,6 +95,8 @@ def to_view(
         # healthy 0.6.0 candidate happened because the installer read the top
         # level and found nothing there.
         software_version=device.software_version,
+        build_id=device.build_id,
+        source_revision=device.source_revision,
         enrolled_at=_aware(device.enrolled_at) or now,
         last_seen_at=_aware(device.last_seen_at),
         aliases=tuple(metadata.get("aliases") or []),

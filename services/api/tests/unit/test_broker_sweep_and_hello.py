@@ -221,3 +221,100 @@ def test_expire_due_commands_still_runs_alongside_sweep_delivery(runtime: Broker
         due = service.expire_due_commands(db)
     assert len(due) == 1
     assert due[0].status == "expired"
+
+
+# ------------------------------------------------------------ ADR-0118: build identity
+
+
+def test_two_builds_that_share_a_product_version_are_still_tellable_apart(
+    runtime: BrokerRuntime,
+) -> None:
+    """The 2026-09-08 rollback, and the thing that made it unprovable.
+
+    `software_version` is the PRODUCT release and is meant to stay still across builds — the
+    deployed agent announced `0.6.0` while advertising the 85-capability M28 manifest. The
+    staged updater compares this row, so two different builds were indistinguishable to the
+    one check that decides whether a swap took.
+    """
+    device = _enroll(runtime)
+    with runtime.session() as db:
+        service.apply_hello(
+            db, device.id, capabilities=["desktop.open_application"],
+            software_version="0.6.0", build_id="aaaaaaaaaaaaaaaa", source_revision="72843b2",
+        )
+        row = service.get_device(db, device.id)
+        # Read into plain values, not held as an ORM object: `apply_hello` ends with
+        # `expire_all()`, so a reference kept across the second hello would silently
+        # re-load and compare the new row with itself.
+        first = (row.software_version, row.build_id, row.source_revision)
+        assert first == ("0.6.0", "aaaaaaaaaaaaaaaa", "72843b2")
+
+        # A different build of the same product release reconnects.
+        service.apply_hello(
+            db, device.id, capabilities=["desktop.open_application"],
+            software_version="0.6.0", build_id="bbbbbbbbbbbbbbbb", source_revision="699c165",
+        )
+        row = service.get_device(db, device.id)
+        second = (row.software_version, row.build_id, row.source_revision)
+
+    assert second[0] == first[0], "the product version is unchanged"
+    assert second[1] != first[1], "and yet the row can tell the two builds apart"
+    assert second[2] == "699c165"
+
+
+def test_an_agent_that_stops_announcing_an_identity_does_not_leave_the_old_one_standing(
+    runtime: BrokerRuntime,
+) -> None:
+    """A stale identity reads as 'the candidate is live' to the staged updater, which is
+    exactly the false pass this field exists to prevent. Rolling back to an agent older than
+    ADR-0118 must clear it, not inherit it."""
+    device = _enroll(runtime)
+    with runtime.session() as db:
+        service.apply_hello(
+            db, device.id, capabilities=["desktop.open_application"],
+            software_version="0.6.0", build_id="cccccccccccccccc",
+        )
+        assert service.get_device(db, device.id).build_id == "cccccccccccccccc"
+
+        service.apply_hello(
+            db, device.id, capabilities=["desktop.open_application"], software_version="0.6.0",
+        )
+        assert service.get_device(db, device.id).build_id is None
+
+
+def test_the_hello_frame_accepts_a_build_identity_and_survives_without_one(
+    runtime: BrokerRuntime,
+) -> None:
+    """Optional on the wire: an agent built before ADR-0118 must still handshake."""
+    from app.broker.frames import HelloFrame
+
+    device_id = str(uuid.uuid4())
+    with_id = HelloFrame.model_validate(
+        {
+            "type": "hello", "protocol_version": 2, "device_id": device_id,
+            "software_version": "0.6.0", "build_id": "dddddddddddddddd",
+            "source_revision": "699c165", "capabilities": ["desktop.open_application"],
+        }
+    )
+    assert (with_id.build_id, with_id.source_revision) == ("dddddddddddddddd", "699c165")
+
+    without = HelloFrame.model_validate(
+        {
+            "type": "hello", "protocol_version": 2, "device_id": device_id,
+            "software_version": "0.6.0", "capabilities": ["desktop.open_application"],
+        }
+    )
+    assert without.build_id is None and without.source_revision is None
+
+
+def test_the_session_row_records_which_build_was_on_this_socket(runtime: BrokerRuntime) -> None:
+    """`devices.build_id` is the last known build; the session row is per-connection history,
+    which is what tells a later reader WHEN a swap actually took effect."""
+    device = _enroll(runtime)
+    with runtime.session() as db:
+        row = service.start_device_session(
+            db, device_id=device.id, software_version="0.6.0",
+            build_id="eeeeeeeeeeeeeeee", connection_metadata={}, trace_id=None,
+        )
+        db.commit()
+        assert db.get(DeviceSession, row.id).build_id == "eeeeeeeeeeeeeeee"

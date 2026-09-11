@@ -66,6 +66,8 @@ public static class Program
             // agree with the announced version, and a derived fingerprint of the capability
             // vocabulary so two installs that claim the same manifest really speak it.
             ["software_version"] = AgentInfo.SoftwareVersion,
+            ["build_id"] = AgentInfo.BuildId,
+            ["source_revision"] = AgentInfo.SourceRevision,
             ["component"] = AgentInfo.Component,
             ["assembly_version"] = AgentInfo.AssemblyVersion,
             ["capability_manifest_version"] = AgentInfo.CapabilityManifestVersion,
@@ -432,9 +434,10 @@ public static class Program
         // without anyone having to ask another process. `started_at` is here rather than
         // inferred from the log's timestamp because a rotated or re-read log loses that.
         logger.LogInformation(
-            "agent identity: component={Component} software_version={SoftwareVersion} assembly_version={AssemblyVersion} capability_manifest={CapabilityManifest} started_at={StartedAt}",
+            "agent identity: component={Component} software_version={SoftwareVersion} build_id={BuildId} assembly_version={AssemblyVersion} capability_manifest={CapabilityManifest} started_at={StartedAt}",
             AgentInfo.Component,
             AgentInfo.SoftwareVersion,
+            AgentInfo.BuildId,
             AgentInfo.AssemblyVersion,
             AgentInfo.CapabilityManifestVersion,
             DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));

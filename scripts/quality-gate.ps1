@@ -302,6 +302,12 @@ if (-not $Fast) {
       Assert-ExitCode "dotnet build"
       & $dotnet test PagentOS.WindowsAgent.sln --nologo --no-build -v q
       Assert-ExitCode "dotnet test"
+      # Release too, because a LATER step judges it. `qualify-staged-update.ps1` takes
+      # bin\Release as the candidate (falling back to Debug), so without this the gate
+      # tests one binary and qualifies another - and a stale Release tree is qualified as
+      # though it were the tree. Found 2026-09-11 when a new identity field read empty.
+      & $dotnet build PagentOS.WindowsAgent.sln -c Release --nologo -v q
+      Assert-ExitCode "dotnet build -c Release"
     } finally { Pop-Location }
   }
 

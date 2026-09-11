@@ -203,6 +203,33 @@ def _file_inspect(payload: dict[str, Any]) -> DeviceRunResult:
     path = _find_path(payload)
     if path is None:
         return DeviceRunResult(False, "not_found", "not_found")
+    if path.lower().endswith(".exe"):
+        # M28 row 26.16. The device's own reader (PeImageReader) adds a `pe` block when the
+        # bytes really are a PE; Cloud Core builds ArtifactFacts out of it and runs
+        # validate_against_spec. The fixture corpus is documents, so a native artefact is
+        # answered here in the shape the DEVICE returns rather than being looked up as one.
+        name = path.replace("/", chr(92)).rsplit(chr(92), 1)[-1]
+        return DeviceRunResult(
+            True,
+            result={
+                "file": {
+                    "file_id": "file_native",
+                    "path": path,
+                    "name": name,
+                    "extension": ".exe",
+                    "size": 162304,
+                    "mtime": "2026-09-09T19:07:00.0000000Z",
+                    "sha256": "a" * 64,
+                },
+                "kind": "unknown",
+                "is_text": False,
+                "pe": {
+                    "version": "0.1.0",
+                    "architecture": "x64",
+                    "subsystem": "windows_gui",
+                },
+            },
+        )
     expected = load_expected(path)
     result: dict[str, Any] = {"file": file_record(path), "kind": expected["kind"]}
     structure = expected.get("structure") or {}

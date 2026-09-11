@@ -29,6 +29,8 @@ from app.nativefactory.device_build import (
 )
 from app.nativefactory.models import (
     STATE_FAILED,
+    STATE_MISMATCH,
+    STATE_UNVERIFIED,
     STATE_VERIFIED,
     NativeBuildRow,
 )
@@ -101,7 +103,32 @@ def _healthy() -> FakeDevice:
         project_test=DeviceRunResult(True, result={"exit_code": 0, "passed": 3, "failed": 0}),
         project_run_publish=DeviceRunResult(True, result={"command_key": "publish"}),
         file_inspect=DeviceRunResult(
-            True, result={"size_bytes": 162304, "sha256": "a" * 64}
+            # The shape the REAL device returns: DocumentCapabilities.Inspect wraps
+            # FileIdentity.ToJson under "file" and names the size `size`. The fake used to
+            # answer {"size_bytes": …, "sha256": …} at the top level, which the device has
+            # never produced -- so this test proved the reader against a shape that does not
+            # exist, and the reader was reading None for both while stamping `verified`.
+            True,
+            result={
+                "file": {
+                    "file_id": "f1",
+                    "path": ROOT + chr(92) + "out" + chr(92) + "notlarim.exe",
+                    "name": "notlarim.exe",
+                    "extension": ".exe",
+                    "size": 162304,
+                    "mtime": "2026-09-09T19:07:00.0000000Z",
+                    "sha256": "a" * 64,
+                },
+                "kind": "unknown",
+                "is_text": False,
+                # M28 row 26.16: the PE block PeImageReader adds when the bytes really are a
+                # PE. The names are ArtifactFacts', because Cloud Core builds that out of it.
+                "pe": {
+                    "version": "0.1.0",
+                    "architecture": "x64",
+                    "subsystem": "windows_gui",
+                },
+            },
         ),
     )
 
@@ -176,12 +203,114 @@ def test_the_artefact_is_read_back_by_the_device_not_inferred_from_an_exit_code(
 
     outcome = build_on_device(db, row, device)
 
+    # `verified` is EARNED here, not inferred: the device read the PE and Cloud Core ran the
+    # same `validate_against_spec` the local path runs. One judge, two sources of facts.
     assert row.state == STATE_VERIFIED
-    assert outcome.artifact["size_bytes"] == 162304
+    assert row.verdict_json["ok"] is True
+    assert row.verdict_json["mismatches"] == []
+    assert row.verdict_json["facts"]["version"] == "0.1.0"
+    assert outcome.artifact["size_bytes"] == 162304, "read from file.size, where the device puts it"
+    assert outcome.artifact["sha256"] == "a" * 64
     assert outcome.artifact["read_back_by"] == "device file.inspect"
     assert row.artifact_path == ROOT + r"\out\notlarim.exe"
     assert device.payload_for("file.inspect")["path"] == row.artifact_path
     assert row.tests_json == {"exit_code": 0, "passed": 3, "failed": 0}
+
+
+def test_an_inspect_that_answers_nothing_usable_is_named_not_stamped(db):
+    """The bypass, in its worst form. Before 2026-09-11 this path read `size_bytes`/`sha256`
+    off the TOP of the result -- keys the device has never emitted -- so both were None and
+    the row was stamped `verified` anyway: a verdict with literally nothing behind it."""
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(True, result={"kind": "binary"})
+    row = _row(db)
+
+    outcome = build_on_device(db, row, device)
+
+    assert row.state == STATE_UNVERIFIED
+    assert outcome.artifact["size_bytes"] is None and outcome.artifact["sha256"] is None
+    assert "answered nothing usable" in row.verdict_json["reason"]
+    assert "size" in row.verdict_json["reason"] and "sha256" in row.verdict_json["reason"]
+
+
+def test_an_empty_artefact_is_never_a_success(db):
+    """`publish exited 0` plus a zero-byte file is the failure this milestone exists to
+    refuse; the local path names it through validate_against_spec and so must this one."""
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(
+        True,
+        result={
+            "file": {"size": 0, "sha256": "b" * 64, "name": "notlarim.exe"},
+            "kind": "unknown",
+            "pe": {"version": "0.1.0", "architecture": "x64", "subsystem": "windows_gui"},
+        },
+    )
+    row = _row(db)
+
+    build_on_device(db, row, device)
+
+    assert row.state == STATE_MISMATCH
+    assert "artefact is empty" in row.verdict_json["mismatches"]
+
+
+def test_a_build_that_produced_yesterdays_exe_is_a_mismatch_not_a_pass(db):
+    """The failure this milestone exists to make impossible: a factory that hands back an
+    older binary while reporting success. The version is the only thing that can catch it."""
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(
+        True,
+        result={
+            "file": {"size": 162304, "sha256": "c" * 64, "name": "notlarim.exe"},
+            "kind": "unknown",
+            "pe": {"version": "0.0.9", "architecture": "x64", "subsystem": "windows_gui"},
+        },
+    )
+    row = _row(db)
+
+    build_on_device(db, row, device)
+
+    assert row.state == STATE_MISMATCH
+    assert any("0.0.9" in m for m in row.verdict_json["mismatches"])
+
+
+def test_a_console_image_where_a_desktop_app_was_asked_for_is_a_mismatch(db):
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(
+        True,
+        result={
+            "file": {"size": 162304, "sha256": "d" * 64, "name": "notlarim.exe"},
+            "kind": "unknown",
+            "pe": {"version": "0.1.0", "architecture": "x64", "subsystem": "windows_console"},
+        },
+    )
+    row = _row(db)
+
+    build_on_device(db, row, device)
+
+    assert row.state == STATE_MISMATCH
+    assert any("console" in m for m in row.verdict_json["mismatches"])
+
+
+def test_an_agent_older_than_row_26_16_leaves_the_build_unverified(db):
+    """A device that cannot report a PE's own identity cannot produce a verified build. It
+    says so, in the row, rather than passing on size and hash -- which is what this path did
+    until 2026-09-11."""
+    device = _healthy()
+    device._answers["file_inspect"] = DeviceRunResult(
+        True,
+        result={
+            "file": {"size": 162304, "sha256": "e" * 64, "name": "notlarim.exe"},
+            "kind": "unknown",
+        },
+    )
+    row = _row(db)
+
+    build_on_device(db, row, device)
+
+    assert row.state == STATE_UNVERIFIED
+    assert row.verdict_json["ok"] is False
+    assert "no PE block" in row.verdict_json["reason"]
+    assert row.verdict_json["not_checked"] == ["version", "subsystem"]
 
 
 # ------------------------------------------------------------------ the refusal matrix

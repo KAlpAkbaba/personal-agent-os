@@ -85,7 +85,7 @@ function New-AgentCandidateManifest {
     # SoftwareVersion / Component / AssemblyVersion / CapabilityManifestVersion, each read
     # defensively: the staged binary always has them, an older one does not, and this must
     # describe both truthfully rather than throw under StrictMode.
-    foreach ($field in @("SoftwareVersion", "Component", "AssemblyVersion", "CapabilityManifestVersion")) {
+    foreach ($field in @("SoftwareVersion", "Component", "AssemblyVersion", "CapabilityManifestVersion", "BuildId", "SourceRevision")) {
         $identity[$field] = if (($manifestNames -contains $field) -and $ServiceManifest.$field) { [string]$ServiceManifest.$field } else { "" }
     }
     $version = $identity["SoftwareVersion"]
@@ -390,6 +390,36 @@ function Get-DeviceRowSoftwareVersion {
     return ""
 }
 
+function Get-DeviceRowBuildId {
+    <#
+    .SYNOPSIS
+        The build identity of a /v1/devices row, or "" when the row carries none.
+    .DESCRIPTION
+        ADR-0118. `software_version` is the PRODUCT release and is meant to stay still across
+        builds - the agent announced 0.6.0 while advertising the 85-capability M28 manifest,
+        so two different builds were indistinguishable to the one comparison that decides
+        whether a staged update took. `build_id` is derived on the device from its own
+        assemblies and changes by construction.
+
+        Read from the top of the row first and from `health` as a FALLBACK, the same two
+        locations and the same order as Get-DeviceRowSoftwareVersion - that function exists
+        because the 2026-09-08 incident was a reader looking in one place, and a new field
+        with a one-place reader would be the same defect with a different name.
+
+        "" means the row named no build identity anywhere. That is an agent older than
+        ADR-0118, or one that could not read its own files. It is never a match.
+    #>
+    param([Parameter(Mandatory = $true)]$Row)
+    $top = [string](Get-ManifestMember $Row "build_id")
+    if ($top) { return $top }
+    $health = Get-ManifestMember $Row "health"
+    if ($null -ne $health) {
+        $nested = [string](Get-ManifestMember $health "build_id")
+        if ($nested) { return $nested }
+    }
+    return ""
+}
+
 function Test-AgentHeartbeatOnCore {
     <#
     .SYNOPSIS
@@ -403,6 +433,11 @@ function Test-AgentHeartbeatOnCore {
         [Parameter(Mandatory = $true)][scriptblock]$FetchDevices,
         [Parameter(Mandatory = $true)][string]$DeviceId,
         [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        <#  ADR-0118. The candidate's own AgentInfo.BuildId. When supplied it is the
+            DECIDING comparison: a product version that is meant to stay still cannot prove
+            a swap took. Left empty the check degrades to the pre-ADR-0118 behaviour, so an
+            older caller keeps working.  #>
+        [string]$ExpectedBuildId = "",
         [string[]]$ExpectedCapabilities = @(),
         [int]$TimeoutSeconds = 90,
         [int]$PollSeconds = 3,
@@ -410,7 +445,7 @@ function Test-AgentHeartbeatOnCore {
         [scriptblock]$Now = { Get-Date }
     )
     $started = & $Now
-    $observed = [ordered]@{ presence = $null; software_version = $null; capability_count = 0; last_seen_at = $null; fetch_error = $null }
+    $observed = [ordered]@{ presence = $null; software_version = $null; build_id = $null; capability_count = 0; last_seen_at = $null; fetch_error = $null }
     $reasons = @()
     $attempt = 0
     while ($true) {
@@ -463,6 +498,22 @@ function Test-AgentHeartbeatOnCore {
                 $reasons += "Cloud Core's device row carries no software version at all (neither row.software_version nor row.health.software_version); the candidate is $ExpectedVersion - this is a Cloud Core contract fault, not a candidate fault"
             }
             elseif ($version -ne $ExpectedVersion) { $reasons += "the device reports software version '$version', the candidate is $ExpectedVersion" }
+            # ADR-0118: the product version above is necessary and NOT sufficient. It is
+            # meant to stay still across builds, so matching it proves only that the row is
+            # not some other product release - never that the CANDIDATE is what is running.
+            $rowBuild = Get-DeviceRowBuildId -Row $row
+            $observed.build_id = $rowBuild
+            if ($ExpectedBuildId) {
+                if (-not $rowBuild) {
+                    $reasons += "Cloud Core's device row carries no build identity (neither row.build_id nor row.health.build_id); the candidate is $ExpectedBuildId - an agent older than ADR-0118, or one that could not read its own assemblies. A swap cannot be proven from the product version alone"
+                }
+                elseif ($rowBuild -eq "unknown") {
+                    $reasons += "the device announces build identity 'unknown' - it could not read its own assemblies, so it cannot prove which build it is; the candidate is $ExpectedBuildId"
+                }
+                elseif ($rowBuild -ne $ExpectedBuildId) {
+                    $reasons += "the device reports build '$rowBuild', the candidate is '$ExpectedBuildId' - the swap has not taken effect on Cloud Core"
+                }
+            }
             $missing = @($ExpectedCapabilities | Where-Object { $caps -notcontains $_ })
             if (@($missing).Count -gt 0) { $reasons += "the device does not advertise: $($missing -join ', ')" }
         }

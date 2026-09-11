@@ -37,13 +37,16 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.appfactory.validation import validate_files
+from app.nativefactory.artifacts import ArtifactFacts, validate_against_spec
 from app.nativefactory.generator import render
 from app.nativefactory.models import (
     STATE_BUILDING,
     STATE_FAILED,
     STATE_GENERATING,
+    STATE_MISMATCH,
     STATE_TESTING,
     STATE_UNAVAILABLE,
+    STATE_UNVERIFIED,
     STATE_VERIFIED,
     NativeBuildRow,
 )
@@ -104,6 +107,11 @@ def native_manifest(csproj: str, publish_dir: str) -> dict[str, Any]:
         },
         "test": f"dotnet test {csproj} -c Release",
     }
+
+
+def _as_text(value: object) -> str | None:
+    """A JSON value the device sent, as text -- or None. Never str(None)."""
+    return str(value) if isinstance(value, str) and value.strip() else None
 
 
 def _fail(
@@ -233,9 +241,16 @@ def build_on_device(
     if not inspected.ok:
         return _fail(db, row, inspected, step="file.inspect")
 
-    artifact = {
-        "size_bytes": inspected.result.get("size_bytes"),
-        "sha256": inspected.result.get("sha256"),
+    # `file.inspect` nests the file record under "file" (FileIdentity.ToJson: file_id, path,
+    # name, extension, size, mtime, sha256). Reading `size_bytes`/`sha256` off the TOP of the
+    # result -- which this did until 2026-09-11 -- produced None for both, and the row was
+    # still stamped `verified`. A verdict with literally nothing behind it.
+    record = inspected.result.get("file")
+    record = record if isinstance(record, dict) else {}
+    artifact: dict[str, Any] = {
+        "size_bytes": record.get("size"),
+        "sha256": record.get("sha256"),
+        "kind": inspected.result.get("kind"),
         "read_back_by": "device file.inspect",
     }
     tests = {
@@ -243,11 +258,80 @@ def build_on_device(
         "passed": tested.result.get("passed"),
         "failed": tested.result.get("failed"),
     }
+
+    # The state this run has EARNED, and no more.
+    #
+    # `validate_against_spec` calls its version check "the point of the whole module": an
+    # artefact that cannot prove which build it is cannot be trusted to be the build that was
+    # just made. So this path may reach `verified` only by running that check, on facts the
+    # DEVICE read out of the file -- never by inferring it from an exit code, and never by
+    # borrowing a word the local path earns by reading the artefact itself.
+    #
+    # `file.inspect` answers the PE block when the file really is one (PeImageReader, M28
+    # row 26.16); a device older than that answers none, and a build read back by such a
+    # device is `unverified` BY CONSTRUCTION rather than quietly passing.
+    pe = inspected.result.get("pe")
+    pe = pe if isinstance(pe, dict) else None
+
+    missing: list[str] = []
+    if artifact["size_bytes"] is None:
+        missing.append("size")
+    if not artifact["sha256"]:
+        missing.append("sha256")
+
+    if missing or pe is None:
+        reason = (
+            "the device reported the file, not its identity: file.inspect returned no PE "
+            "block, so app.nativefactory.artifacts.validate_against_spec could not run. An "
+            "agent older than M28 row 26.16 cannot report a PE's own version, and a build it "
+            "read back is unverified by construction."
+        )
+        if missing:
+            reason = (
+                "the device's file.inspect answered nothing usable about the artefact ("
+                + ", ".join(missing)
+                + "); " + reason
+            )
+        row.artifact_path = artifact_path
+        row.artifact_json = artifact
+        row.verdict_json = {
+            "ok": False,
+            "checked_by": "device file.inspect",
+            "not_checked": ["version", "subsystem"],
+            "reason": reason,
+        }
+        row.tests_json = tests
+        row.updated_at = datetime.now(UTC)
+        _touch(db, row, STATE_UNVERIFIED)
+        return DeviceBuildOutcome(
+            ok=True,
+            root_path=root_path,
+            artifact_path=artifact_path,
+            artifact=artifact,
+            tests=tests,
+        )
+
+    # The device read the file. Cloud Core now compares what it read with what was ASKED,
+    # through the SAME function the local path uses -- one judge, two sources of facts.
+    facts = ArtifactFacts(
+        path=artifact_path,
+        kind="pe",
+        size_bytes=int(artifact["size_bytes"]),
+        sha256=str(artifact["sha256"]),
+        version=_as_text(pe.get("version")),
+        architecture=_as_text(pe.get("architecture")),
+        subsystem=_as_text(pe.get("subsystem")),
+        detail={"read_back_by": "device file.inspect"},
+    )
+    outcome_verdict = validate_against_spec(facts, spec)
+    artifact.update({k: v for k, v in facts.as_dict().items() if k not in artifact})
+
     row.artifact_path = artifact_path
     row.artifact_json = artifact
+    row.verdict_json = outcome_verdict.as_dict()
     row.tests_json = tests
     row.updated_at = datetime.now(UTC)
-    _touch(db, row, STATE_VERIFIED)
+    _touch(db, row, STATE_VERIFIED if outcome_verdict.ok else STATE_MISMATCH)
     return DeviceBuildOutcome(
         ok=True,
         root_path=root_path,

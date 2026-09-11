@@ -55,6 +55,7 @@ from app.actions.receipt import (
 )
 from app.ledger.vocabulary import SUBSYSTEM_NATIVEFACTORY
 from app.logging import get_logger
+from app.nativefactory.device_build import build_on_device
 from app.nativefactory.models import (
     STATE_FAILED,
     STATE_MISMATCH,
@@ -410,7 +411,22 @@ def _run_lifecycle(
         )
     runner = ctx.live.get("native_runner")
     root = ctx.live.get("native_root")
-    if runner is None or root is None or facts.dotnet is None:
+    local_ready = runner is not None and root is not None and facts.dotnet is not None
+
+    if not local_ready:
+        # M28 row 26.16. Production is a Linux Cloud Core with no .NET SDK, no makeappx and
+        # no Windows; the machine that has all three is the owner's enrolled device. So the
+        # absence of a LOCAL runner is not the end of the road here -- it is the normal case,
+        # and the device path is the real one.
+        #
+        # `facts` above measures THIS machine, which is why it is not consulted below: a
+        # Linux Cloud Core's missing dotnet says nothing about the device's. If the device
+        # has no toolchain, its own `project.run` refuses and that refusal reaches the row in
+        # the device's own words (`device_build._fail`), which is more useful than a guess
+        # made here.
+        device = ctx.live.get("device_action")
+        if device is not None:
+            return _build_on_device(ctx, row, device, capability=capability)
         return _refused(
             ctx,
             capability=capability,
@@ -457,6 +473,53 @@ def _run_lifecycle(
         server=_row_summary(row),
         error_class=row.error_class,
         extra={"build": _row_summary(row)},
+    )
+
+
+def _build_on_device(
+    ctx: ToolContext,
+    row: NativeBuildRow,
+    device: Any,
+    *,
+    capability: str,
+) -> dict[str, Any]:
+    """The production chain, end to end, on the machine that actually has a compiler.
+
+        NativeAppSpec -> render + the SAME file policy the local path uses
+                      -> project.scaffold(root="native") on the enrolled device
+                      -> project.run build / project.test / project.run publish
+                      -> file.inspect, read back BY THE DEVICE
+                      -> validate_against_spec, run HERE on what the device read
+                      -> the durable row, and the receipt composed from it
+
+    Nothing is compiled on Cloud Core and nothing is inferred from an exit code. The verdict
+    is the same function the lab path uses -- one judge, two sources of facts -- so a row
+    cannot say `verified` because a device-shaped path was taken; it says it because the
+    version the device read out of the artefact is the version the spec asked for.
+    """
+    outcome = build_on_device(ctx.db, row, device)
+    if not outcome.ok:
+        return _receipt(
+            ctx,
+            capability=capability,
+            requested_state=row.target,
+            execution=EXECUTION_FAILED,
+            terminal=TERMINAL_FAILED,
+            speech=receipt_for(row),
+            server=_row_summary(row),
+            error_class=row.error_class,
+            extra={"build": _row_summary(row), "built_on": "device"},
+        )
+    return _receipt(
+        ctx,
+        capability=capability,
+        requested_state=row.target,
+        execution=EXECUTION_EXECUTED,
+        terminal=_TERMINAL_BY_STATE.get(row.state, TERMINAL_UNVERIFIED),
+        speech=receipt_for(row),
+        server=_row_summary(row),
+        error_class=row.error_class,
+        extra={"build": _row_summary(row), "built_on": "device"},
     )
 
 

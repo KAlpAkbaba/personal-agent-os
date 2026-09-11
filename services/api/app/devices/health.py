@@ -30,12 +30,19 @@ class DeviceHealth:
     last_hello_at: str | None
     software_version: str | None
     heartbeat_age_s: float | None
+    #: Repeated here for the Cockpit, exactly as `software_version` is: one value, two
+    #: readable places, never two values. The verifier reads the top of the row first and
+    #: this as a fallback (ADR-0118). Defaulted and placed AFTER the required fields so
+    #: every existing positional construction keeps working -- an optional addition must
+    #: not be a breaking change to a frozen dataclass's signature.
+    build_id: str | None = None
     recent_outcomes: tuple[CommandOutcome, ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "last_hello_at": self.last_hello_at,
             "software_version": self.software_version,
+            "build_id": self.build_id,
             "heartbeat_age_s": self.heartbeat_age_s,
             "recent_outcomes": [
                 {
@@ -72,6 +79,7 @@ def build_health(
     return DeviceHealth(
         last_hello_at=_iso(device.last_seen_at),
         software_version=device.software_version,
+        build_id=device.build_id,
         heartbeat_age_s=heartbeat_age_s(_aware(device.last_seen_at), now),
         recent_outcomes=tuple(
             CommandOutcome(

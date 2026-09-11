@@ -368,6 +368,20 @@ public sealed class DocumentCapabilities
             return result;
         }
 
+        // M28 row 26.16. A PE says what build it is; nothing else in this result does, and a
+        // native build read back without it could only ever be `unverified` on Cloud Core.
+        // Additive: no new capability name and no new file kind - an executable extension is
+        // `unknown` to FileKinds and stays so. The block appears only when the bytes really
+        // are a PE, so a file that merely ends in .exe gets nothing rather than a guess.
+        if (OperatorCapabilities.ExecutableExtensions.Contains(target.Record.Extension))
+        {
+            var pe = PeImageReader.TryRead(target.Path);
+            if (pe is not null)
+            {
+                result["pe"] = pe;
+            }
+        }
+
         var extractor = ExtractorFor(target.Kind);
         if (extractor is not null)
         {

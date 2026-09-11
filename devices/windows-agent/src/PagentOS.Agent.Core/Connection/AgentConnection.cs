@@ -106,6 +106,8 @@ public sealed class AgentConnection(
                 ProtocolVersion = ProtocolConstants.Version,
                 DeviceId = options.DeviceId,
                 SoftwareVersion = options.SoftwareVersion,
+                BuildId = options.BuildId,
+                SourceRevision = options.SourceRevision,
                 Capabilities = options.Capabilities,
             },
             handshakeToken).ConfigureAwait(false);

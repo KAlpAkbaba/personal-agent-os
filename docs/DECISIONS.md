@@ -9980,6 +9980,163 @@ Three mutations, three reds: prefixes restored to the schedule guard reds the tw
 schedule cases; stem-matching restored to the bare-title verb reds the "açıkla" case; the
 matcher unwired reds the twelve bare cases. 1891 corpus utterances green (48 new).
 
+## ADR-0118 — A product version cannot also be a build identity (2026-09-11)
+
+The staged updater decides whether a candidate took by asking Cloud Core what the device
+announces. The only identity it announced was `software_version`, and on 2026-09-11 the
+deployed agent announced **`0.6.0`** — the M25 number — while advertising the full
+**85-capability M28 manifest**. Two different builds were therefore indistinguishable to the
+one comparison that decides a rollback.
+
+That is not a hypothetical. On 2026-09-08 a healthy release was rolled back over this same
+field, because the verifier read it from a place the row did not carry it (fixed then, in
+`Get-DeviceRowSoftwareVersion`). This is the other half of the same mistake: having found
+the field, we asked it to answer a question it structurally cannot. `software_version` is a
+**product** version. ADR-0095 addendum 2 §1 is explicit that M28 adds no capability name and
+therefore does not bump it — deliberately, so the manifest arithmetic holds. A number that is
+*supposed* to stay still across builds cannot prove that a build changed.
+
+**What was added, and what was deliberately not.** No second version to maintain. `BuildId`
+is **derived**: every `PagentOS.*.dll` beside the running assembly, sorted by name, each
+file's name and SHA-256 folded into one digest, first 16 hex. It cannot drift, cannot be
+forgotten at release time, and changes by construction when the agent's own code changes.
+The .NET runtime files sitting next to it are excluded — a runtime patch is not a new agent
+build. `SourceRevision` rides along as provenance only (the SDK already stamps `+<sha>` into
+`AssemblyInformationalVersionAttribute` from the git checkout, with nothing in this
+repository configuring it); it is never compared, because two builds of one commit share it
+and a build from a dirty tree names a commit it was not quite built from.
+
+Semantic versioning is untouched. `SoftwareVersion` still answers "which product release is
+this", `AgentIdentityTests` still holds it equal to the assembly version, and
+`qualify-staged-update.ps1`'s `^\d+\.\d+\.\d+$` assertion still passes.
+
+**The wire and the row.** `build_id` and `source_revision` are optional on the hello, so an
+agent built before this change still handshakes. `apply_hello` writes them **even when they
+are absent** — a rollback to an older agent must clear the identity, because a stale one
+reads as "the candidate is live" to the updater, which is precisely the false pass this
+exists to prevent. `device_sessions.build_id` records which build was on each socket, which
+is what later tells a reader *when* a swap took effect. Migration `0040`, expand-only, three
+nullable columns.
+
+**The comparison.** `Test-AgentHeartbeatOnCore` gains `-ExpectedBuildId`. Supplied, it is the
+deciding check and the product-version check stays as a necessary-but-not-sufficient one;
+omitted, behaviour is exactly as before, so nothing that worked stops working. A row with no
+identity, or one announcing `unknown`, is **never a match** — an agent that cannot say which
+build it is has not proven anything. `Get-DeviceRowBuildId` reads the top of the row first
+and `health` as a fallback, the same two locations in the same order as the version reader:
+a new field with a one-place reader would be the 2026-09-08 defect wearing a different name.
+
+**Proven by watching it fail.** Two mutations on the Cloud Core side, both red: dropping the
+write entirely, and the subtler one — keeping the old identity when a hello carries none,
+which is the false-pass shape. Six PowerShell cases cover the decision itself, including the
+one that names the whole point: *same product version, different build, reported as a swap
+that has not taken — and not as a version mismatch.* Four C# tests cover the derivation,
+including that a single differing byte changes the answer and that adding an assembly changes
+it even when every existing byte is untouched.
+
+**Known limit, stated.** `BuildId` identifies the agent's own assemblies, not the whole
+install tree. A change confined to a non-`PagentOS.*` file next to them — a runtime, a
+config, the browser worker's Python — does not move it. The browser worker already carries
+its own release identity through the candidate manifest (`package_sha256`), and the two are
+compared separately; nothing here widens or replaces that.
+
+### Addendum — the announcement must not be able to refuse the connection (2026-09-11)
+
+**What happened.** The owner installed the first agent carrying `build_id` while production
+still ran a Cloud Core from before this ADR (`699c165`). That Cloud Core's `HelloFrame`
+forbade fields it did not know, so the hello was refused (`extra_forbidden`), the handshake
+ended in `auth_error`, the device went offline, and the staged installer — correctly — rolled
+the agent back after 92 s. Nothing was lost and the device came back on its previous build.
+The installer did its job; the rule was wrong.
+
+**The defect, precisely.** An *additive* field from a newer agent could take a device off the
+network. It was not only an ordering accident ("release Cloud Core first"): after a release
+the previous Cloud Core stays last-known-good, so any Cloud Core rollback would have stranded
+every agent newer than it — at exactly the moment the owner most needs the device.
+
+**The rule now.** `hello` — and only `hello` — ignores top-level fields it does not know.
+Every field it does know is validated exactly as before (type, bounds, capability names, the
+required set); an unknown field is dropped unread and has no effect on authentication, which
+signs the nonce and the device id and nothing in this frame. The dropped names are kept
+(sorted, at most 16, each cut to 64 characters, because hello arrives before authentication)
+and logged as `broker_hello_fields_ignored` only **after** the device has authenticated, so a
+build/Core skew is a visible fact and an unauthenticated peer cannot write into the log. Every
+other inbound frame keeps `extra="forbid"`: each already has a designated extension point
+(`heartbeat.status`, `command_ack.result`), and hello was the one frame without one.
+
+**The second half of the drift.** `packages/schemas/device-protocol.schema.json` — which calls
+itself the authoritative contract — never received `build_id` or `source_revision`. The C#
+test named `Serialized_field_names_match_schema` compared against a list typed into the test,
+not against the schema, so nothing noticed. The schema now declares both, with a `$comment`
+carrying both halves of the rule (emitters stay closed, receivers ignore). Two tests now read
+the schema instead of restating it: Python (`HelloFrame`'s fields are exactly the schema's
+properties and the required sets are equal) and C# (every field the agent's real hello
+serialises is declared).
+
+**The rollout order that follows.** This tolerance protects only a Cloud Core that has it.
+So: release Cloud Core with it, release again so last-known-good has it too, and only then
+install the agent that announces `build_id`. After that, a future additive hello field needs
+no ordering at all.
+
+**Proven by watching it fail.** Five mutations on the Cloud Core side, each red: hello
+forbidding again (4 tests), the name bound removed (1), every inbound frame opened (4), the
+log moved before authentication (1), `build_id` removed from the schema (1). On the agent
+side, `source_revision` removed from the schema turns the new C# contract test red.
+
+## ADR-0119 — The build belongs to the machine that has a compiler (2026-09-11)
+
+Row 26.16 asked for one thing M28 never had: a native build **startable from production**.
+The device half has existed and been tested since `7cbb41b`, whose own commit message says
+"parked here, not wired"; `app/main.py` registers seventeen live keys and `native_runner` is
+not among them, so `native.build` in production could only ever answer
+`dependency_unavailable` — truthfully, and uselessly.
+
+**Why the obvious fix was the wrong one.** Registering a local runner would have made the
+tool pass. Production is a Linux Cloud Core with no .NET SDK, no `makeappx` and no Windows,
+so that runner would have been a subprocess path that could never compile anything — a green
+tool call standing in for a build. The machine that has all three is the owner's enrolled
+device, and it already advertises every capability this needs.
+
+So `_run_lifecycle` gains a branch rather than a registration: no local runner means the
+**device** path, through the same `device_action` port every other family uses. `facts`
+deliberately stops being consulted there — it measures *this* machine, and a Linux Cloud
+Core's missing dotnet says nothing about the device's. A device without a toolchain refuses
+in its own words through `project.run`, which is more useful than a guess made here.
+
+**The half that was missing, and it was not the wiring.** `build_on_device` reached
+`STATE_VERIFIED` from `file.inspect` alone, and `file.inspect` answers size, hash and kind.
+It never opens the PE. So the version comparison `validate_against_spec` calls "the point of
+the whole module" could not run, and the row claimed its conclusion anyway. Worse, it read
+`size_bytes`/`sha256` off the TOP of the result, where the device has never put them
+(`FileIdentity.ToJson` nests the record under `file` and names the size `size`) — so both
+were `None` on every run. A verdict with literally nothing behind it. Fixed separately in
+`8eb574c`; the row now says `unverified` when it cannot check, with the reason.
+
+**`PeImageReader`.** The device reads what the artefact says about itself: its version
+resource, machine word and subsystem. No new capability name (ADR-0095 addendum 2 section 1)
+and no new file kind — an additive block on a result `file.inspect` already returns, produced
+only when the first two bytes really are `MZ`. The version comes from `FileVersionInfo`, the
+platform's own reader, so there is no second resource-walking implementation to keep true;
+the subsystem is four bytes at a fixed offset, and every offset the file itself supplies is
+bounded against the real length before it is used. A file that is not a PE gets no block —
+never a guess, which is what the `verified` stamp this work removed was made of.
+
+Two readers of one format in two languages is the risk, so the field names are
+`ArtifactFacts`' own — `version`, `architecture`, `subsystem` — and Cloud Core builds that
+dataclass out of the block and runs **the same** `validate_against_spec` the lab path runs.
+One judge, two sources of facts.
+
+**What is proven, and what is not.** The chain runs end to end and reaches `verified`
+against a device fake that answers what the device will answer: request, spec, render, the
+same file policy, `project.scaffold(root="native")`, build, test, publish, `file.inspect`,
+verdict, row. Three mutations red, including the one that matters most — taking the version
+from the spec instead of from the file, which is the factory-hands-back-yesterday's-EXE
+failure this milestone is named for.
+
+Row 26.16 stays `NOT_YET_PROVEN` until this runs against the owner's real device, and it
+cannot yet: the installed agent predates `PeImageReader`, so it reports no PE block and a
+real run today would land honestly on `unverified`. Reinstalling the agent needs elevation
+and is therefore an owner item — recorded rather than worked around.
 ## ADR-0121 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
 
 *Written by the Astra session as "ADR-0118"; renumbered at review because main had
