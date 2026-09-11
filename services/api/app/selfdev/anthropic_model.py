@@ -59,8 +59,22 @@ SYSTEM: Final = (
     "test at the path the plan names - a pytest test that fails on the unfixed code and passes "
     "on the fixed code. Change an existing file with SEARCH/REPLACE blocks whose SEARCH text "
     "is copied verbatim from the file you were shown and occurs in it exactly once. Give a new "
-    "file whole. Match the surrounding code's style, naming and comment density. "
-    "Owner-facing explanations are in Turkish."
+    "file whole. Match the surrounding code's style, naming and comment density. Do not "
+    "reformat, re-comment or restyle anything the fix does not need. Cite no document or "
+    "section you were not shown. Owner-facing explanations are in Turkish."
+)
+
+#: What a model review may refuse for. The fifth real run's reviewer, told only to be "a
+#: strict senior reviewer", refused candidates that had passed every run check - twice for
+#: real problems (a restyled comment the fix did not need, a claim cited to a spec it was
+#: never shown) and as often for test-structure preferences. The line is drawn here, once.
+REVIEW_POLICY: Final = (
+    "Refuse (approved=false) only for a blocking problem: the fix is wrong or incomplete; the "
+    "regression test does not test the defect, or asserts something the evidence does not "
+    "support; the diff changes code the fix does not need (restyling, reformatting, unrelated "
+    "edits); it cites a document, section or fact that neither the diff nor the evidence "
+    "shows; or it weakens a check. Anything else - naming, test structure, a nicer comment - "
+    "is a finding that does not block: list it and approve. Put blocking problems first."
 )
 
 __all__ = [
@@ -471,7 +485,8 @@ class AnthropicEngineeringModel:
         tool = "code_review"
         out = self._call(
             tool,
-            "Approve only a diff that fixes the defect minimally, with a real regression test.",
+            "Approve a diff that fixes the defect with a regression test that catches it; "
+            "refuse only for a blocking problem.",
             {
                 "type": "object",
                 "properties": {
@@ -481,7 +496,7 @@ class AnthropicEngineeringModel:
                 "required": ["approved", "findings"],
             },
             f"{_defect_block(defect)}\n\nplan: {plan.summary}\n\n<diff>\n{diff[-40000:]}\n</diff>"
-            "\n\nReview it as a strict senior reviewer.",
+            f"\n\nReview it as a senior reviewer. {REVIEW_POLICY}",
         )
         return CodeReview(
             approved=_flag(tool, out, "approved"), findings=_strings(tool, out, "findings")

@@ -22,7 +22,12 @@ import json
 import httpx
 import pytest
 
-from app.selfdev.anthropic_model import AnthropicEngineeringModel, ModelError, parse_edit_blocks
+from app.selfdev.anthropic_model import (
+    REVIEW_POLICY,
+    AnthropicEngineeringModel,
+    ModelError,
+    parse_edit_blocks,
+)
 from app.selfdev.model import (
     ChangePlan,
     CodebaseAnalysis,
@@ -309,3 +314,17 @@ def test_a_fix_changes_the_candidate_as_it_stands_and_keeps_what_it_does_not_tou
     # The model is shown the candidate, not the base, for the files it proposed.
     assert f'<file path="{TEST}">\nimport b\nimport a\n\n</file>' in content
     assert f'<file path="{CALC}">\n{fixed}\n</file>' in content
+
+
+def test_the_review_is_told_what_blocks_and_the_patch_what_not_to_touch() -> None:
+    """The fifth real run: a reviewer told only to be "strict" refused run-checked candidates
+    for test-structure preferences, and a patch restyled a comment it did not need and cited
+    a spec it was never shown. What blocks, and what a patch must leave alone, is stated."""
+    seen: list = []
+    _model({"approved": True, "findings": []}, seen=seen).review_code(DEFECT, PLAN, "diff")
+
+    body = seen[0][1]
+    assert REVIEW_POLICY in body["messages"][0]["content"]
+    assert "does not block: list it and approve" in REVIEW_POLICY
+    assert "Cite no document or section you were not shown" in body["system"]
+    assert "Do not reformat, re-comment or restyle" in body["system"]
