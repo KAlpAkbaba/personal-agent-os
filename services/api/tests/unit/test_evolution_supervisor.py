@@ -370,7 +370,7 @@ def test_status_reads_the_rows_alone(db, service) -> None:
 def test_operator_incidents_are_filed_against_the_operators_own_code() -> None:
     """Every ``operator.*`` capability had fallen through to ``voice_tools``, whose single
     path is the GENERIC tool registry — a file containing none of the operator's code. A
-    fix pipeline pointed there is reading the wrong file (ADR-0114)."""
+    fix pipeline pointed there is reading the wrong file (ADR-0115)."""
     for capability in (
         "operator.type",
         "operator.app_open",
