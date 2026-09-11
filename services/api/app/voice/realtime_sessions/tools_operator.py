@@ -39,7 +39,20 @@ from app.actions.receipt import (
 )
 from app.ledger.vocabulary import SUBSYSTEM_OPERATOR
 from app.logging import get_logger
+from app.operator import capabilities as operator_capabilities
 from app.operator import focus as focus_module
+from app.operator.capabilities import (
+    CAPABILITY_APP_OPEN,
+    CAPABILITY_CANCEL,
+    CAPABILITY_SHELL,
+    CAPABILITY_STATUS,
+    CAPABILITY_TYPE,
+    CAPABILITY_WINDOW_CONTROL,
+    PLAN_BY_SHELL_QUERY,
+    PLAN_BY_WINDOW_ACTION,
+    PLAN_OPEN_APPLICATION,
+    PLAN_TYPE_TEXT,
+)
 from app.operator.models import FOCUS_KIND_WINDOW
 from app.operator.plans import (
     APP_ALLOWLIST,
@@ -66,13 +79,18 @@ if TYPE_CHECKING:
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
 
 # ------------------------------------------------------------------ tool names
+#
+# The names themselves live in ``app.operator.capabilities`` — one declaration read by the
+# registry here, by the service that mints the receipt, and by the structural test that
+# keeps the two the same string. These aliases keep the ``TOOL_*`` spelling the rest of
+# this module and its tests already use.
 
-TOOL_APP_OPEN: Final = "operator.app_open"
-TOOL_WINDOW_CONTROL: Final = "operator.window_control"
-TOOL_TYPE: Final = "operator.type"
-TOOL_SHELL: Final = "operator.shell"
-TOOL_CANCEL: Final = "operator.cancel"
-TOOL_STATUS: Final = "operator.status"
+TOOL_APP_OPEN: Final = CAPABILITY_APP_OPEN
+TOOL_WINDOW_CONTROL: Final = CAPABILITY_WINDOW_CONTROL
+TOOL_TYPE: Final = CAPABILITY_TYPE
+TOOL_SHELL: Final = CAPABILITY_SHELL
+TOOL_CANCEL: Final = CAPABILITY_CANCEL
+TOOL_STATUS: Final = CAPABILITY_STATUS
 
 OPERATOR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_APP_OPEN,
@@ -83,14 +101,10 @@ OPERATOR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_STATUS,
 )
 
-_WINDOW_ACTIONS: Final[tuple[str, ...]] = (
-    "close",
-    "maximize",
-    "minimize",
-    "restore",
-    "activate",
-    "previous",
-)
+#: The ``action`` values ``operator.window_control`` accepts — the keys of the declared
+#: action -> plan table, so an action this tool takes and a plan the ledger can name are
+#: the same set by construction rather than by two lists agreeing.
+_WINDOW_ACTIONS: Final[tuple[str, ...]] = tuple(sorted(PLAN_BY_WINDOW_ACTION))
 _INTENT_TO_WINDOW_ACTION: Final[dict[str, str]] = {
     "window_close": "close",
     "window_maximize": "maximize",
@@ -509,7 +523,7 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
         return _capability_missing(ctx, capability=TOOL_APP_OPEN, requested_state="opened")
     operator = _require_operator(ctx, TOOL_APP_OPEN)
     plan = Plan(
-        name="open_application", goal=f"open {canonical}", steps=open_application(canonical)
+        name=PLAN_OPEN_APPLICATION, goal=f"open {canonical}", steps=open_application(canonical)
     )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
     name_tr = _APP_TR_NAMES.get(canonical, canonical)
@@ -558,7 +572,11 @@ def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict
         "previous": previous_window,
     }
     steps = steps_by_action[action](window_id)
-    plan = Plan(name=f"{action}_window", goal=f"{action} window {window_id}", steps=steps)
+    plan = Plan(
+        name=PLAN_BY_WINDOW_ACTION[action],
+        goal=f"{action} window {window_id}",
+        steps=steps,
+    )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
     if task.status == STATUS_SUCCEEDED:
         speech = f"{_WINDOW_SUCCESS_TR[action]} efendim."
@@ -621,7 +639,7 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         return _capability_missing(ctx, capability=TOOL_TYPE, requested_state="typed")
     operator = _require_operator(ctx, TOOL_TYPE)
     plan = Plan(
-        name="type_text",
+        name=PLAN_TYPE_TEXT,
         goal=f"type into {window_id}",
         steps=build_type_text_steps(window_id, text),
     )
@@ -655,16 +673,17 @@ def operator_shell(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     turn = _turn_record(ctx)
     kind = turn.get("shell_query") if isinstance(turn.get("shell_query"), str) else None
     kind = kind or str(arguments.get("query") or "")
-    if kind not in ("ip", "hostname"):
+    if kind not in PLAN_BY_SHELL_QUERY:
         raise VoiceError(
-            VoiceErrorClass.VALIDATION_ERROR, "operator.shell needs 'query' in {'ip', 'hostname'}"
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"operator.shell needs 'query' in {set(PLAN_BY_SHELL_QUERY)}",
         )
     device_action = ctx.live.get("device_action")
     if device_action is None:
         return _capability_missing(ctx, capability=TOOL_SHELL, requested_state=kind)
     operator = _require_operator(ctx, TOOL_SHELL)
     plan = Plan(
-        name=f"shell_query_{kind}",
+        name=PLAN_BY_SHELL_QUERY[kind],
         goal=f"shell query {kind}",
         steps=build_shell_query_steps(kind),
     )
@@ -750,7 +769,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
 
     reg.register(
         ToolSpec(
-            name=TOOL_APP_OPEN,
+            name=operator_capabilities.CAPABILITY_APP_OPEN,
             description=(
                 "Bir MASAÜSTÜ UYGULAMASINI AÇAR: 'Not Defteri'ni aç', 'Chrome'u aç', "
                 "'Tarayıcıyı aç', 'Hesap makinesini aç', 'PowerShell aç' denince HER ZAMAN "
@@ -769,7 +788,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
-            name=TOOL_WINDOW_CONTROL,
+            name=operator_capabilities.CAPABILITY_WINDOW_CONTROL,
             description=(
                 "Bir PENCEREYİ yönetir: kapatır ('bunu kapat', 'bu pencereyi kapatsana', "
                 "'öndeki pencereyi kapat'), büyütür ('pencereyi büyüt'), küçültür ('bu "
@@ -804,7 +823,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
-            name=TOOL_TYPE,
+            name=operator_capabilities.CAPABILITY_TYPE,
             description=(
                 "Odaktaki pencereye METİN YAZAR: 'buraya X yaz', 'bu kutuya X yaz', "
                 "'seçili yere X yaz'. 'content' alanına yazılacak metni ver. Şifre, "
@@ -837,7 +856,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
-            name=TOOL_SHELL,
+            name=operator_capabilities.CAPABILITY_SHELL,
             description=(
                 "Bilgisayarın IP adresini ('IP adresimi göster', 'IP adresim ne?') ya da "
                 "adını ('Bilgisayarın adı ne?') SÖYLER. 'query' alanına 'ip' ya da "
@@ -854,7 +873,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
-            name=TOOL_CANCEL,
+            name=operator_capabilities.CAPABILITY_CANCEL,
             description=(
                 "Çalışmakta olan bir OPERATÖR GÖREVİNİ İPTAL EDER ('iptal et', bir görev "
                 "sürerken 'dur'). Hiçbir şey çalışmıyorsa bunu olduğu gibi söyler. Dönen "
@@ -866,7 +885,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
-            name=TOOL_STATUS,
+            name=operator_capabilities.CAPABILITY_STATUS,
             description=(
                 "Bir OPERATÖR GÖREVİ sürerken 'Ne yapıyorsun?' diye sorulunca hangi adımda "
                 "olduğunu ve hangi pencerede olduğunu SÖYLER. Dönen 'speech' metnini aynen "
