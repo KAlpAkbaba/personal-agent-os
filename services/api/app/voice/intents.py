@@ -4172,6 +4172,18 @@ _MEDIA_MARKER_STEMS: Final[tuple[str, ...]] = (
     "klib",
     "parça",
     "parca",
+    # Widened 2026-09-11 (owner queue item 2). The first list was music-only, so
+    # "Şu diziyi aç" and "Güldür Güldür şovunu aç" -- ordinary ways to ask for the same
+    # thing -- fell through to nothing at all. These are safe additions because the news
+    # noun is checked FIRST and bails out: "haber videosunu aç" is Latest News Mode's,
+    # and always was.
+    "video",
+    "şov",
+    "sov",
+    "dizi",
+    "film",
+    "bölüm",
+    "bolum",
 )
 #: Play verbs. "aç" is included but is inert without a marker (see above).
 _MEDIA_PLAY_VERB_STEMS: Final[tuple[str, ...]] = ("çal", "cal", "oynat", "aç", "ac", "dinlet")
@@ -4218,6 +4230,25 @@ _MEDIA_STRIP_PHRASES: Final[tuple[str, ...]] = (
     "videosunu",
     "videoyu",
     "video",
+    "şovunu",
+    "sovunu",
+    "şovu",
+    "sovu",
+    "şov",
+    "sov",
+    "dizisini",
+    "dizisi",
+    "diziyi",
+    "dizi",
+    "filmini",
+    "filmi",
+    "film",
+    "bölümünü",
+    "bolumunu",
+    "bölümü",
+    "bolumu",
+    "bölüm",
+    "bolum",
 )
 #: Verbs dropped wherever they appear, not only at the end: "Şu şarkıyı çal: Sezen
 #: Aksu" puts the verb in the middle, and leaving it in searches for the word "çal".
@@ -4261,23 +4292,160 @@ _MEDIA_BACKREFERENCE_STEMS: Final[tuple[str, ...]] = (
 #: otuzda bu şarkıyı çal" is an alarm the owner is trying to create, not a song to
 #: start now, and the corpus expects it to stay unrouted rather than become a
 #: playback -- sixteen cases said so the first time this matcher was written.
+#: EXACT forms, not stems -- corrected 2026-09-11. These were prefixes, and "kur" is
+#: three letters: "Kurtlar Vadisi şarkısını çal." was refused outright because "kurtlar"
+#: begins with it, and so was "Dakikalar filmini aç." for "dakika". A guard against
+#: scheduling was quietly deciding which Turkish titles could be played at all, and
+#: nothing said so -- the utterance simply resolved to nothing. The forms below are
+#: spelled out with their real inflections instead, the same way every other verb family
+#: in this file does it, and for the same reason.
+#:
+#: A title that genuinely contains a time word ("Gece Yarısı Ekspresi") is still refused
+#: when it also carries a play verb, and that is honest: the sentence really is ambiguous,
+#: and the sixteen wake-song corpus cases are what that ambiguity costs.
 _MEDIA_SCHEDULE_STEMS: Final[tuple[str, ...]] = (
     "sabah",
+    "sabaha",
+    "sabahleyin",
     "akşam",
     "aksam",
+    "akşama",
+    "aksama",
+    "akşamleyin",
+    "aksamleyin",
     "gece",
+    "geceye",
+    "geceleyin",
     "öğle",
     "ogle",
+    "öğlen",
+    "oglen",
+    "öğleyin",
+    "ogleyin",
     "yarın",
     "yarin",
+    "yarına",
+    "yarina",
     "saat",
+    "saatte",
+    "saatinde",
     "alarm",
+    "alarmı",
+    "alarmi",
+    "alarma",
     "uyandır",
     "uyandir",
+    "uyandırsana",
+    "uyandirsana",
     "kur",
+    "kursana",
     "sonra",
+    "sonrasında",
+    "sonrasinda",
     "dakika",
+    "dakikada",
 )
+
+
+#: Things the owner might name with "aç" that this system does not act on and no branch
+#: above claims. Without them a bare-title rule would send "arka kapıyı aç" to YouTube as
+#: a search for "arka kapı"; silence is the better answer, and it is the honest one.
+_NOT_A_TITLE_STEMS: Final[tuple[str, ...]] = (
+    "kapı",
+    "kapi",
+    "ışık",
+    "isik",
+    "lamba",
+    "perde",
+    "klima",
+    "radyatör",
+    "radyator",
+    "musluk",
+    "vana",
+    "kilit",
+    "garaj",
+    "panjur",
+)
+
+#: EXACT word forms, never stems -- and this is the whole difference between this matcher
+#: and ``_media_match``. ``_has`` matches by prefix, which is right when a media marker has
+#: already established the family ("çal" must also catch "çalsana"), and catastrophic
+#: without one: "açıkla" starts with "aç", and "çalışıyor" and "çalıştığını" both start
+#: with "çal". Twelve corpus cases proved it the first time this rule was written --
+#: "Az önceki araştırmanın teknik detayını AÇIKLA" became a YouTube search. Every other
+#: open-verb branch in this file (``_APP_OPEN_VERB_FORMS``, ``_ARTIFACT_OPEN_VERB_FORMS``,
+#: ``_SCENE_CREATE_VERB_FORMS``) spells its forms out for exactly this reason.
+_BARE_TITLE_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "ac",
+    "açsana",
+    "acsana",
+    "açar",
+    "acar",
+    "çal",
+    "cal",
+    "çalsana",
+    "calsana",
+    "oynat",
+    "oynatsana",
+    "oynatır",
+    "oynatir",
+    "dinlet",
+    "dinletsene",
+)
+
+#: A bare title needs at least this many words. ONE unknown word with a play verb is far
+#: more likely a thing than a work: the corpus pins "Winamp'ı aç." as a truthful
+#: application refusal, and turning it into a YouTube search for "Winamp" would be wrong
+#: in exactly the way this rule is trying to avoid being. Two or more words that no
+#: allowlist, catalogue or noun stem in this resolver recognises is a name, and the only
+#: family left that takes names is this one.
+#:
+#: The cost is stated rather than hidden: "Gülümse aç." (a one-word song) still needs a
+#: marker -- "Gülümse şarkısını aç." -- and always will under this rule.
+_MIN_BARE_TITLE_WORDS: Final[int] = 2
+
+
+def _bare_title_media_match(
+    tokens: tuple[str, ...], utterance: str
+) -> tuple[Intent, str, str] | None:
+    """Last resort: a play verb and a name nothing else in this resolver wanted.
+
+    ADR-0112 made a media marker mandatory because "aç" is the most overloaded word here
+    -- it opens applications, windows, displays, documents, news, the eye and the
+    curtains. That was right, and it is why this is a SEPARATE matcher placed at the very
+    bottom of the ladder rather than a loosening of ``_media_match``. Everything that
+    reaches this point has been refused by all fifty-five branches above it, so "nothing
+    else claimed these words" is true by construction rather than by a list somebody has
+    to keep up to date. "Chrome'u aç", "ekranı aç", "haberleri aç", "uygulamayı aç",
+    "bunu aç" and "Blender'da yeni sahne aç" never get here at all.
+
+    The owner asked for this on 2026-09-11: "Güldür Güldür aç." without saying
+    "YouTube'dan". Returns ``(intent, matched, query)`` -- the query too, because the
+    payload is the whole reason this matched and re-deriving it would be two clocks for
+    one decision.
+    """
+    if _news_noun(tokens) is not None:
+        return None
+    # The same four guards ``_media_match`` uses, deliberately not re-expressed: sixteen
+    # corpus cases turn on the schedule/clock pair alone ("Sabah yedi otuzda ... çal" is
+    # an alarm the owner is drafting, not a playback).
+    if _has(tokens, *_MEDIA_BACKREFERENCE_STEMS):
+        return None
+    if _has_exact(tokens, *_MEDIA_SCHEDULE_STEMS):
+        return None
+    if utterance and _CLOCK_RE.search(utterance):
+        return None
+    if _is_question(tokens):
+        return None
+    if _has(tokens, *_NOT_A_TITLE_STEMS):
+        return None
+    if _has_exact(tokens, *_BARE_TITLE_VERB_FORMS) is None:
+        return None
+    query = _extract_media_query(utterance)
+    if query is None or len(query.split()) < _MIN_BARE_TITLE_WORDS:
+        return None
+    return Intent.MEDIA_PLAY, "adıyla aç", query
 
 
 def _media_match(tokens: tuple[str, ...], utterance: str = "") -> tuple[Intent, str] | None:
@@ -4286,7 +4454,7 @@ def _media_match(tokens: tuple[str, ...], utterance: str = "") -> tuple[Intent, 
         return None
     if _has(tokens, *_MEDIA_BACKREFERENCE_STEMS):
         return None
-    if _has(tokens, *_MEDIA_SCHEDULE_STEMS):
+    if _has_exact(tokens, *_MEDIA_SCHEDULE_STEMS):
         return None
     if utterance and _CLOCK_RE.search(utterance):
         return None
@@ -5889,6 +6057,22 @@ def resolve_intent(
             artifact_kind=_artifact_kind_from_tokens(tokens),
             artifact_title=_extract_artifact_title(text),
             spoken_numbers=_extract_artifact_numbers(text),
+            **base,
+        )
+
+    # 0i. ADR-0112 addendum (owner queue item 2, asked 2026-09-11): "Güldür Güldür aç."
+    #     with no media word in it at all. LAST, below every branch that knows a noun,
+    #     because that placement IS the guard: what reaches here is a play verb and a
+    #     name that no allowlist, catalogue, deictic or noun stem in this resolver
+    #     recognised. ``_media_match`` above keeps its mandatory marker unchanged -- this
+    #     is a separate, narrower matcher, not a loosening of that one.
+    if bare_media := _bare_title_media_match(tokens, text):
+        bare_intent, bare_matched, bare_query = bare_media
+        return ResolvedIntent(
+            bare_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=bare_matched,
+            media_query=bare_query,
             **base,
         )
 

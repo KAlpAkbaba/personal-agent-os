@@ -9923,3 +9923,59 @@ reasoning is sound and is kept — the concrete action is still recorded, as
 built by an f-string, and that the receipt's capability is what an incident title is made
 of. A distinction worth keeping was made the row's identity, and the identity is the part
 that has to be findable.
+
+## ADR-0117 — "Güldür Güldür aç." and the guard that was choosing which titles could be played (2026-09-11)
+
+Owner queue item 2, asked in their own words: *"mesela chrome aç youtube gir birşey aç dedim"*
+and then, plainly, "Güldür Güldür aç." without saying "YouTube'dan". ADR-0112 required an
+explicit media marker **on purpose** — "aç" is the most overloaded word in this resolver,
+and a play verb alone would have stolen from applications, windows, displays, documents,
+news, the eye and the curtains. That decision stands. This widens the matcher in two
+separate ways, and neither of them loosens it.
+
+**One: the marker list was music-only.** `youtube/şarkı/müzi/klip/parça` and nothing else,
+so "Şu diziyi aç" and "Güldür Güldür şovunu aç" — the same request in the owner's mouth —
+fell through to nothing at all. `video`, `şov`, `dizi`, `film` and `bölüm` join them. Safe
+by construction: the news noun is tested first and bails out, so "haber videosunu aç" is
+still Latest News Mode's, as it always was.
+
+**Two: a name with no media word in it.** A separate matcher, `_bare_title_media_match`,
+placed at the very bottom of the ladder — below all fifty-five branches that know a noun.
+That placement *is* the guard: what reaches it is a play verb and a name that no allowlist,
+catalogue, deictic or noun stem recognised. "Chrome'u aç", "ekranı aç", "haberleri aç",
+"uygulamayı aç", "bunu aç" and "Blender'da yeni sahne aç" never arrive.
+
+Two boundaries are drawn deliberately and both are corpus cases rather than comments:
+
+- **One word is not a title.** `Winamp'ı aç.` is a bare proper noun and a play verb, exactly
+  like `Güldür Güldür aç.`, and the corpus pins it as a truthful *application* refusal. A
+  single unknown word is far more likely a thing than a work, so the rule needs two. The
+  cost is stated instead of hidden: "Gülümse aç." still needs "Gülümse şarkısını aç.".
+- **A physical object is not a title.** Nothing in this system opens doors, so
+  `Arka kapıyı aç.` gets silence rather than a YouTube search for "arka kapı".
+
+**The prefix trap, twice in one afternoon.** `_has` matches by prefix, which is right once a
+marker has established the family ("çal" must also catch "çalsana") and catastrophic without
+one: **"açıkla" starts with "aç"**, and "çalışıyor" and "çalıştığını" both start with "çal".
+The first version of the bare-title rule turned twelve corpus cases into YouTube searches —
+"Az önceki araştırmanın teknik detayını AÇIKLA" among them. Exact word forms
+(`_BARE_TITLE_VERB_FORMS`) are the fix, the same way `_APP_OPEN_VERB_FORMS`,
+`_ARTIFACT_OPEN_VERB_FORMS` and `_SCENE_CREATE_VERB_FORMS` have always done it.
+
+**And the defect that was already shipped.** Chasing that trap found the same shape in
+ADR-0112's own code, on the path in production: `_MEDIA_SCHEDULE_STEMS` were prefixes, and
+`"kur"` — as in "alarm kur" — is three letters. So **"Kurtlar Vadisi şarkısını çal."**, with
+an explicit media marker and no time reference anywhere in it, resolved to *nothing at all*.
+"Dakikalar filmini aç." likewise, for "dakika". A guard against scheduling had been quietly
+deciding which Turkish titles the owner was allowed to play, and it did not refuse out loud —
+the sentence simply went nowhere. The stems are exact forms with their real inflections now,
+on both matchers.
+
+A title that genuinely contains a time word ("Gece Yarısı Ekspresi") is still refused when a
+play verb is present, and that stays: the sentence really is ambiguous, and the sixteen
+wake-song cases ("Sabah yedi otuzda bu şarkıyı çal" is an alarm being drafted) are what the
+ambiguity costs. Recorded as a limitation, not solved by guessing.
+
+Three mutations, three reds: prefixes restored to the schedule guard reds the twelve
+schedule cases; stem-matching restored to the bare-title verb reds the "açıkla" case; the
+matcher unwired reds the twelve bare cases. 1891 corpus utterances green (48 new).

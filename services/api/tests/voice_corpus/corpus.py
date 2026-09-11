@@ -4212,6 +4212,124 @@ def _media_cases() -> list[UtteranceCase]:
             )
         )
     )
+    # --------------------------------------------- owner queue item 2 (2026-09-11)
+    # "Güldür Güldür aç." -- the owner's own words, with no media word in the sentence
+    # at all. ADR-0112 required an explicit marker on purpose; these are the two ways
+    # that requirement was widened, and the cases that hold each of them open.
+    for case_id, text in [
+        # (a) the marker list was music-only. A show, a series, a film and an episode
+        #     are the same request in the owner's mouth.
+        ("m.play.show.1", "Güldür Güldür şovunu aç."),
+        ("m.play.series.1", "Şu diziyi aç: Leyla ile Mecnun."),
+        ("m.play.film.1", "Esaretin Bedeli filmini aç."),
+        ("m.play.episode.1", "Son bölümü aç: Güldür Güldür."),
+        # (b) no marker at all: a play verb and a name nothing else in the resolver
+        #     wanted. Decided at the very bottom of the ladder, which is the guard.
+        ("m.play.bare.1", "Güldür Güldür aç."),
+        ("m.play.bare.2", "Leyla ile Mecnun aç."),
+        ("m.play.bare.3", "Kurtlar Vadisi çal."),
+    ]:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="media_play",
+                    expected_tool="media.play",
+                    expected_response=RESPONSE_OK,
+                    forbidden_tools=("research.start", "news.open", "alarm.create"),
+                    side_effects=SIDE_EFFECTS_MEDIA_PLAY,
+                    category="media",
+                )
+            )
+        )
+
+    # The bare-title rule's own boundary, stated as cases rather than trusted.
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="m.play.bare.neg.one_word",
+                utterance="Winamp'ı aç.",
+                # ONE unknown word with a play verb is far more likely a thing than a
+                # work, and this is the case that says so: Winamp is a media player the
+                # allowlist does not carry, and the truthful answer is an application
+                # refusal -- not a YouTube search for the word "Winamp". The cost is
+                # real and stated: "Gülümse aç." needs "Gülümse şarkısını aç.".
+                expected_intent=None,
+                expected_tool="operator.app_open",
+                expected_response=RESPONSE_REFUSED,
+                forbidden_tools=("media.play",),
+                side_effects=SIDE_EFFECTS_NONE,
+                category="media",
+                notes="bare-title rule: one word is not a title",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="m.play.bare.neg.not_a_title",
+                utterance="Arka kapıyı aç.",
+                # Two words, no branch above claims them, and still not a title: this
+                # system does not open doors, and sending "arka kapı" to YouTube would
+                # be a worse answer than silence.
+                expected_intent=None,
+                expected_tool=None,
+                expected_response=RESPONSE_REFUSED,
+                forbidden_tools=("media.play",),
+                side_effects=SIDE_EFFECTS_NONE,
+                category="media",
+                notes="bare-title rule: a physical object is not a title",
+            )
+        )
+    )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="m.play.bare.neg.explain_verb",
+                utterance="Az önceki araştırmanın teknik detayını açıkla.",
+                # "açıkla" STARTS WITH "aç". The first version of the bare-title rule
+                # matched play verbs by stem, the way the marker path safely does, and
+                # turned twelve corpus cases into YouTube searches -- this one, the
+                # "çalıştığını"/"çalışıyor" pair, and their ASR variants. Exact word
+                # forms are the fix and this is the case that keeps them exact.
+                expected_intent="explain",
+                expected_tool="research.explain",
+                # No research to explain in this fixture, so the honest answer is a
+                # question. What this case pins is the ROUTE, not the outcome: it must
+                # reach the research family, and media.play must never see it.
+                expected_response=RESPONSE_CLARIFY,
+                forbidden_tools=("media.play",),
+                side_effects=SIDE_EFFECTS_NONE,
+                category="media",
+                notes="bare-title rule: a verb prefix is not a verb",
+            )
+        )
+    )
+    for case_id, text in [
+        # A guard against SCHEDULING was deciding which titles could be played. "kur"
+        # (as in "alarm kur") is three letters and was matched as a prefix, so "kurtlar"
+        # tripped it and "Kurtlar Vadisi şarkısını çal." -- with an explicit media
+        # marker, on the path that shipped in ADR-0112 -- resolved to nothing at all.
+        # Same for "dakika" and "Dakikalar". Found 2026-09-11 while widening the matcher.
+        ("m.play.schedule_prefix.1", "Kurtlar Vadisi şarkısını çal."),
+        ("m.play.schedule_prefix.2", "Dakikalar filmini aç."),
+    ]:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="media_play",
+                    expected_tool="media.play",
+                    expected_response=RESPONSE_OK,
+                    forbidden_tools=("alarm.create", "research.start", "news.open"),
+                    side_effects=SIDE_EFFECTS_MEDIA_PLAY,
+                    category="media",
+                    regression_issue_id="schedule stems were prefixes and swallowed titles",
+                )
+            )
+        )
     return cases
 
 

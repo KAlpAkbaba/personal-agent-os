@@ -382,6 +382,23 @@ a demonstration.
    are missing, and a bare title with a play verb is not reachable at all. Done = the owner's
    natural phrasing routes, with corpus cases, and "haberleri aç" / "Chrome'u aç" /
    "ekranı aç" still route where they always did.
+
+   **Done 2026-09-11 (ADR-0117).** Both halves: the marker list gained `video`/`şov`/`dizi`/
+   `film`/`bölüm`, and a separate bare-title matcher sits at the bottom of the ladder, below
+   every branch that knows a noun. "haberleri aç", "Chrome'u aç", "ekranı aç", "bunu aç",
+   "uygulamayı aç" and "Blender'da yeni sahne aç" all still route where they did — 1891
+   corpus utterances green, 48 of them new. Two boundaries are cases, not comments: one word
+   is not a title (`Winamp'ı aç.` stays an application refusal) and a physical object is not
+   a title (`Arka kapıyı aç.` stays silent).
+
+   It also uncovered a defect already in production: the scheduling guard matched by prefix,
+   so "kur" (alarm kur) swallowed "Kurtlar" and **"Kurtlar Vadisi şarkısını çal." resolved to
+   nothing** — with an explicit marker and no time reference in it. Fixed on both matchers.
+
+   Known limitation, stated: a one-word title still needs a marker ("Gülümse şarkısını aç."),
+   and a title that really contains a time word ("Gece Yarısı Ekspresi") is refused when a
+   play verb is present, because that sentence is genuinely ambiguous with the sixteen
+   wake-song cases.
 3. **Something advances an idea.** `EvolutionService.advance()` has two callers and neither
    runs on a timer, so a recorded opportunity sits at `idea` for ever — which is what the
    owner watched happen to "YouTube'dan 'Doğum günün kutlu olsun Kadir' aç." Done = a
