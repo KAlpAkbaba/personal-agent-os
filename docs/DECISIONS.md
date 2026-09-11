@@ -10325,3 +10325,57 @@ exists (worker, health endpoint, state tool, app sweeper, REST routes, voice rel
 mutation-proven red on its branch: the research grant check (1), the advisory flag ignored (2),
 each of the five orphan-closing calls removed (5), long-running calls not spared (1), planned
 builds counted as in flight (1).
+
+## ADR-0124 — A self-development engine that fixes real code and then stops (2026-09-11)
+
+**Context.** Phase 9 of the recovery directive: the first real self-development engine. What
+existed (`app.selfhealing`) repairs one injected-bug class inside a lab fixture directory; it
+never touched the product's own source, never used git, and could not tell a fix from a test
+that proves nothing except in that one shape. The constitution's path is fixed: "Gap/incident
+-> issue/spec -> isolated branch/worktree -> code -> tests -> review -> build -> sandbox ->
+canary/shadow -> metrics -> promote or rollback", and never "model edits production source and
+restarts".
+
+**Decision.** `app.selfdev`, run on the development machine that holds the repository - never
+in a production container.
+- **Real branches, real worktrees.** Each run gets `selfdev/<run>` in its own `git worktree`
+  from an EXACT base SHA; the owner's checkout is never edited. At most three live worktrees,
+  a free-disk floor, both checked before work starts.
+- **The EngineeringModel seam** asks seven typed questions - `analyze_codebase`,
+  `plan_change`, `generate_patch`, `review_failure`, `fix_patch`, `review_code`,
+  `explain_change`. `AnthropicEngineeringModel` answers each as a FORCED tool call (JSON to a
+  schema, never scraped prose) on `claude-opus-5`, accounting tokens from every response;
+  `ScriptedEngineeringModel` answers from a script for the engine's own tests. The key comes
+  from the DPAPI store through `scripts/selfdev/run-selfdev.ps1`, into the child's environment
+  only.
+- **A model is trusted with nothing.** Every edit is validated structurally before a byte is
+  written: relative, inside the tree, no `..`/`.git`/drive/absolute path, inside the defect's
+  scope or the declared regression test, bounded in count and size. Whole files only.
+- **The independent reviewer judges by running things**: the candidate's own regression test
+  must FAIL on the base with only the test added (or it does not test this defect), PASS with
+  the full patch; the targeted tests pass; changed files lint clean; nothing leaves the scope.
+  The model's `review_code` is required too - but it can only refuse what the reviewer passed,
+  never pass what it refused.
+- **Bounded, and quarantine is the end.** Attempts, wall time and tokens are hard; the first
+  bound crossed ends the run QUARANTINED with the bound named, its worktree kept for inspection.
+  Nothing retries past a budget.
+- **CI is read, not driven.** A base CI calls red is refused (no candidate's failure could be
+  told from the base's); the candidate's CI state is recorded. The engine never pushes.
+- **It stops at the policy boundary.** A verified candidate is committed on its branch and the
+  run ends `STOPPED_AT_POLICY_BOUNDARY` with the risk tier derived from the paths it touched and
+  its promotion class (`promotion_class_for_tier`): tier 4/5 is NEVER_AUTO_PROMOTE, tier 3 needs
+  the owner, tiers 1-2 are eligible for the release pipeline once CI is green on that exact SHA.
+  The engine itself never merges, pushes or releases.
+
+**Evidence.** 16 engine tests on a real git repository (real worktrees, real pytest in the
+worktree, real lint; only the model scripted): a verified candidate on its own branch with the
+owner's checkout untouched; wrong-then-right fixed within budget; a tier-5 candidate labelled
+NEVER_AUTO_PROMOTE; a test that proves nothing, an out-of-scope edit, five tree-escaping paths,
+a model refusal and a token overrun each end QUARANTINED; a plan outside scope, a red base CI,
+the worktree bound and the disk floor each REFUSE before work. 5 seam tests for the Anthropic
+model (forced tool call, usage, no key -> no request, errors that never echo the body or the
+key). Mutations, each red: red-on-base not enforced, scope not enforced, model refusal
+ignored, token budget ignored.
+
+**What this is not yet.** It fixes Python under `services/api`; the runner is shaped for one
+package root. The Phase 10 acceptance run on a genuine defect is its first real use.
