@@ -30,6 +30,7 @@ from app.nativefactory.device_build import (
 from app.nativefactory.models import (
     STATE_FAILED,
     STATE_MISMATCH,
+    STATE_UNAVAILABLE,
     STATE_UNVERIFIED,
     STATE_VERIFIED,
     NativeBuildRow,
@@ -410,3 +411,18 @@ def test_the_manifest_forms_are_the_ones_the_protocol_document_admits():
         # The table writes each form inside backticks; compare the token sequence, since the
         # document spells the placeholders the same way this manifest does.
         assert re.search(re.escape("`" + command + "`"), text), command
+
+
+def test_a_row_this_path_cannot_honestly_build_is_refused_before_the_device_is_asked(db):
+    """Defence in depth for the planner's rule: whatever opened it, a portable or MSIX row
+    that reaches this path is refused, because it would publish and read back an EXE and
+    the judge would call that `verified`."""
+    msix = plan_build(db, {**WINDOWS, "targets": ["windows_msix"]}, facts=FULL)[0]
+    device = _healthy()
+
+    outcome = build_on_device(db, msix, device)
+
+    assert not outcome.ok
+    assert outcome.error_class == "dependency_unavailable"
+    assert msix.state == STATE_UNAVAILABLE
+    assert device.calls == []

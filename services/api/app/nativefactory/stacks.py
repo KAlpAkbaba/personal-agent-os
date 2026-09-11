@@ -30,6 +30,7 @@ from app.nativefactory.spec import (
     ANDROID_TARGETS,
     STACK_ANDROID_KOTLIN,
     STACK_DOTNET_WPF,
+    TARGET_WINDOWS_EXE,
     TEMPLATE_STACK,
     WINDOWS_TARGETS,
     NativeAppSpec,
@@ -273,6 +274,73 @@ def choose(spec: NativeAppSpec, facts: ToolchainFacts | None = None) -> StackCho
     )
 
 
+#: What the device-dispatched path (ADR-0119, ``device_build.build_on_device``) can
+#: produce today: it scaffolds, builds, tests, publishes and reads back ONE thing, the EXE.
+#: A portable package or an MSIX is not made there, so a row for one is refused by name
+#: rather than answered with an EXE wearing its label.
+DEVICE_BUILDABLE_TARGETS: Final[frozenset[str]] = frozenset({TARGET_WINDOWS_EXE})
+
+SPEECH_DEVICE_PACKAGING_NOT_WIRED: Final = (
+    "Taşınabilir paket ve MSIX kayıtlı cihaz üzerinden henüz üretilmiyor efendim; "
+    "EXE üretilebilir."
+)
+SPEECH_DEVICE_NO_ANDROID: Final = (
+    "Android derlemesi kayıtlı cihaz yolunda yok efendim; cihaz yalnızca Windows "
+    "uygulaması derliyor."
+)
+
+
+def choose_on_device(spec: NativeAppSpec) -> StackChoice:
+    """The stack when the build will run on the owner's enrolled Windows device.
+
+    M28 row 26.16. Production Cloud Core is a Linux host: ``detect()`` there finds no .NET,
+    no Windows Kits and no Java, and never will. Planning against THOSE facts opened every
+    Windows row as ``unavailable`` - "the .NET SDK is not on this machine" - and
+    ``native.build`` then refused before the device path was ever reached. The facts were
+    true and about the wrong machine.
+
+    So this machine's toolchain is not consulted here. The device's toolchain is proven by
+    the device: its own ``project.run`` refuses with ``dependency_unavailable`` naming what
+    is missing, and that refusal reaches the row in its own words
+    (``device_build._fail``). What IS decided here is what the device path can produce at
+    all (``DEVICE_BUILDABLE_TARGETS``).
+    """
+    stack = spec.resolved_stack
+    targets = set(spec.targets)
+    if stack == STACK_ANDROID_KOTLIN or targets & ANDROID_TARGETS:
+        return StackChoice(
+            stack=stack,
+            reason=SPEECH_DEVICE_NO_ANDROID,
+            available=False,
+            owner_action=None,
+            error_class="dependency_unavailable",
+        )
+    if targets & WINDOWS_TARGETS and targets <= DEVICE_BUILDABLE_TARGETS:
+        surface = "form arayüzü" if stack == STACK_DOTNET_WPF else "web arayüzü"
+        return StackChoice(
+            stack=stack,
+            reason=(
+                f"{_spoken(stack)} seçtim: Windows masaüstü, {surface}; derlemeyi kayıtlı "
+                "Windows cihazınız yapacak."
+            ),
+            available=True,
+        )
+    if targets & WINDOWS_TARGETS:
+        return StackChoice(
+            stack=stack,
+            reason=SPEECH_DEVICE_PACKAGING_NOT_WIRED,
+            available=False,
+            owner_action=None,
+            error_class="dependency_unavailable",
+        )
+    return StackChoice(
+        stack=stack,
+        reason=f"{_spoken(stack)} bu hedefleri üretemiyor efendim.",
+        available=False,
+        error_class="dependency_unavailable",
+    )
+
+
 def _spoken(stack: str) -> str:
     return {
         "dotnet_wpf": "WPF",
@@ -287,10 +355,14 @@ def stack_for_template(template: str) -> str:
 
 
 __all__ = [
+    "DEVICE_BUILDABLE_TARGETS",
     "IOS_WORDS",
+    "SPEECH_DEVICE_NO_ANDROID",
+    "SPEECH_DEVICE_PACKAGING_NOT_WIRED",
     "StackChoice",
     "ToolchainFacts",
     "choose",
+    "choose_on_device",
     "detect",
     "refuse_ios",
     "stack_for_template",

@@ -10138,6 +10138,38 @@ cannot yet: the installed agent predates `PeImageReader`, so it reports no PE bl
 real run today would land honestly on `unverified`. Reinstalling the agent needs elevation
 and is therefore an owner item — recorded rather than worked around.
 
+### Addendum — planning asked the wrong machine (2026-09-11)
+
+**Found** by walking the production path from the owner's sentence before the first real
+run, not by any suite. `native.create` decided what was reachable by measuring THIS machine
+(`detect()`). On the Linux Cloud Core that finds no .NET, so the Windows row opened as
+`unavailable` (".NET SDK bu makinede yok efendim") and `native.build` refused it at the
+`STATE_UNAVAILABLE` check - before the device dispatch this ADR added was ever reached.
+Every test either seeded an already-planned row (`CTX_NATIVE_PLANNED`) or ran with the owner's
+PC injected as this machine (the corpus harness's `NATIVE_TOOLCHAIN`): the fake was kinder
+than the machine, a third time in this milestone. The "engineering complete" recorded for row
+26.16 earlier the same day was therefore premature, and is corrected in QUALIFICATION.
+
+A second defect rode along. The device path publishes and reads back ONE artefact, the EXE,
+and `validate_against_spec` compares version and subsystem, not kind - so a portable or MSIX
+row that reached the device would have come back `verified` carrying an EXE.
+
+**Decision.** Planning asks the machine that will build. `_builds_on_device` is the same
+decision `_run_lifecycle` makes when it dispatches (no local runner+root+compiler, and a
+device port present); when it holds, `plan_build(on_device=True)` uses `choose_on_device`
+and does not measure this machine at all. The EXE is reachable and the owner hears who will
+build it ("derlemeyi kayıtlı Windows cihazınız yapacak"); portable/MSIX and Android are refused
+by name (`DEVICE_BUILDABLE_TARGETS`). The device's own toolchain is still proven by the device:
+its `project.run` refuses with `dependency_unavailable` naming what is missing, into the row.
+`build_on_device` independently refuses any row outside `DEVICE_BUILDABLE_TARGETS` before
+the device is asked.
+
+**Evidence.** Three production-shaped tests (Linux facts injected, no local runner): the
+owner's sentence reaches a `verified` row built on the device; an MSIX target is refused by
+name with the device never asked; the lab still plans against its own SDK. One direct test
+of the `build_on_device` guard. Mutations: planning against this machine again turns both
+production tests red; removing the guard turns its test red.
+
 ## ADR-0120 — The risk table names paths that exist (2026-09-11)
 
 **Context.** `app/evolution/risk.py` derives a candidate's risk tier from the paths it

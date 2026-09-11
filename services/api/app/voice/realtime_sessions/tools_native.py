@@ -83,7 +83,13 @@ from app.nativefactory.spec import (
     TEMPLATE_NOTES_DESKTOP,
     NativeFactoryError,
 )
-from app.nativefactory.stacks import ToolchainFacts, choose, detect, refuse_ios
+from app.nativefactory.stacks import (
+    ToolchainFacts,
+    choose,
+    choose_on_device,
+    detect,
+    refuse_ios,
+)
 from app.voice.errors import VoiceError, VoiceErrorClass
 
 if TYPE_CHECKING:
@@ -169,6 +175,25 @@ def _facts(ctx: ToolContext) -> ToolchainFacts:
     rule, and the M27 lesson about a registry key without an executable)."""
     injected = ctx.live.get("native_toolchain")
     return injected if isinstance(injected, ToolchainFacts) else detect()
+
+
+def _local_ready(ctx: ToolContext, facts: ToolchainFacts) -> bool:
+    """A runner, a root and a compiler on THIS machine: the lab, never production."""
+    return (
+        ctx.live.get("native_runner") is not None
+        and ctx.live.get("native_root") is not None
+        and facts.dotnet is not None
+    )
+
+
+def _builds_on_device(ctx: ToolContext, facts: ToolchainFacts) -> bool:
+    """Whether the build will run on the enrolled device rather than here (ADR-0119).
+
+    The SAME decision ``_run_lifecycle`` makes when it dispatches, taken here too so that
+    PLANNING asks the machine that will build. Asking this one instead is what opened every
+    production Windows row as `unavailable` (M28 row 26.16).
+    """
+    return not _local_ready(ctx, facts) and ctx.live.get("device_action") is not None
 
 
 def _turn_record(ctx: ToolContext) -> dict[str, Any]:
@@ -345,8 +370,9 @@ def native_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         payload["title"] = arguments["title"]
 
     facts = _facts(ctx)
+    on_device = _builds_on_device(ctx, facts)
     try:
-        rows = plan_build(db, payload, facts=facts)
+        rows = plan_build(db, payload, facts=facts, on_device=on_device)
     except NativeFactoryError as exc:
         return _refused(
             ctx,
@@ -358,7 +384,8 @@ def native_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
 
     from app.nativefactory.spec import NativeAppSpec
 
-    choice = choose(NativeAppSpec.model_validate(rows[0].spec_json), facts)
+    first = NativeAppSpec.model_validate(rows[0].spec_json)
+    choice = choose_on_device(first) if on_device else choose(first, facts)
     lines = [choice.reason] + [receipt_for(row) for row in rows]
     reachable = [row for row in rows if row.state != STATE_UNAVAILABLE]
     return _receipt(
@@ -411,9 +438,8 @@ def _run_lifecycle(
         )
     runner = ctx.live.get("native_runner")
     root = ctx.live.get("native_root")
-    local_ready = runner is not None and root is not None and facts.dotnet is not None
 
-    if not local_ready:
+    if not _local_ready(ctx, facts):
         # M28 row 26.16. Production is a Linux Cloud Core with no .NET SDK, no makeappx and
         # no Windows; the machine that has all three is the owner's enrolled device. So the
         # absence of a LOCAL runner is not the end of the road here -- it is the normal case,
@@ -542,8 +568,11 @@ def native_rebuild(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
     payload = dict(previous.spec_json or {})
     payload["version"] = _next_version(str(arguments.get("version") or previous.version))
+    facts = _facts(ctx)
     try:
-        rows = plan_build(db, payload, facts=_facts(ctx))
+        rows = plan_build(
+            db, payload, facts=facts, on_device=_builds_on_device(ctx, facts)
+        )
     except NativeFactoryError as exc:
         return _refused(
             ctx,
