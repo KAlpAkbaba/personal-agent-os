@@ -94,7 +94,13 @@ def test_health_ok_shape(monkeypatch) -> None:
             assert isinstance(check["latency_ms"], int | float)
     retention = body["checks"]["retention"]
     assert retention["required"] is False
-    assert retention["sweeps"] == ["memory", "identity_sessions", "security_assets"]
+    assert retention["sweeps"] == [
+        "memory",
+        "identity_sessions",
+        "security_assets",
+        "interrupted_tool_calls",
+        "interrupted_native_builds",
+    ]
     clock = body["checks"]["routine_clock"]
     assert set(clock) == {
         "status",

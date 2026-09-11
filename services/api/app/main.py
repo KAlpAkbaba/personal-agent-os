@@ -78,6 +78,7 @@ from app.middleware import TraceIdMiddleware
 from app.mobile.routes import router as mobile_router
 from app.mobile.runtime import MobileRuntime
 from app.narration.routes import router as narration_router
+from app.nativefactory.interrupted import fail_interrupted_builds
 from app.nativefactory.routes import router as native_router
 from app.news.routes import router as news_router
 from app.operator.service import OperatorService, register_operator_service
@@ -109,6 +110,7 @@ from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
 from app.voice.qualification.routes import router as voice_qualification_router
+from app.voice.realtime_sessions import service as realtime_service
 from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
 from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
@@ -375,6 +377,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     routine_clock = _build_routine_clock()
 
+    def _in_session(session_scope, sweep):  # noqa: ANN001, ANN202 - two local call sites
+        with session_scope() as db:
+            return sweep(db)
+
     # Phase 8 (2026-09-11): three retention sweeps existed and nothing ran them. Lambdas, so
     # nothing is touched until a sweep actually runs (app.maintenance).
     retention_sweeper = RetentionSweeper(
@@ -382,6 +388,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "memory": lambda: memory.backend.sweep_expired(),
             "identity_sessions": lambda: identity.service.sweep_expired(),
             "security_assets": lambda: security.registry.sweep_expired(),
+            # Rows a stopped process left mid-flight (a crash; a colour drained mid-call).
+            "interrupted_tool_calls": lambda: _in_session(
+                voice_realtime.session, realtime_service.fail_interrupted_tool_calls
+            ),
+            "interrupted_native_builds": lambda: _in_session(
+                artifacts.session, fail_interrupted_builds
+            ),
         },
         interval_s=settings.retention_sweep_interval_s,
         initial_delay_s=settings.retention_sweep_initial_delay_s,
