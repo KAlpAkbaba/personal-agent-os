@@ -10137,7 +10137,6 @@ Row 26.16 stays `NOT_YET_PROVEN` until this runs against the owner's real device
 cannot yet: the installed agent predates `PeImageReader`, so it reports no PE block and a
 real run today would land honestly on `unverified`. Reinstalling the agent needs elevation
 and is therefore an owner item — recorded rather than worked around.
-## ADR-0121 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
 
 ## ADR-0120 — The risk table names paths that exist (2026-09-11)
 
@@ -10179,6 +10178,8 @@ tier 4/5 on paper becomes lower.
 detector): the security path reverted, the agent path reverted, the `risk.py` rule removed,
 the `infra/systemd/` rule removed. Every suite that depends on tiers passes (evolution
 routes, approval center, authorize, supervisor, release preflight/execution).
+## ADR-0121 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
+
 *Written by the Astra session as "ADR-0118"; renumbered at review because main had
 already taken ADR-0118 (build identity), ADR-0119 (device-dispatched native build) and
 ADR-0120 (the risk table bound to real paths).*
