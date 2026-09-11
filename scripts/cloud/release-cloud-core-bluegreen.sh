@@ -34,6 +34,11 @@
 #   record RELEASE, LAST_KNOWN_GOOD (the previous sha) and the active colour
 # A release is COMPLETE only when RELEASE names the active colour's sha; --reconcile
 # treats anything else as an interrupted promotion and returns to the last completed one.
+# --reconcile exits: 0 consistent and ok; 80 neither colour serves (nothing switched);
+# 81 the canonical colour did not serve and the recorded other one took over (loud);
+# 82 another release/recovery holds the lock; 83 no tree matches the pinned recovery inputs;
+# 84 the canonical colour serves its release but reports degraded - kept, never switched,
+# because a colour switch cannot repair a dependency both colours share.
 # Any failure after the switch switches back (devices first, then HTTP; the old colour is
 # still up during the drain; after it, the old colour is started again first). Any failure
 # before the switch stops the idle colour and restores the trees. The database is never
@@ -245,6 +250,20 @@ wait_for_colour() {
     return 1
 }
 
+serving_status_of() {
+    # serving_status_of COLOUR EXPECTED_SHA: ONE probe. Prints the colour's top-level health
+    # status when it answers AND names EXPECTED_SHA as its release, whatever that status
+    # is; returns 1 when it does not answer, or answers as some other release.
+    local body status
+    body="$(in_container_health "$1" 2>/dev/null || true)"
+    status="$(top_health_status "$body")"
+    if [ -n "$status" ] && [ "$(served_release "$body")" = "$2" ]; then
+        printf '%s' "$status"
+        return 0
+    fi
+    return 1
+}
+
 install_edge_config() {
     # install_edge_config [TREE]: the tree's nginx.conf becomes the edge's (atomic copy into
     # the edge dir the container reads with -c). A missing tree file leaves the edge's alone.
@@ -378,6 +397,7 @@ if [ "$mode" = "--reconcile" ]; then
     canonical_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$canonical")")"
     other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
     emergency=0
+    degraded=""
     if ! service_running "api-$canonical"; then
         if [ -n "$canonical_sha" ]; then
             echo "reconcile: api-$canonical is not running; starting it from its recorded image ($canonical_sha)"
@@ -389,14 +409,31 @@ if [ "$mode" = "--reconcile" ]; then
     body=""
     if [ -n "$canonical_sha" ] && body="$(wait_for_colour "$canonical" "$canonical_sha")"; then
         echo "reconcile: api-$canonical healthy (release $(served_release "$body")) -> canonical"
+    elif [ -n "$canonical_sha" ] && degraded="$(serving_status_of "$canonical" "$canonical_sha")"; then
+        # It ANSWERS, as its own recorded release, and reports itself not ok. Most checks
+        # behind that status (db, redis, object store, temporal, the providers) are shared
+        # with the other colour, so a switch cannot repair them - and a dependency that
+        # recovers while the other colour starts would make an OLDER build live and rewrite
+        # RELEASE to it. The serving colour stays canonical; the state is reported loudly
+        # at the end (84). Only a colour that does not serve at all is replaced.
+        echo "reconcile: api-$canonical serves $canonical_sha but reports '$degraded'; it stays canonical (a colour switch cannot repair a shared dependency)" >&2
     else
+        degraded=""
         if [ -n "$other_sha" ]; then
             echo "reconcile: api-$canonical will not come up; api-$other ($other_sha) is the only recorded alternative - taking over LOUDLY (not a completed promotion)" >&2
+            other_was_running=0
+            if service_running "api-$other"; then other_was_running=1; fi
             compose up -d --no-deps --wait "api-$other" 2>&1 | tail -1 || true
             if body="$(wait_for_colour "$other" "$other_sha")"; then
                 canonical="$other"; other="$(other_colour "$canonical")"; canonical_sha="$other_sha"; other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
                 emergency=1
             else
+                # This reconcile started it and it never became healthy: it does not stay
+                # up beside the canonical colour (a second routine clock, a second worker).
+                if [ "$other_was_running" = "0" ]; then
+                    echo "reconcile: api-$other did not become healthy either; stopping it again (it was not running before this reconcile)" >&2
+                    compose stop "api-$other" 2>&1 | tail -1 || true
+                fi
                 echo "reconcile: NEITHER colour answers; nothing is switched; operator attention required" >&2
                 exit 80
             fi
@@ -442,6 +479,10 @@ if [ "$mode" = "--reconcile" ]; then
     if [ "$emergency" = "1" ]; then
         echo "RECONCILE EMERGENCY: api-$canonical ($canonical_sha) is live because the canonical release could not start; not a completed promotion - review required" >&2
         exit 81
+    fi
+    if [ -n "$degraded" ]; then
+        echo "RECONCILE DEGRADED: api-$canonical ($canonical_sha) stays canonical but reports '$degraded'; no colour was switched - operator attention required" >&2
+        exit 84
     fi
     echo "RECONCILE OK: api-$canonical is canonical (release ${canonical_sha:-unknown}); markers, upstreams and containers agree"
     exit 0

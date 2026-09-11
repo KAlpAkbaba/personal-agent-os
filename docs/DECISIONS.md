@@ -10048,6 +10048,31 @@ removes exactly the two units and the five named bundle files, removes the bundl
 only if nothing else is in it, and proves the timer is neither enabled nor active (exit 7
 otherwise). On a host without the monitor it changes nothing and says so.
 
+**4. Healthy, then degraded: the periodic reconcile traded a serving colour for an older
+one.** The strict gate (`status` exactly `ok` and the recorded SHA) is right for making a
+colour live. Astra applied it also to deciding whether the *already canonical* colour
+"will not come up". But the API reports top-level `degraded` when ANY check is not ok, and
+most checks - db, redis, object store, temporal, the providers - are shared by both
+colours. Reproduced in the harness before the fix: a canonical colour serving its own
+release but reporting `degraded`, with a healthy older colour on record, was drained and
+stopped *as "a half-promoted candidate"*, the older build made live, and `RELEASE`
+rewritten to it (exit 81). A shared outage lasting past the 120 s wait that recovers while
+the other colour starts does exactly that in production - every minute the timer runs. And
+when both colours were degraded, the older colour was started and left running beside the
+canonical one (exit 80): a second routine clock and a second worker against one database.
+Now: a canonical colour that answers as its recorded release stays canonical whatever it
+reports, and a non-`ok` status ends the run as `RECONCILE DEGRADED` (exit 84, nothing
+switched, nothing started); only a colour that does not serve at all (no answer, or a
+different release) is replaced, and the replacement still needs exact `ok` + SHA; a
+replacement this run started that never becomes healthy is stopped again. Colour-local
+degradation (a dead routine clock in the newest build, say) is therefore reported, not
+rolled back automatically - the loud exit is the input to self-healing, and a downgrade
+stays a decision rather than a side effect of a Redis restart. Four new harness cases
+(52/52): degraded canonical with a healthy older colour (was 81, now 84, RELEASE kept),
+both degraded (was 80 with the older colour left up, now 84 and nothing started), a dead
+canonical is still replaced loudly (81, unchanged), a failed takeover stops what it
+started (was left running). The stop is mutation-proven separately (1 red).
+
 **Evidence.** Recovery-supervisor install suite 30 passed, 2 skipped (the two kernel-`flock`
 cases run only on Linux CI). Seven mutations, each red: Astra's original installer against
 the new suite (18 red), the RELEASE gate removed (6), the root units dropped from the
