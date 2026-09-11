@@ -1665,6 +1665,19 @@ def _genesis_fixture_state(server: Any) -> Any:
 
 
 def run_case(case: UtteranceCase, *, harness: Harness | None = None) -> CaseResult:
+    """One case, with every Temporal workflow start - research or executive - accepted by a
+    client that runs nothing. The corpus judges routing and never runs a durable workflow
+    (``_executive_retry_amend_cases``); a start is the same "started" on a machine with a
+    local Temporal and on CI without one. Until ADR-0123 a start that could not connect
+    left the run RUNNING as an orphan, and the exec cases leaned on that orphan in CI
+    without anyone knowing: 47 of them went red the day orphans started being failed."""
+    temporal = AsyncMock()
+    temporal.start_workflow = AsyncMock(return_value=None)
+    with patch("app.research.service.Client.connect", AsyncMock(return_value=temporal)):
+        return _run_case(case, harness)
+
+
+def _run_case(case: UtteranceCase, harness: Harness | None) -> CaseResult:
     h = harness or build_harness()
     result = CaseResult(
         case_id=case.case_id,
