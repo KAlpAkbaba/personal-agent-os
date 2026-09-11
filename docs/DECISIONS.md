@@ -10040,3 +10040,58 @@ config, the browser worker's Python — does not move it. The browser worker alr
 its own release identity through the candidate manifest (`package_sha256`), and the two are
 compared separately; nothing here widens or replaces that.
 
+## ADR-0119 — The build belongs to the machine that has a compiler (2026-09-11)
+
+Row 26.16 asked for one thing M28 never had: a native build **startable from production**.
+The device half has existed and been tested since `7cbb41b`, whose own commit message says
+"parked here, not wired"; `app/main.py` registers seventeen live keys and `native_runner` is
+not among them, so `native.build` in production could only ever answer
+`dependency_unavailable` — truthfully, and uselessly.
+
+**Why the obvious fix was the wrong one.** Registering a local runner would have made the
+tool pass. Production is a Linux Cloud Core with no .NET SDK, no `makeappx` and no Windows,
+so that runner would have been a subprocess path that could never compile anything — a green
+tool call standing in for a build. The machine that has all three is the owner's enrolled
+device, and it already advertises every capability this needs.
+
+So `_run_lifecycle` gains a branch rather than a registration: no local runner means the
+**device** path, through the same `device_action` port every other family uses. `facts`
+deliberately stops being consulted there — it measures *this* machine, and a Linux Cloud
+Core's missing dotnet says nothing about the device's. A device without a toolchain refuses
+in its own words through `project.run`, which is more useful than a guess made here.
+
+**The half that was missing, and it was not the wiring.** `build_on_device` reached
+`STATE_VERIFIED` from `file.inspect` alone, and `file.inspect` answers size, hash and kind.
+It never opens the PE. So the version comparison `validate_against_spec` calls "the point of
+the whole module" could not run, and the row claimed its conclusion anyway. Worse, it read
+`size_bytes`/`sha256` off the TOP of the result, where the device has never put them
+(`FileIdentity.ToJson` nests the record under `file` and names the size `size`) — so both
+were `None` on every run. A verdict with literally nothing behind it. Fixed separately in
+`8eb574c`; the row now says `unverified` when it cannot check, with the reason.
+
+**`PeImageReader`.** The device reads what the artefact says about itself: its version
+resource, machine word and subsystem. No new capability name (ADR-0095 addendum 2 section 1)
+and no new file kind — an additive block on a result `file.inspect` already returns, produced
+only when the first two bytes really are `MZ`. The version comes from `FileVersionInfo`, the
+platform's own reader, so there is no second resource-walking implementation to keep true;
+the subsystem is four bytes at a fixed offset, and every offset the file itself supplies is
+bounded against the real length before it is used. A file that is not a PE gets no block —
+never a guess, which is what the `verified` stamp this work removed was made of.
+
+Two readers of one format in two languages is the risk, so the field names are
+`ArtifactFacts`' own — `version`, `architecture`, `subsystem` — and Cloud Core builds that
+dataclass out of the block and runs **the same** `validate_against_spec` the lab path runs.
+One judge, two sources of facts.
+
+**What is proven, and what is not.** The chain runs end to end and reaches `verified`
+against a device fake that answers what the device will answer: request, spec, render, the
+same file policy, `project.scaffold(root="native")`, build, test, publish, `file.inspect`,
+verdict, row. Three mutations red, including the one that matters most — taking the version
+from the spec instead of from the file, which is the factory-hands-back-yesterday's-EXE
+failure this milestone is named for.
+
+Row 26.16 stays `NOT_YET_PROVEN` until this runs against the owner's real device, and it
+cannot yet: the installed agent predates `PeImageReader`, so it reports no PE block and a
+real run today would land honestly on `unverified`. Reinstalling the agent needs elevation
+and is therefore an owner item — recorded rather than worked around.
+
