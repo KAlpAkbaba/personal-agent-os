@@ -9979,7 +9979,12 @@ ambiguity costs. Recorded as a limitation, not solved by guessing.
 Three mutations, three reds: prefixes restored to the schedule guard reds the twelve
 schedule cases; stem-matching restored to the bare-title verb reds the "açıkla" case; the
 matcher unwired reds the twelve bare cases. 1891 corpus utterances green (48 new).
-# ADR-0118 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
+
+## ADR-0121 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
+
+*Written by the Astra session as "ADR-0118"; renumbered at review because main had
+already taken ADR-0118 (build identity), ADR-0119 (device-dispatched native build) and
+ADR-0120 (the risk table bound to real paths).*
 
 **Status:** candidate implemented; deployment owner-gated.
 
@@ -10010,3 +10015,42 @@ This changes the recovery root and is `OWNER_APPROVAL_REQUIRED`. Candidate tests
 automatically; production installation waits until review and qualification pass. Backup
 and restore remain separate P0 work because continuous rollback does not recover a lost
 data volume.
+
+### Addendum — review before owner approval (2026-09-11)
+
+An independent security review of this candidate returned NOT_READY with two defects and
+one missing piece. All three are fixed on this branch; it is `READY_FOR_OWNER_APPROVAL`,
+not deployed, and nothing here installs itself.
+
+**1. Provenance was a file compared with itself.** The installer "refused unless the
+installed recovery action is the reviewed candidate tree" by `cmp`-ing its own tree against
+`/opt/pagentos/app`. On the host it is run *from* `/opt/pagentos/app` — the unit file's own
+comment said so — so the two paths were one directory and the check passed for any tree
+whatsoever. Provenance is now an exact commit: the installer takes the approved 40-hex SHA
+as a required argument and installs only when the last completed promotion
+(`/opt/pagentos/RELEASE`) and the deployed tree (`app/RELEASE`) are both exactly that commit;
+every installed file is taken from that tree, and the approved SHA is recorded beside the
+bundle (`APPROVED_SHA`). Run from a separate checkout, that checkout must agree byte for byte
+with the approved tree on every file installed — now including the two root units and the
+installer itself, which the first cut never compared although they are what systemd runs.
+A shape check refuses refs and short SHAs (`HEAD`, `main`, 39 or 41 characters, uppercase).
+
+**2. The risk table could not see this change.** `app/evolution/risk.py` had no rule for
+`infra/systemd/`, so a self-development candidate editing the root timer classified as tier 2.
+Fixed on main as ADR-0120, with the other dead rules the same audit found.
+
+**3. There was no off-switch or removal.** The off-switch is now stated in the installer,
+the unit file and its output: `systemctl disable --now pagentos-bluegreen-reconcile.timer`;
+release and rollback do not depend on the timer. `uninstall-recovery-supervisor.sh` disables
+the timer first (no new run can start), waits for a run already in progress rather than
+pulling its script out from under a colour switch (exit 6, nothing removed, on timeout),
+removes exactly the two units and the five named bundle files, removes the bundle directory
+only if nothing else is in it, and proves the timer is neither enabled nor active (exit 7
+otherwise). On a host without the monitor it changes nothing and says so.
+
+**Evidence.** Recovery-supervisor install suite 30 passed, 2 skipped (the two kernel-`flock`
+cases run only on Linux CI). Seven mutations, each red: Astra's original installer against
+the new suite (18 red), the RELEASE gate removed (6), the root units dropped from the
+comparison (2), any SHA shape accepted (5), the uninstaller not waiting for a running
+reconcile (1), the uninstaller `rm -rf`-ing the bundle directory (1), the uninstaller leaving
+the timer enabled (2).

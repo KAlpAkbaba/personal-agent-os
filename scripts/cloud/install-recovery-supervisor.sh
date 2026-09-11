@@ -5,43 +5,79 @@
 # repeatedly adds the missing post-release detection: if the canonical colour becomes
 # unhealthy later, the recorded alternate is started and selected, with a loud exit 81
 # and journal evidence. The model and the API process have no authority over this timer.
+#
+# Usage (root, on the host, after the approved commit has been released):
+#   install-recovery-supervisor.sh <approved 40-hex commit sha>
+#
+# Provenance is an EXACT commit named by whoever approved it. The recovery law is
+# installed only when the last COMPLETED promotion ($base/RELEASE) and the deployed tree
+# ($app_root/RELEASE) are both that commit, and everything installed is taken from that
+# tree. A byte comparison against "the reviewed candidate" is not provenance on its own:
+# run from the deployed tree - the natural way on the host - the candidate and the tree
+# are the same directory, and the comparison is a file compared with itself.
+#
+# Off-switch (stops every periodic recovery; release and rollback keep working without it):
+#   systemctl disable --now pagentos-bluegreen-reconcile.timer
+# Removal: scripts/cloud/uninstall-recovery-supervisor.sh
 
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 systemd_dir="${PAGENTOS_SYSTEMD_DIR:-/etc/systemd/system}"
 systemctl_bin="${PAGENTOS_SYSTEMCTL:-systemctl}"
-app_root="${PAGENTOS_APP_ROOT:-/opt/pagentos/app}"
+base="${PAGENTOS_BASE:-/opt/pagentos}"
+app_root="${PAGENTOS_APP_ROOT:-$base/app}"
 recovery_root="${PAGENTOS_RECOVERY_ROOT:-/opt/pagentos-recovery}"
 service_name="pagentos-bluegreen-reconcile.service"
 timer_name="pagentos-bluegreen-reconcile.timer"
+expected_sha="${1:-${PAGENTOS_RECOVERY_EXPECTED_SHA:-}}"
 
 if [[ $EUID -ne 0 && "${PAGENTOS_ALLOW_NONROOT:-0}" != "1" ]]; then
     echo "run as root: installing a system service is a privileged operation" >&2
     exit 1
 fi
 
-for source in \
-    "$repo_root/infra/systemd/$service_name" \
-    "$repo_root/infra/systemd/$timer_name" \
-    "$app_root/scripts/cloud/release-cloud-core-bluegreen.sh" \
-    "$app_root/infra/docker/docker-compose.prod.yml" \
-    "$app_root/infra/docker/edge/nginx.conf"; do
-    if [[ ! -f "$source" ]]; then
-        echo "required recovery input is absent: $source" >&2
+if [[ ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "usage: install-recovery-supervisor.sh <approved 40-hex commit sha>" >&2
+    echo "refusing: the recovery law is installed only from an exact, approved commit" >&2
+    exit 4
+fi
+
+# Every file this installs, relative to a tree. The installer itself is on the list: its
+# rollback and wait logic is part of the law being installed.
+relative_inputs=(
+    "infra/systemd/$service_name"
+    "infra/systemd/$timer_name"
+    "scripts/cloud/release-cloud-core-bluegreen.sh"
+    "scripts/cloud/install-recovery-supervisor.sh"
+    "infra/docker/docker-compose.prod.yml"
+    "infra/docker/edge/nginx.conf"
+)
+for relative in "${relative_inputs[@]}"; do
+    if [[ ! -f "$app_root/$relative" ]]; then
+        echo "required recovery input is absent: $app_root/$relative" >&2
         exit 2
     fi
 done
 
-if ! cmp -s \
-    "$repo_root/scripts/cloud/release-cloud-core-bluegreen.sh" \
-    "$app_root/scripts/cloud/release-cloud-core-bluegreen.sh"; then
-    echo "refusing: the installed recovery action is not the reviewed candidate tree" >&2
-    exit 3
+completed_sha="$(tr -d '[:space:]' 2>/dev/null < "$base/RELEASE" || true)"
+tree_sha="$(tr -d '[:space:]' 2>/dev/null < "$app_root/RELEASE" || true)"
+if [[ "$completed_sha" != "$expected_sha" || "$tree_sha" != "$expected_sha" ]]; then
+    echo "refusing: approved $expected_sha, but the completed release is '${completed_sha:-none}' and the deployed tree is '${tree_sha:-none}'" >&2
+    exit 5
 fi
-if ! cmp -s "$repo_root/infra/docker/docker-compose.prod.yml" "$app_root/infra/docker/docker-compose.prod.yml" \
-    || ! cmp -s "$repo_root/infra/docker/edge/nginx.conf" "$app_root/infra/docker/edge/nginx.conf"; then
-    echo "refusing: installed recovery configuration is not the reviewed candidate tree" >&2
+
+# Run from a separate checkout, that checkout must agree byte for byte with the approved
+# tree it is about to install from. (Run from the deployed tree this is trivially true;
+# the RELEASE check above is what binds provenance there.)
+for relative in "${relative_inputs[@]}"; do
+    if ! cmp -s "$repo_root/$relative" "$app_root/$relative"; then
+        echo "refusing: $relative differs between this installer's tree ($repo_root) and the approved release tree ($app_root)" >&2
+        exit 3
+    fi
+done
+if ! cmp -s "${BASH_SOURCE[0]}" "$app_root/scripts/cloud/install-recovery-supervisor.sh"; then
+    echo "refusing: this installer is not the approved release's installer" >&2
     exit 3
 fi
 
@@ -59,6 +95,7 @@ destinations=(
     "$recovery_root/docker-compose.prod.yml"
     "$recovery_root/nginx.conf"
     "$recovery_root/reconcile.sha256"
+    "$recovery_root/APPROVED_SHA"
 )
 for destination in "${destinations[@]}"; do
     if [[ -f "$destination" ]]; then
@@ -108,16 +145,19 @@ while "$systemctl_bin" is-active --quiet "$service_name" >/dev/null 2>&1; do
     sleep "${PAGENTOS_RECOVERY_WAIT_STEP_S:-1}"
     waited=$((waited + 1))
 done
-install -m 0755 "$repo_root/scripts/cloud/release-cloud-core-bluegreen.sh" "$recovery_root/reconcile.sh"
-install -m 0600 "$repo_root/infra/docker/docker-compose.prod.yml" "$recovery_root/docker-compose.prod.yml"
-install -m 0600 "$repo_root/infra/docker/edge/nginx.conf" "$recovery_root/nginx.conf"
+# Everything installed comes from the tree whose RELEASE is the approved commit.
+install -m 0755 "$app_root/scripts/cloud/release-cloud-core-bluegreen.sh" "$recovery_root/reconcile.sh"
+install -m 0600 "$app_root/infra/docker/docker-compose.prod.yml" "$recovery_root/docker-compose.prod.yml"
+install -m 0600 "$app_root/infra/docker/edge/nginx.conf" "$recovery_root/nginx.conf"
 sha256sum \
     "$recovery_root/reconcile.sh" \
     "$recovery_root/docker-compose.prod.yml" \
     "$recovery_root/nginx.conf" > "$recovery_root/reconcile.sha256"
 chmod 0600 "$recovery_root/reconcile.sha256"
-install -m 0644 "$repo_root/infra/systemd/$service_name" "$systemd_dir/$service_name"
-install -m 0644 "$repo_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name"
+printf '%s\n' "$expected_sha" > "$recovery_root/APPROVED_SHA"
+chmod 0600 "$recovery_root/APPROVED_SHA"
+install -m 0644 "$app_root/infra/systemd/$service_name" "$systemd_dir/$service_name"
+install -m 0644 "$app_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name"
 
 "$systemctl_bin" daemon-reload
 # Prove the pinned action once before scheduling it.
@@ -129,4 +169,5 @@ install -m 0644 "$repo_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name
 trap - ERR
 cleanup_backup
 
-echo "RECOVERY SUPERVISOR INSTALLED: $timer_name checks the live blue/green state every minute"
+echo "RECOVERY SUPERVISOR INSTALLED from $expected_sha: $timer_name checks the live blue/green state every minute"
+echo "off-switch: systemctl disable --now $timer_name"

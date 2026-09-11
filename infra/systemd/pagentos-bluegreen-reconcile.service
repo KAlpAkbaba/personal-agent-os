@@ -1,5 +1,5 @@
 # PagentOS Cloud Core: rebuild the blue/green state after a reboot, crash, or later
-# health regression (M18.4 gap 2, ADR-0081 addendum 3, ADR-0118). Its persistent timer
+# health regression (M18.4 gap 2, ADR-0081 addendum 3, ADR-0121). Its persistent timer
 # runs after boot and after each bounded interval, and calls
 # release-cloud-core-bluegreen.sh --reconcile, which makes the last COMPLETED promotion
 # canonical (marker, both edge upstreams, RELEASE, the tree) and drains and stops a
@@ -9,9 +9,13 @@
 # a release swaps. A candidate cannot redefine the monitor that judges it. The env file
 # and markers are under /opt/pagentos; the edge's upstream under /mnt/pagentos-data/edge.
 #
-# Install (root, after the candidate tree is released):
-#   /opt/pagentos/app/scripts/cloud/install-recovery-supervisor.sh
+# Install (root, after the approved commit is released; the exact 40-hex sha is required):
+#   /opt/pagentos/app/scripts/cloud/install-recovery-supervisor.sh <approved sha>
 #   journalctl -u pagentos-bluegreen-reconcile.service -n 30
+# Off-switch (release and rollback keep working without it):
+#   systemctl disable --now pagentos-bluegreen-reconcile.timer
+# Removal:
+#   /opt/pagentos/app/scripts/cloud/uninstall-recovery-supervisor.sh
 [Unit]
 Description=PagentOS Cloud Core blue/green reconcile (after boot or crash)
 After=docker.service network-online.target
