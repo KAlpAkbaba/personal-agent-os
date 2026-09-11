@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
@@ -179,6 +180,31 @@ def test_a_failed_delivery_leaves_the_task_for_the_next_sweep(session_factory) -
     working = _Recorder()
     assert ArtifactReadyAnnouncer(session_factory, working).sweep_once() == 1
     assert working.calls[0][2] == task_id
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is not None
+
+
+@dataclass(frozen=True)
+class _DeliveryReceipt:
+    delivered: int
+
+
+def test_a_returned_provider_failure_is_not_stamped_as_delivered(session_factory) -> None:
+    """MobileService reports a transient provider failure as a returned receipt."""
+    task_id = _seed(session_factory, status=TASK_STATUS_READY, title="Tekrar Dene")
+    announcer = ArtifactReadyAnnouncer(
+        session_factory, lambda *_args: _DeliveryReceipt(delivered=0)
+    )
+
+    assert announcer.sweep_once() == 0
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is None
+        assert list(pending_task_ids(session)) == [task_id]
+
+    recovered = ArtifactReadyAnnouncer(
+        session_factory, lambda *_args: _DeliveryReceipt(delivered=1)
+    )
+    assert recovered.sweep_once() == 1
     with session_factory() as session:
         assert session.get(Task, task_id).announced_at is not None
 

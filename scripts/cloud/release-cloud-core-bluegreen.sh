@@ -51,6 +51,7 @@ case "$first_arg" in
     *) sha="$first_arg"; mode=${2:-release};;
 esac
 base=${PAGENTOS_BASE:-/opt/pagentos}
+lock_file="$base/.bluegreen-operation.lock"
 envf="$base/.env"
 next="$base/app.next"
 cur="$base/app"
@@ -65,6 +66,17 @@ handoff_wait_s=${PAGENTOS_HANDOFF_WAIT_S:-30}
 image_repo=${PAGENTOS_IMAGE_REPO:-pagentos/cloud-core}
 legacy_container=${PAGENTOS_API_CONTAINER:-pagentos-prod-api}
 interrupt_at=${PAGENTOS_INTERRUPT_AT:-}
+
+# Release, rollback and periodic recovery inspect and mutate the same markers, colours and
+# edge upstream. They must be one serial operation. A periodic reconcile that overlaps a
+# legitimate release would otherwise classify its idle colour as an interrupted candidate
+# and stop it. The production host's util-linux `flock` holds the kernel lock on fd 9 for
+# this shell's lifetime; there is no create/write ownership window and SIGKILL releases it.
+exec 9>"$lock_file"
+if ! flock -n 9; then
+    echo "another blue/green release or recovery operation is running; retry later" >&2
+    exit 82
+fi
 
 # ----------------------------------------------------------------- helpers
 
@@ -193,13 +205,18 @@ handoff_devices() {
 }
 
 wait_for_colour() {
-    # wait_for_colour COLOUR: up to ~120 s for the colour's health to answer ok.
-    local colour=$1 tries=0 body=""
+    # wait_for_colour COLOUR EXPECTED_SHA: up to ~120 s for exact healthy provenance.
+    # The API deliberately returns HTTP 200 for degraded health, so transport success or
+    # the mere presence of a status field proves neither health nor the running version.
+    local colour=$1 expected_sha=$2 tries=0 body="" status="" actual_sha=""
     while [ "$tries" -lt 40 ]; do
         body="$(in_container_health "$colour" 2>/dev/null || true)"
-        case "$body" in
-            *'"status"'*) printf '%s' "$body"; return 0;;
-        esac
+        status="$(printf '%s' "$body" | sed -nE 's/^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)"
+        actual_sha="$(served_release "$body")"
+        if [ "$status" = "ok" ] && [ "$actual_sha" = "$expected_sha" ]; then
+            printf '%s' "$body"
+            return 0
+        fi
         tries=$((tries + 1))
         sleep "${PAGENTOS_WAIT_STEP_S:-3}"
     done
@@ -341,13 +358,13 @@ if [ "$mode" = "--reconcile" ]; then
         fi
     fi
     body=""
-    if [ -n "$canonical_sha" ] && body="$(wait_for_colour "$canonical")" && [ -n "$(served_release "$body")" ]; then
+    if [ -n "$canonical_sha" ] && body="$(wait_for_colour "$canonical" "$canonical_sha")"; then
         echo "reconcile: api-$canonical healthy (release $(served_release "$body")) -> canonical"
     else
         if [ -n "$other_sha" ]; then
             echo "reconcile: api-$canonical will not come up; api-$other ($other_sha) is the only recorded alternative - taking over LOUDLY (not a completed promotion)" >&2
             compose up -d --no-deps --wait "api-$other" 2>&1 | tail -1 || true
-            if body="$(wait_for_colour "$other")" && [ -n "$(served_release "$body")" ]; then
+            if body="$(wait_for_colour "$other" "$other_sha")"; then
                 canonical="$other"; other="$(other_colour "$canonical")"; canonical_sha="$other_sha"; other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
                 emergency=1
             else
@@ -451,7 +468,7 @@ if [ "$mode" = "--rollback" ]; then
     leaving_sha="$(cat "$base/RELEASE" 2>/dev/null || true)"
     echo "rolling back: edge -> api-$prev_colour (${target_sha:-sha unknown}; leaving ${leaving_sha:-unknown})"
     compose up -d --no-deps --wait "api-$prev_colour"
-    body="$(wait_for_colour "$prev_colour")" || { echo "api-$prev_colour did not become healthy; the edge stays on api-$active" >&2; exit 75; }
+    body="$(wait_for_colour "$prev_colour" "$target_sha")" || { echo "api-$prev_colour did not become healthy at ${target_sha:-unknown}; the edge stays on api-$active" >&2; exit 75; }
     install_edge_config
     # devices first, then HTTP - the same handoff a release does
     handoff_devices "$active" "$prev_colour" || { rc=$?; echo "device handoff to api-$prev_colour failed ($rc); restoring api-$active" >&2; undrain_colour "$active" >/dev/null; write_upstream "$active" "$active"; reload_edge || true; drain_colour "$prev_colour" >/dev/null; compose stop "api-$prev_colour" >/dev/null 2>&1 || true; exit "$rc"; }
@@ -536,7 +553,7 @@ compose up -d --no-deps --wait "api-$idle" 2>&1 | tail -2
 cd "$base"
 maybe_interrupt after_idle_up
 
-body="$(wait_for_colour "$idle")" || { echo "api-$idle never answered health" >&2; exit 75; }
+body="$(wait_for_colour "$idle" "$sha")" || { echo "api-$idle never answered healthy at $sha" >&2; exit 75; }
 echo "health ok on api-$idle"
 
 version_file="$cur/services/api/app/voice/realtime_sessions/contract_version.py"

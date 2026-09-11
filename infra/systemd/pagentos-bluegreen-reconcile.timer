@@ -1,0 +1,13 @@
+[Unit]
+Description=Continuously verify and recover the PagentOS Cloud Core
+Documentation=file:///opt/pagentos/app/docs/M18_4_SELF_EVOLUTION_SPEC.md
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=pagentos-bluegreen-reconcile.service
+
+[Install]
+WantedBy=timers.target

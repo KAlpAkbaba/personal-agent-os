@@ -9979,3 +9979,31 @@ ambiguity costs. Recorded as a limitation, not solved by guessing.
 Three mutations, three reds: prefixes restored to the schedule guard reds the twelve
 schedule cases; stem-matching restored to the bare-title verb reds the "açıkla" case; the
 matcher unwired reds the twelve bare cases. 1891 corpus utterances green (48 new).
+# ADR-0118 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
+
+**Status:** candidate implemented; deployment owner-gated.
+
+The takeover compared repository state, git/worktrees, installed Windows binaries,
+production markers, database migration/state and GitHub CI. The durable M28 qualification
+wins over stale summary text: Windows row 26.15 is `PROVEN_REAL`, while production-triggered
+native building (26.16) remains absent. The full record is
+`docs/reports/astra-takeover-2026-09-11.md`.
+
+The production recovery action already exists in
+`release-cloud-core-bluegreen.sh --reconcile`. Before scheduling it, its old health gate
+is strengthened: HTTP 200 is insufficient; top-level status must be exactly `ok` and the
+reported release must be the recorded SHA. Release, rollback and recovery share one
+kernel `flock`, preventing a periodic tick from treating an in-flight candidate as an
+abandoned promotion.
+
+The timer executes a digest-verified, root-owned copy under `/opt/pagentos-recovery`,
+outside the mutable application trees it judges. A candidate release therefore cannot
+replace its own recovery law. Installation preserves the previous units and pinned action,
+stops the old timer, proves the new action, and restores/restarts the previous monitor if
+that proof fails. Only then does a persistent systemd timer run the action one minute after
+the previous bounded run finishes.
+
+This changes the recovery root and is `OWNER_APPROVAL_REQUIRED`. Candidate tests may run
+automatically; production installation waits until review and qualification pass. Backup
+and restore remain separate P0 work because continuous rollback does not recover a lost
+data volume.

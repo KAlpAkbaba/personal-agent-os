@@ -97,7 +97,7 @@ $docker = @(
     '    if [ "${FAKE_HEALTH_DOWN:-}" = "$colour" ]; then exit 1; fi',
     '    rel="${FAKE_SERVED_RELEASE:-$(released_for "$colour")}"',
     '    draining=false; [ -f "$FAKE_STATE/draining-$colour" ] && draining=true',
-    '    printf "{\"status\":\"ok\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s}}}" "$rel" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining"',
+    '    printf "{\"status\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s}}}" "${FAKE_HEALTH_STATUS:-ok}" "$rel" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining"',
     '    exit 0;;',
     '  compose*" exec -T edge nginx -t"*) exit 0;;',
     '  compose*" exec -T edge nginx -s reload"*)',
@@ -128,6 +128,7 @@ $curl = @(
 )
 [IO.File]::WriteAllText((Join-Path $fakeBin "docker"), (($docker -join "`n") + "`n"))
 [IO.File]::WriteAllText((Join-Path $fakeBin "curl"), (($curl -join "`n") + "`n"))
+[IO.File]::WriteAllText((Join-Path $fakeBin "flock"), "#!/usr/bin/env bash`nexit 0`n")
 
 function Get-UpstreamText { param([string]$Http, [string]$Devices = $Http) "upstream pagentos_api { server api-$Http`:8001; }`nupstream pagentos_devices { server api-$Devices`:8001; }`n" }
 
@@ -264,7 +265,7 @@ try {
 
         Reset-Host
         $r76 = Invoke-Release -Env @{ FAKE_SERVED_RELEASE = "0000000000000000000000000000000000000000" }
-        Assert-True ($r76.Exit -eq 76 -and $r76.Output -match "reports release '0000" -and (Get-Active) -eq "blue") "an idle colour that does not report the new sha is refused (76) before the switch"
+        Assert-True ($r76.Exit -eq 75 -and $r76.Output -match "never answered healthy at $sha" -and (Get-Active) -eq "blue") "an idle colour that reports the wrong sha never passes the exact health gate"
 
         Reset-Host
         $r73 = Invoke-Release -Env @{ FAKE_CONTRACT_VERSION = "1" }
@@ -335,6 +336,14 @@ try {
         Clear-Calls
         $c5 = Invoke-Release -Mode "--reconcile"
         Assert-True ($c5.Exit -eq 0 -and $c5.Output -match "RECONCILE OK: api-blue is canonical" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Test-UpstreamBoth "blue") -and (Get-Release) -eq $old -and (Get-Sessions "blue") -eq 1 -and -not ($c5.Calls -match " stop api-") -and -not ($c5.Calls -match " up -d")) "a consistent host reconciles to itself: nothing started, nothing stopped, the devices untouched"
+
+        Reset-Host
+        $degraded = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_HEALTH_STATUS = "degraded" }
+        Assert-True ($degraded.Exit -eq 80 -and $degraded.Output -match "operator attention required" -and $degraded.Output -notmatch "RECONCILE OK") "HTTP 200 with status=degraded cannot keep or promote a colour"
+
+        Reset-Host
+        $wrong = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_SERVED_RELEASE = "9999999999999999999999999999999999999999" }
+        Assert-True ($wrong.Exit -eq 80 -and $wrong.Output -match "operator attention required" -and $wrong.Output -notmatch "RECONCILE OK") "a healthy body from the wrong release cannot keep or promote a colour"
 
         Reset-Host
         Remove-Item -LiteralPath (Join-Path $hostBase "state\up-edge")

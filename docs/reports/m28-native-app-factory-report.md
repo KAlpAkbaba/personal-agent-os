@@ -1,4 +1,11 @@
-# M28 Native Application Factory — milestone report (2026-09-09, IN PROGRESS)
+# M28 Native Application Factory — milestone report (2026-09-11, IN PROGRESS)
+
+> Takeover correction, 2026-09-11: owner item 28 and row 26.15 are already
+> `PROVEN_REAL` in Qualification Stage 28 (`item28-unlocked-20260909-190753.json`):
+> the EXE was launched, driven through UI Automation, closed, relaunched with persisted
+> state, and its own log was read. M28 remains open for row 26.16, the missing production
+> `native_runner` that triggers the device build lifecycle. The older narrative below is
+> retained as the history of the pre-install state.
 
 Owner directive: master directive "CLOSE M18.4 AND COMPLETE M19 -> M28" (M28 section: the last milestone; there is no M29). Decision record: ADR-0095. Spec: `docs/M28_NATIVE_APP_FACTORY_SPEC.md`. QUALIFICATION Stage 26 (not yet written — see §"What closing still needs").
 
