@@ -9996,12 +9996,15 @@ reported release must be the recorded SHA. Release, rollback and recovery share 
 kernel `flock`, preventing a periodic tick from treating an in-flight candidate as an
 abandoned promotion.
 
-The timer executes a digest-verified, root-owned copy under `/opt/pagentos-recovery`,
-outside the mutable application trees it judges. A candidate release therefore cannot
-replace its own recovery law. Installation preserves the previous units and pinned action,
-stops the old timer, proves the new action, and restores/restarts the previous monitor if
-that proof fails. Only then does a persistent systemd timer run the action one minute after
-the previous bounded run finishes.
+The timer executes a digest-verified, root-owned bundle under `/opt/pagentos-recovery`,
+outside the mutable application trees it judges. The bundle pins the reconcile action,
+production Compose definition and edge nginx policy; recovery refuses to act unless an
+installed release tree byte-matches the pinned configuration. A candidate release therefore
+cannot replace its own recovery law or the inputs that law executes. Installation preserves
+the previous units and bundle, stops the old timer, waits for any already-running reconcile
+to finish, proves the new action, and restores/restarts the previous monitor if that proof
+fails. Only then does a persistent systemd timer run the action one minute after the previous
+bounded run finishes.
 
 This changes the recovery root and is `OWNER_APPROVAL_REQUIRED`. Candidate tests may run
 automatically; production installation waits until review and qualification pass. Backup

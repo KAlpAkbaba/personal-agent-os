@@ -66,6 +66,8 @@ handoff_wait_s=${PAGENTOS_HANDOFF_WAIT_S:-30}
 image_repo=${PAGENTOS_IMAGE_REPO:-pagentos/cloud-core}
 legacy_container=${PAGENTOS_API_CONTAINER:-pagentos-prod-api}
 interrupt_at=${PAGENTOS_INTERRUPT_AT:-}
+recovery_bundle=${PAGENTOS_RECOVERY_BUNDLE:-}
+recovery_input_tree=""
 
 # Release, rollback and periodic recovery inspect and mutate the same markers, colours and
 # edge upstream. They must be one serial operation. A periodic reconcile that overlaps a
@@ -76,6 +78,23 @@ exec 9>"$lock_file"
 if ! flock -n 9; then
     echo "another blue/green release or recovery operation is running; retry later" >&2
     exit 82
+fi
+
+# The root timer may use only deployment inputs approved with its own pinned bundle. The
+# application tree remains the source of versioned code for normal releases, but it cannot
+# replace Compose mounts/commands or nginx policy underneath the monitor that judges it.
+if [ "$mode" = "--reconcile" ] && [ -n "$recovery_bundle" ]; then
+    for candidate_tree in "$cur" "$prev"; do
+        if cmp -s "$candidate_tree/infra/docker/docker-compose.prod.yml" "$recovery_bundle/docker-compose.prod.yml" \
+            && cmp -s "$candidate_tree/infra/docker/edge/nginx.conf" "$recovery_bundle/nginx.conf"; then
+            recovery_input_tree="$candidate_tree"
+            break
+        fi
+    done
+    if [ -z "$recovery_input_tree" ]; then
+        echo "no app/app.prev tree matches the pinned recovery Compose and nginx inputs" >&2
+        exit 83
+    fi
 fi
 
 # ----------------------------------------------------------------- helpers
@@ -117,7 +136,10 @@ write_upstream() {
     printf '%s\n' "$http" > "$edge_dir/active.txt"
 }
 
-compose() { docker compose --profile bluegreen -f "$cur/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"; }
+compose() {
+    local input_tree="${recovery_input_tree:-$cur}"
+    docker compose --profile bluegreen -f "$input_tree/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"
+}
 
 in_container_health() {
     # in_container_health COLOUR: the colour's own health JSON, from inside the container
@@ -211,7 +233,7 @@ wait_for_colour() {
     local colour=$1 expected_sha=$2 tries=0 body="" status="" actual_sha=""
     while [ "$tries" -lt 40 ]; do
         body="$(in_container_health "$colour" 2>/dev/null || true)"
-        status="$(printf '%s' "$body" | sed -nE 's/^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1)"
+        status="$(top_health_status "$body")"
         actual_sha="$(served_release "$body")"
         if [ "$status" = "ok" ] && [ "$actual_sha" = "$expected_sha" ]; then
             printf '%s' "$body"
@@ -227,6 +249,7 @@ install_edge_config() {
     # install_edge_config [TREE]: the tree's nginx.conf becomes the edge's (atomic copy into
     # the edge dir the container reads with -c). A missing tree file leaves the edge's alone.
     local src="${1:-$cur}/infra/docker/edge/nginx.conf"
+    if [ -n "$recovery_input_tree" ]; then src="$recovery_bundle/nginx.conf"; fi
     if [ -f "$src" ]; then
         mkdir -p "$edge_dir"
         cp "$src" "$edge_dir/nginx.conf.next"
@@ -261,6 +284,12 @@ ensure_edge() {
 served_release() {
     # served_release BODY: the release sha a health body names, or empty.
     printf '%s' "$1" | grep -oE '"release":[[:space:]]*\{[^}]*' | grep -oE '"version":[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true
+}
+
+top_health_status() {
+    # The application emits top-level status first. Anchoring at the opening object keeps
+    # a nested provider's "status":"ok" from masking top-level degraded health.
+    printf '%s' "$1" | sed -nE 's/^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1
 }
 
 maybe_interrupt() {
@@ -603,15 +632,17 @@ maybe_interrupt after_switch
 # the switch, then a needless rollback). Bounded wait for the edge to answer with the sha.
 tries=0
 edge_release=""
+edge_status=""
 while [ "$tries" -lt "${PAGENTOS_EDGE_SETTLE_TRIES:-20}" ]; do
     health="$(curl -fsS "$health_url" 2>/dev/null || true)"
     edge_release="$(served_release "$health")"
-    if [ "$edge_release" = "$sha" ]; then break; fi
+    edge_status="$(top_health_status "$health")"
+    if [ "$edge_status" = "ok" ] && [ "$edge_release" = "$sha" ]; then break; fi
     tries=$((tries + 1))
     sleep "${PAGENTOS_EDGE_SETTLE_STEP_S:-0.5}"
 done
-if [ "$edge_release" != "$sha" ]; then
-    echo "through the edge the release is '${edge_release:-absent}', expected '$sha' (after $tries probes)" >&2
+if [ "$edge_status" != "ok" ] || [ "$edge_release" != "$sha" ]; then
+    echo "through the edge health is '${edge_status:-absent}' and release is '${edge_release:-absent}', expected ok / '$sha' (after $tries probes)" >&2
     exit 76
 fi
 echo "health through the edge: release $sha (settled after $tries retr$( [ "$tries" = "1" ] && echo y || echo ies))"

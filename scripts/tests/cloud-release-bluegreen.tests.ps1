@@ -124,7 +124,7 @@ $curl = @(
     'colour=$(grep -oE "pagentos_api \{ server api-(blue|green)" "$FAKE_STATE/edge-upstream" 2>/dev/null | head -1 | grep -oE "(blue|green)$")',
     'c=$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")',
     'rel=$(grep "^PAGENTOS_RELEASE_$c=" "$FAKE_ENV" 2>/dev/null | head -1 | sed "s/^[^=]*=//")',
-    'printf "{\"status\":\"ok\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"}}" "${FAKE_EDGE_RELEASE:-$rel}"'
+    'printf "{\"status\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"}}" "${FAKE_EDGE_HEALTH_STATUS:-ok}" "${FAKE_EDGE_RELEASE:-$rel}"'
 )
 [IO.File]::WriteAllText((Join-Path $fakeBin "docker"), (($docker -join "`n") + "`n"))
 [IO.File]::WriteAllText((Join-Path $fakeBin "curl"), (($curl -join "`n") + "`n"))
@@ -274,8 +274,12 @@ try {
         Reset-Host
         $ra = Invoke-Release -Env @{ FAKE_EDGE_RELEASE = "9999999999999999999999999999999999999999" }
         if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $ra.Output }
-        Assert-True ($ra.Exit -eq 76 -and $ra.Output -match "expected '$sha' \(after 2 probes\)" -and $ra.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue" -and (Test-Up "blue")) "a failure after the switch (the edge never settles on the sha within the bounded wait) switches the edge back to the old colour, which is still up"
+        Assert-True ($ra.Exit -eq 76 -and $ra.Output -match "expected ok / '$sha' \(after 2 probes\)" -and $ra.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue" -and (Test-Up "blue")) "a failure after the switch (the edge never settles on the sha within the bounded wait) switches the edge back to the old colour, which is still up"
         Assert-True ($ra.Output -match "ROLLBACK: device sessions returning to api-blue: 1/1" -and (Get-Sessions "blue") -eq 1 -and -not (Test-Draining "blue") -and -not (Test-Up "green")) "...the old colour takes the device sessions back (undrained, devices first), then the new colour is stopped"
+
+        Reset-Host
+        $edgeDegraded = Invoke-Release -Env @{ FAKE_EDGE_HEALTH_STATUS = "degraded" }
+        Assert-True ($edgeDegraded.Exit -eq 76 -and $edgeDegraded.Output -match "health is 'degraded'.*expected ok" -and $edgeDegraded.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue") "post-cutover edge health must be ok, even when it reports the expected sha"
 
         Reset-Host -Active "green"
         $rg = Invoke-Release

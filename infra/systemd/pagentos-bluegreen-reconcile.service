@@ -23,6 +23,7 @@ Type=oneshot
 RemainAfterExit=no
 TimeoutStartSec=600
 Environment=PAGENTOS_BASE=/opt/pagentos
+Environment=PAGENTOS_RECOVERY_BUNDLE=/opt/pagentos-recovery
 ExecStartPre=/usr/bin/sha256sum --check /opt/pagentos-recovery/reconcile.sha256
 ExecStart=/bin/bash /opt/pagentos-recovery/reconcile.sh --reconcile
 NoNewPrivileges=true

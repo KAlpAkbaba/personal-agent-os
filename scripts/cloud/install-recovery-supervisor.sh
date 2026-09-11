@@ -24,7 +24,9 @@ fi
 for source in \
     "$repo_root/infra/systemd/$service_name" \
     "$repo_root/infra/systemd/$timer_name" \
-    "$app_root/scripts/cloud/release-cloud-core-bluegreen.sh"; do
+    "$app_root/scripts/cloud/release-cloud-core-bluegreen.sh" \
+    "$app_root/infra/docker/docker-compose.prod.yml" \
+    "$app_root/infra/docker/edge/nginx.conf"; do
     if [[ ! -f "$source" ]]; then
         echo "required recovery input is absent: $source" >&2
         exit 2
@@ -35,6 +37,11 @@ if ! cmp -s \
     "$repo_root/scripts/cloud/release-cloud-core-bluegreen.sh" \
     "$app_root/scripts/cloud/release-cloud-core-bluegreen.sh"; then
     echo "refusing: the installed recovery action is not the reviewed candidate tree" >&2
+    exit 3
+fi
+if ! cmp -s "$repo_root/infra/docker/docker-compose.prod.yml" "$app_root/infra/docker/docker-compose.prod.yml" \
+    || ! cmp -s "$repo_root/infra/docker/edge/nginx.conf" "$app_root/infra/docker/edge/nginx.conf"; then
+    echo "refusing: installed recovery configuration is not the reviewed candidate tree" >&2
     exit 3
 fi
 
@@ -49,6 +56,8 @@ destinations=(
     "$systemd_dir/$service_name"
     "$systemd_dir/$timer_name"
     "$recovery_root/reconcile.sh"
+    "$recovery_root/docker-compose.prod.yml"
+    "$recovery_root/nginx.conf"
     "$recovery_root/reconcile.sha256"
 )
 for destination in "${destinations[@]}"; do
@@ -88,8 +97,24 @@ rollback_install() {
 trap rollback_install ERR
 
 "$systemctl_bin" stop "$timer_name" >/dev/null 2>&1 || true
+# A timer may already have launched the oneshot. Do not replace its code or let `start`
+# join that old job and masquerade as proof of the new pinned action.
+waited=0
+while "$systemctl_bin" is-active --quiet "$service_name" >/dev/null 2>&1; do
+    if [[ "$waited" -ge "${PAGENTOS_RECOVERY_WAIT_TRIES:-120}" ]]; then
+        echo "running recovery service did not finish; pinned files were not replaced" >&2
+        false
+    fi
+    sleep "${PAGENTOS_RECOVERY_WAIT_STEP_S:-1}"
+    waited=$((waited + 1))
+done
 install -m 0755 "$repo_root/scripts/cloud/release-cloud-core-bluegreen.sh" "$recovery_root/reconcile.sh"
-sha256sum "$recovery_root/reconcile.sh" > "$recovery_root/reconcile.sha256"
+install -m 0600 "$repo_root/infra/docker/docker-compose.prod.yml" "$recovery_root/docker-compose.prod.yml"
+install -m 0600 "$repo_root/infra/docker/edge/nginx.conf" "$recovery_root/nginx.conf"
+sha256sum \
+    "$recovery_root/reconcile.sh" \
+    "$recovery_root/docker-compose.prod.yml" \
+    "$recovery_root/nginx.conf" > "$recovery_root/reconcile.sha256"
 chmod 0600 "$recovery_root/reconcile.sha256"
 install -m 0644 "$repo_root/infra/systemd/$service_name" "$systemd_dir/$service_name"
 install -m 0644 "$repo_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name"
