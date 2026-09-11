@@ -10451,3 +10451,217 @@ red: fingerprints that always agree (2), `--apply` without the confirmation (1),
 enabled before the proof (1), a manifest mismatch ignored (1), a failed pre-migration backup
 not stopping the release (1). What no fake can prove - that the real pg_dump, pg_restore,
 mc and restic agree with each other on the real host - is the measured drill on production.
+
+### Addendum — the pre-migration backup is bounded (2026-09-12)
+
+The third independent review of the recovery supervisor (ADR-0121) found this hook running
+unbounded under the operation lock the recovery timer needs: a backup that hung would defer
+every takeover for as long as it hung - at the moment risk is highest, just before a schema
+change. Both release scripts now run it under `timeout --kill-after=60`
+(`PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S`, default 1800 s), and a backup that outlives its
+bound is a failed backup: `pre-migration backup did not finish within N s`, the release stops
+before any migration (74 blue/green, 67 single-container), the active colour keeps serving.
+The default is a ceiling to be replaced by a measured one: the first real backup on the host
+records its duration in `LAST_BACKUP.json`. A killed backup can leave a restic lock that would
+fail every later prune, so a backup now runs `restic unlock` (stale locks only, never
+`--remove-all`) under its own lock before it writes. Tests: both release harnesses gained the
+case (red before, 49/49 and 34/34 after); the backup suite gained the unlock-before-write
+case (red before; 53 passed after).
+
+## ADR-0123 — The reliability sweep: what was promised, now enforced (2026-09-11)
+
+**Context.** Phase 8 of the post-audit recovery directive: the takeover audit listed six
+reliability defects that each looked small and each left the system saying something untrue.
+Five are fixed here; the sixth was examined and deliberately left as the owner decided it.
+
+**Decisions.**
+1. **Autonomous research may not drive the owner's Chrome without its own grant.** ADR-0113
+   put the owner's signed-in Chrome at the owner's disposal (media, operator actions);
+   ADR-0035 requires the separate `owner_authorized_for_research` before an AUTONOMOUS
+   research task drives it, and the enrollment script records it false. Nothing in the
+   worker read it: `session_open {profile: owner}` - default kind research - attached
+   unchecked. The worker now calls `require_research_authorization` for research sessions on
+   the owner profile: `security_scope_error` before any connection, never a fallback. Cloud
+   Core's own owner sessions declare `session_kind: "media"` and are unaffected.
+2. **Redis is reported, not depended on, and both health readers share one rule.** Nothing in
+   Cloud Core uses Redis, yet a Redis restart made top-level health `degraded` - failing every
+   release's exact `ok` gate. `app.health.ADVISORY_CHECKS = {"redis"}` keeps it visible and
+   marked `required: false`; `app.health.is_degraded` is THE rule, used by
+   `/v1/system/health` and by the voice `state.now` answer, which had its own stricter rule
+   (a `skipped` check counted as degraded). A contract test reads `app/` for any Redis client,
+   so the day something uses Redis it cannot stay advisory.
+3. **The retention sweeps run.** Memory TTL deletion, owner-session expiry and authorised-asset
+   expiry existed, were tested, and had no caller. `app.maintenance.RetentionSweeper` runs them
+   hourly from the lifespan (first pass after a boot delay; `0` disables), each isolated from
+   the others' failures, reported as an advisory `retention` check.
+4. **Temporal down is a typed refusal, and nothing it could not start stays open.** Five paths
+   write their durable row before starting the workflow. Research and news tasks stayed
+   `CREATED`, executive runs stayed `running` with no workflow (and counted against the two-run
+   bound - two outages and no more runs), and both REST routes answered an untyped 500.
+   `fail_unstarted_research` and `fail_unstarted_run` close the rows (`workflow_start_failed`);
+   REST answers `503 dependency_unavailable` with the Turkish sentence.
+5. **Rows a stopped process left mid-flight are closed.** A synchronous tool call and a native
+   build each live inside one request; a crash or a drained colour left them `running` /
+   `building` for ever. The sweeper closes synchronous calls running > 2 h and in-flight builds
+   untouched > 2 h as `interrupted`; long-running calls (completed by their announcers),
+   anything recent and `planned` builds are left alone.
+6. **Voice sessions are NOT closed automatically.** The audit listed "dead voice sessions". A
+   session with no recorded expiry is ended by the owner and nothing else - ADR-0105, the
+   owner's explicit "hiç kapanmasın". The harm a vanished client could still cause is a call
+   left `running` inside it, which decision 5 closes; the session row itself stays the
+   owner's to end. Changing that would reverse an owner decision to tidy a table.
+
+**Evidence.** Each fix has a regression test through the real application object where one
+exists (worker, health endpoint, state tool, app sweeper, REST routes, voice relay) and each was
+mutation-proven red on its branch: the research grant check (1), the advisory flag ignored (2),
+each of the five orphan-closing calls removed (5), long-running calls not spared (1), planned
+builds counted as in flight (1).
+
+### Addendum — the corpus leaned on the orphans this ADR removed (2026-09-12)
+
+CI on `0aa0d35` failed 47 owner-utterance corpus cases, every one an `exec.*` case whose
+preceding turn starts an executive run through the real tool. The follow-up connects to
+Temporal; CI has none, the start fails, and since this ADR a run whose workflow never started
+is failed - so "pause", "cancel" and "amend" found no running job. Before, the same failed
+start left the run RUNNING as an orphan, and the corpus had been passing in CI on that orphan.
+The local gate passed because a real Temporal was up in the dev stack. The corpus judges
+routing and never runs a durable workflow, so `run_case` now hands every workflow start -
+research or executive - to a client that accepts it and runs nothing: the same "started" on
+any machine. Reproduced locally with Temporal pointed at a closed port: 47 failed, 73 passed
+without the change; 120 passed with it; the full corpus 1891 passed.
+
+## ADR-0124 — A self-development engine that fixes real code and then stops (2026-09-11)
+
+**Context.** Phase 9 of the recovery directive: the first real self-development engine. What
+existed (`app.selfhealing`) repairs one injected-bug class inside a lab fixture directory; it
+never touched the product's own source, never used git, and could not tell a fix from a test
+that proves nothing except in that one shape. The constitution's path is fixed: "Gap/incident
+-> issue/spec -> isolated branch/worktree -> code -> tests -> review -> build -> sandbox ->
+canary/shadow -> metrics -> promote or rollback", and never "model edits production source and
+restarts".
+
+**Decision.** `app.selfdev`, run on the development machine that holds the repository - never
+in a production container.
+- **Real branches, real worktrees.** Each run gets `selfdev/<run>` in its own `git worktree`
+  from an EXACT base SHA; the owner's checkout is never edited. At most three live worktrees,
+  a free-disk floor, both checked before work starts.
+- **The EngineeringModel seam** asks seven typed questions - `analyze_codebase`,
+  `plan_change`, `generate_patch`, `review_failure`, `fix_patch`, `review_code`,
+  `explain_change`. `AnthropicEngineeringModel` answers each as a FORCED tool call (JSON to a
+  schema, never scraped prose) on `claude-opus-5`, accounting tokens from every response;
+  `ScriptedEngineeringModel` answers from a script for the engine's own tests. The key comes
+  from the DPAPI store through `scripts/selfdev/run-selfdev.ps1`, into the child's environment
+  only.
+- **A model is trusted with nothing.** Every edit is validated structurally before a byte is
+  written: relative, inside the tree, no `..`/`.git`/drive/absolute path, inside the defect's
+  scope or the declared regression test, bounded in count and size. Whole files only.
+- **The independent reviewer judges by running things**: the candidate's own regression test
+  must FAIL on the base with only the test added (or it does not test this defect), PASS with
+  the full patch; the targeted tests pass; changed files lint clean; nothing leaves the scope.
+  The model's `review_code` is required too - but it can only refuse what the reviewer passed,
+  never pass what it refused.
+- **Bounded, and quarantine is the end.** Attempts, wall time and tokens are hard; the first
+  bound crossed ends the run QUARANTINED with the bound named, its worktree kept for inspection.
+  Nothing retries past a budget.
+- **CI is read, not driven.** A base CI calls red is refused (no candidate's failure could be
+  told from the base's); the candidate's CI state is recorded. The engine never pushes.
+- **It stops at the policy boundary.** A verified candidate is committed on its branch and the
+  run ends `STOPPED_AT_POLICY_BOUNDARY` with the risk tier derived from the paths it touched and
+  its promotion class (`promotion_class_for_tier`): tier 4/5 is NEVER_AUTO_PROMOTE, tier 3 needs
+  the owner, tiers 1-2 are eligible for the release pipeline once CI is green on that exact SHA.
+  The engine itself never merges, pushes or releases.
+
+**Evidence.** 16 engine tests on a real git repository (real worktrees, real pytest in the
+worktree, real lint; only the model scripted): a verified candidate on its own branch with the
+owner's checkout untouched; wrong-then-right fixed within budget; a tier-5 candidate labelled
+NEVER_AUTO_PROMOTE; a test that proves nothing, an out-of-scope edit, five tree-escaping paths,
+a model refusal and a token overrun each end QUARANTINED; a plan outside scope, a red base CI,
+the worktree bound and the disk floor each REFUSE before work. 5 seam tests for the Anthropic
+model (forced tool call, usage, no key -> no request, errors that never echo the body or the
+key). Mutations, each red: red-on-base not enforced, scope not enforced, model refusal
+ignored, token budget ignored.
+
+**What this is not yet.** It fixes Python under `services/api`; the runner is shaped for one
+package root. The Phase 10 acceptance run on a genuine defect is its first real use.
+
+**Addendum (2026-09-11) - the first real run crashed, and what that changed.** The Phase 10
+acceptance run on a genuine defect (`supervisor-dead-component-paths`, base `c309065`) died in
+`generate_patch` with `TypeError: string indices must be integers`: the patch's array reached
+the seam in a shape its schema did not promise and was iterated a character at a time. The
+engine let it escape - no `record.json`, a worktree left behind counting against the bound of
+three. Four decisions follow:
+
+- **An answer is read, never trusted to have its schema's shape.** An array sent as a JSON
+  string is decoded; any other wrong shape is a `ModelError` naming the field; an answer cut off
+  at `max_tokens` is never used; a boolean must be one - `bool("false")` is `True`, so a review
+  refusal sent as a string would have read as an approval (a real defect, found by the test).
+- **Existing files change by exact replacement, not by re-typing.** The patch tool now asks for
+  `replacements` (`old_text` copied verbatim, occurring exactly once) and `new_files` (whole).
+  The seam resolves replacements against the text the model was shown into the whole files the
+  engine has always worked with; one that does not apply is carried in `Patch.rejected` with its
+  reason, the workspace refuses the patch structurally, and the reason goes back to the model
+  like any other structural failure. A 29 KB module is no longer re-typed to change three lines.
+  A fix request shows the previous proposal as a diff against the base, not the file twice.
+- **Every run ends with a record.** `ModelError` is `QUARANTINED` with `model: ...`; anything
+  unexpected is `QUARANTINED` naming its type, the trace kept in `record.error`; the worktree is
+  kept either way. A green candidate whose Turkish explanation fails still stops at the policy
+  boundary - it is judged by what was run, not by prose about it.
+- **What the model was asked and answered is kept** (`model-exchanges.json` beside the record:
+  tool, stop reason, tokens, the answer) so every claim in a record can be checked against the
+  answer it rests on. It never holds the key.
+
+`ModelError` moved to `app.selfdev.model` (the seam), re-exported by `anthropic_model`.
+Evidence: 19 seam tests and 21 engine tests green; nine mutations, each red - JSON-string
+decode removed, `bool()` of a string flag, a truncated answer used, an ambiguous replacement
+applied, an unexpected exception escaping, a `ModelError` not named as one, an explanation
+failure sinking a green candidate, the exchanges not written, rejected edits not refused.
+
+**Addendum (2026-09-11) - the second real run was refused by the engine, not the model.** With
+the seam hardened, the run on `supervisor-dead-component-paths` wrote its record: the analysis
+and plan were right (three dead paths, the Windows agent classified tier 2 instead of tier 4,
+the real paths named), and the engine REFUSED the plan because it listed the regression test
+it would add among the paths it changes - which `_validate_plan` called out of scope while the
+write check (`allowed`) two lines later permits exactly that path. The regression test is now
+the one path a plan may change outside the scope, in both checks. The same run showed a plan
+refused before any write kept its worktree, holding one of the three live slots with nothing
+to inspect; it is removed now. `--test` also takes `a,b`, because `run-selfdev.ps1` under
+`-File` passes `-Test a,b` as one string. Each fix has a test that was red first; the two
+engine fixes were mutation-checked red.
+
+**Addendum (2026-09-11) - the third real run: nested objects come back garbled.** The run
+quarantined itself cleanly on `patch: replacements is a string that is not a JSON array`, and
+the kept exchange showed why: asked for an array of `{path, old_text, new_text}` objects
+holding long code, the model wrote its own parameter markup inside the array's value and
+escaped `new_text` to the top level. The first run's crash was almost certainly the same. The
+patch tool now takes ONE top-level string, `edits`, of SEARCH/REPLACE blocks and whole new files
+(`EDIT_FORMAT`); `parse_edit_blocks` is strict - prose outside a block, a headerless SEARCH, an
+unterminated block, a new file never closed - each is a problem carried in `Patch.rejected`,
+never skipped. And a run quarantined before it wrote anything frees its worktree (the record
+and the exchanges are all there is to inspect); one that wrote keeps it, `worktree_kept` says
+which. Six parser mutations and the slot rule's mutation, each red.
+
+**Addendum (2026-09-12) - the fourth to sixth real runs, and the first accepted candidate.**
+The fourth run went end to end and was quarantined by its budget, showing two engine defects:
+asked for "the corrected patch", the model re-sent only the file it corrected and lost the
+fix it had made (a fix now edits the candidate as it stands and carries every change it does
+not touch); and an unsorted import block cost an attempt (the reviewer now applies ruff's
+safe fixes to the changed files before judging - never `--unsafe-fixes`). Its third attempt
+failed on MY defect spec, which claimed the browser worker was misclassified like the Windows
+agent; measured, it is not - the risk table has no browser rule - and the spec now carries the
+measured tiers. The fifth run's candidates passed every run check and were refused by a model
+review told only to be "strict"; `REVIEW_POLICY` now says what blocks (a wrong fix, a test that
+does not test the defect, changes the fix does not need, uncited claims, a weakened check) and
+what is listed and approved, and the patch model is told not to restyle and to cite nothing it
+was not shown.
+
+The sixth run - base `c309065`, CI green - stopped at the policy boundary on its first
+attempt: candidate `db9ed85` on `selfdev/20260911-205513-supervisor-dead-component-paths-70b883`,
+every run check passed, the model review approved with non-blocking findings, 5 calls,
+64 225 tokens, 155 s. It changed `app/evolution/supervisor.py` and the table called that tier
+2, AUTO_CANARY - the component map the table reads and the tier -> class mapping, classified as
+ordinary logic: the same lower-then-promote hole ADR-0120 closed for `risk.py`. Both
+`app/evolution/supervisor.py` and `app/selfdev/` (the engine's own gates) are tier 5 now. The
+candidate's commit subject was the first 200 characters of a Markdown plan; it is the defect's
+title now, the plan in the body. The accepted candidate is evidence of the engine, and is not
+merged by it: under the corrected table it is NEVER_AUTO_PROMOTE, and what happens to it is the
+owner's decision.

@@ -90,6 +90,36 @@ def test_start_with_an_unrecognised_directive_is_422_with_the_service_speech(h: 
     assert resp.json()["detail"]["code"] == "clarification_needed"
 
 
+def test_temporal_unreachable_is_a_typed_refusal_and_opens_no_run(h: Harness) -> None:
+    """Phase 8: this was an untyped 500 - the connect ran outside every handler."""
+    with patch(
+        "app.executive.routes.Client.connect", AsyncMock(side_effect=OSError("no temporal"))
+    ):
+        resp = h.client.post("/v1/executive/runs", json={"directive": _RESEARCH_DIRECTIVE})
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"]["code"] == "dependency_unavailable"
+    assert h.client.get("/v1/executive/runs").json() == {"runs": []}
+
+
+def test_a_workflow_that_never_started_leaves_no_active_run_behind(h: Harness) -> None:
+    """Phase 8. The run row is written BEFORE the workflow starts; a start that failed left
+    it `running` for ever, and it counted against the two-run bound: two Temporal failures
+    and the owner could never start another run. Now the run closes as failed - and a
+    third start after two failures still goes through."""
+    failing = _fake_temporal_client()
+    failing.start_workflow = AsyncMock(side_effect=RuntimeError("temporal refused"))
+    for _ in range(2):
+        with patch("app.executive.routes.Client.connect", AsyncMock(return_value=failing)):
+            resp = h.client.post("/v1/executive/runs", json={"directive": _RESEARCH_DIRECTIVE})
+        assert resp.status_code == 503, resp.text
+        assert resp.json()["detail"]["code"] == "dependency_unavailable"
+    runs = h.client.get("/v1/executive/runs").json()["runs"]
+    assert [r["state"] for r in runs] == ["failed", "failed"]
+
+    run_id = _start_run(h, _RESEARCH_DIRECTIVE)  # the bound is two; two failures are not two
+    assert h.client.get(f"/v1/executive/runs/{run_id}").json()["state"] == "running"
+
+
 def test_get_unknown_run_is_404(h: Harness) -> None:
     resp = h.client.get("/v1/executive/runs/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404

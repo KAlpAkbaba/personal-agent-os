@@ -268,6 +268,15 @@ try {
         $rf2 = Invoke-Release -Env @{ PAGENTOS_BACKUP_BIN = (& $u $backupBin) }
         Assert-True ($rf2.Exit -eq 74 -and $rf2.Output -match "pre-migration backup FAILED; the release stops before any migration" -and $rf2.Output -match "pg_dump pagentos_prod failed" -and -not ($rf2.Calls -match "alembic upgrade head") -and (Get-Active) -eq "blue" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a failed pre-migration backup stops the release before any migration: the active colour keeps serving and the old tree is back"
 
+        # Third review, finding 2: the release holds the operation lock the recovery timer
+        # needs, so a backup that hangs must not hang the release with it - it is bounded, and
+        # a backup that outlives its bound is a failed backup.
+        Reset-Host
+        New-Item -ItemType Directory -Force -Path $backupBin | Out-Null
+        [IO.File]::WriteAllText((Join-Path $backupBin "backup-cloud-core.sh"), "#!/usr/bin/env bash`necho `"backup `$*`" >> `"`$FAKE_STATE/calls.log`"`nsleep 30`necho `"BACKUP OK: too late`"`n")
+        $rt = Invoke-Release -Env @{ PAGENTOS_BACKUP_BIN = (& $u $backupBin); PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S = "2" }
+        Assert-True ($rt.Exit -eq 74 -and $rt.Output -match "pre-migration backup did not finish within 2 s" -and $rt.Output -match "the release stops before any migration" -and -not ($rt.Calls -match "alembic upgrade head") -and (Get-Active) -eq "blue" -and (Test-Up "blue") -and -not (Test-Up "green")) "a pre-migration backup that outlives its bound is a failed backup: the release stops before any migration and the active colour keeps serving"
+
         Reset-Host
         $rl = Invoke-Release -Env @{ FAKE_DRAIN_UNSUPPORTED = "blue" }
         if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $rl.Output }

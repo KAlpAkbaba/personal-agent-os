@@ -34,7 +34,7 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app.artifacts import service as artifact_service
-from app.artifacts.models import TASK_STATUS_FAILED_TERMINAL
+from app.artifacts.models import TASK_STATUS_CREATED, TASK_STATUS_FAILED_TERMINAL, Task
 from app.devices import service as devices_service
 from app.devices.selection import NoCapableDeviceError, select_device
 from app.logging import get_logger
@@ -155,6 +155,45 @@ def start_browser_research(
         device=_device_summary(result.device),
         error=None,
     )
+
+
+#: Said when the durable-workflow service (Temporal) does not answer. The owner hears what
+#: happened; the task opened for the run is closed rather than left CREATED for ever.
+WORKFLOW_UNAVAILABLE_TR = "İş akışı servisine ulaşamadım efendim; araştırma başlamadı."
+ERROR_WORKFLOW_START_FAILED = "workflow_start_failed"
+
+
+def fail_unstarted_research(db: Session, task_id: uuid.UUID, *, detail: str) -> bool:
+    """Close a research task whose workflow never started (Phase 8, 2026-09-11).
+
+    ``start_browser_research`` opens the task and its run row BEFORE the workflow starts
+    (device selection must fail fast, see its docstring). When the start then fails -
+    Temporal down, unreachable, refusing - every caller completed the owner-facing call as
+    failed and left the task CREATED and the run PLANNED for ever: an orphan the task list,
+    the ledger backfill and the announcers all read as work still to come.
+
+    Only a task still in its opening state is touched; one the workflow already moved on is
+    left to the workflow. Returns whether it closed the task.
+    """
+    task = db.get(Task, task_id)
+    if task is None or task.status != TASK_STATUS_CREATED:
+        return False
+    artifact_service.transition_task(
+        db,
+        task_id,
+        TASK_STATUS_FAILED_TERMINAL,
+        error_class=ERROR_WORKFLOW_START_FAILED,
+        error_message=detail[:1000],
+    )
+    runs_service.update_run(
+        db,
+        task_id,
+        stage=STAGE_FAILED,
+        error=detail[:1000],
+        event={"stage": STAGE_FAILED, "detail": detail[:500]},
+    )
+    logger.info("research_unstarted_task_closed", task_id=str(task_id))
+    return True
 
 
 async def start_browser_research_workflow(

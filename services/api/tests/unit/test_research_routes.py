@@ -158,6 +158,23 @@ def test_create_research_with_online_device_returns_202_and_device(client: TestC
     assert body["workflow_id"] == f"research-browser-{body['task_id']}"
 
 
+def test_temporal_down_is_a_typed_503_and_the_task_is_closed_not_orphaned(
+    client: TestClient,
+) -> None:
+    """Phase 8: this was an untyped 500, and the task opened for the run stayed CREATED for
+    ever - read as work still to come by the task list, the ledger and the announcers."""
+    _enroll_online_device(client)
+    with patch("app.research.routes.Client.connect", AsyncMock(side_effect=OSError("down"))):
+        response = client.post("/v1/research", json={"input": "yapay zeka ajanları"})
+    assert response.status_code == 503, response.text
+    detail = response.json()["detail"]
+    assert detail["error_class"] == "dependency_unavailable"
+    assert detail["detail"]  # the Turkish sentence
+    body = client.get(f"/v1/research/{detail['task_id']}").json()
+    assert body["status"] == "FAILED_TERMINAL"
+    assert body["error"]["error_class"] == "workflow_start_failed"
+
+
 def test_create_research_rejects_max_sources_over_ceiling(client: TestClient) -> None:
     response = client.post("/v1/research", json={"input": "konu", "max_sources": 31})
     assert response.status_code == 422

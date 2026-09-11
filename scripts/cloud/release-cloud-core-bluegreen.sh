@@ -619,12 +619,22 @@ upsert_env "PAGENTOS_EDGE_DIR" "$edge_dir"
 # ADR-0122: a safety point before any schema change. The pinned backup (install-backup.sh)
 # takes a pre-migration snapshot; if it cannot, the release stops HERE - before the
 # migration, with the active colour untouched and the trees restored by on_exit.
+# Bounded (ADR-0121, third review): this release holds the operation lock the recovery timer
+# needs, so a backup that hangs would defer every takeover for as long as it hangs. A backup
+# that outlives its bound is killed - process group and all - and is a failed backup.
 backup_bin=${PAGENTOS_BACKUP_BIN:-/opt/pagentos-backup}/backup-cloud-core.sh
+backup_timeout_s=${PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S:-1800}
 if [ -f "$backup_bin" ]; then
     echo "pre-migration backup..."
     backup_log="$base/.pre-migration-backup.log"
-    if ! bash "$backup_bin" --kind pre-migration --label "release-$(printf '%s' "$sha" | cut -c1-12)" > "$backup_log" 2>&1; then
+    backup_rc=0
+    timeout --kill-after=60 "$backup_timeout_s" bash "$backup_bin" --kind pre-migration \
+        --label "release-$(printf '%s' "$sha" | cut -c1-12)" > "$backup_log" 2>&1 || backup_rc=$?
+    if [ "$backup_rc" -ne 0 ]; then
         tail -5 "$backup_log" >&2
+        if [ "$backup_rc" -eq 124 ] || [ "$backup_rc" -eq 137 ]; then
+            echo "pre-migration backup did not finish within $backup_timeout_s s" >&2
+        fi
         echo "pre-migration backup FAILED; the release stops before any migration" >&2
         exit 74
     fi

@@ -143,6 +143,21 @@ def test_a_pre_migration_backup_keeps_its_own_last_ten(host: Host) -> None:
     assert "--tag pre-migration --keep-last 10 --prune" in forget
 
 
+def test_a_backup_clears_restic_locks_left_by_a_killed_one_before_it_writes(host: Host) -> None:
+    # The release bounds its pre-migration backup with `timeout` (ADR-0121, third review), so
+    # a backup can now be killed mid-write and leave a restic lock behind - after which every
+    # later backup would fail at its prune. Under the backup lock no other backup or restore
+    # of ours runs, so a lock whose process is gone is stale; `restic unlock` removes only those.
+    completed = _backup(host)
+
+    assert completed.returncode == 0, completed.stderr
+    restic = host.log("restic")
+    unlock = next(i for i, line in enumerate(restic) if line.endswith(" unlock"))
+    write = next(i for i, line in enumerate(restic) if " backup " in line)
+    assert unlock < write
+    assert not any("--remove-all" in line for line in restic)
+
+
 @pytest.mark.parametrize(
     ("args", "needle"),
     [

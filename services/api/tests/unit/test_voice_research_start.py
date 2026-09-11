@@ -407,6 +407,15 @@ def test_research_start_workflow_start_failure_completes_the_call_as_failed_with
     research_call = next(c for c in activity["tool_calls"] if c["call_id"] == "r1")
     assert research_call["speech_head"] == RESEARCH_START_WORKFLOW_FAILED_TR[:80]
 
+    # Phase 8: the call was completed as failed, but the TASK opened for it stayed CREATED
+    # for ever. It is closed now, with the reason on it.
+    from app.artifacts.models import TASK_STATUS_FAILED_TERMINAL, Task
+
+    with artifacts.session() as db:
+        task = db.get(Task, uuid.UUID(response.json()["result"]["task_id"]))
+        assert task.status == TASK_STATUS_FAILED_TERMINAL
+        assert task.error_class == "workflow_start_failed"
+
 
 # --------------------------------------------------------- plan.redirect honesty
 

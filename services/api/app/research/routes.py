@@ -163,23 +163,45 @@ async def create_research(request: Request, body: CreateResearchRequest) -> JSON
             },
         )
 
-    client = await _temporal_client(request)
-    await research_service.start_browser_research_workflow(
-        client,
-        artifacts,
-        task_id=started.task_id,
-        workflow_id=started.workflow_id,
-        input=body.input,
-        target_device=body.target_device,
-        recency_days=body.recency_days,
-        max_sources=body.max_sources,
-        synthesis=body.synthesis,
-        interactive=body.effective_interactive,
-        interactive_wait_s=body.interactive_wait_s,
-        on_verification_timeout=body.on_verification_timeout,
-        search_provider=body.search_provider or artifacts.settings.research_search_provider,
-        mode=body.research_mode,
-    )
+    try:
+        client = await _temporal_client(request)
+        await research_service.start_browser_research_workflow(
+            client,
+            artifacts,
+            task_id=started.task_id,
+            workflow_id=started.workflow_id,
+            input=body.input,
+            target_device=body.target_device,
+            recency_days=body.recency_days,
+            max_sources=body.max_sources,
+            synthesis=body.synthesis,
+            interactive=body.effective_interactive,
+            interactive_wait_s=body.interactive_wait_s,
+            on_verification_timeout=body.on_verification_timeout,
+            search_provider=body.search_provider or artifacts.settings.research_search_provider,
+            mode=body.research_mode,
+        )
+    except Exception as exc:  # noqa: BLE001 - a typed refusal, and the task closed
+        # Phase 8: Temporal down used to surface as an untyped 500 with the task left
+        # CREATED for ever. It is a dependency the caller can name, and the task says so.
+        detail = f"{type(exc).__name__}: {exc}"
+
+        def close_task() -> None:
+            with artifacts.session() as session:
+                research_service.fail_unstarted_research(session, started.task_id, detail=detail)
+
+        await asyncio.to_thread(close_task)
+        logger.warning(
+            "research_workflow_start_failed", task_id=str(started.task_id), error=detail[:300]
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_class": "dependency_unavailable",
+                "detail": research_service.WORKFLOW_UNAVAILABLE_TR,
+                "task_id": str(started.task_id),
+            },
+        ) from exc
     logger.info("research_created", task_id=str(started.task_id), workflow_id=started.workflow_id)
     return JSONResponse(
         status_code=202,
