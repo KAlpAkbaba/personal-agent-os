@@ -301,9 +301,8 @@ def _reconcile_status_reader():
     import re
     from pathlib import Path
 
-    script = (
-        Path(__file__).resolve().parents[4] / "scripts" / "cloud" / "release-cloud-core-bluegreen.sh"
-    ).read_text(encoding="utf-8")
+    cloud = Path(__file__).resolve().parents[4] / "scripts" / "cloud"
+    script = (cloud / "release-cloud-core-bluegreen.sh").read_text(encoding="utf-8")
     match = re.search(r"sed -nE 's/(\^.*?)/\\1/p'", script)
     assert match, "top_health_status's sed expression was not found in the script"
     return re.compile(match.group(1).replace("[[:space:]]", r"\s"))
