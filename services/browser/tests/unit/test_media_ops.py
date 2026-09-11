@@ -597,10 +597,80 @@ class TestSessionOpen:
         # point: it FAILED TRYING TO CONNECT, and never once tried to launch.
         with pytest.raises(BrowserError):
             await worker._execute(
-                "browser.session_open", {"session_id": "owner-media-1", "profile": "owner"}
+                "browser.session_open",
+                {"session_id": "owner-media-1", "profile": "owner", "session_kind": "media"},
             )
 
         assert recording_backend.instances == [], "attach must never launch a browser"
+
+    @staticmethod
+    def _owner_registry(tmp_path: Path, *, research: bool) -> Path:
+        import json
+
+        registry = tmp_path / "owner-enrollment.json"
+        registry.write_text(
+            json.dumps(
+                {
+                    "enrollments": [
+                        {
+                            "id": "e1",
+                            "name": "owner-chrome",
+                            "transport": "cdp_loopback",
+                            "endpoint": "http://127.0.0.1:19123",
+                            "capability_overrides": {},
+                            "created_at": "2026-09-10T18:00:00+00:00",
+                            "owner_authorized_for_research": research,
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return registry
+
+    async def test_autonomous_research_may_not_drive_the_owners_chrome_without_the_grant(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        """ADR-0035 vs ADR-0113. The owner put their Chrome at their own disposal (media,
+        operator actions) and the enrollment script records owner_authorized_for_research
+        as false. A research session - the DEFAULT kind, so a bare {profile: owner} is one -
+        must not attach to it. Refused as a scope decision, before any connection."""
+        registry = self._owner_registry(tmp_path, research=False)
+        worker = _make_worker(tmp_path, monkeypatch, owner_enrollment_file=str(registry))
+        await worker._print_hello()
+        connects: list[str] = []
+        monkeypatch.setattr(
+            "browser_agent.backends.ExistingSessionBackend.connect",
+            lambda self: connects.append("connect"),
+        )
+
+        for payload in (
+            {"session_id": "research-1", "profile": "owner"},
+            {"session_id": "research-2", "profile": "owner", "session_kind": "research"},
+        ):
+            with pytest.raises(BrowserError) as exc:
+                await worker._execute("browser.session_open", payload)
+            assert exc.value.error_class == ErrorClass.SECURITY_SCOPE_ERROR
+            assert "owner_authorized_for_research" in exc.value.message
+
+        assert connects == [], "a refused scope never reaches the owner's browser"
+        assert recording_backend.instances == []
+
+    async def test_with_the_grant_a_research_session_attaches_like_any_other(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
+    ) -> None:
+        registry = self._owner_registry(tmp_path, research=True)
+        worker = _make_worker(tmp_path, monkeypatch, owner_enrollment_file=str(registry))
+        await worker._print_hello()
+
+        # Nothing listens on the port: the attach is ATTEMPTED (a connection error), which
+        # is what proves the grant let it through.
+        with pytest.raises(BrowserError) as exc:
+            await worker._execute(
+                "browser.session_open", {"session_id": "research-1", "profile": "owner"}
+            )
+        assert exc.value.error_class != ErrorClass.SECURITY_SCOPE_ERROR
+        assert recording_backend.instances == []
 
     async def test_a_non_loopback_enrollment_is_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recording_backend
@@ -634,7 +704,8 @@ class TestSessionOpen:
 
         with pytest.raises(BrowserError) as exc:
             await worker._execute(
-                "browser.session_open", {"session_id": "owner-media-1", "profile": "owner"}
+                "browser.session_open",
+                {"session_id": "owner-media-1", "profile": "owner", "session_kind": "media"},
             )
 
         assert exc.value.error_class == ErrorClass.VALIDATION_ERROR
