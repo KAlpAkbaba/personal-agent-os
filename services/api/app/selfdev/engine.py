@@ -161,15 +161,17 @@ class SelfDevEngine:
             "input_tokens": self.model.usage.input_tokens,
             "output_tokens": self.model.usage.output_tokens,
         }
-        (folder / "record.json").write_text(
-            json.dumps(asdict(record), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        (folder / "model-exchanges.json").write_text(
-            json.dumps(self.model.exchanges, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        # Bytes, not text mode: on Windows a text-mode write turns every LF into CRLF, and the
+        # diff kept as evidence would no longer be what git produced.
+        documents = {
+            "record.json": json.dumps(asdict(record), indent=2, ensure_ascii=False) + "\n",
+            "model-exchanges.json": json.dumps(self.model.exchanges, indent=2, ensure_ascii=False)
+            + "\n",
+        }
         if diff is not None:
-            (folder / "candidate.diff").write_text(diff, encoding="utf-8")
+            documents["candidate.diff"] = diff
+        for name, text in documents.items():
+            (folder / name).write_bytes(text.encode("utf-8"))
 
     def _finish(
         self,

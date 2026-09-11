@@ -192,6 +192,9 @@ def test_a_defect_becomes_a_verified_candidate_on_its_own_branch_and_the_engine_
     assert saved["status"] == STATUS_STOPPED_AT_POLICY
     assert saved["explanation"].startswith("toplama")
     assert (tmp_path / "runs" / record.run_id / "candidate.diff").read_text("utf-8")
+    # Byte for byte what git produced: a text-mode write on Windows turned every LF into CRLF.
+    for name in ("candidate.diff", "record.json", "model-exchanges.json"):
+        assert b"\r\n" not in (tmp_path / "runs" / record.run_id / name).read_bytes(), name
 
 
 def test_wrong_first_right_second_is_diagnosed_and_fixed_within_budget(
