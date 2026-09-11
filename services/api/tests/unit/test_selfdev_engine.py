@@ -32,6 +32,7 @@ from app.selfdev.model import (
     CodeReview,
     DefectSpec,
     FileEdit,
+    ModelError,
     Patch,
     ScriptedEngineeringModel,
 )
@@ -337,3 +338,84 @@ def test_a_disk_below_the_floor_starts_nothing(repo: Path, tmp_path: Path) -> No
     )
     assert record.status == STATUS_REFUSED
     assert "floor" in record.reason
+
+
+# ------------------------------------------------------------ every run ends with a record
+
+
+def _raising(method: str, exc: Exception):
+    def on_call(called: str) -> None:
+        if called == method:
+            raise exc
+
+    return on_call
+
+
+def test_a_model_error_mid_run_is_a_quarantine_with_a_record_and_the_worktree_kept(
+    repo: Path, tmp_path: Path
+) -> None:
+    model = _model(_patch(FIXED))
+    model.on_call = _raising("generate_patch", ModelError("Anthropic API answered 529"))
+
+    record = _engine(repo, tmp_path, model).run(_defect(), base_sha=_base(repo), targeted_tests=[])
+
+    assert record.status == STATUS_QUARANTINED
+    assert record.reason == "model: Anthropic API answered 529"
+    saved = json.loads((tmp_path / "runs" / record.run_id / "record.json").read_text("utf-8"))
+    assert saved["status"] == STATUS_QUARANTINED
+    assert Path(record.worktree).is_dir()
+
+
+def test_an_unexpected_exception_is_a_quarantine_naming_its_type_with_the_trace_kept(
+    repo: Path, tmp_path: Path
+) -> None:
+    """The first real run crashed like this and left a worktree and no record."""
+    model = _model(_patch(FIXED))
+    model.on_call = _raising("generate_patch", TypeError("string indices must be integers"))
+
+    record = _engine(repo, tmp_path, model).run(_defect(), base_sha=_base(repo), targeted_tests=[])
+
+    assert record.status == STATUS_QUARANTINED
+    assert record.reason == "error: TypeError: string indices must be integers"
+    assert "Traceback" in record.error and "on_call" in record.error
+    assert (tmp_path / "runs" / record.run_id / "record.json").is_file()
+
+
+def test_a_green_candidate_whose_explanation_fails_still_stops_at_the_boundary(
+    repo: Path, tmp_path: Path
+) -> None:
+    model = _model(_patch(FIXED))
+    model.on_call = _raising("explain_change", ModelError("Anthropic API answered 529"))
+
+    record = _engine(repo, tmp_path, model).run(_defect(), base_sha=_base(repo), targeted_tests=[])
+
+    assert record.status == STATUS_STOPPED_AT_POLICY
+    assert record.candidate_sha and record.explanation == ""
+
+
+def test_a_patch_the_model_could_not_apply_is_refused_structurally_and_fed_back(
+    repo: Path, tmp_path: Path
+) -> None:
+    unapplied = Patch(
+        edits=(FileEdit(REGRESSION, REGRESSION_TEST),),
+        rejected=(f"replacement 0 in {CALC}: the old text occurs 0 times, not exactly once",),
+    )
+    model = _model(unapplied, _patch(FIXED))
+
+    record = _engine(repo, tmp_path, model).run(_defect(), base_sha=_base(repo), targeted_tests=[])
+
+    assert record.status == STATUS_STOPPED_AT_POLICY
+    assert "did not apply" in record.attempts[0]["structural"]
+    assert "occurs 0 times" in record.attempts[0]["failure"]
+    assert model.calls.count("fix_patch") == 1
+
+
+def test_the_models_exchanges_are_written_beside_the_record(repo: Path, tmp_path: Path) -> None:
+    model = _model(_patch(FIXED))
+
+    record = _engine(repo, tmp_path, model).run(_defect(), base_sha=_base(repo), targeted_tests=[])
+
+    saved = json.loads(
+        (tmp_path / "runs" / record.run_id / "model-exchanges.json").read_text("utf-8")
+    )
+    assert [e["method"] for e in saved] == model.calls

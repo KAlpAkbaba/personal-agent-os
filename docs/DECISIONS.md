@@ -10330,3 +10330,35 @@ ignored, token budget ignored.
 
 **What this is not yet.** It fixes Python under `services/api`; the runner is shaped for one
 package root. The Phase 10 acceptance run on a genuine defect is its first real use.
+
+**Addendum (2026-09-11) - the first real run crashed, and what that changed.** The Phase 10
+acceptance run on a genuine defect (`supervisor-dead-component-paths`, base `c309065`) died in
+`generate_patch` with `TypeError: string indices must be integers`: the patch's array reached
+the seam in a shape its schema did not promise and was iterated a character at a time. The
+engine let it escape - no `record.json`, a worktree left behind counting against the bound of
+three. Four decisions follow:
+
+- **An answer is read, never trusted to have its schema's shape.** An array sent as a JSON
+  string is decoded; any other wrong shape is a `ModelError` naming the field; an answer cut off
+  at `max_tokens` is never used; a boolean must be one - `bool("false")` is `True`, so a review
+  refusal sent as a string would have read as an approval (a real defect, found by the test).
+- **Existing files change by exact replacement, not by re-typing.** The patch tool now asks for
+  `replacements` (`old_text` copied verbatim, occurring exactly once) and `new_files` (whole).
+  The seam resolves replacements against the text the model was shown into the whole files the
+  engine has always worked with; one that does not apply is carried in `Patch.rejected` with its
+  reason, the workspace refuses the patch structurally, and the reason goes back to the model
+  like any other structural failure. A 29 KB module is no longer re-typed to change three lines.
+  A fix request shows the previous proposal as a diff against the base, not the file twice.
+- **Every run ends with a record.** `ModelError` is `QUARANTINED` with `model: ...`; anything
+  unexpected is `QUARANTINED` naming its type, the trace kept in `record.error`; the worktree is
+  kept either way. A green candidate whose Turkish explanation fails still stops at the policy
+  boundary - it is judged by what was run, not by prose about it.
+- **What the model was asked and answered is kept** (`model-exchanges.json` beside the record:
+  tool, stop reason, tokens, the answer) so every claim in a record can be checked against the
+  answer it rests on. It never holds the key.
+
+`ModelError` moved to `app.selfdev.model` (the seam), re-exported by `anthropic_model`.
+Evidence: 19 seam tests and 21 engine tests green; nine mutations, each red - JSON-string
+decode removed, `bool()` of a string flag, a truncated answer used, an ambiguous replacement
+applied, an unexpected exception escaping, a `ModelError` not named as one, an explanation
+failure sinking a green candidate, the exchanges not written, rejected edits not refused.

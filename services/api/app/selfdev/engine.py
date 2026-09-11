@@ -17,12 +17,19 @@ tier-4/5 candidate is NEVER_AUTO_PROMOTE and says so; tier 3 needs the owner.
 Every bound is hard (``app.selfdev.budget``): the first one crossed quarantines the run with
 the bound named, keeps its worktree for inspection, and writes the record. Nothing retries
 past a budget.
+
+Every run ends with a record. The first real run crashed on a model answer of the wrong
+shape and left a worktree and nothing else; now a ModelError is a QUARANTINE saying
+``model: ...``, and anything unexpected is a QUARANTINE naming its type with the trace kept
+in the record. What the model was asked and answered is written beside the record
+(``model-exchanges.json``) so every claim in it can be checked against its source.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import traceback
 import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -40,7 +47,7 @@ from app.evolution.supervisor import (
 )
 from app.selfdev.budget import Budget, BudgetMeter
 from app.selfdev.ci import CI_FAILURE, CIReader, CIStatus
-from app.selfdev.model import ChangePlan, DefectSpec, EngineeringModel, Patch
+from app.selfdev.model import ChangePlan, DefectSpec, EngineeringModel, ModelError, Patch
 from app.selfdev.reviewer import IndependentReviewer
 from app.selfdev.runner import CandidateRunner
 from app.selfdev.workspace import BRANCH_PREFIX, GitWorkspace, WorkspaceError, safe_relative_path
@@ -89,6 +96,7 @@ class RunRecord:
     next_step: str = ""
     candidate_ci: dict[str, str] = field(default_factory=dict)
     explanation: str = ""
+    error: str = ""
     model: dict[str, Any] = field(default_factory=dict)
     seconds: float = 0.0
     finished_at: str = ""
@@ -155,6 +163,10 @@ class SelfDevEngine:
         (folder / "record.json").write_text(
             json.dumps(asdict(record), indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
+        (folder / "model-exchanges.json").write_text(
+            json.dumps(self.model.exchanges, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
         if diff is not None:
             (folder / "candidate.diff").write_text(diff, encoding="utf-8")
 
@@ -212,74 +224,98 @@ class SelfDevEngine:
             return self._finish(record, meter, STATUS_REFUSED, str(exc))
         record.branch = f"{BRANCH_PREFIX}{run_id}"
         record.worktree = str(worktree)
+        try:
+            return self._drive(record, meter, defect, worktree, in_scope, targeted_tests)
+        except _Exhausted as exc:
+            return self._quarantine(record, meter, worktree, str(exc))
+        except ModelError as exc:
+            return self._quarantine(record, meter, worktree, f"model: {exc}")
+        except Exception as exc:  # noqa: BLE001 - whatever broke, the run ends with a record
+            record.error = traceback.format_exc()[-6000:]
+            reason = f"error: {type(exc).__name__}: {exc}"
+            return self._quarantine(record, meter, worktree, reason[:500])
+
+    def _quarantine(
+        self, record: RunRecord, meter: BudgetMeter, worktree: Path, reason: str
+    ) -> RunRecord:
+        """Ends the run with its worktree kept for inspection, and its diff if one can be had."""
+        try:
+            diff: str | None = self.workspace.diff(worktree)
+        except Exception:  # noqa: BLE001 - a record without its diff beats no record
+            diff = None
+        return self._finish(record, meter, STATUS_QUARANTINED, reason, diff)
+
+    def _drive(
+        self,
+        record: RunRecord,
+        meter: BudgetMeter,
+        defect: DefectSpec,
+        worktree: Path,
+        in_scope: Callable[[str], bool],
+        targeted_tests: list[str],
+    ) -> RunRecord:
         reviewer = IndependentReviewer(self.workspace, self.runner)
         package_tests = self.runner.package_root.rstrip("/") + "/tests/"
 
-        try:
-            files = self._context(worktree, defect)
-            analysis = self._ask(meter, lambda: self.model.analyze_codebase(defect, files))
-            record.analysis = asdict(analysis)
-            plan = self._ask(meter, lambda: self.model.plan_change(defect, analysis, files))
-            record.plan = asdict(plan)
-            problem = self._validate_plan(plan, in_scope, package_tests)
-            if problem:
-                return self._finish(record, meter, STATUS_REFUSED, problem)
-            allowed = lambda p: in_scope(p) or p == plan.regression_test_path  # noqa: E731
-            patch: Patch = self._ask(meter, lambda: self.model.generate_patch(defect, plan, files))
+        files = self._context(worktree, defect)
+        analysis = self._ask(meter, lambda: self.model.analyze_codebase(defect, files))
+        record.analysis = asdict(analysis)
+        plan = self._ask(meter, lambda: self.model.plan_change(defect, analysis, files))
+        record.plan = asdict(plan)
+        problem = self._validate_plan(plan, in_scope, package_tests)
+        if problem:
+            return self._finish(record, meter, STATUS_REFUSED, problem)
+        allowed = lambda p: in_scope(p) or p == plan.regression_test_path  # noqa: E731
+        patch: Patch = self._ask(meter, lambda: self.model.generate_patch(defect, plan, files))
 
-            while True:
-                meter.attempts += 1
-                reason = meter.exhausted(self.model.usage)
-                if reason:
-                    raise _Exhausted(reason)
-                attempt: dict[str, Any] = {"n": meter.attempts, "paths": list(patch.paths)}
-                failure = ""
-                try:
-                    self.workspace.validate(patch, allowed=allowed)
-                except WorkspaceError as exc:
-                    failure = f"structural: {exc}"
-                    attempt["structural"] = str(exc)
+        while True:
+            meter.attempts += 1
+            reason = meter.exhausted(self.model.usage)
+            if reason:
+                raise _Exhausted(reason)
+            attempt: dict[str, Any] = {"n": meter.attempts, "paths": list(patch.paths)}
+            failure = ""
+            try:
+                self.workspace.validate(patch, allowed=allowed)
+            except WorkspaceError as exc:
+                failure = f"structural: {exc}"
+                attempt["structural"] = str(exc)
+            else:
+                verdict = reviewer.review(
+                    worktree, patch, plan, in_scope=in_scope, targeted_tests=targeted_tests
+                )
+                attempt["checks"] = verdict.as_dicts()
+                if verdict.approved:
+                    diff = self.workspace.diff(worktree)
+                    review = self._ask(
+                        meter, lambda d=diff: self.model.review_code(defect, plan, d)
+                    )
+                    attempt["model_review"] = asdict(review)
+                    if review.approved:
+                        record.attempts.append(attempt)
+                        record.model_review = asdict(review)
+                        break
+                    failure = "model review: " + "; ".join(review.findings)
                 else:
-                    verdict = reviewer.review(
-                        worktree, patch, plan, in_scope=in_scope, targeted_tests=targeted_tests
-                    )
-                    attempt["checks"] = verdict.as_dicts()
-                    if verdict.approved:
-                        diff = self.workspace.diff(worktree)
-                        review = self._ask(
-                            meter, lambda d=diff: self.model.review_code(defect, plan, d)
-                        )
-                        attempt["model_review"] = asdict(review)
-                        if review.approved:
-                            record.attempts.append(attempt)
-                            record.model_review = asdict(review)
-                            break
-                        failure = "model review: " + "; ".join(review.findings)
-                    else:
-                        first = verdict.first_failure
-                        failure = f"{first.name}: {first.detail}" if first else "review failed"
-                attempt["failure"] = failure[-1500:]
-                record.attempts.append(attempt)
-                if meter.attempts >= self.budget.max_attempts:
-                    raise _Exhausted(
-                        f"attempts: {meter.attempts} of {self.budget.max_attempts} used; "
-                        f"last failure: {failure[:300]}"
-                    )
-                diagnosis = self._ask(
-                    meter,
-                    lambda p=patch, f=failure: self.model.review_failure(defect, p, f),
+                    first = verdict.first_failure
+                    failure = f"{first.name}: {first.detail}" if first else "review failed"
+            attempt["failure"] = failure[-1500:]
+            record.attempts.append(attempt)
+            if meter.attempts >= self.budget.max_attempts:
+                raise _Exhausted(
+                    f"attempts: {meter.attempts} of {self.budget.max_attempts} used; "
+                    f"last failure: {failure[:300]}"
                 )
-                self.workspace.reset(worktree)
-                base_files = self._context(worktree, defect, extra=patch.paths)
-                patch = self._ask(
-                    meter,
-                    lambda p=patch, d=diagnosis, b=base_files: self.model.fix_patch(
-                        defect, p, d, b
-                    ),
-                )
-        except _Exhausted as exc:
-            diff = self.workspace.diff(worktree)
-            return self._finish(record, meter, STATUS_QUARANTINED, str(exc), diff)
+            diagnosis = self._ask(
+                meter,
+                lambda p=patch, f=failure: self.model.review_failure(defect, p, f),
+            )
+            self.workspace.reset(worktree)
+            base_files = self._context(worktree, defect, extra=patch.paths)
+            patch = self._ask(
+                meter,
+                lambda p=patch, d=diagnosis, b=base_files: self.model.fix_patch(defect, p, d, b),
+            )
 
         diff = self.workspace.diff(worktree)
         record.changed_paths = self.workspace.changed_paths(worktree)
@@ -287,7 +323,8 @@ class SelfDevEngine:
             record.explanation = self._ask(
                 meter, lambda: self.model.explain_change(defect, plan, diff)
             )
-        except _Exhausted:
+        except (_Exhausted, ModelError):
+            # The candidate is judged by what was run; the explanation is only prose about it.
             record.explanation = ""
         record.candidate_sha = self.workspace.commit(
             worktree, f"selfdev({defect.defect_id}): {plan.summary}"[:200]

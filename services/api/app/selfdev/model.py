@@ -53,8 +53,9 @@ class ChangePlan:
 
 @dataclass(frozen=True, slots=True)
 class FileEdit:
-    """The complete new text of one file. Whole files, never hunks: a hunk that does not
-    apply is a second failure mode the engine would have to diagnose."""
+    """The complete new text of one file. The engine only ever sees whole files: a model
+    seam that asks for replacements resolves them against the text it showed the model, and
+    reports the ones that do not apply in ``Patch.rejected`` instead of guessing."""
 
     path: str
     new_text: str
@@ -62,8 +63,13 @@ class FileEdit:
 
 @dataclass(frozen=True, slots=True)
 class Patch:
+    """``rejected`` names each proposed change that could not be applied to the text the
+    model was shown, with the reason. The workspace refuses a patch that has any, and the
+    engine hands the reasons back to the model like any other structural failure."""
+
     edits: tuple[FileEdit, ...]
     notes: str = ""
+    rejected: tuple[str, ...] = ()
 
     @property
     def paths(self) -> tuple[str, ...]:
@@ -82,6 +88,12 @@ class CodeReview:
     findings: tuple[str, ...] = ()
 
 
+class ModelError(Exception):
+    """The model's answer cannot be used: the call failed, the answer did not come through
+    the tool, it was cut off, or it did not have the shape asked for. The engine ends the run
+    in QUARANTINE on it, with the reason in the record - never a crash, never a guess."""
+
+
 @dataclass(slots=True)
 class ModelUsage:
     """Tokens a model has spent in this run; the budget reads it after every call."""
@@ -97,8 +109,13 @@ class ModelUsage:
 
 @runtime_checkable
 class EngineeringModel(Protocol):
+    """``exchanges`` is what the model was asked and answered, one entry per call, written
+    beside the run record so every claim in it can be checked against the answer it rests
+    on. It never holds a credential."""
+
     name: str
     usage: ModelUsage
+    exchanges: list[dict[str, Any]]
 
     def analyze_codebase(self, defect: DefectSpec, files: dict[str, str]) -> CodebaseAnalysis: ...
 
@@ -146,9 +163,11 @@ class ScriptedEngineeringModel:
     usage: ModelUsage = field(default_factory=ModelUsage)
     calls: list[str] = field(default_factory=list)
     on_call: Callable[[str], Any] | None = None
+    exchanges: list[dict[str, Any]] = field(default_factory=list)
 
     def _spend(self, method: str) -> None:
         self.calls.append(method)
+        self.exchanges.append({"method": method})
         self.usage.calls += 1
         self.usage.input_tokens += self.tokens_per_call
         if self.on_call is not None:

@@ -128,6 +128,8 @@ class GitWorkspace:
         return files
 
     def validate(self, patch: Patch, *, allowed: Callable[[str], bool]) -> None:
+        if patch.rejected:
+            raise WorkspaceError("the patch did not apply: " + "; ".join(patch.rejected))
         if not patch.edits:
             raise WorkspaceError("the patch changes nothing")
         if len(patch.edits) > self.limits.max_files_per_patch:
