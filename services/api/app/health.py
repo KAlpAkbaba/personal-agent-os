@@ -19,6 +19,37 @@ from app.object_store import S3ObjectStore
 
 CheckResult = dict[str, Any]
 
+#: Checks whose failure is REPORTED but does not make the process degraded. Redis: nothing in
+#: Cloud Core reads or writes it (CLAUDE.md: ephemeral/cache concerns only, never a source of
+#: truth - and today it is not even a cache). Until 2026-09-11 a Redis restart still turned
+#: top-level health `degraded`, which fails every release's exact `ok` gate and raises an
+#: alarm about a dependency nothing depends on. The day code starts using Redis it leaves
+#: this set - test_health_endpoint holds that, by reading app/ for any Redis client.
+ADVISORY_CHECKS: frozenset[str] = frozenset({"redis"})
+
+#: A check status that is not a failure.
+HEALTHY_STATUSES: tuple[str, ...] = ("ok", "skipped")
+
+
+def is_degraded(checks: dict[str, Any]) -> bool:
+    """Whether any REQUIRED check failed - THE rule, for every reader of a health map.
+
+    /v1/system/health and the voice `state.now` answer both call this: two readers with two
+    rules is how the owner could hear "Cloud Core kismen saglikli" about a process its own
+    endpoint called ok. A value may be a check dict or a bare status string; a check is
+    advisory by name (ADVISORY_CHECKS) or by carrying `required: false`.
+    """
+    for name, check in checks.items():
+        if check is None:
+            continue
+        entry = check if isinstance(check, dict) else {"status": check}
+        if entry.get("status") in HEALTHY_STATUSES:
+            continue
+        if name in ADVISORY_CHECKS or entry.get("required", True) is False:
+            continue
+        return True
+    return False
+
 
 async def _run_check(
     name: str, fn: Callable[[], Awaitable[None]], timeout_s: float
@@ -80,4 +111,7 @@ async def run_health_checks(settings: Settings) -> dict[str, CheckResult]:
         _run_check("object_store", lambda: check_object_store(settings), timeout),
         _run_check("temporal", lambda: check_temporal(settings), timeout),
     )
-    return dict(zip(names, results, strict=True))
+    checks = dict(zip(names, results, strict=True))
+    for name in ADVISORY_CHECKS & checks.keys():
+        checks[name]["required"] = False
+    return checks

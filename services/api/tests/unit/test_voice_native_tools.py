@@ -34,6 +34,7 @@ from sqlalchemy import select
 from app.nativefactory import service as native_service
 from app.nativefactory.artifacts import ArtifactFacts
 from app.nativefactory.models import NativeBuildRow
+from app.nativefactory.stacks import SPEECH_DEVICE_PACKAGING_NOT_WIRED, ToolchainFacts
 from app.voice.realtime_sessions.tools_native import (
     SPEECH_ANDROID_NEEDS_JDK,
     SPEECH_INSTALL_NEEDS_DEVICE,
@@ -369,3 +370,97 @@ def test_a_build_id_the_caller_invented_is_not_silently_treated_as_the_latest() 
     body = h.tool(sid, "c-1", "native.check", {"build_id": str(uuid.uuid4())})["result"]
     # There IS exactly one row, and it is the one the owner is talking about.
     assert body["build"]["build_id"] == str(_rows(h)[0].id)
+
+
+# ------------------------------------------------- production's own facts (row 26.16)
+
+#: Production Cloud Core as it really is: a Linux host with no .NET, no Windows Kits, no
+#: Java and no Android SDK. The corpus harness injects the owner's PC as "this machine"
+#: instead - which is exactly why the planning defect below never showed in any suite.
+LINUX_CLOUD_CORE = ToolchainFacts(
+    dotnet=None,
+    dotnet_sdk=None,
+    makeappx=None,
+    signtool=None,
+    java=None,
+    java_home=None,
+    android_sdk=None,
+    aapt2=None,
+    macos=False,
+)
+
+
+def _production_shaped():
+    h = build_harness()
+    h.runtime.register_live(
+        native_runner=None, native_root=None, native_toolchain=LINUX_CLOUD_CORE
+    )
+    return h
+
+
+def test_production_plans_a_windows_app_for_the_device_and_builds_it_there() -> None:
+    """M28 row 26.16, from the owner's sentence to a verified row, on production's facts.
+
+    Until 2026-09-11 native.create measured THIS machine to decide what was reachable. On
+    the Linux Cloud Core that opened the Windows row as `unavailable` (".NET SDK bu makinede
+    yok") and native.build refused it before the device path was reached - so the device
+    dispatch proven above could never run in production. Every earlier test either seeded
+    an already-planned row or had the owner's PC injected as this machine.
+    """
+    h = _production_shaped()
+    sid = h.new_session()
+    h.say(sid, "Bana Windows için masaüstü not uygulaması yap.")
+
+    created = h.tool(
+        sid, "c-1", "native.create", {"targets": ["windows_exe"], "name": "Notlarim"}
+    )["result"]
+
+    assert created["execution_status"] == "executed", created.get("speech")
+    assert [b["state"] for b in created["builds"]] == ["planned"]
+    # The owner hears who will build it - and not a verdict about a machine that won't.
+    assert "cihaz" in created["speech"]
+    assert ".NET SDK bu makinede yok" not in created["speech"]
+
+    built = h.tool(
+        sid, "c-2", "native.build", {"build_id": created["builds"][0]["build_id"]}
+    )["result"]
+
+    assert built["built_on"] == "device", built.get("speech")
+    assert built["build"]["state"] == "verified"
+    assert h.device.capabilities_called()[:2] == ["project.scaffold", "project.run"]
+
+
+def test_a_packaging_target_is_refused_by_name_when_the_device_would_build_it() -> None:
+    """The device path makes the EXE and nothing else. The judge compares version and
+    subsystem, not kind - so an MSIX row sent to the device would have come back `verified`
+    carrying an EXE. It is refused by name instead, and the device is never asked."""
+    h = _production_shaped()
+    sid = h.new_session()
+    created = h.tool(
+        sid,
+        "c-1",
+        "native.create",
+        {"targets": ["windows_exe", "windows_msix"], "name": "Notlarim"},
+    )["result"]
+    states = {b["target"]: b["state"] for b in created["builds"]}
+    assert states == {"windows_exe": "planned", "windows_msix": "unavailable"}
+    msix = next(b for b in created["builds"] if b["target"] == "windows_msix")
+
+    built = h.tool(sid, "c-2", "native.build", {"build_id": msix["build_id"]})["result"]
+
+    assert built["execution_status"] == "refused"
+    assert SPEECH_DEVICE_PACKAGING_NOT_WIRED in built["speech"]
+    assert "project.scaffold" not in h.device.capabilities_called()
+
+
+def test_the_lab_still_plans_against_the_machine_it_runs_on() -> None:
+    """With a local runner and a local compiler the build is HERE, so this machine's facts
+    are the right ones and the reason names the SDK it measured."""
+    h = build_harness()
+    sid = h.new_session()
+    created = h.tool(
+        sid, "c-1", "native.create", {"targets": ["windows_exe"], "name": "Notlarim"}
+    )["result"]
+    assert [b["state"] for b in created["builds"]] == ["planned"]
+    assert ".NET 10.0.400" in created["speech"]
+    assert "cihaz" not in created["speech"]

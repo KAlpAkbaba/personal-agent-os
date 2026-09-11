@@ -48,7 +48,12 @@ from . import launch_guard, lifecycle, media, policy, release, search_engines
 from .backends import ExistingSessionBackend, ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
-from .enrollment import BrowserEnrollment, EnrollmentRegistry, Transport
+from .enrollment import (
+    BrowserEnrollment,
+    EnrollmentRegistry,
+    Transport,
+    require_research_authorization,
+)
 from .errors import BrowserError, ErrorClass, Phase, map_playwright_error, redact_url
 from .extraction import (
     build_links,
@@ -1178,7 +1183,17 @@ class Worker:
             # leaves the browser running. No breaker either: the circuit breaker
             # exists to stop this worker relaunching a profile it keeps crashing,
             # and there is nothing here to relaunch.
-            backend = ExistingSessionBackend(self._require_owner_enrollment())
+            enrollment = self._require_owner_enrollment()
+            if session_kind == media.RESEARCH_SESSION_KIND:
+                # ADR-0113 put the owner's Chrome at the owner's disposal for what they
+                # ask for (media, operator actions). An AUTONOMOUS research task driving it
+                # is a different grant, ADR-0035's `owner_authorized_for_research`, and the
+                # enrollment script records it as false. Until 2026-09-11 nothing here read
+                # it: `session_open {profile: owner}` - whose default kind is research -
+                # attached the owner's signed-in browser for research unchecked. Refused
+                # before any connection, as a scope decision, never a fallback.
+                require_research_authorization(enrollment)
+            backend = ExistingSessionBackend(enrollment)
         else:
             backend = ManagedBackend(
                 headless=not visible,

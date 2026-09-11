@@ -138,6 +138,22 @@ Suggested retention to start:
 - weekly: 8
 - monthly: 6
 
+**As built (ADR-0122, 2026-09-11).** `scripts/cloud/install-backup.sh` on the host installs
+restic (Ubuntu archive), a root-only repository password, the scripts pinned under
+`/opt/pagentos-backup` (digest-checked by systemd before every run) and two timers:
+`pagentos-backup.timer` nightly at 00:30 UTC and `pagentos-restore-drill.timer` weekly.
+The repository is `/var/lib/pagentos-backup/restic` on the root disk - not the data volume
+it protects - and is copied off the host whenever `/opt/pagentos/backup-offhost.env` names
+a second repository. Every snapshot holds all databases (pg_dump -Fc, roles), every bucket
+(through the MinIO API), the env file, the markers, the owner-credential root, the edge
+state, the recovery bundle and the host's pagentos units, with a manifest of every file's
+sha256 and per-table row fingerprints computed from the dumps. Both release paths take a
+`pre-migration` snapshot before any migration and stop if they cannot. The drill
+(`restore-cloud-core.sh --drill`) restores into scratch containers and verifies files,
+rows and objects; `--apply` is the guarded real restore. The repository password lives on
+the host and, escrowed, on the owner's PC (`scripts/cloud/escrow-backup-key.ps1`) - without
+it no copy of any backup can be opened.
+
 Claude should adapt after actual storage growth is known.
 
 ## 8. CI/CD

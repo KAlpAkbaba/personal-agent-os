@@ -157,12 +157,14 @@ class _Composer:
 
 
 def _health_value(health: dict[str, Any]) -> str:
-    statuses = [
-        (v.get("status") if isinstance(v, dict) else v) for v in health.values() if v is not None
-    ]
-    if not statuses:
+    """The same verdict /v1/system/health gives (app.health.is_degraded): until 2026-09-11
+    this counted a `skipped` check and an advisory Redis as degraded, so `state.now` could
+    say "kismen saglikli" about a Cloud Core its own health endpoint reported ok."""
+    from app.health import is_degraded
+
+    if not any(v is not None for v in health.values()):
         return "unknown"
-    return "ok" if all(s == "ok" for s in statuses) else "degraded"
+    return "degraded" if is_degraded(health) else "ok"
 
 
 def _collect_core(c: _Composer, db: Session, health: dict[str, Any] | None) -> None:

@@ -53,6 +53,10 @@ from app.nativefactory.models import (
 from app.nativefactory.roots import check_extensions
 from app.nativefactory.service import _tail, _touch
 from app.nativefactory.spec import NativeAppSpec, NativeFactoryError
+from app.nativefactory.stacks import (
+    DEVICE_BUILDABLE_TARGETS,
+    SPEECH_DEVICE_PACKAGING_NOT_WIRED,
+)
 from app.routines.dispatch import DeviceActionPort, DeviceRunResult
 
 #: The capabilities this path needs. A device that does not advertise all of them cannot build,
@@ -152,6 +156,24 @@ def build_on_device(
     """
     project_slug = slug or row.slug
     project_id = f"native-{str(row.id)[:8]}"
+
+    # ---- only what this path can honestly make -------------------------------------------
+    # It publishes and reads back ONE artefact, the EXE. The judge (validate_against_spec)
+    # compares version and subsystem, not kind, so a portable or MSIX row sent down here
+    # would come back `verified` carrying an EXE. Refused before the device is asked.
+    if row.target not in DEVICE_BUILDABLE_TARGETS:
+        _touch(
+            db,
+            row,
+            STATE_UNAVAILABLE,
+            error_class="dependency_unavailable",
+            error_message=SPEECH_DEVICE_PACKAGING_NOT_WIRED,
+        )
+        return DeviceBuildOutcome(
+            ok=False,
+            error_class="dependency_unavailable",
+            message=SPEECH_DEVICE_PACKAGING_NOT_WIRED,
+        )
 
     # ---- render, and let the SAME policy that guards the local path judge it -------------
     _touch(db, row, STATE_GENERATING)

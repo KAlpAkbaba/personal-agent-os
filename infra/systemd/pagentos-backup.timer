@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly PagentOS Cloud Core backup (03:30 in Turkey)
+Documentation=file:///opt/pagentos/app/docs/CLOUD_INFRASTRUCTURE.md
+
+[Timer]
+# The host clock is UTC; 00:30 UTC is 03:30 in Turkey, when the owner is least likely to
+# be using the system. Persistent: a night the host was down is made up at the next boot.
+OnCalendar=*-*-* 00:30:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=pagentos-backup.service
+
+[Install]
+WantedBy=timers.target
