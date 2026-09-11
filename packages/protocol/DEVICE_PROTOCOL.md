@@ -22,7 +22,7 @@ Contract between the cloud Device Broker and device agents (first: Windows Devic
 ## 3. Handshake (over WS)
 
 ```
-agent  -> {"type":"hello","protocol_version":1,"device_id":"…","software_version":"…","capabilities":["desktop.open_application"]}
+agent  -> {"type":"hello","protocol_version":1,"device_id":"…","software_version":"…","build_id":"…","source_revision":"…","capabilities":["desktop.open_application"]}
 broker -> {"type":"challenge","nonce":"<b64 32 bytes>"}
 agent  -> {"type":"auth","signature":"<b64 ECDSA-SHA256 over nonce_bytes||device_id_utf8>"}
 broker -> {"type":"welcome","session_id":"…","heartbeat_interval_s":10}
@@ -560,6 +560,10 @@ Since M9 every endpoint below requires `Authorization: Bearer <owner-session-tok
 - `GET /v1/devices/{device_id}/commands/{command_id}` → full status/result/error
 - `POST /v1/devices/{device_id}/commands/{command_id}/cancel`
 - `POST /v1/devices/{device_id}/revoke`
+
+  **`build_id` and `source_revision` (ADR-0118, added 2026-09-11).** Both are OPTIONAL on the `hello` and nullable on the row, so an agent built before this change still handshakes. `build_id` is what the build IS — 16 hex characters the agent derives from its own `PagentOS.*` assemblies, so it changes by construction and cannot be forgotten at release time; `"unknown"` means the agent could not read its own files. `source_revision` is the commit the SDK stamped, for a human to find the source; it is never compared.
+
+  They exist because `software_version` is a PRODUCT version and is meant to stay still across builds: on 2026-09-11 the deployed agent announced `0.6.0` (the M25 number) while advertising the full 85-capability M28 manifest, so two different builds were indistinguishable to the one comparison that decides a rollback. The verifier's `-ExpectedBuildId` is now the deciding check when supplied, with the product version kept as a necessary-but-not-sufficient one; a row carrying no identity, or `"unknown"`, is never a match. Like `software_version`, `build_id` is readable at the TOP of the row and repeated inside `health` — one value, two readable places, never two values. Every `hello` overwrites both, **including with `null`**: a rollback to an older agent must clear the identity, because a stale one reads as "the candidate is live".
 
 ## 9. Windows agent process architecture
 

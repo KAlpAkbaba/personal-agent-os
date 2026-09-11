@@ -167,4 +167,77 @@ public sealed class AgentIdentityTests
         Assert.NotNull(dir);
         return Path.Combine([dir.FullName, .. parts]);
     }
+    [Fact]
+    public void BuildIdIsSixteenHexCharactersAndStable()
+    {
+        // Derived, so it cannot be forgotten the way a hand-bumped number can. Two reads of
+        // the same process must agree, or an identity comparison would be a coin toss.
+        Assert.Matches("^[0-9a-f]{16}$", AgentInfo.BuildId);
+        Assert.Equal(AgentInfo.BuildId, AgentInfo.BuildId);
+    }
+
+    [Fact]
+    public void BuildIdIsNotTheProductVersion()
+    {
+        // The whole point of ADR-0118. `SoftwareVersion` is meant to STAY STILL across
+        // builds -- the deployed agent announced 0.6.0 while advertising the 85-capability
+        // M28 manifest -- so it cannot also be the thing that proves which build is running.
+        Assert.NotEqual(AgentInfo.SoftwareVersion, AgentInfo.BuildId);
+        Assert.NotEqual(AgentInfo.AssemblyVersion, AgentInfo.BuildId);
+        Assert.NotEqual(AgentInfo.CapabilityManifestVersion, AgentInfo.BuildId);
+    }
+
+    [Fact]
+    public void TwoBuildsThatShareAProductVersionAreStillTellableApart()
+    {
+        // The 2026-09-08 incident in miniature: two agent trees, the same 0.6.0, one byte of
+        // difference. Before ADR-0118 the staged updater compared the product version and
+        // could not see the difference, so "Cloud Core sees the candidate" was an assumption.
+        //
+        // BuildId's rule is folded here rather than invoked, because AgentInfo reads the
+        // assemblies of the RUNNING process and a test cannot restage those. What is being
+        // asserted is the rule itself: fold the file name and the file's SHA-256, in name
+        // order, and a single differing byte changes the answer.
+        static string Fold(params (string Name, byte[] Bytes)[] files)
+        {
+            using var fold = System.Security.Cryptography.IncrementalHash.CreateHash(
+                System.Security.Cryptography.HashAlgorithmName.SHA256);
+            foreach (var file in files.OrderBy(f => f.Name, StringComparer.Ordinal))
+            {
+                fold.AppendData(System.Text.Encoding.UTF8.GetBytes(file.Name));
+                fold.AppendData(System.Security.Cryptography.SHA256.HashData(file.Bytes));
+            }
+            return Convert.ToHexString(fold.GetHashAndReset())[..16].ToLowerInvariant();
+        }
+
+        var buildA = Fold(("PagentOS.Agent.Core.dll", new byte[] { 1, 2, 3 }),
+                          ("PagentOS.DeviceService.dll", new byte[] { 9, 9 }));
+        var buildB = Fold(("PagentOS.Agent.Core.dll", new byte[] { 1, 2, 4 }),
+                          ("PagentOS.DeviceService.dll", new byte[] { 9, 9 }));
+
+        Assert.NotEqual(buildA, buildB);
+        Assert.Matches("^[0-9a-f]{16}$", buildA);
+
+        // Adding an assembly changes the identity too, even when every existing byte is
+        // untouched -- which is why the NAME is folded in as well as the content.
+        var buildC = Fold(("PagentOS.Agent.Core.dll", new byte[] { 1, 2, 3 }),
+                          ("PagentOS.DeviceService.dll", new byte[] { 9, 9 }),
+                          ("PagentOS.Extra.dll", Array.Empty<byte>()));
+        Assert.NotEqual(buildA, buildC);
+    }
+
+    [Fact]
+    public void TheHelloCarriesTheBuildIdentity()
+    {
+        // An identity the agent computes and never announces would prove nothing: Cloud Core
+        // stores what arrives in the hello, and the staged updater reads Cloud Core.
+        var options = new PagentOS.Agent.Core.Connection.AgentConnectionOptions
+        {
+            BrokerWsUrl = new Uri("wss://example.invalid/v1/devices/connect"),
+            DeviceId = Guid.NewGuid().ToString(),
+        };
+        Assert.Equal(AgentInfo.BuildId, options.BuildId);
+        Assert.Equal(AgentInfo.SourceRevision, options.SourceRevision);
+    }
+
 }

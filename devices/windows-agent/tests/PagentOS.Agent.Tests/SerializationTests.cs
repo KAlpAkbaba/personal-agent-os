@@ -54,7 +54,12 @@ public class SerializationTests
     }
 
     [Theory]
+    // Two hello shapes, deliberately. ADR-0118 added `build_id`/`source_revision` as OPTIONAL
+    // fields: an agent older than that still handshakes, so the old shape must round-trip with
+    // no null keys added to it, and the new shape must actually carry them. One fixture would
+    // only ever pin half of that.
     [InlineData("hello.json", new[] { "type", "protocol_version", "device_id", "software_version", "capabilities" })]
+    [InlineData("hello_with_build_identity.json", new[] { "type", "protocol_version", "device_id", "software_version", "build_id", "source_revision", "capabilities" })]
     [InlineData("challenge.json", new[] { "type", "nonce" })]
     [InlineData("auth.json", new[] { "type", "signature" })]
     [InlineData("welcome.json", new[] { "type", "session_id", "heartbeat_interval_s" })]

@@ -159,6 +159,8 @@ def apply_hello(
     *,
     capabilities: list[str],
     software_version: str,
+    build_id: str | None = None,
+    source_revision: str | None = None,
 ) -> None:
     """Refresh capabilities_json/software_version from a fresh hello (M13 §8).
 
@@ -170,7 +172,15 @@ def apply_hello(
     session.execute(
         update(Device)
         .where(Device.id == device_id)
-        .values(capabilities_json=capabilities, software_version=software_version)
+        .values(
+            capabilities_json=capabilities,
+            software_version=software_version,
+            # Written even when None: an agent that stopped announcing an identity must not
+            # leave the previous build's identity standing on the row, which would read as
+            # "the candidate is live" to the staged updater (ADR-0118).
+            build_id=build_id,
+            source_revision=source_revision,
+        )
         .execution_options(synchronize_session=False)
     )
     session.commit()
@@ -251,10 +261,12 @@ def start_device_session(
     software_version: str,
     connection_metadata: dict[str, Any],
     trace_id: str | None,
+    build_id: str | None = None,
 ) -> DeviceSession:
     row = DeviceSession(
         device_id=device_id,
         software_version=software_version,
+        build_id=build_id,
         connection_metadata_json=connection_metadata,
     )
     session.add(row)

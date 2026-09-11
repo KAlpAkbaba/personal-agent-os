@@ -79,6 +79,13 @@ class Device(Base):
     # Refreshed from every hello (ws.py); last known agent build, distinct from
     # a single DeviceSession's software_version (which is per-connection history).
     software_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # ADR-0118. `software_version` is the PRODUCT release and is meant to stay still across
+    # builds — the agent announced 0.6.0 while advertising the 85-capability M28 manifest, so
+    # two different builds were indistinguishable to the staged updater, which compares
+    # exactly this row. `build_id` is derived from the agent's own assemblies and changes by
+    # construction; `source_revision` is the commit, for a human to find the source.
+    build_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DeviceSession(Base):
@@ -96,6 +103,8 @@ class DeviceSession(Base):
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     software_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Per-connection history: which build was on the other end of THIS socket.
+    build_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DeviceCommand(Base):

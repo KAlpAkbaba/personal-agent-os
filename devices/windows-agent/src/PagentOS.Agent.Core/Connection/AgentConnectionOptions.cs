@@ -10,6 +10,11 @@ public sealed record AgentConnectionOptions
 
     public string SoftwareVersion { get; init; } = AgentInfo.SoftwareVersion;
 
+    /// <summary>Overridable so a test can stage two builds that differ only here.</summary>
+    public string BuildId { get; init; } = AgentInfo.BuildId;
+
+    public string SourceRevision { get; init; } = AgentInfo.SourceRevision;
+
     public IReadOnlyList<string> Capabilities { get; init; } = AgentCapabilities.All;
 
     public double BackoffBaseSeconds { get; init; } = 1.0;

@@ -85,6 +85,12 @@ class HelloFrame(_Frame):
     protocol_version: int = Field(ge=1)
     device_id: uuid.UUID
     software_version: str = Field(max_length=64)
+    #: What this build IS, as opposed to which product release it belongs to. Optional so an
+    #: agent built before ADR-0118 still handshakes; a hello without it stores NULL and the
+    #: staged updater refuses to read a missing identity as a match.
+    build_id: str | None = Field(default=None, max_length=64)
+    #: The commit the SDK stamped into the binary. Provenance for a human, never compared.
+    source_revision: str | None = Field(default=None, max_length=64)
     capabilities: list[str] = Field(max_length=128)
 
     @field_validator("capabilities")

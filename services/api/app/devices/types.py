@@ -30,6 +30,7 @@ DEVICE_IDENTITY_KEYS: tuple[str, ...] = (
     "device_id",
     "presence",
     "software_version",
+    "build_id",
     "capabilities",
     "capability_count",
     "last_seen_at",
@@ -56,6 +57,13 @@ class DeviceView:
     #: (``app.broker.service.apply_hello``). ``None`` when no agent has ever
     #: said hello — which is a truthful "unknown", never an empty string.
     software_version: str | None = None
+    #: ``hello.build_id`` as last reported (ADR-0118). ``software_version`` is the PRODUCT
+    #: release and is meant to stay still across builds, so it cannot prove a staged update
+    #: took; this is what the verifier compares. ``None`` when the agent announced none —
+    #: an agent older than ADR-0118, and never a match.
+    build_id: str | None = None
+    #: The commit the SDK stamped into the binary. Provenance for a human, never compared.
+    source_revision: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +77,8 @@ class DeviceView:
             # "it announced an empty version" are different failures and the
             # installer must be able to tell them apart.
             "software_version": self.software_version,
+            "build_id": self.build_id,
+            "source_revision": self.source_revision,
             "capabilities": list(self.capabilities),
             "capability_count": len(self.capabilities),
             "last_seen_at": self.last_seen_at.isoformat().replace("+00:00", "Z")

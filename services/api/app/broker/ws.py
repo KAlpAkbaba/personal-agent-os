@@ -273,6 +273,7 @@ async def device_connect(websocket: WebSocket) -> None:
                 db,
                 device_id=device_id,
                 software_version=hello.software_version,
+                build_id=hello.build_id,
                 connection_metadata={
                     "remote_addr": client.host if client else None,
                     "protocol_version": hello.protocol_version,
@@ -289,6 +290,8 @@ async def device_connect(websocket: WebSocket) -> None:
                 device_id,
                 capabilities=hello.capabilities,
                 software_version=hello.software_version,
+                build_id=hello.build_id,
+                source_revision=hello.source_revision,
             )
             return row.id
 

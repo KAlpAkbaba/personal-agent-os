@@ -162,7 +162,7 @@ function New-CoreListing {
         and the same version is repeated inside `health`. Getting this shape wrong - by
         inventing one - is what made the 2026-09-08 failure invisible to every suite.
     #>
-    param([string]$DeviceId, [string]$Presence, [string]$Version, [string[]]$Capabilities)
+    param([string]$DeviceId, [string]$Presence, [string]$Version, [string[]]$Capabilities, [string]$BuildId = "")
     # A row with no capability list is a caller bug, not an offline device: say so here
     # rather than letting @($null).Count fail deep inside a health handler.
     if ($null -eq $Capabilities) { throw "New-CoreListing was given no capability list for device $DeviceId" }
@@ -175,12 +175,14 @@ function New-CoreListing {
                 status           = $Presence
                 presence         = $Presence
                 software_version = $Version
+                build_id         = $BuildId
                 capabilities     = $Capabilities
                 capability_count = @($Capabilities).Count
                 last_seen_at     = (Get-Date).ToUniversalTime().ToString("o")
                 health           = [pscustomobject]@{
                     last_hello_at    = (Get-Date).ToUniversalTime().ToString("o")
                     software_version = $Version
+                    build_id         = $BuildId
                     heartbeat_age_s  = 1.0
                     recent_outcomes  = @()
                 }
@@ -447,6 +449,25 @@ try {
     Assert-True ($candidate.SoftwareVersion -match '^\d+\.\d+\.\d+$') "it announces a software version ($($candidate.SoftwareVersion))"
     Assert-True ($candidate.Component -eq "device-service") "it names which component announced it ($($candidate.Component))"
     Assert-True ($candidate.AssemblyVersion -eq $candidate.SoftwareVersion) "ONE canonical version identity: the binary is stamped $($candidate.AssemblyVersion), the same number it announces"
+    # ADR-0118. The line above is the 2026-09-08 lesson: one canonical PRODUCT version. The
+    # lines below are the other half of it. A product version is meant to STAY STILL across
+    # builds - M28 deliberately did not bump 0.6.0 - so it can never prove which BUILD is
+    # running, which is the question this whole script exists to answer.
+    # An EMPTY answer here almost always means the candidate binary predates ADR-0118 -
+    # this qualification judges bin\Release, which is not what `dotnet build` produces by
+    # default, so a stale Release tree is judged as if it were the candidate. Say that,
+    # rather than leaving a reader to work it out from an empty string.
+    Assert-True ($candidate.BuildId -match '^[0-9a-f]{16}$') $(if ($candidate.BuildId) { "it also announces a BUILD identity ($($candidate.BuildId)) - 16 hex derived from its own assemblies, not a number anyone maintains" } else { "it also announces a BUILD identity - the candidate answered NOTHING, which means this binary predates ADR-0118: rebuild it with 'dotnet build devices\windows-agent\PagentOS.WindowsAgent.sln -c Release' and re-run, because a stale candidate proves nothing about the tree" })
+    Assert-True ($candidate.BuildId -ne $candidate.SoftwareVersion -and $candidate.BuildId -ne $candidate.AssemblyVersion) "the build identity is NOT the product version wearing a different name"
+    # A literal, like the shape probe above: $DeviceId is a parameter of the scenario
+    # functions further down, not a script-scope variable.
+    $identityProbeDevice = "build-identity-probe"
+    $sameVersionOtherBuild = New-CoreListing -DeviceId $identityProbeDevice -Presence "online" -Version $candidate.SoftwareVersion -Capabilities $candidate.Capabilities -BuildId ("0" * 16)
+    $swapNotTaken = Test-AgentHeartbeatOnCore -FetchDevices { $sameVersionOtherBuild } -DeviceId $identityProbeDevice -ExpectedVersion $candidate.SoftwareVersion -ExpectedBuildId $candidate.BuildId -ExpectedCapabilities $candidate.Capabilities -TimeoutSeconds 4 -PollSeconds 2
+    Assert-True (-not $swapNotTaken.Ok -and ($swapNotTaken.Reasons -join " ") -match "reports build") "BUILD A != BUILD B: a row on the SAME product version but a different build is correctly refused, which the product version alone could never do"
+    $sameVersionSameBuild = New-CoreListing -DeviceId $identityProbeDevice -Presence "online" -Version $candidate.SoftwareVersion -Capabilities $candidate.Capabilities -BuildId $candidate.BuildId
+    $swapTaken = Test-AgentHeartbeatOnCore -FetchDevices { $sameVersionSameBuild } -DeviceId $identityProbeDevice -ExpectedVersion $candidate.SoftwareVersion -ExpectedBuildId $candidate.BuildId -ExpectedCapabilities $candidate.Capabilities -TimeoutSeconds 8 -PollSeconds 2
+    Assert-True ($swapTaken.Ok -and $swapTaken.Observed.build_id -eq $candidate.BuildId) "...and the candidate's own build is accepted, with the identity recorded"
     Assert-True ($candidate.CapabilityManifestVersion -match '^[0-9a-f]{12}$') "it carries a capability manifest fingerprint ($($candidate.CapabilityManifestVersion))"
 
     # ------------------------------------------------------- gate 3: the whole manifest

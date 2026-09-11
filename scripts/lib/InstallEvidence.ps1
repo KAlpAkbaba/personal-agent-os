@@ -129,6 +129,8 @@ function Get-InstalledAgentManifest {
     $component = $null
     $assemblyVersion = $null
     $capabilityManifestVersion = $null
+    $buildId = $null
+    $sourceRevision = $null
     $displayPowerEnabled = $false
     if ($result.ExitCode -eq 0 -and $result.StdOut) {
         try {
@@ -144,6 +146,11 @@ function Get-InstalledAgentManifest {
             if ($names -contains "component" -and $doc.component) { $component = [string]$doc.component }
             if ($names -contains "assembly_version" -and $doc.assembly_version) { $assemblyVersion = [string]$doc.assembly_version }
             if ($names -contains "capability_manifest_version" -and $doc.capability_manifest_version) { $capabilityManifestVersion = [string]$doc.capability_manifest_version }
+            # ADR-0118: what this build IS, as opposed to which product release it belongs
+            # to. Read defensively like every field above - a binary older than ADR-0118
+            # has neither, and this must describe it truthfully rather than throw.
+            if ($names -contains "build_id" -and $doc.build_id) { $buildId = [string]$doc.build_id }
+            if ($names -contains "source_revision" -and $doc.source_revision) { $sourceRevision = [string]$doc.source_revision }
             if ($names -contains "display_power_enabled") { $displayPowerEnabled = [bool]$doc.display_power_enabled }
             $ok = $true
         }
@@ -158,6 +165,8 @@ function Get-InstalledAgentManifest {
         Component                 = $component
         AssemblyVersion           = $assemblyVersion
         CapabilityManifestVersion = $capabilityManifestVersion
+        BuildId                   = $buildId
+        SourceRevision            = $sourceRevision
         ExitCode                  = $result.ExitCode
         StdErr                    = [string]$result.StdErr
     }

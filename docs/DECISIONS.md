@@ -9979,3 +9979,64 @@ ambiguity costs. Recorded as a limitation, not solved by guessing.
 Three mutations, three reds: prefixes restored to the schedule guard reds the twelve
 schedule cases; stem-matching restored to the bare-title verb reds the "açıkla" case; the
 matcher unwired reds the twelve bare cases. 1891 corpus utterances green (48 new).
+
+## ADR-0118 — A product version cannot also be a build identity (2026-09-11)
+
+The staged updater decides whether a candidate took by asking Cloud Core what the device
+announces. The only identity it announced was `software_version`, and on 2026-09-11 the
+deployed agent announced **`0.6.0`** — the M25 number — while advertising the full
+**85-capability M28 manifest**. Two different builds were therefore indistinguishable to the
+one comparison that decides a rollback.
+
+That is not a hypothetical. On 2026-09-08 a healthy release was rolled back over this same
+field, because the verifier read it from a place the row did not carry it (fixed then, in
+`Get-DeviceRowSoftwareVersion`). This is the other half of the same mistake: having found
+the field, we asked it to answer a question it structurally cannot. `software_version` is a
+**product** version. ADR-0095 addendum 2 §1 is explicit that M28 adds no capability name and
+therefore does not bump it — deliberately, so the manifest arithmetic holds. A number that is
+*supposed* to stay still across builds cannot prove that a build changed.
+
+**What was added, and what was deliberately not.** No second version to maintain. `BuildId`
+is **derived**: every `PagentOS.*.dll` beside the running assembly, sorted by name, each
+file's name and SHA-256 folded into one digest, first 16 hex. It cannot drift, cannot be
+forgotten at release time, and changes by construction when the agent's own code changes.
+The .NET runtime files sitting next to it are excluded — a runtime patch is not a new agent
+build. `SourceRevision` rides along as provenance only (the SDK already stamps `+<sha>` into
+`AssemblyInformationalVersionAttribute` from the git checkout, with nothing in this
+repository configuring it); it is never compared, because two builds of one commit share it
+and a build from a dirty tree names a commit it was not quite built from.
+
+Semantic versioning is untouched. `SoftwareVersion` still answers "which product release is
+this", `AgentIdentityTests` still holds it equal to the assembly version, and
+`qualify-staged-update.ps1`'s `^\d+\.\d+\.\d+$` assertion still passes.
+
+**The wire and the row.** `build_id` and `source_revision` are optional on the hello, so an
+agent built before this change still handshakes. `apply_hello` writes them **even when they
+are absent** — a rollback to an older agent must clear the identity, because a stale one
+reads as "the candidate is live" to the updater, which is precisely the false pass this
+exists to prevent. `device_sessions.build_id` records which build was on each socket, which
+is what later tells a reader *when* a swap took effect. Migration `0040`, expand-only, three
+nullable columns.
+
+**The comparison.** `Test-AgentHeartbeatOnCore` gains `-ExpectedBuildId`. Supplied, it is the
+deciding check and the product-version check stays as a necessary-but-not-sufficient one;
+omitted, behaviour is exactly as before, so nothing that worked stops working. A row with no
+identity, or one announcing `unknown`, is **never a match** — an agent that cannot say which
+build it is has not proven anything. `Get-DeviceRowBuildId` reads the top of the row first
+and `health` as a fallback, the same two locations in the same order as the version reader:
+a new field with a one-place reader would be the 2026-09-08 defect wearing a different name.
+
+**Proven by watching it fail.** Two mutations on the Cloud Core side, both red: dropping the
+write entirely, and the subtler one — keeping the old identity when a hello carries none,
+which is the false-pass shape. Six PowerShell cases cover the decision itself, including the
+one that names the whole point: *same product version, different build, reported as a swap
+that has not taken — and not as a version mismatch.* Four C# tests cover the derivation,
+including that a single differing byte changes the answer and that adding an assembly changes
+it even when every existing byte is untouched.
+
+**Known limit, stated.** `BuildId` identifies the agent's own assemblies, not the whole
+install tree. A change confined to a non-`PagentOS.*` file next to them — a runtime, a
+config, the browser worker's Python — does not move it. The browser worker already carries
+its own release identity through the candidate manifest (`package_sha256`), and the two are
+compared separately; nothing here widens or replaces that.
+
