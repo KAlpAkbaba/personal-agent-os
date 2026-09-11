@@ -335,9 +335,10 @@ def test_the_worktree_bound_holds_while_a_quarantined_run_keeps_its_worktree(
         budget=Budget(max_attempts=1),
         limits=limits,
     )
-    assert (
-        first.run(_defect(), base_sha=_base(repo), targeted_tests=[]).status == STATUS_QUARANTINED
-    )
+    quarantined = first.run(_defect(), base_sha=_base(repo), targeted_tests=[])
+    assert quarantined.status == STATUS_QUARANTINED
+    # It wrote a candidate, so there is something to inspect: the worktree stays.
+    assert quarantined.worktree_kept is True and Path(quarantined.worktree).is_dir()
 
     second = _engine(repo, tmp_path, _model(_patch(FIXED)), limits=limits)
     record = second.run(_defect(), base_sha=_base(repo), targeted_tests=[])
@@ -365,9 +366,11 @@ def _raising(method: str, exc: Exception):
     return on_call
 
 
-def test_a_model_error_mid_run_is_a_quarantine_with_a_record_and_the_worktree_kept(
+def test_a_model_error_before_any_write_is_a_quarantine_with_a_record_and_its_slot_freed(
     repo: Path, tmp_path: Path
 ) -> None:
+    """The third real run quarantined like this and still held one of three live slots with
+    nothing in it: the record and the exchanges are everything there was to inspect."""
     model = _model(_patch(FIXED))
     model.on_call = _raising("generate_patch", ModelError("Anthropic API answered 529"))
 
@@ -377,7 +380,8 @@ def test_a_model_error_mid_run_is_a_quarantine_with_a_record_and_the_worktree_ke
     assert record.reason == "model: Anthropic API answered 529"
     saved = json.loads((tmp_path / "runs" / record.run_id / "record.json").read_text("utf-8"))
     assert saved["status"] == STATUS_QUARANTINED
-    assert Path(record.worktree).is_dir()
+    assert saved["worktree_kept"] is False
+    assert not Path(record.worktree).exists()
 
 
 def test_an_unexpected_exception_is_a_quarantine_naming_its_type_with_the_trace_kept(

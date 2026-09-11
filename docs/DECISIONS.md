@@ -10423,3 +10423,15 @@ refused before any write kept its worktree, holding one of the three live slots 
 to inspect; it is removed now. `--test` also takes `a,b`, because `run-selfdev.ps1` under
 `-File` passes `-Test a,b` as one string. Each fix has a test that was red first; the two
 engine fixes were mutation-checked red.
+
+**Addendum (2026-09-11) - the third real run: nested objects come back garbled.** The run
+quarantined itself cleanly on `patch: replacements is a string that is not a JSON array`, and
+the kept exchange showed why: asked for an array of `{path, old_text, new_text}` objects
+holding long code, the model wrote its own parameter markup inside the array's value and
+escaped `new_text` to the top level. The first run's crash was almost certainly the same. The
+patch tool now takes ONE top-level string, `edits`, of SEARCH/REPLACE blocks and whole new files
+(`EDIT_FORMAT`); `parse_edit_blocks` is strict - prose outside a block, a headerless SEARCH, an
+unterminated block, a new file never closed - each is a problem carried in `Patch.rejected`,
+never skipped. And a run quarantined before it wrote anything frees its worktree (the record
+and the exchanges are all there is to inspect); one that wrote keeps it, `worktree_kept` says
+which. Six parser mutations and the slot rule's mutation, each red.

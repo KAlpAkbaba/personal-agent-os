@@ -15,8 +15,8 @@ is to say which promotion class the candidate falls in (``promotion_class_for_ti
 tier-4/5 candidate is NEVER_AUTO_PROMOTE and says so; tier 3 needs the owner.
 
 Every bound is hard (``app.selfdev.budget``): the first one crossed quarantines the run with
-the bound named, keeps its worktree for inspection, and writes the record. Nothing retries
-past a budget.
+the bound named, keeps its worktree for inspection if it wrote anything, and writes the
+record. Nothing retries past a budget.
 
 Every run ends with a record. The first real run crashed on a model answer of the wrong
 shape and left a worktree and nothing else; now a ModelError is a QUARANTINE saying
@@ -84,6 +84,7 @@ class RunRecord:
     reason: str = ""
     branch: str = ""
     worktree: str = ""
+    worktree_kept: bool = False
     base_ci: dict[str, str] = field(default_factory=dict)
     analysis: dict[str, Any] = field(default_factory=dict)
     plan: dict[str, Any] = field(default_factory=dict)
@@ -241,11 +242,17 @@ class SelfDevEngine:
     def _quarantine(
         self, record: RunRecord, meter: BudgetMeter, worktree: Path, reason: str
     ) -> RunRecord:
-        """Ends the run with its worktree kept for inspection, and its diff if one can be had."""
+        """Ends the run with its diff if one can be had, and its worktree kept for inspection -
+        unless nothing was written: then the record and the exchanges are everything there is
+        to inspect, and the slot goes back to the bound on live worktrees."""
         try:
             diff: str | None = self.workspace.diff(worktree)
         except Exception:  # noqa: BLE001 - a record without its diff beats no record
             diff = None
+        if diff == "":
+            self.workspace.remove(worktree)
+        else:
+            record.worktree_kept = True
         return self._finish(record, meter, STATUS_QUARANTINED, reason, diff)
 
     def _drive(
