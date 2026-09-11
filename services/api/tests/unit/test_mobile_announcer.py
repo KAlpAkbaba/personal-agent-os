@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
@@ -183,6 +184,31 @@ def test_a_failed_delivery_leaves_the_task_for_the_next_sweep(session_factory) -
         assert session.get(Task, task_id).announced_at is not None
 
 
+@dataclass(frozen=True)
+class _DeliveryReceipt:
+    delivered: int
+
+
+def test_a_returned_provider_failure_is_not_stamped_as_delivered(session_factory) -> None:
+    """MobileService reports a transient provider failure as a returned receipt."""
+    task_id = _seed(session_factory, status=TASK_STATUS_READY, title="Tekrar Dene")
+    announcer = ArtifactReadyAnnouncer(
+        session_factory, lambda *_args: _DeliveryReceipt(delivered=0)
+    )
+
+    assert announcer.sweep_once() == 0
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is None
+        assert list(pending_task_ids(session)) == [task_id]
+
+    recovered = ArtifactReadyAnnouncer(
+        session_factory, lambda *_args: _DeliveryReceipt(delivered=1)
+    )
+    assert recovered.sweep_once() == 1
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is not None
+
+
 def test_a_crash_mid_sweep_stamps_nothing_at_all(session_factory) -> None:
     """The pass is one transaction, so a crash rolls the whole sweep back.
 
@@ -230,3 +256,26 @@ def test_a_partial_batch_failure_only_settles_the_delivered_tasks(session_factor
     with session_factory() as session:
         assert session.get(Task, good).announced_at is not None
         assert session.get(Task, bad).announced_at is None
+
+
+def test_a_boolean_where_a_count_belongs_is_not_proof_of_delivery(session_factory) -> None:
+    """`delivered` is a COUNT on `NotificationResult`, and Python's `bool` is an `int`
+    subclass -- so `True > 0` holds, and a notifier that answered `delivered=True` would slip
+    through a plain `isinstance(delivered, int)` check as "one delivery".
+
+    The reader refuses it: a boolean in a count field is a type confusion, and the only
+    conservative reading of a receipt this module cannot interpret is "not proven". The task
+    stays unstamped and is retried rather than marked delivered on a value that means
+    something other than what the field says.
+
+    Added at the handover review (2026-09-11). The guard was already in the code and no test
+    held it -- removing `not isinstance(delivered, bool)` left the whole suite green.
+    """
+    task_id = _seed(session_factory, status=TASK_STATUS_READY, title="Bool Receipt")
+    announcer = ArtifactReadyAnnouncer(
+        session_factory, lambda *_args: _DeliveryReceipt(delivered=True)  # type: ignore[arg-type]
+    )
+
+    assert announcer.sweep_once() == 0
+    with session_factory() as session:
+        assert session.get(Task, task_id).announced_at is None

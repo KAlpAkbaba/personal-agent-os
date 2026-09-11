@@ -51,6 +51,20 @@ DEFAULT_INTERVAL_S = 5.0
 DEFAULT_BATCH = 20
 
 
+def _delivery_succeeded(result: object) -> bool:
+    """Read a notifier receipt without coupling the sweeper to MobileService.
+
+    Production provider failures are returned as ``NotificationResult`` data rather
+    than raised. Returning from the call is therefore not, by itself, delivery proof.
+    Older injected notifiers return ``None`` after delivery, so their return remains a
+    success signal.
+    """
+    delivered = getattr(result, "delivered", None)
+    if delivered is None:
+        return True
+    return isinstance(delivered, int) and not isinstance(delivered, bool) and delivered > 0
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -125,12 +139,17 @@ class ArtifactReadyAnnouncer:
                     task.announced_at = now
                     continue
                 try:
-                    self._notifier(artifact_id, title, task.id)
+                    result = self._notifier(artifact_id, title, task.id)
                 except Exception:
                     # One dead provider must not stall the batch — and must not
                     # consume the task either: leaving it unstamped means the
                     # next sweep retries it once the provider recovers.
                     logger.exception("artifact_ready_announce_failed", task_id=str(task.id))
+                    continue
+                if not _delivery_succeeded(result):
+                    logger.warning(
+                        "artifact_ready_announce_not_delivered", task_id=str(task.id)
+                    )
                     continue
                 announced += 1
                 task.announced_at = now
