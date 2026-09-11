@@ -66,13 +66,16 @@ done
 # it a release finishing during the wait below would swap app/ to another commit after the
 # check had passed, and the bundle would be copied from that tree while APPROVED_SHA named
 # the approved one. Waiting for the lock is waiting for any release/rollback/reconcile in
-# flight; it is released before the proof run, which takes it itself.
+# flight; it is released before the proof run, which takes it itself - and taken back by a
+# rollback before it restores a byte (rollback_install).
 lock_file="$base/.bluegreen-operation.lock"
+lock_wait_s="${PAGENTOS_RECOVERY_LOCK_WAIT_S:-1200}"
 exec 9>"$lock_file"
-if ! "$flock_bin" -w "${PAGENTOS_RECOVERY_LOCK_WAIT_S:-1200}" 9; then
+if ! "$flock_bin" -w "$lock_wait_s" 9; then
     echo "refusing: a release, rollback or reconcile still holds $lock_file; nothing was changed" >&2
     exit 6
 fi
+lock_held=1
 
 completed_sha="$(tr -d '[:space:]' 2>/dev/null < "$base/RELEASE" || true)"
 tree_sha="$(tr -d '[:space:]' 2>/dev/null < "$app_root/RELEASE" || true)"
@@ -130,11 +133,28 @@ rollback_install() {
     rc=$?
     trap - ERR
     set +e
+    # The restore writes the files the copy wrote, so it holds the lock the copy held. A
+    # failure after the copy comes after that lock was let go for the proof run - which may
+    # itself have failed BECAUSE a release took the lock in that instant. Take it back before
+    # a byte is restored; if it stays held, restore nothing, stop the unproven timer, and
+    # keep the previous monitor's files where the message says.
+    if [[ "$lock_held" != "1" ]]; then
+        exec 9>"$lock_file"
+        if ! "$flock_bin" -w "$lock_wait_s" 9; then
+            "$systemctl_bin" disable --now "$timer_name"
+            echo "recovery supervisor installation failed, and $lock_file stayed held for ${lock_wait_s} s: nothing was restored, $timer_name is stopped, and the previous monitor's files are kept in $backup_dir" >&2
+            exit "$rc"
+        fi
+        lock_held=1
+    fi
     for destination in "${destinations[@]}"; do
         saved="$backup_dir/$(basename "$destination")"
         if [[ -f "$saved" ]]; then cp -p "$saved" "$destination"; else rm -f "$destination"; fi
     done
     "$systemctl_bin" daemon-reload
+    # Restored; a timer started below runs a reconcile, and a reconcile takes this lock.
+    exec 9>&-
+    lock_held=0
     if [[ "$was_enabled" = "1" ]]; then
         "$systemctl_bin" enable "$timer_name"
         [[ "$was_active" = "1" ]] && "$systemctl_bin" start "$timer_name"
@@ -176,6 +196,7 @@ install -m 0644 "$app_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name"
 
 # The copy is done; the proof run below is a reconcile, and a reconcile takes this lock.
 exec 9>&-
+lock_held=0
 
 "$systemctl_bin" daemon-reload
 # Prove the pinned action once before scheduling it.

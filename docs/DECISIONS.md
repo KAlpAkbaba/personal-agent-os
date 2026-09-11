@@ -10355,6 +10355,37 @@ socket and nginx reload; that `OnBootSec=2min` is enough after a real reboot and
 run failing because docker is not up yet is retried; and the real duration of the takeover
 and degraded paths against the wait budgets.
 
+### Addendum — third independent review (2026-09-11)
+
+Verdict READY_FOR_OWNER_APPROVAL: both blockers verified closed - the lock scope read line by
+line and re-run with the real `flock` in a Linux container, the risk table's `^infra/systemd/`
+and its siblings at tier 4 with the dead-rule detector behind them - and all six earlier
+SHOULD_FIX items closed. It found two new SHOULD_FIX items:
+
+**1. The rollback restored with no lock held.** The lock is let go before the proof run (a
+reconcile takes it). A proof run that failed - possibly BECAUSE a release took the lock in
+that instant - rolled the bundle and the units back unlocked. `rollback_install` now takes the
+lock back, with the same bounded wait, before a byte is restored, and lets it go again before
+re-enabling the old timer (whose run is a reconcile). If the lock stays held it restores
+nothing, stops the unproven timer, and names where the previous monitor's files are kept.
+Three tests, each red on the previous script: the order (the lock re-taken after the failed
+proof run and before the rollback's reload); the lock-held case (nothing restored, the timer
+stopped, the kept directory named and holding the old `APPROVED_SHA`); and, with the real
+`flock` in a Linux container, held at the rollback's reload and free again for the old timer.
+Linux container: 35 passed, 2 skipped; Windows: 85 passed, 4 skipped.
+
+**2. The pre-migration backup runs unbounded under the operation lock**, deferring any
+takeover for as long as it takes. It belongs to the release script's backup hook (ADR-0122)
+and is closed on main with a time bound (ADR-0122 addendum).
+
+**Notes, no change.** The inverted lock order between restore (backup lock, then operation
+lock, both bounded waits) and release (operation lock held, backup lock non-blocking) cannot
+deadlock: the release never waits on the backup lock. The worst-case install wait is about
+31 minutes (1200 s for the lock, then up to 660 s for a running reconcile), loud either way.
+A release started inside the nightly backup window (00:30 UTC) fails fast at its pre-migration
+backup (exit 74) - a runbook note. To be observed on the host, added to the list above: the
+real duration of the pre-migration backup, and whether the backup window ever meets a release.
+
 ## ADR-0122 — Backups that are restored, not just taken (2026-09-11)
 
 **Context.** Until this change production had no backup of anything. The four databases

@@ -537,6 +537,157 @@ def test_upgrade_waits_for_an_already_running_reconcile(tmp_path: Path) -> None:
     assert service_checks[-1] < recorded.index("start pagentos-bluegreen-reconcile.service")
 
 
+# ---- a rollback after the lock was let go (third review, finding 1) ---------------------
+
+
+def _previous_monitor(tmp_path: Path) -> dict[Path, bytes]:
+    systemd_dir = tmp_path / "systemd"
+    recovery_root = tmp_path / "recovery"
+    systemd_dir.mkdir()
+    recovery_root.mkdir()
+    previous = {
+        systemd_dir / SERVICE.name: b"old service\n",
+        systemd_dir / TIMER.name: b"old timer\n",
+        recovery_root / "reconcile.sh": b"old recovery\n",
+        recovery_root / COMPOSE.name: b"old compose\n",
+        recovery_root / "nginx.conf": b"old nginx\n",
+        recovery_root / "reconcile.sha256": b"old digest\n",
+        recovery_root / "APPROVED_SHA": (OTHER + "\n").encode("ascii"),
+    }
+    for path, content in previous.items():
+        path.write_bytes(content)
+    return previous
+
+
+def test_a_failed_proof_run_takes_the_lock_back_before_restoring_a_byte(tmp_path: Path) -> None:
+    # The lock is let go for the proof run (a reconcile takes it). A proof run that fails -
+    # possibly because a release took the lock in that instant - used to restore the
+    # previous monitor's files with no lock held at all.
+    app_root = tmp_path / "host" / "app"
+    _seed_app_root(app_root)
+    previous = _previous_monitor(tmp_path)
+    fake = _fake_systemctl(
+        tmp_path / "systemctl",
+        "if [ \"$*\" = 'start pagentos-bluegreen-reconcile.service' ]; then exit 9; fi\n",
+    )
+
+    completed = _run(
+        INSTALLER,
+        APPROVED,
+        env=_install_env(tmp_path, app_root, PAGENTOS_SYSTEMCTL=_shell_path(fake)),
+    )
+
+    assert completed.returncode == 9
+    assert "previous monitor restored" in completed.stderr
+    for path, content in previous.items():
+        assert path.read_bytes() == content
+    recorded = (tmp_path / "systemctl.calls").read_text(encoding="utf-8").splitlines()
+    locks = [i for i, call in enumerate(recorded) if call == "flock -w 1200 9"]
+    failed_proof = recorded.index("start pagentos-bluegreen-reconcile.service")
+    assert len(locks) == 2 and locks[0] < failed_proof < locks[1]
+    assert "daemon-reload" in recorded[locks[1] :]
+
+
+def test_a_rollback_that_cannot_take_the_lock_back_restores_nothing_and_says_where(
+    tmp_path: Path,
+) -> None:
+    app_root = tmp_path / "host" / "app"
+    _seed_app_root(app_root)
+    _previous_monitor(tmp_path)
+    flock = tmp_path / "flock-once"
+    flock.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'flock %s\\n' \"$*\" >> \"$PAGENTOS_TEST_CALLS\"\n"
+        "n=$(cat \"$PAGENTOS_TEST_FLOCK_COUNT\" 2>/dev/null || echo 0)\n"
+        "n=$((n + 1)); echo \"$n\" > \"$PAGENTOS_TEST_FLOCK_COUNT\"\n"
+        "[ \"$n\" -eq 1 ]\n",
+        encoding="utf-8",
+    )
+    flock.chmod(flock.stat().st_mode | stat.S_IXUSR)
+    fake = _fake_systemctl(
+        tmp_path / "systemctl",
+        "if [ \"$*\" = 'start pagentos-bluegreen-reconcile.service' ]; then exit 9; fi\n",
+    )
+
+    completed = _run(
+        INSTALLER,
+        APPROVED,
+        env=_install_env(
+            tmp_path,
+            app_root,
+            PAGENTOS_SYSTEMCTL=_shell_path(fake),
+            PAGENTOS_FLOCK=_shell_path(flock),
+            PAGENTOS_TEST_FLOCK_COUNT=_shell_path(tmp_path / "flock.count"),
+        ),
+    )
+
+    assert completed.returncode == 9
+    assert "stayed held" in completed.stderr and "nothing was restored" in completed.stderr
+    # Nothing restored: the candidate's bundle is still what the failed install placed...
+    approved = (tmp_path / "recovery" / "APPROVED_SHA").read_text(encoding="utf-8")
+    assert approved == APPROVED + "\n"
+    # ...its timer is stopped, and the previous monitor is where the message says.
+    recorded = (tmp_path / "systemctl.calls").read_text(encoding="utf-8").splitlines()
+    assert recorded[-1] == "disable --now pagentos-bluegreen-reconcile.timer"
+    kept = completed.stderr.strip().rsplit(" kept in ", 1)[1]
+    shown = subprocess.run(
+        [_bash(), "-c", 'cat "$1/APPROVED_SHA"', "_", kept],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert shown.stdout == OTHER + "\n"
+
+
+def test_the_rollback_restores_under_the_real_lock_and_lets_it_go_for_the_old_timer(
+    tmp_path: Path,
+) -> None:
+    if os.name == "nt":
+        pytest.skip("Git for Windows has no flock; Linux CI exercises the kernel lock")
+    if shutil.which("flock") is None:
+        pytest.skip("util-linux flock is required by the production host contract")
+    app_root = tmp_path / "host" / "app"
+    _seed_app_root(app_root)
+    previous = _previous_monitor(tmp_path)
+    lock = app_root.parent / ".bluegreen-operation.lock"
+    probe = tmp_path / "probe.log"
+    fake = tmp_path / "systemctl"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$PAGENTOS_TEST_CALLS\"\n"
+        "try_lock() { if flock -n \"$PAGENTOS_TEST_LOCK\" true; then echo \"$1 free\"; "
+        "else echo \"$1 held\"; fi >> \"$PAGENTOS_TEST_PROBE\"; }\n"
+        "if [ \"$*\" = 'is-active --quiet pagentos-bluegreen-reconcile.service' ]; then exit 1; fi\n"
+        "if [ \"$*\" = 'daemon-reload' ]; then try_lock daemon-reload; fi\n"
+        "if [ \"$*\" = 'start pagentos-bluegreen-reconcile.service' ]; then "
+        "try_lock proof-run; exit 9; fi\n"
+        "if [ \"$*\" = 'start pagentos-bluegreen-reconcile.timer' ]; then "
+        "try_lock old-timer; fi\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    env = _install_env(
+        tmp_path,
+        app_root,
+        PAGENTOS_SYSTEMCTL=_shell_path(fake),
+        PAGENTOS_TEST_LOCK=_shell_path(lock),
+        PAGENTOS_TEST_PROBE=_shell_path(probe),
+    )
+    env.pop("PAGENTOS_FLOCK")  # the real one
+
+    completed = _run(INSTALLER, APPROVED, env=env)
+
+    assert completed.returncode == 9, completed.stderr
+    for path, content in previous.items():
+        assert path.read_bytes() == content
+    assert probe.read_text(encoding="utf-8").splitlines() == [
+        "daemon-reload free",
+        "proof-run free",
+        "daemon-reload held",
+        "old-timer free",
+    ]
+
+
 # ---- removal ----------------------------------------------------------------------------
 
 
