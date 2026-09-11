@@ -10178,3 +10178,52 @@ tier 4/5 on paper becomes lower.
 detector): the security path reverted, the agent path reverted, the `risk.py` rule removed,
 the `infra/systemd/` rule removed. Every suite that depends on tiers passes (evolution
 routes, approval center, authorize, supervisor, release preflight/execution).
+
+## ADR-0123 — The reliability sweep: what was promised, now enforced (2026-09-11)
+
+**Context.** Phase 8 of the post-audit recovery directive: the takeover audit listed six
+reliability defects that each looked small and each left the system saying something untrue.
+Five are fixed here; the sixth was examined and deliberately left as the owner decided it.
+
+**Decisions.**
+1. **Autonomous research may not drive the owner's Chrome without its own grant.** ADR-0113
+   put the owner's signed-in Chrome at the owner's disposal (media, operator actions);
+   ADR-0035 requires the separate `owner_authorized_for_research` before an AUTONOMOUS
+   research task drives it, and the enrollment script records it false. Nothing in the
+   worker read it: `session_open {profile: owner}` - default kind research - attached
+   unchecked. The worker now calls `require_research_authorization` for research sessions on
+   the owner profile: `security_scope_error` before any connection, never a fallback. Cloud
+   Core's own owner sessions declare `session_kind: "media"` and are unaffected.
+2. **Redis is reported, not depended on, and both health readers share one rule.** Nothing in
+   Cloud Core uses Redis, yet a Redis restart made top-level health `degraded` - failing every
+   release's exact `ok` gate. `app.health.ADVISORY_CHECKS = {"redis"}` keeps it visible and
+   marked `required: false`; `app.health.is_degraded` is THE rule, used by
+   `/v1/system/health` and by the voice `state.now` answer, which had its own stricter rule
+   (a `skipped` check counted as degraded). A contract test reads `app/` for any Redis client,
+   so the day something uses Redis it cannot stay advisory.
+3. **The retention sweeps run.** Memory TTL deletion, owner-session expiry and authorised-asset
+   expiry existed, were tested, and had no caller. `app.maintenance.RetentionSweeper` runs them
+   hourly from the lifespan (first pass after a boot delay; `0` disables), each isolated from
+   the others' failures, reported as an advisory `retention` check.
+4. **Temporal down is a typed refusal, and nothing it could not start stays open.** Five paths
+   write their durable row before starting the workflow. Research and news tasks stayed
+   `CREATED`, executive runs stayed `running` with no workflow (and counted against the two-run
+   bound - two outages and no more runs), and both REST routes answered an untyped 500.
+   `fail_unstarted_research` and `fail_unstarted_run` close the rows (`workflow_start_failed`);
+   REST answers `503 dependency_unavailable` with the Turkish sentence.
+5. **Rows a stopped process left mid-flight are closed.** A synchronous tool call and a native
+   build each live inside one request; a crash or a drained colour left them `running` /
+   `building` for ever. The sweeper closes synchronous calls running > 2 h and in-flight builds
+   untouched > 2 h as `interrupted`; long-running calls (completed by their announcers),
+   anything recent and `planned` builds are left alone.
+6. **Voice sessions are NOT closed automatically.** The audit listed "dead voice sessions". A
+   session with no recorded expiry is ended by the owner and nothing else - ADR-0105, the
+   owner's explicit "hiç kapanmasın". The harm a vanished client could still cause is a call
+   left `running` inside it, which decision 5 closes; the session row itself stays the
+   owner's to end. Changing that would reverse an owner decision to tidy a table.
+
+**Evidence.** Each fix has a regression test through the real application object where one
+exists (worker, health endpoint, state tool, app sweeper, REST routes, voice relay) and each was
+mutation-proven red on its branch: the research grant check (1), the advisory flag ignored (2),
+each of the five orphan-closing calls removed (5), long-running calls not spared (1), planned
+builds counted as in flight (1).
