@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using PagentOS.Agent.Tests.Support;
+using Xunit.Abstractions;
 
 namespace PagentOS.Agent.Tests.Documents;
 
@@ -214,20 +216,88 @@ public static class BombFixtures
     }
 
     /// <summary>
-    /// Run <paramref name="work"/> up to <paramref name="attempts"/> times and return the
-    /// attempt that allocated least. The test process runs other collections in parallel:
-    /// they can only ADD to the allocated-bytes counter, so the smallest delta is an upper
-    /// bound on this work's own allocation — a bomb that was materialised shows in every
-    /// attempt. The working set of that attempt is reported beside it; it moves both ways
-    /// with the rest of the process and is the number the review asked to see, not the
-    /// number the assertion rests on.
+    /// Run <paramref name="work"/> <paramref name="attempts"/> times and return the attempt that
+    /// allocated least, in a window the caller can trust against <paramref name="allocatedBoundMiB"/>.
     ///
-    /// The default rose from three attempts to six on 2026-09-08: the reasoning above needs
-    /// ONE attempt to land in a quiet window, and this assembly grew from 596 tests to 748,
-    /// so three attempts stopped being enough and a bounded read failed for its neighbours'
-    /// allocations rather than its own.
+    /// <para>
+    /// Both gauges are PROCESS-wide, and xunit runs collections in parallel, so a neighbour's
+    /// allocation lands on this reading. That noise is one-sided for the allocated-bytes counter
+    /// — it can only ADD — so a reading already under the bound is conclusive however busy the
+    /// process was, and is returned as it stands. It is a reading OVER the bound that proves
+    /// nothing: it may be this work materialising what it was supposed to bound, or it may be
+    /// the neighbours. So that case, and only that case, is measured again in a quiet window
+    /// (<see cref="TestActivity"/>): other tests wait at the door, the ones already running are
+    /// allowed to finish, and the register is checked afterwards to confirm the window really
+    /// was undisturbed. What the caller then asserts on is this work's own cost.
+    /// </para>
+    ///
+    /// <para>
+    /// 2026-09-08: before that second measurement existed, this took the smallest of three (then
+    /// six) attempts beside the rest of the suite and hoped one would land in a quiet window. It
+    /// did not once this assembly reached 758 tests, and a bounded read failed for its
+    /// neighbours' allocations rather than its own about one run in four. Hoping for a quiet
+    /// window is now asking for one, and the bounds are back where the guarantee put them.
+    /// </para>
+    ///
+    /// <para>
+    /// The working set is sampled with NO collection between the samples (a materialised DOM is
+    /// still live or still uncollected at the second sample). It moves BOTH ways with the rest of
+    /// the process, and that asymmetry is worth stating plainly: an over-bound working set earns
+    /// the same second measurement when a caller passes <paramref name="workingSetBoundMiB"/>, but
+    /// an UNDER-bound one is not the proof its allocated-bytes counterpart is — a neighbour's
+    /// collection can push the delta down as easily as up. It is corroboration, not the guarantee.
+    /// The guarantee rests on the allocated-bytes bound, which the same materialisation would
+    /// break first: every inflation these bounds guard is managed, so it is counted there.
+    /// </para>
     /// </summary>
-    public static (double WorkingSetMiB, double AllocatedMiB) Measure(Action work, int attempts = 6)
+    /// <param name="output">Where the gauge narrates what it measured and whether the window was verified quiet.</param>
+    public static (double WorkingSetMiB, double AllocatedMiB) Measure(
+        Action work,
+        double allocatedBoundMiB,
+        ITestOutputHelper? output = null,
+        double? workingSetBoundMiB = null,
+        int attempts = 3)
+    {
+        var best = Attempt(work, attempts);
+        if (Fits(best, allocatedBoundMiB, workingSetBoundMiB))
+        {
+            output?.WriteLine($"gauge: {Describe(best)}, best of {attempts} beside the rest of the suite — under the bound, and the allocated-bytes counter only ever adds, so it needs no quieter window");
+            return best;
+        }
+
+        output?.WriteLine($"gauge: {Describe(best)}, best of {attempts} beside the rest of the suite, is over the {allocatedBoundMiB:F0} MiB bound and proves nothing; asking for a quiet window");
+        for (var round = 1; round <= QuietRounds; round++)
+        {
+            // The first round only shuts the door: no new test starts, which is where the noise
+            // comes from, and it costs the rest of the suite nothing but the measurement itself.
+            // A round that still cannot get under the bound pays for the full drain.
+            var (window, reading) = TestActivity.Measure(
+                () => Attempt(work, attempts),
+                round == 1 ? TimeSpan.Zero : TestActivity.DefaultDrainTimeout);
+            best = reading.AllocatedMiB < best.AllocatedMiB ? reading : best;
+            output?.WriteLine($"gauge: round {round} in {window}: {Describe(reading)}");
+
+            // Under the bound is conclusive however the window went — the counter only adds.
+            // Over it is conclusive only if the window was verified: that is this work's own cost,
+            // and the caller is right to fail on it.
+            if (Fits(best, allocatedBoundMiB, workingSetBoundMiB) || window.Verified)
+            {
+                return best;
+            }
+        }
+
+        output?.WriteLine($"gauge: {QuietRounds} rounds and never a verified quiet window; reporting {Describe(best)}, which the suite's own noise may have inflated");
+        return best;
+    }
+
+    /// <summary>
+    /// How many times a reading over the bound is taken again in a quiet window before the gauge
+    /// gives up and reports a number it could not verify. Each round shuts the door for its drain,
+    /// so this is also the most the rest of the suite can be made to wait on one gauge.
+    /// </summary>
+    private const int QuietRounds = 2;
+
+    private static (double WorkingSetMiB, double AllocatedMiB) Attempt(Action work, int attempts)
     {
         var workingSet = 0.0;
         var allocated = double.MaxValue;
@@ -245,4 +315,17 @@ public static class BombFixtures
 
         return (workingSet, allocated);
     }
+
+    private static bool Fits((double WorkingSetMiB, double AllocatedMiB) reading, double allocatedBoundMiB, double? workingSetBoundMiB)
+        => reading.AllocatedMiB < allocatedBoundMiB && (workingSetBoundMiB is null || reading.WorkingSetMiB < workingSetBoundMiB);
+
+    private static string Describe((double WorkingSetMiB, double AllocatedMiB) reading)
+        => $"allocated {SignedMiB(reading.AllocatedMiB)} MiB, working set {SignedMiB(reading.WorkingSetMiB)} MiB";
+
+    /// <summary>
+    /// A signed MiB delta. The working set falls as well as rises, and adding zero first is what
+    /// keeps a delta of NEGATIVE zero — which the runtime prints with a sign of its own — from
+    /// coming out as "-+0,0".
+    /// </summary>
+    public static string SignedMiB(double mib) => (mib + 0.0).ToString("+0.0;-0.0", CultureInfo.CurrentCulture);
 }

@@ -16,6 +16,17 @@ namespace PagentOS.Agent.Tests.Documents;
 [Collection(DocumentLabCollection.Name)]
 public sealed class BoundedReadTests(ITestOutputHelper output) : IDisposable
 {
+    /// <summary>
+    /// What a bounded read may allocate. The prefix costs 4 MiB of bytes and 8 MiB of UTF-16 =
+    /// 12 MiB inherent; materialising the whole file — the failure this bound exists to catch —
+    /// costs 6 + 12 on top of that, about 30. Four MiB of headroom over the inherent cost is
+    /// what the M20 guarantee was written with (ADR-0083 addendum 3) and where it stays: the
+    /// gauge is measured in a quiet window when a busy reading exceeds this, so what the
+    /// assertion sees is this read's own cost and not its neighbours'. The gauge is given the
+    /// same number it is asserted against, so the two cannot drift apart.
+    /// </summary>
+    private const double AllocationBoundMiB = 16;
+
     private readonly DocumentLab _lab = new();
 
     public void Dispose() => _lab.Dispose();
@@ -28,20 +39,18 @@ public sealed class BoundedReadTests(ITestOutputHelper output) : IDisposable
         Assert.True(new FileInfo(csv).Length > 6L * 1024 * 1024);
 
         JsonObject read = null!;
-        var (workingSetMiB, allocatedMiB) = BombFixtures.Measure(() => read = _lab.Exec(DocumentCapabilityNames.FileRead, new JsonObject { ["path"] = csv }));
-        output.WriteLine($"6 MiB csv file.read: working set +{workingSetMiB:F1} MiB, allocated +{allocatedMiB:F1} MiB");
+        var (workingSetMiB, allocatedMiB) = BombFixtures.Measure(
+            () => read = _lab.Exec(DocumentCapabilityNames.FileRead, new JsonObject { ["path"] = csv }),
+            AllocationBoundMiB,
+            output);
+        output.WriteLine($"6 MiB csv file.read: working set {BombFixtures.SignedMiB(workingSetMiB)} MiB, allocated {BombFixtures.SignedMiB(allocatedMiB)} MiB");
 
         Assert.Equal(DocumentCapabilityNames.MaxReadChars, read["text"]!.GetValue<string>().Length);
         Assert.True(read["truncated"]!.GetValue<bool>());
         // ASCII, so the decoded prefix is exactly the byte bound: the decode stopped at 4 MiB, not at the file's end.
         Assert.Equal(DocumentBounds.MaxTextPrefixBytes, read["total_chars"]!.GetValue<int>());
         Assert.StartsWith("ad;tutar;tarih\n", read["text"]!.GetValue<string>(), StringComparison.Ordinal);
-        // The prefix costs 4 MiB of bytes and 8 MiB of UTF-16 = 12 MiB inherent; materialising
-        // the whole file — the failure this bound exists to catch — costs 6 + 12 on top of that,
-        // so about 30. The bound sits at 24: still decisive against materialisation, with room
-        // for the process-wide counter to catch a neighbour's allocation (2026-09-08: at 16 it
-        // failed for its neighbours' work rather than its own, on the runner and locally).
-        Assert.True(allocatedMiB < 24, $"allocated {allocatedMiB:F1} MiB (working set +{workingSetMiB:F1} MiB)");
+        Assert.True(allocatedMiB < AllocationBoundMiB, $"allocated {allocatedMiB:F1} MiB (working set {BombFixtures.SignedMiB(workingSetMiB)} MiB)");
 
         // A window that reaches the prefix's end is still truncated: the file went on.
         var tail = _lab.Exec(DocumentCapabilityNames.FileRead, new JsonObject { ["path"] = csv, ["offset"] = DocumentBounds.MaxTextPrefixBytes - 10 });
@@ -84,14 +93,17 @@ public sealed class BoundedReadTests(ITestOutputHelper output) : IDisposable
         }
 
         JsonObject read = null!;
-        var (workingSetMiB, allocatedMiB) = BombFixtures.Measure(() => read = _lab.Exec(DocumentCapabilityNames.FileRead, new JsonObject { ["path"] = big, ["length"] = 100 }));
-        output.WriteLine($"40 MiB txt file.read: working set +{workingSetMiB:F1} MiB, allocated +{allocatedMiB:F1} MiB");
+        var (workingSetMiB, allocatedMiB) = BombFixtures.Measure(
+            () => read = _lab.Exec(DocumentCapabilityNames.FileRead, new JsonObject { ["path"] = big, ["length"] = 100 }),
+            AllocationBoundMiB,
+            output);
+        output.WriteLine($"40 MiB txt file.read: working set {BombFixtures.SignedMiB(workingSetMiB)} MiB, allocated {BombFixtures.SignedMiB(allocatedMiB)} MiB");
 
         Assert.Equal(100, read["text"]!.GetValue<string>().Length);
         Assert.True(read["truncated"]!.GetValue<bool>());
         Assert.Null(read["file"]!["sha256"]);
         // Reading the whole file would allocate 40 MiB of bytes and 80 MiB of UTF-16.
-        Assert.True(allocatedMiB < 24, $"allocated {allocatedMiB:F1} MiB (working set +{workingSetMiB:F1} MiB)");
+        Assert.True(allocatedMiB < AllocationBoundMiB, $"allocated {allocatedMiB:F1} MiB (working set {BombFixtures.SignedMiB(workingSetMiB)} MiB)");
     }
 
     [Fact]
