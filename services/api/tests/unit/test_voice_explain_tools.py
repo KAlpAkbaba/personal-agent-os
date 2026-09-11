@@ -15,7 +15,9 @@ happen, and the transcript is never written to any audit row.
 # ruff: noqa: F811 - the shared `wired` fixture is imported and then named as a parameter
 from __future__ import annotations
 
+import dataclasses
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -49,7 +51,22 @@ OWNER_SENTENCE = (
 
 
 def _use_real_run_evidence(monkeypatch) -> None:
-    source = MemorySource([_research_completed(), _qualified()], REAL_REPORT)
+    """The real 2026-09-04 run's events, moved to NOW with their spacing kept.
+
+    The fixture dates them to the run's own day (test_explain_engine.NOW), and that engine
+    suite passes that same NOW in. This path cannot: the voice tool asks "what did you do
+    lately" against the session's REAL clock, over a 7-day window. So on 2026-09-11 at
+    17:30 UTC - seven days after the fixture's research event - all six tests below went red
+    on the calendar alone, with no code change anywhere ("two clocks for one decision").
+    Anchoring the events to the clock the code under test actually reads removes the date
+    from the test instead of moving the bomb a week further out.
+    """
+    shift = datetime.now(UTC) - NOW
+    events = [
+        dataclasses.replace(event, occurred_at=event.occurred_at + shift)
+        for event in (_research_completed(), _qualified())
+    ]
+    source = MemorySource(events, REAL_REPORT)
     monkeypatch.setattr(explain_service, "evidence_source_factory", lambda db: source)
 
 
