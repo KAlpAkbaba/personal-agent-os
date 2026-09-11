@@ -118,9 +118,20 @@ RISK_RULES: Final[tuple[RiskRule, ...]] = (
         flags=re.IGNORECASE,
     ),
     _rule(
-        r"^app/security/",
+        # Written as ``^app/security/`` until 2026-09-11 - a path with no file under it, so
+        # the security surface fell to the tier-3 catch-all. Rules name real paths now, and
+        # test_every_rule_names_a_path_that_exists holds them to it.
+        r"^services/api/app/security/",
         RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY,
         "touches the security policy/remediation surface",
+    ),
+    _rule(
+        # The law that decides every other tier. It sat under the catch-all's evolution/
+        # exclusion and so defaulted to tier 2: a candidate could lower the classification
+        # in one low-risk step and promote under the lowered one in the next.
+        r"^services/api/app/evolution/risk\.py$",
+        RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY,
+        "changes the risk classification law itself (app/evolution/risk.py)",
     ),
     # ---- tier 4: schema and deployment mechanics ---------------------------
     _rule(
@@ -144,9 +155,31 @@ RISK_RULES: Final[tuple[RiskRule, ...]] = (
         "changes the recovery supervisor (the rollback root)",
     ),
     _rule(
-        r"^windows-agent/",
+        # Written as ``^windows-agent/`` until 2026-09-11; the agent lives under devices/.
+        r"^devices/windows-agent/",
         RiskTier.SCHEMA_OR_DEPLOYMENT_MECHANICS,
         "changes the privileged Windows device service",
+    ),
+    _rule(
+        r"^infra/systemd/",
+        RiskTier.SCHEMA_OR_DEPLOYMENT_MECHANICS,
+        "changes a root systemd unit on the production host (the recovery timer)",
+    ),
+    _rule(
+        r"^infra/docker/(docker-compose\.prod\.yml$|edge/)",
+        RiskTier.SCHEMA_OR_DEPLOYMENT_MECHANICS,
+        "changes the production container or edge definition",
+    ),
+    _rule(
+        r"^scripts/((install|uninstall)-device-service\.ps1"
+        r"|lib/(AgentUpdate|InstallAcl|ServiceInstall)\.ps1)$",
+        RiskTier.SCHEMA_OR_DEPLOYMENT_MECHANICS,
+        "changes how the device service is installed, updated or permissioned",
+    ),
+    _rule(
+        r"^packages/schemas/device-protocol\.schema\.json$",
+        RiskTier.SCHEMA_OR_DEPLOYMENT_MECHANICS,
+        "changes the device wire protocol both sides must agree on",
     ),
     _rule(
         r"^services/api/app/evolution/(backlog|service)\.py$",

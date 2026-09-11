@@ -7,10 +7,15 @@ directly, and an empty path list is refused rather than defaulted to "safe".
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from app.evolution.errors import EvolutionError, EvolutionErrorClass
-from app.evolution.risk import RiskTier, derive_risk_tier
+from app.evolution.risk import RISK_RULES, RiskTier, derive_risk_tier
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_an_empty_path_list_is_refused_not_defaulted_to_safe() -> None:
@@ -48,13 +53,69 @@ def test_tier_4_migration() -> None:
 
 
 def test_tier_4_deployment_scripts_and_recovery_supervisor() -> None:
+    # Real paths only. This list used to carry "windows-agent/service/main.cs", a path that
+    # does not exist, and the test passed while every real file of the privileged Windows
+    # service classified as tier 2.
     for path in (
         "scripts/cloud/release-cloud-core.ps1",
         "services/recovery-supervisor/supervisor.py",
-        "windows-agent/service/main.cs",
+        "devices/windows-agent/src/PagentOS.DeviceService/AgentWorker.cs",
+        "infra/systemd/pagentos-bluegreen-reconcile.service",
+        "infra/docker/docker-compose.prod.yml",
+        "infra/docker/edge/nginx.conf",
+        "scripts/install-device-service.ps1",
+        "scripts/uninstall-device-service.ps1",
+        "scripts/lib/AgentUpdate.ps1",
+        "scripts/lib/ServiceInstall.ps1",
+        "scripts/lib/InstallAcl.ps1",
+        "packages/schemas/device-protocol.schema.json",
     ):
         assessment = derive_risk_tier([path])
         assert assessment.tier == RiskTier.SCHEMA_OR_DEPLOYMENT_MECHANICS, path
+        assert (REPO_ROOT / path).is_file(), f"{path} is not a real file: pick one that is"
+
+
+def test_the_dev_compose_is_not_production_mechanics() -> None:
+    # The production rule is specific: the laptop's compose file is ordinary internal logic.
+    assert derive_risk_tier(["infra/docker/docker-compose.dev.yml"]).tier == (
+        RiskTier.INTERNAL_LOGIC
+    )
+
+
+def test_tier_5_the_security_surface() -> None:
+    # The rule said ^app/security/ - nothing lives there - so this module fell to tier 3.
+    assessment = derive_risk_tier(["services/api/app/security/remediation.py"])
+    assert assessment.tier == RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY
+    assert any("security policy" in r for r in assessment.reasons)
+
+
+def test_tier_5_the_risk_law_itself() -> None:
+    # Before 2026-09-11 this file was tier 2: a candidate could reclassify its own paths in
+    # one unremarkable step and be promoted under the new table in the next.
+    assessment = derive_risk_tier(["services/api/app/evolution/risk.py"])
+    assert assessment.tier == RiskTier.IDENTITY_ROOT_SECRET_BOUNDARY
+    assert any("risk classification law" in r for r in assessment.reasons)
+
+
+def _tracked_files() -> list[str]:
+    completed = subprocess.run(
+        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    )
+    files = completed.stdout.splitlines()
+    assert len(files) > 1000, "git ls-files returned too little to judge the rules by"
+    return files
+
+
+def test_every_rule_names_a_path_that_exists() -> None:
+    # Three rules in this table matched no file in the repository - ^app/security/,
+    # ^windows-agent/ and the fake path in the test above - and every test stayed green,
+    # because each test asserted a path invented to satisfy its rule. A rule nothing matches
+    # is a rule that never fires; this reads the real tree instead.
+    files = _tracked_files()
+    dead = [rule.pattern.pattern for rule in RISK_RULES if not any(
+        rule.pattern.search(path) for path in files
+    )]
+    assert dead == [], f"risk rules that match no tracked file: {dead}"
 
 
 def test_tier_5_identity_module() -> None:
