@@ -81,11 +81,22 @@ class CandidateRunner:
             env,
         )
 
-    def lint(self, worktree: Path, paths: list[str]) -> CommandResult:
+    def _ruff(self, worktree: Path, paths: list[str], *flags: str) -> CommandResult | None:
         python_paths = [p for p in paths if p.endswith(".py")]
         if not python_paths or self.ruff is None:
-            return CommandResult(True, "nothing to lint", 0.0)
-        package = self._package(worktree)
+            return None
         prefix = self.package_root.rstrip("/") + "/"
         local = [p[len(prefix) :] if p.startswith(prefix) else p for p in python_paths]
-        return self._run([self.ruff, "check", *local], package, dict(os.environ))
+        return self._run(
+            [self.ruff, "check", *flags, *local], self._package(worktree), dict(os.environ)
+        )
+
+    def fix(self, worktree: Path, paths: list[str]) -> CommandResult:
+        """Ruff's SAFE fixes only - never ``--unsafe-fixes`` - on the given Python files. An
+        unsorted import block is not worth an attempt (the fourth real run spent one on it,
+        and the retry lost the fix it was carrying)."""
+        done = self._ruff(worktree, paths, "--fix", "--exit-zero")
+        return done or CommandResult(True, "nothing to fix", 0.0)
+
+    def lint(self, worktree: Path, paths: list[str]) -> CommandResult:
+        return self._ruff(worktree, paths) or CommandResult(True, "nothing to lint", 0.0)

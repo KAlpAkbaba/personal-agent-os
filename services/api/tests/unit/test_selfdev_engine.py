@@ -164,6 +164,7 @@ def test_a_defect_becomes_a_verified_candidate_on_its_own_branch_and_the_engine_
     checks = {c["name"]: c["passed"] for c in record.attempts[-1]["checks"]}
     assert checks == {
         "regression_red_on_base": True,
+        "autofix": True,
         "scope": True,
         "regression_green": True,
         "targeted_tests": True,
@@ -437,3 +438,30 @@ def test_the_models_exchanges_are_written_beside_the_record(repo: Path, tmp_path
         (tmp_path / "runs" / record.run_id / "model-exchanges.json").read_text("utf-8")
     )
     assert [e["method"] for e in saved] == model.calls
+
+
+def test_a_safe_lint_fix_does_not_cost_an_attempt(repo: Path, tmp_path: Path) -> None:
+    """The fourth real run spent an attempt on an unsorted import block (I001), and the
+    retry lost the fix. Safe fixes (``ruff check --fix``, never --unsafe-fixes) are applied
+    to the changed files before the lint check; the model reviews, and the commit carries,
+    the fixed text."""
+    if shutil.which("ruff") is None and not Path(sys.executable).with_name("ruff.exe").exists():
+        pytest.skip("ruff is part of the engine's review")
+    (repo / "services/api/pyproject.toml").write_text(
+        '[tool.ruff.lint]\nextend-select = ["I"]\n', encoding="utf-8", newline="\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "isort")
+    unsorted = (
+        "import sys\nimport os\n\nfrom app.calc import add\n\n\n"
+        "def test_add_adds() -> None:\n    assert add(2, 3) == 5 and os and sys\n"
+    )
+    model = _model(_patch(FIXED, unsorted))
+
+    record = _engine(repo, tmp_path, model, budget=Budget(max_attempts=1)).run(
+        _defect(), base_sha=_base(repo), targeted_tests=[]
+    )
+
+    assert record.status == STATUS_STOPPED_AT_POLICY, record.reason
+    committed = _git(repo, "show", f"{record.candidate_sha}:{REGRESSION}")
+    assert committed.startswith("import os\nimport sys\n")

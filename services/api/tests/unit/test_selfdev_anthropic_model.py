@@ -288,3 +288,24 @@ def test_every_exchange_is_kept_for_the_record_and_the_key_is_in_none_of_them() 
         }
     ]
     assert KEY not in json.dumps(model.exchanges)
+
+
+def test_a_fix_changes_the_candidate_as_it_stands_and_keeps_what_it_does_not_touch() -> None:
+    """The fourth real run: asked for "the corrected patch", the model re-sent only the file
+    it corrected and the fix it had already made was lost. A fix now edits the candidate as
+    it stands - the base with the previous proposal applied - and carries every change it
+    does not touch."""
+    seen: list = []
+    fixed = BUGGY.replace("a - b", "a + b", 1)
+    previous = Patch(edits=(FileEdit(CALC, fixed), FileEdit(TEST, "import b\nimport a\n")))
+    sort = _replace(TEST, ("import b\nimport a", "import a\nimport b"))
+    model = _model({"edits": sort}, seen=seen)
+
+    patch = model.fix_patch(DEFECT, previous, FailureDiagnosis("I001", "sort"), {CALC: BUGGY})
+
+    assert patch.rejected == ()
+    assert patch.edits == (FileEdit(CALC, fixed), FileEdit(TEST, "import a\nimport b\n"))
+    content = seen[0][1]["messages"][0]["content"]
+    # The model is shown the candidate, not the base, for the files it proposed.
+    assert f'<file path="{TEST}">\nimport b\nimport a\n\n</file>' in content
+    assert f'<file path="{CALC}">\n{fixed}\n</file>' in content

@@ -13,6 +13,11 @@ candidate it establishes, by running things:
 
 The model's own ``review_code`` verdict is recorded beside these and is required too, but it
 can only ever REFUSE a candidate the reviewer passed - never pass one it refused.
+
+The one change the reviewer makes to a candidate: ruff's SAFE fixes on the changed Python
+files, after the whole patch is written and before anything is judged (``autofix``). It is
+deterministic tooling, like a formatter in a pre-commit hook; the model reviews, and the
+commit carries, the fixed text.
 """
 
 from __future__ import annotations
@@ -99,6 +104,8 @@ class IndependentReviewer:
         self.workspace.reset(worktree)
         self.workspace.write(worktree, patch)
         changed = self.workspace.changed_paths(worktree)
+        fixed = self.runner.fix(worktree, changed)
+        verdict.checks.append(Check("autofix", True, fixed.output[-600:]))
         outside = [p for p in changed if p != test_path and not in_scope(p)]
         verdict.checks.append(
             Check("scope", not outside, "outside scope: " + ", ".join(outside) if outside else "")

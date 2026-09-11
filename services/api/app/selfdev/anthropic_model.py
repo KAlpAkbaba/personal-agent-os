@@ -368,7 +368,9 @@ class AnthropicEngineeringModel:
             regression_test_rationale=_text(tool, out, "regression_test_rationale"),
         )
 
-    def _patch(self, content: str, files: dict[str, str]) -> Patch:
+    def _patch(self, content: str, files: dict[str, str], carry: Patch | None = None) -> Patch:
+        """``files`` are the texts the model was shown; ``carry`` is a previous proposal whose
+        changes stay in the patch unless a block here changes them again."""
         tool = "patch"
         out = self._call(
             tool,
@@ -384,7 +386,8 @@ class AnthropicEngineeringModel:
             f"{content}\n\n{EDIT_FORMAT}",
         )
         replacements, new_files, rejected = parse_edit_blocks(_text(tool, out, "edits"))
-        texts: dict[str, str] = {}
+        texts: dict[str, str] = {e.path: e.new_text for e in carry.edits} if carry else {}
+        by_block: set[str] = set()
         for n, (path, old, new) in enumerate(replacements):
             current = texts.get(path, files.get(path))
             if current is None:
@@ -401,8 +404,9 @@ class AnthropicEngineeringModel:
                 )
             else:
                 texts[path] = current.replace(old, new, 1)
+                by_block.add(path)
         for path, text in new_files:
-            if path in texts:
+            if path in by_block:
                 rejected.append(f"new file {path} is also changed by a SEARCH/REPLACE block")
             else:
                 texts[path] = text
@@ -445,15 +449,22 @@ class AnthropicEngineeringModel:
         diagnosis: FailureDiagnosis,
         files: dict[str, str],
     ) -> Patch:
+        # The fourth real run: asked for "the corrected patch" against the base, the model
+        # re-sent only the file it corrected and lost the fix it had already made. So a fix
+        # edits the candidate AS IT STANDS, and every change it does not touch is carried.
+        candidate = {**files, **{e.path: e.new_text for e in patch.edits}}
         rejected = ""
         if patch.rejected:
             rejected = "\n\nchanges in it that did not apply:\n" + "\n".join(patch.rejected)
         return self._patch(
             f"{_defect_block(defect)}\n\ndiagnosis: {diagnosis.cause}\nnext: "
-            f"{diagnosis.next_step}\n\nthe files as they are on the base:\n{_files_block(files)}"
-            f"\n\nthe previous proposal:\n{_proposal_block(patch, files)}{rejected}\n\nWrite "
-            "the corrected patch, against the files as they are on the base.",
-            files,
+            f"{diagnosis.next_step}\n\nyour previous proposal, as a diff against the base:\n"
+            f"{_proposal_block(patch, files)}{rejected}\n\nthe candidate as it stands - the base "
+            f"with that proposal applied:\n{_files_block(candidate)}\n\nChange the candidate "
+            "where the diagnosis says. SEARCH text is copied from the candidate as it stands; "
+            "everything you do not change stays as it is.",
+            candidate,
+            carry=patch,
         )
 
     def review_code(self, defect: DefectSpec, plan: ChangePlan, diff: str) -> CodeReview:
