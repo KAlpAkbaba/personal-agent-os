@@ -142,6 +142,52 @@ def _aware(dt: datetime | None, fallback: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+#: A synchronous tool runs inside one request; the longest (a device-dispatched native
+#: build) is bounded by the device's own step caps far below this. A call still `running`
+#: after it was left by a process that stopped mid-call - a crash, or a colour drained
+#: during a release.
+INTERRUPTED_TOOL_CALL_AFTER = timedelta(hours=2)
+SPEECH_TOOL_CALL_INTERRUPTED = (
+    "Bu iş yarıda kaldı efendim; onu yürüten süreç durdu. İsterseniz yeniden başlatayım."
+)
+
+
+def fail_interrupted_tool_calls(
+    db: Session, *, now: datetime | None = None, older_than: timedelta = INTERRUPTED_TOOL_CALL_AFTER
+) -> int:
+    """Close synchronous tool calls a stopped process left `running` (Phase 8, 2026-09-11).
+
+    A synchronous call is executed in the request that created its row; if that process
+    dies mid-call the row stays `running` for ever, and a client retrying the same call_id
+    is answered "running" by the replay path with nothing that will ever finish it. Only
+    SYNCHRONOUS calls are touched: a long-running one (research.start, news.summarize) is
+    completed by its announcer when its task ends, however long that takes.
+    """
+    now = now or utcnow()
+    cutoff = now - older_than
+    rows = db.execute(
+        select(RealtimeToolCall).where(
+            RealtimeToolCall.status == TOOL_STATUS_RUNNING,
+            RealtimeToolCall.long_running.is_(False),
+        )
+    ).scalars().all()
+    closed = 0
+    for call in rows:
+        if _aware(call.created_at, now) >= cutoff:
+            continue
+        call.status = TOOL_STATUS_FAILED
+        call.error_class = "interrupted"
+        call.result_json = {
+            "speech": SPEECH_TOOL_CALL_INTERRUPTED,
+            "message": "the process that ran this call stopped before it finished",
+        }
+        call.completed_at = now
+        closed += 1
+    if closed:
+        db.commit()
+    return closed
+
+
 def _iso(dt: datetime | None) -> str | None:
     if dt is None:
         return None

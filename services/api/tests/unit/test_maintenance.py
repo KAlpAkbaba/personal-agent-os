@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 
+import app.main as app_main
 from app.config import Settings
 from app.identity.service import IdentityService
 from app.main import create_app
 from app.maintenance import RetentionSweeper
 from app.memory.store import NativeMemoryBackend
 from app.security.registry import AuthorizedAssetRegistry
+from app.voice.realtime_sessions import service as realtime_service
 
 
 def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
@@ -24,11 +26,19 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
     monkeypatch.setattr(NativeMemoryBackend, "sweep_expired", lambda self: 2)
     monkeypatch.setattr(IdentityService, "sweep_expired", lambda self, **_: 1)
     monkeypatch.setattr(AuthorizedAssetRegistry, "sweep_expired", lambda self, **_: ["a", "b", "c"])
+    monkeypatch.setattr(realtime_service, "fail_interrupted_tool_calls", lambda db: 4)
+    monkeypatch.setattr(app_main, "fail_interrupted_builds", lambda db: 5)
     app = create_app(Settings(_env_file=None))
 
     results = app.state.retention_sweeper.sweep_once()
 
-    assert results == {"memory": 2, "identity_sessions": 1, "security_assets": 3}
+    assert results == {
+        "memory": 2,
+        "identity_sessions": 1,
+        "security_assets": 3,
+        "interrupted_tool_calls": 4,
+        "interrupted_native_builds": 5,
+    }
     assert app.state.retention_sweeper.last_results == results
     assert app.state.retention_sweeper.last_run_at is not None
 
