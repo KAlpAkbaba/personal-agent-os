@@ -39,11 +39,11 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 6 | /v1/world/facts secret redaction | DB parolası açık metin dönüyor | Sır hiçbir yanıtta yok | BROKEN | NYP | P0 | — | B04 | services/api/app/worldmodel/ | — | üretim yanıtı 2026-09-12 | no | Sahip oturumu gerekli ama sızıntı |
 | 7 | Log secret redaction | 13 desen log hattında yok | Sır loga düşmez | MISSING | NYP | P0 | 6 | B04 | services/api/app/observability/ | — | — | no | Desenler var, hat yok |
 | 8 | Health secret redaction | Kimliksiz sağlıkta desen yok | Sağlık sır sızdırmaz | MISSING | NYP | P0 | 6 | B04 | services/api/app/system/health.py | — | — | no | — |
-| 9 | Dead Voice session sweeper | 6-7 zombie `active`, en eskisi 09-09 | Zombie kalmaz | MISSING | NYP | P0 | — | B06 | services/api/app/voice/realtime/ | — | üretim oturum listesi | no | Kaynak: "nothing sweeps" |
-| 10 | Takılmış research/task sweeper | 09-09'dan beri `discovering` | Terminal duruma taşınır | MISSING | NYP | P0 | — | B06 | services/api/app/research/ | — | üretim araştırma satırı | no | — |
-| 11 | Stale RUNNING/CREATED reconciliation | Mutabakat yok | Durum gerçeğe uyar | MISSING | NYP | P0 | 10 | B06 | services/api/app/executive/, app/research/ | — | — | no | — |
+| 9 | Dead Voice session sweeper | 6-7 zombie `active`, en eskisi 09-09 | Zombie kalmaz | DONE | PA | P0 | — | B06 | app/voice/realtime_sessions/service.py:sweep_idle_sessions, app/main.py:RetentionSweeper | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | Yaş değil atıllık: konuşulan oturum hiç süpürülmez |
+| 10 | Takılmış research/task sweeper | 09-09'dan beri `discovering` | Terminal duruma taşınır | DONE | PA | P0 | — | B06 | app/research/service.py:sweep_abandoned_runs, app/main.py:RetentionSweeper | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | Görev FAILED_TERMINAL, koşu STAGE_FAILED; satır silinmez |
+| 11 | Stale RUNNING/CREATED reconciliation | Mutabakat yok | Durum gerçeğe uyar | DONE | PA | P0 | 10 | B06 | app/research/service.py:sweep_abandoned_runs, app/worldmodel/state.py:_collect_tasks | test_orphan_sweeps.py, test_worldmodel.py | üretim turu bekliyor (Karar 0) | no | Süpürge taşır, dünya modeli sayar |
 | 12 | Temporal unavailable typed refusal | Tipli 503 var | Aynı | DONE | PA | P0 | — | — | services/api/app/research/ | services/api/tests/unit | ADR-0123 | no | Rewrite gerekmez |
-| 13 | Orphan research row cleanup | Yetim koşu temizlenmiyor | Yetim kalmaz | MISSING | NYP | P0 | 10 | B06 | services/api/app/research/ | — | — | no | 10 ile aynı batch |
+| 13 | Orphan research row cleanup | Yetim koşu temizlenmiyor | Yetim kalmaz | DONE | PA | P0 | 10 | B06 | app/research/service.py:sweep_abandoned_runs | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | 10 ile tek uygulama |
 | 14 | Retry loop'ları bounded | Üç sınırsız döngü | Sınırlı geri çekilme | BROKEN | NYP | P0 | — | B07 | services/api/app/notifications/, app/research/ | — | denetim 2026-09-12 | no | 15-17'nin şemsiyesi |
 | 15 | Push announcer bounded retry | Kalıcı arızada günde 17.280 deneme | Sınırlı deneme | BROKEN | NYP | P0 | 14 | B07 | services/api/app/notifications/ | — | — | no | 14 ile ortak uygulama |
 | 16 | Briefing announcer kuyruk kilidi yok | Tek bozuk satır kuyruğu kalıcı tıkıyor | Zehirli mesaj karantinaya | BROKEN | NYP | P0 | 14 | B07 | services/api/app/notifications/ | — | — | no | Bildirim kaybının nedeni |
@@ -107,10 +107,10 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 64 | Deployed SHA awareness | Sağlıkta var, öz modelde yok | Öz model bilir | PARTIAL | PR | P1 | 63 | B19 | app/selfmodel/, app/system/health.py | — | version 714ff2b | no | — |
 | 65 | Windows build awareness | Cihaz build_id gönderiyor, öz model okumuyor | Öz model bilir | PARTIAL | PR | P1 | 63 | B19 | app/selfmodel/, app/devices/ | — | build 19f079c4fda2c3c7 | no | — |
 | 66 | Device capability awareness | Kayıtta var, öz modelde yok | Öz model bilir | PARTIAL | PR | P1 | 63 | B19 | app/selfmodel/ | — | 85 yetenek | no | — |
-| 67 | World model terminal-state accuracy | `tasks.running=10` yanlış | Doğru sayım | BROKEN | NYP | P0 | — | B06 | app/worldmodel/ | — | üretim /v1/worldmodel | no | 68 ile aynı kusur |
-| 68 | READY research running sayılmasın | Biten iş "çalışıyor" görünüyor | Doğru | BROKEN | NYP | P0 | 67 | B06 | app/worldmodel/ | — | üretim | no | EVIDENCE etiketi bayatlamayı da engelliyor |
-| 69 | Stuck task detection | Yok | Tespit edilir | MISSING | NYP | P0 | 10 | B06 | app/worldmodel/ | — | — | no | — |
-| 70 | Ledger duplicate Voice event prevention | Her sesli oturum iki satır | Tek satır | BROKEN | NYP | P0 | — | B06 | app/ledger/ | — | 1441 olay | no | Araştırmada koruma var, seste yok |
+| 67 | World model terminal-state accuracy | `tasks.running=10` yanlış | Doğru sayım | DONE | PA | P0 | — | B06 | app/artifacts/state.py:TASK_*_STATUSES, app/worldmodel/state.py:_collect_tasks | test_task_status_meaning.py, test_worldmodel.py | üretim turu bekliyor (Karar 0) | no | Dört anlam kovası; her durum tam olarak bir kovada |
+| 68 | READY research running sayılmasın | Biten iş "çalışıyor" görünüyor | Doğru | DONE | PA | P0 | 67 | B06 | app/artifacts/state.py:TASK_*_STATUSES, app/worldmodel/state.py:_collect_tasks | test_task_status_meaning.py, test_worldmodel.py | üretim turu bekliyor (Karar 0) | no | READY artık awaiting_owner, running değil |
+| 69 | Stuck task detection | Yok | Tespit edilir | DONE | PA | P0 | 10 | B06 | app/worldmodel/state.py:_collect_tasks:STUCK_TASK_AFTER | test_worldmodel.py | üretim turu bekliyor (Karar 0) | no | tasks.stuck_count, 24 saat |
+| 70 | Ledger duplicate Voice event prevention | Her sesli oturum iki satır | Tek satır | DONE | PA | P0 | — | B06 | app/ledger/service.py:voice_session_source_ref, app/ledger/service.py:_voice_live_already_recorded | test_ledger_service.py, test_voice_realtime_sessions.py | üretim turu bekliyor (Karar 0) | no | Doğal anahtar = canlı yazarın kendi anahtarı; tek tanım, iki yarı |
 | 71 | Experience Engine scheduler | Zamanlayıcı yok, hiç koşmadı | Düzenli koşar | MISSING | NYP | P1 | — | B18 | app/experience/ | app/experience testleri | 1441 olaydan 0 bellek | no | Yalnız manuel POST |
 | 72 | Activity to lesson extraction | Kod var, hiç koşmadı | Ders çıkar | PARTIAL | PA | P1 | 71 | B18 | app/experience/ | app/experience testleri | — | no | — |
 | 73 | Lesson to memory integration | Kod var, hiç koşmadı | Belleğe yazılır | PARTIAL | PA | P1 | 72 | B18 | app/experience/, app/memory/ | — | memory.remembered hiç yayılmıyor | no | — |
@@ -265,7 +265,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 203 | Research pause | Yok | Duraklat | MISSING | NYP | P1 | 202 | B31 | app/research/ | — | — | no | — |
 | 204 | Research resume | Yok | Devam | MISSING | NYP | P1 | 203 | B31 | app/research/ | — | — | no | — |
 | 205 | Temporal typed failures | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/research/ | research testleri | ADR-0123 | no | 12 ile aynı iş |
-| 206 | Orphan cleanup | Yok | Temizlenir | MISSING | NYP | P0 | 10 | B06 | app/research/ | — | 3 gündür açık koşu | no | 10,13 ile ortak uygulama |
+| 206 | Orphan cleanup | Yok | Temizlenir | DONE | PA | P0 | 10 | B06 | app/research/service.py:sweep_abandoned_runs | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | 10, 13 ile tek uygulama |
 | 207 | Provider fallback transparency | Kısmi | Şeffaf | PARTIAL | NYP | P1 | — | B31 | app/research/ | — | — | no | — |
 | 208 | Result-first narration | Çalışıyor | Aynı | DONE | PA | P1 | — | — | app/research/, app/voice/ | research testleri | — | no | — |
 | 209 | Technical mode | Kısmi | Çalışır | PARTIAL | NYP | P1 | — | B31 | app/voice/ | — | — | no | 237 ile ortak |
@@ -283,8 +283,8 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 216 | Echo cancellation | Sağlayıcı tarafında | Ölçülür | PARTIAL | NYP | P1 | — | B20 | apps/web/ | — | — | no | — |
 | 217 | Mic sensitivity modes | Yok | Seçilebilir | MISSING | NYP | P1 | — | B20 | apps/web/ | — | — | no | — |
 | 218 | Reconnect | Tek uçuşlu + 410 fırtına koruması | Proaktif yeniden bağlanma | PARTIAL | PA | P1 | — | B20 | app/voice/realtime/, apps/web/ | 410 fırtına testi (20 kesinti to 1 deneme) | — | no | ADR-0099 güçlü |
-| 219 | Dead session cleanup | Yok | Süpürülür | MISSING | NYP | P0 | — | B06 | app/voice/realtime/ | — | 6-7 zombie | no | 9 ile aynı iş |
-| 220 | Session TTL | Yok | Ömür sınırı | MISSING | NYP | P0 | 219 | B06 | app/voice/realtime/ | — | — | no | 9 ile ortak |
+| 219 | Dead session cleanup | Yok | Süpürülür | DONE | PA | P0 | — | B06 | app/voice/realtime_sessions/service.py:sweep_idle_sessions, app/main.py:RetentionSweeper | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | 9 ile tek uygulama |
+| 220 | Session TTL | Yok | Ömür sınırı | DONE | PA | P0 | 219 | B06 | app/voice/realtime_sessions/service.py:sweep_idle_sessions:IDLE_SESSION_AFTER | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | ADR-0105 gereği mutlak ömür DEĞİL, 12 saat atıllık sınırı |
 | 221 | False LISTENING prevention | Mikrofon kaybında "Dinliyor" diyor | Durum gerçeğe bağlı | BROKEN | NYP | P1 | 222 | B20 | apps/web/ | — | — | no | Güven kırıcı |
 | 222 | Mic track loss detection | `track.onended`/`onmute` dinlenmiyor | Kayıp görülür | MISSING | NYP | P1 | — | B20 | apps/web/ | — | — | no | 221'in nedeni |
 | 223 | Provider 60-min limit handling | ADR-0105 düzeltmesi var; tavan değerini istemci okumuyor | Tavan öncesi yenileme | PARTIAL | PA | P1 | — | B20 | app/voice/realtime/, apps/web/ | voice testleri | commit 12b8be4 | no | Yarısı yapıldı |
@@ -1199,3 +1199,98 @@ düşürdüğü için suite tam olarak o pencere kapanana kadar yeşildi ve **ye
 dokuz dakika sonra** altı yerden birden kırmızıya döndü. `sweep_once(now)` artık tek saatle
 karar veriyor ve `test_one_pass_is_decided_by_one_clock` bunu pinliyor. Bu, bu deponun en sık
 tekrar eden hata şekli ("bir karar, iki saat") ve B01'in CI kapısını bloklayan tek şeydi.
+
+---
+
+### B06 — Durum gerçeği ve süpürgeler · 2026-09-12
+
+CI 34712304047 yeşil (7/7) · commit 41eb2c3 · yerel kapı 8979 geçti / 5 atlandı ·
+kanıt `docs/evidence/b06-state-truth-2026-09-12.json`
+
+```
+9, 219, 220   status : DONE
+     commit : 41eb2c3
+     tests  : services/api/tests/unit/test_orphan_sweeps.py (6 sesli oturum testi)
+     proof  : PROVEN_AUTOMATED — deterministik saatle: 3 gün önce kapanmış sekme EXPIRED
+              oluyor, 5 dakika önce konuşulan oturuma dokunulmuyor, bir hafta önce açılıp
+              bir dakika önce kullanılan oturum yaşıyor
+     date   : 2026-09-12
+     note   : Kaynak kodun kendi yorumu "nothing sweeps in the background" diyordu ve doğruydu:
+              bir oturumu yalnızca ONU KULLANAN kapatabiliyordu, yani kapatılan sekme sonsuza
+              kadar `active` kalıyordu. Süpürge YAŞ değil ATILLIK ölçüyor — sabit ufuk her web
+              oturumunu tam bir saatte cümlenin ortasında öldürüyordu (ADR-0105, sahip
+              direktifi "hiç kapanmasın"), canlı konuşma her olayda `updated_at` damgaladığı
+              için ona hiç ulaşılmıyor. 220 bu yüzden mutlak ömür DEĞİL: 12 saat atıllık.
+              Hiçbir satır silinmiyor; EXPIRED'a taşınıyor ve denetim satırı `reason: idle`
+              yazıyor.
+
+10, 13, 206, 11   status : DONE
+     commit : 41eb2c3
+     tests  : test_orphan_sweeps.py (7 araştırma testi)
+     proof  : PROVEN_AUTOMATED — iş akışı kaybolmuş koşu 24 saat sonra görev
+              FAILED_TERMINAL + koşu STAGE_FAILED oluyor; 30 dakika önce ilerlemiş koşuya
+              dokunulmuyor; zaten terminal olan görev ikinci kez geçirilmiyor
+     date   : 2026-09-12
+     note   : `fail_unstarted_research` hiç başlamayan koşuyu kapatıyordu; başlayıp terk
+              edileni kimse kapatmıyordu — üretimde 2026-09-09'dan beri `discovering`.
+              Süpürge satırı kendisi yazmıyor, `runs_service.update_run` üzerinden geçiyor:
+              aşama geçişi, olay günlüğü ve arayüz durumu tek yoldan olsun diye. Sınır 24
+              saat, çünkü etkileşimli aşama SAHİBİN bir sayfayı temizlemesini bekliyor
+              olabilir.
+
+67, 68        status : DONE
+     commit : 41eb2c3
+     tests  : test_task_status_meaning.py (5), test_worldmodel.py (yeni 3 regresyon)
+     proof  : PROVEN_AUTOMATED — dört anlam kovası tüm görev kelime dağarcığını tam olarak
+              bir kez kaplıyor; sonradan eklenen bir durum kovasız kalırsa test düşüyor
+     date   : 2026-09-12
+     note   : Dünya modeli "kaç iş çalışıyor?" sorusunu "kaçı terminal değil?" diye
+              yanıtlıyordu; üretim hiçbir şey çalışmazken on iş çalışıyor diyordu — onu
+              sahibe söylenmeyi bekleyen BİTMİŞ araştırmalardı. İki farklı sorunun tek
+              yanıtı vardı. READY artık `awaiting_owner`, `running` değil.
+
+69            status : DONE
+     commit : 41eb2c3
+     tests  : test_worldmodel.py::..._stuck
+     proof  : PROVEN_AUTOMATED — 24 saatten uzun süredir ilerlemeyen iş `tasks.stuck_count`
+              ile RUNTIME gerçeği olarak görünür
+     date   : 2026-09-12
+     note   : Dünya modeli tespit eder ve söyler; taşıyan süpürgedir (ayrı yetki).
+
+70            status : DONE
+     commit : 41eb2c3
+     tests  : test_ledger_service.py (4 yeni), test_voice_realtime_sessions.py::
+              test_a_session_is_one_ledger_row_per_state_after_the_backfill_runs
+     proof  : PROVEN_AUTOMATED — düzeltme geri alınarak KIRMIZI kanıtlandı: gerçek HTTP
+              yüzeyinden tek oturum (oluştur + üç kez bağlan + kapat) backfill'de 5 kopya
+              satır daha üretiyordu (3 canlı + 5 backfill = 8 satır, 3 olması gereken yerde)
+     date   : 2026-09-12
+     note   : Araştırmada M16'dan beri doğal anahtar koruması vardı, seste yoktu:
+              `(source, source_ref)` tekilliği `live` ile `backfill:audit_events`'in AYNI
+              olguyu anlattığını göremez. Artık iki yarı tek tanımı okuyor —
+              `ledger_service.voice_session_source_ref` anahtarı üretiyor, canlı yazar onu
+              kendi `source_ref`'i olarak yazıyor, backfill aynı fonksiyonla soruyor. Kopya
+              engelleme (oturum, durum) başına: bağlanma tekrarlanabilir ve canlı yazar
+              hepsini tek satıra indiriyor, backfill de en eski denetim satırını alarak aynı
+              şeyi söylüyor. Canlı yazar yokken oluşmuş eski oturum hâlâ backfill ediliyor.
+```
+
+**B06'da yol üstünde bulunan ve aynı batch'te kapatılan kusur:** `_collect_tasks`'ın ilk hâli
+görev sayımını GERÇEK saatten, anlık görüntünün geri kalanını `assemble_snapshot(now=...)`
+saatinden okuyordu — bu deponun en sık tekrar eden hata şekli ("bir karar, iki saat"), aynı gün
+altıncı örneği. `now` artık tek yerden geçiyor ve regresyon testi bunu pinliyor.
+
+**İkinci kusur, yine kendi kodumda:** süpürge denetim satırına `idle_since` yazarken
+`updated_at`'i damgaladıktan SONRA okuyordu — yani her satır "oturum tam süpürüldüğü anda
+atıl oldu" diyordu, ki bu satırın zaten bildiği tek şey. Düzeltildi;
+`test_the_audit_row_says_when_the_session_went_quiet` tutuyor.
+
+**İki bekçi işini yaptı:** `test_maintenance.py` ve `/v1/system/health`'in şekil testi süpürge
+kümesini İSİMLERİYLE pinliyordu, iki yeni süpürge ikisini de kırdı. Gevşetilmedi, kasıtlı olarak
+genişletildi — 2026-09-11'deki "üç süpürge var, çağıran yok" kusuru tam olarak bu sayede
+görünür olmuştu.
+
+**Sıra sapması, açıkça:** Bu batch roadmap'te **B06**; B04 (sır redaksiyon hattı) ve B05 (yetki
+kapısı) henüz yapılmadı. Çalışmaya yanlış numarayla (B04) başladım ve bunu ancak roadmap'i
+yeniden okuduğumda fark ettim. İş bitmiş, testleri yeşil ve teknik bağımlılığı yoktu (süpürgeler
+yetki kapısına bağlı değil), bu yüzden doğru numarayla kapatıldı. Sıradaki iki batch B04 ve B05.

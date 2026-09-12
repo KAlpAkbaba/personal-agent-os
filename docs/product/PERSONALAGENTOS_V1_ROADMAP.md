@@ -365,7 +365,7 @@ ROLLBACK_PLAN       : kapı önce gölge modda (sayar, engellemez); engelleme ay
 ```
 
 ```
-BATCH_ID            : B06
+BATCH_ID            : B06                                       [KAPANDI 2026-09-12]
 NAME                : Durum gerçeği ve süpürgeler
 REQUIREMENT_IDS     : 9, 10, 11, 13, 67, 68, 69, 70, 206, 219, 220
 GOAL                : Sistem kendi durumu hakkında doğru konuşsun: zombie oturum yok, yetim
@@ -376,6 +376,14 @@ EXPECTED_FILES      : services/api/app/voice/realtime/, app/research/, app/world
                       app/ledger/, app/retention/
 RISK                : low
 OWNER_ACTION        : no
+KAPANIŞ             : commit 41eb2c3 · CI 34712304047 yeşil (7/7) · yerel kapı 8979 geçti
+                      kanıt docs/evidence/b06-state-truth-2026-09-12.json
+YOL ÜSTÜNDE         : `_collect_tasks` gerçek saati okuyordu (bir karar iki saat, aynı gün
+                      altıncı örnek); süpürgenin denetim satırı `idle_since`'ı damgaladıktan
+                      sonra okuyordu
+SIRA NOTU           : B04 ve B05'ten ÖNCE yapıldı — yanlış numarayla başlanmış bir batch'ti;
+                      teknik bağımlılığı yoktu (süpürgeler yetki kapısına bağlı değil).
+                      Sıradaki: B04, sonra B05.
 TEST_PLAN           : deterministik saatle TTL süpürgesi; READY araştırmanın running sayılmadığı;
                       aynı sesli oturumun tek defter satırı ürettiği (doğal anahtar)
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde active oturum sayısı gerçeğe iner, 2026-09-09

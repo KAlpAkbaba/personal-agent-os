@@ -1,0 +1,40 @@
+{
+  "batch": "B06",
+  "requirements": [
+    9,
+    10,
+    11,
+    13,
+    67,
+    68,
+    69,
+    70,
+    206,
+    219,
+    220
+  ],
+  "recorded_at": "2026-09-12T19:05:00Z",
+  "commit": "41eb2c342c4bb85fd5db44b97a31aea268135bb6",
+  "ci_run": 34712304047,
+  "conclusion": "success (7/7 jobs)",
+  "what_this_proves": "The system's answers about its own state are now the answers the evidence supports: nothing is counted as a live conversation that nobody is in, nothing is counted as running that is finished and waiting for the owner, an abandoned workflow stops being work in progress, and one voice session is one ledger row per state.",
+  "red_first": {
+    "ledger_duplicate": "The fix was reverted from a backup copy and the end-to-end test re-run against HEAD: ONE session driven through the real HTTP surface (create + three attaches + close) produced 3 live rows AND 5 backfill duplicates - 8 rows where the facts are 3. Restored and re-run: 3 rows, all source=live, backfill created nothing.",
+    "ledger_attach_collapse": "Same revert: three attach audit rows for one session backfilled as three ledger rows (created={'voice_session': 3}).",
+    "why_it_matters": "Without this the tests would only show that the new code agrees with itself."
+  },
+  "sweeps": {
+    "idle_voice_sessions": "IDLE_SESSION_AFTER = 12h of NO activity, not age. The bound itself is guarded (test_the_idle_bound_is_hours_not_minutes) because tightening it towards the old one-hour horizon would reintroduce the defect ADR-0105 exists for. Rows are moved to EXPIRED, never deleted; the audit row records reason=idle and the moment the session actually went quiet.",
+    "abandoned_research_runs": "ABANDONED_RUN_AFTER = 24h. Long on purpose: an interactive stage waits on the OWNER clearing a challenge page. Reconciles through runs_service.update_run, and never re-transitions a task the workflow already closed."
+  },
+  "registration": "Both sweeps are registered on the real application object and NAMED by /v1/system/health (checks.retention.sweeps). test_both_sweeps_are_registered_on_the_real_application_object and test_health_ok_shape both fail if one is added without a caller - which is exactly how the 2026-09-11 'three sweeps and nothing ran them' defect was found.",
+  "task_status_meaning": "TASK_ACTIVE / TASK_PENDING / TASK_WAITING / TASK_AWAITING_OWNER / TASK_TERMINAL partition the TASK_STATUS_* vocabulary exactly once (test_every_status_is_in_exactly_one_bucket), so a status added later cannot join 'running' by default. tasks.* counts are now RUNTIME truth, which means they age; as EVIDENCE they never did, so an hour-old snapshot read as current fact.",
+  "local_gate": "ruff clean; 8979 passed / 5 skipped (11m34s)",
+  "found_on_the_way": [
+    "_collect_tasks read the wall clock while the rest of the snapshot read `now` - the sixth instance of this repo's most recurrent bug shape in one day. Threaded and pinned by a regression.",
+    "The idle sweep's own audit row read updated_at AFTER stamping it, so every row claimed the session went idle at the exact moment it was swept. Fixed; test_the_audit_row_says_when_the_session_went_quiet holds it.",
+    "Two tests enumerate the sweep set (test_maintenance and the health-endpoint shape). Both were honest guards doing their job; both extended deliberately rather than loosened."
+  ],
+  "not_claimed": "tasks has no updated_at column, so tasks.stuck_count measures age since CREATION, not dwell time in the current state. The fact says so in its own note rather than implying more than the row can support.",
+  "proof": "PROVEN_AUTOMATED for all eleven. PROVEN_REAL needs a production release (roadmap decision 0, owner-gated): the production check is that the active-session count falls to the truth, the 2026-09-09 orphan closes, and /v1/state/now stops reporting ten running tasks."
+}
