@@ -128,6 +128,8 @@ def test_a_backup_holds_every_database_every_object_and_the_hosts_configuration(
     record = json.loads((host.backup_root / "LAST_BACKUP.json").read_text("utf-8"))
     assert record["snapshot"] == snapshot.name
     assert record["offhost"] == "not configured"
+    # What it held, in the record itself: one bucket, its two objects (2026-09-12).
+    assert (record["buckets"], record["objects"]) == (1, 2)
     # Nothing is left behind: not the staging copy, not the mirror inside the container.
     assert not (host.backup_root / "staging" / "snapshot").exists()
     assert not any((host.state / "fs" / "minio" / "tmp").glob("pagentos-backup-*"))

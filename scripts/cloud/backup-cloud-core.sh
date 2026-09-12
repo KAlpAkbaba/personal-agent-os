@@ -167,9 +167,10 @@ BUCKETS
 "$docker_bin" cp "$minio_container:$minio_tmp/data/." "$staging/minio/" >/dev/null \
     || fail 93 "the mirrored objects could not be copied out"
 "$docker_bin" exec "$minio_container" rm -rf "$minio_tmp" >/dev/null 2>&1 || true
-# Said out loud, so "it held no objects" can never again be read as silence.
-say "objects: $(find "$staging/minio" -type f | wc -l | tr -d ' ') file(s) from \
-$(printf '%s\n' "$buckets" | wc -l | tr -d ' ') bucket(s)"
+# Counted out loud and into the record, so "it held no objects" can never again be silence.
+object_count=$(find "$staging/minio" -type f | wc -l | tr -d ' ')
+bucket_count=$(printf '%s\n' "$buckets" | wc -l | tr -d ' ')
+say "objects: $object_count file(s) from $bucket_count bucket(s)"
 
 # ---- the host's own configuration and release/recovery metadata --------------------------
 for name in .env RELEASE LAST_KNOWN_GOOD LAST_RECONCILE RECOVERY_BUNDLE_STALE; do
@@ -249,8 +250,9 @@ fi
 finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 seconds=$(( $(date +%s) - started_s ))
 record="$backup_root/LAST_BACKUP.json"
-printf '{"snapshot":"%s","kind":"%s","label":"%s","started_at":"%s","finished_at":"%s","seconds":%s,"release":"%s","alembic":"%s","offhost":"%s"}\n' \
+printf '{"snapshot":"%s","kind":"%s","label":"%s","started_at":"%s","finished_at":"%s","seconds":%s,"release":"%s","alembic":"%s","offhost":"%s","buckets":%s,"objects":%s}\n' \
     "$snapshot" "$kind" "$label" "$started" "$finished" "$seconds" "${release:-unknown}" "${alembic:-unknown}" "$offhost" \
+    "$bucket_count" "$object_count" \
     > "$record.next"
 mv "$record.next" "$record"
 
