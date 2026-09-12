@@ -10210,6 +10210,181 @@ tier 4/5 on paper becomes lower.
 detector): the security path reverted, the agent path reverted, the `risk.py` rule removed,
 the `infra/systemd/` rule removed. Every suite that depends on tiers passes (evolution
 routes, approval center, authorize, supervisor, release preflight/execution).
+## ADR-0121 — Takeover truth and continuous Cloud Core recovery (2026-09-11)
+
+*Written by the Astra session as "ADR-0118"; renumbered at review because main had
+already taken ADR-0118 (build identity), ADR-0119 (device-dispatched native build) and
+ADR-0120 (the risk table bound to real paths).*
+
+**Status:** candidate implemented; deployment owner-gated.
+
+The takeover compared repository state, git/worktrees, installed Windows binaries,
+production markers, database migration/state and GitHub CI. The durable M28 qualification
+wins over stale summary text: Windows row 26.15 is `PROVEN_REAL`, while production-triggered
+native building (26.16) remains absent. The full record is
+`docs/reports/astra-takeover-2026-09-11.md`.
+
+The production recovery action already exists in
+`release-cloud-core-bluegreen.sh --reconcile`. Before scheduling it, its old health gate
+is strengthened: HTTP 200 is insufficient; top-level status must be exactly `ok` and the
+reported release must be the recorded SHA. Release, rollback and recovery share one
+kernel `flock`, preventing a periodic tick from treating an in-flight candidate as an
+abandoned promotion.
+
+The timer executes a digest-verified, root-owned bundle under `/opt/pagentos-recovery`,
+outside the mutable application trees it judges. The bundle pins the reconcile action,
+production Compose definition and edge nginx policy; recovery refuses to act unless an
+installed release tree byte-matches the pinned configuration. A candidate release therefore
+cannot replace its own recovery law or the inputs that law executes. Installation preserves
+the previous units and bundle, stops the old timer, waits for any already-running reconcile
+to finish, proves the new action, and restores/restarts the previous monitor if that proof
+fails. Only then does a persistent systemd timer run the action one minute after the previous
+bounded run finishes.
+
+This changes the recovery root and is `OWNER_APPROVAL_REQUIRED`. Candidate tests may run
+automatically; production installation waits until review and qualification pass. Backup
+and restore remain separate P0 work because continuous rollback does not recover a lost
+data volume.
+
+### Addendum — review before owner approval (2026-09-11)
+
+An independent security review of this candidate returned NOT_READY with two defects and
+one missing piece. All three are fixed on this branch; it is `READY_FOR_OWNER_APPROVAL`,
+not deployed, and nothing here installs itself.
+
+**1. Provenance was a file compared with itself.** The installer "refused unless the
+installed recovery action is the reviewed candidate tree" by `cmp`-ing its own tree against
+`/opt/pagentos/app`. On the host it is run *from* `/opt/pagentos/app` — the unit file's own
+comment said so — so the two paths were one directory and the check passed for any tree
+whatsoever. Provenance is now an exact commit: the installer takes the approved 40-hex SHA
+as a required argument and installs only when the last completed promotion
+(`/opt/pagentos/RELEASE`) and the deployed tree (`app/RELEASE`) are both exactly that commit;
+every installed file is taken from that tree, and the approved SHA is recorded beside the
+bundle (`APPROVED_SHA`). Run from a separate checkout, that checkout must agree byte for byte
+with the approved tree on every file installed — now including the two root units and the
+installer itself, which the first cut never compared although they are what systemd runs.
+A shape check refuses refs and short SHAs (`HEAD`, `main`, 39 or 41 characters, uppercase).
+
+**2. The risk table could not see this change.** `app/evolution/risk.py` had no rule for
+`infra/systemd/`, so a self-development candidate editing the root timer classified as tier 2.
+Fixed on main as ADR-0120, with the other dead rules the same audit found.
+
+**3. There was no off-switch or removal.** The off-switch is now stated in the installer,
+the unit file and its output: `systemctl disable --now pagentos-bluegreen-reconcile.timer`;
+release and rollback do not depend on the timer. `uninstall-recovery-supervisor.sh` disables
+the timer first (no new run can start), waits for a run already in progress rather than
+pulling its script out from under a colour switch (exit 6, nothing removed, on timeout),
+removes exactly the two units and the five named bundle files, removes the bundle directory
+only if nothing else is in it, and proves the timer is neither enabled nor active (exit 7
+otherwise). On a host without the monitor it changes nothing and says so.
+
+**4. Healthy, then degraded: the periodic reconcile traded a serving colour for an older
+one.** The strict gate (`status` exactly `ok` and the recorded SHA) is right for making a
+colour live. Astra applied it also to deciding whether the *already canonical* colour
+"will not come up". But the API reports top-level `degraded` when ANY check is not ok, and
+most checks - db, redis, object store, temporal, the providers - are shared by both
+colours. Reproduced in the harness before the fix: a canonical colour serving its own
+release but reporting `degraded`, with a healthy older colour on record, was drained and
+stopped *as "a half-promoted candidate"*, the older build made live, and `RELEASE`
+rewritten to it (exit 81). A shared outage lasting past the 120 s wait that recovers while
+the other colour starts does exactly that in production - every minute the timer runs. And
+when both colours were degraded, the older colour was started and left running beside the
+canonical one (exit 80): a second routine clock and a second worker against one database.
+Now: a canonical colour that answers as its recorded release stays canonical whatever it
+reports, and a non-`ok` status ends the run as `RECONCILE DEGRADED` (exit 84, nothing
+switched, nothing started); only a colour that does not serve at all (no answer, or a
+different release) is replaced, and the replacement still needs exact `ok` + SHA; a
+replacement this run started that never becomes healthy is stopped again. Colour-local
+degradation (a dead routine clock in the newest build, say) is therefore reported, not
+rolled back automatically - the loud exit is the input to self-healing, and a downgrade
+stays a decision rather than a side effect of a Redis restart. Four new harness cases
+(52/52): degraded canonical with a healthy older colour (was 81, now 84, RELEASE kept),
+both degraded (was 80 with the older colour left up, now 84 and nothing started), a dead
+canonical is still replaced loudly (81, unchanged), a failed takeover stops what it
+started (was left running). The stop is mutation-proven separately (1 red).
+
+**Evidence.** Recovery-supervisor install suite 30 passed, 2 skipped (the two kernel-`flock`
+cases run only on Linux CI). Seven mutations, each red: Astra's original installer against
+the new suite (18 red), the RELEASE gate removed (6), the root units dropped from the
+comparison (2), any SHA shape accepted (5), the uninstaller not waiting for a running
+reconcile (1), the uninstaller `rm -rf`-ing the bundle directory (1), the uninstaller leaving
+the timer enabled (2).
+
+### Addendum — second independent review (2026-09-11)
+
+The re-review of the fixed candidate returned NOT_READY again, with two blockers; both are
+closed on this branch and every other finding is answered below.
+
+**Blocker 1 - provenance checked, then trusted through an unlocked wait.** The installer
+checked the RELEASE markers and bytes once, then waited up to 120 s for a running reconcile
+before copying, never holding the operation lock release/rollback/reconcile share. A release
+finishing in that window would have swapped `app/` under it: the bundle copied from an
+unreviewed tree while `APPROVED_SHA` named the approved one. The installer now takes the same
+kernel lock (`flock -w`, 1200 s) before the provenance check and holds it through the last
+copied byte, then releases it before the proof run - which is itself a reconcile and takes
+the lock. A Linux-only test with the real `flock` probes the lock from inside the fake
+systemctl: held during the copy wait, free at the proof run (mutations: lock kept -> red;
+lock never taken -> red). Run with util-linux in a Linux container: 32 passed, 2 skipped (the
+two privilege-refusal cases cannot be observed as root).
+
+**Blocker 2 - the risk-table fix was not on this branch.** It was on main as ADR-0120 and
+arrives with the next merge of main; the branch is not offered for approval without it.
+
+**3. A release that changes the pinned Compose/edge inputs silently degrades the timer.**
+The release now compares what it shipped with the bundle and, when they differ, says so
+(`RECOVERY BUNDLE STALE: ...`) and leaves `/opt/pagentos/RECOVERY_BUNDLE_STALE`; a matching
+release clears it; a host without the timer hears nothing. Three harness cases (55/55).
+
+**4. Wait budgets shorter than the unit's own 600 s.** Install and uninstall now wait 660 s
+for a running reconcile, and 1200 s for the lock.
+
+**5. Degraded-but-serving never fails over** - reviewed as sound and deliberate (finding 4 of
+the first addendum).
+
+**6. The shell reads health with an anchored sed.** A test now reads that expression out of
+the script and applies it to the real `/v1/system/health` body, for `ok` and `degraded`
+(mutation: `status` moved after `version` -> red).
+
+**7. `Persistent=true` has no effect on monotonic timers.** Kept (harmless); to be observed
+on the host.
+
+**Must be proven ON THE HOST during the approved install** (cannot be settled offline):
+that a failed run (80/81/83/84) still re-arms `OnUnitInactiveSec=60s`; that
+`ExecStartPre`'s digest check, `NoNewPrivileges` and `PrivateTmp` work against the real docker
+socket and nginx reload; that `OnBootSec=2min` is enough after a real reboot and a first
+run failing because docker is not up yet is retried; and the real duration of the takeover
+and degraded paths against the wait budgets.
+
+### Addendum — third independent review (2026-09-11)
+
+Verdict READY_FOR_OWNER_APPROVAL: both blockers verified closed - the lock scope read line by
+line and re-run with the real `flock` in a Linux container, the risk table's `^infra/systemd/`
+and its siblings at tier 4 with the dead-rule detector behind them - and all six earlier
+SHOULD_FIX items closed. It found two new SHOULD_FIX items:
+
+**1. The rollback restored with no lock held.** The lock is let go before the proof run (a
+reconcile takes it). A proof run that failed - possibly BECAUSE a release took the lock in
+that instant - rolled the bundle and the units back unlocked. `rollback_install` now takes the
+lock back, with the same bounded wait, before a byte is restored, and lets it go again before
+re-enabling the old timer (whose run is a reconcile). If the lock stays held it restores
+nothing, stops the unproven timer, and names where the previous monitor's files are kept.
+Three tests, each red on the previous script: the order (the lock re-taken after the failed
+proof run and before the rollback's reload); the lock-held case (nothing restored, the timer
+stopped, the kept directory named and holding the old `APPROVED_SHA`); and, with the real
+`flock` in a Linux container, held at the rollback's reload and free again for the old timer.
+Linux container: 35 passed, 2 skipped; Windows: 85 passed, 4 skipped.
+
+**2. The pre-migration backup runs unbounded under the operation lock**, deferring any
+takeover for as long as it takes. It belongs to the release script's backup hook (ADR-0122)
+and is closed on main with a time bound (ADR-0122 addendum).
+
+**Notes, no change.** The inverted lock order between restore (backup lock, then operation
+lock, both bounded waits) and release (operation lock held, backup lock non-blocking) cannot
+deadlock: the release never waits on the backup lock. The worst-case install wait is about
+31 minutes (1200 s for the lock, then up to 660 s for a running reconcile), loud either way.
+A release started inside the nightly backup window (00:30 UTC) fails fast at its pre-migration
+backup (exit 74) - a runbook note. To be observed on the host, added to the list above: the
+real duration of the pre-migration backup, and whether the backup window ever meets a release.
 
 ## ADR-0122 — Backups that are restored, not just taken (2026-09-11)
 

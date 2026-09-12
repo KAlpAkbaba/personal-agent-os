@@ -36,6 +36,11 @@
 #   record RELEASE, LAST_KNOWN_GOOD (the previous sha) and the active colour
 # A release is COMPLETE only when RELEASE names the active colour's sha; --reconcile
 # treats anything else as an interrupted promotion and returns to the last completed one.
+# --reconcile exits: 0 consistent and ok; 80 neither colour serves (nothing switched);
+# 81 the canonical colour did not serve and the recorded other one took over (loud);
+# 82 another release/recovery holds the lock; 83 no tree matches the pinned recovery inputs;
+# 84 the canonical colour serves its release but reports degraded - kept, never switched,
+# because a colour switch cannot repair a dependency both colours share.
 # Any failure after the switch switches back (devices first, then HTTP; the old colour is
 # still up during the drain; after it, the old colour is started again first). Any failure
 # before the switch stops the idle colour and restores the trees. The database is never
@@ -62,6 +67,7 @@ case "$first_arg" in
     *) sha="$first_arg"; mode=${2:-release};;
 esac
 base=${PAGENTOS_BASE:-/opt/pagentos}
+lock_file="$base/.bluegreen-operation.lock"
 envf="$base/.env"
 next="$base/app.next"
 cur="$base/app"
@@ -76,6 +82,36 @@ handoff_wait_s=${PAGENTOS_HANDOFF_WAIT_S:-30}
 image_repo=${PAGENTOS_IMAGE_REPO:-pagentos/cloud-core}
 legacy_container=${PAGENTOS_API_CONTAINER:-pagentos-prod-api}
 interrupt_at=${PAGENTOS_INTERRUPT_AT:-}
+recovery_bundle=${PAGENTOS_RECOVERY_BUNDLE:-}
+recovery_input_tree=""
+
+# Release, rollback and periodic recovery inspect and mutate the same markers, colours and
+# edge upstream. They must be one serial operation. A periodic reconcile that overlaps a
+# legitimate release would otherwise classify its idle colour as an interrupted candidate
+# and stop it. The production host's util-linux `flock` holds the kernel lock on fd 9 for
+# this shell's lifetime; there is no create/write ownership window and SIGKILL releases it.
+exec 9>"$lock_file"
+if ! flock -n 9; then
+    echo "another blue/green release or recovery operation is running; retry later" >&2
+    exit 82
+fi
+
+# The root timer may use only deployment inputs approved with its own pinned bundle. The
+# application tree remains the source of versioned code for normal releases, but it cannot
+# replace Compose mounts/commands or nginx policy underneath the monitor that judges it.
+if [ "$mode" = "--reconcile" ] && [ -n "$recovery_bundle" ]; then
+    for candidate_tree in "$cur" "$prev"; do
+        if cmp -s "$candidate_tree/infra/docker/docker-compose.prod.yml" "$recovery_bundle/docker-compose.prod.yml" \
+            && cmp -s "$candidate_tree/infra/docker/edge/nginx.conf" "$recovery_bundle/nginx.conf"; then
+            recovery_input_tree="$candidate_tree"
+            break
+        fi
+    done
+    if [ -z "$recovery_input_tree" ]; then
+        echo "no app/app.prev tree matches the pinned recovery Compose and nginx inputs" >&2
+        exit 83
+    fi
+fi
 
 # ----------------------------------------------------------------- helpers
 
@@ -121,7 +157,10 @@ write_upstream() {
     printf '%s\n' "$http" > "$edge_dir/active.txt"
 }
 
-compose() { docker compose --profile bluegreen -f "$cur/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"; }
+compose() {
+    local input_tree="${recovery_input_tree:-$cur}"
+    docker compose --profile bluegreen -f "$input_tree/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"
+}
 
 in_container_health() {
     # in_container_health COLOUR: the colour's own health JSON, from inside the container
@@ -213,16 +252,35 @@ handoff_devices() {
 }
 
 wait_for_colour() {
-    # wait_for_colour COLOUR: up to ~120 s for the colour's health to answer ok.
-    local colour=$1 tries=0 body=""
+    # wait_for_colour COLOUR EXPECTED_SHA: up to ~120 s for exact healthy provenance.
+    # The API deliberately returns HTTP 200 for degraded health, so transport success or
+    # the mere presence of a status field proves neither health nor the running version.
+    local colour=$1 expected_sha=$2 tries=0 body="" status="" actual_sha=""
     while [ "$tries" -lt 40 ]; do
         body="$(in_container_health "$colour" 2>/dev/null || true)"
-        case "$body" in
-            *'"status"'*) printf '%s' "$body"; return 0;;
-        esac
+        status="$(top_health_status "$body")"
+        actual_sha="$(served_release "$body")"
+        if [ "$status" = "ok" ] && [ "$actual_sha" = "$expected_sha" ]; then
+            printf '%s' "$body"
+            return 0
+        fi
         tries=$((tries + 1))
         sleep "${PAGENTOS_WAIT_STEP_S:-3}"
     done
+    return 1
+}
+
+serving_status_of() {
+    # serving_status_of COLOUR EXPECTED_SHA: ONE probe. Prints the colour's top-level health
+    # status when it answers AND names EXPECTED_SHA as its release, whatever that status
+    # is; returns 1 when it does not answer, or answers as some other release.
+    local body status
+    body="$(in_container_health "$1" 2>/dev/null || true)"
+    status="$(top_health_status "$body")"
+    if [ -n "$status" ] && [ "$(served_release "$body")" = "$2" ]; then
+        printf '%s' "$status"
+        return 0
+    fi
     return 1
 }
 
@@ -230,6 +288,7 @@ install_edge_config() {
     # install_edge_config [TREE]: the tree's nginx.conf becomes the edge's (atomic copy into
     # the edge dir the container reads with -c). A missing tree file leaves the edge's alone.
     local src="${1:-$cur}/infra/docker/edge/nginx.conf"
+    if [ -n "$recovery_input_tree" ]; then src="$recovery_bundle/nginx.conf"; fi
     if [ -f "$src" ]; then
         mkdir -p "$edge_dir"
         cp "$src" "$edge_dir/nginx.conf.next"
@@ -308,6 +367,12 @@ served_schema_field() {
     block="$(grep -m1 -oE '"schema":[[:space:]]*\{[^}]*' <<<"$1" || true)"
     field="$(grep -m1 -oE "\"$2\":[[:space:]]*\"[^\"]*\"" <<<"$block" || true)"
     sed -E 's/.*"([^"]*)"$/\1/' <<<"$field"
+}
+
+top_health_status() {
+    # The application emits top-level status first. Anchoring at the opening object keeps
+    # a nested provider's "status":"ok" from masking top-level degraded health.
+    printf '%s' "$1" | sed -nE 's/^[[:space:]]*\{[[:space:]]*"status"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1
 }
 
 maybe_interrupt() {
@@ -396,6 +461,7 @@ if [ "$mode" = "--reconcile" ]; then
     canonical_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$canonical")")"
     other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
     emergency=0
+    degraded=""
     if ! service_running "api-$canonical"; then
         if [ -n "$canonical_sha" ]; then
             echo "reconcile: api-$canonical is not running; starting it from its recorded image ($canonical_sha)"
@@ -405,16 +471,33 @@ if [ "$mode" = "--reconcile" ]; then
         fi
     fi
     body=""
-    if [ -n "$canonical_sha" ] && body="$(wait_for_colour "$canonical")" && [ -n "$(served_release "$body")" ]; then
+    if [ -n "$canonical_sha" ] && body="$(wait_for_colour "$canonical" "$canonical_sha")"; then
         echo "reconcile: api-$canonical healthy (release $(served_release "$body")) -> canonical"
+    elif [ -n "$canonical_sha" ] && degraded="$(serving_status_of "$canonical" "$canonical_sha")"; then
+        # It ANSWERS, as its own recorded release, and reports itself not ok. Most checks
+        # behind that status (db, redis, object store, temporal, the providers) are shared
+        # with the other colour, so a switch cannot repair them - and a dependency that
+        # recovers while the other colour starts would make an OLDER build live and rewrite
+        # RELEASE to it. The serving colour stays canonical; the state is reported loudly
+        # at the end (84). Only a colour that does not serve at all is replaced.
+        echo "reconcile: api-$canonical serves $canonical_sha but reports '$degraded'; it stays canonical (a colour switch cannot repair a shared dependency)" >&2
     else
+        degraded=""
         if [ -n "$other_sha" ]; then
             echo "reconcile: api-$canonical will not come up; api-$other ($other_sha) is the only recorded alternative - taking over LOUDLY (not a completed promotion)" >&2
+            other_was_running=0
+            if service_running "api-$other"; then other_was_running=1; fi
             compose up -d --no-deps --wait "api-$other" 2>&1 | tail -1 || true
-            if body="$(wait_for_colour "$other")" && [ -n "$(served_release "$body")" ]; then
+            if body="$(wait_for_colour "$other" "$other_sha")"; then
                 canonical="$other"; other="$(other_colour "$canonical")"; canonical_sha="$other_sha"; other_sha="$(env_value "PAGENTOS_RELEASE_$(upper "$other")")"
                 emergency=1
             else
+                # This reconcile started it and it never became healthy: it does not stay
+                # up beside the canonical colour (a second routine clock, a second worker).
+                if [ "$other_was_running" = "0" ]; then
+                    echo "reconcile: api-$other did not become healthy either; stopping it again (it was not running before this reconcile)" >&2
+                    compose stop "api-$other" 2>&1 | tail -1 || true
+                fi
                 echo "reconcile: NEITHER colour answers; nothing is switched; operator attention required" >&2
                 exit 80
             fi
@@ -464,6 +547,10 @@ if [ "$mode" = "--reconcile" ]; then
     if [ "$emergency" = "1" ]; then
         echo "RECONCILE EMERGENCY: api-$canonical ($canonical_sha) is live because the canonical release could not start; not a completed promotion - review required" >&2
         exit 81
+    fi
+    if [ -n "$degraded" ]; then
+        echo "RECONCILE DEGRADED: api-$canonical ($canonical_sha) stays canonical but reports '$degraded'; no colour was switched - operator attention required" >&2
+        exit 84
     fi
     echo "RECONCILE OK: api-$canonical is canonical (release ${canonical_sha:-unknown}); markers, upstreams and containers agree"
     exit 0
@@ -519,7 +606,7 @@ if [ "$mode" = "--rollback" ]; then
     leaving_sha="$(cat "$base/RELEASE" 2>/dev/null || true)"
     echo "rolling back: edge -> api-$prev_colour (${target_sha:-sha unknown}; leaving ${leaving_sha:-unknown})"
     compose up -d --no-deps --wait "api-$prev_colour"
-    body="$(wait_for_colour "$prev_colour")" || { echo "api-$prev_colour did not become healthy; the edge stays on api-$active" >&2; exit 75; }
+    body="$(wait_for_colour "$prev_colour" "$target_sha")" || { echo "api-$prev_colour did not become healthy at ${target_sha:-unknown}; the edge stays on api-$active" >&2; exit 75; }
     install_edge_config
     # devices first, then HTTP - the same handoff a release does
     handoff_devices "$active" "$prev_colour" || { rc=$?; echo "device handoff to api-$prev_colour failed ($rc); restoring api-$active" >&2; undrain_colour "$active" >/dev/null; write_upstream "$active" "$active"; reload_edge || true; drain_colour "$prev_colour" >/dev/null; compose stop "api-$prev_colour" >/dev/null 2>&1 || true; exit "$rc"; }
@@ -640,7 +727,11 @@ migrate_out="$(compose run --rm --no-deps --entrypoint uv "api-$idle" run alembi
 printf '%s\n' "$migrate_out" | tail -4
 if [ "$migrate_rc" -ne 0 ]; then
     echo "migration FAILED (rc $migrate_rc); the release stops here - the database keeps the schema it had and api-$active keeps serving" >&2
-    exit 82
+    # 79, not 82: 82 is "another operation holds the lock", which tells an operator to retry
+    # later. A failed migration tells them the opposite - stop and look at the database. Two
+    # meanings on one number is a wrong instruction waiting to be followed, and neither
+    # side's tests could see the collision because the two paths never run in one pass.
+    exit 79
 fi
 
 echo "starting the idle colour api-$idle on $sha (api-$active keeps serving)..."
@@ -654,7 +745,7 @@ fi
 cd "$base"
 maybe_interrupt after_idle_up
 
-body="$(wait_for_colour "$idle")" || { echo "api-$idle never answered health" >&2; exit 75; }
+body="$(wait_for_colour "$idle" "$sha")" || { echo "api-$idle never answered healthy at $sha" >&2; exit 75; }
 echo "health ok on api-$idle"
 
 version_file="$cur/services/api/app/voice/realtime_sessions/contract_version.py"
@@ -723,15 +814,17 @@ maybe_interrupt after_switch
 # the switch, then a needless rollback). Bounded wait for the edge to answer with the sha.
 tries=0
 edge_release=""
+edge_status=""
 while [ "$tries" -lt "${PAGENTOS_EDGE_SETTLE_TRIES:-20}" ]; do
     health="$(curl -fsS "$health_url" 2>/dev/null || true)"
     edge_release="$(served_release "$health")"
-    if [ "$edge_release" = "$sha" ]; then break; fi
+    edge_status="$(top_health_status "$health")"
+    if [ "$edge_status" = "ok" ] && [ "$edge_release" = "$sha" ]; then break; fi
     tries=$((tries + 1))
     sleep "${PAGENTOS_EDGE_SETTLE_STEP_S:-0.5}"
 done
-if [ "$edge_release" != "$sha" ]; then
-    echo "through the edge the release is '${edge_release:-absent}', expected '$sha' (after $tries probes)" >&2
+if [ "$edge_status" != "ok" ] || [ "$edge_release" != "$sha" ]; then
+    echo "through the edge health is '${edge_status:-absent}' and release is '${edge_release:-absent}', expected ok / '$sha' (after $tries probes)" >&2
     exit 76
 fi
 echo "health through the edge: release $sha (settled after $tries retr$( [ "$tries" = "1" ] && echo y || echo ies))"
@@ -761,4 +854,19 @@ echo "$sha" > "$base/RELEASE"
 [ -n "$previous_sha" ] && echo "$previous_sha" > "$base/LAST_KNOWN_GOOD"
 write_release_metadata "$sha" "$idle" "$(served_build_id "$body")" "$schema_head" "$previous_sha"
 trap - EXIT
+# The recovery timer runs only with the Compose file and edge policy its owner-approved
+# bundle pinned (exit 83 otherwise). A release that changes either leaves that bundle behind:
+# the timer reconciles with the PREVIOUS tree's inputs while app.prev still matches, and
+# refuses every run after the next such release. Said now, loudly, and left as a marker a
+# health reader can see - never discovered later as a silent 83 in the journal.
+recovery_root=${PAGENTOS_RECOVERY_ROOT:-/opt/pagentos-recovery}
+if [ -f "$recovery_root/docker-compose.prod.yml" ]; then
+    if cmp -s "$cur/infra/docker/docker-compose.prod.yml" "$recovery_root/docker-compose.prod.yml" \
+        && cmp -s "$cur/infra/docker/edge/nginx.conf" "$recovery_root/nginx.conf"; then
+        rm -f "$base/RECOVERY_BUNDLE_STALE"
+    else
+        date -u +%Y-%m-%dT%H:%M:%SZ > "$base/RECOVERY_BUNDLE_STALE"
+        echo "RECOVERY BUNDLE STALE: $sha changed the Compose file or the edge policy the recovery timer pinned; it reconciles with the previous tree's inputs until the owner re-runs install-recovery-supervisor.sh $sha, and refuses (83) after the next such release" >&2
+    fi
+fi
 echo "RELEASE OK: $sha is running as api-$idle behind the edge (previous ${previous_sha:-none} kept as last known good)"

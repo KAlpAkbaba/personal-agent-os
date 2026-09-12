@@ -64,6 +64,8 @@ $posix = { param($p) $p = ($p -replace '\\', '/'); if ($p -match '^([A-Za-z]):(.
 # FAKE_MIGRATE_EXIT / FAKE_BUILD_EXIT (B01 req 1: until 2026-09-12 the fake could not fail
 # either, so no test could see that a failed migration did not stop the release),
 # FAKE_SCHEMA_CURRENT / FAKE_SCHEMA_HEAD (B01 req 2: the schema revision a colour serves).
+# FAKE_HEALTH_STATUS (every colour's top-level status), FAKE_HEALTH_STATUS_<COLOUR> (one
+# colour's, e.g. FAKE_HEALTH_STATUS_BLUE=degraded while green stays ok).
 $docker = @(
     '#!/usr/bin/env bash',
     '# The real docker refuses to run from a deleted working directory ("getwd: no such file',
@@ -100,12 +102,15 @@ $docker = @(
     '    if [ "${FAKE_HEALTH_DOWN:-}" = "$colour" ]; then exit 1; fi',
     '    rel="${FAKE_SERVED_RELEASE:-$(released_for "$colour")}"',
     '    draining=false; [ -f "$FAKE_STATE/draining-$colour" ] && draining=true',
+    # B01 req 2: the schema revision a colour serves. Astra: the top-level status a
+    # colour reports, per colour, so a reconcile can be shown one degraded side.
+    '    st_var="FAKE_HEALTH_STATUS_$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")"; st="${!st_var:-${FAKE_HEALTH_STATUS:-ok}}"',
     '    # The schema check the colour serves. A migration that ran leaves current == head;',
     '    # the knobs let a test serve the state a FAILED migration leaves behind.',
     '    sc_head="${FAKE_SCHEMA_HEAD:-0040_device_build_identity}"',
     '    sc_cur="${FAKE_SCHEMA_CURRENT:-$sc_head}"',
     '    sc_status=ok; [ "$sc_cur" = "$sc_head" ] || sc_status=fail',
-    '    printf "{\"status\":\"ok\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
+    '    printf "{\"status\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$st" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
     '    exit 0;;',
     '  compose*" exec -T edge nginx -t"*) exit 0;;',
     '  compose*" exec -T edge nginx -s reload"*)',
@@ -142,10 +147,11 @@ $curl = @(
     'colour=$(grep -oE "pagentos_api \{ server api-(blue|green)" "$FAKE_STATE/edge-upstream" 2>/dev/null | head -1 | grep -oE "(blue|green)$")',
     'c=$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")',
     'rel=$(grep "^PAGENTOS_RELEASE_$c=" "$FAKE_ENV" 2>/dev/null | head -1 | sed "s/^[^=]*=//")',
-    'printf "{\"status\":\"ok\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"}}" "${FAKE_EDGE_RELEASE:-$rel}"'
+    'printf "{\"status\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"}}" "${FAKE_EDGE_HEALTH_STATUS:-ok}" "${FAKE_EDGE_RELEASE:-$rel}"'
 )
 [IO.File]::WriteAllText((Join-Path $fakeBin "docker"), (($docker -join "`n") + "`n"))
 [IO.File]::WriteAllText((Join-Path $fakeBin "curl"), (($curl -join "`n") + "`n"))
+[IO.File]::WriteAllText((Join-Path $fakeBin "flock"), "#!/usr/bin/env bash`nexit 0`n")
 
 function Get-UpstreamText { param([string]$Http, [string]$Devices = $Http) "upstream pagentos_api { server api-$Http`:8001; }`nupstream pagentos_devices { server api-$Devices`:8001; }`n" }
 
@@ -204,6 +210,9 @@ function Test-Up { param([string]$Colour) Test-Path (Join-Path $hostBase "state\
 function Test-Draining { param([string]$Colour) Test-Path (Join-Path $hostBase "state\draining-$Colour") }
 function Get-Sessions { param([string]$Colour) $p = Join-Path $hostBase "state\sessions-$Colour"; if (Test-Path $p) { [int](Get-Content $p -Raw).Trim() } else { 0 } }
 function Test-UpstreamBoth { param([string]$Colour) $t = Get-Upstream; ($t -match "pagentos_api \{ server api-$Colour`:8001") -and ($t -match "pagentos_devices \{ server api-$Colour`:8001") }
+# A second colour with a release on record (the last known good, as a completed release
+# leaves it): Reset-Host records only the active one.
+function Set-RecordedRelease { param([string]$Colour, [string]$Sha) [IO.File]::AppendAllText((Join-Path $hostBase ".env"), "PAGENTOS_IMAGE_$($Colour.ToUpper())=$Sha`nPAGENTOS_RELEASE_$($Colour.ToUpper())=$Sha`n") }
 function Clear-Calls { Remove-Item -LiteralPath (Join-Path $hostBase "state\calls.log") -ErrorAction SilentlyContinue }
 
 try {
@@ -297,7 +306,7 @@ try {
         Write-Host "migration and build failures stop the release (B01 req 1)"
         Reset-Host
         $rm = Invoke-Release -Env @{ FAKE_MIGRATE_EXIT = "1" }
-        Assert-True ($rm.Exit -eq 82 -and $rm.Output -match "migration FAILED \(rc 1\); the release stops here" -and $rm.Output -match 'relation .owner_sessions. already exists') "a failed migration stops the release and says what alembic said"
+        Assert-True ($rm.Exit -eq 79 -and $rm.Output -match "migration FAILED \(rc 1\); the release stops here" -and $rm.Output -match 'relation .owner_sessions. already exists') "a failed migration stops the release and says what alembic said"
         Assert-True ((Get-Active) -eq "blue" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Get-Release) -eq $old -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "after a failed migration the active colour still serves, the idle colour is not up and RELEASE still names the previous sha"
 
         Reset-Host
@@ -352,7 +361,7 @@ try {
 
         Reset-Host
         $r76 = Invoke-Release -Env @{ FAKE_SERVED_RELEASE = "0000000000000000000000000000000000000000" }
-        Assert-True ($r76.Exit -eq 76 -and $r76.Output -match "reports release '0000" -and (Get-Active) -eq "blue") "an idle colour that does not report the new sha is refused (76) before the switch"
+        Assert-True ($r76.Exit -eq 75 -and $r76.Output -match "never answered healthy at $sha" -and (Get-Active) -eq "blue") "an idle colour that reports the wrong sha never passes the exact health gate"
 
         Reset-Host
         $r73 = Invoke-Release -Env @{ FAKE_CONTRACT_VERSION = "1" }
@@ -361,12 +370,38 @@ try {
         Reset-Host
         $ra = Invoke-Release -Env @{ FAKE_EDGE_RELEASE = "9999999999999999999999999999999999999999" }
         if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $ra.Output }
-        Assert-True ($ra.Exit -eq 76 -and $ra.Output -match "expected '$sha' \(after 2 probes\)" -and $ra.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue" -and (Test-Up "blue")) "a failure after the switch (the edge never settles on the sha within the bounded wait) switches the edge back to the old colour, which is still up"
+        Assert-True ($ra.Exit -eq 76 -and $ra.Output -match "expected ok / '$sha' \(after 2 probes\)" -and $ra.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue" -and (Test-Up "blue")) "a failure after the switch (the edge never settles on the sha within the bounded wait) switches the edge back to the old colour, which is still up"
         Assert-True ($ra.Output -match "ROLLBACK: device sessions returning to api-blue: 1/1" -and (Get-Sessions "blue") -eq 1 -and -not (Test-Draining "blue") -and -not (Test-Up "green")) "...the old colour takes the device sessions back (undrained, devices first), then the new colour is stopped"
+
+        Reset-Host
+        $edgeDegraded = Invoke-Release -Env @{ FAKE_EDGE_HEALTH_STATUS = "degraded" }
+        Assert-True ($edgeDegraded.Exit -eq 76 -and $edgeDegraded.Output -match "health is 'degraded'.*expected ok" -and $edgeDegraded.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue") "post-cutover edge health must be ok, even when it reports the expected sha"
 
         Reset-Host -Active "green"
         $rg = Invoke-Release
         Assert-True ($rg.Exit -eq 0 -and (Get-Active) -eq "blue" -and (Test-UpstreamBoth "blue") -and (Test-Up "blue") -and -not (Test-Up "green")) "from green the release lands on blue"
+
+        # The recovery timer's pinned bundle vs. what a release ships (owner-approval review,
+        # finding 3): a release that changes the Compose file or the edge policy must say so.
+        Reset-Host
+        $bundle = Join-Path $hostBase "recovery-bundle"
+        New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+        [IO.File]::WriteAllText((Join-Path $bundle "docker-compose.prod.yml"), "services: {}`n")
+        [IO.File]::WriteAllText((Join-Path $bundle "nginx.conf"), "# old edge config`n")
+        $stale = Invoke-Release -Env @{ PAGENTOS_RECOVERY_ROOT = (& $u $bundle) }
+        Assert-True ($stale.Exit -eq 0 -and $stale.Output -match "RECOVERY BUNDLE STALE: $sha changed" -and (Test-Path (Join-Path $hostBase "RECOVERY_BUNDLE_STALE"))) "a release that changes the edge policy the recovery timer pinned says so and leaves a marker - and still completes"
+
+        Reset-Host
+        New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+        [IO.File]::WriteAllText((Join-Path $bundle "docker-compose.prod.yml"), "services: {}`n")
+        [IO.File]::WriteAllText((Join-Path $bundle "nginx.conf"), "# new edge config`n")
+        [IO.File]::WriteAllText((Join-Path $hostBase "RECOVERY_BUNDLE_STALE"), "earlier`n")
+        $fresh = Invoke-Release -Env @{ PAGENTOS_RECOVERY_ROOT = (& $u $bundle) }
+        Assert-True ($fresh.Exit -eq 0 -and $fresh.Output -notmatch "RECOVERY BUNDLE STALE" -and -not (Test-Path (Join-Path $hostBase "RECOVERY_BUNDLE_STALE"))) "a release whose inputs still match the pinned bundle clears the marker and says nothing"
+
+        Reset-Host
+        $none = Invoke-Release
+        Assert-True ($none.Exit -eq 0 -and $none.Output -notmatch "RECOVERY BUNDLE STALE") "a host without the recovery timer hears nothing about it"
 
         Reset-Host
         [IO.File]::AppendAllText((Join-Path $hostBase ".env"), "PAGENTOS_IMAGE_GREEN=0000000000000000000000000000000000000000`nPAGENTOS_RELEASE_GREEN=0000000000000000000000000000000000000000`n")
@@ -424,6 +459,45 @@ try {
         $c5 = Invoke-Release -Mode "--reconcile"
         if ($c5.Exit -ne 0 -or $env:PAGENTOS_BG_VERBOSE) { Write-Host "--- reconcile 5 (exit $($c5.Exit)) ---"; Write-Host $c5.Output; $c5.Calls | ForEach-Object { Write-Host "  call: $_" } }
         Assert-True ($c5.Exit -eq 0 -and $c5.Output -match "RECONCILE OK: api-blue is canonical" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Test-UpstreamBoth "blue") -and (Get-Release) -eq $old -and (Get-Sessions "blue") -eq 1 -and -not ($c5.Calls -match " stop api-") -and -not ($c5.Calls -match " up -d")) "a consistent host reconciles to itself: nothing started, nothing stopped, the devices untouched"
+
+        Reset-Host
+        $degraded = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_HEALTH_STATUS = "degraded" }
+        Assert-True ($degraded.Exit -eq 84 -and $degraded.Output -match "operator attention required" -and $degraded.Output -notmatch "RECONCILE OK") "HTTP 200 with status=degraded is never reported as RECONCILE OK"
+
+        Reset-Host
+        $wrong = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_SERVED_RELEASE = "9999999999999999999999999999999999999999" }
+        Assert-True ($wrong.Exit -eq 80 -and $wrong.Output -match "operator attention required" -and $wrong.Output -notmatch "RECONCILE OK") "a healthy body from the wrong release cannot keep or promote a colour"
+
+        Write-Host "healthy, then degraded: the periodic reconcile never trades a serving colour for an older one"
+        $lkg = "3333333333333333333333333333333333333333"
+
+        Reset-Host
+        Set-RecordedRelease -Colour "green" -Sha $lkg
+        Clear-Calls
+        $blip = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_HEALTH_STATUS_BLUE = "degraded" }
+        if ($env:PAGENTOS_BG_VERBOSE) { Write-Host "--- blip (exit $($blip.Exit)) ---"; Write-Host $blip.Output }
+        Assert-True ($blip.Exit -eq 84 -and $blip.Output -match "RECONCILE DEGRADED: api-blue \($old\) stays canonical" -and (Get-Active) -eq "blue" -and (Test-UpstreamBoth "blue") -and (Get-Release) -eq $old -and -not (Test-Up "green") -and -not ($blip.Calls -match " up -d --no-deps --wait api-green")) "a canonical colour that serves its own release but reports degraded stays canonical, even with a healthy older colour on record: a dependency that recovers mid-takeover must not make the older build live and rewrite RELEASE"
+
+        Reset-Host
+        Set-RecordedRelease -Colour "green" -Sha $lkg
+        Clear-Calls
+        $shared = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_HEALTH_STATUS = "degraded" }
+        if ($env:PAGENTOS_BG_VERBOSE) { Write-Host "--- shared (exit $($shared.Exit)) ---"; Write-Host $shared.Output }
+        Assert-True ($shared.Exit -eq 84 -and $shared.Output -match "operator attention required" -and $shared.Output -notmatch "RECONCILE OK" -and -not (Test-Up "green") -and -not ($shared.Calls -match " up -d --no-deps --wait api-green") -and (Get-Active) -eq "blue" -and (Get-Release) -eq $old) "a shared outage (both colours degraded) starts nothing: the older colour does not sit running beside the canonical one with a second routine clock and worker"
+
+        Reset-Host
+        Set-RecordedRelease -Colour "green" -Sha $lkg
+        Clear-Calls
+        $dead = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_HEALTH_DOWN = "blue" }
+        if ($env:PAGENTOS_BG_VERBOSE) { Write-Host "--- dead (exit $($dead.Exit)) ---"; Write-Host $dead.Output }
+        Assert-True ($dead.Exit -eq 81 -and $dead.Output -match "RECONCILE EMERGENCY: api-green \($lkg\) is live" -and (Get-Active) -eq "green" -and (Test-UpstreamBoth "green") -and (Get-Release) -eq $lkg) "a canonical colour that does not answer at all is still replaced, loudly, by a healthy recorded colour"
+
+        Reset-Host
+        Set-RecordedRelease -Colour "green" -Sha $lkg
+        Clear-Calls
+        $both = Invoke-Release -Mode "--reconcile" -Env @{ FAKE_HEALTH_DOWN = "blue"; FAKE_HEALTH_STATUS_GREEN = "degraded" }
+        if ($env:PAGENTOS_BG_VERBOSE) { Write-Host "--- both (exit $($both.Exit)) ---"; Write-Host $both.Output }
+        Assert-True ($both.Exit -eq 80 -and $both.Output -match "operator attention required" -and -not (Test-Up "green") -and @($both.Calls -match " stop api-green").Count -ge 1 -and (Get-Active) -eq "blue" -and (Get-Release) -eq $old) "a takeover whose alternate never becomes healthy stops the alternate it started, switches nothing, and leaves RELEASE alone"
 
         Reset-Host
         Remove-Item -LiteralPath (Join-Path $hostBase "state\up-edge")

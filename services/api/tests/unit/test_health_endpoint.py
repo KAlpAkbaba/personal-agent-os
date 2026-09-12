@@ -377,3 +377,33 @@ def test_no_subsystems_check_can_leak_a_secret_through_this_endpoint(monkeypatch
     assert "not-a-real-pw-771" not in response.text
     assert body["status"] == "degraded", "the failure is still reported, only the value is gone"
     assert "OperationalError" in body["checks"]["db"]["error"]
+
+def _reconcile_status_reader():
+    """The regular expression release-cloud-core-bluegreen.sh's `top_health_status` uses,
+    read from the script itself - two readers of one body in two languages, so this test
+    reads the other side rather than restating it."""
+    import re
+    from pathlib import Path
+
+    cloud = Path(__file__).resolve().parents[4] / "scripts" / "cloud"
+    script = (cloud / "release-cloud-core-bluegreen.sh").read_text(encoding="utf-8")
+    match = re.search(r"sed -nE 's/(\^.*?)/\\1/p'", script)
+    assert match, "top_health_status's sed expression was not found in the script"
+    return re.compile(match.group(1).replace("[[:space:]]", r"\s"))
+
+
+def test_the_body_opens_the_way_the_reconcile_reads_it(monkeypatch) -> None:
+    """The host's reconcile reads a colour's health with sed, anchored at the opening brace:
+    the top-level `status` must be the FIRST key of a one-line body. It fails safe - an
+    unreadable body is "not ok" - but that is exactly the danger: a harmless-looking change
+    here (a key before `status`, pretty-printed JSON) would make every periodic reconcile
+    read every colour as unhealthy. Owner-approval review of ADR-0121, finding 6."""
+    reader = _reconcile_status_reader()
+    # "degraded" through a REQUIRED dependency: Redis is advisory since ADR-0123.
+    for checks, expected in ((ALL_OK, "ok"), ({**ALL_OK, "db": {"status": "fail"}}, "degraded")):
+        with make_client(monkeypatch, checks) as client:
+            body = client.get("/v1/system/health").text
+        assert "\n" not in body.strip()
+        found = reader.match(body)
+        assert found is not None, body[:120]
+        assert found.group(1) == expected
