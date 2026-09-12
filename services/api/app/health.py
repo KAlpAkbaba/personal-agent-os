@@ -102,6 +102,18 @@ async def check_temporal(settings: Settings) -> None:
     )
 
 
+async def check_schema(settings: Settings) -> dict[str, Any]:
+    """B01 req 2: the alembic revision the database is on vs the head this build carries.
+
+    Its own check rather than a field on the release model, because a release GATES on it:
+    `alembic upgrade head` exiting 0 never proved the schema reached head, and until
+    2026-09-12 nothing asked afterwards.
+    """
+    from app.release.schema import schema_state
+
+    return await asyncio.to_thread(schema_state, settings)
+
+
 async def run_health_checks(settings: Settings) -> dict[str, CheckResult]:
     timeout = settings.health_check_timeout_s
     names = ["db", "redis", "object_store", "temporal"]
@@ -114,4 +126,7 @@ async def run_health_checks(settings: Settings) -> dict[str, CheckResult]:
     checks = dict(zip(names, results, strict=True))
     for name in ADVISORY_CHECKS & checks.keys():
         checks[name]["required"] = False
+    # The schema check reports its own two revisions, so it is not run through _run_check
+    # (which would flatten them into ok/fail and throw the answer away).
+    checks["schema"] = await check_schema(settings)
     return checks

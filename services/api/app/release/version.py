@@ -14,9 +14,13 @@ from typing import Any
 
 from app import __version__
 from app.config import Settings
+from app.release.build import build_identity
 
 COMPONENT_CLOUD_CORE = "cloud-core"
-VERSION_MODEL_VERSION = 1
+#: 2 since 2026-09-12 (B01 req 21/22): the model gained ``build_id``. The number exists so a
+#: reader knows which shape it got; a reader that predates 2 simply does not look for the
+#: field. Nothing gates on this value - the release gates on the CONTRACT versions.
+VERSION_MODEL_VERSION = 2
 
 #: The instant this process started - the honest "since when" for the running version.
 STARTED_AT: datetime = datetime.now(UTC)
@@ -40,7 +44,15 @@ def contract_versions() -> dict[str, int]:
 
 def release_model(settings: Settings, *, now: datetime | None = None) -> dict[str, Any]:
     """The running Cloud Core, as facts: component, version (and its source), app version,
-    contracts, last-known-good when the host exported one, start instant and uptime."""
+    build identity, contracts, last-known-good when the host exported one, start and uptime.
+
+    ``build_id`` (B01 req 21/22) is the canonical answer to "which build is this". ``version``
+    is the commit the host EXPORTED and reads ``unknown`` whenever nobody exported one;
+    ``app_version`` is a product number that has been ``0.1.0`` for every release production
+    has ever had. Neither can tell two builds apart on its own. ``build_id`` is derived from
+    this build's own sources - the same rule the device uses for its own (ADR-0118) - so the
+    two halves of one system answer the question the same way.
+    """
     moment = now or datetime.now(UTC)
     release = (settings.release or "").strip()
     lkg = (settings.last_known_good or "").strip()
@@ -50,6 +62,7 @@ def release_model(settings: Settings, *, now: datetime | None = None) -> dict[st
         "version": release or "unknown",
         "version_source": "env" if release else "unknown",
         "app_version": __version__,
+        "build_id": build_identity(),
         "contracts": contract_versions(),
         "last_known_good": lkg or None,
         "last_known_good_source": "env" if lkg else "unknown",

@@ -235,9 +235,17 @@ Yürütme **numara sırasına göre değildir.** Ok yönü: **önce → sonra**.
 ### FAZ A — P0 ZORUNLU TEMEL (B01–B10)
 
 ```
-BATCH_ID            : B01
+BATCH_ID            : B01                                       [KAPANDI 2026-09-12]
 NAME                : Sürüm güvenliği ve sürüm gerçeği
-REQUIREMENT_IDS     : 1, 2, 21, 22, 23, 24, 631, 632, 638
+REQUIREMENT_IDS     : 1, 2, 21, 22, 23, 24, 631, 632, 638  — dokuzunun dokuzu DONE
+SONUC               : 1 PROVEN_AUTOMATED (altı vaka önce KIRMIZI kanıtlandı) · 2 PROVEN_REAL
+                      (gerçek PostgreSQL, docs/evidence/b01-schema-gate-2026-09-12.json) ·
+                      21/22 PROVEN_REAL (build_id 516452ef2d144269) · 23/24/631/632/638
+                      PROVEN_AUTOMATED. Yol üstünde iki kusur kapandı: matris satır 20'nin
+                      yanlış sınıflandırması ve `test_briefing_announcer` saat bombası
+                      (yeşil CI'dan 9 dakika sonra altı testi birden düşürecekti).
+ACIK               : Üretim sürümü yapılmadı — "bozuk göç gerçek host'ta bir promosyonu
+                      durdurdu" kanıtı owner onaylı bir dağıtım ister (bkz. §11).
 GOAL                : Başarısız bir göç veya kimliği belirsiz bir build üretime promote edilemesin.
 DEPENDENCIES        : none
 AFFECTED_SUBSYSTEMS : Release, Health, Build State
@@ -1000,6 +1008,7 @@ Bunlara **dokunulmaz**; yalnızca çevrelerine bağlantı eklenir:
 
 | # | Karar | Bloklayan batch | Kritik yol mu |
 |---|---|---|---|
+| 0 | **Üretim sürümü** — B01'in düzeltilmiş sürüm betiğini canlıya almak | B01 kapanış kanıtı | **Evet, şimdi** — aşağıya bakın |
 | 1 | S3 uyumlu ikinci kova + erişim anahtarı | B09 | **Evet** — felaket kurtarmanın tek eksiği |
 | 2 | Kurtarma denetçisinin üretime kurulumu (Astra `2561f84`) | B08 | **Evet** |
 | 3 | `db9ed85` adayının kaderi | B35 | Hayır (B35'e kadar bekleyebilir) |
@@ -1017,6 +1026,24 @@ Bunlara **dokunulmaz**; yalnızca çevrelerine bağlantı eklenir:
 
 **Kural:** owner action gereken satırlar `READY_FOR_OWNER` işaretlenir, **bağımsız iş durmaz**,
 ve soru ancak kritik yola girdiğinde sorulur (Phase 7).
+
+### Karar 0 — üretim sürümü (B01 sonrası, 2026-09-12)
+
+**Neden owner kapısı:** B01 sürüm mekanizmasının kendisini değiştirdi (`pipefail`, borusuz göç,
+yeni çıkış kodları 78/82/83, RELEASE.json). Bunu canlıya almak, promosyonu yapan aracı
+değiştirerek bir promosyon yapmak demektir — sahibin durma listesindeki "high-risk production
+promotion" tanımına giren tek adım.
+
+**Neden düşük gerçek risk:** anahtarlanmadan önceki her başarısızlık eski ağacı geri yüklüyor,
+sonraki her başarısızlık geri anahtarlıyor; 97 betik vakası (59 + 38) yeşil; LKG `d86b3d9`
+elde; `--preflight` hiçbir şeyi değiştirmeden yeni ağacı doğruluyor.
+
+**Sahip onaylarsa kazanılan kanıt:** `1` ve `631` `PROVEN_REAL`'e çıkar (gerçek host'ta
+RELEASE.json, sağlıkta build_id ve şema revizyonu), ve B03'ün üretim kanıtları da aynı
+sürümle mümkün hale gelir.
+
+**Sahip onaylamazsa:** B01 bugünkü haliyle kapalı kalır (1 = `PROVEN_AUTOMATED`), sıradaki
+batch B02'dir ve B02'nin hiçbir kanıtı üretim gerektirmez.
 
 ## 12. ÖNERİLEN İLK 10 BATCH
 

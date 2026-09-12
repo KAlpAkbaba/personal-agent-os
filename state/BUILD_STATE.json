@@ -3,8 +3,8 @@
   "project": "personal-agent-os",
   "current_milestone": "M28_DONE_2026_09_12 (row 26.16 PROVEN_REAL); M29 NOT STARTED",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
-  "last_completed_milestone": "M27_CREATIVE_TOOLS_OPERATOR",
-  "last_updated": "2026-09-12T09:00:00Z",
+  "last_completed_milestone": "M28_NATIVE_APP_FACTORY",
+  "last_updated": "2026-09-12T15:26:16Z",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -497,6 +497,118 @@
         "the self-development engine PROVEN_REAL on a genuine defect, stopped at the policy boundary, its candidate neither merged nor pushed"
       ],
       "not_started": "M29 has not been started, per the directive."
+    }
+  },
+  "milestones": {
+    "M18_2_CONTINUITY_AND_NARRATION": {
+      "stage": 13,
+      "rows": 10,
+      "proven": 9,
+      "owner_or_provider": 0,
+      "open": 1,
+      "state": "IN PROGRESS",
+      "open_rows": [
+        "13.3"
+      ]
+    },
+    "M18_4_SELF_EVOLUTION_FOUNDATION": {
+      "stage": 16,
+      "rows": 14,
+      "proven": 14,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M19_DIGITAL_OPERATOR": {
+      "stage": 17,
+      "rows": 11,
+      "proven": 11,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M20_FILE_DOCUMENT_INTELLIGENCE": {
+      "stage": 18,
+      "rows": 10,
+      "proven": 10,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M21_MAIL_CALENDAR": {
+      "stage": 19,
+      "rows": 10,
+      "proven": 10,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M22_ARTIFACT_FACTORY": {
+      "stage": 20,
+      "rows": 8,
+      "proven": 8,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M23_APP_FACTORY": {
+      "stage": 21,
+      "rows": 8,
+      "proven": 8,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M24_CAPABILITY_GENESIS": {
+      "stage": 22,
+      "rows": 8,
+      "proven": 8,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M25_CREATIVE_3D": {
+      "stage": 23,
+      "rows": 10,
+      "proven": 10,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M26_EXECUTIVE_AUTONOMY": {
+      "stage": 24,
+      "rows": 17,
+      "proven": 17,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M27_CREATIVE_TOOLS": {
+      "stage": 25,
+      "rows": 13,
+      "proven": 13,
+      "owner_or_provider": 0,
+      "open": 0,
+      "state": "CLOSED",
+      "open_rows": []
+    },
+    "M28_NATIVE_APP_FACTORY": {
+      "stage": 26,
+      "rows": 17,
+      "proven": 16,
+      "owner_or_provider": 1,
+      "open": 0,
+      "state": "ENGINEERING CLOSED",
+      "open_rows": []
     }
   }
 }

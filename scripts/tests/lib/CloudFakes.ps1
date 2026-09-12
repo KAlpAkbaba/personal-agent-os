@@ -80,7 +80,11 @@ function New-FakeDockerAndCurl {
         only `docker compose ... up ...` creates - so `docker exec ... printenv` reports
         MISSING until the api workload was really recreated. Knobs: FAKE_WIRED=0 (compose
         does not wire the key), FAKE_NEVER_PRESENT=1 (recreate never exposes it),
-        FAKE_PROVIDER_LISTED=0, FAKE_SMOKE_EXIT=n, FAKE_CONFIG_EXIT=n, FAKE_UP_EXIT=n.
+        FAKE_PROVIDER_LISTED=0, FAKE_SMOKE_EXIT=n, FAKE_CONFIG_EXIT=n, FAKE_UP_EXIT=n,
+        FAKE_MIGRATE_EXIT=n / FAKE_BUILD_EXIT=n (B01 req 1: until 2026-09-12 neither could
+        fail here, so no test could see that a refused migration did not stop the release),
+        FAKE_SCHEMA_CURRENT / FAKE_SCHEMA_HEAD (B01 req 2: the revision health reports;
+        FAKE_SCHEMA_ABSENT=1 serves a body with no schema check at all, like an older build).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$Directory)
@@ -115,16 +119,32 @@ function New-FakeDockerAndCurl {
         '  compose*" up "*)',
         '    if [ -n "${FAKE_UP_EXIT:-}" ]; then exit "$FAKE_UP_EXIT"; fi',
         '    if [ "${FAKE_NEVER_PRESENT:-0}" != "1" ]; then touch "$FAKE_STATE/recreated"; fi; exit 0;;',
-        '  compose*" build "*|compose*" run "*|tag\ *) exit 0;;',
+        '  compose*" run "*alembic*upgrade*head*)',
+        '    if [ -n "${FAKE_MIGRATE_EXIT:-}" ]; then',
+        '      echo "FAILED: relation \"owner_sessions\" already exists" >&2',
+        '      exit "$FAKE_MIGRATE_EXIT"',
+        '    fi',
+        '    exit 0;;',
+        '  compose*" build "*)',
+        '    if [ -n "${FAKE_BUILD_EXIT:-}" ]; then echo "ERROR: failed to solve: process did not complete successfully" >&2; exit "$FAKE_BUILD_EXIT"; fi',
+        '    exit 0;;',
+        '  compose*" run "*|tag\ *) exit 0;;',
         'esac',
         'exit 0'
     )
     $curl = @(
         '#!/usr/bin/env bash',
+        '# The schema check the api serves (B01 req 2): current == head after a migration that',
+        '# actually reached head; the knobs serve the state a FAILED or skipped one leaves.',
+        'sc_head="${FAKE_SCHEMA_HEAD:-0040_device_build_identity}"',
+        'sc_cur="${FAKE_SCHEMA_CURRENT:-$sc_head}"',
+        'sc_status=ok; [ "$sc_cur" = "$sc_head" ] || sc_status=fail',
+        'schema=",\"schema\":{\"status\":\"$sc_status\",\"current\":\"$sc_cur\",\"head\":\"$sc_head\"}"',
+        '[ "${FAKE_SCHEMA_ABSENT:-0}" = "1" ] && schema=""',
         'if [ -f "$FAKE_STATE/recreated" ] && [ "${FAKE_PROVIDER_LISTED:-1}" = "1" ]; then',
-        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"contract_version\":%s,\"providers\":[\"openai-realtime\",\"simulated\"]}}}" "${FAKE_CONTRACT_VERSION:-2}"',
+        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"contract_version\":%s,\"providers\":[\"openai-realtime\",\"simulated\"]}%s}}" "${FAKE_CONTRACT_VERSION:-2}" "$schema"',
         'else',
-        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"contract_version\":%s,\"providers\":[]}}}" "${FAKE_CONTRACT_VERSION:-2}"',
+        '  printf "{\"status\":\"ok\",\"checks\":{\"voice_realtime\":{\"contract_version\":%s,\"providers\":[]}%s}}" "${FAKE_CONTRACT_VERSION:-2}" "$schema"',
         'fi'
     )
     [IO.File]::WriteAllText((Join-Path $Directory "docker"), (($docker -join "`n") + "`n"))

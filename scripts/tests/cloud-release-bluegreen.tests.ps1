@@ -60,7 +60,10 @@ $posix = { param($p) $p = ($p -replace '\\', '/'); if ($p -match '^([A-Za-z]):(.
 # lists the colours that are up; `compose up` / `stop` mark the colours' states. Knobs:
 # FAKE_CONFIG_EXIT, FAKE_UP_EXIT, FAKE_HEALTH_DOWN=<colour> (that colour never answers),
 # FAKE_RELOAD_EXIT, FAKE_SERVED_RELEASE (override what a colour reports),
-# FAKE_CONTRACT_VERSION, FAKE_HANDOFF_STUCK=1 (drained sessions never arrive anywhere).
+# FAKE_CONTRACT_VERSION, FAKE_HANDOFF_STUCK=1 (drained sessions never arrive anywhere),
+# FAKE_MIGRATE_EXIT / FAKE_BUILD_EXIT (B01 req 1: until 2026-09-12 the fake could not fail
+# either, so no test could see that a failed migration did not stop the release),
+# FAKE_SCHEMA_CURRENT / FAKE_SCHEMA_HEAD (B01 req 2: the schema revision a colour serves).
 $docker = @(
     '#!/usr/bin/env bash',
     '# The real docker refuses to run from a deleted working directory ("getwd: no such file',
@@ -97,7 +100,12 @@ $docker = @(
     '    if [ "${FAKE_HEALTH_DOWN:-}" = "$colour" ]; then exit 1; fi',
     '    rel="${FAKE_SERVED_RELEASE:-$(released_for "$colour")}"',
     '    draining=false; [ -f "$FAKE_STATE/draining-$colour" ] && draining=true',
-    '    printf "{\"status\":\"ok\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s}}}" "$rel" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining"',
+    '    # The schema check the colour serves. A migration that ran leaves current == head;',
+    '    # the knobs let a test serve the state a FAILED migration leaves behind.',
+    '    sc_head="${FAKE_SCHEMA_HEAD:-0040_device_build_identity}"',
+    '    sc_cur="${FAKE_SCHEMA_CURRENT:-$sc_head}"',
+    '    sc_status=ok; [ "$sc_cur" = "$sc_head" ] || sc_status=fail',
+    '    printf "{\"status\":\"ok\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
     '    exit 0;;',
     '  compose*" exec -T edge nginx -t"*) exit 0;;',
     '  compose*" exec -T edge nginx -s reload"*)',
@@ -114,7 +122,17 @@ $docker = @(
     '    if [ -n "${FAKE_EDGE_RECREATE:-}" ] && [ -f "$FAKE_STATE/up-edge" ]; then echo "Container pagentos-prod-edge Recreated"; fi',
     '    cp "$FAKE_EDGE/upstream.conf" "$FAKE_STATE/edge-upstream"; touch "$FAKE_STATE/up-edge"; exit 0;;',
     '  compose*" stop api-"*) colour=$(colour_of "$*"); rm -f "$FAKE_STATE/up-$colour" "$FAKE_STATE/draining-$colour"; echo 0 > "$FAKE_STATE/sessions-$colour"; exit 0;;',
-    '  compose*" run "*|build\ *|stop\ *) exit 0;;',
+    '  compose*" run "*alembic*upgrade*head*)',
+    '    if [ -n "${FAKE_MIGRATE_EXIT:-}" ]; then',
+    '      echo "ERROR [alembic.util.messaging] Target database is not up to date." >&2',
+    '      echo "FAILED: relation \"owner_sessions\" already exists" >&2',
+    '      exit "$FAKE_MIGRATE_EXIT"',
+    '    fi',
+    '    exit 0;;',
+    '  build\ *)',
+    '    if [ -n "${FAKE_BUILD_EXIT:-}" ]; then echo "ERROR: failed to solve: process did not complete successfully" >&2; exit "$FAKE_BUILD_EXIT"; fi',
+    '    exit 0;;',
+    '  compose*" run "*|stop\ *) exit 0;;',
     'esac',
     'exit 0'
 )
@@ -270,6 +288,47 @@ try {
         $rt = Invoke-Release -Env @{ PAGENTOS_BACKUP_BIN = (& $u $backupBin); PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S = "2" }
         Assert-True ($rt.Exit -eq 74 -and $rt.Output -match "pre-migration backup did not finish within 2 s" -and $rt.Output -match "the release stops before any migration" -and -not ($rt.Calls -match "alembic upgrade head") -and (Get-Active) -eq "blue" -and (Test-Up "blue") -and -not (Test-Up "green")) "a pre-migration backup that outlives its bound is a failed backup: the release stops before any migration and the active colour keeps serving"
 
+        # B01 requirement 1 (docs/product/PERSONALAGENTOS_V1_MASTER_CHECKLIST.md): a failed
+        # migration must stop the release. Until 2026-09-12 it could not: the script ran
+        # `alembic upgrade head 2>&1 | tail -2` under `set -eu` with no pipefail, so the
+        # pipeline's status was tail's - always 0 - and a database that refused the schema
+        # change was promoted anyway, with the new colour serving code the schema does not
+        # match. The fake could not fail either, which is why no test saw it.
+        Write-Host "migration and build failures stop the release (B01 req 1)"
+        Reset-Host
+        $rm = Invoke-Release -Env @{ FAKE_MIGRATE_EXIT = "1" }
+        Assert-True ($rm.Exit -eq 82 -and $rm.Output -match "migration FAILED \(rc 1\); the release stops here" -and $rm.Output -match 'relation .owner_sessions. already exists') "a failed migration stops the release and says what alembic said"
+        Assert-True ((Get-Active) -eq "blue" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Get-Release) -eq $old -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "after a failed migration the active colour still serves, the idle colour is not up and RELEASE still names the previous sha"
+
+        Reset-Host
+        $rbf = Invoke-Release -Env @{ FAKE_BUILD_EXIT = "1" }
+        Assert-True ($rbf.Exit -eq 78 -and $rbf.Output -match "image build FAILED" -and -not ($rbf.Calls -match "alembic upgrade head")) "a failed image build stops the release before any migration"
+
+        # B01 requirement 2: the migration's RESULT is verified, not just its exit code. The
+        # colour serves the alembic revision it is on and the revision its tree expects; a
+        # release whose schema did not reach head is refused before the switch.
+        Write-Host "schema revision gate (B01 req 2)"
+        Reset-Host
+        $rs = Invoke-Release -Env @{ FAKE_SCHEMA_CURRENT = "0039_owner_media_playbacks" }
+        Assert-True ($rs.Exit -eq 83 -and $rs.Output -match "schema revision" -and $rs.Output -match "0039_owner_media_playbacks" -and $rs.Output -match "0040_device_build_identity") "a colour whose schema is behind its tree is refused before the switch, naming both revisions"
+        Assert-True ((Get-Active) -eq "blue" -and -not (Test-Up "green")) "the schema refusal leaves the active colour serving"
+
+        Reset-Host
+        $rsok = Invoke-Release
+        Assert-True ($rsok.Exit -eq 0 -and $rsok.Output -match "schema at 0040_device_build_identity") "a colour whose schema is at its tree's head passes the gate and says so"
+
+        # B01 req 631/632: a COMPLETED promotion leaves one machine-readable record beside the
+        # three bare markers, so a recovery reads facts instead of inferring them.
+        $meta = Join-Path $hostBase "RELEASE.json"
+        Assert-True (Test-Path $meta) "a completed release writes RELEASE.json beside the plain markers"
+        $m = Get-Content $meta -Raw | ConvertFrom-Json
+        Assert-True ($m.schema_version -eq 1 -and $m.sha -eq $sha -and $m.colour -eq "green" -and $m.build_id -eq "abc123def4567890" -and $m.schema_revision -eq "0040_device_build_identity" -and $m.previous_sha -eq $old -and $m.completed_at -match '^\d{4}-\d{2}-\d{2}T') "...naming the sha, the colour, the BUILD identity, the schema revision, the previous sha and when"
+        Assert-True ((Get-Release) -eq $sha -and (Get-Content (Join-Path $hostBase "LAST_KNOWN_GOOD") -Raw).Trim() -eq $old) "...and the plain-text markers are still written exactly as before"
+
+        Reset-Host
+        $rmNo = Invoke-Release -Env @{ FAKE_MIGRATE_EXIT = "1" }
+        Assert-True (-not (Test-Path (Join-Path $hostBase "RELEASE.json"))) "a release that never completed writes no metadata: the record names promotions, not attempts"
+
         Reset-Host
         $rl = Invoke-Release -Env @{ FAKE_DRAIN_UNSUPPORTED = "blue" }
         if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $rl.Output }
@@ -363,6 +422,7 @@ try {
         Reset-Host
         Clear-Calls
         $c5 = Invoke-Release -Mode "--reconcile"
+        if ($c5.Exit -ne 0 -or $env:PAGENTOS_BG_VERBOSE) { Write-Host "--- reconcile 5 (exit $($c5.Exit)) ---"; Write-Host $c5.Output; $c5.Calls | ForEach-Object { Write-Host "  call: $_" } }
         Assert-True ($c5.Exit -eq 0 -and $c5.Output -match "RECONCILE OK: api-blue is canonical" -and (Test-Up "blue") -and -not (Test-Up "green") -and (Test-UpstreamBoth "blue") -and (Get-Release) -eq $old -and (Get-Sessions "blue") -eq 1 -and -not ($c5.Calls -match " stop api-") -and -not ($c5.Calls -match " up -d")) "a consistent host reconciles to itself: nothing started, nothing stopped, the devices untouched"
 
         Reset-Host

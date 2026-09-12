@@ -206,6 +206,26 @@ try {
         $r67t = Invoke-HostRelease -Env @{ PAGENTOS_BACKUP_BIN = (& $u $legacyBackup); PAGENTOS_PREMIGRATION_BACKUP_TIMEOUT_S = "2" }
         Assert-True ($r67t.Exit -eq 67 -and $r67t.Output -match "pre-migration backup did not finish within 2 s" -and -not ($r67t.Calls -match "alembic upgrade head") -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a pre-migration backup that outlives its bound stops the single-container release before the migration"
 
+        # B01 req 1: the same hole the blue/green path had - `alembic upgrade head 2>&1 |
+        # tail -2` under `set -eu` reported tail's status, so a refused migration promoted a
+        # build against a schema that never changed. The fake could not fail either.
+        Reset-Host
+        $r82 = Invoke-HostRelease -Env @{ FAKE_MIGRATE_EXIT = "1" }
+        Assert-True ($r82.Exit -eq 82 -and $r82.Output -match "migration FAILED \(rc 1\); the release stops here" -and $r82.Output -match 'relation .owner_sessions. already exists' -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a failed migration stops the single-container release, says what alembic said, and rolls the tree back"
+
+        Reset-Host
+        $r78 = Invoke-HostRelease -Env @{ FAKE_BUILD_EXIT = "1" }
+        Assert-True ($r78.Exit -eq 78 -and $r78.Output -match "image build FAILED" -and -not ($r78.Calls -match "alembic upgrade head") -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "a failed image build stops the single-container release before any migration"
+
+        # B01 req 2: the migration's RESULT, not just its exit code.
+        Reset-Host
+        $r83 = Invoke-HostRelease -Env @{ FAKE_SCHEMA_CURRENT = "0039_owner_media_playbacks" }
+        Assert-True ($r83.Exit -eq 83 -and $r83.Output -match "schema revision is '0039_owner_media_playbacks', the tree expects '0040_device_build_identity'" -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "an api whose schema is behind its tree -> exit 83 and rollback, naming both revisions"
+
+        Reset-Host
+        $r83w = Invoke-HostRelease -Env @{ FAKE_SCHEMA_ABSENT = "1" }
+        Assert-True ($r83w.Exit -eq 0 -and $r83w.Output -match "serves no schema check; the migration's RESULT is unverified") "a build too old to report the schema check is called out, not refused (the gate stays releasable)"
+
         Reset-Host
         $r68 = Invoke-HostRelease -Env @{ FAKE_NEVER_PRESENT = "1" }
         Assert-True ($r68.Exit -eq 68 -and $r68.Output -match "MISSING inside" -and (Test-Path (Join-Path $hostBase "app\OLD_TREE"))) "key on host but not in the recreated container -> exit 68 and rollback"

@@ -12,7 +12,10 @@ from app import __version__
 from app.config import Settings
 from app.main import create_app
 
-DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal"}
+# B01 req 2 adds a "schema" check: the alembic revision the database is on vs the head this
+# build carries. It is produced by run_health_checks like the four dependency probes, but it
+# reports its two revisions rather than a bare ok/fail, so it does not go through _run_check.
+DEPENDENCY_CHECKS = {"db", "redis", "object_store", "temporal", "schema"}
 # M3 adds an "artifacts" check (object store reachable) alongside "broker".
 # M4 adds a "voice" check (real-provider activation status; always ok/offline).
 # M5 adds a "memory" check (backend + embedder identity; no I/O, always ok).
@@ -73,6 +76,9 @@ ALL_OK = {
     "redis": {"status": "ok", "latency_ms": 0.4},
     "object_store": {"status": "ok", "latency_ms": 3.1},
     "temporal": {"status": "ok", "latency_ms": 5.0},
+    # B01 req 2: the schema check carries the two revisions instead of a latency - the
+    # release compares them, so an "ok" that did not name them would prove nothing.
+    "schema": {"status": "ok", "current": "0040_x", "head": "0040_x"},
 }
 
 
@@ -90,8 +96,12 @@ def test_health_ok_shape(monkeypatch) -> None:
         # rather than a probe (M18.3 spec §3.3: running, interval, ticks, last error) —
         # neither has a round trip to time, and inventing a zero for one would be a
         # latency this endpoint never measured.
-        if name not in ("temporal_worker", "routine_clock", "retention"):
+        if name not in ("temporal_worker", "routine_clock", "retention", "schema"):
             assert isinstance(check["latency_ms"], int | float)
+    # The schema check must always name both revisions, ok or not: "the migration ran" and
+    # "the schema is where this build expects it" are different claims, and only the second
+    # one can be checked - by comparing these two.
+    assert set(body["checks"]["schema"]) >= {"status", "current", "head"}
     retention = body["checks"]["retention"]
     assert retention["required"] is False
     assert retention["sweeps"] == [
@@ -177,6 +187,15 @@ def test_run_health_checks_marks_only_the_advisory_ones(monkeypatch) -> None:
     monkeypatch.setattr(health, "check_redis", down)
     for name in ("check_db", "check_object_store", "check_temporal"):
         monkeypatch.setattr(health, name, up)
+
+    # The subject here is WHICH checks are advisory, not the schema. This process has no
+    # database, so the real schema check would fail for a reason that has nothing to do with
+    # the question - and a failing REQUIRED check would make every assertion below about
+    # `is_degraded` say the wrong thing for the wrong reason.
+    async def schema_ok(settings) -> dict:  # noqa: ANN001
+        return {"status": "ok", "current": "0040_x", "head": "0040_x"}
+
+    monkeypatch.setattr(health, "check_schema", schema_ok)
     checks = asyncio.run(health.run_health_checks(Settings(_env_file=None)))
     assert checks["redis"]["status"] == "fail" and checks["redis"]["required"] is False
     assert all("required" not in checks[n] for n in ("db", "object_store", "temporal"))
@@ -234,8 +253,13 @@ def test_real_check_runner_reports_fail_not_raise(monkeypatch) -> None:
 
     results = asyncio.run(health_module.run_health_checks(Settings(_env_file=None)))
     assert set(results) == DEPENDENCY_CHECKS
-    for result in results.values():
+    for name, result in results.items():
         assert result["status"] == "fail"
+        if name == "schema":
+            # Not one of the mocked probes: it reaches a database that is not there and says
+            # so in its own words. The point of this test is that NOTHING here raises.
+            assert "did not answer" in result["error"]
+            continue
         assert "ConnectionError" in result["error"]
 
 

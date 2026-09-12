@@ -29,6 +29,7 @@ import asyncio
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
+from datetime import datetime
 from typing import Any, Final, Protocol
 
 from sqlalchemy.orm import Session
@@ -104,14 +105,21 @@ class PendingBriefingAnnouncer:
 
     # ------------------------------------------------------------------ sweep
 
-    def sweep_once(self) -> int:
+    def sweep_once(self, now: datetime | None = None) -> int:
         """One pass. Returns how many rows were stamped delivered (0 or more).
 
         More than one only ever happens for a digest, where several rows became one
         spoken sentence and were therefore all delivered by it.
+
+        ``now`` exists so ONE clock decides a pass. ``pending`` drops rows whose expiry has
+        passed, and a caller that fixes the clock for the rows but not for the sweep is
+        making two decisions with two clocks: the announcer tests queued rows dated
+        2026-09-11 09:00 and swept with the real one, so every case passed until real time
+        crossed the 24-hour expiry and then all six failed at once - nine minutes after a
+        green CI run. Production still passes nothing and gets the real clock.
         """
         with self._session_factory() as session:
-            rows = pending(session)
+            rows = pending(session, now)
             if not rows:
                 return 0
             urgent = [row for row in rows if row.policy != POLICY_DIGEST]

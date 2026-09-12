@@ -31,8 +31,8 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 
 | ID | FEATURE | CURRENT_STATUS | TARGET_STATUS | IMPL | PROOF | PRI | DEPS | BATCH | SOURCE_REFERENCES | TEST_REFERENCES | RUNTIME_PROOF | OWNER_ACTION | NOTES |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Migration hatası release'i durdurur | `set -eu`, pipefail yok; göç çıktısı `tail -2`'ye boruluyor | Göç hatası promote'u bloklar | BROKEN | NYP | P0 | — | B01 | scripts/cloud/release-cloud-core-bluegreen.sh:47,560 | — | denetim 2026-09-12 | no | En yüksek üretim riski |
-| 2 | Alembic sürümü release health'te doğrulanır | Sağlık şema sürümüne bakmıyor | Beklenen revizyon görülmeden yeşil yok | MISSING | NYP | P0 | 1 | B01 | scripts/cloud/release-cloud-core-bluegreen.sh | — | — | no | 1 ile aynı kusurun ikinci yarısı |
+| 1 | Migration hatası release'i durdurur | `set -eu -o pipefail`; göç borusuz, rc 82 ile durur | Göç hatası promote'u bloklar | DONE | PA | P0 | — | B01 | scripts/cloud/release-cloud-core-bluegreen.sh, release-cloud-core.sh | cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1, test_release_health_contract.py | — | no | Kırmızı ÖNCE kanıtlandı (6 vaka); sahte docker artık göçü düşürebiliyor — eskiden düşüremiyordu |
+| 2 | Alembic sürümü release health'te doğrulanır | Sağlık `schema` kontrolü current vs head; sürüm rc 83 ile reddeder | Beklenen revizyon görülmeden yeşil yok | DONE | PR | P0 | 1 | B01 | services/api/app/release/schema.py, app/health.py | test_release_schema.py, test_release_health_contract.py, cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1 | docs/evidence/b01-schema-gate-2026-09-12.json | no | Gerçek PostgreSQL'de ok/fail gözlendi; satır geri yüklenip doğrulandı |
 | 3 | file.search mutlak path çözümü | Bulut klasör adı, cihaz mutlak yol istiyor | Klasör araması üretimde çalışır | BROKEN | NYP | P0 | 5 | B03 | services/api/app/files/, devices/windows-agent | — | ADR-0102 cihaz reddi 2026-09-09 | no | Canlı kusur #1 |
 | 4 | App Factory manifest'leri device contract'a uyar | `{port}` ve eksik `run`/`port` | Üç şablon kabul edilir | BROKEN | NYP | P0 | 5,421 | B03 | services/api/app/appfactory/ | — | cihaz `{`/`}` reddi | no | Canlı kusur #2-3 |
 | 5 | Fake device payload = gerçek wire shape | 7 sahte payload'a bakmıyor | Sahte makineden nazik olamaz | BROKEN | NYP | P0 | — | B03 | packages/protocol/, services/recovery-supervisor/tests/fakes/ | devices/windows-agent/tests/.../NativeManifestContractTests.cs | — | no | Dört canlı kusurun KÖKÜ |
@@ -50,11 +50,11 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 17 | Research announcer bounded retry | Sınırsız | Sınırlı | BROKEN | NYP | P0 | 14 | B07 | services/api/app/research/ | — | — | no | 14 ile ortak |
 | 18 | Background loop health tek tek | Yalnız broker süpürgesi görünür | Sekiz döngü ayrı ayrı | PARTIAL | NYP | P0 | — | B07 | services/api/app/system/health.py | — | canlı sağlık: 18 bileşen | no | Döngü ≠ bileşen |
 | 19 | Routine clock alt bileşen izolasyonu | Tek try/except; bir tik patlarsa hepsi düşer | Alt tikler bağımsız | BROKEN | NYP | P0 | 18 | B07 | services/api/app/routines/ | — | — | no | Alarmı sessizce düşürebilir |
-| 20 | Redis kritik sağlıktan çıkarılmalı (kullanılmıyorsa) | Sağlıkta `redis: ok`; gerçek kullanım ölçülmedi | Koşul ölçülür, karar verilir | PARTIAL | NYP | P0 | — | B07 | infra/docker/, services/api/app/system/health.py | — | canlı sağlık | no | Önce ölç, sonra karar |
-| 21 | Build/version provenance canonical | Cihazda build_id var, bulutta app_version sabit | Tek kanonik gerçek | PARTIAL | NYP | P0 | — | B01 | state/RELEASE*.json, app/system/health.py | — | build 19f079c4fda2c3c7 | no | Cihaz iyi, bulut zayıf |
-| 22 | Aynı version altında build ayrımı | `app_version: 0.1.0` her sürümde aynı | Build ayrımı yapılır | PARTIAL | NYP | P0 | 21 | B01 | app/system/health.py | — | canlı sağlık | no | `version` SHA taşıyor, `app_version` taşımıyor |
-| 23 | BUILD_STATE otomatik reconcile | M28 bitti/IN PROGRESS çelişkisi | Otomatik üretilir | MISSING | NYP | P0 | 21 | B01 | state/BUILD_STATE.json | — | — | no | Elle güncelleme çelişki üretti |
-| 24 | Evidence-only-in-prose yasak | Stage 1-6'da 22 satır doğrulanamaz | Her iddia kanıt dosyasına bağlı | PARTIAL | NYP | P0 | — | B01 | docs/ACCEPTANCE_TESTS.md, docs/evidence/ | — | 31/31 kanıt dosyası mevcut | no | Eski satırlar geriye dönük |
+| 20 | Redis kritik sağlıktan çıkarılmalı (kullanılmıyorsa) | `ADVISORY_CHECKS` redis'i kritik olmaktan çıkarıyor | Koşul ölçülür, karar verilir | DONE | PA | P0 | — | — | services/api/app/health.py:28 | test_health_endpoint.py::test_an_advisory_check_is_one_nothing_in_the_app_depends_on | canlı sağlık: redis required=false | no | B01'de ölçüldü: matris yanlışlıkla PARTIAL sayıyordu — 2026-09-11'de zaten çözülmüş |
+| 21 | Build/version provenance canonical | `release.build_id`: kaynaklardan türetilmiş 16 hex | Tek kanonik gerçek | DONE | PR | P0 | — | B01 | services/api/app/release/build.py, release/version.py | test_release_build_identity.py | docs/evidence/b01-schema-gate-2026-09-12.json | no | Cihazın AgentInfo.BuildId kuralı aynada; test cihazın kendi kaynağını okuyor |
+| 22 | Aynı version altında build ayrımı | build_id aynı app_version altında iki imajı ayırıyor | Build ayrımı yapılır | DONE | PR | P0 | 21 | B01 | services/api/app/release/build.py | test_release_build_identity.py | docs/evidence/b01-schema-gate-2026-09-12.json (build_id 516452ef2d144269) | no | version_model 1→2 (additive alan) |
+| 23 | BUILD_STATE otomatik reconcile | `reconcile_build_state.py` türetilen alanları üretir | Otomatik üretilir | DONE | PA | P0 | 21 | B01 | scripts/core/reconcile_build_state.py | test_build_state_reconciled.py | state/BUILD_STATE.json bu commit'te mutabık | no | Anlatı yeniden yazılmıyor, DENETLENİYOR: blok stage'inden fazlasını iddia edemez |
+| 24 | Evidence-only-in-prose yasak | Kanıt işaretli satır var olan bir şeyi göstermeli | Her iddia kanıt dosyasına bağlı | DONE | PA | P0 | — | B01 | docs/QUALIFICATION.md | test_qualification_evidence.py | 272 satır tarandı | no | 16 tarihi satır adıyla listelendi; liste YALNIZCA küçülebilir |
 | 25 | CI tüm kritik testleri kapsar | 7 job yeşil ama kapsam eksik | Kritik test dışarıda kalmaz | PARTIAL | PA | P0 | — | B02 | .github/workflows/ | — | CI success @48dfcc3 | no | 26-29'un şemsiyesi |
 | 26 | Web testleri CI'da | ~1472 test hiçbir kapıda | CI'da koşar | MISSING | NYP | P0 | 25 | B02 | .github/workflows/, apps/web/ | apps/web tests | — | no | CI yalnız `pnpm build` |
 | 27 | Web linter CI'da | İki linter kapısız | CI'da koşar | MISSING | NYP | P0 | 25 | B02 | .github/workflows/ | — | — | no | — |
@@ -807,14 +807,14 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 628 | MinIO backup | API üzerinden, host tarafı ayrıştırma | Aynı | DONE | PR | P0 | — | — | scripts/cloud/backup-cloud-core.sh | backup_fakes.py | 21 nesne | no | "0 nesne" kusuru düzeltildi |
 | 629 | Config backup | .env, kimlik kökü, edge durumu, systemd | Aynı | DONE | PR | P0 | — | — | scripts/cloud/backup-cloud-core.sh | recovery testleri | — | no | — |
 | 630 | Identity-root backup strategy | DPAPI escrow | Host dışı da | DONE | PR | P0 | 644 | B09 | scripts/secret-store.ps1 | — | anahtar escrow'da | no | 644 ile tamamlanır |
-| 631 | Release metadata | Çalışıyor | Kanonik | DONE | PR | P0 | 21 | B01 | state/RELEASE*.json | — | LKG d86b3d9 | no | 21-23 ile birlikte sadeleşir |
-| 632 | Recovery metadata | Kısmi | Tam | PARTIAL | NYP | P0 | 631 | B01 | services/recovery-supervisor/ | — | — | no | — |
+| 631 | Release metadata | RELEASE + LAST_KNOWN_GOOD + RELEASE.json | Kanonik | DONE | PR | P0 | 21 | B01 | scripts/cloud/release-cloud-core-bluegreen.sh (write_release_metadata) | cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1 | üretimde LKG d86b3d9 (düz metin) | no | RELEASE.json bir sonraki sürümde üretimde oluşacak |
+| 632 | Recovery metadata | RELEASE.json: sha, renk, build_id, şema, önceki sha, zaman | Tam | DONE | PA | P0 | 631 | B01 | scripts/cloud/release-cloud-core-bluegreen.sh | cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1 | — | no | Sürüm, reconcile ve rollback üçü de yazıyor; tamamlanmamış sürüm yazmıyor |
 | 633 | Encryption | Çalışıyor | Aynı | DONE | PR | P0 | — | — | scripts/cloud/backup-cloud-core.sh | recovery testleri | restic | no | — |
 | 634 | Integrity hash | Tablo bazında sha256, dökümün kendisinden | Aynı | DONE | PR | P0 | — | — | scripts/cloud/backup-cloud-core.sh | recovery testleri | parmak izleri | no | Güçlü disiplin |
 | 635 | Retention | Çalışıyor | Aynı | DONE | PA | P0 | — | — | scripts/cloud/backup-cloud-core.sh | recovery testleri | — | no | — |
 | 636 | Daily schedule | Timer armed | Aynı | DONE | PR | P0 | — | — | scripts/cloud/install-recovery-supervisor.sh | — | systemd timer | no | — |
 | 637 | Weekly restore drill | Geçti | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | tatbikat verdict passed | no | Ürün ilkesi uygulanmış |
-| 638 | Pre-migration backup | `timeout --kill-after=60` ile sarılı | Aynı | DONE | PA | P0 | — | B01 | scripts/cloud/release-cloud-core*.sh | release testleri | exit 74/67 | no | 1 ile birlikte gözden geçir |
+| 638 | Pre-migration backup | `timeout --kill-after=60`, rc 74/67 | Aynı | DONE | PA | P0 | — | — | scripts/cloud/release-cloud-core*.sh | cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1 | — | no | pipefail altında gözden geçirildi: rc zaten açıkça yakalanıyordu, değişmedi |
 | 639 | Restore script | Çalışıyor | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | — | no | — |
 | 640 | PostgreSQL restore | Kanıtlandı | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | scratch container drill | no | — |
 | 641 | MinIO restore | Kanıtlandı | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | 21 nesne | no | — |
@@ -989,3 +989,85 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
 - Geri yüklemesi kanıtlanmamış yedek `PROVEN_REAL` olmaz.
 - Bağımsız artefakt incelemesi olmayan derleme `VERIFIED` olmaz.
 - Postcondition doğrulanmamış operatör eylemi başarılı sayılmaz.
+
+---
+
+## KAPANIŞ KAYITLARI
+
+### B01 — Sürüm güvenliği ve sürüm gerçeği · 2026-09-12
+
+```
+1    status : DONE
+     commit : <B01>
+     tests  : scripts/tests/cloud-release-bluegreen.tests.ps1 (a failed migration stops the
+              release and says what alembic said; a failed image build stops it before any
+              migration), scripts/tests/cloud-release.tests.ps1 (aynı iki vaka tek renkli yolda),
+              services/api/tests/unit/test_release_health_contract.py::test_neither_release_script_can_lose_a_failure_in_a_pipe_again
+     proof  : PROVEN_AUTOMATED — altı vakanın hepsi düzeltilmemiş betiğe karşı ÖNCE kırmızı
+              kanıtlandı (49 geçen / 6 başarısız), sonra yeşile döndü (59/59, 38/38)
+     date   : 2026-09-12
+
+2    status : DONE
+     commit : <B01>
+     tests  : services/api/tests/unit/test_release_schema.py (7), test_release_health_contract.py,
+              scripts/tests/cloud-release*.tests.ps1 (exit 83 + "serves no schema check" uyarısı)
+     proof  : PROVEN_REAL — docs/evidence/b01-schema-gate-2026-09-12.json: gerçek PostgreSQL'de
+              head'de `ok`, bir revizyon geride `fail` (iki revizyon da adıyla), satır geri
+              yüklenip yeniden okundu
+     date   : 2026-09-12
+
+20   status : DONE
+     commit : <B01>
+     tests  : test_health_endpoint.py::test_an_advisory_check_is_one_nothing_in_the_app_depends_on
+     proof  : PROVEN_AUTOMATED — `ADVISORY_CHECKS` + app/ içinde redis istemcisi arayan test
+     date   : 2026-09-12
+     note   : B01'de yol üstünde ölçüldü; 2026-09-11'de zaten çözülmüştü, matris yanlış
+              sınıflandırmıştı. Düzeltildi, B07'den düşürüldü.
+
+21   status : DONE
+22   status : DONE
+     commit : <B01>
+     tests  : services/api/tests/unit/test_release_build_identity.py (7; sonuncusu cihazın
+              ProtocolConstants.cs kaynağını okuyup iki yarının aynı şekli kullandığını pinliyor)
+     proof  : PROVEN_REAL — gerçek ağaçta build_id 516452ef2d144269 (16 hex), aynı bayt aynı
+              kimlik, tek bayt farkı farklı kimlik, __pycache__ etkisiz
+     date   : 2026-09-12
+
+23   status : DONE
+     commit : <B01>
+     tests  : services/api/tests/unit/test_build_state_reconciled.py (13)
+     proof  : PROVEN_AUTOMATED — state/BUILD_STATE.json bu commit'te türetilen kayıtla mutabık;
+              üç çelişkinin üçü de kapandı (last_completed M27→M28_NATIVE_APP_FACTORY,
+              milestones bloğu, M28 = ENGINEERING CLOSED çünkü 26.17 PROVIDER_UNAVAILABLE)
+     date   : 2026-09-12
+
+24   status : DONE
+     commit : <B01>
+     tests  : services/api/tests/unit/test_qualification_evidence.py (5; biri kuralın kendisini
+              yanlışlar: düz yazı reddedilir, dört referans türü kabul edilir)
+     proof  : PROVEN_AUTOMATED — 272 kanıt işaretli satır tarandı, 16'sı tarihi borç olarak
+              adıyla listelendi; liste yalnızca küçülebilir
+     date   : 2026-09-12
+
+631  status : DONE
+632  status : DONE
+     commit : <B01>
+     tests  : scripts/tests/cloud-release-bluegreen.tests.ps1 (RELEASE.json'ın alanları;
+              tamamlanmamış bir sürümün metadata YAZMADIĞI)
+     proof  : PROVEN_AUTOMATED — sürüm, reconcile ve rollback yollarının üçü de yazıyor
+     date   : 2026-09-12
+
+638  status : DONE
+     commit : <B01>
+     tests  : scripts/tests/cloud-release*.tests.ps1 (rc 74/67 + zaman aşımı vakaları)
+     proof  : PROVEN_AUTOMATED — değişmedi; pipefail altında gözden geçirildi
+     date   : 2026-09-12
+```
+
+**B01'de yol üstünde bulunan ve aynı batch'te kapatılan kusur (batch dışı değil, batch'in
+kendi CI kapısı):** `test_briefing_announcer.py`'nin altı vakası 2026-09-11 09:00 tarihli satır
+kuruyor ama süpürmeyi GERÇEK saatle yapıyordu; `pending` 24 saatlik süresi geçmiş satırı
+düşürdüğü için suite tam olarak o pencere kapanana kadar yeşildi ve **yeşil bir CI koşusundan
+dokuz dakika sonra** altı yerden birden kırmızıya döndü. `sweep_once(now)` artık tek saatle
+karar veriyor ve `test_one_pass_is_decided_by_one_clock` bunu pinliyor. Bu, bu deponun en sık
+tekrar eden hata şekli ("bir karar, iki saat") ve B01'in CI kapısını bloklayan tek şeydi.

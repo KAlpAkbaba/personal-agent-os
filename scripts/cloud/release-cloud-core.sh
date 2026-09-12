@@ -10,12 +10,13 @@
 #   (--preflight stops here: reports, removes app.next, changes nothing)
 #   keep the previous image as pagentos/cloud-core:prev
 #   swap trees: app -> app.prev, app.next -> app
-#   build api image
+#   build api image                                                              78
 #   pre-migration backup (ADR-0122; a warning, not a stop, when not installed)     67
-#   alembic upgrade head (additive migrations; never downgraded on rollback)
-#   recreate ONLY the api workload (--no-deps --force-recreate --wait)
+#   alembic upgrade head (additive migrations; never downgraded on rollback)       82
+#   recreate ONLY the api workload (--no-deps --force-recreate --wait)             75
 #   health on loopback
 #   served realtime contract_version == the tree's CONTRACT_VERSION           73
+#   served schema revision == the tree's alembic head (the migration RESULT)     83
 #   PAGENTOS_VOICE_OPENAI_API_KEY PRESENT inside the container when the env file has it  68
 #   with the key: marin and cedar each minted and echoed unchanged by the vendor  74
 #   health lists openai-realtime when the key is present                  69
@@ -24,7 +25,12 @@
 #
 # Env overrides for tests: PAGENTOS_BASE (default /opt/pagentos), PAGENTOS_API_CONTAINER,
 # PAGENTOS_HEALTH_URL, PAGENTOS_IMAGE (default pagentos/cloud-core:local).
-set -eu
+#
+# pipefail, since 2026-09-12 (B01 req 1): the same hole the blue/green path had. `cmd 2>&1 |
+# tail -2` under plain `set -eu` reports tail's status, so a migration alembic refused did
+# not stop the release. The steps that must stop it now capture their output instead of
+# piping it; pipefail keeps the next `| tail` from reopening the hole.
+set -eu -o pipefail
 
 sha=${1:?SHA}
 mode=${2:-release}
@@ -96,7 +102,13 @@ echo "tree swapped: $cur is $sha (previous kept at $prev)"
 cd "$cur/infra/docker"
 compose=(docker compose -f docker-compose.prod.yml --env-file "$envf")
 echo "building the api image..."
-"${compose[@]}" build api 2>&1 | tail -2
+build_out=""; build_rc=0
+build_out="$("${compose[@]}" build api 2>&1)" || build_rc=$?
+printf '%s\n' "$build_out" | tail -2
+if [ "$build_rc" -ne 0 ]; then
+    echo "image build FAILED (rc $build_rc); the release stops before any migration" >&2
+    exit 78
+fi
 # ADR-0122: a safety point before any schema change; the same rule as the blue/green path,
 # bounded the same way.
 backup_bin=${PAGENTOS_BACKUP_BIN:-/opt/pagentos-backup}/backup-cloud-core.sh
@@ -120,9 +132,21 @@ else
     echo "WARNING: no backup tooling at $backup_bin; migrating WITHOUT a safety point (install-backup.sh)" >&2
 fi
 echo "applying migrations..."
-"${compose[@]}" run --rm --no-deps --entrypoint uv api run alembic upgrade head 2>&1 | tail -2
+migrate_out=""; migrate_rc=0
+migrate_out="$("${compose[@]}" run --rm --no-deps --entrypoint uv api run alembic upgrade head 2>&1)" || migrate_rc=$?
+printf '%s\n' "$migrate_out" | tail -4
+if [ "$migrate_rc" -ne 0 ]; then
+    echo "migration FAILED (rc $migrate_rc); the release stops here - the database keeps the schema it had" >&2
+    exit 82
+fi
 echo "recreating the api workload (dependencies untouched)..."
-"${compose[@]}" up -d --no-deps --force-recreate --wait api 2>&1 | tail -2
+up_out=""; up_rc=0
+up_out="$("${compose[@]}" up -d --no-deps --force-recreate --wait api 2>&1)" || up_rc=$?
+printf '%s\n' "$up_out" | tail -2
+if [ "$up_rc" -ne 0 ]; then
+    echo "the api workload did not come up (rc $up_rc)" >&2
+    exit 75
+fi
 
 health="$(curl -fsS "$health_url")"
 case "$health" in
@@ -135,12 +159,42 @@ esac
 version_file="$cur/services/api/app/voice/realtime_sessions/contract_version.py"
 if [ -f "$version_file" ]; then
     expected_contract="$(grep -oE '^CONTRACT_VERSION[[:space:]]*=[[:space:]]*[0-9]+' "$version_file" | grep -oE '[0-9]+$' || true)"
-    served_contract="$(printf '%s' "$health" | grep -oE '"contract_version":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)"
+    # grep -m1 rather than `| head -1`: under pipefail a reader that stops early kills the
+    # producer with SIGPIPE and the whole pipeline is a failure - here that would silently
+    # empty served_contract and refuse a good release with 73.
+    served_contract="$(grep -m1 -oE '"contract_version":[[:space:]]*[0-9]+' <<<"$health" || true)"
+    served_contract="${served_contract##*[!0-9]}"
     if [ -z "$expected_contract" ] || [ "$served_contract" != "$expected_contract" ]; then
         echo "served realtime contract_version is '${served_contract:-absent}', the tree expects '${expected_contract:-?}'" >&2
         exit 73
     fi
     echo "realtime contract_version $served_contract served (matches the tree)"
+fi
+
+# The schema gate (B01 req 2): `alembic upgrade head` exiting 0 is not proof the schema
+# REACHED head. The api reports the revision the database is on and the head its own tree
+# carries; they must be the same, or this release serves code against a schema that never
+# caught up. A build too old to report the check is called out, not refused.
+schema_field() {
+    # schema_field BLOCK FIELD: one quoted value out of the schema check, or empty. Never the
+    # whole block: a sed that does not match prints its input, and "current" == "head" would
+    # then be true for a body that carries neither.
+    local field
+    field="$(grep -m1 -oE "\"$2\":[[:space:]]*\"[^\"]*\"" <<<"$1" || true)"
+    # An `if` with no else always returns 0: a bare `[ -n ... ] && sed` would make the
+    # function fail on an absent field, and `x="$(schema_field ...)"` would then trip set -e.
+    if [ -n "$field" ]; then sed -E 's/.*"([^"]*)"$/\1/' <<<"$field"; fi
+}
+schema_block="$(grep -m1 -oE '"schema":[[:space:]]*\{[^}]*' <<<"$health" || true)"
+schema_current="$(schema_field "$schema_block" current)"
+schema_head="$(schema_field "$schema_block" head)"
+if [ -z "$schema_block" ]; then
+    echo "WARNING: this build serves no schema check; the migration's RESULT is unverified" >&2
+elif [ "$schema_current" != "$schema_head" ]; then
+    echo "schema revision is '${schema_current:-absent}', the tree expects '${schema_head:-absent}': the migration did not reach head" >&2
+    exit 83
+else
+    echo "schema at $schema_head (database matches the tree)"
 fi
 
 if [ "$key_on_host" -gt 0 ]; then

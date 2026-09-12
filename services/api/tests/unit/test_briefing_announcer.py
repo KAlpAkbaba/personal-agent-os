@@ -83,6 +83,25 @@ def _queue(factory, *, event_type: str, summary: str, at: datetime, **detail) ->
         return queued.briefing_id
 
 
+def test_one_pass_is_decided_by_one_clock(factory) -> None:
+    """The regression for 2026-09-12: every case in this file queued rows dated 2026-09-11
+    09:00 and then swept with the REAL clock. ``pending`` drops rows whose 24-hour expiry has
+    passed, so the suite passed for exactly as long as real time stayed inside that window and
+    then failed six ways at once - nine minutes after a green CI run. The fixture's clock and
+    the sweep's clock are now the same clock, and this test is the one that says so.
+    """
+    _queue(factory, event_type=EVENT_TYPE_RESEARCH_COMPLETED, summary="x", at=NOW, findings=1)
+
+    late = FakeSpeaker(deliver=True)
+    assert PendingBriefingAnnouncer(factory, late).sweep_once(NOW + timedelta(hours=25)) == 0
+    assert late.said == [], "an expired briefing is not spoken"
+
+    # The same row, the same process, swept at the time the fixture is written for.
+    on_time = FakeSpeaker(deliver=True)
+    assert PendingBriefingAnnouncer(factory, on_time).sweep_once(NOW) == 1
+    assert len(on_time.said) == 1
+
+
 def _rows(factory) -> list[PendingBriefingRow]:
     with factory() as session:
         return list(session.execute(select(PendingBriefingRow)).scalars().all())
@@ -101,7 +120,7 @@ def test_an_urgent_briefing_is_spoken_as_itself_and_stamped_by_the_delivery(fact
     )
     speaker = FakeSpeaker(deliver=True)
 
-    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once()
+    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once(NOW)
 
     assert delivered == 1
     assert speaker.said == [
@@ -121,7 +140,7 @@ def test_nobody_heard_it_means_it_is_not_delivered(factory) -> None:
     _queue(factory, event_type=EVENT_TYPE_RESEARCH_COMPLETED, summary="x", at=NOW, findings=1)
     speaker = FakeSpeaker(deliver=False)
 
-    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once()
+    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once(NOW)
 
     assert delivered == 0
     assert len(speaker.said) == 1, "it tried"
@@ -132,7 +151,7 @@ def test_nobody_heard_it_means_it_is_not_delivered(factory) -> None:
 def test_a_speaker_that_raises_stamps_nothing_and_does_not_kill_the_sweep(factory) -> None:
     _queue(factory, event_type=EVENT_TYPE_RESEARCH_COMPLETED, summary="x", at=NOW, findings=1)
 
-    delivered = PendingBriefingAnnouncer(factory, FakeSpeaker(raise_on_say=True)).sweep_once()
+    delivered = PendingBriefingAnnouncer(factory, FakeSpeaker(raise_on_say=True)).sweep_once(NOW)
 
     assert delivered == 0
     (row,) = _rows(factory)
@@ -153,11 +172,11 @@ def test_only_one_thing_is_said_per_pass(factory) -> None:
     speaker = FakeSpeaker()
     announcer = PendingBriefingAnnouncer(factory, speaker)
 
-    assert announcer.sweep_once() == 1
+    assert announcer.sweep_once(NOW) == 1
     assert len(speaker.said) == 1
-    assert announcer.sweep_once() == 1
+    assert announcer.sweep_once(NOW) == 1
     assert len(speaker.said) == 2
-    assert announcer.sweep_once() == 0, "nothing left"
+    assert announcer.sweep_once(NOW) == 0, "nothing left"
     assert all(row.delivered_at is not None for row in _rows(factory))
 
 
@@ -176,7 +195,7 @@ def test_digests_become_one_sentence_and_are_all_stamped_together(factory) -> No
         )
     speaker = FakeSpeaker()
 
-    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once()
+    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once(NOW)
 
     assert delivered == 3
     assert speaker.said == [
@@ -190,7 +209,7 @@ def test_a_single_digest_is_spoken_as_its_own_sentence(factory) -> None:
     _queue(factory, event_type="evolution.idea_created", summary="Evrim fırsatı açıldı.", at=NOW)
     speaker = FakeSpeaker()
 
-    PendingBriefingAnnouncer(factory, speaker).sweep_once()
+    PendingBriefingAnnouncer(factory, speaker).sweep_once(NOW)
 
     assert speaker.said == ["Efendim, bilginize; Evrim fırsatı açıldı."]
 
@@ -206,7 +225,7 @@ def test_an_urgent_row_is_spoken_before_an_older_digest(factory) -> None:
     )
     speaker = FakeSpeaker()
 
-    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once()
+    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once(NOW)
 
     assert delivered == 1
     assert "araştırma tamamlandı" in speaker.said[0]
@@ -247,7 +266,7 @@ def test_an_expired_briefing_is_never_spoken(factory) -> None:
     )
     speaker = FakeSpeaker()
 
-    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once()
+    delivered = PendingBriefingAnnouncer(factory, speaker).sweep_once(NOW)
 
     assert delivered == 0
     assert speaker.said == []
@@ -408,7 +427,7 @@ def test_a_briefing_is_stamped_by_the_drain_that_delivered_it_not_by_the_queue()
         announcer = PendingBriefingAnnouncer(factory, speaker)
 
         # --- pass one: queued, and honestly NOT delivered.
-        assert announcer.sweep_once() == 0, "a queue is not a delivery"
+        assert announcer.sweep_once(NOW) == 0, "a queue is not a delivery"
         with factory() as session:
             assert session.get(PendingBriefingRow, briefing_id).delivered_at is None
             live = session.get(RealtimeSessionRow, session_id)
@@ -419,7 +438,7 @@ def test_a_briefing_is_stamped_by_the_drain_that_delivered_it_not_by_the_queue()
         assert frame["payload"]["routine_id"] == str(RealtimeSayBriefingSpeaker.SYSTEM_ORIGIN)
 
         # --- pass two: it is still sitting there unheard, so nothing is added.
-        assert announcer.sweep_once() == 0
+        assert announcer.sweep_once(NOW) == 0
         with factory() as session:
             live = session.get(RealtimeSessionRow, session_id)
             assert len(live.context_json["pending_sideband"]) == 1, "no second copy"

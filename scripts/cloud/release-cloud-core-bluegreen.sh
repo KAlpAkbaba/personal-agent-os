@@ -18,14 +18,15 @@
 #   docker compose config validation on the NEW tree                     71
 #   (--preflight stops here: reports, removes app.next, changes nothing)
 #   swap trees: app -> app.prev, app.next -> app (rollback restores them)
-#   build the image for THIS sha (pagentos/cloud-core:SHA; the old image is untouched)
+#   build the image for THIS sha (pagentos/cloud-core:SHA; the old image is untouched) 78
 #   pre-migration backup (ADR-0122; a warning, not a stop, when not installed)     74
-#   alembic upgrade head (expand-only migrations, gated by test_migration_compatibility)
+#   alembic upgrade head (expand-only, gated by test_migration_compatibility)        82
 #   record the idle colour's image + release sha in the env file
 #   up the IDLE colour only (--no-deps --wait); the active colour keeps serving
 #   health on the idle colour (in-container; it has no published port)          75
 #   served realtime contract_version == the tree's CONTRACT_VERSION           73
 #   served release == SHA (the version model, spec §2)                          76
+#   served schema revision == the tree's alembic head (the migration RESULT)      83
 #   DEVICE HANDOFF (M18.4 gap 1): the device upstream -> idle colour, the active colour
 #     drains its device sessions (the agent reconnects through the edge within ~1 s),
 #     wait until the idle colour holds them                                       79
@@ -44,7 +45,16 @@
 # (default /mnt/pagentos-data/edge), PAGENTOS_HEALTH_URL, PAGENTOS_DRAIN_S,
 # PAGENTOS_HANDOFF_WAIT_S, PAGENTOS_IMAGE_REPO, PAGENTOS_INTERRUPT_AT (a controlled crash
 # for the recovery proof: after_idle_up | after_device_handoff | after_switch | after_drain).
-set -eu
+# pipefail, since 2026-09-12 (B01 req 1). Every step below was written as
+# `cmd 2>&1 | tail -N` so the log stays short - and under plain `set -eu` a pipeline's status
+# is the LAST command's, i.e. tail's, i.e. always 0. A migration alembic refused therefore
+# did not stop anything: the release went on to promote a colour serving code the schema does
+# not match. The steps whose failure must stop the release now capture their output instead
+# of piping it (the status is theirs again, and the message survives); pipefail is the guard
+# that keeps the next `| tail` from silently reopening the same hole. The two places where a
+# non-zero status must NOT abort - stopping the drained old colour after a COMPLETED switch,
+# and the reconcile's best-effort cleanup - say so with `|| true` and a warning.
+set -eu -o pipefail
 
 first_arg=${1:?SHA, or --rollback / --reconcile}
 case "$first_arg" in
@@ -79,7 +89,12 @@ upsert_env() {
     fi
 }
 
-env_value() { grep "^$1=" "$envf" 2>/dev/null | head -1 | sed 's/^[^=]*=//' || true; }
+# The read helpers below take no pipe between a producer and a truncating reader. Under
+# pipefail a `grep -q` or a `head -1` that stops early closes the pipe, the producer dies of
+# SIGPIPE, and the PIPELINE is a failure - which turned `service_running` into "nothing is
+# running" and would have turned `sessions_of` into a silent 0. `grep -m1` and a here-string
+# say the same thing with nothing left to break.
+env_value() { local line; line="$(grep -m1 "^$1=" "$envf" 2>/dev/null || true)"; printf '%s' "${line#*=}"; }
 
 upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 
@@ -116,14 +131,18 @@ in_container_health() {
 
 service_running() {
     # service_running SERVICE: compose says the service (api-blue, api-green, edge) runs.
-    compose ps --status running --services 2>/dev/null | grep -qx "$1"
+    local listed
+    listed="$(compose ps --status running --services 2>/dev/null || true)"
+    grep -qx "$1" <<<"$listed"
 }
 
 sessions_of() {
     # sessions_of COLOUR: the device sessions the colour holds (health.checks.broker).
-    local body
+    local body field
     body="$(in_container_health "$1" 2>/dev/null || true)"
-    printf '%s' "$body" | grep -oE '"active_sessions":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || echo 0
+    field="$(grep -m1 -oE '"active_sessions":[[:space:]]*[0-9]+' <<<"$body" || true)"
+    field="${field##*[!0-9]}"
+    printf '%s' "${field:-0}"
 }
 
 post_loopback() {
@@ -139,7 +158,7 @@ post_loopback() {
 
 drain_colour() { post_loopback "$1" /v1/devices/drain; }
 undrain_colour() { post_loopback "$1" /v1/devices/undrain; }
-status_of() { printf '%s\n' "$1" | head -1 | awk '{print $2}'; }
+status_of() { awk 'NR==1 {print $2}' <<<"$1"; }
 
 wait_for_sessions() {
     # wait_for_sessions COLOUR WANTED SECONDS: until the colour holds at least WANTED
@@ -237,14 +256,58 @@ ensure_edge() {
     local out
     install_edge_config
     out="$(compose up -d --no-deps --wait edge 2>&1 || true)"
-    if printf '%s' "$out" | grep -qi "recreat"; then
+    if grep -qi "recreat" <<<"$out"; then
         echo "edge RECREATED: its compose definition changed (one gap while the new container took the socket)"
     fi
 }
 
 served_release() {
     # served_release BODY: the release sha a health body names, or empty.
-    printf '%s' "$1" | grep -oE '"release":[[:space:]]*\{[^}]*' | grep -oE '"version":[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true
+    local block field
+    block="$(grep -m1 -oE '"release":[[:space:]]*\{[^}]*' <<<"$1" || true)"
+    field="$(grep -m1 -oE '"version":[[:space:]]*"[^"]*"' <<<"$block" || true)"
+    sed -E 's/.*"([^"]*)"$/\1/' <<<"$field"
+}
+
+served_build_id() {
+    # served_build_id BODY: release.build_id - the identity DERIVED from the build's own
+    # sources (B01 req 21/22). `version` is only what the host exported and `app_version` has
+    # been 0.1.0 for every release production ever had; this is the field that can actually
+    # tell two images apart.
+    local block field
+    block="$(grep -m1 -oE '"release":[[:space:]]*\{[^}]*' <<<"$1" || true)"
+    field="$(grep -m1 -oE '"build_id":[[:space:]]*"[^"]*"' <<<"$block" || true)"
+    sed -E 's/.*"([^"]*)"$/\1/' <<<"$field"
+}
+
+write_release_metadata() {
+    # write_release_metadata SHA COLOUR BUILD_ID SCHEMA PREVIOUS: the canonical, machine-
+    # readable record of a COMPLETED promotion (B01 req 631/632), written atomically beside
+    # the plain-text markers the older tooling reads.
+    #
+    # Until now the only durable facts were three bare strings in three files - RELEASE,
+    # LAST_KNOWN_GOOD and the active-colour marker - and everything else (which build, which
+    # schema, when) had to be inferred from the env file, the containers and the log. A
+    # recovery that has to infer is a recovery that can be wrong. The plain files stay exactly
+    # as they were: this is added beside them, never instead of them.
+    local sha=$1 colour=$2 build=$3 schema=$4 previous=$5
+    local tmp="$base/RELEASE.json.next"
+    printf '{"schema_version":1,"sha":"%s","colour":"%s","build_id":"%s","schema_revision":"%s","previous_sha":"%s","completed_at":"%s"}\n' \
+        "$sha" "$colour" "${build:-unknown}" "${schema:-unknown}" "${previous:-}" \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+    mv "$tmp" "$base/RELEASE.json"
+}
+
+served_schema_field() {
+    # served_schema_field BODY FIELD: checks.schema.<current|head|status>, or empty.
+    # B01 req 2: `alembic upgrade head` exiting 0 is not proof the schema REACHED head - a
+    # migration can be skipped, a colour can be started against another database, a rollback
+    # can leave the tree ahead of the rows. The colour itself reports which revision it is on
+    # and which one its tree expects, and the release compares them before the switch.
+    local block field
+    block="$(grep -m1 -oE '"schema":[[:space:]]*\{[^}]*' <<<"$1" || true)"
+    field="$(grep -m1 -oE "\"$2\":[[:space:]]*\"[^\"]*\"" <<<"$block" || true)"
+    sed -E 's/.*"([^"]*)"$/\1/' <<<"$field"
 }
 
 maybe_interrupt() {
@@ -383,6 +446,10 @@ if [ "$mode" = "--reconcile" ]; then
     fi
     if [ -n "$canonical_sha" ]; then
         echo "$canonical_sha" > "$base/RELEASE"
+        # B01 req 632: a reconcile ALSO produces canonical metadata - otherwise the one state
+        # a recovery most needs to describe is the one state nothing describes.
+        write_release_metadata "$canonical_sha" "$canonical" "$(served_build_id "$body")" \
+            "$(served_schema_field "$body" head)" "${lkg_sha:-}"
     fi
     # The tree: an interrupted release had already swapped app.next in. The canonical
     # release's tree (app.prev, named by its own RELEASE file) comes back; the candidate's
@@ -462,6 +529,8 @@ if [ "$mode" = "--rollback" ]; then
     [ -n "$target_sha" ] && echo "$target_sha" > "$base/RELEASE"
     [ -n "$leaving_sha" ] && echo "$leaving_sha" > "$base/LAST_KNOWN_GOOD"
     [ -n "$leaving_sha" ] && upsert_env "PAGENTOS_LAST_KNOWN_GOOD" "$leaving_sha"
+    [ -n "$target_sha" ] && write_release_metadata "$target_sha" "$prev_colour" \
+        "$(served_build_id "$body")" "$(served_schema_field "$body" head)" "${leaving_sha:-}"
     echo "ROLLBACK OK: api-$prev_colour is active"
     exit 0
 fi
@@ -523,7 +592,13 @@ echo "tree swapped: $cur is $sha (previous kept at $prev)"
 
 cd "$cur/infra/docker"
 echo "building $image_repo:$sha ..."
-docker build -t "$image_repo:$sha" "$cur/services/api" 2>&1 | tail -2
+build_out=""; build_rc=0
+build_out="$(docker build -t "$image_repo:$sha" "$cur/services/api" 2>&1)" || build_rc=$?
+printf '%s\n' "$build_out" | tail -2
+if [ "$build_rc" -ne 0 ]; then
+    echo "image build FAILED (rc $build_rc); the release stops before any migration" >&2
+    exit 78
+fi
 upsert_env "PAGENTOS_IMAGE_$IDLE" "$sha"
 upsert_env "PAGENTOS_RELEASE_$IDLE" "$sha"
 upsert_env "PAGENTOS_EDGE_DIR" "$edge_dir"
@@ -556,11 +631,26 @@ else
     echo "WARNING: no backup tooling at $backup_bin; migrating WITHOUT a safety point (install-backup.sh)" >&2
 fi
 
+# The migration's status is the migration's own (B01 req 1). Its output is captured rather
+# than piped, so a refusal is BOTH fatal and legible: the last lines alembic printed are the
+# only thing that says which migration and which relation.
 echo "applying migrations (expand-only)..."
-compose run --rm --no-deps --entrypoint uv "api-$idle" run alembic upgrade head 2>&1 | tail -2
+migrate_out=""; migrate_rc=0
+migrate_out="$(compose run --rm --no-deps --entrypoint uv "api-$idle" run alembic upgrade head 2>&1)" || migrate_rc=$?
+printf '%s\n' "$migrate_out" | tail -4
+if [ "$migrate_rc" -ne 0 ]; then
+    echo "migration FAILED (rc $migrate_rc); the release stops here - the database keeps the schema it had and api-$active keeps serving" >&2
+    exit 82
+fi
 
 echo "starting the idle colour api-$idle on $sha (api-$active keeps serving)..."
-compose up -d --no-deps --wait "api-$idle" 2>&1 | tail -2
+up_out=""; up_rc=0
+up_out="$(compose up -d --no-deps --wait "api-$idle" 2>&1)" || up_rc=$?
+printf '%s\n' "$up_out" | tail -2
+if [ "$up_rc" -ne 0 ]; then
+    echo "api-$idle did not come up (rc $up_rc)" >&2
+    exit 75
+fi
 cd "$base"
 maybe_interrupt after_idle_up
 
@@ -570,7 +660,11 @@ echo "health ok on api-$idle"
 version_file="$cur/services/api/app/voice/realtime_sessions/contract_version.py"
 if [ -f "$version_file" ]; then
     expected_contract="$(grep -oE '^CONTRACT_VERSION[[:space:]]*=[[:space:]]*[0-9]+' "$version_file" | grep -oE '[0-9]+$' || true)"
-    served_contract="$(printf '%s' "$body" | grep -oE '"contract_version":[[:space:]]*[0-9]+' | head -1 | grep -oE '[0-9]+$' || true)"
+    # grep -m1 rather than `| head -1`: under pipefail a reader that stops early kills the
+    # producer with SIGPIPE and the whole pipeline is a failure - here that would silently
+    # empty served_contract and refuse a good release with 73.
+    served_contract="$(grep -m1 -oE '"contract_version":[[:space:]]*[0-9]+' <<<"$body" || true)"
+    served_contract="${served_contract##*[!0-9]}"
     if [ -z "$expected_contract" ] || [ "$served_contract" != "$expected_contract" ]; then
         echo "served realtime contract_version is '${served_contract:-absent}', the tree expects '${expected_contract:-?}'" >&2
         exit 73
@@ -582,6 +676,21 @@ if [ "$(served_release "$body")" != "$sha" ]; then
     exit 76
 fi
 echo "api-$idle reports release $sha"
+
+# The schema gate (B01 req 2). The colour names the alembic revision the database is on and
+# the head its own tree carries; they must be the same revision, or this colour would serve
+# code against a schema that never caught up. A colour too old to report the check at all is
+# not refused - that would make the gate unreleasable - but it is called out.
+schema_current="$(served_schema_field "$body" current)"
+schema_head="$(served_schema_field "$body" head)"
+if [ -z "$schema_current" ] && [ -z "$schema_head" ]; then
+    echo "WARNING: api-$idle serves no schema check; the migration's RESULT is unverified (a colour older than B01)" >&2
+elif [ "$schema_current" != "$schema_head" ]; then
+    echo "api-$idle schema revision is '${schema_current:-absent}', its tree expects '${schema_head:-absent}': the migration did not reach head" >&2
+    exit 83
+else
+    echo "api-$idle schema at $schema_head (database matches the tree)"
+fi
 
 # ------------------------------------------------------------------ switch
 
@@ -634,12 +743,22 @@ if [ "$first_cutover" != "1" ]; then
         echo "draining api-$active for ${drain_s}s (in-flight requests; device sessions already moved)..."
     fi
     sleep "$drain_s"
-    compose stop "api-$active" 2>&1 | tail -1
+    # The switch is already done and verified through the edge. A stop that fails here leaves
+    # an extra container running - untidy, and exactly what --reconcile cleans up - but it is
+    # NOT a reason to undo a good release, so it is reported and stepped over. (Under pipefail
+    # this must be explicit: without the guard, a failed `docker stop` would trip `set -e` and
+    # send on_exit rolling back a promotion that succeeded.)
+    stop_rc=0
+    compose stop "api-$active" > /dev/null 2>&1 || stop_rc=$?
+    if [ "$stop_rc" -ne 0 ]; then
+        echo "WARNING: could not stop api-$active (rc $stop_rc); the release stands, --reconcile will clean it up" >&2
+    fi
     echo "api-$active stopped"
     maybe_interrupt after_drain
 fi
 
 echo "$sha" > "$base/RELEASE"
 [ -n "$previous_sha" ] && echo "$previous_sha" > "$base/LAST_KNOWN_GOOD"
+write_release_metadata "$sha" "$idle" "$(served_build_id "$body")" "$schema_head" "$previous_sha"
 trap - EXIT
 echo "RELEASE OK: $sha is running as api-$idle behind the edge (previous ${previous_sha:-none} kept as last known good)"

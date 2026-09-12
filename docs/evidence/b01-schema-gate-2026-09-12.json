@@ -1,0 +1,46 @@
+{
+  "batch": "B01",
+  "requirements": [1, 2, 21, 22],
+  "recorded_at": "2026-09-12T15:52:00Z",
+  "head_sha_at_capture": "24904ce",
+  "what_this_proves": "The schema check reports the alembic revision a REAL PostgreSQL is on, against the head this build carries, and says fail with both revisions named when the database is behind - the state a failed migration leaves and the state nothing used to notice.",
+  "method": "app.release.schema.schema_state was run against the development PostgreSQL (real server, real alembic_version table). The row was then moved back one revision, the check re-run, and the row restored and re-read to confirm the restore.",
+  "database": "postgresql+psycopg://pagentos@127.0.0.1:15432/pagentos (development; production untouched)",
+  "observations": [
+    {
+      "state": "at head",
+      "schema_state": {
+        "status": "ok",
+        "current": "0040_device_build_identity",
+        "head": "0040_device_build_identity"
+      }
+    },
+    {
+      "state": "database moved one revision behind (the shape of a failed migration)",
+      "schema_state": {
+        "status": "fail",
+        "current": "0039_owner_media_playbacks",
+        "head": "0040_device_build_identity",
+        "error": "database is at 0039_owner_media_playbacks, this build expects 0040_device_build_identity"
+      }
+    },
+    {
+      "state": "restored",
+      "restored_revision": "0040_device_build_identity",
+      "equals_original": true,
+      "schema_state": {
+        "status": "ok",
+        "current": "0040_device_build_identity",
+        "head": "0040_device_build_identity"
+      }
+    }
+  ],
+  "build_identity": {
+    "build_id": "516452ef2d144269",
+    "shape": "16 lowercase hex, folded from every app/**/*.py by path and sha256",
+    "why": "app_version has been 0.1.0 for every release production ever had, and version reads 'unknown' whenever the host exported no sha; neither can tell two images apart. This mirrors the device's AgentInfo.BuildId (ADR-0118)."
+  },
+  "proof": "PROVEN_REAL",
+  "scope_note": "This proves the SERVER half against a real database. The release scripts' half (a failed migration stopping a promotion, exit 82; a schema behind its tree refused, exit 83) is PROVEN_AUTOMATED: scripts/tests/cloud-release-bluegreen.tests.ps1 and scripts/tests/cloud-release.tests.ps1 drive the real scripts under Git Bash against a fake docker that now CAN fail a migration - it could not before 2026-09-12, which is why no test ever saw the defect. Each case was proven RED against the unfixed scripts first.",
+  "not_proven_here": "A blue/green promotion on the production host refusing a real failed migration. That needs a production release, which is an owner-gated promotion."
+}
