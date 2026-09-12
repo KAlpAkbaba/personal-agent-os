@@ -155,11 +155,13 @@ def test_the_manifest_carries_only_forms_the_device_admits():
         "dotnet publish src/notlarim/notlarim.csproj -c Release -r win-x64 "
         "--self-contained true -o out"
     )
-    assert manifest["test"] == "dotnet test src/notlarim/notlarim.csproj -c Release"
+    # An object of {key: command}, like run: a bare string is what the device refused at the
+    # first device step of the first real production build (2026-09-12).
+    assert manifest["test"] == {"unit": "dotnet test src/notlarim/notlarim.csproj -c Release"}
     # Nothing binds a port: every one of these is a batch run (§6n).
     assert manifest["port"] == 0
     # And no web runtime, which the native root refuses by name.
-    rendered = " ".join([*manifest["run"].values(), manifest["test"]])
+    rendered = " ".join([*manifest["run"].values(), *manifest["test"].values()])
     for refused in ("python", "node", "npm ", "makeappx"):
         assert refused not in rendered
 
@@ -407,7 +409,11 @@ def test_the_manifest_forms_are_the_ones_the_protocol_document_admits():
     text = protocol.read_text(encoding="utf-8")
     manifest = native_manifest("<project.csproj>", "<dir>")
 
-    for command in (manifest["run"]["build"], manifest["test"], manifest["run"]["publish"]):
+    for command in (
+        manifest["run"]["build"],
+        manifest["test"]["unit"],
+        manifest["run"]["publish"],
+    ):
         # The table writes each form inside backticks; compare the token sequence, since the
         # document spells the placeholders the same way this manifest does.
         assert re.search(re.escape("`" + command + "`"), text), command
@@ -426,3 +432,32 @@ def test_a_row_this_path_cannot_honestly_build_is_refused_before_the_device_is_a
     assert outcome.error_class == "dependency_unavailable"
     assert msix.state == STATE_UNAVAILABLE
     assert device.calls == []
+
+
+def test_the_manifest_the_device_half_reads_is_the_one_this_module_writes():
+    """packages/protocol/native-manifest.example.json is the contract BOTH halves read: this
+    test keeps it equal to native_manifest's output, and the device's own
+    NativeManifestContractTests scaffolds that very file through its real parser. The first
+    real production build died at the first device step - "manifest.test must be a non-empty
+    object of {key: command}" - with both suites green, because each half only ever restated
+    the shape to itself.
+    """
+    import json
+    from pathlib import Path
+
+    from app.nativefactory.device_build import (
+        MANIFEST_EXAMPLE_CSPROJ,
+        MANIFEST_EXAMPLE_PUBLISH_DIR,
+    )
+
+    shared = (
+        Path(__file__).resolve().parents[4]
+        / "packages"
+        / "protocol"
+        / "native-manifest.example.json"
+    )
+    doc = json.loads(shared.read_text(encoding="utf-8"))
+
+    assert doc["csproj"] == MANIFEST_EXAMPLE_CSPROJ
+    assert doc["publish_dir"] == MANIFEST_EXAMPLE_PUBLISH_DIR
+    assert doc["manifest"] == native_manifest(MANIFEST_EXAMPLE_CSPROJ, MANIFEST_EXAMPLE_PUBLISH_DIR)

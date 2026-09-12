@@ -1,0 +1,16 @@
+{
+  "$comment": "The manifest the Cloud Core sends with project.scaffold for a native windows_exe build, for the canonical project below. Written by app/nativefactory/device_build.native_manifest; test_nativefactory_device_build keeps this file equal to it, and the device test NativeManifestContractTests scaffolds THIS file through the real parser. Do not hand-edit.",
+  "csproj": "src/notlarim/notlarim.csproj",
+  "publish_dir": "publish",
+  "manifest": {
+    "entry": "src/notlarim/notlarim.csproj",
+    "port": 0,
+    "run": {
+      "build": "dotnet build src/notlarim/notlarim.csproj -c Release",
+      "publish": "dotnet publish src/notlarim/notlarim.csproj -c Release -r win-x64 --self-contained true -o publish"
+    },
+    "test": {
+      "unit": "dotnet test src/notlarim/notlarim.csproj -c Release"
+    }
+  }
+}

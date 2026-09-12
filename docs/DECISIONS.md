@@ -10538,3 +10538,25 @@ that digest, and dev and production name the same bits (red before the change).
 **Not settled here.** MinIO's community distribution is winding down; if quay.io stops too,
 the next step is our own copy in GHCR (the project's registry, ADR on CI/release) by the same
 digest, or a different S3-compatible server behind the existing storage interface.
+
+### Addendum — the first real production build, and the shape neither half checked (2026-09-12)
+
+Row 26.16's first end-to-end run against production reached the device and was refused at the
+very first step: `project.scaffold: manifest.test must be a non-empty object of {key: command}`.
+The Cloud Core wrote `"test": "dotnet test <csproj> -c Release"` - a string - and this device
+has always required an object, exactly like `run`. Both suites were green: the Cloud Core's
+tests asserted the string it wrote, the device's tests built objects of their own, and each
+half only ever restated the shape to itself.
+
+The manifest now carries `{"unit": ...}`, and the two halves read ONE artifact:
+`packages/protocol/native-manifest.example.json` is written from `native_manifest()` for a
+canonical project; the Cloud Core's test keeps the file equal to what it sends, and the
+device's `NativeManifestContractTests` scaffolds that file, unedited, through the real
+`ProjectScaffold` (and proves the bare string is refused with production's own message).
+
+Two more defects the same run found, both in the harness rather than the product: the
+qualification script wrapped `Get-ArrayProperty` in `@()`, which hands back one element - the
+whole array - so it reported "no online device" about a device the same endpoint called online
+(the trap was already documented in `qualify-m18-4.ps1`; `owner-harness.tests.ps1` now pins the
+shape and fails any script that wraps it), and the run before that found the installed agent
+was the one this release replaced.

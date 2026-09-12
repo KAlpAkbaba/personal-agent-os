@@ -143,6 +143,34 @@ Test-Case "a scalar-in-a-collection helper output filtered to nothing is an empt
     Assert-Equal 0 $none.Count "count"
 }
 
+Test-Case "wrapping a Get-ArrayProperty call in @() hands back ONE element: the array itself" {
+    # The helper returns , @(...) so a BARE assignment receives the elements. Wrapping the
+    # call in @() keeps that protective comma intact and yields a one-element array whose
+    # element is the whole array - every field then reads empty. Row 26.16's first two
+    # production runs died on exactly this ("no online device" against a device the same
+    # endpoint reported as online), after the same trap was already documented in
+    # qualify-m18-4.ps1. Pinned here so the shape is a fact, not a surprise.
+    $wrapped = @(Get-ArrayProperty -InputObject $firingTwo -Name "dispatch_results")
+    Assert-Equal 1 $wrapped.Count "wrapped: one element"
+    if (-not ($wrapped[0] -is [object[]])) { throw "expected the element to be the array itself" }
+    $bare = Get-ArrayProperty -InputObject $firingTwo -Name "dispatch_results"
+    Assert-Equal 2 $bare.Count "bare: the elements"
+}
+Test-Case "no script wraps a Get-ArrayProperty call in @()" {
+    $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $offenders = @()
+    foreach ($file in Get-ChildItem -Path (Join-Path $root "scripts") -Recurse -Filter *.ps1) {
+        if ($file.Name -eq "owner-harness.tests.ps1") { continue }
+        $n = 0
+        foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
+            $n++
+            if ($line -match '^\s*#') { continue }  # a comment may name the trap
+            if ($line -match '@\(\s*Get-ArrayProperty') { $offenders += "$($file.Name):$n" }
+        }
+    }
+    Assert-Equal "" ($offenders -join "; ") "scripts that wrap Get-ArrayProperty in @()"
+}
+
 Write-Host ""
 Write-Host "owner-harness tests: $script:Passes passed, $script:Failures failed"
 if ($script:Failures -gt 0) { exit 1 }

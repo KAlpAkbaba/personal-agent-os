@@ -78,7 +78,11 @@ $body = $null
 $headers = @{ Authorization = "Bearer $($issued.token)" }
 
 $listing = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/devices" -Headers $headers -TimeoutSec 30
-$device = @(Get-ArrayProperty -InputObject $listing -Name "devices") |
+# A BARE call, assigned: the helper returns , @(...) so wrapping it in @() would hand
+# back ONE element - the whole array - and every field would read empty (the first two
+# runs of this script died that way, on a device the same endpoint called online).
+$devices = Get-ArrayProperty -InputObject $listing -Name "devices"
+$device = $devices |
     Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "presence") -eq "online" } |
     Select-Object -First 1
 if (-not $device) { Write-Host "no online device"; exit 2 }
@@ -107,7 +111,7 @@ Write-Host ""
 Write-Host "1. native.create { targets = windows_exe; name = $Name }"
 $created = Invoke-Tool -ToolName "native.create" -Arguments @{ targets = @("windows_exe"); name = $Name } -TimeoutSec 60
 $createdResult = Get-OptionalProperty -InputObject $created -Name "result"
-$builds = @(Get-ArrayProperty -InputObject $createdResult -Name "builds")
+$builds = Get-ArrayProperty -InputObject $createdResult -Name "builds"
 Write-Host "   status : $($created.status)"
 Write-Host "   speech : $(Get-OptionalProperty -InputObject $createdResult -Name 'speech')"
 $planned = $builds | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "target") -eq "windows_exe" } | Select-Object -First 1

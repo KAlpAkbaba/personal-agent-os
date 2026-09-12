@@ -109,8 +109,19 @@ def native_manifest(csproj: str, publish_dir: str) -> dict[str, Any]:
                 f"--self-contained true -o {publish_dir}"
             ),
         },
-        "test": f"dotnet test {csproj} -c Release",
+        # An OBJECT of {key: command}, like `run`: the device's parser refuses a bare string
+        # ("manifest.test must be a non-empty object of {key: command}"), which is what the
+        # first real production build hit, at the first device step (2026-09-12).
+        "test": {"unit": f"dotnet test {csproj} -c Release"},
     }
+
+
+#: The manifest above for one canonical project, written where BOTH halves read it: the
+#: Cloud Core test keeps it equal to what `native_manifest` returns, and the device's own
+#: test scaffolds it through the real parser. Restating the shape in two languages is how
+#: two green suites drift - and they did.
+MANIFEST_EXAMPLE_CSPROJ = "src/notlarim/notlarim.csproj"
+MANIFEST_EXAMPLE_PUBLISH_DIR = "publish"
 
 
 def _as_text(value: object) -> str | None:
