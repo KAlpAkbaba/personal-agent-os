@@ -1,0 +1,212 @@
+{
+    "row":  "26.16",
+    "claim":  "a native Windows build startable from PRODUCTION, built on the enrolled device and verified from the artefact\u0027s own identity",
+    "status":  "PROVEN_REAL",
+    "reasons":  [
+
+                ],
+    "started_at":  "2026-09-12T08:50:36.4856554Z",
+    "finished_at":  "2026-09-12T08:50:49.1171191Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "714ff2b523cac4a42411e5cd7b8a6f4c088a3aee",
+                       "release_after":  "714ff2b523cac4a42411e5cd7b8a6f4c088a3aee",
+                       "health_before":  "ok",
+                       "health_after":  "ok"
+                   },
+    "device":  {
+                   "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                   "name":  "MAIL",
+                   "software_version":  "0.6.0",
+                   "build_id":  "19f079c4fda2c3c7",
+                   "source_revision":  "f2fe54ac99720711658c00a018c65fbf30b386a3"
+               },
+    "realtime_session_id":  "b64d7ebe-c14b-4a3f-9ed9-461d7ecbca58",
+    "native_create":  {
+                          "status":  "succeeded",
+                          "result":  {
+                                         "action_id":  "q2616-0911c15f-b88e-4cd0-85e8-b81d5d402630",
+                                         "capability":  "native.create",
+                                         "requested_state":  "windows_exe",
+                                         "execution_status":  "executed",
+                                         "terminal_status":  "verified",
+                                         "observed_after":  {
+                                                                "server":  {
+                                                                               "builds":  [
+                                                                                              {
+                                                                                                  "build_id":  "6666bd5d-c407-4ffe-bd4c-1a385bec2731",
+                                                                                                  "slug":  "notlarim",
+                                                                                                  "target":  "windows_exe",
+                                                                                                  "stack":  "dotnet_wpf",
+                                                                                                  "version":  "0.1.0",
+                                                                                                  "state":  "planned",
+                                                                                                  "artifact":  null,
+                                                                                                  "error_class":  null
+                                                                                              }
+                                                                                          ]
+                                                                           },
+                                                                "local":  {
+
+                                                                          }
+                                                            },
+                                         "evidence_refs":  [
+
+                                                           ],
+                                         "error_class":  null,
+                                         "started_at":  "2026-09-12T08:50:39.207912Z",
+                                         "completed_at":  "2026-09-12T08:50:39.207912Z",
+                                         "session_id":  "b64d7ebe-c14b-4a3f-9ed9-461d7ecbca58",
+                                         "observed_at":  "2026-09-12T08:50:39.207912Z",
+                                         "action_trace":  [
+
+                                                          ],
+                                         "speech":  "WPF seçtim: Windows masaüstü, form arayüzü; derlemeyi kayıtlı Windows cihazınız yapacak. Notlarim için windows_exe hazırlanıyor efendim.",
+                                         "builds":  [
+                                                        {
+                                                            "build_id":  "6666bd5d-c407-4ffe-bd4c-1a385bec2731",
+                                                            "slug":  "notlarim",
+                                                            "target":  "windows_exe",
+                                                            "stack":  "dotnet_wpf",
+                                                            "version":  "0.1.0",
+                                                            "state":  "planned",
+                                                            "artifact":  null,
+                                                            "error_class":  null
+                                                        }
+                                                    ],
+                                         "stack_choice":  {
+                                                              "stack":  "dotnet_wpf",
+                                                              "reason":  "WPF seçtim: Windows masaüstü, form arayüzü; derlemeyi kayıtlı Windows cihazınız yapacak.",
+                                                              "available":  true,
+                                                              "owner_action":  null,
+                                                              "error_class":  null
+                                                          }
+                                     }
+                      },
+    "native_build":  {
+                         "status":  "succeeded",
+                         "seconds":  9.9,
+                         "result":  {
+                                        "action_id":  "q2616-f51dca28-1321-4fef-8354-93a6330c8cb5",
+                                        "capability":  "native.build",
+                                        "requested_state":  "windows_exe",
+                                        "execution_status":  "executed",
+                                        "terminal_status":  "verified",
+                                        "observed_after":  {
+                                                               "server":  {
+                                                                              "build_id":  "6666bd5d-c407-4ffe-bd4c-1a385bec2731",
+                                                                              "slug":  "notlarim",
+                                                                              "target":  "windows_exe",
+                                                                              "stack":  "dotnet_wpf",
+                                                                              "version":  "0.1.0",
+                                                                              "state":  "verified",
+                                                                              "artifact":  {
+                                                                                               "size_bytes":  162304,
+                                                                                               "sha256":  "1a73dab4c32d8e45050a2fcae657b86863c1e62db72d1082b462b9a4723ea5c6",
+                                                                                               "kind":  "unknown",
+                                                                                               "read_back_by":  "device file.inspect",
+                                                                                               "path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\native\\notlarim\\out\\notlarim.exe",
+                                                                                               "version":  "0.1.0",
+                                                                                               "architecture":  "x64",
+                                                                                               "subsystem":  "windows_gui",
+                                                                                               "identity":  null,
+                                                                                               "display_name":  null,
+                                                                                               "detail":  {
+                                                                                                              "read_back_by":  "device file.inspect"
+                                                                                                          }
+                                                                                           },
+                                                                              "error_class":  null
+                                                                          },
+                                                               "local":  {
+
+                                                                         }
+                                                           },
+                                        "evidence_refs":  [
+
+                                                          ],
+                                        "error_class":  null,
+                                        "started_at":  "2026-09-12T08:50:49.164693Z",
+                                        "completed_at":  "2026-09-12T08:50:49.164693Z",
+                                        "session_id":  "b64d7ebe-c14b-4a3f-9ed9-461d7ecbca58",
+                                        "observed_at":  "2026-09-12T08:50:49.164693Z",
+                                        "action_trace":  [
+
+                                                         ],
+                                        "speech":  "Notlarim hazır efendim: notlarim.exe, 158 KB, sürüm 0.1.0, sha256 1a73dab4. Bağımsız okuyucu doğruladı.",
+                                        "build":  {
+                                                      "build_id":  "6666bd5d-c407-4ffe-bd4c-1a385bec2731",
+                                                      "slug":  "notlarim",
+                                                      "target":  "windows_exe",
+                                                      "stack":  "dotnet_wpf",
+                                                      "version":  "0.1.0",
+                                                      "state":  "verified",
+                                                      "artifact":  {
+                                                                       "size_bytes":  162304,
+                                                                       "sha256":  "1a73dab4c32d8e45050a2fcae657b86863c1e62db72d1082b462b9a4723ea5c6",
+                                                                       "kind":  "unknown",
+                                                                       "read_back_by":  "device file.inspect",
+                                                                       "path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\native\\notlarim\\out\\notlarim.exe",
+                                                                       "version":  "0.1.0",
+                                                                       "architecture":  "x64",
+                                                                       "subsystem":  "windows_gui",
+                                                                       "identity":  null,
+                                                                       "display_name":  null,
+                                                                       "detail":  {
+                                                                                      "read_back_by":  "device file.inspect"
+                                                                                  }
+                                                                   },
+                                                      "error_class":  null
+                                                  },
+                                        "built_on":  "device"
+                                    }
+                     },
+    "row_read_back":  {
+                          "id":  "6666bd5d-c407-4ffe-bd4c-1a385bec2731",
+                          "slug":  "notlarim",
+                          "display_name":  "Notlarim",
+                          "stack":  "dotnet_wpf",
+                          "template":  "notes-desktop",
+                          "target":  "windows_exe",
+                          "version":  "0.1.0",
+                          "state":  "verified",
+                          "attempt":  1,
+                          "artifact":  {
+                                           "name":  "notlarim.exe",
+                                           "size_bytes":  162304,
+                                           "sha256":  "1a73dab4c32d8e45050a2fcae657b86863c1e62db72d1082b462b9a4723ea5c6",
+                                           "version":  "0.1.0",
+                                           "architecture":  "x64",
+                                           "subsystem":  "windows_gui",
+                                           "identity":  null
+                                       },
+                          "verdict":  {
+                                          "ok":  true,
+                                          "facts":  {
+                                                        "kind":  "pe",
+                                                        "path":  "C:\\Users\\alpak\\Documents\\PagentOS Projects\\native\\notlarim\\out\\notlarim.exe",
+                                                        "detail":  {
+                                                                       "read_back_by":  "device file.inspect"
+                                                                   },
+                                                        "sha256":  "1a73dab4c32d8e45050a2fcae657b86863c1e62db72d1082b462b9a4723ea5c6",
+                                                        "version":  "0.1.0",
+                                                        "identity":  null,
+                                                        "subsystem":  "windows_gui",
+                                                        "size_bytes":  162304,
+                                                        "architecture":  "x64",
+                                                        "display_name":  null
+                                                    },
+                                          "mismatches":  [
+
+                                                         ]
+                                      },
+                          "tests":  {
+                                        "failed":  null,
+                                        "passed":  null,
+                                        "exit_code":  0
+                                    },
+                          "error_class":  null,
+                          "error_message":  null,
+                          "speech":  "Notlarim hazır efendim: notlarim.exe, 158 KB, sürüm 0.1.0, sha256 1a73dab4. Bağımsız okuyucu doğruladı.",
+                          "created_at":  "2026-09-12T08:50:39.201954+00:00",
+                          "updated_at":  "2026-09-12T08:50:49.158170+00:00"
+                      }
+}
