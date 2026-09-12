@@ -113,6 +113,18 @@ class PendingBriefingRow(Base):
     #: "say" | "session_instructions" | "push".
     delivered_via: Mapped[str | None] = mapped_column(String(32), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: B07 req 14/15/16/17: bounded delivery. Before these three columns existed the
+    #: announcer had no way to know it had already tried, so a permanently failing item was
+    #: re-attempted on every sweep for ever. `attempts` counts failures, `next_attempt_at`
+    #: holds the backoff, and `quarantined_at` is the announcer giving up on ONE item so the
+    #: queue behind it can move (app.notifications.delivery).
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    quarantined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 __all__ = ["ActivityEventRow", "PendingBriefingRow"]

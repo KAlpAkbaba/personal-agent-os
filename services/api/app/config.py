@@ -153,6 +153,12 @@ class Settings(BaseSettings):
     #: now would refuse every sensitive voice action. Enforcement needs the realtime probe
     #: flow first, and then the owner's decision.
     voice_step_up_mode: str = "shadow"
+    #: B07 req 679: the audit-retention sweep counts what it would remove and removes
+    #: nothing until this is false. A retention sweep is the one kind of housekeeping whose
+    #: bug is unrecoverable, and the roadmap's rollback plan for this batch is a dry run
+    #: first - "it would have removed 9,000 rows" is a sentence the owner gets to read
+    #: before it becomes true.
+    audit_retention_dry_run: bool = True
     broker_handshake_timeout_s: float = 10.0
 
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that

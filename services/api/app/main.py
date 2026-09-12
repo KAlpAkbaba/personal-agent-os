@@ -100,6 +100,7 @@ from app.routines.dispatch import (
 )
 from app.routines.models import Routine
 from app.routines.routes import router as routines_router
+from app.security import audit_retention
 from app.security import step_up as step_up_policy
 from app.security.redaction import assert_redacted, redact_value
 from app.security.routes import router as security_router
@@ -414,6 +415,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "abandoned_research_runs": lambda: _in_session(
                 artifacts.session, research_service.sweep_abandoned_runs
             ),
+            # B07 req 679: the audit trail had no end - 13,560 events and nothing that
+            # would ever remove one. Dry run by default; the Activity Ledger is never
+            # swept at all (app.security.audit_retention names why).
+            "audit_retention": lambda: sum(
+                _in_session(
+                    artifacts.session,
+                    lambda db: audit_retention.sweep_audit_retention(
+                        db, dry_run=settings.audit_retention_dry_run
+                    ),
+                ).values()
+            ),
         },
         interval_s=settings.retention_sweep_interval_s,
         initial_delay_s=settings.retention_sweep_initial_delay_s,
@@ -659,6 +671,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["routine_clock"] = routine_clock_health()
         # Phase 8: advisory - housekeeping that has not run yet is not an outage.
         checks["retention"] = retention_sweeper.health_check()
+        # B07 req 18: the four background loops that carried a notification to the owner and
+        # could not be seen here at all. "The process is up" is not "the loops are running",
+        # and the failure these four can have is the one nobody would notice.
+        checks["artifact_ready_announcer"] = mobile.announcer.health_check()
+        checks["briefing_announcer"] = briefing_announcer.health_check()
+        checks["research_tool_call_announcer"] = research_tool_call_announcer.health_check()
+        checks["selfmodel_refresher"] = selfmodel_refresher.health_check()
+        checks["audit_retention"] = audit_retention.health_check(
+            dry_run=settings.audit_retention_dry_run
+        )
         status = "degraded" if is_degraded(checks) else "ok"
         # B04 req 8: this is the ONE endpoint that answers without an owner session, and it
         # aggregates ~18 independently-written health_check() methods. Each says it carries

@@ -33,7 +33,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from app.mobile.config import (
     ApnsCredentials,
@@ -153,17 +153,47 @@ class RegisteredToken:
     token_fingerprint: str
 
 
+#: A transport handed the message to a vendor and the vendor acknowledged it. The ONLY
+#: status that means the notification left this system for something that will act on it.
+STATUS_DELIVERED: Final[str] = "delivered"
+
+#: The offline fake put the message in its own queue. Real, useful, and not a delivery:
+#: nothing outside this process has it yet. (B07 req 375/390.)
+STATUS_SIMULATED: Final[str] = "simulated"
+
+
 @dataclass(frozen=True, slots=True)
 class PushDelivery:
-    """One recorded delivery attempt. Carries no token, ever."""
+    """One recorded delivery attempt. Carries no token, ever.
+
+    B07 req 390: a transport cannot claim ``delivered`` without a ``receipt`` - the vendor's
+    own acknowledgement, an FCM name or an APNs id. This is enforced in ``__post_init__``
+    rather than written in a comment, because the offline fake USED to report ``delivered``
+    by simply taking the default, and a rule the code does not hold is a rule about which
+    everybody is eventually wrong. The fake has no vendor to acknowledge anything, so it has
+    nothing to put in ``receipt``, so it structurally cannot say the word.
+    """
 
     registration_key: str
     provider: str
     message: PushMessage
     delivered_at: datetime
     token_fingerprint: str
-    status: str = "delivered"
+    status: str = STATUS_SIMULATED
     detail: str = ""
+    #: The vendor's acknowledgement. Empty for anything that did not get one.
+    receipt: str = ""
+
+    def __post_init__(self) -> None:
+        if self.status == STATUS_DELIVERED and not self.receipt:
+            raise ValueError(
+                "a delivery claiming 'delivered' must carry the vendor's receipt; "
+                "a transport with nothing to show did not deliver anything"
+            )
+
+    @property
+    def is_delivered(self) -> bool:
+        return self.status == STATUS_DELIVERED
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -171,6 +201,7 @@ class PushDelivery:
             "provider": self.provider,
             "status": self.status,
             "detail": self.detail,
+            "receipt": self.receipt,
             "delivered_at": self.delivered_at.isoformat(),
             "token_fingerprint": self.token_fingerprint,
             **self.message.to_dict(),
@@ -443,13 +474,17 @@ class _RealPushProviderBase:
     def _delivered(
         self, registration_key: str, token: str, message: PushMessage, detail: str
     ) -> PushDelivery:
+        """A real transport's receipt. ``detail`` already carries the vendor's own id (the
+        FCM message name, the APNs id), which is exactly what a receipt is."""
         return PushDelivery(
             registration_key=registration_key,
             provider=self.name,
             message=message,
             delivered_at=utc_now(),
             token_fingerprint=fingerprint(token),
+            status=STATUS_DELIVERED,
             detail=detail,
+            receipt=detail,
         )
 
 

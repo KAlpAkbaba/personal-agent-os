@@ -36,12 +36,15 @@ import uuid
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.artifacts.models import TASK_STATUS_READY, Artifact, Task
 from app.logging import get_logger
+from app.loops import LoopHeartbeat
+from app.notifications import delivery
 
 logger = get_logger("app.mobile.announcer")
 
@@ -87,19 +90,34 @@ class ArtifactReadyAnnouncer:
         self._interval_s = interval_s
         self._batch = batch
         self._task: asyncio.Task[None] | None = None
+        #: B07 req 18: this loop's own health. Four of the nine background loops
+        #: could not be seen on the health surface at all, and they were the four
+        #: that carry a notification to the owner - so the failure they can have is
+        #: the one nobody would notice.
+        self.heartbeat = LoopHeartbeat(name="artifact_ready_announcer", interval_s=self._interval_s)
 
     # ------------------------------------------------------------------ sweep
 
-    def _claim_batch(self, session: Session) -> list[tuple[Task, uuid.UUID | None, str]]:
+    def _claim_batch(
+        self, session: Session, *, now: datetime
+    ) -> list[tuple[Task, uuid.UUID | None, str]]:
         """Lock a batch of announceable tasks. The caller keeps the transaction.
 
         The rows stay locked for the rest of the pass, so a concurrent sweeper
         skips them instead of announcing them a second time. Nothing is stamped
         here: the stamp is a statement that delivery happened.
         """
+        # B07 req 15/376: `announce_quarantined_at` and `announce_next_at` are what stop a
+        # permanently failing task being re-attempted on every sweep - at this interval that
+        # was 17,280 attempts a day against a provider that was never going to answer.
         stmt = (
             select(Task)
-            .where(Task.status == TASK_STATUS_READY, Task.announced_at.is_(None))
+            .where(
+                Task.status == TASK_STATUS_READY,
+                Task.announced_at.is_(None),
+                Task.announce_quarantined_at.is_(None),
+            )
+            .where((Task.announce_next_at.is_(None)) | (Task.announce_next_at <= now))
             .order_by(Task.ready_at)
             .limit(self._batch)
         )
@@ -118,8 +136,12 @@ class ArtifactReadyAnnouncer:
                 batch.append((task, artifact.id, artifact.title))
         return batch
 
-    def sweep_once(self) -> int:
+    def sweep_once(self, now: datetime | None = None) -> int:
         """One pass. Returns how many tasks were announced. Safe to call directly.
+
+        ``now`` exists so ONE clock decides a pass - the batch it claims, the backoff it
+        writes and the stamp it leaves. Two clocks for one decision is this repository's
+        most repeated bug; production passes nothing and gets the real clock.
 
         Deliver first, stamp second, one transaction around both. Stamping first
         would make any failure after the stamp — a dead provider, a crash — drop
@@ -129,9 +151,9 @@ class ArtifactReadyAnnouncer:
         idempotent for the owner, so a rare duplicate beats a silent loss.
         """
         announced = 0
-        now = _utcnow()
+        now = now or _utcnow()
         with self._session_factory() as session:
-            batch = self._claim_batch(session)
+            batch = self._claim_batch(session, now=now)
             for task, artifact_id, title in batch:
                 if artifact_id is None:
                     # Nothing to announce; stamp anyway so this READY task is
@@ -141,15 +163,18 @@ class ArtifactReadyAnnouncer:
                 try:
                     result = self._notifier(artifact_id, title, task.id)
                 except Exception:
-                    # One dead provider must not stall the batch — and must not
-                    # consume the task either: leaving it unstamped means the
-                    # next sweep retries it once the provider recovers.
+                    # One dead provider must not stall the batch — and must not consume the
+                    # task either: it is retried once the provider recovers. Bounded now:
+                    # "retried for ever" and "retried until we give up and say so" differ by
+                    # this one call.
                     logger.exception("artifact_ready_announce_failed", task_id=str(task.id))
+                    self._record_failure(task, now, reason="notifier_raised")
                     continue
                 if not _delivery_succeeded(result):
                     logger.warning(
                         "artifact_ready_announce_not_delivered", task_id=str(task.id)
                     )
+                    self._record_failure(task, now, reason="not_delivered")
                     continue
                 announced += 1
                 task.announced_at = now
@@ -157,6 +182,26 @@ class ArtifactReadyAnnouncer:
         if announced:
             logger.info("artifact_ready_announced", count=announced)
         return announced
+
+    def _record_failure(self, task: Task, now: datetime, *, reason: str) -> None:
+        """One more failed attempt on this task; quarantine it once the bound is reached.
+
+        A quarantined task is NOT lost and NOT marked announced: it is recorded as
+        undeliverable, with how many times we tried, and the queue moves on. Something the
+        owner can see and re-queue beats a notification that silently retries for ever.
+        """
+        attempts, next_at, quarantined = delivery.record_failure(
+            attempts=task.announce_attempts or 0, now=now, key=task.id
+        )
+        task.announce_attempts = attempts
+        task.announce_next_at = next_at
+        task.announce_quarantined_at = quarantined
+        if quarantined is not None:
+            logger.warning(
+                "artifact_ready_announce_quarantined",
+                task_id=str(task.id),
+                **delivery.quarantine_summary(attempts, reason=reason),
+            )
 
     # ------------------------------------------------------------- background
 
@@ -166,13 +211,20 @@ class ArtifactReadyAnnouncer:
                 await asyncio.to_thread(self.sweep_once)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                self.heartbeat.record_failure(exc)
                 logger.exception("artifact_ready_sweep_failed")
+            else:
+                self.heartbeat.record_pass()
             await asyncio.sleep(self._interval_s)
 
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._loop())
+            self.heartbeat.bind(self._task)
+
+    def health_check(self) -> dict[str, Any]:
+        return self.heartbeat.health_check()
 
     async def stop(self) -> None:
         if self._task is not None:

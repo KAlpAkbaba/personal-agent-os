@@ -11,7 +11,7 @@ from __future__ import annotations
 import contextlib
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -164,21 +164,34 @@ async def test_start_and_stop_are_idempotent(session_factory) -> None:
 def test_a_failed_delivery_leaves_the_task_for_the_next_sweep(session_factory) -> None:
     """Stamping before delivering would silently drop the notification forever.
 
-    Regression for the ordering the migration promises: a task whose delivery
-    raised must remain unannounced so a later sweep retries it.
+    Regression for the ordering the migration promises: a task whose delivery raised must
+    remain unannounced so a later sweep retries it.
+
+    B07 (2026-09-13): "a later sweep" is now literally later. The retry used to be the very
+    next pass, five seconds away, for ever - 17,280 attempts a day against a provider that
+    was never going to answer. It waits out a backoff first, so this test advances the clock
+    rather than sweeping twice in a row.
     """
     task_id = _seed(session_factory, status=TASK_STATUS_READY, title="Retry Me")
     failing = _Recorder(fail=True)
     announcer = ArtifactReadyAnnouncer(session_factory, failing)
+    now = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 
-    assert announcer.sweep_once() == 0
+    assert announcer.sweep_once(now) == 0
     with session_factory() as session:
-        assert session.get(Task, task_id).announced_at is None, "task was consumed by a failure"
+        task = session.get(Task, task_id)
+        assert task.announced_at is None, "task was consumed by a failure"
+        assert task.announce_attempts == 1
+        assert task.announce_quarantined_at is None
         assert list(pending_task_ids(session)) == [task_id]
 
-    # Provider recovers -> the next sweep delivers it.
+    # Immediately afterwards it is NOT attempted again: that is the whole fix.
+    assert ArtifactReadyAnnouncer(session_factory, _Recorder()).sweep_once(now) == 0
+
+    # Provider recovers, backoff elapses -> delivered.
     working = _Recorder()
-    assert ArtifactReadyAnnouncer(session_factory, working).sweep_once() == 1
+    later = now + timedelta(minutes=5)
+    assert ArtifactReadyAnnouncer(session_factory, working).sweep_once(later) == 1
     assert working.calls[0][2] == task_id
     with session_factory() as session:
         assert session.get(Task, task_id).announced_at is not None
@@ -196,15 +209,18 @@ def test_a_returned_provider_failure_is_not_stamped_as_delivered(session_factory
         session_factory, lambda *_args: _DeliveryReceipt(delivered=0)
     )
 
-    assert announcer.sweep_once() == 0
+    now = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
+    assert announcer.sweep_once(now) == 0
     with session_factory() as session:
-        assert session.get(Task, task_id).announced_at is None
+        task = session.get(Task, task_id)
+        assert task.announced_at is None
+        assert task.announce_attempts == 1, "a returned failure counts, same as a raised one"
         assert list(pending_task_ids(session)) == [task_id]
 
     recovered = ArtifactReadyAnnouncer(
         session_factory, lambda *_args: _DeliveryReceipt(delivered=1)
     )
-    assert recovered.sweep_once() == 1
+    assert recovered.sweep_once(now + timedelta(minutes=5)) == 1
     with session_factory() as session:
         assert session.get(Task, task_id).announced_at is not None
 

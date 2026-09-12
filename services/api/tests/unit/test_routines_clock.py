@@ -45,6 +45,13 @@ class _Session:
 
     def __init__(self) -> None:
         self.closed = False
+        self.rollbacks = 0
+
+    def rollback(self) -> None:
+        # B07 req 19: the clock rolls back after a failed sub-tick so the next one does not
+        # inherit a broken transaction. Isolation that hands the next caller a poisoned
+        # session is not isolation.
+        self.rollbacks += 1
 
     def close(self) -> None:
         self.closed = True
@@ -99,7 +106,14 @@ def test_each_tick_gets_a_fresh_session() -> None:
 
 def test_a_failing_tick_is_recorded_and_never_fatal() -> None:
     """``last_error`` is how an operator finds out; the loop keeps its cadence, because the
-    next alarm matters more than this tick's exception."""
+    next alarm matters more than this tick's exception.
+
+    B07 req 19 (2026-09-13): the second half of this test used to read "the later ticks were
+    skipped by the exception", which was the defect written down as an expectation. One
+    try/except wrapped all five sub-ticks, so a failure in the routine evaluation stopped the
+    ALARM tick from running that pass - an alarm silently dropped by something that had
+    nothing to do with alarms. They are isolated now.
+    """
 
     def _boom(session, now):
         raise RuntimeError("the database went away")
@@ -108,14 +122,22 @@ def test_a_failing_tick_is_recorded_and_never_fatal() -> None:
     assert asyncio.run(clock.tick_once(now=NOW)) is True
     health = clock.health_check()
     assert health["ticks"] == 1
-    assert "RuntimeError" in health["last_error"]
-    # The later ticks were skipped by the exception, but the session was still closed.
+    assert health["failing_sub_ticks"] == ["routines"]
+    assert "RuntimeError" in health["sub_ticks"]["routines"]["last_error"]
+    assert health["last_error"] == "sub-ticks failed: routines"
+    # The alarm tick ran anyway - that is the whole point.
+    assert len(calls["alarm"]) == 1
+    assert calls["sessions"][0].rollbacks == 1, "the next sub-tick got a clean session"
     assert calls["sessions"][0].closed is True
 
     # ...and a subsequent good tick clears the error rather than leaving it standing.
     clock._evaluate_due = lambda s, now: None  # noqa: SLF001 - simulating a recovered DB
     asyncio.run(clock.tick_once(now=NOW))
-    assert clock.health_check()["last_error"] is None
+    recovered = clock.health_check()
+    assert recovered["last_error"] is None
+    assert recovered["failing_sub_ticks"] == []
+    assert recovered["sub_ticks"]["routines"]["consecutive_failures"] == 0
+    assert recovered["sub_ticks"]["routines"]["failures"] == 1, "the history is kept"
 
 
 def test_a_tick_that_is_already_in_flight_is_skipped_not_queued() -> None:

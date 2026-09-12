@@ -51,6 +51,17 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "routine_clock",
     # Phase 8 (2026-09-11): the retention sweeps nothing ran (app.maintenance); advisory.
     "retention",
+    # B07 req 18 (2026-09-13): the four background loops that could not be seen here at
+    # all - and they are the four that carry a notification to the owner, so the failure
+    # they can have is the one nobody would notice. Advisory: a loop being behind is worth
+    # seeing and is not a reason to fail a gate asking whether the API is serving.
+    "artifact_ready_announcer",
+    "briefing_announcer",
+    "research_tool_call_announcer",
+    "selfmodel_refresher",
+    # B07 req 679: the retention POLICY itself, readable. A policy nobody can see is a
+    # policy nobody can check.
+    "audit_retention",
 }
 # "skipped" (temporal_worker when worker_mode != embedded) is a legitimate
 # non-degraded status alongside "ok" — see app.main's degraded computation.
@@ -96,7 +107,19 @@ def test_health_ok_shape(monkeypatch) -> None:
         # rather than a probe (M18.3 spec §3.3: running, interval, ticks, last error) —
         # neither has a round trip to time, and inventing a zero for one would be a
         # latency this endpoint never measured.
-        if name not in ("temporal_worker", "routine_clock", "retention", "schema"):
+        # B07's four background loops are state reports for the same reason: a loop that
+        # sweeps on a timer has no round trip to time either.
+        if name not in (
+            "temporal_worker",
+            "routine_clock",
+            "retention",
+            "schema",
+            "artifact_ready_announcer",
+            "briefing_announcer",
+            "research_tool_call_announcer",
+            "selfmodel_refresher",
+            "audit_retention",
+        ):
             assert isinstance(check["latency_ms"], int | float)
     # The schema check must always name both revisions, ok or not: "the migration ran" and
     # "the schema is where this build expects it" are different claims, and only the second
@@ -115,6 +138,7 @@ def test_health_ok_shape(monkeypatch) -> None:
         "interrupted_native_builds",
         "idle_voice_sessions",
         "abandoned_research_runs",
+        "audit_retention",
     ]
     clock = body["checks"]["routine_clock"]
     assert set(clock) == {
@@ -125,6 +149,11 @@ def test_health_ok_shape(monkeypatch) -> None:
         "ticks",
         "last_tick_at",
         "last_error",
+        # B07 req 18/19: the clock's five sub-ticks answer for themselves. One aggregated
+        # "the clock is ticking" hid four sub-ticks that were not, because a single
+        # try/except wrapped all five and the first failure skipped the rest.
+        "sub_ticks",
+        "failing_sub_ticks",
     }
 
 

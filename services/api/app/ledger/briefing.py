@@ -28,7 +28,11 @@ from app.ledger.vocabulary import (
     SEVERITY_CRITICAL,
     SUBSYSTEM_LEDGER,
 )
+from app.logging import get_logger
 from app.narration.numbers import cardinal
+from app.notifications import delivery
+
+logger = get_logger("app.ledger.briefing")
 
 POLICY_IMMEDIATE = "immediate"
 POLICY_COMPLETION = "completion"
@@ -148,15 +152,55 @@ def queue_briefing(
 
 
 def pending(session: Session, now: datetime | None = None) -> list[PendingBriefingRow]:
-    """Undelivered, unexpired briefings, most urgent first (spec §4)."""
+    """Undelivered, unexpired, ATTEMPTABLE briefings, most urgent first (spec §4).
+
+    B07 req 16: the last of those three words is the fix. A row the speaker cannot handle
+    used to stay at the head of this list for ever - it is undelivered and unexpired, so it
+    was picked on every pass, failed on every pass, and blocked every notification behind it
+    while it did. Quarantined rows and rows still waiting out their backoff drop out here, so
+    the queue moves past the one item that cannot be delivered instead of stopping at it.
+    """
     now = now or datetime.now(UTC)
     stmt = (
         select(PendingBriefingRow)
         .where(PendingBriefingRow.delivered_at.is_(None))
         .where(PendingBriefingRow.expires_at > now)
+        .where(PendingBriefingRow.quarantined_at.is_(None))
+        .where(
+            (PendingBriefingRow.next_attempt_at.is_(None))
+            | (PendingBriefingRow.next_attempt_at <= now)
+        )
         .order_by(PendingBriefingRow.priority.asc(), PendingBriefingRow.created_at.asc())
     )
     return list(session.execute(stmt).scalars().all())
+
+
+def record_delivery_failure(
+    session: Session, briefing_id: uuid.UUID, *, reason: str, now: datetime | None = None
+) -> PendingBriefingRow | None:
+    """One more failed attempt on this row; quarantine it once the bound is reached.
+
+    Commits, because the count is the only thing standing between a bad row and an infinite
+    loop: losing it to a rollback somewhere upstream would restore the original defect.
+    """
+    moment = now or datetime.now(UTC)
+    row = session.get(PendingBriefingRow, briefing_id)
+    if row is None:
+        return None
+    attempts, next_at, quarantined = delivery.record_failure(
+        attempts=row.attempts or 0, now=moment, key=briefing_id
+    )
+    row.attempts = attempts
+    row.next_attempt_at = next_at
+    row.quarantined_at = quarantined
+    session.commit()
+    if quarantined is not None:
+        logger.warning(
+            "briefing_quarantined",
+            briefing_id=str(briefing_id),
+            **delivery.quarantine_summary(attempts, reason=reason),
+        )
+    return row
 
 
 #: What ``delivered_via`` says when the owner HEARD it -- written by whichever half of

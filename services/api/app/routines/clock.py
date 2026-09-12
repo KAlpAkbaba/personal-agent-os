@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -50,6 +50,48 @@ DEFAULT_INTERVAL_S = 10.0
 MIN_INTERVAL_S = 1.0
 
 
+def _iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+@dataclass
+class SubTickHealth:
+    """One sub-tick's own record (B07 req 18/19).
+
+    Each sub-tick is a separate piece of work on a shared clock, and until 2026-09-13 they
+    shared a single try/except and a single ``last_error`` too. So a failure in the routine
+    evaluation meant the alarm tick did not run at all that pass - and the health surface
+    reported one clock, ticking, with an error string that named only whichever sub-tick
+    happened to raise first. An alarm could be silently dropped by something unrelated to
+    alarms, and nothing said which part was broken.
+    """
+
+    name: str
+    ticks: int = 0
+    failures: int = 0
+    #: The run of failures ending now. A sub-tick that failed once an hour ago and has
+    #: worked since is not the same thing as one that has failed every pass for an hour.
+    consecutive_failures: int = 0
+    last_error: str | None = None
+    last_ok_at: datetime | None = None
+
+    @property
+    def status(self) -> str:
+        return "fail" if self.consecutive_failures else "ok"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "ticks": self.ticks,
+            "failures": self.failures,
+            "consecutive_failures": self.consecutive_failures,
+            "last_error": self.last_error,
+            "last_ok_at": _iso(self.last_ok_at),
+        }
+
+
 @dataclass
 class ClockHealth:
     running: bool = False
@@ -58,6 +100,14 @@ class ClockHealth:
     ticks: int = 0
     last_error: str | None = None
     enabled: bool = True
+    sub_ticks: dict[str, SubTickHealth] = field(default_factory=dict)
+
+    def sub(self, name: str) -> SubTickHealth:
+        record = self.sub_ticks.get(name)
+        if record is None:
+            record = SubTickHealth(name=name)
+            self.sub_ticks[name] = record
+        return record
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -66,12 +116,14 @@ class ClockHealth:
             "enabled": self.enabled,
             "interval_s": self.interval_s,
             "ticks": self.ticks,
-            "last_tick_at": (
-                self.last_tick_at.astimezone(UTC).isoformat().replace("+00:00", "Z")
-                if self.last_tick_at
-                else None
-            ),
+            "last_tick_at": _iso(self.last_tick_at),
             "last_error": self.last_error,
+            # req 18: each loop answers for itself. One aggregated "the clock is ticking"
+            # hid four sub-ticks that were not.
+            "sub_ticks": {name: record.as_dict() for name, record in self.sub_ticks.items()},
+            "failing_sub_ticks": sorted(
+                name for name, record in self.sub_ticks.items() if record.status == "fail"
+            ),
         }
 
 
@@ -166,22 +218,55 @@ class RoutineClock:
             self._in_flight = False
         return True
 
+    def _sub_ticks(self) -> list[tuple[str, Callable[[Session, datetime], Any]]]:
+        """The sub-ticks this clock drives, in order, named. Order is preserved from the
+        original single block: routines are evaluated first because the alarm tick acts on
+        what they produced."""
+        candidates: list[tuple[str, Callable[[Session, datetime], Any] | None]] = [
+            ("routines", self._evaluate_due),
+            ("alarms", self._alarm_tick),
+            ("ambient", self._ambient_tick),
+            ("evolution", self._evolution_tick),
+            ("executive", self._executive_tick),
+        ]
+        return [(name, fn) for name, fn in candidates if fn is not None]
+
     def _run_tick(self, moment: datetime) -> None:
+        """Every sub-tick runs, whatever the ones before it did (B07 req 19).
+
+        One try/except used to wrap all five, so a failure in the first meant the other four
+        did not run at all - an alarm silently dropped by something that had nothing to do
+        with alarms. Each one is isolated now, and the session is rolled back after a failure
+        so the next sub-tick does not inherit a broken transaction: isolation that leaves the
+        next caller a poisoned session is not isolation.
+        """
         session = self._session_factory()
+        failed: list[str] = []
         try:
-            self._evaluate_due(session, moment)
-            if self._alarm_tick is not None:
-                self._alarm_tick(session, moment)
-            if self._ambient_tick is not None:
-                self._ambient_tick(session, moment)
-            if self._evolution_tick is not None:
-                self._evolution_tick(session, moment)
-            if self._executive_tick is not None:
-                self._executive_tick(session, moment)
-            self._health.last_error = None
-        except Exception as exc:  # noqa: BLE001 - a failing tick must not stop the clock
-            self._health.last_error = f"{type(exc).__name__}: {exc}"[:200]
-            logger.error("routine_clock_tick_failed", error=self._health.last_error)
+            for name, fn in self._sub_ticks():
+                record = self._health.sub(name)
+                record.ticks += 1
+                try:
+                    fn(session, moment)
+                except Exception as exc:  # noqa: BLE001 - one sub-tick, not the clock
+                    record.failures += 1
+                    record.consecutive_failures += 1
+                    record.last_error = f"{type(exc).__name__}: {exc}"[:200]
+                    failed.append(name)
+                    logger.error(
+                        "routine_clock_sub_tick_failed",
+                        sub_tick=name,
+                        error=record.last_error,
+                        consecutive=record.consecutive_failures,
+                    )
+                    with contextlib.suppress(Exception):
+                        session.rollback()
+                else:
+                    record.consecutive_failures = 0
+                    record.last_ok_at = moment
+            self._health.last_error = (
+                None if not failed else f"sub-ticks failed: {', '.join(failed)}"
+            )
         finally:
             self._health.ticks += 1
             self._health.last_tick_at = moment

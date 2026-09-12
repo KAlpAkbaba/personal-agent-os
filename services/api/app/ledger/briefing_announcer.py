@@ -34,9 +34,16 @@ from typing import Any, Final, Protocol
 
 from sqlalchemy.orm import Session
 
-from app.ledger.briefing import POLICY_DIGEST, VIA_VOICE, mark_delivered, pending
+from app.ledger.briefing import (
+    POLICY_DIGEST,
+    VIA_VOICE,
+    mark_delivered,
+    pending,
+    record_delivery_failure,
+)
 from app.ledger.models import PendingBriefingRow
 from app.logging import get_logger
+from app.loops import LoopHeartbeat
 from app.narration.numbers import cardinal
 
 logger = get_logger("app.ledger.briefing_announcer")
@@ -102,6 +109,11 @@ class PendingBriefingAnnouncer:
         self._speaker = speaker
         self._interval_s = interval_s
         self._task: asyncio.Task[None] | None = None
+        #: B07 req 18: this loop's own health. Four of the nine background loops
+        #: could not be seen on the health surface at all, and they were the four
+        #: that carry a notification to the owner - so the failure they can have is
+        #: the one nobody would notice.
+        self.heartbeat = LoopHeartbeat(name="briefing_announcer", interval_s=self._interval_s)
 
     # ------------------------------------------------------------------ sweep
 
@@ -131,6 +143,10 @@ class PendingBriefingAnnouncer:
                 # flood the constitution forbids.
                 target = urgent[0]
                 if not self._speak(target.speech, [target.briefing_id]):
+                    # B07 req 16: count it. Returning without recording the failure is what
+                    # made one unspeakable row block the queue for ever - it stayed the most
+                    # urgent pending row and was chosen again on every pass.
+                    record_delivery_failure(session, target.briefing_id, reason="say_failed")
                     return 0
                 mark_delivered(session, target.briefing_id, VIA_VOICE)
                 logger.info("briefing_delivered", policy=target.policy, count=1)
@@ -139,6 +155,8 @@ class PendingBriefingAnnouncer:
             digests = [row for row in rows if row.policy == POLICY_DIGEST]
             ids = [row.briefing_id for row in digests]
             if not self._speak(digest_sentence(digests), ids):
+                for briefing_id in ids:
+                    record_delivery_failure(session, briefing_id, reason="digest_say_failed")
                 return 0
             for briefing_id in ids:
                 mark_delivered(session, briefing_id, VIA_VOICE)
@@ -161,13 +179,20 @@ class PendingBriefingAnnouncer:
                 await asyncio.to_thread(self.sweep_once)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 - the sweep loop must never die silently
+            except Exception as exc:
+                self.heartbeat.record_failure(exc)  # noqa: BLE001 - the sweep loop must never die silently
                 logger.exception("briefing_sweep_failed")
+            else:
+                self.heartbeat.record_pass()
             await asyncio.sleep(self._interval_s)
 
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._loop())
+            self.heartbeat.bind(self._task)
+
+    def health_check(self) -> dict[str, Any]:
+        return self.heartbeat.health_check()
 
     async def stop(self) -> None:
         if self._task is not None:

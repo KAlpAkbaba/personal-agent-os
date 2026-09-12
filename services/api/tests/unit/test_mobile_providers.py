@@ -57,7 +57,12 @@ def test_deliver_records_the_message_without_the_token() -> None:
     provider.register(registration_key="r1", token="device-token-1")
     delivery = provider.deliver(registration_key="r1", message=MESSAGE)
     assert delivery.provider == "fake"
-    assert delivery.status == "delivered"
+    # B07 req 390: this used to read `== "delivered"`, which was the product-principle
+    # violation written down as an expectation. The fake queues a message in this process;
+    # nothing outside it has anything, and no vendor has acknowledged anything.
+    assert delivery.status == P.STATUS_SIMULATED
+    assert delivery.is_delivered is False
+    assert delivery.receipt == ""
     assert "device-token-1" not in repr(delivery)
     assert provider.deliveries_for("r1") == [delivery]
     assert delivery.to_dict()["data"]["kind"] == "artifact_ready"

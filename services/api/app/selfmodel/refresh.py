@@ -44,6 +44,7 @@ from typing import Any, Final
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
+from app.loops import LoopHeartbeat
 from app.selfmodel.indexer import IndexReport, build_index, default_repo_root
 
 logger = get_logger("app.selfmodel.refresh")
@@ -72,6 +73,11 @@ class SelfModelRefresher:
         self._interval_s = interval_s
         self._initial_delay_s = initial_delay_s
         self._task: asyncio.Task[None] | None = None
+        #: B07 req 18: this loop's own health. Four of the nine background loops
+        #: could not be seen on the health surface at all, and they were the four
+        #: that carry a notification to the owner - so the failure they can have is
+        #: the one nobody would notice.
+        self.heartbeat = LoopHeartbeat(name="selfmodel_refresher", interval_s=self._interval_s)
         self._last: IndexReport | None = None
 
     # ----------------------------------------------------------------- one pass
@@ -111,13 +117,20 @@ class SelfModelRefresher:
                 await asyncio.to_thread(self.refresh_once)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                self.heartbeat.record_failure(exc)
                 logger.exception("selfmodel_refresh_pass_failed")
+            else:
+                self.heartbeat.record_pass()
             await asyncio.sleep(self._interval_s)
 
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._loop())
+            self.heartbeat.bind(self._task)
+
+    def health_check(self) -> dict[str, Any]:
+        return self.heartbeat.health_check()
 
     async def stop(self) -> None:
         if self._task is not None:

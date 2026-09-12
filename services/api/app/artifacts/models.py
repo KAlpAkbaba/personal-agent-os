@@ -122,6 +122,18 @@ class Task(Base):
     # has been delivered. The Temporal worker never touches it — it only makes
     # the task READY; see app/mobile/announcer.py for why the two processes
     # communicate through this column instead of a worker-held credential.
+    #: B07 req 14/15/16/17: bounded delivery. Before these three columns existed the
+    #: announcer had no way to know it had already tried, so a permanently failing item was
+    #: re-attempted on every sweep for ever. `attempts` counts failures, `next_attempt_at`
+    #: holds the backoff, and `quarantined_at` is the announcer giving up on ONE item so the
+    #: queue behind it can move (app.notifications.delivery).
+    announce_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    announce_next_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    announce_quarantined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     announced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

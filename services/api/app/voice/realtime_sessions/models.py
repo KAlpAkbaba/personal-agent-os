@@ -16,7 +16,17 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid, func
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -113,6 +123,18 @@ class RealtimeToolCall(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: B07 req 14/15/16/17: bounded delivery. Before these three columns existed the
+    #: announcer had no way to know it had already tried, so a permanently failing item was
+    #: re-attempted on every sweep for ever. `attempts` counts failures, `next_attempt_at`
+    #: holds the backoff, and `quarantined_at` is the announcer giving up on ONE item so the
+    #: queue behind it can move (app.notifications.delivery).
+    announce_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    announce_next_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    announce_quarantined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 __all__ = [

@@ -23,12 +23,15 @@ import asyncio
 import uuid
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
+from app.loops import LoopHeartbeat
+from app.notifications import delivery
 from app.research import runs_service
 from app.research.models import STAGE_FAILED, TERMINAL_STAGES
 from app.research.result import build_insufficient_terminal_payload, build_tool_terminal_payload
@@ -64,15 +67,29 @@ class ResearchToolCallAnnouncer:
         self._interval_s = interval_s
         self._batch = batch
         self._task: asyncio.Task[None] | None = None
+        #: B07 req 18: this loop's own health. Four of the nine background loops
+        #: could not be seen on the health surface at all, and they were the four
+        #: that carry a notification to the owner - so the failure they can have is
+        #: the one nobody would notice.
+        self.heartbeat = LoopHeartbeat(
+            name="research_tool_call_announcer", interval_s=self._interval_s
+        )
 
     # ------------------------------------------------------------------ sweep
 
-    def _claim_batch(self, session: Session) -> list[RealtimeToolCall]:
+    def _claim_batch(self, session: Session, *, now: datetime) -> list[RealtimeToolCall]:
+        # B07 req 17: a call whose completion keeps throwing used to be retried on every
+        # pass with nothing counting the attempts.
         stmt = (
             select(RealtimeToolCall)
             .where(
                 RealtimeToolCall.name == RESEARCH_START_TOOL,
                 RealtimeToolCall.status == TOOL_STATUS_RUNNING,
+                RealtimeToolCall.announce_quarantined_at.is_(None),
+            )
+            .where(
+                (RealtimeToolCall.announce_next_at.is_(None))
+                | (RealtimeToolCall.announce_next_at <= now)
             )
             .order_by(RealtimeToolCall.created_at)
             .limit(self._batch)
@@ -81,8 +98,11 @@ class ResearchToolCallAnnouncer:
             stmt = stmt.with_for_update(skip_locked=True)
         return list(session.execute(stmt).scalars().all())
 
-    def sweep_once(self) -> int:
+    def sweep_once(self, now: datetime | None = None) -> int:
         """One pass. Returns how many tool calls were completed. Safe to call directly.
+
+        ``now`` exists so ONE clock decides a pass: the batch it claims and the backoff it
+        writes. Production passes nothing and gets the real clock.
 
         A call whose run has not reached a terminal stage yet (or whose result never
         carried a ``task_id`` at all — every call today, until ``research.start`` is
@@ -90,8 +110,9 @@ class ResearchToolCallAnnouncer:
         ever guesses at a linkage it was not given.
         """
         completed = 0
+        moment = now or datetime.now(UTC)
         with self._session_factory() as session:
-            for call in self._claim_batch(session):
+            for call in self._claim_batch(session, now=moment):
                 task_id = str((call.result_json or {}).get("task_id") or "")
                 if not task_id:
                     continue
@@ -120,12 +141,33 @@ class ResearchToolCallAnnouncer:
                     logger.exception(
                         "research_tool_call_announce_failed", task_id=task_id, call_id=call.call_id
                     )
+                    self._record_failure(call, moment, reason="completion_raised")
+                    session.commit()
                     continue
                 if outcome is not None:
                     completed += 1
         if completed:
             logger.info("research_tool_call_announced", count=completed)
         return completed
+
+    def _record_failure(self, call: RealtimeToolCall, now: datetime, *, reason: str) -> None:
+        """One more failed attempt on this call; quarantine it once the bound is reached.
+
+        The call is left RUNNING rather than failed: quarantine says "we stopped trying to
+        announce it", which is a different fact from "the research failed", and conflating
+        the two would tell the owner their research broke when the postman did."""
+        attempts, next_at, quarantined = delivery.record_failure(
+            attempts=call.announce_attempts or 0, now=now, key=call.id
+        )
+        call.announce_attempts = attempts
+        call.announce_next_at = next_at
+        call.announce_quarantined_at = quarantined
+        if quarantined is not None:
+            logger.warning(
+                "research_tool_call_announce_quarantined",
+                call_id=call.call_id,
+                **delivery.quarantine_summary(attempts, reason=reason),
+            )
 
     @staticmethod
     def _session_row(session: Session, call: RealtimeToolCall) -> Any:
@@ -153,8 +195,11 @@ class ResearchToolCallAnnouncer:
                 await asyncio.to_thread(self.sweep_once)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 - the sweep loop must never die silently
+            except Exception as exc:
+                self.heartbeat.record_failure(exc)  # noqa: BLE001 - the sweep loop must never die silently
                 logger.exception("research_tool_call_sweep_failed")
+            else:
+                self.heartbeat.record_pass()
             await asyncio.sleep(self._interval_s)
 
     async def start(self) -> None:
@@ -167,6 +212,10 @@ class ResearchToolCallAnnouncer:
             bind(asyncio.get_running_loop())
         if self._task is None:
             self._task = asyncio.create_task(self._loop())
+            self.heartbeat.bind(self._task)
+
+    def health_check(self) -> dict[str, Any]:
+        return self.heartbeat.health_check()
 
     async def stop(self) -> None:
         if self._task is not None:

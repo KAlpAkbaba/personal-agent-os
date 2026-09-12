@@ -45,6 +45,9 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
         "interrupted_native_builds": 5,
         "idle_voice_sessions": 2,
         "abandoned_research_runs": 1,
+        # B07 req 679: a dry run on an empty database counts nothing, which is the honest
+        # answer and not a skipped sweep.
+        "audit_retention": 0,
     }
     assert app.state.retention_sweeper.last_results == results
     assert app.state.retention_sweeper.last_run_at is not None
