@@ -1,0 +1,1 @@
+{"mode":"drill","snapshot":"8ad3e92390234a201892951af6094c47807aec9f54c7a4d058a36644fa67b16a","finished_at":"2026-09-12T08:08:18Z","seconds":{"restore":0,"verify_files":1,"databases":5,"objects":2,"total":8},"databases":{"pagentos_prod":33981,"postgres":0,"temporal":413,"temporal_visibility":42},"objects":21,"verdict":"passed"}
