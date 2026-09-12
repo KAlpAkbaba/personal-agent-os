@@ -142,6 +142,21 @@ Invoke-Step "API lint (ruff)" {
   } finally { Pop-Location }
 }
 
+# B08 (2026-09-13): the other Python services' ruff runs in CI and used to run here only in
+# the FULL gate, so every -Fast pass said "clean" about a tree CI was about to reject. It cost
+# a red CI job on the recovery supervisor for a single long line. Lint is seconds; their test
+# suites stay in the full gate where they belong.
+Invoke-Step "Other services lint (ruff)" {
+  if (-not $uv) { throw "uv not found" }
+  foreach ($svc in @("servicesecovery-supervisor", "servicesrowser")) {
+    Push-Location (Join-Path $repoRoot $svc)
+    try {
+      & $uv run ruff check .
+      Assert-ExitCode "ruff ($svc)"
+    } finally { Pop-Location }
+  }
+}
+
 Invoke-Step "API unit tests" {
   if (-not $uv) { throw "uv not found" }
   Push-Location $apiRoot
