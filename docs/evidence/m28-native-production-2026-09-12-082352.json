@@ -1,0 +1,153 @@
+{
+    "row":  "26.16",
+    "claim":  "a native Windows build startable from PRODUCTION, built on the enrolled device and verified from the artefact\u0027s own identity",
+    "status":  "NOT_YET_PROVEN",
+    "reasons":  [
+                    "the row is \u0027failed\u0027, not verified"
+                ],
+    "started_at":  "2026-09-12T08:23:48.3967658Z",
+    "finished_at":  "2026-09-12T08:23:52.2100454Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "d86b3d94c829d3e3c6119af4d46d72e7b91dfd12",
+                       "release_after":  "d86b3d94c829d3e3c6119af4d46d72e7b91dfd12",
+                       "health_before":  "ok",
+                       "health_after":  "ok"
+                   },
+    "device":  {
+                   "device_id":  "3f60fdb5-5022-48cf-bb3c-d7192466b701",
+                   "name":  "MAIL",
+                   "software_version":  "0.6.0",
+                   "build_id":  "19f079c4fda2c3c7",
+                   "source_revision":  "f2fe54ac99720711658c00a018c65fbf30b386a3"
+               },
+    "realtime_session_id":  "1bec726c-b1d0-478e-acfe-7daaafbc8b4e",
+    "native_create":  {
+                          "status":  "succeeded",
+                          "result":  {
+                                         "action_id":  "q2616-fc3ab584-3e13-4f74-a912-eeac012e0bd4",
+                                         "capability":  "native.create",
+                                         "requested_state":  "windows_exe",
+                                         "execution_status":  "executed",
+                                         "terminal_status":  "verified",
+                                         "observed_after":  {
+                                                                "server":  {
+                                                                               "builds":  [
+                                                                                              {
+                                                                                                  "build_id":  "e2963628-433a-4e99-969f-cc5726a9d2ce",
+                                                                                                  "slug":  "notlarim",
+                                                                                                  "target":  "windows_exe",
+                                                                                                  "stack":  "dotnet_wpf",
+                                                                                                  "version":  "0.1.0",
+                                                                                                  "state":  "planned",
+                                                                                                  "artifact":  null,
+                                                                                                  "error_class":  null
+                                                                                              }
+                                                                                          ]
+                                                                           },
+                                                                "local":  {
+
+                                                                          }
+                                                            },
+                                         "evidence_refs":  [
+
+                                                           ],
+                                         "error_class":  null,
+                                         "started_at":  "2026-09-12T08:23:51.646600Z",
+                                         "completed_at":  "2026-09-12T08:23:51.646600Z",
+                                         "session_id":  "1bec726c-b1d0-478e-acfe-7daaafbc8b4e",
+                                         "observed_at":  "2026-09-12T08:23:51.646600Z",
+                                         "action_trace":  [
+
+                                                          ],
+                                         "speech":  "WPF seçtim: Windows masaüstü, form arayüzü; derlemeyi kayıtlı Windows cihazınız yapacak. Notlarim için windows_exe hazırlanıyor efendim.",
+                                         "builds":  [
+                                                        {
+                                                            "build_id":  "e2963628-433a-4e99-969f-cc5726a9d2ce",
+                                                            "slug":  "notlarim",
+                                                            "target":  "windows_exe",
+                                                            "stack":  "dotnet_wpf",
+                                                            "version":  "0.1.0",
+                                                            "state":  "planned",
+                                                            "artifact":  null,
+                                                            "error_class":  null
+                                                        }
+                                                    ],
+                                         "stack_choice":  {
+                                                              "stack":  "dotnet_wpf",
+                                                              "reason":  "WPF seçtim: Windows masaüstü, form arayüzü; derlemeyi kayıtlı Windows cihazınız yapacak.",
+                                                              "available":  true,
+                                                              "owner_action":  null,
+                                                              "error_class":  null
+                                                          }
+                                     }
+                      },
+    "native_build":  {
+                         "status":  "succeeded",
+                         "seconds":  0.4,
+                         "result":  {
+                                        "action_id":  "q2616-3185d327-d98a-494a-b4da-3ba84c1cce3e",
+                                        "capability":  "native.build",
+                                        "requested_state":  "windows_exe",
+                                        "execution_status":  "failed",
+                                        "terminal_status":  "failed",
+                                        "observed_after":  {
+                                                               "server":  {
+                                                                              "build_id":  "e2963628-433a-4e99-969f-cc5726a9d2ce",
+                                                                              "slug":  "notlarim",
+                                                                              "target":  "windows_exe",
+                                                                              "stack":  "dotnet_wpf",
+                                                                              "version":  "0.1.0",
+                                                                              "state":  "failed",
+                                                                              "artifact":  null,
+                                                                              "error_class":  "validation_error"
+                                                                          },
+                                                               "local":  {
+
+                                                                         }
+                                                           },
+                                        "evidence_refs":  [
+
+                                                          ],
+                                        "error_class":  "validation_error",
+                                        "started_at":  "2026-09-12T08:23:52.056695Z",
+                                        "completed_at":  "2026-09-12T08:23:52.056695Z",
+                                        "session_id":  "1bec726c-b1d0-478e-acfe-7daaafbc8b4e",
+                                        "observed_at":  "2026-09-12T08:23:52.056695Z",
+                                        "action_trace":  [
+
+                                                         ],
+                                        "speech":  "Notlarim derlenemedi efendim: project.scaffold: manifest.test must be a non-empty object of {key: command}.",
+                                        "build":  {
+                                                      "build_id":  "e2963628-433a-4e99-969f-cc5726a9d2ce",
+                                                      "slug":  "notlarim",
+                                                      "target":  "windows_exe",
+                                                      "stack":  "dotnet_wpf",
+                                                      "version":  "0.1.0",
+                                                      "state":  "failed",
+                                                      "artifact":  null,
+                                                      "error_class":  "validation_error"
+                                                  },
+                                        "built_on":  "device"
+                                    }
+                     },
+    "row_read_back":  {
+                          "id":  "e2963628-433a-4e99-969f-cc5726a9d2ce",
+                          "slug":  "notlarim",
+                          "display_name":  "Notlarim",
+                          "stack":  "dotnet_wpf",
+                          "template":  "notes-desktop",
+                          "target":  "windows_exe",
+                          "version":  "0.1.0",
+                          "state":  "failed",
+                          "attempt":  1,
+                          "artifact":  null,
+                          "verdict":  null,
+                          "tests":  null,
+                          "error_class":  "validation_error",
+                          "error_message":  "project.scaffold: manifest.test must be a non-empty object of {key: command}",
+                          "speech":  "Notlarim derlenemedi efendim: project.scaffold: manifest.test must be a non-empty object of {key: command}.",
+                          "created_at":  "2026-09-12T08:23:51.640078+00:00",
+                          "updated_at":  "2026-09-12T08:23:52.050233+00:00"
+                      }
+}
