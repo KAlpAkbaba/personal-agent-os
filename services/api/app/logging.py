@@ -103,6 +103,11 @@ class SecretRedactingFilter(logging.Filter):
     leave ``"connecting to %s"`` clean and the credential intact in the tuple beside it.
     A traceback is formatted into ``exc_text`` for the same reason: the formatter renders it
     later, by which time no filter runs.
+
+    The bound, stated rather than implied: it is attached to the handlers that exist when
+    ``configure_logging`` runs - in this process, the single stream handler ``basicConfig``
+    installs. A handler added afterwards (a file handler an operator wires up later, pytest's
+    own capture handler) does not inherit it.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:

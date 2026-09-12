@@ -329,15 +329,22 @@ ROLLBACK_PLAN       : her aile ayrı commit; cihaz tarafı değişiklik agent s�
 ```
 
 ```
-BATCH_ID            : B04
+BATCH_ID            : B04                                       [KAPANDI 2026-09-12]
 NAME                : Sır redaksiyon hattı
 REQUIREMENT_IDS     : 6, 7, 8, 668, 683
 GOAL                : Mevcut 13 desen her çıkış yüzeyinde uygulansın; hiçbir sır açık çıkmasın.
 DEPENDENCIES        : B03
 AFFECTED_SUBSYSTEMS : World Model, Observability, Health, Security
-EXPECTED_FILES      : services/api/app/worldmodel/, app/observability/, app/system/health.py
+EXPECTED_FILES      : services/api/app/worldmodel/state.py, app/logging.py, app/health.py,
+                      app/main.py (sağlık rotası), app/security/redaction.py
+                      (gerçek dosyalar: `app/observability/` ve `app/system/` yok — log hattı
+                      `app/logging.py`, sağlık `app/health.py`)
 RISK                : low
 OWNER_ACTION        : no
+KAPANIŞ             : commit 25eaede · CI 34717193365 yeşil (7/7) · yerel kapı 8999 geçti
+                      kanıt docs/evidence/b04-secret-redaction-2026-09-12.json
+YOL ÜSTÜNDE         : `redact_value` iç içe anahtar-ADI kuralını uygulamıyordu; stdlib
+                      `logging` (uvicorn/SQLAlchemy) işlemci zincirinin yanından geçiyordu
 TEST_PLAN           : bilinen sır dizesi her yanıt/log/sağlık yüzeyinde aranır ve bulunmaz;
                       redaksiyon kapatılınca test kırmızı olur (mutasyon)
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde /v1/world/facts temiz; PROVEN_AUTOMATED — log hattı

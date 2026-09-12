@@ -36,9 +36,9 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 3 | file.search mutlak path çözümü | Kova adı sözleşmesi: cihaz çözüyor, sonra sınırlıyor | Klasör araması üretimde çalışır | DONE | PA | P0 | 5 | B03 | packages/protocol/file-search-roots.json, app/documents/service.py, .../Documents/WellKnownFolders.cs | test_file_search_roots_contract.py (29), FileSearchRootsContractTests.cs (9) | — | no | Kırmızı önce kanıtlandı (3/9 düştü). Yol üstünde: Türkçe İ katlama kusuru |
 | 4 | App Factory manifest'leri device contract'a uyar | Üç şablon da cihazın kabul ettiği şekilde | Üç şablon kabul edilir | DONE | PA | P0 | 5,421 | B03 | packages/protocol/app-manifest.example.json, app/appfactory/validation.py, templates/*/manifest.json | test_app_manifest_contract.py (17), AppManifestContractTests.cs (5) | — | no | `{port}`→`<port>`; cli-tool `run`+`port: 0` kazandı; doğrulayıcı artık cihazdan nazik değil |
 | 5 | Fake device payload = gerçek wire shape | Sahteler cihazın kendi kaynağından denetleniyor | Sahte makineden nazik olamaz | DONE | PA | P0 | — | B03 | tests/appfactory_support.py, tests/unit/test_nativefactory_device_build.py | test_device_fakes_match_the_device.py (5), test_contract_falsification.py (26) | — | no | Üç sahte `counts_parsed`/`duration_ms` düşürüyordu; artık eksik alan testte düşüyor |
-| 6 | /v1/world/facts secret redaction | DB parolası açık metin dönüyor | Sır hiçbir yanıtta yok | BROKEN | NYP | P0 | — | B04 | services/api/app/worldmodel/ | — | üretim yanıtı 2026-09-12 | no | Sahip oturumu gerekli ama sızıntı |
-| 7 | Log secret redaction | 13 desen log hattında yok | Sır loga düşmez | MISSING | NYP | P0 | 6 | B04 | services/api/app/observability/ | — | — | no | Desenler var, hat yok |
-| 8 | Health secret redaction | Kimliksiz sağlıkta desen yok | Sağlık sır sızdırmaz | MISSING | NYP | P0 | 6 | B04 | services/api/app/system/health.py | — | — | no | — |
+| 6 | /v1/world/facts secret redaction | DB parolası açık metin dönüyor | Sır hiçbir yanıtta yok | DONE | PA | P0 | — | B04 | app/worldmodel/state.py:_Collector.fact, app/security/redaction.py:strip_uri_credentials | test_secret_redaction_surfaces.py | üretim turu bekliyor (Karar 0) | no | Redaksiyon toplayıcı kapısında; DSN'in yalnız userinfo'su siliniyor, host/veritabanı duruyor |
+| 7 | Log secret redaction | 13 desen log hattında yok | Sır loga düşmez | DONE | PA | P0 | 6 | B04 | app/logging.py:redact_secrets, app/logging.py:SecretRedactingFilter | test_secret_redaction_surfaces.py | üretim turu bekliyor (Karar 0) | no | structlog zinciri + stdlib handler filtresi (uvicorn/SQLAlchemy oradan yazıyor) |
+| 8 | Health secret redaction | Kimliksiz sağlıkta desen yok | Sağlık sır sızdırmaz | DONE | PA | P0 | 6 | B04 | app/health.py:_run_check, app/main.py:system_health | test_secret_redaction_surfaces.py, test_health_endpoint.py | üretim turu bekliyor (Karar 0) | no | Kimliksiz uç: hem hata dizesi hem tüm checks haritası |
 | 9 | Dead Voice session sweeper | 6-7 zombie `active`, en eskisi 09-09 | Zombie kalmaz | DONE | PA | P0 | — | B06 | app/voice/realtime_sessions/service.py:sweep_idle_sessions, app/main.py:RetentionSweeper | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | Yaş değil atıllık: konuşulan oturum hiç süpürülmez |
 | 10 | Takılmış research/task sweeper | 09-09'dan beri `discovering` | Terminal duruma taşınır | DONE | PA | P0 | — | B06 | app/research/service.py:sweep_abandoned_runs, app/main.py:RetentionSweeper | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | Görev FAILED_TERMINAL, koşu STAGE_FAILED; satır silinmez |
 | 11 | Stale RUNNING/CREATED reconciliation | Mutabakat yok | Durum gerçeğe uyar | DONE | PA | P0 | 10 | B06 | app/research/service.py:sweep_abandoned_runs, app/worldmodel/state.py:_collect_tasks | test_orphan_sweeps.py, test_worldmodel.py | üretim turu bekliyor (Karar 0) | no | Süpürge taşır, dünya modeli sayar |
@@ -854,7 +854,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 665 | Speaker embedding | Kısmi | Tam | PARTIAL | PA | P0 | 664 | B05 | app/voice/identity/ | voice identity testleri | — | no | — |
 | 666 | Sensitive-operation re-auth | Yok | Yeniden doğrulama | MISSING | NYP | P0 | 658 | B05 | app/identity/, app/security/ | — | — | no | 248 ile ortak |
 | 667 | Secret detection | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/security/ | security testleri | 13 desen | no | Tespit var, uygulama eksik |
-| 668 | Secret redaction | Desenler log hattında ve dünya modelinde yok | Her yüzeyde | BROKEN | NYP | P0 | 667 | B04 | app/observability/, app/worldmodel/ | — | üretim yanıtı | no | 6,7,8 ile aynı iş |
+| 668 | Secret redaction | Desenler log hattında ve dünya modelinde yok | Her yüzeyde | DONE | PA | P0 | 667 | B04 | app/worldmodel/state.py:_Collector.fact, app/logging.py:redact_secrets, app/logging.py:SecretRedactingFilter, app/health.py:_run_check, app/main.py:system_health | test_secret_redaction_surfaces.py | üretim turu bekliyor (Karar 0) | no | Tek kelime dağarcığı: 13 desen app.memory.policy'den, anahtar adları app.research.forbidden_keys'ten |
 | 669 | DPAPI storage | Çalışıyor | Aynı | DONE | PR | P0 | — | — | scripts/secret-store.ps1 | owner-harness.tests.ps1 | escrow | no | Rewrite gerekmez |
 | 670 | Cloud credential separation | Çalışıyor | Aynı | DONE | PA | P0 | — | — | scripts/cloud/set-cloud-secret.ps1 | — | stdin ile | no | — |
 | 671 | Camera permission | Kısmi | Tam | PARTIAL | NYP | P2 | 327 | B48 | app/security/, app/presence/ | — | eye_enabled=false | kamera kararı | — |
@@ -869,7 +869,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 680 | Security review of generated code | Yok | Zorunlu | MISSING | NYP | P0 | — | B35 | app/security/, app/selfdev/ | — | Grant tüketicisi yok | no | 598,579,439 ile ortak |
 | 681 | No CAPTCHA bypass | Zorlanıyor | Aynı | DONE | PA | P0 | — | — | app/browser/ | browser testleri | — | no | Ürün ilkesi — ASLA gevşetilmez |
 | 682 | No DRM bypass | Zorlanıyor | Aynı | DONE | PA | P0 | — | — | app/browser/ | browser testleri | — | no | Ürün ilkesi |
-| 683 | No secret logging | İhlal var | Hiçbir sır loglanmaz | BROKEN | NYP | P0 | 668 | B04 | app/observability/ | — | — | no | 7 ile aynı iş |
+| 683 | No secret logging | İhlal var | Hiçbir sır loglanmaz | DONE | PA | P0 | 668 | B04 | app/logging.py:redact_secrets, app/logging.py:SecretRedactingFilter | test_secret_redaction_surfaces.py | üretim turu bekliyor (Karar 0) | no | Anahtar-adı kuralı her derinlikte, ama yalnız dize değerlere: tokens:1430 sayı kalıyor |
 | 684 | No hidden camera | Uygulanıyor | Aynı | DONE | PA | P0 | — | — | app/presence/, apps/web/ | presence testleri | — | no | Ürün ilkesi |
 
 ## W. WEB / COCKPIT / UX (685–725)
@@ -1294,3 +1294,83 @@ görünür olmuştu.
 kapısı) henüz yapılmadı. Çalışmaya yanlış numarayla (B04) başladım ve bunu ancak roadmap'i
 yeniden okuduğumda fark ettim. İş bitmiş, testleri yeşil ve teknik bağımlılığı yoktu (süpürgeler
 yetki kapısına bağlı değil), bu yüzden doğru numarayla kapatıldı. Sıradaki iki batch B04 ve B05.
+
+---
+
+### B04 — Sır redaksiyon hattı · 2026-09-12
+
+CI 34717193365 yeşil (7/7) · commit 25eaede · yerel kapı 8999 geçti / 5 atlandı · kanıt `docs/evidence/b04-secret-redaction-2026-09-12.json`
+
+```
+6             status : DONE
+     commit : 25eaede
+     tests  : test_secret_redaction_surfaces.py (dünya modeli bölümü, 4 test)
+     proof  : PROVEN_AUTOMATED — düzeltme yedekten geri alınarak KIRMIZI kanıtlandı
+              (dünya modeli + sağlık mutasyonu: 5 başarısız / 12 geçen), dosyalar
+              sha256 ile geri yüklendi
+     date   : 2026-09-12
+     note   : Üretim veritabanı parolası `/v1/world/facts` yanıtında açık metindi. Sahip
+              oturumu gerekiyordu — ama bu "güvenli" demek değil: değer Cockpit'e, anlık
+              görüntüyü alıntılayan her şeye ve her ekran görüntüsüne gidiyor. Düzeltme
+              sızdıran TOPLAYICIYA değil, her toplayıcının yazdığı KAPIYA kondu
+              (`_Collector.fact` / `.uncertain`), yani sonradan eklenen bir bölüm bunu
+              bedava alıyor. DSN'in yalnızca userinfo'su siliniyor: olgu hâlâ hangi host,
+              hangi port, hangi veritabanı olduğunu söylüyor — değerini yok eden redaksiyon
+              düzeltme değildir.
+
+7, 683        status : DONE
+     commit : 25eaede
+     tests  : test_secret_redaction_surfaces.py (log hattı bölümü, 8 test)
+     proof  : PROVEN_AUTOMATED — işlemci etkisizleştirilerek KIRMIZI kanıtlandı
+              (5 başarısız / 12 geçen); ayrıca zincirdeki KONUMU pinli (renderer'dan
+              hemen önce)
+     date   : 2026-09-12
+     note   : On üç desen M8'den beri vardı ve güvenlik ajanının kendi yazma yollarında
+              uygulanıyordu; log satırına uygulayan hiçbir şey yoktu. İki kural, çünkü sır
+              iki ayrı şekilde geliyor: adı "kimlik bilgisi" anlamına gelen ANAHTAR (hiçbir
+              desen `hunter2`'yi tanıyamaz — ne olduğunu yalnızca anahtar söyler) ve desenle
+              taranan her dize. Anahtar kuralı HER DERİNLİKTE uygulanıyor: bir log olayı
+              neredeyse her zaman iç içe şekildedir ve yalnız üst seviyeyi taramak,
+              `{"body": {"password": ...}}`'ı yakalamakla açık basmak arasındaki farktır.
+              Ama yalnız DİZE değerlere: `tokens: 1430` anahtar kelime dağarcığına uyuyor ve
+              sır değil — koruduğu gözlemlenebilirliği yiyen redaksiyon kazandığından
+              fazlasını götürür. 683 "hiçbir sır loglanmaz" dediği için stdlib `logging`
+              hattı da kapsandı: uvicorn erişim satırları ve SQLAlchemy motoru işlemci
+              zincirinin tamamen yanından geçiyordu.
+
+8             status : DONE
+     commit : 25eaede
+     tests  : test_secret_redaction_surfaces.py (sağlık bölümü, 2 test),
+              test_health_endpoint.py::test_no_subsystems_check_can_leak_a_secret_...
+     proof  : PROVEN_AUTOMATED — sızdıran bir check ile gerçek uçtan sürülerek
+     date   : 2026-09-12
+     note   : Sömürü basitti: veritabanı düşükken `/v1/system/health`'e herhangi bir şey
+              yönelt, üretim kimlik bilgisini yanıt gövdesinden oku — sürücünün bağlantı
+              hatası kendisine verilen DSN'i alıntılıyor ve bu uç, SAHİP OTURUMU İSTEMEYEN
+              tek uç. Tek alanla yetinilmedi: uç ~18 bağımsız yazılmış `health_check()`
+              metodunu topluyor, her birinin yorumu "sır yok" diyor ve hiçbiri denetlenmiyor,
+              bu yüzden birleştirilmiş harita bir bütün olarak redakte ediliyor.
+
+668           status : DONE
+     commit : 25eaede
+     tests  : test_secret_redaction_surfaces.py::test_all_thirteen_patterns_are_the_ones_...
+     proof  : PROVEN_AUTOMATED — üç yüzey de AYNI SECRET_PATTERNS'a ulaşıyor; testi
+              `app.memory.policy`'nin listesini okuyor, yeniden yazmıyor
+     date   : 2026-09-12
+     note   : Üç yüzey, dört kelime dağarcığı olmasın diye: desenler `app.memory.policy`'den
+              (M8'in kendi listesi onları zaten oradan alıyor), anahtar adları
+              `app.research.forbidden_keys`'ten — tarayıcı işçisi ve Cloud Core'un zaten
+              üzerinde anlaştığı liste. Bu hatta eklenen yeni bir desen üçünde birden çıkar.
+```
+
+**B04'te yol üstünde bulunan ve aynı batch'te kapatılan iki boşluk:** (1) `redact_value` iç içe
+sözlüklerde anahtar-ADI kuralını uygulamıyor, yalnız deseni uyguluyordu — yani
+`{"body": {"password": "hunter2"}}` ilk yazdığım işlemciden açık geçiyordu; log olayları
+neredeyse her zaman bu şekilde. (2) structlog, bu sürecin tek yazarı değil: stdlib `logging`
+üzerinden yazan uvicorn ve SQLAlchemy işlemci zincirinin yanından geçiyordu. Filtre
+handler'lara takıldı, logger'a değil — `logging`'de bir logger'daki filtre, alt logger'dan
+yukarı propagate eden kayıtlar için sorulmaz ve bu kayıtlar tam olarak onlar.
+
+**Ölçüldü, tahmin edilmedi:** redaksiyonun maliyeti temsili bir alt küme üzerinde
+%1'in altında (10,25 s → 10,34 s). İlk tam kapı koşusundaki 694→776 s farkı koşu
+değişkenliğiydi; işlemci zincirin içinde/dışındayken aynı süite ayrı ayrı ölçüldü.
