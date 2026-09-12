@@ -44,6 +44,12 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.logging import get_logger
+from app.security.redaction import (
+    assert_redacted,
+    redact_text,
+    redact_value,
+    strip_uri_credentials,
+)
 
 logger = get_logger("app.worldmodel.state")
 
@@ -168,7 +174,17 @@ class WorldSnapshot:
 
 class _Collector:
     """Accumulates facts/uncertainties across independently-failing sections
-    (module docstring: one section's failure must not blank the snapshot)."""
+    (module docstring: one section's failure must not blank the snapshot).
+
+    Every value that enters a fact or an uncertainty goes through the secret
+    redactor first (B04 req 6/668). This is a chokepoint on purpose: until
+    2026-09-12 ``dependencies.database_url`` returned the production DSN with its
+    password in clear text, and a section added later would have leaked the same
+    way if the fix had been applied to that one collector instead of to the door
+    every collector writes through. ``assert_redacted`` is the second half: if a
+    secret somehow survives the pass, the value is replaced wholesale rather than
+    served - a redactor bug must not become an exposure.
+    """
 
     def __init__(self, now: datetime) -> None:
         self.now = now
@@ -192,12 +208,12 @@ class _Collector:
             Fact(
                 key=key,
                 category=category,
-                value=value,
+                value=assert_redacted(redact_value(value), where=f"worldmodel.fact:{key}"),
                 truth_kind=truth_kind,
                 observed_at=observed_at or self.now,
                 confidence=confidence,
                 evidence_refs=list(evidence_refs or []),
-                note=note,
+                note=redact_text(note)[0],
                 # A caller-computed floor (module docstring: assembly never
                 # upgrades a fact past what its own source supports, and a
                 # caller that ALREADY knows an observation was superseded by
@@ -212,7 +228,16 @@ class _Collector:
 
     def uncertain(self, category: str, subject: str, reason: str, **detail: Any) -> None:
         self.uncertainties.append(
-            Uncertainty(category=category, subject=subject, reason=reason, detail=detail)
+            Uncertainty(
+                category=category,
+                subject=subject,
+                reason=reason,
+                # `detail` is free-form kwargs from any section, so it is exactly where an
+                # exception string carrying a DSN would arrive.
+                detail=assert_redacted(
+                    redact_value(detail), where=f"worldmodel.uncertain:{subject}"
+                ),
+            )
         )
 
     def section(self, category: str, fn: Callable[[], None]) -> None:
@@ -533,11 +558,15 @@ def _collect_recent_events(c: _Collector, session: Session) -> None:
 def _collect_dependencies(
     c: _Collector, settings: Settings, health_results: dict[str, Any] | None
 ) -> None:
+    # The userinfo is removed HERE rather than left to the collector's redactor, so the
+    # fact keeps saying which host and which database - "postgresql+asyncpg://***@10.0.0.5
+    # :5432/pagentos" answers the question this fact exists for, and the redactor's whole-span
+    # replacement would not. The redactor still runs on top of it as the backstop.
     declared = {
-        "database_url": settings.database_url,
-        "redis_url": settings.redis_url,
-        "temporal_address": settings.temporal_address,
-        "s3_endpoint_url": settings.s3_endpoint_url,
+        "database_url": strip_uri_credentials(settings.database_url or ""),
+        "redis_url": strip_uri_credentials(settings.redis_url or ""),
+        "temporal_address": strip_uri_credentials(settings.temporal_address or ""),
+        "s3_endpoint_url": strip_uri_credentials(settings.s3_endpoint_url or ""),
     }
     for key, value in declared.items():
         c.fact(
@@ -545,7 +574,7 @@ def _collect_dependencies(
             "dependencies",
             value,
             TruthKind.SOURCE,
-            note="declared configuration; not a reachability probe",
+            note="declared configuration, credentials removed; not a reachability probe",
         )
     if not health_results:
         # Deliberately NOT probed here: a real reachability check is I/O the

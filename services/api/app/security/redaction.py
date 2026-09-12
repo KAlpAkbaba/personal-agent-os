@@ -85,6 +85,26 @@ MAX_REDACT_CHARS = 20_000
 MAX_REDACT_DEPTH = 8
 
 
+#: ``scheme://anything@`` — the userinfo half of a connection URI. Separate from
+#: ``connection_uri_credential`` above (which redacts the whole matched span, scheme
+#: included) because some surfaces must keep saying WHICH dependency they mean:
+#: "postgresql+asyncpg://***@10.0.0.5:5432/pagentos" is a useful fact, and
+#: "[REDACTED:connection_uri_credential]10.0.0.5:5432/pagentos" is not.
+_URI_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^\s/@]+@")
+
+
+def strip_uri_credentials(value: str) -> str:
+    """A connection URI with its userinfo removed, everything else intact.
+
+    The username goes too, not only the password: a username is often an owner
+    identifier and is never something a status surface needs in order to say which
+    host it is talking to.
+    """
+    if not value:
+        return value
+    return _URI_USERINFO.sub(r"\1***@", value)
+
+
 def find_secret(text: str) -> str | None:
     """Return the NAME of the first matching secret pattern (never the match)."""
     for name, pattern in SECRET_PATTERNS:
@@ -173,6 +193,7 @@ __all__ = [
     "MAX_REDACT_CHARS",
     "REDACTION_TEMPLATE",
     "SECRET_PATTERNS",
+    "strip_uri_credentials",
     "assert_redacted",
     "contains_secret",
     "find_secret",

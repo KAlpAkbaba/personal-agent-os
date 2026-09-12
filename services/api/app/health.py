@@ -16,6 +16,7 @@ from temporalio.client import Client as TemporalClient
 
 from app.config import Settings
 from app.object_store import S3ObjectStore
+from app.security.redaction import redact_text
 
 CheckResult = dict[str, Any]
 
@@ -62,7 +63,12 @@ async def _run_check(
         return {
             "status": "fail",
             "latency_ms": latency_ms,
-            "error": f"{type(exc).__name__}: {exc}",
+            # B04 req 8. This is the one surface that answers WITHOUT an owner session, and
+            # a driver's connection error quotes the DSN it was given - password included.
+            # The exposure was therefore: point anything at /v1/system/health while the
+            # database is down and read the production credential out of the response body.
+            # The class name and the shape of the failure survive; the credential does not.
+            "error": redact_text(f"{type(exc).__name__}: {exc}")[0],
         }
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
     return {"status": "ok", "latency_ms": latency_ms}

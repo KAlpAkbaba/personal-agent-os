@@ -99,6 +99,7 @@ from app.routines.dispatch import (
 )
 from app.routines.models import Routine
 from app.routines.routes import router as routines_router
+from app.security.redaction import assert_redacted, redact_value
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
 from app.selfhealing.defects import register_defect_sink
@@ -653,6 +654,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Phase 8: advisory - housekeeping that has not run yet is not an outage.
         checks["retention"] = retention_sweeper.health_check()
         status = "degraded" if is_degraded(checks) else "ok"
+        # B04 req 8: this is the ONE endpoint that answers without an owner session, and it
+        # aggregates ~18 independently-written health_check() methods. Each says it carries
+        # no secrets; none of them is checked. One pass over the assembled map costs nothing
+        # here and means a subsystem added later cannot turn this into an exposure by
+        # forgetting - the same reason the world model redacts at its collector door.
+        checks = assert_redacted(redact_value(checks), where="system_health.checks")
         logger.info("health_checked", status=status, checks=checks)
         # M18.4 (spec §2): WHAT is running - the release sha (or "unknown"), the app
         # version and every contract this process serves - so "hangi sürüm çalışıyor?"

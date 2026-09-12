@@ -327,3 +327,24 @@ def test_health_research_check_reports_deterministic_by_default(monkeypatch) -> 
     assert research["status"] == "ok"
     assert research["effective_synthesis"] == "deterministic"
     assert research["providers_configured"]["deterministic"] is True
+
+
+def test_no_subsystems_check_can_leak_a_secret_through_this_endpoint(monkeypatch) -> None:
+    """B04 req 8. This is the one endpoint that answers with NO owner session, and it
+    aggregates roughly eighteen independently-written `health_check()` methods. Each one's
+    comment says "no secrets"; nothing checked. A subsystem added later must not be able to
+    turn the open endpoint into an exposure by forgetting, so the assembled map is redacted
+    as a whole - here proven with a check that leaks on purpose."""
+    leaky = dict(ALL_OK)
+    leaky["db"] = {
+        "status": "fail",
+        "latency_ms": 2.0,
+        "error": 'OperationalError: connecting to "postgresql://pagentos:not-a-real-pw-771@h/db"',
+    }
+    with make_client(monkeypatch, leaky) as client:
+        response = client.get("/v1/system/health")
+
+    body = response.json()
+    assert "not-a-real-pw-771" not in response.text
+    assert body["status"] == "degraded", "the failure is still reported, only the value is gone"
+    assert "OperationalError" in body["checks"]["db"]["error"]
