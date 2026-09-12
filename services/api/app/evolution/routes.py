@@ -401,8 +401,15 @@ async def advance_opportunity(
     """One lifecycle transition.
 
     ``owner_approved`` is refused here on purpose — it has its own endpoint.
-    Production-side targets mint a production authority from THIS request's
+    A production-side transition mints a production authority from THIS request's
     verified owner session; there is no body field that can substitute for it.
+
+    B05 req 675: "production-side" is a property of the transition, not of its target. The
+    service guards a transition that ENTERS the production side and one that LEAVES it, but
+    this route only ever minted for the first, so closing out a live or rolled-back
+    candidate (``live -> superseded``, ``rolled_back -> rejected``) reached
+    ``guard_production_action`` with no authority and was refused every time. The grant was
+    written and the exit was unreachable — permission count zero, as the audit measured it.
     """
     service = _service(request)
     production_authority = None
@@ -417,7 +424,14 @@ async def advance_opportunity(
                 "expected": [str(s) for s in OpportunityStatus],
             },
         ) from exc
-    if target in PRODUCTION_SIDE_STATUSES:
+    # The CURRENT status matters as much as the target: leaving the production side is a
+    # production action too. Read here rather than assumed, and a candidate that cannot be
+    # read is simply not treated as production-side (the service refuses it either way).
+    try:
+        current = OpportunityStatus(service.backlog.get(opportunity_id)["status"])
+    except Exception:  # noqa: BLE001 - an unreadable candidate is the service's to refuse
+        current = None
+    if target in PRODUCTION_SIDE_STATUSES or current in PRODUCTION_SIDE_STATUSES:
         capability = mint_owner_capability(session)
         production_authority = ProductionAuthority.for_owner(
             capability, {Grant.DEPLOY, Grant.WRITE_PRODUCTION_DB}

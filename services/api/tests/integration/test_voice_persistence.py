@@ -150,10 +150,20 @@ def test_speaker_and_preferences_via_http(client: TestClient) -> None:
     assert enroll.status_code == 201
     assert enroll.json()["embedding_ref"]
 
+    # B05 req 246/663: `device_trusted` is no longer the caller's to send. This request
+    # used to claim a trusted device and be believed; the route derives it from the
+    # authenticated session's device binding now, and the body is refused if it tries.
+    refused = client.post("/v1/voice/speaker/verify",
+                          json={"probe_embedding": [1.0, 0.0, 0.0, 0.0], "device_trusted": True})
+    assert refused.status_code == 422
+
     verify = client.post("/v1/voice/speaker/verify",
-                         json={"probe_embedding": [1.0, 0.0, 0.0, 0.0], "device_trusted": True})
+                         json={"probe_embedding": [1.0, 0.0, 0.0, 0.0]})
     assert verify.status_code == 200
     assert verify.json()["decision"] in ("OWNER", "NOT_OWNER", "UNCERTAIN")
+    # This client's session carries no device binding, so a perfect voice match is capped
+    # at UNCERTAIN - voice is never the sole secret.
+    assert verify.json()["device_trusted"] is False
 
     patch = client.patch("/v1/voice/preferences",
                          json={"barge_in": False, "source": "owner"})

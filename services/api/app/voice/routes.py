@@ -17,15 +17,18 @@ VoiceError is mapped to a stable HTTP status + error_class body.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.identity.dependencies import require_owner_session
+from app.identity.service import SessionContext
 from app.logging import get_logger
+from app.security import step_up
 from app.voice import registry, service
 from app.voice.benchmark import run_stt_benchmark, run_tts_benchmark
+from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.runtime import VoiceRuntime
 
@@ -141,16 +144,14 @@ class EnrollRequest(BaseModel):
 
 
 class VerifyRequest(BaseModel):
+    # B05 req 246/663: `device_trusted` USED to be a field here, and the caller set it.
+    # `extra="forbid"` means a client still sending it now gets a 422 rather than being
+    # quietly ignored - a request that believes it is choosing its own trust level should
+    # be told it is not, not allowed to think it succeeded. Trust is derived from the
+    # authenticated session's device binding (app.voice.device_trust).
     model_config = ConfigDict(extra="forbid")
 
     probe_embedding: list[float] = Field(min_length=1, max_length=_MAX_EMBED_DIMS)
-    # SECURITY (M4 review #1): this is an UNTRUSTED, client-asserted hint today.
-    # Speaker verification MUST NOT gate any privileged action until device
-    # trust is derived server-side from an authenticated enrolled-device/broker
-    # session (tracked owner-action gate). The pure classifier already caps an
-    # untrusted device at UNCERTAIN; per-call threshold overrides were removed
-    # so the accept/reject band cannot be widened by the caller.
-    device_trusted: bool = False
 
 
 @router.post("/speaker/enroll", status_code=201)
@@ -182,26 +183,45 @@ async def enroll_speaker(request: Request, body: EnrollRequest) -> dict[str, Any
 
 
 @router.post("/speaker/verify")
-async def verify_speaker_route(request: Request, body: VerifyRequest) -> dict[str, Any]:
+async def verify_speaker_route(
+    request: Request,
+    body: VerifyRequest,
+    owner: Annotated[SessionContext, Depends(require_owner_session)],
+) -> dict[str, Any]:
     runtime = _runtime(request)
 
-    def do() -> dict[str, Any] | None:
+    def do() -> tuple[dict[str, Any] | None, bool]:
         with runtime.session() as session:
+            # Derived here, inside the same session that reads the profile: the answer is
+            # about THIS request's authenticated session, and nothing the body carries.
+            trusted = device_is_trusted(session, owner)
             verdict = service.verify_owner(
                 session, runtime.store, runtime.cipher,
-                probe_embedding=body.probe_embedding, device_trusted=body.device_trusted,
+                probe_embedding=body.probe_embedding, device_trusted=trusted,
                 thresholds=None,  # server-configured band only; not caller-overridable
             )
-            return verdict.to_dict() if verdict else None
+            if verdict is not None:
+                # B05 req 245/665: the verdict outlives the response now. Before this it
+                # was computed, returned and forgotten, so nothing downstream could ask
+                # who was speaking - "advisory" in the most literal sense.
+                step_up.record_verdict(
+                    session,
+                    owner_session_id=owner.session_id,
+                    decision=str(verdict.decision),
+                    score=verdict.score,
+                    device_trusted=trusted,
+                    effective_accept=verdict.effective_accept,
+                )
+            return (verdict.to_dict() if verdict else None), trusted
 
     try:
-        result = await asyncio.to_thread(do)
+        result, trusted = await asyncio.to_thread(do)
     except VoiceError as exc:
         _raise_http(exc)
     if result is None:
         raise HTTPException(status_code=404, detail="no enrolled owner profile")
     logger.info("voice_speaker_verified", decision=result["decision"],
-                device_trusted=body.device_trusted)
+                device_trusted=trusted, derived_from="owner_session")
     return result
 
 

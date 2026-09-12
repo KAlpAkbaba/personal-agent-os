@@ -34,9 +34,11 @@ from app.logging import get_logger
 from app.monotonic_clock import SESSION_CLOCK
 from app.narration import service as narration_service
 from app.narration.commands import NarrationState, State
+from app.security import step_up as step_up_policy
 from app.uistate import UiState
 from app.uistate import publish as publish_ui
 from app.voice import service as voice_service
+from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import Intent, ResolvedIntent, classify_research_shape, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
@@ -791,6 +793,44 @@ def handle_tool_call(
     # it. The refusal is a SUCCEEDED call whose result says plainly that nothing was
     # started and which run is being answered from instead - the same honest shape
     # plan.redirect's refusal has (ADR-0067 amendment).
+    # B05 req 245/247/248/664/666. BEFORE any handler runs, in the same relay and for the
+    # same reason as the refusal below: the model's choice of tool cannot route around it.
+    # Device trust is derived here, never taken from the call.
+    step_up = step_up_policy.evaluate(
+        db,
+        tool=name,
+        owner_session_id=owner.session_id,
+        device_trusted=device_is_trusted(db, owner),
+        now=now,
+    )
+    step_up_policy.record(step_up, owner_session_id=owner.session_id)
+    if not step_up.allowed and spec is not None:
+        call.status = TOOL_STATUS_FAILED
+        call.error_class = VoiceErrorClass.VALIDATION_ERROR.value
+        call.result_json = {
+            "refused": "step_up_required",
+            "speech": step_up.speech,
+            **step_up.as_dict(),
+        }
+        call.completed_at = utcnow()
+        call.long_running = False
+        _audit(
+            db,
+            ACTION_TOOL_CALL,
+            row,
+            trace_id=trace_id,
+            metadata={
+                "call_id": call_id,
+                "name": name,
+                "refused": "step_up_required",
+                "tier": step_up.tier,
+                "reason": step_up.reason,
+            },
+        )
+        _touch(row, now)
+        db.commit()
+        return _tool_row_payload(call)
+
     refusal = research_followup_refusal(
         db,
         tool_name=name,

@@ -69,6 +69,7 @@ class IdentityRuntime:
                 self.root,
                 ttl_s=self.settings.session_ttl_s,
                 idle_timeout_s=self.settings.session_idle_timeout_s,
+                absolute_lifetime_s=self.settings.session_absolute_lifetime_s,
                 limiter=AttemptLimiter(
                     max_failures=self.settings.identity_auth_max_failures,
                     window_s=self.settings.identity_auth_failure_window_s,

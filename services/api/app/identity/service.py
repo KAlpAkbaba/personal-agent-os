@@ -172,6 +172,12 @@ class AttemptLimiter:
 # -------------------------------------------------------------------- service
 
 
+#: B05 req 658. A distinct reason from "absolute_ttl": that one means the renewable window
+#: ran out, this one means the session is too OLD to be renewed at all. The audit has to be
+#: able to tell the owner which of the two ended a session.
+REASON_ABSOLUTE_LIFETIME = "absolute_lifetime"
+
+
 def _aware(value: datetime | None) -> datetime | None:
     """SQLite hands back naive datetimes; treat stored times as UTC."""
     if value is None:
@@ -187,6 +193,7 @@ class IdentityService:
         *,
         ttl_s: int,
         idle_timeout_s: int,
+        absolute_lifetime_s: int = 0,
         clock: Callable[[], datetime] = utc_now,
         limiter: AttemptLimiter | None = None,
     ) -> None:
@@ -194,6 +201,10 @@ class IdentityService:
         self.root = root
         self.ttl_s = ttl_s
         self.idle_timeout_s = idle_timeout_s
+        #: B05 req 658. Measured from `created_at` and NOT reset by a refresh, which is the
+        #: whole point: `ttl_s` is renewed on every refresh, so without this a token that
+        #: leaked lived exactly as long as something kept refreshing it. 0 = no ceiling.
+        self.absolute_lifetime_s = absolute_lifetime_s
         self._clock = clock
         self.limiter = limiter or AttemptLimiter()
 
@@ -545,6 +556,21 @@ class IdentityService:
                     client_kind=row.client_kind,
                 )
 
+            # B05 req 658, checked BEFORE the renewable window: a session past its
+            # absolute age is over regardless of how recently it was refreshed, and saying
+            # so first is what makes the ceiling a ceiling.
+            if self._past_absolute_lifetime(row, now):
+                self._expire(db, row, reason=REASON_ABSOLUTE_LIFETIME, trace_id=trace_id)
+                db.commit()
+                return self._reject(
+                    Refusal.EXPIRED,
+                    reason=REASON_ABSOLUTE_LIFETIME,
+                    trace_id=trace_id,
+                    audit_key=_BEARER_KEY,
+                    session_id=row.id,
+                    client_kind=row.client_kind,
+                )
+
             expires_at = _aware(row.expires_at)
             if row.status == SESSION_STATUS_EXPIRED or (
                 expires_at is not None and now >= expires_at
@@ -560,10 +586,7 @@ class IdentityService:
                     client_kind=row.client_kind,
                 )
 
-            idle_since = _aware(row.last_seen_at) or _aware(row.created_at) or now
-            if self.idle_timeout_s > 0 and now - idle_since > timedelta(
-                seconds=self.idle_timeout_s
-            ):
+            if self._past_idle_timeout(row, now):
                 self._expire(db, row, reason="idle_timeout", trace_id=trace_id)
                 db.commit()
                 return self._reject(
@@ -579,6 +602,22 @@ class IdentityService:
             db.commit()
             self.limiter.reset(_BEARER_KEY)
             return Verdict(session=self._context(row))
+
+    def _past_absolute_lifetime(self, row: OwnerSession, now: datetime) -> bool:
+        if self.absolute_lifetime_s <= 0:
+            return False
+        created = _aware(row.created_at)
+        if created is None:
+            return False
+        return now - created > timedelta(seconds=self.absolute_lifetime_s)
+
+    def _idle_since(self, row: OwnerSession, now: datetime) -> datetime:
+        return _aware(row.last_seen_at) or _aware(row.created_at) or now
+
+    def _past_idle_timeout(self, row: OwnerSession, now: datetime) -> bool:
+        if self.idle_timeout_s <= 0:
+            return False
+        return now - self._idle_since(row, now) > timedelta(seconds=self.idle_timeout_s)
 
     def _expire(
         self, db: Session, row: OwnerSession, *, reason: str, trace_id: str | None
@@ -714,23 +753,39 @@ class IdentityService:
     # ---------------------------------------------------------------- sweeps
 
     def sweep_expired(self, *, trace_id: str | None = None) -> int:
-        """Flip active-but-past-expiry sessions to `expired` and record it once."""
+        """Flip every session that is over to `expired`, and record why, once each.
+
+        B05 req 659: this used to look at `expires_at` alone, so a session that had gone
+        IDLE stayed `active` in the database until somebody happened to present its token -
+        which for an abandoned client is never. It was counted as an active session, listed
+        as one, and reported as one, while nothing was using it. Sweeping is the same three
+        rules `verify` applies, applied on a clock instead of on a request; the reason
+        recorded says which rule ended it.
+        """
         now = self._clock()
         with self._sessions() as db:
             rows = (
                 db.execute(
-                    select(OwnerSession).where(
-                        OwnerSession.status == SESSION_STATUS_ACTIVE,
-                        OwnerSession.expires_at <= now,
-                    )
+                    select(OwnerSession).where(OwnerSession.status == SESSION_STATUS_ACTIVE)
                 )
                 .scalars()
                 .all()
             )
+            swept = 0
             for row in rows:
-                self._expire(db, row, reason="swept", trace_id=trace_id)
+                expires_at = _aware(row.expires_at)
+                if self._past_absolute_lifetime(row, now):
+                    reason = REASON_ABSOLUTE_LIFETIME
+                elif expires_at is not None and expires_at <= now:
+                    reason = "swept"
+                elif self._past_idle_timeout(row, now):
+                    reason = "idle_timeout"
+                else:
+                    continue
+                self._expire(db, row, reason=reason, trace_id=trace_id)
+                swept += 1
             db.commit()
-            return len(rows)
+            return swept
 
     # ----------------------------------------------------------------- reads
 

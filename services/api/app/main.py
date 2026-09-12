@@ -40,6 +40,7 @@ from app.creative.service import CreativeService
 from app.creative3d.routes import router as scenes_router
 from app.creative3d.service import SceneService
 from app.db import build_engine, build_session_factory
+from app.devices import authority as device_authority
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
 from app.devices.status import get_status_registry
@@ -99,6 +100,7 @@ from app.routines.dispatch import (
 )
 from app.routines.models import Routine
 from app.routines.routes import router as routines_router
+from app.security import step_up as step_up_policy
 from app.security.redaction import assert_redacted, redact_value
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
@@ -377,6 +379,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ),
         gaps=lambda status="open", limit=100: evolution.gaps.list(status=status, limit=limit),
     )
+    # B05 req 663/246: one gate policy for this process, resolved once at startup. Shadow
+    # by default - it counts what it would refuse without refusing it.
+    device_authority.set_mode(settings.device_command_gate_mode)
+    step_up_policy.set_mode(settings.voice_step_up_mode)
     routine_clock = _build_routine_clock()
 
     def _in_session(session_scope, sweep):  # noqa: ANN001, ANN202 - two local call sites

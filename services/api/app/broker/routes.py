@@ -26,6 +26,7 @@ from app.broker.models import DEVICE_STATUS_REVOKED, Device, DeviceCommand
 from app.broker.runtime import BrokerRuntime
 from app.broker.ws import deliver_command
 from app.devices import service as devices_service
+from app.devices.authority import DeviceCommandRefused
 from app.devices.selection import NoCapableDeviceError, select_device
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
@@ -408,7 +409,14 @@ async def create_command(
                 trace_id=trace_id,
             )
 
-    command, created = await asyncio.to_thread(create)
+    try:
+        command, created = await asyncio.to_thread(create)
+    except DeviceCommandRefused as exc:
+        # 403, not 404/409: the device is known and the caller is the owner. What is refused
+        # is this capability ON this device, and the reason says which of the two it was.
+        raise HTTPException(
+            status_code=403, detail={"error": "capability_refused", **exc.decision.as_dict()}
+        ) from exc
     if created:
         runtime.counters["commands_created"] += 1
         logger.info(

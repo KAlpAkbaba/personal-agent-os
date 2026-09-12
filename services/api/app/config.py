@@ -142,6 +142,17 @@ class Settings(BaseSettings):
     broker_enrollment_token_ttl_s: int = 900
     broker_sweep_interval_s: float = 5.0
     broker_default_command_timeout_s: float = 300.0
+    #: B05 req 663/246: whether the server-side device-command gate BLOCKS or only counts.
+    #: Ships as "shadow" on purpose - the roadmap's rollback plan is that a gate's first
+    #: appearance in production must not be an outage. Flipping to "enforce" is an owner
+    #: decision, made after a day of shadow counting says what it would have refused.
+    device_command_gate_mode: str = "shadow"
+    #: B05 req 245/247/248/666: whether the voice step-up policy BLOCKS or only counts.
+    #: Shadow, and for a second reason beyond caution: the only thing that produces a
+    #: speaker verdict today is a REST endpoint nothing calls automatically, so enforcing
+    #: now would refuse every sensitive voice action. Enforcement needs the realtime probe
+    #: flow first, and then the owner's decision.
+    voice_step_up_mode: str = "shadow"
     broker_handshake_timeout_s: float = 10.0
 
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that
@@ -234,6 +245,12 @@ class Settings(BaseSettings):
     # at whichever comes first; refresh rotates the token and restarts both.
     session_ttl_s: int = 30 * 24 * 3600  # 30 days
     session_idle_timeout_s: int = 7 * 24 * 3600  # 7 days
+    #: B05 req 658: the ceiling a refresh cannot lift. `session_ttl_s` is renewed on every
+    #: refresh, so before this a token that leaked into a log or a backup lived for ever as
+    #: long as something kept refreshing it. This one is measured from `created_at` and is
+    #: the age at which the session must be established again rather than extended.
+    #: 0 disables it (and the health surface says so rather than implying a ceiling).
+    session_absolute_lifetime_s: int = 90 * 24 * 3600  # 90 days
     # Failed-attempt budget per window: throttles credential exchange (429) and
     # bounds how much a scanner can append to session_events.
     identity_auth_max_failures: int = 10

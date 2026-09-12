@@ -409,6 +409,55 @@ def test_live_is_refused_while_no_release_evidence_exists(client: TestClient) ->
     assert live.json()["detail"]["error_class"] == "lifecycle_violation"
 
 
+def test_a_candidate_on_the_production_side_can_be_closed_out(client: TestClient) -> None:
+    """B05 req 675. LEAVING the production side is a production action too, and the service
+    guards it as one - but this route only ever minted an authority when the TARGET was
+    production-side. So a candidate parked in `qualifying` could not be rejected, closed out
+    or quarantined through the API at all: every attempt reached
+    `guard_production_action` with no authority. The grant existed and the exit was
+    unreachable, which is what "permission count zero" meant in the audit."""
+    opportunity = create_opportunity(client)
+    opportunity_id = opportunity["opportunity_id"]
+    drive_to_shadow_ready(client, opportunity_id)
+    client.post(f"/v1/evolution/opportunities/{opportunity_id}/approve", json={})
+    assert (
+        client.post(
+            f"/v1/evolution/opportunities/{opportunity_id}/advance",
+            json={"target": "qualifying", "actor": "system"},
+        ).status_code
+        == 200
+    )
+
+    closed = client.post(
+        f"/v1/evolution/opportunities/{opportunity_id}/advance",
+        json={"target": "rejected", "actor": "system", "reason": "owner closed it out"},
+    )
+
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["status"] == "rejected"
+
+
+def test_a_lab_actor_still_cannot_take_the_exit(client: TestClient) -> None:
+    """The fix mints an authority for the owner's own request; it does not open the exit to
+    the lab. The Evolution Engine proposes, the owner disposes - including about closing
+    something out."""
+    opportunity = create_opportunity(client)
+    opportunity_id = opportunity["opportunity_id"]
+    drive_to_shadow_ready(client, opportunity_id)
+    client.post(f"/v1/evolution/opportunities/{opportunity_id}/approve", json={})
+    client.post(
+        f"/v1/evolution/opportunities/{opportunity_id}/advance",
+        json={"target": "qualifying", "actor": "system"},
+    )
+
+    refused = client.post(
+        f"/v1/evolution/opportunities/{opportunity_id}/advance",
+        json={"target": "rejected", "actor": "lab"},
+    )
+
+    assert refused.status_code == 403, refused.text
+
+
 def test_an_illegal_transition_is_a_409(client: TestClient) -> None:
     opportunity = create_opportunity(client)
     response = client.post(

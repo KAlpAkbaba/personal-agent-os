@@ -35,6 +35,7 @@ from app.broker.models import (
     EnrollmentToken,
 )
 from app.broker.state import TERMINAL_STATUSES, TransitionDecision, classify_transition
+from app.devices import authority
 from app.selfhealing.defects import report_device_defect
 
 
@@ -347,11 +348,19 @@ def create_command(
     idempotency_key: str,
     timeout_s: float,
     trace_id: str,
+    gate_mode: str | None = None,
 ) -> tuple[DeviceCommand, bool]:
     """Durably insert a command; dedup on (device_id, idempotency_key).
 
     Returns (command, created). On dedup, the existing command is returned
     unchanged and no audit row is added.
+
+    B05 req 663/246: every command passes the server-side authority gate first, HERE rather
+    than at each caller, so a caller added later cannot forget it. The gate ships in shadow
+    mode (it records and counts, and lets the command through); in enforce mode it raises
+    ``authority.DeviceCommandRefused``. Dedup is checked first on purpose: returning an
+    already-created command is not creating one, and re-answering it must not depend on what
+    the device happens to advertise right now.
     """
     existing = session.execute(
         select(DeviceCommand).where(
@@ -361,6 +370,12 @@ def create_command(
     ).scalar_one_or_none()
     if existing is not None:
         return existing, False
+
+    device = session.get(Device, device_id)
+    decision = authority.evaluate(device, capability, mode=gate_mode)
+    authority.record(decision, device_id=device_id)
+    if not decision.allowed:
+        raise authority.DeviceCommandRefused(decision)
 
     command = DeviceCommand(
         device_id=device_id,

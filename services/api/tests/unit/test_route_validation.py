@@ -39,4 +39,13 @@ def test_verify_request_rejects_caller_threshold_override() -> None:
 def test_verify_request_bounds_embedding_dims() -> None:
     with pytest.raises(ValidationError):
         VerifyRequest(probe_embedding=[0.0] * 5000)
-    assert VerifyRequest(probe_embedding=[1.0, 0.0]).device_trusted is False
+
+
+def test_a_caller_cannot_declare_its_own_device_trusted() -> None:
+    """B05 req 246/663. This assertion used to read `.device_trusted is False`, pinning a
+    field the CALLER set - the one party the rule about device trust exists to constrain.
+    The field is gone and the model forbids extras, so a client still sending it is told
+    so (422) rather than quietly having it ignored; trust now comes from the authenticated
+    session's device binding (app.voice.device_trust)."""
+    with pytest.raises(ValidationError):
+        VerifyRequest(probe_embedding=[1.0, 0.0], device_trusted=True)
