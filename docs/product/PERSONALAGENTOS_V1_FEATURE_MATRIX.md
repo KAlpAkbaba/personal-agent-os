@@ -1472,3 +1472,174 @@ CI 34720710232 yeşil (7/7) · commit 0394a83 · yerel kapı 9066 geçti / 5 atl
 kaydediyor ve geçiriyor. Roadmap'in kendi rollback planı bu — üretimdeki ilk görünümü bir
 kesinti olan kapı, kapatılan kapıdır. Açmak sahip kararı: cihaz kapısı için üretimde bir
 günlük sayım (batch'in kendi REAL_PROOF şartı), step-up için önce verdict üreten akış.
+
+---
+
+### B07 — Sınırlı teslim, döngü izolasyonu, saklama · 2026-09-13
+
+CI 34722166605 yeşil (7/7) · commit 690abd5 · yerel kapı 9096 geçti / 5 atlandı
+
+```
+14, 15, 16, 17, 376   status : DONE
+     commit : 690abd5
+     tests  : test_bounded_delivery.py (25), test_mobile_announcer.py (güncellendi)
+     proof  : PROVEN_AUTOMATED — düzeltme dört dosyada geri alınarak KIRMIZI kanıtlandı
+              (7 başarısız / 12 geçen), sha256 ile geri yüklendi
+     date   : 2026-09-13
+     note   : Üç duyurucu, aralarında tek bir eksik fikir: hiçbiri ne yaptığını bilmiyordu.
+              En pahalısı brifing kuyruğuydu — konuşulamayan satır EN ÖNCELİKLİ olduğu için
+              her turda seçiliyor, `_speak` düşünce hiçbir şeye dokunmadan `return 0`
+              deniyordu. Aynı satır bir sonraki turda yine en öncelikli. Arkasındaki her
+              bildirim kalıcı olarak, sessizce bloke. Sahibin kayıp bildirimleri oradaydı.
+              Push duyurucusu beş saniyede bir yeniden deniyordu: asla cevap vermeyecek bir
+              sağlayıcıya günde 17.280 deneme. Üçü artık tek politikayı paylaşıyor, çünkü
+              bir yeniden deneme kuralının üç yakın kopyası ayrışır. Karantina = TEK bir
+              öğeden vazgeçmek; vazgeçemeyen kuyruğun yeniden deneme politikası değil,
+              kilidi vardır.
+
+18            status : DONE
+     commit : 690abd5
+     tests  : test_bounded_delivery.py (döngü sağlığı bölümü)
+     proof  : PROVEN_AUTOMATED — `create_app`'in lifespan'ındaki her `.start()` okunuyor;
+              sağlıkta karşılığı olmayan bir döngü testi düşürüyor
+     date   : 2026-09-13
+     note   : Dokuz döngü başlıyor; beşi görülebiliyordu, dördü hiç görülemiyordu — ve o
+              dördü sahibe bildirim TAŞIYAN dörtlüydü, yani sahip olabilecekleri arıza tam
+              olarak kimsenin fark etmeyeceği arıza. "Süreç ayakta" ≠ "döngüler çalışıyor",
+              ve `task.done()` uyanıp hiçbir şey yapmayan bir döngü için False'tur: kalp
+              atışı tamamlanan turu sayıyor, canlılığı değil.
+
+19            status : DONE
+     commit : 690abd5
+     tests  : test_routines_clock.py (güncellendi), test_bounded_delivery.py
+     proof  : PROVEN_AUTOMATED — routines patlarken alarm tiki koşuyor ve arada rollback var
+     date   : 2026-09-13
+     note   : Tek try/except beş alt tiki sarıyordu: rutin değerlendirmesindeki bir arıza
+              ALARM tikinin o turda hiç koşmaması demekti — alarmla hiç ilgisi olmayan bir
+              şey yüzünden sessizce düşen bir alarm. Testin kendi yorumu kusuru bir beklenti
+              olarak yazmıştı: "The later ticks were skipped by the exception". Ayrıca
+              başarısızlıktan sonra rollback: bir sonraki çağırana bozuk bir işlem bırakan
+              izolasyon, izolasyon değildir.
+
+375, 390      status : DONE
+     commit : 690abd5
+     tests  : test_bounded_delivery.py (sahte sağlayıcı bölümü), test_mobile_providers.py
+     proof  : PROVEN_AUTOMATED — makbuzsuz `delivered` İNŞA EDİLEMİYOR (ValueError)
+     date   : 2026-09-13
+     note   : Varsayılan argümanla ihlal edilen bir ürün ilkesi. `PushDelivery.status`
+              varsayılanı "delivered"dı ve sahte sağlayıcı onu alıyordu. Artık `delivered`
+              satıcının makbuzunu gerektiriyor; sahtenin gösterecek bir satıcısı yok, o
+              yüzden kelimeyi söyleyemiyor. Kural değil, tip.
+
+679           status : DONE
+     commit : 690abd5
+     tests  : test_bounded_delivery.py (saklama bölümü, 6 test)
+     proof  : PROVEN_AUTOMATED — kuru koşu sayıyor ve silmiyor; gerçek koşu yalnız süresi
+              dolanı siliyor
+     date   : 2026-09-13
+     note   : 13.560 olay ve hiçbirini silecek bir şey yok. Üç tablo üç farklı şey: cihaz
+              trafiği altı ay, kimlik doğrulama kararları bir yıl, ve Activity Ledger ASLA —
+              sahibin "ne yaptın" yanıtlarının dayandığı kanıt tabanı ve EVIDENCE yaşlanmaz.
+              Sessizce atlanan bir tablo, unutulmuş bir tablodan ayırt edilemez; o yüzden
+              atlama gerekçesiyle adlandırıldı. Kuru koşu varsayılan: hatası geri alınamayan
+              tek ev işi türü.
+```
+
+---
+
+### B08 — Yedek/kurtarma sağlığı · 2026-09-13 (KISMEN)
+
+kanıt `docs/evidence/b08-backup-recovery-2026-09-13.json`
+
+```
+646, 647, 648, 649, 650   status : DONE
+     commit : ed40936
+     tests  : test_backup_health.py (25)
+     proof  : PROVEN_AUTOMATED
+     date   : 2026-09-13
+     note   : İki dosya haftalardır yazılıyordu ve hiçbir şey okumuyordu. RPO ve RTO artık
+              belgeden değil o iki dosyadan geliyor: kurtarma noktası son iyi yedeğin yaşı,
+              kurtarma süresi son gerçek tatbikatın ölçtüğü saniye. Görünmüyorsa "skipped" —
+              API konteynerde, dosya host'ta; gözlemleyemediği şey için alarm veren bir
+              kontrol, sahibin okumayı bıraktığı kontroldür. Ve hiçbir zamanlanmış birimin
+              `OnFailure=`'ı yoktu: arıza, kimsenin okumadığı bir journal satırıydı.
+
+614, 651, 652, 653, 654, 655   status : PARTIAL
+     note   : KOD main'de — Astra dalı (codex/astra-p0-reliability @2561f84,
+              READY_FOR_OWNER_APPROVAL) birleştirildi: kurulum/kaldırma betikleri, reconcile
+              timer birimi, blue/green operasyon kilidi ve 842 satırlık kurulum testi.
+              EKSİK olan üretim host'unda root kurulum — batch'in kendi tanımıyla sahip
+              eylemi. Sahip kararı (2026-09-13): şimdilik PARTIAL kalsın, B09-B10'a devam.
+              Depoda duran bir systemd birimi, host'ta duran bir systemd birimi değildir.
+```
+
+---
+
+### B09 — Host dışı felaket kurtarma · 2026-09-13 (KISMEN)
+
+```
+642, 643, 644   status : DONE
+     commit : ed40936
+     tests  : test_backup_health.py (off-host bölümü)
+     proof  : PROVEN_AUTOMATED — `--from-offhost` var ve testli; tatbikat config/.env ve
+              RELEASE olmadan anlık görüntüyü reddediyor
+     date   : 2026-09-13
+     note   : Off-host kopya YAZILABİLİR ama OKUNAMAZDI. Her anlık görüntü haftalardır
+              ikinci depoya kopyalanıyordu ve `restore-cloud-core.sh` yalnızca
+              `$backup_root/restic`'i açıyordu — yedeğin korumak için var olduğu diskteki
+              depoyu. Kaybolmuş bir host'ta o depo da kaybolmuştur. Geri yükleyemediğiniz
+              bir yedek, yedek değil dosyadır. Yordam OPERATIONS.md'de, olması gereken
+              sırayla: önce escrow'dan parola, sonra off-host kimlik bilgileri.
+
+645           status : BLOCKED_OWNER
+     note   : S3 uyumlu ikinci kova + erişim anahtarı. Anahtar DPAPI ile saklanır, asla
+              commit'e/log'a girmez. O zamana kadar sağlık `advisories: ["no_offhost_copy"]`
+              diyor — kurtarma hedefleri host'un VERİSİNİ kaybetmeyi kapsıyor, host'u
+              kaybetmeyi değil, ve bu artık yazılı.
+```
+
+---
+
+### B10 — Yürütme dürüstlüğü · 2026-09-13
+
+kanıt `docs/evidence/b10-execution-honesty-2026-09-13.json`
+
+```
+558, 559      status : DONE
+     commit : ed40936
+     tests  : test_execution_honesty.py (14)
+     proof  : PROVEN_AUTOMATED — düzeltme geri alınarak KIRMIZI: `assert 4 == 1`
+     date   : 2026-09-13
+     note   : İki üretim koşusu "4/4 adım tamam" diyordu; o dördün üçü başarısızdı.
+              `steps_done` terminal duruma ulaşan HER adımı sayıyordu ve failed, cancelled,
+              compensated, skipped hepsi terminal. Sonra cümle ona "adım tamam" diyordu.
+              B06'nın dünya modelinde düzelttiği şeklin aynısı, bu kez yürütmede.
+     yol üstünde : İLK yazdığım testler satırı elle kurup CÜMLEYİ doğruluyordu — kusuru
+              geri koyduğumda yeşil kaldılar, çünkü sayıyı hesaplayan kodu hiç
+              çalıştırmıyorlardı. Yazıldığı hatayı yakalayamayan test o hatanın kapsamı
+              değildir; `_recompute_run_progress`'i gerçekten süren test eklendi.
+
+539           status : DONE
+     commit : ed40936
+     tests  : test_execution_honesty.py (telafi bölümü, 5 test)
+     proof  : PROVEN_AUTOMATED — üç dal da kırmızıyla kanıtlandı
+     date   : 2026-09-13
+     note   : `_run_compensation` KOŞULSUZ `state = COMPENSATED` yazıyordu. Hiçbir dalı
+              eşleşmeyen, kanıtında iş yapacak bir id olmayan, ve sağlayıcısı patlayıp
+              kasıtlı best-effort yakalamaya düşen adım — üçü de gerçekten iş geri alan bir
+              adımla aynı şeyi söylüyordu. "Telafi edildi" bir şeyin geri alındığı anlamına
+              gelmeli, yoksa sahibin onu okuduğu tek durumda kelime hiçbir şey etmez.
+              Best-effort yakalama kalıyor (sahip durmak istedi, bu çalışmalı); değişen,
+              adımın sonrasında NE SÖYLEDİĞİ.
+
+548           status : DONE
+     note   : B03'ün file.search sözleşmesi bunu düzeltti. Yeniden düzeltilmedi, ölçüldü.
+
+560           status : DONE (ÖLÇÜM DÜZELTMESİ)
+     note   : Matris MISSING diyordu. Değil: `app/executive/reconcile.py` var, `create_app`
+              `executive_tick`'i rutin saatine enjekte ediyor, 31 test geçiyor. B07 bunu
+              maddi olarak daha da doğru yaptı — saatin beş alt tiki tek try/except
+              paylaşıyordu, yani rutin değerlendirmesindeki bir arıza bunun hiç koşmamasına
+              yol açıyordu. Ölçüm dokümantasyonu yendi; bu projenin kendi dokümantasyonu
+              dahil.
+```

@@ -1,8 +1,14 @@
 {
   "batch": "B10",
-  "requirements": [539, 548, 558, 559, 560],
+  "requirements": [
+    539,
+    548,
+    558,
+    559,
+    560
+  ],
   "recorded_at": "2026-09-13T03:00:00Z",
-  "commit": null,
+  "commit": "ed40936",
   "ci_run": null,
   "conclusion": null,
   "what_this_proves": "A run says what actually happened. Two production runs reported '4/4 adim tamam' - four of four steps completed - while three of those four steps had failed.",
@@ -21,5 +27,6 @@
     "560": "Recorded as MISSING in the matrix. It is not: `app/executive/reconcile.py` exists, `create_app` injects `executive_tick` into the routine clock, and 31 tests pass on it. Corrected to DONE with the measurement. B07 made it materially more true - the clock's five sub-ticks shared one try/except, so a failure in the routine evaluation used to stop this one running at all.",
     "why_this_matters": "Existing measured reality wins over old documentation, including this project's own documentation."
   },
-  "proof": "PROVEN_AUTOMATED for all five. PROVEN_REAL needs a production release (decision 0): the five existing runs recomputed against the truth."
+  "proof": "PROVEN_AUTOMATED for all five. PROVEN_REAL needs a production release (decision 0): the five existing runs recomputed against the truth.",
+  "local_gate": "ruff clean; 9150 passed / 5 skipped"
 }

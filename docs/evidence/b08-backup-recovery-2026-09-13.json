@@ -1,8 +1,20 @@
 {
   "batch": "B08",
-  "requirements": [614, 646, 647, 648, 649, 650, 651, 652, 653, 654, 655],
+  "requirements": [
+    614,
+    646,
+    647,
+    648,
+    649,
+    650,
+    651,
+    652,
+    653,
+    654,
+    655
+  ],
   "recorded_at": "2026-09-13T02:00:00Z",
-  "commit": null,
+  "commit": "ed40936",
   "ci_run": null,
   "conclusion": null,
   "what_this_proves": "The safety net can be seen and can speak. Both halves have been running for weeks and writing records that nothing read - so a broken backup would have been discovered on the day it was needed.",
@@ -14,7 +26,14 @@
     "650_rto": "seconds.total from the last real drill, published as checks.backup.rto_seconds, with drill_stale true past 14 days. A number in OPERATIONS.md is a claim; a number off the last run is a measurement."
   },
   "owner_gated": {
-    "requirements": [614, 651, 652, 653, 654, 655],
+    "requirements": [
+      614,
+      651,
+      652,
+      653,
+      654,
+      655
+    ],
     "state": "The CODE is on main - the Astra branch (codex/astra-p0-reliability @2561f84, marked READY_FOR_OWNER_APPROVAL) is merged, with the install/uninstall scripts, the reconcile timer unit, the blue/green operation lock and 842 lines of install tests. What is missing is a root install on the production host, which is an owner action by the batch's own definition.",
     "what_the_owner_run_has_to_show": "timer armed; one reconcile actually ran; the backup age visible in production health; and a deliberately broken colour rolled back automatically. Until that run these stay PARTIAL - a systemd unit in the repository is not a systemd unit on the host."
   },
@@ -24,5 +43,6 @@
   "red_first": {
     "method": "The four B07 files were reverted to HEAD from a digest-verified backup and the suite re-run (7 failed / 12 passed), then restored (sha256sum -c: 4/4 OK). For B08 the backup-health tests are new behaviour against a module that did not exist, so their red is the import error rather than a staged defect; the honest statement is that these tests are new coverage of a surface that had none, not a regression guard on a fix."
   },
-  "proof": "PROVEN_AUTOMATED for 646-650. PROVEN_REAL for all eleven needs the host run described above, plus the production release (decision 0)."
+  "proof": "PROVEN_AUTOMATED for 646-650. PROVEN_REAL for all eleven needs the host run described above, plus the production release (decision 0).",
+  "local_gate": "ruff clean; 9150 passed / 5 skipped"
 }
