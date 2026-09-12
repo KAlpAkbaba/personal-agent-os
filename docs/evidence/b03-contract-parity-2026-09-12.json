@@ -1,0 +1,33 @@
+{
+  "batch": "B03",
+  "requirements": [3, 4, 5, 147, 168, 417, 418, 419, 420, 421, 467, 505, 510, 715],
+  "recorded_at": "2026-09-12T18:00:00Z",
+  "commit": "9ddf24307801a2b806d2548d19017508477d13e4",
+  "ci_run": 34709341943,
+  "conclusion": "success (7/7 jobs)",
+  "what_this_proves": "The four defects production actually had are closed on BOTH halves, and the seam they came through has guards that read the other side's source instead of restating their own.",
+  "red_first": {
+    "file_search": "The device fix was reverted from a sha256-verified backup copy and FileSearchRootsContractTests re-run: 3 failed / 6 passed. Restored and verified by digest; the suite then passed 9/9.",
+    "why_it_matters": "Without this the tests would only show that the new code agrees with itself."
+  },
+  "observed_in_ci": {
+    "device_tests": "PagentOS.Agent.Tests.dll Passed 881 / Skipped 6 / Total 887 - up from 869 before this batch (+18: FileSearchRootsContractTests 9, AppManifestContractTests 5, DeviceProtocolSchemaContractTests 4)",
+    "powershell": "cloud-release-bluegreen tests: 59 passed, 0 failed"
+  },
+  "local_gate": "ruff clean; 8954 passed / 5 skipped",
+  "new_shared_contracts": [
+    "packages/protocol/file-search-roots.json - the bucket names file.search accepts; the device resolves and then CONFINES them, so a bucket is never more authority than a path",
+    "packages/protocol/app-manifest.example.json - the manifest the App Factory sends, in both its shapes (a server, and a project that binds nothing)"
+  ],
+  "device_changes": [
+    "WellKnownFolders.cs - a roots entry may be an absolute path, a bucket name, or a bucket with relative segments; everything still goes through AuthorisedRoots.Confine",
+    "ProjectManifest.cs - port 0 means 'binds nothing' in ANY scope, not only 3D/native",
+    "ProjectCapabilities.cs - a project that declares no port is RUN as a batch rather than waited for on a socket"
+  ],
+  "found_on_the_way": [
+    "Python's default casing is not Turkish: \"Indirilenler\" with a dotted capital lowercases to 'i' plus U+0307, which matched no alias key - so a folder typed the ordinary Turkish way was refused as unknown. Folded properly now, with I/i/dotless forms all accepted for this closed vocabulary.",
+    "Three more fakes were smaller than the device (project.test without counts_parsed, one also without duration_ms). test_device_fakes_match_the_device now reads the keys from ProjectCapabilities.cs itself.",
+    "The device protocol schema, carried over from B02, now holds its C# half: HelloMessage's wire names are compared with the schema's own $defs.hello."
+  ],
+  "proof": "PROVEN_AUTOMATED for all fourteen. PROVEN_REAL needs a production release (roadmap decision 0, owner-gated)."
+}

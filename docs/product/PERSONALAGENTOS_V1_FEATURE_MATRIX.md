@@ -1068,7 +1068,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
 
 ```
 3, 147, 168   status : DONE
-     commit : <B03>
+     commit : 9ddf243
      tests  : services/api/tests/unit/test_file_search_roots_contract.py (29),
               test_documents_confinement.py (15),
               devices/.../Documents/FileSearchRootsContractTests.cs (9)
@@ -1082,7 +1082,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
               gibi sınırlıyor — kova kök listesinin etrafından dolaşamıyor.
 
 4, 417-421    status : DONE
-     commit : <B03>
+     commit : 9ddf243
      tests  : test_app_manifest_contract.py (17), AppManifestContractTests.cs (5),
               test_appfactory_generator.py, test_appfactory_validation.py
      proof  : PROVEN_AUTOMATED — üç şablon da gerçek ProjectScaffold'dan geçiyor;
@@ -1094,7 +1094,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
               olarak çalıştırılıyor. Bulut doğrulayıcısı da artık cihazdan nazik değil.
 
 5             status : DONE
-     commit : <B03>
+     commit : 9ddf243
      tests  : test_device_fakes_match_the_device.py (5), test_contract_falsification.py (26)
      proof  : PROVEN_AUTOMATED — sahtenin anahtarları CİHAZIN kendi kaynağından okunuyor;
               eksik veya uydurulmuş alan testte düşüyor
@@ -1103,7 +1103,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
               deponun dördüncü "sahte makineden nazik" vakası; artık mekanik olarak yakalanıyor.
 
 467           status : DONE
-     commit : <B03>
+     commit : 9ddf243
      tests  : test_nativefactory_device_build.py (20; üçü yeni regresyon)
      proof  : PROVEN_AUTOMATED — sayılamayan bir test koşusu `tests_unreadable` ile duruyor
               ve publish'e hiç geçmiyor
@@ -1113,7 +1113,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
               de artık geçer not değil.
 
 505           status : DONE
-     commit : <B03>
+     commit : 9ddf243
      tests  : test_creative_tools.py::..._reaches_a_tool_that_can_work
      proof  : PROVEN_AUTOMATED — tool adlandırılmadığında Paint'e gidiyor ve iş yapıyor
      date   : 2026-09-12
@@ -1121,7 +1121,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
               sabit `False`. Adıyla Figma isteyen hâlâ dürüst reddi alıyor — kasıtlı.
 
 510, 715      status : DONE
-     commit : <B03>
+     commit : 9ddf243
      tests  : test_web_asks_for_routes_that_exist.py (12)
      proof  : PROVEN_AUTOMATED — Cockpit'in bildirdiği 10 yolun hepsi API'nin OpenAPI
               belgesinde var; mekanizma da pinlendi (parametreden sonra bildirilen literal)

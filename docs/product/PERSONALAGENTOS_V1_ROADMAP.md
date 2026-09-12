@@ -300,6 +300,8 @@ SONUC               : Dört canlı üretim kusurunun dördü de kapandı. İki y
                       yarıdan okunuyor. Cihaz da iki yerde eksikti: bir web projesi
                       "hiçbir şeye bağlanmıyorum" diyemiyordu ve kova adı çözemiyordu.
                       B02'den devreden device-protocol.schema.json'ın C# yarısı da kapandı.
+CI                 : run 34709341943 yeşil (7/7) · commit 9ddf243 · cihaz testleri
+                      869 → 887 · kanıt docs/evidence/b03-contract-parity-2026-09-12.json
 YOL USTUNDE         : Türkçe İ katlama kusuru (büyük İ ile yazılan klasör reddediliyordu);
                       üç sahtenin daha `counts_parsed` düşürmesi — artık mekanik bekçisi var.
 GOAL                : Bulut ile cihazın konuştuğu her şekil tek paylaşılan artefakttan okunsun;
