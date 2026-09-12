@@ -133,6 +133,20 @@ def test_a_backup_holds_every_database_every_object_and_the_hosts_configuration(
     assert not any((host.state / "fs" / "minio" / "tmp").glob("pagentos-backup-*"))
 
 
+def test_a_backup_that_finds_no_bucket_refuses_instead_of_holding_no_objects(host: Host) -> None:
+    """The silent shape this replaces (found on the production host, 2026-09-12): the bucket
+    listing was parsed in the container with awk, which that image does not have, so the loop
+    saw no buckets, mirrored nothing, and the snapshot was written as if it held them all."""
+    shutil.rmtree(host.state / "prod-objects")
+    (host.state / "prod-objects").mkdir()
+
+    completed = _backup(host)
+
+    assert completed.returncode == 93, completed.stdout
+    assert "no bucket" in completed.stderr
+    assert host.snapshots() == []
+
+
 def test_a_pre_migration_backup_keeps_its_own_last_ten(host: Host) -> None:
     completed = _backup(host, "--kind", "pre-migration", "--label", "release-cc0212bf2377")
 

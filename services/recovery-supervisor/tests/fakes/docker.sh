@@ -40,14 +40,14 @@ case "$1" in
       createdb) db="${!#}"; mkdir -p "$(dbdir "$c")"; [ -f "$(dbdir "$c")/$db.sql" ] || : > "$(dbdir "$c")/$db.sql"; exit 0;;
       dropdb) db="${!#}"; rm -f "$(dbdir "$c")/$db.sql"; exit 0;;
       rm) shift; for p in "$@"; do case "$p" in -*) ;; *) rm -rf "$S/fs/$c$p";; esac; done; exit 0;;
+      mc)
+        # mc is on the container's PATH; run the fake one against the container's own tree.
+        shift
+        FAKE_MC_SCRATCH="$S/fs/$c/data" FAKE_CONTAINER="$c" "$FAKE_MC" "$@"
+        exit $?;;
       sh)
         script="$3"; arg="$5"
         case "$script" in
-          *"alias set bk"*)
-            [ -n "${FAKE_MIRROR_EXIT:-}" ] && exit "$FAKE_MIRROR_EXIT"
-            mkdir -p "$S/fs/$c$arg/data"
-            cp -r "$S/prod-objects/." "$S/fs/$c$arg/data/"
-            exit 0;;
           *"alias set rs"*)
             if [ -f "$S/mount-$c" ] && [ "$arg" = "/restore" ]; then src="$(cat "$S/mount-$c")"; else src="$S/fs/$c$arg"; fi
             out="$S/fs/$c/tmp/pagentos-restore-out"
@@ -56,6 +56,21 @@ case "$1" in
             if [ "${FAKE_READBACK_DROP:-}" = "1" ]; then f=$(find "$out" -type f | head -1); [ -n "$f" ] && rm -f "$f"; fi
             if [ "$c" = "minio" ]; then rm -rf "$S/prod-objects"; mkdir -p "$S/prod-objects"; cp -r "$src/." "$S/prod-objects/"; fi
             exit 0;;
+          *mc*)
+            [ -n "${FAKE_MIRROR_EXIT:-}" ] && exit "$FAKE_MIRROR_EXIT"
+            # The backup's in-container script runs FOR REAL, with only the tools that image
+            # has (sh, mc, tr, cut, mkdir, rm, ls, head - no awk, no sed, no find). A fake
+            # that mirrored the objects itself hid a backup that silently held none of them.
+            shift 3  # drop: sh -c <script>; what is left is the inner $0 and its arguments
+            mapped=()
+            for a in "$@"; do case "$a" in /*) mapped+=("$S/fs/$c$a");; *) mapped+=("$a");; esac; done
+            # A PATH entry must be POSIX-style: "C:/x" would split on the colon into two.
+            image_path="$(cygpath -u "$FAKE_MINIO_PATH" 2>/dev/null || printf '%s' "$FAKE_MINIO_PATH")"
+            host_path="$PATH"  # assignments in a command prefix apply left to right
+            PATH="$image_path" FAKE_HOST_PATH="$host_path" FAKE_STATE="$S" \
+              FAKE_MC_SCRATCH="$S/fs/$c/data" MINIO_ROOT_USER=fake MINIO_ROOT_PASSWORD=fake \
+              sh -c "$script" "${mapped[@]}"
+            exit $?;;
         esac
         exit 0;;
     esac

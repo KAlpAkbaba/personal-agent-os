@@ -10293,6 +10293,28 @@ fail every later prune, so a backup now runs `restic unlock` (stale locks only, 
 case (red before, 49/49 and 34/34 after); the backup suite gained the unlock-before-write
 case (red before; 53 passed after).
 
+### Addendum — the backup held no objects at all (2026-09-12)
+
+The first real install on the host (proof backup + proof drill, both OK) printed one line to
+stderr that the exit code did not carry: `sh: line 6: awk: command not found`. The bucket
+listing was parsed INSIDE the MinIO container - `mc ls bk | awk "{print $NF}"` - and that
+image has no awk (measured on the host: sh, mc, tr, cut, mkdir, rm, ls, head; no awk, sed,
+grep, find, jq). So the loop saw no buckets, mirrored nothing, and every snapshot was written
+as if it held them all; the drill's object stage had nothing to compare and said nothing. The
+one bucket that exists, `pagentos-artifacts`, holds every artifact the owner has.
+
+The listing is parsed on the HOST now (the credentials still never leave the container: the
+alias is set there, in a throwaway config dir), each bucket is mirrored by its own call, an
+empty listing is a failed backup (`93 ... refusing a backup that would hold no objects`), and
+the count of files and buckets is printed - so "it held no objects" can never again be read as
+silence.
+
+Why the suite missed it: the fake docker emulated the in-container script instead of running
+it - it copied the objects itself. The fake was kinder than the machine. It now runs the real
+script with a PATH holding exactly the tools that image has (`tests/fakes/mc.sh`, the
+`minio-bin` wrappers); with the old awk line in place, two tests fail. 29 tests pass on the
+fix, and the guard case (no bucket -> exit 93, no snapshot) is new.
+
 ## ADR-0123 — The reliability sweep: what was promised, now enforced (2026-09-11)
 
 **Context.** Phase 8 of the post-audit recovery directive: the takeover audit listed six

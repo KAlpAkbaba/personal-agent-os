@@ -75,6 +75,24 @@ class Host:
         for d in (self.bin, self.base, self.data / "identity", self.data / "edge", self.systemd):
             d.mkdir(parents=True, exist_ok=True)
         self.docker = _executable(self.bin / "docker", _fake("docker.sh"))
+        self.mc = _executable(self.bin / "mc", _fake("mc.sh"))
+        # What the production MinIO image actually carries, measured on the host on
+        # 2026-09-12: sh, mc and a handful of coreutils - no awk, no sed, no grep, no find.
+        # The scripts' own in-container shell runs with exactly this and nothing else, so a
+        # tool the image lacks fails here instead of silently mirroring nothing.
+        self.minio_bin = self.state / "minio-bin"
+        self.minio_bin.mkdir(parents=True, exist_ok=True)
+        for tool, real in {
+            "sh": "/bin/sh",
+            "mkdir": "/usr/bin/mkdir",
+            "rm": "/usr/bin/rm",
+            "ls": "/usr/bin/ls",
+            "tr": "/usr/bin/tr",
+            "cut": "/usr/bin/cut",
+            "head": "/usr/bin/head",
+        }.items():
+            _executable(self.minio_bin / tool, f'#!/bin/bash\nexec {real} "$@"\n')
+        _executable(self.minio_bin / "mc", f'#!/bin/bash\nexec "{self.posix(self.mc)}" "$@"\n')
         self.restic = _executable(self.bin / "restic", _fake("restic.sh"))
         self.flock = _executable(self.bin / "flock", _fake("logger.sh"))
         self.systemctl = _executable(self.bin / "systemctl", _fake("logger.sh"))
@@ -126,6 +144,8 @@ class Host:
             "PAGENTOS_MINIO_CONTAINER": "minio",
             "PAGENTOS_TEMPORAL_CONTAINER": "temporal",
             "PAGENTOS_COLOUR_CONTAINERS": "blue green",
+            "FAKE_MINIO_PATH": p(self.minio_bin),
+            "FAKE_MC": p(self.mc),
             "PAGENTOS_DOCKER": p(self.docker),
             "PAGENTOS_RESTIC": p(self.restic),
             "PAGENTOS_FLOCK": p(self.flock),

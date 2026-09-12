@@ -129,22 +129,47 @@ alembic=$("$docker_bin" exec "$pg_container" psql -U "$pg_user" -d pagentos_prod
 
 # ---- objects, through the MinIO API (a consistent object view, not live data files) -----
 say "objects: mirroring every bucket"
-# The script runs INSIDE the MinIO container with the container's own credentials, so no
-# secret crosses this shell; the alias lives in a throwaway config dir that is removed.
+# The credentials never leave the container: the alias is set there, in a throwaway config
+# dir. The LISTING is parsed here, on the host. Until 2026-09-12 it was parsed in the
+# container with awk - which that image does not have (sh, mc, tr, cut, mkdir, rm, ls, head
+# and no more) - so the loop saw no buckets and every backup silently held no objects at all.
 "$docker_bin" exec "$minio_container" sh -c '
     set -e
-    cfg="$1/mc"; out="$1/data"
-    mkdir -p "$cfg" "$out"
-    mc --config-dir "$cfg" alias set bk http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
-    for bucket in $(mc --config-dir "$cfg" ls bk | awk "{print \$NF}" | tr -d /); do
-        mc --config-dir "$cfg" mirror --quiet "bk/$bucket" "$out/$bucket" >/dev/null
-        mkdir -p "$out/$bucket"
-    done
-    rm -rf "$cfg"
-' sh "$minio_tmp" || fail 93 "the object mirror failed"
+    mkdir -p "$1/mc" "$1/data"
+    mc --config-dir "$1/mc" alias set bk http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
+' sh "$minio_tmp" || fail 93 "the MinIO alias could not be set"
+listing=$("$docker_bin" exec "$minio_container" \
+    mc --config-dir "$minio_tmp/mc" ls --json bk) || fail 93 "the bucket listing failed"
+buckets=$(printf '%s\n' "$listing" | "$python_bin" -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    row = json.loads(line)
+    key = str(row.get("key", "")).rstrip("/")
+    if row.get("status") == "success" and key:
+        print(key)
+') || fail 93 "the bucket listing could not be read"
+[ -n "$buckets" ] || fail 93 "MinIO reported no bucket; refusing a backup that would hold no objects"
+while IFS= read -r bucket; do
+    [ -n "$bucket" ] || continue
+    say "objects: $bucket"
+    "$docker_bin" exec "$minio_container" sh -c '
+        set -e
+        mkdir -p "$2/$3"
+        mc --config-dir "$1" mirror --quiet "bk/$3" "$2/$3" >/dev/null
+    ' sh "$minio_tmp/mc" "$minio_tmp/data" "$bucket" || fail 93 "the object mirror failed for $bucket"
+done <<BUCKETS
+$buckets
+BUCKETS
+"$docker_bin" exec "$minio_container" rm -rf "$minio_tmp/mc" >/dev/null 2>&1 || true
 "$docker_bin" cp "$minio_container:$minio_tmp/data/." "$staging/minio/" >/dev/null \
     || fail 93 "the mirrored objects could not be copied out"
 "$docker_bin" exec "$minio_container" rm -rf "$minio_tmp" >/dev/null 2>&1 || true
+# Said out loud, so "it held no objects" can never again be read as silence.
+say "objects: $(find "$staging/minio" -type f | wc -l | tr -d ' ') file(s) from \
+$(printf '%s\n' "$buckets" | wc -l | tr -d ' ') bucket(s)"
 
 # ---- the host's own configuration and release/recovery metadata --------------------------
 for name in .env RELEASE LAST_KNOWN_GOOD LAST_RECONCILE RECOVERY_BUNDLE_STALE; do
