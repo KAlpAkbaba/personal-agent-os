@@ -244,6 +244,7 @@ SONUC               : 1 PROVEN_AUTOMATED (altı vaka önce KIRMIZI kanıtlandı)
                       PROVEN_AUTOMATED. Yol üstünde iki kusur kapandı: matris satır 20'nin
                       yanlış sınıflandırması ve `test_briefing_announcer` saat bombası
                       (yeşil CI'dan 9 dakika sonra altı testi birden düşürecekti).
+CI                 : run 34703755179 yeşil (7/7 job) · commit 15df7f3
 ACIK               : Üretim sürümü yapılmadı — "bozuk göç gerçek host'ta bir promosyonu
                       durdurdu" kanıtı owner onaylı bir dağıtım ister (bkz. §11).
 GOAL                : Başarısız bir göç veya kimliği belirsiz bir build üretime promote edilemesin.

@@ -998,7 +998,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
 
 ```
 1    status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : scripts/tests/cloud-release-bluegreen.tests.ps1 (a failed migration stops the
               release and says what alembic said; a failed image build stops it before any
               migration), scripts/tests/cloud-release.tests.ps1 (aynı iki vaka tek renkli yolda),
@@ -1008,7 +1008,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
      date   : 2026-09-12
 
 2    status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : services/api/tests/unit/test_release_schema.py (7), test_release_health_contract.py,
               scripts/tests/cloud-release*.tests.ps1 (exit 83 + "serves no schema check" uyarısı)
      proof  : PROVEN_REAL — docs/evidence/b01-schema-gate-2026-09-12.json: gerçek PostgreSQL'de
@@ -1017,7 +1017,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
      date   : 2026-09-12
 
 20   status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : test_health_endpoint.py::test_an_advisory_check_is_one_nothing_in_the_app_depends_on
      proof  : PROVEN_AUTOMATED — `ADVISORY_CHECKS` + app/ içinde redis istemcisi arayan test
      date   : 2026-09-12
@@ -1026,7 +1026,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
 
 21   status : DONE
 22   status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : services/api/tests/unit/test_release_build_identity.py (7; sonuncusu cihazın
               ProtocolConstants.cs kaynağını okuyup iki yarının aynı şekli kullandığını pinliyor)
      proof  : PROVEN_REAL — gerçek ağaçta build_id 516452ef2d144269 (16 hex), aynı bayt aynı
@@ -1034,7 +1034,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
      date   : 2026-09-12
 
 23   status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : services/api/tests/unit/test_build_state_reconciled.py (13)
      proof  : PROVEN_AUTOMATED — state/BUILD_STATE.json bu commit'te türetilen kayıtla mutabık;
               üç çelişkinin üçü de kapandı (last_completed M27→M28_NATIVE_APP_FACTORY,
@@ -1042,7 +1042,7 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
      date   : 2026-09-12
 
 24   status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : services/api/tests/unit/test_qualification_evidence.py (5; biri kuralın kendisini
               yanlışlar: düz yazı reddedilir, dört referans türü kabul edilir)
      proof  : PROVEN_AUTOMATED — 272 kanıt işaretli satır tarandı, 16'sı tarihi borç olarak
@@ -1051,14 +1051,14 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
 
 631  status : DONE
 632  status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : scripts/tests/cloud-release-bluegreen.tests.ps1 (RELEASE.json'ın alanları;
               tamamlanmamış bir sürümün metadata YAZMADIĞI)
      proof  : PROVEN_AUTOMATED — sürüm, reconcile ve rollback yollarının üçü de yazıyor
      date   : 2026-09-12
 
 638  status : DONE
-     commit : <B01>
+     commit : 15df7f3
      tests  : scripts/tests/cloud-release*.tests.ps1 (rc 74/67 + zaman aşımı vakaları)
      proof  : PROVEN_AUTOMATED — değişmedi; pipefail altında gözden geçirildi
      date   : 2026-09-12
