@@ -1,0 +1,40 @@
+{
+  "batch": "B02",
+  "requirements": [25, 26, 27, 28, 29, 30],
+  "recorded_at": "2026-09-12T16:50:00Z",
+  "commit": "8ca23ac30da1222f063dc65556cfdb212b8315af",
+  "ci_run": 34705909155,
+  "what_this_proves": "The gates B02 added are not workflow text - they ran, in CI, on this commit, and the run's own job logs say what they found. GitHub expires logs; these lines are kept here because a claim about a run nobody can read again is prose.",
+  "conclusion": "success (7/7 jobs)",
+  "observed": {
+    "web_shell_build_and_tests": {
+      "lint_oxlint": "Found 14 warnings and 0 errors.",
+      "vitest_files": "82 passed (82)",
+      "vitest_tests": "1587 passed (1587)",
+      "typecheck": "step 'Types (tsc --noEmit, tests included)' ran after the build and passed",
+      "note": "before this commit the job ran `pnpm build` and nothing else"
+    },
+    "windows_agent_build_and_tests": {
+      "dotnet_agent_tests": "Passed! - Failed: 0, Passed: 863, Skipped: 6, Total: 869 - PagentOS.Agent.Tests.dll (net10.0)",
+      "pe_reader_note": "PeImageReaderTests (7 Fact) is in PagentOS.Agent.Tests and therefore inside that 869. Requirement 28 was ALREADY satisfied; the 2026-09-12 audit's claim that these tests are skipped in CI was wrong, and the matrix now says what this log says.",
+      "cloud_owner_rotation": "26 passed, 0 failed",
+      "cloud_release_bluegreen": "59 passed, 0 failed",
+      "note": "both suites ran in CI for the first time on this commit; the blue/green one covers the release path production actually uses, including everything B01 added"
+    }
+  },
+  "durable_guard": {
+    "test": "services/api/tests/unit/test_ci_covers_every_suite.py",
+    "what_it_holds": "every scripts/tests/*.tests.ps1 must be named by the workflow; every gate script apps/web defines (lint, typecheck, test) must be a step CI runs; the web job must still build as well as test",
+    "falsified_against": "a fixture of the real drifted workflow shape - the checker reports exactly the omitted suite, and reports nothing when the list is complete"
+  },
+  "mutation": {
+    "test": "services/api/tests/unit/test_contract_falsification.py::test_hiding_a_contract_actually_fails_its_guard",
+    "method": "packages/protocol/realtime-session-contract.json is deleted, its guard is run in a subprocess, the non-zero exit and the missing file named in the output are asserted, the file is restored from a copy and verified by sha256, and the guard is run again to prove it passes with the contract back",
+    "runs": "every CI run and every local gate, not once by hand"
+  },
+  "found_on_the_way": [
+    "services/browser/tests/unit/test_injection.py compared the marker list against the shared contract only `when_present` - a pytest.skip when the file was absent. Deleting the contract turned its guard green. The hedge was written while a parallel M13 track was still authoring the file and outlived it; the file is required now.",
+    "packages/schemas/device-protocol.schema.json calls itself authoritative but only the Python half is held to it, and only for the hello frame; the C# half cites it in comments. Registered with that cost written down (Contract.unheld) and handed to B03."
+  ],
+  "proof": "PROVEN_REAL for 26/27/28/29 (observed in CI run 34705909155), PROVEN_AUTOMATED for 25/30"
+}

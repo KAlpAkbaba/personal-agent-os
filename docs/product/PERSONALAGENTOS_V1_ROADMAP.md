@@ -273,6 +273,8 @@ SONUC               : Web: 1587 test + oxlint + tsc CI'a girdi (önce yalnız `b
                       ölçüm denetimi düzeltti (CI run 34703755179: 869 test). 30 için
                       mutasyon her koşuda GERÇEKTEN yürütülüyor. Yol üstünde: test_injection'ın
                       "sözleşme yoksa SKIP" kaçamağı kaldırıldı.
+CI                 : run 34705909155 yeşil (7/7) · commit 8ca23ac · kanıt
+                      docs/evidence/b02-ci-coverage-2026-09-12.json
 KALICI KORUMA       : test_ci_covers_every_suite.py — elle tutulan listeler artık denetleniyor;
                       var olan bir paketi adlandırmayan workflow testte düşer.
 GOAL                : Kritik hiçbir test kapının dışında kalmasın; kritik sözleşme testleri
