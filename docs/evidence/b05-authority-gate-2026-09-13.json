@@ -1,0 +1,47 @@
+{
+  "batch": "B05",
+  "requirements": [
+    245,
+    246,
+    247,
+    248,
+    658,
+    659,
+    663,
+    664,
+    665,
+    666,
+    675,
+    678
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "0394a83",
+  "ci_run": 34720710232,
+  "conclusion": "success (7/7 jobs)",
+  "what_this_proves": "Four things the server took another party's word for are now decided by the server, and the one policy question in this batch was put to the owner rather than guessed at.",
+  "closed_fully": {
+    "246_663_device_trust": "`device_trusted` came from the request BODY - the rule 'an untrusted device caps a voice match at UNCERTAIN' was written down and then handed to the one party it exists to constrain. It is derived from the authenticated session's device binding now, and because the model forbids extras a client still sending the field gets a 422 rather than believing it succeeded.",
+    "658_absolute_lifetime": "`refresh` rotated the token and pushed `expires_at` out on the same row with no ceiling, so a token that leaked into a log or a backup lived exactly as long as something kept refreshing it. The ceiling is 90 days from `created_at` and a refresh does not touch it; the test stages the defect with a client that refreshes every five days for eighty-five days and is still over at a hundred.",
+    "659_idle_sweep": "The idle rule lived only in `verify`, so an abandoned client's session stayed `active` in the database until somebody presented its token - which for an abandoned client is never. It was counted and listed as active the whole time. Same defect shape B06 closed for voice sessions.",
+    "675_exit_transition": "'Production-side' is a property of the TRANSITION, not of its target. The service guards a transition that enters the production side and one that LEAVES it; the route only ever minted an authority for the first. So closing out a candidate parked on the production side reached `guard_production_action` with no authority and was refused every time - the grant existed and the exit was unreachable, which is what 'permission count zero' meant in the audit.",
+    "678_delete_gate": "Owner decision 2026-09-13, asked because it is a privacy policy: soft delete is the default and reversible (voice may ask for it in one step), permanent destruction needs a confirmation from a second channel - clicked or typed, never an utterance. A confirmation names one subject and expires in five minutes. `forget_memory` is the ONE named exemption, with its reason, and a test fails if a second permanent deletion joins it."
+  },
+  "not_claimed_done": {
+    "245_247_248_664_665_666": "PARTIAL, not DONE. The decision path exists, is tested, and sits in `handle_tool_call` - the one relay every voice tool call passes through, ahead of any handler. But NOTHING in the realtime path produces a speaker verdict: the only thing that writes one is a REST endpoint nothing calls automatically. Enforcing today would refuse every sensitive voice action. 'A class exists' is not completion, so these stay PARTIAL with the missing piece named: the realtime probe flow.",
+    "why_this_matters": "Marking them DONE would be exactly the failure the directive forbids - claiming complete because the code is written."
+  },
+  "shadow_by_design": {
+    "device_command_gate": "`create_command` now evaluates every command against the device's advertised capabilities and its enrolment status - inside the function rather than at each caller, so a caller added later cannot forget. Ships in shadow: it records and counts and lets the command through. The roadmap's own rollback plan, and the reason is that a gate whose first production appearance is an outage is a gate that gets turned off.",
+    "voice_step_up": "Same, plus the second reason above.",
+    "turning_them_on": "Both are owner decisions. The device gate needs a day of production shadow counting first (REAL_PROOF_REQUIRED); the step-up policy needs the verdict-producing flow before enforcement means anything."
+  },
+  "red_first": {
+    "method": "Files copied to a backup with sha256 digests, reverted to HEAD, the suite re-run, restored by digest verification (sha256sum -c: 3/3 OK).",
+    "gate_and_identity": "11 failed / 11 passed - the capability gate, the revoked-device refusal, the unknown-device refusal, the ceiling on a refreshing session, the idle sweep and the reason recorded for each.",
+    "exit_transition": "`assert 403 == 200` - closing out a production-side candidate was refused before the fix."
+  },
+  "tier_map": "Every one of the 117 registered tools is explicitly classified OPEN / SENSITIVE / CRITICAL. Not 'anything absent is OPEN': a default is how a tool added later ends up ungoverned with nobody deciding it should be. `test_every_registered_tool_has_a_tier` reads the real registry and fails in both directions - a tool with no tier, and a tier naming a tool that does not exist.",
+  "the_invariant": "There is no path through the step-up policy where a score, however high, makes an untrusted device sufficient - the device check runs BEFORE the verdict is even loaded, so there is no ordering in which a score gets a word in first. A verdict reached on an untrusted device is also not reusable once the device becomes trusted: it was a measurement taken under conditions that capped it at UNCERTAIN.",
+  "proof": "PROVEN_AUTOMATED for the six closed requirements. PROVEN_REAL needs a production release (decision 0, owner-gated) plus, for the two gates, the shadow-mode counting that decides whether enforcement is safe.",
+  "local_gate": "ruff clean; 9066 passed / 5 skipped"
+}

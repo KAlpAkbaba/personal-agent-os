@@ -314,10 +314,10 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 242 | Wake-word enable/disable | Yok | Açılıp kapanır | MISSING | NYP | P2 | 241 | B47 | devices/windows-agent | — | — | no | — |
 | 243 | Push-to-talk fallback | Yok | Bas-konuş | MISSING | NYP | P2 | 239 | B47 | devices/windows-agent | — | — | no | Mahremiyet açısından en ucuz seçenek |
 | 244 | Local VAD | Yok | Cihazda konuşma tespiti | MISSING | NYP | P2 | 239 | B47 | devices/windows-agent | — | — | no | — |
-| 245 | Speaker verification | Tavsiye niteliğinde; verdict'i okuyan yok | Karar yolunda | PARTIAL | PA | P0 | — | B05 | app/voice/identity/ | voice identity testleri | — | no | Ses ASLA tek başına kök değil |
-| 246 | Trusted-device check | `device_trusted` istek gövdesinden geliyor | Sunucu tarafında doğrulanır | BROKEN | NYP | P0 | 663 | B05 | app/voice/identity/, app/devices/ | — | — | no | Kural yazılı, zorlanmıyor |
-| 247 | Speaker-confidence threshold | Hesaplanıyor, tüketilmiyor | Uygulanır | PARTIAL | NYP | P0 | 245 | B05 | app/voice/identity/ | — | — | no | — |
-| 248 | Sensitive-command higher threshold | Yok | Eşik yükselir | MISSING | NYP | P0 | 247 | B05 | app/voice/identity/, app/security/ | — | — | no | — |
+| 245 | Speaker verification | Tavsiye niteliğinde; verdict'i okuyan yok | Karar yolunda | PARTIAL | PA | P0 | — | B05 | app/security/step_up.py, app/voice/realtime_sessions/service.py:handle_tool_call | test_voice_step_up.py | gölge mod: sayıyor, engellemiyor — enforce sahip kararı | no | Karar yolu var ve test edildi; realtime'da verdict üreten akış YOK |
+| 246 | Trusted-device check | `device_trusted` istek gövdesinden geliyor | Sunucu tarafında doğrulanır | DONE | PA | P0 | 663 | B05 | app/voice/device_trust.py, app/voice/routes.py:verify_speaker_route | test_authority_gate.py | üretim turu bekliyor (Karar 0) | no | Alan kaldırıldı: gönderen 422 alıyor, sessizce yok sayılmıyor |
+| 247 | Speaker-confidence threshold | Hesaplanıyor, tüketilmiyor | Uygulanır | PARTIAL | PA | P0 | 245 | B05 | app/security/step_up.py, app/voice/realtime_sessions/service.py:handle_tool_call | test_voice_step_up.py | gölge mod: sayıyor, engellemiyor — enforce sahip kararı | no | Eşik tüketiliyor ama gölge modda; enforce iki şey bekliyor |
+| 248 | Sensitive-command higher threshold | Yok | Eşik yükselir | PARTIAL | PA | P0 | 247 | B05 | app/security/step_up.py, app/voice/realtime_sessions/service.py:handle_tool_call | test_voice_step_up.py | gölge mod: sayıyor, engellemiyor — enforce sahip kararı | no | CRITICAL için 0.88 skor + 3 dk tazelik; gölge modda |
 | 249 | Raw voice not archived | Politika uygulanıyor | Aynı | DONE | PA | P0 | — | — | app/voice/ | voice testleri | — | no | Ürün ilkesi — gevşetilmez |
 | 250 | Device-local Voice startup | Yok | Açılışta başlar | MISSING | NYP | P2 | 239 | B47 | devices/windows-agent | — | — | no | — |
 | 251 | Voice service restart recovery | Yok | Toparlanır | MISSING | NYP | P2 | 250 | B47 | devices/windows-agent | — | — | no | — |
@@ -844,15 +844,15 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 656 | Owner credential | Çalışıyor | Aynı | DONE | PR | P0 | — | — | app/identity/ | identity testleri | üretim oturumu | no | Rewrite gerekmez |
 | 657 | Session authentication | Opak jeton, SHA-256, sabit zaman | Aynı | DONE | PA | P0 | — | — | app/identity/ | identity testleri | — | no | — |
-| 658 | Absolute session lifetime | YOK — yenilenen jeton süresiz yaşar | Mutlak tavan | MISSING | NYP | P0 | — | B05 | app/identity/ | — | — | no | Sızan jeton riski |
-| 659 | Idle session lifetime | Kısmi | Tam | PARTIAL | PA | P0 | 658 | B05 | app/identity/ | identity testleri | — | no | — |
+| 658 | Absolute session lifetime | YOK — yenilenen jeton süresiz yaşar | Mutlak tavan | DONE | PA | P0 | — | B05 | app/identity/service.py:_past_absolute_lifetime, :sweep_expired | test_authority_gate.py | üretim turu bekliyor (Karar 0) | no | 90 gün, created_at'ten; refresh tavanı kaldırmıyor |
+| 659 | Idle session lifetime | Kısmi | Tam | DONE | PA | P0 | 658 | B05 | app/identity/service.py:_past_absolute_lifetime, :sweep_expired | test_authority_gate.py | üretim turu bekliyor (Karar 0) | no | Atıl kural artık süpürgede de: jeton sunulmasa da oturum kapanıyor |
 | 660 | Panic revoke | Var ama keşfedilebilir değil | Erişilebilir | DONE | PA | P0 | — | B25 | app/identity/ | identity testleri | — | no | Arayüzde görünmüyor |
 | 661 | Device enrollment | Çalışıyor | Aynı | DONE | PR | P0 | — | — | app/devices/ | device testleri | cihaz MAIL online | no | — |
 | 662 | Device revoke | Oturumları da iptal ediyor | Aynı | DONE | PA | P0 | — | — | app/devices/ | device testleri | — | no | — |
-| 663 | Device trust | Çağıranın gönderdiği boolean | Sunucuda doğrulanır | BROKEN | NYP | P0 | — | B05 | app/devices/, app/voice/identity/ | — | — | no | 246 ile aynı kusur |
-| 664 | Speaker verification | Tavsiye niteliğinde | Karar yolunda (tek başına kök DEĞİL) | PARTIAL | PA | P0 | 663 | B05 | app/voice/identity/ | voice identity testleri | — | no | Ürün ilkesi korunur |
-| 665 | Speaker embedding | Kısmi | Tam | PARTIAL | PA | P0 | 664 | B05 | app/voice/identity/ | voice identity testleri | — | no | — |
-| 666 | Sensitive-operation re-auth | Yok | Yeniden doğrulama | MISSING | NYP | P0 | 658 | B05 | app/identity/, app/security/ | — | — | no | 248 ile ortak |
+| 663 | Device trust | Çağıranın gönderdiği boolean | Sunucuda doğrulanır | DONE | PA | P0 | — | B05 | app/voice/device_trust.py, app/voice/routes.py:verify_speaker_route | test_authority_gate.py | üretim turu bekliyor (Karar 0) | no | 246 ile tek uygulama; oturumun cihaz bağı + cihazın canlı olması |
+| 664 | Speaker verification | Tavsiye niteliğinde | Karar yolunda (tek başına kök DEĞİL) | PARTIAL | PA | P0 | 663 | B05 | app/security/step_up.py, app/voice/realtime_sessions/service.py:handle_tool_call | test_voice_step_up.py | gölge mod: sayıyor, engellemiyor — enforce sahip kararı | no | Güvenilmeyen cihazda hiçbir skor yetmiyor — skordan ÖNCE bakılıyor |
+| 665 | Speaker embedding | Kısmi | Tam | PARTIAL | PA | P0 | 664 | B05 | app/security/step_up.py, app/voice/realtime_sessions/service.py:handle_tool_call, app/voice/models.py:SpeakerVerdictRow | test_voice_step_up.py | gölge mod: sayıyor, engellemiyor — enforce sahip kararı | no | Verdict kalıcı; probe embedding ASLA saklanmıyor |
+| 666 | Sensitive-operation re-auth | Yok | Yeniden doğrulama | PARTIAL | PA | P0 | 658 | B05 | app/security/step_up.py, app/voice/realtime_sessions/service.py:handle_tool_call | test_voice_step_up.py | gölge mod: sayıyor, engellemiyor — enforce sahip kararı | no | Hassas işlemde taze verdict = yeniden doğrulama; gölge modda |
 | 667 | Secret detection | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/security/ | security testleri | 13 desen | no | Tespit var, uygulama eksik |
 | 668 | Secret redaction | Desenler log hattında ve dünya modelinde yok | Her yüzeyde | DONE | PA | P0 | 667 | B04 | app/worldmodel/state.py:_Collector.fact, app/logging.py:redact_secrets, app/logging.py:SecretRedactingFilter, app/health.py:_run_check, app/main.py:system_health | test_secret_redaction_surfaces.py | üretim turu bekliyor (Karar 0) | no | Tek kelime dağarcığı: 13 desen app.memory.policy'den, anahtar adları app.research.forbidden_keys'ten |
 | 669 | DPAPI storage | Çalışıyor | Aynı | DONE | PR | P0 | — | — | scripts/secret-store.ps1 | owner-harness.tests.ps1 | escrow | no | Rewrite gerekmez |
@@ -861,10 +861,10 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 672 | Browser permission | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/security/ | security testleri | — | no | — |
 | 673 | Research permission | Gerçekten zorlanıyor | Aynı | DONE | PA | P0 | — | — | app/security/, app/research/ | research testleri | owner_authorized=false | no | ADR-0113 |
 | 674 | File mutation permission | Mutasyon olmadığı için yok | İzin modeli | MISSING | NYP | P2 | 160 | B34 | app/security/, app/files/ | — | — | onay politikası | 153-170'in ön koşulu |
-| 675 | Code promotion permission | Grant'lar var | Aynı | DONE | PA | P0 | — | B05 | app/evolution/ | supervisor testleri | izin sayısı 0 | no | Çıkış geçişi erişilemez — B05'te bak |
+| 675 | Code promotion permission | Grant'lar var | Aynı | DONE | PA | P0 | — | B05 | app/evolution/routes.py:advance_opportunity | test_evolution_routes.py | üretim turu bekliyor (Karar 0) | no | Çıkış geçişi açıldı: üretim tarafından ÇIKMAK da üretim eylemi |
 | 676 | Production deployment permission | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/evolution/ | supervisor testleri | — | no | — |
 | 677 | High-risk owner gate | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/evolution/supervisor.py | supervisor testleri | — | no | Ürün ilkesi — gevşetilmez |
-| 678 | Permanent delete owner gate | Kısmi | Tam | PARTIAL | NYP | P0 | — | B05 | app/security/ | — | — | onay politikası | 159,354,412 buna bağlı |
+| 678 | Permanent delete owner gate | Kısmi | Tam | DONE | PA | P0 | — | B05 | app/security/deletion.py | test_deletion_gate.py | tüketiciler B34/B42/B46 | onay politikası | Sahip kararı 2026-09-13: yumuşak silme varsayılan, kalıcı yok etme ikinci kanal |
 | 679 | Security audit ledger | Çalışıyor | Saklama politikası eklenir | DONE | PR | P0 | 16 | B07 | app/security/, app/ledger/ | security testleri | 13.560 olay | no | Saklama yok |
 | 680 | Security review of generated code | Yok | Zorunlu | MISSING | NYP | P0 | — | B35 | app/security/, app/selfdev/ | — | Grant tüketicisi yok | no | 598,579,439 ile ortak |
 | 681 | No CAPTCHA bypass | Zorlanıyor | Aynı | DONE | PA | P0 | — | — | app/browser/ | browser testleri | — | no | Ürün ilkesi — ASLA gevşetilmez |
@@ -1374,3 +1374,101 @@ yukarı propagate eden kayıtlar için sorulmaz ve bu kayıtlar tam olarak onlar
 **Ölçüldü, tahmin edilmedi:** redaksiyonun maliyeti temsili bir alt küme üzerinde
 %1'in altında (10,25 s → 10,34 s). İlk tam kapı koşusundaki 694→776 s farkı koşu
 değişkenliğiydi; işlemci zincirin içinde/dışındayken aynı süite ayrı ayrı ölçüldü.
+
+---
+
+### B05 — Yetki kapısı ve kimlik sertleştirme · 2026-09-13
+
+CI 34720710232 yeşil (7/7) · commit 0394a83 · yerel kapı 9066 geçti / 5 atlandı · kanıt `docs/evidence/b05-authority-gate-2026-09-13.json`
+
+```
+246, 663      status : DONE
+     commit : 0394a83
+     tests  : test_authority_gate.py (cihaz güveni bölümü, 5 test)
+     proof  : PROVEN_AUTOMATED — kırmızı kanıtlandı (11 başarısız / 11 geçen), dosyalar
+              sha256 ile geri yüklendi
+     date   : 2026-09-13
+     note   : `device_trusted` istek GÖVDESİNDEN geliyordu. Alanın kendi yorumu ne olduğunu
+              söylüyordu — "UNTRUSTED, client-asserted hint" — ve sınıflandırıcı güvenilmeyen
+              cihazı UNCERTAIN'de kapıyordu; yani kural yazılmış ve tam da kısıtladığı tarafa
+              teslim edilmişti. Sahip jetonu olan her şey `device_trusted: true` gönderip
+              kabul bandını kendi lehine kaydırabiliyordu. Artık oturumun cihaz bağından
+              türetiliyor, ve model extra alan kabul etmediği için hâlâ gönderen 422 alıyor:
+              kendi güven seviyesini seçtiğini sanan bir istek, sessizce yok sayılmak yerine
+              öyle olmadığını öğrenmeli.
+
+658           status : DONE
+     commit : 0394a83
+     tests  : test_authority_gate.py::test_the_ceiling_is_not_reset_by_refreshing (+kontrol)
+     proof  : PROVEN_AUTOMATED — kusuru canlandıran test: beş günde bir yenilenen bir
+              istemci seksen beş gün boyunca sorunsuz yenileniyor ve yüzüncü günde bitiyor;
+              kontrol testi tavansız aynı dizinin sonsuza kadar yaşadığını gösteriyor
+     date   : 2026-09-13
+     note   : `refresh` jetonu döndürüp AYNI satırda `expires_at`'i ileri itiyordu ve tavan
+              yoktu. Yani bir loga, bir yedeğe ya da bir proxy'e sızmış jeton, onu yenileyen
+              bir şey olduğu sürece tam olarak sonsuza kadar yaşıyordu. Tavan `created_at`'ten
+              ölçülüyor ve yenileme ona dokunmuyor — tavanı tavan yapan şey bu.
+
+659           status : DONE
+     commit : 0394a83
+     tests  : test_authority_gate.py (süpürge bölümü, 3 test)
+     proof  : PROVEN_AUTOMATED — on gün dokunulmamış oturum süpürülüyor, dün kullanılan
+              oturuma dokunulmuyor, ve denetim hangi kuralın bitirdiğini yazıyor
+     date   : 2026-09-13
+     note   : Atıl kuralı yalnızca `verify` içindeydi, yani terk edilmiş bir istemcinin
+              oturumu birileri jetonunu sunana kadar veritabanında `active` kalıyordu — terk
+              edilmiş bir istemci için asla. O süre boyunca aktif oturum olarak sayılıyor ve
+              listeleniyordu. B06'nın seste kapattığı kusurun aynısı, kimlikte.
+
+675           status : DONE
+     commit : 0394a83
+     tests  : test_evolution_routes.py (2 yeni: çıkış açık, lab hâlâ giremiyor)
+     proof  : PROVEN_AUTOMATED — düzeltme geri alınarak KIRMIZI kanıtlandı: `403 == 200`
+     date   : 2026-09-13
+     note   : "Üretim tarafı" geçişin özelliği, hedefinin değil. Servis hem üretim tarafına
+              GİREN hem ORADAN ÇIKAN geçişi koruyordu; rota yalnız birincisi için yetki
+              basıyordu. Sonuç: üretim tarafında park etmiş bir adayı kapatmak
+              (`live -> superseded`, `qualifying -> rejected`) her seferinde yetkisiz
+              `guard_production_action`'a düşüyor ve reddediliyordu. İzin yazılmış, çıkış
+              erişilemezdi — denetimin "izin sayısı 0" ölçümü tam olarak buydu.
+
+678           status : DONE
+     commit : 0394a83
+     tests  : test_deletion_gate.py (16)
+     proof  : PROVEN_AUTOMATED — ses kanalı kalıcı silmeyi onaylayamıyor; onay tek bir
+              özneyi adlandırıyor ve beş dakikada bayatlıyor
+     date   : 2026-09-13
+     note   : SAHİP KARARI (2026-09-13, soruldu): yumuşak silme varsayılan ve geri alınabilir,
+              o yüzden sesle tek adımda istenebilir; KALICI yok etme ikinci kanal onayı ister
+              — tıklanan ya da yazılan bir şey, asla bir söz. Gerekçe step-up politikasıyla
+              aynı: bir söz bu sistemde kazayla üretilmesi en kolay şey (televizyon, misafir,
+              yanlış duyulan kelime) ve yok etme, arkasında hatayı geri alacak hiçbir şey
+              olmayan tek eylem. `forget_memory` TEK adlandırılmış istisna, gerekçesiyle:
+              unutulmak bir gizlilik HAKKI ve sahibi, sistemin onu unutması için önce bir
+              yere tıklamaya zorlamak hakkı tersine çevirir.
+
+245, 247, 248, 664, 665, 666   status : PARTIAL (DONE DEĞİL)
+     commit : 0394a83
+     tests  : test_voice_step_up.py (21)
+     proof  : PROVEN_AUTOMATED (mekanizma) — ama erişilebilir uçtan uca akış YOK
+     date   : 2026-09-13
+     note   : Karar yolu var: `handle_tool_call`'un — her sesli araç çağrısının geçtiği tek
+              rölenin — içinde, herhangi bir işleyiciden ÖNCE, tıpkı yanındaki araştırma
+              reddi gibi, ki modelin araç seçimi etrafından dolaşamasın. 117 kayıtlı aracın
+              hepsi açıkça OPEN/SENSITIVE/CRITICAL olarak sınıflandırıldı ("yoksa OPEN" değil:
+              varsayılan, sonradan eklenen bir aracın kimse karar vermeden yönetimsiz kalma
+              yoludur) ve bir test bunu gerçek kayıtla iki yönlü karşılaştırıyor.
+              EKSİK OLAN: realtime yolda konuşmacı verdict'i ÜRETEN hiçbir akış yok — tek
+              yazan, otomatik çağrılmayan bir REST ucu. Bugün enforce etsem her hassas sesli
+              işlem reddedilirdi. Bu yüzden DONE değil: "sınıf var" tamamlandı değildir.
+     invariant : Güvenilmeyen cihazda hiçbir skor yetmez. Cihaz kontrolü verdict daha
+              YÜKLENMEDEN yapılıyor, yani skorun söz alabileceği bir sıralama yok. Güvenilmeyen
+              cihazda alınmış bir verdict, cihaz sonradan güvenilir olsa da yeniden
+              kullanılamıyor: farklı koşullarda alınmış bir ölçümdü.
+```
+
+**Gölge modda ne var, neden:** cihaz komut kapısı (`create_command` içinde, her çağıran için,
+çünkü çağıran başına konsa unutulabilirdi) ve ses step-up politikası. İkisi de değerlendirip
+kaydediyor ve geçiriyor. Roadmap'in kendi rollback planı bu — üretimdeki ilk görünümü bir
+kesinti olan kapı, kapatılan kapıdır. Açmak sahip kararı: cihaz kapısı için üretimde bir
+günlük sayım (batch'in kendi REAL_PROOF şartı), step-up için önce verdict üreten akış.

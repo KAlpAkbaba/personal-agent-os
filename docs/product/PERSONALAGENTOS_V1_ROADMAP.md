@@ -352,7 +352,7 @@ ROLLBACK_PLAN       : tek modül; commit geri alınır
 ```
 
 ```
-BATCH_ID            : B05
+BATCH_ID            : B05                                       [KAPANDI 2026-09-13]
 NAME                : Yetki kapısı ve kimlik sertleştirme
 REQUIREMENT_IDS     : 245, 246, 247, 248, 658, 659, 663, 664, 665, 666, 675, 678
 GOAL                : Cihaz komutu sunucuda yetenek+politika kapısından geçsin; cihaz güveni ve
@@ -362,7 +362,19 @@ DEPENDENCIES        : B04
 AFFECTED_SUBSYSTEMS : Identity, Devices, Voice Identity, Security
 EXPECTED_FILES      : services/api/app/identity/, app/devices/, app/voice/identity/, app/security/
 RISK                : medium — yetki kapısı mevcut çağrıları kırabilir
-OWNER_ACTION        : no (kalıcı silme politikası için 678'de onay şekli sorulacak)
+OWNER_ACTION        : SORULDU ve YANITLANDI (2026-09-13) — 678 kalıcı silme politikası:
+                      "yumuşak silme varsayılan (sesle, geri alınabilir) + KALICI yok etme
+                      ikinci kanal onayı ister". app/security/deletion.py bunu uyguluyor.
+KAPANIŞ             : commit 0394a83 · CI 34720710232 yeşil (7/7) · yerel kapı 9066 geçti
+                      kanıt docs/evidence/b05-authority-gate-2026-09-13.json
+TAM KAPANAN         : 246, 663, 658, 659, 675, 678 (altısı da PROVEN_AUTOMATED)
+KISMİ KALAN         : 245, 247, 248, 664, 665, 666 — karar yolu var, testli ve tek kapıya
+                      bağlı; ama realtime yolda VERDICT ÜRETEN AKIŞ YOK, o yüzden enforce
+                      etmek her hassas sesli işlemi reddederdi. "Sınıf var" tamamlandı
+                      değildir; eksik parça adıyla yazıldı.
+GÖLGE MODDA         : cihaz komut kapısı ve ses step-up politikası. İkisi de sayıyor,
+                      engellemiyor. Açmak sahip kararı: cihaz kapısı için üretimde bir
+                      günlük sayım (REAL_PROOF), step-up için önce verdict akışı.
 TEST_PLAN           : kapsam dışı yetenek çağrısı 403; çağıranın gönderdiği `device_trusted`
                       yok sayılır; düşük güvenli konuşmacı hassas komutta reddedilir; yaşlı
                       jeton yenilenemez
