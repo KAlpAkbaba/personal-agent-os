@@ -16,6 +16,7 @@ from app.identity.service import IdentityService
 from app.main import create_app
 from app.maintenance import RetentionSweeper
 from app.memory.store import NativeMemoryBackend
+from app.research import service as research_service
 from app.security.registry import AuthorizedAssetRegistry
 from app.voice.realtime_sessions import service as realtime_service
 
@@ -28,6 +29,10 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
     monkeypatch.setattr(AuthorizedAssetRegistry, "sweep_expired", lambda self, **_: ["a", "b", "c"])
     monkeypatch.setattr(realtime_service, "fail_interrupted_tool_calls", lambda db: 4)
     monkeypatch.setattr(app_main, "fail_interrupted_builds", lambda db: 5)
+    # B06 (2026-09-12): the two orphan sweeps. Stubbed for the same reason as the others —
+    # what is asserted here is that the APPLICATION reaches them, not what they do.
+    monkeypatch.setattr(realtime_service, "sweep_idle_sessions", lambda db: ["s1", "s2"])
+    monkeypatch.setattr(research_service, "sweep_abandoned_runs", lambda db: ["r1"])
     app = create_app(Settings(_env_file=None))
 
     results = app.state.retention_sweeper.sweep_once()
@@ -38,6 +43,8 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
         "security_assets": 3,
         "interrupted_tool_calls": 4,
         "interrupted_native_builds": 5,
+        "idle_voice_sessions": 2,
+        "abandoned_research_runs": 1,
     }
     assert app.state.retention_sweeper.last_results == results
     assert app.state.retention_sweeper.last_run_at is not None

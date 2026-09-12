@@ -28,8 +28,10 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, Final
 
+from sqlalchemy import select
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
@@ -194,6 +196,71 @@ def fail_unstarted_research(db: Session, task_id: uuid.UUID, *, detail: str) -> 
     )
     logger.info("research_unstarted_task_closed", task_id=str(task_id))
     return True
+
+
+#: A run nothing has moved for this long has no workflow behind it any more. Generous on
+#: purpose: the interactive stages wait on a PERSON (a challenge page the owner clears), and a
+#: day is long enough that "the owner is still on it" has stopped being true.
+ABANDONED_RUN_AFTER: Final[timedelta] = timedelta(hours=24)
+ERROR_RUN_ABANDONED = "workflow_abandoned"
+ABANDONED_RUN_TR = "Araştırma yarıda kaldı efendim; iş akışı geri dönmedi."
+
+
+def sweep_abandoned_runs(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    abandoned_after: timedelta | None = None,
+    limit: int = 50,
+) -> list[uuid.UUID]:
+    """Close research runs whose workflow is gone (B06 req 10/13/11/206). Returns what it closed.
+
+    ``fail_unstarted_research`` covers the run that never STARTED. This is the other orphan:
+    one that started, and then the workflow went away - a worker restart, a killed process, a
+    Temporal that came back without its history. Nothing swept those: on 2026-09-12 a run was
+    still in ``discovering`` three days after its last event, the task list read it as work in
+    progress, and the world model counted it among the running.
+
+    A task is only reconciled together with its run, and only when the task is still in a
+    non-terminal state: a task the workflow already closed is left exactly as it is.
+    """
+    from app.artifacts.state import TASK_TERMINAL_STATUSES
+    from app.research.models import TERMINAL_STAGES, ResearchRunRow
+
+    moment = now or datetime.now(UTC)
+    horizon = moment - (abandoned_after or ABANDONED_RUN_AFTER)
+    rows = list(
+        db.execute(
+            select(ResearchRunRow)
+            .where(ResearchRunRow.stage.notin_(tuple(TERMINAL_STAGES)))
+            .where(ResearchRunRow.updated_at <= horizon)
+            .order_by(ResearchRunRow.updated_at.asc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    closed: list[uuid.UUID] = []
+    for row in rows:
+        task = db.get(Task, row.task_id)
+        if task is not None and task.status not in TASK_TERMINAL_STATUSES:
+            artifact_service.transition_task(
+                db,
+                row.task_id,
+                TASK_STATUS_FAILED_TERMINAL,
+                error_class=ERROR_RUN_ABANDONED,
+                error_message=ABANDONED_RUN_TR,
+            )
+        runs_service.update_run(
+            db,
+            row.task_id,
+            stage=STAGE_FAILED,
+            error=ERROR_RUN_ABANDONED,
+            event={"stage": STAGE_FAILED, "detail": ABANDONED_RUN_TR},
+        )
+        closed.append(row.task_id)
+        logger.info("research_abandoned_run_closed", task_id=str(row.task_id), was=row.stage)
+    return closed
 
 
 async def start_browser_research_workflow(

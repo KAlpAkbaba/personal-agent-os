@@ -85,6 +85,7 @@ from app.operator.service import OperatorService, register_operator_service
 from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
 from app.release.version import release_model
+from app.research import service as research_service
 from app.research.browser_gateway import UnwiredBrowserGateway
 from app.research.embedded_worker import EmbeddedWorkerRuntime
 from app.research.health import research_health
@@ -394,6 +395,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ),
             "interrupted_native_builds": lambda: _in_session(
                 artifacts.session, fail_interrupted_builds
+            ),
+            # B06 (2026-09-12): the two orphans nothing ever closed. A realtime session was
+            # only ever ended by somebody USING it, so a tab closed on the 9th was still
+            # `active` on the 12th and /v1/state/now counted six of them as live
+            # conversations. A research run whose workflow went away stayed in `discovering`
+            # for three days, and the world model counted it among the running.
+            "idle_voice_sessions": lambda: _in_session(
+                voice_realtime.session, realtime_service.sweep_idle_sessions
+            ),
+            "abandoned_research_runs": lambda: _in_session(
+                artifacts.session, research_service.sweep_abandoned_runs
             ),
         },
         interval_s=settings.retention_sweep_interval_s,

@@ -30,6 +30,34 @@ from app.artifacts.models import (
 
 TASK_TERMINAL_STATUSES = frozenset({TASK_STATUS_COMPLETED, TASK_STATUS_FAILED_TERMINAL})
 
+# ---------------------------------------------------------------- what a status MEANS
+#
+# "Not terminal" is one fact and "the system is working on it" is another, and the world
+# model used to answer the second question with the first: `tasks.running_count` was every
+# task that had not reached COMPLETED or FAILED_TERMINAL. On 2026-09-12 production therefore
+# reported 10 running tasks while nothing at all was running - the ten were finished research
+# sitting in READY, waiting for the owner to be told. The owner asks "what are you doing?" and
+# the honest answer to that is the first set below, not the complement of the last one.
+#
+# `test_task_status_buckets_partition_the_vocabulary` holds these four to cover every status
+# exactly once, so a new status has to be placed deliberately rather than joining "running"
+# by default.
+
+#: The system is doing work right now.
+TASK_ACTIVE_STATUSES = frozenset({TASK_STATUS_RUNNING, TASK_STATUS_RENDERING})
+
+#: Accepted, not started - or failed in a way that will be retried.
+TASK_PENDING_STATUSES = frozenset(
+    {TASK_STATUS_CREATED, TASK_STATUS_PLANNED, TASK_STATUS_FAILED_RECOVERABLE}
+)
+
+#: Blocked on something outside this system; no work of ours is happening.
+TASK_WAITING_STATUSES = frozenset({TASK_STATUS_WAITING_EXTERNAL})
+
+#: The work is DONE and the owner has not had it yet. Not running, and not finished either -
+#: which is exactly why it deserves its own count instead of hiding inside one of the others.
+TASK_AWAITING_OWNER_STATUSES = frozenset({TASK_STATUS_READY, TASK_STATUS_PRESENTING})
+
 _TASK_EDGES: dict[str, frozenset[str]] = {
     TASK_STATUS_CREATED: frozenset({TASK_STATUS_PLANNED}),
     TASK_STATUS_PLANNED: frozenset({TASK_STATUS_RUNNING}),

@@ -124,12 +124,24 @@ the reference it was derived from. Sources and the exact mapping:
 | `research_runs` with stage `ready` + `research_reports` | `research.completed` with `detail_json = report.stats` (findings, sources, rejected_by_reason), `research_job_id`, `version = research policy` when known | run `updated_at` | research_report, artifact, memory |
 | `research_runs` with stage `failed` | `research.failed` with `error` class | `updated_at` | research_run |
 | `research_runs.events_json` ranking entries carrying `rejected` | `research.quality_gate` | event `at` | research_run |
-| `audit_events` category `voice_realtime` actions `voice_session_created/closed/attached` | `voice.session.*` | `created_at` | audit_event |
+| `audit_events` category `voice_realtime` actions `voice_session_created/closed/attached` | `voice.session.*`, one row per (session, state) | `created_at` | audit_event |
 | `releases` | `deployment.<component>.released/rolled_back` with `production_state` | `promoted_at` / `rolled_back_at` | release |
 | `incidents` | `incident.opened` (severity from the row) | `first_seen_at` | incident |
 
 Idempotency key = `<table>:<pk>:<state>`. Backfill is re-runnable; a re-run records nothing
 new for unchanged rows.
+
+**A live writer's fact is not backfilled again.** `(source, source_ref)` uniqueness cannot see
+that `live` and `backfill:<table>` are describing one fact, so every source a live writer also
+covers is guarded on the natural key instead: research on `(event_type, research_job_id)`, voice
+on the live writer's own key `realtime_sessions:<id>:<state>`, built by
+`ledger_service.voice_session_source_ref` so both halves read one definition. Voice had no such
+guard until 2026-09-12, and every session created since the live writer shipped therefore had two
+ledger rows — three attaches and a close made one session eight rows where it should have been
+three. Voice dedup is per **(session, state)**: attaching is repeatable and the live writer
+collapses every attach into the one row its key names, so the backfill emits only the oldest
+audit row of each pair and means the same thing. A session from before the live writer shipped
+has no live row and is still backfilled, which is what the backfill is for.
 
 ## 2. Self Explanation Engine (`app/explain`)
 

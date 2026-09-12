@@ -433,6 +433,133 @@ def test_backfill_creates_voice_session_events_from_audit_events(session):
     assert row.source == "backfill:audit_events"
 
 
+def test_backfill_skips_a_voice_session_already_recorded_live(session):
+    """B06 req 70. The live writer and the backfill describe one session's creation under
+    two different ``source`` values, so uniqueness on (source, source_ref) cannot see they
+    are the same fact — research has been guarded against this since M16 and voice was not,
+    which put TWO rows in the ledger for every session created since the live writer
+    shipped."""
+    session_id = uuid.uuid4()
+    ledger_service.record(
+        session,
+        ledger_service.ActivityEvent(
+            event_type="voice.session.created",
+            subsystem="voice",
+            action="voice_session_created",
+            factual_summary="Sesli oturum oluşturuldu.",
+            occurred_at=NOW - timedelta(minutes=3),
+            source="live",
+            source_ref=ledger_service.voice_session_source_ref(session_id, "created"),
+        ),
+    )
+    session.add(
+        AuditEvent(
+            category="voice_realtime",
+            action="voice_session_created",
+            subject_ref=str(session_id),
+            created_at=NOW - timedelta(minutes=3),
+        )
+    )
+    session.commit()
+
+    report = ledger_service.backfill(session, now=NOW)
+
+    assert report.created.get("voice_session") is None
+    assert report.skipped.get("voice_session") == 1
+    rows = (
+        session.execute(
+            select(ActivityEventRow).where(ActivityEventRow.event_type == "voice.session.created")
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].source == "live"
+
+
+def test_backfill_writes_one_row_for_a_session_attached_three_times(session):
+    """The live writer collapses every attach of a session into the one row its key names,
+    so the backfill has to mean the same thing by its own row — otherwise the two halves
+    disagree about how many times a session was attached."""
+    session_id = uuid.uuid4()
+    for minutes in (30, 20, 10):
+        session.add(
+            AuditEvent(
+                category="voice_realtime",
+                action="voice_session_attached",
+                subject_ref=str(session_id),
+                created_at=NOW - timedelta(minutes=minutes),
+            )
+        )
+    session.commit()
+
+    report = ledger_service.backfill(session, now=NOW)
+
+    assert report.created.get("voice_session") == 1
+    assert report.skipped.get("voice_session") == 2
+    row = session.execute(
+        select(ActivityEventRow).where(ActivityEventRow.event_type == "voice.session.attached")
+    ).scalar_one()
+    # the OLDEST of the three, so a re-run keeps choosing the same one
+    assert row.occurred_at.replace(tzinfo=UTC) == NOW - timedelta(minutes=30)
+
+    ledger_service.backfill(session, now=NOW + timedelta(minutes=1))
+    assert (
+        len(
+            session.execute(
+                select(ActivityEventRow).where(
+                    ActivityEventRow.event_type == "voice.session.attached"
+                )
+            )
+            .scalars()
+            .all()
+        )
+        == 1
+    )
+
+
+def test_backfill_still_covers_a_session_no_live_writer_ever_saw(session):
+    """The guard must not swallow the case the backfill exists for: a session from before
+    the live writer shipped has audit rows and no ledger row, and still gets one."""
+    session_id = uuid.uuid4()
+    session.add(
+        AuditEvent(
+            category="voice_realtime",
+            action="voice_session_closed",
+            subject_ref=str(session_id),
+            created_at=NOW - timedelta(days=30),
+        )
+    )
+    session.commit()
+
+    report = ledger_service.backfill(session, now=NOW)
+
+    assert report.created.get("voice_session") == 1
+    row = session.execute(
+        select(ActivityEventRow).where(ActivityEventRow.event_type == "voice.session.closed")
+    ).scalar_one()
+    assert row.source == "backfill:audit_events"
+
+
+def test_one_sessions_states_are_separate_facts(session):
+    """Dedup is per (session, state): created and closed are two things that happened."""
+    session_id = uuid.uuid4()
+    for action, minutes in (("voice_session_created", 40), ("voice_session_closed", 5)):
+        session.add(
+            AuditEvent(
+                category="voice_realtime",
+                action=action,
+                subject_ref=str(session_id),
+                created_at=NOW - timedelta(minutes=minutes),
+            )
+        )
+    session.commit()
+
+    report = ledger_service.backfill(session, now=NOW)
+
+    assert report.created.get("voice_session") == 2
+
+
 def test_backfill_creates_deployment_events_from_releases(session):
     rel_id = uuid.uuid4()
     session.add(

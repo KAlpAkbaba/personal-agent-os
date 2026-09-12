@@ -76,6 +76,12 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _aware(dt: datetime) -> datetime:
+    """A stored timestamp as UTC. SQLite hands back naive datetimes where PostgreSQL hands
+    back aware ones, and subtracting one from the other raises."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class Fact:
     key: str
@@ -391,18 +397,66 @@ def _collect_capabilities(c: _Collector) -> None:
     )
 
 
-def _collect_tasks(c: _Collector, session: Session) -> None:
-    from app.artifacts.models import Task
-    from app.artifacts.state import TASK_TERMINAL_STATUSES
+#: A task still non-terminal this long after it was CREATED is not progressing. `tasks` has
+#: no `updated_at`, so age since creation is the only clock the row carries - which is why the
+#: fact below says "created more than 24h ago" rather than claiming to measure dwell time in
+#: the current state. The research workflow's own budget is minutes, so a day is well past the
+#: point where "still working on it" is a believable sentence.
+STUCK_TASK_AFTER: Final[timedelta] = timedelta(hours=24)
 
+
+def _collect_tasks(c: _Collector, session: Session, *, now: datetime | None = None) -> None:
+    """What the tasks are, by what each state MEANS.
+
+    ``tasks.running_count`` used to be "not terminal", so finished research waiting for the
+    owner was reported as work in progress: production said 10 running while nothing ran. The
+    counts are separated now, and they are RUNTIME truth rather than EVIDENCE - "how many are
+    running" is an observation of this moment and must age like one. As EVIDENCE it never went
+    stale, so a snapshot from an hour ago read as current fact.
+    """
+    from app.artifacts.models import Task
+    from app.artifacts.state import (
+        TASK_ACTIVE_STATUSES,
+        TASK_AWAITING_OWNER_STATUSES,
+        TASK_PENDING_STATUSES,
+        TASK_TERMINAL_STATUSES,
+        TASK_WAITING_STATUSES,
+    )
+
+    moment = now or datetime.now(UTC)
     rows = list(session.execute(select(Task)).scalars().all())
-    running = [r for r in rows if r.status not in TASK_TERMINAL_STATUSES]
+
+    def _refs(tasks: list[Any]) -> list[dict[str, str]]:
+        return [{"kind": "task", "ref": str(t.id)} for t in tasks[:20]]
+
+    for key, statuses in (
+        ("tasks.running_count", TASK_ACTIVE_STATUSES),
+        ("tasks.pending_count", TASK_PENDING_STATUSES),
+        ("tasks.waiting_external_count", TASK_WAITING_STATUSES),
+        ("tasks.awaiting_owner_count", TASK_AWAITING_OWNER_STATUSES),
+    ):
+        matched = [r for r in rows if r.status in statuses]
+        c.fact(key, "tasks", len(matched), TruthKind.RUNTIME, evidence_refs=_refs(matched))
+
+    # A task nobody is moving. Reported rather than swept: the world model says what IS, and
+    # `app.maintenance` is what acts (B06 req 69/11).
+    stuck = [
+        r
+        for r in rows
+        if r.status not in TASK_TERMINAL_STATUSES
+        and r.created_at is not None
+        and moment - _aware(r.created_at) > STUCK_TASK_AFTER
+    ]
     c.fact(
-        "tasks.running_count",
+        "tasks.stuck_count",
         "tasks",
-        len(running),
-        TruthKind.EVIDENCE,
-        evidence_refs=[{"kind": "task", "ref": str(t.id)} for t in running[:20]],
+        len(stuck),
+        TruthKind.RUNTIME,
+        evidence_refs=_refs(stuck),
+        note=(
+            "created more than "
+            f"{int(STUCK_TASK_AFTER.total_seconds() // 3600)}h ago and still not terminal"
+        ),
     )
 
 
@@ -592,7 +646,9 @@ def assemble_snapshot(
     c.section("devices", lambda: _collect_devices(c, session, broker_runtime))
     c.section("presence", lambda: _collect_presence(c, session, presence_runtime))
     c.section("capabilities", lambda: _collect_capabilities(c))
-    c.section("tasks", lambda: _collect_tasks(c, session))
+    # `now`, not the wall clock: the snapshot's own moment decides what is stale here as it
+    # does everywhere else in this function. One decision, one clock.
+    c.section("tasks", lambda: _collect_tasks(c, session, now=now))
     c.section("goals", lambda: _collect_goals(c, session))
     c.section("deployment", lambda: _collect_deployment(c, session))
     c.section("incidents", lambda: _collect_incidents(c, session))

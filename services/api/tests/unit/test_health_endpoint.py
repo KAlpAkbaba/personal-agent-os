@@ -104,12 +104,17 @@ def test_health_ok_shape(monkeypatch) -> None:
     assert set(body["checks"]["schema"]) >= {"status", "current", "head"}
     retention = body["checks"]["retention"]
     assert retention["required"] is False
+    # Health NAMES the sweeps, so a sweep that exists but is not registered cannot hide -
+    # the 2026-09-11 defect was three sweeps with no caller at all. The last two are B06's
+    # orphan sweeps (2026-09-12).
     assert retention["sweeps"] == [
         "memory",
         "identity_sessions",
         "security_assets",
         "interrupted_tool_calls",
         "interrupted_native_builds",
+        "idle_voice_sessions",
+        "abandoned_research_runs",
     ]
     clock = body["checks"]["routine_clock"]
     assert set(clock) == {

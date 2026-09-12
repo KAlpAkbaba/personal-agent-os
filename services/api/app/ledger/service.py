@@ -499,31 +499,94 @@ def _backfill_research(session: Session, report: BackfillReport) -> None:
             )
 
 
+#: audit action -> (session state, event type, the one Turkish sentence). The state is the
+#: same word the live writer keys its own row on, so the two halves name one fact.
 _VOICE_ACTION_EVENT_TYPE = {
-    "voice_session_created": (EVENT_TYPE_VOICE_SESSION_CREATED, "Sesli oturum oluşturuldu."),
+    "voice_session_created": (
+        "created",
+        EVENT_TYPE_VOICE_SESSION_CREATED,
+        "Sesli oturum oluşturuldu.",
+    ),
     "voice_session_attached": (
+        "attached",
         EVENT_TYPE_VOICE_SESSION_ATTACHED,
         "Sesli oturum yeniden bağlandı.",
     ),
-    "voice_session_closed": (EVENT_TYPE_VOICE_SESSION_CLOSED, "Sesli oturum kapandı."),
+    "voice_session_closed": (
+        "closed",
+        EVENT_TYPE_VOICE_SESSION_CLOSED,
+        "Sesli oturum kapandı.",
+    ),
 }
 
 
+def voice_session_source_ref(session_ref: object, state: str) -> str:
+    """The key for "this voice session reached this state" — defined once, read by both.
+
+    The live writer (``app.voice.realtime_sessions.service._ledger``) uses it as its own
+    ``source_ref``; the backfill below uses it to ask whether the live writer already
+    covered the session it is looking at. A guard that restated the shape instead of
+    sharing it would drift the moment either side changed its wording.
+    """
+    return f"realtime_sessions:{session_ref}:{state}"
+
+
+def _voice_live_already_recorded(session: Session, *, session_ref: str, state: str) -> bool:
+    """True when the live writer already put this session's transition in the ledger.
+
+    Same problem as ``_live_already_recorded`` for research: the live writer and the
+    backfill describe the SAME fact under deliberately different ``source`` values, so the
+    ``(source, source_ref)`` uniqueness alone cannot see they are one fact. Voice had no
+    such guard, so every session created since the live writer shipped had TWO rows.
+    """
+    stmt = (
+        select(ActivityEventRow.event_id)
+        .where(
+            ActivityEventRow.source == "live",
+            ActivityEventRow.source_ref == voice_session_source_ref(session_ref, state),
+        )
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none() is not None
+
+
 def _backfill_voice(session: Session, report: BackfillReport) -> None:
+    """One session, one row per state.
+
+    Two audit rows can also describe one fact: attaching is repeatable, and the live writer
+    collapses every attach of a session into the single row its key names. The backfill
+    keeps that meaning by emitting only the FIRST audit row of each (session, state) — the
+    oldest one, so the choice is stable and a re-run still records nothing new.
+    """
     from app.broker.models import AuditEvent
 
     rows = (
         session.execute(
-            select(AuditEvent).where(
+            select(AuditEvent)
+            .where(
                 AuditEvent.category == "voice_realtime",
                 AuditEvent.action.in_(list(_VOICE_ACTION_EVENT_TYPE)),
             )
+            .order_by(AuditEvent.created_at, AuditEvent.id)
         )
         .scalars()
         .all()
     )
+    seen: set[tuple[str, str]] = set()
     for row in rows:
-        event_type, summary = _VOICE_ACTION_EVENT_TYPE[row.action]
+        state, event_type, summary = _VOICE_ACTION_EVENT_TYPE[row.action]
+        # An audit row with no subject cannot be tied to a session; it keeps the old
+        # per-audit-row key rather than being dropped.
+        session_ref = row.subject_ref or ""
+        if session_ref:
+            already = (session_ref, state) in seen or _voice_live_already_recorded(
+                session, session_ref=session_ref, state=state
+            )
+            seen.add((session_ref, state))
+            if already:
+                _bump(report.examined, "voice_session")
+                _bump(report.skipped, "voice_session")
+                continue
         _emit(
             session,
             report,
@@ -693,4 +756,5 @@ __all__ = [
     "record",
     "research_policy_version",
     "utcnow",
+    "voice_session_source_ref",
 ]

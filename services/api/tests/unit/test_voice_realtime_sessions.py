@@ -662,6 +662,33 @@ def test_events_feed_the_benchmark_and_resolve_intents_server_side(wired) -> Non
     assert report["target_check"]["tool_preamble_ms"]["met"] is None
 
 
+def test_a_session_is_one_ledger_row_per_state_after_the_backfill_runs(wired) -> None:
+    """B06 req 70, through the real caller. Creating, attaching and closing a session each
+    write an audit row AND a live ledger row; the backfill then derives the same three facts
+    from the same audit rows under a different ``source``, which is why the ledger showed
+    every session twice. The backfill runs at every API start, so this is what the owner's
+    "son ne yaptın" actually reads."""
+    from app.ledger import service as ledger_service
+    from app.ledger.vocabulary import SUBSYSTEM_VOICE
+
+    client, _, runtime, _, _, _ = wired
+    sid = _create(client)["session_id"]
+    for _ in range(3):  # attaching is repeatable; it is still one session
+        assert client.post(f"/v1/voice/realtime/sessions/{sid}/attach", json={}).status_code == 200
+    assert client.post(f"/v1/voice/realtime/sessions/{sid}/close", json={}).status_code == 200
+
+    with runtime.session() as db:
+        before = ledger_service.query(db, subsystems=[SUBSYSTEM_VOICE], limit=200)
+        report = ledger_service.backfill(db)
+        after = ledger_service.query(db, subsystems=[SUBSYSTEM_VOICE], limit=200)
+
+    assert report.created.get("voice_session") is None, report.as_dict()
+    by_type = sorted(row.event_type for row in after)
+    assert by_type == ["voice.session.attached", "voice.session.closed", "voice.session.created"]
+    assert {row.source for row in after} == {"live"}
+    assert [r.event_id for r in before] == [r.event_id for r in after]
+
+
 def test_eye_phrases_are_resolved_and_audited_but_the_utterance_never_mutates(wired) -> None:
     """docs/M18_ACTION_CONTRACT.md §5.3: the tool call is the ONE mutation path. An
     utterance resolved to EYE_DISABLE is audited with its class and capability, and

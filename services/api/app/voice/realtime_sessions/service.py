@@ -14,7 +14,7 @@ import re
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -255,7 +255,9 @@ def _ledger(
     detail: dict[str, Any] | None = None,
 ) -> None:
     """Activity Ledger write for create/attach/close (M16 track A, spec §1.2
-    writer table: ``source_ref = realtime_sessions:<id>:<state>``).
+    writer table: ``source_ref = realtime_sessions:<id>:<state>``), built by the ledger's
+    own ``voice_session_source_ref`` so the backfill's "did live already cover this
+    session?" guard is asking about the key this actually writes.
     Best-effort: a ledger failure must never fail the voice session
     transition it is describing — that transition already committed."""
     try:
@@ -271,7 +273,7 @@ def _ledger(
                 evidence_refs=[{"kind": "realtime_session", "ref": str(row.id)}],
                 detail_json=detail or {},
                 source="live",
-                source_ref=f"realtime_sessions:{row.id}:{state}",
+                source_ref=ledger_service.voice_session_source_ref(row.id, state),
             ),
         )
     except Exception as exc:  # noqa: BLE001 - see docstring
@@ -1916,6 +1918,65 @@ def close_session(
     return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
 
 
+#: A session nothing has touched for this long is not a conversation, it is a closed tab.
+#: NOT an age: ``expires_at`` is deliberately NULL since migration 0038, because a fixed
+#: horizon written at creation killed every web session at exactly one hour, mid-sentence
+#: (ADR-0105, owner directive 2026-09-10 "hic kapanmasin"). A live conversation stamps
+#: ``updated_at`` on every event and every tool call, so it is never idle; what this reaches
+#: is the ones nothing will ever touch again.
+IDLE_SESSION_AFTER: Final[timedelta] = timedelta(hours=12)
+
+
+def sweep_idle_sessions(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    idle_after: timedelta | None = None,
+    limit: int = 200,
+) -> list[uuid.UUID]:
+    """Close the sessions nothing is using (B06 req 9/219/220). Returns what it closed.
+
+    Before this, ``require_live`` was the ONLY path that ever ended a session and it only ran
+    when somebody used the session - so a tab closed on 2026-09-09 was still ``active`` three
+    days later, and ``/v1/state/now`` counted six or seven of them as live conversations.
+    Nothing swept, and the module said so in a comment.
+    """
+    moment = now or utcnow()
+    horizon = moment - (idle_after or IDLE_SESSION_AFTER)
+    rows = list(
+        db.execute(
+            select(RealtimeSessionRow)
+            .where(RealtimeSessionRow.state.in_((REALTIME_STATE_CREATED, REALTIME_STATE_ACTIVE)))
+            .where(RealtimeSessionRow.updated_at <= horizon)
+            .order_by(RealtimeSessionRow.updated_at.asc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    closed: list[uuid.UUID] = []
+    for row in rows:
+        # read BEFORE the row is stamped: the audit says when the session went quiet, which
+        # is the only thing here the sweep moment does not already tell you
+        idle_since = _iso(_aware(row.updated_at, moment))
+        row.state = REALTIME_STATE_EXPIRED
+        row.closed_at = moment
+        row.updated_at = moment
+        _audit(
+            db,
+            ACTION_SESSION_EXPIRED,
+            row,
+            metadata={"reason": "idle", "idle_since": idle_since},
+        )
+        closed.append(row.id)
+    if closed:
+        db.commit()
+        for row in rows:
+            _publish_session_over(row, reason="idle")
+        logger.info("realtime_idle_sessions_swept", count=len(closed))
+    return closed
+
+
 def _publish_session_over(row: RealtimeSessionRow, *, reason: str) -> None:
     """A session that is over says so on the UI-state bus.
 
@@ -2385,6 +2446,7 @@ __all__ = [
     "ACTION_TOOL_CALL",
     "ACTION_TOOL_CALL_REPLAYED",
     "ACTION_TOOL_COMPLETED",
+    "IDLE_SESSION_AFTER",
     "AUDIT_CATEGORY",
     "CLIENT_EVENT_KINDS",
     "attach",
@@ -2402,6 +2464,7 @@ __all__ = [
     "list_recent_sessions",
     "noise_summary",
     "snapshot_benchmark_at_close",
+    "sweep_idle_sessions",
     "timing_breakdown",
     "record_client_events",
     "require_leg",

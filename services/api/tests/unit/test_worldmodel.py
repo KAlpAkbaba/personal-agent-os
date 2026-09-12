@@ -15,7 +15,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.artifacts.models import TASK_STATUS_RUNNING, Task
+from app.artifacts.models import (
+    TASK_STATUS_PRESENTING,
+    TASK_STATUS_READY,
+    TASK_STATUS_RUNNING,
+    Task,
+)
 from app.artifacts.runtime import ArtifactRuntime
 from app.broker.models import Device
 from app.config import Settings
@@ -128,13 +133,53 @@ def test_capabilities_are_source_truth(session) -> None:
     assert isinstance(cap_fact.value, list)
 
 
-def test_running_tasks_are_counted_as_evidence(session) -> None:
+def _fact(snapshot, key: str):
+    return next(f for f in snapshot.facts if f.key == key)
+
+
+def test_a_running_task_is_counted_as_running_and_ages_like_an_observation(session) -> None:
     session.add(Task(intent="araştır", status=TASK_STATUS_RUNNING))
     session.commit()
     snapshot = assemble_snapshot(session, now=NOW)
-    tasks_fact = next(f for f in snapshot.facts if f.key == "tasks.running_count")
-    assert tasks_fact.truth_kind == TruthKind.EVIDENCE
-    assert tasks_fact.value == 1
+    fact = _fact(snapshot, "tasks.running_count")
+    # RUNTIME, not EVIDENCE: "how many are running" is an observation of this moment. As
+    # EVIDENCE it never went stale, so an hour-old snapshot read as current fact (B06 req 67).
+    assert fact.truth_kind == TruthKind.RUNTIME
+    assert fact.value == 1
+
+
+def test_finished_work_waiting_for_the_owner_is_not_reported_as_running(session) -> None:
+    """B06 req 68. Production said `tasks.running = 10` while nothing was running: the ten
+    were finished research sitting in READY. "Not terminal" is not "the system is working on
+    it", and the owner asking "ne yapıyorsun?" is asking the second question."""
+    session.add(Task(intent="araştır", status=TASK_STATUS_READY))
+    session.add(Task(intent="araştır", status=TASK_STATUS_PRESENTING))
+    session.add(Task(intent="araştır", status=TASK_STATUS_RUNNING))
+    session.commit()
+
+    snapshot = assemble_snapshot(session, now=NOW)
+
+    assert _fact(snapshot, "tasks.running_count").value == 1
+    assert _fact(snapshot, "tasks.awaiting_owner_count").value == 2
+
+
+def test_a_task_nobody_has_moved_for_a_day_is_counted_as_stuck(session) -> None:
+    """B06 req 69. The 2026-09-09 research sat in `discovering` for three days and the world
+    model reported it as work in progress, indefinitely."""
+    from datetime import timedelta
+
+    session.add(
+        Task(intent="araştır", status=TASK_STATUS_RUNNING, created_at=NOW - timedelta(days=3))
+    )
+    session.add(Task(intent="araştır", status=TASK_STATUS_RUNNING, created_at=NOW))
+    session.commit()
+
+    snapshot = assemble_snapshot(session, now=NOW)
+
+    stuck = _fact(snapshot, "tasks.stuck_count")
+    assert stuck.value == 1
+    assert len(stuck.evidence_refs) == 1
+    assert _fact(snapshot, "tasks.running_count").value == 2
 
 
 def test_dependencies_are_source_truth_without_a_health_probe(session) -> None:
