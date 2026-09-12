@@ -290,10 +290,19 @@ def _status_speech(run: ExecutiveRunRow) -> str:
     if run.state == STATE_PLANNED:
         return "Planı hazırladım, başlıyorum efendim."
     if run.state == STATE_RUNNING:
-        return f"Çalışıyorum efendim: {run.steps_done}/{run.steps_total} adım tamam."
+        # B10 req 559: `steps_done` counts steps that WORKED now, so this sentence is true.
+        # It used to count every settled step, failures included, and a run of three
+        # failures and one success said "4/4 adım tamam" while it was still going.
+        failed = f", {run.steps_failed} başarısız" if run.steps_failed else ""
+        return f"Çalışıyorum efendim: {run.steps_done}/{run.steps_total} adım tamam{failed}."
     if run.state == STATE_PAUSED:
-        left = max(run.steps_total - run.steps_done, 0)
-        return f"Duraklatıldı efendim: {run.steps_done} adım tamam, {left} bekliyor."
+        # "waiting" is what is neither done nor failed - subtracting only the successes
+        # would count a failed step as still to come.
+        left = max(run.steps_total - run.steps_done - run.steps_failed, 0)
+        failed = f", {run.steps_failed} başarısız" if run.steps_failed else ""
+        return (
+            f"Duraklatıldı efendim: {run.steps_done} adım tamam{failed}, {left} bekliyor."
+        )
     if run.state == STATE_COMPLETED:
         tail = f" {run.synthesis_text}" if run.synthesis_text else ""
         return f"Tamamlandı efendim.{tail}".strip()
@@ -304,6 +313,14 @@ def _status_speech(run: ExecutiveRunRow) -> str:
         return f"Kısmen bitti efendim: {detail}.{tail}".strip()
     if run.state == STATE_CANCELLED:
         return f"İptal edildi efendim: {run.steps_done} adım tamam, geri kalanı durduruldu."
+    if run.state == STATE_COMPLETED and run.steps_failed:  # pragma: no cover - see below
+        # Unreachable by construction: `_derive_run_outcome` cannot return COMPLETED with a
+        # failed step. Kept as the sentence that would be said if it ever did, because a
+        # "completed" run with failures is precisely the lie this requirement is about.
+        return (
+            f"Tamamlandı efendim, ama {run.steps_failed} adım başarısız oldu - "
+            "yani tam olarak tamamlanmadı."
+        )
     if run.state == STATE_FAILED:
         return f"Başarısız oldu efendim: {run.error_message or 'bilinmeyen bir hata oluştu'}."
     return "Durumu bilmiyorum efendim."
@@ -334,6 +351,9 @@ def run_dict(run: ExecutiveRunRow) -> dict[str, Any]:
         "state": run.state,
         "step": run.current_step,
         "done": run.steps_done,
+        # B10 req 559: the panel needs both halves. "not done" used to mean
+        # either "still going" or "it failed", and the caller could not tell.
+        "failed": run.steps_failed,
         "total": run.steps_total,
         "missing": missing_steps(run),
         "created_at": run.created_at.isoformat() if run.created_at else None,

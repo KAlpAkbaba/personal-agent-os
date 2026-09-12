@@ -159,6 +159,10 @@ class Settings(BaseSettings):
     #: first - "it would have removed 9,000 rows" is a sentence the owner gets to read
     #: before it becomes true.
     audit_retention_dry_run: bool = True
+    #: B08 req 646/648: where the host keeps LAST_BACKUP.json and the drill reports. The API
+    #: runs in a container and this lives on the host, so where it is not mounted the check
+    #: reports "skipped, not visible" rather than inventing a failure it cannot observe.
+    backup_root: str = "/var/lib/pagentos-backup"
     broker_handshake_timeout_s: float = 10.0
 
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that

@@ -88,6 +88,18 @@ STEP_STATES: tuple[str, ...] = (
 
 #: A step in one of these is DONE contributing to the run's progress count — it will
 #: never run again on this attempt sequence (spec §6's ``done``/``total`` counters).
+#: B10 req 558/559: terminal AND not successful. `STEP_TERMINAL_STATES` answers "will this
+#: step move again?"; this answers "did it work?", and conflating the two is what made a run
+#: of three failures report four steps done.
+STEP_UNSUCCESSFUL_STATES: frozenset[str] = frozenset(
+    {
+        STEP_STATE_FAILED,
+        STEP_STATE_COMPENSATED,
+        STEP_STATE_SKIPPED,
+        STEP_STATE_CANCELLED,
+    }
+)
+
 STEP_TERMINAL_STATES: frozenset[str] = frozenset(
     {
         STEP_STATE_VERIFIED,
@@ -137,7 +149,14 @@ class ExecutiveRunRow(Base):
     #: first step starts and after the run reaches a terminal state.
     current_step: Mapped[str | None] = mapped_column(String(8), nullable=True)
     steps_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: B10 req 558/559: steps that WORKED. It used to count every step in a terminal state
+    #: - failures, cancellations and compensations included - while being spoken as "adım
+    #: tamam", so a run of three failures and one success reported "4/4 adım tamam".
     steps_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Steps that did not work. The other half of the count, so a caller never has to infer
+    #: failure by subtracting and never has to guess whether "not done" means "failed" or
+    #: "still going".
+    steps_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: The final owner-facing summary (spec §1's ``synthesis`` step output) — what was
     #: made, where it is, what is missing. Populated even on a ``partial`` run (spec §3:
     #: "the synthesis still runs over what exists").

@@ -44,12 +44,12 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 11 | Stale RUNNING/CREATED reconciliation | Mutabakat yok | Durum gerçeğe uyar | DONE | PA | P0 | 10 | B06 | app/research/service.py:sweep_abandoned_runs, app/worldmodel/state.py:_collect_tasks | test_orphan_sweeps.py, test_worldmodel.py | üretim turu bekliyor (Karar 0) | no | Süpürge taşır, dünya modeli sayar |
 | 12 | Temporal unavailable typed refusal | Tipli 503 var | Aynı | DONE | PA | P0 | — | — | services/api/app/research/ | services/api/tests/unit | ADR-0123 | no | Rewrite gerekmez |
 | 13 | Orphan research row cleanup | Yetim koşu temizlenmiyor | Yetim kalmaz | DONE | PA | P0 | 10 | B06 | app/research/service.py:sweep_abandoned_runs | test_orphan_sweeps.py | üretim turu bekliyor (Karar 0) | no | 10 ile tek uygulama |
-| 14 | Retry loop'ları bounded | Üç sınırsız döngü | Sınırlı geri çekilme | BROKEN | NYP | P0 | — | B07 | services/api/app/notifications/, app/research/ | — | denetim 2026-09-12 | no | 15-17'nin şemsiyesi |
-| 15 | Push announcer bounded retry | Kalıcı arızada günde 17.280 deneme | Sınırlı deneme | BROKEN | NYP | P0 | 14 | B07 | services/api/app/notifications/ | — | — | no | 14 ile ortak uygulama |
-| 16 | Briefing announcer kuyruk kilidi yok | Tek bozuk satır kuyruğu kalıcı tıkıyor | Zehirli mesaj karantinaya | BROKEN | NYP | P0 | 14 | B07 | services/api/app/notifications/ | — | — | no | Bildirim kaybının nedeni |
-| 17 | Research announcer bounded retry | Sınırsız | Sınırlı | BROKEN | NYP | P0 | 14 | B07 | services/api/app/research/ | — | — | no | 14 ile ortak |
-| 18 | Background loop health tek tek | Yalnız broker süpürgesi görünür | Sekiz döngü ayrı ayrı | PARTIAL | NYP | P0 | — | B07 | services/api/app/system/health.py | — | canlı sağlık: 18 bileşen | no | Döngü ≠ bileşen |
-| 19 | Routine clock alt bileşen izolasyonu | Tek try/except; bir tik patlarsa hepsi düşer | Alt tikler bağımsız | BROKEN | NYP | P0 | 18 | B07 | services/api/app/routines/ | — | — | no | Alarmı sessizce düşürebilir |
+| 14 | Retry loop'ları bounded | Üç sınırsız döngü | Sınırlı geri çekilme | DONE | PA | P0 | — | B07 | app/notifications/delivery.py | test_bounded_delivery.py | üretim turu bekliyor (Karar 0) | no | Üç kuyruğun ortak politikası: deneme sayısı, tavanlı geri çekilme, karantina |
+| 15 | Push announcer bounded retry | Kalıcı arızada günde 17.280 deneme | Sınırlı deneme | DONE | PA | P0 | 14 | B07 | app/notifications/delivery.py, app/mobile/announcer.py | test_bounded_delivery.py, test_mobile_announcer.py | üretim turu bekliyor (Karar 0) | no | 17.280/gün bitti; başarısız görev karantinaya, kuyruk ilerliyor |
+| 16 | Briefing announcer kuyruk kilidi yok | Tek bozuk satır kuyruğu kalıcı tıkıyor | Zehirli mesaj karantinaya | DONE | PA | P0 | 14 | B07 | app/notifications/delivery.py, app/ledger/briefing.py:pending | test_bounded_delivery.py | üretim turu bekliyor (Karar 0) | no | Zehirli satır artık kenara çekiliyor: kırmızı kanıtlandı |
+| 17 | Research announcer bounded retry | Sınırsız | Sınırlı | DONE | PA | P0 | 14 | B07 | app/notifications/delivery.py, app/voice/realtime_sessions/research_announcer.py | test_bounded_delivery.py | üretim turu bekliyor (Karar 0) | no | Karantina 'duyuramadık' der, 'araştırma başarısız' demez |
+| 18 | Background loop health tek tek | Yalnız broker süpürgesi görünür | Sekiz döngü ayrı ayrı | DONE | PA | P0 | — | B07 | app/loops.py, app/main.py (sağlık haritası) | test_bounded_delivery.py | canlı sağlık: 24 bileşen | no | Dokuz döngü, dokuzu da sağlıkta; başlatılan ama görünmeyeni test yakalıyor |
+| 19 | Routine clock alt bileşen izolasyonu | Tek try/except; bir tik patlarsa hepsi düşer | Alt tikler bağımsız | DONE | PA | P0 | 18 | B07 | app/routines/clock.py:_run_tick | test_bounded_delivery.py, test_routines_clock.py | üretim turu bekliyor (Karar 0) | no | Beş alt tik izole + başarısızlıktan sonra rollback |
 | 20 | Redis kritik sağlıktan çıkarılmalı (kullanılmıyorsa) | `ADVISORY_CHECKS` redis'i kritik olmaktan çıkarıyor | Koşul ölçülür, karar verilir | DONE | PA | P0 | — | — | services/api/app/health.py:28 | test_health_endpoint.py::test_an_advisory_check_is_one_nothing_in_the_app_depends_on | canlı sağlık: redis required=false | no | B01'de ölçüldü: matris yanlışlıkla PARTIAL sayıyordu — 2026-09-11'de zaten çözülmüş |
 | 21 | Build/version provenance canonical | `release.build_id`: kaynaklardan türetilmiş 16 hex | Tek kanonik gerçek | DONE | PR | P0 | — | B01 | services/api/app/release/build.py, release/version.py | test_release_build_identity.py | docs/evidence/b01-schema-gate-2026-09-12.json | no | Cihazın AgentInfo.BuildId kuralı aynada; test cihazın kendi kaynağını okuyor |
 | 22 | Aynı version altında build ayrımı | build_id aynı app_version altında iki imajı ayırıyor | Build ayrımı yapılır | DONE | PR | P0 | 21 | B01 | services/api/app/release/build.py | test_release_build_identity.py | docs/evidence/b01-schema-gate-2026-09-12.json (build_id 516452ef2d144269) | no | version_model 1→2 (additive alan) |
@@ -472,8 +472,8 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 372 | WebPush | İstemci tarafı (service worker) hiç yazılmamış, yük şifrelemesi yok | Çalışır | MISSING | NYP | P1 | 367 | B11 | apps/web/, app/notifications/ | — | sağlayıcı atıl | VAPID anahtarı | — |
 | 373 | FCM | Yapılandırılmamış | Çalışır | BLOCKED_PROVIDER | PU | P1 | 367 | B12 | app/notifications/ | — | — | sağlayıcı hesabı | — |
 | 374 | APNs | Yapılandırılmamış | Çalışır | BLOCKED_PROVIDER | PU | P1 | 367 | B12 | app/notifications/ | — | — | sağlayıcı hesabı | — |
-| 375 | Delivery receipt | `fake` sağlayıcı "iletildi" diyor; duyurucu kalıcı damgalıyor | Gerçek makbuz | BROKEN | NYP | P0 | 390 | B07 | app/notifications/ | — | üretim duyurucu | no | Kuyruk teslim değildir |
-| 376 | Delivery retry | Sınırsız | Sınırlı + karantina | BROKEN | NYP | P0 | 14 | B07 | app/notifications/ | — | günde 17.280 deneme | no | 14-17 ile ortak |
+| 375 | Delivery receipt | `fake` sağlayıcı "iletildi" diyor; duyurucu kalıcı damgalıyor | Gerçek makbuz | DONE | PA | P0 | 390 | B07 | app/mobile/providers.py:PushDelivery | test_bounded_delivery.py | üretim turu bekliyor (Karar 0) | no | Makbuzsuz 'delivered' inşa edilemiyor — kural değil, tip |
+| 376 | Delivery retry | Sınırsız | Sınırlı + karantina | DONE | PA | P0 | 14 | B07 | app/notifications/delivery.py | test_bounded_delivery.py | üretim turu bekliyor (Karar 0) | no | 14 ile tek uygulama |
 | 377 | Delivery history | Kısmi | Tam | PARTIAL | NYP | P1 | 367 | B11 | app/notifications/ | — | — | no | — |
 | 378 | Priority | Yok | Öncelik | MISSING | NYP | P1 | 367 | B11 | app/notifications/ | — | — | no | — |
 | 379 | Quiet hours | Yok | Sessiz saatler | MISSING | NYP | P1 | 378 | B11 | app/notifications/ | — | — | no | — |
@@ -487,7 +487,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 387 | "Research finished" | Kısmi | Gerçek teslim | PARTIAL | NYP | P1 | 375 | B12 | app/research/ | — | — | no | — |
 | 388 | "SelfDev candidate ready" | Yok | Bildirilir | MISSING | NYP | P2 | 609 | B12 | app/notifications/, app/selfdev/ | — | — | no | — |
 | 389 | Notification fallback ladder | Yok | toast to ses to push to kutu | MISSING | NYP | P1 | 367,369 | B11 | app/notifications/ | — | — | no | Merdivenin kendisi |
-| 390 | Fake provider must never report delivered | Sahte "delivered" diyebiliyor | Yapısal olarak diyemez | BROKEN | NYP | P0 | 5 | B07 | app/notifications/ | — | üretim | no | Ürün ilkesi ihlali |
+| 390 | Fake provider must never report delivered | Sahte "delivered" diyebiliyor | Yapısal olarak diyemez | DONE | PA | P0 | 5 | B07 | app/mobile/providers.py:FakePushProvider | test_bounded_delivery.py | üretim turu bekliyor (Karar 0) | no | Sahtenin gösterecek makbuzu yok, o yüzden kelimeyi söyleyemiyor |
 
 ## M. ARTIFACT FACTORY (391–416)
 
@@ -687,7 +687,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 536 | Step preconditions | Kısmi | Tam | PARTIAL | NYP | P2 | — | B38 | app/executive/ | — | — | no | — |
 | 537 | Step postconditions | Kısmi | Tam | PARTIAL | NYP | P2 | 536 | B38 | app/executive/ | — | — | no | 111 ile aynı ilke |
 | 538 | Retry | Kısmi | Tam | PARTIAL | NYP | P2 | — | B38 | app/executive/ | — | — | no | — |
-| 539 | Compensation | Bir dal hiçbir şey yapmadan "telafi edildi" diyor | Gerçek telafi | BROKEN | NYP | P0 | — | B10 | app/executive/ | — | üretim koşuları | no | Yalan rapor |
+| 539 | Compensation | Bir dal hiçbir şey yapmadan "telafi edildi" diyor | Gerçek telafi | DONE | PA | P0 | — | B10 | app/executive/activities.py:_run_compensation | test_execution_honesty.py | üretim turu bekliyor (Karar 0) | no | Koşulsuz 'compensated' bitti: undone / nothing_to_undo / attempted_and_failed |
 | 540 | Pause | Gerçek Temporal sinyali | Aynı | DONE | PA | P1 | — | — | app/executive/ | executive testleri | — | no | — |
 | 541 | Resume | Gerçek Temporal sinyali | Aynı | DONE | PA | P1 | — | — | app/executive/ | executive testleri | — | no | — |
 | 542 | Cancel | Gerçek Temporal sinyali | Aynı | DONE | PA | P1 | — | — | app/executive/ | executive testleri | — | no | Telafi yalnız iptalde çalışıyor |
@@ -696,7 +696,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 545 | Task history | Çalışıyor | Aynı | DONE | PA | P1 | — | — | app/executive/ | executive testleri | — | no | — |
 | 546 | Task explanation | Kısmi | Tam | PARTIAL | NYP | P2 | 558 | B38 | app/executive/ | — | — | no | — |
 | 547 | Research-report plan | Çalışıyor | Aynı | DONE | PR | P1 | — | — | app/executive/ | executive testleri | üretim | no | — |
-| 548 | Folder-compare plan | file.search kusuruna bağımlı | Çalışır | BROKEN | NYP | P0 | 3 | B10 | app/executive/ | executive testleri | — | no | 3 düzelmeden düzelmez |
+| 548 | Folder-compare plan | file.search kusuruna bağımlı | Çalışır | DONE | PA | P0 | 3 | B10 | app/executive/planner.py | test_executive_planner.py | üretim turu bekliyor (Karar 0) | no | B03'ün file.search sözleşmesi düzeltti; klasör planı artık çalışan bir yeteneğe dayanıyor |
 | 549 | Mail-sequence plan | Sağlayıcı yok | Çalışır | BLOCKED_PROVIDER | PU | P2 | 336 | B38 | app/executive/ | executive testleri | — | hesap bilgisi | — |
 | 550 | General model planner | `NotImplementedError` | Model planlar | MISSING | NYP | P2 | — | B38 | app/executive/ | — | — | model bütçesi | Atıl seam |
 | 551 | Dynamic plan generation | Yok | Dinamik | MISSING | NYP | P2 | 550 | B38 | app/executive/ | — | — | no | — |
@@ -706,9 +706,9 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 555 | Loop steps | Yok | Döngü | MISSING | NYP | P2 | 551 | B38 | app/executive/ | — | — | no | — |
 | 556 | Timeout policy | Kısmi | Tam | PARTIAL | NYP | P2 | — | B38 | app/executive/ | — | — | no | — |
 | 557 | Recovery from partial failure | Kısmi | Tam | PARTIAL | NYP | P2 | 539 | B38 | app/executive/ | — | 5 koşunun 4'ü partial | no | — |
-| 558 | Correct final status | Yanlış | Doğru | BROKEN | NYP | P0 | — | B10 | app/executive/ | — | üretim | no | 559 ile aynı kusur |
-| 559 | No false "4/4 completed" | İki koşu yalan söylüyor | Dürüst | BROKEN | NYP | P0 | 558 | B10 | app/executive/ | — | 4 adımın 3'ü başarısızken "4/4" | no | Ürün ilkesi ihlali |
-| 560 | Task reconciliation | Yok | Mutabakat | MISSING | NYP | P0 | 11 | B10 | app/executive/ | — | — | no | 11 ile ortak uygulama |
+| 558 | Correct final status | Yanlış | Doğru | DONE | PA | P0 | — | B10 | app/executive/activities.py, app/executive/service.py, app/executive/models.py | test_execution_honesty.py | üretim turu bekliyor (Karar 0) | no | steps_done artık yalnız VERIFIED sayıyor |
+| 559 | No false "4/4 completed" | İki koşu yalan söylüyor | Dürüst | DONE | PA | P0 | 558 | B10 | app/executive/activities.py, app/executive/service.py, app/executive/models.py | test_execution_honesty.py | üretim turu bekliyor (Karar 0) | no | '4/4' kırmızıyla kanıtlandı: assert 4 == 1 |
+| 560 | Task reconciliation | Yok | Mutabakat | DONE | PA | P0 | 11 | B10 | app/executive/reconcile.py, app/main.py | test_executive_reconcile.py (31) | üretim turu bekliyor (Karar 0) | no | ÖLÇÜM DÜZELTMESİ: MISSING değildi — kod var, saate bağlı, 31 testi geçiyor |
 
 ## S. CAPABILITY GENESIS (561–580)
 
@@ -781,7 +781,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 611 | Rollback | Çalışıyor | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | release testleri | 16 geri alma | no | — |
 | 612 | Last-known-good | Çalışıyor | Aynı | DONE | PR | P0 | — | — | state/, app/system/health.py | release testleri | LKG d86b3d9 | no | — |
 | 613 | Post-release health | Çalışıyor | Aynı | DONE | PR | P0 | — | — | app/system/health.py | release testleri | 18 bileşen ok | no | — |
-| 614 | Post-release rollback | Kısmi (timer yok) | Otomatik | PARTIAL | NYP | P0 | 652 | B08 | services/recovery-supervisor/ | — | — | no | 651,652 ile ortak |
+| 614 | Post-release rollback | Kısmi (timer yok) | Otomatik | PARTIAL | PA | P0 | 652 | B08 | services/recovery-supervisor/, scripts/cloud/install-recovery-supervisor.sh | test_systemd_install.py | host kurulumu bekliyor (sahip) | no | 651/652 ile ortak: timer kurulmadan otomatik değil |
 | 615 | Scheduler | Yok | Zamanlayıcı | MISSING | NYP | P2 | 583 | B35 | app/selfdev/ | — | — | no | — |
 | 616 | Attempt budget | Çalışıyor | Aynı | DONE | PA | P2 | — | — | app/selfdev/engine.py | test_selfdev_engine.py | — | no | — |
 | 617 | Time budget | Çalışıyor | Aynı | DONE | PA | P2 | — | — | app/selfdev/engine.py | test_selfdev_engine.py | — | no | — |
@@ -818,20 +818,20 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 639 | Restore script | Çalışıyor | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | — | no | — |
 | 640 | PostgreSQL restore | Kanıtlandı | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | scratch container drill | no | — |
 | 641 | MinIO restore | Kanıtlandı | Aynı | DONE | PR | P0 | — | — | scripts/cloud/ | recovery testleri | 21 nesne | no | — |
-| 642 | Config restore | Dosyalar var, host yeniden kurulumu denenmedi | Tatbikatlı | PARTIAL | PX | P0 | 644 | B09 | scripts/cloud/ | — | — | no | — |
-| 643 | Release restore | Kısmi | Tatbikatlı | PARTIAL | PX | P0 | 642 | B09 | scripts/cloud/ | — | — | no | — |
-| 644 | Off-host repository | YOK — depo koruduğu diskte | İkinci hedef | MISSING | BLK | P0 | — | B09 | scripts/cloud/backup-cloud-core.sh | — | — | S3 kovası + anahtar | Felaket kurtarmanın TEK eksiği |
-| 645 | S3-compatible target | Yapılandırılmamış | Yapılandırılır | BLOCKED_OWNER | BLK | P0 | 644 | B09 | scripts/cloud/ | — | — | S3 kovası + anahtar | Kod hazır |
-| 646 | Backup health | Okuyan sağlık yok | Sağlıkta görünür | MISSING | NYP | P0 | — | B08 | app/system/health.py | — | LAST_BACKUP.json okunmuyor | no | — |
-| 647 | Backup failure notification | `OnFailure=` yok | Bildirilir | MISSING | NYP | P0 | 646 | B08 | scripts/cloud/install-recovery-supervisor.sh | — | — | no | 385 ile ortak |
-| 648 | Restore health | Kısmi | Tam | PARTIAL | NYP | P0 | 646 | B08 | app/system/health.py | — | tatbikat raporu okunmuyor | no | — |
-| 649 | RPO measurement | Veri için <=24 sa; host kaybı için sonsuz | Ölçülür ve yayınlanır | PARTIAL | NYP | P0 | 644 | B08 | docs/OPERATIONS.md | — | — | no | — |
-| 650 | RTO measurement | Dakikalar; host kaybı için sonsuz | Ölçülür | PARTIAL | NYP | P0 | 644 | B08 | docs/OPERATIONS.md | — | — | no | — |
-| 651 | Recovery supervisor | Servis `main`'de, timer değil | Kurulu | PARTIAL | PX | P0 | — | B08 | services/recovery-supervisor/ | recovery testleri | Astra dalı @2561f84 hazır | kurulum onayı | READY_FOR_OWNER_APPROVAL |
-| 652 | Recovery systemd timer | `main`'de YOK | Kurulu | MISSING | NYP | P0 | 651 | B08 | scripts/cloud/install-recovery-supervisor.sh | — | — | kurulum onayı | Bozulmayı izleyen hiçbir şey yok |
-| 653 | Healthy to degraded detection | Kısmi | Tam | PARTIAL | PX | P0 | 652 | B08 | services/recovery-supervisor/ | recovery testleri | — | no | — |
-| 654 | Automatic rollback | Kısmi | Tam | PARTIAL | PX | P0 | 653 | B08 | services/recovery-supervisor/ | rollback lock testleri | Astra: lock_held, lock_wait_s | kurulum onayı | — |
-| 655 | Recovery audit | Kısmi | Tam | PARTIAL | NYP | P0 | 654 | B08 | services/recovery-supervisor/ | — | — | no | — |
+| 642 | Config restore | Dosyalar var, host yeniden kurulumu denenmedi | Tatbikatlı | DONE | PA | P0 | 644 | B09 | scripts/cloud/restore-cloud-core.sh | test_backup_health.py | S3 kovası + anahtar (sahip) | no | Tatbikat config/.env ve RELEASE yoksa anlık görüntüyü reddediyor |
+| 643 | Release restore | Kısmi | Tatbikatlı | DONE | PA | P0 | 642 | B09 | scripts/cloud/restore-cloud-core.sh | test_backup_health.py | S3 kovası + anahtar (sahip) | no | 642 ile tek uygulama: RELEASE metadata'sı zorunlu |
+| 644 | Off-host repository | YOK — depo koruduğu diskte | İkinci hedef | DONE | PA | P0 | — | B09 | scripts/cloud/restore-cloud-core.sh:--from-offhost | test_backup_health.py | S3 kovası + anahtar (sahip) | S3 kovası + anahtar | Kopya yazılabiliyordu ama OKUNAMIYORDU; artık ikinci depodan geri yükleme yolu var ve testli |
+| 645 | S3-compatible target | Yapılandırılmamış | Yapılandırılır | BLOCKED_OWNER | BLK | P0 | 644 | B09 | scripts/cloud/backup-cloud-core.sh | — | S3 kovası + anahtar (sahip) | S3 kovası + anahtar | Yol hazır; kova ve anahtar sahip eylemi — anahtar asla commit'e girmez |
+| 646 | Backup health | Okuyan sağlık yok | Sağlıkta görünür | DONE | PA | P0 | — | B08 | services/api/app/backup_health.py, app/main.py | test_backup_health.py | üretim /v1/system/health checks.backup | no | LAST_BACKUP.json artık okunuyor; görünmüyorsa 'skipped', uydurma arıza yok |
+| 647 | Backup failure notification | `OnFailure=` yok | Bildirilir | DONE | PA | P0 | 646 | B08 | infra/systemd/pagentos-failure-marker@.service, infra/systemd/*.service | test_backup_health.py | host kurulumu bekliyor (sahip) | no | OnFailure her timer biriminde; işaret dosyası — kredi yok, ağ yok, sabaha kalır |
+| 648 | Restore health | Kısmi | Tam | DONE | PA | P0 | 646 | B08 | services/api/app/backup_health.py, app/main.py | test_backup_health.py | üretim checks.backup.last_drill_* | no | Tatbikat raporu okunuyor; hiç tatbikat yoksa 'stale', 'iyi' değil |
+| 649 | RPO measurement | Veri için <=24 sa; host kaybı için sonsuz | Ölçülür ve yayınlanır | DONE | PA | P0 | 644 | B08 | services/api/app/backup_health.py, app/main.py, docs/OPERATIONS.md | test_backup_health.py | üretim rpo_hours | no | Son yedeğin yaşı — belge değil ölçüm |
+| 650 | RTO measurement | Dakikalar; host kaybı için sonsuz | Ölçülür | DONE | PA | P0 | 644 | B08 | services/api/app/backup_health.py, app/main.py, docs/OPERATIONS.md | test_backup_health.py | üretim rto_seconds | no | Son tatbikatın gerçek süresi; 14 günde bayatlıyor |
+| 651 | Recovery supervisor | Servis `main`'de, timer değil | Kurulu | PARTIAL | PA | P0 | — | B08 | services/recovery-supervisor/, scripts/cloud/install-recovery-supervisor.sh | test_systemd_install.py (842 satır) | host kurulumu bekliyor (sahip) | kurulum onayı | Kod main'de (Astra birleşti); systemd kurulumu sahip kapısı |
+| 652 | Recovery systemd timer | `main`'de YOK | Kurulu | PARTIAL | PA | P0 | 651 | B08 | infra/systemd/pagentos-bluegreen-reconcile.timer | test_systemd_install.py | host kurulumu bekliyor (sahip) | kurulum onayı | Timer birimi main'de; host'a kurulum sahip kapısı |
+| 653 | Healthy to degraded detection | Kısmi | Tam | PARTIAL | PA | P0 | 652 | B08 | services/recovery-supervisor/, scripts/cloud/install-recovery-supervisor.sh | test_health_policy.py | host kurulumu bekliyor (sahip) | no | Kod hazır; PROVEN_REAL için host'ta bir tur gerekiyor |
+| 654 | Automatic rollback | Kısmi | Tam | PARTIAL | PA | P0 | 653 | B08 | services/recovery-supervisor/, scripts/cloud/install-recovery-supervisor.sh, scripts/cloud/release-cloud-core-bluegreen.sh | test_systemd_install.py, cloud-release-bluegreen.tests.ps1 | host kurulumu bekliyor (sahip) | kurulum onayı | Operasyon kilidi (exit 82) main'de; kasten bozulmuş renk denemesi host'ta |
+| 655 | Recovery audit | Kısmi | Tam | PARTIAL | PA | P0 | 654 | B08 | services/recovery-supervisor/recovery_supervisor/incidents.py | test_incidents.py | host kurulumu bekliyor (sahip) | no | Rapor üretiliyor; host turu olmadan denetim izi PROVEN_REAL değil |
 
 ## V. SECURITY / IDENTITY (656–684)
 
@@ -865,7 +865,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 676 | Production deployment permission | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/evolution/ | supervisor testleri | — | no | — |
 | 677 | High-risk owner gate | Çalışıyor | Aynı | DONE | PA | P0 | — | — | app/evolution/supervisor.py | supervisor testleri | — | no | Ürün ilkesi — gevşetilmez |
 | 678 | Permanent delete owner gate | Kısmi | Tam | DONE | PA | P0 | — | B05 | app/security/deletion.py | test_deletion_gate.py | tüketiciler B34/B42/B46 | onay politikası | Sahip kararı 2026-09-13: yumuşak silme varsayılan, kalıcı yok etme ikinci kanal |
-| 679 | Security audit ledger | Çalışıyor | Saklama politikası eklenir | DONE | PR | P0 | 16 | B07 | app/security/, app/ledger/ | security testleri | 13.560 olay | no | Saklama yok |
+| 679 | Security audit ledger | Çalışıyor | Saklama politikası eklenir | DONE | PA | P0 | 16 | B07 | app/security/audit_retention.py | test_bounded_delivery.py | 13.560 olay → kuru koşu sayıyor | no | Activity Ledger ASLA süpürülmüyor: kanıt yaşlanmaz, gerekçesi yazılı |
 | 680 | Security review of generated code | Yok | Zorunlu | MISSING | NYP | P0 | — | B35 | app/security/, app/selfdev/ | — | Grant tüketicisi yok | no | 598,579,439 ile ortak |
 | 681 | No CAPTCHA bypass | Zorlanıyor | Aynı | DONE | PA | P0 | — | — | app/browser/ | browser testleri | — | no | Ürün ilkesi — ASLA gevşetilmez |
 | 682 | No DRM bypass | Zorlanıyor | Aynı | DONE | PA | P0 | — | — | app/browser/ | browser testleri | — | no | Ürün ilkesi |

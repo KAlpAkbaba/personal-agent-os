@@ -75,6 +75,7 @@ from app.executive.models import (
     STEP_STATE_SKIPPED,
     STEP_STATE_VERIFIED,
     STEP_TERMINAL_STATES,
+    STEP_UNSUCCESSFUL_STATES,
     TERMINAL_RUN_STATES,
     ExecutiveRunRow,
     ExecutiveStepRow,
@@ -84,6 +85,9 @@ from app.executive.spec import (
     COMPENSATION_DELETE_RENDER,
     COMPENSATION_DISCARD_DRAFT,
     COMPENSATION_NONE,
+    COMPENSATION_OUTCOME_ATTEMPTED_AND_FAILED,
+    COMPENSATION_OUTCOME_NOTHING_TO_UNDO,
+    COMPENSATION_OUTCOME_UNDONE,
     COMPENSATION_STOP_PROJECT,
     EVIDENCE_ARTIFACT_ID,
     EVIDENCE_DOCUMENT_REFS,
@@ -376,6 +380,9 @@ def publish_run_state(run: ExecutiveRunRow) -> None:
         "run": _run_short_token(run.id),
         "state": run.state,
         "done": run.steps_done,
+        # B10 req 559: the panel needs both halves. "not done" used to mean
+        # either "still going" or "it failed", and the caller could not tell.
+        "failed": run.steps_failed,
         "total": run.steps_total,
     }
     if run.current_step:
@@ -438,7 +445,14 @@ def _recompute_run_progress(db: Session, run_id: uuid.UUID) -> None:
     )
     running = [s for s in steps if s.state == STEP_STATE_RUNNING]
     run.steps_total = len(steps)
-    run.steps_done = sum(1 for s in steps if s.state in STEP_TERMINAL_STATES)
+    # B10 req 558/559: `steps_done` is SPOKEN as "adım tamam" - steps completed - and used
+    # to count every step that had reached a terminal state, which includes `failed`,
+    # `cancelled` and `compensated`. A run whose four steps were three failures and one
+    # success said "4/4 adım tamam". Two different questions ("how many are settled?" and
+    # "how many worked?") had one answer, and the answer given was the wrong one for the
+    # sentence it appeared in.
+    run.steps_done = sum(1 for s in steps if s.state == STEP_STATE_VERIFIED)
+    run.steps_failed = sum(1 for s in steps if s.state in STEP_UNSUCCESSFUL_STATES)
     outcome_state, reasons, synthesis_text = _derive_run_outcome(steps)
     if outcome_state == STATE_RUNNING:
         run.state = STATE_RUNNING if run.state == STATE_PLANNED else run.state
@@ -510,28 +524,53 @@ def _run_compensation(db: Session, step_row: ExecutiveStepRow) -> None:
     content-addressed and may be shared by another artifact, so it is left in place —
     the render is small, reusable, and not "the owner's file" either way, spec §1's own
     example of what compensation must never touch)."""
-    evidence = step_row.evidence_json or {}
+    evidence = dict(step_row.evidence_json or {})
+    outcome = COMPENSATION_OUTCOME_NOTHING_TO_UNDO
+    error: str | None = None
     try:
         if step_row.compensation == COMPENSATION_DISCARD_DRAFT and evidence.get("draft_id"):
             get_mail_service().discard(db, draft_id=str(evidence["draft_id"]))
+            outcome = COMPENSATION_OUTCOME_UNDONE
         elif step_row.compensation == COMPENSATION_STOP_PROJECT and evidence.get("project_id"):
             get_app_factory_service().stop(
                 db, get_device_action(), target=str(evidence["project_id"])
             )
+            outcome = COMPENSATION_OUTCOME_UNDONE
         elif step_row.compensation == COMPENSATION_DELETE_RENDER and evidence.get("scene_id"):
             row = db.get(SceneRow, uuid.UUID(str(evidence["scene_id"])))
             if row is not None and row.render_object_key:
                 _, store = build_artifact_context(get_settings())
                 try:
                     store.delete(row.render_object_key)
-                except Exception:  # noqa: BLE001 - best-effort, see docstring
-                    pass
+                except Exception as exc:  # noqa: BLE001 - best-effort, see docstring
+                    # The row is still cleared (the key is unusable either way), but the
+                    # object store refusing is not "undone" and must not be recorded as it.
+                    error = f"{type(exc).__name__}"
                 row.render_object_key = None
                 row.render_sha256 = None
                 row.render_bytes = None
-    except Exception:  # noqa: BLE001 - best-effort, see docstring
-        pass
-    step_row.state = STEP_STATE_COMPENSATED
+                outcome = (
+                    COMPENSATION_OUTCOME_UNDONE if error is None
+                    else COMPENSATION_OUTCOME_ATTEMPTED_AND_FAILED
+                )
+    except Exception as exc:  # noqa: BLE001 - best-effort, see docstring
+        error = f"{type(exc).__name__}"
+        outcome = COMPENSATION_OUTCOME_ATTEMPTED_AND_FAILED
+
+    # B10 req 539: this used to be `state = COMPENSATED`, unconditionally. A step whose
+    # compensation was NONE, or whose evidence carried no id to act on, or whose action
+    # raised and was swallowed by the best-effort catch, all ended up saying the same thing
+    # as one that genuinely undid its work. "Compensated" has to mean something was undone,
+    # or the word is worth nothing on the one occasion the owner reads it.
+    evidence["compensation_outcome"] = outcome
+    if error is not None:
+        evidence["compensation_error"] = error
+    step_row.evidence_json = evidence
+    step_row.state = (
+        STEP_STATE_COMPENSATED
+        if outcome == COMPENSATION_OUTCOME_UNDONE
+        else STEP_STATE_CANCELLED
+    )
     step_row.updated_at = datetime.now(UTC)
 
 
@@ -563,7 +602,9 @@ def cancel_run_and_compensate(run_id: uuid.UUID) -> dict[str, Any]:
                 step.updated_at = step.finished_at
         run.state = STATE_CANCELLED
         run.current_step = None
-        run.steps_done = sum(1 for s in steps if s.state in STEP_TERMINAL_STATES)
+        # Same honest counts as the reconciliation above (B10 req 558/559).
+        run.steps_done = sum(1 for s in steps if s.state == STEP_STATE_VERIFIED)
+        run.steps_failed = sum(1 for s in steps if s.state in STEP_UNSUCCESSFUL_STATES)
         run.updated_at = datetime.now(UTC)
         db.commit()
         publish_run_state(run)

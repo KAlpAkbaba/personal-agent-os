@@ -27,6 +27,7 @@ from app.artifacts.render_fetch_store import get_render_fetch_store
 from app.artifacts.routes import device_router as artifacts_device_router
 from app.artifacts.routes import router as artifacts_router
 from app.artifacts.runtime import ArtifactRuntime
+from app.backup_health import backup_health
 from app.briefing.service import BriefingService
 from app.broker.routes import router as broker_router
 from app.broker.runtime import BrokerRuntime
@@ -678,6 +679,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["briefing_announcer"] = briefing_announcer.health_check()
         checks["research_tool_call_announcer"] = research_tool_call_announcer.health_check()
         checks["selfmodel_refresher"] = selfmodel_refresher.health_check()
+        # B08 req 646/648/649/650: the safety net answers for itself. Both records have
+        # been written for weeks and nothing read either of them; a backup nobody checks is
+        # one you find out about on the day you need it.
+        checks["backup"] = await asyncio.to_thread(backup_health, settings.backup_root)
         checks["audit_retention"] = audit_retention.health_check(
             dry_run=settings.audit_retention_dry_run
         )

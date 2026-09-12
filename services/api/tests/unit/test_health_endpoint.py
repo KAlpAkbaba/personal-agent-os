@@ -62,6 +62,9 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     # B07 req 679: the retention POLICY itself, readable. A policy nobody can see is a
     # policy nobody can check.
     "audit_retention",
+    # B08 req 646/648: the safety net. Skipped where the host's backup root is not mounted
+    # into this container, which is every test process.
+    "backup",
 }
 # "skipped" (temporal_worker when worker_mode != embedded) is a legitimate
 # non-degraded status alongside "ok" — see app.main's degraded computation.
@@ -119,6 +122,7 @@ def test_health_ok_shape(monkeypatch) -> None:
             "research_tool_call_announcer",
             "selfmodel_refresher",
             "audit_retention",
+            "backup",
         ):
             assert isinstance(check["latency_ms"], int | float)
     # The schema check must always name both revisions, ok or not: "the migration ran" and

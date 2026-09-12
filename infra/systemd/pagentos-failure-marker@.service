@@ -1,0 +1,40 @@
+# PagentOS: what happens when a scheduled unit fails (B08 req 647).
+#
+# Until 2026-09-13 the answer was "nothing". The nightly backup, the weekly restore drill and
+# the blue/green reconcile each had a timer and no `OnFailure=`, so a failure was a line in
+# the journal that nobody reads and a file that quietly stopped being updated. The owner
+# would have found out about a broken backup on the day they needed it.
+#
+# This writes a marker the Cloud Core's `backup` health check reads, rather than calling an
+# API or sending a mail. Deliberately:
+#
+#   * no credential. A unit that needs an owner token to report a failure is a unit that
+#     needs a secret on disk, and the thing it is reporting may be the secret store itself;
+#   * no network. The moment a backup fails is exactly the moment the host may be unwell,
+#     and an alert that needs the API to be up cannot report that the API is down;
+#   * it survives. A marker file is still there tomorrow morning, which a journal line and a
+#     dropped webhook are not.
+#
+# Instantiated with the failing unit's name: `OnFailure=pagentos-failure-marker@%n.service`.
+# %i is that name, so one template covers every scheduled unit and a unit added later gets
+# reporting by adding one line to it.
+#
+# Read:   ls /var/lib/pagentos-backup/failures/
+# Clear:  the next successful run of the unit removes its own marker.
+
+[Unit]
+Description=PagentOS: record that %i failed, where the product can see it
+
+[Service]
+Type=oneshot
+Environment=PAGENTOS_BACKUP_ROOT=/var/lib/pagentos-backup
+ExecStart=/bin/bash -c 'set -eu; \
+  root="${PAGENTOS_BACKUP_ROOT}/failures"; mkdir -p "$root"; \
+  result="$(systemctl show -p Result --value "%i" 2>/dev/null || echo unknown)"; \
+  status="$(systemctl show -p ExecMainStatus --value "%i" 2>/dev/null || echo unknown)"; \
+  printf "{\\"unit\\":\\"%i\\",\\"failed_at\\":\\"%%s\\",\\"result\\":\\"%%s\\",\\"exit_status\\":\\"%%s\\"}\\n" \
+    "$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" "$result" "$status" \
+    > "$root/%i.json.next"; \
+  mv "$root/%i.json.next" "$root/%i.json"'
+NoNewPrivileges=true
+PrivateTmp=true

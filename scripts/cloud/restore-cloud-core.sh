@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 # Prove that a Cloud Core backup restores - or restore one over production (ADR-0122).
 #
-#   restore-cloud-core.sh --drill [--snapshot ID]
+#   restore-cloud-core.sh [--from-offhost] --drill [--snapshot ID]
 #       Restore the snapshot (default: the newest) into SCRATCH containers beside
 #       production - no network, throwaway credentials, the same images production runs -
 #       and verify all of it: every file against the snapshot's own manifest, every
 #       database re-dumped and fingerprinted against the fingerprint taken from the backup's
 #       dump, every object loaded into a scratch MinIO and read back out through its API.
 #       Measures each step and writes a report. Changes nothing in production.
+#
+#   --from-offhost (B09 req 644)
+#       Read the SECOND repository - the copy that survives losing this host - instead of
+#       the local one. Until 2026-09-13 the off-host copy was write-only: every snapshot
+#       was copied to it and nothing could read it back, because this script only ever
+#       looked at $backup_root/restic, which lives on the disk the backup exists to
+#       protect. Needs backup-offhost.env (exit 91 without it) and the repository password,
+#       which is deliberately NOT in the backup and on a lost host comes from the escrow
+#       (exit 92 when it is not there yet).
 #
 #   restore-cloud-core.sh --apply --snapshot ID --confirm "RESTORE ID OVER PRODUCTION"
 #       Replace production's databases and objects with the snapshot's. Refuses without the
@@ -21,6 +30,8 @@
 #       not a side effect).
 #
 # Exit: 0 ok; 1 not root; 2 usage/refused; 90 a backup or blue/green operation holds a lock;
+# 91 --from-offhost with no off-host repository configured; 92 --from-offhost without the
+# repository password (restore it from the escrow first);
 # 96 the snapshot could not be restored; 97 files differ from the manifest; 98 a database
 # did not restore to the same rows; 99 the objects did not load back; 100 --apply: the
 # pre-restore backup failed (nothing was touched); 101 --apply: services did not come back.
@@ -54,6 +65,7 @@ fi
 host_name=${PAGENTOS_BACKUP_HOST:-pagentos-core}
 ready_tries=${PAGENTOS_DRILL_READY_TRIES:-60}
 ready_step=${PAGENTOS_DRILL_READY_STEP_S:-1}
+offhost_env=${PAGENTOS_BACKUP_OFFHOST_ENV:-$base/backup-offhost.env}
 export RESTIC_REPOSITORY=${RESTIC_REPOSITORY:-$backup_root/restic}
 export RESTIC_PASSWORD_FILE=${RESTIC_PASSWORD_FILE:-$base/backup.password}
 staging_path="$backup_root/staging/snapshot"
@@ -61,16 +73,43 @@ staging_path="$backup_root/staging/snapshot"
 mode=""
 snapshot=""
 confirm=""
+from_offhost=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --drill) mode=drill; shift;;
         --apply) mode=apply; shift;;
+        --from-offhost) from_offhost=1; shift;;
         --snapshot) snapshot=${2:-}; shift 2 || true;;
         --confirm) confirm=${2:-}; shift 2 || true;;
-        *) echo "usage: restore-cloud-core.sh --drill [--snapshot ID] | --apply --snapshot ID --confirm \"RESTORE ID OVER PRODUCTION\"" >&2; exit 2;;
+        *) echo "usage: restore-cloud-core.sh [--from-offhost] --drill [--snapshot ID] | --apply --snapshot ID --confirm \"RESTORE ID OVER PRODUCTION\"" >&2; exit 2;;
     esac
 done
 [ -n "$mode" ] || { echo "say --drill or --apply" >&2; exit 2; }
+
+# ---- B09 req 644: restore from the copy that survives losing this host --------------------
+# The off-host copy has been WRITE-ONLY. backup-cloud-core.sh has copied every snapshot to a
+# second repository for weeks, and this script only ever read `$backup_root/restic` - the one
+# on the disk the backup exists to protect. On a host that is gone, so is that repository,
+# and the second copy had no documented, tested way back out. A backup you cannot restore
+# from is a file, not a backup.
+if [ "$from_offhost" = "1" ]; then
+    [ -f "$offhost_env" ] || { echo "no off-host configuration at $offhost_env" >&2; exit 91; }
+    set -a
+    # shellcheck disable=SC1090
+    . "$offhost_env"
+    set +a
+    [ -n "${PAGENTOS_BACKUP_OFFHOST_REPOSITORY:-}" ]         || { echo "$offhost_env names no PAGENTOS_BACKUP_OFFHOST_REPOSITORY" >&2; exit 91; }
+    export RESTIC_REPOSITORY="$PAGENTOS_BACKUP_OFFHOST_REPOSITORY"
+    # The repository password is NOT in the backup (it would be locked inside what it opens)
+    # and on a lost host it is not on disk either. It comes from the escrow, and saying so
+    # here is the difference between a procedure and a discovery at the worst moment.
+    [ -f "$RESTIC_PASSWORD_FILE" ] || {
+        echo "the repository password is not at $RESTIC_PASSWORD_FILE; restore it from the" >&2
+        echo "escrow first (scripts/cloud/escrow-backup-key.ps1 wrote it off the host)" >&2
+        exit 92
+    }
+    echo "restoring from the OFF-HOST repository (the local one is not consulted)"
+fi
 case "$snapshot" in *[!0-9a-f]*) echo "a snapshot id is hexadecimal" >&2; exit 2;; esac
 
 if [[ $EUID -ne 0 && "${PAGENTOS_ALLOW_NONROOT:-0}" != "1" ]]; then
@@ -271,6 +310,10 @@ printf '{"mode":"%s","snapshot":"%s","finished_at":"%s","seconds":{"restore":%s,
     $((restored_s - started_s)) $((verified_s - restored_s)) $((postgres_s - verified_s)) \
     $((objects_s - postgres_s)) $((finished_s - started_s)) "${database_rows%,}" "$object_files" \
     > "$report"
+# B08 req 647: a unit clears its own failure marker when it succeeds. Without this a single
+# bad night would leave the health surface complaining for ever, and a check that complains
+# for ever is a check nobody reads - which is the defect this whole requirement is about.
+rm -f "$backup_root/failures/pagentos-restore-drill.service.json" 2>/dev/null || true
 if [ "$mode" = "drill" ]; then
     echo "DRILL OK: snapshot ${snapshot:0:12} restored and verified in $((finished_s - started_s))s (report $report)"
 else

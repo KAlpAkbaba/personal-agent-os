@@ -260,4 +260,8 @@ if [ "$offhost" = "failed" ]; then
     echo "BACKUP PARTIAL: local snapshot $snapshot is good and checked; the off-host copy FAILED" >&2
     exit 95
 fi
+# B08 req 647: a unit clears its own failure marker when it succeeds. Without this a single
+# bad night would leave the health surface complaining for ever, and a check that complains
+# for ever is a check nobody reads - which is the defect this whole requirement is about.
+rm -f "$backup_root/failures/pagentos-backup.service.json" 2>/dev/null || true
 echo "BACKUP OK: snapshot $snapshot ($kind) in ${seconds}s; off-host: $offhost"

@@ -1,0 +1,28 @@
+{
+  "batch": "B08",
+  "requirements": [614, 646, 647, 648, 649, 650, 651, 652, 653, 654, 655],
+  "recorded_at": "2026-09-13T02:00:00Z",
+  "commit": null,
+  "ci_run": null,
+  "conclusion": null,
+  "what_this_proves": "The safety net can be seen and can speak. Both halves have been running for weeks and writing records that nothing read - so a broken backup would have been discovered on the day it was needed.",
+  "closed_fully": {
+    "646_backup_health": "LAST_BACKUP.json is read and reported on /v1/system/health. Not visible (the API is in a container, the file is on the host) reports 'skipped' with the reason rather than a failure the process cannot observe - a check that cries wolf about what it cannot see is one the owner learns to ignore.",
+    "647_failure_notification": "Every timer-driven unit now carries OnFailure=pagentos-failure-marker@%n.service. It writes a marker file rather than calling an API or sending mail, deliberately: no credential (the thing failing might be the secret store), no network (the moment a backup fails is the moment the host may be unwell), and it survives to the morning, which a journal line and a dropped webhook do not. The unit's own next success removes its marker, so one bad night does not complain for ever.",
+    "648_restore_health": "The drill report is read: verdict, timings, and how long ago. No drill at all reads as STALE rather than as fine - absent evidence is not evidence of a working restore.",
+    "649_rpo": "The age of the last good backup, published as checks.backup.rpo_hours. Degraded past 36 hours, because that is where the nightly schedule's promise stops being kept.",
+    "650_rto": "seconds.total from the last real drill, published as checks.backup.rto_seconds, with drill_stale true past 14 days. A number in OPERATIONS.md is a claim; a number off the last run is a measurement."
+  },
+  "owner_gated": {
+    "requirements": [614, 651, 652, 653, 654, 655],
+    "state": "The CODE is on main - the Astra branch (codex/astra-p0-reliability @2561f84, marked READY_FOR_OWNER_APPROVAL) is merged, with the install/uninstall scripts, the reconcile timer unit, the blue/green operation lock and 842 lines of install tests. What is missing is a root install on the production host, which is an owner action by the batch's own definition.",
+    "what_the_owner_run_has_to_show": "timer armed; one reconcile actually ran; the backup age visible in production health; and a deliberately broken colour rolled back automatically. Until that run these stay PARTIAL - a systemd unit in the repository is not a systemd unit on the host."
+  },
+  "found_on_the_way": {
+    "exit_code_collision": "Merging the two lines of work put two different failures on `exit 82`: 'another operation holds the lock' (retry later) and 'the migration failed' (stop and look at the database). Opposite instructions on one number. Neither side's tests could see it - the lock is taken at the top of the script and the migration runs much later, so no single run reaches both, and each suite asserted its own number and passed. The migration moved to 79. test_release_exit_codes.py now reads the scripts and fails on any code carrying two different messages; two codes that legitimately repeat are named with their reason."
+  },
+  "red_first": {
+    "method": "The four B07 files were reverted to HEAD from a digest-verified backup and the suite re-run (7 failed / 12 passed), then restored (sha256sum -c: 4/4 OK). For B08 the backup-health tests are new behaviour against a module that did not exist, so their red is the import error rather than a staged defect; the honest statement is that these tests are new coverage of a surface that had none, not a regression guard on a fix."
+  },
+  "proof": "PROVEN_AUTOMATED for 646-650. PROVEN_REAL for all eleven needs the host run described above, plus the production release (decision 0)."
+}

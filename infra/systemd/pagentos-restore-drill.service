@@ -11,6 +11,10 @@ Description=PagentOS Cloud Core restore drill (scratch containers; production un
 After=docker.service
 Requires=docker.service
 
+# B08 req 647: a failure of the weekly restore drill was previously a journal line nobody reads.
+# The marker unit records it where the product's health check can see it.
+OnFailure=pagentos-failure-marker@%n.service
+
 [Service]
 Type=oneshot
 TimeoutStartSec=3600

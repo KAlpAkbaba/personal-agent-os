@@ -1,0 +1,25 @@
+{
+  "batch": "B10",
+  "requirements": [539, 548, 558, 559, 560],
+  "recorded_at": "2026-09-13T03:00:00Z",
+  "commit": null,
+  "ci_run": null,
+  "conclusion": null,
+  "what_this_proves": "A run says what actually happened. Two production runs reported '4/4 adim tamam' - four of four steps completed - while three of those four steps had failed.",
+  "red_first": {
+    "the_count": "The fix was reverted and the count test re-run: `assert 4 == 1` - 'three failures are not three accomplishments'. That single assertion is the production defect, reproduced.",
+    "compensation": "Reverting `state = COMPENSATED` to its unconditional form failed 3 of the compensation tests.",
+    "restored": "sha256sum -c: 2/2 OK.",
+    "a_gap_i_found_in_my_own_tests": "The first version of the sentence tests built the run row directly and asserted the wording. They passed with the defect reverted, because they never exercised the CODE THAT COMPUTES the counts. A test that would not have caught the bug it was written for is not coverage of it - so a test that drives `_recompute_run_progress` over three failures and one success was added, and that is the one that goes red."
+  },
+  "the_defects": {
+    "558_559": "`steps_done` counted every step in a terminal state, and `failed`, `cancelled`, `compensated` and `skipped` are all terminal. It was then spoken as 'adim tamam' - steps completed. Two different questions ('how many are settled?' and 'how many worked?') with one answer, and the sentence was asking the second one. Same shape as B06's `tasks.running_count`, in the executive this time. `steps_done` counts successes now, `steps_failed` carries the other half so no caller infers failure by subtracting, and 'not done' no longer means either 'still going' or 'it failed' with nothing to say which.",
+    "539": "`_run_compensation` ended with `state = COMPENSATED`, unconditionally. A step whose compensation was `none`, whose evidence carried no id to act on, or whose provider raised and was swallowed by the deliberate best-effort catch, all said exactly what a step that genuinely undid its work said. The outcome is now recorded as one of undone / nothing_to_undo / attempted_and_failed, and only the first is called COMPENSATED. The best-effort catch stays - a cancel must complete even if a provider is briefly unreachable - what changed is what the step says afterwards.",
+    "548": "The folder-compare plan depended on the file.search defect B03 closed. Verified by measurement rather than re-fixed."
+  },
+  "measurement_correction": {
+    "560": "Recorded as MISSING in the matrix. It is not: `app/executive/reconcile.py` exists, `create_app` injects `executive_tick` into the routine clock, and 31 tests pass on it. Corrected to DONE with the measurement. B07 made it materially more true - the clock's five sub-ticks shared one try/except, so a failure in the routine evaluation used to stop this one running at all.",
+    "why_this_matters": "Existing measured reality wins over old documentation, including this project's own documentation."
+  },
+  "proof": "PROVEN_AUTOMATED for all five. PROVEN_REAL needs a production release (decision 0): the five existing runs recomputed against the truth."
+}

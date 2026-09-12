@@ -412,7 +412,7 @@ ROLLBACK_PLAN       : süpürgeler bayrakla kapatılabilir; hiçbir satır silin
 ```
 
 ```
-BATCH_ID            : B07
+BATCH_ID            : B07                              [KAPANDI 2026-09-13]
 NAME                : Sınırlı teslim, döngü izolasyonu, saklama
 REQUIREMENT_IDS     : 14, 15, 16, 17, 18, 19, 20, 375, 376, 390, 679
 GOAL                : Hiçbir kuyruk sonsuz denemesin, tek bozuk satır kuyruğu kilitlemesin, bir
@@ -424,6 +424,10 @@ EXPECTED_FILES      : services/api/app/notifications/, app/research/, app/routin
                       app/retention/, app/system/health.py
 RISK                : medium — alarm yolu; deterministik saat testi zorunlu
 OWNER_ACTION        : no
+KAPANIŞ             : commit 690abd5 · CI 34722166605 yeşil (7/7) · yerel kapı 9096 geçti
+                      kanıt: kapanış kaydı FEATURE_MATRIX'te
+YOL ÜSTÜNDE         : brifing kuyruğundaki tek zehirli satır kalıcı kilit yapıyordu —
+                      sahibin kayıp bildirimleri oradaydı
 TEST_PLAN           : zehirli mesajın karantinaya gittiği ve kuyruğun ilerlediği; bir alt tik
                       patlarken diğer alt tiklerin koştuğu; `fake` sağlayıcının "delivered"
                       damgası üretemediği (tip düzeyinde); saklama süpürgesinin sayıları düşürdüğü
@@ -432,7 +436,7 @@ ROLLBACK_PLAN       : saklama süpürgesi önce kuru koşu (sayar, silmez)
 ```
 
 ```
-BATCH_ID            : B08
+BATCH_ID            : B08                              [KISMEN KAPANDI 2026-09-13 — host kurulumu sahipte]
 NAME                : Yedek/kurtarma sağlığı, ölçüm ve denetçi
 REQUIREMENT_IDS     : 614, 646, 647, 648, 649, 650, 651, 652, 653, 654, 655
 GOAL                : Yedek arızası görünsün ve haber versin; kurtarma denetçisi timer'ıyla
@@ -444,6 +448,12 @@ EXPECTED_FILES      : scripts/cloud/install-recovery-supervisor.sh, services/rec
 RISK                : medium — otomatik geri alma üretimi etkiler
 OWNER_ACTION        : YES — kurtarma denetçisinin üretime kurulumu (Astra `2561f84`
                       READY_FOR_OWNER_APPROVAL)
+KAPANIŞ             : 646-650 DONE (PROVEN_AUTOMATED); 614, 651-655 PARTIAL
+                      kanıt docs/evidence/b08-backup-recovery-2026-09-13.json
+SAHİP KAPISI        : `install-recovery-supervisor.sh <sha>` üretim host'unda root ile.
+                      Sahip kararı (2026-09-13): şimdilik PARTIAL kalsın, B09-B10'a devam.
+YOL ÜSTÜNDE         : Astra birleşmesi iki farklı arızayı `exit 82`'ye koydu (kilit vs göç);
+                      göç 79'a taşındı ve mekanik bekçi eklendi
 TEST_PLAN           : Astra dalındaki rollback-lock testleri (lock_held, lock_wait_s); yedek
                       yaşı eşiği aşınca sağlığın degrade dediği; OnFailure zincirinin bildirim
                       ürettiği
@@ -453,7 +463,7 @@ ROLLBACK_PLAN       : denetçi systemd biriminden durdurulur; otomatik geri alma
 ```
 
 ```
-BATCH_ID            : B09
+BATCH_ID            : B09                              [KISMEN KAPANDI 2026-09-13 — kova sahipte]
 NAME                : Host dışı felaket kurtarma
 REQUIREMENT_IDS     : 630, 642, 643, 644, 645
 GOAL                : Host tamamen kaybedilse bile geri dönüş mümkün olsun.
@@ -463,6 +473,11 @@ EXPECTED_FILES      : scripts/cloud/backup-cloud-core.sh, docs/OPERATIONS.md
 RISK                : low — salt ekleme; mevcut yedek yolu değişmez
 OWNER_ACTION        : YES — S3 uyumlu ikinci kova + erişim anahtarı (DPAPI ile saklanacak;
                       anahtar asla log'a/commit'e girmez)
+KAPANIŞ             : 642, 643, 644 DONE; 645 BLOCKED_OWNER
+SAHİP KAPISI        : S3 uyumlu ikinci kova + erişim anahtarı. Anahtar DPAPI ile saklanır,
+                      asla commit'e/log'a girmez.
+YOL ÜSTÜNDE         : off-host kopya YAZILABİLİR ama OKUNAMAZDI — `restore-cloud-core.sh`
+                      yalnızca korumaya çalıştığı diskteki depoyu açıyordu
 TEST_PLAN           : ikinci hedefe yazım; boş bir kaptan tam geri yükleme tatbikatı;
                       yapılandırma ve sürüm meta verisinin de geri geldiğinin doğrulanması
 REAL_PROOF_REQUIRED : PROVEN_REAL — ikinci hedefte snapshot + geçen geri yükleme tatbikatı
@@ -470,7 +485,7 @@ ROLLBACK_PLAN       : ikinci hedef yapılandırmadan çıkarılır; birincil yed
 ```
 
 ```
-BATCH_ID            : B10
+BATCH_ID            : B10                              [KAPANDI 2026-09-13]
 NAME                : Yürütme dürüstlüğü
 REQUIREMENT_IDS     : 539, 548, 558, 559, 560
 GOAL                : Hiçbir koşu başarısız adımları "tamam" diye raporlamasın; telafi gerçekten
@@ -480,6 +495,9 @@ AFFECTED_SUBSYSTEMS : Executive
 EXPECTED_FILES      : services/api/app/executive/
 RISK                : low
 OWNER_ACTION        : no
+KAPANIŞ             : beşi de DONE (PROVEN_AUTOMATED)
+YOL ÜSTÜNDE         : 560 zaten uygulanmıştı ve 31 testi geçiyordu — matris MISSING diyordu.
+                      Ölçüm dokümantasyonu yendi.
 TEST_PLAN           : 3 adımı başarısız bir koşunun "4/4" diyemediği; boş telafi dalının
                       "telafi edildi" diyemediği; mutabakatın yarım kalan koşuyu kapattığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimdeki 5 koşunun durumu yeniden hesaplandığında gerçeğe

@@ -23,22 +23,42 @@ from pathlib import Path
 import pytest
 
 CLOUD = Path(__file__).resolve().parents[4] / "scripts" / "cloud"
-RELEASE_SCRIPTS = ("release-cloud-core-bluegreen.sh", "release-cloud-core.sh")
+#: Every operator script with an exit vocabulary of its own. `restore-cloud-core.sh` earned
+#: its place immediately: adding `--from-offhost` in B09 reached for 96 and 97, both of which
+#: already meant something else in that file. The guard caught its own author.
+RELEASE_SCRIPTS = (
+    "release-cloud-core-bluegreen.sh",
+    "release-cloud-core.sh",
+    "restore-cloud-core.sh",
+    "backup-cloud-core.sh",
+)
 
 #: Codes deliberately raised from more than one place because they ARE one failure, said
 #: about different subjects. Whether two messages describe the same failure is not something
 #: a regular expression can judge, so it is a named decision instead: adding to this list is
 #: somebody deciding, and a NEW collision still fails.
-SHARED_BY_DESIGN: dict[int, str] = {
-    75: (
-        "a colour never became healthy - the idle one during a release, the previous one "
-        "during a rollback. One failure, two subjects, and the operator's next move is the "
-        "same either way."
-    ),
-    77: (
-        "the edge reload failed. Release, rollback and reconcile each say so in their own "
-        "words; the failure and the remedy are identical."
-    ),
+SHARED_BY_DESIGN: dict[str, dict[int, str]] = {
+    "release-cloud-core-bluegreen.sh": {
+        75: (
+            "a colour never became healthy - the idle one during a release, the previous "
+            "one during a rollback. One failure, two subjects, and the operator's next "
+            "move is the same either way."
+        ),
+        77: (
+            "the edge reload failed. Release, rollback and reconcile each say so in their "
+            "own words; the failure and the remedy are identical."
+        ),
+    },
+    "restore-cloud-core.sh": {
+        90: (
+            "something else holds a lock - the backup's or the blue/green operation's. One "
+            "failure ('wait and try again'), two locks."
+        ),
+        91: (
+            "--from-offhost with no off-host repository: no configuration file, or a file "
+            "that names no repository. One gap, said about two ways of having it."
+        ),
+    },
 }
 
 
@@ -77,7 +97,7 @@ def test_no_exit_code_carries_two_different_meanings(name: str) -> None:
     """
     collisions: list[str] = []
     for code, lines in sorted(_exits(CLOUD / name).items()):
-        if code in SHARED_BY_DESIGN:
+        if code in SHARED_BY_DESIGN.get(name, {}):
             continue
         distinct = {re.sub(r"\s+", " ", line) for line in lines}
         # An `exit N` on its own line carries no message; it is the sites WITH a message
@@ -97,16 +117,20 @@ def test_the_shared_codes_are_each_explained() -> None:
     """An allowlist without reasons is a way to make a guard quiet, not a way to record a
     decision."""
     assert SHARED_BY_DESIGN
-    for code, reason in SHARED_BY_DESIGN.items():
-        assert len(reason) > 40, f"exit {code} is allowed to repeat without saying why"
+    for script, codes in SHARED_BY_DESIGN.items():
+        for code, reason in codes.items():
+            assert len(reason) > 40, f"{script} exit {code} repeats without saying why"
 
 
 def test_the_shared_codes_really_are_shared() -> None:
     """The other direction: an entry that no longer describes anything is stale, and a stale
     exemption hides the next real collision on that number."""
-    used = _exits(CLOUD / "release-cloud-core-bluegreen.sh")
-    for code in SHARED_BY_DESIGN:
-        assert len(used.get(code, [])) > 1, f"exit {code} no longer repeats; drop the entry"
+    for script, codes in SHARED_BY_DESIGN.items():
+        used = _exits(CLOUD / script)
+        for code in codes:
+            assert len(used.get(code, [])) > 1, (
+                f"{script} exit {code} no longer repeats; drop the entry"
+            )
 
 
 def test_the_lock_and_the_migration_do_not_share_a_number() -> None:

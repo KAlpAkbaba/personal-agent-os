@@ -80,6 +80,20 @@ RISK_CLASSES: tuple[str, ...] = (RISK_READ, RISK_MUTATE_LOCAL, RISK_MUTATE_EXTER
 #: keep — neither needs undoing, so both compensate with ``none`` rather than inventing a
 #: fifth word.
 COMPENSATION_NONE = "none"
+
+
+#: B10 req 539: what a compensation actually DID. Recorded on the step's evidence, because
+#: "compensated" used to be written unconditionally - a branch that matched nothing, an
+#: evidence dict with no id to act on, and a provider that raised all ended up saying the
+#: same thing as a genuine undo.
+COMPENSATION_OUTCOME_UNDONE = "undone"
+COMPENSATION_OUTCOME_NOTHING_TO_UNDO = "nothing_to_undo"
+COMPENSATION_OUTCOME_ATTEMPTED_AND_FAILED = "attempted_and_failed"
+COMPENSATION_OUTCOMES: tuple[str, ...] = (
+    COMPENSATION_OUTCOME_UNDONE,
+    COMPENSATION_OUTCOME_NOTHING_TO_UNDO,
+    COMPENSATION_OUTCOME_ATTEMPTED_AND_FAILED,
+)
 COMPENSATION_DISCARD_DRAFT = "discard_draft"
 COMPENSATION_STOP_PROJECT = "stop_project"
 COMPENSATION_DELETE_RENDER = "delete_render"
