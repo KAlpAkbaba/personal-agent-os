@@ -1,7 +1,7 @@
 {
   "entry": "index.html",
   "run": {
-    "serve": "python -m http.server {port} --bind 127.0.0.1"
+    "serve": "python -m http.server <port> --bind 127.0.0.1"
   },
   "test": {
     "unit": "node tests/run.js"

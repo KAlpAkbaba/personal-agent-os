@@ -1,0 +1,46 @@
+{
+  "contract": "app factory project manifest",
+  "version": 1,
+  "why": [
+    "Every app the App Factory ever produced was refused by the device at the first parse,",
+    "and both halves' suites were green while it happened. Three separate reasons, one shape:",
+    "each half only ever restated its own spelling to itself.",
+    "",
+    "  * two templates wrote `{port}`; the device's placeholder is `<port>` and it refuses",
+    "    `{` and `}` anywhere in a command as composition characters;",
+    "  * the cli-tool template carried no `run` section; the device requires one;",
+    "  * it carried no `port` either, and the device requires a port of a web project - so a",
+    "    CLI tool, which binds nothing, had no truthful manifest it could send at all.",
+    "",
+    "The last one was not only the Cloud Core's fault: `port: 0` (`binds nothing`) was the",
+    "device's own vocabulary for a 3D batch run and a web project could not use it. It can now,",
+    "and a project that declares no port is RUN as a batch - started, waited for, answered with",
+    "its exit - instead of waiting for a socket that never opens."
+  ],
+  "examples": {
+    "server": {
+      "entry": "index.html",
+      "run": { "serve": "python -m http.server <port> --bind 127.0.0.1" },
+      "test": { "unit": "node tests/run.js" },
+      "port": 8766
+    },
+    "binds_nothing": {
+      "entry": "cli.js",
+      "run": { "start": "node cli.js" },
+      "test": { "unit": "node tests/run.js" },
+      "port": 0
+    }
+  },
+  "rules": {
+    "entry": "required; a relative path that names a file of the project",
+    "run": "required; a non-empty object of {key: command}, every command on the allowlist",
+    "test": "optional; the same shape and its own allowlist",
+    "port": "required; 0 means the project binds nothing, otherwise 1024..65535",
+    "port_placeholder": "<port>",
+    "forbidden_in_commands": [";", "|", "&", "$", "(", ")", "{", "}", "`", "\"", "'"]
+  },
+  "read_by": [
+    "services/api/app/appfactory/validation.py (the Cloud Core refuses anything else before sending)",
+    "devices/windows-agent/.../Projects/ProjectManifest.cs (the device parses what arrives)"
+  ]
+}

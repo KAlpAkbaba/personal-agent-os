@@ -1,0 +1,42 @@
+{
+  "contract": "file.search roots",
+  "version": 1,
+  "why": [
+    "The Cloud Core asks for 'the PDFs in my Documents'. It cannot name that folder: only the",
+    "device knows where the owner's Documents actually is, and the owner may have moved it.",
+    "So the Cloud Core sends a BUCKET NAME and the device resolves it - then confines it by",
+    "the owner's authorised roots exactly as it confines an absolute path. A bucket name is",
+    "therefore never more authority than a path; it is less, because it cannot name anywhere",
+    "the well-known folders do not.",
+    "",
+    "Until 2026-09-12 this was not a contract, it was an assumption. The Cloud Core put the",
+    "bucket name straight into payload.roots and the device answered 'payload.roots must be",
+    "absolute paths'. The refusal was recorded on 2026-09-09 (ADR-0102, the defect sink) and",
+    "the search stayed broken: both halves had tests, neither read the other."
+  ],
+  "roots_field": {
+    "absent_or_empty": "the device searches every authorised root",
+    "entry_forms": [
+      "an absolute path (resolved, then confined by the authorised roots)",
+      "a bucket name from `buckets` below (case-insensitive)",
+      "a bucket name followed by relative segments, e.g. `documents/Faturalar` - resolved under the bucket, then confined"
+    ],
+    "refused": [
+      "a relative path that does not begin with a bucket name",
+      "any `..` segment",
+      "a bucket whose folder this machine does not have, or which resolves outside the authorised roots"
+    ]
+  },
+  "buckets": [
+    { "name": "documents", "windows_known_folder": "MyDocuments" },
+    { "name": "desktop", "windows_known_folder": "DesktopDirectory" },
+    { "name": "downloads", "windows_known_folder": "Downloads" },
+    { "name": "pictures", "windows_known_folder": "MyPictures" },
+    { "name": "videos", "windows_known_folder": "MyVideos" },
+    { "name": "music", "windows_known_folder": "MyMusic" }
+  ],
+  "read_by": [
+    "services/api/app/documents/service.py (the Cloud Core sends only these names)",
+    "devices/windows-agent/src/PagentOS.SessionCompanion/Documents/WellKnownFolders.cs (the device resolves them)"
+  ]
+}

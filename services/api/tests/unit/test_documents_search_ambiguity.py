@@ -64,7 +64,9 @@ def test_a_folder_search_with_several_different_names_focuses_the_folder_not_a_f
         assert name in speech
     # The named folder reached the device as a search root, and became the folder focus.
     payload = device.payload_for("file.search")
-    assert payload["roots"] == ["Masaüstü"]
+    # The bucket name the device knows, not the owner's word (B03 req 3,
+    # packages/protocol/file-search-roots.json). The spoken form still decides the focus.
+    assert payload["roots"] == ["desktop"]
     folder = focus_module.current(db, FOCUS_KIND_FOLDER)
     assert folder is not None and folder.object_id == "Masaüstü"
     assert focus_module.current(db, FOCUS_KIND_FILE) is None

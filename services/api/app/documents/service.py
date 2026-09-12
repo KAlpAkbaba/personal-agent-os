@@ -21,10 +21,12 @@ first. No focus at all -> ``needs_clarification`` "Hangi belge?".
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Final
 
 from sqlalchemy.orm import Session
@@ -85,27 +87,98 @@ ERROR_INVALID_ARGUMENT = "invalid_argument"
 # named-target resolution path (``_resolve_document``, ``_resolve_target_file``) —
 # the one place in this module a caller-supplied string reaches ``file.search``.
 
-#: Root names the device confines to by default (spec §1's ``AuthorisedRoots``) —
-#: accepted as a ``folder`` without further checking because they name a well-known
-#: bucket the DEVICE resolves, never a path this layer would have to reason about.
-_KNOWN_FOLDER_ROOTS: Final[frozenset[str]] = frozenset(
-    {"documents", "desktop", "downloads", "pictures", "videos", "music"}
+def _load_bucket_names() -> tuple[str, ...]:
+    """The bucket names ``file.search`` accepts, from the contract BOTH halves read.
+
+    Until 2026-09-12 this list lived here as a literal and the device had no notion of it at
+    all: Cloud Core put the name straight into ``payload.roots`` and the device answered
+    ``payload.roots must be absolute paths``. The refusal was filed by the defect sink on
+    2026-09-09 (ADR-0102) and folder search stayed broken for three days, with both halves'
+    suites green, because each restated the shape to itself.
+
+    A missing or malformed contract is not silently survivable - that hedge is how a shared
+    file stops being shared - so this raises at import and the packaged tests say so.
+    """
+    document = json.loads(_FILE_SEARCH_ROOTS.read_text(encoding="utf-8"))
+    names = tuple(str(bucket["name"]) for bucket in document["buckets"])
+    if not names:
+        raise ValueError(f"{_FILE_SEARCH_ROOTS} declares no buckets")
+    return names
+
+
+#: ``packages/protocol/file-search-roots.json`` - the one place the bucket names are written.
+_FILE_SEARCH_ROOTS: Final[Path] = (
+    Path(__file__).resolve().parents[4] / "packages" / "protocol" / "file-search-roots.json"
 )
+
+#: Root names the DEVICE resolves (spec §1's ``AuthorisedRoots``): Cloud Core cannot name the
+#: owner's Documents folder - the owner may have moved it - so it sends the bucket name and
+#: the device resolves it, then confines it exactly as it confines an absolute path.
+_KNOWN_FOLDER_ROOTS: Final[frozenset[str]] = frozenset(_load_bucket_names())
 #: The Turkish words the voice router already resolves to one of the roots above
 #: (``app.voice.intents._FOLDER_ALIASES`` keys, duplicated here — not imported — so this
 #: module's own second line of defence does not depend on the router's private
 #: vocabulary table keeping the same name or shape).
-_KNOWN_FOLDER_ALIASES: Final[frozenset[str]] = frozenset(
-    {"masaüstü", "masaustu", "belgelerim", "belgelerimde", "indirilenler"}
-)
+#: The Turkish words the voice router already resolves, mapped to the SAME bucket names the
+#: contract declares. A dict rather than a set since 2026-09-12: the value is what actually
+#: goes on the wire, so an alias can never reach the device as a word it does not know.
+_KNOWN_FOLDER_ALIASES: Final[dict[str, str]] = {
+    "masaüstü": "desktop",
+    "masaustu": "desktop",
+    "belgelerim": "documents",
+    "belgelerimde": "documents",
+    "indirilenler": "downloads",
+}
 _UNC_OR_DEVICE_PREFIXES: Final[tuple[str, ...]] = ("\\\\", "//", "\\\\?\\", "\\\\.\\")
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:")
 _MAX_PATTERN_CHARS: Final = 200
 
 
+#: Every Turkish form of the letter I folded onto one, before lowercasing. Python's default
+#: casing is not Turkish: ``"İndirilenler".lower()`` is ``"i̇ndirilenler"`` - an ``i`` followed
+#: by a COMBINING DOT ABOVE (U+0307) - which matches no alias key, so a folder the owner typed
+#: with a capital İ was refused as unknown. ``I``/``ı`` are folded the same way on purpose:
+#: this is matching a closed vocabulary of folder words, where being lenient about a dot is
+#: right and a false refusal is not.
+_TURKISH_I_FORMS: Final[dict[int, str]] = str.maketrans(
+    {"İ": "i", "I": "i", "ı": "i", "̇": ""}
+)
+
+
+def _fold(text: str) -> str:
+    """Lowercase for MATCHING, Turkish included."""
+    return text.translate(_TURKISH_I_FORMS).lower().replace("̇", "")
+
+
 def _is_known_folder_name(folder: str) -> bool:
-    normalized = folder.strip().lower()
+    normalized = _fold(folder.strip())
     return normalized in _KNOWN_FOLDER_ROOTS or normalized in _KNOWN_FOLDER_ALIASES
+
+
+def canonical_folder(folder: str) -> str | None:
+    """The ``roots`` entry to send for a spoken folder, or ``None`` when there is none.
+
+    One of three shapes, and nothing else reaches the device:
+
+    * a bucket name (``documents``) - including through a Turkish alias (``belgelerim``);
+    * a bucket name with relative segments (``documents/Faturalar``);
+    * ``None``, which the caller turns into "Bu klasörü tanımıyorum efendim."
+
+    A bare relative folder used to be forwarded and the device refused it as a
+    ``validation_error`` the owner never saw a reason for. Refusing it HERE, in the owner's
+    own words, is the honest answer: Cloud Core genuinely does not know which folder that is.
+    """
+    normalized = folder.strip().replace("\\", "/").strip("/")
+    if not normalized or "\x00" in normalized:
+        return None
+    segments = [segment for segment in normalized.split("/") if segment]
+    if not segments or ".." in segments:
+        return None
+    head = _fold(segments[0])
+    bucket = _KNOWN_FOLDER_ALIASES.get(head, head if head in _KNOWN_FOLDER_ROOTS else None)
+    if bucket is None:
+        return None
+    return "/".join([bucket, *segments[1:]])
 
 
 def _is_safe_relative_folder(folder: str) -> bool:
@@ -336,7 +409,12 @@ class DocumentService:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
             return missing
-        if folder and not _validate_folder(folder):
+        # The ONE place a spoken folder becomes a wire value. What goes out is a bucket name
+        # the device knows (packages/protocol/file-search-roots.json), never the owner's word
+        # and never a bare relative path the device would refuse with a class the owner can
+        # make nothing of.
+        root_entry = canonical_folder(folder) if folder else None
+        if folder and root_entry is None:
             return self._invalid_argument_receipt(
                 capability=CAPABILITY_FILE_SEARCH,
                 requested_state="searched",
@@ -355,8 +433,8 @@ class DocumentService:
         payload: dict[str, Any] = {}
         if pattern:
             payload["pattern"] = pattern
-        if folder:
-            payload["roots"] = [folder]
+        if root_entry:
+            payload["roots"] = [root_entry]
         if extensions:
             payload["extensions"] = extensions
         result = device_action.run(  # type: ignore[union-attr]

@@ -46,7 +46,9 @@ def test_task_tracker_manifest_names_a_real_entry() -> None:
     files = DeterministicAppGenerator().generate(spec)
     manifest = files.manifest()
     assert manifest["entry"] in files.path_set()
-    assert manifest["run"]["serve"] == "python -m http.server {port} --bind 127.0.0.1"
+    # `<port>`, not `{port}`: the device's own placeholder. It refuses `{`/`}` anywhere in a
+    # command, so every app this factory produced was refused at its first parse (B03 req 4).
+    assert manifest["run"]["serve"] == "python -m http.server <port> --bind 127.0.0.1"
     assert manifest["test"]["unit"] == "node tests/run.js"
 
 
@@ -102,7 +104,12 @@ def test_cli_tool_renders_commands_into_cli_js_and_tests() -> None:
     assert '"say"' in cli_js
     manifest = files.manifest()
     assert manifest["entry"] == "cli.js"
-    assert "run" not in manifest  # a CLI tool is not served
+    # A CLI tool is not SERVED, but it is still RUN, and the device requires both a `run`
+    # section and a `port` of every project. Saying nothing meant the manifest was refused
+    # outright; `port: 0` is the device's own way to say "this binds nothing", and the run
+    # then waits for the program to exit instead of for a socket (B03 req 420).
+    assert manifest["run"] == {"start": "node cli.js"}
+    assert manifest["port"] == 0
     assert manifest["test"]["unit"] == "node tests/run.js"
     tests_run = files.get("tests/run.js")
     assert '"selamla"' in tests_run

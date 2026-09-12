@@ -216,7 +216,19 @@ public sealed class ProjectManifest
         var node = manifest["port"];
         // M28: a native manifest omits `port` for the same reason a 3D one does — every one of
         // its commands is a batch run that binds nothing.
-        if (scope != ProjectScope.Web && (node is null || IsNoPort(node)))
+        if (node is not null && IsNoPort(node))
+        {
+            // B03 (2026-09-12): port 0 means "this project binds nothing", in ANY scope. It
+            // was already how a 3D manifest said it; a Web project could not say it at all,
+            // so the CLI-tool template - a program that prints and exits - had no truthful
+            // manifest to send. Inventing a port for it would have been inventing a number
+            // nothing checks, and `project.run` would then have waited for a socket that
+            // never opens. A project that declares no port is run as a batch
+            // (ProjectCapabilities.RunAsync): started, waited for, answered with its exit.
+            return NoPort;
+        }
+
+        if (scope != ProjectScope.Web && node is null)
         {
             // A batch run binds nothing. Requiring a port of a 3D manifest would be requiring
             // a number nothing ever checks, and every 3D project would have to invent one.

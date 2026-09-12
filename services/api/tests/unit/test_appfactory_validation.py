@@ -134,7 +134,12 @@ def test_manifest_test_command_not_on_the_allowlist_is_refused() -> None:
             ProjectFile("index.html", "<html></html>"),
             ProjectFile(
                 "manifest.json",
-                '{"entry": "index.html", "run": {}, "test": {"unit": "rm -rf /"}}',
+                # A VALID run section and port: since B03 the manifest's own shape is
+                # checked first (the device requires both), so a fixture that left them out
+                # would now fail for that instead of for the command under test.
+                '{"entry": "index.html", "port": 8766,'
+                ' "run": {"serve": "python -m http.server <port> --bind 127.0.0.1"},'
+                ' "test": {"unit": "rm -rf /"}}',
             ),
         )
     )

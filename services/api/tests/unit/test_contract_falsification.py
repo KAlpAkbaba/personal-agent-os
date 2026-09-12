@@ -91,18 +91,33 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
             "test_committed_contract_matches_the_live_request_models"
         ),
     ),
+    "app-manifest.example.json": Contract(
+        guard="test_the_shared_example_is_what_the_templates_actually_send",
+        why=(
+            "every app the factory produced was refused at the device's first parse - `{port}` "
+            "where the device spells `<port>`, no `run` section, no `port` at all - and both "
+            "halves' suites were green throughout"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+    ),
+    "file-search-roots.json": Contract(
+        guard="test_the_service_reads_its_bucket_names_from_the_contract_and_does_not_restate_them",
+        why=(
+            "the Cloud Core put the owner's own Turkish word in payload.roots and the device "
+            "answered 'payload.roots must be absolute paths'; folder search was broken in "
+            "production for three days with both halves' suites green"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+    ),
     "device-protocol.schema.json": Contract(
         guard="test_hello_knows_exactly_the_fields_the_schema_declares",
         why=(
             "ADR-0118 added build_id to HelloFrame and to the agent and never to the schema "
-            "that calls itself authoritative"
+            "that calls itself authoritative. Both halves are held to it since B03: the C# "
+            "side by DeviceProtocolSchemaContractTests, which compares HelloMessage's wire "
+            "names with the schema's own"
         ),
-        held_by=("services/api",),
-        unheld=(
-            "devices/windows-agent cites this schema in comments and is held to nothing: the "
-            "C# frame types are not compared against it. Registered here so the gap is "
-            "counted rather than invisible - closing it belongs to B03 (contract parity)."
-        ),
+        held_by=("services/api", "devices/windows-agent"),
     ),
 }
 

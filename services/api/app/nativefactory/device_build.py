@@ -245,11 +245,38 @@ def build_on_device(
     )
     if not tested.ok:
         return _fail(db, row, tested, step="project.test")
+    # What the DEVICE said about its own test run, recorded before anything is decided from
+    # it. The device answers `counts_parsed` precisely because it knows when it could not read
+    # its runner's output - and until 2026-09-12 nothing here read that field, so a run whose
+    # counts were unknown was stamped `verified` with `passed: null, failed: null`. A verdict
+    # about tests nobody could count is not a verdict (B03 req 467).
     exit_code = tested.result.get("exit_code")
+    counts_parsed = bool(tested.result.get("counts_parsed"))
+    row.tests_json = {
+        "exit_code": exit_code,
+        "passed": tested.result.get("passed"),
+        "failed": tested.result.get("failed"),
+        "counts_parsed": counts_parsed,
+        "duration_ms": tested.result.get("duration_ms"),
+        "report_tail": _tail(str(tested.result.get("report_tail") or ""), 1000),
+    }
     if exit_code not in (0, None):
         message = _tail(str(tested.result.get("report_tail") or ""), 1000)
         _touch(db, row, STATE_FAILED, error_class="tests_failed", error_message=message)
         return DeviceBuildOutcome(ok=False, error_class="tests_failed", message=message)
+    if exit_code is None or not counts_parsed:
+        # The tests ran and the device could not say how they went. "Nothing failed" is not
+        # the same claim as "nothing was counted", and only one of them is true here.
+        reason = (
+            "the device could not read the test counts"
+            if exit_code is not None
+            else "the device could not read the test runner's exit code"
+        )
+        message = f"{reason}; this build is not verified. " + _tail(
+            str(tested.result.get("report_tail") or ""), 800
+        )
+        _touch(db, row, STATE_FAILED, error_class="tests_unreadable", error_message=message)
+        return DeviceBuildOutcome(ok=False, error_class="tests_unreadable", message=message)
 
     # ---- publish: the artefact itself ---------------------------------------------------
     published = device.run(
@@ -286,11 +313,9 @@ def build_on_device(
         "kind": inspected.result.get("kind"),
         "read_back_by": "device file.inspect",
     }
-    tests = {
-        "exit_code": exit_code,
-        "passed": tested.result.get("passed"),
-        "failed": tested.result.get("failed"),
-    }
+    # Built once, at the test step, and carried from there: a second construction here used
+    # to drop `counts_parsed` again on its way into the row (B03 req 467).
+    tests = row.tests_json or {}
 
     # The state this run has EARNED, and no more.
     #

@@ -22,6 +22,25 @@ from tests.voice_corpus.harness import build_harness
 # ------------------------------------------------------------------- creative.design
 
 
+def test_creative_design_without_a_named_tool_reaches_a_tool_that_can_work() -> None:
+    """B03 req 505. The default used to be Figma, and ``FigmaProvider.token_present`` is a
+    hard-coded ``False`` with nothing wired to set it - an honest placeholder for a credential
+    store that does not exist. So an owner who said "bir arayuz tasarla" without naming a
+    program got ``dependency_unavailable`` every single time: the tool failed by construction,
+    and no owner could ever get through it. Naming Figma still reaches that refusal (the test
+    below); naming nothing now reaches Paint, which does the work with Pillow."""
+    h = build_harness()
+    sid = h.new_session()
+    call = h.tool(sid, "c-0", "creative.design", {"width": 400, "height": 300})
+
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] != "refused", body
+    with h.factory() as db:
+        row = db.get(CreativeRunRow, uuid.UUID(body["run_id"]))
+        assert row.tool == "paint"
+
+
 def test_creative_design_figma_absent_is_an_honest_refusal() -> None:
     h = build_harness()
     sid = h.new_session()

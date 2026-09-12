@@ -112,8 +112,19 @@ public sealed class SearchInspectReadTests : IDisposable
         Assert.False(outside.Retryable);
         Assert.DoesNotContain("System32", outside.Message, StringComparison.OrdinalIgnoreCase);
 
-        var relative = _lab.ExpectFailure(DocumentCapabilityNames.FileSearch, new JsonObject { ["roots"] = new JsonArray("documents"), ["pattern"] = "*" });
+        // "documents" is no longer a validation error: since 2026-09-12 it is a BUCKET NAME
+        // the device resolves (packages/protocol/file-search-roots.json), because only this
+        // machine knows where the owner's Documents folder is. It is still refused HERE - the
+        // lab's only authorised root is its own run directory - but as permission_denied,
+        // through the same resolve-then-confine path an absolute path takes. A bucket is never
+        // a way around the root list; FileSearchRootsContractTests holds that from the other
+        // side. What stays a validation error is a relative folder that names no bucket.
+        var bucketOutsideRoots = _lab.ExpectFailure(DocumentCapabilityNames.FileSearch, new JsonObject { ["roots"] = new JsonArray("documents"), ["pattern"] = "*" });
+        Assert.Equal(ErrorClasses.PermissionDenied, bucketOutsideRoots.ErrorClass);
+
+        var relative = _lab.ExpectFailure(DocumentCapabilityNames.FileSearch, new JsonObject { ["roots"] = new JsonArray("Faturalar"), ["pattern"] = "*" });
         Assert.Equal(ErrorClasses.ValidationError, relative.ErrorClass);
+        Assert.Contains("absolute path", relative.Message, StringComparison.Ordinal);
 
         var file = _lab.ExpectFailure(DocumentCapabilityNames.FileSearch, new JsonObject { ["roots"] = new JsonArray(_lab.PathOf("notlar.md")), ["pattern"] = "*" });
         Assert.Equal(ErrorClasses.ValidationError, file.ErrorClass);

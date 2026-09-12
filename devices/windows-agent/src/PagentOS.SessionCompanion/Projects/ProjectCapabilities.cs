@@ -218,10 +218,15 @@ public sealed class ProjectCapabilities : IDisposable
         var project = Locate(payload);
         var key = OptionalString(payload, "command_key", MaxCommandKeyChars);
         var command = Pick(project.Manifest.Run, key, "run", project.Slug);
-        if (command.IsBatch)
+        if (command.IsBatch || project.Manifest.Port == ProjectManifest.NoPort)
         {
             // M25: Blender and Unity are batch runs, not servers. There is no port to bind and
             // nothing to probe: the run WAITS for the exit and answers with it.
+            //
+            // B03 (2026-09-12): so is any project that declares `port: 0` - "I bind nothing".
+            // The CLI-tool template is one: `node cli.js` prints and exits. Waiting for a
+            // socket it never opens would have turned every CLI run into a timeout, which is
+            // why the template had no port at all and was refused outright instead.
             var batch = await Runner.RunBatchAsync(project, command, budget, cancellationToken).ConfigureAwait(false);
             return new JsonObject
             {

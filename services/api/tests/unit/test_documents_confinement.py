@@ -132,22 +132,43 @@ def test_a_named_target_with_a_bad_pattern_is_refused_for_inspect_too(db, servic
 # ------------------------------------------------------- known aliases still reach it
 
 
-def test_a_known_folder_alias_still_reaches_the_device(db, service) -> None:
+def test_a_known_folder_alias_reaches_the_device_as_a_name_the_device_knows(db, service) -> None:
+    """B03 req 3. This test used to assert ``roots == ["Masaüstü"]`` - the owner's Turkish
+    word, on the wire, to a device that has never known it. That is the defect: the device
+    answered ``payload.roots must be absolute paths`` and folder search was broken in
+    production for three days with this test green. The alias now becomes the bucket name
+    the shared contract declares, and the device resolves it."""
     device = build_fake_device_action()
 
     receipt = service.search(db, device, folder="Masaüstü", extensions=[".pdf"])
 
     assert receipt["execution_status"] == "executed"
-    assert device.payload_for("file.search")["roots"] == ["Masaüstü"]
+    assert device.payload_for("file.search")["roots"] == ["desktop"]
 
 
-def test_a_plain_relative_folder_still_reaches_the_device(db, service) -> None:
+def test_a_bucket_with_a_subfolder_reaches_the_device_as_one_entry(db, service) -> None:
+    device = build_fake_device_action()
+
+    receipt = service.search(db, device, folder="Belgelerim/Faturalar", pattern="fatura")
+
+    assert receipt["execution_status"] == "executed"
+    assert device.payload_for("file.search")["roots"] == ["documents/Faturalar"]
+
+
+def test_a_relative_folder_that_names_no_bucket_is_refused_here_in_the_owners_words(
+    db, service
+) -> None:
+    """It used to be forwarded, and the device refused it with ``validation_error`` - a class
+    the owner never saw a reason for. Cloud Core genuinely does not know which folder
+    ``sozlesmeler/2026`` is, and saying so is the honest answer."""
     device = build_fake_device_action()
 
     receipt = service.search(db, device, folder="sozlesmeler/2026", pattern="sozlesme")
 
-    assert receipt["execution_status"] == "executed"
-    assert device.payload_for("file.search")["roots"] == ["sozlesmeler/2026"]
+    assert receipt["execution_status"] == "refused"
+    assert receipt["error_class"] == "invalid_argument"
+    assert "klasörü tanımıyorum" in receipt["speech"]
+    assert device.calls == []
 
 
 # ---------------------------------------------------- folder focus persistence source
@@ -169,11 +190,15 @@ def test_folder_focus_for_a_raw_relative_folder_comes_from_searched_roots_not_th
     the persisted focus identity when it is not a name this layer already recognises —
     only the DEVICE's own ``searched_roots`` may. A fake device that resolves the caller's
     relative folder to a different, absolute, real path proves the persisted focus tracks
-    THAT, not the raw argument."""
+    THAT, not the raw argument.
+
+    The folder is bucket-prefixed since 2026-09-12 (B03 req 3): a bare relative folder no
+    longer reaches the device at all, so the rule this test protects is now exercised with a
+    shape the contract actually admits."""
     resolved_root = "C:\\Users\\owner\\Documents\\sozlesmeler\\2026"
 
     def _search(payload: dict) -> DeviceRunResult:
-        assert payload["roots"] == ["sozlesmeler/2026"]
+        assert payload["roots"] == ["documents/sozlesmeler/2026"]
         return DeviceRunResult(
             True,
             result={
@@ -202,13 +227,13 @@ def test_folder_focus_for_a_raw_relative_folder_comes_from_searched_roots_not_th
 
     device = FakeDeviceAction(results={"file.search": _search})
 
-    receipt = service.search(db, device, folder="sozlesmeler/2026")
+    receipt = service.search(db, device, folder="documents/sozlesmeler/2026")
 
     assert receipt["execution_status"] == "executed"
     folder = focus_module.current(db, FOCUS_KIND_FOLDER)
     assert folder is not None
     assert folder.object_id == resolved_root
-    assert folder.object_id != "sozlesmeler/2026"
+    assert folder.object_id != "documents/sozlesmeler/2026"
     assert focus_module.current(db, FOCUS_KIND_FILE) is None
 
 

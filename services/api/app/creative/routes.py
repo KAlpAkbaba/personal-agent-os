@@ -54,6 +54,12 @@ def _row_dict(row: CreativeRunRow) -> dict[str, Any]:
     }
 
 
+# `/runs` FIRST, and before `/{run_id}`: FastAPI matches in declaration order, so a literal
+# segment declared after a path parameter is swallowed by it. That is exactly what happened -
+# the Cockpit asked for `/v1/creative/runs`, `run_id: uuid.UUID` refused "runs" as a UUID, and
+# the panel served HTTP 422 for every owner, for ever (B03 req 510/715). The bare prefix stays
+# as an alias so nothing that already worked stops working.
+@router.get("/runs")
 @router.get("")
 async def list_creative_runs(request: Request) -> dict[str, Any]:
     artifacts = _artifacts(request)

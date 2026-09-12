@@ -292,9 +292,16 @@ ROLLBACK_PLAN       : workflow dosyası geri alınır; kod etkilenmez
 ```
 
 ```
-BATCH_ID            : B03
+BATCH_ID            : B03                                       [KAPANDI 2026-09-12]
 NAME                : Gerçek/sahte sözleşme eşitliği ve dört canlı kusur
-REQUIREMENT_IDS     : 3, 4, 5, 147, 168, 417, 418, 419, 420, 421, 467, 505, 510, 715
+REQUIREMENT_IDS     : 3, 4, 5, 147, 168, 417-421, 467, 505, 510, 715 — on dördünün on dördü DONE
+SONUC               : Dört canlı üretim kusurunun dördü de kapandı. İki yeni paylaşılan
+                      sözleşme (file-search-roots, app-manifest.example), her ikisi de iki
+                      yarıdan okunuyor. Cihaz da iki yerde eksikti: bir web projesi
+                      "hiçbir şeye bağlanmıyorum" diyemiyordu ve kova adı çözemiyordu.
+                      B02'den devreden device-protocol.schema.json'ın C# yarısı da kapandı.
+YOL USTUNDE         : Türkçe İ katlama kusuru (büyük İ ile yazılan klasör reddediliyordu);
+                      üç sahtenin daha `counts_parsed` düşürmesi — artık mekanik bekçisi var.
 GOAL                : Bulut ile cihazın konuştuğu her şekil tek paylaşılan artefakttan okunsun;
                       klasör araması, üç uygulama şablonu, yaratıcı paneli ve dürüst test sayısı
                       üretimde çalışsın.

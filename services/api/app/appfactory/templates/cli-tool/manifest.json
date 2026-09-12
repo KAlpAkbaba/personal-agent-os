@@ -1,6 +1,10 @@
 {
   "entry": "cli.js",
+  "run": {
+    "start": "node cli.js"
+  },
   "test": {
     "unit": "node tests/run.js"
-  }
+  },
+  "port": 0
 }

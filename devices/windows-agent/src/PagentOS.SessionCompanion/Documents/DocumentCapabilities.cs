@@ -290,12 +290,22 @@ public sealed class DocumentCapabilities
         {
             foreach (var raw in requested)
             {
-                if (!Path.IsPathRooted(raw))
+                // An entry is an absolute path, or a bucket name the DEVICE resolves
+                // (packages/protocol/file-search-roots.json). The Cloud Core cannot name the
+                // owner's Documents folder - only this machine can - so it sends the bucket
+                // and this resolves it. Either way the result is confined below: a bucket is
+                // never more authority than a path, and cannot reach anywhere the owner's
+                // well-known folders do not.
+                var candidate = raw;
+                if (!Path.IsPathRooted(candidate))
                 {
-                    throw DocumentErrors.Invalid("payload.roots must be absolute paths");
+                    candidate = WellKnownFolders.ResolveEntry(raw)
+                                ?? throw DocumentErrors.Invalid(
+                                    $"payload.roots takes an absolute path or one of: {WellKnownFolders.NamesForMessage}"
+                                    + " (optionally followed by relative segments)");
                 }
 
-                var resolved = Roots.Confine(raw)
+                var resolved = Roots.Confine(candidate)
                                ?? throw DocumentErrors.Denied(RootsRefusal("a search root"));
                 if (!Directory.Exists(resolved))
                 {

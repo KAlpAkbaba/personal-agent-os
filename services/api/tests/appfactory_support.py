@@ -76,8 +76,20 @@ def project_stop_ok(_payload: dict[str, Any]) -> DeviceRunResult:
 
 
 def project_test_ok(_payload: dict[str, Any]) -> DeviceRunResult:
+    # `counts_parsed` is part of what the REAL device answers (ProjectCapabilities.TestAsync):
+    # it is how the device says whether it could read its runner's output at all. Every fake
+    # that left it out let the Cloud Core's "verified" verdict be tested against a shape the
+    # device never sends - which is how row 26.16 was stamped verified with `passed: null`.
     return DeviceRunResult(
-        True, result={"exit_code": 0, "passed": 5, "failed": 0, "report_tail": "5/5 passed"}
+        True,
+        result={
+            "exit_code": 0,
+            "passed": 5,
+            "failed": 0,
+            "counts_parsed": True,
+            "duration_ms": 240,
+            "report_tail": "5/5 passed",
+        },
     )
 
 
@@ -88,6 +100,8 @@ def project_test_failing(_payload: dict[str, Any]) -> DeviceRunResult:
             "exit_code": 1,
             "passed": 3,
             "failed": 2,
+            "counts_parsed": True,
+            "duration_ms": 310,
             "report_tail": "not ok - toggleDone flips only the matching task",
         },
     )

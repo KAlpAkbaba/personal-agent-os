@@ -33,9 +33,9 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 1 | Migration hatası release'i durdurur | `set -eu -o pipefail`; göç borusuz, rc 82 ile durur | Göç hatası promote'u bloklar | DONE | PA | P0 | — | B01 | scripts/cloud/release-cloud-core-bluegreen.sh, release-cloud-core.sh | cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1, test_release_health_contract.py | — | no | Kırmızı ÖNCE kanıtlandı (6 vaka); sahte docker artık göçü düşürebiliyor — eskiden düşüremiyordu |
 | 2 | Alembic sürümü release health'te doğrulanır | Sağlık `schema` kontrolü current vs head; sürüm rc 83 ile reddeder | Beklenen revizyon görülmeden yeşil yok | DONE | PR | P0 | 1 | B01 | services/api/app/release/schema.py, app/health.py | test_release_schema.py, test_release_health_contract.py, cloud-release-bluegreen.tests.ps1, cloud-release.tests.ps1 | docs/evidence/b01-schema-gate-2026-09-12.json | no | Gerçek PostgreSQL'de ok/fail gözlendi; satır geri yüklenip doğrulandı |
-| 3 | file.search mutlak path çözümü | Bulut klasör adı, cihaz mutlak yol istiyor | Klasör araması üretimde çalışır | BROKEN | NYP | P0 | 5 | B03 | services/api/app/files/, devices/windows-agent | — | ADR-0102 cihaz reddi 2026-09-09 | no | Canlı kusur #1 |
-| 4 | App Factory manifest'leri device contract'a uyar | `{port}` ve eksik `run`/`port` | Üç şablon kabul edilir | BROKEN | NYP | P0 | 5,421 | B03 | services/api/app/appfactory/ | — | cihaz `{`/`}` reddi | no | Canlı kusur #2-3 |
-| 5 | Fake device payload = gerçek wire shape | 7 sahte payload'a bakmıyor | Sahte makineden nazik olamaz | BROKEN | NYP | P0 | — | B03 | packages/protocol/, services/recovery-supervisor/tests/fakes/ | devices/windows-agent/tests/.../NativeManifestContractTests.cs | — | no | Dört canlı kusurun KÖKÜ |
+| 3 | file.search mutlak path çözümü | Kova adı sözleşmesi: cihaz çözüyor, sonra sınırlıyor | Klasör araması üretimde çalışır | DONE | PA | P0 | 5 | B03 | packages/protocol/file-search-roots.json, app/documents/service.py, .../Documents/WellKnownFolders.cs | test_file_search_roots_contract.py (29), FileSearchRootsContractTests.cs (9) | — | no | Kırmızı önce kanıtlandı (3/9 düştü). Yol üstünde: Türkçe İ katlama kusuru |
+| 4 | App Factory manifest'leri device contract'a uyar | Üç şablon da cihazın kabul ettiği şekilde | Üç şablon kabul edilir | DONE | PA | P0 | 5,421 | B03 | packages/protocol/app-manifest.example.json, app/appfactory/validation.py, templates/*/manifest.json | test_app_manifest_contract.py (17), AppManifestContractTests.cs (5) | — | no | `{port}`→`<port>`; cli-tool `run`+`port: 0` kazandı; doğrulayıcı artık cihazdan nazik değil |
+| 5 | Fake device payload = gerçek wire shape | Sahteler cihazın kendi kaynağından denetleniyor | Sahte makineden nazik olamaz | DONE | PA | P0 | — | B03 | tests/appfactory_support.py, tests/unit/test_nativefactory_device_build.py | test_device_fakes_match_the_device.py (5), test_contract_falsification.py (26) | — | no | Üç sahte `counts_parsed`/`duration_ms` düşürüyordu; artık eksik alan testte düşüyor |
 | 6 | /v1/world/facts secret redaction | DB parolası açık metin dönüyor | Sır hiçbir yanıtta yok | BROKEN | NYP | P0 | — | B04 | services/api/app/worldmodel/ | — | üretim yanıtı 2026-09-12 | no | Sahip oturumu gerekli ama sızıntı |
 | 7 | Log secret redaction | 13 desen log hattında yok | Sır loga düşmez | MISSING | NYP | P0 | 6 | B04 | services/api/app/observability/ | — | — | no | Desenler var, hat yok |
 | 8 | Health secret redaction | Kimliksiz sağlıkta desen yok | Sağlık sır sızdırmaz | MISSING | NYP | P0 | 6 | B04 | services/api/app/system/health.py | — | — | no | — |
@@ -201,7 +201,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 144 | RTF read | Yok | Okunur | MISSING | NYP | P2 | — | B52 | devices/windows-agent | — | — | no | — |
 | 145 | ODT read | Yok | Okunur | MISSING | NYP | P2 | — | B52 | devices/windows-agent | — | — | no | — |
 | 146 | Legacy Office formats | Yok | .doc/.xls/.ppt okunur | MISSING | NYP | P2 | — | B52 | devices/windows-agent | — | — | no | — |
-| 147 | File metadata search | Var ama klasör yolu kusuru yüzünden kırık | Çalışır | PARTIAL | NYP | P0 | 3 | B03 | app/files/ | — | cihaz reddi | no | 3 düzelmeden düzelmez |
+| 147 | File metadata search | Klasör araması çalışıyor | Çalışır | DONE | PA | P0 | 3 | B03 | app/documents/service.py | test_documents_confinement.py (15) | — | no | 3'ün doğrudan sonucu |
 | 148 | Full text search | Sözlüksel token örtüşmesi | Gerçek tam metin | PARTIAL | PA | P1 | 3 | B32 | app/files/ | files testleri | — | no | — |
 | 149 | Semantic document search | Yok | Anlamsal arama | MISSING | NYP | P2 | 51 | B37 | app/files/, app/memory/ | — | — | no | Gömme sağlayıcısına bağlı |
 | 150 | File deduplication | Yok | Sadeleşir | MISSING | NYP | P1 | 151 | B32 | app/files/ | — | — | no | — |
@@ -222,7 +222,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 165 | Safe atomic write | Artefaktta var, belge ailesinde yok | Her yerde | PARTIAL | PA | P2 | 154 | B34 | app/artifacts/, app/files/ | artifacts testleri | — | no | Artefakt yarısı örnek |
 | 166 | Owner approval by risk | Yok | Riskli mutasyon onay ister | MISSING | NYP | P2 | 160,674 | B34 | app/files/, app/security/ | — | — | onay politikası | — |
 | 167 | "Bu dosyayı düzenle" | Yok | Doğal akış | MISSING | NYP | P2 | 153 | B34 | app/voice/intent/ | — | — | no | — |
-| 168 | "Şu klasördeki dosyaları özetle" | Klasör araması kırık | Çalışır | BROKEN | NYP | P0 | 3 | B03 | app/files/, app/voice/intent/ | — | cihaz reddi | no | 3'ün doğrudan sonucu |
+| 168 | "Şu klasördeki dosyaları özetle" | 'Şu klasördeki dosyaları özetle' çalışıyor | Çalışır | DONE | PA | P0 | 3 | B03 | app/documents/service.py | test_file_search_roots_contract.py | — | no | 3'ün doğrudan sonucu |
 | 169 | "Bu iki dokümanı karşılaştır" | Executive şablonu var, 3'e bağımlı | Çalışır | PARTIAL | PA | P1 | 3 | B32 | app/executive/ | executive testleri | — | no | 548 ile aynı plan |
 | 170 | "Bu belgeyi güncelle ve kaydet" | Yok | Güncelle ve kaydet | MISSING | NYP | P2 | 153 | B34 | app/files/ | — | — | no | — |
 
@@ -531,11 +531,11 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 
 | ID | FEATURE | CURRENT_STATUS | TARGET_STATUS | IMPL | PROOF | PRI | DEPS | BATCH | SOURCE_REFERENCES | TEST_REFERENCES | RUNTIME_PROOF | OWNER_ACTION | NOTES |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 417 | Fixed template generation | Cihaz manifest'i reddediyor | Çalışır | BROKEN | NYP | P0 | 4,421 | B03 | app/appfactory/ | appfactory testleri | 0 uygulama | no | Canlı kusur |
-| 418 | Task tracker | `{port}` reddediliyor | Çalışır | BROKEN | NYP | P0 | 421 | B03 | app/appfactory/ | — | cihaz reddi | no | — |
-| 419 | Static site | `{port}` reddediliyor | Çalışır | BROKEN | NYP | P0 | 421 | B03 | app/appfactory/ | — | cihaz reddi | no | — |
-| 420 | CLI tool | `run` ve `port` yok | Çalışır | BROKEN | NYP | P0 | 421 | B03 | app/appfactory/ | — | cihaz reddi | no | — |
-| 421 | Template manifest contract | Paylaşılan sözleşme yok | Tek paylaşılan artefakt | BROKEN | NYP | P0 | 5 | B03 | packages/protocol/ | NativeManifestContractTests.cs deseni | — | no | Native yarısında çözüldü, app tarafında değil |
+| 417 | Fixed template generation | Şablonla üretim cihazda kabul ediliyor | Çalışır | DONE | PA | P0 | 4,421 | B03 | app/appfactory/ | test_app_manifest_contract.py | — | no | — |
+| 418 | Task tracker | `<port>` + port 8765 | Çalışır | DONE | PA | P0 | 421 | B03 | templates/task-tracker/manifest.json | test_appfactory_generator.py | — | no | — |
+| 419 | Static site | `<port>` + port 8766 | Çalışır | DONE | PA | P0 | 421 | B03 | templates/static-page/manifest.json | test_appfactory_generator.py | — | no | — |
+| 420 | CLI tool | `run: {start: node cli.js}` + `port: 0` | Çalışır | DONE | PA | P0 | 421 | B03 | templates/cli-tool/manifest.json, ProjectManifest.cs, ProjectCapabilities.cs | AppManifestContractTests.cs | — | no | Cihaz da eksikti: web projesi 'hiçbir şeye bağlanmıyorum' diyemiyordu |
+| 421 | Template manifest contract | Tek paylaşılan artefakt, iki yarı okuyor | Tek paylaşılan artefakt | DONE | PA | P0 | 5 | B03 | packages/protocol/app-manifest.example.json | test_app_manifest_contract.py, AppManifestContractTests.cs | — | no | — |
 | 422 | General requirements parser | Ayrıştırıyor sonra sessizce atıyor | Kullanılır | PARTIAL | PA | P2 | 425 | B40 | app/appfactory/ | appfactory testleri | — | no | Sessiz veri kaybı |
 | 423 | Architecture planner | Yok | Planlar | MISSING | NYP | P2 | 425 | B40 | app/appfactory/ | — | — | no | — |
 | 424 | Project planner | Yok | Planlar | MISSING | NYP | P2 | 423 | B40 | app/appfactory/ | — | — | no | — |
@@ -589,7 +589,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 464 | Relaunch | Yok | Çalışır | MISSING | NYP | P1 | 462 | B33 | devices/windows-agent | — | — | no | — |
 | 465 | Persistence | Yok | Doğrulanır | MISSING | NYP | P1 | 462 | B33 | devices/windows-agent | — | — | no | — |
 | 466 | App log | Yok | Okunur | MISSING | NYP | P1 | 462 | B33 | devices/windows-agent | — | — | no | — |
-| 467 | Test count parsing | Cihaz "ayrıştırılamadı" diyor, bulut okumuyor | Dürüst sayı | BROKEN | NYP | P0 | 5 | B03 | app/nativefactory/ | — | passed:null, failed:null ile "verified" | no | Yalan verdict |
+| 467 | Test count parsing | `counts_parsed` okunuyor; sayılamayan koşu `tests_unreadable` | Dürüst sayı | DONE | PA | P0 | 5 | B03 | app/nativefactory/device_build.py | test_nativefactory_device_build.py (20, 3 yeni regresyon) | — | no | `exit_code: None` da artık geçer not değil |
 | 468 | Native install | Ölü araç | Çalışır | MISSING | NYP | P1 | — | B33 | app/nativefactory/ | — | — | no | — |
 | 469 | Native uninstall | Yok | Çalışır | MISSING | NYP | P1 | 468 | B33 | app/nativefactory/ | — | — | no | — |
 | 470 | Native fix | Ölü araç | Çalışır | MISSING | NYP | P1 | 462 | B33 | app/nativefactory/ | — | — | no | — |
@@ -636,12 +636,12 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 502 | Photoshop driver | Red | Sürücü | MISSING | NYP | P3 | 500 | B43 | app/creative/ | — | — | lisans | v1.0'ı bloklamaz |
 | 503 | Illustrator detection | Çalışıyor | Aynı | DONE | PA | P2 | — | — | app/creative/ | creative testleri | — | no | — |
 | 504 | Illustrator driver | Red | Sürücü | MISSING | NYP | P3 | 500 | B43 | app/creative/ | — | — | lisans | v1.0'ı bloklamaz |
-| 505 | Figma integration | Jeton sabit `False`; `creative.design` varsayılanı Figma | Varsayılan çalışan yola | BROKEN | NYP | P0 | — | B03 | app/creative/ | — | araç her zaman başarısız | Figma jetonu | Yapısal başarısızlık |
+| 505 | Figma integration | `creative.design` varsayılanı Paint | Varsayılan çalışan yola | DONE | PA | P0 | — | B03 | app/voice/realtime_sessions/tools_creative.py | test_creative_tools.py::..._reaches_a_tool_that_can_work | — | Figma jetonu | Figma jetonu hâlâ bağlı değil; adıyla istenirse dürüst ret veriyor (kasıtlı) |
 | 506 | Layer-aware editing | Yok | Çalışır | MISSING | NYP | P2 | 507 | B43 | app/creative/ | — | — | no | — |
 | 507 | PSD support | Yok | Çalışır | MISSING | NYP | P2 | — | B43 | app/creative/ | — | — | no | — |
 | 508 | SVG support | Yok | Çalışır | MISSING | NYP | P2 | — | B43 | app/creative/ | — | — | no | — |
 | 509 | Export to owner disk | Çıktı yalnız MinIO'da | Diske teslim | MISSING | NYP | P2 | 413 | B43 | app/creative/, devices/windows-agent | — | — | no | Artefakt teslim yolu örnek alınmalı |
-| 510 | Creative history | Panel kalıcı 422 | Çalışır | BROKEN | NYP | P0 | 715 | B03 | apps/web/app/lib/cockpit/creative.ts, app/creative/routes.py | — | HTTP 422 | no | Web `/v1/creative/runs`, API `/{run_id}` bekliyor |
+| 510 | Creative history | Panel veri gösteriyor | Çalışır | DONE | PA | P0 | 715 | B03 | app/creative/routes.py | test_web_asks_for_routes_that_exist.py (12) | — | no | 715 ile aynı düzeltme |
 | 511 | Undo/redo | Yok | Çalışır | MISSING | NYP | P2 | 160 | B43 | app/creative/ | — | — | no | — |
 | 512 | "Bu fotoğrafı düzelt" | Yok | Çalışır | MISSING | NYP | P2 | 494 | B43 | app/voice/intent/ | — | — | no | — |
 
@@ -910,7 +910,7 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 712 | Feature status badges | Yok | Rozetler | MISSING | NYP | P1 | 700 | B24 | apps/web/ | — | — | no | — |
 | 713 | PROVEN_REAL badges | Yok | Rozetler | MISSING | NYP | P1 | 712 | B24 | apps/web/ | — | — | no | Bu matrisi ürüne bağlar |
 | 714 | Cockpit panel cleanup | 13/27 boş, 1 kalıcı 422 | Boş aile panel doğurmaz | BROKEN | NYP | P1 | 685 | B24 | apps/web/ | — | — | no | — |
-| 715 | Broken /creative/runs route fix | Kalıcı HTTP 422 | Çalışır | BROKEN | NYP | P0 | — | B03 | apps/web/app/lib/cockpit/creative.ts:36, app/creative/routes.py | — | 422 | no | 510 ile aynı kusur |
+| 715 | Broken /creative/runs route fix | `/v1/creative/runs` artık `/{run_id}`'den önce | Çalışır | DONE | PA | P0 | — | B03 | app/creative/routes.py | test_web_asks_for_routes_that_exist.py (12) | — | no | Web'in istediği 10 yolun hepsi API'de doğrulanıyor |
 | 716 | PWA navigation | Kurulu PWA tek bağlantılı sayfada açılıyor | Gezinilebilir | PARTIAL | NYP | P1 | 685 | B23 | apps/web/ | — | — | no | — |
 | 717 | Dark fullscreen Living Core | Çalışıyor | Aynı | DONE | PR | P1 | — | — | apps/web/ | web testleri | üretim | no | Rewrite gerekmez |
 | 718 | Gold/amber visual identity | Çalışıyor | Aynı | DONE | PA | P1 | — | — | apps/web/ | web testleri | — | no | — |
@@ -1063,6 +1063,86 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
      proof  : PROVEN_AUTOMATED — değişmedi; pipefail altında gözden geçirildi
      date   : 2026-09-12
 ```
+
+### B03 — Gerçek/sahte sözleşme eşitliği ve dört canlı kusur · 2026-09-12
+
+```
+3, 147, 168   status : DONE
+     commit : <B03>
+     tests  : services/api/tests/unit/test_file_search_roots_contract.py (29),
+              test_documents_confinement.py (15),
+              devices/.../Documents/FileSearchRootsContractTests.cs (9)
+     proof  : PROVEN_AUTOMATED — cihaz düzeltmesi geri alınarak KIRMIZI kanıtlandı
+              (3 başarısız / 6 geçen), dosya sha256 ile geri yüklendi
+     date   : 2026-09-12
+     note   : Kök neden hiç yazılmamış bir sözleşmeydi. Bulut kova adı (hatta sahibin
+              "Masaüstü" kelimesi) gönderiyordu; cihaz mutlak yol istiyordu. Artık
+              packages/protocol/file-search-roots.json var: cihaz kova adını KENDİ çözüyor
+              (sahibin klasörünü yalnız o bilebilir) ve tam olarak mutlak yolu sınırladığı
+              gibi sınırlıyor — kova kök listesinin etrafından dolaşamıyor.
+
+4, 417-421    status : DONE
+     commit : <B03>
+     tests  : test_app_manifest_contract.py (17), AppManifestContractTests.cs (5),
+              test_appfactory_generator.py, test_appfactory_validation.py
+     proof  : PROVEN_AUTOMATED — üç şablon da gerçek ProjectScaffold'dan geçiyor;
+              `{port}`, eksik `run` ve eksik `port` şekilleri ayrı ayrı reddediliyor
+     date   : 2026-09-12
+     note   : Üçüncü sebep cihazın da eksiğiydi: `port: 0` ("hiçbir şeye bağlanmıyorum")
+              3B'nin kelimesiydi ve bir web projesi onu söyleyemiyordu, yani CLI aracının
+              gönderebileceği DOĞRU bir manifest yoktu. Artık var ve portsuz proje batch
+              olarak çalıştırılıyor. Bulut doğrulayıcısı da artık cihazdan nazik değil.
+
+5             status : DONE
+     commit : <B03>
+     tests  : test_device_fakes_match_the_device.py (5), test_contract_falsification.py (26)
+     proof  : PROVEN_AUTOMATED — sahtenin anahtarları CİHAZIN kendi kaynağından okunuyor;
+              eksik veya uydurulmuş alan testte düşüyor
+     date   : 2026-09-12
+     note   : Üç ayrı sahte `counts_parsed` (ve biri `duration_ms`) düşürüyordu. Bu, bu
+              deponun dördüncü "sahte makineden nazik" vakası; artık mekanik olarak yakalanıyor.
+
+467           status : DONE
+     commit : <B03>
+     tests  : test_nativefactory_device_build.py (20; üçü yeni regresyon)
+     proof  : PROVEN_AUTOMATED — sayılamayan bir test koşusu `tests_unreadable` ile duruyor
+              ve publish'e hiç geçmiyor
+     date   : 2026-09-12
+     note   : Cihaz `counts_parsed: false` diyordu, bulut okumuyordu; üretimdeki 26.16
+              `passed: null, failed: null` ile "verified" damgalanmıştı. `exit_code: None`
+              de artık geçer not değil.
+
+505           status : DONE
+     commit : <B03>
+     tests  : test_creative_tools.py::..._reaches_a_tool_that_can_work
+     proof  : PROVEN_AUTOMATED — tool adlandırılmadığında Paint'e gidiyor ve iş yapıyor
+     date   : 2026-09-12
+     note   : Varsayılan Figma'ydı ve `FigmaProvider.token_present` hiçbir şeyin set etmediği
+              sabit `False`. Adıyla Figma isteyen hâlâ dürüst reddi alıyor — kasıtlı.
+
+510, 715      status : DONE
+     commit : <B03>
+     tests  : test_web_asks_for_routes_that_exist.py (12)
+     proof  : PROVEN_AUTOMATED — Cockpit'in bildirdiği 10 yolun hepsi API'nin OpenAPI
+              belgesinde var; mekanizma da pinlendi (parametreden sonra bildirilen literal)
+     date   : 2026-09-12
+     note   : `/{run_id}` "runs" segmentini yutuyordu: UUID değil → kalıcı 422. Bekçi
+              METODU henüz kontrol etmiyor; bu sınır testin kendi docstring'inde yazılı.
+
+B02'DEN DEVREDEN  status : DONE
+     tests  : devices/.../Protocol/DeviceProtocolSchemaContractTests.cs (4)
+     proof  : PROVEN_AUTOMATED — HelloMessage'ın wire adları şemanın kendi `$defs.hello`
+              tanımıyla karşılaştırılıyor; ADR-0118'in eklediği build_id pinlendi
+     date   : 2026-09-12
+     note   : device-protocol.schema.json kendini "authoritative" ilan ediyordu ve C# yarısı
+              ona hiç tutulmuyordu. Artık tutuluyor; sözleşme kaydında `unheld` notu kalktı.
+```
+
+**B03'te yol üstünde bulunan ve aynı batch'te kapatılan kusur:** Python'un `"İndirilenler".lower()`
+sonucu `i` + U+0307 (birleşik nokta) — hiçbir alias anahtarına uymuyor. Yani sahibin Türkçe
+klavyeyle yazdığı büyük **İ**'li klasör adı "tanımıyorum" ile reddediliyordu. `_fold` artık
+İ/I/ı/i̇ biçimlerini tek harfe indiriyor; kapalı bir klasör kelime dağarcığında nokta konusunda
+hoşgörülü olmak doğru, yanlış ret değil. (`tr-TR` birinci sınıf — `CLAUDE.md`.)
 
 ### B02 — CI kapsamı ve yanlışlama kapısı · 2026-09-12
 

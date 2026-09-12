@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Final
 
 from app.creative.service import CreativeService
-from app.creative.spec import EXPORT_FORMATS, TOOL_FIGMA, TOOL_PAINT, TOOLS
+from app.creative.spec import EXPORT_FORMATS, TOOL_PAINT, TOOLS
 from app.voice.errors import VoiceError, VoiceErrorClass
 
 if TYPE_CHECKING:
@@ -253,10 +253,18 @@ def creative_cleanup(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
 
 
 def creative_design(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """ "Figma'da buna benzeyen bir arayüz tasarla." (spec §5)."""
+    """ "Figma'da buna benzeyen bir arayüz tasarla." (spec §5).
+
+    The default tool is Paint, not Figma (B03 req 505). ``FigmaProvider.token_present`` is a
+    hard-coded ``False`` with nothing wired to set it - an honest placeholder for a credential
+    store that does not exist yet - so defaulting to Figma made this tool fail by construction
+    for every owner who did not name a tool: ``dependency_unavailable``, every time, with no
+    path through it. Naming Figma still reaches that refusal, which is the point of the
+    refusal; not naming anything now reaches the one tool that actually does the work.
+    """
     db = _require_db(ctx, TOOL_CREATIVE_DESIGN)
     service = _service(ctx, TOOL_CREATIVE_DESIGN)
-    tool = _resolve_tool(ctx, arguments, default=TOOL_FIGMA)
+    tool = _resolve_tool(ctx, arguments, default=TOOL_PAINT)
     name = (
         str(arguments.get("name"))
         if isinstance(arguments.get("name"), str) and arguments.get("name")

@@ -101,7 +101,22 @@ def _healthy() -> FakeDevice:
     return FakeDevice(
         project_scaffold=DeviceRunResult(True, result={"root_path": ROOT, "files_written": 9}),
         project_run_build=DeviceRunResult(True, result={"command_key": "build"}),
-        project_test=DeviceRunResult(True, result={"exit_code": 0, "passed": 3, "failed": 0}),
+        # The shape the REAL device returns: ProjectCapabilities.TestAsync always answers
+        # `counts_parsed` - it is how the device says whether it could read its runner's
+        # output at all. The fake omitted it, so nothing here could see that the Cloud Core
+        # ignored it and stamped `verified` with `passed: null` (B03 req 467, and the same
+        # class of gap the `file` wrapper comment below records).
+        project_test=DeviceRunResult(
+            True,
+            result={
+                "exit_code": 0,
+                "passed": 3,
+                "failed": 0,
+                "counts_parsed": True,
+                "duration_ms": 120,
+                "report_tail": "Passed!  - Failed: 0, Passed: 3",
+            },
+        ),
         project_run_publish=DeviceRunResult(True, result={"command_key": "publish"}),
         file_inspect=DeviceRunResult(
             # The shape the REAL device returns: DocumentCapabilities.Inspect wraps
@@ -217,7 +232,12 @@ def test_the_artefact_is_read_back_by_the_device_not_inferred_from_an_exit_code(
     assert outcome.artifact["read_back_by"] == "device file.inspect"
     assert row.artifact_path == ROOT + r"\out\notlarim.exe"
     assert device.payload_for("file.inspect")["path"] == row.artifact_path
-    assert row.tests_json == {"exit_code": 0, "passed": 3, "failed": 0}
+    # The whole thing the device said about its test run, `counts_parsed` included - that
+    # field is what decides whether a build may be called verified at all (B03 req 467).
+    assert row.tests_json["exit_code"] == 0
+    assert row.tests_json["passed"] == 3
+    assert row.tests_json["failed"] == 0
+    assert row.tests_json["counts_parsed"] is True
 
 
 def test_an_inspect_that_answers_nothing_usable_is_named_not_stamped(db):
@@ -314,6 +334,63 @@ def test_an_agent_older_than_row_26_16_leaves_the_build_unverified(db):
     assert row.verdict_json["ok"] is False
     assert "no PE block" in row.verdict_json["reason"]
     assert row.verdict_json["not_checked"] == ["version", "subsystem"]
+
+
+def test_a_test_run_whose_counts_could_not_be_read_is_not_a_pass(db):
+    """B03 req 467. The device says `counts_parsed: false` precisely when it could not read
+    its runner's output. Nothing here read that field, so production's row 26.16 was stamped
+    `verified` carrying `passed: null, failed: null` - "nothing failed" and "nothing was
+    counted" recorded as the same thing. Only one of them was true."""
+    device = _healthy()
+    device._answers["project_test"] = DeviceRunResult(
+        True,
+        result={
+            "exit_code": 0,
+            "passed": None,
+            "failed": None,
+            "counts_parsed": False,
+            "report_tail": "Test run for tests.dll (.NETCoreApp,Version=v10.0)",
+        },
+    )
+    row = _row(db)
+
+    outcome = build_on_device(db, row, device)
+
+    assert outcome.ok is False
+    assert outcome.error_class == "tests_unreadable"
+    assert row.state == STATE_FAILED
+    assert "could not read the test counts" in row.error_message
+    assert row.tests_json["counts_parsed"] is False
+    # And it never went on to publish something it could not vouch for.
+    assert [c for c, _ in device.calls] == ["project.scaffold", "project.run", "project.test"]
+
+
+def test_a_test_run_with_no_exit_code_is_not_a_pass_either(db):
+    """`exit_code: None` used to fall through the `not in (0, None)` check as success."""
+    device = _healthy()
+    device._answers["project_test"] = DeviceRunResult(
+        True,
+        result={"exit_code": None, "passed": 3, "failed": 0, "counts_parsed": True},
+    )
+    row = _row(db)
+
+    outcome = build_on_device(db, row, device)
+
+    assert outcome.ok is False
+    assert outcome.error_class == "tests_unreadable"
+    assert "exit code" in row.error_message
+
+
+def test_a_healthy_test_run_records_the_counts_the_device_reported(db):
+    """The counts are kept, not just consulted: a verified build can say what its tests did."""
+    device = _healthy()
+    row = _row(db)
+
+    build_on_device(db, row, device)
+
+    assert row.tests_json["passed"] == 3
+    assert row.tests_json["failed"] == 0
+    assert row.tests_json["counts_parsed"] is True
 
 
 # ------------------------------------------------------------------ the refusal matrix

@@ -46,13 +46,23 @@ _RESERVED_NAMES = frozenset(
 )
 
 #: The fixed allowlist a manifest's ``run``/``test`` command values must be a member of,
-#: byte for byte (module docstring point 5). ``{port}``/``{entry}`` are the only
-#: substitution tokens a command template may carry — filled in by the DEVICE at
-#: dispatch time (the free port it bound / the manifest's own entry), never by this
-#: layer or by the model.
+#: byte for byte (module docstring point 5). ``<port>`` is the only substitution token a
+#: command template may carry — filled in by the DEVICE at dispatch time, never by this layer
+#: or by the model.
+#:
+#: The token is ``<port>``, not ``{port}``, since 2026-09-12 (B03 req 4/418/419). The device
+#: refuses ``{`` and ``}`` anywhere in a command as composition characters and has always
+#: spelled its own placeholder ``<port>`` (``ProjectManifest.PortPlaceholder``). Two templates
+#: shipped ``{port}``, so every app the factory ever produced was refused at the device's
+#: first parse - with both halves' suites green, because each only ever restated its own
+#: spelling to itself. ``packages/protocol/app-manifest.example.json`` is now the one file
+#: both halves read.
 ALLOWED_RUN_COMMANDS = frozenset(
     {
-        "python -m http.server {port} --bind 127.0.0.1",
+        "python -m http.server <port> --bind 127.0.0.1",
+        # `node <entry>`: the device admits the manifest's own entry file, spelled out. A CLI
+        # tool binds nothing, and says so with `port: 0`.
+        "node cli.js",
     }
 )
 ALLOWED_TEST_COMMANDS = frozenset(
@@ -61,8 +71,15 @@ ALLOWED_TEST_COMMANDS = frozenset(
     }
 )
 
+#: The device's own placeholder (``ProjectManifest.PortPlaceholder``), spelled its way.
+PORT_PLACEHOLDER = "<port>"
+
 MIN_PORT = 1024
 MAX_PORT = 65535
+#: What a manifest carries when the project binds no port at all (the device's
+#: ``ProjectManifest.NoPort``). A CLI tool is run as a batch: started, waited for, answered
+#: with its exit code.
+NO_PORT = 0
 
 
 class AppValidationError(ValueError):
@@ -189,9 +206,17 @@ def validate_manifest(files: ProjectFiles) -> dict:
             details={"entry": entry},
         )
 
-    run = manifest.get("run") or {}
-    if not isinstance(run, dict):
-        raise AppValidationError("manifest 'run' must be a mapping", code="invalid_manifest")
+    # `run` is REQUIRED and non-empty, because the device requires it
+    # (ProjectManifest.ParseCommands, required: true). This layer used to accept its absence
+    # - `manifest.get("run") or {}` - so the CLI-tool template passed here and was refused at
+    # the device's first parse. A validator that is kinder than the machine it validates for
+    # is not a validator.
+    run = manifest.get("run")
+    if not isinstance(run, dict) or not run:
+        raise AppValidationError(
+            "manifest 'run' is required and must be a non-empty mapping of {key: command}",
+            code="invalid_manifest",
+        )
     for key, command in run.items():
         if not isinstance(command, str) or command not in ALLOWED_RUN_COMMANDS:
             raise AppValidationError(
@@ -211,13 +236,22 @@ def validate_manifest(files: ProjectFiles) -> dict:
                 details={"key": key},
             )
 
+    # `port` is REQUIRED, because the device requires it of a web project. NO_PORT (0) is the
+    # device's own way of saying "this binds nothing" - what a CLI tool is - and the device
+    # then runs the project as a batch instead of waiting for a socket.
     port = manifest.get("port")
-    if port is not None:
-        port_is_plain_int = isinstance(port, int) and not isinstance(port, bool)
-        if not port_is_plain_int or not (MIN_PORT <= port <= MAX_PORT):
-            raise AppValidationError(
-                f"manifest 'port' {port!r} is out of range", code="invalid_manifest"
-            )
+    port_is_plain_int = isinstance(port, int) and not isinstance(port, bool)
+    if not port_is_plain_int or not (port == NO_PORT or MIN_PORT <= port <= MAX_PORT):
+        raise AppValidationError(
+            f"manifest 'port' must be {NO_PORT} (binds nothing) or in "
+            f"[{MIN_PORT}, {MAX_PORT}]; got {port!r}",
+            code="invalid_manifest",
+        )
+    if port == NO_PORT and any(PORT_PLACEHOLDER in command for command in run.values()):
+        raise AppValidationError(
+            f"manifest 'port' is {NO_PORT} but a run command still asks for {PORT_PLACEHOLDER}",
+            code="invalid_manifest",
+        )
 
     return manifest
 
