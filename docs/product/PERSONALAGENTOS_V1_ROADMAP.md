@@ -448,7 +448,8 @@ EXPECTED_FILES      : scripts/cloud/install-recovery-supervisor.sh, services/rec
 RISK                : medium — otomatik geri alma üretimi etkiler
 OWNER_ACTION        : YES — kurtarma denetçisinin üretime kurulumu (Astra `2561f84`
                       READY_FOR_OWNER_APPROVAL)
-KAPANIŞ             : 646-650 DONE (PROVEN_AUTOMATED); 614, 651-655 PARTIAL
+KAPANIŞ             : commit ed40936 · CI 34724500752 yeşil (7/7) · yerel kapı 9150
+                      646-650 DONE (PROVEN_AUTOMATED); 614, 651-655 PARTIAL
                       kanıt docs/evidence/b08-backup-recovery-2026-09-13.json
 SAHİP KAPISI        : `install-recovery-supervisor.sh <sha>` üretim host'unda root ile.
                       Sahip kararı (2026-09-13): şimdilik PARTIAL kalsın, B09-B10'a devam.
@@ -473,7 +474,8 @@ EXPECTED_FILES      : scripts/cloud/backup-cloud-core.sh, docs/OPERATIONS.md
 RISK                : low — salt ekleme; mevcut yedek yolu değişmez
 OWNER_ACTION        : YES — S3 uyumlu ikinci kova + erişim anahtarı (DPAPI ile saklanacak;
                       anahtar asla log'a/commit'e girmez)
-KAPANIŞ             : 642, 643, 644 DONE; 645 BLOCKED_OWNER
+KAPANIŞ             : commit ed40936 · CI 34724500752 yeşil (7/7)
+                      642, 643, 644 DONE; 645 BLOCKED_OWNER
 SAHİP KAPISI        : S3 uyumlu ikinci kova + erişim anahtarı. Anahtar DPAPI ile saklanır,
                       asla commit'e/log'a girmez.
 YOL ÜSTÜNDE         : off-host kopya YAZILABİLİR ama OKUNAMAZDI — `restore-cloud-core.sh`
@@ -495,7 +497,7 @@ AFFECTED_SUBSYSTEMS : Executive
 EXPECTED_FILES      : services/api/app/executive/
 RISK                : low
 OWNER_ACTION        : no
-KAPANIŞ             : beşi de DONE (PROVEN_AUTOMATED)
+KAPANIŞ             : commit ed40936 · CI 34724500752 yeşil (7/7) · beşi de DONE
 YOL ÜSTÜNDE         : 560 zaten uygulanmıştı ve 31 testi geçiyordu — matris MISSING diyordu.
                       Ölçüm dokümantasyonu yendi.
 TEST_PLAN           : 3 adımı başarısız bir koşunun "4/4" diyemediği; boş telafi dalının

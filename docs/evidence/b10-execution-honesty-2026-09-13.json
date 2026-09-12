@@ -9,8 +9,8 @@
   ],
   "recorded_at": "2026-09-13T03:00:00Z",
   "commit": "ed40936",
-  "ci_run": null,
-  "conclusion": null,
+  "ci_run": 34724500752,
+  "conclusion": "success (7/7 jobs)",
   "what_this_proves": "A run says what actually happened. Two production runs reported '4/4 adim tamam' - four of four steps completed - while three of those four steps had failed.",
   "red_first": {
     "the_count": "The fix was reverted and the count test re-run: `assert 4 == 1` - 'three failures are not three accomplishments'. That single assertion is the production defect, reproduced.",

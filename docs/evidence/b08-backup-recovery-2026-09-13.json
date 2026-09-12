@@ -15,8 +15,8 @@
   ],
   "recorded_at": "2026-09-13T02:00:00Z",
   "commit": "ed40936",
-  "ci_run": null,
-  "conclusion": null,
+  "ci_run": 34724500752,
+  "conclusion": "success (7/7 jobs)",
   "what_this_proves": "The safety net can be seen and can speak. Both halves have been running for weeks and writing records that nothing read - so a broken backup would have been discovered on the day it was needed.",
   "closed_fully": {
     "646_backup_health": "LAST_BACKUP.json is read and reported on /v1/system/health. Not visible (the API is in a container, the file is on the host) reports 'skipped' with the reason rather than a failure the process cannot observe - a check that cries wolf about what it cannot see is one the owner learns to ignore.",
