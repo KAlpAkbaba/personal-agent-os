@@ -55,12 +55,12 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 22 | Aynı version altında build ayrımı | build_id aynı app_version altında iki imajı ayırıyor | Build ayrımı yapılır | DONE | PR | P0 | 21 | B01 | services/api/app/release/build.py | test_release_build_identity.py | docs/evidence/b01-schema-gate-2026-09-12.json (build_id 516452ef2d144269) | no | version_model 1→2 (additive alan) |
 | 23 | BUILD_STATE otomatik reconcile | `reconcile_build_state.py` türetilen alanları üretir | Otomatik üretilir | DONE | PA | P0 | 21 | B01 | scripts/core/reconcile_build_state.py | test_build_state_reconciled.py | state/BUILD_STATE.json bu commit'te mutabık | no | Anlatı yeniden yazılmıyor, DENETLENİYOR: blok stage'inden fazlasını iddia edemez |
 | 24 | Evidence-only-in-prose yasak | Kanıt işaretli satır var olan bir şeyi göstermeli | Her iddia kanıt dosyasına bağlı | DONE | PA | P0 | — | B01 | docs/QUALIFICATION.md | test_qualification_evidence.py | 272 satır tarandı | no | 16 tarihi satır adıyla listelendi; liste YALNIZCA küçülebilir |
-| 25 | CI tüm kritik testleri kapsar | 7 job yeşil ama kapsam eksik | Kritik test dışarıda kalmaz | PARTIAL | PA | P0 | — | B02 | .github/workflows/ | — | CI success @48dfcc3 | no | 26-29'un şemsiyesi |
-| 26 | Web testleri CI'da | ~1472 test hiçbir kapıda | CI'da koşar | MISSING | NYP | P0 | 25 | B02 | .github/workflows/, apps/web/ | apps/web tests | — | no | CI yalnız `pnpm build` |
-| 27 | Web linter CI'da | İki linter kapısız | CI'da koşar | MISSING | NYP | P0 | 25 | B02 | .github/workflows/ | — | — | no | — |
-| 28 | PE reader testleri CI'da | 15 test atlanıyor | CI'da koşar | MISSING | NYP | P0 | 25 | B02 | .github/workflows/, devices/windows-agent | PeImageReader tests | — | no | Native verdict'in yargıcı |
-| 29 | PowerShell qualification CI'da | Yerel kapı veya hiç | CI'da koşar | MISSING | NYP | P0 | 25 | B02 | scripts/tests/ | scripts/tests/owner-harness.tests.ps1 | — | no | Windows runner gerekir |
-| 30 | Mutation/falsification kritik contract'ta | Ad hoc kullanıldı (yedek işinde) | Kalıcı kapı | PARTIAL | PA | P0 | 5 | B02 | services/recovery-supervisor/tests/ | backup_fakes.py | yedek mutasyonu kanıtlandı | no | Sözleşme testlerine yayılmalı |
+| 25 | CI tüm kritik testleri kapsar | 7 job; kapsamı bekçi test zorluyor | Kritik test dışarıda kalmaz | DONE | PA | P0 | — | B02 | .github/workflows/ci.yml | test_ci_covers_every_suite.py (7) | CI run 34703755179 | no | Elle tutulan liste artık denetleniyor: var olan her paket adlandırılmak zorunda |
+| 26 | Web testleri CI'da | 1587 test (82 dosya) CI'da koşuyor | CI'da koşar | DONE | PA | P0 | 25 | B02 | .github/workflows/ci.yml (web-build job) | apps/web vitest 82 dosya | yerel: 1587/1587, 6,0 sn | no | Önceden yalnız `pnpm build` vardı |
+| 27 | Web linter CI'da | oxlint + tsc --noEmit CI'da | CI'da koşar | DONE | PA | P0 | 25 | B02 | .github/workflows/ci.yml, apps/web/package.json (yeni `typecheck`) | test_ci_covers_every_suite.py::test_ci_runs_every_gate_the_web_package_defines | yerel: lint exit 0, tsc temiz | no | `next build` testleri tip denetlemiyordu; tsc onları da kapsıyor |
+| 28 | PE reader testleri CI'da | PagentOS.Agent.Tests.dll: 869 test, 6 atlanan (isimlendirilmiş nedenle) | CI'da koşar | DONE | PR | P0 | 25 | B02 | devices/windows-agent/PagentOS.WindowsAgent.sln | PeImageReaderTests (7 Fact) | CI run 34703755179 job logu: Passed 863 / Skipped 6 / Total 869 | no | B02'de ölçüldü: matris MISSING sayıyordu — testler zaten CI'da koşuyordu. Düzeltildi |
+| 29 | PowerShell qualification CI'da | 26/26 PowerShell paketi CI'da | CI'da koşar | DONE | PA | P0 | 25 | B02 | .github/workflows/ci.yml | test_ci_covers_every_suite.py::test_ci_runs_every_powershell_suite | yerel: bluegreen 59, owner-rotation 26 | no | Eksik ikisinden biri cloud-release-bluegreen (59 vaka, ÜRETİMİN kullandığı sürüm yolu) |
+| 30 | Mutation/falsification kritik contract'ta | Sözleşme gizlenip bekçinin düştüğü her koşuda kanıtlanıyor | Kalıcı kapı | DONE | PA | P0 | 5 | B02 | packages/protocol/*.json | test_contract_falsification.py (11) | mutasyon her koşuda yürütülüyor (5,6 sn) | no | Yol üstünde: test_injection'ın 'dosya yoksa SKIP' kaçamağı kaldırıldı — sözleşmeyi silmek bekçisini yeşile çeviriyordu |
 
 ## B. MEMORY / PERSONAL INTELLIGENCE (31–62)
 
@@ -1062,6 +1062,54 @@ Her `DONE` satırı kapanışta şu bloğu kazanır (batch raporunda ve bu dosya
      tests  : scripts/tests/cloud-release*.tests.ps1 (rc 74/67 + zaman aşımı vakaları)
      proof  : PROVEN_AUTOMATED — değişmedi; pipefail altında gözden geçirildi
      date   : 2026-09-12
+```
+
+### B02 — CI kapsamı ve yanlışlama kapısı · 2026-09-12
+
+```
+25   status : DONE
+     commit : <B02>
+     tests  : services/api/tests/unit/test_ci_covers_every_suite.py (7)
+     proof  : PROVEN_AUTOMATED — var olan bir paketi adlandırmayan workflow testte düşüyor;
+              kural kendi üzerinde yanlışlandı (sürüklenmiş bir liste fikstürüne karşı)
+     date   : 2026-09-12
+
+26   status : DONE
+27   status : DONE
+     commit : <B02>
+     tests  : apps/web vitest (82 dosya / 1587 test), oxlint, tsc --noEmit
+     proof  : PROVEN_AUTOMATED — üçü de CI'a eklendi ve yerelde pnpm ile tam olarak CI'ın
+              çağırdığı şekilde yeşil koştu (1587/1587, lint exit 0, tsc temiz)
+     date   : 2026-09-12
+     note   : `apps/web` bir `typecheck` betiği kazandı: `next build` uygulamayı tipliyor
+              ama TESTLERİ tiplemiyordu — sözleşme tiplerinin asıl kullanıldığı yer orası.
+
+28   status : DONE
+     commit : <B02>
+     tests  : devices/.../Documents/PeImageReaderTests.cs (7 Fact)
+     proof  : PROVEN_REAL — CI run 34703755179 "Windows agent build + tests" job logu:
+              `PagentOS.Agent.Tests.dll` Passed 863 / Skipped 6 / Total 869
+     date   : 2026-09-12
+     note   : B02'de ölçüldü. Denetim "CI'da atlanıyor" demişti; ölçüm aksini gösterdi —
+              testler .sln içinde ve `dotnet test` onları koşuyor. Matris düzeltildi.
+
+29   status : DONE
+     commit : <B02>
+     tests  : test_ci_covers_every_suite.py::test_ci_runs_every_powershell_suite
+     proof  : PROVEN_AUTOMATED — 24/26 idi, 26/26 oldu. Eksik ikiden biri
+              cloud-release-bluegreen.tests.ps1: 59 vaka, üretimin kullandığı sürüm yolu
+     date   : 2026-09-12
+
+30   status : DONE
+     commit : <B02>
+     tests  : services/api/tests/unit/test_contract_falsification.py (11)
+     proof  : PROVEN_AUTOMATED — mutasyon GERÇEKTEN yürütülüyor: paylaşılan sözleşme
+              gizleniyor, bekçisi alt süreçte koşuluyor, DÜŞTÜĞÜ doğrulanıyor, dosya
+              sha256 ile geri yükleniyor, sonra bekçinin yeniden geçtiği görülüyor
+     date   : 2026-09-12
+     note   : Yol üstünde bir kaçamak kapandı: test_injection'ın sözleşme dosyası yoksa
+              SKIP eden karşılaştırması. Sözleşmeyi silmek bekçisini yeşile çeviriyordu —
+              bu deponun iki kez ödediği şekil. Artık dosya zorunlu.
 ```
 
 **B01'de yol üstünde bulunan ve aynı batch'te kapatılan kusur (batch dışı değil, batch'in

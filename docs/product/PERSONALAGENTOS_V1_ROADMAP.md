@@ -264,9 +264,17 @@ ROLLBACK_PLAN       : betik değişiklikleri commit bazında geri alınır; üre
 ```
 
 ```
-BATCH_ID            : B02
+BATCH_ID            : B02                                       [KAPANDI 2026-09-12]
 NAME                : CI kapsamı ve yanlışlama kapısı
-REQUIREMENT_IDS     : 25, 26, 27, 28, 29, 30
+REQUIREMENT_IDS     : 25, 26, 27, 28, 29, 30  — altısının altısı DONE
+SONUC               : Web: 1587 test + oxlint + tsc CI'a girdi (önce yalnız `build` vardı).
+                      PowerShell: 24/26 → 26/26; eksik ikiden biri cloud-release-bluegreen
+                      (59 vaka, üretimin kullandığı sürüm yolu). 28 zaten karşılanmıştı —
+                      ölçüm denetimi düzeltti (CI run 34703755179: 869 test). 30 için
+                      mutasyon her koşuda GERÇEKTEN yürütülüyor. Yol üstünde: test_injection'ın
+                      "sözleşme yoksa SKIP" kaçamağı kaldırıldı.
+KALICI KORUMA       : test_ci_covers_every_suite.py — elle tutulan listeler artık denetleniyor;
+                      var olan bir paketi adlandırmayan workflow testte düşer.
 GOAL                : Kritik hiçbir test kapının dışında kalmasın; kritik sözleşme testleri
                       mutasyonla düşsün.
 DEPENDENCIES        : none (B01 ile paralel yürütülebilir, ama B03'ten ÖNCE bitmeli)
@@ -298,6 +306,11 @@ OWNER_ACTION        : no
 TEST_PLAN           : NativeManifestContractTests deseni her aileye yayılır — paylaşılan fikstür
                       YOKSA C# testi başarısız olur; cihazın gerçek ayrıştırıcısı bulutun
                       gönderdiği örneği kabul eder; bare-string/`{port}` reddi pinlenir
+B02'DEN DEVREDEN    : `packages/schemas/device-protocol.schema.json` kendini "authoritative"
+                      ilan ediyor ama YALNIZCA Python yarısı ona tutuluyor (ve yalnız `hello`
+                      çerçevesi için). C# tarafı şemayı sadece yorumda anıyor; çerçeve tipleri
+                      hiçbir yerde şemaya karşı doğrulanmıyor. B02'nin sözleşme kaydına
+                      `unheld` notuyla girdi — kapatması B03'ün işi.
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimden klasör araması sonuç döndürür; üç şablon cihazda
                       kabul edilir; cockpit yaratıcı paneli veri gösterir; native verdict
                       `passed:null` ile "verified" diyemez

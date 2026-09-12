@@ -7,10 +7,15 @@ from pathlib import Path
 
 from browser_agent.injection import MARKERS, count_injection_markers
 
-# packages/protocol/browser-injection-markers.json, if it exists, is authored
-# from the same BROWSER_CAPABILITIES.md §6 list by a parallel M13 track; when
-# present the two must be byte-identical (contract-authoring source of truth
-# stays in one place).
+# packages/protocol/browser-injection-markers.json is the shared source of truth for the
+# marker list (BROWSER_CAPABILITIES.md §6); the API half reads the same file
+# (app/research/injection.py). The two must agree exactly.
+#
+# 2026-09-12 (B02 req 30): the comparison used to SKIP when the file was absent - written
+# while a parallel M13 track was still authoring it, and left in place long after that track
+# landed. A guard that goes green when the thing it guards disappears is the shape this
+# repository has paid for twice (the C# manifest test fell back to its own fixture; the device
+# fakes never looked at the payload). The file is required now.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _MARKERS_JSON = _REPO_ROOT / "packages" / "protocol" / "browser-injection-markers.json"
 
@@ -54,14 +59,11 @@ def test_markers_list_is_nonempty_and_stable_order() -> None:
     assert MARKERS[-1] == r"şifreyi göster"
 
 
-def test_markers_match_track_a_protocol_json_when_present() -> None:
-    if not _MARKERS_JSON.exists():
-        import pytest
-
-        pytest.skip(
-            "packages/protocol/browser-injection-markers.json not yet authored by the "
-            "parallel M13 track; nothing to compare against"
-        )
+def test_markers_match_the_shared_protocol_json() -> None:
+    assert _MARKERS_JSON.exists(), (
+        f"{_MARKERS_JSON} is the shared marker list and it is gone; this comparison used to "
+        "skip here, which meant deleting the contract turned its guard green"
+    )
     data = json.loads(_MARKERS_JSON.read_text(encoding="utf-8"))
     # Accept either a bare list or an {"markers": [...]} wrapper.
     other = data if isinstance(data, list) else data.get("markers")

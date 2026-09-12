@@ -165,6 +165,13 @@ jobs:
       # NOTHING. The defect it describes reached the owner's install in a file the guard's
       # hand-typed list did not cover. It runs here now, with the regression that drives
       # the real Cloud Core verifier in a clean child process.
+      #
+      # 2026-09-12 (B02): the same shape again, and a worse instance - this hand-typed list
+      # had grown to 24 of the repository's 26 suites, and one of the two it omitted was
+      # cloud-release-bluegreen.tests.ps1: 59 cases covering the release path PRODUCTION
+      # ACTUALLY USES. A list nobody checks drifts. test_ci_covers_every_suite now fails
+      # when a suite exists that this step does not name, so the list cannot silently fall
+      # behind again.
       # The installer/deployment/identity scripts run on the owner's machine under
       # WINDOWS POWERSHELL 5.1, and four real qualification failures were 5.1-only
       # (native quoting, StrictMode unrolling, ??, ImportFromPem). windows-latest still
@@ -192,7 +199,9 @@ jobs:
           powershell -NoProfile -File scripts\tests\agent-audit.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\owner-explain.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\cloud-owner-rotation.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\cloud-release-bluegreen.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\item28-gate.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\core-verifier-scope.tests.ps1 && ^
@@ -208,8 +217,11 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: powershell -NoProfile -File scripts\qualify-staged-update.ps1
 
+  # Until 2026-09-12 (B02) this job ran `build` and nothing else: 82 files and 1587 web tests,
+  # plus the linter the package itself defines, were behind no gate at all. Every milestone
+  # since M18 quoted a web suite count in its evidence - counts nobody in CI had ever seen.
   web-build:
-    name: Web shell build
+    name: Web shell build + tests
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -223,5 +235,19 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Lint (oxlint)
+        run: pnpm --dir apps/web lint
+      - name: Unit tests (vitest)
+        run: pnpm --dir apps/web test
       - name: Build
         run: pnpm --dir apps/web build
+      # AFTER the build, deliberately. tsconfig includes `.next/types/**`, which `next build`
+      # generates; nothing in the tree needs those types TODAY (measured 2026-09-12: tsc is
+      # clean with .next deleted), but the day something does, this order is the difference
+      # between a green developer machine with a warm .next and a red CI checkout - the
+      # local-masks-CI divergence this repository has been bitten by before. The step is not
+      # a duplicate of the build either: `next build` type-checks the app but NOT the tests,
+      # and the tests are where the contract types (session-contract.ts, the ui_state shapes)
+      # are actually exercised.
+      - name: Types (tsc --noEmit, tests included)
+        run: pnpm --dir apps/web typecheck
