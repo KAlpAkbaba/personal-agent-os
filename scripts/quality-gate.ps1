@@ -219,6 +219,19 @@ Invoke-Step "Windows agent build + tests" {
   } finally { Pop-Location }
 }
 
+# B13 (2026-09-13): and this runs in -Fast too, for the same reason and by the same lesson.
+# The step above was moved into -Fast an hour earlier and CI STILL found a second guard the
+# local gate did not run: `qualify-staged-update.ps1` pinned the advertised capability count
+# at 40, so the same `desktop.notify` failed three of its checks after the manifest pin had
+# already been fixed. Two guards, one addition, two separate CI round trips - because the
+# local gate ran neither. It uses the Release tree the step above just built, and it touches
+# nothing live: its own sandbox, its own journal, its own fake SCM.
+Invoke-Step "Staged-update qualification (real candidate binary, sandbox engine)" {
+  if (-not $powershell5) { throw "powershell.exe not found" }
+  & $powershell5 -NoProfile -File (Join-Path $repoRoot "scripts/qualify-staged-update.ps1")
+  Assert-ExitCode "staged-update qualification"
+}
+
 # ---------------------------------------------------------------- full checks
 
 if (-not $Fast) {
@@ -437,17 +450,6 @@ if (-not $Fast) {
     $script = Join-Path $repoRoot "scripts\tests\identity-restore.tests.ps1"
     & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
     Assert-ExitCode "identity restoration tests"
-  }
-
-  Invoke-Step "Staged-update qualification (real candidate binary, sandbox engine)" {
-    # Runs AFTER the agent build, like the identity restoration step: the REAL
-    # DeviceService answers its own capabilities verb, the REAL journaled engine performs
-    # the swap/commit/rollback in a sandbox, and the REAL Cloud Core verifier reads a
-    # device row in the shape Cloud Core actually returns. Nothing here touches the live
-    # install, the SCM, the running service or the owner's session.
-    $script = Join-Path $repoRoot "scripts\qualify-staged-update.ps1"
-    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
-    Assert-ExitCode "staged-update qualification"
   }
 
   if ($E2E) {

@@ -94,6 +94,16 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 
 $script:Failures = 0
 $script:Passes = 0
+
+# The count Cloud Core observed at 20:23Z on 2026-09-08, kept as a FLOOR rather than an
+# equality. A manifest that shrank below it is the regression this number was written for;
+# a manifest that grew past it is a capability somebody added on purpose, and the C# pin in
+# `BrowserDispatchTests` is what makes that growth visible as an explicit, ordered append.
+$script:CapabilityFloor = 40
+
+# Filled in by gate 2 from the candidate's own manifest, then reused: the later gates assert
+# that Cloud Core counted the SAME number, which is the thing 2026-09-08 actually broke.
+$script:AdvertisedCapabilityCount = 0
 $script:Sandbox = Join-Path $env:TEMP "pagentos-staged-update-qualification-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $script:Sandbox | Out-Null
 
@@ -495,7 +505,18 @@ try {
     $media = @("browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop")
     $missingMedia = @($media | Where-Object { $caps -notcontains $_ })
     Assert-True (@($missingMedia).Count -eq 0) "the four wake-alarm media operations are present by name (the YouTube wake-music path is built on exactly these)"
-    Assert-True ($caps.Count -eq 40) "the candidate advertises 40 capabilities with -DisplayPower and the browser worker - the number Cloud Core observed at 20:23Z (actual: $($caps.Count))"
+    # B13 (2026-09-13): a FLOOR plus a relationship, not a literal.
+    #
+    # This was `-eq 40` - the count Cloud Core observed at 20:23Z on 2026-09-08 - and B11
+    # appending `desktop.notify` turned three green checks red for a capability that was
+    # added on purpose, tested, and named in the C# manifest pin that exists precisely so
+    # additions are visible. A hard count re-asserts "the manifest has not grown", which is
+    # not the claim worth keeping; the claims worth keeping are that it has not SHRUNK below
+    # what the incident measured, that the flag adds exactly one, and that Cloud Core sees
+    # the same number the candidate advertises. Those three are asserted instead, and the
+    # count is carried forward rather than restated.
+    $script:AdvertisedCapabilityCount = $caps.Count
+    Assert-True ($caps.Count -ge $script:CapabilityFloor) "the candidate advertises at least the $($script:CapabilityFloor) capabilities Cloud Core observed at 20:23Z, with -DisplayPower and the browser worker (actual: $($caps.Count))"
     Assert-True (@($caps | Group-Object | Where-Object { $_.Count -gt 1 }).Count -eq 0) "no capability is advertised twice"
 
     # The owner's own action list (docs/OWNER_ACTIONS.md item 28/F) folds -Operator into the
@@ -524,7 +545,7 @@ try {
     $withoutFlag = Get-ConfiguredManifest -Exe $serviceExe -BrowserEnabled $true -DisplayPowerEnabled $false
     Assert-True (@($withoutFlag.Capabilities) -notcontains "desktop.display_off") "without the flag the same binary does NOT advertise desktop.display_off - the flag is what does it, not the version"
     Assert-True (-not $withoutFlag.DisplayPowerEnabled) "...and reports display_power_enabled=false"
-    Assert-True (@($withoutFlag.Capabilities).Count -eq 39) "which is exactly one capability fewer (39)"
+    Assert-True (@($withoutFlag.Capabilities).Count -eq ($script:AdvertisedCapabilityCount - 1)) "which is exactly one capability fewer ($(@($withoutFlag.Capabilities).Count) against $($script:AdvertisedCapabilityCount)) - the flag adds display_off and nothing else"
     $installer = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\install-device-service.ps1"))
     Assert-True ($installer -match '-DisplayPowerEnabled \(\[bool\]\$DisplayPower\)') "the installer writes DisplayPowerEnabled into the SERVICE's staged configuration"
     Assert-True ($installer -match '(?s)if \(\$DisplayPower\) \{\s*\$companionConfig\["DisplayPowerEnabled"\] = \$true') "the installer writes DisplayPowerEnabled into the COMPANION's staged configuration too"
@@ -580,7 +601,7 @@ try {
     Assert-True ($core.CompanionBeats -ge 1 -and $core.WorkerProofs -ge 1) "the companion heartbeat and the browser worker proof were both required before the commit"
     Assert-True (@($core.Problems).Count -eq 0) "...and the worker proof is Test-LiveBrowserWorker itself - version, module inside the promoted venv, pid, --data-dir and creation time all agreed$(if (@($core.Problems).Count) { ": $($core.Problems -join '; ')" })"
     Assert-True ($core.LastHeartbeat.Ok -and $core.LastHeartbeat.Observed.software_version -eq $candidate.SoftwareVersion) "Cloud Core saw the candidate's version ($($core.LastHeartbeat.Observed.software_version)) - THE 2026-09-08 FAILURE, now passing"
-    Assert-True ($core.LastHeartbeat.Observed.capability_count -eq 40) "...and its complete capability manifest ($($core.LastHeartbeat.Observed.capability_count) capabilities)"
+    Assert-True ($core.LastHeartbeat.Observed.capability_count -eq $script:AdvertisedCapabilityCount) "...and its COMPLETE capability manifest: Cloud Core counted $($core.LastHeartbeat.Observed.capability_count), the candidate advertises $($script:AdvertisedCapabilityCount). THE 2026-09-08 FAILURE was these two numbers disagreeing, not either of them being 40"
     Assert-True ((Read-DeployJournal -Root $root).phase -eq "committed") "the journal says committed"
 
     # ------------------------------- gate 4b: the browser worker proof is not a formality
@@ -756,7 +777,7 @@ if ($script:Failures -eq 0) {
     Write-Host "STAGED UPDATE QUALIFIED: $script:Passes checks passed." -ForegroundColor Green
     Write-Host "  device-row contract read from Cloud Core's own source -> stage -> manifest verified"
     Write-Host "  file by file (browser worker package digest included) -> candidate identity -> complete"
-    Write-Host "  capability manifest (40 with -DisplayPower, browser.media_* included) -> promotion of"
+    Write-Host "  capability manifest ($script:AdvertisedCapabilityCount with -DisplayPower, browser.media_* included) -> promotion of"
     Write-Host "  service, companion AND browser worker -> live worker proven by Test-LiveBrowserWorker"
     Write-Host "  -> Cloud Core sees the candidate's version and capabilities -> committed. A stale"
     Write-Host "  worker, a tampered or empty candidate, and a candidate Cloud Core cannot see each"
