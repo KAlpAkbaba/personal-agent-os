@@ -14,8 +14,8 @@
     281
   ],
   "recorded_at": "2026-09-13T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "af0d4aa",
+  "ci_run": 34758642613,
   "what_this_proves": "The morning briefing stops requiring a browser. `BriefingService.build` had exactly one caller since it was written - the voice tool - so the whole morning experience needed the owner awake, at a machine, with a browser open and a live voice session running, which is the opposite of what a morning briefing is for. The alarm path is now the second caller.",
   "the_measurement_that_shaped_it": {
     "what": "The roadmap's test plan asks that ONE WAV contain every section. It cannot, and the number that decides it was measured rather than assumed.",

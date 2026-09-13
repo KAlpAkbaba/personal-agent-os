@@ -639,7 +639,7 @@ AFFECTED_SUBSYSTEMS : Briefing, News, Device Companion, Narration
 EXPECTED_FILES      : services/api/app/briefing/, app/news/, devices/windows-agent
 RISK                : medium
 OWNER_ACTION        : TTS sağlayıcı kredisi — 281'in sesli kanıtı için; kod bloklanmadı
-KAPANIŞ             : commit PENDING_B15 · CI PENDING · 10/10 DONE
+KAPANIŞ             : commit af0d4aa · CI 34758642613 yeşil (7/7) · 10/10 DONE
                       (281 PROOF=BLOCKED: anahtarsız sesli kanıt yok, roadmap'in kendi
                       OWNER_ACTION satırının öngördüğü kapanış)
                       kanıt docs/evidence/b15-browser-free-morning-2026-09-13.json
