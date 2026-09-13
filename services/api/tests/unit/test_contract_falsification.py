@@ -109,6 +109,23 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
         ),
         held_by=("services/api", "devices/windows-agent"),
     ),
+    "desktop-notify.json": Contract(
+        guard="test_the_limits_are_read_from_the_contract_not_restated",
+        why=(
+            "the four capabilities that were NOT written as a contract first - file.search "
+            "roots, the app manifest, the native manifest, the device protocol schema - each "
+            "shipped with both halves' suites green and neither half able to talk to the "
+            "other. This one was written before either half existed"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+        unheld=(
+            "the toast RENDERING is not held, only the shape. The device's shell sink draws "
+            "a balloon, which has no action buttons, so a three-button payload is accepted, "
+            "carried and shown without them (requirement 370 needs the WinRT toast surface "
+            "and a Windows-version-specific target framework). The device says so in its "
+            "answer's `detail` rather than reporting a toast the owner never saw buttons on"
+        ),
+    ),
     "device-protocol.schema.json": Contract(
         guard="test_hello_knows_exactly_the_fields_the_schema_declares",
         why=(

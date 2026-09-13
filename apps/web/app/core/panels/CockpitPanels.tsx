@@ -58,6 +58,18 @@ import type {
   PendingProposal,
 } from "../../lib/cockpit/approvals";
 import {
+  NOTIFICATION_ROWS_SHOWN,
+  PRIORITY_NORMAL,
+  canMarkRead,
+  deliveryLine,
+  deliveryState,
+  formatWhen,
+  inboxBadge,
+  needsAttention,
+  priorityLabel,
+} from "../../lib/cockpit/notification-rows";
+import type { Inbox } from "../../lib/cockpit/notifications";
+import {
   artifactKindLabel,
   artifactOpenGate,
   artifactRenderLine,
@@ -3295,6 +3307,77 @@ export function VoiceQualificationPanel({
           </ul>
         );
       }}
+    </Panel>
+  );
+}
+
+/**
+ * B11 req 368/377/378: the durable inbox.
+ *
+ * The one panel in this cockpit that is about the cockpit's own irrelevance. Everything
+ * else here answers "what exists" for an owner who is already looking at the screen; this
+ * lists what the system tried to tell them when they were NOT — and says, per row, whether
+ * anything actually carried it.
+ *
+ * Three states, three sentences, never merged: nothing carried it, it was delivered and not
+ * read, it was read. Before B11 the inbox lived in the fake push transport's memory: empty
+ * in production, gone on every restart, and indistinguishable from "nothing happened".
+ */
+export function NotificationsPanel({
+  state,
+  onMarkRead,
+  busyId,
+}: {
+  state: CockpitData["notifications"];
+  onMarkRead: (notificationId: string) => void;
+  busyId: string | null;
+}) {
+  return (
+    <Panel<Inbox>
+      id="notifications"
+      title="Bildirimler"
+      state={state}
+      empty="Bildirim yok."
+      isEmpty={(inbox) => inbox.rows.length === 0}
+      badge={(inbox) => inboxBadge(inbox.unread)}
+      // Only an URGENT row nothing carried. An urgent row that WAS delivered already
+      // interrupted the owner once, and a panel that shouts about everything is a panel
+      // that gets ignored - which is the failure this batch exists to remove.
+      attention={(inbox) => needsAttention(inbox.rows)}
+    >
+      {(inbox) => (
+        <ul>
+          {inbox.rows.slice(0, NOTIFICATION_ROWS_SHOWN).map((row) => (
+            <li
+              key={row.id}
+              data-notification-id={row.id}
+              data-notification-priority={row.priority ?? PRIORITY_NORMAL}
+              data-notification-delivery={deliveryState(row)}
+            >
+              <div className="event-row">
+                <span>{row.title ?? row.kind}</span>
+                <span className="event-when">{formatWhen(row.created_at)}</span>
+              </div>
+              {row.body && <span className="muted">{row.body}</span>}
+              <span className="muted" data-notification-line>
+                {priorityLabel(row.priority)} · {deliveryLine(row)}
+              </span>
+              {canMarkRead(row) && (
+                <button
+                  type="button"
+                  className="core-chip"
+                  data-notification-action="read"
+                  data-notification-target={row.id}
+                  disabled={busyId !== null}
+                  onClick={() => onMarkRead(row.id)}
+                >
+                  Okundu
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </Panel>
   );
 }

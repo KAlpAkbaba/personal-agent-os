@@ -1,0 +1,111 @@
+{
+  "contract": "desktop.notify",
+  "version": 1,
+  "why": [
+    "The system had no way to reach the owner with the browser closed. Every notification",
+    "path ended either in a page nobody had open or in the fake push provider's in-memory",
+    "log, so 'the owner has been told' was true only while they were already looking.",
+    "",
+    "A desktop toast is the one channel that works when the browser is shut and the screen",
+    "is locked, and it is the device's to raise: only the companion process runs in the",
+    "owner's interactive session. The Cloud Core cannot show a toast and must not pretend",
+    "to - it sends this shape and the device answers whether the toast was actually shown.",
+    "",
+    "Written as a contract before either half was built, because the last four capabilities",
+    "that were not (file.search roots, the app manifest, the native manifest, the device",
+    "protocol schema) each shipped with both halves' suites green and neither half able to",
+    "talk to the other."
+  ],
+  "capability": "desktop.notify",
+  "request": {
+    "title": {
+      "required": true,
+      "max_chars": 64,
+      "why": "Windows truncates a toast title past roughly this; sending more is sending something the owner will not see."
+    },
+    "body": {
+      "required": true,
+      "max_chars": 256,
+      "why": "Two lines of toast text. Longer belongs in the inbox, which already has the whole thing."
+    },
+    "notification_id": {
+      "required": true,
+      "form": "uuid",
+      "why": "The row in `notifications`. The device echoes it back so an action button can be attributed to the notification it came from, and so a repeat send is recognisable as the same notification rather than a second one."
+    },
+    "priority": {
+      "required": false,
+      "values": ["urgent", "normal", "low"],
+      "default": "normal",
+      "why": "`urgent` asks Windows for a toast that stays on screen until dismissed; the others expire on their own."
+    },
+    "group_key": {
+      "required": false,
+      "max_chars": 128,
+      "why": "Windows' own collapse key. Two notifications about one thing replace each other in the Action Center instead of stacking."
+    },
+    "actions": {
+      "required": false,
+      "max_items": 3,
+      "why": "Toast action buttons. Three is Windows' own limit; asking for more silently drops the extras, so the contract refuses them instead.",
+      "item": {
+        "id": {
+          "required": true,
+          "max_chars": 32,
+          "form": "[a-z0-9_]+",
+          "why": "Echoed back verbatim when the owner presses it. A closed vocabulary the Cloud Core chose, never free text from a model."
+        },
+        "label": {
+          "required": true,
+          "max_chars": 24,
+          "why": "What the button says, in Turkish. Windows gives a button about this much room."
+        }
+      }
+    }
+  },
+  "response": {
+    "shown": {
+      "form": "boolean",
+      "why": "Whether a toast was actually raised. FALSE is a real answer - no interactive session, notifications disabled by the owner in Windows settings, or the shell not running - and the Cloud Core steps down its ladder rather than recording a delivery that did not happen."
+    },
+    "reason": {
+      "form": "string",
+      "present_when": "shown is false",
+      "values": [
+        "no_interactive_session",
+        "notifications_disabled",
+        "shell_unavailable",
+        "invalid_payload"
+      ],
+      "why": "Which of them, because the owner's remedy differs: enable notifications, or log in."
+    },
+    "notification_id": {
+      "form": "uuid",
+      "why": "Echoed, so a late answer cannot be attributed to whichever notification is current."
+    }
+  },
+  "action_event": {
+    "why": [
+      "When the owner presses a toast button the device sends this as a device event, not as",
+      "a response: the toast may be pressed minutes after the command that raised it has",
+      "already been answered, and holding a command open for a human's attention span is how",
+      "a queue fills up."
+    ],
+    "event": "desktop.notify.action",
+    "payload": {
+      "notification_id": "uuid, the notification the toast belonged to",
+      "action_id": "the id of the pressed button, verbatim from the request",
+      "pressed_at": "ISO-8601 UTC"
+    }
+  },
+  "refused": [
+    "a title or body over its limit (the device refuses rather than truncating - the Cloud Core should decide what the owner reads, not the toast layer)",
+    "more than three actions",
+    "an action id outside [a-z0-9_]",
+    "a notification_id that is not a uuid"
+  ],
+  "not_in_this_contract": [
+    "Whether the owner READ it. A toast that appeared while nobody was at the desk was shown and not read; `read_at` belongs to the inbox and is set when the owner opens it.",
+    "Retrying. The Cloud Core's ladder decides what happens after `shown: false`; the device answers about one attempt and forgets it."
+  ]
+}

@@ -61,6 +61,7 @@ from app.devices.service import list_device_views
 from app.logging import get_logger
 from app.narration.normalizer import normalize
 from app.narration.service import pronunciation_map
+from app.notifications import toast as _toast_contract
 from app.routines.actions import (
     ACTION_KIND_ALARM,
     ACTION_KIND_BROWSER_ACTION,
@@ -481,6 +482,11 @@ CAPABILITY_DESKTOP_DISPLAY_OFF = "desktop.display_off"
 CAPABILITY_DESKTOP_DISPLAY_STATUS = "desktop.display_status"
 CAPABILITY_DESKTOP_ACTIVITY_STATUS = "desktop.activity_status"
 CAPABILITY_DESKTOP_PLAY_AUDIO = "desktop.play_audio"
+#: B11 req 369: the desktop toast. Spelled ONCE, in the module that reads the shared
+#: contract both halves are built from - restating the string here is how a capability
+#: name comes to exist in two versions, which is the failure
+#: ``test_desktop_capability_mirror`` was written for.
+CAPABILITY_DESKTOP_NOTIFY = _toast_contract.CAPABILITY
 CAPABILITY_BROWSER_MEDIA_PLAY = "browser.media_play"
 CAPABILITY_BROWSER_MEDIA_VOLUME = "browser.media_volume"
 CAPABILITY_BROWSER_MEDIA_STATUS = "browser.media_status"
@@ -771,6 +777,7 @@ __all__ = [
     "CAPABILITY_DESKTOP_DISPLAY_OFF",
     "CAPABILITY_DESKTOP_DISPLAY_STATUS",
     "CAPABILITY_DESKTOP_DISPLAY_WAKE",
+    "CAPABILITY_DESKTOP_NOTIFY",
     "CAPABILITY_DESKTOP_PLAY_AUDIO",
     "DISPLAY_ACTION_QUALIFIED",
     "ActionDispatcher",

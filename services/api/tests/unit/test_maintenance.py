@@ -16,6 +16,8 @@ from app.identity.service import IdentityService
 from app.main import create_app
 from app.maintenance import RetentionSweeper
 from app.memory.store import NativeMemoryBackend
+from app.notifications import events as notification_events
+from app.notifications import ladder as notification_ladder
 from app.research import service as research_service
 from app.security.registry import AuthorizedAssetRegistry
 from app.voice.realtime_sessions import service as realtime_service
@@ -33,6 +35,14 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
     # what is asserted here is that the APPLICATION reaches them, not what they do.
     monkeypatch.setattr(realtime_service, "sweep_idle_sessions", lambda db: ["s1", "s2"])
     monkeypatch.setattr(research_service, "sweep_abandoned_runs", lambda db: ["r1"])
+    # B11/B12 (2026-09-13): the notification ladder and the backup-failure notice. Same
+    # reason as every stub above - what is asserted is that the APPLICATION reaches them.
+    # `notification_ladder.sweep` in particular was written and had NO caller until it was
+    # wired here, which is the sixth time this repository has paid for that shape.
+    monkeypatch.setattr(notification_ladder, "sweep", lambda db, **_: {"toast": 3})
+    monkeypatch.setattr(
+        notification_events, "sweep_backup_failures", lambda db, **_: ["pagentos-backup.service"]
+    )
     app = create_app(Settings(_env_file=None))
 
     results = app.state.retention_sweeper.sweep_once()
@@ -45,6 +55,10 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
         "interrupted_native_builds": 5,
         "idle_voice_sessions": 2,
         "abandoned_research_runs": 1,
+        # B11 req 389: three notifications the ladder actually delivered this pass.
+        "notification_ladder": 3,
+        # B12 req 385: one failed unit turned into a notice the owner will see.
+        "backup_failure_notices": 1,
         # B07 req 679: a dry run on an empty database counts nothing, which is the honest
         # answer and not a skipped sweep.
         "audit_retention": 0,

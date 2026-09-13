@@ -981,6 +981,44 @@ class EvolutionService:
 
     # ------------------------------------------------------------- auditing
 
+    def _notify_owner(self, opportunity: Mapping[str, Any], status: OpportunityStatus) -> None:
+        """B12 req 383/388: the two transitions that are ABOUT the owner.
+
+        `owner_approval_required` means something is waiting on a decision only they can
+        make; `shadow_ready` means a candidate is ready to look at. Everything else here is
+        the engine talking to itself and does not earn an interruption.
+
+        Best-effort and session-less: this service owns no session, so the notification is
+        written through the artifact runtime's own factory. A fault here never unwinds a
+        transition that has already committed.
+        """
+        events_for = {
+            OpportunityStatus.OWNER_APPROVAL_REQUIRED: "approval_required",
+            OpportunityStatus.SHADOW_READY: "candidate_ready",
+        }
+        which = events_for.get(status)
+        if which is None:
+            return
+        try:
+            from app.artifacts.runtime import build_artifact_context
+            from app.config import get_settings
+            from app.notifications import events
+
+            factory, _store = build_artifact_context(get_settings())
+            identifier = str(opportunity.get("opportunity_id") or opportunity.get("id") or "?")
+            title = str(opportunity.get("title") or "Bir aday")
+            with factory() as db:
+                if which == "approval_required":
+                    events.approval_required(db, subject=identifier, what=title)
+                else:
+                    events.candidate_ready(db, opportunity_id=identifier, title_text=title)
+        except Exception as exc:  # noqa: BLE001 - see docstring
+            logger.warning(
+                "evolution_owner_notification_failed",
+                status=str(status),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
     def _audit(
         self,
         opportunity: Mapping[str, Any],
@@ -993,6 +1031,7 @@ class EvolutionService:
         publish the UI state. Neither failure is allowed to unwind a committed
         transition; both are logged and reported in the caller's result."""
         self._record_ledger(opportunity, status, actor, reason=reason)
+        self._notify_owner(opportunity, status)
         ui_state = UI_STATE_FOR_STATUS.get(status)
         if ui_state is not None:
             payload: dict[str, Any] = {

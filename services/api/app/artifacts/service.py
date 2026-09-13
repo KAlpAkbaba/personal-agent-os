@@ -7,9 +7,10 @@ durable research workflow can retry any activity (worker restart / replay)
 without creating duplicate artifacts, versions, renders or sources.
 """
 
+import contextlib
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -20,6 +21,7 @@ from app.artifacts.models import (
     RENDER_STATE_VALID,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_CREATED,
+    TASK_STATUS_FAILED_TERMINAL,
     TASK_STATUS_READY,
     Artifact,
     ArtifactRender,
@@ -29,7 +31,10 @@ from app.artifacts.models import (
     TaskRun,
 )
 from app.artifacts.state import assert_artifact_transition, assert_task_transition
+from app.logging import get_logger
 from app.research.compose import ScoredSource
+
+logger = get_logger("app.artifacts.service")
 
 
 def utcnow() -> datetime:
@@ -100,7 +105,48 @@ def transition_task(
     if new_status == TASK_STATUS_COMPLETED and task.completed_at is None:
         task.completed_at = now
     session.commit()
+    # B12 req 381/382/387: the owner hears about work finishing or failing HERE, at the one
+    # transition every kind of task passes through, rather than at each producer. A producer
+    # added later is covered without remembering to be - and three of them (research, the
+    # app factory, the native factory) each had their own idea of "done" before this.
+    _notify_task_transition(session, task, new_status)
     return task
+
+
+#: Task intents that are a research question. The owner asked these in their own words, so
+#: the notification quotes the question rather than saying "task 3f2a completed".
+_RESEARCH_KINDS: Final[tuple[str, ...]] = ("research", "araştır")
+
+
+def _notify_task_transition(session: Session, task: Task, new_status: str) -> None:
+    """Best-effort: a notification fault must never undo a transition already committed."""
+    if new_status not in (TASK_STATUS_READY, TASK_STATUS_FAILED_TERMINAL):
+        return
+    try:
+        from app.notifications import events
+
+        intent = (task.intent or "").strip()
+        what = intent[:120] if intent else "İş"
+        if new_status == TASK_STATUS_FAILED_TERMINAL:
+            events.task_failed(
+                session, task_id=task.id, what=what, error_class=task.error_class or ""
+            )
+        elif any(kind in intent.lower() for kind in _RESEARCH_KINDS):
+            events.research_finished(session, task_id=task.id, question=what)
+        else:
+            events.task_completed(session, task_id=task.id, what=what)
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        # Rolling back is not optional: a swallowed database error leaves the session in a
+        # failed transaction, and the NEXT caller inherits it. B07 learned this on the
+        # routine clock's sub-ticks - isolation that hands on a poisoned session is not
+        # isolation, it is a delayed failure with somebody else's name on it.
+        with contextlib.suppress(Exception):
+            session.rollback()
+        logger.warning(
+            "task_transition_notification_failed",
+            task_id=str(task.id),
+            error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 def start_task_run(

@@ -44,6 +44,10 @@ public sealed class CompanionRuntime(
     BrowserWorkerHost? browserWorker = null,
     AlarmController? alarm = null,
     DisplayPowerController? displayPower = null,
+    // B11 requirement 369: desktop.notify. Optional like every other capability
+    // object here - a companion built without it answers capability_missing rather
+    // than pretending a toast appeared.
+    Notify.NotifyCapabilities? notify = null,
     AlarmArmController? alarmArms = null,
     ActivityStatusReporter? activityStatus = null,
     GreetingPlayer? greeting = null,
@@ -628,6 +632,12 @@ public sealed class CompanionRuntime(
             "this companion has no access to the owner's display",
             retryable: false);
 
+    private Notify.NotifyCapabilities RequireNotify()
+        => notify ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "this companion cannot raise a desktop notification",
+            retryable: false);
+
     private AlarmArmController RequireArms()
         => alarmArms ?? throw new CapabilityException(
             ErrorClasses.CapabilityMissing,
@@ -734,6 +744,17 @@ public sealed class CompanionRuntime(
                 case AgentCapabilities.DesktopDisplayWake:
                     result = RequireDisplay().Wake(request.Payload);
                     logger.LogInformation("executed {Capability}", request.Capability);
+                    break;
+
+                // B11 (requirement 369): the only channel that reaches the owner with the
+                // browser closed. `shown: false` is a real answer and the Cloud Core's
+                // ladder reads it - see packages/protocol/desktop-notify.json.
+                case AgentCapabilities.DesktopNotify:
+                    result = RequireNotify().Notify(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability} shown={Shown}",
+                        request.Capability,
+                        result["shown"]?.GetValue<bool>());
                     break;
 
                 case AgentCapabilities.DesktopDisplayStatus:

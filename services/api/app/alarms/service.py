@@ -29,6 +29,7 @@ special case for test alarms: the same path, with a shorter ``max_play_seconds``
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -634,6 +635,26 @@ def fire_alarm(
             metadata={"alarm_id": str(alarm.id), "reason": result.reason[:64]},
         )
         _release(session, alarm, sequence=sequence, reason="audio_failed", now=moment)
+        # B12 req 386: an alarm that did not fire is otherwise discovered by oversleeping,
+        # and the UI-state event above only reaches somebody already looking at the panel.
+        # Best-effort: the alarm has already failed and a notification fault must not make
+        # that worse.
+        try:
+            from app.notifications import events
+
+            events.alarm_failed(
+                session,
+                alarm_id=alarm.id,
+                label=alarm.local_time or "",
+                reason=result.reason[:120] if result.reason else "",
+                now=moment,
+            )
+        except Exception as exc:  # noqa: BLE001 - see above
+            with contextlib.suppress(Exception):
+                session.rollback()  # a swallowed error leaves the session unusable
+            logger.warning(
+                "alarm_failure_notification_failed", error=f"{type(exc).__name__}: {exc}"
+            )
         return FireDecision(False, "audio_failed", result)
     # ADR-0079 §6: an alarm that fired holds off every automatic display-off for the
     # alarm holdoff. Wired here, on the success path - the hardening run of 2026-09-07

@@ -11,6 +11,7 @@ hashes it, so dedup can never diverge between producers.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import uuid
 from collections.abc import Callable
@@ -29,6 +30,29 @@ from app.selfhealing.models import INCIDENT_STATUSES, RELEASE_STATUSES, Incident
 from app.selfhealing.monitoring import IncidentDraft
 
 logger = get_logger("app.selfhealing.service")
+
+
+
+def _notify_rollback(session: Any, row: Any) -> None:
+    """B12 req 384: tell the owner their system rewound itself.
+
+    Best-effort on purpose. The rollback has already happened and is already committed; a
+    notification subsystem being unwell must not turn a successful recovery into an
+    exception, and the row is durable so a later sweep still reaches them.
+    """
+    try:
+        from app.notifications import events
+
+        events.rollback_happened(
+            session,
+            component=row.component,
+            from_release=row.version or "unknown",
+            to_release=getattr(row, "rolled_back_to", None) or "last known good",
+        )
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        with contextlib.suppress(Exception):
+            session.rollback()  # a swallowed error leaves the session unusable
+        logger.warning("rollback_notification_failed", error=f"{type(exc).__name__}: {exc}")
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
 
@@ -338,6 +362,7 @@ class SelfHealingService:
                 raise SelfHealingError(
                     SelfHealingErrorClass.NOT_FOUND, f"release {release_id} not found"
                 )
+            previous_status = row.status
             row.status = status
             if status == "active":
                 row.promoted_at = _utcnow()
@@ -347,6 +372,12 @@ class SelfHealingService:
                 row.health_json = health
             session.commit()
             logger.info("release_status_set", release_id=str(release_id), status=status)
+            if status == "rolled_back" and previous_status != "rolled_back":
+                # B12 req 384: production changed underneath the owner without them asking.
+                # Sixteen rollbacks happened in seven days and not one was announced; the
+                # owner finding out afterwards that their system rewound itself is exactly
+                # the surprise the urgent level exists for.
+                _notify_rollback(session, row)  # never raises; see below
             return _release_dict(row)
 
     def supersede_active_releases(

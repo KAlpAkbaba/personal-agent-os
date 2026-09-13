@@ -14,6 +14,12 @@
       generated App entry point, no XAML tooling).
     -->
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+    <!--
+      B11 (requirement 369): desktop.notify needs a shell notification, and NotifyIcon lives
+      in the WindowsForms profile. Profile reference rather than UseWindowsForms: the process
+      stays console-only, with no generated entry point and no designer tooling.
+    -->
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WindowsForms" />
   </ItemGroup>
 
   <ItemGroup>

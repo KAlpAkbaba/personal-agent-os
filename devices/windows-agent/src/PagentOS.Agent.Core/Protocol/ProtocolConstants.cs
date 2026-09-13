@@ -232,6 +232,15 @@ public static class AgentCapabilities
     /// <summary>M18.3: forget a local fallback arm (§6f). Idempotent by <c>alarm_id</c>.</summary>
     public const string DesktopAlarmDisarm = "desktop.alarm_disarm";
 
+    /// <summary>
+    /// B11 requirement 369: a desktop toast. The one channel that reaches the owner with the
+    /// browser closed and the screen locked, and only this process can raise it — nothing in
+    /// the cloud runs in the owner's interactive session. Always advertised: it only adds,
+    /// and it has a truthful answer on every device (<c>shown: false</c> with a reason when
+    /// there is no session or the owner has turned notifications off).
+    /// </summary>
+    public const string DesktopNotify = "desktop.notify";
+
     /// <summary>M18: turn the display off — the ONLY machine-state action, and only off (§6e).</summary>
     public const string DesktopDisplayOff = "desktop.display_off";
 
@@ -262,7 +271,7 @@ public static class AgentCapabilities
     public static readonly IReadOnlyList<string> Ambient =
     [
         DesktopDisplayWake, DesktopDisplayStatus, DesktopActivityStatus,
-        DesktopAlarmArm, DesktopAlarmDisarm, DesktopPlayAudio,
+        DesktopAlarmArm, DesktopAlarmDisarm, DesktopPlayAudio, DesktopNotify,
     ];
 
     /// <summary>Display power (M18). Advertised only behind <c>DisplayPowerEnabled</c>.</summary>

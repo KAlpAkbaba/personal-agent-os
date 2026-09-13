@@ -41,6 +41,7 @@ import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
+import { useNotificationRead } from "../../lib/cockpit/useNotificationRead";
 import { useCreativeControl } from "../../lib/cockpit/useCreativeControl";
 import { useCreativeImages } from "../../lib/cockpit/useCreativeImages";
 import { useExecutiveControl } from "../../lib/cockpit/useExecutiveControl";
@@ -96,6 +97,7 @@ import {
   ScenesPanel,
   ShadowReadyPanel,
   StateStreamPanel,
+  NotificationsPanel,
   VoiceQualificationPanel,
   WorldPanel,
 } from "../panels/CockpitPanels";
@@ -136,6 +138,8 @@ function Cockpit() {
   // M21: the approval pair's one state, bound to the real client; every
   // answer reloads the pending lists so the panels show what the Cloud Core
   // now holds rather than what this page assumed it did.
+  // B11 req 368: the only write this panel can make, and it leaves the process.
+  const notificationRead = useNotificationRead(refreshPanels);
   const approvals = useApprovalPair(approvalClient, refreshPanels);
 
   // M22 §4: "Aç" asks the Cloud Core to fetch and open an artifact on the
@@ -282,6 +286,14 @@ function Cockpit() {
               with the owner's actions, because that is what they are. */}
           <MailPanel pending={data.mailDrafts} truth={truth} now={now} pair={approvals.drafts} />
           <CalendarPanel pending={data.calendarProposals} truth={truth} now={now} pair={approvals.proposals} />
+          {/* B11 req 368/377: what the system tried to tell the owner while they were
+              NOT looking at this page, and whether anything actually carried it. Placed
+              with the owner's own surfaces: reading one is their act on their record. */}
+          <NotificationsPanel
+            state={data.notifications}
+            onMarkRead={notificationRead.markRead}
+            busyId={notificationRead.busyId}
+          />
           <RunningToolsPanel truth={truth} now={now} />
           {/* M18.3: what is set to wake the owner, and what the screens are
               doing. Both are read-only here; the renderer owns no policy. */}

@@ -83,6 +83,9 @@ from app.narration.routes import router as narration_router
 from app.nativefactory.interrupted import fail_interrupted_builds
 from app.nativefactory.routes import router as native_router
 from app.news.routes import router as news_router
+from app.notifications import events as notification_events
+from app.notifications import ladder as notification_ladder
+from app.notifications.routes import router as notifications_router
 from app.operator.service import OperatorService, register_operator_service
 from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
@@ -419,6 +422,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # B07 req 679: the audit trail had no end - 13,560 events and nothing that
             # would ever remove one. Dry run by default; the Activity Ledger is never
             # swept at all (app.security.audit_retention names why).
+            # B11 req 389: the fallback ladder, driven. Written and unwired is the defect
+            # this repository keeps paying for - a notification nothing attempts to deliver
+            # sits in the inbox looking exactly like one that was delivered there.
+            "notification_ladder": lambda: sum(
+                _in_session(
+                    artifacts.session,
+                    lambda db: notification_ladder.sweep(
+                        db,
+                        rungs=notification_ladder.default_rungs(device_action=device_action),
+                    ),
+                ).values()
+            ),
+            # B12 req 385: B08 made a failed backup VISIBLE; this is what TELLS the owner.
+            # A sweep rather than a hook because the failing unit is a systemd service that
+            # cannot call into this process - which is the whole reason it writes a file.
+            "backup_failure_notices": lambda: _in_session(
+                artifacts.session,
+                lambda db: notification_events.sweep_backup_failures(
+                    db, backup_root=settings.backup_root
+                ),
+            ),
             "audit_retention": lambda: sum(
                 _in_session(
                     artifacts.session,
@@ -632,6 +656,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # broker/artifacts runtime every other family above already reads — one device
     # authority, never a second path.
     app.include_router(news_router)
+    # B11 req 368/377: the durable inbox. The old one read the fake push transport's
+    # in-memory log, so it was empty in production and lost on every restart.
+    app.include_router(notifications_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

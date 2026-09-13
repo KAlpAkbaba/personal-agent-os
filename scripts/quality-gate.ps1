@@ -148,8 +148,17 @@ Invoke-Step "API lint (ruff)" {
 # suites stay in the full gate where they belong.
 Invoke-Step "Other services lint (ruff)" {
   if (-not $uv) { throw "uv not found" }
-  foreach ($svc in @("servicesecovery-supervisor", "servicesrowser")) {
-    Push-Location (Join-Path $repoRoot $svc)
+  # Forward slashes on purpose. This line shipped in d7f726a with \ separators,
+  # and a string literal on the way in turned them into a carriage return and a
+  # backspace: the names became "services<CR>ecovery-supervisor" and
+  # "services<BS>rowser". The step then ran ruff at the repo root and printed
+  # "All checks passed!" about two trees it had never entered. PowerShell takes /
+  # everywhere, and no escape layer can mangle it.
+  foreach ($svc in @("services/recovery-supervisor", "services/browser")) {
+    $svcPath = Join-Path $repoRoot $svc
+    # A path that is not there is a step that did not run. Never a silent pass again.
+    if (-not (Test-Path $svcPath)) { throw "other-services lint: $svcPath does not exist" }
+    Push-Location $svcPath
     try {
       & $uv run ruff check .
       Assert-ExitCode "ruff ($svc)"

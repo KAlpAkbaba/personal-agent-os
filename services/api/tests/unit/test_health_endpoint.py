@@ -142,6 +142,11 @@ def test_health_ok_shape(monkeypatch) -> None:
         "interrupted_native_builds",
         "idle_voice_sessions",
         "abandoned_research_runs",
+        # B11 req 389 / B12 req 385 (2026-09-13). The ladder is here because it was written
+        # with no caller at all; the backup notice because B08's marker file was visible and
+        # nothing told the owner about it.
+        "notification_ladder",
+        "backup_failure_notices",
         "audit_retention",
     ]
     clock = body["checks"]["routine_clock"]

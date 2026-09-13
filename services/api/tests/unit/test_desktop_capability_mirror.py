@@ -58,6 +58,7 @@ CANONICAL_DESKTOP = (
     "desktop.activity_status",
     "desktop.play_audio",
     "desktop.display_off",
+    "desktop.notify",
 )
 
 CANONICAL_BROWSER_MEDIA = (

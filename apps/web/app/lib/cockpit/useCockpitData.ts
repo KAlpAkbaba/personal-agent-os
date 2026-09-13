@@ -58,6 +58,7 @@ import { type CreativeRunRow, fetchCreativeRuns } from "./creative";
 import { type ExecutiveRunRow, fetchExecutiveRuns } from "./executive";
 import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
 import { type NativeBuildRow, fetchNativeBuilds } from "./native";
+import { type Inbox, fetchInbox } from "./notifications";
 import { type SceneRow, fetchScenes } from "./scenes";
 
 const POLL_VISIBLE_MS = 15_000;
@@ -155,6 +156,15 @@ export type CockpitData = {
    * not here.
    */
   nativeBuilds: Loaded<NativeBuildRow[]>;
+  /**
+   * B11 req 368: the durable inbox, from `/v1/notifications`.
+   *
+   * On the slow loop with everything else, and that is the right clock: this is the record
+   * of what the owner was told, not the telling. Reaching them is the ladder's job and
+   * happens whether or not this page is open - which is the whole point of B11, because
+   * the inbox it replaces lived in the push transport's memory and was empty in production.
+   */
+  notifications: Loaded<Inbox>;
 };
 
 const INITIAL: CockpitData = {
@@ -183,6 +193,7 @@ const INITIAL: CockpitData = {
   executiveRuns: { kind: "loading" },
   creativeRuns: { kind: "loading" },
   nativeBuilds: { kind: "loading" },
+  notifications: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -220,6 +231,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         executiveRuns,
         creativeRuns,
         nativeBuilds,
+        notifications,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -247,6 +259,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchExecutiveRuns(),
         fetchCreativeRuns(),
         fetchNativeBuilds(),
+        fetchInbox(),
       ]);
       if (stopped.current) return;
       setData({
@@ -275,6 +288,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         executiveRuns,
         creativeRuns,
         nativeBuilds,
+        notifications,
       });
     } finally {
       inFlight.current = false;
