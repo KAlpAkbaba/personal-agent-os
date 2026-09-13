@@ -740,7 +740,7 @@ RISK                : medium — persona talimatı büyür, jeton bütçesi öl�
 OWNER_ACTION        : no
 TEST_PLAN           : top-k geri getirmenin talimata girdiği; açık kaydın çıkarımı yendiği;
                       çelişen iki kaydın çözüldüğü; talimat boyutunun tavanı aşmadığı
-KAPANIŞ             : commit PENDING_B17 · CI PENDING · 9/9 DONE
+KAPANIŞ             : commit 7728584 · CI 34767855834 yeşil (7/7) · 9/9 DONE
                       kanıt docs/evidence/b17-memory-injection-2026-09-13.json
 ÖLÇÜM               : (a) 55 MISSING yazıyordu ve KOŞUYORDU: `sweep_expired` retention
                       sınıfına göre süpürüyor (session/short TTL, sabitlenmiş ve açık

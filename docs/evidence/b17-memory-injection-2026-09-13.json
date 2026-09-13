@@ -13,8 +13,8 @@
     56
   ],
   "recorded_at": "2026-09-13T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "7728584",
+  "ci_run": 34767855834,
   "what_this_proves": "A preference taught by voice is used in a NEW session without being repeated. B16 gave the owner a way to teach this system something and, without this half, that was a write-only diary: `hybrid_search` has been complete since M5, B16 gave it its first product caller (`memory.search`, when the owner ASKS), and nothing had ever put a memory in front of the model on the path where it answers.",
   "the_defect_the_measurement_found": {
     "what": "Requirement 45 was recorded as 'yazılı, hiç tetiklenmedi' — written, never triggered. B17 found out why, and it was worse than not triggering: the keyed conflict branch compares `value_json`, and EVERY memory this product actually writes has an empty value. `{} == {}` is true for any pair of them.",
