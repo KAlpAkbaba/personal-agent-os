@@ -367,6 +367,29 @@ class DeviceStatusRegistry:
 _registry = DeviceStatusRegistry()
 
 
+def lowest_idle_seconds(registry: DeviceStatusRegistry | None = None) -> float | None:
+    """B14 req 294/299: how long since the OWNER last touched any of their machines.
+
+    The LOWEST across the devices that reported one, because "the owner is idle" is a claim
+    about the owner and not about a machine: a laptop shut since Friday says nothing about
+    somebody who is at their desktop right now, and taking the highest would call them idle
+    while they typed.
+
+    ``None`` when nothing reported - which a condition trigger reads as "not met", never as
+    "the owner has gone" (``app.routines.triggers.check_condition_due``).
+    """
+    reg = registry or get_status_registry()
+    try:
+        idles = [
+            status.input_idle_s
+            for status in reg.all().values()
+            if status.input_idle_s is not None
+        ]
+    except Exception:  # noqa: BLE001 - a missing registry is "unknown", never a fault
+        return None
+    return min(idles) if idles else None
+
+
 def get_status_registry() -> DeviceStatusRegistry:
     return _registry
 
@@ -391,6 +414,7 @@ __all__ = [
     "DeviceStatusRegistry",
     "StatusChange",
     "get_status_registry",
+    "lowest_idle_seconds",
     "parse_status",
     "set_status_registry",
 ]

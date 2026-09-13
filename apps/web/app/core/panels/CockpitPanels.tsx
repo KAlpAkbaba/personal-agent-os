@@ -58,6 +58,19 @@ import type {
   PendingProposal,
 } from "../../lib/cockpit/approvals";
 import {
+  ROUTINE_ROWS_SHOWN,
+  STATUS_PAUSED as ROUTINE_STATUS_PAUSED,
+  controlFor,
+  formatWhen as routineWhen,
+  needsAttention as routinesNeedAttention,
+  routinesBadge,
+  sourceLabel,
+  statusLabel as routineStatusLabel,
+  triggerPhrase,
+} from "../../lib/cockpit/routine-rows";
+import type { RoutineRow } from "../../lib/cockpit/routines";
+import type { RoutineControlProps } from "../../lib/cockpit/useRoutineControl";
+import {
   NOTIFICATION_ROWS_SHOWN,
   PRIORITY_NORMAL,
   canMarkRead,
@@ -3376,6 +3389,90 @@ export function NotificationsPanel({
               )}
             </li>
           ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * B14 req 295: the routines the owner has, and whether each is actually running.
+ *
+ * The Routine Engine has been complete since M18 with no surface at all. Every one of the
+ * seven routines in production was created by the alarm subsystem on the owner's behalf,
+ * and nothing showed them that — so "what does this system do on its own?" had no answer
+ * short of reading the database.
+ *
+ * Two controls, both reversible: Duraklat and Devam ettir. Cancelling is permanent and
+ * stays where the owner is looking at what they are ending, not on a list they are
+ * scanning.
+ */
+export function RoutinesPanel({
+  state,
+  control,
+}: {
+  state: CockpitData["routines"];
+  control: RoutineControlProps;
+}) {
+  return (
+    <Panel<RoutineRow[]>
+      id="routines"
+      title="Rutinler"
+      state={state}
+      empty="Kurulu rutin yok."
+      isEmpty={(rows) => rows.length === 0}
+      badge={(rows) => routinesBadge(rows)}
+      // A paused routine the owner may have forgotten. Nothing here is WRONG - this is the
+      // one state a list can hide, and a morning routine turned off in March is invisible
+      // among twelve until somebody wonders why their mornings are quiet.
+      attention={(rows) => routinesNeedAttention(rows)}
+    >
+      {(rows) => (
+        <ul>
+          {rows.slice(0, ROUTINE_ROWS_SHOWN).map((row) => {
+            const button = controlFor(row);
+            return (
+              <li
+                key={row.routine_id}
+                data-routine-id={row.routine_id}
+                data-routine-status={row.status ?? "unknown"}
+                data-routine-trigger={row.trigger_kind ?? "unknown"}
+              >
+                <div className="event-row">
+                  <span>{row.name}</span>
+                  <span className="event-when">{routineStatusLabel(row.status)}</span>
+                </div>
+                <span className="muted" data-routine-when>
+                  {triggerPhrase(row.trigger_kind, row.trigger)}
+                  {sourceLabel(row.source) && ` · ${sourceLabel(row.source)}`}
+                </span>
+                {row.status === ROUTINE_STATUS_PAUSED && (
+                  <span className="muted" data-routine-paused>
+                    {row.pause_reason
+                      ? `${routineWhen(row.paused_at)} · ${row.pause_reason}`
+                      : routineWhen(row.paused_at)}
+                  </span>
+                )}
+                {button && (
+                  <button
+                    type="button"
+                    className="core-chip"
+                    data-routine-action={button.action}
+                    data-routine-target={row.routine_id}
+                    disabled={control.busyId !== null}
+                    onClick={() => control.onControl(button.action, row.routine_id)}
+                  >
+                    {button.label}
+                  </button>
+                )}
+              </li>
+            );
+          })}
+          {control.error && (
+            <li data-routine-error>
+              <span className="panel-unknown">Olmadı: {control.error}</span>
+            </li>
+          )}
         </ul>
       )}
     </Panel>

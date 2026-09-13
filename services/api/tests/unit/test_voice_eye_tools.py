@@ -567,10 +567,24 @@ def test_disable_then_enable_round_trip_leaves_two_receipts(wired) -> None:
     _call(client, sid, "r2", "eye.enable", utterance="Gözünü aç.", observed_after=_local("ACTIVE"))
     assert _eye_enabled(runtime) is True
     receipts = _receipts(runtime, SUBSYSTEM_PRESENCE)
-    assert [(r.action, r.status) for r in receipts] == [
+
+    # BOTH receipts, each verified. Asserted as a set rather than as a list, because the
+    # ledger orders by `occurred_at` and two receipts written inside the same clock tick
+    # share it - there is no order between them for the query to return, and demanding one
+    # asserts something this store does not promise.
+    #
+    # Found 2026-09-13 (B14): this passed for months only because `test_voice_eye_tools`
+    # sorts before `test_voice_step_up` alphabetically, so it always ran cold and the two
+    # calls landed ~16 ms apart. Running the two files in the other order makes them land
+    # together and the list flips. A test whose green depends on filename ordering is a
+    # test that will fail in CI on the day somebody adds a file.
+    assert {(r.action, r.status) for r in receipts} == {
         ("eye.enable", "verified"),
         ("eye.disable", "verified"),
-    ]  # newest first
+    }
+    # And the claim that survives a tie: the later act was not recorded as the earlier one.
+    by_action = {r.action: r.occurred_at for r in receipts}
+    assert by_action["eye.enable"] >= by_action["eye.disable"]
     assert {r.detail_json["session_id"] for r in receipts} == {sid}
     calls = _activity(runtime, sid)["tool_calls"]
     assert [c["capability"] for c in calls] == ["eye.disable", "eye.enable"]

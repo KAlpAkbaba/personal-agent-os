@@ -1,6 +1,6 @@
 """Trigger vocabulary, validation and "is this due?" evaluation (M18 task brief §Triggers).
 
-Three trigger kinds, one rule that binds them: a trigger is data, evaluated explicitly by
+Four trigger kinds, one rule that binds them: a trigger is data, evaluated explicitly by
 ``app.routines.service.evaluate_due`` at some caller-chosen ``now`` — nothing here schedules
 a wakeup or runs on a clock.
 
@@ -28,6 +28,18 @@ a wakeup or runs on a clock.
   event can never double-fire a routine even across repeated ``evaluate_due`` calls; the
   caller additionally advances a per-routine watermark (``Routine.last_presence_sequence``)
   so old events are never re-scanned at all.
+- ``condition`` (B14 req 294/299): a STATE the owner's machine is in, rather than an
+  instant. "Bilgisayar boşta kalınca" is not a moment; it is true for as long as it is
+  true, so a trigger that fired whenever the condition held would fire on every tick for as
+  long as the owner was away from the keyboard. This one fires on the CROSSING - the tick
+  where it first becomes true - and the caller carries the previous answer in
+  ``Routine.last_condition_met``. The occurrence key is the crossing instant, so two
+  genuine crossings are two firings and one long idle stretch is one.
+
+  It reads the same ``RoutineConditionContext`` the CONDITIONS read, for the same reason
+  this module names presence events as strings: the routines package imports nothing from
+  ``app.devices``, and a process that supplies no device status simply never crosses the
+  edge. Unknown is not "true".
 """
 
 from __future__ import annotations
@@ -36,6 +48,26 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+#: B14 req 294/299. Two kinds and no more for now: each has to be answerable from
+#: ``RoutineConditionContext``, and a vocabulary that grew ahead of the fields that feed it
+#: would let the owner create a routine the engine can never fire.
+CONDITION_TRIGGER_DEVICE_IDLE = "device_idle"
+CONDITION_TRIGGER_DEVICE_ACTIVE = "device_active"
+
+CONDITION_TRIGGER_KINDS: tuple[str, ...] = (
+    CONDITION_TRIGGER_DEVICE_IDLE,
+    CONDITION_TRIGGER_DEVICE_ACTIVE,
+)
+
+#: Ten minutes. Long enough that stepping away for coffee is not "the owner has gone", short
+#: enough that "bilgisayar boşta kalınca" means what it sounds like.
+DEFAULT_IDLE_SECONDS = 600
+#: A floor, because a one-second edge would fire between two keystrokes.
+MIN_IDLE_SECONDS = 30
+#: A day. Past this the question is presence, not idleness, and the presence trigger answers
+#: it with a model that can be argued with.
+MAX_IDLE_SECONDS = 24 * 3600
 
 #: Names another track publishes through app.uistate (module docstring). Not enum members of
 #: app.uistate.contract.UiState — deliberately: adding them there would make this package
@@ -155,6 +187,28 @@ def validate_presence_trigger(raw: dict[str, Any]) -> dict[str, Any]:
     return {"event": event}
 
 
+def validate_condition_trigger(raw: dict[str, Any]) -> dict[str, Any]:
+    """B14 req 294. A closed vocabulary of ONE to begin with, on purpose.
+
+    Every kind here has to be answerable from ``RoutineConditionContext`` alone, and a
+    vocabulary that grew ahead of the fields that feed it would be a routine the owner can
+    create and the engine can never fire.
+    """
+    kind = raw.get("kind")
+    if kind not in CONDITION_TRIGGER_KINDS:
+        raise InvalidTrigger(
+            f"unknown condition trigger kind: {kind!r}; must be one of {CONDITION_TRIGGER_KINDS}"
+        )
+    seconds = raw.get("min_seconds", DEFAULT_IDLE_SECONDS)
+    if not isinstance(seconds, int) or isinstance(seconds, bool) or not (
+        MIN_IDLE_SECONDS <= seconds <= MAX_IDLE_SECONDS
+    ):
+        raise InvalidTrigger(
+            f"'min_seconds' must be an int in {MIN_IDLE_SECONDS}..{MAX_IDLE_SECONDS}"
+        )
+    return {"kind": kind, "min_seconds": seconds}
+
+
 def validate_trigger(trigger_kind: str, raw: dict[str, Any] | None) -> dict[str, Any]:
     raw = raw or {}
     if trigger_kind == "at":
@@ -163,6 +217,8 @@ def validate_trigger(trigger_kind: str, raw: dict[str, Any] | None) -> dict[str,
         return validate_schedule_trigger(raw)
     if trigger_kind == "presence":
         return validate_presence_trigger(raw)
+    if trigger_kind == "condition":
+        return validate_condition_trigger(raw)
     raise InvalidTrigger(f"unknown trigger_kind: {trigger_kind!r}")
 
 
@@ -226,8 +282,51 @@ def check_presence_due(
     return False, None, new_watermark
 
 
+def check_condition_due(
+    trigger_json: dict[str, Any],
+    context: Any,
+    *,
+    last_met: bool,
+    now: datetime,
+) -> tuple[bool, str | None, bool]:
+    """Returns ``(due, occurrence_key, met_now)``.
+
+    Due only on the RISING edge. ``met_now`` is what the caller stores back into
+    ``Routine.last_condition_met``, and it is returned even when the routine is not due -
+    the falling edge has to be recorded too, or the next rise would not look like one.
+
+    Unknown context is NOT met. A process with no device status never crosses the edge,
+    which is the same fail-closed rule ``app.routines.conditions`` follows: a state that
+    cannot be observed is not a state the system will act on.
+    """
+    kind = trigger_json.get("kind")
+    threshold = int(trigger_json.get("min_seconds", DEFAULT_IDLE_SECONDS))
+    idle = getattr(context, "device_idle_s", None)
+
+    if kind == CONDITION_TRIGGER_DEVICE_IDLE:
+        met_now = isinstance(idle, int | float) and float(idle) >= threshold
+    elif kind == CONDITION_TRIGGER_DEVICE_ACTIVE:
+        met_now = isinstance(idle, int | float) and float(idle) < threshold
+    else:  # pragma: no cover - validate_condition_trigger closes the vocabulary
+        return False, None, False
+
+    if met_now and not last_met:
+        # The instant of the crossing, so two genuine crossings are two occurrence keys and
+        # one long idle stretch is one.
+        return True, now.isoformat(), True
+    return False, None, met_now
+
+
 __all__ = [
+    "CONDITION_TRIGGER_DEVICE_ACTIVE",
+    "CONDITION_TRIGGER_DEVICE_IDLE",
+    "CONDITION_TRIGGER_KINDS",
     "DEFAULT_GRACE_MINUTES",
+    "DEFAULT_IDLE_SECONDS",
+    "MAX_IDLE_SECONDS",
+    "MIN_IDLE_SECONDS",
+    "check_condition_due",
+    "validate_condition_trigger",
     "MAX_GRACE_MINUTES",
     "ONCE_OCCURRENCE_KEY",
     "PRESENCE_EVENT_OWNER_AWAKE",

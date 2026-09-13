@@ -46,6 +46,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -54,6 +55,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     Uuid,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -74,8 +76,22 @@ def _in_list(column: str, values: tuple[str, ...]) -> str:
 TRIGGER_KIND_AT = "at"
 TRIGGER_KIND_SCHEDULE = "schedule"
 TRIGGER_KIND_PRESENCE = "presence"
+#: B14 req 294/299: "when the machine goes idle", and things shaped like it.
+#:
+#: The other three triggers are all about an INSTANT — a time, a wall clock, an event on the
+#: bus. This one is about a STATE the owner's machine is in, which is a different question
+#: with a different hazard: a state is true for as long as it is true, so a trigger that
+#: fired whenever the condition held would fire on every tick for as long as the owner was
+#: away from the keyboard. It fires on the CROSSING, and `last_condition_met` is what
+#: remembers which side of the edge the routine was last on.
+TRIGGER_KIND_CONDITION = "condition"
 
-TRIGGER_KINDS: tuple[str, ...] = (TRIGGER_KIND_AT, TRIGGER_KIND_SCHEDULE, TRIGGER_KIND_PRESENCE)
+TRIGGER_KINDS: tuple[str, ...] = (
+    TRIGGER_KIND_AT,
+    TRIGGER_KIND_SCHEDULE,
+    TRIGGER_KIND_PRESENCE,
+    TRIGGER_KIND_CONDITION,
+)
 
 # -------------------------------------------------------------------- statuses
 
@@ -85,11 +101,20 @@ TRIGGER_KINDS: tuple[str, ...] = (TRIGGER_KIND_AT, TRIGGER_KIND_SCHEDULE, TRIGGE
 #: (triggered or skipped — either way the moment has passed); ``schedule``/``presence``
 #: routines stay ``armed`` across every occurrence until cancelled.
 ROUTINE_STATUS_ARMED = "armed"
+#: B14 req 290/291: off for now, and not the same thing as cancelled.
+#:
+#: Cancelling is a decision about the routine; pausing is a decision about this week. The
+#: owner who says "sabah rutinini bu hafta durdur" is not asking for it to be deleted, and
+#: the only way to honour that before this state existed was to cancel and re-create - which
+#: loses the routine's id, its firing history and everything the ledger recorded about it.
+#: `paused` is NOT terminal: `evaluate_due` skips it, `resume_routine` puts it back.
+ROUTINE_STATUS_PAUSED = "paused"
 ROUTINE_STATUS_COMPLETED = "completed"
 ROUTINE_STATUS_CANCELLED = "cancelled"
 
 ROUTINE_STATUSES: tuple[str, ...] = (
     ROUTINE_STATUS_ARMED,
+    ROUTINE_STATUS_PAUSED,
     ROUTINE_STATUS_COMPLETED,
     ROUTINE_STATUS_CANCELLED,
 )
@@ -153,6 +178,25 @@ class Routine(Base):
     #: presence trigger, so the same underlying presence event is never re-scanned, let
     #: alone re-fired, on a later evaluate_due call. Meaningless for at/schedule triggers.
     last_presence_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: B14 req 294: which side of a CONDITION trigger's edge this routine was last on.
+    #:
+    #: The presence watermark above is a position in a stream; this is a state. A condition
+    #: is true for as long as it is true - "the machine has been idle for ten minutes" stays
+    #: true for the next hour - so without this the routine would fire on every tick of that
+    #: hour. `False` means "not met last time we looked", which is also what a routine that
+    #: has never been evaluated should start at: the first crossing is a crossing.
+    #: Meaningless for at/schedule/presence triggers.
+    last_condition_met: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    #: When that edge was last crossed, so the occurrence key differs between crossings and
+    #: a routine can be asked "when did this last happen?" without reading the firings.
+    last_condition_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: B14 req 290/291: when the owner paused it, and why. `None` on an armed routine.
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pause_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -235,10 +279,12 @@ __all__ = [
     "ROUTINE_STATUSES",
     "ROUTINE_STATUS_ARMED",
     "ROUTINE_STATUS_CANCELLED",
+    "ROUTINE_STATUS_PAUSED",
     "ROUTINE_STATUS_COMPLETED",
     "ROUTINE_TERMINAL_STATUSES",
     "TRIGGER_KINDS",
     "TRIGGER_KIND_AT",
+    "TRIGGER_KIND_CONDITION",
     "TRIGGER_KIND_PRESENCE",
     "TRIGGER_KIND_SCHEDULE",
     "Routine",

@@ -362,6 +362,14 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "native.check",
         "native.fix",
         "native.rebuild",
+        # B14 req 287-291: the owner's own routines. The engine has been complete since M18
+        # and the model was never offered a way to reach it, so every routine in production
+        # was made by the alarm subsystem on the owner's behalf.
+        "routine.create",
+        "routine.list",
+        "routine.cancel",
+        "routine.pause",
+        "routine.resume",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

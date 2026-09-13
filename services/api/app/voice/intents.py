@@ -49,6 +49,15 @@ class Intent(StrEnum):
     EVOLUTION_CANCEL = "evolution_cancel"  # bu geliştirmeyi iptal et
     EVOLUTION_HOLD = "evolution_hold"  # bunu canlıya alma
     RELEASE_ROLLBACK = "release_rollback"  # önceki sürüme dön
+    # B14 req 287-291, 296-299: the owner's own routines, by voice. Resolved BEFORE the
+    # alarm family, because "rutini durdur" and "rutini iptal et" carry the alarm's own
+    # stop and cancel verbs - the noun is what tells them apart, and the noun has to be
+    # looked at first or "sabah rutinini durdur" silences tomorrow's alarm instead.
+    ROUTINE_CREATE = "routine_create"  # her sabah 08:00'de haberleri oku
+    ROUTINE_LIST = "routine_list"  # hangi rutinlerim var
+    ROUTINE_CANCEL = "routine_cancel"  # sabah rutinini iptal et
+    ROUTINE_PAUSE = "routine_pause"  # sabah rutinini durdur / bu hafta durdur
+    ROUTINE_RESUME = "routine_resume"  # sabah rutinini geri aç
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -316,6 +325,11 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     # targets the SAME capability as ALARM_CREATE — a test alarm is a real alarm with
     # `test=true` and a short offset (spec §8.1), not a second code path, so it must not be
     # a second capability either.
+    # B14 req 287-291. `routine.list` is a QUERY and lives in the other table.
+    Intent.ROUTINE_CREATE: "routine.create",
+    Intent.ROUTINE_CANCEL: "routine.cancel",
+    Intent.ROUTINE_PAUSE: "routine.pause",
+    Intent.ROUTINE_RESUME: "routine.resume",
     Intent.ALARM_CREATE: "alarm.create",
     Intent.ALARM_TEST_CREATE: "alarm.create",
     Intent.ALARM_CANCEL: "alarm.cancel",
@@ -432,6 +446,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
 #: from CAPABILITY_BY_INTENT because that map is what makes an intent an ACTION.
 QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.ALARM_QUERY: "alarm.status",
+    # B14 req 288. Reading back what the owner already set up mutates nothing.
+    Intent.ROUTINE_LIST: "routine.list",
     Intent.DISPLAY_QUERY: "display.status",
     # ADR-0079 §12: "why did / didn't you" and "what is the policy now" are answered from
     # the live decision, the presence assertion, the holdoffs and the ledger - a query.
@@ -1371,6 +1387,98 @@ def _is_question(tokens: tuple[str, ...]) -> bool:
         # "Ekran durumu ne?" / "Alarm durumu nedir?" (corpus d.status.2).
         or (_has(tokens, "durum") and _has_exact(tokens, "ne", "nedir", "nasıl", "nasil"))
     )
+
+
+# ---------------------------------------------------------------- B14: the routines
+#
+# The owner's own routines, by voice (req 287-291, 296-299). Resolved BEFORE the alarm
+# family for one concrete reason: "sabah rutinini durdur" and "sabah rutinini iptal et"
+# carry the alarm family's own stop and cancel verbs. The NOUN is what tells them apart, so
+# the noun has to be looked at first - otherwise the owner turning off a morning routine
+# silences tomorrow's alarm instead, and finds out by oversleeping.
+#
+# Every phrase below requires the routine noun. There is deliberately no bare-verb
+# fallback: "durdur" alone is the narration stop, and a routine family that claimed it
+# would take a word the owner uses constantly.
+
+#: "rutin" and its suffixed forms. Turkish agglutination means the stem match is the right
+#: primitive here (rutini, rutinimi, rutinlerim, rutinini, rutinlerimi ...).
+_ROUTINE_NOUN_STEMS: Final[tuple[str, ...]] = ("rutin",)
+
+#: Setting one up. `kur` covers kur/kurar/kursana; `ayarla` the other common phrasing.
+_ROUTINE_CREATE_VERB_STEMS: Final[tuple[str, ...]] = ("kur", "ayarla", "oluştur", "olustur")
+
+#: Turning one off for a while. `durdur`/`duraklat` are the owner's words; `beklet` too.
+_ROUTINE_PAUSE_VERB_STEMS: Final[tuple[str, ...]] = ("durdur", "duraklat", "beklet")
+
+#: Turning it back on. "geri aç", "tekrar başlat", "devam ettir".
+_ROUTINE_RESUME_VERB_STEMS: Final[tuple[str, ...]] = ("başlat", "baslat", "sürdür", "surdur")
+_ROUTINE_RESUME_PARTICLES: Final[tuple[str, ...]] = ("geri", "tekrar", "yeniden", "devam")
+_ROUTINE_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "ac", "açar", "acar", "açsana")
+
+
+#: What makes a routine sentence a QUESTION. Wider than the shared ``_is_question`` on
+#: purpose: "Hangi rutinlerim var?" and "Rutinlerim neler?" carry no interrogative particle
+#: at all, and the shared helper is tuned for the alarm/display families, where widening it
+#: would change what "var" means for sentences this batch never looked at.
+_ROUTINE_QUESTION_MARKERS: Final[tuple[str, ...]] = (
+    "hangi",
+    "neler",
+    "nedir",
+    "var",
+    "kaç",
+    "kac",
+)
+#: And the imperatives that ask for the same answer.
+_ROUTINE_LIST_VERB_STEMS: Final[tuple[str, ...]] = ("listele", "say", "göster", "goster")
+
+
+def _routine_noun(tokens: tuple[str, ...]) -> str | None:
+    return _has(tokens, *_ROUTINE_NOUN_STEMS)
+
+
+def _routine_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """The routine family, in priority order: QUERY, then PAUSE/RESUME, then CANCEL, then
+    CREATE.
+
+    The order matters the same way the alarm family's does, and for the same reason: the
+    words overlap and the consequences are asymmetric. "Hangi rutinlerim var?" must never
+    mutate anything, so the question shape is checked first. PAUSE before CANCEL because
+    "durdur" and "iptal" are different requests and reading a pause as a cancellation
+    throws away the routine's id and its history - a loss the owner cannot undo by saying
+    the sentence again.
+    """
+    noun = _routine_noun(tokens)
+    if noun is None:
+        return None
+
+    # "Hangi rutinlerim var?" / "Rutinlerim neler?" / "Rutinlerimi say." / "Kaç rutinim var?"
+    if (
+        _is_question(tokens)
+        or _has_exact(tokens, *_ROUTINE_QUESTION_MARKERS)
+        or _has(tokens, *_ROUTINE_LIST_VERB_STEMS)
+    ):
+        return Intent.ROUTINE_LIST, noun
+
+    # RESUME before PAUSE: "geri aç" and "tekrar başlat" carry no pause verb, but
+    # "duraklatılmış rutini başlat" carries both, and the imperative is the resume.
+    if _has_exact(tokens, *_ROUTINE_RESUME_PARTICLES) and (
+        _has(tokens, *_ROUTINE_RESUME_VERB_STEMS) or _has_exact(tokens, *_ROUTINE_OPEN_VERB_FORMS)
+    ):
+        return Intent.ROUTINE_RESUME, noun
+    if _has(tokens, *_ROUTINE_RESUME_VERB_STEMS):
+        return Intent.ROUTINE_RESUME, noun
+
+    if _has(tokens, *_ROUTINE_PAUSE_VERB_STEMS):
+        return Intent.ROUTINE_PAUSE, noun
+
+    if _has(tokens, *_CANCEL_VERB_STEMS):
+        return Intent.ROUTINE_CANCEL, noun
+
+    if _has(tokens, *_ROUTINE_CREATE_VERB_STEMS):
+        return Intent.ROUTINE_CREATE, noun
+
+    return None
 
 
 def _alarm_match(
@@ -5452,6 +5560,17 @@ def resolve_intent(
                 if ambient_matched[0] is Intent.AMBIENT_POLICY_SET
                 else None
             ),
+            **base,
+        )
+    # 0c'. B14 (req 287-291, 296-299): the owner's own routines. BEFORE the alarm family,
+    #      because "sabah rutinini durdur" carries the alarm's stop verb and "rutini iptal
+    #      et" its cancel verb - the noun is what tells them apart, and reading a routine
+    #      pause as an alarm cancellation is a mistake the owner discovers by oversleeping.
+    if routine_matched := _routine_match(tokens):
+        return ResolvedIntent(
+            routine_matched[0],
+            scope=SCOPE_CONVERSATION,
+            matched=routine_matched[1],
             **base,
         )
     if alarm_matched := _alarm_match(

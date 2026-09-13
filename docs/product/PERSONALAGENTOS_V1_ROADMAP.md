@@ -579,7 +579,7 @@ AFFECTED_SUBSYSTEMS : Alarms, Device, Protocol
 EXPECTED_FILES      : packages/protocol/, services/api/app/alarms/, devices/windows-agent
 RISK                : medium — alarm yolu
 OWNER_ACTION        : no
-KAPANIŞ             : commit PENDING_B13 · CI PENDING · 267/269/282/283/284/285/286 DONE,
+KAPANIŞ             : commit c28d70c · CI 34751858233 yeşil (7/7) · 267/269/282/283/284/285/286 DONE,
                       259 PARTIAL (sınır kondu; yerel tetikleyici B47)
                       kanıt docs/evidence/b13-alarm-integrity-2026-09-13.json
 YOL ÜSTÜNDE         : (1) 284 tek sayıya indi: `packages/protocol/alarm-timing.json`, iki yarı
@@ -596,7 +596,7 @@ ROLLBACK_PLAN       : makbuz alanı isteğe bağlı; eski davranış bayrakla
 ```
 
 ```
-BATCH_ID            : B14
+BATCH_ID            : B14                              [KAPANDI 2026-09-13]
 NAME                : Tekrarlayan ve tetiklenen rutinler
 REQUIREMENT_IDS     : 261, 262, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299
 GOAL                : Yazılmış ama görünmez olan rutin altyapısı sesle ve ekrandan erişilebilir
@@ -606,6 +606,21 @@ AFFECTED_SUBSYSTEMS : Routines, Voice Tools, Intent, Web
 EXPECTED_FILES      : services/api/app/routines/, app/voice/tools/, app/voice/intent/, apps/web/
 RISK                : low
 OWNER_ACTION        : no
+KAPANIŞ             : commit PENDING_B14 · CI PENDING · 15/15 DONE
+                      kanıt docs/evidence/b14-routines-2026-09-13.json
+ÖLÇÜMLE DÜZELTİLDİ  : 261/262/293 "yok" değildi — kod M18.3'ten beri vardı, matris ÜRETİM
+                      SATIRLARINI anlatıyordu (B10'daki 560 ile aynı şekil).
+YOL ÜSTÜNDE         : (1) Ama ölçüm gerçek bir kusur buldu: tekrarlayan alarm bir sabahı
+                      kaçırınca ÖLÜYORDU. `scheduled_for` "sonraki oluşum" demek ve bunu
+                      sadece `_release` (yani çaldıktan SONRA) güncelliyordu; kaçan bir
+                      sabah satırı geçmişte bırakıyor, schedule rutini her sabah tetikleniyor
+                      ve `fire_alarm` hepsini "expired" diye reddediyordu. Sessiz: tek
+                      belirti sahibin bir daha uyandırılmaması. Kırmızı kanıtlandı (10/7).
+                      (2) `test_voice_eye_tools` dosya SIRASINA bağlı yeşildi — aynı tikteki
+                      iki makbuba sıra dayatıyordu. Küme karşılaştırmasına çevrildi.
+                      (3) Serbest metin taşıyan rutin sesle kurulamıyor: röle `text`
+                      anahtarını reddediyor (gizlilik kuralı, kusur değil). Belgelendi,
+                      testle sabitlendi; kalan iş "yük değil SEÇİCİ taşıyan brifing eylemi".
 TEST_PLAN           : "her sabah 08:00", "evden çıkınca", "bilgisayar boşta kalınca"
                       cümlelerinin doğru tetikleyiciye çözüldüğü; rutin iptalinin çalıştığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde `at` olmayan en az bir tekrarlayan ve bir varlık

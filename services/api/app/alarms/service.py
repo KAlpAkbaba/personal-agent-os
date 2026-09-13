@@ -633,6 +633,14 @@ def fire_alarm(
         return FireDecision(False, "already_firing")
     if firing_id is not None and alarm.last_firing_id == firing_id:
         return FireDecision(False, "firing_already_handled")
+    # B14 req 261, at the one door. The lateness check below asks "is this row's occurrence
+    # too old to ring?", and for a RECURRING alarm the row is not the authority on which
+    # occurrence this is - the schedule routine is, and `check_schedule_due` already refuses
+    # anything outside its own grace window. A row left pointing at a morning the machine
+    # slept through would otherwise make every later morning "expired", so a recurring alarm
+    # that missed one day was dead. Catching up here means the refusal never happens; the
+    # same helper runs on the tick so the row is honest between occurrences too.
+    _catch_up_recurring(alarm, moment)
     late_by = (moment - _aware(alarm.scheduled_for)).total_seconds()
     if late_by > MAX_LATE_FIRE_S:
         transition(session, alarm, STATE_STOPPED, now=moment, reason="expired_while_down")
@@ -729,6 +737,24 @@ def tick(
     for alarm in alarms:
         try:
             if alarm.state in ALARM_PENDING_STATES:
+                # B14 req 261: a recurring alarm whose occurrence went by unrung catches up.
+                #
+                # `scheduled_for` on a recurring alarm means "the next occurrence", and only
+                # `_release` was keeping that true - so one missed morning (the machine was
+                # off; the process was down) left the row pointing at a day in the past for
+                # ever. The schedule routine kept firing on time and `fire_alarm` refused
+                # every one of them as expired, because the row said the occurrence was
+                # yesterday. A recurring alarm that misses one morning was dead.
+                #
+                # Only occurrences already too late to ring are moved (`MAX_LATE_FIRE_S`,
+                # the shared horizon of req 284): an occurrence that is one second past is
+                # about to ring, and pushing it to tomorrow would be the silent alarm this
+                # exists to prevent.
+                if _catch_up_recurring(alarm, moment):
+                    # Committed here, not left for whatever the tick does next: with no
+                    # sequence wired nothing below this line writes, and a row correction
+                    # that is rolled back at the end of the request is not a correction.
+                    session.commit()
                 if sequence is not None and _should_arm(alarm, moment):
                     step = sequence.arm(session, alarm, now=moment)
                     if step.ok:
@@ -759,6 +785,45 @@ def tick(
                 error=f"{type(exc).__name__}: {exc}",
             )
     return TickResult(armed=armed, greeted=greeted, completed=completed, checked=len(alarms))
+
+
+def _catch_up_recurring(alarm: WakeAlarm, now: datetime) -> bool:
+    """Move a recurring alarm past an occurrence that is now too late to ring (req 261).
+
+    Returns whether it moved. Never touches a one-shot alarm: a one-shot whose moment went
+    by IS finished, and moving it would invent a wake-up the owner never asked for.
+    """
+    if not alarm.recurrence:
+        return False
+    late_by = (now - _aware(alarm.scheduled_for)).total_seconds()
+    if late_by <= MAX_LATE_FIRE_S:
+        return False
+    try:
+        moved_to = next_occurrence_after(
+            local_time=alarm.local_time,
+            weekdays=alarm.recurrence.get("weekdays") or [],
+            after=now,
+            timezone=alarm.timezone,
+        )
+    except Exception as exc:  # noqa: BLE001 - a broken recurrence must not stop the tick
+        logger.warning(
+            "alarm_catch_up_failed", alarm_id=str(alarm.id), error=type(exc).__name__
+        )
+        return False
+    logger.info(
+        "alarm_recurrence_caught_up",
+        alarm_id=str(alarm.id),
+        was=_aware(alarm.scheduled_for).isoformat(),
+        now_at=moved_to.isoformat(),
+        missed_by_s=int(late_by),
+    )
+    alarm.scheduled_for = moved_to
+    # The arm on the device is for an instant that has passed; re-arming happens below on
+    # the same tick, and `_should_arm` sees ARMED only as "already armed for the OLD one".
+    alarm.armed_at = None
+    if alarm.state == STATE_ARMED:
+        alarm.state = STATE_SCHEDULED
+    return True
 
 
 def _should_arm(alarm: WakeAlarm, now: datetime) -> bool:

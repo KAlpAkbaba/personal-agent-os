@@ -84,6 +84,11 @@ from app.voice.realtime_sessions.tools_native import (
 )
 from app.voice.realtime_sessions.tools_news import register_news_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
+
+# No ROUTINE_CLARIFYING_TOOLS beside its siblings: a routine tool never answers "Hangi
+# rutin?" - it takes an id and refuses a bad one by name. Importing the name tuple here
+# just to have it would be a constant nothing reads.
+from app.voice.realtime_sessions.tools_routines import register_routine_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
 from app.voice.realtime_sessions.tools_weather import (
     WEATHER_TOOL_NAMES,
@@ -1739,6 +1744,10 @@ def default_registry() -> ToolRegistry:
     register_creative_tools(reg)
     # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory's voice tools.
     register_native_tools(reg)
+    # B14 req 287-291: the owner's voice over their own ROUTINES. The engine has been
+    # complete since M18 and the owner could not reach any of it by speaking - every one of
+    # the seven routines in production was created by the alarm subsystem on their behalf.
+    register_routine_tools(reg)
     return reg
 
 

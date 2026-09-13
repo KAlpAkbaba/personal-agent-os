@@ -44,6 +44,8 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_ROUTINE_CANCELLED,
     EVENT_TYPE_ROUTINE_CREATED,
     EVENT_TYPE_ROUTINE_EXECUTED,
+    EVENT_TYPE_ROUTINE_PAUSED,
+    EVENT_TYPE_ROUTINE_RESUMED,
     EVENT_TYPE_ROUTINE_SKIPPED,
     EVENT_TYPE_ROUTINE_TRIGGERED,
     SUBSYSTEM_ROUTINE,
@@ -85,7 +87,9 @@ from app.routines.models import (
     ROUTINE_STATUS_ARMED,
     ROUTINE_STATUS_CANCELLED,
     ROUTINE_STATUS_COMPLETED,
+    ROUTINE_STATUS_PAUSED,
     TRIGGER_KIND_AT,
+    TRIGGER_KIND_CONDITION,
     TRIGGER_KIND_PRESENCE,
     TRIGGER_KIND_SCHEDULE,
     TRIGGER_KINDS,
@@ -295,6 +299,74 @@ def cancel_routine(
     return routine
 
 
+def pause_routine(
+    session: Session, routine_id: uuid.UUID, *, reason: str | None = None
+) -> Routine:
+    """B14 req 290: off for a while, not gone.
+
+    Idempotent, the same way ``cancel_routine`` is. Pausing a completed or cancelled routine
+    raises: a resolved routine has nothing to pause, and answering "done" to that would let
+    the owner believe they had turned something off that was never going to run again
+    anyway - which is the kind of quiet agreement that ends in a missed morning.
+    """
+    routine = _require_routine(session, routine_id)
+    if routine.status == ROUTINE_STATUS_PAUSED:
+        return routine
+    assert_routine_transition(routine.status, ROUTINE_STATUS_PAUSED)
+    routine.status = ROUTINE_STATUS_PAUSED
+    routine.paused_at = utcnow()
+    routine.pause_reason = reason
+    routine.updated_at = utcnow()
+    session.commit()
+    _record_ledger(
+        session,
+        event_type=EVENT_TYPE_ROUTINE_PAUSED,
+        routine=routine,
+        action="routine_paused",
+        factual_summary=f"Rutin duraklatıldı: {routine.name}",
+        source_ref=f"routines:{routine.routine_id}:paused:{routine.paused_at.isoformat()}",
+        detail={"reason": reason},
+    )
+    return routine
+
+
+def resume_routine(session: Session, routine_id: uuid.UUID) -> Routine:
+    """B14 req 291: back exactly where it was.
+
+    The same row, the same id, the same firing history. A resumed routine does NOT replay
+    the occurrences it slept through: `evaluate_due` asks whether each trigger is due NOW,
+    and a schedule trigger that was paused past Tuesday simply was not due on Tuesday. That
+    is the honest reading of "durdur" - the owner asked for those mornings not to happen.
+    """
+    routine = _require_routine(session, routine_id)
+    if routine.status == ROUTINE_STATUS_ARMED:
+        return routine
+    assert_routine_transition(routine.status, ROUTINE_STATUS_ARMED)
+    paused_for = None
+    if routine.paused_at is not None:
+        # SQLite hands back naive datetimes where PostgreSQL hands back aware ones, and
+        # subtracting one from the other raises. This repository has paid for that twice.
+        was = routine.paused_at
+        if was.tzinfo is None:
+            was = was.replace(tzinfo=UTC)
+        paused_for = int((utcnow() - was).total_seconds())
+    routine.status = ROUTINE_STATUS_ARMED
+    routine.paused_at = None
+    routine.pause_reason = None
+    routine.updated_at = utcnow()
+    session.commit()
+    _record_ledger(
+        session,
+        event_type=EVENT_TYPE_ROUTINE_RESUMED,
+        routine=routine,
+        action="routine_resumed",
+        factual_summary=f"Rutin devam ediyor: {routine.name}",
+        source_ref=f"routines:{routine.routine_id}:resumed:{routine.updated_at.isoformat()}",
+        detail={"paused_for_s": paused_for},
+    )
+    return routine
+
+
 # ------------------------------------------------------------------------- evaluation
 
 
@@ -334,9 +406,16 @@ def _find_existing_firing(
     ).scalar_one_or_none()
 
 
-def _check_due(routine: Routine, now: datetime) -> tuple[bool, str | None, int | None]:
+def _check_due(
+    routine: Routine, now: datetime, context: RoutineConditionContext | None = None
+) -> tuple[bool, str | None, int | None]:
     """Returns (due, occurrence_key, new_presence_watermark). The watermark is only
-    meaningful (non-None) for a presence trigger."""
+    meaningful (non-None) for a presence trigger.
+
+    A CONDITION trigger writes its own edge state onto the routine here rather than
+    returning it: the falling edge has to be recorded too - or the next rise would not look
+    like one - and it is recorded whether or not the routine turned out to be due.
+    """
     if routine.trigger_kind == TRIGGER_KIND_AT:
         due, key = triggers_mod.check_at_due(routine.trigger_json, now)
         return due, key, None
@@ -349,6 +428,18 @@ def _check_due(routine: Routine, now: datetime) -> tuple[bool, str | None, int |
             routine.trigger_json, tail, after_sequence=routine.last_presence_sequence
         )
         return due, key, watermark
+    if routine.trigger_kind == TRIGGER_KIND_CONDITION:
+        due, key, met_now = triggers_mod.check_condition_due(
+            routine.trigger_json,
+            context or RoutineConditionContext(),
+            last_met=bool(routine.last_condition_met),
+            now=now,
+        )
+        if met_now != bool(routine.last_condition_met):
+            routine.last_condition_met = met_now
+            if met_now:
+                routine.last_condition_at = now
+        return due, key, None
     raise ValueError(f"unknown trigger_kind: {routine.trigger_kind!r}")  # pragma: no cover
 
 
@@ -439,9 +530,15 @@ def evaluate_due(
     outcomes: list[FiringOutcome] = []
 
     for routine in armed:
-        due, occurrence_key, new_watermark = _check_due(routine, now)
+        edge_before = bool(routine.last_condition_met)
+        due, occurrence_key, new_watermark = _check_due(routine, now, context)
         if new_watermark is not None and new_watermark != routine.last_presence_sequence:
             routine.last_presence_sequence = new_watermark
+            session.commit()
+        if bool(routine.last_condition_met) != edge_before:
+            # Committed even when the routine is not due: an edge that was observed and not
+            # written is an edge that will be observed again, and a routine that fires every
+            # tick of a long idle stretch is the defect the edge exists to prevent.
             session.commit()
         if not due or occurrence_key is None:
             continue

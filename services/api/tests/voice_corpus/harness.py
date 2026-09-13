@@ -184,6 +184,7 @@ from tests.voice_corpus.corpus import (
     CTX_PPTX_FOCUSED,
     CTX_PROPOSAL_READ_BACK,
     CTX_RESEARCH_FOCUS_B,
+    CTX_ROUTINE_EXISTS,
     CTX_SCENE_BLENDER,
     CTX_SECRET_FILE_FOCUSED,
     CTX_WINDOW_FOCUSED,
@@ -567,6 +568,26 @@ class Harness:
                     assert decision.fired, decision
             self.ids["alarm"] = str(alarm_id)
             self.device.reset()
+        elif context == CTX_ROUTINE_EXISTS:
+            # B14 req 289/290/291: one armed routine the owner can name. Created through
+            # the real service, so the control tools act on a row the engine would evaluate
+            # rather than on a fixture nothing else in the system agrees exists.
+            from app.routines import service as routines_service
+
+            with self.factory() as db:
+                routine = routines_service.create_routine(
+                    db,
+                    name="Sabah rutini",
+                    trigger_kind="schedule",
+                    trigger={
+                        "weekdays": [0, 1, 2, 3, 4],
+                        "time": "08:00",
+                        "timezone": "Europe/Istanbul",
+                    },
+                    actions=[{"kind": "display_action", "detail": {"action": "wake"}}],
+                    source="corpus",
+                )
+                self.ids["routine"] = str(routine.routine_id)
         elif context == CTX_ALARM_WAKE_SONG_SET:
             # 2026-09-08 wake-song defect fix: the owner has already approved a wake song
             # once (``PUT /v1/alarms/wake-song``) — the precondition a PLAIN alarm-create
@@ -1426,8 +1447,16 @@ def _local_eye(state: str) -> dict:
     }
 
 
-def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
-    """The arguments the persona tells the model to pass for ``tool`` on this utterance."""
+def contract_arguments(
+    case: UtteranceCase, tool: str, resolved: dict, ids: dict[str, str] | None = None
+) -> dict:
+    """The arguments the persona tells the model to pass for ``tool`` on this utterance.
+
+    ``ids`` are the fixture rows the case's context created, for the few tools whose
+    argument is a row id the owner never speaks (B14's routine control trio: a real
+    model resolves "sabah rutini" to an id by having heard ``routine.list`` first).
+    """
+    ids = ids or {}
     text = case.utterance
     args: dict[str, Any] = {}
     if tool == "activity.explain":
@@ -1512,6 +1541,30 @@ def contract_arguments(case: UtteranceCase, tool: str, resolved: dict) -> dict:
     # app.run/app.test/scene.render already follow.
     elif tool == "native.create":
         args = {"name": "Notlarim", "request": text}
+    # B14 (req 287-291): what a real model sends after hearing one of these sentences. The
+    # ROUTER resolves the intent; the trigger shape is the model's own reading of the
+    # sentence, exactly as it is for `artifact.create`'s spec and `app.create`'s template.
+    elif tool == "routine.create":
+        args = {
+            "name": "Sabah rutini",
+            "trigger_kind": "schedule",
+            "trigger": {
+                "weekdays": [0, 1, 2, 3, 4],
+                "time": "08:00",
+                "timezone": "Europe/Istanbul",
+            },
+            # `display_action`, NOT `voice_briefing`. The relay refuses any argument key
+            # matching `text` (app.voice.realtime_sessions.service.FORBIDDEN_KEY_PARTS: a
+            # transcript must never travel as a tool argument), and `voice_briefing`'s
+            # detail is exactly a `text`. So a routine carrying free speech is REST-only by
+            # construction - see `tools_routines.routine_create`'s own note.
+            "actions": [{"kind": "display_action", "detail": {"action": "wake"}}],
+        }
+    elif tool in ("routine.cancel", "routine.pause", "routine.resume"):
+        # The id the CTX_ROUTINE_EXISTS fixture created. A model resolves the owner's
+        # "sabah rutini" to an id by having heard `routine.list` first; the corpus supplies
+        # it directly, the same way the alarm family's own control cases do.
+        args = {"routine_id": ids.get("routine", "")}
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §5): the 3D-creation family. The router
     # resolves the tool word and (for scene.add) the primitive kind - everything
     # else here is a plausible model argument a real persona would send after
@@ -1776,7 +1829,10 @@ def _run_case(case: UtteranceCase, harness: Harness | None) -> CaseResult:
             return result
 
         call = h.tool(
-            sid, "c-1", case.expected_tool, contract_arguments(case, case.expected_tool, resolved)
+            sid,
+            "c-1",
+            case.expected_tool,
+            contract_arguments(case, case.expected_tool, resolved, h.ids),
         )
         result.tool_status = call["status"]
         body = call.get("result") or call.get("error") or {}

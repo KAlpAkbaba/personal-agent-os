@@ -42,6 +42,7 @@ import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
 import { useNotificationRead } from "../../lib/cockpit/useNotificationRead";
+import { useRoutineControl } from "../../lib/cockpit/useRoutineControl";
 import { useCreativeControl } from "../../lib/cockpit/useCreativeControl";
 import { useCreativeImages } from "../../lib/cockpit/useCreativeImages";
 import { useExecutiveControl } from "../../lib/cockpit/useExecutiveControl";
@@ -98,6 +99,7 @@ import {
   ShadowReadyPanel,
   StateStreamPanel,
   NotificationsPanel,
+  RoutinesPanel,
   VoiceQualificationPanel,
   WorldPanel,
 } from "../panels/CockpitPanels";
@@ -140,6 +142,8 @@ function Cockpit() {
   // now holds rather than what this page assumed it did.
   // B11 req 368: the only write this panel can make, and it leaves the process.
   const notificationRead = useNotificationRead(refreshPanels);
+  // B14 req 295: pause and resume, the two reversible controls over a routine.
+  const routineControl = useRoutineControl(refreshPanels);
   const approvals = useApprovalPair(approvalClient, refreshPanels);
 
   // M22 §4: "Aç" asks the Cloud Core to fetch and open an artifact on the
@@ -298,6 +302,11 @@ function Cockpit() {
           {/* M18.3: what is set to wake the owner, and what the screens are
               doing. Both are read-only here; the renderer owns no policy. */}
           <AlarmsPanel state={data.alarms} now={now} />
+          {/* B14 req 295: what this system does on its own, and whether each of them is
+              actually running. Beside the alarms, because a recurring alarm IS a routine -
+              the panel is where the owner finds out that seven of them were created for
+              them rather than by them. */}
+          <RoutinesPanel state={data.routines} control={routineControl} />
           <AmbientPanel policy={data.ambientPolicy} devices={data.devices} />
           {/* ADR-0080: whether the owner's words still route where they say. */}
           <VoiceQualificationPanel state={data.voiceQualification} now={now} />

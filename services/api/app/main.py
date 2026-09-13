@@ -44,7 +44,7 @@ from app.db import build_engine, build_session_factory
 from app.devices import authority as device_authority
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
-from app.devices.status import get_status_registry
+from app.devices.status import get_status_registry, lowest_idle_seconds
 from app.documents.service import DocumentService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
@@ -356,6 +356,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 greeting_allowed=allowed,
                 greeting_reason=reason,
                 greeting_decision=decision,
+                # B14 req 294/299: what a condition trigger asks about. Read from the
+                # device status registry HERE rather than inside app.routines, which
+                # imports nothing from app.devices on purpose - a process with no device
+                # status supplies None, and a condition routine simply never crosses its
+                # edge, which is the fail-closed direction.
+                device_idle_s=lowest_idle_seconds(),
             )
             return routines_service.evaluate_due(session, now=now, context=context)
 

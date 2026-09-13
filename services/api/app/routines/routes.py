@@ -5,6 +5,8 @@
 - GET  /v1/routines                list, filterable by status/trigger_kind
 - GET  /v1/routines/{routine_id}   one routine
 - POST /v1/routines/{routine_id}/cancel
+- POST /v1/routines/{routine_id}/pause    off for a while (B14 req 290)
+- POST /v1/routines/{routine_id}/resume   back where it was (B14 req 291)
 - GET  /v1/routines/{routine_id}/firings   the durable record of every evaluated occurrence
                                             (never silently dropped — task brief)
 - POST /v1/routines/evaluate       the explicit "due now" evaluation entry point
@@ -76,6 +78,13 @@ def _routine_dict(routine: Routine) -> dict[str, Any]:
         "armed_at": _iso(routine.armed_at),
         "cancelled_at": _iso(routine.cancelled_at),
         "cancel_reason": routine.cancel_reason,
+        # B14 req 290/291: paused is not cancelled, and the row says which.
+        "paused_at": _iso(routine.paused_at),
+        "pause_reason": routine.pause_reason,
+        # B14 req 294: which side of a condition trigger's edge it was last on, and when it
+        # last crossed. Meaningless for the other three kinds, and null there.
+        "last_condition_met": bool(routine.last_condition_met),
+        "last_condition_at": _iso(routine.last_condition_at),
         "source": routine.source,
         "source_ref": routine.source_ref,
         "detail_json": routine.detail_json,
@@ -278,6 +287,21 @@ async def get_routine(request: Request, routine_id: uuid.UUID) -> dict[str, Any]
     return _routine_dict(routine)
 
 
+async def _writing(write: Any) -> Routine:
+    """Run a routine write off the loop and translate its two refusals the same way.
+
+    Spelled once: three routes make the same two promises - 404 for a routine that is not
+    there, 409 for a transition the machine forbids - and three copies of that mapping is
+    three chances for one of them to answer 500 to a refusal the service made deliberately.
+    """
+    try:
+        return await asyncio.to_thread(write)
+    except routines_service.RoutineNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except IllegalRoutineTransition as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/{routine_id}/cancel")
 async def cancel_routine(
     request: Request, routine_id: uuid.UUID, body: CancelRoutineRequest | None = None
@@ -289,13 +313,47 @@ async def cancel_routine(
         with artifacts.session() as session:
             return routines_service.cancel_routine(session, routine_id, reason=reason)
 
-    try:
-        routine = await asyncio.to_thread(write)
-    except routines_service.RoutineNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except IllegalRoutineTransition as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _routine_dict(routine)
+    return _routine_dict(await _writing(write))
+
+
+class PauseRoutineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/{routine_id}/pause")
+async def pause_routine(
+    request: Request, routine_id: uuid.UUID, body: PauseRoutineRequest | None = None
+) -> dict[str, Any]:
+    """B14 req 290. Off for a while, not gone: the same row, the same id, the same history.
+
+    409 on a completed or cancelled routine, because a resolved routine has nothing to
+    pause - answering "done" to that would let the owner believe they had turned something
+    off that was never going to run again anyway.
+    """
+    artifacts = _artifacts(request)
+    reason = body.reason if body is not None else None
+
+    def write() -> Routine:
+        with artifacts.session() as session:
+            return routines_service.pause_routine(session, routine_id, reason=reason)
+
+    return _routine_dict(await _writing(write))
+
+
+@router.post("/{routine_id}/resume")
+async def resume_routine(request: Request, routine_id: uuid.UUID) -> dict[str, Any]:
+    """B14 req 291. A resumed routine does NOT replay what it slept through: `evaluate_due`
+    asks whether each trigger is due NOW, and a schedule trigger that was paused past
+    Tuesday simply was not due on Tuesday. That is the honest reading of "durdur"."""
+    artifacts = _artifacts(request)
+
+    def write() -> Routine:
+        with artifacts.session() as session:
+            return routines_service.resume_routine(session, routine_id)
+
+    return _routine_dict(await _writing(write))
 
 
 @router.get("/{routine_id}/firings")

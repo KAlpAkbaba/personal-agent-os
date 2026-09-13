@@ -56,6 +56,12 @@ class RoutineConditionContext:
     fails every condition it declares, which is the safe direction (module docstring)."""
 
     owner_present: bool | None = None
+    #: B14 req 294/299: seconds since the owner last touched this machine, or None when
+    #: unknown. Supplied by the caller like every other field here - this package still
+    #: imports nothing from ``app.devices``, and a routine that asks about idleness on a
+    #: process with no device status simply never crosses its edge, which is the safe
+    #: direction and the same fail-closed rule the evaluators below follow.
+    device_idle_s: float | None = None
     #: Where ``owner_present`` came from - see app.routines.presence_link. A condition that
     #: passed on a caller's assertion about a room the caller cannot see must be
     #: distinguishable, afterwards, from one that passed on real perception.

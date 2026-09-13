@@ -36,6 +36,9 @@ CTX_NONE: Final = "none"
 CTX_RESEARCH_FOCUS_B: Final = "research_focus_b"  # A (older) and B (newer, focused), one title
 CTX_ALARM_RINGING: Final = "alarm_ringing"
 CTX_ALARM_SCHEDULED: Final = "alarm_scheduled"
+#: B14 req 289/290/291: one armed routine the owner can name. The control tools take an id,
+#: and a corpus case that invented one would be testing the 404 path.
+CTX_ROUTINE_EXISTS: Final = "routine_exists"
 #: 2026-09-08 wake-song defect fix: the owner has already approved a wake song
 #: (``alarms_service.set_wake_song``) — the one precondition a plain "Yarın 07:30'da beni
 #: uyandır." (no media named) needs to resolve to something real rather than the tone, the
@@ -5736,8 +5739,125 @@ def _nativeapps_cases() -> list[UtteranceCase]:
     ]
 
 
+def _routine_cases() -> list[UtteranceCase]:
+    """B14 req 296-299: the owner's own routines, in their own words.
+
+    The three sentences the roadmap names by hand — "her sabah 08:00", "evden çıkınca",
+    "bilgisayar boşta kalınca" — plus the control verbs, plus the collisions that make this
+    family worth pinning at all. "Sabah rutinini durdur" and "Sabah alarmımı iptal et"
+    differ by ONE noun and route to different subsystems; the pair below is what keeps
+    that true.
+    """
+    cases: list[UtteranceCase] = []
+
+    # req 296/297: setting one up, recurring, in one sentence.
+    create = [
+        ("r.create.1", "Her sabah 08:00'de bana haberleri okuyan bir rutin kur.", "canonical"),
+        ("r.create.2", "Hafta içi 07:00'de bir rutin ayarla.", "canonical"),
+        ("r.create.3", "her sabah sekizde rutin kur", "asr_noise"),
+        # req 298: a presence trigger, in the owner's words.
+        ("r.create.4", "Evden çıkınca çalışacak bir rutin oluştur.", "canonical"),
+        # req 299: a condition trigger, in the owner's words.
+        ("r.create.5", "Bilgisayar boşta kalınca çalışacak bir rutin kur.", "canonical"),
+    ]
+    for case_id, text, source in create:
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="routine_create",
+                expected_tool="routine.create",
+                category="routine",
+                source=source,
+            )
+        )
+
+    # req 288: asking. Four shapes, because "hangi ... var", "neler", "kaç" and the plain
+    # imperative are all how this actually gets said and none of them carries a "mı".
+    for case_id, text, source in [
+        ("r.list.1", "Hangi rutinlerim var?", "canonical"),
+        ("r.list.2", "Rutinlerim neler?", "paraphrase"),
+        ("r.list.3", "Kaç rutinim var?", "paraphrase"),
+        ("r.list.4", "Rutinlerimi listele.", "canonical"),
+    ]:
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="routine_list",
+                expected_tool="routine.list",
+                category="routine",
+                source=source,
+            )
+        )
+
+    for case_id, text, intent, tool, source in [
+        ("r.cancel.1", "Sabah rutinini iptal et.", "routine_cancel", "routine.cancel", "canonical"),
+        ("r.pause.1", "Sabah rutinini durdur.", "routine_pause", "routine.pause", "canonical"),
+        (
+            "r.pause.2",
+            "Bu rutini bu hafta duraklat.",
+            "routine_pause",
+            "routine.pause",
+            "paraphrase",
+        ),
+        ("r.resume.1", "Sabah rutinini geri aç.", "routine_resume", "routine.resume", "canonical"),
+        (
+            "r.resume.2",
+            "Sabah rutinini tekrar başlat.",
+            "routine_resume",
+            "routine.resume",
+            "paraphrase",
+        ),
+    ]:
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent=intent,
+                expected_tool=tool,
+                context=CTX_ROUTINE_EXISTS,
+                category="routine",
+                source=source,
+            )
+        )
+
+    # The collisions. These are the cases this family exists to not break: one noun apart,
+    # two subsystems, and getting them the wrong way round means an alarm the owner turned
+    # off by accident - discovered by oversleeping.
+    cases.append(
+        UtteranceCase(
+            case_id="r.collision.alarm_cancel",
+            utterance="Sabah alarmımı iptal et.",
+            expected_intent="alarm_cancel",
+            expected_tool="alarm.cancel",
+            forbidden_tools=("routine.cancel",),
+            category="routine",
+            source="canonical",
+            notes="One noun apart from r.cancel.1. The alarm must win when it is the noun.",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="r.collision.alarm_stop",
+            utterance="Alarmı durdur.",
+            expected_intent="alarm_stop",
+            expected_tool="alarm.stop",
+            expected={"alarm_state": "STOPPED"},
+            side_effects=SIDE_EFFECTS_ALARM_STOP,
+            context=CTX_ALARM_RINGING,
+            forbidden_tools=("routine.pause",),
+            category="routine",
+            source="canonical",
+            notes="'durdur' is the routine family's pause verb AND the alarm's stop verb.",
+        )
+    )
+    return cases
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
+        *_routine_cases(),
         *_research_cases(),
         *_alarm_create_cases(),
         *_alarm_control_cases(),

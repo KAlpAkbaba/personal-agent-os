@@ -59,6 +59,7 @@ import { type ExecutiveRunRow, fetchExecutiveRuns } from "./executive";
 import { type GenesisRunRow, fetchGenesisRuns } from "./genesis";
 import { type NativeBuildRow, fetchNativeBuilds } from "./native";
 import { type Inbox, fetchInbox } from "./notifications";
+import { type RoutineRow, fetchRoutines } from "./routines";
 import { type SceneRow, fetchScenes } from "./scenes";
 
 const POLL_VISIBLE_MS = 15_000;
@@ -165,6 +166,15 @@ export type CockpitData = {
    * the inbox it replaces lived in the push transport's memory and was empty in production.
    */
   notifications: Loaded<Inbox>;
+  /**
+   * B14 req 295: the routines the owner has, from `/v1/routines`.
+   *
+   * On the slow loop, which is the right clock: a routine's SHAPE changes when somebody
+   * changes it, and what it is doing right now reaches the Core through the UI-state bus
+   * like every other activity. This panel answers "what does this system do on its own?",
+   * which had no answer short of reading the database.
+   */
+  routines: Loaded<RoutineRow[]>;
 };
 
 const INITIAL: CockpitData = {
@@ -194,6 +204,7 @@ const INITIAL: CockpitData = {
   creativeRuns: { kind: "loading" },
   nativeBuilds: { kind: "loading" },
   notifications: { kind: "loading" },
+  routines: { kind: "loading" },
 };
 
 export function useCockpitData(enabled = true): { data: CockpitData; refresh: () => void } {
@@ -232,6 +243,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         creativeRuns,
         nativeBuilds,
         notifications,
+        routines,
       ] = await Promise.all([
         fetchResearchTasks(),
         // Same refresh, no extra timer: the focus changes when the list does.
@@ -260,6 +272,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchCreativeRuns(),
         fetchNativeBuilds(),
         fetchInbox(),
+        fetchRoutines(),
       ]);
       if (stopped.current) return;
       setData({
@@ -289,6 +302,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         creativeRuns,
         nativeBuilds,
         notifications,
+        routines,
       });
     } finally {
       inFlight.current = false;

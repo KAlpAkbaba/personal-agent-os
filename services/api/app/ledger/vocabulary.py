@@ -300,6 +300,12 @@ EVENT_TYPE_ROUTINE_TRIGGERED = "routine.triggered"
 EVENT_TYPE_ROUTINE_EXECUTED = "routine.executed"
 EVENT_TYPE_ROUTINE_SKIPPED = "routine.skipped"
 EVENT_TYPE_ROUTINE_CANCELLED = "routine.cancelled"
+#: B14 req 290/291. Their own event types rather than a `routine.cancelled` with a flag:
+#: "the owner turned this off for a while" and "the owner ended this" are different facts,
+#: and a history that cannot tell them apart cannot answer "why did my morning routine stop
+#: running?" - which is the question a pause exists to make answerable.
+EVENT_TYPE_ROUTINE_PAUSED = "routine.paused"
+EVENT_TYPE_ROUTINE_RESUMED = "routine.resumed"
 #: M18 dispatch visibility (ADR-0060, app.routines.dispatch). A failed or refused action
 #: gets its OWN ledger row - never only a field buried inside routine.executed's
 #: detail_json - because "which action, and why" must be answerable without reading
@@ -510,6 +516,8 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ROUTINE_EXECUTED,
     EVENT_TYPE_ROUTINE_SKIPPED,
     EVENT_TYPE_ROUTINE_CANCELLED,
+    EVENT_TYPE_ROUTINE_PAUSED,
+    EVENT_TYPE_ROUTINE_RESUMED,
     EVENT_TYPE_ROUTINE_ACTION_FAILED,
     EVENT_TYPE_ROUTINE_ACTION_REFUSED,
     EVENT_TYPE_ACTION_RECEIPT,

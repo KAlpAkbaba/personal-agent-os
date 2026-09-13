@@ -147,6 +147,15 @@ _TIERS: Final[dict[str, str]] = {
     "operator.type": TIER_SENSITIVE,
     "operator.window_control": TIER_SENSITIVE,
     "research.start": TIER_SENSITIVE,
+    # B14 req 287-291. Four of the five change state, so four are SENSITIVE. `routine.create`
+    # in particular deserves it more than most tools here: it is the one that installs
+    # something which will act on the owner's behalf UNATTENDED, every morning, until they
+    # say otherwise - a mis-heard routine is not a mis-heard command, it is a mis-heard
+    # command that repeats.
+    "routine.cancel": TIER_SENSITIVE,
+    "routine.create": TIER_SENSITIVE,
+    "routine.pause": TIER_SENSITIVE,
+    "routine.resume": TIER_SENSITIVE,
     "scene.add": TIER_SENSITIVE,
     "scene.camera": TIER_SENSITIVE,
     "scene.create": TIER_SENSITIVE,
@@ -183,6 +192,10 @@ _TIERS: Final[dict[str, str]] = {
     "operator.status": TIER_OPEN,
     "plan.redirect": TIER_OPEN,
     "research.explain": TIER_OPEN,
+    # Reading back what the owner already set up. OPEN for the same reason `alarm.status`
+    # is: refusing to say what is scheduled protects nothing and teaches the owner that the
+    # gate is noise.
+    "routine.list": TIER_OPEN,
     "research.finding_detail": TIER_OPEN,
     "research.sources": TIER_OPEN,
     "scene.inspect": TIER_OPEN,

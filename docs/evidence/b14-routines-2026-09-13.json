@@ -1,0 +1,58 @@
+{
+  "batch": "B14",
+  "name": "Tekrarlayan ve tetiklenen rutinler",
+  "requirements": [
+    261,
+    262,
+    287,
+    288,
+    289,
+    290,
+    291,
+    292,
+    293,
+    294,
+    295,
+    296,
+    297,
+    298,
+    299
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "what_this_proves": "The Routine Engine stops being a mechanism nobody can reach. It has been complete since M18 - triggers, conditions, actions, firings, a ledger row per transition, a REST surface, a clock driving it every ten seconds - and the owner could not create one, see one, or turn one off. All seven routines in production were made by the alarm subsystem on their behalf.",
+  "closed_fully": {
+    "287_288_289_the_voice_tools": "Five tools where there were none: create, list, cancel, pause, resume. Deliberately no `routine.edit` - editing a trigger by voice means reading a whole routine back to confirm what is changing, and a mis-heard edit to something that runs unattended every morning is worse than being asked to say it again. The tools validate nothing themselves; `app.routines.service` refuses in its own words and those words reach the owner.",
+    "290_291_pause_is_not_cancel": "A new non-terminal status, its own two ledger events, a migration that widens the CHECK constraints, and a state machine edge in each direction. Cancelling is a decision about the routine; pausing is a decision about this week - and before this state existed, honouring 'sabah rutinini bu hafta durdur' meant cancel-and-recreate, which loses the id, the firings and everything the ledger recorded. A resumed routine does NOT replay what it slept through: the owner asked for those mornings not to happen.",
+    "294_299_a_trigger_about_a_state": "The other three triggers are about an INSTANT - a time, a wall clock, an event on the bus. 'Bilgisayar boşta kalınca' is about a state the machine is IN, and a state is true for as long as it is true. So it fires on the CROSSING, with `last_condition_met` remembering which side of the edge the routine was last on; without that it would fire on every tick for as long as the owner was away from the keyboard - six times a minute, each one a real dispatch. Unknown is not met: a process with no device status never crosses the edge.",
+    "292_a_trigger_that_finally_has_a_creator": "The presence trigger has been implemented and tested since M18 and had NO creator anywhere in `app/` - it existed only in a unit test. `routine.create` is the creator, and the test does not stop at the tool's answer: it publishes a real `owner.returned` on the bus and follows it through `evaluate_due` to a dispatch.",
+    "295_the_panel": "What this system does on its own, and whether each of them is actually running - a question that had no answer short of reading the database. Most of the work is TRANSLATION: the trigger is stored as data (`{weekdays: [0,1,2,3,4], time: '07:15'}`) and the owner asked for it in words ('hafta içi 07:15'). A shape the panel does not know says so rather than producing a confident sentence about a routine nobody can check. Two controls, both reversible; cancelling stays where the owner is looking at what they are ending.",
+    "296_299_the_owner_s_own_words": "A `_routine_match` resolved BEFORE the alarm family, because 'sabah rutinini durdur' carries the alarm's stop verb and 'rutini iptal et' its cancel verb - the NOUN is what tells them apart, and reading a routine pause as an alarm cancellation is a mistake the owner discovers by oversleeping. Sixteen corpus cases, two of them collisions pinned deliberately: `r.collision.alarm_cancel` and `r.collision.alarm_stop` forbid the routine tools by name."
+  },
+  "corrected_by_measurement": {
+    "261_262_293": "Recorded MISSING/PARTIAL with the note 'none - all 7 production routines are one-shot'. That is a statement about the ROWS in production, not about the code: `create_alarm` has read a weekday set out of the owner's sentence since M18.3, `_create_trigger_routine` makes a `schedule` routine, and `_release` moves the alarm forward while the routine stays armed. Same shape as requirement 560 in B10 - measurement beat documentation. What was genuinely missing was a test of the LOOP, and writing it found a real defect (below)."
+  },
+  "defects_found_on_the_way": {
+    "a_recurring_alarm_that_missed_one_morning_was_dead": "The defect the 261 measurement uncovered, and the reason that requirement was not simply mis-recorded. `scheduled_for` on a recurring alarm means 'the next occurrence', and ONLY `_release` kept that true - and `_release` runs after a ring. So a morning that went by unrung (the machine was off, the process was down) left the row pointing at a day in the past for ever. The schedule routine kept firing on time and `fire_alarm` refused every one of those firings as expired, because the ROW said the occurrence was yesterday. Silent: the owner's only symptom was not being woken again. Fixed at the one door (`_catch_up_recurring`, called from `fire_alarm` before the lateness check AND from the alarm tick so the row is honest between occurrences), and only for occurrences already past the shared late horizon - moving one that is a second late would be the silent alarm this exists to prevent.",
+    "a_test_whose_green_depended_on_filename_order": "`test_voice_eye_tools::test_disable_then_enable_round_trip_leaves_two_receipts` asserted a strict order between two receipts written inside the same clock tick. It passed for months only because that file sorts before `test_voice_step_up` alphabetically, so it always ran cold and the two calls landed ~16 ms apart; running the two files in the other order makes them land together and the list flips. The ledger promises no order between two events in one tick, so the test now compares a SET and keeps the claim that survives a tie. Pre-existing, unrelated to this batch, and fixed because a test whose green depends on filename ordering fails in CI on the day somebody adds a file.",
+    "a_routine_carrying_free_text_cannot_travel_by_voice": "Found by the owner-utterance corpus and left standing, because it is a privacy rule working correctly. The relay refuses any tool argument whose key matches `text` (a transcript must never travel as a tool argument), and `voice_briefing`'s detail IS a free-text payload - so that one action kind is refused before `routine.create` is reached. The other five carry no free text and work by voice. Documented in the tool and pinned by a test, so a change to either side is a decision rather than a surprise. The remainder: a briefing action that names a SELECTOR rather than a payload would close it.",
+    "a_loop_hid_three_tools_from_the_system_s_own_model": "The three control tools were registered in a loop over a tuple, which is fine at runtime and invisible to `app.selfmodel.indexer`: it reads this file with `ast` and can only see a `ToolSpec(name=...)` whose name is a LITERAL. So three tools were registered, running, reachable by the model - and absent from the system's own index of what it can do. `test_the_index_knows_every_tool_the_running_registry_knows` caught it, which is the same '115 registered, 0 indexed' failure that test was written for. Unrolled; the shared parameter schema stays a constant, because the indexer reads the name and not the schema."
+  },
+  "red_first": {
+    "the_recurring_loop": "`app/alarms/service.py` copied to a backup with its sha256, `_catch_up_recurring` made a no-op, the suite re-run: 7 of 10 failed, including `test_a_recurring_alarm_that_missed_a_morning_still_rings_the_next_one` by name. Restored by digest verification (`sha256sum -c`: OK).",
+    "the_guards_that_spoke_on_their_own": "B05's step-up gate failed the moment the five tools were registered ('these tools have no tier'), which is what it is for - a tool that installs something acting on the owner's behalf UNATTENDED must not be OPEN by accident. The migration/model agreement guard and the single-head check both passed on the new migration."
+  },
+  "tests": {
+    "services/api/tests/unit/test_alarms_recurrence.py": 10,
+    "services/api/tests/unit/test_routines_pause_and_condition.py": 19,
+    "services/api/tests/unit/test_routines_voice_tools.py": 17,
+    "services/api/tests/voice_corpus (r.*)": 16,
+    "apps/web/tests/cockpit/routines-panel.test.tsx": 26
+  },
+  "runtime_proof": {
+    "status": "NOT_YET",
+    "why": "REAL_PROOF_REQUIRED for B14 is at least one recurring and one presence-triggered routine that is not an `at` running in production. Everything here is deterministic-clock proven on both sides; 'it ran in production' needs the production round, which is Karar 0."
+  },
+  "guards_that_spoke": "Four, without being asked: B05's step-up gate refused to let five new tools go untiered; the self-model indexer refused to let three of them be invisible; the realtime session's manifest pin refused to let the offered tool set change silently; and the migration/model agreement guard checked the new columns. Every one of them is a guard an earlier batch added after paying for its absence."
+}

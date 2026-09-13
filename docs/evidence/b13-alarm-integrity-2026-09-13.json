@@ -12,8 +12,8 @@
     286
   ],
   "recorded_at": "2026-09-13T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "c28d70c",
+  "ci_run": 34751858233,
   "what_this_proves": "An alarm now has one answer to every question it used to have two of: one late threshold instead of the cloud's two hours against the device's five minutes, one ring instead of a local fallback the cloud could ring over, one record of what happened instead of a row that forgets yesterday, and one honest sentence when the greeting cannot be spoken instead of a 110 Hz buzz.",
   "closed_fully": {
     "284_one_late_threshold": "The cloud said an alarm could still be worth ringing two hours late; the device said five minutes. Two halves of one decision, each with its own memory of the answer. The device's number was the one chosen by MEASUREMENT - on 2026-09-10 a 07:30 alarm armed the night before rang at 08:10 because the machine had slept through the alarm time, 39 minutes and 39 seconds late, into a room where the owner was already awake. The device learned from that incident and the cloud did not, because nothing made the two read the same file. `packages/protocol/alarm-timing.json` is that file; `app.alarms.timing` and `AlarmTimingContractTests` are its two readers, and it is registered in `test_contract_falsification` with what it does NOT hold (the sampling rate, only the horizon).",
@@ -44,5 +44,6 @@
   "runtime_proof": {
     "status": "NOT_YET",
     "why": "REAL_PROOF_REQUIRED for B13 is a single ring in a real alarm run. Everything here is deterministic-clock proven on both sides, but 'one ring' is a claim about a morning, and it needs the agent build installed on the owner's machine - carried with Karar 0 and the device install."
-  }
+  },
+  "ci_note": "7/7 green, first try - the -Fast gate now runs the device suite and the staged-update qualification, so both guards B11 tripped were already satisfied locally."
 }
