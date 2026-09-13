@@ -1230,6 +1230,68 @@ def _narration_state_for(db: Session, row: RealtimeSessionRow) -> NarrationState
         return None
 
 
+#: B16 req 33/34: how many extracted-sentence keys one session remembers. Bounded because
+#: it lives in `context_json`, which a reattaching client receives in full - a session that
+#: ran all day must not hand the next client a kilobyte of hashes. Oldest first out: a
+#: sentence that fell off the end costs one duplicate observation, which the memory
+#: service's own corroboration path already handles honestly.
+EXTRACTED_KEYS_KEPT = 200
+
+
+def _extract_memories(
+    db: Session,
+    ctx: dict[str, Any],
+    summary: str,
+    memory_runtime: Any,
+    *,
+    row: RealtimeSessionRow,
+) -> dict[str, Any]:
+    """Feed one conversation summary to the memory write policy (B16 req 33/34).
+
+    Returns what to put on the event's audit metadata - counts only, never content.
+
+    ``memory_runtime`` is None in any process that has not registered one; the extraction
+    then does not happen and SAYS so in the metadata, rather than quietly not happening.
+    That distinction is the whole reason this returns a dict: "extraction found nothing"
+    and "extraction never ran" look identical from the outside and mean opposite things.
+
+    **It shares this request's session, and that COMMITS early.** ``app.memory.service``
+    owns its own transactions - ``record_observation`` commits, by design, because the
+    write policy's secret refusal has to be audited even when the write is rejected. So a
+    summary carrying an extractable sentence commits whatever ``record_client_events`` has
+    written up to that point, where before it committed once at the end. Deliberate, and
+    the alternative was worse: a second session on its own connection to write two tables
+    the outer transaction is not touching, for atomicity across a batch of client events
+    that nothing depends on - those events DID happen, and the audit rows saying so are
+    true whether or not a later event in the same POST is malformed. What is guaranteed
+    instead is the part that matters: extraction never raises, so it can never be the
+    reason a client-event batch fails.
+    """
+    if memory_runtime is None:
+        return {"memory_extraction": "no_runtime"}
+    if not summary.strip():
+        return {}
+
+    from app.memory.extraction import extract_from_summary
+
+    already = set(ctx.get("memory_extracted") or ())
+    result = extract_from_summary(
+        db,
+        memory_runtime.embedder,
+        summary,
+        already=already,
+        source={
+            "kind": "conversation_summary",
+            "channel": "voice",
+            "session_id": str(row.id),
+        },
+    )
+    if result.seen:
+        keys = list(already | set(result.seen))
+        ctx["memory_extracted"] = keys[-EXTRACTED_KEYS_KEPT:]
+    return {"memory_extraction": result.as_dict()}
+
+
 def record_client_events(
     db: Session,
     row: RealtimeSessionRow,
@@ -1238,6 +1300,7 @@ def record_client_events(
     events: list[dict[str, Any]],
     trace_id: str | None = None,
     sideband: SidebandPusher | None = None,
+    memory_runtime: Any = None,
 ) -> dict[str, Any]:
     """Spec §4 step 5: timing events (benchmark) and state transitions (audit).
 
@@ -1634,6 +1697,16 @@ def record_client_events(
         elif kind == "summary":
             row.transcript_summary = str(ev.get("text") or "")[:MAX_SUMMARY_CHARS]
             meta["chars"] = len(row.transcript_summary)
+            # B16 req 33/34: and this is where the write policy's trigger patterns
+            # finally get fed. They have existed since M5 - "bundan sonra", "tercih
+            # ederim", "her zaman", "karar" - and the matrix's note was exact: kod var,
+            # girdi yok. The summary is already server-side and already durable, so
+            # nothing about the owner's words moves anywhere to make this possible; the
+            # extractor runs where the text already is. `explicit=False` always, so a
+            # summary is a candidate at most (M5 review #4).
+            meta.update(
+                _extract_memories(db, ctx, row.transcript_summary, memory_runtime, row=row)
+            )
         elif kind == "state":
             state = str(payload.get("state") or "")
             if state in RealtimeState.__members__:

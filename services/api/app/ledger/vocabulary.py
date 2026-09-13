@@ -258,6 +258,14 @@ EVENT_TYPE_DEPLOYMENT_CLOUD_CORE_ROLLED_BACK = "deployment.cloud_core.rolled_bac
 EVENT_TYPE_DEPLOYMENT_AGENT_INSTALLED = "deployment.agent.installed"
 EVENT_TYPE_DEPLOYMENT_AGENT_SKIPPED = "deployment.agent.skipped"
 EVENT_TYPE_MEMORY_REMEMBERED = "memory.remembered"
+#: B16 req 62: a memory was READ BACK TO THE OWNER and therefore used. Written where
+#: the memory leaves for somebody who will act on it - the voice tools that speak it -
+#: and never where it is merely retrieved: a search result nobody heard is not a use
+#: (the rule `app.notifications` learned as "a queue is not a delivery"). The ledger is
+#: the home rather than `memory_audit_events`, which is an audit of MUTATIONS, and
+#: because `activity.explain` already answers "what did you do" from here - so "hangi
+#: kaydi kullandin?" is answerable through a surface that exists.
+EVENT_TYPE_MEMORY_USED = "memory.used"
 EVENT_TYPE_LEDGER_BACKFILL = "ledger.backfill"
 EVENT_TYPE_BRIEFING_QUEUED = "briefing.queued"
 EVENT_TYPE_BRIEFING_DELIVERED = "briefing.delivered"
@@ -496,6 +504,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_DEPLOYMENT_AGENT_INSTALLED,
     EVENT_TYPE_DEPLOYMENT_AGENT_SKIPPED,
     EVENT_TYPE_MEMORY_REMEMBERED,
+    EVENT_TYPE_MEMORY_USED,
     EVENT_TYPE_LEDGER_BACKFILL,
     EVENT_TYPE_BRIEFING_QUEUED,
     EVENT_TYPE_BRIEFING_DELIVERED,

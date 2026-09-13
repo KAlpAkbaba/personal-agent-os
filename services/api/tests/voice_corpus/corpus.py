@@ -39,6 +39,10 @@ CTX_ALARM_SCHEDULED: Final = "alarm_scheduled"
 #: B14 req 289/290/291: one armed routine the owner can name. The control tools take an id,
 #: and a corpus case that invented one would be testing the 404 path.
 CTX_ROUTINE_EXISTS: Final = "routine_exists"
+#: B16 req 36-38/61: one memory the owner can name, written through the real service.
+#: `memory.forget` HARD-deletes and `memory.correct` versions, so a corpus case that
+#: proves either has to act on a row the rest of the system agrees exists.
+CTX_MEMORY_EXISTS: Final = "memory_exists"
 #: 2026-09-08 wake-song defect fix: the owner has already approved a wake song
 #: (``alarms_service.set_wake_song``) — the one precondition a plain "Yarın 07:30'da beni
 #: uyandır." (no media named) needs to resolve to something real rather than the tone, the
@@ -5910,10 +5914,148 @@ def _clock_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _memory_cases() -> list[UtteranceCase]:
+    """B16 req 35-38, 61: the owner's own memory, by voice.
+
+    Two families of collision, and both were found by running this corpus rather than by
+    anybody reasoning about them beforehand.
+
+    The first is INSIDE the family and is the sharpest thing in it: Turkish negates an
+    imperative with a suffix, so "unut" is forget and "unutMA" is the strongest remember
+    phrase `app.memory.policy` knows. `_has` is a prefix match. A stem match on "unut"
+    reads "bunu unutma" as a HARD delete - the row, its versions, its evidence and its
+    embeddings, with no undo. `m.negation.*` pins both readings.
+
+    The second is with every other family, because this one's verbs belong to everybody:
+    "düzelt" is the native app factory's fix verb and the evolution engine's, and "nereden
+    biliyorsun" is the location family's own question. Placed with the alarm and routine
+    families this took nine corpus cases away from their owners in a single run, which is
+    why it is resolved after all of them.
+    """
+    cases = [
+        UtteranceCase(
+            case_id=f"m.remember.{i}",
+            utterance=text,
+            expected_intent="memory_remember",
+            expected_tool="memory.remember",
+            category="memory",
+            source=source,
+        )
+        for i, (text, source) in enumerate(
+            [
+                ("Kahveyi sade severim, bunu hatırla.", "canonical"),
+                ("Bunu aklında tut.", "canonical"),
+                ("Sunu kaydet.", "paraphrase"),
+                ("bunu hatirla", "asr_noise"),
+            ],
+            start=1,
+        )
+    ]
+    cases.extend(
+        UtteranceCase(
+            case_id=f"m.recall.{i}",
+            utterance=text,
+            expected_intent="memory_search",
+            expected_tool="memory.search",
+            forbidden_tools=("memory.forget",),
+            category="memory",
+            source=source,
+        )
+        for i, (text, source) in enumerate(
+            [
+                ("Kahve hakkında ne biliyorsun?", "canonical"),
+                ("Bunu hatırlıyor musun?", "canonical"),
+            ],
+            start=1,
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="m.forget.1",
+            utterance="Bunu unut.",
+            expected_intent="memory_forget",
+            expected_tool="memory.forget",
+            context=CTX_MEMORY_EXISTS,
+            category="memory",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="m.negation.unutma_is_remember",
+            utterance="Bunu unutma.",
+            expected_intent="memory_remember",
+            expected_tool="memory.remember",
+            forbidden_tools=("memory.forget",),
+            category="memory",
+            source="canonical",
+            notes=(
+                "Turkish negates an imperative with a suffix. A PREFIX match on 'unut' "
+                "reads the owner's strongest remember phrase as an irreversible delete."
+            ),
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="m.pin.1",
+            utterance="Bunu sabitle.",
+            expected_intent="memory_pin",
+            expected_tool="memory.pin",
+            context=CTX_MEMORY_EXISTS,
+            category="memory",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="m.why.1",
+            utterance="Bunu neden hatırlıyorsun?",
+            expected_intent="memory_why",
+            expected_tool="memory.why",
+            forbidden_tools=("memory.forget", "memory.remember"),
+            context=CTX_MEMORY_EXISTS,
+            category="memory",
+            source="canonical",
+            notes="Carries the recall verb and is a question ABOUT the memory, not for it.",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="m.collision.location_source",
+            utterance="Şu an konumumu nereden biliyorsun?",
+            expected_intent="location_source_query",
+            expected_tool="weather.last_evidence",
+            expected_response=RESPONSE_OK,
+            forbidden_tools=("memory.search", "memory.why"),
+            category="memory",
+            source="regression",
+            notes="'nereden biliyorsun' is the LOCATION family's own question (2026-09-13).",
+            # `weather.last_evidence` answers from THE RECORD, so a fresh session has no
+            # prior query to report - the same preceding turn `location.source.1` uses.
+            preceding_turns=(("Hava nasıl?", "weather.current"),),
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="m.collision.evolution_last_fix",
+            utterance="Son hangi hatayı düzelttin?",
+            expected_intent="explain",
+            expected_tool="activity.explain",
+            expected={"query_kind": "last_fix", "routed": "evolution.status"},
+            forbidden_tools=("memory.correct",),
+            category="memory",
+            source="regression",
+            notes="'düzelt' is the whole product's fix verb, not a memory correction.",
+        )
+    )
+    return cases
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_clock_cases(),
         *_routine_cases(),
+        *_memory_cases(),
         *_research_cases(),
         *_alarm_create_cases(),
         *_alarm_control_cases(),

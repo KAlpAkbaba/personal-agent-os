@@ -78,6 +78,7 @@ from app.voice.realtime_sessions.tools_genesis import (
 )
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_media import register_media_tools
+from app.voice.realtime_sessions.tools_memory import register_memory_tools
 from app.voice.realtime_sessions.tools_native import (
     NATIVE_TOOL_NAMES,
     register_native_tools,
@@ -1763,6 +1764,11 @@ def default_registry() -> ToolRegistry:
     # complete since M18 and the owner could not reach any of it by speaking - every one of
     # the seven routines in production was created by the alarm subsystem on their behalf.
     register_routine_tools(reg)
+    # B16 req 31-38/61-62: the owner's voice over their own MEMORY. `app.memory` has
+    # been complete since M5 - policy, evidence, versions, audit, retrieval, REST - and
+    # nothing under app/voice/ imported one line of it, so nothing the owner SAID could
+    # ever be remembered.
+    register_memory_tools(reg)
     return reg
 
 

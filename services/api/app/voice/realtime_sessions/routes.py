@@ -438,6 +438,12 @@ async def report_events(
                 events=events,
                 trace_id=trace_id,
                 sideband=runtime.sideband,
+                # B16 req 33/34: the SAME MemoryRuntime `/v1/memory/*` and the memory.*
+                # tools use, through the live-source path `create_app` registers - so
+                # the extractor's embeddings come from the model the index was built
+                # with. `.get` rather than an attribute: a process that registered none
+                # gets None, and the extractor records "no_runtime" instead of guessing.
+                memory_runtime=runtime.live_sources().get("memory_runtime"),
             )
 
     try:

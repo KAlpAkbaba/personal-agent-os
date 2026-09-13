@@ -676,7 +676,7 @@ ROLLBACK_PLAN       : brifing eklentisi bayrakla kapatılır; mevcut karşılama
 ```
 
 ```
-BATCH_ID            : B16
+BATCH_ID            : B16                              [KAPANDI 2026-09-13]
 NAME                : Bellek yazma yolu
 REQUIREMENT_IDS     : 31, 32, 33, 34, 35, 36, 37, 38, 61, 62
 GOAL                : Sahip bir tercihi sesle öğretebilsin, düzeltebilsin, unutturabilsin,
@@ -686,6 +686,42 @@ AFFECTED_SUBSYSTEMS : Memory, Voice Tools, Intent
 EXPECTED_FILES      : services/api/app/memory/, app/voice/tools/, app/voice/intent/
 RISK                : low
 OWNER_ACTION        : no
+TEST_PLAN           : tetikleyici kalıpların gerçek konuşma metniyle beslendiği; yazılan kaydın
+                      provenans ve güven taşıdığı; hassas verinin dışarıda kaldığı
+KAPANIŞ             : commit PENDING_B16 · CI PENDING · 10/10 DONE
+                      kanıt docs/evidence/b16-memory-write-path-2026-09-13.json
+ÖLÇÜM               : `app.memory` eksik değil, OLGUN: 3400 satır, dondurulmuş yazma
+                      politikası + sır tarayıcı, kanıt/sürüm/denetim zinciri, hibrit geri
+                      getirme, terfi merdiveni, tam REST yüzeyi. Matrisin dediği kopuk
+                      halka birebir doğrulandı: app/voice/ altında app.memory'yi import
+                      eden TEK satır yoktu; memory dışı tek çağıran `app.experience` ve o
+                      da yalnız Etkinlik Defteri'ni okuyor, konuşmayı bilinçle okumuyor.
+                      61 için de veri M5'ten beri tamdı (`inspect_memory` provenans,
+                      kanıt, sürüm, denetim, çelişki döndürüyor) — söylenemiyordu.
+KARAR               : ADR-0126 — sesli oturum `explicit` bayrağını taşıyabilir. Politika
+                      OWNER yetkisini yalnız çağıranın öne sürdüğü bayrağa veriyor (M5
+                      gözden geçirme #4: bir web sayfası "always use" yazarak sahip kaydı
+                      basamamalı). Sesli oturum yutma hattı değil: SENSITIVE kademeden
+                      geçen, kimliği doğrulanmış cihazdaki sahibin kendisi — `/remember`
+                      ile aynı güven. Aksi hâlde "sesle kalıcı bellek yazılır" yanlış olur,
+                      çünkü CANDIDATE satır kalıcı değildir. Otomatik çıkarım ise HER ZAMAN
+                      `explicit=False`.
+YOL ÜSTÜNDE         : (1) Politikanın kendi karar tablosu M5'ten beri "explicit flag OR
+                      explicit owner phrase" diyordu; kod bayrağı şart koşuyor. Bir GÜVENLİK
+                      kuralı, o modülü inceleyen herkesin ilk okuduğu tabloda yanlış
+                      yazılmıştı. Davranış zaten testliydi — yanlış olan belgeydi.
+                      (2) `EVENT_TYPE_MEMORY_REMEMBERED` defter sözlüğünde vardı ve hiçbir
+                      şey onu yazmıyordu; ilk yazıcısı bu batch.
+                      (3) İlk `_ORIGIN_TR` taslağı hiçbir yazıcının koymadığı bir `kind`
+                      anahtarını okuyordu: `memory.why` her kayıt için "nereden geldiğini
+                      kaydetmemişim" diyecekti. Sözlük artık `service.py`'nin kendi
+                      yazdıklarından okunuyor ve bir bekçi sürüklenmeyi yakalıyor.
+                      (4) Türkçe olumsuzlama: `_has` ön ek eşleşmesi, "unutma" ise "unut"
+                      ile başlıyor — yani hatırlamanın en güçlü ifadesi geri alınamaz bir
+                      silme olarak okunacaktı. `_has_exact` ve `m.negation.*` pinledi.
+                      (5) Bellek ailesi ilk konumunda dokuz korpus vakasını sahibinden
+                      çaldı ("düzelt" native/evolution'ın, "nereden biliyorsun" konumun).
+                      Aile artık tüm ailelerden SONRA çözülüyor.
 TEST_PLAN           : tetikleyici kalıpların gerçek konuşma metniyle beslendiği; yazılan kaydın
                       provenans ve güven taşıdığı; hassas verinin dışarıda kaldığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde sesle yazılmış bir tercih satırı

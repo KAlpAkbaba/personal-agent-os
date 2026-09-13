@@ -159,3 +159,49 @@ def test_secret_in_value_json_is_refused() -> None:
 
 def test_plain_preference_text_is_not_a_secret() -> None:
     assert find_secret("Owner prefers dark mode and Turkish narration.") is None
+
+
+# --------------------------------------------------- the table is the specification
+
+
+def test_the_decision_table_matches_the_code():
+    """B16. The module docstring is what anyone reads before touching this policy, and
+    until this batch its row 2 said "explicit flag OR explicit owner phrase" while
+    `decide()` has required the FLAG since M5 review #4. A phrase alone is a candidate.
+
+    That is the same shape as B15's req 279 — a comment that was true once, was never
+    revisited, and was believed — except that this one described a SECURITY rule: read
+    literally, it says a webpage fed through an ingestion pipeline can mint an explicit
+    owner memory by containing the words "always use". The code never allowed it.
+
+    So each documented row is exercised here. The table cannot drift from the behaviour
+    again without this test failing.
+    """
+    import app.memory.policy as policy_module
+
+    table = policy_module.__doc__ or ""
+
+    # Row 1 — a secret is refused before anything else, flag or no flag.
+    row1 = decide(Observation(text="my api_key = abcdefgh12345678", explicit=True))
+    assert row1.action == ACTION_REFUSE
+    assert row1.secret_pattern == "generic_api_key"
+
+    # Row 2 — the FLAG, and only the flag.
+    row2 = decide(Observation(text="metrik birim kullan", explicit=True))
+    assert (row2.action, row2.actor, row2.explicit) == (WriteStage.DURABLE, Actor.OWNER, True)
+    assert "caller-asserted `explicit` flag" in table
+    assert "explicit flag OR explicit owner phrase" not in table, (
+        "the table claims a phrase alone grants OWNER authority; decide() has never done that"
+    )
+
+    # Row 3 — chatty content never becomes a row.
+    assert decide(Observation(text="tamam")).action == ACTION_IGNORE
+
+    # Row 4 — an explicit-style PHRASE without the flag is a candidate, not an owner memory.
+    row4 = decide(Observation(text="Bundan sonra metrik birim kullan lütfen efendim"))
+    assert (row4.action, row4.actor, row4.explicit) == (WriteStage.CANDIDATE, Actor.POLICY, False)
+    assert row4.confidence <= SINGLE_OBSERVATION_MAX_CONFIDENCE
+
+    # Row 5 — anything else inferred is session-scoped.
+    row5 = decide(Observation(text="Bu sabah kahve içtim ve gazete okudum"))
+    assert (row5.action, row5.retention_class) == (WriteStage.SESSION, RetentionClass.SESSION)

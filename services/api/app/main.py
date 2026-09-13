@@ -331,6 +331,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         weather_service=weather_service,
         location_service=location_service,
         briefing_service=briefing_service,
+        # B16 req 31-38/61-62: memory.* reads the SAME MemoryRuntime `/v1/memory/*`
+        # drives, for its EMBEDDER above all. A tool that built its own would write
+        # vectors from a different model into the one embeddings table and every
+        # semantic search would quietly get worse.
+        memory_runtime=memory,
     )
 
     def _build_routine_dispatcher() -> ActionDispatcher:

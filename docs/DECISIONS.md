@@ -10735,3 +10735,52 @@ whole array - so it reported "no online device" about a device the same endpoint
 (the trap was already documented in `qualify-m18-4.ps1`; `owner-harness.tests.ps1` now pins the
 shape and fails any script that wraps it), and the run before that found the installed agent
 was the one this release replaced.
+
+## ADR-0126 — The owner's voice may assert an explicit memory (2026-09-13, B16)
+
+**Context.** `app.memory.policy.decide()` grants `Actor.OWNER` and a DURABLE, confidence-1.0
+row only on a **caller-asserted `explicit` flag**, never on a trigger phrase in the text. Its
+own comment names the threat (M5 review #4, SECURITY_MODEL §6): once ingestion pipelines —
+browser, research, document — feed text into `/v1/memory/observe`, a webpage containing
+"always use ..." must not be able to mint an owner memory. The flag is described as being set
+only by "trusted owner-facing surfaces (`/remember`, an owner UI)".
+
+B16 req 31 asks for a `memory.remember` voice tool whose acceptance is *"sesle kalıcı bellek
+yazılır"* — durable. A CANDIDATE row is not durable, so the requirement is only met if the
+tool asserts the flag, and whether a realtime session counts as a trusted owner-facing
+surface had never been decided.
+
+**Decision.** It does, and `memory.remember` asserts `explicit=True`.
+
+A realtime session is not an ingestion pipeline. It is the owner speaking, through a tool
+gated SENSITIVE by `app.security.step_up`, on a device the broker has authenticated, in a
+session bound to an owner API session. That is the same trust the `POST /v1/memory/remember`
+route already carries — and that route is one of the two surfaces the policy names. The
+threat model is about text of unknown provenance arriving in bulk; a spoken sentence at a
+step-up-gated tool call is the opposite end of that axis.
+
+Two limits keep the decision narrow:
+
+* **Only `memory.remember`.** Automatic extraction from conversation (req 33/34,
+  `app.memory.extraction`) asserts `explicit=False` — always, with a test that says so. A
+  summary is a model's paraphrase of a conversation and is exactly the untrusted-ingestion
+  shape the policy was hardened against; it produces candidates capped at
+  `SINGLE_OBSERVATION_MAX_CONFIDENCE`, like any inference.
+* **What travels is a statement, not a transcript.** `statement` is a sentence the model
+  composed, the way `routine.create` takes a structure the model composed. The relay's
+  `FORBIDDEN_KEY_PARTS` refuses any argument key spelled like a transcript, and nothing here
+  works around that: extraction reads `transcript_summary` where it is already stored,
+  server-side, rather than moving the owner's words to where an extractor is.
+
+**Reversible.** Dropping `explicit=True` from `memory_remember` turns every voice-taught
+memory into a candidate; nothing else changes, and the rows already written keep their
+provenance (`origin: owner_statement`, `source.channel: voice`), so which ones came this way
+stays legible.
+
+**Guards.** `test_what_the_owner_says_is_durable_and_carries_its_provenance` holds the
+decision; `test_a_conversation_never_mints_an_owner_memory` and
+`test_an_extracted_memory_is_never_attributed_to_the_owner` hold the limit; and
+`test_the_decision_table_matches_the_code` now walks the policy's documented rows, after B16
+found that the table had said "explicit flag OR explicit owner phrase" since M5 while the
+code required the flag — a security rule described wrongly in the first thing a reviewer of
+that module reads.

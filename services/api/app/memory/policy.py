@@ -5,12 +5,22 @@ Decision table (deterministic, documented for the lead):
 | # | condition (first match wins)                        | decision                          |
 |---|-----------------------------------------------------|-----------------------------------|
 | 1 | content matches a secret pattern                    | REFUSE (SECRET_REJECTED + audit)  |
-| 2 | explicit flag OR explicit owner phrase (en/tr)      | DURABLE, explicit=True, conf=1.0, |
+| 2 | caller-asserted `explicit` flag                     | DURABLE, explicit=True, conf=1.0, |
 |   |                                                     | actor=OWNER                       |
 | 3 | chatty / no-signal content (greeting, ack, filler)  | IGNORE (no row)                   |
-| 4 | inferred with stable key OR strong-signal phrase    | CANDIDATE, conf<=0.4, actor=POLICY|
+| 4 | inferred with stable key OR explicit-style phrase   | CANDIDATE, conf<=0.4, actor=POLICY|
+|   | OR strong-signal phrase                             |                                   |
 | 5 | any other inferred observation                      | SESSION, conf<=0.4, retention=    |
 |   |                                                     | session, actor=POLICY             |
+
+Row 2 is the FLAG and only the flag. An explicit owner PHRASE ("hatırla", "always
+use") without it lands on row 4 as a candidate, capped like any inference — see
+`decide()`'s own comment for why (M5 review #4: a webpage fed through an ingestion
+pipeline must not be able to mint an explicit owner memory by saying "always use").
+This table said "flag OR phrase" until B16 and the code never did; it is the same
+shape as B15's req 279 — a comment that was never revisited — except that this one
+described a SECURITY rule, in the decision table every reviewer of this module reads
+first. `test_the_decision_table_matches_the_code` now walks these rows.
 
 Inferred confidence is always capped at SINGLE_OBSERVATION_MAX_CONFIDENCE for a
 single observation; promotion candidate->durable happens only through evidence

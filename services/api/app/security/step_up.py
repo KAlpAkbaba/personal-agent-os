@@ -131,6 +131,15 @@ _TIERS: Final[dict[str, str]] = {
     "mail.read_draft": TIER_SENSITIVE,
     "mail.search": TIER_SENSITIVE,
     "mail.thread": TIER_SENSITIVE,
+    # B16 req 31-38. Five of the six change what the system believes about its owner,
+    # so five are SENSITIVE. `memory.forget` is the sharpest tool in this product's
+    # voice surface: `app.memory` hard-deletes the row, its versions, its evidence and
+    # its embeddings, and says so on purpose - there is no undo and no tombstone. It
+    # takes an id read back from `memory.search` for the same reason.
+    "memory.correct": TIER_SENSITIVE,
+    "memory.forget": TIER_SENSITIVE,
+    "memory.pin": TIER_SENSITIVE,
+    "memory.remember": TIER_SENSITIVE,
     "media.play": TIER_SENSITIVE,
     "media.stop": TIER_SENSITIVE,
     "native.build": TIER_SENSITIVE,
@@ -172,6 +181,10 @@ _TIERS: Final[dict[str, str]] = {
     "artifact.list": TIER_OPEN,
     "artifact.validate": TIER_OPEN,
     "briefing.morning": TIER_OPEN,
+    # B16 req 32/61: a question about what is already remembered. Reading a memory back
+    # changes nothing - but it is a USE, and both of these write a `memory.used` receipt.
+    "memory.search": TIER_OPEN,
+    "memory.why": TIER_OPEN,
     "briefing.overnight_work": TIER_OPEN,
     "briefing.system_status": TIER_OPEN,
     "calendar.agenda": TIER_OPEN,

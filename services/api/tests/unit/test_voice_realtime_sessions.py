@@ -370,6 +370,16 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "routine.cancel",
         "routine.pause",
         "routine.resume",
+        # B16 req 31-38/61-62: the owner's own memory. `app.memory` has been complete
+        # since M5 - policy, evidence, versions, audit, retrieval, a REST surface - and
+        # nothing under app/voice/ imported one line of it, so nothing the owner SAID
+        # could ever be remembered.
+        "memory.remember",
+        "memory.search",
+        "memory.forget",
+        "memory.correct",
+        "memory.pin",
+        "memory.why",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

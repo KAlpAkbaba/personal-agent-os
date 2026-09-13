@@ -99,6 +99,17 @@ from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
 from app.main import create_app
 from app.media.models import OwnerMediaPlaybackRow
+from app.memory.models import (
+    Entity,
+    EntityEdge,
+    Memory,
+    MemoryAuditEvent,
+    MemoryEmbedding,
+    MemoryEvidence,
+    MemoryVersion,
+)
+from app.memory.runtime import MemoryRuntime
+from app.memory.types import MemoryClass
 from app.narration.models import NarrationSession, PronunciationEntry
 from app.nativefactory.models import NativeBuildRow
 from app.nativefactory.service import RunResult, build_and_test, generate, plan_build
@@ -175,6 +186,7 @@ from tests.voice_corpus.corpus import (
     CTX_EYE_DISABLED,
     CTX_FILE_FOCUSED,
     CTX_LAMPBOX_RUNNING,
+    CTX_MEMORY_EXISTS,
     CTX_MESSAGE_FOCUSED,
     CTX_NATIVE_ANDROID,
     CTX_NATIVE_BUILT,
@@ -327,6 +339,15 @@ TABLES = (
     NewsPlaybackContextRow.__table__,
     OwnerMediaPlaybackRow.__table__,  # ADR-0112
     NativeBuildRow.__table__,
+    # B16 req 31-38/61-62: the owner's own memory. A corpus case that teaches something
+    # writes a real row through the real service, so the tables have to be here.
+    Memory.__table__,
+    MemoryVersion.__table__,
+    MemoryEvidence.__table__,
+    MemoryEmbedding.__table__,
+    MemoryAuditEvent.__table__,
+    Entity.__table__,
+    EntityEdge.__table__,
 )
 
 #: The tools the harness may dispatch as "forbidden" because the product refuses them at
@@ -429,6 +450,10 @@ class Harness:
     #: writes under - never this machine's real dotnet in a corpus run.
     native_runner: Any = None
     native_root: Any = None
+    #: B16 (req 31-38, 61-62): the SAME MemoryRuntime the REST surface and `create_app`
+    #: give the memory.* tools - for its EMBEDDER, so a corpus run indexes with the model
+    #: the index was built with rather than one this harness invented.
+    memory: Any = None
     ids: dict[str, str] = field(default_factory=dict)
     #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6, §7): the live fixture application
     #: (CounterBoxServer/LampBoxServer) a CTX_COUNTERBOX_RUNNING/CTX_LAMPBOX_RUNNING case
@@ -588,6 +613,23 @@ class Harness:
                     source="corpus",
                 )
                 self.ids["routine"] = str(routine.routine_id)
+        elif context == CTX_MEMORY_EXISTS:
+            # B16 req 36-38/61: one memory the owner can name. Written through the real
+            # service and the real write policy, for the same reason the routine above is:
+            # `memory.forget` hard-deletes a row, `memory.correct` versions one, and
+            # `memory.why` reads a provenance chain - none of that means anything against a
+            # fixture the rest of the system does not agree exists.
+            from app.memory import service as memory_service
+
+            with self.factory() as db:
+                observed = memory_service.remember_explicit(
+                    db,
+                    self.memory.embedder,
+                    text="Kahveyi sade severim.",
+                    memory_class=MemoryClass.PREFERENCE,
+                    source={"kind": "owner", "channel": "corpus"},
+                )
+                self.ids["memory"] = str(observed.memory_id)
         elif context == CTX_ALARM_WAKE_SONG_SET:
             # 2026-09-08 wake-song defect fix: the owner has already approved a wake song
             # once (``PUT /v1/alarms/wake-song``) — the precondition a PLAIN alarm-create
@@ -1194,6 +1236,13 @@ def build_harness() -> Harness:
     # fixture does. Every prior corpus case never touched ``.store`` at all.
     artifacts._store = InMemoryObjectStore()
     app.state.artifacts = artifacts
+    # B16 req 31-38/61-62: the memory tools need the SAME MemoryRuntime the REST surface
+    # drives - for its embedder above all, so a corpus run indexes with the model the index
+    # was built with. Pointed at this suite's own engine the way every runtime above is.
+    memory = MemoryRuntime(settings)
+    memory._engine = engine
+    memory._session_factory = factory
+    app.state.memory = memory
     sim = SimulatedRealtimeProvider()
     runtime = RealtimeVoiceRuntime(
         settings,
@@ -1375,6 +1424,7 @@ def build_harness() -> Harness:
         native_runner=native_runner,
         native_root=str(native_root),
         native_toolchain=NATIVE_TOOLCHAIN,
+        memory_runtime=memory,
     )
     holdoffs = HoldoffRegistry()
     set_holdoffs(holdoffs)
@@ -1428,6 +1478,7 @@ def build_harness() -> Harness:
         news_provider=news_provider,
         native_runner=native_runner,
         native_root=native_root,
+        memory=memory,
     )
 
 
@@ -1560,6 +1611,20 @@ def contract_arguments(
             # construction - see `tools_routines.routine_create`'s own note.
             "actions": [{"kind": "display_action", "detail": {"action": "wake"}}],
         }
+    # B16 (req 31-38, 61): what a real model sends after hearing one of these sentences.
+    # `statement` is the model's own one-line reading of what the owner said - it is not
+    # the transcript, which the relay refuses by key on the way in (FORBIDDEN_KEY_PARTS).
+    elif tool == "memory.remember":
+        args = {"statement": "Kahveyi sade severim."}
+    elif tool == "memory.search":
+        args = {"query": "kahve"}
+    elif tool == "memory.correct":
+        args = {"memory_id": ids.get("memory", ""), "statement": "Kahveyi az şekerli severim."}
+    # The id the CTX_MEMORY_EXISTS fixture created. A model resolves the owner's "bunu" to
+    # an id by having heard `memory.search` read the matches back - which is the whole
+    # reason `memory.forget` refuses anything else.
+    elif tool in ("memory.forget", "memory.pin", "memory.why"):
+        args = {"memory_id": ids.get("memory", "")}
     elif tool in ("routine.cancel", "routine.pause", "routine.resume"):
         # The id the CTX_ROUTINE_EXISTS fixture created. A model resolves the owner's
         # "sabah rutini" to an id by having heard `routine.list` first; the corpus supplies

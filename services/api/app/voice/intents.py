@@ -63,6 +63,16 @@ class Intent(StrEnum):
     # the time only as part of a whole morning briefing. Resolved AFTER the alarm family:
     # "Sabah alarmım kaçta?" is a question about an alarm, not about the clock.
     CLOCK_QUERY = "clock_query"
+    # B16 req 35-38, 61: the owner's own memory, by voice. `app.memory` has been
+    # complete since M5 with a REST surface and no sentence reached it. Resolved AFTER
+    # the alarm, display, routine and clock families: this family shares verbs with none
+    # of them and objects with all of them, so "alarmı unut" must stay an alarm.
+    MEMORY_REMEMBER = "memory_remember"  # bunu hatırla / aklında tut / unutma
+    MEMORY_SEARCH = "memory_search"  # bunu hatırlıyor musun / ne biliyorsun
+    MEMORY_FORGET = "memory_forget"  # bunu unut
+    MEMORY_CORRECT = "memory_correct"  # hayır, öyle değil, düzelt
+    MEMORY_PIN = "memory_pin"  # bunu sabitle
+    MEMORY_WHY = "memory_why"  # bunu neden hatırlıyorsun
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -335,6 +345,13 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.ROUTINE_CANCEL: "routine.cancel",
     Intent.ROUTINE_PAUSE: "routine.pause",
     Intent.ROUTINE_RESUME: "routine.resume",
+    # B16 req 35-38. `memory.search` and `memory.why` are QUERIES and live in the other
+    # table: they read a memory back and change nothing (they do write a `memory.used`
+    # receipt, which is evidence ABOUT the read, not a mutation of the row).
+    Intent.MEMORY_REMEMBER: "memory.remember",
+    Intent.MEMORY_FORGET: "memory.forget",
+    Intent.MEMORY_CORRECT: "memory.correct",
+    Intent.MEMORY_PIN: "memory.pin",
     Intent.ALARM_CREATE: "alarm.create",
     Intent.ALARM_TEST_CREATE: "alarm.create",
     Intent.ALARM_CANCEL: "alarm.cancel",
@@ -455,6 +472,9 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.CLOCK_QUERY: "clock.now",
     # B14 req 288. Reading back what the owner already set up mutates nothing.
     Intent.ROUTINE_LIST: "routine.list",
+    # B16 req 32/61. Both read and neither mutates.
+    Intent.MEMORY_SEARCH: "memory.search",
+    Intent.MEMORY_WHY: "memory.why",
     Intent.DISPLAY_QUERY: "display.status",
     # ADR-0079 §12: "why did / didn't you" and "what is the policy now" are answered from
     # the live decision, the presence assertion, the holdoffs and the ledger - a query.
@@ -1513,6 +1533,82 @@ def _clock_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
         _is_question(tokens) or _has_exact(tokens, *_CLOCK_QUESTION_FORMS)
     ):
         return Intent.CLOCK_QUERY, "saat"
+    return None
+
+
+# ----------------------------------------------------------------- B16: the memory
+#
+# `app.memory` has been complete since M5 and no sentence the owner could say reached it.
+# The family is resolved AFTER the alarm, display, routine and clock families and declines
+# outright when one of their nouns is present, because it shares verbs with none of them
+# but shares OBJECTS with all of them: "alarmı unut" is an alarm the owner wants cancelled,
+# not a memory row.
+
+#: FORGET. Exact forms and never `_has`, which is a PREFIX match: "unutma" is Turkish for
+#: "don't forget", i.e. the owner's strongest REMEMBER phrase, and `app.memory.policy`
+#: already lists it as one. A stem match on "unut" would read "bunu unutma" as a hard
+#: delete - and `memory.forget` is a hard delete: the row, its versions, its evidence and
+#: its embeddings, with no undo. The one place in this file where the difference between
+#: `_has` and `_has_exact` is the difference between remembering and destroying.
+_MEMORY_FORGET_FORMS: Final[tuple[str, ...]] = (
+    "unut",
+    "unutabilirsin",
+    "unutalım",
+    "unutalim",
+    "unutun",
+)
+#: REMEMBER, including the negative imperative the forget forms deliberately exclude.
+_MEMORY_REMEMBER_STEMS: Final[tuple[str, ...]] = ("hatırla", "hatirla", "unutma", "kaydet")
+#: "Bunu hatırlıyor musun?" / "Kahve hakkında ne biliyorsun?" - a question about what is
+#: already there. Distinct stems from REMEMBER: "hatırlıyor" does not start with "hatırla".
+_MEMORY_RECALL_STEMS: Final[tuple[str, ...]] = (
+    "hatırlıyor",
+    "hatirliyor",
+    "biliyor",
+    "biliyorsun",
+)
+_MEMORY_WHY_FORMS: Final[tuple[str, ...]] = ("neden", "niye", "niçin", "nicin", "nereden")
+_MEMORY_PIN_STEMS: Final[tuple[str, ...]] = ("sabitle", "sabit")
+_MEMORY_CORRECT_STEMS: Final[tuple[str, ...]] = ("düzelt", "duzelt")
+#: The noun, for the sentences that name it: "hafızandan sil", "kaydı göster".
+_MEMORY_NOUN_STEMS: Final[tuple[str, ...]] = ("hafıza", "hafiza", "bellek", "bellegin")
+
+
+def _memory_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """The memory family, in priority order: WHY, RECALL, FORGET, PIN, CORRECT, REMEMBER.
+
+    REMEMBER is LAST and it is the widest, which is the right way round: a memory written
+    by mistake can be forgotten, and a memory forgotten by mistake cannot be recovered.
+    Every ambiguity in this family therefore resolves away from the destructive reading.
+
+    WHY before RECALL because "Bunu neden hatırlıyorsun?" carries the recall verb and is a
+    question about the memory rather than for it. RECALL before FORGET because "bunu
+    hatırlıyor musun" is a question, and a question must never mutate anything.
+    """
+    # Another family's object. This one declines rather than competing: those families are
+    # resolved first anyway, and being explicit here is what keeps a later reordering from
+    # silently turning "alarmı unut" into a memory deletion.
+    if _alarm_noun(tokens) or _routine_noun(tokens) or _screen_noun(tokens):
+        return None
+
+    if (why := _has_exact(tokens, *_MEMORY_WHY_FORMS)) and _has(tokens, *_MEMORY_RECALL_STEMS):
+        return Intent.MEMORY_WHY, why
+    if recall := _has(tokens, *_MEMORY_RECALL_STEMS):
+        return Intent.MEMORY_SEARCH, recall
+    if forget := _has_exact(tokens, *_MEMORY_FORGET_FORMS):
+        return Intent.MEMORY_FORGET, forget
+    if pin := _has(tokens, *_MEMORY_PIN_STEMS):
+        return Intent.MEMORY_PIN, pin
+    if correct := _has(tokens, *_MEMORY_CORRECT_STEMS):
+        return Intent.MEMORY_CORRECT, correct
+    if remember := _has(tokens, *_MEMORY_REMEMBER_STEMS):
+        return Intent.MEMORY_REMEMBER, remember
+    # "Bunu aklında tut." - two tokens, and neither means anything on its own.
+    if _has(tokens, "aklında", "aklinda") and _has(tokens, "tut"):
+        return Intent.MEMORY_REMEMBER, "aklında tut"
+    # "Hafızandan sil." - the noun makes the shared cancel verb unambiguous.
+    if (noun := _has(tokens, *_MEMORY_NOUN_STEMS)) and _has(tokens, *_CANCEL_VERB_STEMS):
+        return Intent.MEMORY_FORGET, noun
     return None
 
 
@@ -6266,6 +6362,28 @@ def resolve_intent(
             scope=SCOPE_CONVERSATION,
             matched=explain_kind,
             query_kind=explain_kind,
+            **base,
+        )
+
+    # 1c. B16 req 35-38/61: the owner's own memory. LAST of the families, and further
+    #     down this function than any of them, because it is the only one whose verbs
+    #     belong to everybody. The owner-utterance corpus proved it rather than a
+    #     reviewer guessing: placed with the alarm and routine families it took
+    #     "Son hangi hatayı düzelttin?" from the evolution status query, "Hata varsa
+    #     düzelt." from the native app factory, and "Şu an konumumu nereden
+    #     biliyorsun?" from the location source query - nine cases in one run. What
+    #     reaches this point carries no other family's noun and no activity question,
+    #     which is what makes the family safe to state as simply as it is.
+    #
+    #     Its own internal order runs the other way round from the rest of this
+    #     function: the destructive reading is checked before the widest one, because a
+    #     memory written by mistake can be forgotten and one forgotten by mistake
+    #     cannot be recovered.
+    if memory_matched := _memory_match(tokens):
+        return ResolvedIntent(
+            memory_matched[0],
+            scope=SCOPE_CONVERSATION,
+            matched=memory_matched[1],
             **base,
         )
 

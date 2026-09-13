@@ -1,0 +1,60 @@
+{
+  "batch": "B16",
+  "name": "Bellek yazma yolu",
+  "requirements": [
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    61,
+    62
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "what_this_proves": "The owner can teach this system something by speaking to it. `app.memory` has been complete since M5 - a frozen write-policy decision table with a secrets guard, evidence and version chains, an audit log, hybrid retrieval, a promotion ladder and a full REST surface, 3400 lines of it - and NOTHING under `app/voice/` imported one line. The only non-REST caller in the whole product is `app.experience`, which reads the Activity Ledger and deliberately never touches conversation. So everything this system knew about its owner had arrived through a browser.",
+  "the_measurement_first": {
+    "what_was_actually_missing": "Not the memory subsystem. The matrix's own note on requirement 31 - 'ses paketi app.memory'yi import etmiyor' - was exact, and grep confirmed it: zero imports. Requirement 61 was the same shape one level up: `inspect_memory` has returned provenance, evidence, versions, audit and conflicts since M5, and nothing ever turned any of it into a sentence. The data was complete and unspeakable.",
+    "what_was_genuinely_absent": "Requirement 62. Nothing anywhere recorded that a memory had been USED, so 'hangi kaydı kullandın?' was a question the system could not answer about itself. That one needed a substrate, not a caller.",
+    "requirements_33_34": "`app.memory.policy` has carried the trigger patterns since M5 - 'hatırla', 'bundan sonra', 'tercih ederim', 'her zaman', 'karar' - and the matrix's note was again exact: kod var, girdi yok. `app.experience` is the closest thing to a feeder and it reads DURABLE ledger evidence on purpose, never conversation."
+  },
+  "closed_fully": {
+    "31_35_the_first_sentence_that_reaches_memory": "`memory.remember`, SENSITIVE, asserting `explicit=True` - see ADR-0126 for why that is allowed and what it is limited to. Durable immediately, superseding a keyed incumbent, and every refusal comes from `app.memory` in its own words. The secrets guard above all: a password said out loud and quietly dropped is worse than one said out loud and refused out loud, because the owner would believe it was stored.",
+    "32_the_step_the_destructive_tools_depend_on": "`memory.search` is what turns 'bunu' into an id the owner has actually HEARD. It is not a convenience: `memory.forget`, `memory.correct` and `memory.pin` all take an id and refuse a description, and the read-back is where that id comes from.",
+    "36_forget_takes_an_id_and_never_a_description": "`app.memory.types.MemoryStatus` says it in as many words: 'Forgetting is a HARD delete (row + versions + evidence + embeddings), not a status.' That is the right product decision for a personal OS and it makes `memory.forget` the sharpest thing in this product's voice surface - the first irreversible mistake a person could make by mumbling. So it resolves nothing itself. Same reasoning as B14's refusal to add `routine.edit`, one step harder because there is no undo.",
+    "37_38_correct_and_pin": "`edit_memory` and not `supersede_memory` for a correction: the owner is fixing what the system got WRONG, not replacing a fact that used to be true, so the previous text survives as a version and `memory.why` can still say the row has been corrected.",
+    "61_why_do_you_remember_this": "`inspect_memory`'s payload, said out loud - four things and no more, because this is an answer somebody hears: what it says, who put it there, how much it is leaning on, and whether anything has ever contradicted it.",
+    "62_which_memory_did_you_use": "A `memory.used` ledger event, written where the memory LEAVES for somebody who will act on it - the tool that speaks it - and never in `hybrid_search`. A search returning forty rows so a caller can pick one is not forty uses. The ledger rather than `memory_audit_events`, which is an audit of MUTATIONS and a read is not one. WHAT THAT BUYS, stated exactly rather than generously: `app.explain.engine` answers \"bugün ne yaptın?\" with an UNFILTERED `source.events(subsystems=None)`, so the receipt lands inside the question the owner already asks, and `test_a_use_receipt_is_readable_where_the_owner_asks_what_you_did` performs that same read and finds it. It is not yet a bespoke \"which memory did you use for that answer\" reply - that wants the injection path B17 builds, and the substrate is now there for it to write to.",
+    "33_34_the_patterns_finally_get_fed": "`app.memory.extraction`, run on the `summary` client event over the session's own `transcript_summary`. Nothing about the owner's words MOVES to make this possible: the summary is already server-side, already durable, already fed back into the persona on every attach. `explicit=False` always, so a summary that happens to contain 'always use ...' is a candidate capped at `SINGLE_OBSERVATION_MAX_CONFIDENCE` - which is M5 review #4's rule holding exactly as designed, since untrusted ingestion is precisely this shape."
+  },
+  "found_on_the_way": {
+    "a_security_rule_described_wrongly_in_the_table_reviewers_read_first": "`app.memory.policy`'s module docstring is a decision table, and its row 2 said 'explicit flag OR explicit owner phrase (en/tr) -> DURABLE, explicit=True, actor=OWNER'. `decide()` has required the FLAG since M5 review #4, and its inline comment explains why: a webpage fed through an ingestion pipeline must not mint an owner memory by containing the words 'always use'. Read literally, the table said it could. The BEHAVIOUR was already right and already tested (`test_explicit_phrases_without_owner_flag_stay_candidate` fails on the mutation) - what was wrong was the description, in the first thing anyone reads before touching a frozen security policy. Same shape as B15's req 279: a sentence that was true once and was never revisited. `test_the_decision_table_matches_the_code` now walks every documented row.",
+    "a_ledger_event_type_with_no_writer": "`EVENT_TYPE_MEMORY_REMEMBERED = 'memory.remembered'` has been enumerated in the ledger's vocabulary since the ledger was written - in a module whose own rule is 'every event_type the ledger accepts is enumerated, never discovered from a caller's payload' - and nothing in the product ever emitted one. B16 is its first writer.",
+    "an_explanation_that_would_have_been_wrong_about_every_row": "The first `_ORIGIN_TR` keyed on `provenance['kind']`. No writer in this product sets that key: `service._new_memory` writes `origin`, one of `owner_statement` / `observation`, and `lifecycle.detect_procedures` writes `procedure_detection`. So `memory.why` would have answered 'nereden geldiğini kaydetmemişim' about every memory in the system while the row said exactly where it came from - wrong in the one direction that matters, because the owner cannot check it. Caught by the test about an INFERRED memory, which is the case the requirement exists for. The table is now read out of the writers by `test_the_provenance_vocabulary_is_the_memory_service_s_own`.",
+    "turkish_negation_and_a_prefix_match": "`_has` in `app.voice.intents` is a PREFIX match, and Turkish negates an imperative with a suffix: 'unut' is forget and 'unutMA' is don't-forget, which `app.memory.policy` already lists as one of the owner's strongest REMEMBER phrases. A stem match on 'unut' reads 'bunu unutma' as a hard delete of a row, its versions, its evidence and its embeddings. `_MEMORY_FORGET_FORMS` is matched with `_has_exact` and `m.negation.unutma_is_remember` pins both readings. The one place in that file where the difference between `_has` and `_has_exact` is the difference between remembering and destroying.",
+    "a_family_whose_verbs_belong_to_everybody": "Placed with the alarm and routine families, `_memory_match` took NINE corpus cases from their owners in a single run: 'Son hangi hatayı düzelttin?' from the evolution status query, 'Hata varsa düzelt.' from the native app factory, and 'Şu an konumumu nereden biliyorsun?' from the location source query, with variants. 'düzelt' is the whole product's fix verb and 'nereden biliyorsun' is the location family's own question. The family is now resolved after ALL of them - further down `resolve_intent` than any other family - and it declines outright when an alarm, routine or screen noun is present, so 'alarmı unut' can never become a memory deletion. Found by running the corpus, not by anybody reasoning about it beforehand."
+  },
+  "red_first": {
+    "the_decision_table": "`decide()`'s `if observation.explicit:` changed to `if observation.explicit or is_explicit_instruction(text):` - the code doing what the stale table described. 8 tests fail, including the six pre-existing `test_explicit_phrases_without_owner_flag_stay_candidate` cases and the new table guard. Restored by digest verification (`sha256sum -c`: OK). Worth stating plainly: the behaviour was never broken, so this red proof measures the DOCUMENTATION guard.",
+    "the_provenance_vocabulary": "`procedure_detection` removed from `_ORIGIN_TR`: the guard fails naming it. Restored.",
+    "the_extraction_wiring": "The one line in `record_client_events`' `summary` branch that reaches the extractor, deleted: `test_the_summary_event_is_what_feeds_it` fails (`0 = len([])`). Restored by digest verification (`sha256sum -c`: OK). That test drives a real `summary` client event through the real `record_client_events`, not the helper - a test that called the helper would still pass on the day somebody deletes that line."
+  },
+  "guards_that_spoke": "Three, without being asked. B05's step-up gate required a tier for all six new tools before they could be offered. The realtime session's manifest pin refused to let the offered tool set grow silently (`test_create_selects_by_capability_and_returns_the_contract`). And the owner-utterance corpus found the nine-case collision that no amount of reading would have.",
+  "tests": {
+    "services/api/tests/unit/test_memory_voice_tools.py": 22,
+    "services/api/tests/unit/test_memory_extraction.py": 14,
+    "services/api/tests/unit/test_memory_policy.py (table guard)": 1,
+    "services/api/tests/voice_corpus (m.*)": 12
+  },
+  "decisions": {
+    "ADR-0126": "The owner's voice may assert an explicit memory - and automatic extraction never may."
+  },
+  "runtime_proof": {
+    "status": "NOT_YET",
+    "why": "REAL_PROOF_REQUIRED for B16 is a preference row written by voice IN PRODUCTION. Everything here is proven through the real application object, the real write policy and the real service on both sides; 'it ran in production' needs the production round, which is Karar 0."
+  }
+}
