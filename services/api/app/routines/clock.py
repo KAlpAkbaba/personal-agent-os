@@ -145,6 +145,7 @@ class RoutineClock:
         ambient_tick: Callable[[Session, datetime], Any] | None = None,
         evolution_tick: Callable[[Session, datetime], Any] | None = None,
         executive_tick: Callable[[Session, datetime], Any] | None = None,
+        experience_tick: Callable[[Session, datetime], Any] | None = None,
         interval_s: float = DEFAULT_INTERVAL_S,
         enabled: bool = True,
     ) -> None:
@@ -160,6 +161,11 @@ class RoutineClock:
         #: will ever settle again. The recompute needs a cadence as well as an event.
         #: Last, with the evolution scan, for the same reason - never ahead of an alarm.
         self._executive_tick = executive_tick
+        #: B18 req 71: the Experience Engine's pass. LAST, behind the evolution scan and for
+        #: the same reason - it reads the whole ledger and writes memories, which is the
+        #: slowest thing on this clock and the least urgent. It throttles itself to its own
+        #: interval, so most ticks it does nothing at all.
+        self._experience_tick = experience_tick
         self._interval_s = max(MIN_INTERVAL_S, float(interval_s))
         self._enabled = enabled
         self._task: asyncio.Task[None] | None = None
@@ -228,6 +234,7 @@ class RoutineClock:
             ("ambient", self._ambient_tick),
             ("evolution", self._evolution_tick),
             ("executive", self._executive_tick),
+            ("experience", self._experience_tick),
         ]
         return [(name, fn) for name, fn in candidates if fn is not None]
 

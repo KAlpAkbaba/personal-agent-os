@@ -192,6 +192,13 @@ class Settings(BaseSettings):
     #: at most every ``evolution_supervisor_interval_s``; disabled means no scan at all.
     evolution_supervisor_enabled: bool = True
     evolution_supervisor_interval_s: float = 300.0
+    #: B18 req 71: the Experience Engine's pass, riding the same clock with its own
+    #: interval. `ingest` has been complete since it was written and the only caller was a
+    #: manual POST - 1441 activity events and 0 memories, measured. Fifteen minutes,
+    #: because the ledger is written by things that take minutes and a derivation pass
+    #: faster than its input is just re-reading.
+    experience_ingest_enabled: bool = True
+    experience_ingest_interval_s: float = 900.0
     #: Phase 8 (2026-09-11): the memory / owner-session / authorised-asset expiry sweeps
     #: that existed and nothing ran (app.maintenance). 0 disables; the first pass waits
     #: the initial delay so a booting process is not doing housekeeping.

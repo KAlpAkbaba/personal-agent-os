@@ -51,6 +51,11 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     "routine_clock",
     # Phase 8 (2026-09-11): the retention sweeps nothing ran (app.maintenance); advisory.
     "retention",
+    # B18 req 71: the Experience Engine's pass. Owner-visible for the same reason the
+    # routine clock is - it decides whether this system ever learns anything from what it
+    # did, and "0 memories from 1441 events" is a state nobody would notice without a line
+    # to read.
+    "experience_ingest",
     # B07 req 18 (2026-09-13): the four background loops that could not be seen here at
     # all - and they are the four that carry a notification to the owner, so the failure
     # they can have is the one nobody would notice. Advisory: a loop being behind is worth

@@ -51,6 +51,7 @@ from app.evolution.runtime import EvolutionRuntime
 from app.executive import reconcile as executive_reconcile
 from app.executive.routes import router as executive_router
 from app.experience.routes import router as experience_router
+from app.experience.scheduler import ExperienceScheduler
 from app.genesis.routes import router as genesis_router
 from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
@@ -403,6 +404,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session, now=now, evolution_service=evolution.evolution_service
             ),
             executive_tick=executive_reconcile.executive_tick,
+            # B18 req 71: the Experience Engine's pass. `ingest` has been complete since it
+            # was written and the only caller was a manual POST - 1441 activity events and
+            # 0 memories. It throttles itself to `experience_ingest_interval_s`, so most
+            # ten-second ticks it returns "not_due" and touches nothing.
+            experience_tick=lambda session, now: experience_scheduler.tick(session, now=now),
             interval_s=settings.routine_clock_interval_s,
             enabled=settings.routine_clock_enabled,
         )
@@ -419,6 +425,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # by default - it counts what it would refuse without refusing it.
     device_authority.set_mode(settings.device_command_gate_mode)
     step_up_policy.set_mode(settings.voice_step_up_mode)
+    experience_scheduler = ExperienceScheduler(
+        enabled=settings.experience_ingest_enabled,
+        interval_s=settings.experience_ingest_interval_s,
+    )
+    # The SAME embedder the memory index was built with, never one this scheduler
+    # invented: vectors from a different model in the one embeddings table make every
+    # semantic search quietly worse (ADR-0078's lesson, third time).
+    experience_scheduler.bind_embedder(memory.embedder)
     routine_clock = _build_routine_clock()
 
     def _in_session(session_scope, sweep):  # noqa: ANN001, ANN202 - two local call sites
@@ -586,6 +600,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.selfmodel_refresher = selfmodel_refresher
     app.state.briefing_announcer = briefing_announcer
     app.state.retention_sweeper = retention_sweeper
+    app.state.experience_scheduler = experience_scheduler
     # M18.3: the routes and the voice tools reach the device through these, injected
     # rather than imported as singletons (docs/M18_ACTION_CONTRACT.md §4).
     app.state.wake_sequence = wake_sequence
@@ -730,6 +745,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["routine_clock"] = routine_clock_health()
         # Phase 8: advisory - housekeeping that has not run yet is not an outage.
         checks["retention"] = retention_sweeper.health_check()
+        # B18 req 71: the Experience Engine's pass, owner-visible for the same reason
+        # the routine clock is - it is the thing that decides whether this system ever
+        # learns anything from what it did, and "0 memories from 1441 events" is a
+        # state nobody would notice without a line to read.
+        checks["experience_ingest"] = experience_scheduler.health_check()
         # B07 req 18: the four background loops that carried a notification to the owner and
         # could not be seen here at all. "The process is up" is not "the loops are running",
         # and the failure these four can have is the one nobody would notice.

@@ -10,7 +10,7 @@ and never touches conversation. So the owner could teach this system nothing by 
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -30,7 +30,9 @@ from app.memory.models import (
     MemoryVersion,
 )
 from app.memory.types import Actor, MemoryClass
+from app.operator.models import ObjectFocusRow
 from app.voice.errors import VoiceError
+from app.voice.realtime_sessions.models import RealtimeSessionRow
 from app.voice.realtime_sessions.tools_memory import (
     MEMORY_TOOL_NAMES,
     memory_correct,
@@ -53,6 +55,8 @@ _TABLES = [
     MemoryEmbedding.__table__,
     MemoryAuditEvent.__table__,
     ActivityEventRow.__table__,
+    ObjectFocusRow.__table__,
+    RealtimeSessionRow.__table__,
 ]
 
 
@@ -75,9 +79,18 @@ class _Runtime:
 class _Ctx:
     """A ToolContext's shape, with nothing a memory tool does not read."""
 
-    def __init__(self, db: Session, *, runtime: Any = None, call_id: str = "c1") -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        runtime: Any = None,
+        call_id: str = "c1",
+        session_id: uuid.UUID | None = None,
+    ) -> None:
         self.db = db
-        self.session_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
+        # A FIXED id by default, so most tests can build several contexts that all belong to
+        # one conversation; overridden where a test needs a genuinely different one.
+        self.session_id = session_id or uuid.UUID("11111111-1111-1111-1111-111111111111")
         self.owner_session_id = uuid.uuid4()
         self.device_id = None
         self.client_kind = "desktop"
@@ -453,3 +466,172 @@ def test_a_use_receipt_is_readable_where_the_owner_asks_what_you_did(db):
     used = [e for e in events if e.event_type == EVENT_TYPE_MEMORY_USED]
     assert len(used) == 1
     assert "sahibe okundu" in used[0].factual_summary
+
+
+# ------------------------------------------------------- B18 req 49: "bunu" and "şunu"
+
+
+def test_forgetting_resolves_the_memory_the_owner_was_just_read(db):
+    """req 49. `memory.search` sets the durable object focus on what it speaks, so a bare
+    "bunu unut" acts on the memory the owner actually heard - the same current/previous
+    mechanism the window, document, message, draft, event, artifact, project, scene and
+    creative families have had since M19, which requirement 49 was recorded as MISSING.
+
+    This is not the fuzzy matcher B16 refused. Nothing is resolved from the sentence: the
+    id comes from a record of what was said out loud.
+    """
+    ctx = _Ctx(db)
+    answer = _remember(ctx, "Kahveyi sade severim.")
+    memory_search(_Ctx(db, call_id="s1"), {"query": "kahve"})
+
+    gone = memory_forget(_Ctx(db, call_id="f1"), {})
+
+    assert gone["memory_id"] == answer["memory_id"]
+    assert db.get(Memory, uuid.UUID(answer["memory_id"])) is None
+
+
+def test_a_session_that_has_read_nothing_back_still_refuses(db):
+    """The half that keeps the convenience from becoming the defect. With nothing spoken,
+    there is nothing to point at, and a hard delete does not guess."""
+    _remember(_Ctx(db), "Kahveyi sade severim.")
+
+    with pytest.raises(VoiceError) as caught:
+        memory_forget(_Ctx(db, call_id="f2"), {})
+
+    assert "nothing has been read back" in caught.value.message
+    assert db.execute(select(Memory)).scalars().all() != []
+
+
+def test_a_named_id_always_wins_over_the_focus(db):
+    """The owner naming the second of three is not pointing at the first."""
+    first = _remember(_Ctx(db), "Kahveyi sade severim.")
+    second = _remember(_Ctx(db, call_id="r2"), "Çayı demli severim.")
+    memory_search(_Ctx(db, call_id="s2"), {"query": "kahve"})
+
+    pinned = memory_pin(_Ctx(db, call_id="p1"), {"memory_id": second["memory_id"]})
+
+    assert pinned["memory_id"] == second["memory_id"]
+    assert db.get(Memory, uuid.UUID(first["memory_id"])).pinned is False
+
+
+def test_the_focus_names_the_memory_that_was_spoken_first(db):
+    """A bare deictic means the one at the top of what was just read out."""
+    from app.operator import focus as focus_module
+    from app.operator.models import FOCUS_KIND_MEMORY
+
+    _remember(_Ctx(db), "Kahveyi sade severim.")
+    answer = memory_search(_Ctx(db, call_id="s3"), {"query": "kahve"})
+
+    entry = focus_module.current(db, FOCUS_KIND_MEMORY)
+    assert entry is not None
+    assert entry.object_id == answer["memories"][0]["memory_id"]
+    assert entry.source == "memory_search"
+
+
+def test_a_search_that_found_nothing_points_at_nothing(db):
+    from app.operator import focus as focus_module
+    from app.operator.models import FOCUS_KIND_MEMORY
+
+    memory_search(_Ctx(db), {"query": "denizaltı"})
+
+    assert focus_module.current(db, FOCUS_KIND_MEMORY) is None
+
+
+# --------------------------------------------- B18 req 46/50: where and when it was taught
+
+
+def test_a_taught_memory_records_the_conversation_that_taught_it(db):
+    """req 50. `Memory.conversation_id` has been in the schema since M5 and nothing ever
+    set it, so "you told me this while we were talking about X" was unanswerable."""
+    ctx = _Ctx(db)
+
+    answer = _remember(ctx, "Kahveyi sade severim.")
+
+    memory = db.get(Memory, uuid.UUID(answer["memory_id"]))
+    assert memory.conversation_id == ctx.session_id
+
+
+def _session_started(db, ctx, *, at: datetime) -> None:
+    """The realtime session row `_links` reads to decide whether a project focus belongs to
+    THIS conversation."""
+    from app.voice.realtime_sessions.models import REALTIME_STATE_ACTIVE, RealtimeSessionRow
+
+    db.add(
+        RealtimeSessionRow(
+            id=ctx.session_id,
+            provider="openai",
+            transport="webrtc",
+            client_kind="web",
+            device_id=None,
+            owner_session_id=ctx.owner_session_id,
+            state=REALTIME_STATE_ACTIVE,
+            expires_at=None,
+            created_at=at,
+        )
+    )
+    db.commit()
+
+
+def test_a_memory_taught_while_a_project_is_open_carries_it(db):
+    """req 46. `Memory.project_id` has been in the schema since M5, `RetrievalFilters` can
+    scope by it and `hybrid_search` already scores a project match - and nothing filled it,
+    so the join existed and nobody could make it."""
+    from app.operator import focus as focus_module
+    from app.operator.models import FOCUS_KIND_PROJECT
+
+    ctx = _Ctx(db)
+    _session_started(db, ctx, at=NOW - timedelta(minutes=10))
+    project_id = uuid.uuid4()
+    focus_module.set_focus(
+        db, FOCUS_KIND_PROJECT, str(project_id), label="Görev takibi", now=NOW
+    )
+
+    answer = _remember(ctx, "Bu projede testleri önce yazıyoruz.")
+
+    assert db.get(Memory, uuid.UUID(answer["memory_id"])).project_id == project_id
+
+
+def test_a_project_opened_before_this_conversation_is_not_stamped_on_it(db):
+    """The bound, and the reason it exists. `focus.current` has no staleness limit - a
+    deictic word means the most recent thing however long ago - but a durable link stamped
+    on every memory taught afterwards is a different question. A project opened in March
+    must not be attached to a preference taught in June: a join that is always true is not
+    a join."""
+    from app.operator import focus as focus_module
+    from app.operator.models import FOCUS_KIND_PROJECT
+
+    focus_module.set_focus(
+        db, FOCUS_KIND_PROJECT, str(uuid.uuid4()), now=NOW - timedelta(days=90)
+    )
+    ctx = _Ctx(db)
+    _session_started(db, ctx, at=NOW)
+
+    answer = _remember(ctx, "Kahveyi sade severim.")
+
+    assert db.get(Memory, uuid.UUID(answer["memory_id"])).project_id is None
+
+
+def test_the_project_link_is_findable_again_in_a_later_session(db):
+    """What "oturumlar arası sürer" actually means: a different session, and the link is
+    still the way to find what was learned while that project was open."""
+    from app.memory.retrieval import RetrievalFilters, structured_candidates
+    from app.operator import focus as focus_module
+    from app.operator.models import FOCUS_KIND_PROJECT
+
+    ctx = _Ctx(db)
+    _session_started(db, ctx, at=NOW - timedelta(minutes=10))
+    project_id = uuid.uuid4()
+    focus_module.set_focus(db, FOCUS_KIND_PROJECT, str(project_id), now=NOW)
+    _remember(ctx, "Bu projede testleri önce yazıyoruz.")
+    # A DIFFERENT conversation, with no session row and no project open in it.
+    _remember(_Ctx(db, call_id="r2", session_id=uuid.uuid4()), "Kahveyi sade severim.")
+
+    scoped = structured_candidates(db, RetrievalFilters(project_id=project_id))
+
+    assert [m.text for m in scoped] == ["Bu projede testleri önce yazıyoruz."]
+
+
+def test_no_project_open_is_no_link_rather_than_a_guess(db):
+    answer = _remember(_Ctx(db), "Kahveyi sade severim.")
+
+    assert db.get(Memory, uuid.UUID(answer["memory_id"])).project_id is None

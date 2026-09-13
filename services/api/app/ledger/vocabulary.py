@@ -266,6 +266,12 @@ EVENT_TYPE_MEMORY_REMEMBERED = "memory.remembered"
 #: because `activity.explain` already answers "what did you do" from here - so "hangi
 #: kaydi kullandin?" is answerable through a surface that exists.
 EVENT_TYPE_MEMORY_USED = "memory.used"
+#: B18 req 71: one Experience Engine pass. Carries the window it scanned, which is
+#: also its CURSOR: the scheduler reads the latest of these to know where it got to,
+#: so the engine keeps no private state that could disagree with what it wrote. The
+#: engine excludes this type from its own ingest - a system that learned from the
+#: record of its own learning would corroborate itself.
+EVENT_TYPE_EXPERIENCE_INGESTED = "experience.ingested"
 EVENT_TYPE_LEDGER_BACKFILL = "ledger.backfill"
 EVENT_TYPE_BRIEFING_QUEUED = "briefing.queued"
 EVENT_TYPE_BRIEFING_DELIVERED = "briefing.delivered"
@@ -505,6 +511,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_DEPLOYMENT_AGENT_SKIPPED,
     EVENT_TYPE_MEMORY_REMEMBERED,
     EVENT_TYPE_MEMORY_USED,
+    EVENT_TYPE_EXPERIENCE_INGESTED,
     EVENT_TYPE_LEDGER_BACKFILL,
     EVENT_TYPE_BRIEFING_QUEUED,
     EVENT_TYPE_BRIEFING_DELIVERED,

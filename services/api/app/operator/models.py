@@ -78,6 +78,16 @@ FOCUS_KIND_SCENE = "scene"
 #: "önceki" works the same current/previous way every other kind above already gets
 #: from this module.
 FOCUS_KIND_CREATIVE = "creative"
+#: B18 req 49: the owner's own MEMORY, by identity. `memory` names one `memories` row,
+#: set when `memory.search` reads matches back, so "bunu unut" after hearing them
+#: resolves to the one the owner was just told about - and "önceki" works the same
+#: current/previous way every other kind above already gets from this module.
+#:
+#: B16 gave `memory.forget` an id and no way to resolve a deictic word, deliberately:
+#: forgetting is a HARD delete and a fuzzy matcher is not something to hand it. Focus
+#: is the other answer to the same problem and a stricter one - not a guess about what
+#: the owner meant, but a durable record of what they were actually just read.
+FOCUS_KIND_MEMORY = "memory"
 FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_WINDOW,
     FOCUS_KIND_APP,
@@ -93,6 +103,7 @@ FOCUS_KINDS: tuple[str, ...] = (
     FOCUS_KIND_PROJECT,
     FOCUS_KIND_SCENE,
     FOCUS_KIND_CREATIVE,
+    FOCUS_KIND_MEMORY,
 )
 
 #: How many recent rows of ONE kind the stack keeps (bounded, per task brief: "a bounded
@@ -144,6 +155,7 @@ __all__ = [
     "FOCUS_KIND_FILE",
     "FOCUS_KIND_FOLDER",
     "FOCUS_KIND_MESSAGE",
+    "FOCUS_KIND_MEMORY",
     "FOCUS_KIND_PROJECT",
     "FOCUS_KIND_PROPOSAL",
     "FOCUS_KIND_SCENE",

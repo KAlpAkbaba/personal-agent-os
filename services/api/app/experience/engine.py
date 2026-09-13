@@ -64,6 +64,7 @@ from app.ledger.models import ActivityEventRow
 from app.ledger.vocabulary import (
     EVENT_TYPE_BRIEFING_DELIVERED,
     EVENT_TYPE_BRIEFING_QUEUED,
+    EVENT_TYPE_EXPERIENCE_INGESTED,
     EVENT_TYPE_LEDGER_BACKFILL,
     EVENT_TYPE_RESEARCH_COMPLETED,
     STATUS_COMPLETED,
@@ -86,8 +87,16 @@ EPISODIC_KEY_PREFIX = "experience.episodic"
 SEMANTIC_KEY_PREFIX = "experience.semantic"
 
 #: ledger bookkeeping about itself — not "experience" worth remembering.
-_EXCLUDED_EVENT_TYPES = frozenset(
-    {EVENT_TYPE_LEDGER_BACKFILL, EVENT_TYPE_BRIEFING_QUEUED, EVENT_TYPE_BRIEFING_DELIVERED}
+EXCLUDED_EVENT_TYPES = frozenset(
+    {
+        EVENT_TYPE_LEDGER_BACKFILL,
+        EVENT_TYPE_BRIEFING_QUEUED,
+        EVENT_TYPE_BRIEFING_DELIVERED,
+        # B18 req 71: this engine's OWN pass receipt. Without it every pass would write a
+        # row saying it ran and the next pass would remember that it ran - a system
+        # learning from the record of its own learning, corroborating itself for ever.
+        EVENT_TYPE_EXPERIENCE_INGESTED,
+    }
 )
 
 #: a derived (SEMANTIC) fact is proposed only once this many DISTINCT ledger
@@ -119,6 +128,11 @@ class IngestReport:
     semantic_corroborated: int = 0
     semantic_skipped_no_new_evidence: int = 0
     semantic_refused_secret: int = 0
+    #: B18 req 71: the oldest event this pass READ, whether or not it produced a row. The
+    #: scheduler's backlog cursor moves on what was scanned and never on what was written -
+    #: an event whose summary the write policy ignores produces nothing, and a whole page of
+    #: those would leave a written-based cursor exactly where it started.
+    oldest_scanned: datetime | None = None
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -338,10 +352,15 @@ def ingest(
     *,
     embedder: Embedder | None = None,
     since: datetime | None = None,
+    until: datetime | None = None,
     now: datetime | None = None,
     limit: int = DEFAULT_INGEST_LIMIT,
 ) -> IngestReport:
-    """Turn durable ledger evidence since `since` into memory.
+    """Turn durable ledger evidence in [`since`, `until`] into memory.
+
+    ``until`` (B18 req 71) is what lets the scheduler walk BACKWARD through the history a
+    page at a time: `ledger.query` is newest-first and capped, so "everything since my last
+    pass" reaches today and never reaches the 1441 events that were already there.
 
     Reuses ``app.ledger.service.query`` (never touches ``ActivityEventRow``
     directly beyond reading it) and ``app.memory.service.record_observation``
@@ -353,14 +372,18 @@ def ingest(
     report = IngestReport()
     publish_progress(phase="ingest_started", since=since.isoformat() if since else None)
 
-    rows = ledger_service.query(session, since=since, limit=limit)
+    rows = ledger_service.query(session, since=since, until=until, limit=limit)
     # ledger.query is newest-first; process oldest-first so occurred_at order
     # matches the order the facts actually happened in.
     rows = list(reversed(rows))
     report.events_scanned = len(rows)
+    # B18 req 71: what the scheduler's backlog cursor moves on. The oldest row READ, which
+    # is `rows[0]` now that they are oldest-first.
+    if rows:
+        report.oldest_scanned = rows[0].occurred_at
 
     for row in rows:
-        if row.event_type in _EXCLUDED_EVENT_TYPES:
+        if row.event_type in EXCLUDED_EVENT_TYPES:
             continue
         try:
             _ingest_episodic(session, embedder, row, report)
@@ -387,6 +410,7 @@ __all__ = [
     "EPISODIC_KEY_PREFIX",
     "SEMANTIC_KEY_PREFIX",
     "SEMANTIC_MIN_CORROBORATION",
+    "EXCLUDED_EVENT_TYPES",
     "IngestReport",
     "ingest",
     "utcnow",

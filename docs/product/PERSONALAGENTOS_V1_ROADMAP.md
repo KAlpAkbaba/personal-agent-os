@@ -775,7 +775,7 @@ ROLLBACK_PLAN       : enjeksiyon bayrakla kapatılır; persona eski haline döne
 ```
 
 ```
-BATCH_ID            : B18
+BATCH_ID            : B18                              [KAPANDI 2026-09-13]
 NAME                : Süreklilik, varlıklar ve deneyim motoru
 REQUIREMENT_IDS     : 46, 47, 48, 49, 50, 71, 72, 73
 GOAL                : Proje ve görev bağlamı oturumlar arası sürsün; 1441 aktivite olayından
@@ -787,8 +787,46 @@ RISK                : low
 OWNER_ACTION        : no
 TEST_PLAN           : zamanlayıcının koştuğu; dersin belleğe yazıldığı ve `memory.remembered`
                       olayının yayıldığı; "bunu/şunu" ifadesinin doğru nesneye bağlandığı
+KAPANIŞ             : commit PENDING_B18 · CI PENDING · 8/8 DONE
+                      kanıt docs/evidence/b18-continuity-and-experience-2026-09-13.json
+ÖLÇÜM               : Dört mekanizma tam, dördünün de çağıranı yoktu — bu deponun baskın
+                      kusuru beşinci batch üst üste. (a) 71: motor tam, tek çağıran elle
+                      POST, 1441 olaydan 0 bellek. (b) 47: `Entity`/`EntityEdge`, sekiz
+                      kind, servis fonksiyonları ve REST yüzeyi M5'ten beri var, `app/`
+                      altında sıfır çağıran. (c) 46/50: `Memory.project_id` ve
+                      `conversation_id` şemada, dolduran yok — kimsenin yapamadığı iki
+                      join. (d) 49 ÖLÇÜMLE DÜZELTİLDİ: odak mekanizması M19'dan beri var,
+                      15 kind, sekiz pakette kullanılıyor; eksik olan `memory` kind'ıydı.
+                      48 de düzeltildi: kimlik şeması `(kind, name)` tekilliğiyle zaten
+                      cihazdan bağımsızdı — yazıcı gelene kadar sınanamıyordu, o kadar.
+YOL ÜSTÜNDE         : (1) Zamanlayıcının İKİ yöne yürümesi gerekti: defter sorgusu en
+                      yeniden başlıyor ve 200'de sınırlı, yani yalnız ileri giden bir tur
+                      bugüne yetişir ve zaten orada olan 1441'e hiç ulaşmaz.
+                      (2) İmleç YAZILANA değil OKUNANA göre ilerlemeli: yazma politikasının
+                      yok saydığı bir özet satır üretmez, ve öyle bir sayfa imleci yerinde
+                      bırakırdı. İmleç defterdeki `experience.ingested` olayı — motorun
+                      kendi durumu yok, yazdığıyla çelişebilecek ikinci kaynak yok.
+                      (3) Grafik ilk taslakta motorun KENDİ makbuzunu okuyordu: her tur
+                      `system: memory` ve `capability: experience.ingest` düğümü büyüyordu
+                      — sistemin, kendi grafik kurmasının grafiğini kurması. "İkinci tur
+                      kopya eklemez" testi yakaladı; iki yazıcı artık tek dışlama listesini
+                      paylaşıyor.
+                      (4) Proje bağlantısı BU KONUŞMAYLA sınırlandı. `focus.current`'ın
+                      tazelik sınırı yok (bir işaret zamiri en son şeyi kasteder, ne kadar
+                      eski olursa olsun) ama her öğretilene damga vuran kalıcı bir bağlantı
+                      başka bir sorudur: martta açılan proje hazirandaki tercihe yapışırdı
+                      ve her zaman doğru olan bir join, join değildir.
+                      (5) Odak yazımının catch'i oturumu zehirliyordu — bugün üç kez doğru
+                      yazdığım rollback'i burada atlamışım; `PendingRollbackError` testte
+                      çıktı.
+TEST_PLAN           : zamanlayıcının koştuğu; dersin belleğe yazıldığı ve `memory.remembered`
+                      olayının yayıldığı; "bunu/şunu" ifadesinin doğru nesneye bağlandığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde aktiviteden türetilmiş en az bir bellek satırı
+                      → üretim dışındaki tamamı kanıtlandı: gerçek defter olayları gerçek
+                      motordan geçip bellek satırı oldu, zamanlayıcı gerçek uygulama
+                      nesnesinde rutin saatine bağlı ve /health raporluyor.
 ROLLBACK_PLAN       : zamanlayıcı kapatılır; türetilmiş satırlar işaretli olduğu için silinebilir
+                      (`PAGENTOS_EXPERIENCE_INGEST_ENABLED=false`)
 ```
 
 ```

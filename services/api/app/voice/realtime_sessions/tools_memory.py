@@ -37,8 +37,10 @@ own stored summary (`app.memory.extraction`).
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 from typing import TYPE_CHECKING, Any, Final
 
+from app.logging import get_logger
 from app.memory import receipts
 from app.memory import service as memory_service
 from app.memory.errors import MemoryErrorClass, MemorySubsystemError
@@ -48,6 +50,8 @@ from app.voice.errors import VoiceError, VoiceErrorClass
 
 if TYPE_CHECKING:
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
+
+logger = get_logger("app.voice.realtime_sessions.tools_memory")
 
 TOOL_MEMORY_REMEMBER: Final = "memory.remember"
 TOOL_MEMORY_SEARCH: Final = "memory.search"
@@ -102,16 +106,58 @@ def _embedder(ctx: ToolContext, tool: str) -> Any:
     return runtime.embedder
 
 
-def _memory_id(arguments: dict[str, Any], tool: str) -> uuid.UUID:
+def _memory_id(ctx: ToolContext, arguments: dict[str, Any], tool: str) -> uuid.UUID:
+    """The id the owner means: the one named, or the one they were just read.
+
+    B18 req 49. `memory.search` sets the durable object focus on every match it speaks, so
+    a bare "bunu unut" resolves to the memory the owner has actually just heard - the same
+    current/previous mechanism the window, document, message, draft, event, artifact,
+    project, scene and creative families have used since M19.
+
+    This is NOT the fuzzy matcher B16 refused. It resolves nothing from the sentence: it
+    reads a record of what was said out loud, and when there is no such record it still
+    refuses. The difference matters because `memory.forget` is a hard delete.
+    """
     raw = arguments.get("memory_id")
+    if raw:
+        try:
+            return uuid.UUID(str(raw))
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"{tool} needs the memory's id; '{raw}' is not one. "
+                "Use memory.search first and act on the one the owner names.",
+            ) from exc
+
+    focused = _focused_memory(ctx)
+    if focused is not None:
+        return focused
+    raise VoiceError(
+        VoiceErrorClass.VALIDATION_ERROR,
+        f"{tool} needs the memory's id, and nothing has been read back to the owner in "
+        "this session to point at. Call memory.search first.",
+    )
+
+
+def _focused_memory(ctx: ToolContext) -> uuid.UUID | None:
+    """The memory `memory.search` last spoke, or None. Never raises: a focus lookup that
+    failed must read as "nothing to point at", which is the refusing direction."""
+    if ctx.db is None:
+        return None
     try:
-        return uuid.UUID(str(raw))
-    except (ValueError, AttributeError, TypeError) as exc:
-        raise VoiceError(
-            VoiceErrorClass.VALIDATION_ERROR,
-            f"{tool} needs the memory's id; '{raw}' is not one. "
-            "Use memory.search first and forget the one the owner names.",
-        ) from exc
+        from app.operator import focus as focus_module
+        from app.operator.models import FOCUS_KIND_MEMORY
+
+        entry = focus_module.current(ctx.db, FOCUS_KIND_MEMORY)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("memory_focus_read_failed", error=f"{type(exc).__name__}: {exc}")
+        return None
+    if entry is None:
+        return None
+    try:
+        return uuid.UUID(str(entry.object_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
 
 
 def _statement(arguments: dict[str, Any], tool: str) -> str:
@@ -167,6 +213,95 @@ def _voice_error(exc: MemorySubsystemError) -> VoiceError:
     )
 
 
+def _links(ctx: ToolContext) -> Any:
+    """B18 req 46/50: WHERE and WHEN this was taught, on the columns that already exist.
+
+    `Memory.project_id` and `Memory.conversation_id` have been in the schema since M5,
+    `RetrievalFilters` can scope by both and `hybrid_search` already scores a project
+    match - and nothing in this product ever set either one. A link column nothing fills
+    is a join nobody can make.
+
+    The conversation is this realtime session, which is what makes "you told me this while
+    we were talking about X" answerable at all.
+
+    The project is the one the owner opened **during this conversation**, and the bound is
+    the point. `app.operator.focus.current` has no staleness limit by design - a deictic
+    word in a sentence means the most recent thing, however long ago it was - but a durable
+    link stamped on every memory taught afterwards is a different question entirely. A
+    project opened once in March would otherwise be attached to a preference taught in
+    June, and a join that is always true is not a join. Comparing against the session's own
+    `created_at` needs no magic window: it is exactly "the project context of this
+    conversation".
+
+    Never raises and never blocks the write: a memory with no links is still the memory the
+    owner asked for.
+    """
+    from app.memory.service import MemoryLinks
+
+    project_id = None
+    if ctx.db is not None:
+        try:
+            project_id = _project_opened_in_this_conversation(ctx)
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            logger.warning("memory_project_link_failed", error=f"{type(exc).__name__}: {exc}")
+            project_id = None
+    return MemoryLinks(project_id=project_id, conversation_id=ctx.session_id)
+
+
+def _project_opened_in_this_conversation(ctx: ToolContext) -> uuid.UUID | None:
+    from app.operator import focus as focus_module
+    from app.operator.models import FOCUS_KIND_PROJECT
+    from app.voice.realtime_sessions.models import RealtimeSessionRow
+
+    entry = focus_module.current(ctx.db, FOCUS_KIND_PROJECT)
+    if entry is None:
+        return None
+    session_row = ctx.db.get(RealtimeSessionRow, ctx.session_id)
+    if session_row is None or session_row.created_at is None:
+        return None
+    started = session_row.created_at
+    selected = entry.selected_at
+    if started.tzinfo is None:  # SQLite hands naive datetimes back
+        started = started.replace(tzinfo=UTC)
+    if selected.tzinfo is None:
+        selected = selected.replace(tzinfo=UTC)
+    if selected < started:
+        return None
+    return uuid.UUID(str(entry.object_id))
+
+
+def _remember_focus(ctx: ToolContext, memory: Any) -> None:
+    """Point the durable object focus at a memory the owner has just been read.
+
+    Never raises. The focus is a convenience on top of an answer that has already been
+    produced; a session whose focus could not be written still heard the search.
+    """
+    if ctx.db is None:
+        return
+    try:
+        from app.operator import focus as focus_module
+        from app.operator.models import FOCUS_KIND_MEMORY
+
+        focus_module.set_focus(
+            ctx.db,
+            FOCUS_KIND_MEMORY,
+            str(memory.id),
+            label=str(memory.text or "")[:200],
+            source="memory_search",
+            owner_session_id=ctx.owner_session_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("memory_focus_write_failed", error=f"{type(exc).__name__}: {exc}")
+        # The rollback is the half that matters. A swallowed flush error leaves the session
+        # in PendingRollbackError and the NEXT statement fails somewhere the owner cannot
+        # connect to this - which is exactly what happened when this catch was first
+        # written without it.
+        try:
+            ctx.db.rollback()
+        except Exception:  # noqa: BLE001 - nothing further to do about it
+            pass
+
+
 def _source_ref(ctx: ToolContext, tool: str) -> str:
     """A receipt key unique to this tool call, so the ledger's idempotency helps rather
     than hides: a retried call writes one row, two different calls write two."""
@@ -197,6 +332,7 @@ def memory_remember(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
             text=statement,
             memory_class=memory_class,
             key=key,
+            links=_links(ctx),
             source={"kind": "owner", "channel": "voice", "session_id": str(ctx.session_id)},
         )
     except MemorySubsystemError as exc:
@@ -262,6 +398,15 @@ def memory_search(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         }
 
     spoken = hits[:SPOKEN_SEARCH_MAX]
+    # B18 req 49: what was READ ALOUD is what "bunu" points at. Set on the first match,
+    # which is what a bare deictic means; an owner naming a later one ("ikincisini unut")
+    # gives the model its id from the list below.
+    #
+    # BEFORE the receipts, not after: `set_focus` commits, and a failure inside it rolls
+    # the session back - which would discard use receipts written just before it. Order
+    # chosen so the cheaper thing is the one that can be lost.
+    _remember_focus(ctx, spoken[0].memory)
+
     receipts.record_use(
         db,
         [(h.memory.id, h.memory.memory_class, h.memory.text) for h in spoken],
@@ -302,7 +447,7 @@ def memory_forget(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     given a fuzzy matcher.
     """
     db = _require_db(ctx, TOOL_MEMORY_FORGET)
-    memory_id = _memory_id(arguments, TOOL_MEMORY_FORGET)
+    memory_id = _memory_id(ctx, arguments, TOOL_MEMORY_FORGET)
 
     try:
         memory = memory_service.get_memory(db, memory_id)
@@ -330,7 +475,7 @@ def memory_correct(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     """
     db = _require_db(ctx, TOOL_MEMORY_CORRECT)
     embedder = _embedder(ctx, TOOL_MEMORY_CORRECT)
-    memory_id = _memory_id(arguments, TOOL_MEMORY_CORRECT)
+    memory_id = _memory_id(ctx, arguments, TOOL_MEMORY_CORRECT)
     statement = _statement(arguments, TOOL_MEMORY_CORRECT)
 
     try:
@@ -356,7 +501,7 @@ def memory_correct(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
 def memory_pin(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """req 38. "Bunu sabitle." — never auto-expired, never auto-rewritten."""
     db = _require_db(ctx, TOOL_MEMORY_PIN)
-    memory_id = _memory_id(arguments, TOOL_MEMORY_PIN)
+    memory_id = _memory_id(ctx, arguments, TOOL_MEMORY_PIN)
 
     try:
         memory = memory_service.pin_memory(db, memory_id, actor=Actor.OWNER)
@@ -378,7 +523,7 @@ def memory_why(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     is also a USE: the memory was read back to the owner, so it gets its receipt.
     """
     db = _require_db(ctx, TOOL_MEMORY_WHY)
-    memory_id = _memory_id(arguments, TOOL_MEMORY_WHY)
+    memory_id = _memory_id(ctx, arguments, TOOL_MEMORY_WHY)
 
     try:
         payload = memory_service.inspect_memory(db, memory_id)

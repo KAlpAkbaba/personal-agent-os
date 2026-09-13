@@ -171,12 +171,27 @@ public sealed class NotepadLifecycleTests : IDisposable
         while (true)
         {
             attempt++;
+            // Put the window back in front before each attempt. `FocusGuard` REFUSES to send
+            // input when the target is not the foreground window - correctly: an operator
+            // that typed into whatever happened to be in front would be the worst defect in
+            // this product. On 2026-09-13 a gate run met "actual (no foreground window);
+            // nothing was sent" and the refusal surfaced here as a bare exception. The test
+            // owns this Notepad, so re-establishing the precondition is its job, not
+            // something to weaken the guard for.
+            _lab.Activate(windowId);
             click = _lab.Exec(OperatorCapabilityNames.PointerClick, new JsonObject { ["window_id"] = windowId, ["x"] = x, ["y"] = y });
             var seen = click["observed"]!["cursor"]!;
             var offBy = Math.Max(
                 Math.Abs(seen["x"]!.GetValue<int>() - click["screen_x"]!.GetValue<int>()),
                 Math.Abs(seen["y"]!.GetValue<int>() - click["screen_y"]!.GetValue<int>()));
-            if (offBy <= 2 || attempt == 3)
+            // BOTH readings of the shared desktop, not just the cursor. `observed.window` is
+            // `Registry.Foreground()?.ToJson()` and is NULL when the foreground moved between
+            // the click and the read - which on 2026-09-13 arrived as a bare
+            // NullReferenceException from the assertion below, on a gate run that had touched
+            // no device code. The comment above this loop named the cursor as the one thing
+            // this test reads that it does not own; it was one field short.
+            var landed = click["observed"]!["window"]?["window_id"]?.GetValue<string>();
+            if ((offBy <= 2 && landed == windowId) || attempt == 3)
             {
                 break;
             }
@@ -197,7 +212,9 @@ public sealed class NotepadLifecycleTests : IDisposable
         var cursor = click["observed"]!["cursor"]!;
         Assert.InRange(cursor["x"]!.GetValue<int>(), click["screen_x"]!.GetValue<int>() - 2, click["screen_x"]!.GetValue<int>() + 2);
         Assert.InRange(cursor["y"]!.GetValue<int>(), click["screen_y"]!.GetValue<int>() - 2, click["screen_y"]!.GetValue<int>() + 2);
-        Assert.Equal(windowId, click["observed"]!["window"]!["window_id"]!.GetValue<string>());
+        // Null-safe, so a foreground that moved for the third time in a row reads as
+        // "nothing was in front" rather than as an unexplained NullReferenceException.
+        Assert.Equal(windowId, click["observed"]!["window"]?["window_id"]?.GetValue<string>());
 
         var screen = _lab.Exec(OperatorCapabilityNames.ScreenInspect, new JsonObject());
         Assert.NotEmpty(screen["monitors"]!.AsArray());
