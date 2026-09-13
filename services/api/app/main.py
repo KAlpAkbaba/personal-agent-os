@@ -209,16 +209,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_factory=dispatch_session_factory,
         command_client=DeviceCommandClient(dispatch_session_factory),
     )
-    # M18.3 (spec §3.5, §3.7): the wake sequence, and the TTS provider for its greeting.
-    # The provider is resolved through the voice runtime's own registry, so a process with
-    # no OpenAI key gets the offline fake and the greeting still has a truthful path —
-    # never a silent alarm because a key is missing.
-    wake_sequence = WakeSequence(
-        device_action=device_action,
-        tts=build_greeting_tts(settings),
-        audio_store=get_audio_store(),
-        broker_audio_origin=settings.alarm_audio_origin,
-    )
     # docs/DECISIONS.md ADR-0078: the alarm/display voice tools read the wake sequence
     # and the device-status registry from ToolContext.live (tools_ambient._sequence,
     # display_status). They are registered HERE, where they are built, on the same
@@ -257,6 +247,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         location_service=location_service, provider=build_weather_provider(settings)
     )
     briefing_service = BriefingService()
+    # M18.3 (spec §3.5, §3.7): the wake sequence, and the TTS provider for its greeting.
+    # The provider is resolved through the voice runtime's own registry, so a process with
+    # no OpenAI key gets the offline fake and the greeting still has a truthful path —
+    # never a silent alarm because a key is missing.
+    #
+    # B15 req 281: built HERE, after the briefing/weather/calendar services, because it now
+    # reads the briefing too. `BriefingService.build` had exactly one caller before this -
+    # the voice tool - so the whole morning experience needed a browser open and a live
+    # voice session. The alarm path is the second caller, and `alarm_briefing_enabled` is
+    # the one setting that turns it off again (the roadmap's own rollback plan for B15).
+    wake_sequence = WakeSequence(
+        device_action=device_action,
+        tts=build_greeting_tts(settings),
+        audio_store=get_audio_store(),
+        broker_audio_origin=settings.alarm_audio_origin,
+        briefing=briefing_service if settings.alarm_briefing_enabled else None,
+        briefing_settings=settings,
+        # The same runtime bag the voice tool hands `build`, assembled by the alarm path
+        # for itself. A key that is absent makes its section absent, which every section
+        # builder already handles - this is not a second contract, it is the same one.
+        briefing_live={
+            "weather_service": weather_service,
+            "calendar_service": calendar_service,
+            "device_statuses": get_status_registry(),
+            # No `news_provider` key on purpose: nothing registers one anywhere in this
+            # process (`app.state.news_provider` is never set either), so the resolver
+            # falls back to its own default exactly as `app.news.routes` does. Passing a
+            # name that does not exist here would be a second, wronger answer.
+        },
+    )
     # M23 (docs/M23_APP_FACTORY_SPEC.md §1-§4, ADR-0086): the App Factory's own service,
     # reading the SAME device port every other family holds — one desktop authority,
     # never a second path. The browser gateway is the M13 seam

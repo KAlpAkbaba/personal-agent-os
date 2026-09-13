@@ -27,6 +27,11 @@ namespace PagentOS.Agent.Tests.FakeBrowserWorker;
 /// <item><c>--self-check</c>: print the hello and exit 0 (the real worker's install probe).</item>
 /// <item><c>--no-hello</c>: never announce (hello-timeout test).</item>
 /// <item><c>--no-pong</c>: ignore pings (liveness test).</item>
+/// <item><c>--no-pong-once</c>: the FIRST worker started in this working directory ignores
+/// pings and every later one answers them - "a hung browser is replaced by a healthy one",
+/// which is what production looks like and what <c>--no-pong</c> could not express: the
+/// replacement inherits the same argv, so it is unresponsive too and a test then has to win
+/// a race against the next kill to prove anything about it.</item>
 /// <item><c>--hello-delay-ms N</c>: announce late.</item>
 /// </list>
 /// The contract's own CLI arguments (<c>--data-dir</c>, <c>--profile-dir</c>, <c>--channel</c>,
@@ -103,6 +108,15 @@ public static class Program
         {
             WriteLine(stdout, hello);
             return 0;
+        }
+
+        // Decided AFTER the self-check return so an install probe never spends the one
+        // unresponsive slot. The host runs us with WorkingDirectory = DataDir, and each test
+        // gets its own, so the marker scopes to a single host's worker generations.
+        if (args.Contains("--no-pong-once") && ClaimTheUnresponsiveSlot())
+        {
+            noPong = true;
+            await Console.Error.WriteLineAsync("fake-worker: first worker here; ignoring pings");
         }
 
         if (!noHello)
@@ -372,6 +386,24 @@ public static class Program
             ["retryable"] = retryable,
         },
     };
+
+    /// <summary>
+    /// True for the first <c>--no-pong-once</c> worker in this working directory and false
+    /// for every later one. <c>CreateNew</c> rather than an exists-check: two workers can
+    /// overlap during a restart, and the file system is the only thing both of them can see.
+    /// </summary>
+    private static bool ClaimTheUnresponsiveSlot()
+    {
+        try
+        {
+            using var _ = new FileStream("no-pong-once.claimed", FileMode.CreateNew, FileAccess.Write);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
 
     private static void WriteLine(StreamWriter stdout, JsonObject message)
     {

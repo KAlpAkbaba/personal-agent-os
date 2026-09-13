@@ -20,7 +20,7 @@
   ],
   "recorded_at": "2026-09-13T00:00:00Z",
   "commit": "ba24ec7",
-  "ci_run": "PENDING",
+  "ci_run": 34755470859,
   "what_this_proves": "The Routine Engine stops being a mechanism nobody can reach. It has been complete since M18 - triggers, conditions, actions, firings, a ledger row per transition, a REST surface, a clock driving it every ten seconds - and the owner could not create one, see one, or turn one off. All seven routines in production were made by the alarm subsystem on their behalf.",
   "closed_fully": {
     "287_288_289_the_voice_tools": "Five tools where there were none: create, list, cancel, pause, resume. Deliberately no `routine.edit` - editing a trigger by voice means reading a whole routine back to confirm what is changing, and a mis-heard edit to something that runs unattended every morning is worse than being asked to say it again. The tools validate nothing themselves; `app.routines.service` refuses in its own words and those words reach the owner.",
@@ -54,5 +54,6 @@
     "status": "NOT_YET",
     "why": "REAL_PROOF_REQUIRED for B14 is at least one recurring and one presence-triggered routine that is not an `at` running in production. Everything here is deterministic-clock proven on both sides; 'it ran in production' needs the production round, which is Karar 0."
   },
-  "guards_that_spoke": "Four, without being asked: B05's step-up gate refused to let five new tools go untiered; the self-model indexer refused to let three of them be invisible; the realtime session's manifest pin refused to let the offered tool set change silently; and the migration/model agreement guard checked the new columns. Every one of them is a guard an earlier batch added after paying for its absence."
+  "guards_that_spoke": "Four, without being asked: B05's step-up gate refused to let five new tools go untiered; the self-model indexer refused to let three of them be invisible; the realtime session's manifest pin refused to let the offered tool set change silently; and the migration/model agreement guard checked the new columns. Every one of them is a guard an earlier batch added after paying for its absence.",
+  "ci_note": "7/7 green. Recorded on the run that carries the docs commit as well: the code commit's own run (34755406760) was cancelled by pushing the SHA-stamp docs commit while it was still going - the workflow's concurrency group cancels the previous SHA. Same tree, same result, twenty minutes wasted, and the habit is now written down: stamp locally, hold the docs commit until CI is green, then push it carrying the run id."
 }

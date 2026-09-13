@@ -1052,6 +1052,13 @@ def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
         # produced a 110 Hz sine wave and the system played it AS the greeting, so a buzz
         # in a bedroom at 07:30 was indistinguishable from a fault and the row said nothing.
         "greeting_failure": (alarm.detail_json or {}).get("greeting_failure"),
+        # B15 req 281, by the same reasoning one batch later. The briefing is spoken in
+        # CLIPS, so "it did not happen" is not the only bad outcome - "the owner heard two
+        # of four and cannot tell which two are missing" is the one this batch went out of
+        # its way to make visible, and it would be invisible again if the receipt stopped
+        # at `detail_json`. `{clips, spoken, failure, complete}`, or None on a morning with
+        # no briefing at all.
+        "briefing": (alarm.detail_json or {}).get("briefing"),
         # The lifecycle instants and the device, so an owner harness can prove "armed on
         # the device", "fired at the scheduled instant" and "cleaned up" from this row alone.
         "device_id": str(alarm.device_id) if alarm.device_id else None,

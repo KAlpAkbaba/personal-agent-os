@@ -78,8 +78,8 @@ def _alarm(session, *, media: dict | None = None, **kwargs):
     )
 
 
-def _fire(session, device, alarm, *, tts=None):
-    sequence = WakeSequence(device_action=device, tts=tts)
+def _fire(session, device, alarm, *, tts=None, briefing=None):
+    sequence = WakeSequence(device_action=device, tts=tts, briefing=briefing)
     return sequence, sequence.fire(
         session,
         alarm,
@@ -650,6 +650,103 @@ def test_the_reason_is_on_the_row_the_owner_can_read(session, device):
     )
 
     assert alarms_service.alarm_dict(alarm)["greeting_failure"] == "no_tts_key"
+
+
+# -------------------------------------------------- B15 req 281: the briefing's receipt
+
+
+class _StubBriefing:
+    """`BriefingService.build`'s shape and nothing else - the briefing's own content is
+    `test_briefing_service`'s subject, and its splitting is `test_briefing_delivery`'s."""
+
+    def __init__(self, speech: str) -> None:
+        self.speech = speech
+
+    def build(self, session, **_kwargs):  # noqa: ANN001, ANN202, ARG002
+        return {"speech": self.speech}
+
+
+#: Long enough to be several clips, which is the point: a briefing is spoken in pieces, so
+#: "the owner heard two of four" is a real outcome and not a hypothetical one.
+LONG_BRIEFING = " ".join(
+    [
+        "Bugun 13 Eylul Pazar.",
+        "Su an Istanbul'da hava 21 derece, parcali bulutlu.",
+        "Sistem saglikli efendim; uretimde 0.6.0 surumu calisiyor, bir cihaz cevrimici.",
+        "Gece boyunca uc otonom gelistirme etkinligi oldu.",
+        "Bir arastirma tamamlandi: kahve makinesi karsilastirmasi.",
+        "Son haber: merkez bankasi faiz kararini acikladi.",
+    ]
+)
+
+
+def test_the_briefing_receipt_is_on_the_row_the_owner_can_read(session, device):
+    """B13's rule for `greeting_failure`, one batch later and for the thing B15 added.
+
+    The briefing was written to `detail_json` and stopped there, so a morning the owner
+    only half heard was knowable from the log and from nowhere else - which is the
+    browser-shaped morning this batch exists to end.
+    """
+    alarm = _alarm(session)
+    sequence, _ = _fire(
+        session,
+        device,
+        alarm,
+        tts=FakeTTSProvider(name="tts-that-speaks"),
+        briefing=_StubBriefing(LONG_BRIEFING),
+    )
+
+    sequence.speak_greeting(
+        session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
+    )
+
+    receipt = alarms_service.alarm_dict(alarm)["briefing"]
+    assert receipt["complete"] is True
+    assert receipt["clips"] > 1, "a full briefing does not fit in one clip"
+    assert receipt["spoken"] == receipt["clips"]
+    assert receipt["failure"] == ""
+
+
+def test_a_briefing_the_owner_only_half_heard_says_where_it_stopped(session, device):
+    """And the wake-up is still a success. The alarm rang and the greeting was spoken;
+    a briefing clip the device refused must not turn that into a FAILED alarm."""
+    alarm = _alarm(session)
+    device.results["desktop.play_audio"] = lambda payload: (
+        failed("device_offline", "the companion went away")
+        if str(payload.get("audio_id", "")).startswith("briefing-2-")
+        else ok(played=True, duration_ms=2500)
+    )
+    sequence, _ = _fire(
+        session,
+        device,
+        alarm,
+        tts=FakeTTSProvider(name="tts-that-speaks"),
+        briefing=_StubBriefing(LONG_BRIEFING),
+    )
+
+    sequence.speak_greeting(
+        session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
+    )
+
+    receipt = alarms_service.alarm_dict(alarm)["briefing"]
+    assert receipt["complete"] is False
+    assert receipt["failure"] == "clip_not_played:2"
+    assert receipt["spoken"] == 1, "it stopped rather than carrying on past the failure"
+    assert alarm.greeted_at is not None, "the greeting happened; only the briefing was cut"
+    assert alarm.state != STATE_FAILED
+
+
+def test_a_morning_with_no_briefing_says_none_rather_than_an_empty_receipt(session, device):
+    """The B15 rollback plan's own shape: one setting off, and the row looks like it did
+    before this batch rather than reporting a briefing of zero clips."""
+    alarm = _alarm(session)
+    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider(name="tts-that-speaks"))
+
+    sequence.speak_greeting(
+        session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
+    )
+
+    assert alarms_service.alarm_dict(alarm)["briefing"] is None
 
 
 def test_a_real_provider_still_speaks(session, device):

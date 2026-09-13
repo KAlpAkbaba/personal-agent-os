@@ -1,0 +1,63 @@
+{
+  "batch": "B15",
+  "name": "Tarayıcısız sabah deneyimi",
+  "requirements": [
+    270,
+    271,
+    272,
+    273,
+    274,
+    275,
+    276,
+    279,
+    280,
+    281
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "what_this_proves": "The morning briefing stops requiring a browser. `BriefingService.build` had exactly one caller since it was written - the voice tool - so the whole morning experience needed the owner awake, at a machine, with a browser open and a live voice session running, which is the opposite of what a morning briefing is for. The alarm path is now the second caller.",
+  "the_measurement_that_shaped_it": {
+    "what": "The roadmap's test plan asks that ONE WAV contain every section. It cannot, and the number that decides it was measured rather than assumed.",
+    "why": "`desktop.play_audio` TRUNCATES at `GreetingPlayer.MaxSeconds` (20 s) - `WavAudio.Parse(bytes).Truncate(maxSeconds * 1000)` - it does not refuse. A representative full briefing (greeting, date, weather, system status, overnight work, research, calendar, news) is about 39 seconds of Turkish speech. One WAV would mean the owner hears the greeting, the date, the weather and half the system status, and never learns the rest existed, with nothing anywhere reporting a cut.",
+    "what_was_built_instead": "The briefing is split on SENTENCE boundaries into clips the device will play whole - four clips of about eleven seconds each for that 39-second briefing - and each is its own command. A clip that fails stops the briefing and the receipt says how far it got, because a briefing with a hole in it is worse than a short one: the owner cannot tell which part they missed. The 2 MiB store cap makes a single long WAV impossible past ~43 s anyway, so chunking is not a workaround for the 20 s bound - it is the only shape that fits.",
+    "the_bound_is_not_restated": "`test_the_briefing_clip_bound_is_the_device_s_own` reads `GreetingPlayer.cs` and fails when the two halves drift. The Cloud Core has to decide how to split BEFORE it sends anything, so it cannot ask the device - the same 'read the other side's own file' discipline `test_desktop_capability_mirror` already uses."
+  },
+  "closed_fully": {
+    "279_the_news": "Recorded as a 'wrong negation'. It was worse: an UNCONDITIONAL one. The clause was a hardcoded 'Haber özeti şu an bağlı değil efendim.' under a comment explaining that no news resolver existed in the repository yet. That was true when written and stopped being true when the news track landed; nothing revisited it. So every morning the briefing told the owner that a working subsystem was disconnected - and `test_build_is_honest_about_the_absent_news_resolver` asserted that exact string, so the suite was holding the lie in place. A test named 'is honest about' was enforcing a falsehood. The briefing now ASKS: the latest upload from the owner's configured source, or the truthful reason it cannot say (no source configured, could not reach it, nothing eligible).",
+    "280_281_the_second_caller": "The wake sequence builds the briefing, normalises it, splits it and speaks it - after the greeting and inside the SAME duck window, so the tone stays low for the whole thing rather than jumping back up between 'Günaydın efendim' and the first sentence the owner actually wanted. After the greeting and not instead of it: that sentence is what tells somebody half-awake that the noise has stopped and a sentence is starting.",
+    "276_research_that_finished_overnight": "It had a delivery path already - `app.ledger.briefing` queues a sentence per completed run and the voice session speaks it - and nothing put it in the MORNING briefing. An owner who did not open a session never heard that their question had been answered: the run finished, the report existed, and the only thing that knew was a queue. Read from the same ledger and the same twelve-hour window the overnight clause uses, so 'overnight' means one thing in this briefing rather than two.",
+    "271_what_time_is_it": "'Saat kaç?' resolved to NO intent at all, and `clock.now` returned a raw UTC ISO timestamp with no sentence - so even if an intent had reached it the owner would have been handed '2026-09-13T04:15:00Z'. Both halves fixed, and the tool reads the BRIEFING's own formatter rather than growing a second one that will drift. Resolved after the alarm and display families, because 'Sabah alarmım kaçta?' and 'saat yedide uyandır' both carry the clock's own noun - two corpus collisions pin that.",
+    "272_274_275_browser_free": "Weather, system status and overnight work were each recorded as 'needs a live voice session'. None of them needed one; the BRIEFING did, and now it does not.",
+    "273_location": "The mechanism works end to end through six tiers and the owner can set a default by voice (`location.set_default`). Unset, the briefing says 'Şu an neredesiniz bilmiyorum efendim' - which is honest and is an empty setting, not a defect."
+  },
+  "found_on_the_way": {
+    "the_briefing_had_never_been_normalised": "Its sentences carry clock times, temperatures and percentages that no normaliser had touched - 'saat 08:45', '21°C', 'yüzde 20'. The alarm's own custom greeting has gone through `normalize_greeting` since M18.3 and the briefing never did, because nothing spoke it aloud. Now something does, and a broken pronunciation table never silences it - the same rule `normalize_greeting` already followed.",
+    "a_news_lookup_on_the_wake_path": "Since this batch the briefing is read aloud at 07:15, so every read it makes is on the alarm's critical path. The news clause guards its own lookup and SAYS it could not read it - it does not vanish (the owner would never learn the clause was meant to be there) and it does not raise (a news lookup must not be why an alarm's greeting never happens).",
+    "the_briefing_s_own_receipt_stopped_at_the_row": "Written by this batch and caught inside it. `_speak_briefing` records `{clips, spoken, failure, complete}` on `detail_json`, and `alarm_dict` did not carry it - so `GET /v1/alarms/{id}` could tell the owner why the GREETING was silent (B13 req 267 put `greeting_failure` there for exactly that reason) and nothing at all about the briefing. Worse here than there, because a briefing is spoken in CLIPS: 'it did not happen' is not the only bad outcome, 'you heard two of four and cannot tell which two are missing' is the one this batch went out of its way to make visible, and it would have been visible only in a log. Three tests: the receipt reaches the row, a cut briefing names the clip it stopped at while the wake-up stays a success, and a morning with no briefing answers None rather than a receipt of zero clips.",
+    "a_device_test_that_had_to_win_a_race": "Out of this batch's requirements and in it because it held the gate. `A_worker_that_stops_answering_pings_is_killed_and_replaced` failed the B15 gate and passed on every rerun - 920/920 twice, and three single runs at ~830 ms. Not load noise: the test was SHAPED by the fake rather than by the product. `--no-pong` is inherited by the replacement worker, so the watchdog is right to kill it again every 3 x 100 ms, and the request proving 'the next one gets a fresh worker' had to complete inside that 300 ms window. On 2026-09-09 that cost a run and the single request became a bounded retry loop; on 2026-09-13 the retry loop cost one too, because under a loaded gate (a 12-minute pytest run beside two dotnet suites) a worker LAUNCH can take longer than the 300 ms it is given to live, so no attempt in the 20-second budget ever won. Widening the budget would only have made a coin toss rarer. The fake gained `--no-pong-once` instead: the first worker in a data directory ignores pings, its replacement answers them - which is what production is (a hung Chrome replaced by a working one) and what `--no-pong` could not express. The test is STRONGER for it: no retry loop, no deadline, and `Starts == 2` / `LivenessKills == 1` are exact where they had been floors. `PongsReceived == 0` was replaced by the host's own kill line ('missed 3 consecutive pings'), which says why the kill happened rather than only that no pong arrived.",
+    "the_gate_could_not_say_why_a_device_test_failed": "The reason the flake above cost a full 12-minute rerun before it could even be named. `quality-gate.ps1` runs `dotnet test ... -v q`, and quiet verbosity prints the `[FAIL]` header and swallows the message and the stack - the gate log had the test's NAME and nothing else. CI is unaffected (it runs at default verbosity), so this was the local gate being blinder than the thing it exists to predict, the inverse of d7f726a. Fixed with `--logger console;verbosity=minimal`: full detail on a failure, eight lines on a green run of 1055 tests, measured. `WaitUntilAsync` also stopped saying 'condition not met in time' and now quotes the predicate's own source via `CallerArgumentExpression` - the mutation run below printed `never became true within 00:00:30: () => host.LivenessKills >= 1`, which is the sentence that was missing this morning."
+  },
+  "not_claimed_proven": {
+    "281_audible_proof": "IMPL DONE, PROOF BLOCKED, exactly as the roadmap's own OWNER_ACTION line anticipates. With no TTS key `build_greeting_tts` returns the offline fake, and B13 req 267 established that its 110 Hz sine is not offered to the owner as speech - so a keyless deployment records `no_tts_key` and stays silent rather than buzzing through a whole briefing. 'The briefing was spoken with the browser closed' needs the key and the agent installed."
+  },
+  "red_first": {
+    "the_wiring": "`create_app`'s `briefing=` argument set to None: `test_the_application_gives_the_wake_sequence_a_briefing` fails. Restored by digest verification (`sha256sum -c`: OK). A delivery module the alarm path cannot reach would look exactly like a quiet morning.",
+    "the_split": "Asserted against the device's own truncation point rather than against itself: every clip's estimated duration must be under `DEVICE_MAX_CLIP_SECONDS`, read out of `GreetingPlayer.cs`.",
+    "the_rewritten_device_test": "A rewritten test has to be shown still to catch what it was written for. `BrowserWorkerHost.cs` copied out with its sha256, the watchdog's `worker.OutstandingPings >= LivenessMissedPongs` made `>= int.MaxValue` so no kill can ever happen, rebuilt: the test fails with `never became true within 00:00:30: () => host.LivenessKills >= 1`. Restored by digest verification (`sha256sum -c`: OK). Five consecutive green runs before and after.",
+    "the_briefing_receipt": "`alarm_dict`'s `\"briefing\"` line removed from a digest-backed copy of `app/alarms/service.py`: all three receipt tests fail with `KeyError: 'briefing'`. Restored by digest verification (`sha256sum -c`: OK)."
+  },
+  "tests": {
+    "services/api/tests/unit/test_briefing_service.py": 12,
+    "services/api/tests/unit/test_briefing_delivery.py": 21,
+    "services/api/tests/voice_corpus (c.*)": 6,
+    "services/api/tests/unit/test_alarms_sequence.py (briefing receipt)": 3
+  },
+  "runtime_proof": {
+    "status": "BLOCKED",
+    "why": "REAL_PROOF_REQUIRED is a morning run with the browser closed in which the briefing was audibly spoken. That needs a TTS provider key (owner) and the agent installed on the owner's machine, both of which are carried with Karar 0."
+  },
+  "left_open_deliberately": {
+    "auto_open_news_video": "A briefing preference that has never been acted on. Its old justification - 'there is no news-video capability yet' - died with the same comment req 279 was hiding behind, so the setting is now a switch the owner can turn on that does nothing. It is not one of B15's requirement ids and it is not in the feature matrix, so it is recorded here rather than built: opening a video on the owner's screen at 07:15 is a behaviour change that deserves its own requirement, not a side effect of fixing the sentence next to it."
+  }
+}

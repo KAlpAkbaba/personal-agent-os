@@ -165,6 +165,13 @@ class Settings(BaseSettings):
     backup_root: str = "/var/lib/pagentos-backup"
     broker_handshake_timeout_s: float = 10.0
 
+    #: B15 req 281: whether the wake alarm reads the morning briefing aloud after its
+    #: greeting. On by default, because a morning briefing nobody hears without opening a
+    #: browser is the gap this batch exists to close - and off by one setting, because the
+    #: roadmap's own rollback plan for this batch is "turn the briefing extension off and
+    #: keep the existing greeting", which has to be one flag and not a revert.
+    alarm_briefing_enabled: bool = True
+
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that
     # asks "is anything due?". The routines package still has no timer of its own and
     # `evaluate_due` is still its only entry point; this is the thing that calls it, on a

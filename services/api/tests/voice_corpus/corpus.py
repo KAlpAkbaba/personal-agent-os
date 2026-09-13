@@ -5855,8 +5855,64 @@ def _routine_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _clock_cases() -> list[UtteranceCase]:
+    """B15 req 271: "Saat kaç?", asked directly.
+
+    The sentence has existed in the briefing since it was written and no intent reached it,
+    so the only way to be told the time was to ask for a whole morning briefing. The three
+    collisions below are the reason this family is resolved AFTER the alarm's: every one of
+    them carries the clock's own noun.
+    """
+    cases = [
+        UtteranceCase(
+            case_id=f"c.now.{i}",
+            utterance=text,
+            expected_intent="clock_query",
+            expected_tool="clock.now",
+            category="clock",
+            source=source,
+        )
+        for i, (text, source) in enumerate(
+            [
+                ("Saat kaç?", "canonical"),
+                ("Saat kaç oldu?", "paraphrase"),
+                ("Bugün günlerden ne?", "canonical"),
+                ("saat kac", "asr_noise"),
+            ],
+            start=1,
+        )
+    ]
+    cases.append(
+        UtteranceCase(
+            case_id="c.collision.alarm_query",
+            utterance="Sabah alarmım kaçta?",
+            expected_intent="alarm_query",
+            expected_tool="alarm.status",
+            forbidden_tools=("clock.now",),
+            category="clock",
+            source="canonical",
+            notes="Carries the clock's noun AND its question word; the alarm noun decides.",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="c.collision.alarm_create",
+            utterance="Saat yedi buçukta beni uyandır.",
+            expected_intent="alarm_create",
+            expected_tool="alarm.create",
+            expected={"local_time": "07:30"},
+            forbidden_tools=("clock.now",),
+            category="clock",
+            source="canonical",
+            notes="'saat' names the hour of an alarm, not a question about the clock.",
+        )
+    )
+    return cases
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
+        *_clock_cases(),
         *_routine_cases(),
         *_research_cases(),
         *_alarm_create_cases(),

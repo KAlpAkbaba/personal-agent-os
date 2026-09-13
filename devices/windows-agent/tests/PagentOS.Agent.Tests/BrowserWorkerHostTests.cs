@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using PagentOS.Agent.Core.Audit;
 using PagentOS.Agent.Core.Commands;
@@ -360,52 +361,51 @@ public sealed class BrowserWorkerHostTests : IDisposable
     [Fact]
     public async Task A_worker_that_stops_answering_pings_is_killed_and_replaced()
     {
-        await using var host = NewHost(extraArgs: "--no-pong", pingInterval: TimeSpan.FromMilliseconds(100));
+        // `--no-pong-once`, not `--no-pong`: the first worker ignores pings and its
+        // REPLACEMENT answers them. That is what production looks like - a hung Chrome is
+        // replaced by a working one - and it is the only shape in which the second half of
+        // this test's own name ("and replaced") can be proven rather than gambled on.
+        //
+        // The history is worth keeping, because both earlier versions were shaped by the
+        // fake and not by the product. With `--no-pong` the replacement inherits the same
+        // argv, so the watchdog is right to kill it again every 3 x 100 ms, and a request
+        // has to complete inside that window. 2026-09-09: asserting the single request
+        // succeeded lost a run to "killed ... while this request was in flight", so it
+        // became a bounded retry loop. 2026-09-13: the retry loop lost a run too - under a
+        // loaded gate (a 12-minute pytest run alongside two dotnet suites) a worker launch
+        // can itself take longer than the 300 ms it is given to live, so no attempt in the
+        // 20-second budget ever won. Widening the budget would only have made a coin toss
+        // rarer. Removing the coin toss is what this does, and it STRENGTHENS the test:
+        // "exactly two starts, exactly one kill" is now assertable, where before only
+        // floors were.
+        await using var host = NewHost(extraArgs: "--no-pong-once", pingInterval: TimeSpan.FromMilliseconds(100));
         await host.StartAsync(CancellationToken.None);
         Assert.NotNull(host.WorkerPid);
 
-        await WaitUntilAsync(() => host.LivenessKills >= 1, TimeSpan.FromSeconds(10));
+        // Thirty seconds is a hang guard, not a claim about speed: the kill lands after
+        // 3 x 100 ms, and nothing here asserts that it was quick.
+        await WaitUntilAsync(() => host.LivenessKills >= 1, TimeSpan.FromSeconds(30));
         Assert.True(host.PingsSent >= 3);
-        Assert.Equal(0, host.PongsReceived);
+        // WHY it was killed, from the host's own words. `PongsReceived == 0` used to stand
+        // in for this and cannot any more - the healthy replacement answers pings - but it
+        // was always the weaker claim: it says no pong arrived, not that this kill was
+        // because of that.
+        Assert.True(_log.Any("missed 3 consecutive pings"));
 
-        // The replacement is launched with `--no-pong` too, so the watchdog is certain to
-        // kill it again roughly every 3 x 100 ms - and a request that happens to be in
-        // flight when that fires fails with a NAMED exception saying exactly that. The
-        // host's contract is not "this request survives", which is a coin toss; it is "a
-        // request killed in flight is TOLD so, and the NEXT one gets a fresh worker". So
-        // that is what is asserted, in a bounded loop. A host that never replaced the
-        // worker, or that failed for any OTHER reason, still fails here immediately.
-        //
-        // 2026-09-09: asserting the single request succeeded lost a run to
-        // "the browser worker was killed by the companion (missed 3 consecutive pings)
-        // while this request was in flight" - the test failing on the very behaviour it
-        // exists to prove.
-        JsonObject? result = null;
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
-        var killedInFlight = 0;
-        while (result is null)
-        {
-            try
-            {
-                result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
-            }
-            catch (CapabilityException ex) when (
-                ex.Message.Contains("missed 3 consecutive pings", StringComparison.Ordinal)
-                && DateTime.UtcNow < deadline)
-            {
-                killedInFlight++;  // killed in flight, and it said so; ask the next worker
-            }
-        }
+        // No retry loop and no deadline: the replacement answers pings, so nothing kills it.
+        var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));
+
         Assert.Equal(BrowserCapabilities.Inspect, result["capability"]!.GetValue<string>());
+        // The replacement is not merely serving requests, it is answering the watchdog - so
+        // the "exactly one kill" below is a worker that survives rather than one the test
+        // stopped looking at in time. Waited for, because the first ping to a new worker is
+        // one whole ping interval away and the exec above returns in milliseconds; the
+        // bound is a hang guard.
+        await WaitUntilAsync(() => host.PongsReceived >= 1, TimeSpan.FromSeconds(30));
         // Windows reuses pids quickly, so a START — not pid inequality — is the proof of a
-        // replacement. A FLOOR, not an exact count, and deliberately: the replacement is
-        // launched with `--no-pong` too, so it is unresponsive by construction and the
-        // watchdog is right to kill it again. "Exactly two" only ever held while this test
-        // won a race against the next kill, and on a loaded machine it lost one run in
-        // three (2026-09-09). Nothing is weakened — a host that never replaced the worker,
-        // or served this request from the dead one, still fails every line below.
-        Assert.True(host.Starts >= 2, $"expected a replacement start, saw {host.Starts} (requests killed in flight: {killedInFlight})");
-        Assert.True(host.LivenessKills >= 1);
+        // replacement. Exact: one worker died, one replaced it, and it was not killed again.
+        Assert.Equal(2, host.Starts);
+        Assert.Equal(1, host.LivenessKills);
         Assert.True(host.WorkerRunning);
     }
 
@@ -771,12 +771,25 @@ public sealed class BrowserWorkerHostTests : IDisposable
         Assert.Contains("browser_worker_started", content, StringComparison.Ordinal);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    /// <summary>
+    /// Poll until <paramref name="condition"/> holds. The timeout is a hang guard, not a
+    /// claim about speed - a test that means to bound how LONG something took says so with
+    /// its own assertion.
+    /// </summary>
+    /// <remarks>
+    /// The message quotes the predicate's own source. "condition not met in time" is what
+    /// this used to say, and on 2026-09-13 a gate failure in this file arrived with nothing
+    /// else in the log: a whole re-run spent finding out which wait it was.
+    /// </remarks>
+    private static async Task WaitUntilAsync(
+        Func<bool> condition,
+        TimeSpan timeout,
+        [CallerArgumentExpression(nameof(condition))] string? source = null)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (!condition())
         {
-            Assert.True(DateTime.UtcNow < deadline, "condition not met in time");
+            Assert.True(DateTime.UtcNow < deadline, $"never became true within {timeout}: {source}");
             await Task.Delay(25);
         }
     }

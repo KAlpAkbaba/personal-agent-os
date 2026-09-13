@@ -32,12 +32,14 @@ from app.briefing.models import BRIEFING_PREFERENCES_ID, BriefingPreferencesRow
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import (
     EVENT_TYPE_MORNING_BRIEFING_DELIVERED,
+    EVENT_TYPE_RESEARCH_COMPLETED,
     STATUS_COMPLETED,
     STATUS_FAILED,
     SUBSYSTEM_BRIEFING,
     SUBSYSTEM_DEPLOYMENT,
     SUBSYSTEM_EVOLUTION,
     SUBSYSTEM_GENESIS,
+    SUBSYSTEM_RESEARCH,
 )
 from app.logging import get_logger
 from app.release.version import release_model
@@ -115,6 +117,12 @@ def _local(now: datetime) -> datetime:
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
     return now.astimezone(_ZONE)
+
+
+def local_now(now: datetime) -> datetime:
+    """The owner's own wall clock. Public because B15 req 271's `clock.now` answers with
+    `date_time_sentence`, and both halves of "what time is it" must read one zone."""
+    return _local(now)
 
 
 def greeting_for(now_local: datetime) -> str:
@@ -196,6 +204,76 @@ def _overnight_summary_sentence(session: Session, *, now: datetime) -> str:
     else:
         sentence += "."
     return sentence
+
+
+def _research_sentence(session: Session, *, now: datetime) -> str | None:
+    """B15 req 276: the research that finished while the owner was asleep.
+
+    It had a delivery path already - `app.ledger.briefing` queues a sentence per completed
+    run and the voice session speaks it - but nothing put it in the MORNING briefing, so an
+    owner who did not open a session simply never heard that their question had been
+    answered. The run finished, the report exists, and the only thing that knew was a queue.
+
+    Read from the same ledger and the same twelve-hour window the overnight clause uses, so
+    "overnight" means one thing in this briefing rather than two.
+    """
+    events = ledger_service.query(
+        session,
+        since=now - _OVERNIGHT_WINDOW,
+        until=now,
+        subsystems=(SUBSYSTEM_RESEARCH,),
+        event_types=(EVENT_TYPE_RESEARCH_COMPLETED,),
+        limit=50,
+    )
+    if not events:
+        return None
+    if len(events) == 1:
+        return f"Bir araştırma tamamlandı: {events[0].factual_summary}"
+    return f"{len(events)} araştırma tamamlandı efendim; hazır olduğunuzda okuyabilirim."
+
+
+def _news_sentence(session: Session, *, live: dict[str, Any]) -> str:
+    """B15 req 279: what the news actually says, asked rather than assumed.
+
+    This clause used to be a hardcoded "Haber özeti şu an bağlı değil efendim.", under a
+    comment explaining that no news resolver existed in the repository yet. That was true
+    when it was written and stopped being true when the news track landed - and nothing
+    revisited it, so every morning the briefing told the owner that a working subsystem was
+    disconnected. A comment that ages into a lie is still a lie when it is spoken aloud.
+
+    What the news package can answer SYNCHRONOUSLY is "the latest upload from the owner's
+    configured source" (`app.news.resolve_service.resolve_for_source`). It cannot summarise
+    the day's news without starting a browser-research workflow, which is not something a
+    morning briefing waits on. So the briefing says the headline, and says truthfully when
+    it cannot: no source configured, nothing eligible, or the provider could not answer.
+    """
+    from app.news import sources_service
+    from app.news.resolve_service import NewsResolveError, resolve_for_source
+
+    try:
+        source = sources_service.default_source(session)
+    except Exception as exc:  # noqa: BLE001 - see below
+        # A section that cannot be produced SAYS so. It does not vanish (the owner would
+        # never learn the news clause was meant to be there) and it does not raise: since
+        # B15 this briefing is read aloud by the wake sequence at 07:15, and a news lookup
+        # that throws must not be the reason an alarm's greeting never happens.
+        logger.warning("briefing_news_unavailable", error=f"{type(exc).__name__}: {exc}")
+        return "Haber kaynağını okuyamadım efendim."
+    if source is None or source.channel_id is None:
+        return "Haber kaynağı tanımlı değil efendim."
+    try:
+        outcome = resolve_for_source(session, source, provider=live.get("news_provider"))
+    except NewsResolveError:
+        # The resolver's own refusal: an unresolved channel identity, or a provider that
+        # could not answer at all. Never "here is the latest" over nothing.
+        return "Haber kaynağına şu an ulaşamadım efendim."
+    except Exception as exc:  # noqa: BLE001 - see above
+        logger.warning("briefing_news_unavailable", error=f"{type(exc).__name__}: {exc}")
+        return "Haber kaynağını okuyamadım efendim."
+    selected = outcome.result.selected
+    if selected is None:
+        return "Yeni bir haber videosu yok efendim."
+    return f"Son haber: {selected.title}."
 
 
 def _weather_sentence(
@@ -285,15 +363,22 @@ class BriefingService:
                 sections["calendar"] = calendar
                 sentences.append(calendar)
 
+        if prefs.include_overnight_work:
+            # req 276, under the same preference as the overnight clause: a research that
+            # finished overnight IS overnight work, and giving it its own switch would ask
+            # the owner to reason about a distinction the system made for its own reasons.
+            research = _research_sentence(session, now=now)
+            if research:
+                sections["research_completed"] = research
+                sentences.append(research)
+
         if prefs.include_news_summary:
-            # No news resolver exists in this repository yet (another track's scope,
-            # task brief) — the honest one-clause absence, never a fabricated summary,
-            # and auto_open_news_video is not acted on here for the same reason: there
-            # is no news-video capability to open yet. Wiring it in is a follow-up once
-            # that track lands, with no change to this preference's shape.
-            gap = "Haber özeti şu an bağlı değil efendim."
-            sections["news_summary"] = gap
-            sentences.append(gap)
+            # B15 req 279. This used to be one hardcoded sentence saying the news was not
+            # connected - written when that was true, never revisited when the news track
+            # landed. Now it asks.
+            news = _news_sentence(session, live=live)
+            sections["news_summary"] = news
+            sentences.append(news)
 
         speech = " ".join(sentences)
 

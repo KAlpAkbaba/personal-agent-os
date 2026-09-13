@@ -192,6 +192,13 @@ Invoke-Step "API unit tests" {
 # spoke after the commit was already pushed. It costs under a minute against a twelve-minute
 # gate, and it removes the same class of surprise d7f726a removed for the other services'
 # ruff: the local gate must judge what CI judges.
+# B15 (2026-09-13): and the run says WHY a test failed. `-v q` alone printed the `[FAIL]`
+# header and swallowed the message and the stack, so a single device failure in a
+# twelve-minute gate cost a whole re-run just to learn which assertion it was. The console
+# logger at `minimal` prints failures in full and stays silent about the 1055 that passed:
+# eight lines on a green run, measured.
+$script:DotnetTestLogger = "console;verbosity=minimal"
+
 Invoke-Step "Windows agent build + tests" {
   $dotnet = Find-Dotnet
   $env:DOTNET_ROOT = Split-Path -Parent $dotnet
@@ -202,12 +209,12 @@ Invoke-Step "Windows agent build + tests" {
       # judges, so it is the one worth a fast pass. The full gate below still does both.
       & $dotnet build PagentOS.WindowsAgent.sln -c Release --nologo -v q
       Assert-ExitCode "dotnet build -c Release"
-      & $dotnet test PagentOS.WindowsAgent.sln -c Release --nologo --no-build -v q
+      & $dotnet test PagentOS.WindowsAgent.sln -c Release --nologo --no-build -v q --logger $script:DotnetTestLogger
       Assert-ExitCode "dotnet test -c Release"
     } else {
       & $dotnet build PagentOS.WindowsAgent.sln --nologo -v q
       Assert-ExitCode "dotnet build"
-      & $dotnet test PagentOS.WindowsAgent.sln --nologo --no-build -v q
+      & $dotnet test PagentOS.WindowsAgent.sln --nologo --no-build -v q --logger $script:DotnetTestLogger
       Assert-ExitCode "dotnet test"
       # Release too, because a LATER step judges it. `qualify-staged-update.ps1` takes
       # bin\Release as the candidate (falling back to Debug), so without this the gate

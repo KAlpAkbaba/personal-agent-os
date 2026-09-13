@@ -238,7 +238,22 @@ def _require_str(arguments: dict[str, Any], key: str, *, max_len: int = 2000) ->
 
 
 def clock_now(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    return {"now": ctx.now.isoformat().replace("+00:00", "Z"), "timezone": "UTC"}
+    """B15 req 271: "Saat kaç?" answered in the owner's own words and own timezone.
+
+    The UTC instant is still here, because a model reasoning about scheduling wants it. What
+    was missing is the SENTENCE: this tool returned a raw ISO timestamp and nothing else, so
+    "Saat kaç?" resolved to no intent at all and, if it had, would have handed the owner
+    "2026-09-13T04:15:00Z". The briefing has said the date and time in Turkish since it was
+    written; this reads the same formatter rather than growing a second one that will drift.
+    """
+    del arguments
+    from app.briefing.service import date_time_sentence, local_now
+
+    return {
+        "now": ctx.now.isoformat().replace("+00:00", "Z"),
+        "timezone": "UTC",
+        "speech": date_time_sentence(local_now(ctx.now)),
+    }
 
 
 def voice_intent(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:

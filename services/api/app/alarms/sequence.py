@@ -75,6 +75,7 @@ from app.alarms.models import (
     STATE_PLAYING,
     WakeAlarm,
 )
+from app.briefing import delivery as briefing_delivery
 from app.ledger.vocabulary import SUBSYSTEM_AMBIENT, SUBSYSTEM_ROUTINE
 from app.logging import get_logger
 from app.routines.dispatch import (
@@ -260,12 +261,23 @@ class WakeSequence:
         tts: TTSProviderLike | None = None,
         audio_store: AudioStore | None = None,
         broker_audio_origin: str = "",
+        briefing: Any = None,
+        briefing_settings: Any = None,
+        briefing_live: dict[str, Any] | None = None,
     ) -> None:
         self._device = device_action
         self._tts = tts
         self._audio_store = audio_store or get_audio_store()
         self._broker_audio_origin = broker_audio_origin.rstrip("/")
         self._greeting_cache: dict[str, GreetingAudio] = {}
+        # B15 req 281. Injected, and `None` by default, so a sequence built without a
+        # briefing simply greets the owner exactly as it did before this batch - which is
+        # also the roadmap's rollback plan for B15, reachable by one setting rather than a
+        # revert. `briefing_live` is the same runtime bag the voice tool passes to
+        # `BriefingService.build`; the alarm path assembles its own.
+        self._briefing = briefing
+        self._settings = briefing_settings
+        self._briefing_live: dict[str, Any] = dict(briefing_live or {})
 
     def _audio_origin(self) -> str:
         """The absolute origin the greeting URL is built on.
@@ -825,6 +837,15 @@ class WakeSequence:
             )
             alarm.greeted_at = moment
 
+            # B15 req 281: and then the briefing, inside the SAME duck window, so the tone
+            # stays low for the whole thing rather than jumping back up between the
+            # greeting and the first sentence the owner actually wanted.
+            #
+            # After the greeting and not instead of it: "Günaydın efendim, saat yedi
+            # buçuk." is what tells somebody half-awake that the noise has stopped and a
+            # sentence is starting. The briefing follows it.
+            steps.extend(self._speak_briefing(db, alarm, now=moment))
+
         restored = self._restore_volume(db, alarm, firing_key="greeting", now=moment)
         if restored is not None:
             steps.append(restored)
@@ -835,6 +856,101 @@ class WakeSequence:
         alarm.greeting_due_at = None
         if transition is not None:
             transition(db, alarm, STATE_PLAYING, now=moment, after="greeting")
+        return steps
+
+    def _speak_briefing(
+        self, db: Session, alarm: WakeAlarm, *, now: datetime
+    ) -> list[StepOutcome]:
+        """B15 req 281: the morning briefing, read out with no browser open.
+
+        `BriefingService.build` had exactly one caller before this - the voice tool - so the
+        whole morning experience required the owner to be awake, at a machine, with a
+        browser open and a live voice session running. This is the second caller.
+
+        Every failure is swallowed and recorded on the alarm rather than raised. The alarm
+        has already rung and the owner has already been greeted; a weather service that is
+        slow, a TTS provider that is out of credit or a device that stopped answering must
+        not turn a successful wake-up into a FAILED one. `briefing_failure` on the row says
+        what happened, the same way `greeting_failure` does.
+        """
+        if self._briefing is None:
+            return []
+        steps: list[StepOutcome] = []
+
+        def _play(
+            text: str,
+            *,
+            audio_id: str,
+            url: str,
+            sha256: str,
+            size_bytes: int,
+            max_seconds: int,
+        ) -> bool:
+            del text  # the device is handed audio, never a transcript
+            step = self._run_step(
+                db,
+                alarm,
+                capability=CAPABILITY_DESKTOP_PLAY_AUDIO,
+                payload={
+                    "audio_id": f"{audio_id}-{alarm.id}",
+                    "audio": {
+                        "url": url,
+                        "sha256": sha256,
+                        "bytes": size_bytes,
+                        "format": "wav",
+                    },
+                    "level": GREETING_LEVEL,
+                    "max_seconds": max_seconds,
+                },
+                requested_state="spoken",
+                idempotency_key=f"alarm-briefing:{alarm.id}:{alarm.snooze_count}:{audio_id}",
+                timeout_s=TIMEOUT_PLAY_AUDIO,
+                observed_key="played",
+                now=now,
+            )
+            steps.append(step)
+            return step.ok
+
+        try:
+            delivery = briefing_delivery.speak_briefing(
+                db,
+                briefing_service=self._briefing,
+                settings=self._settings,
+                live=self._briefing_live,
+                tts=self._tts,
+                audio_store=self._audio_store,
+                audio_origin=self._audio_origin(),
+                play=_play,
+                normalise=lambda text: normalize_greeting(text, db),
+                now=now,
+                device_id=alarm.device_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - see the docstring
+            logger.warning(
+                "alarm_briefing_failed",
+                alarm_id=str(alarm.id),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            alarm.detail_json = {
+                **(alarm.detail_json or {}),
+                "briefing_failure": f"{type(exc).__name__}",
+            }
+            return steps
+
+        detail = {**(alarm.detail_json or {})}
+        detail["briefing"] = delivery.as_dict()
+        if delivery.failure:
+            detail["briefing_failure"] = delivery.failure
+            logger.info(
+                "alarm_briefing_incomplete",
+                alarm_id=str(alarm.id),
+                spoken=len(delivery.spoken),
+                clips=delivery.clips,
+                reason=delivery.failure,
+            )
+        else:
+            detail.pop("briefing_failure", None)
+        alarm.detail_json = detail
         return steps
 
     def _duck(

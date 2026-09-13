@@ -606,7 +606,7 @@ AFFECTED_SUBSYSTEMS : Routines, Voice Tools, Intent, Web
 EXPECTED_FILES      : services/api/app/routines/, app/voice/tools/, app/voice/intent/, apps/web/
 RISK                : low
 OWNER_ACTION        : no
-KAPANIŞ             : commit ba24ec7 · CI PENDING · 15/15 DONE
+KAPANIŞ             : commit ba24ec7 · CI 34755470859 yeşil (7/7) · 15/15 DONE
                       kanıt docs/evidence/b14-routines-2026-09-13.json
 ÖLÇÜMLE DÜZELTİLDİ  : 261/262/293 "yok" değildi — kod M18.3'ten beri vardı, matris ÜRETİM
                       SATIRLARINI anlatıyordu (B10'daki 560 ile aynı şekil).
@@ -629,7 +629,7 @@ ROLLBACK_PLAN       : yeni tetikleyiciler bayrakla kapatılır; mevcut 7 rutin e
 ```
 
 ```
-BATCH_ID            : B15
+BATCH_ID            : B15                              [KAPANDI 2026-09-13 — 281'in sesli kanıtı TTS anahtarında]
 NAME                : Tarayıcısız sabah deneyimi
 REQUIREMENT_IDS     : 270, 271, 272, 273, 274, 275, 276, 279, 280, 281
 GOAL                : Alarm çaldığında karşılama gerçek brifingi okusun — hava, gecelik iş,
@@ -638,7 +638,37 @@ DEPENDENCIES        : B14, B21 (gerçek TTS)
 AFFECTED_SUBSYSTEMS : Briefing, News, Device Companion, Narration
 EXPECTED_FILES      : services/api/app/briefing/, app/news/, devices/windows-agent
 RISK                : medium
-OWNER_ACTION        : TTS sağlayıcı kredisi — yoksa `PROVEN_PROXY` + `BLOCKED` ile kapatılır
+OWNER_ACTION        : TTS sağlayıcı kredisi — 281'in sesli kanıtı için; kod bloklanmadı
+KAPANIŞ             : commit PENDING_B15 · CI PENDING · 10/10 DONE
+                      (281 PROOF=BLOCKED: anahtarsız sesli kanıt yok, roadmap'in kendi
+                      OWNER_ACTION satırının öngördüğü kapanış)
+                      kanıt docs/evidence/b15-browser-free-morning-2026-09-13.json
+TEST_PLAN'DAN SAPMA : "tek WAV'ın tüm bölümleri içerdiği" maddesi ÖLÇÜMLE reddedildi.
+                      `desktop.play_audio` 20 sn'de KESİYOR (reddetmiyor) ve dolu bir
+                      brifing ~39 sn. Tek WAV olsaydı sahip karşılamayı, tarihi, havayı ve
+                      sistem durumunun yarısını duyar, gerisinin var olduğunu hiç
+                      öğrenmezdi — hiçbir yerde bir hata da olmazdı. Cümle sınırında
+                      parçalanıyor; sınır C# kaynağından okunuyor, ezberden yazılmıyor.
+                      2 MiB'lik depo tavanı zaten ~43 sn'de ısırıyor, yani parçalama
+                      20 sn sınırına bir çare değil, tek geçerli şekil.
+YOL ÜSTÜNDE         : (1) 279 "yanlış olumsuzlama" değil KOŞULSUZ olumsuzlamaydı: hiçbir şey
+                      sorulmuyordu ve `test_build_is_honest_about_the_absent_news_resolver`
+                      yalanı yerinde tutuyordu. "Dürüst" adlı bir test yanlışı dayatıyordu.
+                      (2) Brifing hiç normalize edilmemişti — kimse sesli okumadığı için.
+                      (3) 271'de `clock.now` ham ISO damgası dönüyordu; niyet de yoktu.
+                      (3b) Bu batch'in KENDİ yazdığı makbuz `detail_json`'da kalıyordu:
+                      `alarm_dict` taşımıyordu, yani sahip karşılamanın neden sessiz
+                      kaldığını okuyabiliyor (B13/267) ama brifingin dördün ikisinde
+                      kesildiğini okuyamıyordu. Üç testle kapatıldı.
+                      (4) Batch dışı, kapıyı bu batch'te tuttuğu için: cihaz süitindeki
+                      `A_worker_that_stops_answering_pings_is_killed_and_replaced` yüklü
+                      makinede yazı-tura oynuyordu — `--no-pong` yedek işçiye de geçtiği
+                      için istek, işçinin 300 ms'lik ömrüne sığmak zorundaydı. Yerine
+                      `--no-pong-once`: ilk işçi cevapsız, YEDEĞİ sağlıklı — üretimin
+                      şekli bu. Tur döngüsü ve 20 sn'lik bütçe silindi; "tam iki başlangıç,
+                      tam bir öldürme" artık taban değil kesin sayı. Ayrıca kapı `-v q` ile
+                      koştuğu için hata mesajını YUTUYORDU: tek bir cihaz hatası, hangi
+                      iddia olduğunu öğrenmek için 12 dakikalık bir tur daha yaktı.
 TEST_PLAN           : BriefingService.build'in alarm yolundan çağrıldığı; haber bağlıyken
                       "bağlı değil" denmediği; tek WAV'ın tüm bölümleri içerdiği
 REAL_PROOF_REQUIRED : PROVEN_REAL — tarayıcı kapalı sabah koşusunda brifing seslendi

@@ -32,6 +32,7 @@ from app.ledger.vocabulary import (
 )
 from app.location.models import LocationContextRow
 from app.location.service import LocationService
+from app.news.models import NewsResolutionRow, NewsSourceRow
 from app.weather.models import WeatherQueryEvidenceRow
 from app.weather.providers import FakeWeatherProvider
 from app.weather.service import WeatherService
@@ -49,6 +50,10 @@ def db():
         LocationContextRow.__table__,
         WeatherQueryEvidenceRow.__table__,
         ActivityEventRow.__table__,
+        # B15 req 279: the briefing ASKS the news package now, so its tables belong
+        # here - a fixture without them would only ever exercise the unreadable arm.
+        NewsSourceRow.__table__,
+        NewsResolutionRow.__table__,
     ):
         table.create(engine)
     factory = sessionmaker(bind=engine, expire_on_commit=False)
@@ -105,10 +110,41 @@ def test_build_assembles_greeting_date_and_weather(db) -> None:
     assert "gece" in speech.lower() or "Gece" in speech  # overnight summary
 
 
-def test_build_is_honest_about_the_absent_news_resolver(db) -> None:
+def test_the_briefing_says_there_is_no_news_source_when_there_is_none(db) -> None:
+    """B15 req 279, replacing `test_build_is_honest_about_the_absent_news_resolver`.
+
+    That test pinned the string "Haber özeti şu an bağlı değil efendim." - one hardcoded
+    sentence under a comment explaining that the news track had not landed yet. It had. The
+    briefing told the owner every morning that a working subsystem was disconnected, and
+    the test held it there.
+
+    With no source configured the honest sentence is about the SOURCE: nothing is
+    disconnected, the owner simply has not named a channel.
+    """
     service = BriefingService()
+
     result = service.build(db, settings=Settings(), live={}, now=NOW)
-    assert "Haber özeti şu an bağlı değil" in result["speech"]
+
+    assert "Haber kaynağı tanımlı değil efendim." in result["speech"]
+    assert "bağlı değil" not in result["speech"]
+
+
+def test_a_broken_news_lookup_never_stops_the_rest_of_the_briefing(db, monkeypatch) -> None:
+    """Since B15 this briefing is read aloud by the wake sequence at 07:15. A news lookup
+    that raises must not be why an alarm's greeting never happens - and the clause must
+    still SAY something, or the owner never learns it was meant to be there."""
+    from app.news import sources_service
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("the news tables are gone")
+
+    monkeypatch.setattr(sources_service, "default_source", _boom)
+    service = BriefingService()
+
+    result = service.build(db, settings=Settings(), live={}, now=NOW)
+
+    assert "Haber kaynağını okuyamadım efendim." in result["speech"]
+    assert "sürüm" in result["speech"], "the rest of the briefing is still there"
 
 
 def test_build_omits_a_section_the_owner_turned_off(db) -> None:

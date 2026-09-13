@@ -58,6 +58,11 @@ class Intent(StrEnum):
     ROUTINE_CANCEL = "routine_cancel"  # sabah rutinini iptal et
     ROUTINE_PAUSE = "routine_pause"  # sabah rutinini durdur / bu hafta durdur
     ROUTINE_RESUME = "routine_resume"  # sabah rutinini geri aç
+    # B15 req 271: "Saat kaç?" / "Bugün günlerden ne?". The sentence has existed in the
+    # briefing since it was written and no intent reached it, so the owner could be told
+    # the time only as part of a whole morning briefing. Resolved AFTER the alarm family:
+    # "Sabah alarmım kaçta?" is a question about an alarm, not about the clock.
+    CLOCK_QUERY = "clock_query"
     STOP = "stop"  # dur / kes / sus / yeter / durdur / duraklat / bekle
     RESUME = "resume"  # devam / kaldığın yerden / sürdür
     REPEAT = "repeat"  # tekrar (oku) / yeniden oku / bir daha
@@ -446,6 +451,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
 #: from CAPABILITY_BY_INTENT because that map is what makes an intent an ACTION.
 QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.ALARM_QUERY: "alarm.status",
+    # B15 req 271. A query: it reads a clock and changes nothing.
+    Intent.CLOCK_QUERY: "clock.now",
     # B14 req 288. Reading back what the owner already set up mutates nothing.
     Intent.ROUTINE_LIST: "routine.list",
     Intent.DISPLAY_QUERY: "display.status",
@@ -1478,6 +1485,34 @@ def _routine_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     if _has(tokens, *_ROUTINE_CREATE_VERB_STEMS):
         return Intent.ROUTINE_CREATE, noun
 
+    return None
+
+
+#: B15 req 271: the words that ask what time or what day it is. Nouns only - the question
+#: shape is checked separately, because "saat yedide uyandır" is an alarm and carries the
+#: same noun.
+_CLOCK_NOUN_FORMS: Final[tuple[str, ...]] = ("saat", "saati", "tarih", "tarihi")
+_DAY_QUESTION_FORMS: Final[tuple[str, ...]] = ("günlerden", "gunlerden")
+#: The clock family's own question words. Wider than the shared ``_is_question``, which is
+#: tuned for the alarm/display families: "Saat kaç?" carries no interrogative particle and
+#: no "kaçta", and widening the shared helper would change what those families claim.
+_CLOCK_QUESTION_FORMS: Final[tuple[str, ...]] = ("kaç", "kac", "kaçtır", "kactir", "ne", "nedir")
+
+
+def _clock_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """"Saat kaç?" / "Bugün günlerden ne?" — the clock, asked directly.
+
+    Evaluated AFTER the alarm and display families, which is the whole reason this can be
+    as simple as it is: "Sabah alarmım kaçta?" carries the alarm noun and is claimed there,
+    "saat yedide uyandır" carries the wake verb and is claimed there. What reaches this
+    point is a bare question about the time, and nothing else asks one.
+    """
+    if _has_exact(tokens, *_DAY_QUESTION_FORMS):
+        return Intent.CLOCK_QUERY, "günlerden"
+    if _has_exact(tokens, *_CLOCK_NOUN_FORMS) and (
+        _is_question(tokens) or _has_exact(tokens, *_CLOCK_QUESTION_FORMS)
+    ):
+        return Intent.CLOCK_QUERY, "saat"
     return None
 
 
@@ -5588,6 +5623,13 @@ def resolve_intent(
     if display_matched := _display_match(tokens):
         return ResolvedIntent(
             display_matched[0], scope=SCOPE_CONVERSATION, matched=display_matched[1], **base
+        )
+    # 0c''. B15 req 271: the clock, asked directly. AFTER the alarm and display families,
+    #       because "Sabah alarmım kaçta?" is a question about an alarm and "saat yedide
+    #       uyandır" is a request to be woken - both carry the clock's own noun.
+    if clock_matched := _clock_match(tokens):
+        return ResolvedIntent(
+            Intent.CLOCK_QUERY, scope=SCOPE_CONVERSATION, matched=clock_matched[1], **base
         )
 
     # 0d. M19 (spec §3): the operator's Cancel/Status pair, gated on a task actually
