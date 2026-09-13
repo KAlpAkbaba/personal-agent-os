@@ -688,7 +688,7 @@ RISK                : low
 OWNER_ACTION        : no
 TEST_PLAN           : tetikleyici kalıpların gerçek konuşma metniyle beslendiği; yazılan kaydın
                       provenans ve güven taşıdığı; hassas verinin dışarıda kaldığı
-KAPANIŞ             : commit PENDING_B16 · CI PENDING · 10/10 DONE
+KAPANIŞ             : commit 07bea37 · CI 34762772790 yeşil (7/7) · 10/10 DONE
                       kanıt docs/evidence/b16-memory-write-path-2026-09-13.json
 ÖLÇÜM               : `app.memory` eksik değil, OLGUN: 3400 satır, dondurulmuş yazma
                       politikası + sır tarayıcı, kanıt/sürüm/denetim zinciri, hibrit geri
