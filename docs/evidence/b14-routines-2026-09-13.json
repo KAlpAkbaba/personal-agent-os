@@ -19,7 +19,7 @@
     299
   ],
   "recorded_at": "2026-09-13T00:00:00Z",
-  "commit": "PENDING",
+  "commit": "ba24ec7",
   "ci_run": "PENDING",
   "what_this_proves": "The Routine Engine stops being a mechanism nobody can reach. It has been complete since M18 - triggers, conditions, actions, firings, a ledger row per transition, a REST surface, a clock driving it every ten seconds - and the owner could not create one, see one, or turn one off. All seven routines in production were made by the alarm subsystem on their behalf.",
   "closed_fully": {

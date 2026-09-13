@@ -606,7 +606,7 @@ AFFECTED_SUBSYSTEMS : Routines, Voice Tools, Intent, Web
 EXPECTED_FILES      : services/api/app/routines/, app/voice/tools/, app/voice/intent/, apps/web/
 RISK                : low
 OWNER_ACTION        : no
-KAPANIŞ             : commit PENDING_B14 · CI PENDING · 15/15 DONE
+KAPANIŞ             : commit ba24ec7 · CI PENDING · 15/15 DONE
                       kanıt docs/evidence/b14-routines-2026-09-13.json
 ÖLÇÜMLE DÜZELTİLDİ  : 261/262/293 "yok" değildi — kod M18.3'ten beri vardı, matris ÜRETİM
                       SATIRLARINI anlatıyordu (B10'daki 560 ile aynı şekil).
