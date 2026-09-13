@@ -1,10 +1,19 @@
 {
   "batch": "B18",
   "name": "Süreklilik, varlıklar ve deneyim motoru",
-  "requirements": [46, 47, 48, 49, 50, 71, 72, 73],
+  "requirements": [
+    46,
+    47,
+    48,
+    49,
+    50,
+    71,
+    72,
+    73
+  ],
   "recorded_at": "2026-09-13T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "efe6195",
+  "ci_run": 34772392586,
   "what_this_proves": "This system starts learning from what it did. The Experience Engine has been complete since it was written and the only thing that ever called it was a manual POST: the feature matrix measured the result exactly, 1441 activity events and 0 memories. A system that keeps a durable record of everything it does and never reads it back is keeping a diary it cannot remember.",
   "the_shape_of_this_batch": "Four complete mechanisms, none of which had a caller - the fifth batch in a row where the dominant defect is not broken code but finished code nobody reaches. The Experience Engine (a manual POST), the entity graph (`Entity`, `EntityEdge`, eight kinds, service functions and a REST surface, zero callers in `app/`), and two link columns in the memory schema (`project_id`, `conversation_id`) that `RetrievalFilters` can already scope by and `hybrid_search` already scores - and that nothing ever filled. A link column nothing fills is a join nobody can make.",
   "closed_fully": {

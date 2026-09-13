@@ -787,7 +787,7 @@ RISK                : low
 OWNER_ACTION        : no
 TEST_PLAN           : zamanlayıcının koştuğu; dersin belleğe yazıldığı ve `memory.remembered`
                       olayının yayıldığı; "bunu/şunu" ifadesinin doğru nesneye bağlandığı
-KAPANIŞ             : commit PENDING_B18 · CI PENDING · 8/8 DONE
+KAPANIŞ             : commit efe6195 · CI 34772392586 yeşil (7/7) · 8/8 DONE
                       kanıt docs/evidence/b18-continuity-and-experience-2026-09-13.json
 ÖLÇÜM               : Dört mekanizma tam, dördünün de çağıranı yoktu — bu deponun baskın
                       kusuru beşinci batch üst üste. (a) 71: motor tam, tek çağıran elle
