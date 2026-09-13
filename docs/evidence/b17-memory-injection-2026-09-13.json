@@ -1,0 +1,57 @@
+{
+  "batch": "B17",
+  "name": "Bellek okuma ve enjeksiyon",
+  "requirements": [
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    55,
+    56
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "what_this_proves": "A preference taught by voice is used in a NEW session without being repeated. B16 gave the owner a way to teach this system something and, without this half, that was a write-only diary: `hybrid_search` has been complete since M5, B16 gave it its first product caller (`memory.search`, when the owner ASKS), and nothing had ever put a memory in front of the model on the path where it answers.",
+  "the_defect_the_measurement_found": {
+    "what": "Requirement 45 was recorded as 'yazılı, hiç tetiklenmedi' — written, never triggered. B17 found out why, and it was worse than not triggering: the keyed conflict branch compares `value_json`, and EVERY memory this product actually writes has an empty value. `{} == {}` is true for any pair of them.",
+    "measured_consequence": "Teach 'Kahveyi sade severim.' under key `coffee.style`, then teach 'Kahveyi az şekerli severim.' under the same key: the second was recorded as a second piece of EVIDENCE for the first. One row, still reading 'sade', evidence count two. The owner corrected themselves and the system got MORE confident in the thing they were correcting - and requirement 44's whole branch (contradiction, explicit-outranks-inference, supersede) was unreachable for every write path in the product.",
+    "the_fix": "`_states_the_same_thing`: a structured value still decides when either side has one, and when neither does the TEXT decides. Minimal, and it leaves every existing value-carrying behaviour alone. After it, the same two sentences supersede: the first row goes to `superseded`, the second is active, and the audit says so.",
+    "why_it_survived": "Both halves were self-consistent. The write policy's tests supply values because they are testing values; the product's writers supply none because a spoken sentence has none. Nobody had ever run the two together, which is what B17 did by trying to inject the result."
+  },
+  "closed_fully": {
+    "39_40_the_last_broken_link": "The persona was ten fixed blocks and seven preference fields. It now carries a memory block, placed LAST and after the conversation summary: what the owner said two minutes ago outranks what they said in March, and a model reading in order sees the standing facts against the live conversation. Requirement 40 is not a second injection point to build - there is ONE instruction (spec §4 step 1) and tool choice reads it; building a separate tool-decision context would have been a second source of truth for the same question.",
+    "41_top_k_on_the_answer_path": "`select_for_instruction` retrieves per class through `hybrid_search`, from a candidate pool deliberately LARGER than the ceiling: you cannot drop for budget what you never retrieved, and with a pool the size of the answer the re-ranking below would be sorting a list nothing was excluded from.",
+    "45_a_precedence_and_not_a_weight": "`hybrid_search` scores explicitness in one sum with recency, so a guess made this morning can outscore something the owner stated in March. That is the right shape for 'find me what is relevant' and the wrong one for 'what does this system believe about its owner'. `rank` sorts explicit first, then confidence, then recency, before the budget is spent.",
+    "44_the_other_half_was_already_right": "`retrieval.apply_filters` refuses non-active rows unconditionally, so a superseded memory cannot come back through the instruction. Asserted rather than re-implemented, with a test that says why it matters so changing that filter fails something legible.",
+    "42_43_many_sources_and_distinguishable_trust": "Recorded as 'tek yazıcı araştırma, 8 satır' and 'üretimde tek sınıf' - one writer, so one class. B16 gave the schema two more (`owner_statement` from voice, `observation` from conversation extraction) and B17 needs them held apart, because 'explicit outranks inferred' has nothing to read otherwise. The block itself carries the distinction into the instruction: what the owner said is marked as said, an inference is marked with its confidence, and the model is told to ask rather than assert when working from the second kind.",
+    "56_the_last_gate_before_it_leaves_the_machine": "The write policy refuses a credential at the door, so the injection gate should never fire. It is there anyway, using the policy's OWN `find_secret` rather than a second list, because this batch is what changed the stakes: memory now travels to a third-party model provider inside a session instruction. A row can predate a pattern the guard learned later; a last gate that trusts the first one is not a gate."
+  },
+  "corrected_by_measurement": {
+    "55_the_sweeper_was_already_running": "Recorded 'Yok | Politikayla süpürme | MISSING'. Both halves are wrong. `lifecycle.sweep_expired` sweeps BY retention class - session and short TTLs measured from last confirmation, never a pinned row, never an explicit one, deletion following the forget path's own semantics - and `create_app` has registered it in the `RetentionSweeper` since Phase 8 (2026-09-11), started by the lifespan, reported on `/health`. Same shape as B14's 261/262/293 and B15's 272/274/275: the matrix was describing production ROWS, not code. What was genuinely missing is the reason it could stay wrong for two batches: no guard. There is one now."
+  },
+  "the_budget_the_roadmap_named": {
+    "risk_line": "B17's own RISK field said 'persona talimatı büyür, jeton bütçesi ölçülmeli'.",
+    "measured": "The persona is 10,110 characters before any of this, sent on every session create AND every attach. The memory block's ceiling is 1,400 - a deliberate ~14% - enforced by construction and held by `test_the_injected_block_stays_under_its_ceiling`, which feeds it fifty distinct preferences and checks what comes out. A representative twelve-memory block measured 706 characters.",
+    "spent_in_rank_order": "The budget STOPS at the first memory that does not fit rather than skipping ahead to a shorter one. A block that silently preferred terse memories over important ones would be a ranking nobody wrote down."
+  },
+  "red_first": {
+    "the_persona_block": "The two lines in `build_instructions` that append the block, deleted: `test_the_session_the_provider_is_given_carries_the_memory` and the end-to-end chain test both fail. Restored by digest verification (`sha256sum -c`: OK).",
+    "the_conflict_fix": "Measured RED before the fix and GREEN after, on the product's own path: `remember_explicit` twice under one key returned `corroborated` with one row at evidence 2, and returns `superseded_previous` with two rows afterwards."
+  },
+  "a_fixture_that_quietly_collapsed": "Worth recording because it nearly cost the ceiling test its meaning. The first budget fixture was fifty sentences of the form 'Sahip {i} numaralı tercihi ...' - they differ by a digit, which is far above `DEDUP_SIMILARITY`, so the memory service corroborated all fifty into ONE row and the ceiling was never exercised. The test passed the ceiling assertions and asserted nothing. It now checks `considered` first, so a fixture that collapses fails loudly instead of quietly.",
+  "tests": {
+    "services/api/tests/unit/test_memory_injection.py": 22,
+    "services/api/tests/unit/test_memory_service.py (keyed re-teach)": 3
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is 'a preference was said, and applied in a NEW session without being said again'. Everything but the production round is proven through the real application object: a session is created over HTTP, the owner teaches through the real `memory.remember` tool, the session is closed, and a SECOND session's instructions - the ones handed to the provider - carry the sentence, marked as something the owner said. The remaining step is that same chain in production, which is Karar 0."
+  },
+  "found_on_the_way_outside_the_batch": {
+    "an_operator_assertion_that_could_not_fail": "The B17 gate failed one device test B17 had not touched: NotepadLifecycleTests.A_pointer_click_inside_the_window_lands_and_the_cursor_is_re_observed_there, cursor at -469 against a requested -486. The gate PRINTED that, in full, on the first read - B15's own diagnosability fix paying for itself, where before it would have said only the test's name and cost a rerun. Measured: the monitors are {0,0,2560,1440} and {-1440,-1107,1440,2560}, so -486 is well inside the left screen and SetCursorPos did not clamp; something moved the pointer on the owner's live desktop between the click and the read. Every other reading in that file is of the Notepad the test launched; this one is of the system cursor, which the test does not own. Fixed by retrying the click until the observation agrees (a hand on the mouse does not repeat; a wrong coordinate fails all three), NOT by widening the bound. And red-proving that retry found something worse: shifting the capability's screenX by 17 pixels left every assertion in the test GREEN, because the pointer is placed at the wrong coordinate and then observed at the wrong coordinate and the two agree perfectly. The test named 'a pointer click lands' had never checked where it landed. It now computes the expected screen coordinate from the window's own rect and compares - the mutation fails it, 300 against 317."
+  }
+}

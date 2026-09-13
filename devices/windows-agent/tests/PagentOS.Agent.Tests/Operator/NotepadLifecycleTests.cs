@@ -151,8 +151,49 @@ public sealed class NotepadLifecycleTests : IDisposable
         var rect = window["rect"]!;
         var x = Math.Min(200, rect["width"]!.GetValue<int>() - 10);
         var y = Math.Min(200, rect["height"]!.GetValue<int>() - 10);
-        var click = _lab.Exec(OperatorCapabilityNames.PointerClick, new JsonObject { ["window_id"] = windowId, ["x"] = x, ["y"] = y });
+        // Every other reading in this file is of the Notepad this test launched. This one is
+        // of the SYSTEM CURSOR, which the test does not own, and that is the whole
+        // difference. 2026-09-13: it failed once at -469 against a requested -486, during a
+        // 13-minute gate on the owner's live desktop. Measured rather than assumed - the
+        // monitors are {0,0,2560,1440} and {-1440,-1107,1440,2560}, so -486 is well inside
+        // the left screen and `SetCursorPos` did not clamp. Something moved the pointer in
+        // the moment between the click and the read.
+        //
+        // The tolerance stays at TWO pixels, because that IS the claim: `pointer.click`
+        // reports `observed.cursor` so a caller can prove the pointer went where it was
+        // asked, and "roughly there" proves nothing about a coordinate computation. What
+        // changes is that the claim is "the pointer CAN be placed there", so it is allowed
+        // to be disturbed and asked again: a hand on the mouse does not repeat, a wrong
+        // `screenX` fails all three. Same shape as the browser-worker liveness fix on the
+        // same day - remove the coin toss rather than widen the bound it keeps losing.
+        JsonObject click;
+        var attempt = 0;
+        while (true)
+        {
+            attempt++;
+            click = _lab.Exec(OperatorCapabilityNames.PointerClick, new JsonObject { ["window_id"] = windowId, ["x"] = x, ["y"] = y });
+            var seen = click["observed"]!["cursor"]!;
+            var offBy = Math.Max(
+                Math.Abs(seen["x"]!.GetValue<int>() - click["screen_x"]!.GetValue<int>()),
+                Math.Abs(seen["y"]!.GetValue<int>() - click["screen_y"]!.GetValue<int>()));
+            if (offBy <= 2 || attempt == 3)
+            {
+                break;
+            }
+        }
+
         Assert.Equal("window", click["space"]!.GetValue<string>());
+
+        // WHERE it clicked, computed by this test from the window's own rect rather than
+        // read back from the answer being checked. Found while red-proving the retry above:
+        // shifting `screenX` by 17 pixels in the capability left every assertion here
+        // GREEN, because the cursor is placed at the wrong coordinate and then observed at
+        // the wrong coordinate, and the two agree with each other perfectly. The pair of
+        // InRange checks below prove that the pointer went where the capability SAID and
+        // stayed there to be read; they never proved that where it said was right.
+        Assert.Equal(rect["x"]!.GetValue<int>() + x, click["screen_x"]!.GetValue<int>());
+        Assert.Equal(rect["y"]!.GetValue<int>() + y, click["screen_y"]!.GetValue<int>());
+
         var cursor = click["observed"]!["cursor"]!;
         Assert.InRange(cursor["x"]!.GetValue<int>(), click["screen_x"]!.GetValue<int>() - 2, click["screen_x"]!.GetValue<int>() + 2);
         Assert.InRange(cursor["y"]!.GetValue<int>(), click["screen_y"]!.GetValue<int>() - 2, click["screen_y"]!.GetValue<int>() + 2);

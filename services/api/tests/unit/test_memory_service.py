@@ -736,3 +736,67 @@ def test_short_retention_assigned_to_inferred_episodic_and_swept(db: Session) ->
     assert swept >= 1
     assert db.get(Memory, episodic.memory_id) is None
     assert db.get(Memory, durable.memory_id) is not None
+
+
+# ------------------------------------- B17: a keyed re-teach with no structured value
+
+
+def test_a_keyed_correction_supersedes_rather_than_corroborating(db):
+    """The defect B17's injection work uncovered, and why requirement 45 had never fired.
+
+    The keyed conflict branch compared `value_json`, and every memory this product actually
+    writes - taught by voice, extracted from a conversation - has an empty value, so
+    ``{} == {}`` made any two of them the same statement. Measured before the fix: teaching
+    the opposite preference under one key recorded it as a second piece of EVIDENCE for the
+    first. One row, still reading "sade", evidence count two. The owner corrected themselves
+    and the system got more confident in the thing they were correcting.
+    """
+    first = service.remember_explicit(
+        db, EMBEDDER, text="Kahveyi sade severim.", memory_class=MemoryClass.PREFERENCE,
+        key="coffee.style",
+    )
+
+    second = service.remember_explicit(
+        db, EMBEDDER, text="Kahveyi az şekerli severim.", memory_class=MemoryClass.PREFERENCE,
+        key="coffee.style",
+    )
+
+    assert second.action == "superseded_previous"
+    assert second.memory_id != first.memory_id
+    assert db.get(Memory, first.memory_id).status == MemoryStatus.SUPERSEDED.value
+    assert db.get(Memory, second.memory_id).text == "Kahveyi az şekerli severim."
+
+
+def test_restating_the_same_thing_under_one_key_still_corroborates(db):
+    """The half that keeps the fix from becoming the bug. Saying it again - the same
+    sentence, whatever the spacing or case - is agreement, not a correction."""
+    first = service.remember_explicit(
+        db, EMBEDDER, text="Kahveyi sade severim.", memory_class=MemoryClass.PREFERENCE,
+        key="coffee.style",
+    )
+
+    second = service.remember_explicit(
+        db, EMBEDDER, text="  kahveyi   SADE severim. ", memory_class=MemoryClass.PREFERENCE,
+        key="coffee.style",
+    )
+
+    assert second.action == "corroborated"
+    assert second.memory_id == first.memory_id
+    assert db.get(Memory, first.memory_id).status == MemoryStatus.ACTIVE.value
+
+
+def test_a_structured_value_still_decides_when_there_is_one(db):
+    """Values were never the problem and are left alone: when either side carries one, it
+    is the precise statement and the text is not consulted."""
+    first = service.remember_explicit(
+        db, EMBEDDER, text="Kahveyi sade severim.", memory_class=MemoryClass.PREFERENCE,
+        key="coffee.style", value={"sugar": 0},
+    )
+
+    second = service.remember_explicit(
+        db, EMBEDDER, text="Sade kahve içerim, şekersiz.", memory_class=MemoryClass.PREFERENCE,
+        key="coffee.style", value={"sugar": 0},
+    )
+
+    assert second.action == "corroborated", "the same value is the same statement"
+    assert second.memory_id == first.memory_id

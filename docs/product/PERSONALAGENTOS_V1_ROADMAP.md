@@ -729,7 +729,7 @@ ROLLBACK_PLAN       : araçlar araç kaydından çıkarılır; yazılan satırla
 ```
 
 ```
-BATCH_ID            : B17
+BATCH_ID            : B17                              [KAPANDI 2026-09-13]
 NAME                : Bellek okuma ve enjeksiyon
 REQUIREMENT_IDS     : 39, 40, 41, 42, 43, 44, 45, 55, 56
 GOAL                : Öğretilen tercih bir daha söylenmeden kullanılsın.
@@ -740,9 +740,38 @@ RISK                : medium — persona talimatı büyür, jeton bütçesi öl�
 OWNER_ACTION        : no
 TEST_PLAN           : top-k geri getirmenin talimata girdiği; açık kaydın çıkarımı yendiği;
                       çelişen iki kaydın çözüldüğü; talimat boyutunun tavanı aşmadığı
+KAPANIŞ             : commit PENDING_B17 · CI PENDING · 9/9 DONE
+                      kanıt docs/evidence/b17-memory-injection-2026-09-13.json
+ÖLÇÜM               : (a) 55 MISSING yazıyordu ve KOŞUYORDU: `sweep_expired` retention
+                      sınıfına göre süpürüyor (session/short TTL, sabitlenmiş ve açık
+                      kayıtlara dokunmuyor), Phase 8'den beri RetentionSweeper'a kayıtlı,
+                      lifespan'de başlıyor, /health raporluyor. Eksik olan bekçiydi — iki
+                      batch boyunca yanlış yazabildi çünkü yanlış olduğunda hiçbir şey
+                      düşmüyordu. (b) 40 ikinci bir enjeksiyon noktası değil: talimat tek
+                      (spec §4 adım 1), araç seçimi onu okuyor.
+YOL ÜSTÜNDE         : ÖLÇÜM GERÇEK BİR KUSUR BULDU ve 45'in neden "hiç tetiklenmediğini"
+                      açıkladı. Anahtarlı çatışma dalı `value_json` karşılaştırıyor;
+                      sesle ya da konuşmadan yazılan HER kaydın değeri boş, yani
+                      `{} == {}` her çift için doğru. Sonuç ölçüldü: sahip
+                      "Kahveyi sade severim" dedikten sonra "Kahveyi az şekerli severim"
+                      dediğinde ikincisi, düzelttiği şeye İKİNCİ KANIT olarak yazılıyordu
+                      — tek satır, hâlâ "sade", kanıt sayısı iki. Sahip kendini düzeltti
+                      ve sistem düzeltilen şeye daha çok inandı. 44'ün yaşadığı dal her
+                      zaman ulaşılamazdı; artık değer yoksa METİN karar veriyor.
+                      Ayrıca 56'nın kapsamını asıl genişleten şey bu batch: bellek artık
+                      üçüncü taraf bir sağlayıcıya talimat içinde gidiyor, bu yüzden
+                      enjeksiyon politikanın kendi kalıplarıyla son bir kez tarıyor.
+TEST_PLAN           : top-k geri getirmenin talimata girdiği; açık kaydın çıkarımı yendiği;
+                      çelişen iki kaydın çözüldüğü; talimat boyutunun tavanı aşmadığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — bir tercih söylendi, YENİ bir oturumda tekrar söylenmeden
                       uygulandı (zincirin uçtan uca kanıtı)
+                      → üretim dışındaki tamamı kanıtlandı: gerçek uygulama nesnesi üzerinden
+                      HTTP ile oturum açıldı, `memory.remember` ile öğretildi, oturum
+                      kapatıldı, YENİ oturumun sağlayıcıya giden talimatı o cümleyi taşıdı
+                      (`test_a_preference_taught_by_voice_reaches_a_NEW_session_...`).
+                      Eksik olan yalnızca üretim turu (Karar 0).
 ROLLBACK_PLAN       : enjeksiyon bayrakla kapatılır; persona eski haline döner
+                      (`PAGENTOS_MEMORY_INJECTION_ENABLED=false`)
 ```
 
 ```

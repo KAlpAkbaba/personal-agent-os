@@ -172,6 +172,13 @@ class Settings(BaseSettings):
     #: keep the existing greeting", which has to be one flag and not a revert.
     alarm_briefing_enabled: bool = True
 
+    #: B17 req 39: whether what this system knows about its owner reaches the model's
+    #: instructions. On by default, because a memory nothing reads is a write-only
+    #: diary - and off by one setting, because the roadmap's rollback plan for B17 is
+    #: "turn the injection off and the persona goes back to what it was", which has to
+    #: be a flag and not a revert.
+    memory_injection_enabled: bool = True
+
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that
     # asks "is anything due?". The routines package still has no timer of its own and
     # `evaluate_due` is still its only entry point; this is the thing that calls it, on a

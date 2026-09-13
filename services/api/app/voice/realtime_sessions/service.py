@@ -360,11 +360,37 @@ def mint_credential(
     )
 
 
+def _memory_block(db: Session, memory_runtime: Any, *, now: datetime | None = None) -> str:
+    """B17 req 39/41: what this system knows about its owner, budgeted, as persona prose.
+
+    Best-effort and never raising. This runs while minting a session credential, and an
+    owner whose voice stopped working because a preference could not be retrieved would
+    rightly regard the memory feature as having made things worse. A failure here costs a
+    persona block; a raise here costs the session.
+    """
+    if memory_runtime is None:
+        return ""
+    try:
+        from app.memory.injection import select_for_instruction
+
+        selection = select_for_instruction(db, memory_runtime.embedder, now=now)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("memory_injection_failed", error=f"{type(exc).__name__}: {exc}")
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - nothing further to do about it
+            pass
+        return ""
+    logger.info("memory_injected", **selection.as_dict())
+    return selection.as_block()
+
+
 def _session_config(
     row: RealtimeSessionRow,
     *,
     registry: ToolRegistry,
     prefs: Any,
+    memory_block: str = "",
 ) -> RealtimeSessionConfig:
     ctx = row.context_json or {}
     return RealtimeSessionConfig(
@@ -375,6 +401,7 @@ def _session_config(
             plan=ctx.get("plan"),
             transcript_summary=row.transcript_summary,
             voice_profile=ctx.get("voice_profile"),
+            memory_block=memory_block,
         ),
         tools=tuple(registry.manifest()),
         voice=ctx.get("voice"),
@@ -398,6 +425,7 @@ def create_session(
     registry: ToolRegistry,
     selection: dict[str, Any] | None = None,
     trace_id: str | None = None,
+    memory_runtime: Any = None,
 ) -> tuple[RealtimeSessionRow, EphemeralCredential, dict[str, Any]]:
     """Spec §4 step 1. Returns the row, the one-time credential and the
     client payload (session id, provider, transport, tools, instructions)."""
@@ -442,7 +470,12 @@ def create_session(
     db.add(row)
     db.flush()
     prefs = voice_service.load_preferences(db)
-    config = _session_config(row, registry=registry, prefs=prefs)
+    config = _session_config(
+        row,
+        registry=registry,
+        prefs=prefs,
+        memory_block=_memory_block(db, memory_runtime, now=utcnow()),
+    )
     credential = mint_credential(
         provider,
         session_id=row.id,
@@ -1916,6 +1949,7 @@ def attach(
     transport: str | None = None,
     credential_ttl_s: int = 600,
     trace_id: str | None = None,
+    memory_runtime: Any = None,
 ) -> dict[str, Any]:
     """Spec §7: a new client takes over the session. The previous media leg is
     told it is closed (sideband, best effort), the leg moves to the caller's
@@ -1956,7 +1990,12 @@ def attach(
     _set_context(row, ctx)
     _touch(row, now)
     prefs = voice_service.load_preferences(db)
-    config = _session_config(row, registry=registry, prefs=prefs)
+    config = _session_config(
+        row,
+        registry=registry,
+        prefs=prefs,
+        memory_block=_memory_block(db, memory_runtime, now=utcnow()),
+    )
     credential = mint_credential(
         provider,
         session_id=row.id,

@@ -254,8 +254,16 @@ def build_instructions(
     plan: dict[str, Any] | None = None,
     transcript_summary: str = "",
     voice_profile: str | None = None,
+    memory_block: str = "",
 ) -> str:
-    """Assemble the session instructions (Turkish persona + defaults + state)."""
+    """Assemble the session instructions (Turkish persona + defaults + state).
+
+    ``memory_block`` (B17 req 39/40) is what this system knows about its owner, built by
+    `app.memory.injection` and passed in already budgeted. A STRING and not a list of rows:
+    this module composes instructions and does not query, the way it takes
+    ``transcript_summary`` rather than a session id — so the persona has no opinion about
+    retrieval and the memory package has none about Turkish persona prose.
+    """
     parts = [
         PERSONA_TR,
         EXECUTIVE_DEFAULTS_TR,
@@ -296,6 +304,14 @@ def build_instructions(
         )
     if transcript_summary:
         parts.append("Önceki konuşmanın özeti: " + transcript_summary.strip())
+    # B17 req 39/40: LAST, and after the summary on purpose. What the owner said two
+    # minutes ago outranks what they said in March when the two disagree, and a model
+    # reading in order sees the standing facts against the live conversation rather than
+    # the other way round. Tool choice reads this same instruction — there is ONE
+    # instruction (spec §4 step 1), so req 40 is not a second injection point to build;
+    # it is this one being true.
+    if memory_block:
+        parts.append(memory_block.strip())
     return "\n".join(parts)
 
 

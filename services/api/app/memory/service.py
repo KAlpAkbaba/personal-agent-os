@@ -92,6 +92,37 @@ def _values_equal(a: dict[str, Any] | None, b: dict[str, Any] | None) -> bool:
     return (a or {}) == (b or {})
 
 
+def _same_text(a: str | None, b: str | None) -> bool:
+    return " ".join(str(a or "").split()).casefold() == " ".join(str(b or "").split()).casefold()
+
+
+def _states_the_same_thing(memory: Memory, obs: Observation) -> bool:
+    """Whether an observation says what a keyed incumbent already says.
+
+    B17 (2026-09-13). This used to be ``_values_equal`` alone, and that made the keyed
+    conflict branch below unreachable for every memory this product actually writes. A
+    memory taught by voice or extracted from a conversation carries NO structured value —
+    ``{} == {}`` is true for any pair of them — so "Kahveyi sade severim." and "Kahveyi az
+    şekerli severim." under one key were the same statement.
+
+    Measured, not reasoned about: teaching the second one recorded it as a second piece of
+    EVIDENCE for the first. One row, still reading "sade", evidence count two. The owner
+    corrected themselves and the system got more confident in the thing they corrected.
+    That is also the whole answer to why requirement 45 (explicit outranks inferred) was
+    recorded as "written, never triggered": the branch it lives in could not be reached.
+
+    A structured value is still the precise statement and still decides when either side
+    has one. When neither does, the text decides. When one has a value and the other does
+    not, they are not the same statement — an observation that pins a value down is saying
+    something the bare sentence was not.
+    """
+    theirs = memory.value_json or {}
+    ours = obs.value or {}
+    if theirs or ours:
+        return theirs == ours
+    return _same_text(memory.text, obs.text)
+
+
 def _active_by_key(session: Session, memory_class: str, key: str) -> list[Memory]:
     return list(
         session.execute(
@@ -284,9 +315,9 @@ def _apply_write(
     if obs.key is not None:
         incumbents = _active_by_key(session, obs.memory_class.value, obs.key)
         same_value = next(
-            (m for m in incumbents if _values_equal(m.value_json, obs.value)), None
+            (m for m in incumbents if _states_the_same_thing(m, obs)), None
         )
-        conflicting = [m for m in incumbents if not _values_equal(m.value_json, obs.value)]
+        conflicting = [m for m in incumbents if not _states_the_same_thing(m, obs)]
 
         if same_value is not None and not conflicting:
             if decision.explicit and not same_value.explicit:

@@ -227,6 +227,19 @@ async def list_realtime_providers(request: Request) -> dict[str, Any]:
     }
 
 
+def _memory_runtime(runtime: Any) -> Any:
+    """B17 req 39: the SAME MemoryRuntime `create_app` registers, and only when the owner
+    has left the injection on.
+
+    Read here rather than inside the service so the SETTING and the RUNTIME are decided in
+    one place: the roadmap's rollback plan for this batch is one flag, and a flag consulted
+    in two places is a flag that will one day disagree with itself.
+    """
+    if not runtime.settings.memory_injection_enabled:
+        return None
+    return runtime.live_sources().get("memory_runtime")
+
+
 @router.post("/sessions", status_code=201)
 async def create_session(request: Request, body: CreateSessionRequest) -> dict[str, Any]:
     runtime = _runtime(request)
@@ -285,6 +298,7 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
                 registry=runtime.registry,
                 selection=selection.to_dict(),
                 trace_id=trace_id,
+                memory_runtime=_memory_runtime(runtime),
             )
             return payload
 
@@ -484,6 +498,7 @@ async def attach_session(
                 transport=body.transport,
                 credential_ttl_s=runtime.settings.voice_realtime_credential_ttl_s,
                 trace_id=trace_id,
+                memory_runtime=_memory_runtime(runtime),
             )
 
     try:
