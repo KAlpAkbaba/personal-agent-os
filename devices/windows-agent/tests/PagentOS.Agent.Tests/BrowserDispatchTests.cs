@@ -47,10 +47,11 @@ public sealed class BrowserDispatchTests : IDisposable
         Assert.Equal(new[] { "desktop.open_application", "desktop.open_artifact" }, AgentCapabilities.Desktop);
         Assert.Equal(AgentCapabilities.Desktop, AgentCapabilities.All);
 
-        // M18 added the alarm pair to what a device advertises, and M18.3 the ambient group;
-        // `Desktop` and `All` still mean exactly the M1/M3 pair, so the byte-for-byte
-        // hello/enrollment expectations that use them are untouched and the growth is visible
-        // here — as an APPEND, in a fixed order — rather than inherited silently.
+        // M18 added the alarm pair to what a device advertises, M18.3 the ambient group, and
+        // B11 the desktop toast; `Desktop` and `All` still mean exactly the M1/M3 pair, so the
+        // byte-for-byte hello/enrollment expectations that use them are untouched and the
+        // growth is visible here — as an APPEND, in a fixed order — rather than inherited
+        // silently. This assertion caught B11 doing exactly that, which is what it is for.
         Assert.Equal(
             new[]
             {
@@ -58,6 +59,7 @@ public sealed class BrowserDispatchTests : IDisposable
                 "desktop.alarm_start", "desktop.alarm_stop",
                 "desktop.display_wake", "desktop.display_status", "desktop.activity_status",
                 "desktop.alarm_arm", "desktop.alarm_disarm", "desktop.play_audio",
+                "desktop.notify",
             },
             AgentCapabilities.Compose(browserEnabled: false));
     }

@@ -65,6 +65,17 @@ function Assert-ExitCode {
   if ($LASTEXITCODE -ne 0) { throw "$What exited with code $LASTEXITCODE" }
 }
 
+function Find-Dotnet {
+  # Never PATH: a spawned shell on this machine does not reliably have it.
+  foreach ($cand in @("$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe", "C:\Program Files\dotnet\dotnet.exe")) {
+    if (Test-Path $cand) {
+      $sdks = & $cand --list-sdks 2>$null
+      if ($LASTEXITCODE -eq 0 -and $sdks) { return $cand }
+    }
+  }
+  throw "dotnet SDK not found"
+}
+
 # ---------------------------------------------------------------- fast checks
 
 Invoke-Step "Required files" {
@@ -172,6 +183,39 @@ Invoke-Step "API unit tests" {
   try {
     & $uv run pytest tests/unit -q
     Assert-ExitCode "pytest (unit)"
+  } finally { Pop-Location }
+}
+
+# B11 (2026-09-13): the device suite runs in -Fast too. `desktop.notify` was appended to the
+# agent's ambient group, the -Fast gate said clean, and `BrowserDispatchTests`' manifest pin
+# — a test written precisely so that growth is visible rather than inherited silently — only
+# spoke after the commit was already pushed. It costs under a minute against a twelve-minute
+# gate, and it removes the same class of surprise d7f726a removed for the other services'
+# ruff: the local gate must judge what CI judges.
+Invoke-Step "Windows agent build + tests" {
+  $dotnet = Find-Dotnet
+  $env:DOTNET_ROOT = Split-Path -Parent $dotnet
+  Push-Location (Join-Path $repoRoot "devices/windows-agent")
+  try {
+    if ($Fast) {
+      # Release only, and one build: it is the configuration `qualify-staged-update.ps1`
+      # judges, so it is the one worth a fast pass. The full gate below still does both.
+      & $dotnet build PagentOS.WindowsAgent.sln -c Release --nologo -v q
+      Assert-ExitCode "dotnet build -c Release"
+      & $dotnet test PagentOS.WindowsAgent.sln -c Release --nologo --no-build -v q
+      Assert-ExitCode "dotnet test -c Release"
+    } else {
+      & $dotnet build PagentOS.WindowsAgent.sln --nologo -v q
+      Assert-ExitCode "dotnet build"
+      & $dotnet test PagentOS.WindowsAgent.sln --nologo --no-build -v q
+      Assert-ExitCode "dotnet test"
+      # Release too, because a LATER step judges it. `qualify-staged-update.ps1` takes
+      # bin\Release as the candidate (falling back to Debug), so without this the gate
+      # tests one binary and qualifies another - and a stale Release tree is qualified as
+      # though it were the tree. Found 2026-09-11 when a new identity field read empty.
+      & $dotnet build PagentOS.WindowsAgent.sln -c Release --nologo -v q
+      Assert-ExitCode "dotnet build -c Release"
+    }
   } finally { Pop-Location }
 }
 
@@ -307,31 +351,6 @@ if (-not $Fast) {
       Assert-ExitCode "playwright install chromium"
       & $uv run pytest -q -m browser
       Assert-ExitCode "pytest (browser e2e)"
-    } finally { Pop-Location }
-  }
-
-  Invoke-Step "Windows agent build + tests" {
-    $dotnet = $null
-    foreach ($cand in @("$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe", "C:\Program Files\dotnet\dotnet.exe")) {
-      if (Test-Path $cand) {
-        $sdks = & $cand --list-sdks 2>$null
-        if ($LASTEXITCODE -eq 0 -and $sdks) { $dotnet = $cand; break }
-      }
-    }
-    if (-not $dotnet) { throw "dotnet SDK not found" }
-    $env:DOTNET_ROOT = Split-Path -Parent $dotnet
-    Push-Location (Join-Path $repoRoot "devices\windows-agent")
-    try {
-      & $dotnet build PagentOS.WindowsAgent.sln --nologo -v q
-      Assert-ExitCode "dotnet build"
-      & $dotnet test PagentOS.WindowsAgent.sln --nologo --no-build -v q
-      Assert-ExitCode "dotnet test"
-      # Release too, because a LATER step judges it. `qualify-staged-update.ps1` takes
-      # bin\Release as the candidate (falling back to Debug), so without this the gate
-      # tests one binary and qualifies another - and a stale Release tree is qualified as
-      # though it were the tree. Found 2026-09-11 when a new identity field read empty.
-      & $dotnet build PagentOS.WindowsAgent.sln -c Release --nologo -v q
-      Assert-ExitCode "dotnet build -c Release"
     } finally { Pop-Location }
   }
 
