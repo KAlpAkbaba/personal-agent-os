@@ -2,6 +2,7 @@
 
 - GET  /v1/alarms                     the alarms that still matter (terminal ones on request)
 - POST /v1/alarms                     create one (armed by the next clock tick)
+- GET  /v1/alarms/history             what actually happened, from the Activity Ledger
 - GET  /v1/alarms/{alarm_id}
 - POST /v1/alarms/{alarm_id}/cancel
 - POST /v1/alarms/{alarm_id}/snooze
@@ -30,6 +31,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.alarms import history as alarm_history
 from app.alarms import service as alarms_service
 from app.alarms import speech as alarm_speech
 from app.alarms.audio_store import AudioStore, get_audio_store
@@ -182,6 +184,34 @@ async def list_alarms(
             return [alarms_service.alarm_dict(r) for r in rows]
 
     return {"alarms": await asyncio.to_thread(load)}
+
+
+# Declared BEFORE the /{alarm_id} routes for the same reason "wake-song" is: "history" is
+# not a UUID and must not be captured by them.
+@router.get("/history")
+async def get_alarm_history(
+    request: Request,
+    alarm_id: uuid.UUID | None = None,
+    include_tests: bool = True,
+    limit: int = alarm_history.DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """B13 req 285: every alarm event, newest first, read from the Activity Ledger.
+
+    NOT from the `wake_alarms` table, and that is the point. A recurring alarm reuses its
+    row: `_release` rewinds `terminal_state`/`terminal_at`/`terminal_reason` to `None` when
+    it re-schedules for tomorrow, so the row can only ever describe the NEXT occurrence.
+    "Did my 07:30 ring on Tuesday?" is unanswerable from it by construction. The ledger
+    keeps each occurrence separately, because its idempotency key contains the occurrence.
+    """
+    artifacts = _artifacts(request)
+
+    def load() -> list[dict[str, Any]]:
+        with artifacts.session() as session:
+            return alarm_history.alarm_history(
+                session, alarm_id=alarm_id, include_tests=include_tests, limit=limit
+            )
+
+    return {"history": await asyncio.to_thread(load)}
 
 
 class WakeSongRequest(BaseModel):

@@ -40,6 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.alarms import speech as alarm_speech
+from app.alarms import timing
 from app.alarms.models import (
     ALARM_ACTIVE_STATES,
     ALARM_PENDING_STATES,
@@ -47,6 +48,7 @@ from app.alarms.models import (
     DEFAULT_MAX_PLAY_SECONDS,
     DEFAULT_SNOOZE_MINUTES,
     DEFAULT_TIMEZONE,
+    MAX_SNOOZE_COUNT,
     MAX_SNOOZE_MINUTES,
     MEDIA_KIND_REMEMBERED,
     MEDIA_KIND_TONE,
@@ -100,10 +102,16 @@ logger = get_logger("app.alarms.service")
 #: does not need an arm attempt on every one of those ticks).
 ARM_LEAD_S = 12 * 3600
 
-#: An alarm whose moment passed by more than this while the process was down is fired
-#: anyway (the owner still wants to be woken), but one older than this is not: waking
-#: someone for an alarm from yesterday morning is worse than not waking them.
-MAX_LATE_FIRE_S = 2 * 3600
+#: B13 req 284: how late an alarm may still be worth ringing. READ from
+#: ``packages/protocol/alarm-timing.json``, not remembered here.
+#:
+#: This constant said two hours and the device said five minutes - two halves of one
+#: decision, each with its own memory of the answer. The device's number was the one chosen
+#: by measurement: on 2026-09-10 a 07:30 alarm armed the night before rang at 08:10 because
+#: the machine had slept through the alarm time, 39 minutes late, into a room where the
+#: owner was already awake. The device learned from that. The cloud did not, because nothing
+#: made the two read the same file.
+MAX_LATE_FIRE_S = timing.max_late_fire_s()
 
 #: Spec §7's bus TTLs, published as metadata so the renderer never invents one.
 _UI_STATE_BY_ALARM_STATE: dict[str, UiState] = {
@@ -536,6 +544,16 @@ def snooze_alarm(
     span = int(minutes if minutes is not None else alarm.snooze_minutes)
     if span < 1 or span > MAX_SNOOZE_MINUTES:
         raise InvalidAlarmRequest(f"snooze minutes must be 1..{MAX_SNOOZE_MINUTES}")
+    # B13 req 259: a wake-up cannot be deferred for ever. Without this an alarm never
+    # reached a terminal state - it stayed live in the row, in the world model and on the
+    # device's arm for as long as somebody kept pressing, and one morning wrote an unbounded
+    # run of SNOOZED transitions into the ledger. The refusal is explicit: the alarm keeps
+    # ringing and the owner is told why, rather than the system quietly going silent.
+    if alarm.snooze_count >= MAX_SNOOZE_COUNT:
+        raise InvalidAlarmRequest(
+            f"this alarm has been snoozed {alarm.snooze_count} times "
+            f"(the limit is {MAX_SNOOZE_COUNT}); stop it or get up"
+        )
 
     if sequence is not None:
         sequence.stop_playback(session, alarm, reason="snooze", now=moment)
@@ -964,6 +982,11 @@ def alarm_dict(alarm: WakeAlarm) -> dict[str, Any]:
         "terminal_reason": alarm.terminal_reason,
         "max_play_seconds": alarm.max_play_seconds,
         "greeted_at": _aware(alarm.greeted_at).isoformat() if alarm.greeted_at else None,
+        # B13 req 267: why the greeting was not spoken, readable from this row alone.
+        # `no_tts_key` is the one that used to be invisible - with no key the provider
+        # produced a 110 Hz sine wave and the system played it AS the greeting, so a buzz
+        # in a bedroom at 07:30 was indistinguishable from a fault and the row said nothing.
+        "greeting_failure": (alarm.detail_json or {}).get("greeting_failure"),
         # The lifecycle instants and the device, so an owner harness can prove "armed on
         # the device", "fired at the scheduled instant" and "cleaned up" from this row alone.
         "device_id": str(alarm.device_id) if alarm.device_id else None,

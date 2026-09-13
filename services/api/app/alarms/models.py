@@ -135,6 +135,19 @@ TEST_MAX_PLAY_SECONDS = 120
 DEFAULT_SNOOZE_MINUTES = 5
 MAX_SNOOZE_MINUTES = 60
 
+#: B13 req 259: how many times one wake-up may be pushed forward before the system stops
+#: agreeing to it.
+#:
+#: There was no cap. An alarm could be snoozed indefinitely and would never reach a terminal
+#: state, so a wake-up nobody ever got up for stayed live in the row, in the world model and
+#: on the device's arm for as long as somebody kept pressing - and the ledger recorded an
+#: unbounded run of SNOOZED transitions for one morning.
+#:
+#: Five, because five is already 25 minutes past the moment the owner asked to be woken at
+#: the default span, and a system that keeps agreeing after that is not helping. The refusal
+#: is explicit and says so; it does NOT silently stop ringing.
+MAX_SNOOZE_COUNT = 5
+
 
 class WakeAlarm(Base):
     """One wake alarm. ``id`` is the ``alarm_id`` used everywhere: the routine action
@@ -286,6 +299,7 @@ __all__ = [
     "DEFAULT_MAX_PLAY_SECONDS",
     "DEFAULT_SNOOZE_MINUTES",
     "DEFAULT_TIMEZONE",
+    "MAX_SNOOZE_COUNT",
     "MAX_SNOOZE_MINUTES",
     "MEDIA_KIND_REMEMBERED",
     "MEDIA_KIND_TONE",

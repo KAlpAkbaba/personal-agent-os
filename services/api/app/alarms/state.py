@@ -41,7 +41,8 @@ from app.alarms.models import (
 )
 
 #: SCHEDULED/ARMED -> STOPPED covers the alarm whose moment passed while the process was
-#: down for longer than ``app.alarms.service.MAX_LATE_FIRE_S``. It never rang, so it is not
+#: down for longer than the shared late horizon (``app.alarms.timing.max_late_fire_s``,
+#: read from ``packages/protocol/alarm-timing.json``). It never rang, so it is not
 #: COMPLETED; the owner did not ask, so it is not CANCELLED. STOPPED with
 #: ``terminal_reason="expired_while_down"`` is the truthful third answer, and it releases
 #: the device arm like every other terminal state.

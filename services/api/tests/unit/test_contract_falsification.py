@@ -109,6 +109,22 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
         ),
         held_by=("services/api", "devices/windows-agent"),
     ),
+    "alarm-timing.json": Contract(
+        guard="test_the_late_horizon_is_the_one_in_the_shared_contract",
+        why=(
+            "an alarm has two independent ways to ring and both answer 'is it now too late "
+            "for this to be a wake-up?'. The cloud said two hours; the device said five "
+            "minutes, cut down after a 07:30 alarm rang at 08:10 on the owner's own machine. "
+            "The device learned from the incident and the cloud did not, because nothing "
+            "made the two halves read the same number"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+        unheld=(
+            "WHEN the device notices lateness is not held - it checks on its own tick and on "
+            "reload, the cloud checks when a firing reaches `fire_alarm`. The contract fixes "
+            "the horizon, not the sampling rate, so the two can still differ by one tick"
+        ),
+    ),
     "desktop-notify.json": Contract(
         guard="test_the_limits_are_read_from_the_contract_not_restated",
         why=(

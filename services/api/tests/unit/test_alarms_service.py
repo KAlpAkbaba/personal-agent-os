@@ -20,6 +20,7 @@ import pytest
 
 from app.alarms import service as alarms_service
 from app.alarms.models import (
+    ALARM_ACTIVE_STATES,
     PLAYED_KIND_LOCAL_FALLBACK,
     PLAYED_KIND_TONE_FALLBACK,
     PLAYED_KIND_YOUTUBE,
@@ -263,18 +264,67 @@ def test_two_ticks_two_processes_and_a_redelivery_produce_one_ring(factory, devi
     assert device.count("desktop.alarm_start") == 1
 
 
-def test_an_alarm_missed_by_hours_is_not_rung_late(session, sequence):
-    """Waking someone for yesterday's alarm is worse than not waking them
-    (``MAX_LATE_FIRE_S``)."""
+def test_an_alarm_forty_minutes_late_is_not_rung(session, sequence):
+    """B13 req 284, with the incident's own number.
+
+    On 2026-09-10 a 07:30 alarm armed the night before rang at 08:10, because the machine
+    had slept through the alarm time and woke up to an overdue arm: 39 minutes and 39
+    seconds late, into a room where the owner was already awake. The DEVICE was fixed that
+    day and the cloud was not, so the cloud would still have done it - it allowed two hours.
+    Forty minutes is the number this test uses because forty minutes is what happened.
+    """
     alarm = _create(session, when=parse_when_struct({"relative_seconds": 60}, now=NOW))
-    very_late = NOW + timedelta(seconds=alarms_service.MAX_LATE_FIRE_S + 600)
+    forty_minutes_late = NOW + timedelta(minutes=40)
+
     decision = alarms_service.fire_alarm(
-        session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(), now=very_late
+        session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(), now=forty_minutes_late
     )
+
     assert decision.fired is False
     assert decision.reason == "expired"
     session.refresh(alarm)
     assert alarm.state == STATE_STOPPED
+    assert alarm.terminal_reason == "expired_while_down"
+
+
+def test_an_alarm_two_minutes_late_is_still_rung(session, sequence):
+    """The horizon is not zero, and this is why. A slow resume, a busy boot, the cloud
+    losing a race - a couple of minutes late still serves the request to be woken AT a
+    time, and refusing would turn every scheduling wobble into a missed alarm."""
+    alarm = _create(session, when=parse_when_struct({"relative_seconds": 60}, now=NOW))
+
+    decision = alarms_service.fire_alarm(
+        session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(),
+        now=NOW + timedelta(minutes=2),
+    )
+
+    assert decision.fired is True
+
+
+def test_the_late_horizon_is_the_one_in_the_shared_contract(session, sequence):  # noqa: ARG001
+    """Not a number remembered here. The cloud said two hours and the device said five
+    minutes for three days, with both suites green - one decision, two memories of the
+    answer, which is what `packages/protocol/` exists to stop."""
+    import json
+    from pathlib import Path
+
+    contract = json.loads(
+        (
+            Path(__file__).resolve().parents[4] / "packages" / "protocol" / "alarm-timing.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert alarms_service.MAX_LATE_FIRE_S == contract["late_fire"]["max_late_seconds"]
+
+
+def test_the_grace_stays_well_under_the_late_horizon() -> None:
+    """Two different questions, and the ordering between them is load-bearing: a grace as
+    long as the horizon would leave the device politely waiting for the cloud at the exact
+    moment ringing stopped being worth doing."""
+    from app.alarms import timing
+
+    assert timing.cloud_grace_s() < timing.max_late_fire_s()
+    assert timing.device_default_grace_s() < timing.max_late_fire_s()
 
 
 def test_a_cancelled_alarm_never_fires(session, sequence):
@@ -919,3 +969,56 @@ def test_the_engine_and_the_alarm_judge_the_same_moment(factory, device) -> None
     )
     assert firing.dispatch_results[0]["kind"] == "wake_alarm"
     del alarm
+
+
+# ------------------------------------------------ B13 req 259: snooze has an end
+
+
+def test_a_wake_up_cannot_be_deferred_for_ever(session, sequence):
+    """There was no cap. An alarm could be snoozed indefinitely and never reached a terminal
+    state, so a wake-up nobody ever got up for stayed live in the row, in the world model and
+    on the device's arm for as long as somebody kept pressing."""
+    alarm = _create(session)
+    # The clock moves with the snoozes, because a snooze schedules the alarm five minutes
+    # from the moment it was pressed: firing at a stale `now` would be refused as expired
+    # (B13 req 284) and the loop would prove nothing about the cap.
+    moment = NOW
+    alarms_service.fire_alarm(
+        session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(), now=moment
+    )
+
+    for _ in range(alarms_service.MAX_SNOOZE_COUNT):
+        alarms_service.snooze_alarm(session, alarm.id, minutes=5, sequence=sequence, now=moment)
+        moment += timedelta(minutes=5)
+        alarms_service.fire_alarm(
+            session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(), now=moment
+        )
+
+    with pytest.raises(alarms_service.InvalidAlarmRequest) as refused:
+        alarms_service.snooze_alarm(session, alarm.id, minutes=5, sequence=sequence, now=moment)
+
+    assert str(alarms_service.MAX_SNOOZE_COUNT) in str(refused.value)
+
+
+def test_the_refusal_leaves_the_alarm_ringing_rather_than_going_quiet(session, sequence):
+    """A cap that silenced the alarm would be worse than no cap: the owner would have
+    snoozed once more and simply not been woken."""
+    alarm = _create(session)
+    alarms_service.fire_alarm(session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(), now=NOW)
+    alarm.snooze_count = alarms_service.MAX_SNOOZE_COUNT
+    session.commit()
+
+    with pytest.raises(alarms_service.InvalidAlarmRequest):
+        alarms_service.snooze_alarm(session, alarm.id, minutes=5, sequence=sequence, now=NOW)
+
+    session.refresh(alarm)
+    assert alarm.state in ALARM_ACTIVE_STATES, "the alarm is still physically happening"
+
+
+def test_a_fresh_alarm_is_not_born_at_the_limit(session, sequence):
+    alarm = _create(session)
+    alarms_service.fire_alarm(session, alarm.id, sequence=sequence, firing_id=uuid.uuid4(), now=NOW)
+
+    snoozed = alarms_service.snooze_alarm(session, alarm.id, minutes=5, sequence=sequence, now=NOW)
+
+    assert snoozed.snooze_count == 1

@@ -28,7 +28,7 @@ public sealed class ActivityStatusReporter(
     AlarmArmController? arms = null)
 {
     /// <summary>
-    /// Payload: <c>{}</c>. Result: the seven fields of <see cref="HeartbeatStatus.Fields"/>.
+    /// Payload: <c>{}</c>. Result: the eight fields of <see cref="HeartbeatStatus.Fields"/>.
     /// Never throws for a missing subsystem — an unwired one reports null or zero, which is a
     /// true statement about this device.
     /// </summary>
@@ -45,6 +45,11 @@ public sealed class ActivityStatusReporter(
         var observation = displayObserver.Current;
         var ringing = ringingAlarmId();
         var next = arms?.NextFireLocalAt;
+        var fired = new JsonArray();
+        foreach (var id in arms?.DrainLocallyFiredIds() ?? [])
+        {
+            fired.Add(id);
+        }
 
         return new JsonObject
         {
@@ -61,6 +66,11 @@ public sealed class ActivityStatusReporter(
             [HeartbeatStatus.NextAlarmAt] = next is null
                 ? null
                 : JsonValue.Create(next.Value.ToString("O", CultureInfo.InvariantCulture)),
+            // B13 req 282. DRAINED, not read: composing a status is the act of reporting, so
+            // an id leaves here exactly once. A field that only grew would make one local ring
+            // look like a ring on every heartbeat until the process restarted, and the cloud
+            // would keep re-reconciling an alarm it had already closed.
+            [HeartbeatStatus.LocalAlarmFired] = fired,
         };
     }
 }

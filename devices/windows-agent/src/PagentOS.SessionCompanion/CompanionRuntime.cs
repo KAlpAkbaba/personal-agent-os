@@ -463,6 +463,19 @@ public sealed class CompanionRuntime(
         {
             if (string.Equals(request.Capability, AgentCapabilities.DesktopPlayAudio, StringComparison.Ordinal))
             {
+                // B13 req 269: the alarm tone steps back while this speaks.
+                //
+                // The cloud has ducked the owner's MUSIC since M18.3 and could never duck the
+                // tone, because the tone is generated inside this process and has no
+                // per-stream volume the cloud can address. So on the tone-fallback path -
+                // every alarm without a wake song, and every alarm whose media failed - the
+                // greeting played over a ringing alarm at full level, and the one sentence
+                // the owner was meant to hear was the one thing in the room they could not.
+                //
+                // Here rather than inside `GreetingPlayer`, because this is the single door
+                // every piece of cloud-played audio comes through: a second such capability
+                // added later ducks the tone without its author having to remember to.
+                using var duck = alarm?.Duck("desktop.play_audio");
                 var greetingResult = await RequireGreeting()
                     .PlayAsync(request.Payload, cancellationToken)
                     .ConfigureAwait(false);

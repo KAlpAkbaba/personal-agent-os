@@ -45,6 +45,13 @@ public sealed class AlarmController : IDisposable
     /// <summary>How long an unattended alarm rings before stopping itself, when the caller says nothing.</summary>
     public const int DefaultMaxDurationSeconds = 300;
 
+    /// <summary>
+    /// What the tone drops to while something else speaks (requirement 269). The same 0.15
+    /// the cloud already uses to duck the owner's music, so a greeting over the tone and a
+    /// greeting over a song sound like the same decision rather than two.
+    /// </summary>
+    public const double DuckLevel = 0.15;
+
     public const int MinMaxDurationSeconds = 10;
 
     /// <summary>Half an hour. Past this, "the alarm is still ringing" is a fault, not a wake-up.</summary>
@@ -58,6 +65,9 @@ public sealed class AlarmController : IDisposable
     private readonly bool _autoPump;
     private readonly int _chunkMs;
     private readonly object _sync = new();
+
+    /// <summary>How many things are currently speaking over the tone (req 269).</summary>
+    private int _duckDepth;
 
     private Ringing? _current;
     private CancellationTokenSource? _pumpCts;
@@ -95,6 +105,77 @@ public sealed class AlarmController : IDisposable
     }
 
     public bool IsRinging => RingingAlarmId is not null;
+
+    /// <summary>
+    /// B13 requirement 269: the alarm tone steps back while something else speaks.
+    /// </summary>
+    /// <remarks>
+    /// <para>The cloud has ducked the owner's MUSIC since M18.3 — one `browser.media_volume`
+    /// at 0.15 while the greeting plays, and back afterwards. It could never duck this,
+    /// because this tone is generated inside the companion and has no per-stream volume the
+    /// cloud can address. So on the tone-fallback path (which is every alarm without a wake
+    /// song, and every alarm whose media failed) the greeting simply played OVER a ringing
+    /// alarm at full level, and the sentence the owner was supposed to hear was the one
+    /// thing in the room they could not.</para>
+    /// <para>Ducked HERE rather than by a new capability, because the two sounds are made by
+    /// one process: the level is applied per chunk in <c>Pump</c>, so it takes effect on the
+    /// next chunk and needs no restart, no second stream and no round trip.</para>
+    /// </remarks>
+    public bool Ducked
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _duckDepth > 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Lowers the tone until the returned handle is disposed. Nested and reference-counted:
+    /// two overlapping greetings must not have the first one's end restore full volume under
+    /// the second.
+    /// </summary>
+    public IDisposable Duck(string reason)
+    {
+        lock (_sync)
+        {
+            _duckDepth++;
+            if (_duckDepth == 1)
+            {
+                _logger.LogInformation("alarm tone ducked to {Level} ({Reason})", DuckLevel, reason);
+            }
+        }
+
+        return new DuckHandle(this);
+    }
+
+    private void Unduck()
+    {
+        lock (_sync)
+        {
+            if (_duckDepth > 0)
+            {
+                _duckDepth--;
+            }
+        }
+    }
+
+    private sealed class DuckHandle(AlarmController owner) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            // Once, whatever the caller does: a double dispose that decremented twice would
+            // leave a still-speaking greeting fighting a tone back at full volume.
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                owner.Unduck();
+            }
+        }
+    }
 
     /// <summary>
     /// Payload: <c>{"alarm_id": "&lt;id&gt;"?, "label": "&lt;text&gt;"?, "wake_volume": {"start": f,
@@ -312,6 +393,14 @@ public sealed class AlarmController : IDisposable
         }
 
         var level = current.Ramp.LevelAt(elapsed);
+        if (_duckDepth > 0)
+        {
+            // req 269. Applied per chunk, so ducking takes effect on the next one - no
+            // restart, no second stream, and the ramp underneath keeps its own shape so the
+            // tone comes back exactly where it would have been.
+            level = Math.Min(level, DuckLevel);
+        }
+
         var pcm = WakeTone.Render(current.Playback.Format, current.OffsetMs, _chunkMs, level);
         current.OffsetMs += _chunkMs;
         try

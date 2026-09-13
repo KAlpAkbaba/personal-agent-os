@@ -58,6 +58,12 @@ public sealed class AlarmArmController : IDisposable
     /// that - a slow resume, a busy boot, the cloud losing a race - so the horizon is not zero.
     /// Forty minutes late serves nothing: the owner is already awake, or was never going to be
     /// woken by this, and the only thing the noise does is startle them.</para>
+    /// <para><b>B13: this number is now shared.</b> The cloud used to answer the same question
+    /// with two hours - two halves of one decision, each with its own memory of the answer,
+    /// and only this half had learned from the incident above.
+    /// <c>packages/protocol/alarm-timing.json</c> holds it for both, and
+    /// <c>AlarmTimingContractTests</c> fails if this constant and that file disagree. Editing
+    /// it here alone will go red, which is the point.</para>
     /// </remarks>
     public static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
 
@@ -68,6 +74,27 @@ public sealed class AlarmArmController : IDisposable
     private readonly AuditLog? _audit;
     private readonly int _tickMs;
     private readonly object _sync = new();
+
+    /// <summary>Ids rung locally and not yet carried away by a status report (req 282).</summary>
+    private readonly List<string> _locallyFired = [];
+
+    /// <summary>
+    /// B13 requirement 283: ids this device rang locally and has not yet TOLD the cloud about
+    /// synchronously.
+    /// </summary>
+    /// <remarks>
+    /// <para>Separate from <see cref="_locallyFired"/> on purpose, because they answer two
+    /// different questions at two different speeds. The heartbeat's list is eventual - it
+    /// leaves on the next report, whenever that is. This set is what <see cref="Disarm"/>
+    /// answers with, and disarm is the FIRST thing the cloud does when it fires: it is the one
+    /// moment the cloud can learn "this already rang" before deciding whether to ring.</para>
+    /// <para>Waiting for the heartbeat is what "the cloud can fire a second time half an hour
+    /// later" means. A heartbeat that has not arrived yet is not a statement that nothing
+    /// happened.</para>
+    /// <para>Cleared when the id is armed again (a new arm is a new occurrence) and when a
+    /// disarm carries the fact away.</para>
+    /// </remarks>
+    private readonly HashSet<string> _rangLocallyUntold = [];
     private readonly HashSet<string> _reportedRingFailures = new(StringComparer.Ordinal);
 
     private CancellationTokenSource? _tickCts;
@@ -121,6 +148,53 @@ public sealed class AlarmArmController : IDisposable
     /// <summary>Local fallback rings since this process started. Telemetry; asserted by tests.</summary>
     public int LocalRings { get; private set; }
 
+    /// <summary>
+    /// B13 requirement 282: the ids this device has rung on its own and not yet reported.
+    /// </summary>
+    /// <remarks>
+    /// <para>A counter cannot answer the question Cloud Core actually has, which is not "how
+    /// many" but "WHICH one". Without the id the cloud cannot tell that the alarm it is about to
+    /// fire is the alarm this device already rang, so it rings a second time - requirement 283,
+    /// recorded as "the cloud can fire a second time half an hour later".</para>
+    /// <para>Not a running list: <see cref="DrainLocallyFiredIds"/> empties it, so an id is
+    /// reported until a status report carries it away and never after. A list that only grew
+    /// would make one ring look like a ring on every heartbeat for the rest of the session.</para>
+    /// </remarks>
+    public IReadOnlyList<string> LocallyFiredIds
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return [.. _locallyFired];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes the pending ids and clears them, so one local ring is reported once.
+    /// </summary>
+    /// <remarks>
+    /// The Cloud Core side is idempotent anyway (it diffs against the previous report and
+    /// `reconcile_local_fired` refuses an alarm already past FIRING), but "reported once"
+    /// belongs here too: the two halves each holding the whole rule is what makes a
+    /// half that is wrong survivable.
+    /// </remarks>
+    public IReadOnlyList<string> DrainLocallyFiredIds()
+    {
+        lock (_sync)
+        {
+            if (_locallyFired.Count == 0)
+            {
+                return [];
+            }
+
+            var drained = _locallyFired.ToArray();
+            _locallyFired.Clear();
+            return drained;
+        }
+    }
+
     /// <summary>Arms expired for being too far overdue to be a wake-up. Telemetry; asserted by tests.</summary>
     public int Expired { get; private set; }
 
@@ -152,6 +226,10 @@ public sealed class AlarmArmController : IDisposable
 
         var fireAt = ParseInstant(payload["fire_at"], "fire_at");
         var grace = ParseGrace(payload["grace_s"]);
+        // B13 req 286: the cloud says whether anybody meant this. Until now the device could
+        // not tell - a test ring's audit row was byte-identical to a real 07:30, so the one
+        // record a test mode exists to keep clean was the one it could not.
+        var isTest = payload["is_test"]?.GetValue<bool>() ?? false;
 
         var arm = new ArmedAlarm
         {
@@ -161,6 +239,7 @@ public sealed class AlarmArmController : IDisposable
             Label = payload["label"]?.GetValue<string>(),
             WakeVolume = payload["wake_volume"] is JsonObject wake ? (JsonObject)wake.DeepClone() : null,
             MaxDurationSeconds = ParseOptionalInt(payload["max_duration_s"], "max_duration_s"),
+            IsTest = isTest,
             ArmedAt = _time.GetUtcNow(),
         };
 
@@ -171,6 +250,9 @@ public sealed class AlarmArmController : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             replaced = _store.Upsert(arm);
             _reportedRingFailures.Remove(alarmId);
+            // req 283: a new arm for this id is a new occurrence. Yesterday's local ring must
+            // not make the cloud stand down for tomorrow's alarm.
+            _rangLocallyUntold.Remove(alarmId);
             count = _store.Count;
             if (AutoTick)
             {
@@ -190,7 +272,7 @@ public sealed class AlarmArmController : IDisposable
             capability: AgentCapabilities.DesktopAlarmArm,
             status: AckStatus.Succeeded,
             detail: $"alarm_id={alarmId}; fire_at={fireAt:O}; grace_s={grace}; "
-                + $"fire_local_at={arm.FireLocalAt:O}; replaced={replaced}");
+                + $"fire_local_at={arm.FireLocalAt:O}; replaced={replaced}; is_test={isTest}");
 
         return new JsonObject
         {
@@ -219,12 +301,26 @@ public sealed class AlarmArmController : IDisposable
         var alarmId = payload["alarm_id"]?.GetValue<string>();
 
         bool wasArmed;
+        bool alreadyFired;
         int count;
         lock (_sync)
         {
             wasArmed = string.IsNullOrWhiteSpace(alarmId)
                 ? _store.RemoveAll() > 0
                 : _store.Remove(alarmId);
+            // req 283: the answer the cloud needs BEFORE it decides to ring, and the moment it
+            // gets it. Taken, not read: the cloud has now been told, and telling it twice would
+            // make the second fire of a genuinely new occurrence stand down for no reason.
+            if (string.IsNullOrWhiteSpace(alarmId))
+            {
+                alreadyFired = _rangLocallyUntold.Count > 0;
+                _rangLocallyUntold.Clear();
+            }
+            else
+            {
+                alreadyFired = _rangLocallyUntold.Remove(alarmId);
+            }
+
             count = _store.Count;
         }
 
@@ -237,13 +333,16 @@ public sealed class AlarmArmController : IDisposable
             "alarm_disarm",
             capability: AgentCapabilities.DesktopAlarmDisarm,
             status: AckStatus.Succeeded,
-            detail: $"alarm_id={alarmId ?? "(all)"}; was_armed={wasArmed}");
+            detail: $"alarm_id={alarmId ?? "(all)"}; was_armed={wasArmed}; already_fired={alreadyFired}");
 
         return new JsonObject
         {
             ["disarmed"] = true,
             ["alarm_id"] = alarmId,
             ["was_armed"] = wasArmed,
+            // req 283. `was_armed: false` alone is ambiguous - it means "never armed" AND
+            // "already rang", and the cloud cannot act on an ambiguity. This says which.
+            ["already_fired"] = alreadyFired,
             ["armed_count"] = count,
         };
     }
@@ -431,6 +530,19 @@ public sealed class AlarmArmController : IDisposable
         }
 
         LocalRings++;
+        lock (_sync)
+        {
+            // B13 req 282: the id, not just the count. Deduplicated because a re-armed alarm
+            // that rings twice before one report is still one thing the cloud must not fire.
+            if (!_locallyFired.Contains(arm.AlarmId))
+            {
+                _locallyFired.Add(arm.AlarmId);
+            }
+
+            // req 283: and the synchronous half, which `Disarm` answers with.
+            _rangLocallyUntold.Add(arm.AlarmId);
+        }
+
         _logger.LogWarning(
             "alarm {AlarmId} rang from the LOCAL fallback: no cloud alarm_start arrived within {Grace}s of {FireAt:O} (late {Late})",
             arm.AlarmId,
@@ -442,7 +554,7 @@ public sealed class AlarmArmController : IDisposable
             capability: AgentCapabilities.DesktopAlarmArm,
             status: AckStatus.Succeeded,
             detail: $"alarm_id={arm.AlarmId}; fire_at={arm.FireAt:O}; grace_s={arm.GraceSeconds}; "
-                + $"late_s={(int)lateness.TotalSeconds}; source=local_fallback");
+                + $"late_s={(int)lateness.TotalSeconds}; source=local_fallback; is_test={arm.IsTest}");
         return true;
     }
 

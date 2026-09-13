@@ -119,7 +119,13 @@
         "alarm_ringing": { "type": "boolean" },
         "ringing_alarm_id": { "type": ["string", "null"], "maxLength": 128 },
         "armed_alarms": { "type": "integer", "minimum": 0 },
-        "next_alarm_at": { "type": ["string", "null"], "format": "date-time" }
+        "next_alarm_at": { "type": ["string", "null"], "format": "date-time" },
+        "local_alarm_fired": {
+          "$comment": "B13 requirement 282: the ids this device rang on its OWN fallback since the last report, drained when reported. Cloud Core diffs it against the previous report and reconciles, which is what makes requirement 283 (no second ring from the cloud) enforceable: without the id the cloud knows a fallback rang but not WHICH alarm, so it cannot tell that the one it is about to fire has already woken the owner. Absent means 'nothing rang locally', which is also what an older agent sends.",
+          "type": "array",
+          "items": { "type": "string", "maxLength": 128 },
+          "maxItems": 32
+        }
       },
       "additionalProperties": false
     },

@@ -1,0 +1,48 @@
+{
+  "batch": "B13",
+  "name": "Alarm bütünlüğü",
+  "requirements": [
+    259,
+    267,
+    269,
+    282,
+    283,
+    284,
+    285,
+    286
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "what_this_proves": "An alarm now has one answer to every question it used to have two of: one late threshold instead of the cloud's two hours against the device's five minutes, one ring instead of a local fallback the cloud could ring over, one record of what happened instead of a row that forgets yesterday, and one honest sentence when the greeting cannot be spoken instead of a 110 Hz buzz.",
+  "closed_fully": {
+    "284_one_late_threshold": "The cloud said an alarm could still be worth ringing two hours late; the device said five minutes. Two halves of one decision, each with its own memory of the answer. The device's number was the one chosen by MEASUREMENT - on 2026-09-10 a 07:30 alarm armed the night before rang at 08:10 because the machine had slept through the alarm time, 39 minutes and 39 seconds late, into a room where the owner was already awake. The device learned from that incident and the cloud did not, because nothing made the two read the same file. `packages/protocol/alarm-timing.json` is that file; `app.alarms.timing` and `AlarmTimingContractTests` are its two readers, and it is registered in `test_contract_falsification` with what it does NOT hold (the sampling rate, only the horizon).",
+    "282_which_alarm_rang": "The device kept a COUNTER of local rings. A counter cannot answer the question Cloud Core has, which is not 'how many' but 'WHICH one'. `local_alarm_fired` was added to the closed status field set in all four places that declare it (the JSON schema, DEVICE_PROTOCOL.md, `HeartbeatStatus.Fields`, `ActivityStatusReporter.Compose`), and it is DRAINED by the report: composing a status IS the act of reporting, so an id leaves once. A list that only grew would make one ring look like a ring on every heartbeat until the process restarted.",
+    "283_one_wake_up_one_ring": "With 282 the cloud can learn it, but only on the next heartbeat - and 'the cloud can fire a second time half an hour later' is precisely the window before that heartbeat arrives. So the answer is SYNCHRONOUS: `desktop.alarm_disarm` is the first thing the cloud does when it fires, and it now answers `already_fired`. `was_armed: false` could not have carried this - after a local ring the arm is gone, so it means 'never armed' AND 'already rang' at once, and the cloud cannot act on an ambiguity. The fact is TAKEN by the disarm rather than left behind, and re-arming the same id clears it, so a recurring alarm's ring yesterday cannot silence the cloud tomorrow. The stand-down does NOT skip the greeting: the owner was woken by a tone and not spoken to, so the sentence still plays - over the local fallback, which is precisely what requirement 269's duck is for.",
+    "269_the_tone_steps_back": "The cloud has ducked the owner's MUSIC since M18.3 - one `browser.media_volume` at 0.15 while the greeting plays - and could never duck the tone, because the tone is generated inside the companion and has no per-stream volume the cloud can address. So on the tone-fallback path (every alarm without a wake song, and every alarm whose media failed) the greeting played OVER a ringing alarm at full level, and the one sentence the owner was meant to hear was the one thing in the room they could not. Ducked per chunk in `Pump`, at the same 0.15, reference-counted, and applied at the ONE door every piece of cloud-played audio comes through - so a second such capability added later ducks the tone without its author having to remember to.",
+    "267_the_keyless_greeting": "With no OpenAI key `build_greeting_tts` falls back to the offline fake, and what that fake produces is a 110 Hz sine wave. It was played AS the greeting: after an alarm, in a bedroom, a buzz that sounds like a fault rather than like a voice - and the row recorded nothing, so the owner's only way to find out was to hear it and wonder. The fallback is not removed, it is ANNOUNCED: the provider still exists and is still exercised (a keyless machine can prove the whole greeting path end to end, and a test asserts the WAV it makes is real and not silent), but a synthetic tone is not offered to the owner as a greeting. `greeting_failure=\"no_tts_key\"` is on the row `GET /v1/alarms/{id}` returns.",
+    "285_the_history_the_row_cannot_keep": "No new table. Every alarm transition has written an Activity Ledger row since M18, idempotent per occurrence; nothing could read it back as a history. That matters more here than anywhere else in the subsystem, because the alarm ROW cannot become one: a recurring alarm reuses its row, and `_release` rewinds `terminal_state`, `terminal_at` and `terminal_reason` to `None` when it re-schedules for tomorrow. 'Did my 07:30 ring on Tuesday?' is unanswerable from the row BY CONSTRUCTION. The event list is derived from `ALARM_EVENT_TYPE_BY_STATE`, so a state added to the machine cannot be missing from the history.",
+    "286_the_device_knows_it_is_a_test": "The cloud shortened the play ceiling, renamed the routine and changed the spoken sentence - and never told the device, so the audit row the agent wrote for a test ring was byte-identical to one for a real 07:30. The one record a test mode exists to keep clean was the one it could not. `is_test` now rides on the arm and the start, is persisted with the arm (the ring that matters most for this is the LOCAL one, which happens when the cloud is not there to label it afterwards), appears in both audit rows, and the history can leave test rings out."
+  },
+  "not_claimed_done": {
+    "259_snooze": "PARTIAL, and the missing piece is named precisely. The cap is real and tested: there was NO limit, so an alarm could be snoozed indefinitely and never reached a terminal state - it stayed live in the row, in the world model and on the device's arm for as long as somebody kept pressing, and one morning wrote an unbounded run of SNOOZED transitions into the ledger. The limit is five and the refusal is explicit: the alarm keeps ringing and says why, because a cap that silenced the alarm would be worse than no cap. What remains is snoozing DURING a local fallback ring, when the cloud is unreachable. That is not a missing device capability - adding `desktop.alarm_snooze` would only be reachable from the cloud, which is the case that already works. It needs a LOCAL trigger (a hotkey, a toast action, a spoken word the device hears on its own), which belongs with device-side input in B47."
+  },
+  "red_first": {
+    "284_the_late_horizon": "`app/alarms/service.py` copied to a backup with its sha256, `MAX_LATE_FIRE_S` put back to `2 * 3600`, the suite re-run, restored by digest verification (`sha256sum -c`: OK). 2 failed: the forty-minute case rang, and the contract check reported `assert 7200 == 300`.",
+    "269_the_duck": "`AlarmController.cs` backed up by digest, the duck clamp replaced with a no-op, the suite re-run: `The_tone_drops_while_something_else_is_speaking` failed with `ducked peak 19660 should be under 18021`. Restored by digest (`sha256sum -c`: OK). The assertion was then TIGHTENED as a result - 'lower' is satisfied by a duck that shaves five per cent and still leaves the greeting inaudible, so it now reads the generator's own `WakeTone.PeakLevel` and asserts the level itself.",
+    "why_the_measured_fake_matters": "The duck test uses a playback that KEEPS the samples. `FakePlayback` only counts bytes, and a test that read a byte count would have passed with the level ignored entirely - the B10 lesson (a test that stays green with the fix reverted) applied before it could cost anything."
+  },
+  "tests": {
+    "services/api/tests/unit/test_alarms_service.py": 51,
+    "services/api/tests/unit/test_alarms_sequence.py": 42,
+    "services/api/tests/unit/test_alarms_history.py": 10,
+    "services/api/tests/unit/test_contract_falsification.py": 34,
+    "devices/.../Alarms/AlarmTimingContractTests.cs": 5,
+    "devices/.../Alarms/LocalFiredReportingTests.cs": 10,
+    "devices/.../Alarms/AlarmDuckAndTestModeTests.cs": 7
+  },
+  "runtime_proof": {
+    "status": "NOT_YET",
+    "why": "REAL_PROOF_REQUIRED for B13 is a single ring in a real alarm run. Everything here is deterministic-clock proven on both sides, but 'one ring' is a claim about a morning, and it needs the agent build installed on the owner's machine - carried with Karar 0 and the device install."
+  }
+}

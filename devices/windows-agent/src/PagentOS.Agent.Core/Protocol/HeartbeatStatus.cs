@@ -49,11 +49,24 @@ public static class HeartbeatStatus
     /// <summary>When this device would next ring on its own, or null.</summary>
     public const string NextAlarmAt = "next_alarm_at";
 
+    /// <summary>
+    /// B13 requirement 282: ids this device rang on its own fallback since the last report.
+    /// </summary>
+    /// <remarks>
+    /// The count was already here (<see cref="ArmedAlarms"/> is how many are held, and the
+    /// controller counted its rings) and a count cannot answer the question Cloud Core has,
+    /// which is not "how many" but "WHICH one". Without the id the cloud knows a fallback rang
+    /// and cannot tell that the alarm it is about to fire is the one that already woke the
+    /// owner — which is requirement 283, recorded as "the cloud can fire a second time half an
+    /// hour later". An id this device was handed, and nothing else: no title, no label, no time.
+    /// </remarks>
+    public const string LocalAlarmFired = "local_alarm_fired";
+
     /// <summary>Every key the <c>status</c> object may carry, in the order the schema lists them.</summary>
     public static readonly IReadOnlyList<string> Fields =
     [
         InputIdleSeconds, DisplayState, DisplayObservedAt,
-        AlarmRinging, RingingAlarmId, ArmedAlarms, NextAlarmAt,
+        AlarmRinging, RingingAlarmId, ArmedAlarms, NextAlarmAt, LocalAlarmFired,
     ];
 
     /// <summary>

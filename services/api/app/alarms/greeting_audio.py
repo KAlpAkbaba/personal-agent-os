@@ -121,15 +121,35 @@ def synthesize_greeting(
     )
 
 
+#: The provider name the offline fake answers with. B13 req 267: NAMED here, because
+#: "which provider spoke" is the only thing that distinguishes a greeting from a buzz.
+FALLBACK_PROVIDER_NAME: Final[str] = "fake-tts-greeting"
+
+
+def is_fallback_provider(provider: Any) -> bool:
+    """Whether this provider produces a synthetic tone rather than speech (req 267).
+
+    Asked by name because that is what the receipt records; a provider that renames itself
+    to look real is a different problem from the one this exists to catch.
+    """
+    return getattr(provider, "name", "") == FALLBACK_PROVIDER_NAME
+
+
 def build_greeting_tts(settings: Any) -> TTSProviderLike:
     """The provider the wake greeting speaks through (spec §3.7).
 
     ``OpenAITTSProvider`` when the owner's OpenAI key is configured (the same key the
     realtime session already uses), and the OFFLINE fake otherwise — never ``None``. A
     process with no key still produces a real WAV the companion really plays, so "the
-    greeting path works" is provable on a machine with no credentials at all, and the
-    difference between the two is visible in the receipt's provider name rather than in
-    whether anything was spoken.
+    greeting path works" is provable on a machine with no credentials at all.
+
+    **B13 req 267: the difference must be ANNOUNCED, not merely recorded.** What the fake
+    produces is a 110 Hz sine wave. Played into a bedroom after an alarm it is not a
+    greeting that sounds odd, it is a fault that sounds deliberate — and the row said
+    nothing, so the owner's only way to find out was to hear it and wonder. The sequence
+    now refuses to play it and says why (``greeting_failure="no_tts_key"``), which is the
+    honest version of the same fallback: the path is exercised, the WAV is still produced
+    and testable, and nobody is buzzed at.
     """
     from app.voice.providers import FakeTTSProvider, OpenAITTSProvider
 
@@ -138,7 +158,7 @@ def build_greeting_tts(settings: Any) -> TTSProviderLike:
     )
     if api_key:
         return OpenAITTSProvider(api_key, default_voice=GREETING_VOICE_PREFERENCE[-1])
-    return FakeTTSProvider(name="fake-tts-greeting")
+    return FakeTTSProvider(name=FALLBACK_PROVIDER_NAME)
 
 
 def normalize_greeting(text: str, session: Any | None = None) -> str:
@@ -160,6 +180,7 @@ def normalize_greeting(text: str, session: Any | None = None) -> str:
 
 
 __all__ = [
+    "FALLBACK_PROVIDER_NAME",
     "GREETING_FORMAT",
     "GREETING_LEVEL",
     "GREETING_MAX_SECONDS",
@@ -168,6 +189,7 @@ __all__ = [
     "GreetingSynthesisFailed",
     "TTSProviderLike",
     "build_greeting_tts",
+    "is_fallback_provider",
     "normalize_greeting",
     "synthesize_greeting",
 ]

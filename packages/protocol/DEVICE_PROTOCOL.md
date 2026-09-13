@@ -270,19 +270,21 @@ The **local fallback** for an alarm the cloud intends to ring. A wake alarm that
 
 `desktop.alarm_arm`
 
-Payload: `{"alarm_id":"<id>","fire_at":"<iso-8601>","grace_s":<int>?,"label":"<text>"?,"wake_volume":{…}?,"max_duration_s":<int>?}`
+Payload: `{"alarm_id":"<id>","fire_at":"<iso-8601>","grace_s":<int>?,"label":"<text>"?,"wake_volume":{…}?,"max_duration_s":<int>?,"is_test":<bool>?}`
 Result: `{"armed":true,"alarm_id":"…","fire_at":"…","grace_s":<i>,"fire_local_at":"…","replaced":<bool>,"armed_count":<i>}`
 
 `desktop.alarm_disarm`
 
 Payload: `{"alarm_id":"<id>"?}` — omit it to forget every arm.
-Result: `{"disarmed":true,"alarm_id":"…"|null,"was_armed":<bool>,"armed_count":<i>}`
+Result: `{"disarmed":true,"alarm_id":"…"|null,"was_armed":<bool>,"already_fired":<bool>,"armed_count":<i>}`
 
 - **`alarm_id` is required to arm.** Unlike `alarm_start`, an anonymous arm could never be consumed by anything except its own firing.
 - **`grace_s` defaults to 60**, clamped to 0…3600. The device rings at `fire_at + grace_s`, not at `fire_at`: firing at exactly `fire_at` would race the cloud's own command over a link with any latency at all, and the owner would sometimes hear two alarms.
 - **One ring per `alarm_id`, always.** Three things consume an arm, each removing it from the store first: a `desktop.alarm_start` naming that id (the ordinary case — the cloud got there in time), a `desktop.alarm_stop` naming it (the owner has already dealt with it), and `desktop.alarm_disarm`. Firing locally removes it too, **persisted before the first sample is generated**, so a companion that dies mid-ring gives the owner a missed alarm — which they notice — rather than a second one on the next start.
 - **Arming is idempotent by `alarm_id`**: the same id replaces the existing arm and says so in `replaced`. Disarming is idempotent the way `alarm_stop` is: disarming something never armed is a success with `was_armed:false`.
-- **Reload on start is conservative.** An arm whose local fire time already passed rings **once** if it passed less than **2 hours** ago, and is **expired with an audit row** otherwise. Waking someone twenty minutes late is a late alarm; waking them at 14:00 for a 06:30 alarm is a machine behaving badly.
+- **Reload on start is conservative, and the horizon is SHARED (B13, requirement 284).** An arm whose local fire time already passed rings **once** if it passed less than the late horizon ago, and is **expired with an audit row** otherwise. That horizon lives in `packages/protocol/alarm-timing.json` and is read by both halves — `app.alarms.timing` on the cloud, `AlarmArmController.StaleAfter` here, with `AlarmTimingContractTests` failing if they disagree. It is **five minutes**, cut down from two hours after 2026-09-10: a 07:30 alarm armed the night before was rung at 08:10 because the machine had slept through the alarm time, 39 minutes and 39 seconds late, into a room where the owner was already awake. This half learned from that; the cloud still said two hours, because nothing made the two read one number.
+- **`already_fired` on a disarm is how the cloud avoids ringing twice (requirement 283).** Disarm is the first thing Cloud Core does when it fires, so it is the one moment it can learn — synchronously — that this device has already rung this alarm on its own. `was_armed:false` cannot carry that: after a local ring the arm is gone, so it means "never armed" AND "already rang" at once. The fact is **taken** by the disarm rather than left behind, and arming the same id again clears it, because a new arm is a new occurrence.
+- **`is_test` tells the device whether anybody meant this ring (requirement 286).** Optional, persisted with the arm, and carried into the local ring's audit row. Until B13 a test ring's `alarm_arm_fired` row was byte-identical to a real 07:30, which is exactly the record a test mode exists to keep clean.
 - **The fallback rings the same alarm.** `label`, `wake_volume` and `max_duration_s` are carried into the `alarm_start` path of §6c, so the local ring obeys the same ramp, the same ceiling and the same `max_duration_s`. With no render endpoint the failure is audited once per arm, not once per tick.
 - Audit rows: `alarm_arm`, `alarm_disarm`, `alarm_arm_consumed`, `alarm_arm_fired`, `alarm_arm_expired`, `alarm_arm_ring_failed`.
 
@@ -298,14 +300,16 @@ Result — and, verbatim, the optional `status` object on a heartbeat:
  "display_state":"unknown"|"off"|"on"|"dimmed",
  "display_observed_at":"<iso-8601>"|null,
  "alarm_ringing":<bool>,"ringing_alarm_id":"…"|null,
- "armed_alarms":<int>,"next_alarm_at":"<iso-8601>"|null}
+ "armed_alarms":<int>,"next_alarm_at":"<iso-8601>"|null,
+ "local_alarm_fired":["<alarm-id>", …]}
 ```
 
 - **One shape, one producer.** The heartbeat's `status` IS this capability's result. A status assembled separately from the capability's answer would drift, and the version Cloud Core reasons about most often would be the one nothing tests.
 - **`input_idle_s` comes from `GetLastInputInfo` — a tick count and nothing else.** No key, character, pointer position, window title or application name is ever read, stored or sent. A structural test fails if a hook, key-state, raw-input or foreground-window API name appears in the companion's input source.
 - **It reports; it does not decide.** There is no "the owner is asleep" field and there will not be one. The inference from idle time and display state to a person's state belongs where it can be explained, argued with and turned off — in Cloud Core, against the presence model (`docs/M18_THREAT_MODEL.md` §4).
 - **On the heartbeat the field is OPTIONAL and additive; `protocol_version` stays 1.** The Device Service asks the companion for `desktop.activity_status` before each heartbeat and attaches the answer. Absent means "not known", never "nothing is happening": no companion connected, a companion that did not answer within **1.5 s**, a companion that threw, or an agent older than the field all produce a heartbeat without `status`, byte-for-byte the frame v1 always sent. Presence and liveness never depend on it — a status path that could stall a heartbeat would let a busy companion make the device look offline, which is strictly worse.
-- **The key set is closed and the SERVICE closes it.** `additionalProperties: false` inside `status` means one unknown key would fail the broker's validation for the whole heartbeat, so the Device Service projects the companion's answer onto exactly the seven keys above before sending. A newer companion cannot break an older service's connection.
+- **`local_alarm_fired` is DRAINED, not read (B13, requirement 282).** It lists the alarm ids this device rang on its own local fallback since the last report, and composing a status is the act of reporting: an id leaves once and is then gone. The count was never enough - Cloud Core's question is not "how many rang" but "WHICH one", because without the id it cannot tell that the alarm it is about to fire is the one that already woke the owner (requirement 283: "the cloud can fire a second time half an hour later"). An empty list and an absent field say the same thing, which is also what an agent older than this field sends.
+- **The key set is closed and the SERVICE closes it.** `additionalProperties: false` inside `status` means one unknown key would fail the broker's validation for the whole heartbeat, so the Device Service projects the companion's answer onto exactly the eight keys above before sending. A newer companion cannot break an older service's connection.
 
 ## 6h. Capability: `desktop.play_audio` (M18.3)
 

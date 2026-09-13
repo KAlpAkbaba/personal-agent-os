@@ -34,6 +34,18 @@ public sealed record ArmedAlarm
 
     public DateTimeOffset ArmedAt { get; init; }
 
+    /// <summary>
+    /// B13 requirement 286: whether anybody meant this ring.
+    /// </summary>
+    /// <remarks>
+    /// The cloud already shortened the play ceiling, renamed the routine and changed the
+    /// spoken sentence for a test alarm — but the device was never told, so the audit row it
+    /// wrote for a test ring was byte-identical to one for a real 07:30. Kept on the arm and
+    /// persisted with it, because the ring that matters most for this is the LOCAL fallback:
+    /// it happens when the cloud is not there to label it afterwards.
+    /// </remarks>
+    public bool IsTest { get; init; }
+
     /// <summary>The moment this device rings, if nothing has consumed the arm by then.</summary>
     public DateTimeOffset FireLocalAt => FireAt + TimeSpan.FromSeconds(GraceSeconds);
 
@@ -59,6 +71,14 @@ public sealed record ArmedAlarm
         if (MaxDurationSeconds is not null)
         {
             node["max_duration_s"] = MaxDurationSeconds.Value;
+        }
+
+        if (IsTest)
+        {
+            // Written only when true: a store file full of `"is_test": false` says nothing,
+            // and the absence of the key already means "a real alarm" for every arm ever
+            // persisted before this field existed.
+            node["is_test"] = true;
         }
 
         return node;
@@ -98,6 +118,7 @@ public sealed record ArmedAlarm
             WakeVolume = row["wake_volume"] is JsonObject wake ? (JsonObject)wake.DeepClone() : null,
             MaxDurationSeconds = row["max_duration_s"]?.GetValue<int>(),
             ArmedAt = armedAt,
+            IsTest = row["is_test"]?.GetValue<bool>() ?? false,
         };
     }
 }

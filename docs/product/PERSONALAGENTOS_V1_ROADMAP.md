@@ -510,7 +510,7 @@ ROLLBACK_PLAN       : tek modül; commit geri alınır
 ### FAZ B — P1 GÜNLÜK KULLANIM (B11–B33)
 
 ```
-BATCH_ID            : B11
+BATCH_ID            : B11                              [KISMEN KAPANDI 2026-09-13 — 369/370 cihaz kurulumu, 372 VAPID sahipte]
 NAME                : Sahibe ulaşma omurgası
 REQUIREMENT_IDS     : 367, 368, 369, 370, 372, 377, 378, 379, 380, 389
 GOAL                : Tarayıcı kapalıyken sistem sahibine güvenilir biçimde ulaşabilsin.
@@ -519,7 +519,23 @@ AFFECTED_SUBSYSTEMS : Notifications, Device Companion, Protocol, Web
 EXPECTED_FILES      : packages/protocol/, devices/windows-agent (SessionCompanion),
                       services/api/app/notifications/, apps/web/
 RISK                : medium — yeni cihaz yeteneği, agent kurulumu gerekir
-OWNER_ACTION        : no (VAPID anahtarı 372 için gerekirse checkpoint edilir)
+OWNER_ACTION        : VAPID anahtarı (372) — checkpoint, bloklamadı
+KAPANIŞ             : commit 86769d7 (+db84bbd, 8d2d56e) · CI 34750573146 · 367/368/377/378/379/380/389 DONE,
+                      369/370 PARTIAL (cihazda kurulum), 372 BLOCKED_OWNER (VAPID)
+                      kanıt docs/evidence/b11-owner-reachability-2026-09-13.json
+YOL ÜSTÜNDE         : (1) `ladder.sweep` yazılmıştı ve HİÇBİR ŞEY çağırmıyordu — bu deponun
+                      altıncı "yazıldı ama bağlanmadı" kusuru; RetentionSweeper'a bağlandı.
+                      (2) ToastRung, `DeviceActionPort.run`'ın kabul etmediği `device_id`/
+                      `trace_id` ile çağırıyordu: her toast merdivenin catch-all'ı içinde
+                      TypeError atıp "cihaz göstermedi" diye kaydedilecekti. Elle yazılmış
+                      sahteler bunu göremez; regresyon gerçek portun `create_autospec`'ine
+                      karşı koşuyor. (3) `desktop.notify` iki kez yazılmıştı — ayna testi
+                      kendi işini yaptı, tek yazım `toast.CAPABILITY`'de toplandı.
+                      (4) d7f726a'da eklenen "diğer servisler ruff" adımı HİÇ KOŞMAMIŞ:
+                      yollardaki ters bölü CR ve BACKSPACE'e dönüşmüş, adım depo kökünde
+                      ruff koşup hiç girmediği iki ağaç için "All checks passed!" demiş.
+                      Düz bölü + `Test-Path` kapısı. Sessiz geçişi durdurmak için yazılan
+                      adımın kendisi sessiz geçiş olmuştu.
 TEST_PLAN           : toast yeteneğinin paylaşılan sözleşmeden okunduğu; kalıcı tablonun
                       yeniden başlatmayı atlattığı; merdivenin sırayla düştüğü
 REAL_PROOF_REQUIRED : PROVEN_REAL — tarayıcı kapalı, ekran kilitli: toast göründü ve kutuda kaldı
@@ -527,7 +543,7 @@ ROLLBACK_PLAN       : agent sürümü geri alınır; bulut tarafı bayrakla eski
 ```
 
 ```
-BATCH_ID            : B12
+BATCH_ID            : B12                              [KISMEN KAPANDI 2026-09-13 — 373/374 sağlayıcı hesabı sahipte]
 NAME                : Bildirim olayları
 REQUIREMENT_IDS     : 373, 374, 381, 382, 383, 384, 385, 386, 387, 388
 GOAL                : Sahibin bilmesi gereken her olay (iş bitti/başarısız, onay gerekiyor,
@@ -536,7 +552,16 @@ DEPENDENCIES        : B11
 AFFECTED_SUBSYSTEMS : Notifications, Release, Backup, Alarms, SelfDev
 EXPECTED_FILES      : services/api/app/notifications/, app/release/, app/alarms/, app/selfdev/
 RISK                : low
-OWNER_ACTION        : FCM/APNs için sağlayıcı hesabı (373, 374) — checkpoint, bloklamaz
+OWNER_ACTION        : FCM/APNs için sağlayıcı hesabı (373, 374) — checkpoint, bloklamadı
+KAPANIŞ             : commit 86769d7 (+db84bbd, 8d2d56e) · CI 34750573146 · 381–388 DONE,
+                      373/374 BLOCKED_PROVIDER (merdivenin `push` basamağı ayrılmış ve boş)
+                      kanıt docs/evidence/b12-notification-events-2026-09-13.json
+YOL ÜSTÜNDE         : (1) Üç en-iyi-çaba kancasının üçü de yutulan hatada session'ı
+                      zehirliyordu — B07'nin rutin saatinde öğrendiği tuzağın bir alt sistem
+                      ötesi; üçü de artık rollback ediyor ve bir test üç kaynağı da okuyor.
+                      (2) Erişilebilirlik bekçisinin ilk hâli regex'le yalan söylüyordu:
+                      `backup_failed` meşru olarak `sweep_backup_failures`'tan çağrılıyor.
+                      `ast` ile yeniden yazıldı.
 TEST_PLAN           : her olay tipinin merdivene girdiği ve dürüst makbuz ürettiği
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde bir geri alma ve bir yedek arızası simüle edilip
                       sahibe ulaştığı gözlendi
@@ -544,7 +569,7 @@ ROLLBACK_PLAN       : olay yayıcıları bayrakla kapatılır
 ```
 
 ```
-BATCH_ID            : B13
+BATCH_ID            : B13                              [KISMEN KAPANDI 2026-09-13 — 259'un yerel tetikleyicisi B47'de]
 NAME                : Alarm bütünlüğü
 REQUIREMENT_IDS     : 259, 267, 269, 282, 283, 284, 285, 286
 GOAL                : Cihaz çaldığını buluta bildirsin, çift çalma imkânsız olsun, tek gecikme
@@ -554,6 +579,16 @@ AFFECTED_SUBSYSTEMS : Alarms, Device, Protocol
 EXPECTED_FILES      : packages/protocol/, services/api/app/alarms/, devices/windows-agent
 RISK                : medium — alarm yolu
 OWNER_ACTION        : no
+KAPANIŞ             : commit PENDING_B13 · CI PENDING · 267/269/282/283/284/285/286 DONE,
+                      259 PARTIAL (sınır kondu; yerel tetikleyici B47)
+                      kanıt docs/evidence/b13-alarm-integrity-2026-09-13.json
+YOL ÜSTÜNDE         : (1) 284 tek sayıya indi: `packages/protocol/alarm-timing.json`, iki yarı
+                      da okuyor. Cihazın 5 dakikası kazandı — 2026-09-10'da 39 dakika geç
+                      çalan alarmla ÖLÇÜLMÜŞ olan oydu; bulut o olaydan hiç öğrenmemişti.
+                      (2) 283 için heartbeat beklemek kusurun kendisiydi; disarm SENKRON
+                      cevap veriyor. (3) 269 companion içinde çözüldü: bulut kendi üretmediği
+                      sesi kısamaz. (4) 267'de vızıltı artık karşılama diye sunulmuyor.
+                      (5) 285 için yeni tablo YOK — defter zaten tutuyordu.
 TEST_PLAN           : deterministik saatle: cihaz çaldıktan sonra bulutun çalmadığı; tek eşiğin
                       iki yakada da aynı olduğu; anahtarsız ton yedeğinin gerçekten ses ürettiği
 REAL_PROOF_REQUIRED : PROVEN_REAL — gerçek bir alarm koşusunda tek çalma

@@ -51,6 +51,7 @@ from app.actions.receipt import (
     record_receipt,
 )
 from app.alarms import speech as alarm_speech
+from app.alarms import timing
 from app.alarms.audio_store import AudioStore, AudioTooLarge, get_audio_store
 from app.alarms.greeting_audio import (
     GREETING_LEVEL,
@@ -58,10 +59,12 @@ from app.alarms.greeting_audio import (
     GreetingAudio,
     GreetingSynthesisFailed,
     TTSProviderLike,
+    is_fallback_provider,
     normalize_greeting,
     synthesize_greeting,
 )
 from app.alarms.models import (
+    PLAYED_KIND_LOCAL_FALLBACK,
     PLAYED_KIND_TONE_FALLBACK,
     PLAYED_KIND_YOUTUBE,
     STATE_DISPLAY_WAKING,
@@ -402,10 +405,22 @@ class WakeSequence:
                 .replace("+00:00", "Z"),
                 # The companion's flat payload (DEVICE_PROTOCOL.md §6f as shipped): the
                 # fallback's label, ramp and duration sit beside the id and the instant.
-                "grace_s": 45,
+                # B13 req 284: the grace is READ from the shared timing contract. It is a
+                # different question from lateness - how long the device holds its silence
+                # for a cloud that may ring first - and it must stay well under the late
+                # horizon, or the device would still be waiting politely at the moment
+                # ringing stopped being worth it. A test asserts that ordering.
+                "grace_s": timing.cloud_grace_s(),
                 "label": alarm.label or "",
                 "wake_volume": volume,
                 "max_duration_s": alarm.max_play_seconds,
+                # B13 req 286: the device is TOLD it is a test. It was the one party in the
+                # chain that could not tell - the cloud shortened the play ceiling, renamed
+                # the routine and changed the spoken sentence, and the device's own audit
+                # row for the ring was byte-identical to a real 07:30. So a test ring in the
+                # agent's log was indistinguishable from a wake-up that actually happened,
+                # which is exactly the record a test mode exists to keep clean.
+                "is_test": bool(alarm.is_test),
             },
             requested_state="armed",
             idempotency_key=f"alarm-arm:{alarm.id}:{int(_aware(alarm.scheduled_for).timestamp())}",
@@ -456,7 +471,51 @@ class WakeSequence:
         _to(STATE_FIRING, firing_id=str(firing_id) if firing_id else None)
 
         # 1. Disarm the device's own fallback FIRST (spec §3.5 step 1).
-        steps.append(self.disarm(db, alarm, reason="cloud_firing", now=moment))
+        disarm_step = self.disarm(db, alarm, reason="cloud_firing", now=moment)
+        steps.append(disarm_step)
+
+        # 1a. B13 req 283: the device may have ALREADY rung this alarm on its own, and the
+        #     disarm is the moment we can find that out - synchronously, before deciding to
+        #     ring. Waiting for the next heartbeat to say so is exactly what "the cloud can
+        #     fire a second time half an hour later" describes: a heartbeat that has not
+        #     arrived is not a statement that nothing happened.
+        #
+        #     The owner has already been woken. Starting the media and the ramp now would be
+        #     a SECOND wake-up for one alarm, which is the thing the whole arm/disarm dance
+        #     exists to prevent - so the cloud stands down and records the ring that did
+        #     happen, rather than adding one that should not.
+        if bool(disarm_step.result.get("already_fired")):
+            logger.info(
+                "alarm_local_fallback_already_rang",
+                alarm_id=str(alarm.id),
+                firing_id=str(firing_id) if firing_id else None,
+            )
+            # Stamped BEFORE the transition, which is what commits: `media_kind` is the
+            # field `GET /v1/alarms/{id}` answers "how were you woken?" from, and a
+            # stand-down that left it empty would turn a real wake-up into a silence in the
+            # record. Same order as `reconcile_local_fired`, for the same reason.
+            alarm.media_kind = PLAYED_KIND_LOCAL_FALLBACK
+            alarm.playing_since = alarm.playing_since or moment
+            # The greeting still happens. The owner was woken by the tone, not spoken to,
+            # and the sentence is part of the wake-up rather than part of the cloud's ring -
+            # skipping it because the cloud arrived late would leave them with a bare tone.
+            # It plays OVER the local fallback, which is exactly what req 269's duck is for:
+            # the device lowers its own tone while `desktop.play_audio` speaks.
+            ramp_seconds = int(_volume_policy(alarm).get("ramp_seconds", 20))
+            alarm.greeting_due_at = moment + timedelta(
+                seconds=ramp_seconds + GREETING_DELAY_AFTER_RAMP_S
+            )
+            _to(
+                STATE_PLAYING,
+                media_kind=PLAYED_KIND_LOCAL_FALLBACK,
+                reason="local_fallback_already_rang",
+            )
+            return FireResult(
+                state=STATE_PLAYING,
+                media_kind=PLAYED_KIND_LOCAL_FALLBACK,
+                steps=steps,
+                reason="local_fallback_already_rang",
+            )
         # 1b. If the device had ALREADY rung its fallback for this alarm (the cloud reached
         #     it late - a network gap longer than the arm's grace), silence that tone now,
         #     by id: the music or the cloud's own ramp is about to start, and two alarms
@@ -656,6 +715,9 @@ class WakeSequence:
             "alarm_id": str(alarm.id),
             "wake_volume": volume,
             "max_duration_s": alarm.max_play_seconds,
+            # req 286: same reason as the arm above. A ring is a ring on the device; only
+            # the cloud knew whether anybody meant it.
+            "is_test": bool(alarm.is_test),
         }
         if alarm.label:
             payload["label"] = alarm.label
@@ -701,6 +763,17 @@ class WakeSequence:
         failure = ""
         if self._tts is None:
             failure = "no_tts_provider"
+        elif is_fallback_provider(self._tts):
+            # B13 req 267. With no TTS key the fake provider produces a 110 Hz sine wave,
+            # and until now that was played as the greeting: after an alarm, in a bedroom, a
+            # buzz that sounds like a fault rather than like a voice - and the row said
+            # nothing, so the owner's only way to find out was to hear it and wonder.
+            #
+            # The fallback is not removed, it is ANNOUNCED. The provider still exists and is
+            # still exercised (a keyless machine can still prove the whole greeting path
+            # end to end), but a synthetic tone is not offered to the owner AS a greeting.
+            # Silence with a recorded reason is the honest version of "we could not speak".
+            failure = "no_tts_key"
         else:
             try:
                 audio = synthesize_greeting(text, provider=self._tts, cache=self._greeting_cache)

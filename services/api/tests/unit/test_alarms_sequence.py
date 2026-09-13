@@ -25,7 +25,9 @@ from app.actions.receipt import (
     TERMINAL_VERIFIED,
 )
 from app.alarms import service as alarms_service
+from app.alarms.greeting_audio import FALLBACK_PROVIDER_NAME
 from app.alarms.models import (
+    PLAYED_KIND_LOCAL_FALLBACK,
     PLAYED_KIND_TONE_FALLBACK,
     PLAYED_KIND_YOUTUBE,
     STATE_FAILED,
@@ -555,3 +557,159 @@ def test_no_assertion_in_this_file_reads_the_wall_clock() -> None:
         for call in re.findall(r"\bstore\.(?:take|put)\([^)]*\)", "store.take(token)")
         if "now=" not in call
     ] == ["store.take(token)"]
+
+
+# ------------------------------------------------ B13 req 283: one alarm, one wake-up
+
+
+def test_the_cloud_stands_down_when_the_device_says_it_already_rang(session, device):
+    """The defect this closes, recorded as "the cloud can fire a second time half an hour
+    later".
+
+    The device rings its own armed fallback when the cloud does not reach it within the
+    grace. Until now the cloud only learned that from the NEXT heartbeat, so a cloud that
+    came back before the heartbeat arrived started the media and the ramp on top of an alarm
+    that had already woken the owner. A heartbeat that has not arrived is not a statement
+    that nothing happened.
+
+    Disarm runs first in the fire sequence, so it is the one place the cloud can ask, and
+    the device answers `already_fired` there.
+    """
+    device.results["desktop.alarm_disarm"] = ok(disarmed=True, was_armed=False, already_fired=True)
+    alarm = _alarm(session, media={"url": MEDIA_URL})
+
+    _, result = _fire(session, device, alarm)
+
+    assert result.state == STATE_PLAYING
+    assert result.media_kind == PLAYED_KIND_LOCAL_FALLBACK
+    assert result.reason == "local_fallback_already_rang"
+    # The whole point: nothing was rung, played, ramped or woken a second time.
+    assert device.count("desktop.alarm_start") == 0
+    assert device.count("browser.media_play") == 0
+    assert device.count("browser.media_volume") == 0
+    assert device.count("desktop.display_wake") == 0
+
+
+def test_a_device_that_did_not_ring_is_fired_normally(session, device):
+    """The other half of the claim, and the one that keeps the fix from becoming the bug:
+    a stand-down that triggered on a MISSING field would silence every alarm on any device
+    older than this change."""
+    device.results["desktop.alarm_disarm"] = ok(disarmed=True, was_armed=True)
+    alarm = _alarm(session, media={"url": MEDIA_URL})
+
+    _, result = _fire(session, device, alarm)
+
+    assert result.state == STATE_PLAYING
+    assert result.media_kind == PLAYED_KIND_YOUTUBE
+    assert device.count("browser.media_play") == 1
+
+
+def test_the_owner_can_still_see_which_ring_actually_happened(session, device):
+    """`media_kind` is what `GET /v1/alarms/{id}` answers "how were you woken?" from. A
+    stand-down that left it empty would turn a real wake-up into a silence in the record."""
+    device.results["desktop.alarm_disarm"] = ok(disarmed=True, was_armed=False, already_fired=True)
+    alarm = _alarm(session)
+
+    _fire(session, device, alarm)
+    session.refresh(alarm)
+
+    assert alarm.media_kind == PLAYED_KIND_LOCAL_FALLBACK
+    assert alarm.playing_since is not None
+
+
+# ---------------------------------- B13 req 267: the keyless greeting, tested and announced
+
+
+def test_with_no_tts_key_the_owner_is_not_buzzed_at(session, device):
+    """The defect, recorded as "with no key, silently a sine tone, no test".
+
+    `build_greeting_tts` falls back to the offline fake when there is no OpenAI key, and
+    what that fake produces is a 110 Hz sine wave. It was played as the greeting: after an
+    alarm, in a bedroom, a buzz that sounds like a fault rather than like a voice — and the
+    row recorded nothing, so the owner's only way to find out was to hear it and wonder.
+    """
+    alarm = _alarm(session)
+    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider(name=FALLBACK_PROVIDER_NAME))
+    device.reset()
+
+    sequence.speak_greeting(
+        session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
+    )
+
+    assert device.count("desktop.play_audio") == 0
+    assert (alarm.detail_json or {}).get("greeting_failure") == "no_tts_key"
+    assert alarm.greeted_at is None
+
+
+def test_the_reason_is_on_the_row_the_owner_can_read(session, device):
+    """"Announced" means readable without a log: `GET /v1/alarms/{id}` answers it."""
+    alarm = _alarm(session)
+    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider(name=FALLBACK_PROVIDER_NAME))
+    sequence.speak_greeting(
+        session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
+    )
+
+    assert alarms_service.alarm_dict(alarm)["greeting_failure"] == "no_tts_key"
+
+
+def test_a_real_provider_still_speaks(session, device):
+    """The half that keeps the fix from becoming the bug. Only the KEYLESS fallback is
+    refused; a provider that actually speaks is unaffected."""
+    alarm = _alarm(session)
+    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider(name="tts-that-speaks"))
+    device.reset()
+
+    sequence.speak_greeting(
+        session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
+    )
+
+    assert device.count("desktop.play_audio") == 1
+    assert alarm.greeted_at is not None
+
+
+def test_the_fallback_is_still_exercised_and_still_produces_real_audio():
+    """The other half of "tested and announced": the fallback path is not removed, so a
+    machine with no credentials at all can still prove the whole greeting path end to end.
+    What changed is that its output is not offered to the owner AS a greeting."""
+    from app.alarms.greeting_audio import synthesize_greeting
+
+    audio = synthesize_greeting(
+        "Günaydın efendim.", provider=FakeTTSProvider(name=FALLBACK_PROVIDER_NAME)
+    )
+
+    assert audio.audio[:4] == b"RIFF"
+    assert len(audio.audio) > 1000
+    assert max(audio.audio) != min(audio.audio), "a silent 'fallback' would be a broken one"
+
+
+def test_the_keyless_process_gets_the_fallback_and_a_keyed_one_does_not():
+    """Read from `build_greeting_tts` itself, because that is the wiring that decides. A
+    check that only ever ran against a hand-made provider would not know what production
+    hands the sequence."""
+    from app.alarms.greeting_audio import build_greeting_tts, is_fallback_provider
+
+    class _Settings:
+        voice_openai_api_key = ""
+        openai_api_key = ""
+
+    keyless = _Settings()
+    keyed = _Settings()
+    keyed.voice_openai_api_key = "sk-not-a-real-key"
+
+    assert is_fallback_provider(build_greeting_tts(keyless)) is True
+    assert is_fallback_provider(build_greeting_tts(keyed)) is False
+
+
+def test_the_owner_is_still_greeted_after_a_local_fallback_ring(session, device):
+    """The stand-down is about not ringing TWICE, not about saying nothing.
+
+    The owner was woken by a tone and not spoken to. The greeting plays over the local
+    fallback — which is what req 269's duck is for: the device lowers its own tone while
+    `desktop.play_audio` speaks, because the cloud cannot lower a sound it did not make.
+    """
+    device.results["desktop.alarm_disarm"] = ok(disarmed=True, was_armed=False, already_fired=True)
+    alarm = _alarm(session)
+
+    _fire(session, device, alarm)
+
+    assert alarm.greeting_due_at is not None

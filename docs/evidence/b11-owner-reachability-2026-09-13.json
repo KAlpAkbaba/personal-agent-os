@@ -1,0 +1,57 @@
+{
+  "batch": "B11",
+  "name": "Sahibe ulaşma omurgası",
+  "requirements": [
+    367,
+    368,
+    369,
+    370,
+    372,
+    377,
+    378,
+    379,
+    380,
+    389
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "86769d7",
+  "ci_run": 34750573146,
+  "what_this_proves": "The system can now reach the owner with the browser closed, and can say honestly when it could not. Before this batch every notification path ended either in a page nobody had open or in the fake push transport's in-memory log, so 'the owner has been told' was true only while they were already looking - and false again after every restart.",
+  "closed_fully": {
+    "367_durable_table": "The queue was a `deque` in one process's memory. The row is written to `notifications` BEFORE any delivery is attempted, so a restart mid-ladder loses an attempt and never a notification. 18 columns, one migration (0044), and the attempt record lives on the row rather than in a call stack - which is what makes the ladder resumable rather than restartable.",
+    "368_inbox": "Two halves. `/v1/notifications` reads the table and asks no transport what it remembers, and the cockpit's Bildirimler panel prints THREE states rather than one: `hiçbir kanal taşımadı`, `iletildi, okunmadı`, `okundu`. Collapsing them is how a system convinces itself it communicated - a toast that appeared on a locked screen at 03:00 reached the machine, not the owner.",
+    "369_desktop_toast": "Written as a contract first (`packages/protocol/desktop-notify.json`), because the last four capabilities that were not - file.search roots, the app manifest, the native manifest, the device protocol schema - each shipped with both suites green and neither half able to talk to the other. Both halves read the contract's own numbers: the Cloud Core's length limits come from `contract()[\"request\"][field][\"max_chars\"]`, and `DesktopNotifyContractTests.cs` reads the same file. Registered in `test_contract_falsification.py` with its `held_by`/`unheld` pair.",
+    "377_delivery_history": "`/v1/notifications/history` lists what NOTHING carried alongside what was delivered. That is the part of a delivery history worth reading: a channel that has never once worked looks exactly like a device that happened to be switched off, until you can see the rows nothing reached.",
+    "378_priority": "Three levels. An unknown value falls to `normal` rather than creating a fourth level, and each of the eight events records WHY it has the priority it has (B12) - because `urgent` is a decision to wake somebody, and a priority nobody has to justify drifts upward until the owner turns the whole thing off.",
+    "379_quiet_hours": "23:00-07:30, midnight wrap handled. Deliberately about NOISE and not about hiding: a deferred row is in the inbox the whole time and is visible there; only the interruption waits for morning. Urgent is exempt, which is the entire content of the word.",
+    "380_grouping": "Supersedes the UNREAD sibling in the same group only. A read sibling is something the owner already knows about, and quietly replacing it would erase a thing they had seen. Seven nights of the same failed backup leave one unread notice saying so.",
+    "389_ladder": "toast -> sound -> push -> inbox, with the inbox as the floor, so the ladder cannot fail - it can only end with the owner finding out later than the system would have liked. A rung that cannot be tried is skipped rather than waited for; a rung already tried is never tried again for the same row, or the ladder is a loop."
+  },
+  "not_claimed_done": {
+    "369_370_partial": "PARTIAL, not DONE. Both halves exist and are wired, the balloon is a real Windows shell notification, and the action buttons are parsed, carried and refused correctly when malformed - but `ShellToastSink` is a NotifyIcon balloon and has no action buttons, which the device says in its own answer's `detail` rather than pretending. REAL_PROOF_REQUIRED for this batch is a locked screen with the browser closed, and that needs the agent installed on the owner's machine.",
+    "372_webpush": "BLOCKED_OWNER. The client half (a service worker) was never written and payload encryption needs a VAPID key pair the owner must generate. Writing a transport that cannot be keyed would put a rung on the ladder that is guaranteed to say no - noise, and worse, a rung an operator would reasonably believe had been tried."
+  },
+  "defects_found_on_the_way": {
+    "the_ladder_had_no_caller": "`ladder.sweep` was written and NOTHING called it - the same 'written but unwired' defect the B12 guard had caught minutes earlier for `backup_failed`, and the one this repository has now paid for six times (three retention sweeps, a speaker verdict, a reconcile timer, this). Wired into `RetentionSweeper` in `create_app`, where a test can enumerate it.",
+    "the_toast_rung_called_a_signature_that_does_not_exist": "The rung passed `device_id=` and `trace_id=` to `DeviceActionPort.run`, which takes neither. Every toast would have raised `TypeError` inside the ladder's catch-all and been recorded as a device that did not show it: a channel that never worked, looking exactly like a device switched off. The hand-rolled rung doubles could not see it, because a double accepts whatever it is passed. The regression drives the REAL rung against `create_autospec(DeviceActionPort)`, so a keyword the rung invents raises here.",
+    "the_capability_was_spelled_twice": "`desktop.notify` was added to the C# `Ambient` group and never declared on the Cloud Core side, so `test_desktop_capability_mirror` failed exactly as designed ('the agent declares desktop names this reconciliation does not know about'). Cloud Core now declares `CAPABILITY_DESKTOP_NOTIFY` as `toast.CAPABILITY` rather than restating the string, and a test asserts the contract file, the notifications half and the dispatch table all say the same word.",
+    "the_gate_step_i_added_never_ran": "The `-Fast` gate's other-services ruff step, added in d7f726a to stop CI finding what the local gate missed, had its two paths written with backslash separators and a string literal on the way in turned them into a carriage return and a backspace: `services<CR>ecovery-supervisor` and `services<BS>rowser`. `Push-Location` then failed or silently left the shell at the repo root, `ruff check .` ran there, and the step printed 'All checks passed!' about two trees it had never entered. Fixed with forward slashes - which no escape layer can mangle - and a `Test-Path` guard, so a path that is not there throws instead of passing. A step written to stop a silent pass had become one.",
+    "two_sweeps_the_guards_caught": "`test_health_endpoint.py` and `test_maintenance.py` both failed on the two new sweeps, which is what they are for: health NAMES every registered sweep and the maintenance test asserts the APPLICATION reaches each one. Registering a sweep without appearing in both is impossible, which is the guard B06 built after three sweeps shipped with no caller."
+  },
+  "red_first": {
+    "method": "app/notifications/ladder.py copied to a backup with its sha256, the shipped bug re-introduced, the suite re-run, restored by digest verification (`sha256sum -c`: OK).",
+    "toast_rung": "3 failed / 33 deselected with the wrong kwargs restored - `TypeError: got an unexpected keyword argument 'device_id'` from the autospec, which is precisely the error the blanket except was swallowing in production.",
+    "capability_mirror": "The mirror test failed on its own before the Cloud Core constant existed: 'the agent declares desktop names this reconciliation does not know about: [desktop.notify]'."
+  },
+  "tests": {
+    "services/api/tests/unit/test_notifications.py": 36,
+    "services/api/tests/unit/test_desktop_capability_mirror.py": 7,
+    "devices/windows-agent/tests/.../DesktopNotifyContractTests.cs": 11,
+    "apps/web/tests/cockpit/notifications-panel.test.tsx": 29
+  },
+  "runtime_proof": {
+    "status": "NOT_YET",
+    "why": "REAL_PROOF_REQUIRED for B11 is a toast appearing with the browser closed and the screen locked, and staying in the inbox afterwards. That needs the agent build installed on the owner's machine (OWNER_ACTION on the roadmap's own risk line) and is carried forward with Karar 0."
+  },
+  "ci_note": "The push at 86769d7 went red on the Windows agent job: `desktop.notify` broke two guards the local -Fast gate did not run - the C# manifest pin (db84bbd) and the staged-update qualification's hard capability count (8d2d56e). Both are fixed, both now run in -Fast, and this run is green on the tree that carries all three commits. Recorded rather than tidied away: the batch's own evidence is where a red CI belongs."
+}

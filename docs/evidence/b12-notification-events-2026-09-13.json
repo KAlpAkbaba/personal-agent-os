@@ -1,0 +1,58 @@
+{
+  "batch": "B12",
+  "name": "Bildirim olayları",
+  "requirements": [
+    373,
+    374,
+    381,
+    382,
+    383,
+    384,
+    385,
+    386,
+    387,
+    388
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "86769d7",
+  "ci_run": 34750573146,
+  "what_this_proves": "The eight things the owner has to be told are each raised where they actually happen, and a mechanical guard now fails the build if a ninth is declared and left unwired.",
+  "why_one_module": "The priority judgement decides whether an event wakes somebody at night. Scattered across eight subsystems, 'backup failed' ends up quieter than 'research finished' and nobody notices until the night it matters. Declaring them together also makes them checkable: `EMITTERS` maps each event to the function that raises it, and a test reads the app for a caller.",
+  "closed_fully": {
+    "381_task_completed": "Raised where the task reaches READY, not where it was queued. `_notify_task_transition` sits inside the one function every status change passes through, so a transition added later cannot forget it.",
+    "382_task_failed": "The error CLASS reaches the owner, never the exception text. A traceback in a toast is a notification the owner cannot act on and would not read twice.",
+    "383_approval_required": "The Evolution Engine's OWNER_APPROVAL_REQUIRED transition. Owner gates used to wait in silence: the queue existed, and finding out about it meant going and looking.",
+    "384_rollback_happened": "Sixteen rollbacks in seven days and not one was ever announced. The body names both releases - 'your system rewound itself' is only useful with what it rewound from and to.",
+    "385_backup_failed": "B08 made a failed unit VISIBLE - the marker file, and the health check that reads it. Visible is not told. A SWEEP rather than a hook, because the failing unit is a systemd service that cannot call into this process, which is the whole reason it writes a file at all. Wired into `RetentionSweeper` as `backup_failure_notices`.",
+    "386_alarm_failed": "An alarm that did not fire is otherwise discovered by oversleeping, which is the one moment the information stops being useful. The UI-state event that already existed only reaches somebody already looking at the panel.",
+    "387_research_finished": "Research kinds get their own event rather than the generic 'iş bitti'; the owner asked a question and the answer being ready is a different sentence from a job finishing.",
+    "388_candidate_ready": "LOW - the least time-critical thing this system produces, and the one most likely to arrive in batches. In quiet hours it waits for morning like everything that is not urgent."
+  },
+  "the_three_urgent_ones": {
+    "which": [
+      "release.rolled_back",
+      "backup.failed",
+      "alarm.failed"
+    ],
+    "why_named_individually": "This list IS the policy: production rewinding itself, the safety net being down, and an alarm that did not fire. A test asserts the set, so a fourth cannot be added by a hurried edit - everything else waits for morning, and a system that wakes the owner about a finished report is a system whose notifications get turned off."
+  },
+  "not_claimed_done": {
+    "373_374_fcm_apns": "BLOCKED_PROVIDER. The ladder's `push` rung is a named, reserved, EMPTY slot. Writing a transport with no provider account would put a rung on the ladder that can only ever say no, and - worse - one an operator would reasonably read as 'push was tried'."
+  },
+  "defects_found_on_the_way": {
+    "a_swallowed_error_poisons_the_session": "All three best-effort hooks (artifacts, alarms, self-healing) swallow a notification fault so a notification never breaks the work it is about. A swallowed SQLAlchemy error leaves the session in a failed transaction and the NEXT caller inherits it - B07 learned this on the routine clock's sub-ticks, and it was the same trap one subsystem further along. Every hook now rolls back, and `test_every_best_effort_notification_hook_rolls_back` reads all three sources for it.",
+    "the_reachability_guard_was_lying_by_regex": "The first version of the guard pattern-matched `events.py`'s own text and would have failed `backup_failed`, which is legitimately raised by `sweep_backup_failures` in that same module. Rewritten with `ast`: an emitter counts as reached when the app calls it, OR when a function in `events.py` that the app DOES call calls it. Matching source with a regex to answer 'is this reachable' is how a guard starts lying."
+  },
+  "red_first": {
+    "method": "The guard was proven against its own subject: an emitter removed from every call site is reported by name.",
+    "the_guard": "`test_every_emitter_is_actually_called_from_somewhere` names the unwired functions in its message, because the failure this repository keeps paying for is a mechanism that exists and nothing calls - three retention sweeps, a speaker verdict, a reconcile timer, and in this very batch the notification ladder itself."
+  },
+  "tests": {
+    "services/api/tests/unit/test_notification_events.py": 17
+  },
+  "runtime_proof": {
+    "status": "NOT_YET",
+    "why": "REAL_PROOF_REQUIRED for B12 is a rollback and a backup failure simulated in production and observed reaching the owner. Carried with Karar 0 (the production release the owner has not yet authorised)."
+  },
+  "ci_note": "The push at 86769d7 went red on the Windows agent job: `desktop.notify` broke two guards the local -Fast gate did not run - the C# manifest pin (db84bbd) and the staged-update qualification's hard capability count (8d2d56e). Both are fixed, both now run in -Fast, and this run is green on the tree that carries all three commits. Recorded rather than tidied away: the batch's own evidence is where a red CI belongs."
+}
