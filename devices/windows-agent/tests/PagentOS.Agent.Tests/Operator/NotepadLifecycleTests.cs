@@ -214,7 +214,24 @@ public sealed class NotepadLifecycleTests : IDisposable
         Assert.InRange(cursor["y"]!.GetValue<int>(), click["screen_y"]!.GetValue<int>() - 2, click["screen_y"]!.GetValue<int>() + 2);
         // Null-safe, so a foreground that moved for the third time in a row reads as
         // "nothing was in front" rather than as an unexplained NullReferenceException.
-        Assert.Equal(windowId, click["observed"]!["window"]?["window_id"]?.GetValue<string>());
+        //
+        // 2026-09-14: and it says WHO took it. Three attempts in a row lost the foreground
+        // during a gate run - once to a window titled "Claude" (the agent's own client,
+        // raising itself as this session worked) and then, with the owner watching a
+        // full-screen video, to nothing the registry could resolve at all. Both are facts
+        // about a desktop the lab shares with its owner, and the old message ("Strings
+        // differ: w-3802978-... / w-5834690-...") named neither. A number is not a
+        // diagnosis: whoever reads this next needs the intruder, not two handles.
+        var observedWindow = click["observed"]!["window"];
+        var intruder = observedWindow is null
+            ? "nothing the registry could resolve (a full-screen or elevated window)"
+            : $"{observedWindow["title"]?.GetValue<string>() ?? "(untitled)"} "
+              + $"[{observedWindow["image"]?.GetValue<string>() ?? "?"}]";
+        Assert.True(
+            observedWindow?["window_id"]?.GetValue<string>() == windowId,
+            $"after {attempt} attempt(s) the click landed while the foreground was {intruder}; "
+            + "the operator lab needs a desktop nobody else is using (PAGENTOS_OPERATOR_LAB=0 "
+            + "skips it).");
 
         var screen = _lab.Exec(OperatorCapabilityNames.ScreenInspect, new JsonObject());
         Assert.NotEmpty(screen["monitors"]!.AsArray());

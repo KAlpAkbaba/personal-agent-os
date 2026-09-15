@@ -399,12 +399,33 @@ def _leg_max_seconds(provider: Any) -> int:
         return 0
 
 
+def _pronunciation_rules(db: Session) -> dict[str, str]:
+    """B21 req 229: the owner's pronunciation table, for the assistant's OWN speech.
+
+    Best-effort and never raising, for the same reason `_memory_block` is: this runs while
+    minting a session credential, and a voice session that failed because a pronunciation
+    row could not be read would be a worse outcome than a mispronounced surname.
+    """
+    try:
+        from app.narration import service as narration_service
+
+        return dict(narration_service.pronunciation_map(db))
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("pronunciation_read_failed", error=f"{type(exc).__name__}: {exc}")
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001 - nothing further to do about it
+            pass
+        return {}
+
+
 def _session_config(
     row: RealtimeSessionRow,
     *,
     registry: ToolRegistry,
     prefs: Any,
     memory_block: str = "",
+    pronunciation: dict[str, str] | None = None,
 ) -> RealtimeSessionConfig:
     ctx = row.context_json or {}
     return RealtimeSessionConfig(
@@ -416,6 +437,7 @@ def _session_config(
             transcript_summary=row.transcript_summary,
             voice_profile=ctx.get("voice_profile"),
             memory_block=memory_block,
+            pronunciation=pronunciation,
         ),
         tools=tuple(registry.manifest()),
         voice=ctx.get("voice"),
@@ -489,6 +511,7 @@ def create_session(
         registry=registry,
         prefs=prefs,
         memory_block=_memory_block(db, memory_runtime, now=utcnow()),
+        pronunciation=_pronunciation_rules(db),
     )
     credential = mint_credential(
         provider,
@@ -528,7 +551,7 @@ def create_session(
     )
     db.commit()
     _ledger(db, "created", row, trace_id=trace_id, detail={"provider": row.provider})
-    payload = _leg_payload(row, credential, registry=registry, config=config)
+    payload = _leg_payload(row, credential, registry=registry, config=config, provider=provider)
     return row, credential, payload
 
 

@@ -3,6 +3,7 @@ computed oracle (docs/M21_MAIL_CALENDAR_SPEC.md §4, ADR-0084)."""
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
@@ -102,6 +103,13 @@ def test_expand_bounds_a_window_without_truncating_an_unbounded_rule() -> None:
 # --------------------------------------------------------------- M2 (security review)
 
 
+#: A hang guard, not a performance bound. 200_000 raw occurrences take well under a second
+#: even on a machine building something else at the same time; an UNCAPPED walk from 2000
+#: never finishes. Anything between those two is not a case this test can distinguish, so
+#: the number is generous on purpose - the behavioural claim is `truncated is True` below.
+HANG_GUARD_SECONDS = 30.0
+
+
 def _secondly_since_2000() -> list[VEvent]:
     """The exact pathological shape M2's own security review named: a ``FREQ=SECONDLY``
     event anchored decades before any window a real agenda/find_slot call would ever
@@ -120,20 +128,46 @@ def _secondly_since_2000() -> list[VEvent]:
 
 
 def test_freq_secondly_since_2000_finishes_in_bounded_time() -> None:
+    """The raw-scan cap bites, stated as WORK DONE rather than as seconds elapsed.
+
+    This asserted `elapsed < 1.0` and failed on 2026-09-14 inside the quality gate while a
+    dotnet build ran beside it: the ceiling measured the runner, not the cap. The claim
+    the test exists for is that `expand_events` stops after `MAX_RRULE_RAW_SCAN`
+    occurrences instead of materialising a quarter-century of seconds — and that claim is
+    visible in the ANSWER (nothing found, and `truncated` set to say so), which is true on
+    a loaded machine and on an idle one alike. The clock stays only as a hang guard, with
+    a bound generous enough that it can only fire for an unbounded expansion.
+    """
     events = _secondly_since_2000()
+    answer: list[tuple[list, bool]] = []
+
+    def _expand() -> None:
+        answer.append(
+            expand_events_report(
+                events,
+                start=datetime(2026, 9, 9, tzinfo=UTC),
+                end=datetime(2026, 9, 10, tzinfo=UTC),
+            )
+        )
+
+    # The deadline belongs to the TEST, not to a number checked after the call returns:
+    # with the cap removed this call never returns at all, and an `elapsed < N` assertion
+    # placed after it can never run. A joined thread turns the hang into a failure.
+    worker = threading.Thread(target=_expand, daemon=True)
     started = time.monotonic()
-    occs = expand_events(
-        events,
-        start=datetime(2026, 9, 9, tzinfo=UTC),
-        end=datetime(2026, 9, 10, tzinfo=UTC),
+    worker.start()
+    worker.join(HANG_GUARD_SECONDS)
+    assert not worker.is_alive(), (
+        f"still expanding after {time.monotonic() - started:.0f}s - the raw-scan cap did not bite"
     )
-    elapsed = time.monotonic() - started
-    assert elapsed < 1.0, f"took {elapsed:.2f}s - the raw-scan cap did not bite"
+
+    occs, truncated = answer[0]
     # The event's own DTSTART (2000) is so far before the window that the raw-scan cap
     # (MAX_RRULE_RAW_SCAN) exhausts itself before ever reaching 2026 - the honestly
     # bounded answer is "nothing found", never a hang and never a silent lie that the
     # rule was fully expanded.
     assert occs == []
+    assert truncated is True, "the answer must SAY it was cut short, not just be empty"
 
 
 def test_freq_secondly_caps_occurrences_within_the_window_itself() -> None:
@@ -150,14 +184,15 @@ def test_freq_secondly_caps_occurrences_within_the_window_itself() -> None:
             rrule="FREQ=SECONDLY",
         )
     ]
-    started = time.monotonic()
     occs, truncated = expand_events_report(
         events,
         start=datetime(2026, 9, 9, tzinfo=UTC),
         end=datetime(2026, 9, 10, tzinfo=UTC),  # a whole day of seconds, uncapped >> cap
     )
-    elapsed = time.monotonic() - started
-    assert elapsed < 2.0, f"took {elapsed:.2f}s"
+    # No wall-clock assertion here, deliberately. The window itself bounds this walk (a day
+    # of seconds terminates with or without the cap), so a ceiling could only ever measure
+    # the runner - which is exactly how its sibling above failed inside the gate. The cap
+    # is visible in the ANSWER, and that is what is asserted.
     assert truncated is True
     assert len(occs) == MAX_OCCURRENCES_PER_EVENT
 

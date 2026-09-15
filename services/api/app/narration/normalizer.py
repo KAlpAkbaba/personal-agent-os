@@ -233,6 +233,57 @@ def _sub_percent(m: re.Match[str], ctx: _Ctx) -> str:
     return f"yüzde {_normalize_number_token(m.group('num'), ctx)}"
 
 
+def _sub_degree(m: re.Match[str], ctx: _Ctx) -> str:
+    """B21 req 230: "21°C" was read "yirmi bir" and the degree fell silent.
+
+    A weather briefing says a temperature every single morning, and the one word that
+    makes it a temperature was dropped on the floor - the symbol is not in any rule, so
+    the number rule took the digits and left the ring behind.
+    """
+    number = _normalize_number_token(m.group("num"), ctx)
+    unit = (m.group("unit") or "").lower()
+    if unit == "f":
+        return f"{number} fahrenhayt derece"
+    return f"{number} derece"
+
+
+#: "7/24" is an idiom (round the clock), not a fraction; Turkish says it as two numbers.
+#: Restated as a pair rather than a regex special case so the reason stays readable.
+#: "1/2" is the other one, for a harder reason: the mechanical reading "ikide bir" is a
+#: different Turkish EXPRESSION ("every so often"), so the general rule does not merely
+#: sound stiff there, it says something else. Turkish reads a half as "yarım".
+_SLASH_IDIOMS: dict[tuple[int, int], str] = {
+    (7, 24): "yedi yirmi dört",
+    (1, 2): "yarım",
+}
+
+
+def _sub_fraction(m: re.Match[str], ctx: _Ctx) -> str:
+    """B21 req 230: "3/4" was read "üç/dört" - the solidus spoken, or worse, silent.
+
+    Turkish reads a fraction denominator-first in the locative: "dörtte üç". The guards
+    that matter are around it rather than in it: a date written with slashes and an IP's
+    mask are excluded by the pattern's own lookarounds, and "7/24" is an idiom.
+    """
+    n, d = int(m.group("n")), int(m.group("d"))
+    if d == 0:
+        return m.group(0)
+    idiom = _SLASH_IDIOMS.get((n, d))
+    if idiom:
+        return idiom
+    return f"{numbers.attach_suffix(numbers.cardinal(d), 'de')} {numbers.cardinal(n)}"
+
+
+def _sub_negative(m: re.Match[str], ctx: _Ctx) -> str:
+    """B21 req 230: "-5 derece" was read "-beş" and the minus was a hyphen or nothing.
+
+    `numbers.cardinal` has said "eksi" for a negative integer since M4; no rule ever
+    handed it one, because the sign is not part of `\\d+`. Below zero is exactly where a
+    temperature has to be heard correctly.
+    """
+    return "eksi "
+
+
 def _sub_grouped(m: re.Match[str], ctx: _Ctx) -> str:
     if ctx.mode == "technical":
         return m.group(0)  # keep literal; a dotted run is structure in technical mode
@@ -383,6 +434,25 @@ _PIPELINE: list[tuple[str, re.Pattern[str], object]] = [
         re.compile(r"(?:\+90|0)[\s(]?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}\b"),
         _sub_phone,
     ),
+    # B21 req 230. These three run AFTER dates, clocks, IPs, versions and phone numbers
+    # (whose own separators would otherwise be read as signs and slashes) and BEFORE the
+    # generic number rules, so the sign, the degree symbol and the solidus are consumed
+    # together with the number they belong to.
+    (
+        "degree",
+        re.compile(r"(?P<num>-?\d+(?:[.,]\d+)?)\s*°\s*(?P<unit>[CFcf])?"),
+        _sub_degree,
+    ),
+    (
+        "fraction",
+        re.compile(r"(?<![\d/.,:])(?P<n>\d{1,3})/(?P<d>\d{1,3})(?![\d/.,:])"),
+        _sub_fraction,
+    ),
+    (
+        "negative",
+        re.compile(r"(?<![\w.,])[-−](?=\d)"),
+        _sub_negative,
+    ),
     (
         "grouped",
         re.compile(r"\b\d{1,3}(?:\.\d{3})+\b"),
@@ -414,6 +484,33 @@ _PIPELINE: list[tuple[str, re.Pattern[str], object]] = [
 
 
 _ACRONYM_RE = re.compile(rf"(?<![\w])[{_TR_UPPER}]{{2,6}}(?![\w])", re.UNICODE)
+
+
+#: B21 req 230: every Turkish word a number can END in once this pipeline has spoken it.
+#: A closed set, because the rule that follows removes an apostrophe and Turkish uses the
+#: apostrophe legitimately everywhere else ("Ahmet'in", "PagentOS'un"). If a number word
+#: is missing from this set the suffix simply stays as it was, which is the old behaviour;
+#: nothing else can be damaged by an omission.
+_NUMBER_WORDS: frozenset[str] = frozenset(
+    {
+        "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz",
+        "on", "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan",
+        "yüz", "bin", "milyon", "milyar", "trilyon", "katrilyon", "kentilyon",
+        "buçuk", "yarım", "çeyrek",
+    }
+)
+
+_NUMBER_SUFFIX_RE = re.compile(
+    r"(?P<word>[a-zçğıöşüA-ZÇĞİÖŞÜ]+)['’](?P<suffix>[a-zçğıöşü]+)", re.UNICODE
+)
+
+
+def _sub_number_suffix(match: re.Match[str]) -> str:
+    """Join a suffix the author wrote on a NUMERAL to the words that numeral became."""
+    word = match.group("word")
+    if word.lower() not in _NUMBER_WORDS:
+        return match.group(0)
+    return numbers.attach_suffix(word, match.group("suffix"))
 
 
 def _acronym_fallback(text: str) -> str:
@@ -469,6 +566,12 @@ def normalize(
 
     for _name, pattern, fn in _PIPELINE:
         out = pattern.sub(lambda m, fn=fn: fn(m, ctx), out)  # type: ignore[operator]
+
+    # B21 req 230, and it runs LAST on purpose: the apostrophe it removes only exists
+    # once a number has become words. Restricted to Turkish number words so ordinary
+    # Turkish orthography is untouched — "Ahmet'in" is written that way and read that
+    # way, while "bin'den" is an artefact of this pipeline and is read as a break.
+    out = _NUMBER_SUFFIX_RE.sub(_sub_number_suffix, out)
 
     if spell_acronyms:
         out = _acronym_fallback(out)

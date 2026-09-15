@@ -10844,3 +10844,54 @@ produced by real transport events), `proactive-reconnect.test.ts`, `leg-ceiling.
 `test_voice_activity_history.py`, and `test_voice_unavailable_contract.py`, which reads the
 TypeScript and fails when the client's idea of "no provider" drifts from the server's own
 `VoiceErrorClass`.
+
+## ADR-0128 — Narration speaks, and the assistant obeys the owner's table (2026-09-14, B21)
+
+**Context.** `app/narration/` has been complete since M4: a plan built from an artifact's
+canonical body, sentence chunking, a semantic cursor persisted for cross-device resume, a
+Turkish command machine (`oku` / `dur` / `devam` / `tekrar` / `açıkla` / `hız`), a chunk
+cache keyed by artifact-version-chunk-voice, a read-ahead window and cancellation of chunks
+the cursor left behind. Its `Synthesizer` seam had **no implementation anywhere under
+`app/`** — the only caller that ever passed one was `test_narration_engine.py`. The whole
+subsystem was mute, and the matrix's four words for it ("motor yalnız testlerde") were
+exact. Two other things in the same family: the pronunciation dictionary had one writer
+nobody could reach (a hand-made `PUT`, hence zero rows in production), and the table it
+filled only ever reached text the assistant READ OUT, never what it said in its own words.
+
+**Decision.**
+
+* `app.narration.synth.ProviderSynthesizer` adapts the engine's seam to the TTS provider
+  protocol, and `build_synthesizer` answers **None** when the deployment has no provider
+  that speaks. A narration with no voice returns the chunk's TEXT and names what is
+  missing (B20 req 233's rule on a third delivery path); it never hums a 110 Hz tone at
+  the owner for ninety seconds (B13 req 267, B20 req 234).
+* The narration runtime owns ONE `NarrationEngine` per process, because the point of the
+  pipeline is its cache: the sentence after this one is synthesised while this one plays.
+  Audio is ephemeral by design — a restart re-synthesises, and the semantic cursor, which
+  is the source of truth, is in the database.
+* The command response carries a URL, a sha256, a byte count and a MEASURED duration; the
+  audio endpoint reads the cache and never synthesises, because a GET that can spend a
+  provider call is a GET that can be made to spend money in a loop.
+* `narration.start` lets the owner ask for any artifact by id (from `artifact.list`, never
+  a guessed title) and attaches the same durable narration every later command drives.
+* `pronunciation.teach` / `.list` / `.forget` put the dictionary where the rule is born —
+  in speech — and `pronunciation_block` puts the table into the session instruction so the
+  assistant's OWN sentences obey it, bounded to 24 rules and 700 characters.
+* The normaliser gains what Turkish does around a number: an apostrophised suffix joined
+  IN HARMONY with the word the conversion produced, the minus sign, the degree symbol, and
+  fractions read denominator-first with two idioms hard-coded (`7/24`, and `1/2`, whose
+  mechanical reading "ikide bir" is a different Turkish expression).
+* A technical presentation now selects the normaliser's technical MODE, so "teknik anlat"
+  changes how the document is read and not only how much of it.
+
+**Reversible.** `build_synthesizer` returning None restores the mute path exactly;
+unregistering the three pronunciation tools leaves the REST surface as it was; each
+normaliser stage is one entry in `_PIPELINE`.
+
+**Guards.** `test_narration_audio.py` (audio through the real routes, provider CALLS
+counted so the cache is measured rather than asserted), `test_pronunciation_voice.py`,
+`test_narration_numbers_tr.py` (a corpus of ordinary Turkish, including the four cases the
+guards must NOT touch: `A/B`, `km/s`, a slashed date, a CIDR mask), and in
+`test_voice_realtime_sessions.py` the end-to-end proofs that a taught rule reaches the
+instruction, that "teknik anlat" changes the reading, and that an artifact can be read
+aloud because the owner asked for it.

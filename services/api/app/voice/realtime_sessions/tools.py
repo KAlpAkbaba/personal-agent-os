@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
-from app.narration.commands import State
+from app.narration.commands import NarrationState, State
 from app.narration.engine import PARAGRAPH_LIST
 from app.state.now import SCOPES
 from app.voice.errors import VoiceError, VoiceErrorClass
@@ -85,6 +85,9 @@ from app.voice.realtime_sessions.tools_native import (
 )
 from app.voice.realtime_sessions.tools_news import register_news_tools
 from app.voice.realtime_sessions.tools_operator import register_operator_tools
+from app.voice.realtime_sessions.tools_pronunciation import (
+    register_pronunciation_tools,
+)
 
 # No ROUTINE_CLARIFYING_TOOLS beside its siblings: a routine tool never answers "Hangi
 # rutin?" - it takes an id and refuses a bad one by name. Importing the name tuple here
@@ -1010,6 +1013,121 @@ def plan_redirect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     return {"status": "replanned", "plan": plan}
 
 
+def _narration_mode(presentation: Any) -> str:
+    """B21 req 237: the normaliser mode a presentation level implies.
+
+    Only "technical" changes it. The normaliser's technical mode reads dotted numeric runs
+    as octets and stops collapsing grouped thousands into a magnitude — literal structure,
+    which is exactly what somebody who said "teknik anlat" is asking to hear. Every other
+    level is ordinary narration, and saying so here keeps the mapping in ONE place rather
+    than as a truth-test at each call site.
+    """
+    return "technical" if str(presentation or "") == "technical" else "narration"
+
+
+def narration_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """B21 req 414: read an artifact aloud, asked for by voice.
+
+    Narration has had exactly one way to begin: `activity.explain` builds a briefing
+    artifact and attaches a session to it. Every other artifact this system produces — a
+    research report, a document, anything in `artifact.list` — could be OPENED on a screen
+    and never read, which is the opposite of what a voice-first assistant is for.
+
+    Takes an artifact id from `artifact.list` rather than a description, the same rule
+    `memory.forget` and `pronunciation.forget` follow: resolving a title from a half-heard
+    phrase and then reading the wrong document for two minutes is a worse failure than
+    asking which one.
+
+    What comes back is the first bounded piece of the document as `speech`; every command
+    after it ("devam", "dur", "ikinci madde", "teknik anlat") goes through
+    `narration.control` over the SAME durable cursor, so the position survives the session
+    and moves between devices exactly as it always has.
+    """
+    import uuid as _uuid
+
+    from app.artifacts import service as artifact_service
+    from app.narration import service as narration_service
+    from app.narration.engine import build_plan
+    from app.narration.routes import _pack_state
+    from app.voice.intents import speech_budget, speech_from
+
+    db = ctx.db
+    if db is None:
+        raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE, "narration.start needs a session")
+    raw = str(arguments.get("artifact_id") or "").strip()
+    try:
+        artifact_id = _uuid.UUID(raw)
+    except ValueError as exc:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            "narration.start: 'artifact_id' bir kimlik olmalı (önce artifact.list çağır)",
+        ) from exc
+    artifact = artifact_service.get_artifact(db, artifact_id)
+    if artifact is None:
+        return {"status": "failed", "speech": "Böyle bir belge bulamadım efendim."}
+    version = artifact_service.get_current_version(db, artifact_id)
+    body_md = version.canonical_body if version else ""
+    if not body_md.strip():
+        return {
+            "status": "failed",
+            "speech": "Bu belgenin okunacak bir gövdesi yok efendim.",
+        }
+
+    row = narration_service.create_session(
+        db,
+        artifact_id=artifact_id,
+        artifact_version=version.version if version else 1,
+        device_id=ctx.device_id,
+    )
+    plan = build_plan(
+        body_md,
+        artifact_id=str(artifact_id),
+        version=row.artifact_version,
+        mode=_narration_mode(ctx.context.get("presentation")),
+        pronunciation=narration_service.pronunciation_map(db),
+    )
+    start = plan.chunks[0].cursor if plan.chunks else None
+    state = NarrationState(state=State.READING, cursor=start, paragraph_anchor=start)
+    narration_service.update_cursor(
+        db,
+        row.id,
+        cursor=_pack_state(state),
+        state=State.READING.value,
+        device_id=ctx.device_id,
+    )
+    # Attaching it is what makes every later "devam" mean this document.
+    ctx.context["narration_session_id"] = str(row.id)
+    speech = speech_from(
+        plan,
+        start,
+        whole_section=ctx.context.get("presentation") != "full",
+        max_chars=speech_budget(ctx.context.get("presentation")),
+    )
+    ctx.push(
+        SB_NARRATION_CURSOR,
+        {
+            "narration_session_id": str(row.id),
+            "cursor": start.as_dict() if start else None,
+            "state": State.READING.value,
+            "speed": row.speed,
+            "action": "started",
+        },
+    )
+    logger.info(
+        "narration_started_by_voice",
+        artifact_id=str(artifact_id),
+        narration_session_id=str(row.id),
+    )
+    return {
+        "status": "succeeded",
+        "narration_session_id": str(row.id),
+        "artifact_id": str(artifact_id),
+        "title": artifact.title,
+        "chunks": len(plan.chunks),
+        "speech": speech,
+    }
+
+
 def narration_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """Resolve a Turkish narration intent and, when a narration session is
     attached, move its durable cursor / speed through the M4 engine so the
@@ -1034,15 +1152,34 @@ def narration_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     if version is None:
         version = artifact_service.get_current_version(ctx.db, row.artifact_id)
     body_md = version.canonical_body if version else ""
+    pronunciation = narration_service.pronunciation_map(ctx.db)
     plan = build_plan(
         body_md,
         artifact_id=str(row.artifact_id),
         version=row.artifact_version,
-        pronunciation=narration_service.pronunciation_map(ctx.db),
+        mode=_narration_mode(ctx.context.get("presentation")),
+        pronunciation=pronunciation,
     )
     state = _unpack_state(row)
     resolved = resolve_intent(utterance, session_state=ctx.fsm_state, narration=state)
     bridged = apply_to_narration(resolved, state, plan)
+    # B21 req 237: "teknik anlat" changed the LENGTH of the answer and nothing about how
+    # it was read. The normaliser has had a technical mode since M4 — it is the difference
+    # between "192.168.100.200" spoken as four octets and spoken as a magnitude, which is
+    # the whole of what somebody asking for the technical version wants — and no owner
+    # utterance ever selected it: `mode` came from the REQUEST BODY of a REST call the
+    # voice path does not make. When the intent turns technical the plan is rebuilt in
+    # that mode, so what is spoken next is read technically as well as chosen technically.
+    if bridged.presentation and _narration_mode(bridged.presentation) != _narration_mode(
+        ctx.context.get("presentation")
+    ):
+        plan = build_plan(
+            body_md,
+            artifact_id=str(row.artifact_id),
+            version=row.artifact_version,
+            mode=_narration_mode(bridged.presentation),
+            pronunciation=pronunciation,
+        )
     packed = _pack_state(bridged.state)
     narration_service.update_cursor(
         ctx.db,
@@ -1499,6 +1636,29 @@ def default_registry() -> ToolRegistry:
     )
     reg.register(
         ToolSpec(
+            name="narration.start",
+            description=(
+                "Bir belgeyi sesli okumaya BAŞLAR. Sahip 'şu raporu oku', 'belgeyi "
+                "seslendir' dediğinde çağır; 'artifact_id' artifact.list çıktısından gelir, "
+                "tahminle çağırma. Dönen 'speech' metnini aynen oku; sonraki komutlar "
+                "narration.control ile yürür."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "artifact_id": {
+                        "type": "string",
+                        "description": "artifact.list'ten gelen belge kimliği.",
+                    }
+                },
+                "required": ["artifact_id"],
+                "additionalProperties": False,
+            },
+            handler=narration_start,
+        )
+    )
+    reg.register(
+        ToolSpec(
             name="narration.control",
             description=(
                 "Bağlı belge anlatımını komutla yönetir (kaldığı yer, madde, hız, "
@@ -1769,6 +1929,10 @@ def default_registry() -> ToolRegistry:
     # nothing under app/voice/ imported one line of it, so nothing the owner SAID could
     # ever be remembered.
     register_memory_tools(reg)
+    # B21 req 228: the pronunciation table has had a REST surface since M4 and zero rows
+    # in production, because its only writer was a hand-made PUT. The moment a rule is
+    # worth writing is the moment the word came out wrong, and that moment is spoken.
+    register_pronunciation_tools(reg)
     return reg
 
 

@@ -18,21 +18,24 @@ first use so app wiring stays a single import + one include_router line.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts import service as artifact_service
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.narration import commands, service
-from app.narration.engine import Cursor, build_plan
+from app.narration.engine import ChunkCache, Cursor, build_plan
 from app.narration.models import NARRATION_STATES, NarrationSession, PronunciationEntry
 from app.narration.normalizer import normalize
 from app.narration.runtime import NarrationRuntime
+from app.narration.synth import NARRATION_FORMAT, voice_settings_for
+from app.voice.providers import wav_duration_ms
 
 logger = get_logger("app.narration.routes")
 
@@ -249,6 +252,102 @@ async def patch_cursor(
     return payload
 
 
+def _synthesise_window(
+    runtime: NarrationRuntime,
+    row: NarrationSession,
+    plan: Any,
+    state: Any,
+) -> dict[str, Any] | None:
+    """B21 req 224/225/226: synthesise the cursor's chunk and the ones just after it.
+
+    Answers what the client needs to PLAY the current chunk — a URL it can fetch with the
+    owner session it already has, the sha256 of the bytes, their length, and the measured
+    duration — plus which chunks are now ready, so a client can see the read-ahead working
+    rather than take it on faith.
+
+    Never raises. A narration that fails to speak degrades to the text already in the
+    response (req 233); it does not fail the command that positioned the cursor.
+    """
+    narrator = runtime.narrator
+    if narrator is None:
+        return None
+    settings = voice_settings_for(row)
+    try:
+        results = narrator.ensure_ahead(plan, state.cursor, settings)
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning(
+            "narration_synthesis_failed",
+            session_id=str(row.id),
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+    if not results:
+        return None
+    current = results[0]
+    return {
+        "chunk_id": current.chunk_id,
+        "url": f"/v1/narration/sessions/{row.id}/chunks/{current.chunk_id}/audio",
+        "sha256": hashlib.sha256(current.audio).hexdigest(),
+        "bytes": len(current.audio),
+        "format": NARRATION_FORMAT,
+        "seconds": round(wav_duration_ms(current.audio) / 1000, 2),
+        "from_cache": current.from_cache,
+        # req 226: what is ALREADY synthesised for what comes next, by name.
+        "ready_ahead": [r.chunk_id for r in results[1:]],
+    }
+
+
+@router.get("/sessions/{session_id}/chunks/{chunk_id}/audio")
+async def get_chunk_audio(request: Request, session_id: uuid.UUID, chunk_id: str) -> Response:
+    """B21 req 224/414: the bytes of one narrated chunk.
+
+    Behind the owner session like every other route in this module — this is the browser's
+    path, and a browser has a bearer token. (The DEVICE's path is the one-time token store
+    in `app.alarms.audio_store`, because a Windows service has no owner session; that is
+    the briefing's route and stays as it is.)
+
+    Reads the cache the command endpoint filled. It does not synthesise on demand: a GET
+    that can spend a provider call is a GET that can be made to spend money in a loop, and
+    the cursor is what decides what is worth saying, not a URL.
+    """
+    runtime = _runtime(request)
+    narrator = runtime.narrator
+    if narrator is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_class": "provider_auth_missing",
+                "message": "bu dağıtımda seslendirme sağlayıcısı yapılandırılmamış",
+            },
+        )
+
+    def work() -> tuple[bytes | None, int]:
+        with runtime.session() as session:
+            row = service.get_session(session, session_id)
+            if row is None:
+                return None, 404
+            key = ChunkCache.key(
+                str(row.artifact_id), row.artifact_version, chunk_id, voice_settings_for(row)
+            )
+            return narrator.cache.get(key), 200
+
+    audio, status = await asyncio.to_thread(work)
+    if status == 404:
+        raise HTTPException(status_code=404, detail="unknown narration session")
+    if audio is None:
+        # Not synthesised (or evicted after a jump). The cursor decides what exists.
+        raise HTTPException(status_code=404, detail="bu parça için ses hazır değil")
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={
+            "Cache-Control": "private, max-age=300",
+            "Content-Length": str(len(audio)),
+            "X-Content-SHA256": hashlib.sha256(audio).hexdigest(),
+        },
+    )
+
+
 class CommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -316,6 +415,7 @@ async def post_command(
             chunk = plan.chunk_at(new_state.cursor) if new_state.cursor else None
             fresh = service.get_session(session, session_id)
             payload = _session_payload(fresh) if fresh else {}
+            reading = chunk is not None and new_state.state == commands.State.READING
             payload.update(
                 {
                     "action": result.action,
@@ -323,11 +423,22 @@ async def post_command(
                     "message": result.message,
                     "current_chunk": (
                         {"chunk_id": chunk.chunk_id, "kind": chunk.kind, "text": chunk.text}
-                        if chunk and new_state.state == commands.State.READING
+                        if reading
                         else None
                     ),
                 }
             )
+            # B21 req 224/225/226: and now it is actually READ. The window around the
+            # cursor is synthesised through the engine's cache (this chunk plus the next
+            # `NARRATION_LOOKAHEAD`), so the sentence after this one is already waiting
+            # when this one ends. A paused session synthesises nothing: `reading` is the
+            # command's own answer, and paying a provider for audio the owner just asked
+            # to stop is the version of this that would be worse than silence.
+            payload["audio"] = (
+                _synthesise_window(runtime, row, plan, new_state) if reading else None
+            )
+            if payload["audio"] is None and reading:
+                payload["audio_unavailable"] = runtime.no_voice_reason or "synthesis_failed"
             return payload
 
     payload = await asyncio.to_thread(work)

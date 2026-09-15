@@ -8,6 +8,7 @@ defaults; nothing here is provider-specific and no model name appears.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from app.actions.receipt import FAKE_COMPLETION_PHRASES
@@ -247,6 +248,51 @@ CAPABILITY_PROPOSAL_TR = (
 )
 
 
+#: B21 req 229: how many pronunciation rules travel in the instruction, and how long the
+#: block may be. The dictionary is unbounded by design (the owner can add a rule for every
+#: proper noun they own); an instruction is not. The most recently taught rules win,
+#: because a rule the owner added this week is about something they are talking about now.
+MAX_PRONUNCIATION_RULES = 24
+MAX_PRONUNCIATION_CHARS = 700
+
+
+def pronunciation_block(rules: Mapping[str, str] | None) -> str:
+    """The owner's pronunciation dictionary as an instruction to the ASSISTANT.
+
+    B21 req 229, and the matrix calls it "asıl eksik" for a good reason. The dictionary has
+    been applied to two things since M4: the narration plan's text, and the text a tool
+    hands back. Both are the assistant reading something PREPARED. Everything the assistant
+    says in its own words — the answer to a question, a preamble before a tool, "araştırmayı
+    başlattım efendim" — went to the provider having never seen the table, so the owner
+    could teach the system to say their surname correctly and then hear it mispronounced
+    for the rest of the conversation.
+
+    Written as a spoken-form instruction rather than a substitution: this is a realtime
+    speech model, and telling it *how a word sounds* is the thing it can act on.
+    """
+    if not rules:
+        return ""
+    lines: list[str] = []
+    used = 0
+    for token, spoken in list(rules.items())[:MAX_PRONUNCIATION_RULES]:
+        token = (token or "").strip()
+        spoken = (spoken or "").strip()
+        if not token or not spoken:
+            continue
+        line = f"{token} → {spoken}"
+        if used + len(line) > MAX_PRONUNCIATION_CHARS:
+            break
+        lines.append(line)
+        used += len(line)
+    if not lines:
+        return ""
+    return (
+        "Telaffuz: aşağıdaki yazımları KENDİ konuşmanda da verilen okunuşla söyle. "
+        "Yazarken değil, seslendirirken geçerlidir; listede olmayan bir kelimeyi "
+        "uydurmadan olağan Türkçe okunuşuyla söylersin.\n" + "\n".join(lines)
+    )
+
+
 def build_instructions(
     prefs: VoicePreferences | None = None,
     *,
@@ -255,6 +301,7 @@ def build_instructions(
     transcript_summary: str = "",
     voice_profile: str | None = None,
     memory_block: str = "",
+    pronunciation: Mapping[str, str] | None = None,
 ) -> str:
     """Assemble the session instructions (Turkish persona + defaults + state).
 
@@ -302,6 +349,12 @@ def build_instructions(
             + (f" (kapsam: {scope})" if scope else "")
             + (f" — durum: {status}." if status else ".")
         )
+    # req 229: BEFORE the transcript summary and the memory block, because it is a rule
+    # about how to say things rather than a fact about what is true, and the two blocks
+    # after it are the ones whose order against each other matters.
+    pron = pronunciation_block(pronunciation)
+    if pron:
+        parts.append(pron)
     if transcript_summary:
         parts.append("Önceki konuşmanın özeti: " + transcript_summary.strip())
     # B17 req 39/40: LAST, and after the summary on purpose. What the owner said two
@@ -317,6 +370,8 @@ def build_instructions(
 
 __all__ = [
     "ACTION_GROUNDING_TR",
+    "MAX_PRONUNCIATION_CHARS",
+    "MAX_PRONUNCIATION_RULES",
     "CAPABILITY_PROPOSAL_TR",
     "ALARM_DISPLAY_GROUNDING_TR",
     "EXECUTIVE_DEFAULTS_TR",
@@ -328,4 +383,5 @@ __all__ = [
     "VOICE_STYLE_ARBOR_TR",
     "VOICE_STYLE_BLOCKS",
     "build_instructions",
+    "pronunciation_block",
 ]

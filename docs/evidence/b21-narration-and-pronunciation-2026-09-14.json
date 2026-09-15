@@ -1,0 +1,87 @@
+{
+  "batch": "B21",
+  "name": "Anlatım ve telaffuz",
+  "requirements": [
+    224,
+    225,
+    226,
+    227,
+    228,
+    229,
+    230,
+    237,
+    414
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except one live-desktop test",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS (909 s, 9583 tests)",
+      "Windows agent build + tests": "1 of 1055 failed - see blocked_on_the_desktop",
+      "Staged-update qualification": "PASS (89 checks)"
+    },
+    "web_gates": "not re-run: this batch changed no web source (B20's run stands)"
+  },
+  "blocked_on_the_desktop": {
+    "test": "PagentOS.Agent.Tests.Operator.NotepadLifecycleTests.A_pointer_click_inside_the_window_lands_and_the_cursor_is_re_observed_there",
+    "status": "READY_FOR_OWNER - needs an idle desktop, not a code change",
+    "why": "The operator lab drives the REAL desktop: it launches Notepad, activates it, clicks inside it and reads `Registry.Foreground()` microseconds later. This batch changed no device code at all (`git status devices/` is empty), and the same suite passed three times earlier today. It began failing when the desktop became busy: first the foreground was taken by a window titled \"Claude\" (this session's own client raising itself), and then - with the owner watching a full-screen video - by something the registry could not resolve at all.",
+    "what_changed_here": "Only the diagnosis. The failure used to read `Assert.Equal() Failure: Strings differ / w-3802978-342479328 / w-5834690-342479218`, which names neither party. It now names the intruder and the remedy: \"after 3 attempt(s) the click landed while the foreground was <title> [<image>]; the operator lab needs a desktop nobody else is using\".",
+    "not_done_on_purpose": [
+      "The assertion was NOT loosened: 'the click landed in OUR window' is the claim that separates an operator from a keylogger, and `pointer.click` captures the foreground immediately after synthesising the click, so the claim is fair.",
+      "The retry count was NOT raised: this file's own comment rejects widening a bound that keeps losing, and three activations that each verified `foreground: true` were already enough to prove the desktop is being taken back.",
+      "`PAGENTOS_OPERATOR_LAB=0` was NOT set. Disabling the lab to make a gate green is the move this repository exists to avoid; the switch is the owner's.",
+      "The stray Notepad on the desktop was NOT closed: its title is `*a.txt`, the asterisk means unsaved work, and it has been open since 2026-09-10. It is the owner's document and it is not the cause (it never held the foreground in any observed failure)."
+    ],
+    "rest_of_the_suite": "919 of 920 agent tests and 135 of 135 audio tests pass."
+  },
+  "what_this_proves": "The narration subsystem makes a sound, and the assistant says the owner's words the way the owner says them. A command that positions the cursor now returns audio a client can play, with the next sentences already synthesised; the pronunciation table can be filled by speaking and reaches the assistant's OWN speech; and four things Turkish does with the characters around a number are now read correctly.",
+  "the_shape_of_this_batch": "The oldest shape in this repository, at its largest. `app/narration/engine.py` has planned, split, cached, looked ahead and cancelled since M4 — and its `Synthesizer` seam had NO implementation anywhere under `app/`. The only thing that ever passed one was a test. Sixteen hundred lines of narration machinery, a REST surface, a Turkish command machine, a cross-device cursor: complete, correct, and mute. Requirement 228's dictionary is the same story told with a different ending — a complete subsystem with one writer nobody could reach (a hand-made PUT), and therefore zero rows in production.",
+  "closed_fully": {
+    "224_the_seam_has_something_behind_it": "`ProviderSynthesizer` translates the engine's `synthesize(text, settings) -> bytes` onto every TTS provider's `synthesize(text, *, voice, speed, fmt) -> TTSResult` — the mismatch the matrix names. `build_synthesizer` returns **None** when the deployment has no provider that speaks, because B13 req 267 and B20 req 234 settled what the offline fake produces: a 110 Hz tone, and narration is the longest form of speech this system has and the least forgiving place to hum for ninety seconds.",
+    "225_226_the_queue_and_the_read_ahead_have_a_caller": "`NarrationEngine.ensure_ahead` synthesises the cursor's chunk plus `NARRATION_LOOKAHEAD` more and cancels what the cursor moved away from. The command response names the chunks that are ready (`ready_ahead`) rather than claiming a read-ahead, and the test counts PROVIDER CALLS to prove the cache is what makes the second command instant.",
+    "227_a_paused_session_pays_for_nothing": "\"dur\" is the one command that must never cost a provider call: the owner just said stop, and synthesising the next three sentences anyway is both money and the audio equivalent of not listening. The audio block is built only for a state the command machine itself calls READING.",
+    "414_an_artifact_can_be_asked_for": "Narration had exactly one way to begin — `activity.explain` builds a briefing and attaches a session to it — so every other artifact could be opened on a screen and never read. `narration.start` takes an artifact id from `artifact.list` (an id, never a guessed title: reading the wrong document for two minutes is a worse failure than asking which one) and attaches the same durable narration every later command drives.",
+    "228_the_dictionary_can_be_filled_by_speaking": "The moment a pronunciation rule is worth writing is the moment the word came out wrong, and that moment is spoken. `pronunciation.teach` upserts (teaching the same word twice is a correction, not a second rule), `pronunciation.list` reads the table back, and `pronunciation.forget` takes an id from that list.",
+    "229_the_assistant_obeys_its_own_table": "The dictionary reached two things: the narration plan's text, and what a tool handed back — both of them the assistant reading something PREPARED. What it said in its own words went to the provider having never seen the table. `pronunciation_block` puts the rules in the session instruction, bounded to 24 rules and 700 characters, worded as a rule about SPEAKING rather than spelling.",
+    "230_what_turkish_does_around_a_number": "Four gaps, each found by reading a corpus out loud rather than by reading the code. The apostrophe ('1.000'den' → 'bin'den'), where joining alone is not enough because the author harmonised the suffix to the DIGITS and the preceding word has changed ('20:00'de' wants 'sıfırda'). The minus sign, which `cardinal()` has handled since M4 and no rule ever handed it one. The degree symbol, dropped silently in a system that reads a temperature every morning. And the solidus.",
+    "237_teknik_anlat_changes_the_reading": "The presentation level reached the speech BUDGET and stopped there. The normaliser's technical mode — dotted runs as octets, no magnitude collapsing — is exactly what somebody asking for the technical version wants to hear, and no owner utterance could select it: `mode` came from the request body of a REST call the voice path does not make."
+  },
+  "found_on_the_way": {
+    "the_relay_refuses_the_obvious_argument_names": "`pronunciation.teach` was written with `token` and `context`. `FORBIDDEN_KEY_PARTS` refuses both — `token` is credential-shaped, and `context` CONTAINS `text` — so the tool could never have been called, and it would have looked perfectly correct in review. Caught by `test_no_tool_schema_names_an_argument_the_relay_refuses`, which is the guard doing precisely its job; the arguments are now `written_form` and `scope`, and a test in this batch states the reason.",
+    "every_registered_tool_needs_a_tier": "`test_every_registered_tool_has_a_tier` failed the moment the three tools existed. The map is complete in BOTH directions on purpose, and a default of OPEN is how a tool added later ends up ungoverned with nobody deciding it should be.",
+    "the_fake_is_refused_by_the_policy_it_earned": "B20 made the tone policy ask the class, so `FakeTTSProvider` is refused by the narration path — correct in production and useless for exercising the path where audio IS produced. The tests use the explicit `synthetic_speech=False` stand-in, which `test_no_production_path_declares_a_fake_to_be_real_speech` forbids under `app/`.",
+    "1_2_is_not_ikide_bir": "The mechanical fraction reading of '1/2' is 'ikide bir', which is a different Turkish EXPRESSION ('every so often'). It is one of two idioms the rule hard-codes; the other is '7/24'."
+  },
+  "tests": {
+    "services/api/tests/unit/test_narration_audio.py": 13,
+    "services/api/tests/unit/test_pronunciation_voice.py": 13,
+    "services/api/tests/unit/test_narration_numbers_tr.py": 38,
+    "services/api/tests/unit/test_voice_realtime_sessions.py": "+4 (229 end to end, 237, 414 and its refusal)"
+  },
+  "red_first_proof": {
+    "method": "Each claim was proved by an executed mutation of the production source, restored afterwards from a sha256-verified backup.",
+    "mutations": [
+      "narration: return no audio on a reading command -> four audio tests fail; let `build_synthesizer` accept a tone provider -> the no-voice test fails.",
+      "pronunciation: stop passing the table to `_session_config` -> the end-to-end 229 test fails.",
+      "numbers: drop the apostrophe stage -> 8 fail; join without harmony -> 2 fail (the two the author's spelling gets wrong); disable the degree and sign stages -> 8 fail.",
+      "237: make `_narration_mode` always answer 'narration' -> the technical-reading test fails.",
+      "414: create the narration and never attach it -> the read-aloud test fails."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED for 224/414 is real audio bytes from a real provider on a long text, and this deployment has no TTS credit — the roadmap's own allowance for that case is PROVEN_PROXY plus a BLOCKED note. What is proven: a real WAV, produced through the real engine and the real routes by a provider that returns bytes, fetched over the real HTTP surface, with its sha256 and its measured duration matching. The moment a key exists, `build_synthesizer` returns a real synthesizer through the same path and nothing else changes."
+  },
+  "owner_gates": {
+    "281_tts_credit": "a TTS provider credit turns 224/414 from PROVEN_AUTOMATED into PROVEN_REAL; until then narration answers with text and says why",
+    "karar_0": "production release round"
+  }
+}

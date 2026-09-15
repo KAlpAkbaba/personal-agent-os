@@ -896,7 +896,7 @@ TEST_PLAN           : `track.onended`/`onmute` tetiklendiğinde arayüz durumunu
                       faster-whisper'ın sağlıkta yanlış "etkin" görünmediği (kısa devre mutasyonu)
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde mikrofon iptal edildiğinde durum doğru değişti
 ROLLBACK_PLAN       : istemci değişikliği; web sürümü geri alınır
-KAPANIŞ             : commit PENDING_B20 · CI PENDING · yerel kapı PASS · 13/13 DONE
+KAPANIŞ             : commit 8ea8b3e · CI 35023336136 yeşil (7/7) · yerel kapı PASS · 13/13 DONE
                       kanıt docs/evidence/b20-voice-resilience-2026-09-13.json
                       (quality-gate -Fast PASS; web kapıları ayrıca: vitest 1694, tsc temiz,
                       oxlint 0 hata)
@@ -948,6 +948,39 @@ TEST_PLAN           : seam imzasının gerçek sağlayıcıyla uyuştuğu (sözl
 REAL_PROOF_REQUIRED : PROVEN_REAL — uzun metinden gerçek ses baytı üretildi (kota yoksa
                       PROVEN_PROXY + BLOCKED notu)
 ROLLBACK_PLAN       : anlatım bayrakla kapatılır; metin yolu korunur
+KAPANIŞ             : commit PENDING_B21 · CI PENDING · 9/9 DONE
+                      kanıt docs/evidence/b21-narration-and-pronunciation-2026-09-14.json
+                      224/414 için PROVEN_PROXY + BLOCKED (TTS kredisi yok); geri kalanı
+                      PROVEN_AUTOMATED
+                      Yerel kapı: API 9583 test PASS, lint PASS, staged-update PASS;
+                      cihaz süitinde 1055 testten 1'i (NotepadLifecycleTests pointer click)
+                      MASAÜSTÜ MEŞGUL olduğu için düşüyor — bu batch cihaz kodunda tek satır
+                      değiştirmedi (`git status devices/` boş) ve aynı süit gün içinde üç kez
+                      yeşil koştu. READY_FOR_OWNER: operatör laboratuvarı boş bir masaüstü
+                      ister; test artık ön plandaki pencereyi ADIYLA söylüyor.
+ÖLÇÜM               : Bu deponun EN ESKİ kusur şekli, en büyük hâliyle: `app/narration/`
+                      M4'ten beri planlıyor, cümlelere bölüyor, önbelleğe alıyor, ileri
+                      okuyor ve iptal ediyor — ve `Synthesizer` seam'inin `app/` altında
+                      HİÇBİR gerçeklemesi yoktu. Bir tek test geçiyordu ona. Bin altı yüz
+                      satır anlatım makinesi, REST yüzeyi, Türkçe komut makinesi, cihazlar
+                      arası imleç: eksiksiz, doğru ve DİLSİZ.
+                      228 aynı hikâyenin başka sonu: eksiksiz bir alt sistem, kimsenin
+                      ulaşamadığı tek bir yazıcıyla (elle PUT) — ve üretimde sıfır kural.
+                      230 ise sayının KENDİSİNDE değil, ETRAFINDAKİ karakterlerde eksikti:
+                      kesme işareti, eksi işareti, derece simgesi, bölü çizgisi.
+YOL ÜSTÜNDE         : (1) `pronunciation.teach` ilk hâlinde `token` ve `context` argümanları
+                      alıyordu; relay ikisini de reddediyor (`token` kimlik-biçimli,
+                      `context` içinde "text" GEÇİYOR), yani araç hiç çağrılamazdı ve
+                      incelemede kusursuz görünürdü. Guard yakaladı.
+                      (2) Üç yeni araç kaydedilir kaydedilmez step-up katman haritası
+                      testi kırıldı: harita her iki yönde de eksiksiz tutuluyor, çünkü
+                      varsayılan OPEN, sonradan eklenen bir aracın kimse karar vermeden
+                      yönetimsiz kalmasının yoludur.
+                      (3) B20'nin ton politikası `FakeTTSProvider`ı reddettiği için
+                      anlatım testleri açık `synthetic_speech=False` vekiliyle yazıldı;
+                      `app/` altında bunu kullanmak AST testiyle yasak.
+                      (4) "1/2"nin mekanik okunuşu "ikide bir" — bu Türkçede BAŞKA bir
+                      ifade ("sık sık"). Kural iki deyimi sabitliyor: 1/2 ve 7/24.
 ```
 
 ```

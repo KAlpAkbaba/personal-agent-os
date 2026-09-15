@@ -142,6 +142,82 @@ def ordinal(n: int) -> str:
     return " ".join(words)
 
 
+#: Consonants after which a suffix's initial d/c hardens to t/ç (Turkish consonant
+#: assimilation). "beş" + "de" is "beşte"; "bin" + "de" is "binde".
+_VOICELESS = set("fstkçşhp")
+
+
+def _last_vowel(word: str) -> str:
+    for ch in reversed(word.lower()):
+        if ch in _VOWELS:
+            return ch
+    return ""
+
+
+def _harmonise_vowel(vowel: str, last: str, *, two_way: bool) -> str:
+    """The Turkish vowel this suffix vowel becomes after a word ending in ``last``.
+
+    ``two_way`` is the a/e alternation (-de/-da, -den/-dan, -e/-a, -ler/-lar); the
+    four-way alternation (-i/-ı/-u/-ü, -lik/-lık/-luk/-lük) is the other one.
+    """
+    if two_way:
+        return "a" if last in _BACK_UNROUNDED or last in _BACK_ROUNDED else "e"
+    if last in _BACK_UNROUNDED:
+        return "ı"
+    if last in _BACK_ROUNDED:
+        return "u"
+    if last in _FRONT_ROUNDED:
+        return "ü"
+    return "i"
+
+
+_TWO_WAY = set("ae")
+_FOUR_WAY = set("ıiuü")
+
+
+def attach_suffix(word: str, suffix: str) -> str:
+    """B21 req 230: join a written suffix to a spoken number, in harmony.
+
+    Turkish writes a suffix on a numeral with an apostrophe — "1.000'den", "3'ü",
+    "08:45'te", "2'şer" — and the normaliser used to convert the number and leave the
+    apostrophe standing: "bin'den", "üç'ü", "sekiz kırk beş'te". A TTS reads that as a
+    break, a glottal stop, or the word "kesme"; none of them is Turkish.
+
+    Joining alone is not enough, because the author harmonised the suffix to the DIGITS
+    they wrote and the conversion changes what the last word is. "20:00'de" becomes
+    "yirmi sıfır sıfır" + "de", and Turkish wants "sıfırda". So the suffix's own vowels
+    are re-harmonised to the word that now precedes them, and an initial d/c hardens
+    after a voiceless consonant. Nothing is invented: the suffix's CONSONANTS and its
+    alternation class come from what the author wrote.
+    """
+    word = word.rstrip()
+    suffix = suffix.strip()
+    if not suffix:
+        return word
+    if not word:
+        return suffix
+    last = _last_vowel(word.split()[-1] if word.split() else word)
+    if not last:
+        return f"{word}{suffix}"
+    tail = word[-1].lower()
+    out: list[str] = []
+    for index, ch in enumerate(suffix):
+        lower = ch.lower()
+        if lower in _TWO_WAY:
+            out.append(_harmonise_vowel(lower, last, two_way=True))
+        elif lower in _FOUR_WAY:
+            out.append(_harmonise_vowel(lower, last, two_way=False))
+        elif index == 0 and lower in ("d", "c") and tail in _VOICELESS:
+            out.append("t" if lower == "d" else "ç")
+        elif index == 0 and lower in ("t", "ç") and tail not in _VOICELESS and tail in _VOWELS:
+            # The author wrote the hard form after a digit; after a vowel Turkish softens
+            # it back ("6'ta" -> "altıda").
+            out.append("d" if lower == "t" else "c")
+        else:
+            out.append(ch)
+    return word + "".join(out)
+
+
 def digit_by_digit(digits: str) -> str:
     """Read a run of characters digit by digit ('05' -> 'sıfır beş')."""
     out = [_DIGIT_WORD[c] for c in digits if c in _DIGIT_WORD]
@@ -160,4 +236,4 @@ def decimal(int_part: str, frac_part: str) -> str:
     return f"{whole} virgül {frac}"
 
 
-__all__ = ["cardinal", "ordinal", "decimal", "digit_by_digit"]
+__all__ = ["attach_suffix", "cardinal", "ordinal", "decimal", "digit_by_digit"]

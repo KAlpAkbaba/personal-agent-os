@@ -205,6 +205,28 @@ def _audit_rows(runtime, session_id: str, action: str | None = None) -> list[Aud
 # ------------------------------------------------------------------ create
 
 
+def test_the_owners_pronunciation_rules_reach_the_assistants_own_instruction(wired) -> None:
+    """B21 req 229, end to end through the real create path.
+
+    The dictionary has been applied to the narration plan and to tool-return text since
+    M4 — both of them the assistant reading something PREPARED. What it says in its own
+    words never saw the table, so the owner could teach this system how their surname
+    sounds and hear it mangled for the rest of the conversation.
+    """
+    client, _identity, runtime, _sideband, _issued, _engine = wired
+    with runtime.session() as db:
+        from app.narration import service as narration_service
+
+        narration_service.upsert_pronunciation(
+            db, token="Akbaba", spoken_form="ak-ba-ba", context=None, explicit=True
+        )
+
+    data = _create(client)
+
+    assert "Telaffuz:" in data["instructions"]
+    assert "Akbaba → ak-ba-ba" in data["instructions"]
+
+
 def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
     client, _, runtime, _, issued, _ = wired
     data = _create(client)
@@ -380,6 +402,13 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "memory.correct",
         "memory.pin",
         "memory.why",
+        # B21 req 228: the pronunciation table had a REST surface since M4 and zero rows in
+        # production, because a hand-made PUT was its only writer. The moment a rule is
+        # worth writing is the moment a word came out wrong, and that moment is spoken.
+        "narration.start",
+        "pronunciation.teach",
+        "pronunciation.list",
+        "pronunciation.forget",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR
@@ -955,6 +984,170 @@ def _seed_narration(engine) -> uuid.UUID:
         db.add(narration)
         db.commit()
         return narration.id
+
+
+TECHNICAL_DOC = """# Sunucu
+
+Sunucunun adresi 192.168.100.200 ve bellek 1.250.000 bayt.
+
+İkinci madde burada.
+"""
+
+
+def _seed_technical_narration(engine) -> uuid.UUID:
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as db:
+        artifact = Artifact(title="Teknik Rapor", current_version=1)
+        db.add(artifact)
+        db.flush()
+        db.add(
+            ArtifactVersion(
+                artifact_id=artifact.id,
+                version=1,
+                canonical_body=TECHNICAL_DOC,
+                content_hash=hashlib.sha256(TECHNICAL_DOC.encode()).hexdigest(),
+            )
+        )
+        narration = NarrationSession(artifact_id=artifact.id, artifact_version=1)
+        db.add(narration)
+        db.commit()
+        return narration.id
+
+
+def test_an_artifact_can_be_read_aloud_because_the_owner_asked_for_it(wired) -> None:
+    """B21 req 414.
+
+    Narration had exactly one way to begin: `activity.explain` builds a briefing and
+    attaches a session to it. Every other artifact this system produces — a research
+    report, a document — could be opened on a screen and never read, in a voice-first
+    product. `narration.start` is the entry point, and what it starts is the SAME durable
+    narration every later command drives.
+    """
+    from sqlalchemy.orm import Session as _Session
+
+    client, _identity, runtime, sideband, _issued, engine = wired
+    with _Session(engine) as db:
+        artifact = Artifact(title="Saha Raporu", current_version=1)
+        db.add(artifact)
+        db.flush()
+        db.add(
+            ArtifactVersion(
+                artifact_id=artifact.id,
+                version=1,
+                canonical_body=DOC,
+                content_hash=hashlib.sha256(DOC.encode()).hexdigest(),
+            )
+        )
+        db.commit()
+        artifact_id = artifact.id
+
+    # No narration attached: this session was created for a conversation, not a document.
+    sid = _create(client)["session_id"]
+    url = f"/v1/voice/realtime/sessions/{sid}/tool-calls"
+
+    started = client.post(
+        url,
+        json={
+            "call_id": "a1",
+            "name": "narration.start",
+            "arguments": {"artifact_id": str(artifact_id)},
+        },
+    ).json()["result"]
+
+    assert started["status"] == "succeeded"
+    assert started["title"] == "Saha Raporu"
+    assert started["speech"].startswith("Birinci madde")
+    assert sideband.events()[-1] == "narration_cursor"
+
+    # And it is a real narration: the next command moves ITS cursor.
+    moved = client.post(
+        url,
+        json={
+            "call_id": "a2",
+            "name": "narration.control",
+            "arguments": {"utterance": "ikinci maddeyi tekrar oku"},
+        },
+    ).json()["result"]
+    assert moved["narration"]["current_chunk"]["text"].startswith("İkinci madde")
+
+    # The position is durable: another device reads it back from the row.
+    with runtime.session() as db:
+        row = db.get(NarrationSession, uuid.UUID(started["narration_session_id"]))
+        assert row.artifact_id == artifact_id
+        assert row.state == "READING"
+
+
+def test_narration_start_refuses_a_guess_and_says_so(wired) -> None:
+    client, _identity, _runtime, _sideband, _issued, _engine = wired
+    sid = _create(client)["session_id"]
+    url = f"/v1/voice/realtime/sessions/{sid}/tool-calls"
+
+    # A tool-call error is carried IN the 200 envelope (the provider reads it back), so
+    # the refusal is the error_class rather than an HTTP status.
+    guessed = client.post(
+        url,
+        json={
+            "call_id": "g1",
+            "name": "narration.start",
+            "arguments": {"artifact_id": "saha raporu"},
+        },
+    ).json()
+    assert guessed["status"] == "failed"
+    assert guessed["error"]["error_class"] == "validation_error"
+
+    missing = client.post(
+        url,
+        json={
+            "call_id": "g2",
+            "name": "narration.start",
+            "arguments": {"artifact_id": str(uuid.uuid4())},
+        },
+    ).json()["result"]
+    assert missing["status"] == "failed"
+    assert "bulamadım" in missing["speech"]
+
+
+def test_teknik_anlat_changes_how_the_document_is_READ_not_only_how_much(wired) -> None:
+    """B21 req 237.
+
+    The normaliser has had a technical mode since M4: it reads a dotted numeric run as
+    octets and stops collapsing grouped thousands into a magnitude — which is the whole of
+    what somebody asking for the technical version of a system document wants to hear.
+    No owner utterance ever selected it. `mode` came from the REQUEST BODY of a REST call
+    the voice path does not make, so "teknik anlat" changed the LENGTH of the answer and
+    nothing about how the numbers in it were said.
+    """
+    client, _identity, _runtime, _sideband, _issued, engine = wired
+    narration_id = _seed_technical_narration(engine)
+    sid = _create(client, narration_session_id=str(narration_id))["session_id"]
+    url = f"/v1/voice/realtime/sessions/{sid}/tool-calls"
+
+    plain = client.post(
+        url,
+        json={
+            "call_id": "t1",
+            "name": "narration.control",
+            "arguments": {"utterance": "birinci maddeyi oku"},
+        },
+    ).json()["result"]
+    # Narration mode: the address is read as a magnitude-free dotted run and the byte count
+    # collapses into words.
+    assert "bir milyon iki yüz elli bin" in plain["speech"]
+
+    technical = client.post(
+        url,
+        json={
+            "call_id": "t2",
+            "name": "narration.control",
+            "arguments": {"utterance": "teknik anlat"},
+        },
+    ).json()["result"]
+
+    assert technical["narration"]["presentation"] == "technical"
+    # The reading itself changed: grouped thousands are no longer collapsed.
+    assert "bir milyon iki yüz elli bin" not in technical["speech"]
+    assert "nokta" in technical["speech"]
 
 
 def test_narration_control_moves_the_durable_cursor_and_pushes_it(wired) -> None:
@@ -1556,7 +1749,7 @@ def test_a_session_created_with_no_ttl_never_expires(wired) -> None:
 
 
 def test_the_owner_can_still_close_it(wired) -> None:
-    """"Never expires" must not become "cannot be ended"."""
+    """ "Never expires" must not become "cannot be ended"."""
     client = wired[0]
     sid = _create(client)["session_id"]
 

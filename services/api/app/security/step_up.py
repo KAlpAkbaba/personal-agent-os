@@ -140,6 +140,17 @@ _TIERS: Final[dict[str, str]] = {
     "memory.forget": TIER_SENSITIVE,
     "memory.pin": TIER_SENSITIVE,
     "memory.remember": TIER_SENSITIVE,
+    # B21 req 228. Teaching and forgetting a pronunciation CHANGE what the assistant will
+    # say from now on - the table is part of the persona instruction (req 229) - so they
+    # are governed like any other write. They are the mildest writes in this map: the cost
+    # of a wrong one is a word said oddly until the owner corrects it, and there is no
+    # deletion of anything the owner cannot re-teach in one sentence.
+    "pronunciation.forget": TIER_SENSITIVE,
+    "pronunciation.teach": TIER_SENSITIVE,
+    # B21 req 414: starting a narration creates a durable session and points the
+    # assistant's voice at a document. It reads what the owner already owns and changes
+    # nothing in it, but it is a write (a session row) and it decides what gets said next.
+    "narration.start": TIER_SENSITIVE,
     "media.play": TIER_SENSITIVE,
     "media.stop": TIER_SENSITIVE,
     "native.build": TIER_SENSITIVE,
@@ -185,6 +196,9 @@ _TIERS: Final[dict[str, str]] = {
     # changes nothing - but it is a USE, and both of these write a `memory.used` receipt.
     "memory.search": TIER_OPEN,
     "memory.why": TIER_OPEN,
+    # Reading the table back changes nothing, and it is the step `pronunciation.forget`
+    # depends on: an id read out loud, then named.
+    "pronunciation.list": TIER_OPEN,
     "briefing.overnight_work": TIER_OPEN,
     "briefing.system_status": TIER_OPEN,
     "calendar.agenda": TIER_OPEN,
