@@ -42,6 +42,8 @@ export class WebRtcTransport implements RealtimeTransport {
   private audioSinks = new Set<(output: AudioOutput) => void>();
   private now: () => number = () => performance.now();
   private closed = false;
+  /** req 218: the peer reported `disconnected` and has not come back yet. */
+  private impaired = false;
   /** Settles the in-flight open promise exactly once; null when none is armed. */
   private settleOpen: ((error?: Error) => void) | null = null;
   private outbox: unknown[] = [];
@@ -83,6 +85,20 @@ export class WebRtcTransport implements RealtimeTransport {
       if (this.closed) return;
       if (pc.connectionState === "failed" || pc.connectionState === "closed") {
         this.emit({ type: "disconnected", at: this.now(), reason: `peer_${pc.connectionState}` });
+        return;
+      }
+      // B20 req 218: `disconnected` is the warning that comes BEFORE `failed`, and until
+      // now it was dropped on the floor. Media has stopped arriving; the browser will
+      // either recover the candidate pair or give up, and how long it takes to decide is
+      // its own business - seconds of silence with the page still claiming to listen.
+      if (pc.connectionState === "disconnected") {
+        this.impaired = true;
+        this.emit({ type: "impaired", at: this.now(), reason: "peer_disconnected" });
+        return;
+      }
+      if (pc.connectionState === "connected" && this.impaired) {
+        this.impaired = false;
+        this.emit({ type: "recovered", at: this.now() });
       }
     };
 

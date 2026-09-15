@@ -36,6 +36,7 @@ const ALL_STATES: VoiceUiState[] = [
   "interrupted",
   "reconnecting",
   "closed",
+  "mic_lost",
   "error",
 ];
 
@@ -59,6 +60,9 @@ describe("the state table", () => {
     speaking: "speaking",
     tool_running: "tool_running",
     interrupted: "interrupted",
+    // B20 req 221: the microphone is gone and the session is not. It DRAWS - the
+    // defect was a page that kept showing the listening core into a dead microphone.
+    mic_lost: "error",
     error: "error",
   };
 

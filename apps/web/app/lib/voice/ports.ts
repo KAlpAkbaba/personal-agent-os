@@ -97,6 +97,16 @@ export interface Microphone {
   readonly stream: MediaStream | null;
   /** Read back from the last successful open; null before / after close. */
   readonly applied?: AppliedInputSettings | null;
+  /**
+   * B20 req 215/216: change suppression / AGC on the LIVE track.
+   *
+   * Without this, "ayarlanır" was only true between sessions: the owner moved the
+   * suppression selector mid-conversation, the profile stored the choice, the gate
+   * re-derived - and the capture went on exactly as it was until the next `open()`, with
+   * nothing on the screen to say so. Answers with the read-back of what the browser
+   * ACTUALLY applied, which is the only evidence that the change happened at all.
+   */
+  applyLive?(constraints: Partial<MicrophoneConstraints>): Promise<AppliedInputSettings | null>;
   close(): void;
 }
 

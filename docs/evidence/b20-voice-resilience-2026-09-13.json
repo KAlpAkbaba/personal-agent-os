@@ -1,0 +1,101 @@
+{
+  "batch": "B20",
+  "name": "Ses oturumu dayanıklılığı ve dürüst durum",
+  "requirements": [
+    215,
+    216,
+    217,
+    218,
+    221,
+    222,
+    223,
+    231,
+    233,
+    234,
+    235,
+    236,
+    238
+  ],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS (922 s)",
+      "Windows agent build + tests": "PASS (47 s)",
+      "Staged-update qualification": "PASS (10 s, 89 checks)"
+    },
+    "web_gates_run_separately": {
+      "vitest": "1694 passed / 90 files",
+      "tsc --noEmit": "clean",
+      "oxlint": "0 errors"
+    },
+    "note": "The first run failed on API lint alone (three import blocks and one long line in this batch's own files); fixed and re-run green. The web gates are not part of -Fast and were run directly."
+  },
+  "what_this_proves": "Every sentence the voice surfaces say about themselves is now tied to something measured. The page stops saying 'Dinliyor' into a revoked microphone and 'Konuşuyor' into a silent room; the client beats the provider's own media-leg ceiling instead of being cut by it; a link in trouble is acted on before the browser gives up; and what could not be SPOKEN is still TOLD, in text.",
+  "the_shape_of_this_batch": "Different again from the five that found complete code with no caller, and from B19's complete mechanism with an empty input. This batch found CONTROLS THAT DID NOTHING and CLAIMS NOTHING CHECKED. A suppression menu with three options and two behaviours; a sensitivity menu with four options and three; a state label printed from a token while the analyser next to it drew silence; a tone-refusal policy keyed on one provider NAME while the tone is a property of the class; a `disconnected` warning the transport dropped on the floor; a ceiling the server knew and never published. Nothing here was missing code — it was code whose two halves had never been asked whether they agreed.",
+  "closed_fully": {
+    "215_216_suppression_and_echo_are_measured_and_adjusted": "`constraintsFor` computed `noiseSuppressionMode !== 'off'`, so 'otomatik' and 'tarayıcı' were the same behaviour and 'auto' followed no measurement at all. It now classifies the device's own measured noise floor with the same `classifyEnvironment` the gate presets use, and suppression is left ON unless the owner's declaration or a completed measurement says the room is quiet — silence is not evidence of quiet. The other half: these constraints only ever reached the capture at the NEXT `getUserMedia`, so an owner changing suppression mid-conversation changed nothing they could hear. `BrowserMicrophone.applyLive` applies them to the open track and answers with the READ-BACK, because `applyConstraints` resolving is not evidence that anything changed. Echo cancellation was already measured (ADR-0047 §4 read-back, and `measuredEchoResidualDb` persisted from the gate) — a measurement correction.",
+    "217_four_sensitivity_modes_are_four": "'otomatik' and 'normal' derived byte-identical gate parameters. The mode an owner reaches for when the microphone has gone deaf on them did nothing at all. 'normal' now means the standard: the per-device LEARNED offsets are set aside, which is the escape hatch from bad learning that the bounded-and-reversible design implied and never offered. The modes existed and were wired end to end (profile → page → rig → `deriveGateParameters`), so 'Yok' was a measurement correction.",
+    "218_the_warning_is_acted_on": "`onconnectionstatechange` looked for `failed` and `closed` and dropped `disconnected`, which is the state WebRTC reports first and then takes as long as it likes to resolve. Those seconds are dead air with the page still saying 'Dinliyor'. A warning is now a stopwatch, not a teardown: `LEG_RENEW`-style grace of 2 s, cancelled if the link recovers by itself (most blips do), and a re-attach through the one existing series if it does not.",
+    "221_222_the_microphone_that_went_away": "`track.onended` and `onmute` were never subscribed. `mic_lost` is its own state because it is neither of the two it would be mistaken for, and the check lives inside `setState` so a later transition cannot put the lie back on the screen. The loss is reported to the server too, so it is in the record and not only on the glass.",
+    "223_the_client_beats_the_provider_ceiling": "ADR-0105 fixed the half that was a lie (the session does not expire and the client stopped counting `expires_at` down). The other half stood: the provider ends a single media LEG at sixty minutes whatever the session says, and the client had no idea the ceiling existed. The server publishes `leg_max_seconds` with every leg; the client re-opens two minutes before it, waits for a gap in the conversation while there is time to wait, and stops waiting inside fifteen seconds of the ceiling.",
+    "231_konusuyor_is_a_claim_about_sound": "The pulse in the Core has been honest since ADR-0066 — no audio, no pulse. The WORDS were not: `speaking` is set at `response_started`, and both readouts printed 'Konuşuyor' from that instant. The label now follows the measured phase ('Yanıt hazırlanıyor…' while generating) and the Core's caption waits with the voice. The state machine is deliberately unchanged: the turn IS the assistant's, and the barge-in path needs to know that.",
+    "233_a_failure_to_speak_is_not_a_failure_to_tell": "The wake greeting recorded `greeting_failure=\"no_tts_key\"` and threw the sentence away; the briefing stopped at the clip that would not play and threw the rest away; and because the briefing only ran after a greeting that was actually spoken, one TTS failure silently took both. An owner whose credit ran out overnight woke to silence and found nothing anywhere about their morning. `app.voice.text_fallback.deliver_as_text` writes the unspoken words to the notification store (which commits before any transport is tried), and the briefing is built text-only on the greeting-failure branch rather than being skipped.",
+    "234_the_tone_policy_asks_the_class": "B13 req 267's rule was right and its implementation matched one NAME, `fake-tts-greeting`, while `FakeTTSProvider` produces the identical 110 Hz sine under every other name this codebase builds — `fake-tts`, `fake-tts-a`, `fake-tts-b`, or anything a caller passes. The provider now declares `synthetic_speech` about itself; the escape hatch for a test standing in for a real provider is explicit at the construction site and an AST test forbids it anywhere under `app/`.",
+    "235_no_provider_is_a_condition_not_an_error": "A 503 arrived as `Oturum oluşturulamadı: POST /v1/voice/realtime/sessions: HTTP 503` beside a button labelled 'Bağlan'. The client now classifies the server's own error taxonomy, says one Turkish sentence about what is missing and one about what the owner can do (a key goes in the DPAPI store, never in a browser form), and disables the control only for the conditions pressing it cannot fix.",
+    "236_a_dead_provider_is_not_activated": "`not caps['requires_api_key'] or _is_activated(...)` short-circuits: faster-whisper declares no key requirement, so the branch written to answer False was never reached and `GET /v1/voice/providers` listed an uninstalled local STT as ACTIVATED — on the very surface an owner would consult to find out why transcription failed. A provider that needs no key is activated iff whatever it does need is there, and the provider is the thing that knows what that is.",
+    "238_the_history_says_what_the_conversation_was": "The close AUDIT row has carried `lifetime_ms` and `barge_in_count` since M16; the LEDGER row — the surface the owner reads — carried a reason code. The numbers were computed two statements earlier and dropped. The history row now carries the lifetime, the barge-ins, the tool-call count and the provider, and its Turkish sentence names them."
+  },
+  "corrected_by_measurement": {
+    "216_echo_cancellation_was_already_measured": "Recorded 'Sağlayıcı tarafında'. ADR-0047 §4's read-back records what the browser actually applied to the input track, and the gate's measured echo residual is persisted per device (`rig.ts` commits `measuredEchoResidualDb`). Seventh measurement correction.",
+    "217_the_modes_existed": "Recorded MISSING ('Yok'). `preferredVadSensitivity` is in the profile, on the page, read live by the rig and applied in `deriveGateParameters`. What was missing was a DIFFERENCE between two of the four options, which is a different defect and the one that got fixed. Eighth measurement correction.",
+    "238_the_double_write_ended_in_B06": "Recorded 'Defter çift yazıyor', with the note '70 düzelmeden düzelmez'. Requirement 70 closed in B06: `voice_session_source_ref` is one natural key shared by the live writer and the backfill, and `_voice_live_already_recorded` is the backfill asking whether live already covered the session. Ninth measurement correction — and the row's real remaining defect was elsewhere, in what the surviving row said."
+  },
+  "found_on_the_way": {
+    "a_deferral_that_re_arms_for_now_is_a_spin": "Red-proving the leg-renewal hard floor by removing it turned the deferral into a zero-delay loop that hung the suite synchronously — vitest cannot interrupt that, so the mutation produced no failure at all, only a stopped clock. `LEG_RENEW_MIN_WAIT_MS` puts a floor under every renewal wait, and a nonsense ceiling from a confused server is now bounded rather than unbounded.",
+    "the_fake_that_stood_in_for_a_real_provider": "Making the tone policy ask the class broke nine tests that used `FakeTTSProvider` to exercise the path where audio IS produced and played. That is a real need — a keyless machine proving the whole greeting path end to end — so the escape is explicit at the construction site and forbidden in production by an AST test. A policy with no way to test the happy path would have been quietly weakened instead.",
+    "the_protocol_that_grew_a_method": "Adding `leg_max_seconds` to the `runtime_checkable` `RealtimeProvider` protocol silently un-typed the simulator and the offline fake: `isinstance(sim, RealtimeProvider)` became False and one test caught it. Both now answer 0, which is the honest answer 'I do not end legs' rather than the absence of an answer.",
+    "the_notification_that_could_destroy_the_record": "`deliver_as_text` writes through a store that commits, and rolls the session back when that write fails. Called AFTER `alarm.detail_json` was set, a failed notification would have taken the `greeting_failure` with it — the record of the failure destroyed by the attempt to work around it. The call now happens before the row is touched.",
+    "two_exhaustive_lists_for_one_union": "`voice-overlay.test.ts` keeps `ALL_STATES` and `EXPECTED`; adding `mic_lost` to one left the other failing. Both are deliberate — one proves the overlay handles every state, the other pins what each renders — and both have to be fed."
+  },
+  "tests": {
+    "apps/web/tests/voice/microphone-loss.test.ts": 5,
+    "apps/web/tests/voice/leg-ceiling.test.ts": 10,
+    "apps/web/tests/voice/input-tuning.test.ts": 18,
+    "apps/web/tests/voice/proactive-reconnect.test.ts": 8,
+    "apps/web/tests/voice/speaking-truth.test.ts": 5,
+    "apps/web/tests/voice/provider-unavailable.test.ts": 5,
+    "services/api/tests/unit/test_tts_fallback_policy.py": 6,
+    "services/api/tests/unit/test_voice_text_fallback.py": 8,
+    "services/api/tests/unit/test_voice_activity_history.py": 5,
+    "services/api/tests/unit/test_voice_unavailable_contract.py": 3
+  },
+  "red_first_proof": {
+    "method": "Each claim was proved by an executed mutation of the production source, with the file restored from a sha256-verified backup afterwards.",
+    "mutations": [
+      "leg renewal: remove the mid-turn deferral -> 'waits for a gap' fails; remove the hard floor -> 'stops waiting when there is no time left' fails; keep the first ceiling for every later leg -> 'arms from the leg it was just handed' fails; drop the retry -> 'leaves the working leg alone and tries again' fails.",
+      "input tuning: restore `noiseSuppressionMode !== 'off'` -> 'turns suppression off once the device has measured a quiet room' fails; stop zeroing the learned adaptation for 'normal' -> both sensitivity tests fail; stop calling `applyInputPreferences` from `patchProfile` -> both live-apply tests fail.",
+      "speaking truth: make the label ignore the phase -> two tests fail.",
+      "proactive reconnect: ignore the `impaired` event -> four tests fail; ignore `recovered` -> two fail.",
+      "tts policy: restore the name-only check -> two tests fail.",
+      "text fallback: drop `_briefing_as_text` -> the briefing test fails.",
+      "unavailable contract: drop one class from the web set -> the contract test fails.",
+      "activity history: restore the reason-only detail -> three tests fail."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is the owner revoking the microphone in production and seeing the state change. Everything short of that is proven against the real controller, the real store and the real rig: a track that ends, a track that mutes and comes back, a leg re-opened before a published ceiling, a link warning that clears and one that does not, a suppression change that reaches an open capture, and a keyless wake path that delivers its words as text. The production round is Karar 0."
+  },
+  "owner_gates": {
+    "karar_0": "production release round — every 'üretim turu bekliyor' note above resolves there",
+    "281_tts_credit": "a real TTS provider credit is what turns the text fallback back into speech; until then req 233's path is the one that runs"
+  }
+}

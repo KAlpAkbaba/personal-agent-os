@@ -294,9 +294,12 @@ def test_the_receipt_says_what_the_owner_actually_heard():
     assert delivery.as_dict() == {
         "clips": delivery.clips,
         "spoken": 2,
+        # B20 req 233: and what they did not hear, which is what gets delivered as text.
+        "unspoken": delivery.clips - 2,
         "failure": "clip_not_played:3",
         "complete": False,
     }
+    assert delivery.unspoken and delivery.unspoken[0] not in delivery.spoken
 
 
 # ------------------------------------------------------------------- the wiring

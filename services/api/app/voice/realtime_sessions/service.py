@@ -16,7 +16,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -255,6 +255,7 @@ def _ledger(
     *,
     trace_id: str | None = None,
     detail: dict[str, Any] | None = None,
+    summary: str | None = None,
 ) -> None:
     """Activity Ledger write for create/attach/close (M16 track A, spec §1.2
     writer table: ``source_ref = realtime_sessions:<id>:<state>``), built by the ledger's
@@ -269,7 +270,7 @@ def _ledger(
                 event_type=_LEDGER_EVENT_TYPE_BY_STATE[state],
                 subsystem=SUBSYSTEM_VOICE,
                 action=f"voice_session_{state}",
-                factual_summary=_LEDGER_SUMMARY_BY_STATE[state],
+                factual_summary=summary or _LEDGER_SUMMARY_BY_STATE[state],
                 occurred_at=utcnow(),
                 trace_id=trace_id,
                 evidence_refs=[{"kind": "realtime_session", "ref": str(row.id)}],
@@ -383,6 +384,19 @@ def _memory_block(db: Session, memory_runtime: Any, *, now: datetime | None = No
         return ""
     logger.info("memory_injected", **selection.as_dict())
     return selection.as_block()
+
+
+def _leg_max_seconds(provider: Any) -> int:
+    """The provider's ceiling, or 0 when it declares none. Never raises: a provider that
+    cannot answer is a provider with no known ceiling, and the client then schedules
+    nothing rather than renewing on a number nobody supplied."""
+    getter = getattr(provider, "leg_max_seconds", None)
+    if getter is None:
+        return 0
+    try:
+        return max(0, int(getter()))
+    except Exception:  # noqa: BLE001 - see the docstring
+        return 0
 
 
 def _session_config(
@@ -524,6 +538,7 @@ def _leg_payload(
     *,
     registry: ToolRegistry,
     config: RealtimeSessionConfig,
+    provider: Any = None,
 ) -> dict[str, Any]:
     """The client sees exactly the instructions/tools the credential was minted
     with (same ``config`` object), so the two can never drift."""
@@ -536,6 +551,10 @@ def _leg_payload(
         "instructions": config.instructions,
         "language": row.language,
         "expires_at": _iso(row.expires_at),
+        # B20 req 223: the provider's own ceiling on ONE media leg, so the client can
+        # renew BEFORE it rather than meeting it as silence. Distinct from `expires_at`,
+        # which ADR-0105 made NULL: the session never ends and the leg still does.
+        "leg_max_seconds": _leg_max_seconds(provider),
         "state": row.state,
         "voice": (row.context_json or {}).get("voice"),
         "voice_profile": (row.context_json or {}).get("voice_profile"),
@@ -2039,6 +2058,56 @@ def attach(
     return payload
 
 
+def _closed_session_facts(
+    db: Session, row: RealtimeSessionRow, *, reason: str, now: datetime
+) -> dict[str, Any]:
+    """What the ledger records about a finished conversation (B20 req 238).
+
+    Every number here is READ, never estimated: the lifetime from the row's own timestamps,
+    the barge-in count the session kept as it ran, and the tool calls counted in their own
+    table. A count that cannot be taken is omitted rather than sent as zero — "no tools
+    were used" and "I could not count the tools" are different facts, and only one of them
+    is true when the query fails.
+    """
+    created = _aware(row.created_at, now)
+    facts: dict[str, Any] = {
+        "reason": reason[:64],
+        "lifetime_ms": int((now - created).total_seconds() * 1000),
+        "barge_in_count": int((row.context_json or {}).get("barge_in_count", 0)),
+        "provider": row.provider,
+        "transport": row.transport,
+        "client_kind": row.client_kind,
+    }
+    try:
+        facts["tool_calls"] = int(
+            db.execute(
+                select(func.count())
+                .select_from(RealtimeToolCall)
+                .where(RealtimeToolCall.session_id == row.id)
+            ).scalar_one()
+        )
+    except Exception as exc:  # noqa: BLE001 - a count must not fail a close
+        db.rollback()
+        logger.warning("tool_call_count_failed", session_id=str(row.id), error=type(exc).__name__)
+    return facts
+
+
+def _closed_summary(facts: dict[str, Any]) -> str:
+    """The one Turkish sentence the ledger shows for a finished conversation."""
+    minutes = max(0, int(facts.get("lifetime_ms", 0))) // 60_000
+    seconds = (max(0, int(facts.get("lifetime_ms", 0))) // 1000) % 60
+    length = f"{minutes} dk {seconds} sn" if minutes else f"{seconds} sn"
+    parts = [f"Sesli oturum kapandı ({length}"]
+    barge = int(facts.get("barge_in_count", 0))
+    if barge:
+        parts.append(f", {barge} söze girme")
+    tools = facts.get("tool_calls")
+    if isinstance(tools, int) and tools:
+        parts.append(f", {tools} araç çağrısı")
+    parts.append(").")
+    return "".join(parts)
+
+
 def close_session(
     db: Session,
     row: RealtimeSessionRow,
@@ -2065,7 +2134,23 @@ def close_session(
         )
         snapshot_benchmark_at_close(db, row)
         db.commit()
-        _ledger(db, "closed", row, trace_id=trace_id, detail={"reason": reason[:64]})
+        # B20 req 238: the history says what the conversation WAS, not only that it ended.
+        #
+        # These three numbers were already computed for the audit row two statements above
+        # and then dropped on the way to the ledger, which is the surface the owner reads:
+        # "Sesli oturum kapandı." with a reason code is a log line, and a voice activity
+        # history made of those cannot answer "how long did we talk this morning". The
+        # audit trail is for an investigation; the ledger is the owner's own record, and
+        # there was no reason for the second to know less than the first.
+        closed = _closed_session_facts(db, row, reason=reason, now=now)
+        _ledger(
+            db,
+            "closed",
+            row,
+            trace_id=trace_id,
+            detail=closed,
+            summary=_closed_summary(closed),
+        )
         _publish_session_over(row, reason=reason)
     return {"session_id": str(row.id), "state": row.state, "closed_at": _iso(row.closed_at)}
 

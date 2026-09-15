@@ -18,6 +18,7 @@ import {
   VOICE_LABEL,
   VOICE_STATE_LABEL,
   speechPhaseNote,
+  voiceStateLabel,
 } from "../lib/voice/labels";
 import {
   type AgcPreference,
@@ -108,6 +109,9 @@ function VoiceConsole() {
 
   const live = snapshot !== null && isLiveState(snapshot.state);
   const busy = snapshot !== null && isBusyState(snapshot.state);
+  // req 235: a missing credential is not retryable from here, and the button says so
+  // rather than inviting the owner to press it until they give up.
+  const blocked = snapshot?.unavailable != null && !snapshot.unavailable.retryable;
 
   // Live level / gate meter while a session is open.
   useEffect(() => {
@@ -291,7 +295,13 @@ function VoiceConsole() {
               cursor: busy ? "progress" : "pointer",
             }}
           >
-            {live ? "Bağlantıyı kes" : busy ? STATE_LABEL[snapshot.state] : "Bağlan"}
+            {live
+              ? "Bağlantıyı kes"
+              : busy
+                ? STATE_LABEL[snapshot.state]
+                : blocked
+                  ? "Ses kullanılamıyor"
+                  : "Bağlan"}
           </button>
           <label className="muted">
             Mikrofon{" "}
@@ -354,7 +364,7 @@ function VoiceConsole() {
           <div className="status-row">
             <strong>Durum</strong>
             <span className={`badge ${snapshot.state === "error" ? "fail" : live ? "ok" : "unknown"}`} data-speech-phase={snapshot.speech.phase}>
-              {STATE_LABEL[snapshot.state]}
+              {voiceStateLabel(snapshot)}
               {speechPhaseNote(snapshot) ? ` · ${speechPhaseNote(snapshot)}` : ""}
             </span>
           </div>
@@ -412,7 +422,18 @@ function VoiceConsole() {
           {snapshot.contractNotice && (
             <p className="muted" style={{ color: "var(--warn)" }}>{snapshot.contractNotice}</p>
           )}
-          {snapshot.lastError && (
+          {/* B20 req 235: the provider-unavailable condition is not an error line. It says
+              what is missing and who can change it, and the connect button above is
+              disabled while nothing the owner does here could work. */}
+          {snapshot.unavailable && (
+            <div style={{ color: "var(--warn)" }} data-voice-unavailable={snapshot.unavailable.errorClass || "unknown"}>
+              <p className="muted" style={{ color: "inherit", margin: 0 }}>{snapshot.unavailable.message}</p>
+              {snapshot.unavailable.remedy && (
+                <p className="muted" style={{ color: "inherit", margin: "0.2rem 0 0 0" }}>{snapshot.unavailable.remedy}</p>
+              )}
+            </div>
+          )}
+          {!snapshot.unavailable && snapshot.lastError && (
             <div style={{ color: "var(--fail)" }}>
               <p className="muted" style={{ color: "inherit", margin: 0 }}>{snapshot.lastError}</p>
               {snapshot.lastErrorLines.map((line, i) => (
@@ -608,9 +629,9 @@ function VoiceConsole() {
                 onChange={(e) => patchProfile({ preferredVadSensitivity: e.target.value as MicrophoneProfile["preferredVadSensitivity"] })}
                 aria-label="Ses algılama hassasiyeti"
               >
-                <option value="auto">otomatik</option>
+                <option value="auto">otomatik (öğrenilenle)</option>
                 <option value="low">düşük</option>
-                <option value="normal">normal</option>
+                <option value="normal">normal (öğrenileni yok say)</option>
                 <option value="high">yüksek</option>
               </select>
             </label>

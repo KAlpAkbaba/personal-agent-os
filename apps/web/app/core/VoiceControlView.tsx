@@ -14,7 +14,7 @@
 
 import Link from "next/link";
 
-import { MODE_LABEL, VOICE_STATE_LABEL, speechPhaseNote } from "../lib/voice/labels";
+import { MODE_LABEL, VOICE_STATE_LABEL, speechPhaseNote, voiceStateLabel } from "../lib/voice/labels";
 import {
   type VoiceStoreSnapshot,
   isBusyState,
@@ -35,8 +35,13 @@ export default function VoiceControlView({ voice, onConnect, onDisconnect, onRec
   const state = controller.state;
   const live = isLiveState(state);
   const busy = isBusyState(state);
+  // B20 req 235: there is no provider, and pressing a button will not produce one. A
+  // condition the owner has to act on OUTSIDE the page (a key in the DPAPI store) is the
+  // one case where the control is disabled rather than hopeful; a provider that is merely
+  // down stays retryable, because that one can come back on its own.
+  const blocked = controller.unavailable !== null && !controller.unavailable.retryable;
   // Closed or failed once: the owner reconnects from here, without leaving /core.
-  const reopenable = state === "closed" || state === "error";
+  const reopenable = (state === "closed" || state === "error") && !blocked;
   const connection = live ? "connected" : busy ? "connecting" : "disconnected";
 
   return (
@@ -51,7 +56,7 @@ export default function VoiceControlView({ voice, onConnect, onDisconnect, onRec
       <span className="ambient-title">
         {live ? "Ses bağlı" : busy ? "Ses bağlanıyor" : "Ses bağlı değil"}
         {" · "}
-        {VOICE_STATE_LABEL[state]}
+        {voiceStateLabel(controller)}
         {/* ADR-0066: the lifecycle, not the energy — "draining" is speaking with the generation over. */}
         {speechPhaseNote(controller) && <span className="muted" data-speech-note>{` (${speechPhaseNote(controller)})`}</span>}
       </span>
@@ -80,10 +85,20 @@ export default function VoiceControlView({ voice, onConnect, onDisconnect, onRec
               Çalışan araç: {controller.toolsRunning.join(", ")}
             </span>
           )}
-          {controller.lastError && (
-            <span className="muted" data-voice-error="yes">
-              {controller.lastError}
+          {/* B20 req 235: a standing condition, said as one. Not an error line, and not a
+              button that cannot work: a missing key stays missing however often it is
+              pressed, and only the owner can change that. */}
+          {controller.unavailable ? (
+            <span className="muted" data-voice-unavailable={controller.unavailable.errorClass || "unknown"}>
+              {controller.unavailable.message}
+              {controller.unavailable.remedy ? ` ${controller.unavailable.remedy}` : ""}
             </span>
+          ) : (
+            controller.lastError && (
+              <span className="muted" data-voice-error="yes">
+                {controller.lastError}
+              </span>
+            )
           )}
         </>
       )}
@@ -98,8 +113,14 @@ export default function VoiceControlView({ voice, onConnect, onDisconnect, onRec
             Yeniden bağlan
           </button>
         ) : (
-          <button type="button" className="core-chip" data-voice-action="connect" disabled={busy || !voice.ready} onClick={onConnect}>
-            {busy ? VOICE_STATE_LABEL[state] : "Bağlan"}
+          <button
+            type="button"
+            className="core-chip"
+            data-voice-action="connect"
+            disabled={busy || !voice.ready || blocked}
+            onClick={onConnect}
+          >
+            {busy ? VOICE_STATE_LABEL[state] : blocked ? "Ses kullanılamıyor" : "Bağlan"}
           </button>
         )}
         <Link href="/voice" className="voice-cell-link">

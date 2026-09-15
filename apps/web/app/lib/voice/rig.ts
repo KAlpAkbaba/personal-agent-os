@@ -279,6 +279,14 @@ export type VoiceRig = {
   connect(options: { deviceId?: string; voice?: string }): Promise<void>;
   /** Disconnect, then let the profile learn from the session's own counters. */
   disconnect(): Promise<void>;
+  /**
+   * B20 req 215/216: push the profile's input constraints onto the LIVE capture.
+   *
+   * Answers what the browser applied, or null when there is nothing open to apply to.
+   * The read-back it returns is stored in the profile like any other measurement — the
+   * owner's choice and what the device did with it are two different facts.
+   */
+  applyInputPreferences(): Promise<AppliedInputSettings | null>;
   /** The controller's snapshot right now (convenience). */
   snapshot(): ControllerSnapshot;
   /** The microphone's read-back, when open. */
@@ -428,6 +436,18 @@ export function createVoiceRig(build: VoiceRigBuilder): VoiceRig {
     }
   };
 
+  const applyInputPreferences = async (): Promise<AppliedInputSettings | null> => {
+    const current = profile.current;
+    if (!current || !parts.microphone.applyLive || !parts.microphone.stream) return null;
+    const readBack = await parts.microphone.applyLive(constraintsFor(current));
+    if (!readBack) return null;
+    commitProfile({ ...current, appliedSettings: appliedSettingsRecord(readBack, new Date().toISOString()) });
+    // The session record carries the change too: a suppression the browser refused is a
+    // fact about this conversation, not only about this page.
+    controller.reportInputReadBack();
+    return readBack;
+  };
+
   const disconnect = async (): Promise<void> => {
     await controller.disconnect();
     // ADR-0047 §4: the profile learns from the session's own counters — bounded, reversible, no owner question.
@@ -475,6 +495,7 @@ export function createVoiceRig(build: VoiceRigBuilder): VoiceRig {
     currentProfile,
     connect,
     disconnect,
+    applyInputPreferences,
     snapshot: () => controller.getSnapshot(),
     applied: () => parts.microphone.applied ?? null,
     dispose() {

@@ -69,6 +69,18 @@ def device():
     return FakeDeviceAction(results=happy_device_results())
 
 
+def _speaking_tts(name: str = "fake-tts"):
+    """A stand-in for a provider that really speaks.
+
+    B20 req 234 made the tone policy ask the CLASS rather than one name, so every
+    `FakeTTSProvider` is refused as a synthetic tone unless the construction site says
+    otherwise. These tests exercise the path where audio IS produced and played, on a
+    machine with no credentials, which is exactly what the escape hatch is for - and the
+    tests that mean "the keyless fallback" keep constructing the fake plainly.
+    """
+    return FakeTTSProvider(name=name, synthetic_speech=False)
+
+
 def _alarm(session, *, media: dict | None = None, **kwargs):
     return alarms_service.create_alarm(
         session,
@@ -364,7 +376,7 @@ def test_display_off_verifies_from_the_devices_own_read_back(session, device):
 
 def test_the_greeting_ducks_and_restores_on_the_media_path(session, device):
     alarm = _alarm(session, media={"url": MEDIA_URL})
-    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider())
+    sequence, _ = _fire(session, device, alarm, tts=_speaking_tts())
     device.reset()
     sequence.speak_greeting(
         session,
@@ -384,7 +396,7 @@ def test_the_greeting_does_not_duck_the_tone(session, device):
     """There is no per-stream volume the cloud can address for the local tone, so the
     greeting plays over it at its own level (spec §3.5 step 4's parenthesis)."""
     alarm = _alarm(session)
-    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider())
+    sequence, _ = _fire(session, device, alarm, tts=_speaking_tts())
     device.reset()
     sequence.speak_greeting(
         session,
@@ -403,7 +415,7 @@ def test_the_greeting_payload_carries_a_one_time_token_and_its_hash(session, dev
     store = AudioStore()
     sequence = WakeSequence(
         device_action=device,
-        tts=FakeTTSProvider(),
+        tts=_speaking_tts(),
         audio_store=store,
         broker_audio_origin="https://core.example",
     )
@@ -442,7 +454,7 @@ def test_the_greeting_payload_carries_a_one_time_token_and_its_hash(session, dev
 
 def test_a_custom_greeting_text_is_used_verbatim_after_normalisation(session, device):
     alarm = _alarm(session, greeting_policy={"enabled": True, "text": "Kalk bakalım."})
-    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider())
+    sequence, _ = _fire(session, device, alarm, tts=_speaking_tts())
     sequence.speak_greeting(
         session,
         alarm,
@@ -459,7 +471,7 @@ def test_a_custom_greeting_text_is_used_verbatim_after_normalisation(session, de
 def test_every_device_call_in_a_full_sequence_writes_a_receipt(session, device):
     """Spec §11's "every physical action has a receipt", as a count rather than a spot check."""
     alarm = _alarm(session, media={"url": MEDIA_URL})
-    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider())
+    sequence, _ = _fire(session, device, alarm, tts=_speaking_tts())
     sequence.speak_greeting(
         session,
         alarm,
@@ -692,7 +704,7 @@ def test_the_briefing_receipt_is_on_the_row_the_owner_can_read(session, device):
         session,
         device,
         alarm,
-        tts=FakeTTSProvider(name="tts-that-speaks"),
+        tts=_speaking_tts("tts-that-speaks"),
         briefing=_StubBriefing(LONG_BRIEFING),
     )
 
@@ -720,7 +732,7 @@ def test_a_briefing_the_owner_only_half_heard_says_where_it_stopped(session, dev
         session,
         device,
         alarm,
-        tts=FakeTTSProvider(name="tts-that-speaks"),
+        tts=_speaking_tts("tts-that-speaks"),
         briefing=_StubBriefing(LONG_BRIEFING),
     )
 
@@ -740,7 +752,7 @@ def test_a_morning_with_no_briefing_says_none_rather_than_an_empty_receipt(sessi
     """The B15 rollback plan's own shape: one setting off, and the row looks like it did
     before this batch rather than reporting a briefing of zero clips."""
     alarm = _alarm(session)
-    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider(name="tts-that-speaks"))
+    sequence, _ = _fire(session, device, alarm, tts=_speaking_tts("tts-that-speaks"))
 
     sequence.speak_greeting(
         session, alarm, local_now=FIRED_AT, now=FIRED_AT, transition=alarms_service.transition
@@ -753,7 +765,7 @@ def test_a_real_provider_still_speaks(session, device):
     """The half that keeps the fix from becoming the bug. Only the KEYLESS fallback is
     refused; a provider that actually speaks is unaffected."""
     alarm = _alarm(session)
-    sequence, _ = _fire(session, device, alarm, tts=FakeTTSProvider(name="tts-that-speaks"))
+    sequence, _ = _fire(session, device, alarm, tts=_speaking_tts("tts-that-speaks"))
     device.reset()
 
     sequence.speak_greeting(

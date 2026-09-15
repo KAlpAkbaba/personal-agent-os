@@ -49,6 +49,13 @@ export type SessionLegPayload = {
   voice_profile?: string | null;
   /** Optional provider transport descriptor (see transport.ts). */
   transport_descriptor?: Record<string, unknown>;
+  /**
+   * B20 req 223: how many seconds this provider lets ONE MEDIA LEG live, 0 when it does
+   * not say. Not the session (ADR-0105: the session never expires and survives any number
+   * of legs) — the leg, which OpenAI Realtime ends by itself at sixty minutes. The client
+   * re-opens before the ceiling instead of finding out by being disconnected mid-sentence.
+   */
+  leg_max_seconds?: number;
   /** attach only */
   pending_sideband?: SidebandFrame[];
   previous_leg?: Record<string, unknown> | null;

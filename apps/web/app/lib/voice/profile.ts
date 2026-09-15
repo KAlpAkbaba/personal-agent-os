@@ -12,6 +12,7 @@
 
 import {
   boundAdaptation,
+  classifyEnvironment,
   EMPTY_ADAPTATION,
   type EnvironmentMode,
   type GateAdaptation,
@@ -286,9 +287,42 @@ export function effectiveAgc(profile: MicrophoneProfile): boolean {
   return profile.agcBenchmark?.recommended === "on";
 }
 
+/**
+ * B20 req 215: what the room measured, under "auto".
+ *
+ * "auto", "browser" and "off" were three options with two behaviours - `!== "off"` made
+ * auto and browser the same thing, so the owner picking "otomatik" got "always on" and the
+ * word meant nothing. Requirement 215 asks for suppression that is MEASURED and ADJUSTED,
+ * and the measurement is already in the profile: the noise floor this device calibrated,
+ * classified by the same `classifyEnvironment` the gate presets use.
+ *
+ * Suppression is left ON unless something says the room is quiet, and the ONLY things that
+ * can say so are the owner's own declaration (`environmentMode`) and a completed
+ * measurement. An unmeasured device keeps suppression: silence is not evidence of quiet.
+ * Browser NS in a genuinely quiet room costs onsets and breath - which is why turning it
+ * off is worth doing when it is earned, and only then.
+ *
+ * Spread is passed as 0 because the profile keeps the floor and not the spread; that omits
+ * the intermittent-noise penalty, which can only make the answer QUIETER — so it is
+ * bounded by the owner's declaration, never by an unrecorded number.
+ */
+export function suppressionDecision(profile: MicrophoneProfile): {
+  suppress: boolean;
+  basis: "owner" | "measured" | "unmeasured" | "forced";
+} {
+  if (profile.noiseSuppressionMode === "off") return { suppress: false, basis: "forced" };
+  if (profile.noiseSuppressionMode === "browser") return { suppress: true, basis: "forced" };
+  if (profile.environmentMode !== "auto") {
+    return { suppress: profile.environmentMode !== "quiet", basis: "owner" };
+  }
+  if (profile.measuredNoiseFloorDb === null) return { suppress: true, basis: "unmeasured" };
+  const room = classifyEnvironment(profile.measuredNoiseFloorDb, 0);
+  return { suppress: room !== "quiet", basis: "measured" };
+}
+
 /** Layer 1 constraints for getUserMedia derived from the profile (read back afterwards, never assumed). */
 export function constraintsFor(profile: MicrophoneProfile): MicrophoneConstraints {
-  const suppress = profile.noiseSuppressionMode !== "off";
+  const { suppress } = suppressionDecision(profile);
   return {
     echoCancellation: true,
     noiseSuppression: suppress,

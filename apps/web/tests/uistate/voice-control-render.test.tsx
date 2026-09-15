@@ -63,6 +63,7 @@ function snapshot(state: VoiceUiState, overrides: Partial<VoiceStoreSnapshot> = 
       lastErrorLines: [],
       contract: null,
       contractNotice: null,
+      unavailable: null,
       requestLog: [],
       latency: {},
       latencyDetail: {},

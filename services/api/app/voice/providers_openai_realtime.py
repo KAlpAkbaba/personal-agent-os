@@ -81,13 +81,13 @@ DEFAULT_MODEL = "gpt-realtime-2.1"
 #: Everything else is a LAYER, added one at a time so a live smoke can say which
 #: option the vendor refuses. Order = the order the probe adds them.
 SESSION_LAYERS = (
-    "expires_after",       # request-level: expires_after.anchor/seconds
-    "output_modalities",   # session.output_modalities = ["audio"]
-    "audio_formats",       # session.audio.input.format / session.audio.output.format
-    "transcription",       # session.audio.input.transcription
-    "turn_detection",      # session.audio.input.turn_detection = semantic_vad + interrupt
-    "instructions",        # session.instructions (Cloud Core persona)
-    "tools",               # session.tools + tool_choice
+    "expires_after",  # request-level: expires_after.anchor/seconds
+    "output_modalities",  # session.output_modalities = ["audio"]
+    "audio_formats",  # session.audio.input.format / session.audio.output.format
+    "transcription",  # session.audio.input.transcription
+    "turn_detection",  # session.audio.input.turn_detection = semantic_vad + interrupt
+    "instructions",  # session.instructions (Cloud Core persona)
+    "tools",  # session.tools + tool_choice
 )
 MINIMAL_LAYERS: tuple[str, ...] = ()
 FULL_LAYERS: tuple[str, ...] = SESSION_LAYERS
@@ -97,8 +97,18 @@ DATA_CHANNEL_NAME = "oai-events"
 #: The vendor's voice ids, verbatim from live discovery on 2026-09-02 (a mint with
 #: ``voice: arbor`` was refused with exactly this list). A session may request only
 #: one of these; "arbor" is the owner's perceptual profile, never a wire value.
-SUPPORTED_VOICES = ("alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse",
-                    "marin", "cedar")
+SUPPORTED_VOICES = (
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+)
 SUPPORTED_VOICES_DISCOVERED = "2026-09-02"
 OUTPUT_SPEED_MIN = 0.25
 OUTPUT_SPEED_MAX = 1.5
@@ -162,9 +172,11 @@ def _audio_format_object(fmt: str) -> dict[str, Any]:
         return {"type": "audio/pcmu"}
     if fmt == AUDIO_FORMAT_G711_ALAW:
         return {"type": "audio/pcma"}
-    raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                     f"unsupported audio format {fmt!r}; supported: {SUPPORTED_AUDIO_FORMATS}",
-                     provider=OPENAI_REALTIME_PROVIDER_NAME)
+    raise VoiceError(
+        VoiceErrorClass.VALIDATION_ERROR,
+        f"unsupported audio format {fmt!r}; supported: {SUPPORTED_AUDIO_FORMATS}",
+        provider=OPENAI_REALTIME_PROVIDER_NAME,
+    )
 
 
 def map_tools(manifest: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -176,24 +188,27 @@ def map_tools(manifest: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     for entry in manifest:
         name = str(entry.get("name") or "").strip()
         if not name:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             "tool manifest entry without a name",
-                             provider=OPENAI_REALTIME_PROVIDER_NAME)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                "tool manifest entry without a name",
+                provider=OPENAI_REALTIME_PROVIDER_NAME,
+            )
         params = entry.get("parameters") or {"type": "object", "properties": {}}
-        out.append({
-            "type": "function",
-            "name": vendor_tool_name(name),
-            "description": str(entry.get("description") or ""),
-            "parameters": params,
-        })
+        out.append(
+            {
+                "type": "function",
+                "name": vendor_tool_name(name),
+                "description": str(entry.get("description") or ""),
+                "parameters": params,
+            }
+        )
     return out
 
 
 def scrub_secrets(obj: Any) -> Any:
     """Recursively drop secret-shaped keys from a vendor payload (session echo)."""
     if isinstance(obj, dict):
-        return {k: scrub_secrets(v) for k, v in obj.items()
-                if str(k).lower() not in _SECRET_KEYS}
+        return {k: scrub_secrets(v) for k, v in obj.items() if str(k).lower() not in _SECRET_KEYS}
     if isinstance(obj, list):
         return [scrub_secrets(v) for v in obj]
     return obj
@@ -206,9 +221,11 @@ def _clamp_ttl(ttl_s: int) -> int:
 def _validate_layers(layers: tuple[str, ...]) -> None:
     unknown = [layer for layer in layers if layer not in SESSION_LAYERS]
     if unknown:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"unknown session layer(s) {unknown}; known: {list(SESSION_LAYERS)}",
-                         provider=OPENAI_REALTIME_PROVIDER_NAME)
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"unknown session layer(s) {unknown}; known: {list(SESSION_LAYERS)}",
+            provider=OPENAI_REALTIME_PROVIDER_NAME,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,9 +261,11 @@ class OpenAIRealtimeProvider:
         audio_format: str = AUDIO_FORMAT_PCM16,
     ) -> None:
         if eagerness not in EAGERNESS_LEVELS:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             f"eagerness must be one of {EAGERNESS_LEVELS}, got {eagerness!r}",
-                             provider=self.name)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"eagerness must be one of {EAGERNESS_LEVELS}, got {eagerness!r}",
+                provider=self.name,
+            )
         _audio_format_object(audio_format)  # validates
         self._api_key = api_key or None
         self._model = model
@@ -254,10 +273,11 @@ class OpenAIRealtimeProvider:
         self._eagerness = eagerness
         self._transcription_model = transcription_model
         if not (OUTPUT_SPEED_MIN <= float(speed) <= OUTPUT_SPEED_MAX):
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             f"speed must be within [{OUTPUT_SPEED_MIN}, {OUTPUT_SPEED_MAX}], "
-                             f"got {speed!r}",
-                             provider=OPENAI_REALTIME_PROVIDER_NAME)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"speed must be within [{OUTPUT_SPEED_MIN}, {OUTPUT_SPEED_MAX}], got {speed!r}",
+                provider=OPENAI_REALTIME_PROVIDER_NAME,
+            )
         self._speed = float(speed)
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
@@ -277,9 +297,11 @@ class OpenAIRealtimeProvider:
         )
 
     def __repr__(self) -> str:  # never the key
-        return (f"OpenAIRealtimeProvider(model={self._model!r}, voice={self._voice!r}, "
-                f"eagerness={self._eagerness!r}, "
-                f"key={'configured' if self._api_key else 'absent'})")
+        return (
+            f"OpenAIRealtimeProvider(model={self._model!r}, voice={self._voice!r}, "
+            f"eagerness={self._eagerness!r}, "
+            f"key={'configured' if self._api_key else 'absent'})"
+        )
 
     @property
     def model(self) -> str:
@@ -299,7 +321,8 @@ class OpenAIRealtimeProvider:
                 VoiceErrorClass.VALIDATION_ERROR,
                 f"voice {voice!r} is not offered by {self.name} "
                 f"(discovered {SUPPORTED_VOICES_DISCOVERED}): {list(SUPPORTED_VOICES)}",
-                provider=self.name, details={"supported_voices": list(SUPPORTED_VOICES)},
+                provider=self.name,
+                details={"supported_voices": list(SUPPORTED_VOICES)},
             )
         return voice
 
@@ -308,6 +331,15 @@ class OpenAIRealtimeProvider:
         return bool(self._api_key)
 
     # ------------------------------------------------------------ capability
+
+    #: B20 req 223. OpenAI ends a Realtime session at sixty minutes; a leg that reaches it
+    #: simply stops carrying audio, and until this was published the client had no way to
+    #: know a ceiling existed. Declared as the provider's own fact, so a provider without
+    #: one reports 0 and the client schedules nothing.
+    LEG_MAX_SECONDS = 60 * 60
+
+    def leg_max_seconds(self) -> int:
+        return self.LEG_MAX_SECONDS
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -333,7 +365,7 @@ class OpenAIRealtimeProvider:
                 "usd_per_1m_text_output": 16.0,
                 "billing": "usage",
                 "verified": "2026-09-02 vendor pricing page; per-minute cost is computed "
-                            "from real session token usage, not assumed",
+                "from real session token usage, not assumed",
             },
             output_formats=SUPPORTED_AUDIO_FORMATS,
             latency_class="realtime",
@@ -387,8 +419,7 @@ class OpenAIRealtimeProvider:
                 "session_max_minutes": SESSION_MAX_MINUTES,
             }
         if transport == TRANSPORT_WEBSOCKET:
-            ws_base = self._base_url.replace("https://", "wss://", 1).replace(
-                "http://", "ws://", 1)
+            ws_base = self._base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
             return {
                 "transport": TRANSPORT_WEBSOCKET,
                 "websocket_url": f"{ws_base}/realtime",
@@ -397,7 +428,7 @@ class OpenAIRealtimeProvider:
                 "auth": "bearer_ephemeral_secret",
                 "audio": audio,
                 "audio_encoding": "base64 in input_audio_buffer.append / "
-                                  "response.output_audio.delta",
+                "response.output_audio.delta",
                 "session_max_minutes": SESSION_MAX_MINUTES,
             }
         raise VoiceError(
@@ -407,8 +438,10 @@ class OpenAIRealtimeProvider:
         )
 
     def build_session_config(
-        self, session_config: RealtimeSessionConfig | None = None,
-        *, layers: tuple[str, ...] = FULL_LAYERS,
+        self,
+        session_config: RealtimeSessionConfig | None = None,
+        *,
+        layers: tuple[str, ...] = FULL_LAYERS,
     ) -> dict[str, Any]:
         """The ``session`` object of the client_secrets request (current GA schema).
 
@@ -472,7 +505,11 @@ class OpenAIRealtimeProvider:
         return session
 
     def build_credential_request(
-        self, *, session_id: str, ttl_s: int, transport: str,
+        self,
+        *,
+        session_id: str,
+        ttl_s: int,
+        transport: str,
         session_config: RealtimeSessionConfig | None = None,
         layers: tuple[str, ...] = FULL_LAYERS,
     ) -> ProviderRequest:
@@ -509,8 +546,9 @@ class OpenAIRealtimeProvider:
         One real call; nothing but ids is returned or logged."""
         _require_key(self._api_key, self.name)
         try:
-            payload = _send(self.build_models_request(), timeout_s=self._timeout_s,
-                            provider=self.name).json()
+            payload = _send(
+                self.build_models_request(), timeout_s=self._timeout_s, provider=self.name
+            ).json()
         except VoiceError as exc:
             raise self._scrubbed(exc) from None
         except ValueError:
@@ -528,13 +566,19 @@ class OpenAIRealtimeProvider:
 
     def _scrubbed(self, exc: VoiceError) -> VoiceError:
         return VoiceError(
-            exc.error_class, self._scrub(exc.message), provider=self.name,
+            exc.error_class,
+            self._scrub(exc.message),
+            provider=self.name,
             retryable=exc.retryable,
             details=json.loads(self._scrub(json.dumps(exc.details, default=str))),
         )
 
     def mint(
-        self, *, session_id: str, ttl_s: int, transport: str,
+        self,
+        *,
+        session_id: str,
+        ttl_s: int,
+        transport: str,
         session_config: RealtimeSessionConfig | None = None,
         layers: tuple[str, ...] = FULL_LAYERS,
     ) -> MintResult:
@@ -544,8 +588,11 @@ class OpenAIRealtimeProvider:
         is re-raised with the standing key scrubbed from message and details."""
         _require_key(self._api_key, self.name)
         req = self.build_credential_request(
-            session_id=session_id, ttl_s=ttl_s, transport=transport,
-            session_config=session_config, layers=layers,
+            session_id=session_id,
+            ttl_s=ttl_s,
+            transport=transport,
+            session_config=session_config,
+            layers=layers,
         )
         try:
             resp = _send(req, timeout_s=self._timeout_s, provider=self.name)
@@ -556,17 +603,24 @@ class OpenAIRealtimeProvider:
             raise VoiceError(
                 VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
                 f"{self.name}: client_secrets response was not JSON ({type(exc).__name__})",
-                provider=self.name, retryable=True,
+                provider=self.name,
+                retryable=True,
             ) from None
         if not isinstance(payload, dict):
-            raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
-                             f"{self.name}: client_secrets response was not an object",
-                             provider=self.name, retryable=True)
+            raise VoiceError(
+                VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+                f"{self.name}: client_secrets response was not an object",
+                provider=self.name,
+                retryable=True,
+            )
         value = payload.get("value")
         if not isinstance(value, str) or not value:
-            raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
-                             f"{self.name}: client_secrets response carried no credential",
-                             provider=self.name, retryable=True)
+            raise VoiceError(
+                VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+                f"{self.name}: client_secrets response carried no credential",
+                provider=self.name,
+                retryable=True,
+            )
         expires_raw = payload.get("expires_at")
         if isinstance(expires_raw, int | float) and expires_raw > 0:
             expires_at = datetime.fromtimestamp(float(expires_raw), tz=UTC)
@@ -584,18 +638,29 @@ class OpenAIRealtimeProvider:
         )
         logger.info(
             "openai_realtime_credential_minted",
-            session_id=session_id, session_ref=session_ref, transport=transport,
-            expires_at=expires_at.isoformat(), ttl_requested_s=_clamp_ttl(ttl_s),
+            session_id=session_id,
+            session_ref=session_ref,
+            transport=transport,
+            expires_at=expires_at.isoformat(),
+            ttl_requested_s=_clamp_ttl(ttl_s),
         )
-        return MintResult(credential=credential, session_echo=scrub_secrets(session_obj),
-                          request_body=req.json_body or {})
+        return MintResult(
+            credential=credential,
+            session_echo=scrub_secrets(session_obj),
+            request_body=req.json_body or {},
+        )
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int, transport: str = TRANSPORT_WEBRTC,
+        self,
+        *,
+        session_id: str,
+        ttl_s: int,
+        transport: str = TRANSPORT_WEBRTC,
         session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential:
-        return self.mint(session_id=session_id, ttl_s=ttl_s, transport=transport,
-                         session_config=session_config).credential
+        return self.mint(
+            session_id=session_id, ttl_s=ttl_s, transport=transport, session_config=session_config
+        ).credential
 
 
 # ------------------------------------------------------- event mapping (in)
@@ -634,51 +699,105 @@ def map_server_event(event: dict[str, Any], *, at_ms: int) -> tuple[RealtimeSess
     Unknown or purely incremental events map to ``()``."""
     kind = event.get("type")
     if kind == EV_SPEECH_STARTED:
-        return (RealtimeSessionEvent(RT_SPEECH_STARTED, at_ms, {
-            "item_id": event.get("item_id"), "audio_start_ms": event.get("audio_start_ms"),
-        }),)
+        return (
+            RealtimeSessionEvent(
+                RT_SPEECH_STARTED,
+                at_ms,
+                {
+                    "item_id": event.get("item_id"),
+                    "audio_start_ms": event.get("audio_start_ms"),
+                },
+            ),
+        )
     if kind == EV_SPEECH_STOPPED:
-        return (RealtimeSessionEvent(RT_SPEECH_STOPPED, at_ms, {
-            "item_id": event.get("item_id"), "audio_end_ms": event.get("audio_end_ms"),
-        }),)
+        return (
+            RealtimeSessionEvent(
+                RT_SPEECH_STOPPED,
+                at_ms,
+                {
+                    "item_id": event.get("item_id"),
+                    "audio_end_ms": event.get("audio_end_ms"),
+                },
+            ),
+        )
     if kind == EV_RESPONSE_CREATED:
         resp = event.get("response") or {}
-        return (RealtimeSessionEvent(RT_RESPONSE_STARTED, at_ms,
-                                     {"response_id": resp.get("id")}),)
+        return (RealtimeSessionEvent(RT_RESPONSE_STARTED, at_ms, {"response_id": resp.get("id")}),)
     if kind in (EV_OUTPUT_AUDIO_DELTA, EV_OUTPUT_AUDIO_DELTA_LEGACY):
-        return (RealtimeSessionEvent(RT_RESPONSE_AUDIO, at_ms, {
-            "response_id": event.get("response_id"), "item_id": event.get("item_id"),
-            "bytes": _b64_len(event.get("delta")),
-        }),)
+        return (
+            RealtimeSessionEvent(
+                RT_RESPONSE_AUDIO,
+                at_ms,
+                {
+                    "response_id": event.get("response_id"),
+                    "item_id": event.get("item_id"),
+                    "bytes": _b64_len(event.get("delta")),
+                },
+            ),
+        )
     if kind == EV_RESPONSE_DONE:
         resp = event.get("response") or {}
         status = resp.get("status")
-        call_ids = [item.get("call_id") for item in (resp.get("output") or [])
-                    if isinstance(item, dict) and item.get("type") == "function_call"]
-        return (RealtimeSessionEvent(RT_RESPONSE_DONE, at_ms, {
-            "response_id": resp.get("id"), "cancelled": status == "cancelled",
-            "status": status, "tool_call_ids": call_ids,
-        }),)
+        call_ids = [
+            item.get("call_id")
+            for item in (resp.get("output") or [])
+            if isinstance(item, dict) and item.get("type") == "function_call"
+        ]
+        return (
+            RealtimeSessionEvent(
+                RT_RESPONSE_DONE,
+                at_ms,
+                {
+                    "response_id": resp.get("id"),
+                    "cancelled": status == "cancelled",
+                    "status": status,
+                    "tool_call_ids": call_ids,
+                },
+            ),
+        )
     if kind == EV_RESPONSE_CANCELLED:
         resp = event.get("response") or {}
-        return (RealtimeSessionEvent(RT_RESPONSE_DONE, at_ms, {
-            "response_id": resp.get("id") or event.get("response_id"),
-            "cancelled": True, "status": "cancelled", "tool_call_ids": [],
-        }),)
+        return (
+            RealtimeSessionEvent(
+                RT_RESPONSE_DONE,
+                at_ms,
+                {
+                    "response_id": resp.get("id") or event.get("response_id"),
+                    "cancelled": True,
+                    "status": "cancelled",
+                    "tool_call_ids": [],
+                },
+            ),
+        )
     if kind == EV_FUNCTION_CALL_ARGS_DONE:
         raw_name = event.get("name")
-        return (RealtimeSessionEvent(RT_TOOL_CALL, at_ms, {
-            "call_id": event.get("call_id"),
-            "name": cloud_tool_name(raw_name) if isinstance(raw_name, str) else raw_name,
-            "arguments": _parse_arguments(event.get("arguments")),
-            "response_id": event.get("response_id"), "item_id": event.get("item_id"),
-        }),)
+        return (
+            RealtimeSessionEvent(
+                RT_TOOL_CALL,
+                at_ms,
+                {
+                    "call_id": event.get("call_id"),
+                    "name": cloud_tool_name(raw_name) if isinstance(raw_name, str) else raw_name,
+                    "arguments": _parse_arguments(event.get("arguments")),
+                    "response_id": event.get("response_id"),
+                    "item_id": event.get("item_id"),
+                },
+            ),
+        )
     if kind == EV_ERROR:
         err = event.get("error") or {}
-        return (RealtimeSessionEvent(RT_ERROR, at_ms, {
-            "type": err.get("type"), "code": err.get("code"),
-            "message": str(err.get("message") or "")[:500], "event_id": err.get("event_id"),
-        }),)
+        return (
+            RealtimeSessionEvent(
+                RT_ERROR,
+                at_ms,
+                {
+                    "type": err.get("type"),
+                    "code": err.get("code"),
+                    "message": str(err.get("message") or "")[:500],
+                    "event_id": err.get("event_id"),
+                },
+            ),
+        )
     return ()
 
 
@@ -696,7 +815,10 @@ def input_transcript(event: dict[str, Any]) -> str | None:
 
 
 def barge_in_commands(
-    *, transport: str, item_id: str | None = None, content_index: int = 0,
+    *,
+    transport: str,
+    item_id: str | None = None,
+    content_index: int = 0,
     audio_end_ms: int | None = None,
 ) -> tuple[dict[str, Any], ...]:
     """The provider-side half of barge-in (spec §5: the client stops LOCAL
@@ -710,17 +832,23 @@ def barge_in_commands(
        client knows the item and how much was played.
     """
     if transport not in SUPPORTED_TRANSPORTS:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"unsupported transport {transport!r}",
-                         provider=OPENAI_REALTIME_PROVIDER_NAME)
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"unsupported transport {transport!r}",
+            provider=OPENAI_REALTIME_PROVIDER_NAME,
+        )
     commands: list[dict[str, Any]] = [{"type": CMD_RESPONSE_CANCEL}]
     if transport == TRANSPORT_WEBRTC:
         commands.append({"type": CMD_OUTPUT_AUDIO_CLEAR})
     if item_id is not None and audio_end_ms is not None:
-        commands.append({
-            "type": CMD_ITEM_TRUNCATE, "item_id": item_id,
-            "content_index": int(content_index), "audio_end_ms": max(0, int(audio_end_ms)),
-        })
+        commands.append(
+            {
+                "type": CMD_ITEM_TRUNCATE,
+                "item_id": item_id,
+                "content_index": int(content_index),
+                "audio_end_ms": max(0, int(audio_end_ms)),
+            }
+        )
     return tuple(commands)
 
 
@@ -729,8 +857,11 @@ def tool_result_commands(call_id: str, result: dict[str, Any]) -> tuple[dict[str
     ``conversation.item.create(function_call_output)`` then ``response.create``.
     The output is a JSON string with Turkish characters preserved."""
     if not call_id:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "call_id must be non-empty",
-                         provider=OPENAI_REALTIME_PROVIDER_NAME)
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            "call_id must be non-empty",
+            provider=OPENAI_REALTIME_PROVIDER_NAME,
+        )
     return (
         {
             "type": CMD_ITEM_CREATE,
@@ -751,8 +882,11 @@ def say_command(text: str) -> dict[str, Any]:
     tool runs", so the preamble is an explicit, client-driven response."""
     phrase = (text or "").strip()
     if not phrase:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "say text must be non-empty",
-                         provider=OPENAI_REALTIME_PROVIDER_NAME)
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            "say text must be non-empty",
+            provider=OPENAI_REALTIME_PROVIDER_NAME,
+        )
     return {
         "type": CMD_RESPONSE_CREATE,
         "response": {

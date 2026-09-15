@@ -78,6 +78,29 @@ function describeValidationItem(item: unknown): ErrorLine | null {
   return parts.length ? parts.join(" · ") : null;
 }
 
+/**
+ * The server error classes that mean "no voice is available here", verbatim from
+ * `app.voice.errors.VoiceErrorClass`. Restated rather than imported (different runtimes),
+ * and `test_the_web_client_knows_the_server_s_unavailable_classes` reads the Python enum
+ * and fails if the two ever drift.
+ */
+export const PROVIDER_UNAVAILABLE_CLASSES: ReadonlySet<string> = new Set([
+  "provider_auth_missing",
+  "capability_missing",
+  "dependency_unavailable",
+  "optional_dependency_missing",
+  "all_providers_failed",
+]);
+
+/** What the owner is told, and what they can do about it. Never a status line. */
+export const PROVIDER_UNAVAILABLE_TR: Record<string, string> = {
+  provider_auth_missing: "Ses sağlayıcısının anahtarı tanımlı değil.",
+  capability_missing: "Bu yetenek için tanımlı bir ses sağlayıcısı yok.",
+  dependency_unavailable: "Ses sağlayıcısına ulaşılamıyor.",
+  optional_dependency_missing: "Yerel ses bileşeni kurulu değil.",
+  all_providers_failed: "Tanımlı ses sağlayıcılarının hepsi başarısız oldu.",
+};
+
 export class VoiceApiError extends Error {
   constructor(
     readonly status: number,
@@ -104,6 +127,35 @@ export class VoiceApiError extends Error {
   /** 410: the session is closed or expired; nothing to reattach to. */
   get gone(): boolean {
     return this.status === 410;
+  }
+
+  /**
+   * B20 req 235: the Cloud Core is fine and there is no voice to be had.
+   *
+   * The taxonomy is the server's own (`app.voice.errors.VoiceErrorClass`, mapped to 503 in
+   * the realtime routes): a real adapter with no key, an optional local dependency that is
+   * not installed, no provider for the capability at all, or a provider that is reachable
+   * and failing. All four mean the same thing to the owner and none of them mean "try
+   * again": retrying is what the client did, and what the page showed for it was
+   * `POST /v1/voice/realtime/sessions: HTTP 503` next to a button labelled "Bağlan".
+   */
+  get providerUnavailable(): boolean {
+    // 503 for the four "there is nothing to call" classes, 502 for `all_providers_failed`
+    // — the realtime routes' own mapping (`_STATUS_BY_CLASS`), which
+    // `test_the_web_client_knows_the_servers_unavailable_classes` reads and pins.
+    if (this.status !== 503 && this.status !== 502) return false;
+    return PROVIDER_UNAVAILABLE_CLASSES.has(this.errorClass);
+  }
+
+  /** The server's `error_class` for this failure, or "" when the body carried none. */
+  get errorClass(): string {
+    const body =
+      this.detail && typeof this.detail === "object" && "detail" in (this.detail as object)
+        ? (this.detail as { detail: unknown }).detail
+        : this.detail;
+    if (!body || typeof body !== "object") return "";
+    const value = (body as Record<string, unknown>).error_class;
+    return typeof value === "string" ? value : "";
   }
 
   /** The server's reasons, field by field (empty when the body said nothing usable). */

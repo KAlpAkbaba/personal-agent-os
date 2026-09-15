@@ -94,6 +94,7 @@ from app.routines.dispatch import (
     DeviceActionPort,
     DeviceRunResult,
 )
+from app.voice.text_fallback import deliver_as_text
 
 logger = get_logger("app.alarms.sequence")
 
@@ -807,6 +808,26 @@ class WakeSequence:
             logger.warning(
                 "alarm_greeting_not_spoken", alarm_id=str(alarm.id), reason=failure or "unknown"
             )
+            # B20 req 233: the greeting sentence was composed and normalised, and until now
+            # it was thrown away here - the owner woke to silence and a failure code on a
+            # row they have no reason to read. A failure to SPEAK is not a failure to TELL.
+            #
+            # BEFORE the row is touched, deliberately: `deliver_as_text` writes through the
+            # notification store, which commits, and rolls the session back if that write
+            # fails. A `greeting_failure` set first would be the thing that rollback threw
+            # away - the record of the failure destroyed by the attempt to work around it.
+            deliver_as_text(
+                db,
+                text=text,
+                reason=failure or "unknown",
+                what="selamlamayı",
+                group_key=f"alarm-greeting:{alarm.id}",
+                now=moment,
+            )
+            # And the briefing with it. It is not attempted aloud on this branch (the same
+            # provider or device just failed), but the owner asked to be told what their
+            # morning looks like, and text is a way of telling them.
+            self._briefing_as_text(db, alarm, reason=failure or "unknown", now=moment)
             alarm.detail_json = {
                 **(alarm.detail_json or {}),
                 "greeting_failure": failure or "unknown",
@@ -948,10 +969,80 @@ class WakeSequence:
                 clips=delivery.clips,
                 reason=delivery.failure,
             )
+            # B20 req 233: what the owner did not hear, they can still read. The unspoken
+            # clips rather than the whole briefing - the part they already heard is not
+            # worth making them read again, and the part they did not is the whole point.
+            unheard = "\n\n".join(delivery.unspoken) or delivery.text
+            deliver_as_text(
+                db,
+                text=unheard,
+                reason=delivery.failure,
+                what="sabah brifingini",
+                group_key=f"alarm-briefing:{alarm.id}",
+                data={"clips": delivery.clips, "spoken": len(delivery.spoken)},
+                now=now,
+            )
         else:
             detail.pop("briefing_failure", None)
         alarm.detail_json = detail
         return steps
+
+    def _briefing_as_text(
+        self, db: Session, alarm: WakeAlarm, *, reason: str, now: datetime
+    ) -> None:
+        """B20 req 233: build the briefing and deliver it as TEXT, with no audio attempted.
+
+        Reached when the greeting itself could not be spoken. Rather than a second way of
+        building a briefing, this is the same `speak_briefing` with no TTS provider: it
+        builds, normalises and splits exactly as the spoken path does, fails at the first
+        clip with `no_tts_key` and hands back the whole thing as `unspoken`. No synthesis
+        is attempted and no device command is sent - the provider or the device just
+        failed, and asking it again would only add a second failure to the record.
+        """
+        if self._briefing is None:
+            return
+
+        def _never_played(_text: str, **_kwargs: Any) -> bool:  # pragma: no cover - unreachable
+            logger.error("briefing_text_only_tried_to_play", alarm_id=str(alarm.id))
+            return False
+
+        try:
+            delivery = briefing_delivery.speak_briefing(
+                db,
+                briefing_service=self._briefing,
+                settings=self._settings,
+                live=self._briefing_live,
+                tts=None,
+                audio_store=self._audio_store,
+                audio_origin=self._audio_origin(),
+                play=_never_played,
+                normalise=lambda text: normalize_greeting(text, db),
+                now=now,
+                device_id=alarm.device_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - the wake path never raises
+            logger.warning(
+                "alarm_briefing_text_failed",
+                alarm_id=str(alarm.id),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return
+        text = "\n\n".join(delivery.unspoken) or delivery.text
+        if not text:
+            return
+        deliver_as_text(
+            db,
+            text=text,
+            reason=reason,
+            what="sabah brifingini",
+            group_key=f"alarm-briefing:{alarm.id}",
+            data={"clips": delivery.clips, "spoken": 0},
+            now=now,
+        )
+        alarm.detail_json = {
+            **(alarm.detail_json or {}),
+            "briefing": {**delivery.as_dict(), "delivered_as_text": True},
+        }
 
     def _duck(
         self,

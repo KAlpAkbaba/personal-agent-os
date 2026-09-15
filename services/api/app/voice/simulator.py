@@ -33,6 +33,7 @@ from typing import Any
 
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.providers import (
+    DEFAULT_LEG_MAX_SECONDS,
     END_OF_TURN_SEMANTIC,
     INTERRUPT_LATENCY_FAST,
     RT_ERROR,
@@ -196,8 +197,9 @@ class SimulatedRealtimeSession:
 
     def _require_open(self) -> None:
         if self._closed:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "session is closed",
-                             provider=self.provider)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "session is closed", provider=self.provider
+            )
 
     # ----------------------------------------------------- virtual clock
 
@@ -239,8 +241,9 @@ class SimulatedRealtimeSession:
         "yani…", a trailing vowel) so the semantic end-of-turn waits longer."""
         self._require_open()
         if not chunk:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "empty audio chunk",
-                             provider=self.provider)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "empty audio chunk", provider=self.provider
+            )
         self.audio_in_bytes += len(chunk)
         self._last_frame_was_filler = filler
         self._last_owner_frame_ms = self.clock_ms
@@ -251,8 +254,10 @@ class SimulatedRealtimeSession:
             overlapped = self._responding or self._preamble_playing
             if overlapped:
                 self._mark("barge_in_start", turn=self.turn)
-            self._schedule(self.timings.uplink_delay_ms,
-                           lambda t=self.turn, o=overlapped: self._provider_speech_started(t, o))
+            self._schedule(
+                self.timings.uplink_delay_ms,
+                lambda t=self.turn, o=overlapped: self._provider_speech_started(t, o),
+            )
         expected = self._last_owner_frame_ms
         guard = self.timings.hesitation_guard_ms if filler else 0
         self._schedule(
@@ -279,8 +284,7 @@ class SimulatedRealtimeSession:
         ):
             return  # a newer frame arrived; that frame scheduled its own check
         self._owner_speaking = False
-        self._emit(RT_SPEECH_STOPPED, turn=self.turn,
-                   after_filler=self._last_frame_was_filler)
+        self._emit(RT_SPEECH_STOPPED, turn=self.turn, after_filler=self._last_frame_was_filler)
         self.fsm.owner_speech_ended()
         self._begin_assistant_turn(self.turn)
 
@@ -289,15 +293,18 @@ class SimulatedRealtimeSession:
     def _begin_assistant_turn(self, turn: int) -> None:
         turn_spec = self.script.popleft() if self.script else SimulatedTurn.reply()
         if turn_spec.kind == "tool_call":
-            self._schedule(self.timings.tool_call_delay_ms,
-                           lambda: self._emit_tool_call(turn, turn_spec))
+            self._schedule(
+                self.timings.tool_call_delay_ms, lambda: self._emit_tool_call(turn, turn_spec)
+            )
             return
-        self._schedule(self.timings.first_audio_delay_ms,
-                       lambda: self._start_response(turn, turn_spec.text,
-                                                    self.timings.response_duration_ms))
+        self._schedule(
+            self.timings.first_audio_delay_ms,
+            lambda: self._start_response(turn, turn_spec.text, self.timings.response_duration_ms),
+        )
 
-    def _start_response(self, turn: int, text: str, duration_ms: int, *,
-                        preamble: bool = False) -> None:
+    def _start_response(
+        self, turn: int, text: str, duration_ms: int, *, preamble: bool = False
+    ) -> None:
         if self._closed or self._network_down or self._owner_speaking:
             # A provider does not start talking over the owner; the owner's
             # next end-of-turn begins a fresh assistant turn instead.
@@ -322,8 +329,10 @@ class SimulatedRealtimeSession:
                 delay += self.timings.response_gap_ms
             self._schedule(delay, lambda g=gen, i=i, t=turn, p=preamble: self._frame(g, i, t, p))
         total = (frames - 1) * self.timings.frame_ms + (self.timings.response_gap_ms or 0)
-        self._schedule(total + self.timings.frame_ms,
-                       lambda g=gen, t=turn, p=preamble: self._finish_response(g, t, p))
+        self._schedule(
+            total + self.timings.frame_ms,
+            lambda g=gen, t=turn, p=preamble: self._finish_response(g, t, p),
+        )
 
     def _frame(self, gen: int, index: int, turn: int, preamble: bool) -> None:
         if gen != self._response_gen or self._closed:
@@ -362,8 +371,13 @@ class SimulatedRealtimeSession:
         call_id = f"call_{next(self._tool_seq):04d}"
         self._pending_tool = {"call_id": call_id, "name": spec.tool_name, "turn": turn}
         self.fsm.start_tool_call(spec.tool_name)
-        self._emit(RT_TOOL_CALL, turn=turn, call_id=call_id, name=spec.tool_name,
-                   arguments=dict(spec.arguments))
+        self._emit(
+            RT_TOOL_CALL,
+            turn=turn,
+            call_id=call_id,
+            name=spec.tool_name,
+            arguments=dict(spec.arguments),
+        )
 
     def submit_tool_result(self, call_id: str, result: dict[str, Any]) -> None:
         """Client hands the provider a tool output. ``{"status": "running",
@@ -373,18 +387,24 @@ class SimulatedRealtimeSession:
         self._require_open()
         pending = self._pending_tool
         if pending is None or pending["call_id"] != call_id:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             f"no pending tool call {call_id!r}", provider=self.provider)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"no pending tool call {call_id!r}",
+                provider=self.provider,
+            )
         turn = pending["turn"]
         if result.get("status") == "running":
             preamble = str(result.get("preamble") or "")
-            self._mark("tool_running_submitted", turn=turn, call_id=call_id,
-                       preamble_chars=len(preamble))
+            self._mark(
+                "tool_running_submitted", turn=turn, call_id=call_id, preamble_chars=len(preamble)
+            )
             if preamble:
-                self._schedule(self.timings.tool_preamble_delay_ms,
-                               lambda: self._start_response(
-                                   turn, preamble, self.timings.preamble_duration_ms,
-                                   preamble=True))
+                self._schedule(
+                    self.timings.tool_preamble_delay_ms,
+                    lambda: self._start_response(
+                        turn, preamble, self.timings.preamble_duration_ms, preamble=True
+                    ),
+                )
             return
         self._pending_tool = None
         self._mark("tool_done", turn=turn, call_id=call_id)
@@ -392,9 +412,10 @@ class SimulatedRealtimeSession:
         if self._preamble_playing:
             self._response_gen += 1
             self._preamble_playing = False
-        self._schedule(self.timings.tool_done_to_speech_ms,
-                       lambda: self._start_response(turn, "Sonuç hazır.",
-                                                    self.timings.response_duration_ms))
+        self._schedule(
+            self.timings.tool_done_to_speech_ms,
+            lambda: self._start_response(turn, "Sonuç hazır.", self.timings.response_duration_ms),
+        )
 
     @property
     def pending_tool_call(self) -> dict[str, Any] | None:
@@ -477,24 +498,47 @@ class SimulatedRealtimeProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="realtime", languages=("tr-TR", "en-US"), streaming=True,
-            long_form_stability="n/a", pronunciation_dict=False, voice_selection=True,
+            name=self.name,
+            kind="realtime",
+            languages=("tr-TR", "en-US"),
+            streaming=True,
+            long_form_stability="n/a",
+            pronunciation_dict=False,
+            voice_selection=True,
             speed_control=True,
             cost_metadata={"unit": "audio_minutes", "usd_per_min": 0.0, "note": "simulator"},
-            output_formats=("pcm16",), latency_class="realtime", requires_api_key=False,
-            speech_to_speech=True, full_duplex=True, barge_in=True,
-            end_of_turn=END_OF_TURN_SEMANTIC, tool_calling=True,
-            transports=(TRANSPORT_SIMULATED,), ephemeral_credentials=True,
-            input_formats=("pcm16",), interrupt_latency_class=INTERRUPT_LATENCY_FAST,
+            output_formats=("pcm16",),
+            latency_class="realtime",
+            requires_api_key=False,
+            speech_to_speech=True,
+            full_duplex=True,
+            barge_in=True,
+            end_of_turn=END_OF_TURN_SEMANTIC,
+            tool_calling=True,
+            transports=(TRANSPORT_SIMULATED,),
+            ephemeral_credentials=True,
+            input_formats=("pcm16",),
+            interrupt_latency_class=INTERRUPT_LATENCY_FAST,
         )
+
+    def leg_max_seconds(self) -> int:
+        """No ceiling. The simulator's leg lives as long as the test wants it to, and B20
+        req 223's contract is that a provider ANSWERS this rather than leaving the client
+        to guess - 0 is the answer "I do not end legs", not the absence of one."""
+        return DEFAULT_LEG_MAX_SECONDS
 
     def open_session(self, *, language: str = "tr-TR") -> SimulatedRealtimeSession:
         script = self._script_factory() if self._script_factory else ()
-        return SimulatedRealtimeSession(provider=self.name, language=language,
-                                        timings=self.timings, script=script)
+        return SimulatedRealtimeSession(
+            provider=self.name, language=language, timings=self.timings, script=script
+        )
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int | None = None, transport: str = TRANSPORT_SIMULATED,
+        self,
+        *,
+        session_id: str,
+        ttl_s: int | None = None,
+        transport: str = TRANSPORT_SIMULATED,
         session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential:
         """A random, single-session secret. Nothing from Settings is involved —

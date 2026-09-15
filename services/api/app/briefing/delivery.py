@@ -114,6 +114,10 @@ class BriefingDelivery:
     failure: str = ""
     #: The whole briefing text, whether or not all of it was spoken.
     text: str = ""
+    #: B20 req 233: the clips the owner did NOT hear, in order — everything from the one
+    #: that failed onwards. The caller delivers these as text, so a briefing that could not
+    #: be spoken is still a briefing that arrived. Empty when every clip played.
+    unspoken: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -123,6 +127,7 @@ class BriefingDelivery:
         return {
             "clips": self.clips,
             "spoken": len(self.spoken),
+            "unspoken": len(self.unspoken),
             "failure": self.failure,
             "complete": self.ok,
         }
@@ -191,15 +196,18 @@ def speak_briefing(
             audio = tts_synthesise(tts, clip)
         except Exception as exc:  # noqa: BLE001 - see the docstring
             delivery.failure = f"synthesis_failed:{type(exc).__name__}"
+            delivery.unspoken = clips[index - 1 :]
             logger.warning("briefing_clip_synthesis_failed", clip=index, error=str(exc)[:200])
             return delivery
         if audio is None:
             delivery.failure = "no_tts_key"
+            delivery.unspoken = clips[index - 1 :]
             return delivery
         try:
             handle = audio_store.put(audio, now=now)
         except Exception as exc:  # noqa: BLE001 - see the docstring
             delivery.failure = f"audio_store_failed:{type(exc).__name__}"
+            delivery.unspoken = clips[index - 1 :]
             logger.warning("briefing_clip_store_failed", clip=index, error=str(exc)[:200])
             return delivery
 
@@ -215,6 +223,7 @@ def speak_briefing(
             # Stop here and say how far we got. A briefing with a hole in it is worse than
             # a short one: the owner cannot tell which part they missed.
             delivery.failure = f"clip_not_played:{index}"
+            delivery.unspoken = clips[index - 1 :]
             logger.warning("briefing_clip_not_played", clip=index, of=len(clips))
             return delivery
         delivery.spoken.append(clip)

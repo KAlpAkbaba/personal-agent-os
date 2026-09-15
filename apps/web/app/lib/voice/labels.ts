@@ -22,6 +22,9 @@ export const VOICE_STATE_LABEL: Record<VoiceUiState, string> = {
   interrupted: "Kesildi",
   reconnecting: "Yeniden bağlanıyor…",
   closed: "Kapalı",
+  // B20 req 221: what the owner sees INSTEAD of "Dinliyor" when the microphone is
+  // gone. It names the thing to fix, because the owner is the only one who can.
+  mic_lost: "Mikrofon kapandı",
   error: "Hata",
 };
 
@@ -42,6 +45,26 @@ export const SPEECH_PHASE_LABEL: Record<SpeechPhase, string> = {
 export function speechPhaseNote(snapshot: Pick<ControllerSnapshot, "state" | "speech">): string | null {
   if (snapshot.state !== "speaking") return null;
   return SPEECH_PHASE_LABEL[snapshot.speech.phase] || null;
+}
+
+/**
+ * B20 req 231: "Konuşuyor" only while something is actually being said.
+ *
+ * ADR-0066 already separates GENERATION from playback, and the analyser-driven pulse in
+ * the Core is honest about it - no audio, no pulse. The words were not: the state token
+ * turns `speaking` at `response_started`, and both readouts printed "Konuşuyor" from that
+ * instant, which on a slow first token is a second or more of the page claiming the
+ * assistant is talking into a silent room. The phase is the measurement; the label follows
+ * it. Everything else about the state machine is unchanged - the state is still `speaking`,
+ * because the turn IS the assistant's, and that is what the barge-in path needs to know.
+ */
+export const SPEECH_PREPARING_LABEL = "Yanıt hazırlanıyor…";
+
+export function voiceStateLabel(snapshot: Pick<ControllerSnapshot, "state" | "speech">): string {
+  if (snapshot.state === "speaking" && snapshot.speech.phase === "generating") {
+    return SPEECH_PREPARING_LABEL;
+  }
+  return VOICE_STATE_LABEL[snapshot.state];
 }
 
 export const MODE_LABEL: Record<EnvironmentMode, string> = {
@@ -104,9 +127,13 @@ const TOOL_SPEAKING_CAPTION: Record<string, string> = {
  * else its name), then the narration cursor Cloud Core last pushed.
  */
 export function speechCaption(
-  snapshot: Pick<ControllerSnapshot, "state" | "toolsRunning" | "narrationCursor">,
+  snapshot: Pick<ControllerSnapshot, "state" | "toolsRunning" | "narrationCursor"> &
+    Partial<Pick<ControllerSnapshot, "speech">>,
 ): string | null {
   if (snapshot.state !== "speaking") return null;
+  // req 231: "…anlatıyorum" is a claim about speech. While the response is still being
+  // generated there is none yet, and the caption waits with the voice.
+  if (snapshot.speech && snapshot.speech.phase === "generating") return null;
   const tool = snapshot.toolsRunning.at(-1);
   if (tool) return TOOL_SPEAKING_CAPTION[tool] ?? `${toolLabel(tool)} sonucunu anlatıyorum…`;
   const cursor = snapshot.narrationCursor;

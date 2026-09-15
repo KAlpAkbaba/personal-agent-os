@@ -390,7 +390,14 @@ export function deriveGateParameters(input: {
 }): DerivedGateParameters {
   const basis = modeToClass(input.mode, input.calibration);
   const preset = MODE_PRESETS[basis];
-  const adaptation = boundAdaptation(input.adaptation);
+  // B20 req 217: "normal" is the standard, and the standard means WITHOUT what this device
+  // has learned about the owner. Before this, "otomatik" and "normal" derived byte-identical
+  // parameters - four options in the menu, three behaviours, and the one an owner reaches
+  // for when the microphone has gone deaf on them did nothing at all. The learned offsets
+  // (`marginDb`, `onsetMs`, `echoMarginDb`) are bounded and reversible by design, but they
+  // are still an accumulation, and "give me the textbook settings" has to be reachable
+  // without erasing a profile that is right most of the time.
+  const adaptation = boundAdaptation(input.sensitivity === "normal" ? null : input.adaptation);
   let openMarginDb = preset.openMarginDb;
   let minOnsetMs = preset.minOnsetMs;
   let spreadAdjustDb = 0;

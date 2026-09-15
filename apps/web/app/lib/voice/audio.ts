@@ -225,6 +225,49 @@ export class BrowserMicrophone implements Microphone {
     return this.stream;
   }
 
+  /**
+   * B20 req 215/216: apply suppression / AGC to the track that is already open.
+   *
+   * `applyConstraints` is the only way to change these without a new `getUserMedia`, and a
+   * new one would drop the media leg mid-conversation for a preference change. The reply
+   * is a READ-BACK, not a confirmation: a browser is free to accept the promise and
+   * change nothing (Chromium does exactly that for `voiceIsolation` on devices that cannot
+   * do it), and `notHonoured` is where that shows up. Never throws - a refused constraint
+   * leaves the capture as it was, which is a worse answer than the owner wanted but not a
+   * broken session.
+   */
+  async applyLive(constraints: Partial<MicrophoneConstraints>): Promise<AppliedInputSettings | null> {
+    const track = this.raw?.getAudioTracks()[0];
+    if (!track) return null;
+    const requested: MicrophoneConstraints = {
+      ...DEFAULT_MICROPHONE_CONSTRAINTS,
+      ...this.applied?.requested,
+      ...constraints,
+      channelCount: 1,
+    };
+    let supported: Record<string, boolean> = {};
+    try {
+      supported = navigator.mediaDevices.getSupportedConstraints() as unknown as Record<string, boolean>;
+    } catch {
+      supported = {};
+    }
+    const wanted: MediaTrackConstraints & Record<string, unknown> = {
+      echoCancellation: requested.echoCancellation,
+      noiseSuppression: requested.noiseSuppression,
+      autoGainControl: requested.autoGainControl,
+    };
+    if (requested.voiceIsolation !== undefined && supported.voiceIsolation) {
+      wanted.voiceIsolation = requested.voiceIsolation;
+    }
+    try {
+      await track.applyConstraints(wanted);
+    } catch {
+      /* the browser refused; the read-back below says what is actually in force */
+    }
+    this.applied = readBackTrack(track, requested, supported);
+    return this.applied;
+  }
+
   close(): void {
     this.uplink?.detach();
     this.uplink = null;

@@ -19,6 +19,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.alarms.models import AmbientPolicyRow, WakeAlarm
 from app.ledger.models import ActivityEventRow
+from app.notifications.models import NotificationRow
 from app.routines.dispatch import DeviceRunResult
 from app.routines.models import Routine, RoutineFiring
 
@@ -28,6 +29,9 @@ ALL_TABLES = [
     Routine.__table__,
     RoutineFiring.__table__,
     ActivityEventRow.__table__,
+    # B20 req 233: the wake path writes the unspoken greeting/briefing here when it cannot
+    # be said aloud, so the table has to exist for the sequence to be exercised at all.
+    NotificationRow.__table__,
 ]
 
 #: A Wednesday 07:29:30 UTC — a minute before a 07:30 Istanbul alarm would be irrelevant,
@@ -134,6 +138,13 @@ class FakeDeviceAction:
 
 def ok(**result: Any) -> DeviceRunResult:
     return DeviceRunResult(True, result=result)
+
+
+#: A valid 1x1 PNG (67 bytes), base64 - what a device's ``screen.capture`` returns in
+#: ``png_base64``, at the smallest size that is still an image a decoder accepts.
+ONE_PIXEL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
 
 
 def failed(error_class: str = "capability_missing", message: str = "") -> DeviceRunResult:

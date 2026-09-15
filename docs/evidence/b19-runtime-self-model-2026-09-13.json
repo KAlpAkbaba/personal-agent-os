@@ -3,8 +3,8 @@
   "name": "Öz model ve dürüst yanıtlar",
   "requirements": [63, 64, 65, 66, 74, 75, 76, 77, 78, 79, 80],
   "recorded_at": "2026-09-13T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "67b69d46583e1de4073a10c125ac2140437b0215",
+  "ci_run": "35016883524",
   "what_this_proves": "The self-model stops answering questions about the running system out of the source tree, and four questions the owner asks about the SYSTEM get answers. Every one of the nine self-model answers that existed needed the owner to name a module first.",
   "the_shape_of_this_batch": "Different from the five before it. Those found complete mechanisms with no caller; this one found a complete mechanism whose caller exists and whose INPUT is empty. `_apply_production_states` is ordered correctly by evidence strength and both producers of runtime truth are written - but both are HISTORICAL: `TRUTH_INSTALLED` from `Release` rows, `TRUTH_RUNTIME` from completed `deployment.*` events. This deployment has had neither, so all 443 modules reading `source_only` was the honest answer. The evidence nobody collected was the most direct there is: the process answering for itself.",
   "closed_fully": {

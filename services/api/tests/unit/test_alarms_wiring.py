@@ -153,7 +153,7 @@ def wired():
     app.state.voice_realtime = runtime
 
     device = FakeDeviceAction(results=happy_device_results())
-    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
+    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider(synthetic_speech=False))
     statuses = DeviceStatusRegistry()
     # The one registration production makes (app.main), made the same way here.
     runtime.register_live(wake_sequence=sequence, device_statuses=statuses)

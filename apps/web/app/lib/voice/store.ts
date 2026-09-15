@@ -19,12 +19,13 @@
 
 import { type GatedDetectorSnapshot, listAudioDevices } from "./audio";
 import { type ControllerSnapshot, EMPTY_SPEECH, type VoiceUiState } from "./controller";
-import type { AppliedInputSettings, AudioDevice } from "./ports";
+import type { AppliedInputSettings, AudioDevice, MicrophoneConstraints } from "./ports";
 import type { EnvironmentMode } from "./calibration";
 import {
   type MicrophoneProfile,
   type StorageLike,
   type VoiceChoice,
+  constraintsFor,
   loadVoiceChoice,
   normalizeVoiceChoice,
   saveVoiceChoice,
@@ -68,6 +69,16 @@ export const LIVE_STATES: ReadonlySet<VoiceUiState> = new Set<VoiceUiState>([
 
 /** States in which a connect is in progress and a second one must not start. */
 export const BUSY_STATES: ReadonlySet<VoiceUiState> = new Set<VoiceUiState>(["creating", "connecting"]);
+
+/** The four constraints a live `applyConstraints` can actually change. */
+function sameInputConstraints(a: MicrophoneConstraints, b: MicrophoneConstraints): boolean {
+  return (
+    a.echoCancellation === b.echoCancellation &&
+    a.noiseSuppression === b.noiseSuppression &&
+    a.autoGainControl === b.autoGainControl &&
+    a.voiceIsolation === b.voiceIsolation
+  );
+}
 
 export function isLiveState(state: VoiceUiState): boolean {
   return LIVE_STATES.has(state);
@@ -115,6 +126,7 @@ function idleController(): ControllerSnapshot {
     lastErrorLines: [],
     contract: null,
     contractNotice: null,
+    unavailable: null,
     requestLog: [],
     latency: {},
     latencyDetail: {},
@@ -349,8 +361,20 @@ export class VoiceStore {
     const rig = this.ensureRig();
     const current = rig.profile;
     if (!current) return;
-    rig.commitProfile({ ...current, ...partial });
+    const next = { ...current, ...partial };
+    rig.commitProfile(next);
     rig.parts.detector.applyPreferences?.();
+    // B20 req 215/216: the gate re-derives from the profile, but suppression and AGC live
+    // on the capture track and used to wait for the next `open()` - the owner moved the
+    // selector mid-conversation and the microphone went on exactly as it was. Only when
+    // the derived constraints actually differ: `applyConstraints` on an unchanged set is a
+    // re-negotiation for nothing.
+    if (!sameInputConstraints(constraintsFor(current), constraintsFor(next))) {
+      void rig.applyInputPreferences().then(
+        () => this.publish(),
+        () => {},
+      );
+    }
   }
 
   /** Persist a whole profile (the diagnostics benchmark writes one). */

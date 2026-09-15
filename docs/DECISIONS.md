@@ -10784,3 +10784,63 @@ decision; `test_a_conversation_never_mints_an_owner_memory` and
 found that the table had said "explicit flag OR explicit owner phrase" since M5 while the
 code required the flag — a security rule described wrongly in the first thing a reviewer of
 that module reads.
+
+## ADR-0127 — A control that does nothing is a lie the size of the control (2026-09-13, B20)
+
+**Context.** B20's thirteen requirements were filed as thin coverage — "kısmi", "sağlayıcı
+tarafında", "yok". None of them was missing code. Every one of them was a surface making a
+claim nothing had checked:
+
+* the suppression selector offered *otomatik / tarayıcı / kapalı* and computed
+  `noiseSuppressionMode !== "off"`, so two of the three options were one behaviour and
+  "auto" followed no measurement at all;
+* the sensitivity selector offered four modes and derived byte-identical gate parameters
+  for "otomatik" and "normal" — the mode an owner reaches for when the microphone has gone
+  deaf on them did nothing whatever;
+* both selectors reached the capture only at the next `getUserMedia`, so a change made
+  mid-conversation changed nothing the owner could hear;
+* the state readout printed "Konuşuyor" from `response_started`, next to a Core pulse that
+  was honestly drawing silence;
+* the wake path's tone-refusal policy (B13 req 267) matched one provider NAME while the
+  tone is produced by a CLASS, so every other fake this codebase builds walked past it;
+* the WebRTC transport dropped `disconnected` — the warning that precedes `failed` — on the
+  floor, and the reconnect series waited for the browser to give up;
+* the provider knew its own media-leg ceiling and never published it.
+
+**Decision.** Where a surface makes a claim, the claim is derived from the measurement, and
+where the two halves of a contract can drift, one reads the other.
+
+* `suppressionDecision` classifies the device's own measured noise floor with the same
+  `classifyEnvironment` the gate presets use; suppression stays ON unless the owner's
+  declaration or a completed measurement says the room is quiet. Silence is not evidence.
+* "normal" means the standard: the per-device LEARNED offsets are set aside. That is the
+  escape hatch from bad learning that the bounded-and-reversible design implied and never
+  offered.
+* `Microphone.applyLive` puts constraints on the open track and answers with the READ-BACK,
+  because `applyConstraints` resolving is not evidence that anything changed.
+* `voiceStateLabel` follows ADR-0066's measured phase. The state machine is unchanged: the
+  turn IS the assistant's from `response_started`, and the barge-in path needs that.
+* A synthetic-tone provider declares `synthetic_speech` about itself; the escape for a test
+  standing in for a real provider is explicit at the construction site and forbidden under
+  `app/` by an AST test.
+* An `impaired` transport event is a stopwatch, not a teardown: two seconds to recover on
+  its own, then the existing re-attach series.
+* The server publishes `leg_max_seconds`; the client re-opens before it, waits for a gap
+  while there is time to wait, and stops waiting inside `LEG_RENEW_HARD_MS` of the ceiling.
+
+**And a failure to speak is never a failure to tell.** `app.voice.text_fallback` writes the
+unspoken greeting and the unheard part of the briefing to the notification store, which
+commits before any transport is tried. An owner whose TTS credit runs out overnight wakes to
+silence and finds their morning in the inbox instead of nowhere.
+
+**Reversible.** Each half stands alone: reverting `suppressionDecision` to `!== "off"`,
+dropping the `sensitivity === "normal"` clause, removing the `impaired` case, or publishing
+`leg_max_seconds: 0` each restores the previous behaviour of exactly one surface.
+
+**Guards.** `input-tuning.test.ts` (the three-options-two-behaviours defect, stated as a
+measurement), `speaking-truth.test.ts` (driven through the real controller so the phase is
+produced by real transport events), `proactive-reconnect.test.ts`, `leg-ceiling.test.ts`,
+`provider-unavailable.test.ts`, `test_tts_fallback_policy.py`, `test_voice_text_fallback.py`,
+`test_voice_activity_history.py`, and `test_voice_unavailable_contract.py`, which reads the
+TypeScript and fails when the client's idea of "no provider" drifts from the server's own
+`VoiceErrorClass`.

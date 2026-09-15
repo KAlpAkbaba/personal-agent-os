@@ -73,8 +73,9 @@ def _wrap_wav(pcm: bytes, sample_rate: int) -> bytes:
     header += struct.pack("<I", 36 + len(pcm))
     header += b"WAVE"
     header += b"fmt "
-    header += struct.pack("<IHHIIHH", 16, 1, _WAV_CHANNELS, sample_rate, byte_rate,
-                          block_align, _WAV_BITS)
+    header += struct.pack(
+        "<IHHIIHH", 16, 1, _WAV_CHANNELS, sample_rate, byte_rate, block_align, _WAV_BITS
+    )
     header += b"data"
     header += struct.pack("<I", len(pcm))
     return header + pcm
@@ -143,7 +144,10 @@ INTERRUPT_LATENCY_MEDIUM = "medium"
 INTERRUPT_LATENCY_SLOW = "slow"
 INTERRUPT_LATENCY_NA = "n/a"
 INTERRUPT_LATENCY_CLASSES = (
-    INTERRUPT_LATENCY_FAST, INTERRUPT_LATENCY_MEDIUM, INTERRUPT_LATENCY_SLOW, INTERRUPT_LATENCY_NA,
+    INTERRUPT_LATENCY_FAST,
+    INTERRUPT_LATENCY_MEDIUM,
+    INTERRUPT_LATENCY_SLOW,
+    INTERRUPT_LATENCY_NA,
 )
 
 
@@ -180,11 +184,14 @@ class ProviderCapabilities:
 
     def __post_init__(self) -> None:
         if self.end_of_turn not in END_OF_TURN_MODES:
-            raise ValueError(f"end_of_turn must be one of {END_OF_TURN_MODES}, "
-                             f"got {self.end_of_turn!r}")
+            raise ValueError(
+                f"end_of_turn must be one of {END_OF_TURN_MODES}, got {self.end_of_turn!r}"
+            )
         if self.interrupt_latency_class not in INTERRUPT_LATENCY_CLASSES:
-            raise ValueError(f"interrupt_latency_class must be one of "
-                             f"{INTERRUPT_LATENCY_CLASSES}, got {self.interrupt_latency_class!r}")
+            raise ValueError(
+                f"interrupt_latency_class must be one of "
+                f"{INTERRUPT_LATENCY_CLASSES}, got {self.interrupt_latency_class!r}"
+            )
         unknown = [t for t in self.transports if t not in TRANSPORTS]
         if unknown:
             raise ValueError(f"unknown transports {unknown}; known: {TRANSPORTS}")
@@ -321,8 +328,15 @@ RT_ERROR = "error"
 RT_NETWORK_LOST = "network_lost"
 RT_NETWORK_RESTORED = "network_restored"
 REALTIME_EVENT_KINDS = (
-    RT_SPEECH_STARTED, RT_SPEECH_STOPPED, RT_RESPONSE_STARTED, RT_RESPONSE_AUDIO,
-    RT_RESPONSE_DONE, RT_TOOL_CALL, RT_ERROR, RT_NETWORK_LOST, RT_NETWORK_RESTORED,
+    RT_SPEECH_STARTED,
+    RT_SPEECH_STOPPED,
+    RT_RESPONSE_STARTED,
+    RT_RESPONSE_AUDIO,
+    RT_RESPONSE_DONE,
+    RT_TOOL_CALL,
+    RT_ERROR,
+    RT_NETWORK_LOST,
+    RT_NETWORK_RESTORED,
 )
 
 
@@ -397,16 +411,36 @@ AudioSink = Callable[[bytes], None]
 EventSink = Callable[[RealtimeSessionEvent], None]
 
 
+#: B20 req 223: how long ONE media leg may live before the provider ends it, in seconds.
+#: A provider fact and therefore declared by the provider - the default is the value a
+#: provider with no ceiling of its own reports, and 0 means "no ceiling".
+#:
+#: ADR-0105 made the SESSION never expire ("hiç kapanmasın"), and that is a different
+#: thing from the media leg: the session is the owner's conversation and the leg is one
+#: WebRTC connection carrying it. The provider ends the leg at its own ceiling whatever
+#: the session says, so a session that never expires still went deaf on the hour, and the
+#: owner met it as silence.
+DEFAULT_LEG_MAX_SECONDS = 0
+
+
 @runtime_checkable
 class RealtimeProvider(Protocol):
     name: str
 
     def capabilities(self) -> ProviderCapabilities: ...
 
+    def leg_max_seconds(self) -> int:  # pragma: no cover - Protocol default
+        """The provider's own ceiling on one media leg, or 0 when it has none."""
+        return DEFAULT_LEG_MAX_SECONDS
+
     def open_session(self, *, language: str = "tr-TR") -> RealtimeSessionHandle: ...
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int, transport: str,
+        self,
+        *,
+        session_id: str,
+        ttl_s: int,
+        transport: str,
         session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential: ...
 
@@ -435,9 +469,32 @@ class FakeTTSProvider:
     while each stays reproducible (used to prove the benchmark compares >= 2).
     """
 
-    def __init__(self, name: str = "fake-tts", *, seed: int = 0,
-                 stability: str = "high", latency_ms: float = 12.0) -> None:
+    #: B20 req 234. What this produces is a sine tone, not speech, and the delivery paths
+    #: are required to refuse it (B13 req 267: a buzz in a bedroom after an alarm is a
+    #: fault that sounds deliberate). The provider declares that about ITSELF rather than
+    #: leaving the policy to match a name: the policy was keyed on the single name
+    #: ``fake-tts-greeting``, and every other fake this codebase builds - ``fake-tts``,
+    #: ``fake-tts-a``, ``fake-tts-b``, and any name a caller passes - produces exactly the
+    #: same tone and sailed straight through it. The fault is the class, not the name.
+    synthetic_speech = True
+
+    def __init__(
+        self,
+        name: str = "fake-tts",
+        *,
+        seed: int = 0,
+        stability: str = "high",
+        latency_ms: float = 12.0,
+        synthetic_speech: bool | None = None,
+    ) -> None:
         self.name = name
+        # A TEST standing in for a provider that really speaks says so here, at the
+        # construction site, where a reader can see it. Nothing under `app/` may pass it -
+        # `test_no_production_path_declares_a_fake_to_be_real_speech` reads the sources and
+        # fails if one ever does - because the whole point of the policy is that the owner
+        # is never handed a sine tone as if it were a voice.
+        if synthetic_speech is not None:
+            self.synthetic_speech = bool(synthetic_speech)
         self._seed = seed
         self._stability = stability
         self._latency_ms = latency_ms
@@ -462,15 +519,19 @@ class FakeTTSProvider:
         self, text: str, *, voice: str = "default", speed: float = 1.0, fmt: str = "wav"
     ) -> TTSResult:
         if not text or not text.strip():
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "text must be non-empty",
-                             provider=self.name)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "text must be non-empty", provider=self.name
+            )
         if fmt not in ("wav", "pcm16"):
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             f"fake provider only emits wav/pcm16, not {fmt!r}",
-                             provider=self.name)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"fake provider only emits wav/pcm16, not {fmt!r}",
+                provider=self.name,
+            )
         if speed <= 0:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "speed must be > 0",
-                             provider=self.name)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "speed must be > 0", provider=self.name
+            )
         audio = synthesize_wav(text, seed=self._seed)
         duration = int(round(wav_duration_ms(audio) / speed))
         return TTSResult(
@@ -487,24 +548,39 @@ class FakeTTSProvider:
 class FailingTTSProvider:
     """A TTS fake that always fails with a fall-backable error (router tests)."""
 
-    def __init__(self, name: str = "failing-tts",
-                 error_class: VoiceErrorClass = VoiceErrorClass.DEPENDENCY_UNAVAILABLE) -> None:
+    def __init__(
+        self,
+        name: str = "failing-tts",
+        error_class: VoiceErrorClass = VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+    ) -> None:
         self.name = name
         self._error_class = error_class
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="tts", languages=("tr-TR",), streaming=False,
-            long_form_stability="low", pronunciation_dict=False, voice_selection=False,
-            speed_control=False, cost_metadata={}, output_formats=("wav",),
-            latency_class="low", requires_api_key=False,
+            name=self.name,
+            kind="tts",
+            languages=("tr-TR",),
+            streaming=False,
+            long_form_stability="low",
+            pronunciation_dict=False,
+            voice_selection=False,
+            speed_control=False,
+            cost_metadata={},
+            output_formats=("wav",),
+            latency_class="low",
+            requires_api_key=False,
         )
 
     def synthesize(
         self, text: str, *, voice: str = "default", speed: float = 1.0, fmt: str = "wav"
     ) -> TTSResult:
-        raise VoiceError(self._error_class, f"{self.name} is configured to fail",
-                         provider=self.name, retryable=True)
+        raise VoiceError(
+            self._error_class,
+            f"{self.name} is configured to fail",
+            provider=self.name,
+            retryable=True,
+        )
 
 
 class FakeSTTProvider:
@@ -515,9 +591,15 @@ class FakeSTTProvider:
     benchmark a real comparison. Default profile is perfect recovery.
     """
 
-    def __init__(self, name: str = "fake-stt", *, seed: int = 0,
-                 error_profile: Any = None, confidence: float = 0.97,
-                 latency_ms: float = 30.0) -> None:
+    def __init__(
+        self,
+        name: str = "fake-stt",
+        *,
+        seed: int = 0,
+        error_profile: Any = None,
+        confidence: float = 0.97,
+        latency_ms: float = 30.0,
+    ) -> None:
         self.name = name
         self._seed = seed
         self._error_profile = error_profile
@@ -526,17 +608,27 @@ class FakeSTTProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="stt", languages=("tr-TR", "en-US"), streaming=True,
-            long_form_stability="n/a", pronunciation_dict=False, voice_selection=False,
+            name=self.name,
+            kind="stt",
+            languages=("tr-TR", "en-US"),
+            streaming=True,
+            long_form_stability="n/a",
+            pronunciation_dict=False,
+            voice_selection=False,
             speed_control=False,
             cost_metadata={"unit": "audio_seconds", "usd_per_min": 0.0, "note": "fake/offline"},
-            output_formats=("text",), latency_class="low", requires_api_key=False,
+            output_formats=("text",),
+            latency_class="low",
+            requires_api_key=False,
         )
 
     def transcribe(self, audio: bytes, *, language: str = "tr-TR") -> STTResult:
         if not is_wav(audio):
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             "fake STT expects RIFF/WAVE audio", provider=self.name)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                "fake STT expects RIFF/WAVE audio",
+                provider=self.name,
+            )
         text = _recover_text_from_wav(audio, seed=self._seed)
         tokens = _tokenize(text)
         if self._error_profile is not None:
@@ -615,12 +707,28 @@ class FakeRealtimeProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="realtime", languages=("tr-TR", "en-US"), streaming=True,
-            long_form_stability="n/a", pronunciation_dict=False, voice_selection=True,
+            name=self.name,
+            kind="realtime",
+            languages=("tr-TR", "en-US"),
+            streaming=True,
+            long_form_stability="n/a",
+            pronunciation_dict=False,
+            voice_selection=True,
             speed_control=False,
             cost_metadata={"unit": "audio_minutes", "usd_per_min": 0.0, "note": "fake/offline"},
-            output_formats=("pcm16", "opus"), latency_class="realtime", requires_api_key=False,
+            output_formats=("pcm16", "opus"),
+            latency_class="realtime",
+            requires_api_key=False,
         )
+
+    def leg_max_seconds(self) -> int:
+        """No ceiling: this fake never ends a leg, and says so rather than staying silent.
+
+        B20 req 223 put `leg_max_seconds` on the `RealtimeProvider` protocol, and the
+        protocol is `runtime_checkable` - an implementation that omits it is not one, and
+        `test_simulator_and_m4_fake_satisfy_the_extended_protocols` says so out loud.
+        """
+        return DEFAULT_LEG_MAX_SECONDS
 
     def open_session(self, *, language: str = "tr-TR"):  # noqa: ANN201 - see realtime.py
         from app.voice.realtime import RealtimeSession
@@ -628,7 +736,11 @@ class FakeRealtimeProvider:
         return RealtimeSession(provider=self.name, language=language)
 
     def mint_credential(
-        self, *, session_id: str, ttl_s: int, transport: str = TRANSPORT_SIMULATED,
+        self,
+        *,
+        session_id: str,
+        ttl_s: int,
+        transport: str = TRANSPORT_SIMULATED,
         session_config: RealtimeSessionConfig | None = None,
     ) -> EphemeralCredential:
         """Control-only fake: a labelled, non-secret placeholder credential."""
@@ -660,14 +772,17 @@ def vendor_tool_name(name: str) -> str:
     """Cloud Core tool name (``research.start``) -> the name the vendor sees
     (``research__start``). Reversible: a Cloud Core name may not contain ``__``."""
     if _VENDOR_DOT in name:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"tool name {name!r} contains '__', which is reserved for the vendor "
-                         "spelling of '.'")
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"tool name {name!r} contains '__', which is reserved for the vendor spelling of '.'",
+        )
     mapped = name.replace(".", _VENDOR_DOT)
     if not VENDOR_TOOL_NAME_PATTERN.match(mapped):
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"tool name {name!r} cannot be expressed to the vendor "
-                         f"(pattern {VENDOR_TOOL_NAME_PATTERN.pattern})")
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"tool name {name!r} cannot be expressed to the vendor "
+            f"(pattern {VENDOR_TOOL_NAME_PATTERN.pattern})",
+        )
     return mapped
 
 
@@ -692,26 +807,40 @@ def _send(req: ProviderRequest, *, timeout_s: float, provider: str) -> Any:
     try:
         import httpx
     except ImportError as exc:  # pragma: no cover - httpx present in dev group
-        raise VoiceError(VoiceErrorClass.OPTIONAL_DEPENDENCY_MISSING,
-                         "httpx is required for real provider calls",
-                         provider=provider) from exc
+        raise VoiceError(
+            VoiceErrorClass.OPTIONAL_DEPENDENCY_MISSING,
+            "httpx is required for real provider calls",
+            provider=provider,
+        ) from exc
     try:
         with httpx.Client(timeout=timeout_s) as client:
             if req.files:
                 resp = client.request(
-                    req.method, req.url, headers=req.headers, params=req.query or None,
-                    data=req.form or None, files=req.files,
+                    req.method,
+                    req.url,
+                    headers=req.headers,
+                    params=req.query or None,
+                    data=req.form or None,
+                    files=req.files,
                 )
             else:
                 resp = client.request(
-                    req.method, req.url, headers=req.headers, params=req.query or None,
-                    json=req.json_body, content=req.data,
+                    req.method,
+                    req.url,
+                    headers=req.headers,
+                    params=req.query or None,
+                    json=req.json_body,
+                    content=req.data,
                 )
             resp.raise_for_status()
             return resp
     except httpx.TimeoutException as exc:
-        raise VoiceError(VoiceErrorClass.TIMEOUT, f"{provider}: request timed out",
-                         provider=provider, retryable=True) from exc
+        raise VoiceError(
+            VoiceErrorClass.TIMEOUT,
+            f"{provider}: request timed out",
+            provider=provider,
+            retryable=True,
+        ) from exc
     except httpx.HTTPStatusError as exc:
         # The body is the diagnosis. A bare "400 Bad Request" sent a real owner
         # smoke run in circles; the vendor's error object (type/code/param/message)
@@ -727,9 +856,12 @@ def _send(req: ProviderRequest, *, timeout_s: float, provider: str) -> Any:
             details=details,
         ) from exc
     except httpx.HTTPError as exc:
-        raise VoiceError(VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
-                         f"{provider}: {type(exc).__name__}: {exc}",
-                         provider=provider, retryable=True) from exc
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            f"{provider}: {type(exc).__name__}: {exc}",
+            provider=provider,
+            retryable=True,
+        ) from exc
 
 
 VENDOR_ERROR_FIELDS = ("type", "code", "param", "message")
@@ -1063,6 +1195,19 @@ class FasterWhisperSTTProvider:
             output_formats=("text",), latency_class="batch", requires_api_key=False,
         )
 
+    def available(self) -> bool:
+        """B20 req 236: whether this provider can actually be used, asked of the thing
+        that knows. `importlib.util.find_spec` rather than an import: it answers the same
+        question without paying for CTranslate2's several hundred megabytes on every
+        health listing, and a provider probe that loaded a model would be a diagnostic
+        surface with a memory cost."""
+        import importlib.util
+
+        try:
+            return importlib.util.find_spec("faster_whisper") is not None
+        except (ImportError, ValueError):  # pragma: no cover - a broken installation
+            return False
+
     def _load(self) -> Any:
         if self._model is not None:
             return self._model
@@ -1074,8 +1219,9 @@ class FasterWhisperSTTProvider:
                 "faster-whisper is not installed (optional local STT fallback)",
                 provider=self.name,
             ) from exc
-        self._model = WhisperModel(self._model_size, device=self._device,
-                                   compute_type=self._compute_type)
+        self._model = WhisperModel(
+            self._model_size, device=self._device, compute_type=self._compute_type
+        )
         return self._model
 
     def transcribe(self, audio: bytes, *, language: str = "tr-TR") -> STTResult:  # pragma: no cover
@@ -1087,9 +1233,12 @@ class FasterWhisperSTTProvider:
         segments, _info = model.transcribe(io.BytesIO(audio), language=language.split("-")[0])
         text = " ".join(seg.text.strip() for seg in segments)
         return STTResult(
-            text=text.strip(), confidence=1.0, word_timings=(),
+            text=text.strip(),
+            confidence=1.0,
+            word_timings=(),
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            provider=self.name, language=language,
+            provider=self.name,
+            language=language,
         )
 
 

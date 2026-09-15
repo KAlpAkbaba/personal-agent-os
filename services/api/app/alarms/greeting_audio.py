@@ -127,11 +127,21 @@ FALLBACK_PROVIDER_NAME: Final[str] = "fake-tts-greeting"
 
 
 def is_fallback_provider(provider: Any) -> bool:
-    """Whether this provider produces a synthetic tone rather than speech (req 267).
+    """Whether this provider produces a synthetic tone rather than speech (req 267/234).
 
-    Asked by name because that is what the receipt records; a provider that renames itself
-    to look real is a different problem from the one this exists to catch.
+    Asks the PROVIDER first (``synthetic_speech``), and only then the name.
+
+    B20 req 234: the name test was the whole check, and the name it tested was the single
+    one this module builds. Every other fake in the codebase produces the same 110 Hz sine
+    - the registry's ``fake-tts``, the benchmark's ``fake-tts-a`` / ``fake-tts-b``, and any
+    name a caller passes to ``FakeTTSProvider`` - so any delivery path handed one of those
+    would have played a tone to the owner as speech, past a guard written to prevent
+    exactly that. A tone is a property of what the provider IS; the name is only how the
+    receipt refers to it, and it is kept as the second test for anything that answers a
+    name without declaring itself.
     """
+    if getattr(provider, "synthetic_speech", False):
+        return True
     return getattr(provider, "name", "") == FALLBACK_PROVIDER_NAME
 
 

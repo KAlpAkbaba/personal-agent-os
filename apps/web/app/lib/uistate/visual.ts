@@ -1740,6 +1740,10 @@ export type VoiceOverlay = {
   lastError: string | null;
 };
 
+/** B20 req 221: what the owner reads when the microphone is gone. One string, here,
+ * so the core and the status line cannot end up saying two different things. */
+export const MIC_LOST_LABEL = "Mikrofon kapandı — sizi duyamıyorum";
+
 /** The voice controller's states that draw the core; `idle`/`closed` do not. */
 export const VOICE_OVERLAY_STATES: ReadonlySet<VoiceUiState> = new Set<VoiceUiState>([
   "creating",
@@ -1749,6 +1753,9 @@ export const VOICE_OVERLAY_STATES: ReadonlySet<VoiceUiState> = new Set<VoiceUiSt
   "speaking",
   "tool_running",
   "interrupted",
+  // B20 req 221. It DRAWS, and that is the requirement: the whole defect was a page that
+  // showed the listening core while the operating system had revoked the microphone.
+  "mic_lost",
   "error",
 ]);
 
@@ -1904,6 +1911,22 @@ export function applyVoiceOverlay(bus: VisualIntent, voice: VoiceOverlay): Visua
         breathHz: 0,
         glow: 0.15,
         shellSpread: 0.05,
+      };
+
+    case "mic_lost":
+      // Drawn as a fault rather than as a quieter listening state, because the owner has
+      // to DO something: the session is alive and cannot hear them, and no amount of
+      // waiting fixes that. Still and dimmed - a breathing core would read as attention.
+      return {
+        ...local("error", "fault"),
+        label: MIC_LOST_LABEL,
+        severity: "warning",
+        scale: 0.94,
+        dim: 0.4,
+        breathAmplitude: 0,
+        glow: 0.12,
+        shellSpread: 0.2,
+        ringSpin: 0,
       };
 
     case "error":

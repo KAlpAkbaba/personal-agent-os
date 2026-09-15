@@ -110,6 +110,18 @@ export type TransportEvent =
       arguments: Record<string, unknown>;
     }
   | { type: "error"; at: number; message: string; code?: string }
+  /**
+   * B20 req 218: the link is in trouble but not gone.
+   *
+   * WebRTC says `disconnected` before it says `failed`, and the gap between them is the
+   * browser's own patience - seconds in which no media flows, nothing is delivered, and
+   * the page went on saying "Dinliyor" because the only thing the transport reported was
+   * `failed`. The connection can recover on its own, so this is a WARNING and not a
+   * teardown: the controller gives it a short grace and re-attaches if it does not clear.
+   */
+  | { type: "impaired"; at: number; reason: string }
+  /** The impaired link came back by itself; whatever the warning started is called off. */
+  | { type: "recovered"; at: number }
   | { type: "disconnected"; at: number; reason: string };
 
 export type TransportEventType = TransportEvent["type"];

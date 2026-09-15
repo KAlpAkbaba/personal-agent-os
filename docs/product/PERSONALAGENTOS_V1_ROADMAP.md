@@ -842,7 +842,7 @@ RISK                : low
 OWNER_ACTION        : no
 TEST_PLAN           : runtime provenanslı satırların üretildiği; bayat verinin bayat işaretlendiği;
                       çalışmayan özellik listesinin matristen değil çalışma zamanından geldiği
-KAPANIŞ             : commit PENDING_B19 · CI PENDING · 11/11 DONE
+KAPANIŞ             : commit 67b69d4 · CI 35016883524 yeşil (7/7) · 11/11 DONE
                       kanıt docs/evidence/b19-runtime-self-model-2026-09-13.json
 ÖLÇÜM               : Bu batch öncekilerden FARKLI çıktı: mekanizmanın çağıranı vardı,
                       GİRDİSİ yoktu. `_apply_production_states` kanıt gücüne göre doğru
@@ -896,6 +896,40 @@ TEST_PLAN           : `track.onended`/`onmute` tetiklendiğinde arayüz durumunu
                       faster-whisper'ın sağlıkta yanlış "etkin" görünmediği (kısa devre mutasyonu)
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde mikrofon iptal edildiğinde durum doğru değişti
 ROLLBACK_PLAN       : istemci değişikliği; web sürümü geri alınır
+KAPANIŞ             : commit PENDING_B20 · CI PENDING · yerel kapı PASS · 13/13 DONE
+                      kanıt docs/evidence/b20-voice-resilience-2026-09-13.json
+                      (quality-gate -Fast PASS; web kapıları ayrıca: vitest 1694, tsc temiz,
+                      oxlint 0 hata)
+ÖLÇÜM               : Bu batch NE eksik kod ne de çağrılmayan mekanizma buldu: HİÇBİR ŞEY
+                      YAPMAYAN KONTROLLER ve HİÇ DENETLENMEMİŞ İDDİALAR buldu. Bastırma
+                      menüsünün üç seçeneği iki davranıştı (`!== "off"`), hassasiyetin dört
+                      seçeneği üç davranıştı ("otomatik" ile "normal" birebir aynı
+                      parametreleri üretiyordu), durum etiketi yanındaki analizör sessizliği
+                      çizerken "Konuşuyor" yazıyordu, ton reddi politikası SINIFA değil tek
+                      bir ADA bakıyordu, taşıyıcı `disconnected` uyarısını yere düşürüyordu
+                      ve sunucu bildiği tavanı yayımlamıyordu.
+                      Üç satır ölçümle düzeldi (7., 8. ve 9. düzeltme): 216 zaten ölçülüyordu
+                      (ADR-0047 §4 okuma geri alma + kalıcı yankı kalıntısı), 217'nin modları
+                      zaten uçtan uca bağlıydı — eksik olan iki seçenek arasındaki FARKTI —
+                      ve 238'in çift yazımı B06'da 70 ile bitmişti; o satırın gerçek kusuru
+                      başka yerdeydi: hayatta kalan satırın ne söylediğinde.
+YOL ÜSTÜNDE         : (1) Tavan yenilemesinin sert tabanını mutasyonla kaldırınca erteleme
+                      sıfır gecikmeli bir döngüye dönüştü ve süiti senkron olarak kilitledi —
+                      vitest böyle bir döngüyü kesemez, yani mutasyon HİÇ hata üretmedi,
+                      yalnız duran bir saat. `LEG_RENEW_MIN_WAIT_MS` her beklemeye taban
+                      koyuyor; sunucudan gelen anlamsız bir tavan artık sınırlı.
+                      (2) Politikayı sınıfa bakar hale getirmek, gerçek sağlayıcı yerine
+                      `FakeTTSProvider` kullanan dokuz testi kırdı. Bu gerçek bir ihtiyaç
+                      (anahtarsız makinede tüm selamlama yolunu kanıtlamak), o yüzden kaçış
+                      kapısı yapıldığı yerde açıkça yazılıyor ve `app/` altında AST testiyle
+                      yasak. Aksi halde politika sessizce zayıflatılmış olurdu.
+                      (3) `runtime_checkable` protokole `leg_max_seconds` eklemek simülatörü
+                      ve çevrimdışı fake'i sessizce protokol dışı bıraktı; ikisi de artık 0
+                      diyor — "bacak bitirmem" cevabı, cevapsızlık değil.
+                      (4) `deliver_as_text` commit eden bir depoya yazıyor ve hata halinde
+                      oturumu geri alıyor. `alarm.detail_json` ondan ÖNCE yazılsaydı,
+                      başarısız bir bildirim `greeting_failure` kaydını da götürürdü: kusurun
+                      kaydını, kusuru telafi etme girişimi yok ederdi.
 ```
 
 ```

@@ -285,8 +285,59 @@ export class FakePlayback implements Playback {
 
 // ---------------------------------------------------- mic / vad / network
 
+/**
+ * An input track that behaves like the thing it stands in for (B20 req 222).
+ *
+ * `FakeMicrophone` used to answer `getAudioTracks(): []`, which is a stream no browser
+ * ever produces, and it meant no test could reach the code that watches a track for
+ * `ended` / `mute` - the very events whose absence let the page say "Dinliyor" into a
+ * revoked microphone. A fake that is kinder than the thing it stands in for does not catch
+ * anything.
+ */
+export class FakeInputTrack {
+  readyState: "live" | "ended" = "live";
+  muted = false;
+  private listeners = new Map<string, Set<() => void>>();
+
+  addEventListener(type: string, fn: () => void): void {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(fn);
+    this.listeners.set(type, set);
+  }
+
+  removeEventListener(type: string, fn: () => void): void {
+    this.listeners.get(type)?.delete(fn);
+  }
+
+  /** The device was revoked: a track that ends never comes back. */
+  end(): void {
+    this.readyState = "ended";
+    this.emit("ended");
+  }
+
+  /** Silenced without ending - recoverable, and the browser says so with `unmute`. */
+  mute(): void {
+    this.muted = true;
+    this.emit("mute");
+  }
+
+  unmute(): void {
+    this.muted = false;
+    this.emit("unmute");
+  }
+
+  private emit(type: string): void {
+    // A snapshot: a handler is allowed to unsubscribe while this runs, and iterating the
+    // live set while it changes is how a fake grows a bug the real thing does not have.
+    const handlers = Array.from(this.listeners.get(type) ?? []);
+    for (const fn of handlers) fn();
+  }
+}
+
 export class FakeMicrophone implements Microphone {
   stream: MediaStream | null = null;
+  /** The track behind the current stream, for a test that revokes the device. */
+  track: FakeInputTrack | null = null;
   applied: AppliedInputSettings | null = null;
   opened: Array<string | undefined> = [];
   constraints: Array<Partial<MicrophoneConstraints> | undefined> = [];
@@ -294,8 +345,13 @@ export class FakeMicrophone implements Microphone {
   async open(deviceId?: string, constraints?: Partial<MicrophoneConstraints>): Promise<MediaStream> {
     this.opened.push(deviceId);
     this.constraints.push(constraints);
-    // Node has no MediaStream; the controller only passes it through.
-    this.stream = { id: `fake-mic-${this.opened.length}`, getAudioTracks: () => [] } as unknown as MediaStream;
+    // Node has no MediaStream; the controller passes it through and reads its tracks.
+    const track = new FakeInputTrack();
+    this.track = track;
+    this.stream = {
+      id: `fake-mic-${this.opened.length}`,
+      getAudioTracks: () => [track],
+    } as unknown as MediaStream;
     const requested: MicrophoneConstraints = {
       echoCancellation: true,
       noiseSuppression: true,
@@ -324,9 +380,39 @@ export class FakeMicrophone implements Microphone {
     return this.stream;
   }
 
+  /**
+   * B20 req 215/216: the live re-apply, with the one behaviour that matters for a test —
+   * a browser that refuses. `refuses` names constraints this fake accepts the call for and
+   * does not change, exactly as Chromium does for `voiceIsolation` on a device that cannot
+   * do it; they come back in `notHonoured`.
+   */
+  refuses = new Set<string>();
+  liveApplies: Array<Partial<MicrophoneConstraints>> = [];
+
+  async applyLive(constraints: Partial<MicrophoneConstraints>): Promise<AppliedInputSettings | null> {
+    if (!this.applied) return null;
+    this.liveApplies.push(constraints);
+    const requested: MicrophoneConstraints = { ...this.applied.requested, ...constraints, channelCount: 1 };
+    const honour = <K extends "echoCancellation" | "noiseSuppression" | "autoGainControl">(key: K): boolean =>
+      this.refuses.has(key) ? (this.applied?.[key] ?? requested[key]) : requested[key];
+    const notHonoured = (["echoCancellation", "noiseSuppression", "autoGainControl"] as const).filter(
+      (key) => this.refuses.has(key) && this.applied?.[key] !== requested[key],
+    );
+    this.applied = {
+      ...this.applied,
+      echoCancellation: honour("echoCancellation"),
+      noiseSuppression: honour("noiseSuppression"),
+      autoGainControl: honour("autoGainControl"),
+      notHonoured: [...notHonoured, ...(requested.voiceIsolation ? ["voiceIsolation"] : [])],
+      requested,
+    };
+    return this.applied;
+  }
+
   close(): void {
     this.stream = null;
     this.applied = null;
+    this.track = null;
   }
 }
 
@@ -516,6 +602,8 @@ export type FakeCloudCoreOptions = {
   contract?: FakeContractMode;
   /** a v1 server: `extra="forbid"` refuses `voice` exactly like the deployed release did */
   legacyCreate?: boolean;
+  /** B20 req 223: the provider's media-leg ceiling in seconds; omitted from the payload when 0. */
+  legMaxSeconds?: number;
 };
 
 type ForcedFailure = { status: number; detail: unknown };
@@ -540,7 +628,16 @@ export class FakeCloudCore {
   clientLeg = "web-1";
   private readonly sessionId = "11111111-2222-4333-8444-555555555555";
 
-  constructor(private readonly options: FakeCloudCoreOptions = {}) {}
+  /**
+   * B20 req 223: what the server publishes as the provider's media-leg ceiling. Mutable,
+   * because a re-opened leg can come back with a different one and the client must arm
+   * itself from the payload it was just handed rather than from the first one it saw.
+   */
+  legMaxSeconds: number;
+
+  constructor(private readonly options: FakeCloudCoreOptions = {}) {
+    this.legMaxSeconds = options.legMaxSeconds ?? 0;
+  }
 
   /** Make the next call to `pathSuffix` answer with `status` (queued FIFO), optionally with a body. */
   failNext(pathSuffix: string, status: number, detail?: unknown): void {
@@ -623,6 +720,7 @@ export class FakeCloudCore {
       state: "created",
       voice: this.voice,
       voice_profile: "arbor",
+      ...(this.legMaxSeconds ? { leg_max_seconds: this.legMaxSeconds } : {}),
       ...(this.options.descriptor ? { transport_descriptor: this.options.descriptor } : {}),
     };
   }

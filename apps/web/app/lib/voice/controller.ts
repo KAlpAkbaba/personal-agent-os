@@ -46,7 +46,7 @@
  */
 
 import type { RequestLogEntry, VoiceSessionApi } from "./api";
-import { VoiceApiError } from "./api";
+import { PROVIDER_UNAVAILABLE_TR, VoiceApiError } from "./api";
 import type {
   FsmState,
   SessionCredential,
@@ -104,7 +104,33 @@ export type VoiceUiState =
   | "interrupted"
   | "reconnecting"
   | "closed"
+  /**
+   * B20 req 221/222: the session is alive and the microphone is not. Its own state
+   * because it is neither of the two it would otherwise be mistaken for: `error` says the
+   * session failed (it has not - the assistant can still speak, the tools still run), and
+   * `listening` is the lie this state exists to end.
+   */
+  | "mic_lost"
   | "error";
+
+/**
+ * B20 req 235: the provider-unavailable condition, as something the page can render on
+ * purpose rather than as a status line that leaked into a message box.
+ *
+ * `retryable` is the field the UI actually needs: a missing key does not become present
+ * because the owner pressed "Bağlan" again, and offering that button as the only thing on
+ * the screen is what made this "kısmi" rather than "kontrollü".
+ */
+export type VoiceUnavailable = {
+  /** The server's own `error_class` (see `PROVIDER_UNAVAILABLE_CLASSES`). */
+  errorClass: string;
+  /** One Turkish sentence: what is missing. */
+  message: string;
+  /** One Turkish sentence: what the owner can do, or "" when there is nothing to say. */
+  remedy: string;
+  /** Whether pressing connect again could plausibly work. */
+  retryable: boolean;
+};
 
 export type LatencySample = { value: number; at: number };
 
@@ -253,6 +279,14 @@ export type ControllerSnapshot = {
   contract: ContractStatus | null;
   /** ADR-0045: Turkish notice about the last create request (fields dropped, version unknown). */
   contractNotice: string | null;
+  /**
+   * B20 req 235: there is no voice to be had here, and this says which kind of "no".
+   *
+   * Distinct from `lastError` because it is not the same KIND of thing: an error is
+   * something that went wrong and might not next time, and this is a standing condition
+   * the owner is the only one who can change. Null whenever a session could be created.
+   */
+  unavailable: VoiceUnavailable | null;
   /** ADR-0045: the last outgoing Cloud Core requests, scrubbed (diagnostics). */
   requestLog: RequestLogEntry[];
   latency: {
@@ -301,6 +335,8 @@ export type ControllerDeps = {
   uplinkProbe?: { pollMs?: number; maxMs?: number };
   /** ADR-0047 §3: how long after the provider's audio-start to wait for LOCAL audibility before falling back. */
   playbackConfirmMs?: number;
+  /** B20 req 218: how long an impaired link may recover on its own before re-attaching. */
+  impairedGraceMs?: number;
   /**
    * ADR-0047 §4: extra numbers the page knows about the input path (the AGC
    * A/B benchmark from the profile), merged into the `mic_input` read-back
@@ -418,6 +454,37 @@ export const PLAYBACK_DRAIN_MAX_MS = 8000;
 export const PLAYBACK_POLL_MS = 50;
 export const PLAYBACK_ENERGY_LEVEL = 0.02;
 
+/**
+ * B20 req 223: beat the provider's media-leg ceiling instead of being cut by it.
+ *
+ * `LEG_RENEW_MARGIN_MS` is how long before the ceiling the client re-opens the leg. Two
+ * minutes is chosen so a renewal that fails still has time for several retries, and so the
+ * renewal can WAIT for a quiet moment: `LEG_RENEW_DEFER_MS` is how long it steps back when
+ * the owner or the assistant is mid-turn, and `LEG_RENEW_HARD_MS` is the point at which
+ * politeness stops — closer than this to the ceiling, the leg is re-opened whatever is
+ * happening, because the alternative is the provider ending it mid-sentence.
+ */
+export const LEG_RENEW_MARGIN_MS = 120_000;
+export const LEG_RENEW_DEFER_MS = 5_000;
+export const LEG_RENEW_HARD_MS = 15_000;
+export const LEG_RENEW_RETRY_MS = 10_000;
+/**
+ * The floor under every renewal wait. A timer that re-arms for "now" does not wait, it
+ * spins: removing the hard-floor guard while red-proving this batch turned the deferral
+ * into a zero-delay loop that hung the suite outright, and a ceiling of a few milliseconds
+ * from a confused server would do the same in a browser. Nothing here is ever scheduled
+ * for zero.
+ */
+export const LEG_RENEW_MIN_WAIT_MS = 250;
+
+/**
+ * B20 req 218: how long an impaired link is given to recover by itself before the session
+ * re-attaches. Short, because the owner is mid-conversation and hears the silence; not
+ * zero, because most WebRTC `disconnected` blips clear inside a second and a re-attach
+ * that beat them would cost more than it saved.
+ */
+export const DEFAULT_IMPAIRED_GRACE_MS = 2000;
+
 const SIDEBAND_LOG_MAX = 20;
 const REQUEST_LOG_MAX = 20;
 const DEFAULT_LOCAL_GRACE_MS = 700;
@@ -491,6 +558,9 @@ export class VoiceSessionController {
   private transport: RealtimeTransport | null = null;
   private transportUnsubs: Array<() => void> = [];
   private portUnsubs: Array<() => void> = [];
+  /** B20 req 222: the input track has ended or been muted and not come back. */
+  private micLost = false;
+  private micUnsubs: Array<() => void> = [];
   private localSpeechUnsubs: Array<() => void> = [];
   private snapshot: ControllerSnapshot;
   private listeners = new Set<(snapshot: ControllerSnapshot) => void>();
@@ -566,6 +636,20 @@ export class VoiceSessionController {
   /** The `POST .../attach` currently on the wire, so callers share one request. */
   private attachInFlight: Promise<void> | null = null;
 
+  // link health (B20 req 218)
+  /** When the transport last warned that media had stopped flowing; null when healthy. */
+  private impairedSince: number | null = null;
+  private impairedTimer: unknown = null;
+
+  // leg ceiling (B20 req 223)
+  /** The provider's declared media-leg ceiling in ms, 0 when it declares none. */
+  private legCeilingMs = 0;
+  /** When the CURRENT leg opened, on the session clock. */
+  private legOpenedAt = 0;
+  private legRenewTimer: unknown = null;
+  /** A proactive renewal already running, so a deferral cannot start a second. */
+  private renewing = false;
+
   // continuity
   private recentLines: string[] = [];
 
@@ -592,6 +676,7 @@ export class VoiceSessionController {
       lastErrorLines: [],
       contract: null,
       contractNotice: null,
+      unavailable: null,
       requestLog: [],
       latency: {},
       latencyDetail: {},
@@ -686,10 +771,16 @@ export class VoiceSessionController {
     //
     // It clears on ARRIVAL rather than on every patch, so a failure recorded about a session
     // that is broken still stands - see the second test in stale-terminal-state.test.ts.
-    if (state === "listening" && this.snapshot.lastError !== null) {
-      this.patch({ state, lastError: null, lastErrorLines: [] });
+    // B20 req 221. `listening` REQUIRES a live input track, and the check is here rather
+    // than at each of the two call sites because that is the whole defect: the owner's
+    // screen said "Dinliyor" while the operating system had revoked the microphone, and
+    // nothing on the page could have told them otherwise. Whatever else happens, this
+    // controller cannot claim to be listening through a track that has ended.
+    const claiming = state === "listening" && this.micLost ? "mic_lost" : state;
+    if (claiming === "listening" && this.snapshot.lastError !== null) {
+      this.patch({ state: claiming, lastError: null, lastErrorLines: [] });
     } else {
-      this.patch({ state });
+      this.patch({ state: claiming });
     }
     if (fsm && this.reporter) {
       this.reporter.report({ kind: "state", turn: this.snapshot.turn, payload: { state: fsm } });
@@ -721,6 +812,7 @@ export class VoiceSessionController {
       lastError: null,
       lastErrorLines: [],
       contractNotice: null,
+      unavailable: null,
       assistantText: "",
       ownerText: "",
       micMetrics: { ...EMPTY_MIC_METRICS },
@@ -755,6 +847,13 @@ export class VoiceSessionController {
     try {
       payload = await this.deps.api.create(checked.body);
     } catch (error) {
+      // B20 req 235: a provider that is not there is not an error the owner can retry
+      // their way out of, and it used to arrive as `POST …/sessions: HTTP 503` beside a
+      // button labelled "Bağlan". Named, so the page can render the condition.
+      if (error instanceof VoiceApiError && error.providerUnavailable) {
+        this.enterUnavailable(error);
+        return;
+      }
       this.fail(`Oturum oluşturulamadı: ${describe(error)}`, linesOf(error));
       return;
     }
@@ -815,6 +914,7 @@ export class VoiceSessionController {
         this.wireLocalSpeech(this.deps.localSpeech);
       }
     }
+    if (microphone) this.watchMicrophone(microphone);
     const transport = this.deps.transportFactory(this.descriptor);
     this.transport = transport;
     this.transportUnsubs.push(
@@ -827,6 +927,115 @@ export class VoiceSessionController {
       now: () => this.now(),
     });
     this.log("transport.connected");
+    this.armLegRenewal(payload);
+  }
+
+  /**
+   * B20 req 223: re-open the media leg BEFORE the provider ends it.
+   *
+   * ADR-0105 fixed the half of this that was a lie: the SESSION does not expire, and the
+   * client no longer counts down `expires_at` as if it did. What ADR-0105 did not do is
+   * face the other half — the provider ends a single realtime LEG on its own ceiling
+   * (OpenAI: sixty minutes) whatever the session says, and the client had no idea the
+   * ceiling existed. A conversation that ran past it was cut, and the reconnect series
+   * picked the pieces up afterwards: a break the owner hears, in the middle of a sentence,
+   * for something the client was told about an hour in advance.
+   *
+   * The server now publishes the ceiling with the leg (`leg_max_seconds`, 0 when the
+   * provider declares none) and this arms a timer against it. Zero arms nothing: a client
+   * that invented a ceiling for a provider that has none would be re-opening a healthy leg
+   * on a schedule of its own imagining.
+   */
+  private armLegRenewal(payload: SessionLegPayload): void {
+    this.clearLegRenewTimer();
+    this.legOpenedAt = this.now();
+    const seconds = Number(payload.leg_max_seconds ?? 0);
+    this.legCeilingMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 0;
+    if (!this.legCeilingMs) return;
+    // A ceiling shorter than the margin would schedule the renewal in the past; renew at
+    // the halfway mark instead, which is still ahead of it.
+    const lead = Math.min(LEG_RENEW_MARGIN_MS, this.legCeilingMs / 2);
+    this.scheduleLegRenewal(Math.max(0, this.legCeilingMs - lead));
+  }
+
+  private scheduleLegRenewal(delay: number): void {
+    this.clearLegRenewTimer();
+    this.legRenewTimer = this.scheduler.setTimeout(
+      () => {
+        this.legRenewTimer = null;
+        void this.renewLeg();
+      },
+      Math.max(LEG_RENEW_MIN_WAIT_MS, delay),
+    );
+  }
+
+  /** Milliseconds left on the current leg's ceiling; Infinity when there is no ceiling. */
+  private legRemainingMs(): number {
+    if (!this.legCeilingMs) return Number.POSITIVE_INFINITY;
+    return this.legOpenedAt + this.legCeilingMs - this.now();
+  }
+
+  /**
+   * The renewal costs a media re-open, so it waits for a gap in the conversation — but
+   * only while there is time to wait. Inside `LEG_RENEW_HARD_MS` of the ceiling it goes
+   * ahead mid-turn: a re-open the owner notices beats the provider cutting the leg.
+   */
+  private async renewLeg(): Promise<void> {
+    if (this.closing || this.renewing || !this.sessionId || !this.legCeilingMs) return;
+    const remaining = this.legRemainingMs();
+    if (remaining > LEG_RENEW_HARD_MS && this.midTurn()) {
+      this.log("leg.renew_deferred");
+      this.scheduleLegRenewal(Math.min(LEG_RENEW_DEFER_MS, remaining - LEG_RENEW_HARD_MS));
+      return;
+    }
+    this.renewing = true;
+    const ageMs = this.now() - this.legOpenedAt;
+    try {
+      // Through the same single-flight attach as every other re-open: a reconnect series
+      // and this timer firing together share the one request rather than moving the leg
+      // twice. `runAttach` re-arms the timer from the NEW payload's ceiling.
+      await this.reattach();
+      this.log("leg.renewed");
+      this.reporter?.report({
+        kind: "state",
+        turn: this.snapshot.turn,
+        payload: { leg_renewed: 1, leg_age_s: Math.round(ageMs / 1000) },
+      });
+    } catch (error) {
+      // The old leg is still up — the attach failed, it was not taken away. Retry while
+      // there is ceiling left; past it the provider ends the leg and the existing
+      // reconnect series (onNetworkLost) takes over, which is the pre-ADR-0105 behaviour
+      // and remains the safety net under this one.
+      this.log(`leg.renew_failed:${describe(error)}`);
+      this.reporter?.report({
+        kind: "state",
+        turn: this.snapshot.turn,
+        payload: { leg_renew_failed: 1, leg_age_s: Math.round(ageMs / 1000) },
+      });
+      const left = this.legRemainingMs();
+      if (left > LEG_RENEW_RETRY_MS) this.scheduleLegRenewal(LEG_RENEW_RETRY_MS);
+    } finally {
+      this.renewing = false;
+    }
+  }
+
+  /** Somebody is talking: the owner, or the assistant, or a tool the assistant is awaiting. */
+  private midTurn(): boolean {
+    const state = this.snapshot.state;
+    return (
+      this.ownerSpeaking ||
+      this.responseActive ||
+      state === "speaking" ||
+      state === "tool_running" ||
+      state === "interrupted"
+    );
+  }
+
+  private clearLegRenewTimer(): void {
+    if (this.legRenewTimer !== null) {
+      this.scheduler.clearTimeout(this.legRenewTimer);
+      this.legRenewTimer = null;
+    }
   }
 
   /**
@@ -834,7 +1043,7 @@ export class VoiceSessionController {
    * numbers, plus the page's input evidence (AGC A/B). Verified by read-back
    * — a requested constraint the browser ignored shows up as `not_honoured`.
    */
-  private reportInputReadBack(): void {
+  reportInputReadBack(): void {
     const applied = this.deps.microphone?.applied;
     if (!applied || !this.reporter) return;
     this.reporter.report({
@@ -854,6 +1063,72 @@ export class VoiceSessionController {
       }),
     });
     this.log("report.mic_input");
+  }
+
+  /**
+   * B20 req 222: watch the input track, so losing the microphone is SEEN.
+   *
+   * `track.onended` fires when the operating system, another application or the user
+   * revokes the device; `onmute` fires when it is silenced without ending. Neither was
+   * listened to, so the page went on saying "Dinliyor" into a dead microphone - the owner
+   * talking to something that had stopped hearing them, with nothing on the screen to say
+   * so. That is why requirement 221 is filed as trust-breaking rather than as cosmetic.
+   *
+   * `unmute` restores, because a muted track is a recoverable state and a session that
+   * stayed broken after the microphone came back would trade one wrong answer for another.
+   * An ENDED track never comes back: the state stays until the leg is re-opened.
+   */
+  private watchMicrophone(stream: MediaStream): void {
+    for (const unsub of this.micUnsubs) unsub();
+    this.micUnsubs = [];
+    const [track] = stream.getAudioTracks();
+    if (!track) {
+      this.onMicrophoneLost("no_audio_track");
+      return;
+    }
+    this.micLost = false;
+    const ended = () => this.onMicrophoneLost("ended");
+    const muted = () => this.onMicrophoneLost("muted");
+    const unmuted = () => this.onMicrophoneBack();
+    track.addEventListener("ended", ended);
+    track.addEventListener("mute", muted);
+    track.addEventListener("unmute", unmuted);
+    this.micUnsubs = [
+      () => track.removeEventListener("ended", ended),
+      () => track.removeEventListener("mute", muted),
+      () => track.removeEventListener("unmute", unmuted),
+    ];
+    // A track that arrived already dead - the device was revoked between `open()` and
+    // here - is the same fact and must not wait for an event that has already fired.
+    if (track.readyState === "ended" || track.muted) {
+      this.onMicrophoneLost(track.muted ? "muted" : "ended");
+    }
+  }
+
+  private onMicrophoneLost(reason: string): void {
+    if (this.micLost) return;
+    this.micLost = true;
+    this.log("microphone.lost");
+    this.setState("mic_lost");
+    // Numbers only, like every other client event: `reason` is one of a closed set this
+    // client writes, never anything read off the device.
+    this.reporter?.report({
+      kind: "state",
+      turn: this.snapshot.turn,
+      payload: { mic_lost: 1, mic_lost_reason: reason },
+    });
+  }
+
+  private onMicrophoneBack(): void {
+    if (!this.micLost) return;
+    this.micLost = false;
+    this.log("microphone.restored");
+    this.reporter?.report({
+      kind: "state",
+      turn: this.snapshot.turn,
+      payload: { mic_lost: 0 },
+    });
+    if (this.snapshot.state === "mic_lost") this.setState("listening", "LISTENING");
   }
 
   /** Subscribe once per leg (a reattach re-wires instead of stacking sinks). */
@@ -901,6 +1176,8 @@ export class VoiceSessionController {
     this.closing = true;
     this.clearEotTimer();
     this.clearReattachTimer();
+    this.clearLegRenewTimer();
+    this.clearImpairedTimer();
     this.clearLocalGraceTimer();
     this.clearPlaybackConfirmTimer();
     this.dropPending();
@@ -928,6 +1205,13 @@ export class VoiceSessionController {
   private teardownLeg(reason: string): void {
     for (const unsub of this.transportUnsubs) unsub();
     this.transportUnsubs = [];
+    // The ceiling belongs to the leg, not to the session: the next `openLeg` arms a new
+    // one from the payload that opened it.
+    this.clearLegRenewTimer();
+    this.legCeilingMs = 0;
+    // req 218: so does the link warning. A new leg starts healthy.
+    this.clearImpairedTimer();
+    this.impairedSince = null;
     this.probe?.cancel();
     this.probe = null;
     this.clearPlaybackConfirmTimer();
@@ -971,6 +1255,45 @@ export class VoiceSessionController {
    * announced through that same channel, and saying so here makes the rule visible where
    * someone would otherwise reintroduce it.
    */
+  /**
+   * B20 req 235: enter the provider-unavailable condition.
+   *
+   * The state is still `error` - the session did not open, and every guard that asks "is
+   * this live" must keep saying no - but `unavailable` carries what the page needs to say
+   * something true instead of a status line, and `lastError` is that same sentence rather
+   * than the transport's. The reporter is deliberately not told: there is no session to
+   * report to, which is the whole condition.
+   */
+  private enterUnavailable(error: VoiceApiError): void {
+    const cls = error.errorClass;
+    const message = PROVIDER_UNAVAILABLE_TR[cls] ?? "Ses sağlayıcısı şu anda kullanılamıyor.";
+    // Only the owner can add a credential, and never through this page: the constitution's
+    // secret rule is that keys live in the DPAPI store, not in a browser form.
+    const remedy =
+      cls === "provider_auth_missing"
+        ? "Anahtarı yalnızca siz ekleyebilirsiniz (scripts/secret-store.ps1)."
+        : cls === "optional_dependency_missing"
+          ? "Yerel bileşen kurulunca kendiliğinden çalışır."
+          : cls === "dependency_unavailable" || cls === "all_providers_failed"
+            ? "Sağlayıcı yeniden yanıt verdiğinde tekrar denenebilir."
+            : "";
+    const unavailable: VoiceUnavailable = {
+      errorClass: cls,
+      message,
+      remedy,
+      // A key that is missing is missing until someone adds one; a provider that is down
+      // may be up in a minute. The difference is the only thing the button should obey.
+      retryable: cls === "dependency_unavailable" || cls === "all_providers_failed",
+    };
+    this.log(`session.unavailable:${cls || "unknown"}`);
+    this.patch({
+      state: "error",
+      unavailable,
+      lastError: remedy ? `${message} ${remedy}` : message,
+      lastErrorLines: error.lines,
+    });
+  }
+
   private fail(message: string, lines: string[] = [], { viaReporter = true } = {}): void {
     this.patch({ state: "error", lastError: message, lastErrorLines: lines });
     if (!viaReporter) return;
@@ -1063,9 +1386,70 @@ export class VoiceSessionController {
         });
         return;
       }
+      case "impaired":
+        this.onLinkImpaired(event.reason, event.at);
+        return;
+      case "recovered":
+        this.onLinkRecovered(event.at);
+        return;
       case "disconnected":
         this.onNetworkLost(event.reason, event.at);
         return;
+    }
+  }
+
+  /**
+   * B20 req 218: act on the warning instead of waiting for the failure.
+   *
+   * The reconnect machinery was entirely REACTIVE - it started when the transport said the
+   * peer had failed, or when the browser said the network was gone. WebRTC says
+   * `disconnected` first, and how long it then takes to decide on `failed` is the
+   * browser's own business: several seconds in which no media flows either way while the
+   * page says "Dinliyor". Most of those blips do recover on their own, so this is not a
+   * teardown; it is a stopwatch. If the link is still impaired when the grace runs out,
+   * the session re-attaches BEFORE the transport gives up on it.
+   */
+  private onLinkImpaired(reason: string, at: number): void {
+    if (this.closing || this.impairedSince !== null) return;
+    if (this.snapshot.state === "reconnecting") return;
+    this.impairedSince = at;
+    this.log(`link.impaired:${reason}`);
+    this.reporter?.report({
+      kind: "state",
+      t_ms: at,
+      turn: this.snapshot.turn,
+      payload: { link_impaired: 1 },
+    });
+    const grace = this.deps.impairedGraceMs ?? DEFAULT_IMPAIRED_GRACE_MS;
+    this.impairedTimer = this.scheduler.setTimeout(() => {
+      this.impairedTimer = null;
+      if (this.closing || this.impairedSince === null) return;
+      // Still impaired. Re-attach through the one path that knows how, rather than
+      // inventing a second: `onNetworkLost` tears the leg down and runs the series.
+      this.log("link.impaired_expired");
+      this.impairedSince = null;
+      this.onNetworkLost("link_impaired", this.now());
+    }, grace);
+  }
+
+  private onLinkRecovered(at: number): void {
+    if (this.impairedSince === null) return;
+    const heldMs = Math.max(0, at - this.impairedSince);
+    this.impairedSince = null;
+    this.clearImpairedTimer();
+    this.log("link.recovered");
+    this.reporter?.report({
+      kind: "state",
+      t_ms: at,
+      turn: this.snapshot.turn,
+      payload: { link_impaired: 0, link_impaired_ms: Math.round(heldMs) },
+    });
+  }
+
+  private clearImpairedTimer(): void {
+    if (this.impairedTimer !== null) {
+      this.scheduler.clearTimeout(this.impairedTimer);
+      this.impairedTimer = null;
     }
   }
 

@@ -350,7 +350,7 @@ def test_the_greeting_happens_on_a_later_tick_not_inside_the_fire(session, devic
     """Spec §3.5 step 4: the greeting waits for the ramp to finish."""
     from app.voice.providers import FakeTTSProvider
 
-    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
+    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider(synthetic_speech=False))
     alarm = _create(session, when=parse_when_struct({"relative_seconds": 5}, now=NOW))
     fired_at = NOW + timedelta(seconds=10)
     _fire_now(session, sequence, alarm, fired_at)
@@ -379,7 +379,7 @@ def test_the_greeting_plays_over_the_tone_fallback_too(session, device):
     from app.voice.providers import FakeTTSProvider
 
     device.results["browser.media_play"] = failed("capability_missing")
-    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
+    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider(synthetic_speech=False))
     alarm = _create(
         session,
         when=parse_when_struct({"relative_seconds": 5}, now=NOW),
@@ -825,7 +825,7 @@ def test_the_alarm_never_depends_on_a_realtime_session_or_presence(session, devi
     """
     from app.voice.providers import FakeTTSProvider
 
-    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider())
+    sequence = WakeSequence(device_action=device, tts=FakeTTSProvider(synthetic_speech=False))
     alarm = _create(session, when=parse_when_struct({"relative_seconds": 5}, now=NOW))
     fired_at = NOW + timedelta(seconds=10)
     assert _fire_now(session, sequence, alarm, fired_at).fired
