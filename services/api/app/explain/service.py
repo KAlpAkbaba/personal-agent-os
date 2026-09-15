@@ -51,6 +51,11 @@ logger = get_logger("app.explain.service")
 # ------------------------------------------------------------------ ledger adapter
 
 
+def _iso_or_empty(value: Any) -> str:
+    """A timestamp as a sortable string, or "" - never a guess at "now"."""
+    return value.isoformat() if hasattr(value, "isoformat") else ""
+
+
 def row_as_dict(row: Any) -> dict[str, Any]:
     """A subsystem row as plain data for the engine.
 
@@ -325,6 +330,43 @@ class LedgerEvidenceSource:
                 "component": getattr(r, "component", None),
                 "severity": getattr(r, "severity", None),
                 "occurrence_count": getattr(r, "occurrence_count", 0),
+            }
+            for r in rows
+        ]
+
+
+    def recent_incidents(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """B19 req 77. Every incident, newest first, whatever its status.
+
+        `open_incidents` answers "is anything wrong NOW"; "son bug neydi" is a question
+        about the past and a fixed bug is still the last bug. Same table, different
+        question - and reading the open-only list for it would answer "no bugs" to an
+        owner whose last three were all fixed.
+        """
+        from sqlalchemy import select
+
+        from app.selfhealing.models import Incident
+
+        try:
+            rows = self._db.execute(
+                select(Incident).order_by(Incident.last_seen_at.desc()).limit(limit)
+            ).scalars()
+        except Exception:  # noqa: BLE001 - table absent on an older schema
+            return []
+        # Ordered by `last_seen_at`, not by id: `Incident.id` is a UUID and sorting by it
+        # would return an arbitrary incident with total confidence. And the "title" is
+        # assembled from the fields this table actually has - component and fingerprint,
+        # which together ARE the defect class - rather than from a `title` column it has
+        # never had.
+        return [
+            {
+                "id": str(r.id),
+                "title": f"{r.component}: {r.fingerprint}",
+                "status": r.status,
+                "component": r.component,
+                "severity": r.severity,
+                "occurrences": r.occurrence_count,
+                "created_at": _iso_or_empty(r.last_seen_at),
             }
             for r in rows
         ]

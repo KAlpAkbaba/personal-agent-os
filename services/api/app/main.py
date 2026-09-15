@@ -186,7 +186,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # and until now nothing ever rebuilt it — production's map was five days and
     # six releases old, and did not contain the two modules the owner's 2026-09-09
     # typing defect lived in. Runs off the request path, failures are logged.
-    selfmodel_refresher = SelfModelRefresher(artifacts.session)
+    selfmodel_refresher = SelfModelRefresher(
+        artifacts.session,
+        # B19 req 63-66: how the self-model learns what is RUNNING. Every one of the
+        # 443 indexed modules read `source_only`, and that was honest: the only
+        # producers of runtime truth were historical (a Release row, a completed
+        # deployment event) and this deployment has had neither. The most direct
+        # evidence there is - this process answering for itself - was never collected.
+        release=lambda: release_model(settings),
+    )
 
     def _routine_label(routine_id: Any) -> str | None:
         """Best-effort alarm label lookup (ADR-0060) — never raises: a routine name is a

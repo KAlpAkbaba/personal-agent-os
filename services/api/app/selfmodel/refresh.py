@@ -68,8 +68,14 @@ class SelfModelRefresher:
         *,
         interval_s: float = DEFAULT_INTERVAL_S,
         initial_delay_s: float = DEFAULT_INITIAL_DELAY_S,
+        release: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._session_factory = session_factory
+        #: B19 req 63-66: how this process learns its OWN identity. A callable rather than
+        #: the dict, because the answer includes uptime and must be read at observation
+        #: time; None in a process that has no release identity to report, and then the
+        #: runtime truth is simply not written rather than written as unknown.
+        self._release = release
         self._interval_s = interval_s
         self._initial_delay_s = initial_delay_s
         self._task: asyncio.Task[None] | None = None
@@ -93,6 +99,11 @@ class SelfModelRefresher:
         try:
             with self._session_factory() as session:
                 report = build_index(session, repo_root=default_repo_root())
+                # B19 req 63-66: and then what is observably true NOW. After the index,
+                # because a runtime truth is written per KNOWN module and the index is what
+                # decides which modules exist. Never raises out of here - the try below
+                # already owns "diagnosis must not break the product".
+                self._observe_runtime(session)
                 session.commit()
         except Exception as exc:  # noqa: BLE001 - diagnosis must not break the product
             logger.warning("selfmodel_refresh_failed", error=f"{type(exc).__name__}: {exc}")
@@ -107,6 +118,20 @@ class SelfModelRefresher:
                 duration_ms=report.duration_ms,
             )
         return report
+
+    def _observe_runtime(self, session: Any) -> None:
+        """Write the runtime truth this process can see, if it was given a way to see it."""
+        from app.selfmodel.runtime_truth import device_rows, observe
+
+        release = None
+        if self._release is not None:
+            try:
+                release = self._release()
+            except Exception as exc:  # noqa: BLE001 - see the class docstring
+                logger.warning(
+                    "selfmodel_release_read_failed", error=f"{type(exc).__name__}: {exc}"
+                )
+        observe(session, release=release, devices=device_rows(session))
 
     # --------------------------------------------------------------- background
 

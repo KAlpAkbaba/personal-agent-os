@@ -38,6 +38,12 @@ QUERY_GOALS = "goals"  # neyi hedefliyorsun / hedeflerin ne durumda
 QUERY_SINCE_YOU_LEFT = "since_you_left"  # siz yokken / yokluğumda ne oldu
 QUERY_WORLD_STATE = "world_state"  # kendi sisteminde şu anda ne görüyorsun
 QUERY_SELF_CODE = "self_code"  # kendi kodun hakkında ne biliyorsun
+# B19 req 76/77/78/79: the questions asked about the SYSTEM with nothing named. Every
+# other self-question this classifier knows needs the owner to name a module first.
+QUERY_STUCK_NOW = "stuck_now"  # nerede takıldın
+QUERY_LAST_DEFECT = "last_defect"  # son bug neydi
+QUERY_NOT_WORKING = "not_working"  # hangi özelliklerin çalışmıyor
+QUERY_SELF_DIAGNOSIS = "self_diagnosis"  # genel durumun nasıl
 QUERY_CAN_DEPLOY = "can_deploy"  # bunu canlıya alabilir misin
 # docs/M18_ACTION_CONTRACT.md §2: "kamera açık mı?" is a CURRENT-STATE question about one
 # subsystem; it is answered by the live composer (app.state.now), never from the ledger.
@@ -115,6 +121,28 @@ _SUBSYSTEM_WORDS: tuple[tuple[str, str], ...] = (
 
 # (all of these stems present) -> kind; first match wins, so specific phrasings come first.
 _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    # --- B19: the four system-wide self questions --------------------------------
+    # FIRST, and for the same reason the deploy-authority question is: every one of
+    # these carries a word another pattern below also matches ("sorun", "çalış",
+    # "durum", "hata"), and the more specific question must not fall through to the
+    # generic status answer. The corpus pins the collisions.
+    (("nerede", "takıl"), QUERY_STUCK_NOW),
+    (("nerde", "takıl"), QUERY_STUCK_NOW),
+    (("takıldığın",), QUERY_STUCK_NOW),
+    (("takildigin",), QUERY_STUCK_NOW),
+    (("neye", "takıl"), QUERY_STUCK_NOW),
+    (("son", "bug"), QUERY_LAST_DEFECT),
+    (("son", "hata", "neydi"), QUERY_LAST_DEFECT),
+    (("en", "son", "hatan"), QUERY_LAST_DEFECT),
+    (("hangi", "özellik", "çalışmıyor"), QUERY_NOT_WORKING),
+    (("hangi", "ozellik", "calismiyor"), QUERY_NOT_WORKING),
+    (("neler", "çalışmıyor"), QUERY_NOT_WORKING),
+    (("ne", "çalışmıyor"), QUERY_NOT_WORKING),
+    (("çalışmayan", "özellik"), QUERY_NOT_WORKING),
+    (("genel", "durumun"), QUERY_SELF_DIAGNOSIS),
+    (("kendini", "kontrol"), QUERY_SELF_DIAGNOSIS),
+    (("sistem", "özeti"), QUERY_SELF_DIAGNOSIS),
+    (("nasılsın", "sistem"), QUERY_SELF_DIAGNOSIS),
     # --- may you put it live? the authority boundary, asked as a question --------
     # First, and deliberately: "canlıya alabilir misin" must never fall through to a
     # status answer. The honest answer is about who may deploy, not about what exists.
@@ -399,7 +427,11 @@ __all__ = [
     "QUERY_SINCE_YOU_LEFT",
     "QUERY_LAST_ACTIVITY",
     "QUERY_MODULE_PROBLEM",
+    "QUERY_LAST_DEFECT",
+    "QUERY_NOT_WORKING",
     "QUERY_PROBLEMS_NOW",
+    "QUERY_SELF_DIAGNOSIS",
+    "QUERY_STUCK_NOW",
     "QUERY_RESEARCH_PROBLEMS",
     "QUERY_REJECTED_PAGES",
     "QUERY_RESEARCH_DETAIL",

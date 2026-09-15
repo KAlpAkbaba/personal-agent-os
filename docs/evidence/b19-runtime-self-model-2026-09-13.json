@@ -1,0 +1,36 @@
+{
+  "batch": "B19",
+  "name": "Öz model ve dürüst yanıtlar",
+  "requirements": [63, 64, 65, 66, 74, 75, 76, 77, 78, 79, 80],
+  "recorded_at": "2026-09-13T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "what_this_proves": "The self-model stops answering questions about the running system out of the source tree, and four questions the owner asks about the SYSTEM get answers. Every one of the nine self-model answers that existed needed the owner to name a module first.",
+  "the_shape_of_this_batch": "Different from the five before it. Those found complete mechanisms with no caller; this one found a complete mechanism whose caller exists and whose INPUT is empty. `_apply_production_states` is ordered correctly by evidence strength and both producers of runtime truth are written - but both are HISTORICAL: `TRUTH_INSTALLED` from `Release` rows, `TRUTH_RUNTIME` from completed `deployment.*` events. This deployment has had neither, so all 443 modules reading `source_only` was the honest answer. The evidence nobody collected was the most direct there is: the process answering for itself.",
+  "closed_fully": {
+    "63_64_the_process_answers_for_itself": "`release_model()` has returned the version and a build id derived from this build's own sources all along, and the self-model could only learn a runtime truth from an event about the past. Confidence 0.99, above the 0.95 a completed deployment event earns: that is a record of something that happened, this is the thing itself answering. A process that cannot say what it is running writes NOTHING rather than `version: unknown` - a row like that would make every module 'running' on the strength of an admission of ignorance.",
+    "65_66_the_device_answers_too": "`Device.build_id` (ADR-0118, derived from the agent's own assemblies) and the 85-capability manifest are refreshed from every hello. Read from the ENROLMENT row, not the status registry: that registry carries what a device is DOING - idle seconds, display state, a ringing alarm - and refreshes six times a minute. Identity belongs to the row that changes when the agent changes.",
+    "76_where_are_you_stuck": "A stuck task raises no incident and writes no error, which is exactly why the question needs its own answer: a system that is stuck looks, to every other surface, like a system that is idle. `app.explain`'s existing `problems_now` answers from incidents and critical events and would say 'nothing wrong' to an owner whose work has been frozen for a day.",
+    "77_what_was_the_last_bug": "Answered only from DIAGNOSED records. A system that answered it from the most recent exception it happened to see would be telling the owner about noise. `recent_incidents` rather than `open_incidents`, because a fixed bug is still the last bug and the open-only list answers 'none' to an owner whose last three were all fixed.",
+    "78_what_is_not_working": "From the world model's dependency facts, which carry their own observation time and staleness. The requirement says 'çalışma zamanından' and the word is load-bearing: reading it out of the feature matrix would make the answer right exactly as often as a hand-maintained document is. Advisory checks are reported separately - `app.health` marks them `required: false`, and 'two of my features are not working' about two advisory checks would be crying wolf.",
+    "74_79_health_as_a_sentence_and_a_summary": "Eighteen JSON blocks in one sentence, and a summary ordered for the person relying on the system rather than the person who built it: what is broken, then what is stuck, then what is running. A summary that led with the build id would be the other one."
+  },
+  "corrected_by_measurement": {
+    "75_fixed_in_B06": "Recorded BROKEN with 'Yanlış (running=10)'. `app/worldmodel/state.py` documents that exact defect in its own comment - 'production said 10 running while nothing ran' - and fixed it with `TASK_ACTIVE_STATUSES` when requirement 67 closed in B06. The matrix row was not revisited. Fifth measurement correction.",
+    "80_fixed_on_2026_09_05": "Recorded MISSING. `query.STALE_AFTER` and `is_stale` exist and are computed at every read; the module's own comment records why - an independent security review found `stale` was written as False everywhere and never computed, so every answer claimed a freshness it had not checked. The matrix note ('EVIDENCE etiketi bayatlamayı engelliyor') describes a deliberate design as a defect: evidence truth is a historical record and what happened stays happened. Sixth measurement correction. What B19 changed is that staleness now MATTERS: before this batch there was no runtime truth for it to age."
+  },
+  "found_on_the_way": {
+    "the_reassuring_answer_from_stale_data": "The first draft of `_metric` returned 0 for a stale fact, which makes the answer 'nothing is stuck' - the reassuring sentence, produced from data nobody had refreshed, by the very subsystem whose staleness rules exist to prevent exactly that. It now returns `(value, known)` and says it does not know.",
+    "identity_read_from_the_wrong_registry": "The first draft read device identity from `app.devices.status`, which is the registry of what a device is DOING and refreshes six times a minute. Identity belongs to the enrolment row. Pinned by an AST test that asserts the module imports `app.broker.models` and nothing under `app.devices`.",
+    "a_source_grep_that_matched_its_own_explanation": "That AST test began as a substring check for `app.devices.status` - and matched the docstring explaining why that registry is NOT used. A test that greps source text for an absence will find the comment saying it is absent.",
+    "the_incident_table_has_no_title": "`Incident` carries component, severity, fingerprint, status, occurrence_count, first_seen_at, last_seen_at - no `title`, no `created_at`. The reader builds the title from component+fingerprint, which together ARE the defect class, and orders by `last_seen_at`: `Incident.id` is a UUID and ordering by it would return an arbitrary incident with total confidence.",
+    "the_dict_shaped_helper_on_a_list_answer": "`_call_obj` returns None for a source method that answers with a list, and None read as 'no incidents recorded' - the confident empty answer both `_call` and `_call_obj` exist to prevent. Caught by the test that asks the question through the real engine rather than the function."
+  },
+  "tests": {
+    "services/api/tests/unit/test_selfmodel_runtime_truth.py": 21
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is the running SHA and the device build visible in the self-model IN PRODUCTION. Everything short of that is proven: a real `release_model()` answer and a real `Device` row move a real indexed module from `source_only` to `running`, and the four questions are answered through the real classifier and the real `explain()`. The production round is Karar 0."
+  }
+}

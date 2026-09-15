@@ -830,7 +830,7 @@ ROLLBACK_PLAN       : zamanlayıcı kapatılır; türetilmiş satırlar işaretl
 ```
 
 ```
-BATCH_ID            : B19
+BATCH_ID            : B19                              [KAPANDI 2026-09-13]
 NAME                : Öz model ve dürüst yanıtlar
 REQUIREMENT_IDS     : 63, 64, 65, 66, 74, 75, 76, 77, 78, 79, 80
 GOAL                : "Şu an ne yapıyorsun", "nerede takıldın", "hangi özelliklerin çalışmıyor"
@@ -842,7 +842,42 @@ RISK                : low
 OWNER_ACTION        : no
 TEST_PLAN           : runtime provenanslı satırların üretildiği; bayat verinin bayat işaretlendiği;
                       çalışmayan özellik listesinin matristen değil çalışma zamanından geldiği
+KAPANIŞ             : commit PENDING_B19 · CI PENDING · 11/11 DONE
+                      kanıt docs/evidence/b19-runtime-self-model-2026-09-13.json
+ÖLÇÜM               : Bu batch öncekilerden FARKLI çıktı: mekanizmanın çağıranı vardı,
+                      GİRDİSİ yoktu. `_apply_production_states` kanıt gücüne göre doğru
+                      sıralı ve `TRUTH_RUNTIME`/`TRUTH_INSTALLED` yazıcıları mevcut — ama
+                      ikisi de TARİHSEL: biri `Release` satırlarından, biri tamamlanmış
+                      `deployment.*` olaylarından. Üretim turu yapılmadığı için ikisi de
+                      boş, dolayısıyla 443 modülün `source_only` olması DÜRÜST cevaptı.
+                      Okunmayan şey en doğrudan kanıttı: sürecin kendisi.
+                      Ayrıca iki satır daha ölçümle düzeldi. 75 B06'da kapandı
+                      (`TASK_ACTIVE_STATUSES`; state.py'nin yorumu kusuru birebir
+                      anlatıyor) ve 80 2026-09-05'te bağımsız güvenlik incelemesiyle
+                      düzeltilmişti — `stale` her yerde False yazılıp hiç hesaplanmıyordu.
+YOL ÜSTÜNDE         : (1) İlk taslakta bayat bir gözlem için 0 dönüyordum, yani cevap
+                      "takılı bir şey yok" oluyordu — kimsenin tazelemediği veriden
+                      üretilen RAHATLATICI cümle. Rahatlatıcı cevap hak edilmesi gereken
+                      cevaptır; artık bilmediğini söylüyor.
+                      (2) Cihaz kimliğini durum kayıtçısından okumaya kalkmıştım; o
+                      kayıtçı cihazın ne YAPTIĞINI taşıyor (boşta saniyesi, ekran durumu)
+                      ve dakikada altı kez tazeleniyor. Kimlik `Device` satırında.
+                      (3) `Incident` tablosunda `title` ve `created_at` yok; başlık
+                      component+fingerprint'ten kuruluyor ve sıralama `last_seen_at` ile,
+                      çünkü `id` bir UUID ve ona göre sıralamak tam bir güvenle rastgele
+                      bir olay döndürürdü.
+                      (4) `_call_obj` sözlük döndürüyor; liste döndüren iki okuma için
+                      onu kullanmak "kayıtlı olay yok" diye okunuyordu — iki yardımcının
+                      da var olma sebebi olan kendinden emin boş cevap.
+                      (5) Kaynak-metni arayan bir testim, o metnin NEDEN kullanılmadığını
+                      açıklayan docstring'e takıldı; artık AST ile import denetliyor.
+TEST_PLAN           : runtime provenanslı satırların üretildiği; bayat verinin bayat işaretlendiği;
+                      çalışmayan özellik listesinin matristen değil çalışma zamanından geldiği
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde öz modelde çalışan SHA ve cihaz build'i görünür
+                      → üretim dışındaki tamamı kanıtlandı: gerçek `release_model()` ve gerçek
+                      `Device` satırı, gerçek indeksten geçip modülü `source_only`'den
+                      `running`'e taşıyor; dört soru gerçek sınıflandırıcı ve gerçek
+                      `explain()` üzerinden cevaplanıyor.
 ROLLBACK_PLAN       : provenans alanı isteğe bağlı; eski cevaplar korunur
 ```
 

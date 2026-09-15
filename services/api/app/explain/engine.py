@@ -23,14 +23,18 @@ from app.explain.classify import (
     QUERY_EYE_STATE,
     QUERY_FAILURES,
     QUERY_GOALS,
+    QUERY_LAST_DEFECT,
     QUERY_LEARNED,
     QUERY_MODULE_PROBLEM,
+    QUERY_NOT_WORKING,
     QUERY_PROBLEMS_NOW,
     QUERY_REJECTED_PAGES,
     QUERY_RESEARCH_PROBLEMS,
     QUERY_SELF_CODE,
+    QUERY_SELF_DIAGNOSIS,
     QUERY_SHADOW_READY,
     QUERY_SINCE_YOU_LEFT,
+    QUERY_STUCK_NOW,
     QUERY_SUBSYSTEM_STATUS,
     QUERY_TESTS,
     QUERY_TODAY,
@@ -223,6 +227,72 @@ class EventView:
         return {"kind": "activity_event", "ref": self.event_id}
 
 
+def _self_diagnosis(kind: str, source: Any, world: dict[str, Any], selfdiag: Any) -> Any:
+    """Which of the four questions was asked, and what each one needs to read.
+
+    The health of the running system is read from the WORLD MODEL's dependency facts
+    rather than by probing: the world model already collects them with their own
+    observation time and staleness, and a second probe here would be a second answer to
+    "is the database up" that could disagree with the first.
+    """
+    checks = _dependency_checks(world)
+    # `_call` and not `_call_obj`: these two answer with a LIST, and the dict-shaped
+    # sibling returns None for one, which read as "no incidents recorded" - the confident
+    # empty answer both helpers exist to prevent.
+    if kind == QUERY_STUCK_NOW:
+        return selfdiag.stuck_now(world, _call(source, "open_incidents"))
+    if kind == QUERY_LAST_DEFECT:
+        return selfdiag.last_defect(_call(source, "recent_incidents", limit=10))
+    if kind == QUERY_NOT_WORKING:
+        return selfdiag.not_working(checks)
+    return selfdiag.summary(
+        checks=checks,
+        world=world,
+        incidents=_call(source, "open_incidents"),
+        defects=_call(source, "recent_incidents", limit=10),
+        runtime=_runtime_identity(world),
+    )
+
+
+def _dependency_checks(world: dict[str, Any]) -> dict[str, Any]:
+    """The world model's dependency facts, in the shape the health surface uses.
+
+    A translation and not a re-derivation: `app.selfmodel.diagnosis.not_working` takes the
+    `{name: {status, required}}` that `/health` produces, so the REST caller and this one
+    hand it the same thing and cannot drift into two opinions about what "not working"
+    means.
+    """
+    checks: dict[str, Any] = {}
+    for fact in world.get("facts") or []:
+        if not isinstance(fact, dict) or fact.get("category") != "dependencies":
+            continue
+        key = str(fact.get("key") or "")
+        name = key.split(".", 1)[-1] if key else ""
+        if not name:
+            continue
+        value = fact.get("value")
+        status = value.get("status") if isinstance(value, dict) else value
+        checks[name] = {
+            "status": str(status or "unknown"),
+            "required": (value.get("required") if isinstance(value, dict) else None),
+        }
+    return checks
+
+
+def _runtime_identity(world: dict[str, Any]) -> dict[str, Any]:
+    """The running version and build, from the world model's own release facts."""
+    out: dict[str, Any] = {}
+    for fact in world.get("facts") or []:
+        if not isinstance(fact, dict):
+            continue
+        key = str(fact.get("key") or "")
+        if key.endswith("release.version"):
+            out["version"] = fact.get("value")
+        elif key.endswith("release.build_id"):
+            out["build_id"] = fact.get("value")
+    return out
+
+
 class EvidenceSource(Protocol):
     """What the engine may look at. Read-only by construction."""
 
@@ -247,6 +317,12 @@ class EvidenceSource(Protocol):
         return []
 
     def procedural_memories(self, *, limit: int = 20) -> list[dict[str, Any]]:  # pragma: no cover
+        return []
+
+    def recent_incidents(self, *, limit: int = 10) -> list[dict[str, Any]]:  # pragma: no cover
+        """B19 req 77. Every incident newest-first, whatever its status: a fixed bug is
+        still the last bug, and `open_incidents` would answer "none" to an owner whose
+        last three were all fixed."""
         return []
 
     def opportunities(
@@ -1490,6 +1566,39 @@ def explain(
                     )
                 )
 
+    elif query.kind in (
+        QUERY_STUCK_NOW,
+        QUERY_LAST_DEFECT,
+        QUERY_NOT_WORKING,
+        QUERY_SELF_DIAGNOSIS,
+    ):
+        # B19 req 76/77/78/79. The sentence is composed by `app.selfmodel.diagnosis`, which
+        # is a pure function over what was read; this branch only decides WHAT to read and
+        # turns the answer into the briefing's own shape. Keeping the wording there rather
+        # than here is what lets the REST surface and this one say the same thing.
+        from app.selfmodel import diagnosis as selfdiag
+
+        world = _call_obj(source, "world_state") or {}
+        answer = _self_diagnosis(query.kind, source, world, selfdiag)
+        add_refs(({"kind": "world_state", "ref": "worldmodel"},))
+        executive.append(
+            Statement(
+                answer.speech,
+                LABEL_FACT if answer.grounded else LABEL_UNCERTAINTY,
+                ({"kind": "world_state", "ref": "worldmodel"},),
+            )
+        )
+        for finding in answer.findings[:MAX_DETAILED_ITEMS]:
+            ref = {"kind": "diagnosis", "ref": finding.what[:120]}
+            add_refs((ref,))
+            detailed.append(
+                BriefingItem(
+                    title=finding.what,
+                    statements=(
+                        Statement(finding.detail or finding.what, LABEL_FACT, (ref,)),
+                    ),
+                )
+            )
     elif query.kind == QUERY_SELF_CODE:
         # "Kendi kodun hakkında ne biliyorsun?" - from the index, never from memory of
         # having written it. An empty index is answered as an empty index.
