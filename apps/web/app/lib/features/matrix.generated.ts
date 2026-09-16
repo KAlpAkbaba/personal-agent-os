@@ -563,7 +563,7 @@ export const ROWS: readonly MatrixRow[] = [
   { id: 470, section: "O", feature: "Native fix", impl: "DONE", proof: "PA", batch: "B33", owner: false },
   { id: 471, section: "O", feature: "Native update", impl: "DONE", proof: "PA", batch: "B33", owner: false },
   { id: 472, section: "O", feature: "Signing policy", impl: "DONE", proof: "PA", batch: "B33", owner: false },
-  { id: 473, section: "O", feature: "Signing optional/test cert", impl: "PARTIAL", proof: "PA", batch: "B33", owner: false },
+  { id: 473, section: "O", feature: "Signing optional/test cert", impl: "DONE", proof: "PA", batch: "B33", owner: false },
   { id: 474, section: "O", feature: "Android project generation", impl: "DONE", proof: "PA", batch: "B49", owner: false },
   { id: 475, section: "O", feature: "APK", impl: "PARTIAL", proof: "PR", batch: "B49", owner: false },
   { id: 476, section: "O", feature: "AAB", impl: "PARTIAL", proof: "PR", batch: "B49", owner: false },

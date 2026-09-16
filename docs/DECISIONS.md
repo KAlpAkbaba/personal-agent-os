@@ -12768,3 +12768,60 @@ always-advertised capability (with B47's desktop.voice_status: 13 / 14 / 44 / 10
 `CameraEnabled=false` (device); input-based presence (311) is untouched.
 
 **Owner checkpoint (READY_FOR_OWNER, no UAC).** `scripts/core/qualify-device-camera.ps1 -DryRun`, then `-IncludePrivacyCheck` (about 10 minutes) and optionally `-SleepTrial`; the evidence holds states and timestamps only. Independent security review: one High (veto lost on companion restart) and one Medium (permission check failed open), both fixed with mutation proofs (10/10).
+
+## ADR-0167 — The factory's Windows packages are self-signed on the device, and trusting them is one owner step (2026-09-16, B33 req 473)
+
+Status: Accepted. Owner decision 2026-09-16, "win uygulamada da kendinden imzalı olsun". It supersedes the "signs nothing" half of ADR-0095 decision 4 and addendum 2 §5. The "runs no signer" half stands.
+
+**Context.** Until now every MSIX was unsigned, and `test_certificate` was a named-and-refused mode. An unsigned MSIX never installs, so the MSIX target was a file nobody could install.
+
+**Decision 1: the default flips to `test_certificate`.**
+- The owner decided, and the setting still overrides.
+- `unsigned` stays available as an explicit opt-out.
+- `owner_certificate` stays refused by name. The Cloud Core never forwards it as anything but `unsigned`.
+
+**Decision 2: the identity is the Session Companion's, in the owner's profile.**
+- It is a self-signed RSA-3072 code-signing certificate created by `CertificateRequest`. No certificate tool is run.
+- The key is a persisted CNG user key with export policy None; Windows' key storage protects it with DPAPI.
+- The certificate is in `CurrentUser\My`, identified by the thumbprint in `identity.json`.
+- The public DER is exported for the trust step. Nothing else is written, logged or sent.
+- The subject is fixed, because the MSIX signer requires Publisher == subject byte for byte. The Cloud Core scaffolds that Publisher.
+- Validity is 2 years, with renewal 30 days early. The renewal is honest: the new certificate is untrusted, and the answers and the log say so.
+- ECDSA was not tried, so it is not claimed.
+
+**Decision 3: signing is in process and untimestamped.**
+- The signer is `SignerSignEx2` with the package SIP. `ForbiddenPrograms` is unchanged, and no manifest command can sign.
+- There is no timestamp, because that would be a third-party network call on the owner's behalf.
+- Consequence: a package stops verifying when its certificate expires. That is why renewal is early.
+
+**Decision 4: a signature is only what an independent reader found.**
+- Two readers check it: `WinVerifyTrust`, and the package's own CMS block, which names the signer.
+- `signed: true` needs an intact status plus the identity's thumbprint. Otherwise the package is deleted and the answer is `postcondition_failed`.
+- Measured on this machine: intact and untrusted = `0x800B0109`; one byte tampered = `0x80096010`; unsigned = `0x800B0100`. Re-zipping after signing gave `0x800B0003`, so the tamper test flips a byte in place.
+
+**Decision 5: trust is the owner's one elevated step, and the device never elevates.**
+- `trusted` = the verifier said success, or the thumbprint is in `LocalMachine\TrustedPeople` or `Root`. Those stores are opened read-only.
+- `scripts/trust-native-signing-cert.ps1` writes only `LocalMachine\TrustedPeople`, and only the companion's public certificate, after seven checks.
+- Its tests run against throwaway current-user stores.
+
+**Decision 6: an MSIX row installs per user through Windows' own PackageManager ABI.**
+- There is no shell and no cmdlet.
+- The trust gate runs first; Windows' own refusal is the backstop, and a lab test proves it.
+- "Installed" means `GetPackagesByPackageFamily` lists the package.
+- The device's two refusals are recognised by their first word, because the wire error has no detail field.
+
+**Decision 7: the portable zip is not signed.**
+- Its EXE was already read back and hashed, and signing it afterwards would falsify that hash.
+- A self-signed Authenticode signature would not satisfy SmartScreen either.
+
+**Decision 8: no capability name is added.**
+- The manifest counts are unchanged by this decision (13 / 14 / 44 / 104 after B47 and B48).
+- The protocol change is additive in both directions.
+
+**Found on the way (fixed, with a regression test).** The service capped `project.package`, `project.install` and `project.uninstall` at 30 s, while the companion allows 5 min and the Cloud Core waits 330 s. They now have a 5 min 30 s cap, and a C# test reads the Cloud Core's two waits from its source.
+
+**Consequences.** The factory's MSIX is signed, and it is installable after one owner step. Every receipt speaks the device's read-back. The successful trusted-install path is proved only up to Windows' own refusal on this machine; its success needs the owner's step (READY_FOR_OWNER).
+
+**Security review (2026-09-17).** One Medium: the elevated trust gate did not require the owner-store key to be non-exportable, so a same-user process could have had its own key trusted machine-wide. Fixed: the gate now requires a CNG key with export policy None and the companion's key-name prefix, and an explicit `-Thumbprint` must match `identity.json` unless `-AllowRenewedThumbprint` is given. Residual risk: code already running as the owner could create a non-exportable key under that name; that is inside the owner's own account boundary. Also fixed: a failed read-back of a new identity left an orphan certificate in `CurrentUser\My`. Mutations M9-M11 red.
+
+**Owner checkpoint (READY_FOR_OWNER).** After the device agent is deployed and one MSIX is packaged: from an elevated Windows PowerShell in the repo root, `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\trust-native-signing-cert.ps1`; then "Uygulamayı kur" on the MSIX row.
