@@ -53,9 +53,18 @@ jobs:
           fi
 
   api-lint-unit:
-    name: API lint + unit tests
+    # 2026-09-17: one job grew past its 25-minute bound, so the unit suite runs as three
+    # parallel shards (tests/conftest.py, PAGENTOS_TEST_SHARD; split per test, not per file).
+    name: API lint + unit tests (${{ matrix.shard }}/${{ matrix.shard_count }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+        shard_count: [3]
+    env:
+      PAGENTOS_TEST_SHARD: ${{ matrix.shard }}/${{ matrix.shard_count }}
     defaults:
       run:
         working-directory: services/api

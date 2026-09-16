@@ -1,11 +1,63 @@
 """Shared pytest fixtures."""
 
+import os
+import zlib
 from collections.abc import Callable
 
 import pytest
 
 from app.config import Settings
 from tests.identity_support import authenticate
+
+#: CI splits the unit suite across parallel jobs (2026-09-17: one job grew past its 25-minute
+#: bound). ``PAGENTOS_TEST_SHARD=i/n`` keeps the items whose node id hashes to shard ``i`` of
+#: ``n`` (1-based); unset, everything runs. Per ITEM, not per file: the owner corpus is one
+#: file holding most of the suite's time.
+SHARD_ENV = "PAGENTOS_TEST_SHARD"
+
+
+def parse_shard(value: str | None) -> tuple[int, int] | None:
+    if not value:
+        return None
+    index_text, _, count_text = value.partition("/")
+    index, count = int(index_text), int(count_text)
+    if count < 1 or not 1 <= index <= count:
+        raise ValueError(f"{SHARD_ENV}={value!r} is not i/n with 1 <= i <= n")
+    return index, count
+
+
+def shard_of(nodeid: str, count: int) -> int:
+    """The 1-based shard a test belongs to: stable across machines and runs (crc32, never
+    Python's salted ``hash``)."""
+    return zlib.crc32(nodeid.encode("utf-8")) % count + 1
+
+
+def shard_keys(nodeids: list[str]) -> list[str]:
+    """A process-independent key per test: the function's node id without its parameter
+    part, plus the item's position among that function's parameter sets. Some parameter
+    ids carry a fresh uuid4 per collection (route-guard tables), so the raw node id differs
+    between the shard processes and a test could run in two shards or in none."""
+    seen: dict[str, int] = {}
+    keys = []
+    for nodeid in nodeids:
+        base = nodeid.split("[", 1)[0]
+        position = seen.get(base, 0)
+        seen[base] = position + 1
+        keys.append(f"{base}#{position}")
+    return keys
+
+
+def pytest_collection_modifyitems(config, items):
+    shard = parse_shard(os.environ.get(SHARD_ENV))
+    if shard is None:
+        return
+    index, count = shard
+    kept, dropped = [], []
+    for item, key in zip(items, shard_keys([item.nodeid for item in items]), strict=True):
+        (kept if shard_of(key, count) == index else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = kept
 
 
 @pytest.fixture()
