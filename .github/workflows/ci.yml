@@ -206,7 +206,8 @@ jobs:
           powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\core-verifier-scope.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\harness-symbols.tests.ps1 && ^
-          powershell -NoProfile -File scripts\tests\owner-harness.tests.ps1
+          powershell -NoProfile -File scripts\tests\owner-harness.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\native-signing-trust.tests.ps1
       # The staged update, end to end, against the REAL DeviceService this job just built:
       # candidate identity, the complete capability manifest (40 with -DisplayPower and a
       # browser worker, browser.media_* included), promotion, Cloud Core verification,

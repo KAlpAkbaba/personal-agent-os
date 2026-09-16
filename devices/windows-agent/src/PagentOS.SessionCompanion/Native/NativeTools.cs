@@ -27,7 +27,7 @@ public sealed record NativeTool(string Executable, string Version, string Source
 /// that spawns a process is a detection that can hang.
 ///
 /// <c>signtool.exe</c> sits in the same Windows Kits directory as <c>makeappx.exe</c> and this
-/// class deliberately has no function that returns it (§9): the device signs nothing, and the
+/// class deliberately has no function that returns it (§9): the device runs no signing program, and the
 /// way to keep that true is to have no code that could hand a signer its path.
 /// </summary>
 [SupportedOSPlatform("windows")]

@@ -21,12 +21,17 @@ namespace PagentOS.SessionCompanion.Projects;
 /// </summary>
 /// <remarks>
 /// Every path is the project's own (<see cref="ProjectContext.Folder"/>, already resolved and
-/// contained by the roots); nothing here takes an absolute path from the payload. Nothing
-/// signs anything: <see cref="NativeCapabilityNames.ForbiddenPrograms"/> stands, and the
-/// package result says <c>signed: false</c> in as many words. An "install" is deliberately the
-/// smallest true thing: the executable stays where it was built, the shortcut points at it,
-/// and <c>installed.json</c> under the native root is the record the uninstall reads.
+/// contained by the roots); nothing here takes an absolute path from the payload. No signing
+/// PROGRAM is ever run (<see cref="NativeCapabilityNames.ForbiddenPrograms"/> stands). Since B33
+/// req 473 an MSIX asked for with <c>signing_mode: "test_certificate"</c> is signed in this
+/// process with the owner's self-signed identity and answers <c>signed: true</c> only after the
+/// signature READ BACK intact; every other package says <c>signed: false</c>. A default
+/// "install" is deliberately the smallest true thing: the executable stays where it was built,
+/// the shortcut points at it, and <c>installed.json</c> under the native root is the record the
+/// uninstall reads; an <c>msix</c> install is a per-user package registration, refused with the
+/// owner's trust step named while the signer is not trusted on this machine.
 /// </remarks>
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 public static class NativeLifecycle
 {
     public const string PublishDirName = "out";
@@ -40,15 +45,23 @@ public static class NativeLifecycle
     public const int MaxChunkBytes = 32 * 1024;
     public static readonly TimeSpan MakeAppxTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary><c>project.install</c>'s default: a Start Menu shortcut to the built executable.</summary>
+    public const string InstallKindShortcut = "shortcut";
+
+    /// <summary>B33 req 473: the signed MSIX, installed for the current user.</summary>
+    public const string InstallKindMsix = "msix";
+
     // ================================================================== project.package
 
-    public static JsonObject Package(ProjectContext project, JsonObject payload, ILogger logger, CancellationToken cancellationToken)
+    public static JsonObject Package(ProjectContext project, JsonObject payload, NativeSigning signing, ILogger logger, CancellationToken cancellationToken)
     {
         var kind = OptionalString(payload, "kind") ?? "portable";
         if (kind is not ("portable" or "msix"))
         {
             throw DocumentErrors.Invalid("payload.kind must be \"portable\" or \"msix\"");
         }
+
+        var signingMode = SigningModeOf(payload);
 
         var publishDir = Path.Combine(project.Folder, OptionalString(payload, "publish_dir") ?? PublishDirName);
         if (!Directory.Exists(publishDir))
@@ -84,6 +97,11 @@ public static class NativeLifecycle
                 throw DocumentErrors.NotFound($"no AppxManifest.xml at {manifestRelative}; the Cloud Core scaffolds it for an MSIX target");
             }
 
+            if (signingMode == NativeCapabilityNames.SigningModeTestCertificate)
+            {
+                RequirePublisherIsTheSigner(manifest, manifestRelative, signing.Identity.Options.Subject);
+            }
+
             var makeappx = NativeTools.FindMakeAppx()
                 ?? throw new CapabilityException(ErrorClasses.DependencyUnavailable, "makeappx.exe is not installed on this device (Windows 10 SDK); an MSIX cannot be packed here", retryable: false);
             var staging = Path.Combine(project.Folder, StagingDirName, "pack");
@@ -111,25 +129,169 @@ public static class NativeLifecycle
             {
                 throw new CapabilityException(ErrorClasses.DependencyUnavailable, "makeappx exited without producing the package", retryable: false);
             }
+
+            if (signingMode == NativeCapabilityNames.SigningModeTestCertificate)
+            {
+                var signed = SignAndReadBack(outPath, signing, logger);
+                return PackageAnswer(kind, outPath, signed);
+            }
         }
 
+        var answer = PackageAnswer(kind, outPath, signature: null);
+        if (kind == "portable" && signingMode != NativeCapabilityNames.SigningModeUnsigned)
+        {
+            // The portable zip is not signed, whatever was asked (DEVICE_PROTOCOL.md §6n): its
+            // executable was already read back and hashed by the Cloud Core, and signing it
+            // afterwards would make that hash a statement about a file that no longer exists.
+            answer["signing_note"] = "portable_not_signed";
+        }
+
+        return answer;
+    }
+
+    /// <summary>What a package answer says: the file as observed, and its signature as READ BACK — never as intended.</summary>
+    private static JsonObject PackageAnswer(string kind, string outPath, SignedPackage? signature)
+    {
         var info = new FileInfo(outPath);
-        return new JsonObject
+        var observed = new JsonObject { ["exists"] = true, ["bytes"] = info.Length };
+        var answer = new JsonObject
         {
             ["kind"] = kind,
             ["path"] = outPath,
             ["name"] = info.Name,
             ["bytes"] = info.Length,
             ["sha256"] = Sha256Of(outPath),
-            ["signed"] = false,
-            ["observed"] = new JsonObject { ["exists"] = true, ["bytes"] = info.Length },
+            ["signed"] = signature is not null,
+            ["signing_mode"] = signature is null ? NativeCapabilityNames.SigningModeUnsigned : NativeCapabilityNames.SigningModeTestCertificate,
         };
+        if (signature is not null)
+        {
+            foreach (var (key, value) in signature.Facts.ToJson())
+            {
+                answer[key] = value?.DeepClone();
+            }
+
+            answer["trusted"] = signature.Trusted;
+            if (!signature.Trusted)
+            {
+                answer["trust_step"] = NativeCapabilityNames.TrustScript;
+            }
+
+            observed["signature_intact"] = signature.ReadBack.Intact;
+            observed["verify_status"] = signature.ReadBack.VerifyStatusHex;
+        }
+
+        answer["observed"] = observed;
+        return answer;
+    }
+
+    private sealed record SignedPackage(SigningCertificateFacts Facts, PackageSignatureReadBack ReadBack, bool Trusted);
+
+    /// <summary>
+    /// Signs the packed MSIX in this process and reads the signature back through two readers
+    /// that did not write it. A package whose signature does not read back is DELETED, so no
+    /// file is left at the answered path claiming what it is not.
+    /// </summary>
+    private static SignedPackage SignAndReadBack(string outPath, NativeSigning signing, ILogger logger)
+    {
+        SigningCertificateFacts facts;
+        try
+        {
+            using var certificate = signing.Identity.Acquire(out facts);
+            if (facts.Created)
+            {
+                logger.LogWarning(
+                    "project.package created the self-signed signing identity {Thumbprint} (valid to {NotAfter:yyyy-MM-dd}); it is not trusted on this machine until the owner runs {Script}",
+                    facts.Thumbprint,
+                    facts.NotAfter,
+                    NativeCapabilityNames.TrustScript);
+            }
+
+            signing.SignMsix(outPath, certificate);
+        }
+        catch (CryptographicException exception)
+        {
+            TryDelete(outPath);
+            throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"signing_failed: {exception.Message}; the unsigned package was removed", retryable: false);
+        }
+
+        var readBack = PackageSigner.Verify(outPath);
+        if (!readBack.Signed || !string.Equals(readBack.SignerThumbprint, facts.Thumbprint, StringComparison.OrdinalIgnoreCase))
+        {
+            TryDelete(outPath);
+            throw new CapabilityException(
+                ErrorClasses.PostconditionFailed,
+                $"the package was signed but the signature did not read back ({readBack.VerifyStatusHex}: {readBack.Detail}); the package was removed rather than answered as signed",
+                retryable: false);
+        }
+
+        var trusted = readBack.ChainTrusted || signing.Identity.IsTrusted(facts.Thumbprint);
+        logger.LogInformation("project.package signed by {Thumbprint}; read back {Status}; trusted={Trusted}", facts.Thumbprint, readBack.VerifyStatusHex, trusted);
+        return new SignedPackage(facts, readBack, trusted);
+    }
+
+    private static string SigningModeOf(JsonObject payload)
+    {
+        var mode = OptionalString(payload, "signing_mode") ?? NativeCapabilityNames.SigningModeUnsigned;
+        if (mode == NativeCapabilityNames.SigningModeOwnerCertificate)
+        {
+            throw DocumentErrors.Denied($"signing_mode '{NativeCapabilityNames.SigningModeOwnerCertificate}' is refused: the owner's own code-signing identity is theirs and this device never reaches for it");
+        }
+
+        if (mode is not (NativeCapabilityNames.SigningModeUnsigned or NativeCapabilityNames.SigningModeTestCertificate))
+        {
+            throw DocumentErrors.Invalid($"payload.signing_mode must be \"{NativeCapabilityNames.SigningModeUnsigned}\" or \"{NativeCapabilityNames.SigningModeTestCertificate}\"");
+        }
+
+        return mode;
+    }
+
+    private static void RequirePublisherIsTheSigner(string manifestPath, string manifestRelative, string subject)
+    {
+        string publisher;
+        try
+        {
+            using var stream = new FileStream(manifestPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            publisher = MsixIdentity.FromManifest(stream).Publisher;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or System.Xml.XmlException)
+        {
+            throw DocumentErrors.Invalid($"{manifestRelative} does not declare a readable package identity: {exception.Message}");
+        }
+
+        if (!string.Equals(publisher, subject, StringComparison.Ordinal))
+        {
+            throw DocumentErrors.Invalid($"{manifestRelative} names Publisher '{publisher}'; a package this device signs must name '{subject}', its signing certificate's subject");
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (IOException)
+        {
+            // The answer is a refusal either way.
+        }
     }
 
     // ================================================================== project.install
 
-    public static JsonObject Install(ProjectContext project, JsonObject payload, string nativeRoot)
+    public static JsonObject Install(ProjectContext project, JsonObject payload, string nativeRoot, NativeSigning signing)
     {
+        var kind = OptionalString(payload, "kind") ?? InstallKindShortcut;
+        if (kind == InstallKindMsix)
+        {
+            return InstallMsix(project, payload, nativeRoot, signing);
+        }
+
+        if (kind != InstallKindShortcut)
+        {
+            throw DocumentErrors.Invalid($"payload.kind must be \"{InstallKindShortcut}\" or \"{InstallKindMsix}\"");
+        }
+
         var exeRelative = OptionalString(payload, "exe") ?? Path.Combine(PublishDirName, project.Slug + ".exe");
         var exe = Path.GetFullPath(Path.Combine(project.Folder, exeRelative));
         if (!exe.StartsWith(Path.GetFullPath(project.Folder) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
@@ -174,12 +336,17 @@ public static class NativeLifecycle
 
     // ================================================================== project.uninstall
 
-    public static JsonObject Uninstall(ProjectContext project, string nativeRoot)
+    public static JsonObject Uninstall(ProjectContext project, string nativeRoot, NativeSigning signing)
     {
         var record = ReadRecord(nativeRoot);
         if (record[project.ProjectId] is not JsonObject entry)
         {
             throw DocumentErrors.NotFound($"'{project.Slug}' is not installed by this system; nothing to remove");
+        }
+
+        if (entry["method"]?.GetValue<string>() == InstallKindMsix)
+        {
+            return UninstallMsix(project, nativeRoot, record, entry, signing);
         }
 
         var shortcut = entry["shortcut"]?.GetValue<string>();
@@ -201,6 +368,143 @@ public static class NativeLifecycle
             ["observed"] = new JsonObject { ["shortcut_exists"] = !string.IsNullOrEmpty(shortcut) && File.Exists(shortcut) },
         };
     }
+
+    // ================================================ project.install / uninstall (msix)
+
+    /// <summary>
+    /// A signed MSIX, installed for the current user by Windows' own package manager. Three
+    /// refusals come first and each names its reason: no package; a package whose signature
+    /// does not read back intact (<see cref="NativeCapabilityNames.UnsignedPackageMarker"/>);
+    /// a signer this machine does not trust (<see cref="NativeCapabilityNames.UntrustedSignerMarker"/>,
+    /// naming the owner's one elevated step). This code never elevates and never writes a
+    /// LocalMachine store; Windows' own trust check stays the backstop.
+    /// </summary>
+    private static JsonObject InstallMsix(ProjectContext project, JsonObject payload, string nativeRoot, NativeSigning signing)
+    {
+        var relative = Path.Combine(DistDirName, project.Slug + ".msix");
+        var package = Path.Combine(project.Folder, relative);
+        if (!File.Exists(package))
+        {
+            throw DocumentErrors.NotFound($"{relative} does not exist; package the MSIX first");
+        }
+
+        var readBack = PackageSigner.Verify(package);
+        if (!readBack.Signed)
+        {
+            throw DocumentErrors.Denied($"{NativeCapabilityNames.UnsignedPackageMarker}: {relative} carries no intact signature ({readBack.VerifyStatusHex}: {readBack.Detail}); this device installs only a package it signed");
+        }
+
+        if (!string.Equals(readBack.SignerSubject, signing.Identity.Options.Subject, StringComparison.Ordinal))
+        {
+            throw DocumentErrors.Denied($"{NativeCapabilityNames.UnsignedPackageMarker}: {relative} is signed by '{readBack.SignerSubject}', not by this device's signing identity");
+        }
+
+        var thumbprint = readBack.SignerThumbprint!;
+        if (!readBack.ChainTrusted && !signing.Identity.IsTrusted(thumbprint))
+        {
+            throw DocumentErrors.Denied(
+                $"{NativeCapabilityNames.UntrustedSignerMarker}: the package's signer {thumbprint} is not trusted on this machine; "
+                + $"the owner runs {NativeCapabilityNames.TrustScript} once, elevated, to trust it (this device never elevates)");
+        }
+
+        MsixIdentity identity;
+        string fullName;
+        string familyName;
+        try
+        {
+            identity = MsixIdentity.Read(package);
+            (fullName, familyName) = MsixPackageNames.For(identity);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or System.Xml.XmlException)
+        {
+            throw DocumentErrors.Invalid($"{relative} does not declare a readable package identity: {exception.Message}");
+        }
+
+        var outcome = signing.Deployer.Add(package);
+        if (!outcome.Ok)
+        {
+            throw new CapabilityException(
+                ErrorClasses.DependencyUnavailable,
+                $"msix_install_failed ({outcome.HResultHex}): {Trim(outcome.ErrorText) ?? "Windows gave no reason"}",
+                retryable: false);
+        }
+
+        if (!signing.Deployer.IsRegistered(familyName, fullName))
+        {
+            throw new CapabilityException(ErrorClasses.PostconditionFailed, $"Windows reported the install of {fullName} but does not list it for this user", retryable: false);
+        }
+
+        var name = SafeName(OptionalString(payload, "name") ?? project.Slug);
+        var record = ReadRecord(nativeRoot);
+        record[project.ProjectId] = new JsonObject
+        {
+            ["project_id"] = project.ProjectId,
+            ["slug"] = project.Slug,
+            ["name"] = name,
+            ["method"] = InstallKindMsix,
+            ["package"] = package,
+            ["package_full_name"] = fullName,
+            ["package_family_name"] = familyName,
+            ["signer_thumbprint"] = thumbprint,
+            ["sha256"] = Sha256Of(package),
+            ["installed_at"] = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture),
+        };
+        WriteRecord(nativeRoot, record);
+
+        return new JsonObject
+        {
+            ["installed"] = true,
+            ["method"] = InstallKindMsix,
+            ["name"] = name,
+            ["package_full_name"] = fullName,
+            ["package_family_name"] = familyName,
+            ["signed"] = true,
+            ["signer_thumbprint"] = thumbprint,
+            ["trusted"] = true,
+            ["observed"] = new JsonObject { ["package_registered"] = true },
+        };
+    }
+
+    private static JsonObject UninstallMsix(ProjectContext project, string nativeRoot, JsonObject record, JsonObject entry, NativeSigning signing)
+    {
+        var fullName = entry["package_full_name"]?.GetValue<string>();
+        var familyName = entry["package_family_name"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(fullName) || string.IsNullOrEmpty(familyName))
+        {
+            throw DocumentErrors.Invalid($"the install record of '{project.Slug}' names no package; it was not written by this device");
+        }
+
+        var wasRegistered = signing.Deployer.IsRegistered(familyName, fullName);
+        DeploymentOutcome? outcome = null;
+        if (wasRegistered)
+        {
+            outcome = signing.Deployer.Remove(fullName);
+        }
+
+        var stillRegistered = signing.Deployer.IsRegistered(familyName, fullName);
+        if (stillRegistered)
+        {
+            throw new CapabilityException(
+                ErrorClasses.DependencyUnavailable,
+                $"msix_uninstall_failed ({outcome?.HResultHex ?? "not attempted"}): {Trim(outcome?.ErrorText) ?? "the package is still registered"}",
+                retryable: false);
+        }
+
+        record.Remove(project.ProjectId);
+        WriteRecord(nativeRoot, record);
+        return new JsonObject
+        {
+            ["uninstalled"] = true,
+            ["method"] = InstallKindMsix,
+            ["package_full_name"] = fullName,
+            ["package_removed"] = wasRegistered,
+            ["build_kept"] = true,
+            ["observed"] = new JsonObject { ["package_registered"] = false, ["shortcut_exists"] = false },
+        };
+    }
+
+    private static string? Trim(string? text)
+        => string.IsNullOrWhiteSpace(text) ? null : (text.Length > 400 ? text[..400] : text).Trim();
 
     // ================================================================== project.artifact
 

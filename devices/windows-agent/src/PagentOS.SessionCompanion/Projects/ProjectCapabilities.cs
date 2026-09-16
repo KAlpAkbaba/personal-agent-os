@@ -33,7 +33,7 @@ public sealed class ProjectCapabilities : IDisposable
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
 
-    public ProjectCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, ProjectRunner? runner = null, ProjectRoots? roots = null, ProjectRoots? roots3d = null, ProjectRoots? rootsNative = null)
+    public ProjectCapabilities(OperatorOptions options, ILogger logger, AuditLog? audit = null, ProjectRunner? runner = null, ProjectRoots? roots = null, ProjectRoots? roots3d = null, ProjectRoots? rootsNative = null, Native.NativeSigning? signing = null)
     {
         _options = options;
         _logger = logger;
@@ -42,6 +42,7 @@ public sealed class ProjectCapabilities : IDisposable
         Roots3d = roots3d ?? new ProjectRoots(options.Scene3dOptions());
         RootsNative = rootsNative ?? new ProjectRoots(options.NativeOptions());
         Runner = runner ?? new ProjectRunner(logger);
+        Signing = signing ?? Native.NativeSigning.ForOwner();
     }
 
     /// <summary>The same gate as the operator (<c>PAGENTOS_AGENT_OperatorEnabled</c>).</summary>
@@ -56,6 +57,9 @@ public sealed class ProjectCapabilities : IDisposable
     public ProjectRoots RootsNative { get; }
 
     public ProjectRunner Runner { get; }
+
+    /// <summary>B33 req 473: the owner's self-signed identity and the per-user deployment (nothing is created until a package is signed).</summary>
+    public Native.NativeSigning Signing { get; }
 
     /// <summary>The Projects root as configured (for the log).</summary>
     public string? ProjectsRoot => _options.EffectiveProjectsRoot;
@@ -134,9 +138,9 @@ public sealed class ProjectCapabilities : IDisposable
             ProjectCapabilityNames.ProjectTest => TestAsync(payload, budget, cancellationToken),
             // B33: the lifecycle after the build. Every one resolves the project through Locate
             // (the roots, the marker), never a payload path; native scope only.
-            ProjectCapabilityNames.ProjectPackage => Task.Run(() => NativeLifecycle.Package(RequireNative(Locate(payload)), payload, _logger, cancellationToken), CancellationToken.None),
-            ProjectCapabilityNames.ProjectInstall => Task.Run(() => NativeLifecycle.Install(RequireNative(Locate(payload)), payload, RootsNative.RequireRoot()), CancellationToken.None),
-            ProjectCapabilityNames.ProjectUninstall => Task.Run(() => NativeLifecycle.Uninstall(RequireNative(Locate(payload)), RootsNative.RequireRoot()), CancellationToken.None),
+            ProjectCapabilityNames.ProjectPackage => Task.Run(() => NativeLifecycle.Package(RequireNative(Locate(payload)), payload, Signing, _logger, cancellationToken), CancellationToken.None),
+            ProjectCapabilityNames.ProjectInstall => Task.Run(() => NativeLifecycle.Install(RequireNative(Locate(payload)), payload, RootsNative.RequireRoot(), Signing), CancellationToken.None),
+            ProjectCapabilityNames.ProjectUninstall => Task.Run(() => NativeLifecycle.Uninstall(RequireNative(Locate(payload)), RootsNative.RequireRoot(), Signing), CancellationToken.None),
             ProjectCapabilityNames.ProjectArtifact => Task.Run(() => NativeLifecycle.Artifact(RequireNative(Locate(payload)), payload), CancellationToken.None),
             SceneCapabilityNames.Inspect => Task.Run(() => Inspect(payload), CancellationToken.None),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),

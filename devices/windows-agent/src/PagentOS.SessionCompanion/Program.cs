@@ -362,7 +362,7 @@ public static class Program
             // toolchain is DETECTED here, before anything is asked of it, for the same reason
             // M25 detects the editors — and nothing here signs, so the log says that too.
             logger.LogInformation(
-                "native builds: ENABLED - no new capability name; native root={RootNative}; builds bounded to {Memory} MiB / {Minutes:F0} min / {Processes} processes, CPU {Cpu:F0} min on {Cores} cores; tools: {Tools}; SIGNS NOTHING ({Forbidden} refused by name)",
+                "native builds: ENABLED - no new capability name; native root={RootNative}; builds bounded to {Memory} MiB / {Minutes:F0} min / {Processes} processes, CPU {Cpu:F0} min on {Cores} cores; tools: {Tools}; RUNS NO SIGNER ({Forbidden} refused by name; an MSIX is signed in process with the owner's self-signed identity)",
                 projectCapabilities.ProjectsRootNative ?? "(no Documents folder: every native build is refused)",
                 NativeCapabilityNames.MemoryLimitBytes / (1024 * 1024),
                 NativeCapabilityNames.RunLimit.TotalMinutes,

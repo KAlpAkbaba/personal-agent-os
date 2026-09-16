@@ -117,31 +117,86 @@ def file_reveal_ok(_payload: dict[str, Any]) -> DeviceRunResult:
 INSTALLED: dict[str, str] = {}
 ARTIFACT_BYTES = b"MZ\x90\x00" + b"PagentOS native artefact fixture " * 64
 
+#: B33 req 473: whether the fake machine trusts the device's signing certificate (the owner's
+#: elevated step). A test that flips it restores it; the default is the truth before that step.
+SIGNING_TRUST: dict[str, bool] = {"trusted": False}
+FAKE_SIGNER_THUMBPRINT = "0F" * 20
+
 
 def project_package_ok(payload: dict[str, Any]) -> DeviceRunResult:
+    """The shape ``NativeLifecycle.Package`` answers (C#): an MSIX asked for with
+    ``signing_mode: test_certificate`` comes back signed, with the signer and the trust state
+    read back; everything else comes back ``signed: false`` / ``signing_mode: unsigned``."""
     import hashlib
+
+    from app.nativefactory.signing import TEST_SIGNING_SUBJECT
 
     kind = str(payload.get("kind") or "portable")
     project_id = str(payload.get("project_id") or "")
     name = f"{project_id}-portable.zip" if kind == "portable" else f"{project_id}.msix"
     path = f"C:\\Users\\owner\\Documents\\PagentOS Projects\\native\\{project_id}\\dist\\{name}"
-    return DeviceRunResult(
-        True,
-        result={
-            "kind": kind,
-            "path": path,
-            "name": name,
-            "bytes": len(ARTIFACT_BYTES),
-            "sha256": hashlib.sha256(ARTIFACT_BYTES).hexdigest(),
-            "signed": False,
-            "observed": {"exists": True, "bytes": len(ARTIFACT_BYTES)},
-        },
-    )
+    signs = kind == "msix" and payload.get("signing_mode") == "test_certificate"
+    result: dict[str, Any] = {
+        "kind": kind,
+        "path": path,
+        "name": name,
+        "bytes": len(ARTIFACT_BYTES),
+        "sha256": hashlib.sha256(ARTIFACT_BYTES).hexdigest(),
+        "signed": signs,
+        "signing_mode": "test_certificate" if signs else "unsigned",
+        "observed": {"exists": True, "bytes": len(ARTIFACT_BYTES)},
+    }
+    if kind == "portable" and payload.get("signing_mode") not in (None, "unsigned"):
+        result["signing_note"] = "portable_not_signed"
+    if signs:
+        trusted = SIGNING_TRUST["trusted"]
+        result.update(
+            {
+                "signer_thumbprint": FAKE_SIGNER_THUMBPRINT,
+                "signer_subject": TEST_SIGNING_SUBJECT,
+                "signer_not_after": "2028-09-15T20:00:00Z",
+                "trusted": trusted,
+            }
+        )
+        if not trusted:
+            result["trust_step"] = "scripts\\trust-native-signing-cert.ps1"
+        result["observed"] = {
+            **result["observed"],
+            "signature_intact": True,
+            "verify_status": "0x800B0109",
+        }
+    return DeviceRunResult(True, result=result)
 
 
 def project_install_ok(payload: dict[str, Any]) -> DeviceRunResult:
     project_id = str(payload.get("project_id") or "")
     name = str(payload.get("name") or project_id)
+    if payload.get("kind") == "msix":
+        # NativeLifecycle.InstallMsix: the trust gate first, then Windows' own registration.
+        if not SIGNING_TRUST["trusted"]:
+            return DeviceRunResult(
+                False,
+                "permission_denied",
+                f"signing_cert_untrusted: the package's signer {FAKE_SIGNER_THUMBPRINT} is not "
+                "trusted on this machine; the owner runs scripts\\trust-native-signing-cert.ps1 "
+                "once, elevated, to trust it (this device never elevates)",
+            )
+        full_name = f"PagentOS.{project_id.replace('-', '')}_0.1.0.0_x64__fakepublisher"
+        INSTALLED[project_id] = "msix:" + full_name
+        return DeviceRunResult(
+            True,
+            result={
+                "installed": True,
+                "method": "msix",
+                "name": name,
+                "package_full_name": full_name,
+                "package_family_name": f"PagentOS.{project_id.replace('-', '')}_fakepublisher",
+                "signed": True,
+                "signer_thumbprint": FAKE_SIGNER_THUMBPRINT,
+                "trusted": True,
+                "observed": {"package_registered": True},
+            },
+        )
     programs = "C:\\Users\\owner\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs"
     shortcut = f"{programs}\\PagentOS\\{name}.lnk"
     INSTALLED[project_id] = shortcut
@@ -163,6 +218,18 @@ def project_uninstall_ok(payload: dict[str, Any]) -> DeviceRunResult:
     shortcut = INSTALLED.pop(project_id, None)
     if shortcut is None:
         return DeviceRunResult(False, "not_found", "not installed by this system")
+    if shortcut.startswith("msix:"):
+        return DeviceRunResult(
+            True,
+            result={
+                "uninstalled": True,
+                "method": "msix",
+                "package_full_name": shortcut.removeprefix("msix:"),
+                "package_removed": True,
+                "build_kept": True,
+                "observed": {"package_registered": False, "shortcut_exists": False},
+            },
+        )
     return DeviceRunResult(
         True,
         result={

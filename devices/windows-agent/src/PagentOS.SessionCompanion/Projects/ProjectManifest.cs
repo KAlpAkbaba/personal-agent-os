@@ -343,7 +343,7 @@ public sealed class ProjectManifest
         // separately so that widening a shape can never widen these in by accident.
         if (NativeCapabilityNames.IsForbiddenProgram(program))
         {
-            throw Refuse(key, text, $"'{program}' is a signing or certificate tool, and this device signs nothing — an unsigned package is the honest state of a package nobody signed, and the owner's signing identity is theirs");
+            throw Refuse(key, text, $"'{program}' is a signing or certificate tool, and this device runs no signing program — no manifest command may sign; the only signature is the companion's own, in process, on an MSIX, and the owner's real signing identity is theirs");
         }
 
         // M28: the native root compiles applications and does nothing else. Stated as its own
