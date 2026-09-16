@@ -189,7 +189,7 @@ function Test-NativeSigningCertificate {
     $chain.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
     [void]$chain.Build($Certificate)
     $badSignature = @($chain.ChainStatus | Where-Object { $_.Status -eq [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::NotSignatureValid })
-    if (@($badSignature).Count -gt 0 -or $chain.ChainElements.Count -ne 1) { return (Refuse "the certificate's self-signature does not verify") }
+    if (@($badSignature).Count -gt 0 -or @($chain.ChainElements).Count -ne 1) { return (Refuse "the certificate's self-signature does not verify") }
 
     $owner = New-Object System.Security.Cryptography.X509Certificates.X509Store -ArgumentList $OwnerStoreName, ([System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
     try {
