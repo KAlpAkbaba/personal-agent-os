@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 from cryptography.hazmat.primitives.asymmetric import ec
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
@@ -65,11 +65,29 @@ _P256DH_RAW_LEN: Final = 65
 
 _ENDPOINT_HOST_RE = re.compile(r"^https://([^/]+)")
 
+#: Security review finding (LOW): nothing bounded how many browsers could subscribe.
+#: One owner, realistically a handful of browsers/devices — 32 is generous headroom
+#: over that without leaving the table free to grow without limit from a route an
+#: owner-session token can call repeatedly. Re-subscribing an ENDPOINT already stored
+#: (a refreshed permission, the same browser again) never counts against this: it
+#: updates the existing row rather than adding one (see `subscribe` below).
+MAX_SUBSCRIPTIONS: Final = 32
+
 
 class SubscriptionError(ValueError):
-    """A subscription payload does not decode to valid RFC 8291 key material, or the
-    endpoint fails the SSRF allowlist. Raised at STORE time (``subscribe``) so a bad
-    subscription never reaches the ladder's retry path at all."""
+    """A subscription payload does not decode to valid RFC 8291 key material, the
+    endpoint fails the SSRF allowlist, or the subscription table is already at
+    `MAX_SUBSCRIPTIONS`. Raised at STORE time (``subscribe``) so a bad subscription
+    never reaches the ladder's retry path at all.
+
+    ``error_class`` is one of ``app.errors.catalog``'s keys — the route reads it to
+    answer the owner in Turkish (``app.errors.owner.log_and_detail``) rather than
+    mapping every ``SubscriptionError`` to the same generic sentence.
+    """
+
+    def __init__(self, message: str, *, error_class: str = "validation_error") -> None:
+        super().__init__(message)
+        self.error_class = error_class
 
 
 def endpoint_host(endpoint: str) -> str:
@@ -114,6 +132,15 @@ def subscribe(
         existing.auth = auth
         existing.user_agent = user_agent[:256]
         row = existing
+    elif (
+        db.execute(select(func.count()).select_from(PushSubscriptionRow)).scalar_one()
+        >= MAX_SUBSCRIPTIONS
+    ):
+        raise SubscriptionError(
+            f"already at the {MAX_SUBSCRIPTIONS}-subscription limit; remove an old "
+            "browser before adding another",
+            error_class="resource_budget_exceeded",
+        )
     else:
         row = PushSubscriptionRow(
             endpoint=endpoint,
@@ -302,6 +329,7 @@ def send_to_all(
 
 __all__ = [
     "MAX_BODY_CHARS",
+    "MAX_SUBSCRIPTIONS",
     "MAX_TITLE_CHARS",
     "PushOutcome",
     "SubscriptionError",

@@ -107,6 +107,51 @@ def test_unsubscribe_unknown_id_returns_false(db) -> None:
     assert service.unsubscribe(db, uuid.uuid4()) is False
 
 
+def test_subscribe_refuses_past_the_subscription_cap(db) -> None:
+    """Security review finding (LOW): nothing bounded how many browsers could
+    subscribe. Fill the table to the cap, then prove the NEXT new endpoint is refused
+    politely (a typed `SubscriptionError`, the existing owner error path) rather than
+    silently accepted."""
+    for i in range(service.MAX_SUBSCRIPTIONS):
+        p256dh, auth = _fake_subscription_keys()
+        service.subscribe(
+            db, endpoint=f"https://fcm.googleapis.com/fcm/send/cap-{i}", p256dh=p256dh, auth=auth
+        )
+    assert len(service.list_subscriptions(db)) == service.MAX_SUBSCRIPTIONS
+
+    p256dh, auth = _fake_subscription_keys()
+    with pytest.raises(service.SubscriptionError) as excinfo:
+        service.subscribe(
+            db,
+            endpoint="https://fcm.googleapis.com/fcm/send/one-too-many",
+            p256dh=p256dh,
+            auth=auth,
+        )
+    assert excinfo.value.error_class == "resource_budget_exceeded"
+    assert len(service.list_subscriptions(db)) == service.MAX_SUBSCRIPTIONS
+
+
+def test_resubscribing_an_existing_endpoint_at_the_cap_still_works(db) -> None:
+    """Re-subscribing (a refreshed permission, the same browser again) updates the
+    EXISTING row rather than adding one, so it must never be refused by the cap even
+    when the table is completely full."""
+    endpoints = [
+        f"https://fcm.googleapis.com/fcm/send/cap-{i}" for i in range(service.MAX_SUBSCRIPTIONS)
+    ]
+    for endpoint in endpoints:
+        p256dh, auth = _fake_subscription_keys()
+        service.subscribe(db, endpoint=endpoint, p256dh=p256dh, auth=auth)
+
+    new_p256dh, new_auth = _fake_subscription_keys()
+    row = service.subscribe(db, endpoint=endpoints[0], p256dh=new_p256dh, auth=new_auth)
+    assert row.p256dh == new_p256dh
+    assert len(service.list_subscriptions(db)) == service.MAX_SUBSCRIPTIONS
+
+
+def test_subscription_error_default_error_class_is_validation_error() -> None:
+    assert service.SubscriptionError("bad key material").error_class == "validation_error"
+
+
 # ------------------------------------------------------------- build_payload
 
 

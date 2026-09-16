@@ -93,6 +93,25 @@ def test_validate_push_endpoint_refuses_everything_else(endpoint: str) -> None:
     assert excinfo.value.reason == PushError.REASON_INVALID_ENDPOINT
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://fcm.googleapis.com:443/fcm/send/abc",  # explicit default port - still refused
+        "https://fcm.googleapis.com:8443/fcm/send/abc",  # a non-default port
+        "https://fcm.googleapis.com:abc/fcm/send/abc",  # malformed port (.port raises ValueError)
+    ],
+)
+def test_validate_push_endpoint_refuses_any_explicit_port(endpoint: str) -> None:
+    """Security review finding (LOW): a port is never examined by the host check, so an
+    endpoint on an unexpected port would otherwise sail through as long as the hostname
+    matched. None of the four allowed vendors ever serve their push resource on a
+    non-default port; refusing ANY explicit port (even the correct default) is simpler
+    and safer than trying to enumerate which ports are fine."""
+    with pytest.raises(PushError) as excinfo:
+        validate_push_endpoint(endpoint)
+    assert excinfo.value.reason == PushError.REASON_INVALID_ENDPOINT
+
+
 def test_http_provider_refuses_before_any_network_call() -> None:
     """The allowlist check must happen BEFORE a request is dispatched — a provider
     wired to a transport that would raise on any real connection attempt (there is
@@ -208,6 +227,65 @@ def test_provider_sends_the_exact_headers_and_body_given() -> None:
     assert captured["headers"]["ttl"] == "60"
     assert captured["headers"]["urgency"] == "high"
     assert captured["headers"]["authorization"] == "vapid t=x, k=y"
+
+
+class _TrackingResponseStream(httpx.SyncByteStream):
+    """A response body ``HttpPushProvider.send`` must never read - only the status
+    code and the ``Retry-After`` header are ever used (security review finding, LOW).
+    Records whether it was iterated at all, and whether it was closed."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.iterated = False
+        self.closed = False
+
+    def __iter__(self):  # noqa: ANN204 - matches httpx.SyncByteStream's own signature
+        self.iterated = True
+        yield from self._chunks
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_response_body_is_never_read_and_the_response_is_closed() -> None:
+    """A push service is free to answer with a body of any size; nothing in
+    ``HttpPushProvider.send`` has a use for it (only ``status_code`` and
+    ``Retry-After``). Proven with a response whose body stream flags whether it was
+    ever iterated, rather than by size alone — a mock's bytes already sit in memory
+    either way, so this checks the ACCESS, not the byte count."""
+    stream = _TrackingResponseStream([b"x" * 70_000, b"y" * 70_000])
+
+    def _huge_body(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, headers={"Retry-After": "5"}, stream=stream)
+
+    provider = _provider_with(_huge_body)
+    provider.send(
+        endpoint="https://fcm.googleapis.com/fcm/send/abc", headers={}, body=b"hi", timeout_s=1.0
+    )  # 201: must not raise
+
+    assert stream.iterated is False, "the response body was read despite never being used"
+    assert stream.closed is True, "the response was not closed - the connection would leak"
+
+
+def test_response_body_is_never_read_even_on_an_error_status() -> None:
+    """The same guarantee holds on a failure path (429), which also reads a header
+    (``Retry-After``) but must still never touch the body."""
+    stream = _TrackingResponseStream([b"z" * 70_000])
+
+    def _huge_body(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "12"}, stream=stream)
+
+    provider = _provider_with(_huge_body)
+    with pytest.raises(PushError) as excinfo:
+        provider.send(
+            endpoint="https://fcm.googleapis.com/fcm/send/abc",
+            headers={},
+            body=b"hi",
+            timeout_s=1.0,
+        )
+    assert excinfo.value.retry_after_s == 12.0
+    assert stream.iterated is False
+    assert stream.closed is True
 
 
 # ------------------------------------------------------------- FakePushProvider

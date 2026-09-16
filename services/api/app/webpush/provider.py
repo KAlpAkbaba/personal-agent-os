@@ -66,15 +66,30 @@ def is_allowed_push_host(host: str) -> bool:
 
 def validate_push_endpoint(endpoint: str) -> None:
     """Raise :class:`PushError` (reason ``invalid_endpoint``) for anything that is not
-    ``https://`` to a known push-service host. Called before every send AND before a
-    subscription is ever stored (``app.webpush.service.subscribe``) — refusing at
-    storage time means a bad endpoint never reaches the ladder's retry path at all.
+    ``https://`` to a known push-service host, on the default port. Called before every
+    send AND before a subscription is ever stored (``app.webpush.service.subscribe``) —
+    refusing at storage time means a bad endpoint never reaches the ladder's retry path
+    at all.
     """
     parts = urlsplit(endpoint)
     if parts.scheme != "https":
         raise PushError(PushError.REASON_INVALID_ENDPOINT, "push endpoint must be https://")
     if parts.username or parts.password:
         raise PushError(PushError.REASON_INVALID_ENDPOINT, "push endpoint must not carry userinfo")
+    # Security review finding (LOW): none of the four allowed vendors ever serve their
+    # push resource on a non-default port, and an explicit port - even ``:443`` - is one
+    # more thing a hostname check does not examine. Refuse it outright rather than
+    # trying to enumerate which ports are "fine"; a malformed port string (``:abc``)
+    # makes ``.port`` raise ``ValueError`` before it ever gets the chance to be `None`,
+    # so that is refused the same way.
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise PushError(
+            PushError.REASON_INVALID_ENDPOINT, "push endpoint has a malformed port"
+        ) from exc
+    if port is not None:
+        raise PushError(PushError.REASON_INVALID_ENDPOINT, "push endpoint must not specify a port")
     host = parts.hostname or ""
     if not is_allowed_push_host(host):
         raise PushError(
@@ -151,15 +166,24 @@ class HttpPushProvider:
     ) -> None:
         validate_push_endpoint(endpoint)
         effective_timeout = timeout_s if timeout_s is not None else self.default_timeout_s
-        with self._client(effective_timeout) as client:
-            try:
-                response = client.post(endpoint, headers=headers, content=body)
-            except httpx.TimeoutException as exc:
-                raise PushError(PushError.REASON_TIMEOUT, str(exc)) from exc
-            except httpx.HTTPError as exc:
-                raise PushError(PushError.REASON_PROVIDER_ERROR, str(exc)) from exc
-
-        status = response.status_code
+        # Security review finding (LOW): only the status code and the (tiny)
+        # ``Retry-After`` header are ever read from a push service's answer - nothing
+        # here has a use for the response BODY, which a push service is free to send in
+        # any size. ``client.stream()`` gives both without ever buffering it: the
+        # status line and headers arrive before a byte of body does, and exiting the
+        # ``with`` block closes the response (dropping the connection rather than
+        # reading the rest of the body) whether or not anything was read from it.
+        try:
+            with (
+                self._client(effective_timeout) as client,
+                client.stream("POST", endpoint, headers=headers, content=body) as response,
+            ):
+                status = response.status_code
+                retry_after = response.headers.get("retry-after")
+        except httpx.TimeoutException as exc:
+            raise PushError(PushError.REASON_TIMEOUT, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise PushError(PushError.REASON_PROVIDER_ERROR, str(exc)) from exc
         if status in (201, 202):
             return
         if status in (404, 410):
@@ -177,7 +201,7 @@ class HttpPushProvider:
                 PushError.REASON_RATE_LIMITED,
                 "push service rate-limited this application server",
                 status_code=429,
-                retry_after_s=_parse_retry_after(response.headers.get("retry-after")),
+                retry_after_s=_parse_retry_after(retry_after),
             )
         if 500 <= status < 600:
             raise PushError(

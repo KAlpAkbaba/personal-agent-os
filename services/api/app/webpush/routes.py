@@ -103,7 +103,7 @@ async def create_subscription(request: Request, payload: SubscribeRequest) -> di
             )
             raise HTTPException(status_code=422, detail=detail) from exc
         except webpush.SubscriptionError as exc:
-            detail = log_and_detail("validation_error", exc, where="webpush.create_subscription")
+            detail = log_and_detail(exc.error_class, exc, where="webpush.create_subscription")
             raise HTTPException(status_code=422, detail=detail) from exc
         return _subscription_dict(row)
 
