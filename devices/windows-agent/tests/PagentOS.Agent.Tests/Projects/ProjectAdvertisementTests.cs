@@ -26,8 +26,8 @@ public sealed class ProjectAdvertisementTests
     [Fact]
     public void Compose_lists_the_five_names_last_only_when_operator_is_enabled()
     {
-        Assert.Equal(["project.scaffold", "project.run", "project.status", "project.stop", "project.test"], AgentCapabilities.Projects);
-        Assert.Equal(5, AgentCapabilities.Projects.Count);
+        Assert.Equal(["project.scaffold", "project.run", "project.status", "project.stop", "project.test", "project.package", "project.install", "project.uninstall", "project.artifact"], AgentCapabilities.Projects);
+        Assert.Equal(9, AgentCapabilities.Projects.Count);
 
         var without = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: false);
         Assert.DoesNotContain(without, AgentCapabilities.IsProjects);
@@ -36,9 +36,9 @@ public sealed class ProjectAdvertisementTests
         // M25 appended the scenes family after the projects family; the projects names keep
         // their order and their place, one step in from the end.
         Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(1));
-        Assert.Equal(AgentCapabilities.Projects, with.SkipLast(1).TakeLast(5));
-        Assert.Equal(AgentCapabilities.Documents, with.SkipLast(6).TakeLast(7));
-        Assert.Equal(without.Count + 32 + 7 + 5 + 1, with.Count);
+        Assert.Equal(AgentCapabilities.Projects, with.SkipLast(1).TakeLast(AgentCapabilities.Projects.Count));
+        Assert.Equal(AgentCapabilities.Documents, with.SkipLast(AgentCapabilities.Projects.Count + AgentCapabilities.Scenes.Count).TakeLast(AgentCapabilities.Documents.Count));
+        Assert.Equal(without.Count + 36 + 14 + 9 + 1, with.Count);
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal("0.6.0", AgentInfo.SoftwareVersion);
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), AgentCapabilities.Compose(browserEnabled: false, displayPowerEnabled: false, operatorEnabled: false));

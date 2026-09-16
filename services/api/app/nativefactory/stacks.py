@@ -31,6 +31,8 @@ from app.nativefactory.spec import (
     STACK_ANDROID_KOTLIN,
     STACK_DOTNET_WPF,
     TARGET_WINDOWS_EXE,
+    TARGET_WINDOWS_MSIX,
+    TARGET_WINDOWS_PORTABLE,
     TEMPLATE_STACK,
     WINDOWS_TARGETS,
     NativeAppSpec,
@@ -278,11 +280,15 @@ def choose(spec: NativeAppSpec, facts: ToolchainFacts | None = None) -> StackCho
 #: produce today: it scaffolds, builds, tests, publishes and reads back ONE thing, the EXE.
 #: A portable package or an MSIX is not made there, so a row for one is refused by name
 #: rather than answered with an EXE wearing its label.
-DEVICE_BUILDABLE_TARGETS: Final[frozenset[str]] = frozenset({TARGET_WINDOWS_EXE})
+#: B33 req 456/457: the portable zip and the MSIX are packaged BY THE DEVICE after the EXE
+#: is read back (``project.package``), so the three Windows targets are all buildable there.
+DEVICE_BUILDABLE_TARGETS: Final[frozenset[str]] = frozenset(
+    {TARGET_WINDOWS_EXE, TARGET_WINDOWS_PORTABLE, TARGET_WINDOWS_MSIX}
+)
 
 SPEECH_DEVICE_PACKAGING_NOT_WIRED: Final = (
-    "Taşınabilir paket ve MSIX kayıtlı cihaz üzerinden henüz üretilmiyor efendim; "
-    "EXE üretilebilir."
+    "Bu hedef kayıtlı cihaz üzerinden üretilmiyor efendim; EXE, taşınabilir paket ve "
+    "MSIX üretilebilir."
 )
 SPEECH_DEVICE_NO_ANDROID: Final = (
     "Android derlemesi kayıtlı cihaz yolunda yok efendim; cihaz yalnızca Windows "

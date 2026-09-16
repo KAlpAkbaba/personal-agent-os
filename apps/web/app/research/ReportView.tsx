@@ -261,6 +261,20 @@ export default function ReportView({ report, artifactId, onCopyJson, copyState =
             {report.window?.label ?? "pencere belirtilmedi"}
             {report.generated_at && <> · oluşturuldu {formatWhen(report.generated_at)}</>}
             {report.synthesis_provider && <> · sentez: {report.synthesis_provider}</>}
+            {report.synthesis_fallback && (
+              <>
+                {" "}
+                · <span data-fallback="synthesis">yedek sağlayıcı: {report.synthesis_fallback.requested} yerine{" "}
+                {report.synthesis_fallback.used} ({report.synthesis_fallback.attempts} deneme,{" "}
+                {report.synthesis_fallback.reason})</span>
+              </>
+            )}
+            {report.search_fallbacks ? (
+              <>
+                {" "}
+                · <span data-fallback="search">{report.search_fallbacks} arama sorgusu yedek sağlayıcıyla</span>
+              </>
+            ) : null}
           </div>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end" }}>

@@ -98,9 +98,7 @@ class Memory(Base):
     value_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
 
     stage: Mapped[str] = mapped_column(String(16), nullable=False, default="candidate")
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="active", index=True
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", index=True)
     explicit: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

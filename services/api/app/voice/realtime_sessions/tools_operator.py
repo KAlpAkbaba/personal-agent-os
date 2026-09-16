@@ -21,6 +21,9 @@ fakes the same way, docs/M18_ACTION_CONTRACT.md §4).
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import re
 import uuid
 from collections.abc import Callable
@@ -29,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from app.actions.receipt import (
     EXECUTION_EXECUTED,
+    EXECUTION_FAILED,
     EXECUTION_NOOP,
     EXECUTION_REFUSED,
     TERMINAL_ALREADY,
@@ -39,37 +43,78 @@ from app.actions.receipt import (
 )
 from app.ledger.vocabulary import SUBSYSTEM_OPERATOR
 from app.logging import get_logger
+from app.operator import adapters as app_adapters
+from app.operator import allowlists as app_allowlists
 from app.operator import capabilities as operator_capabilities
 from app.operator import focus as focus_module
 from app.operator.capabilities import (
+    CAPABILITY_APP_CLOSE,
     CAPABILITY_APP_OPEN,
     CAPABILITY_CANCEL,
+    CAPABILITY_INSPECT,
+    CAPABILITY_KEY,
+    CAPABILITY_POINTER,
+    CAPABILITY_PROCESS,
+    CAPABILITY_SCREENSHOT,
+    CAPABILITY_SEE,
+    CAPABILITY_SERVICE,
     CAPABILITY_SHELL,
     CAPABILITY_STATUS,
     CAPABILITY_TYPE,
+    CAPABILITY_UI,
     CAPABILITY_WINDOW_CONTROL,
+    PLAN_BY_POINTER_ACTION,
+    PLAN_BY_PROCESS_ACTION,
+    PLAN_BY_READ_MODE,
+    PLAN_BY_SERVICE_ACTION,
     PLAN_BY_SHELL_QUERY,
+    PLAN_BY_UI_ACTION,
     PLAN_BY_WINDOW_ACTION,
+    PLAN_CLOSE_APPLICATION,
     PLAN_OPEN_APPLICATION,
+    PLAN_PRESS_KEY,
+    PLAN_PRESS_SHORTCUT,
     PLAN_TYPE_TEXT,
 )
 from app.operator.models import FOCUS_KIND_WINDOW
 from app.operator.plans import (
     APP_ALLOWLIST,
+    POINTER_ACTIONS,
+    POINTER_SPACES,
+    UI_ACTIONS,
+    UI_EXPECTATIONS,
     activate_window,
+    close_app,
     close_window,
     maximize_window,
     minimize_window,
+    move_window,
     open_application,
     parse_ipv4,
+    press_key,
+    press_shortcut,
     previous_window,
+    process_list,
+    process_stop,
+    resize_window,
     resolve_app_alias,
     restore_window,
+    service_restart,
+    service_status,
+    tree_text,
+    ui_invoke,
+    ui_read,
+    ui_select,
+    ui_set_value,
+    valid_key,
+    valid_shortcut,
 )
+from app.operator.plans import pointer as build_pointer_steps
 from app.operator.plans import shell_query as build_shell_query_steps
 from app.operator.plans import type_text as build_type_text_steps
 from app.operator.service import Plan
 from app.operator.task import STATUS_SUCCEEDED
+from app.operator.vision import DEFAULT_QUESTION_TR, VisionError
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import contains_secret_reference, normalize_transcript, turkish_casefold
 
@@ -91,6 +136,15 @@ TOOL_TYPE: Final = CAPABILITY_TYPE
 TOOL_SHELL: Final = CAPABILITY_SHELL
 TOOL_CANCEL: Final = CAPABILITY_CANCEL
 TOOL_STATUS: Final = CAPABILITY_STATUS
+TOOL_SCREENSHOT: Final = CAPABILITY_SCREENSHOT
+TOOL_KEY: Final = CAPABILITY_KEY
+TOOL_POINTER: Final = CAPABILITY_POINTER
+TOOL_UI: Final = CAPABILITY_UI
+TOOL_INSPECT: Final = CAPABILITY_INSPECT
+TOOL_SEE: Final = CAPABILITY_SEE
+TOOL_APP_CLOSE: Final = CAPABILITY_APP_CLOSE
+TOOL_PROCESS: Final = CAPABILITY_PROCESS
+TOOL_SERVICE: Final = CAPABILITY_SERVICE
 
 OPERATOR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_APP_OPEN,
@@ -99,6 +153,105 @@ OPERATOR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_SHELL,
     TOOL_CANCEL,
     TOOL_STATUS,
+    TOOL_SCREENSHOT,
+    TOOL_KEY,
+    TOOL_POINTER,
+    TOOL_UI,
+    TOOL_INSPECT,
+    TOOL_SEE,
+    TOOL_APP_CLOSE,
+    TOOL_PROCESS,
+    TOOL_SERVICE,
+)
+
+#: B29: the UI Automation family's sentences and refusals.
+SPEECH_NO_TARGET: Final = "Hangi düğme ya da alan?"
+SPEECH_NO_VALUE: Final = "Ne yazmamı istersiniz?"
+SPEECH_NO_ITEM: Final = "Hangi öğeyi seçeyim?"
+SPEECH_UI_INVOKED_TR: Final = "{name} düğmesine bastım efendim."
+SPEECH_UI_SET_TR: Final = "Değeri yazdım efendim."
+SPEECH_UI_SELECTED_TR: Final = "{item} seçildi efendim."
+SPEECH_UI_NOT_FOUND: Final = "Bunu pencerede bulamadım efendim."
+SPEECH_UI_UNVERIFIED_TR: Final = "{name} düğmesine bastım ama bir sonuç göremedim efendim."
+SPEECH_UI_FAILURE: Final = "Arayüz eylemini yapamadım efendim."
+SPEECH_READ_EMPTY: Final = "Bu alanda metin yok efendim."
+SPEECH_READ_TR: Final = "Şöyle yazıyor: {text}"
+SPEECH_INSPECT_TR: Final = "Pencerede {count} öğe gördüm efendim; başlıcaları: {names}."
+SPEECH_NO_VISION: Final = (
+    "Görüntü anlamlandırma sağlayıcısı tanımlı değil efendim; ekranı tarif edemiyorum."
+)
+SPEECH_VISION_FAILED: Final = "Ekranı tarif edemedim efendim."
+ERROR_UI_TARGET_NOT_FOUND: Final = "ui_target_not_found"
+ERROR_NO_VISION_PROVIDER: Final = "dependency_unavailable"
+MAX_READ_CHARS: Final = 600
+
+#: B28 req 107: the pointer is the LAST rung of spec §2's ladder (API -> DOM -> UI
+#: Automation -> keyboard -> visual -> raw coordinates). ``operator.pointer`` therefore
+#: refuses a move or a click that does not say it is the last resort - the model has to
+#: state that the UI Automation and keyboard rungs were tried or do not apply, and the
+#: statement travels in the receipt. Scrolling is the one exception: it targets the
+#: window's own centre, never an element, so there is no higher rung to prefer.
+ERROR_COORDINATE_NOT_LAST_RESORT: Final = "coordinate_not_last_resort"
+SPEECH_COORDINATE_POLICY: Final = (
+    "Koordinatla tıklamak son çare efendim; önce arayüz ağacını ya da klavyeyi denerim."
+)
+#: The companion's own refusal when the foreground moved between OBSERVE and ACT
+#: (``FocusGuard``, spec §1 invariant 2). Named here so the sentence can say it.
+ERROR_FOCUS_MISMATCH: Final = "focus_mismatch"
+SPEECH_FOCUS_LOST: Final = "Pencere önden çekildi efendim; gönderimi durdurdum."
+SPEECH_KEY_SUCCESS_TR: Final = "{key} tuşuna bastım efendim."
+SPEECH_SHORTCUT_SUCCESS_TR: Final = "{keys} kısayolunu gönderdim efendim."
+SPEECH_KEY_FAILURE: Final = "Tuşa basamadım efendim."
+SPEECH_NO_KEY: Final = "Hangi tuş?"
+SPEECH_POINTER_SUCCESS_TR: Final = {
+    "move": "İmleci taşıdım efendim.",
+    "click": "Tıkladım efendim.",
+    "double_click": "Çift tıkladım efendim.",
+    "right_click": "Sağ tıkladım efendim.",
+    "scroll": "Kaydırdım efendim.",
+}
+SPEECH_POINTER_FAILURE: Final = "İşaretçi eylemini yapamadım efendim."
+#: Turkish for the key names, for the sentence ("Enter tuşuna bastım").
+KEY_TR: Final[dict[str, str]] = {
+    "enter": "Enter",
+    "escape": "Escape",
+    "tab": "Tab",
+    "backspace": "Geri",
+    "delete": "Sil",
+    "insert": "Insert",
+    "home": "Home",
+    "end": "End",
+    "pageup": "Page Up",
+    "pagedown": "Page Down",
+    "up": "Yukarı ok",
+    "down": "Aşağı ok",
+    "left": "Sol ok",
+    "right": "Sağ ok",
+    "space": "Boşluk",
+}
+#: "Aşağı kaydır" = three notches towards the user (negative), "yukarı" away (positive) -
+#: the companion's own sign convention (``IInputSynthesizer.Scroll``).
+SCROLL_NOTCHES_BY_DIRECTION: Final[dict[str, int]] = {"down": -3, "up": 3}
+#: Where a spoken scroll lands when the device's window list carries no rect: a point
+#: inside any real window rather than its corner.
+SCROLL_FALLBACK_POINT: Final = (50, 50)
+
+#: B27 req 735: the device operation ``operator.screenshot`` asks for
+#: (docs/M19_DIGITAL_OPERATOR_SPEC.md §2: ``{window_id?, format}`` -> ``{width, height,
+#: png_base64}``, never persisted by the companion). Same string as the agent's
+#: ``ProtocolConstants.ScreenCapture``.
+DEVICE_SCREEN_CAPTURE: Final = "screen.capture"
+TIMEOUT_SCREEN_CAPTURE_S: Final = 20.0
+#: Where the bytes go when there is an object store to put them in: the receipt carries
+#: the KEY and the hash, never the image - a ledger row is not a place for two megabytes
+#: of base64, and ``app.presence.observations`` already refuses image-shaped keys.
+SCREENSHOT_KEY_PREFIX: Final = "screenshots"
+SPEECH_SCREENSHOT_NO_DEVICE: Final = (
+    "Bağlı bilgisayar ekran görüntüsü yeteneği bildirmiyor efendim."
+)
+SPEECH_SCREENSHOT_FAILED: Final = "Ekran görüntüsünü alamadım efendim."
+SPEECH_SCREENSHOT_UNVERIFIED: Final = (
+    "Ekran görüntüsünü alamadım efendim; cihaz bir görüntü döndürmedi."
 )
 
 #: The ``action`` values ``operator.window_control`` accepts — the keys of the declared
@@ -113,15 +266,9 @@ _INTENT_TO_WINDOW_ACTION: Final[dict[str, str]] = {
     "window_previous": "previous",
 }
 
-#: Turkish names for the allowlisted app ids (spec §2's ``app.launch`` allowlist).
-_APP_TR_NAMES: Final[dict[str, str]] = {
-    "notepad": "Not Defteri",
-    "calc": "Hesap Makinesi",
-    "explorer": "Dosya Gezgini",
-    "powershell": "PowerShell",
-    "chrome": "Chrome",
-    "msedge": "Microsoft Edge",
-}
+#: Turkish names for the allowlisted app ids (spec §2's ``app.launch`` allowlist) - from
+#: the shared contract since B30, so the sentence names what the device would launch.
+_APP_TR_NAMES: Final[dict[str, str]] = dict(app_allowlists.APP_NAMES_TR)
 
 _WINDOW_SUCCESS_TR: Final[dict[str, str]] = {
     "close": "Pencereyi kapattım",
@@ -130,6 +277,8 @@ _WINDOW_SUCCESS_TR: Final[dict[str, str]] = {
     "restore": "Pencereyi eski haline getirdim",
     "activate": "Pencereyi öne getirdim",
     "previous": "Önceki pencereye döndüm",
+    "move": "Pencereyi taşıdım",
+    "resize": "Pencereyi boyutlandırdım",
 }
 _WINDOW_FAILURE_TR: Final[dict[str, str]] = {
     "close": "Pencereyi kapatamadım",
@@ -138,6 +287,45 @@ _WINDOW_FAILURE_TR: Final[dict[str, str]] = {
     "restore": "Pencereyi eski haline getiremedim",
     "activate": "Pencereyi öne getiremedim",
     "previous": "Önceki pencereye dönemedim",
+    "move": "Pencereyi taşıyamadım",
+    "resize": "Pencereyi boyutlandıramadım",
+}
+
+#: B30 req 118-122: the shell's third query and the process/service sentences.
+SPEECH_WHOAMI_FAILURE: Final = "Kullanıcı adını okuyamadım efendim."
+SPEECH_NO_PROCESS: Final = "Hangi uygulamayı sonlandırayım?"
+SPEECH_NO_SERVICE: Final = "Hangi servis?"
+SPEECH_PROCESS_POLICY: Final = (
+    "Bu süreci sonlandırmam politikaya aykırı efendim; yalnız izin listesindeki "
+    "uygulamaları kapatırım."
+)
+SPEECH_PROCESS_LIST_FAILURE: Final = "Süreçleri okuyamadım efendim."
+SPEECH_SERVICE_POLICY: Final = (
+    "Bu servisi yeniden başlatmam politikaya aykırı efendim; izin listesinde yok."
+)
+SPEECH_SERVICE_ELEVATION: Final = (
+    "Servisi yeniden başlatmak yönetici yetkisi istiyor efendim; bunu siz onaylamalısınız."
+)
+SERVICE_STATE_TR: Final[dict[str, str]] = {
+    "running": "çalışıyor",
+    "stopped": "durmuş",
+    "paused": "duraklatılmış",
+    "start pending": "başlıyor",
+    "stop pending": "duruyor",
+}
+#: The Turkish names the owner uses for a few Windows services -> the service name.
+SERVICE_ALIASES_TR: Final[dict[str, str]] = {
+    "yazdırma": "Spooler",
+    "yazdirma": "Spooler",
+    "yazıcı": "Spooler",
+    "yazici": "Spooler",
+    "spooler": "Spooler",
+    "güncelleme": "wuauserv",
+    "guncelleme": "wuauserv",
+    "windows update": "wuauserv",
+    "bluetooth": "bthserv",
+    "ses": "Audiosrv",
+    "zaman": "W32Time",
 }
 
 SPEECH_NO_OPERATOR_AUTHORITY: Final = "Bu bilgisayarda operatör yetkisi yok efendim."
@@ -157,6 +345,11 @@ SPEECH_TYPE_FAILURE: Final = "Yazamadım efendim; metni doğrulayamadım."
 SPEECH_TYPE_NOT_ATTEMPTED: Final = "Yazamadım efendim; pencereyi öne getiremedim."
 SPEECH_IP_FAILURE: Final = "IP adresini okuyamadım efendim."
 SPEECH_HOSTNAME_FAILURE: Final = "Bilgisayarın adını okuyamadım efendim."
+_SHELL_FAILURE_TR: Final[dict[str, str]] = {
+    "ip": SPEECH_IP_FAILURE,
+    "hostname": SPEECH_HOSTNAME_FAILURE,
+    "whoami": SPEECH_WHOAMI_FAILURE,
+}
 
 logger = get_logger("app.voice.realtime_sessions.tools_operator")
 
@@ -212,6 +405,23 @@ def _window_lister(ctx: ToolContext) -> Callable[[], list[dict[str, Any]]] | Non
         return list(windows) if isinstance(windows, list) else []
 
     return _list
+
+
+def _once(
+    lister: Callable[[], list[dict[str, Any]]] | None,
+) -> Callable[[], list[dict[str, Any]]] | None:
+    """The same device listing for the resolver and the adapter lookup: ONE ``window.list``
+    per tool call, never two readings of a desktop that may differ between them."""
+    if lister is None:
+        return None
+    cache: dict[str, list[dict[str, Any]]] = {}
+
+    def _cached() -> list[dict[str, Any]]:
+        if "windows" not in cache:
+            cache["windows"] = lister()
+        return cache["windows"]
+
+    return _cached
 
 
 def _allowlist_speech() -> str:
@@ -493,7 +703,7 @@ def _require_operator(ctx: ToolContext, tool: str) -> Any:
 
 
 def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" / "PowerShell aç" (spec §3).
+    """ "Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" / "PowerShell aç" (spec §3).
 
     The allowlisted app id the owner's WORDS named wins over the model's own
     ``application`` argument; an unmatched name is refused, naming the allowlist — this
@@ -538,7 +748,7 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
 
 
 def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Pencereyi büyüt" / "Bunu kapat" / "Önceki pencereye dön" (spec §3). Resolves the
+    """ "Pencereyi büyüt" / "Bunu kapat" / "Önceki pencereye dön" (spec §3). Resolves the
     target window through the durable focus stack — never a window id the model guessed."""
     turn = _turn_record(ctx)
     action = _INTENT_TO_WINDOW_ACTION.get(str(turn.get("intent") or "")) or str(
@@ -571,7 +781,26 @@ def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict
         "activate": activate_window,
         "previous": previous_window,
     }
-    steps = steps_by_action[action](window_id)
+    if action in ("move", "resize"):
+        # B30 req 84/85: geometry comes from the model's arguments (a spoken sentence
+        # carries no pixels); the device re-observes the rect within 8 px.
+        keys = ("x", "y") if action == "move" else ("width", "height")
+        values = []
+        for key in keys:
+            raw = arguments.get(key)
+            if not isinstance(raw, int | float) or isinstance(raw, bool):
+                raise VoiceError(
+                    VoiceErrorClass.VALIDATION_ERROR,
+                    f"operator.window_control {action} needs integer '{keys[0]}' and '{keys[1]}'",
+                )
+            values.append(int(raw))
+        steps = (
+            move_window(window_id, values[0], values[1])
+            if action == "move"
+            else resize_window(window_id, values[0], values[1])
+        )
+    else:
+        steps = steps_by_action[action](window_id)
     plan = Plan(
         name=PLAN_BY_WINDOW_ACTION[action],
         goal=f"{action} window {window_id}",
@@ -594,7 +823,7 @@ def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict
 
 
 def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Buraya X yaz" / "Bu kutuya X yaz" (spec §3). Refuses a secret-looking payload
+    """ "Buraya X yaz" / "Bu kutuya X yaz" (spec §3). Refuses a secret-looking payload
     outright ("Şifreleri ben yazmam"); the text the owner's words extracted wins over the
     model's own ``content`` argument.
 
@@ -668,7 +897,7 @@ def _type_speech(task: Any) -> str:
 
 
 def operator_shell(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"IP adresimi göster" / "Bilgisayarın adı ne?" (spec §3) — a QUERY: it dispatches a
+    """ "IP adresimi göster" / "Bilgisayarın adı ne?" (spec §3) — a QUERY: it dispatches a
     read-only allowlisted command and answers from what it read, never from a guess."""
     turn = _turn_record(ctx)
     kind = turn.get("shell_query") if isinstance(turn.get("shell_query"), str) else None
@@ -690,29 +919,265 @@ def operator_shell(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
     if task.status == STATUS_SUCCEEDED:
         stdout = str(task.last_observed.get("stdout") or "")
+        first_line = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
         if kind == "ip":
             value = parse_ipv4(stdout) or ""
             speech = f"IP adresiniz {value}." if value else SPEECH_IP_FAILURE
+        elif kind == "whoami":
+            # B30 req 118: ``whoami`` answers DOMAIN\\user; the owner hears the user part.
+            user = first_line.rsplit("\\", 1)[-1] if first_line else ""
+            speech = f"Kullanıcı adınız {user}." if user else SPEECH_WHOAMI_FAILURE
         else:
             # The companion's own ``hostname`` output is one line; a canned test fixture
             # may carry more (alarms_support.happy_operator_device_results), so only the
             # first line is ever spoken as the machine's name.
-            first_line = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
             speech = f"Bilgisayarın adı {first_line}." if first_line else SPEECH_HOSTNAME_FAILURE
     else:
-        speech = SPEECH_IP_FAILURE if kind == "ip" else SPEECH_HOSTNAME_FAILURE
+        speech = _SHELL_FAILURE_TR.get(kind, SPEECH_HOSTNAME_FAILURE)
     return {**(task.action_receipt or {}), "speech": speech}
+
+
+# ------------------------------------------------- B30: app close, processes, services
+
+
+def _app_close_speech(task: Any, name_tr: str) -> str:
+    if task.status == STATUS_SUCCEEDED:
+        return f"{name_tr} uygulamasını kapattım efendim."
+    if task.error_class == "modal_open":
+        return f"{name_tr} uygulamasını kapatamadım efendim; kaydedilmemiş bir şey soruyor."
+    return f"{name_tr} uygulamasını kapatamadım efendim."
+
+
+def operator_app_close(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Not Defteri'ni kapat." / "Chrome'u kapat." (B30 req 82) — ``app.close`` on the
+    window the owner named (or the current one): WM_CLOSE, never a kill unless ``force``,
+    a save prompt reported as ``modal_open`` rather than answered for the owner."""
+    turn = _turn_record(ctx)
+    canonical = turn.get("application") if isinstance(turn.get("application"), str) else None
+    if not canonical:
+        raw = arguments.get("application")
+        if isinstance(raw, str) and raw.strip():
+            _, tokens, _ = normalize_transcript(raw)
+            canonical = resolve_app_alias(tokens)
+    db = _require_db(ctx, TOOL_APP_CLOSE)
+    lister = _once(_window_lister(ctx))
+    if canonical:
+        # The application's own window, from the device's list (by image), not a guess.
+        image = app_allowlists.APP_IMAGES.get(canonical, "")
+        window_id = next(
+            (
+                str(w.get("window_id"))
+                for w in _live_windows(lister)
+                if str(w.get("image") or "").replace("\\", "/").rsplit("/", 1)[-1].lower() == image
+            ),
+            None,
+        )
+        if window_id is None:
+            name_tr = _APP_TR_NAMES.get(canonical, canonical)
+            return _receipt(
+                ctx,
+                capability=TOOL_APP_CLOSE,
+                requested_state="closed",
+                execution=EXECUTION_NOOP,
+                terminal=TERMINAL_ALREADY,
+                server={"application": canonical, "reason": "not_running"},
+                speech=f"{name_tr} zaten açık değil efendim.",
+            )
+        name_tr = _APP_TR_NAMES.get(canonical, canonical)
+    else:
+        window_ref = turn.get("window_ref") or arguments.get("window") or "current"
+        window_id, refusal = _resolve_window_id(
+            db, action="close", window_ref=str(window_ref), list_windows=lister
+        )
+        if window_id is None:
+            return _clarification(refusal or SPEECH_NO_WINDOW)
+        name_tr = "Öndeki"
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_APP_CLOSE, requested_state="closed")
+    operator = _require_operator(ctx, TOOL_APP_CLOSE)
+    force = arguments.get("force") is True
+    plan = Plan(
+        name=PLAN_CLOSE_APPLICATION,
+        goal=f"close application {window_id}",
+        steps=close_app(window_id, force=force),
+    )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    return {**(task.action_receipt or {}), "speech": _app_close_speech(task, name_tr)}
+
+
+def _spoken_name(turn: dict[str, Any], arguments: dict[str, Any], key: str) -> str:
+    spoken = turn.get(key)
+    if isinstance(spoken, str) and spoken.strip():
+        return spoken.strip()
+    argued = arguments.get("name")
+    return argued.strip() if isinstance(argued, str) else ""
+
+
+def operator_process(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Chrome çalışıyor mu?" / "Hangi uygulamalar açık?" (B30 req 119) and "Chrome'u
+    sonlandır." (req 120) — ``process.list`` is a read; ``process.stop`` is allowed only
+    for an image the shared contract names as stoppable, refused with ``permission_denied``
+    otherwise, before any device is asked."""
+    turn = _turn_record(ctx)
+    action = str(arguments.get("action") or "")
+    if turn.get("intent") == "process_query":
+        action = "list"
+    elif turn.get("intent") == "process_stop":
+        action = "stop"
+    if action not in PLAN_BY_PROCESS_ACTION:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"operator.process needs 'action' in {tuple(PLAN_BY_PROCESS_ACTION)}",
+        )
+    name = _spoken_name(turn, arguments, "process_name")
+    canonical = resolve_app_alias(normalize_transcript(name)[1]) if name else None
+    image = app_allowlists.APP_IMAGES.get(canonical or "", "") or name
+    if action == "stop":
+        if not image:
+            return _clarification(SPEECH_NO_PROCESS)
+        if not app_allowlists.image_stoppable(image):
+            return _receipt(
+                ctx,
+                capability=TOOL_PROCESS,
+                requested_state="stopped",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"requested": image, "reason": "not_in_stop_policy"},
+                speech=SPEECH_PROCESS_POLICY,
+                error_class="permission_denied",
+            )
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_PROCESS, requested_state=action)
+    operator = _require_operator(ctx, TOOL_PROCESS)
+    if action == "list":
+        steps = process_list(image or None)
+    else:
+        steps = process_stop(image, force=arguments.get("force") is True)
+    plan = Plan(
+        name=PLAN_BY_PROCESS_ACTION[action], goal=f"process {action} {image or '*'}", steps=steps
+    )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    out = {**(task.action_receipt or {})}
+    if action == "list":
+        observed = task.last_observed or {}
+        processes = observed.get("processes") if task.status == STATUS_SUCCEEDED else None
+        if not isinstance(processes, list):
+            out["speech"] = SPEECH_PROCESS_LIST_FAILURE
+            return out
+        names = sorted(
+            {str(p.get("name") or p.get("image") or "") for p in processes if isinstance(p, dict)}
+        )
+        names = [n for n in names if n]
+        if image:
+            label = _APP_TR_NAMES.get(canonical or "", image)
+            out["speech"] = (
+                f"{label} çalışıyor efendim ({len(processes)} süreç)."
+                if processes
+                else f"{label} çalışmıyor efendim."
+            )
+        else:
+            out["speech"] = (
+                f"{len(names)} uygulama açık efendim: {', '.join(names[:8])}."
+                if names
+                else "Açık bir uygulama görünmüyor efendim."
+            )
+        out["processes"] = processes
+        return out
+    label = _APP_TR_NAMES.get(canonical or "", image)
+    if task.status == STATUS_SUCCEEDED:
+        out["speech"] = f"{label} sürecini sonlandırdım efendim."
+    elif task.error_class == "permission_denied":
+        out["speech"] = SPEECH_PROCESS_POLICY
+    else:
+        out["speech"] = f"{label} sürecini sonlandıramadım efendim."
+    return out
+
+
+def operator_service(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Yazdırma servisi çalışıyor mu?" (B30 req 121) and "Spooler servisini yeniden
+    başlat." (req 122) — ``service.status`` is a read; ``service.restart`` is allowed only
+    for a service the shared contract names, and the device refuses an unelevated companion
+    with ``permission_denied`` (UAC stays the owner's)."""
+    turn = _turn_record(ctx)
+    action = str(arguments.get("action") or "")
+    if turn.get("intent") == "service_query":
+        action = "status"
+    elif turn.get("intent") == "service_restart":
+        action = "restart"
+    if action not in PLAN_BY_SERVICE_ACTION:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"operator.service needs 'action' in {tuple(PLAN_BY_SERVICE_ACTION)}",
+        )
+    name = _spoken_name(turn, arguments, "service_name")
+    name = SERVICE_ALIASES_TR.get(name.lower(), name)
+    if not name:
+        return _clarification(SPEECH_NO_SERVICE)
+    if action == "restart" and not app_allowlists.service_restartable(name):
+        return _receipt(
+            ctx,
+            capability=TOOL_SERVICE,
+            requested_state="restarted",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"requested": name, "reason": "not_in_restart_policy"},
+            speech=SPEECH_SERVICE_POLICY,
+            error_class="permission_denied",
+        )
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_SERVICE, requested_state=action)
+    operator = _require_operator(ctx, TOOL_SERVICE)
+    steps = service_status(name) if action == "status" else service_restart(name)
+    plan = Plan(name=PLAN_BY_SERVICE_ACTION[action], goal=f"service {action} {name}", steps=steps)
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    out = {**(task.action_receipt or {})}
+    state = str((task.last_observed or {}).get("state") or "")
+    if action == "status":
+        if task.status == STATUS_SUCCEEDED and state:
+            out["speech"] = f"{name} servisi {SERVICE_STATE_TR.get(state.lower(), state)} efendim."
+        elif task.error_class == "ui_target_not_found":
+            out["speech"] = f"{name} adında bir servis yok efendim."
+        else:
+            out["speech"] = f"{name} servisinin durumunu okuyamadım efendim."
+        out["state"] = state or None
+        return out
+    if task.status == STATUS_SUCCEEDED:
+        out["speech"] = f"{name} servisini yeniden başlattım efendim."
+    elif task.error_class == "permission_denied":
+        out["speech"] = SPEECH_SERVICE_ELEVATION
+    else:
+        out["speech"] = f"{name} servisini yeniden başlatamadım efendim."
+    return out
 
 
 # ---------------------------------------------------------------------- cancel
 
 
+def _mission_active(ctx: ToolContext) -> bool:
+    if ctx.db is None:
+        return False
+    try:
+        from app.operator.mission_service import active_mission
+
+        return active_mission(ctx.db) is not None
+    except Exception:  # noqa: BLE001 - a deployment without the missions table
+        return False
+
+
 def operator_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"İptal et." / "Dur." while a task is running (spec §3). Idempotent: nothing
+    """ "İptal et." / "Dur." while a task is running (spec §3). Idempotent: nothing
     running is a truthful, calm answer, not an error."""
     del arguments
     operator = ctx.live.get("operator")
     running = bool(operator is not None and operator.is_running())
+    if not running and _mission_active(ctx):
+        # B39 (req 129): "Dur." while a MISSION runs is the mission's cancel.
+        from app.voice.realtime_sessions.tools_mission import mission_control
+
+        return mission_control(ctx, "cancel")
     if not running:
         return _receipt(
             ctx,
@@ -739,11 +1204,16 @@ def operator_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
 
 
 def operator_status(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Ne yapıyorsun?" while a task is running (spec §3) — a QUERY over the live task."""
+    """ "Ne yapıyorsun?" while a task is running (spec §3) — a QUERY over the live task."""
     del arguments
     operator = ctx.live.get("operator")
     running = bool(operator is not None and operator.is_running())
     task = operator.status() if operator is not None else None
+    if (not running or task is None) and _mission_active(ctx):
+        # B39 (req 129): "Ne yapıyorsun?" while a MISSION runs is the mission's status.
+        from app.voice.realtime_sessions.tools_mission import mission_control
+
+        return mission_control(ctx, "status")
     if not running or task is None:
         return {"speech": SPEECH_NOT_DOING_ANYTHING, "task": task.as_dict() if task else None}
     observed = task.last_observed if isinstance(task.last_observed, dict) else {}
@@ -760,11 +1230,557 @@ def operator_status(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     return {"speech": speech, "task": task.as_dict()}
 
 
+def _input_speech(task: Any, *, success: str, failure: str) -> str:
+    """The sentence for an input run, naming the guard when the guard stopped it."""
+    if task.status == STATUS_SUCCEEDED:
+        return success
+    if task.error_class == ERROR_FOCUS_MISMATCH:
+        return SPEECH_FOCUS_LOST
+    return failure
+
+
+def _spoken_key(turn: dict[str, Any], arguments: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """(key, chord): the owner's own words first (``key_press`` on the turn, "enter" or
+    "ctrl+s"), the model's ``key`` / ``keys`` arguments only when the router named none."""
+    spoken = turn.get("key_press")
+    if isinstance(spoken, str) and spoken.strip():
+        parts = [p.strip().lower() for p in spoken.split("+") if p.strip()]
+        if len(parts) == 1:
+            return parts[0], []
+        return None, parts
+    keys = arguments.get("keys")
+    if isinstance(keys, list) and keys:
+        return None, [str(k).strip().lower() for k in keys if str(k).strip()]
+    key = arguments.get("key")
+    if isinstance(key, str) and key.strip():
+        return key.strip().lower(), []
+    return None, []
+
+
+def operator_key(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Enter'a bas." / "Ctrl S'ye bas." (B28 req 92/93) — one key or one chord into the
+    focused window, through the companion's focus guard, re-observed after.
+
+    The plan is ``window.activate`` -> ``keyboard.key|shortcut`` with ``retries=0`` on the
+    input step: a chord that was sent and not read back is not sent twice (Ctrl+Z twice is
+    two undos). The device's ``focus_mismatch`` mid-plan ends the task with that class and
+    the receipt counts the steps that ran before it (req 110).
+    """
+    turn = _turn_record(ctx)
+    key, chord = _spoken_key(turn, arguments)
+    if key is None and not chord:
+        return _clarification(SPEECH_NO_KEY)
+    if key is not None and not valid_key(key):
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR, f"'{key}' is not a key keyboard.key accepts"
+        )
+    if chord and not valid_shortcut(chord):
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"{chord!r} is not a chord keyboard.shortcut accepts (modifiers then one key)",
+        )
+    db = _require_db(ctx, TOOL_KEY)
+    window_ref = turn.get("window_ref") or arguments.get("window") or "current"
+    window_id, refusal = _resolve_window_id(
+        db, action="activate", window_ref=str(window_ref), list_windows=_window_lister(ctx)
+    )
+    if window_id is None:
+        return _clarification(refusal or SPEECH_NO_WINDOW)
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_KEY, requested_state="pressed")
+    operator = _require_operator(ctx, TOOL_KEY)
+    if key is not None:
+        plan = Plan(
+            name=PLAN_PRESS_KEY, goal=f"press {key} in {window_id}", steps=press_key(window_id, key)
+        )
+        success = SPEECH_KEY_SUCCESS_TR.format(key=KEY_TR.get(key, key.upper()))
+    else:
+        plan = Plan(
+            name=PLAN_PRESS_SHORTCUT,
+            goal=f"press {'+'.join(chord)} in {window_id}",
+            steps=press_shortcut(window_id, chord),
+        )
+        success = SPEECH_SHORTCUT_SUCCESS_TR.format(
+            keys="+".join(KEY_TR.get(k, k.upper()) for k in chord)
+        )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    return {
+        **(task.action_receipt or {}),
+        "speech": _input_speech(task, success=success, failure=SPEECH_KEY_FAILURE),
+    }
+
+
+def _window_centre(windows: list[dict[str, Any]], window_id: str) -> tuple[int, int]:
+    """The centre of ``window_id`` in window space, from the device's own rect."""
+    for window in windows:
+        if window.get("window_id") != window_id:
+            continue
+        rect = window.get("rect") if isinstance(window.get("rect"), dict) else {}
+        try:
+            width, height = int(rect.get("width") or 0), int(rect.get("height") or 0)
+        except (TypeError, ValueError):
+            width = height = 0
+        if width > 0 and height > 0:
+            return max(0, width // 2), max(0, height // 2)
+    return SCROLL_FALLBACK_POINT
+
+
+def operator_pointer(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Aşağı kaydır." (B28 req 98), and the model's own move/click/double/right click
+    (req 94-97) — the last rung of the ladder, taken only when said to be (req 107).
+
+    A move or a click without ``last_resort: true`` is a REFUSED receipt: the policy is the
+    action, and the refusal is its record. Screen-space coordinates need it too. A scroll
+    needs no justification (no element is being targeted) and, when spoken, lands on the
+    window's own centre computed from the device's rect - never a guessed coordinate.
+    """
+    turn = _turn_record(ctx)
+    scroll_direction = turn.get("scroll_direction")
+    spoken_scroll = (
+        isinstance(scroll_direction, str) and scroll_direction in SCROLL_NOTCHES_BY_DIRECTION
+    )
+    action = "scroll" if spoken_scroll else str(arguments.get("action") or "")
+    if action not in POINTER_ACTIONS:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"operator.pointer needs 'action' in {POINTER_ACTIONS}",
+        )
+    space = str(arguments.get("space") or "window")
+    if space not in POINTER_SPACES:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "space must be 'window' or 'screen'")
+    last_resort = arguments.get("last_resort") is True
+    reason = str(arguments.get("reason") or "")[:200]
+    if action != "scroll" and not last_resort:
+        return _receipt(
+            ctx,
+            capability=TOOL_POINTER,
+            requested_state=action,
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={
+                "reason": ERROR_COORDINATE_NOT_LAST_RESORT,
+                "action": action,
+                "space": space,
+                "interaction_level": "pointer",
+            },
+            speech=SPEECH_COORDINATE_POLICY,
+            error_class=ERROR_COORDINATE_NOT_LAST_RESORT,
+        )
+    db = _require_db(ctx, TOOL_POINTER)
+    window_ref = turn.get("window_ref") or arguments.get("window") or "current"
+    lister = _once(_window_lister(ctx))
+    window_id, refusal = _resolve_window_id(
+        db, action="activate", window_ref=str(window_ref), list_windows=lister
+    )
+    if window_id is None:
+        return _clarification(refusal or SPEECH_NO_WINDOW)
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_POINTER, requested_state=action)
+    delta: int | None = None
+    if action == "scroll":
+        if spoken_scroll:
+            delta = SCROLL_NOTCHES_BY_DIRECTION[str(scroll_direction)]
+        else:
+            raw = arguments.get("delta")
+            delta = int(raw) if isinstance(raw, int | float) and not isinstance(raw, bool) else None
+    x_arg, y_arg = arguments.get("x"), arguments.get("y")
+    have_point = all(isinstance(v, int | float) and not isinstance(v, bool) for v in (x_arg, y_arg))
+    if have_point:
+        x, y = int(x_arg), int(y_arg)  # type: ignore[arg-type]
+    elif action == "scroll" and space == "window":
+        x, y = _window_centre(_live_windows(lister), window_id)
+    else:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "operator.pointer needs 'x' and 'y'")
+    try:
+        steps = build_pointer_steps(window_id, action, x=x, y=y, space=space, delta=delta)
+    except ValueError as exc:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, str(exc)) from exc
+    operator = _require_operator(ctx, TOOL_POINTER)
+    plan = Plan(
+        name=PLAN_BY_POINTER_ACTION[action],
+        goal=f"pointer {action} at ({x},{y}) {space} in {window_id}",
+        steps=steps,
+    )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    out = {
+        **(task.action_receipt or {}),
+        "speech": _input_speech(
+            task, success=SPEECH_POINTER_SUCCESS_TR[action], failure=SPEECH_POINTER_FAILURE
+        ),
+    }
+    if last_resort:
+        # The justification travels with the receipt (req 107): a reader of the ledger
+        # sees WHY the last rung was taken, in the model's own words.
+        server = out.get("observed_after", {}).get("server")
+        if isinstance(server, dict):
+            server["last_resort_reason"] = reason
+    return out
+
+
+def _focused_image(lister: Callable[[], list[dict[str, Any]]] | None, window_id: str) -> str:
+    """The process image behind ``window_id``, from the device's own window list."""
+    for window in _live_windows(lister):
+        if window.get("window_id") == window_id:
+            return str(window.get("image") or "")
+    return ""
+
+
+def _ui_query(
+    turn: dict[str, Any], arguments: dict[str, Any], adapter: app_adapters.AppAdapter
+) -> dict[str, str]:
+    """The element query: the owner's spoken target first ("Tamam" -> a button named
+    Tamam; "belge" -> the adapter's document control), then the model's explicit query
+    keys, then the model's plain ``target`` name."""
+    spoken = turn.get("ui_target")
+    if isinstance(spoken, str) and spoken.strip():
+        known = app_adapters.spoken_target_query(adapter, spoken)
+        if known is not None:
+            return known
+        return app_adapters.button_query(spoken.strip())
+    explicit = {
+        key: str(arguments[key]).strip()
+        for key in app_adapters.QUERY_KEYS
+        if isinstance(arguments.get(key), str) and str(arguments[key]).strip()
+    }
+    if explicit:
+        return explicit
+    target = arguments.get("target")
+    if isinstance(target, str) and target.strip():
+        known = app_adapters.spoken_target_query(adapter, target)
+        return known if known is not None else {"name": target.strip()}
+    return {}
+
+
+def _ui_speech(task: Any, *, success: str, failure: str, unverified: str | None = None) -> str:
+    if task.status == STATUS_SUCCEEDED:
+        return success
+    if task.error_class == ERROR_FOCUS_MISMATCH:
+        return SPEECH_FOCUS_LOST
+    if task.error_class == ERROR_UI_TARGET_NOT_FOUND:
+        return SPEECH_UI_NOT_FOUND
+    if unverified and task.error_class == "postcondition_failed":
+        return unverified
+    return failure
+
+
+def operator_ui(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Tamam düğmesine tıkla." / set a control's value / select an item (B29 req
+    100/101/103) — UI Automation, the highest semantic rung below the API, each action
+    verified by an INDEPENDENT read afterwards (req 111): an invoke whose element neither
+    changed nor went away is a failure, never a success.
+    """
+    turn = _turn_record(ctx)
+    action = str(arguments.get("action") or "")
+    if turn.get("intent") == "ui_invoke":
+        action = "invoke"
+    if action not in UI_ACTIONS:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR, f"operator.ui needs 'action' in {UI_ACTIONS}"
+        )
+    # Nothing to act on, or a secret: decided before any device is asked anything.
+    if not _ui_query(turn, arguments, app_adapters.GENERIC):
+        return _clarification(SPEECH_NO_TARGET)
+    if action == "set_value":
+        raw_value = arguments.get("value")
+        raw_value = raw_value.strip() if isinstance(raw_value, str) else ""
+        if not raw_value:
+            return _clarification(SPEECH_NO_VALUE)
+        if contains_secret_reference(raw_value):
+            return _receipt(
+                ctx,
+                capability=TOOL_UI,
+                requested_state="set_value",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={},
+                speech=SPEECH_SECRET_REFUSED,
+                error_class=ERROR_SECRET_REFUSED,
+            )
+    db = _require_db(ctx, TOOL_UI)
+    window_ref = turn.get("window_ref") or arguments.get("window") or "current"
+    lister = _once(_window_lister(ctx))
+    window_id, refusal = _resolve_window_id(
+        db, action="activate", window_ref=str(window_ref), list_windows=lister
+    )
+    if window_id is None:
+        return _clarification(refusal or SPEECH_NO_WINDOW)
+    adapter = app_adapters.adapter_for(_focused_image(lister, window_id))
+    query = _ui_query(turn, arguments, adapter)
+    if not query:
+        return _clarification(SPEECH_NO_TARGET)
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_UI, requested_state=action)
+    label = query.get("name") or query.get("automation_id") or query.get("control_type") or ""
+    try:
+        if action == "invoke":
+            expect = arguments.get("expect")
+            expect = str(expect) if isinstance(expect, str) and expect in UI_EXPECTATIONS else None
+            expect_arg = arguments.get("expect_value")
+            expect_arg = str(expect_arg) if isinstance(expect_arg, str) and expect_arg else None
+            steps = ui_invoke(window_id, query, expect=expect, expect_arg=expect_arg)
+            success = SPEECH_UI_INVOKED_TR.format(name=label)
+            unverified: str | None = SPEECH_UI_UNVERIFIED_TR.format(name=label)
+        elif action == "set_value":
+            value = str(arguments.get("value") or "").strip()
+            steps = ui_set_value(window_id, query, value)
+            success = SPEECH_UI_SET_TR
+            unverified = None
+        else:
+            item = arguments.get("item")
+            item = item.strip() if isinstance(item, str) else ""
+            if not item:
+                return _clarification(SPEECH_NO_ITEM)
+            steps = ui_select(window_id, query, item)
+            success = SPEECH_UI_SELECTED_TR.format(item=item)
+            unverified = None
+    except ValueError as exc:
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, str(exc)) from exc
+    operator = _require_operator(ctx, TOOL_UI)
+    plan = Plan(
+        name=PLAN_BY_UI_ACTION[action], goal=f"ui {action} {query} in {window_id}", steps=steps
+    )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    out = {
+        **(task.action_receipt or {}),
+        "speech": _ui_speech(
+            task, success=success, failure=SPEECH_UI_FAILURE, unverified=unverified
+        ),
+    }
+    server = out.get("observed_after", {}).get("server")
+    if isinstance(server, dict):
+        server["adapter"] = adapter.image or "generic"
+        server["query"] = dict(query)
+    return out
+
+
+def operator_inspect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Ekrandaki metni oku." / the UI Automation tree of the focused window (B29 req
+    99/102) — a QUERY: one bounded ``ui.inspect``, spoken as the text the control holds
+    or as what the window contains."""
+    turn = _turn_record(ctx)
+    db = _require_db(ctx, TOOL_INSPECT)
+    window_ref = turn.get("window_ref") or arguments.get("window") or "current"
+    lister = _once(_window_lister(ctx))
+    window_id, refusal = _resolve_window_id(
+        db, action="activate", window_ref=str(window_ref), list_windows=lister
+    )
+    if window_id is None:
+        return _clarification(refusal or SPEECH_NO_WINDOW)
+    adapter = app_adapters.adapter_for(_focused_image(lister, window_id))
+    query = _ui_query(turn, arguments, adapter)
+    reading = turn.get("intent") == "ui_read" or bool(query) or arguments.get("read") is True
+    if reading and not query and adapter.document_query:
+        query = dict(adapter.document_query)
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_INSPECT, requested_state="read")
+    operator = _require_operator(ctx, TOOL_INSPECT)
+    mode = "read" if reading else "inspect"
+    plan = Plan(
+        name=PLAN_BY_READ_MODE[mode],
+        goal=f"ui {mode} {query} in {window_id}",
+        steps=ui_read(window_id, query or None),
+    )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    out = {**(task.action_receipt or {})}
+    root = (task.last_observed or {}).get("root") if task.status == STATUS_SUCCEEDED else None
+    if root is None:
+        out["speech"] = _ui_speech(task, success="", failure=SPEECH_UI_FAILURE)
+        return out
+    if reading:
+        text = tree_text(root)[:MAX_READ_CHARS]
+        out["speech"] = SPEECH_READ_TR.format(text=text) if text else SPEECH_READ_EMPTY
+        out["text"] = text
+    else:
+        from app.operator.plans import _tree_nodes
+
+        nodes = _tree_nodes(root)
+        names = [str(n.get("name")).strip() for n in nodes if str(n.get("name") or "").strip()]
+        out["speech"] = SPEECH_INSPECT_TR.format(
+            count=len(nodes), names=", ".join(names[:6]) or "adsız öğeler"
+        )
+        out["node_count"] = len(nodes)
+    out["root"] = root
+    return out
+
+
+def operator_see(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Ekranda ne var?" (B29 req 105) — the VISUAL rung: one ``screen.capture``, one
+    question to the vision provider, the answer spoken. No provider configured is a
+    refusal that says so; the picture is never persisted and never guessed about."""
+    question = arguments.get("question")
+    question = question.strip() if isinstance(question, str) and question.strip() else ""
+    question = question or DEFAULT_QUESTION_TR
+    provider = ctx.live.get("vision_provider")
+    if provider is None:
+        return _receipt(
+            ctx,
+            capability=TOOL_SEE,
+            requested_state="described",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": "no_vision_provider"},
+            speech=SPEECH_NO_VISION,
+            error_class=ERROR_NO_VISION_PROVIDER,
+        )
+    device = ctx.live.get("device_action")
+    if device is None:
+        return _capability_missing(ctx, capability=TOOL_SEE, requested_state="described")
+    action_id = _action_id(ctx)
+    result = device.run(
+        capability=DEVICE_SCREEN_CAPTURE,
+        payload={"format": "png"},
+        idempotency_key=f"see:{action_id}",
+        timeout_s=TIMEOUT_SCREEN_CAPTURE_S,
+    )
+    encoded = (result.result or {}).get("png_base64") if result.ok else None
+    raw: bytes | None = None
+    if isinstance(encoded, str) and encoded:
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raw = None
+    if not raw:
+        missing = result.error_class in ("no_capable_device", "capability_missing")
+        return _receipt(
+            ctx,
+            capability=TOOL_SEE,
+            requested_state="described",
+            execution=EXECUTION_REFUSED if missing else EXECUTION_FAILED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": result.error_class or "no_image"},
+            speech=SPEECH_SCREENSHOT_NO_DEVICE if missing else SPEECH_SCREENSHOT_FAILED,
+            error_class="capability_missing" if missing else (result.error_class or "unverified"),
+        )
+    try:
+        answer = provider.describe(raw, question=question)
+    except VisionError as exc:
+        return _receipt(
+            ctx,
+            capability=TOOL_SEE,
+            requested_state="described",
+            execution=EXECUTION_FAILED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": exc.error_class, "provider": getattr(provider, "name", "?")},
+            speech=SPEECH_VISION_FAILED,
+            error_class=exc.error_class,
+        )
+    out = _receipt(
+        ctx,
+        capability=TOOL_SEE,
+        requested_state="described",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        server={
+            "provider": answer.provider,
+            "model": answer.model,
+            "bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "interaction_level": "visual",
+        },
+        speech=answer.text,
+    )
+    out["answer"] = answer.as_dict()
+    return out
+
+
+def operator_screenshot(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Ekran görüntüsü al." (B27 req 735) — ONE ``screen.capture`` on the device.
+
+    The first caller the capability has had. The device is asked through the same port
+    every other action uses, so "no device advertises screen.capture" comes back as the
+    registry's own answer (``no_capable_device`` -> ``capability_missing``) rather than a
+    sentence written here; and a device that answers without an image is an UNVERIFIED
+    failure, never a success with nothing behind it.
+    """
+    del arguments
+    device = ctx.live.get("device_action")
+    if device is None:
+        return _capability_missing(
+            ctx, capability=CAPABILITY_SCREENSHOT, requested_state="captured"
+        )
+    action_id = _action_id(ctx)
+    result = device.run(
+        capability=DEVICE_SCREEN_CAPTURE,
+        payload={"format": "png"},
+        idempotency_key=f"screenshot:{action_id}",
+        timeout_s=TIMEOUT_SCREEN_CAPTURE_S,
+    )
+    if not result.ok:
+        missing = result.error_class in ("no_capable_device", "capability_missing")
+        return _receipt(
+            ctx,
+            capability=CAPABILITY_SCREENSHOT,
+            requested_state="captured",
+            execution=EXECUTION_REFUSED if missing else EXECUTION_FAILED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": result.error_class, "detail": (result.message or "")[:200]},
+            speech=SPEECH_SCREENSHOT_NO_DEVICE if missing else SPEECH_SCREENSHOT_FAILED,
+            error_class="capability_missing" if missing else (result.error_class or "failed"),
+        )
+    payload = result.result or {}
+    encoded = payload.get("png_base64")
+    raw: bytes | None = None
+    if isinstance(encoded, str) and encoded:
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raw = None
+    if not raw:
+        return _receipt(
+            ctx,
+            capability=CAPABILITY_SCREENSHOT,
+            requested_state="captured",
+            execution=EXECUTION_FAILED,
+            terminal=TERMINAL_FAILED,
+            server={
+                "reason": "no_image",
+                "width": payload.get("width"),
+                "height": payload.get("height"),
+            },
+            speech=SPEECH_SCREENSHOT_UNVERIFIED,
+            error_class="unverified",
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    stored_key: str | None = None
+    artifacts = ctx.live.get("artifacts_runtime")
+    if artifacts is not None:
+        key = f"{SCREENSHOT_KEY_PREFIX}/{ctx.session_id}/{action_id}.png"
+        try:
+            artifacts.store.put(key, raw, "image/png")
+            stored_key = key
+        except Exception:  # noqa: BLE001 - the image is the action; storing it is evidence
+            logger.warning("screenshot_store_failed", action_id=action_id)
+    width = payload.get("width")
+    height = payload.get("height")
+    size = f"{width}×{height}" if width and height else f"{len(raw)} bayt"
+    speech = f"Ekran görüntüsünü aldım efendim; {size}."
+    speech += " Kaydettim." if stored_key else " Kaydedemedim; yalnız bu oturumda."
+    return _receipt(
+        ctx,
+        capability=CAPABILITY_SCREENSHOT,
+        requested_state="captured",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        server={
+            "width": width,
+            "height": height,
+            "bytes": len(raw),
+            "sha256": digest,
+            "stored_key": stored_key,
+        },
+        speech=speech,
+    )
+
+
 # ------------------------------------------------------------------ registration
 
 
 def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
-    """Register all six tools (module docstring: ONE line in ``default_registry``)."""
+    """Register all seven tools (module docstring: ONE line in ``default_registry``)."""
     from app.voice.realtime_sessions.tools import ToolSpec
 
     reg.register(
@@ -865,7 +1881,7 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
             ),
             parameters={
                 "type": "object",
-                "properties": {"query": {"type": "string", "enum": ["ip", "hostname"]}},
+                "properties": {"query": {"type": "string", "enum": list(PLAN_BY_SHELL_QUERY)}},
                 "additionalProperties": False,
             },
             handler=operator_shell,
@@ -895,19 +1911,250 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
             handler=operator_status,
         )
     )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_SCREENSHOT,
+            description=(
+                "EKRAN GÖRÜNTÜSÜ ALIR: 'ekran görüntüsü al', 'ekranın görüntüsünü al', "
+                "'screenshot al', 'ekranı yakala' denince bu araç çağrılır. Görüntüyü "
+                "sunucu saklar; sana boyutu ve saklandığı anahtar döner, görüntünün "
+                "kendisi dönmez. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=operator_screenshot,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_KEY,
+            description=(
+                "Odaktaki pencereye TEK BİR TUŞ ya da KISAYOL gönderir: 'Enter'a bas', "
+                "'Escape'e bas', 'Tab tuşuna bas', 'Ctrl S'ye bas'. 'key' tek tuş adı "
+                "(enter, escape, tab, backspace, delete, home, end, up, down, left, right, "
+                "space, f1..f12); 'keys' kısayol için ['ctrl','s'] gibi. Metin yazmak için "
+                "operator.type kullanılır. Hangi tuş olduğunu sahibin sözcüğünden SUNUCU "
+                "okur. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "maxLength": 16},
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 16},
+                        "maxItems": 4,
+                    },
+                    "window": {"type": "string", "maxLength": 100},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_key,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_POINTER,
+            description=(
+                "İŞARETÇİ: 'aşağı kaydır' / 'yukarı kaydır' denince action=scroll; "
+                "taşıma/tıklama (move, click, double_click, right_click) YALNIZ SON ÇARE: "
+                "önce arayüz ağacı (ui.*) ve klavye denenir, olmuyorsa "
+                "last_resort=true ve 'reason' ile çağrılır; aksi hâlde araç reddeder. "
+                "x,y pencere uzayında (space='window'); 'delta' kaydırma çentiği. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(POINTER_ACTIONS)},
+                    "x": {"type": "integer", "minimum": -20000, "maximum": 20000},
+                    "y": {"type": "integer", "minimum": -20000, "maximum": 20000},
+                    "space": {"type": "string", "enum": list(POINTER_SPACES)},
+                    "delta": {"type": "integer", "minimum": -50, "maximum": 50},
+                    "last_resort": {"type": "boolean"},
+                    "reason": {"type": "string", "maxLength": 200},
+                    "window": {"type": "string", "maxLength": 100},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_pointer,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_UI,
+            description=(
+                "ARAYÜZ AĞACI (UI Automation) ile eyler — tıklamadan ÖNCE denenecek yol: "
+                "action=invoke bir düğmeye basar ('Tamam düğmesine tıkla' → name='Tamam'); "
+                "action=set_value bir alanın değerini yazar ('value'); action=select bir "
+                "listeden öğe seçer ('item'). Hedef: name / automation_id / name_prefix / "
+                "control_type ya da 'target'. invoke için beklenen sonucu söyleyebilirsin: "
+                "expect=window_gone|element_gone|element_present|value_ends_with "
+                "(+expect_value); sunucu sonucu bağımsız okur, doğrulanmayan eylem "
+                "başarısız raporlanır. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(UI_ACTIONS)},
+                    "target": {"type": "string", "maxLength": 200},
+                    "name": {"type": "string", "maxLength": 200},
+                    "automation_id": {"type": "string", "maxLength": 200},
+                    "name_prefix": {"type": "string", "maxLength": 200},
+                    "control_type": {"type": "string", "maxLength": 64},
+                    "value": {"type": "string", "maxLength": 2000},
+                    "item": {"type": "string", "maxLength": 200},
+                    "expect": {"type": "string", "enum": list(UI_EXPECTATIONS)},
+                    "expect_value": {"type": "string", "maxLength": 200},
+                    "window": {"type": "string", "maxLength": 100},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_ui,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_INSPECT,
+            description=(
+                "Odaktaki pencerenin ARAYÜZ AĞACINI okur (UI Automation): 'ekrandaki "
+                "metni oku', 'ne yazıyor' denince alanın metnini SÖYLER; hedef "
+                "verilmezse pencerenin öğelerini sayar ve başlıcalarını adlandırır. "
+                "Hiçbir şeyi değiştirmez. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 200},
+                    "name": {"type": "string", "maxLength": 200},
+                    "automation_id": {"type": "string", "maxLength": 200},
+                    "name_prefix": {"type": "string", "maxLength": 200},
+                    "control_type": {"type": "string", "maxLength": 64},
+                    "read": {"type": "boolean"},
+                    "window": {"type": "string", "maxLength": 100},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_inspect,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_SEE,
+            description=(
+                "EKRANI TARİF EDER (görüntü anlamlandırma): 'ekranda ne var', 'ekranı "
+                "anlat' denince bir ekran görüntüsü alır ve görüntü sağlayıcısına sorar; "
+                "'question' sahibin sorusu. Sağlayıcı tanımlı değilse bunu olduğu gibi "
+                "söyler. Arayüz ağacı yetiyorsa önce operator.inspect kullanılır. Dönen "
+                "'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"question": {"type": "string", "maxLength": 500}},
+                "additionalProperties": False,
+            },
+            handler=operator_see,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_APP_CLOSE,
+            description=(
+                "Bir MASAÜSTÜ UYGULAMASINI KAPATIR: 'Not Defteri'ni kapat', 'Chrome'u "
+                "kapat'. Önce düzgün kapatma (WM_CLOSE); kaydedilmemiş bir şey soruyorsa "
+                "bunu söyler, sahibin yerine cevaplamaz; 'force' yalnız sahip isterse. "
+                "'application' sahibin söylediği ad. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "application": {"type": "string", "maxLength": 100},
+                    "window": {"type": "string", "maxLength": 100},
+                    "force": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_app_close,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_PROCESS,
+            description=(
+                "SÜREÇLER: action=list çalışan uygulamaları/süreçleri sayar ('hangi "
+                "uygulamalar açık', 'Chrome çalışıyor mu' → name); action=stop bir süreci "
+                "sonlandırır ('Chrome'u sonlandır') — YALNIZ izin listesindeki uygulamalar, "
+                "sistem süreçleri asla; politika dışı istek reddedilir. Dönen 'speech' "
+                "metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(PLAN_BY_PROCESS_ACTION)},
+                    "name": {"type": "string", "maxLength": 100},
+                    "force": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_process,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_SERVICE,
+            description=(
+                "WINDOWS SERVİSLERİ: action=status bir servisin durumunu söyler "
+                "('yazdırma servisi çalışıyor mu'); action=restart yeniden başlatır — YALNIZ "
+                "politikanın adlandırdığı servisler ve yönetici yetkisi varsa; aksi hâlde "
+                "dürüstçe reddeder. 'name' servis adı (Spooler gibi) ya da sahibin sözü. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(PLAN_BY_SERVICE_ACTION)},
+                    "name": {"type": "string", "maxLength": 100},
+                },
+                "additionalProperties": False,
+            },
+            handler=operator_service,
+        )
+    )
+    # B39 (req 127-130): the mission tool is one of the operator's own - registered here so
+    # the declared capabilities and the registered tools stay one set.
+    from app.voice.realtime_sessions.tools_mission import register_mission_tools
+
+    register_mission_tools(reg)
     return reg
 
 
 __all__ = [
+    "DEVICE_SCREEN_CAPTURE",
     "OPERATOR_TOOL_NAMES",
     "TOOL_APP_OPEN",
+    "TOOL_APP_CLOSE",
     "TOOL_CANCEL",
+    "TOOL_INSPECT",
+    "TOOL_KEY",
+    "TOOL_POINTER",
+    "TOOL_PROCESS",
+    "TOOL_SCREENSHOT",
+    "TOOL_SEE",
+    "TOOL_SERVICE",
     "TOOL_SHELL",
     "TOOL_STATUS",
     "TOOL_TYPE",
+    "TOOL_UI",
     "TOOL_WINDOW_CONTROL",
+    "operator_app_close",
     "operator_app_open",
     "operator_cancel",
+    "operator_inspect",
+    "operator_key",
+    "operator_pointer",
+    "operator_process",
+    "operator_screenshot",
+    "operator_see",
+    "operator_service",
     "operator_shell",
     "operator_status",
     "operator_type",

@@ -19,11 +19,13 @@ than "Gönder." is one utterance away from one.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from sqlalchemy import select
 
 from app.actions.confirmation_gate import CONFIRM_SOURCE_REST, Confirmation
@@ -131,4 +133,74 @@ async def discard_draft(draft_id: uuid.UUID, request: Request) -> dict[str, Any]
     return await asyncio.to_thread(run)
 
 
-__all__ = ["MAIL_ROUTES_VERSION", "router"]
+# ------------------------------------------------------------ B45: attachments
+
+
+@router.get("/attachments")
+async def download_attachment(
+    request: Request,
+    message_id: Annotated[str, Query(min_length=3, max_length=500)],
+    index: Annotated[int, Query(ge=1, le=100)] = 1,
+) -> Response:
+    """B45 (req 348): the owner's own download of the ``index``-th attachment (1-based) -
+    the web's save path; the voice path hands the device a single-use token instead."""
+    service = _service(request)
+
+    def load() -> Any:
+        return service.attachment_bytes(message_id, index - 1)
+
+    attachment = await asyncio.to_thread(load)
+    if attachment is None:
+        raise HTTPException(status_code=404)
+    name = MailService._safe_attachment_name(attachment.filename)
+    return Response(
+        content=attachment.data,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+#: B45 (req 348): the device's fetch of ONE attachment by a single-use token. No owner
+#: credential - the device's GET carries none (DEVICE_PROTOCOL.md 6k) - which is why it is its
+#: own router, outside the owner-gated one above, exactly like the artifacts' device router.
+device_router = APIRouter(prefix="/v1/mail", tags=["mail"])
+
+
+@device_router.get("/attachments/fetch/{token}")
+async def fetch_attachment_by_token(
+    request: Request, token: Annotated[str, Path(max_length=128)]
+) -> Response:
+    """Unknown, expired, already-redeemed and hash-mismatched tokens are all the SAME bare
+    404, so a probe learns nothing (the render fetch route's rule)."""
+    from app.mail.attachment_fetch import get_attachment_fetch_store
+
+    store = get_attachment_fetch_store()
+    artifacts = _artifacts(request)
+
+    def redeem() -> tuple[bytes, str] | None:
+        target = store.take(token)
+        if target is None:
+            return None
+        try:
+            data = artifacts.store.get(target.object_key)
+        except Exception:  # noqa: BLE001 - a missing object is the same bare 404
+            return None
+        if hashlib.sha256(data).hexdigest() != target.sha256:
+            return None
+        return data, target.content_type
+
+    found = await asyncio.to_thread(redeem)
+    if found is None:
+        raise HTTPException(status_code=404)
+    data, content_type = found
+    return Response(
+        content=data,
+        media_type=content_type or "application/octet-stream",
+        headers={"Cache-Control": "no-store", "Content-Length": str(len(data))},
+    )
+
+
+__all__ = ["MAIL_ROUTES_VERSION", "device_router", "router"]

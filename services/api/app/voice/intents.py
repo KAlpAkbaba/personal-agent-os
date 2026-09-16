@@ -27,6 +27,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Final
 
+from app.calendar import tr_time as calendar_tr_time
 from app.narration import commands
 from app.narration.commands import Command, NarrationState, ParsedCommand, State
 from app.narration.engine import PARAGRAPH_HEADING, PARAGRAPH_LIST, Cursor, NarrationPlan
@@ -63,6 +64,40 @@ class Intent(StrEnum):
     # the time only as part of a whole morning briefing. Resolved AFTER the alarm family:
     # "Sabah alarmım kaçta?" is a question about an alarm, not about the clock.
     CLOCK_QUERY = "clock_query"
+    # B27 req 726-735: the ten sentences the audit measured as reaching NOTHING that a
+    # person actually says every day. Each resolves to a tool that already existed (or,
+    # for the two below marked so, to the tool this batch adds as the caller a
+    # capability never had). Resolved right after the clock, before the operator's
+    # running-gated pair: each carries its own noun, so none can shadow a bare "Dur.".
+    CAPABILITIES_QUERY = "capabilities_query"  # neler yapabilirsin / yeteneklerin neler
+    RESEARCH_CANCEL = "research_cancel"  # araştırmayı iptal et / araştırmayı durdur
+    # B31 req 201/203/204/209: the research paused, resumed, opened by reference, and the
+    # owner's standing answer register.
+    RESEARCH_PAUSE = "research_pause"  # araştırmayı duraklat
+    RESEARCH_RESUME = "research_resume"  # araştırmaya devam et
+    RESEARCH_OPEN = "research_open"  # bir önceki araştırmayı aç
+    RESEARCH_ANSWER_MODE = "research_answer_mode"  # bundan sonra teknik anlat
+    MEDIA_VOLUME = "media_volume"  # sesini kıs / sesi aç / sessize al
+    SCREENSHOT_CAPTURE = "screenshot_capture"  # ekran görüntüsü al
+    CALENDAR_CANCEL = "calendar_cancel"  # toplantıyı iptal et / randevuyu sil
+    # B28 req 92/93/98: the Digital Operator's input the owner can SAY. A key or a chord
+    # ("Enter'a bas", "Ctrl S'ye bas") and a scroll ("aşağı kaydır"); clicks are the
+    # model's own last-resort argument (req 107) and have no spoken form here.
+    OPERATOR_KEY = "operator_key"
+    OPERATOR_SCROLL = "operator_scroll"
+    # B29 req 100/102/105: UI Automation and the visual rung, spoken. "Tamam düğmesine
+    # tıkla" invokes a named button through the tree (never a coordinate); "ekrandaki
+    # metni oku" reads a control's text; "ekranda ne var" asks the vision provider.
+    UI_INVOKE = "ui_invoke"
+    UI_READ = "ui_read"
+    SCREEN_DESCRIBE = "screen_describe"
+    # B30 req 82/119-122: an application closed by name, processes and services asked
+    # about by name, and the two policy-gated actions on them.
+    APP_CLOSE = "app_close"  # Not Defteri'ni kapat / Chrome'u kapat
+    PROCESS_QUERY = "process_query"  # Chrome çalışıyor mu / hangi uygulamalar açık
+    PROCESS_STOP = "process_stop"  # Chrome'u sonlandır
+    SERVICE_QUERY = "service_query"  # yazdırma servisi çalışıyor mu
+    SERVICE_RESTART = "service_restart"  # Spooler servisini yeniden başlat
     # B16 req 35-38, 61: the owner's own memory, by voice. `app.memory` has been
     # complete since M5 with a REST surface and no sentence reached it. Resolved AFTER
     # the alarm, display, routine and clock families: this family shares verbs with none
@@ -123,6 +158,12 @@ class Intent(StrEnum):
     SHELL_QUERY = "shell_query"  # IP adresimi göster / bilgisayarın adı ne
     OPERATOR_CANCEL = "operator_cancel"  # dur / iptal et, while a task is running
     OPERATOR_STATUS = "operator_status"  # Ne yapıyorsun?, while a task is running
+    # B39 (req 127-130): a multi-step mission ("Chrome'u aç ve YouTube'a gir",
+    # "Ayarlarda Bluetooth'u aç") and its three words while one is parked or running.
+    MISSION_START = "mission_start"
+    MISSION_APPROVE = "mission_approve"  # Evet, başla - while the plan waits
+    MISSION_PAUSE = "mission_pause"  # Bekle / duraklat - while it runs
+    MISSION_RESUME = "mission_resume"  # Devam et - while it is paused
 
     # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): File & Document Intelligence.
     # Every one of these targets app.documents through tools_documents - never a second
@@ -131,6 +172,24 @@ class Intent(StrEnum):
     DOCUMENT_READ = "document_read"  # bu dosyayı oku
     DOCUMENT_SUMMARIZE = "document_summarize"  # bunu özetle (bir belge odaktayken)
     DOCUMENT_ANSWER = "document_answer"  # ödeme süresi kaç gün / üçüncü sayfada ne yazıyor
+    # B32 req 139/141/148/150/151/152: pictures, archives, full text, duplicates, preview.
+    DOCUMENT_PREVIEW = "document_preview"  # bu belgeyi önizle
+    DOCUMENT_FIND_TEXT = "document_find_text"  # içinde bütçe geçen belgeyi bul
+    DOCUMENT_DUPLICATES = "document_duplicates"  # yinelenen dosyaları bul
+    DOCUMENT_DEDUP = "document_dedup"  # kopyaları çöp kutusuna gönder
+    # B34 req 153-167, 170: the managed mutations - journaled, reversible, approved by risk.
+    DOCUMENT_WRITE = "document_write"  # X adında bir dosya oluştur
+    DOCUMENT_APPEND = "document_append"  # bu dosyanın sonuna şunu ekle
+    DOCUMENT_EDIT = "document_edit"  # bu dosyada X yerine Y yaz / bu belgeyi güncelle ve kaydet
+    DOCUMENT_RENAME = "document_rename"  # bu dosyanın adını X yap
+    DOCUMENT_MOVE = "document_move"  # bu dosyayı Masaüstüne taşı
+    DOCUMENT_COPY = "document_copy"  # bu dosyayı kopyala
+    DOCUMENT_DELETE = "document_delete"  # bu dosyayı sil (çöp kutusu, yedekli)
+    DOCUMENT_APPLY = "document_apply"  # uygula / kaydet (bekleyen değişiklik)
+    DOCUMENT_UNDO = "document_undo"  # son değişikliği geri al
+    DOCUMENT_VERSIONS = "document_versions"  # bu dosyanın sürüm geçmişi
+    IMAGE_TEXT = "image_text"  # görseldeki metni oku
+    IMAGE_METADATA = "image_metadata"  # fotoğrafın bilgilerini oku
     DOCUMENT_COMPARE = "document_compare"  # bir önceki belgeyle karşılaştır
     DOCUMENT_INSPECT = "document_inspect"  # bu Excel'de ne var / kaç slayt var
     DOCUMENT_COMMON_POINTS = "document_common_points"  # bunların ortak noktalarını çıkar
@@ -154,6 +213,9 @@ class Intent(StrEnum):
     MAIL_EDIT_DRAFT = "mail_edit_draft"  # Konuyu 'Plan onayı' yap
     MAIL_READ_DRAFT = "mail_read_draft"  # Cevabı oku
     MAIL_SEND = "mail_send"  # Gönder. (only with a draft read back)
+    # B45 (req 347, 348): a message's attachments.
+    MAIL_ATTACHMENTS = "mail_attachments"  # Bu mailin eklerini göster
+    MAIL_SAVE_ATTACHMENT = "mail_save_attachment"  # Eki bilgisayarıma kaydet
     CALENDAR_AGENDA = "calendar_agenda"  # Bugün takvimimde ne var?
     CALENDAR_FIND_SLOT = "calendar_find_slot"  # Cuma 60 dakikalık boşluk bul
     CALENDAR_PROPOSE = "calendar_propose"  # Perşembe 15'e diş hekimi ekle / Bunu bir saat ertele
@@ -171,6 +233,11 @@ class Intent(StrEnum):
     ARTIFACT_OPEN = "artifact_open"  # Bunu aç / Son ürettiğin dosyayı aç
     ARTIFACT_LIST = "artifact_list"  # Neler ürettin?
     ARTIFACT_VALIDATE = "artifact_validate"  # Bu dosya doğru mu?
+    # B42 (req 410-416): the artifact in focus owns its lifecycle words.
+    ARTIFACT_EDIT = "artifact_edit"  # Bu belgeye Riskler bölümünü ekle
+    ARTIFACT_CLONE = "artifact_clone"  # Bunu kopyala
+    ARTIFACT_DELETE = "artifact_delete"  # Bunu sil / Evet, sil
+    ARTIFACT_COMPARE = "artifact_compare"  # Öncekiyle karşılaştır
 
     # M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory. Every one of these targets
     # app.appfactory through tools_apps - never a second app-building path (ADR-0086).
@@ -186,6 +253,15 @@ class Intent(StrEnum):
     APP_FACTORY_STATUS = "app_factory_status"  # Uygulama çalışıyor mu?
     APP_FACTORY_OPEN = "app_factory_open"  # Uygulamayı aç
     APP_FACTORY_LIST = "app_factory_list"  # Hangi uygulamaları yaptın?
+    APP_FACTORY_FIX = "app_factory_fix"  # Testleri düzelt / uygulamadaki hatayı düzelt (B40)
+    # B41 (req 440-452): the generated application's lifecycle, gated on a project focus.
+    APP_FACTORY_VERIFY = "app_factory_verify"  # Uygulamayı doğrula
+    APP_FACTORY_LOG = "app_factory_log"  # Uygulamanın günlüğünü oku
+    APP_FACTORY_PACKAGE = "app_factory_package"  # Uygulamayı paketle
+    APP_FACTORY_LAUNCH = "app_factory_launch"  # Paketlenmiş sürümü başlat
+    APP_FACTORY_HISTORY = "app_factory_history"  # Bu uygulamada neler yaptık?
+    APP_FACTORY_RESUME = "app_factory_resume"  # Kitaplık uygulamasına devam edelim
+    APP_FACTORY_MODIFY = "app_factory_modify"  # Bu uygulamaya ... ekle
 
     # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): Capability Genesis. Every one of
     # these targets app.genesis through tools_genesis - never a second
@@ -217,6 +293,9 @@ class Intent(StrEnum):
     SCENE_CAMERA = "scene_camera"  # Kamerayı nesneye çevir
     SCENE_RENDER = "scene_render"  # Render al
     SCENE_INSPECT = "scene_inspect"  # Sahnede ne var?
+    # B44 (req 526, 527): the production path's motion and export.
+    SCENE_ANIMATE = "scene_animate"  # Küreye bir animasyon ekle
+    SCENE_EXPORT = "scene_export"  # Sahneyi GLB olarak dışa aktar
 
     # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy. Every one of
     # these targets app.executive through tools_executive - never a second multi-step
@@ -286,6 +365,12 @@ class Intent(StrEnum):
     CREATIVE_CLEANUP = "creative_cleanup"  # Logoyu daha temiz hale getir.
     CREATIVE_DESIGN = "creative_design"  # Figma'da buna benzeyen bir arayüz tasarla.
     CREATIVE_EXPORT = "creative_export"  # Bunu PNG olarak dışa aktar.
+    # B43 (req 492, 509, 511, 512): the creative run's life after its first bytes.
+    CREATIVE_GENERATE = "creative_generate"  # Bana bir logo üret: mavi bir dalga.
+    CREATIVE_ENHANCE = "creative_enhance"  # Bu fotoğrafı düzelt.
+    CREATIVE_UNDO = "creative_undo"  # Geri al.
+    CREATIVE_REDO = "creative_redo"  # Yinele.
+    CREATIVE_DELIVER = "creative_deliver"  # Bunu bilgisayarıma indir. / Paint'te göster.
 
     # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native Desktop + Mobile
     # Application Factory. Every one of these targets app.nativefactory through
@@ -307,6 +392,17 @@ class Intent(StrEnum):
     NATIVE_CHECK = "native_check"  # Çalışıyor mu kontrol et.
     NATIVE_FIX = "native_fix"  # Hata varsa düzelt.
     NATIVE_REBUILD = "native_rebuild"  # Yeni sürümü build et.
+    # B33 req 462-471: the lifecycle after the build, on the device.
+    NATIVE_LAUNCH = "native_launch"  # Uygulamayı aç / çalıştır (Windows)
+    NATIVE_VERIFY = "native_verify"  # Uygulamayı doğrula / arayüzünü test et
+    NATIVE_LOG = "native_log"  # Uygulamanın günlüğünü oku
+    NATIVE_UNINSTALL = "native_uninstall"  # Kurulumu kaldır
+    NATIVE_UPDATE = "native_update"  # Uygulamayı güncelle
+    # B35 (req 622/623): the owner assigns the system work on ITSELF - a queued
+    # defect or feature on the self-development queue, never a live edit.
+    SELFDEV_FIX = "selfdev_fix"  # Şu bug'ı kendin düzelt
+    SELFDEV_FEATURE = "selfdev_feature"  # Şu özelliği kendine ekle
+    SELFDEV_STATUS = "selfdev_status"  # Kendinde ne düzeltiyorsun?
 
     NONE = "none"
 
@@ -371,6 +467,10 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.WINDOW_PREVIOUS: "operator.window_control",
     Intent.TYPE_TEXT: "operator.type",
     Intent.OPERATOR_CANCEL: "operator.cancel",
+    Intent.MISSION_START: "operator.mission",
+    Intent.MISSION_APPROVE: "operator.mission",
+    Intent.MISSION_PAUSE: "operator.mission",
+    Intent.MISSION_RESUME: "operator.mission",
     # M21 (spec §3): the PREPARE and EXTERNAL MUTATION tiers end in a receipt, the same
     # class alarm.create/ambient.set_policy already get. DISCARD is deliberately absent —
     # it targets one of two capabilities depending on which object is pending, decided at
@@ -394,6 +494,14 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.APP_FACTORY_CREATE: "app.create",
     Intent.APP_FACTORY_RUN: "app.run",
     Intent.APP_FACTORY_TEST: "app.test",
+    Intent.APP_FACTORY_FIX: "app.fix",
+    Intent.APP_FACTORY_VERIFY: "app.verify",
+    Intent.APP_FACTORY_LOG: "app.log",
+    Intent.APP_FACTORY_PACKAGE: "app.package",
+    Intent.APP_FACTORY_LAUNCH: "app.launch",
+    Intent.APP_FACTORY_HISTORY: "app.history",
+    Intent.APP_FACTORY_RESUME: "app.resume",
+    Intent.APP_FACTORY_MODIFY: "app.modify",
     Intent.APP_FACTORY_STOP: "app.stop",
     Intent.APP_FACTORY_OPEN: "app.open",
     # M24 (spec §6): a genesis request/approval/cancellation is a real mutation
@@ -413,6 +521,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.SCENE_LIGHT: "scene.light",
     Intent.SCENE_CAMERA: "scene.camera",
     Intent.SCENE_RENDER: "scene.render",
+    Intent.SCENE_ANIMATE: "scene.animate",
+    Intent.SCENE_EXPORT: "scene.export",
     # M26 (spec §5): starting/pausing/resuming/retrying/amending/cancelling a durable
     # multi-step job is a real mutation, the same class every other family above gets.
     # EXEC_STATUS/EXEC_EXPLAIN are QUERY_TOOL_BY_INTENT entries instead (read nothing
@@ -448,6 +558,11 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.CREATIVE_CLEANUP: "creative.cleanup",
     Intent.CREATIVE_DESIGN: "creative.design",
     Intent.CREATIVE_EXPORT: "creative.export",
+    Intent.CREATIVE_GENERATE: "creative.generate",
+    Intent.CREATIVE_ENHANCE: "creative.enhance",
+    Intent.CREATIVE_UNDO: "creative.undo",
+    Intent.CREATIVE_REDO: "creative.redo",
+    Intent.CREATIVE_DELIVER: "creative.deliver",
     # M28 (spec §6): scaffolding, compiling, packaging, installing, launching, fixing
     # and rebuilding a real distributable application on the owner's machine are all
     # real mutations - the same receipt class app.create/creative.redraw already get.
@@ -461,6 +576,38 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.NATIVE_EMULATOR_OPEN: "native.launch",
     Intent.NATIVE_FIX: "native.fix",
     Intent.NATIVE_REBUILD: "native.rebuild",
+    # B33.
+    Intent.NATIVE_LAUNCH: "native.launch",
+    Intent.NATIVE_VERIFY: "native.verify",
+    Intent.NATIVE_LOG: "native.log",
+    Intent.NATIVE_UNINSTALL: "native.uninstall",
+    Intent.NATIVE_UPDATE: "native.update",
+    Intent.SELFDEV_FIX: "selfdev.defect",
+    Intent.SELFDEV_FEATURE: "selfdev.feature",
+    Intent.SELFDEV_STATUS: "selfdev.status",
+    # B27 req 731-733, 735. Each ACTS: a workflow is cancelled, a volume changes on the
+    # device, the screen is read, a calendar deletion is asked for - the last one ends in
+    # an honest refusal today (the writer has no delete, spec §1's own boundary; B46 owns
+    # the policy) and is an ACTION all the same, for the reason DEPLOY already is: the
+    # refusal is a receipt, and a receipt is evidence.
+    Intent.RESEARCH_CANCEL: "research.cancel",
+    # B31 req 201/203/204/209.
+    Intent.RESEARCH_PAUSE: "research.pause",
+    Intent.RESEARCH_RESUME: "research.resume",
+    Intent.RESEARCH_OPEN: "research.open",
+    Intent.RESEARCH_ANSWER_MODE: "research.answer_mode",
+    Intent.MEDIA_VOLUME: "media.volume",
+    Intent.SCREENSHOT_CAPTURE: "operator.screenshot",
+    Intent.CALENDAR_CANCEL: "calendar.cancel",
+    # B28 req 92/93/98: a key press and a scroll both act on the owner's desktop.
+    Intent.OPERATOR_KEY: "operator.key",
+    Intent.OPERATOR_SCROLL: "operator.pointer",
+    # B29 req 100: invoking a button through UI Automation acts on the desktop.
+    Intent.UI_INVOKE: "operator.ui",
+    # B30 req 82/120/122: closing an application, stopping a process, restarting a service.
+    Intent.APP_CLOSE: "operator.app_close",
+    Intent.PROCESS_STOP: "operator.process",
+    Intent.SERVICE_RESTART: "operator.service",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -490,6 +637,24 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.DOCUMENT_SUMMARIZE: "document.summarize",
     Intent.DOCUMENT_ANSWER: "document.answer",
     Intent.DOCUMENT_COMPARE: "document.compare",
+    # B32.
+    Intent.DOCUMENT_PREVIEW: "document.preview",
+    Intent.DOCUMENT_FIND_TEXT: "document.find_text",
+    Intent.DOCUMENT_DUPLICATES: "document.duplicates",
+    Intent.DOCUMENT_DEDUP: "document.dedup",
+    # B34.
+    Intent.DOCUMENT_WRITE: "document.write",
+    Intent.DOCUMENT_APPEND: "document.append",
+    Intent.DOCUMENT_EDIT: "document.edit",
+    Intent.DOCUMENT_RENAME: "document.rename",
+    Intent.DOCUMENT_MOVE: "document.move",
+    Intent.DOCUMENT_COPY: "document.copy",
+    Intent.DOCUMENT_DELETE: "document.delete",
+    Intent.DOCUMENT_APPLY: "document.apply",
+    Intent.DOCUMENT_UNDO: "document.undo",
+    Intent.DOCUMENT_VERSIONS: "document.versions",
+    Intent.IMAGE_TEXT: "document.read",
+    Intent.IMAGE_METADATA: "document.inspect",
     Intent.DOCUMENT_INSPECT: "document.inspect",
     Intent.DOCUMENT_COMMON_POINTS: "document.common_points",
     Intent.DOCUMENT_PREVIOUS: "document.previous",
@@ -500,6 +665,8 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.MAIL_SEARCH: "mail.search",
     Intent.MAIL_READ: "mail.read",
     Intent.MAIL_THREAD: "mail.thread",
+    Intent.MAIL_ATTACHMENTS: "mail.attachments",
+    Intent.MAIL_SAVE_ATTACHMENT: "mail.save_attachment",
     Intent.CALENDAR_AGENDA: "calendar.agenda",
     Intent.CALENDAR_FIND_SLOT: "calendar.find_slot",
     # M22 (spec §5): listing what was made and re-checking it mutate nothing the owner
@@ -507,6 +674,10 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # document/mail families already get for the identical reason.
     Intent.ARTIFACT_LIST: "artifact.list",
     Intent.ARTIFACT_VALIDATE: "artifact.validate",
+    Intent.ARTIFACT_EDIT: "artifact.edit",
+    Intent.ARTIFACT_CLONE: "artifact.clone",
+    Intent.ARTIFACT_DELETE: "artifact.delete",
+    Intent.ARTIFACT_COMPARE: "artifact.compare",
     # M23 (spec §5): a status read-back and listing what was made mutate nothing the
     # owner can see - the same query class artifact.list/validate already get.
     Intent.APP_FACTORY_STATUS: "app.status",
@@ -541,6 +712,15 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     # nothing the owner can see, so it is a query, the same class app.status/
     # scene.inspect already get for the identical reason.
     Intent.NATIVE_CHECK: "native.check",
+    # B27 req 734: "Neler yapabilirsin?" reads the registry (B25 built the tool) and
+    # changes nothing - a query, the same class clock.now already gets.
+    Intent.CAPABILITIES_QUERY: "assistant.capabilities",
+    # B29 req 102/105: reading a control's text and describing the screen change nothing.
+    Intent.UI_READ: "operator.inspect",
+    Intent.SCREEN_DESCRIBE: "operator.see",
+    # B30 req 119/121: reading what runs changes nothing.
+    Intent.PROCESS_QUERY: "operator.process",
+    Intent.SERVICE_QUERY: "operator.service",
 }
 
 
@@ -700,7 +880,7 @@ class ResolvedIntent:
     #: or None when the owner named no text at all ("Şuraya yazar mısın?") - a clarification
     #: is then the honest answer, not a guess.
     text_to_type: str | None = None
-    #: For SHELL_QUERY, which reading was asked for: "ip" | "hostname".
+    #: For SHELL_QUERY, which reading was asked for: "ip" | "hostname" | "whoami" (B30).
     shell_query: str | None = None
     #: For the window-control family and TYPE_TEXT, which window the owner's words pointed
     #: at as far as vocabulary alone can say: "current" | "previous" | None. The tool
@@ -713,6 +893,12 @@ class ResolvedIntent:
     document_ref: str | None = None
     #: For DOCUMENT_ANSWER, the raw question (the owner's own words, never a paraphrase).
     question: str | None = None
+    #: B34: for DOCUMENT_EDIT, the words to find and the words to put in their place ("X
+    #: yerine Y yaz"); None for the "güncelle ve kaydet" shape, whose new text is the model's.
+    find_text: str | None = None
+    replace_text: str | None = None
+    #: B34: for DOCUMENT_WRITE / RENAME / COPY, the file name the owner's words named.
+    new_name: str | None = None
     #: For FILE_SEARCH, the name fragment the owner's words named ("sözleşme", "bütçe"),
     #: or None when none was said (a bare "bu klasördeki PDF'leri bul").
     pattern: str | None = None
@@ -730,6 +916,11 @@ class ResolvedIntent:
     #: For the calendar reschedule shape ("Bunu bir saat ertele"), the event the owner's
     #: WORDS pointed at: "current" | None.
     calendar_ref: str | None = None
+    #: B46 (req 356, 357): for CALENDAR_PROPOSE, the recurrence rule and the reminder
+    #: (minutes before) the owner's own words asked for - read from the utterance, so
+    #: the model can neither drop nor invent them. None when nothing was said.
+    calendar_rrule: str | None = None
+    calendar_reminder_minutes: int | None = None
     #: M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): for the artifact family, which
     #: artifact the owner's WORDS pointed at: "current" | "previous" | None. ``None``
     #: means the words named neither and the tool falls back to its own default
@@ -746,6 +937,8 @@ class ResolvedIntent:
     #: nothing recognisable remains - a best-effort convenience the tool prefers only
     #: when non-empty, never a substitute for the model's own title.
     artifact_title: str | None = None
+    #: B42 (req 412): the owner's explicit yes to a delete ("Evet, sil").
+    artifact_confirm: bool = False
     #: For ARTIFACT_CREATE, every number the owner's WORDS actually said ("kira 12000,
     #: maaş 45000" -> [12000.0, 45000.0]), the closed set ``ArtifactSpec`` validates the
     #: model's own ``spec`` argument against (the "never invented" rule) - None when no
@@ -772,6 +965,8 @@ class ResolvedIntent:
     #: when none was said - the model still names its own ``commands``, and this is
     #: preferred only when non-empty.
     app_commands: list[str] | None = None
+    #: B40 (req 422): the owner's whole sentence when no built-in template fits it.
+    app_request: str | None = None
     #: M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): for the Capability Genesis
     #: family, the interface the owner's WORDS named, resolved against
     #: app.genesis.catalogue.GenesisInterfaceCatalogue - the interface's own
@@ -805,6 +1000,9 @@ class ResolvedIntent:
     #: only a best-effort convenience the tool prefers when non-empty (the same rule
     #: ``app_template``/``artifact_kind`` already follow).
     scene_kind: str | None = None
+    #: B44 (req 527): the export format the owner's WORDS named ("glb" / "fbx"), else
+    #: None - the tool falls back to GLB.
+    scene_format: str | None = None
     #: M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): for EXEC_START, WHICH of the three
     #: directive shapes the owner's WORDS matched ("research" | "folder_compare" |
     #: "mail_thread") — a diagnostic echo of what this resolver decided, never itself
@@ -872,6 +1070,10 @@ class ResolvedIntent:
     #: "png"), or None when none was said - the tool then falls back to "png", the
     #: same best-effort-convenience rule ``scene_kind`` already follows.
     creative_format: str | None = None
+    #: B43: the owner's own generation sentence (492) and the application a delivery
+    #: should open the file in ("Paint'te göster" -> mspaint).
+    creative_prompt: str | None = None
+    creative_application: str | None = None
     #: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): for the Native App Factory family,
     #: the TARGET the owner's own WORDS named - one of ``app.nativefactory.spec.
     #: NATIVE_TARGETS`` ("EXE" -> "windows_exe", "kurulum" -> "windows_msix", "APK" ->
@@ -891,6 +1093,45 @@ class ResolvedIntent:
     #: already follow. Spec §7: "Bunu EXE yap." / "Bunun Android sürümünü yap."
     #: resolve through ids on the build stack, never through fuzzy titles.
     native_ref: str | None = None
+    #: B35 (req 622/623): the owner's OWN sentence assigning the system work on itself,
+    #: kept whole so the queue row carries what was said and not the model's paraphrase.
+    selfdev_request: str | None = None
+    #: B39 (req 127-130): the owner's own sentence for the mission planner, and the
+    #: mission word (start/approve/pause/resume) the router heard.
+    mission_request: str | None = None
+    mission_action: str | None = None
+    #: B27 req 734: the ONE area the owner asked about ("mail konusunda neler
+    #: yapabilirsin?"), as a capability family key, or None for the whole question. The
+    #: tool prefers THIS over the model's own ``family`` argument - the owner's words win,
+    #: the rule every field above already follows.
+    capability_family: str | None = None
+    #: B27 req 733: which way the volume goes - "down" | "up" | "mute" - read off the
+    #: owner's own verb, never guessed by the model.
+    media_volume_direction: str | None = None
+    #: B28 req 92/93: the key the owner named ("enter") or the chord ("ctrl+s"), in the
+    #: companion's own vocabulary; the tool prefers THIS over the model's argument.
+    key_press: str | None = None
+    #: B28 req 98: "down" | "up" for a spoken scroll.
+    scroll_direction: str | None = None
+    #: B31 req 209: the standing answer register the owner asked for
+    #: (executive | detail | technical | full).
+    answer_level: str | None = None
+    #: B31 req 192: the research mode the OWNER'S OWN WORDS carry ("kapsamlı",
+    #: "derinlemesine" -> deep; "geniş", "karşılaştırmalı" -> standard; else quick) -
+    #: read by research.start so the model's extracted topic cannot drop the word that
+    #: chose the mode (owner rule 1: never silently choose DEEP - and never silently lose it).
+    research_mode: str | None = None
+    #: B32 req 148: the words the owner wants found in a document's text.
+    text_query: str | None = None
+    #: B29 req 100/102: the button or control the owner NAMED ("Tamam", "belge"), in the
+    #: owner's own casing; the tool turns it into a UI Automation query.
+    ui_target: str | None = None
+    #: B30 req 119/120: the process (application) the owner NAMED, as the allowlist id
+    #: when the alias table knows it, else the owner's word.
+    process_name: str | None = None
+    #: B30 req 121/122: the service the owner NAMED, in the owner's own word ("yazdırma");
+    #: the tool maps it to the Windows service name.
+    service_name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -934,6 +1175,19 @@ class ResolvedIntent:
             "media_query": self.media_query,
             "native_target": self.native_target,
             "native_ref": self.native_ref,
+            "selfdev_request": self.selfdev_request,
+            "mission_request": self.mission_request,
+            "mission_action": self.mission_action,
+            "capability_family": self.capability_family,
+            "media_volume_direction": self.media_volume_direction,
+            "key_press": self.key_press,
+            "scroll_direction": self.scroll_direction,
+            "answer_level": self.answer_level,
+            "research_mode": self.research_mode,
+            "text_query": self.text_query,
+            "ui_target": self.ui_target,
+            "process_name": self.process_name,
+            "service_name": self.service_name,
         }
 
     @property
@@ -1231,6 +1485,64 @@ def _evolution_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     return None
 
 
+# ------------------------------------------------- B35: the owner assigns the system work on itself
+#
+# "Şu bug'ı kendin düzelt." / "Şu özelliği kendine ekle." (req 622/623): a self-reference
+# ("kendin", "kendine", "sen") beside a defect noun and a fix verb, or beside a feature noun
+# and an add verb. Evaluated AFTER the evolution block, because "kendi kendini geliştirmeyi
+# ..." carries the same self-reference and is the pause/resume switch, never an assignment
+# (the ORDER is the guard: a noun check here was dead code, proven so by a mutation that
+# removed it and turned nothing red). Before the memory-correct and explain matchers,
+# which claim "düzelt" and "hatayı" for themselves - and keep them when nothing in the
+# sentence points at the system itself (tests/unit/test_selfdev_b35.py).
+
+_SELF_REFERENCE_FORMS: Final[tuple[str, ...]] = (
+    "kendin",
+    "kendine",
+    "kendini",
+    "kendinde",
+    "kendindeki",
+    "kendinden",
+    "sen",
+)
+_SELFDEV_DEFECT_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "bug",
+    "hata",
+    "kusur",
+    "sorun",
+    "arıza",
+    "ariza",
+)
+_SELFDEV_FIX_VERB_STEMS: Final[tuple[str, ...]] = (
+    "düzelt",
+    "duzelt",
+    "çöz",
+    "coz",
+    "onar",
+    "gider",
+)
+#: "özelliği" / "yeteneği": the k softens to ğ under the accusative, so the stems stop short.
+_SELFDEV_FEATURE_NOUN_STEMS: Final[tuple[str, ...]] = ("özelli", "ozelli", "yetene", "fonksiyon")
+_SELFDEV_ADD_VERB_STEMS: Final[tuple[str, ...]] = ("ekle", "kazandır", "kazandir", "getir", "koy")
+_SELFDEV_QUESTION_FORMS: Final[tuple[str, ...]] = ("ne", "neyi", "neler", "hangi")
+
+
+def _selfdev_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    if _has_exact(tokens, *_SELF_REFERENCE_FORMS) is None:
+        return None
+    defect = _has(tokens, *_SELFDEV_DEFECT_NOUN_STEMS)
+    fix = _has(tokens, *_SELFDEV_FIX_VERB_STEMS)
+    if defect and fix and not fix.endswith(("yorsun", "yorsunuz", "iyor")):
+        return Intent.SELFDEV_FIX, f"{defect} {fix}"
+    feature = _has(tokens, *_SELFDEV_FEATURE_NOUN_STEMS)
+    add = _has(tokens, *_SELFDEV_ADD_VERB_STEMS)
+    if feature and add:
+        return Intent.SELFDEV_FEATURE, f"{feature} {add}"
+    if _has_exact(tokens, "kendinde") and fix and _has_exact(tokens, *_SELFDEV_QUESTION_FORMS):
+        return Intent.SELFDEV_STATUS, f"kendinde {fix}"
+    return None
+
+
 def _deploy_match(tokens: tuple[str, ...]) -> str | None:
     target = _has_exact(tokens, *_PROMOTE_TARGETS)
     if target and _has_exact(tokens, *_TAKE_VERB_FORMS):
@@ -1520,13 +1832,18 @@ _CLOCK_QUESTION_FORMS: Final[tuple[str, ...]] = ("kaç", "kac", "kaçtır", "kac
 
 
 def _clock_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
-    """"Saat kaç?" / "Bugün günlerden ne?" — the clock, asked directly.
+    """ "Saat kaç?" / "Bugün günlerden ne?" — the clock, asked directly.
 
     Evaluated AFTER the alarm and display families, which is the whole reason this can be
     as simple as it is: "Sabah alarmım kaçta?" carries the alarm noun and is claimed there,
     "saat yedide uyandır" carries the wake verb and is claimed there. What reaches this
     point is a bare question about the time, and nothing else asks one.
     """
+    # B40 (req 422): an application request that lists its fields ("... sipariş tutarı,
+    # tarih, ödendi mi") carries a clock noun and a question particle without asking the
+    # time; the create shape is the stronger signal and is checked here, not later.
+    if _appfactory_create_match(tokens) is not None:
+        return None
     if _has_exact(tokens, *_DAY_QUESTION_FORMS):
         return Intent.CLOCK_QUERY, "günlerden"
     if _has_exact(tokens, *_CLOCK_NOUN_FORMS) and (
@@ -1744,7 +2061,10 @@ def ambient_policy_changes(tokens: tuple[str, ...]) -> dict[str, bool | int] | N
             changes["auto_off_enabled"] = True
     if _has(tokens, *_RETURN_STEMS):
         changes["wake_on_return"] = not bool(_has_exact(tokens, *_WAKE_NEGATION_FORMS))
-    if _has(tokens, "otomatik") and not changes:
+    # B26 req 738: the same narrowing on the half that WRITES the policy. `_ambient_policy_
+    # match` is the only caller today, but a reader that flips `auto_off_enabled` for any
+    # sentence containing "otomatik" is one call site away from the defect again.
+    if _has(tokens, "otomatik") and _screen_noun(tokens) is not None and not changes:
         if _has_exact(tokens, *_AUTO_ON_FORMS):
             changes["auto_off_enabled"] = True
         elif _has_exact(tokens, *_AUTO_OFF_FORMS) or _has(tokens, "devre"):
@@ -1789,7 +2109,14 @@ def _ambient_policy_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
     two seconds or in twenty minutes."""
     if explained := _ambient_explain_match(tokens):
         return Intent.AMBIENT_EXPLAIN, explained
-    if _screen_noun(tokens) is None and not _has(tokens, "otomatik"):
+    # B26 req 738 — the most dangerous misroute the audit measured. The gate used to admit
+    # a sentence on the bare word "otomatik" with no screen anywhere in it, so "Otomatik
+    # güncellemeleri kapat." (software updates), "Otomatik yedeklemeyi kapat." (backups)
+    # and "Otomatik kaydetmeyi kapat." (autosave) all turned the SCREEN automation off.
+    # This family is about screens; the screen has to be in the sentence. Nothing else is
+    # lost, because "otomatik" alone was never this family's own phrase — its own phrase
+    # is "ekranları otomatik kapatmayı aç", which still has a screen in it.
+    if _screen_noun(tokens) is None:
         return None
     if _has(tokens, "test") and _has(tokens, "ekran"):
         return Intent.AMBIENT_TEST_DISPLAY, "ekran testi"
@@ -1842,6 +2169,80 @@ _RESTORE_HAL_STEMS: Final[tuple[str, ...]] = ("eski",)
 _RESTORE_YUKLE_STEMS: Final[tuple[str, ...]] = ("yükle", "yukle")
 
 
+# ------------------------------------------------- B39: operator missions (127-130)
+#
+# A mission is what the owner asks for in one breath and cannot be one plan: two or
+# more operator/browser parts joined by "ve"/"sonra", or one part no fixed plan
+# serves (a Settings page, an Explorer folder, an editor's file, an Office document).
+# The planner itself (app.operator.mission.plan_mission) decides - the router asks it
+# and keeps single simple steps with the tools that already own them, so "Not
+# Defteri'ni aç" is APP_OPEN as it always was. The three control words are gated on
+# ``mission_state`` (the caller's one live fact), never on vocabulary alone.
+
+_MISSION_SIMPLE_KINDS: Final[tuple[str, ...]] = (
+    "app_open",
+    "type_text",
+    "ui_invoke",
+    "window_close",
+    "navigate",
+)
+_MISSION_APPROVE_FORMS: Final[tuple[str, ...]] = (
+    "evet",
+    "başla",
+    "basla",
+    "başlayabilirsin",
+    "baslayabilirsin",
+    "onaylıyorum",
+    "onayliyorum",
+    "onayla",
+    "yap",
+    "tamam",
+    "olur",
+)
+_MISSION_PAUSE_FORMS: Final[tuple[str, ...]] = ("bekle", "duraklat", "beklet", "ara ver")
+_MISSION_RESUME_FORMS: Final[tuple[str, ...]] = ("devam", "sürdür", "surdur")
+
+
+def _mission_start_match(tokens: tuple[str, ...], text: str) -> str | None:
+    """The planner says whether this sentence is a mission and what its first step is
+    called; a single simple step (one the operator's own tools already serve) is not
+    a mission, so nothing is stolen from APP_OPEN / TYPE_TEXT / UI_INVOKE / WINDOW_CLOSE."""
+    if len(tokens) < 2:
+        return None
+    from app.operator.mission import MissionClarificationNeeded, plan_mission
+
+    try:
+        mission = plan_mission(text)
+    except MissionClarificationNeeded:
+        return None
+    if len(mission.steps) >= 2 or any(s.kind not in _MISSION_SIMPLE_KINDS for s in mission.steps):
+        return mission.steps[0].label_tr
+    return None
+
+
+def _mission_approve_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Evet, başla." / "Onaylıyorum." while the plan waits (req 130) - gated."""
+    if len(tokens) > 4:
+        return None
+    return _has_exact(tokens, *_MISSION_APPROVE_FORMS)
+
+
+def _mission_pause_match(tokens: tuple[str, ...]) -> str | None:
+    if len(tokens) > 4:
+        return None
+    if _has_exact(tokens, "bekle", "beklet", "duraklat"):
+        return _has_exact(tokens, "bekle", "beklet", "duraklat")
+    if "ara ver" in " ".join(tokens):
+        return "ara ver"
+    return None
+
+
+def _mission_resume_match(tokens: tuple[str, ...]) -> str | None:
+    if len(tokens) > 4:
+        return None
+    return _has_exact(tokens, *_MISSION_RESUME_FORMS)
+
+
 def _operator_cancel_match(tokens: tuple[str, ...]) -> str | None:
     """ "Dur." / "İptal et." while a task is running (spec §3) - gated by the caller on
     ``operator_running``, never on vocabulary alone: these words mean plenty else too."""
@@ -1871,6 +2272,13 @@ def _shell_query_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
         return "ip", "ip adresi"
     if _has(tokens, "bilgisayar") and _has(tokens, "ad") and _has_exact(tokens, "ne", "nedir"):
         return "hostname", "bilgisayarın adı"
+    # B30 req 118: "Kullanıcı adım ne?" / "Hangi kullanıcıyla oturum açtım?" -> whoami.
+    if _has(tokens, "kullanıcı", "kullanici") and (
+        (_has(tokens, "ad") and _has_exact(tokens, "ne", "nedir"))
+        or _has(tokens, "oturum")
+        or _has_exact(tokens, "hangi", "kim")
+    ):
+        return "whoami", "kullanıcı adı"
     return None
 
 
@@ -1909,6 +2317,35 @@ def _window_control_match(tokens: tuple[str, ...]) -> tuple[Intent, str, str | N
 #: starts with "yaz" is at least plausibly about writing, and this only fires alongside a
 #: target phrase or a deictic pointer anyway.
 _WRITE_VERB_STEMS: Final[tuple[str, ...]] = ("yaz",)
+#: B26 req 737. Turkish builds words by suffix, and `yaz` (write) is the first three letters
+#: of several words that are not the verb at all. The causative `yazdır` is PRINT — "Bunu
+#: yazdır." asks for paper — and a prefix match on the verb turned it into typing whatever
+#: was said into whatever window happened to be focused, which the audit measured.
+#: A closed list of the non-verbs rather than a cleverer stemmer: the words are few, they
+#: are known, and a rule that "guesses" morphology is what produced the defect.
+_WRITE_NOT_VERB_STEMS: Final[tuple[str, ...]] = (
+    "yazdır",  # yazdır / yazdırt / yazdırır -> PRINT (causative)
+    "yazdir",
+    "yazıcı",  # printer
+    "yazici",
+    "yazılım",  # software
+    "yazilim",
+    "yazım",  # spelling
+    "yazim",
+)
+
+
+def _write_verb(tokens: tuple[str, ...]) -> str | None:
+    """The token that really is "write", or None (B26 req 737)."""
+    for token in tokens:
+        if not token.startswith(_WRITE_VERB_STEMS):
+            continue
+        if token.startswith(_WRITE_NOT_VERB_STEMS):
+            continue
+        return token
+    return None
+
+
 _WRITE_TARGET_STEMS: Final[tuple[str, ...]] = ("buraya", "şuraya", "suraya", "kutu", "yere", "alan")
 
 #: The target phrase to cut before reading the payload off the raw utterance (longest
@@ -1923,14 +2360,429 @@ _WRITE_TARGET_PHRASES: Final[tuple[str, ...]] = (
     "şuraya",
     "suraya",
 )
-_WRITE_VERB_RE: Final[re.Pattern[str]] = re.compile(r"\byaz\w*\b")
+#: req 737 again, one layer down: the payload reader cuts the utterance AT the verb, so it
+#: has to agree with `_write_verb` about which words are the verb. A negative lookahead
+#: rather than a second list — two lists of the same words is how the two halves drift.
+_WRITE_VERB_RE: Final[re.Pattern[str]] = re.compile(
+    r"\byaz(?!dır|dir|ıcı|ici|ılım|ilim|ım\b|im\b)\w*\b"
+)
 
 
 def _type_text_match(tokens: tuple[str, ...]) -> str | None:
-    if _has(tokens, *_WRITE_VERB_STEMS) is None:
+    if _write_verb(tokens) is None:
         return None
     if _has(tokens, *_WRITE_TARGET_STEMS) or _has_exact(tokens, *_DEICTIC_WORDS):
         return "yaz"
+    return None
+
+
+# ------------------------------------------------- B28: the operator's spoken input
+#
+#: The companion's ``keyboard.key`` vocabulary (``InputSynthesizer.KeyMap``), by the
+#: words a Turkish speaker uses for each. Apostrophe suffixes ("enter'a", "escape'e")
+#: are cut before matching, the same way ``resolve_app_alias`` cuts "chrome'u".
+_KEY_BY_WORD: Final[dict[str, str]] = {
+    "enter": "enter",
+    "escape": "escape",
+    "esc": "escape",
+    "tab": "tab",
+    "backspace": "backspace",
+    "delete": "delete",
+    "del": "delete",
+    "insert": "insert",
+    "home": "home",
+    "end": "end",
+    "pageup": "pageup",
+    "pagedown": "pagedown",
+    "space": "space",
+    "boşluk": "space",
+    "bosluk": "space",
+    "boşluğa": "space",
+    "bosluga": "space",
+    **{f"f{n}": f"f{n}" for n in range(1, 13)},
+}
+#: Arrow words: "yukarı ok tuşuna bas" - the direction plus "ok".
+_ARROW_BY_WORD: Final[dict[str, str]] = {
+    "yukarı": "up",
+    "yukari": "up",
+    "aşağı": "down",
+    "asagi": "down",
+    "sol": "left",
+    "sağ": "right",
+    "sag": "right",
+}
+_MODIFIER_BY_WORD: Final[dict[str, str]] = {
+    "ctrl": "ctrl",
+    "control": "ctrl",
+    "kontrol": "ctrl",
+    "alt": "alt",
+    "shift": "shift",
+    "şift": "shift",
+}
+_PRESS_VERB_FORMS: Final[tuple[str, ...]] = (
+    "bas",
+    "bassana",
+    "basar",
+    "basın",
+    "basin",
+    "tuşla",
+    "tusla",
+    "tuşlasana",
+    "tuslasana",
+)
+_KEY_NOUN_STEMS: Final[tuple[str, ...]] = ("tuş", "tus")
+_SCROLL_VERB_FORMS: Final[tuple[str, ...]] = (
+    "kaydır",
+    "kaydir",
+    "kaydırsana",
+    "kaydirsana",
+    "kaydırır",
+    "kaydirir",
+)
+_SCROLL_DIRECTION_BY_WORD: Final[dict[str, str]] = {
+    "aşağı": "down",
+    "asagi": "down",
+    "aşağıya": "down",
+    "asagiya": "down",
+    "yukarı": "up",
+    "yukari": "up",
+    "yukarıya": "up",
+    "yukariya": "up",
+}
+
+
+def _bare(token: str) -> str:
+    """The token without its apostrophe suffix: "enter'a" -> "enter", "s'ye" -> "s"."""
+    return token.split("'", 1)[0]
+
+
+def _key_press_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Enter'a bas." -> "enter"; "Ctrl S'ye bas." -> "ctrl+s"; "Yukarı ok tuşuna bas."
+    -> "up". ``None`` when there is no press verb or no key the companion knows: "Düğmeye
+    bas." names no key, and a clarification is the tool's to ask, not this matcher's to
+    guess."""
+    if _has_exact(tokens, *_PRESS_VERB_FORMS) is None:
+        return None
+    modifiers: list[str] = []
+    key: str | None = None
+    bare = [_bare(tok) for tok in tokens]
+    for word in bare:
+        if word in _MODIFIER_BY_WORD:
+            if _MODIFIER_BY_WORD[word] not in modifiers:
+                modifiers.append(_MODIFIER_BY_WORD[word])
+        elif key is None and word in _KEY_BY_WORD:
+            key = _KEY_BY_WORD[word]
+    if key is None and _has_exact(tokens, "ok", "oka", "ok'a"):
+        for word in bare:
+            if word in _ARROW_BY_WORD:
+                key = _ARROW_BY_WORD[word]
+                break
+    if key is None and modifiers:
+        # A chord's own key may be a bare letter or digit: "ctrl s'ye bas".
+        for word in bare:
+            if len(word) == 1 and word.isalnum():
+                key = word
+                break
+    if key is None:
+        return None
+    return "+".join([*modifiers, key])
+
+
+#: B29 req 100. "X düğmesine tıkla/bas" - the button NOUN plus a click/press verb; the
+#: name is the words before the noun, read off the raw utterance for its own casing.
+_BUTTON_NOUN_FORMS: Final[tuple[str, ...]] = (
+    "düğmesine",
+    "dugmesine",
+    "düğmeye",
+    "dugmeye",
+    "butonuna",
+    "butona",
+)
+_CLICK_VERB_FORMS: Final[tuple[str, ...]] = (
+    "tıkla",
+    "tikla",
+    "tıklasana",
+    "tiklasana",
+    "tıklar",
+    "tiklar",
+    "bas",
+    "bassana",
+    "basar",
+)
+_BUTTON_RE: Final = re.compile(
+    r"^(?P<name>.+?)\s+(?:düğmesine|dugmesine|düğmeye|dugmeye|butonuna|butona)\b", re.IGNORECASE
+)
+#: B29 req 102. "Ekrandaki metni oku." / "Ne yazıyor?" / "Belgeyi oku." - a text noun (or
+#: the adapter's document word) with a read verb, or the bare "ne yazıyor" question.
+_READ_TEXT_NOUN_FORMS: Final[tuple[str, ...]] = (
+    "metni",
+    "metin",
+    "yazıyı",
+    "yaziyi",
+    "yazı",
+    "yazi",
+    "alanı",
+    "alani",
+)
+_READ_VERB_FORMS_UI: Final[tuple[str, ...]] = ("oku", "okusana", "okur", "söyle", "soyle")
+#: The words a bare "Ne yazıyor?" may carry and still be about the screen in front.
+_BARE_READ_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "ne",
+        "yazıyor",
+        "yaziyor",
+        "burada",
+        "orada",
+        "şurada",
+        "surada",
+        "ekranda",
+        "ekrandaki",
+        "ekranımda",
+        "ekranimda",
+    }
+)
+#: B29 req 105. "Ekranda ne var?" / "Ekranı anlat." / "Ekranı tarif et." ("Ne görüyorsun?"
+#: stays the activity explanation's - the eye's own question, ADR-0079.)
+_DESCRIBE_VERB_FORMS: Final[tuple[str, ...]] = ("anlat", "anlatsana", "tarif", "betimle")
+_SCREEN_LOCATIVE_FORMS: Final[tuple[str, ...]] = (
+    "ekranda",
+    "ekrandaki",
+    "ekranımda",
+    "ekranimda",
+    "ekranımı",
+    "ekranimi",
+    "ekranım",
+    "ekranim",
+)
+
+
+def _ui_invoke_match(tokens: tuple[str, ...], utterance: str) -> str | None:
+    """ "Tamam düğmesine tıkla." -> "Tamam"; None when no button is named."""
+    if _has_exact(tokens, *_BUTTON_NOUN_FORMS) is None:
+        return None
+    if _has_exact(tokens, *_CLICK_VERB_FORMS) is None:
+        return None
+    match = _BUTTON_RE.search(utterance.strip())
+    if match is None:
+        return None
+    name = match.group("name").strip(" ,.'\"")
+    # "Şu düğmeye bas" names nothing a tree can find.
+    if not name or turkish_casefold(name) in _DEICTIC_WORDS:
+        return None
+    return name
+
+
+def _ui_read_match(tokens: tuple[str, ...]) -> tuple[str, str | None] | None:
+    """(matched, spoken target): "Ekrandaki metni oku." -> ("metni oku", "metin");
+    "Ne yazıyor?" -> ("ne yazıyor", None)."""
+    # The BARE question only: "Ne yazıyor?" / "Burada ne yazıyor?". With a page or a
+    # document named ("Üçüncü sayfada ne yazıyor?") the question is the document
+    # family's (DOCUMENT_ANSWER), resolved further down the ladder.
+    if (
+        _has_exact(tokens, "ne")
+        and _has(tokens, "yazıyor", "yaziyor")
+        and all(tok in _BARE_READ_WORDS for tok in tokens)
+    ):
+        return "ne yazıyor", None
+    noun = _has_exact(tokens, *_READ_TEXT_NOUN_FORMS)
+    if noun is None or _has_exact(tokens, *_READ_VERB_FORMS_UI) is None:
+        return None
+    # The document word the adapter knows ("belge" / "metin" / "yazı"), bare.
+    bare_forms = {"metni": "metin", "yazıyı": "yazı", "yaziyi": "yazı"}
+    target = bare_forms.get(noun, noun)
+    return "metni oku", target
+
+
+def _screen_describe_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Ekranda ne var?" / "Ekranı anlat." / "Ekranımı tarif et."."""
+    on_screen = _has_exact(tokens, *_SCREEN_LOCATIVE_FORMS)
+    screen = _screen_noun(tokens)
+    if on_screen and _has_exact(tokens, "ne", "neler") and _has_exact(tokens, "var"):
+        return "ekranda ne var"
+    if (screen or on_screen) and _has(tokens, *_DESCRIBE_VERB_FORMS):
+        return "ekranı anlat"
+    return None
+
+
+# ------------------------------------------- B30: applications, processes, services
+
+_SERVICE_NOUN_STEMS: Final[tuple[str, ...]] = ("servis", "hizmet")
+_RUNNING_QUERY_FORMS: Final[tuple[str, ...]] = ("çalışıyor", "calisiyor", "açık", "acik", "aktif")
+_RESTART_STEMS: Final[tuple[str, ...]] = ("başlat", "baslat")
+_STOP_PROCESS_STEMS: Final[tuple[str, ...]] = ("sonlandır", "sonlandir", "öldür", "oldur")
+_PROCESS_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "uygulama",
+    "program",
+    "süreç",
+    "surec",
+    "işlem",
+    "islem",
+)
+_WHICH_FORMS: Final[tuple[str, ...]] = ("hangi", "neler", "ne")
+
+
+def _service_match(tokens: tuple[str, ...]) -> tuple[Intent, str] | None:
+    """ "Yazdırma servisi çalışıyor mu?" -> (SERVICE_QUERY, "yazdırma"); "Spooler servisini
+    yeniden başlat." -> (SERVICE_RESTART, "spooler"). The service NOUN is required."""
+    noun_index = next(
+        (i for i, tok in enumerate(tokens) if tok.startswith(_SERVICE_NOUN_STEMS)), None
+    )
+    if noun_index is None:
+        return None
+    # The service's own name is the word before the noun ("yazdırma servisi").
+    name = _bare(tokens[noun_index - 1]) if noun_index > 0 else ""
+    if _has(tokens, "yeniden", "tekrar") and _has(tokens, *_RESTART_STEMS):
+        return Intent.SERVICE_RESTART, name
+    if _has_exact(tokens, *_RUNNING_QUERY_FORMS) and _is_question(tokens):
+        return Intent.SERVICE_QUERY, name
+    if _has(tokens, "durum") and _has_exact(tokens, "ne", "nedir", "nasıl", "nasil"):
+        return Intent.SERVICE_QUERY, name
+    return None
+
+
+def _process_match(tokens: tuple[str, ...]) -> tuple[Intent, str | None, str] | None:
+    """ "Chrome çalışıyor mu?" -> (PROCESS_QUERY, "chrome"); "Hangi uygulamalar açık?" ->
+    (PROCESS_QUERY, None); "Chrome'u sonlandır." -> (PROCESS_STOP, "chrome")."""
+    from app.operator.plans import resolve_app_alias
+
+    canonical = resolve_app_alias(tokens)
+    if _has(tokens, *_STOP_PROCESS_STEMS):
+        if canonical is None:
+            return None
+        return Intent.PROCESS_STOP, canonical, "sonlandır"
+    if _has_exact(tokens, *_RUNNING_QUERY_FORMS) and _is_question(tokens):
+        if canonical is not None:
+            return Intent.PROCESS_QUERY, canonical, "çalışıyor mu"
+        if _has(tokens, *_PROCESS_NOUN_STEMS) and _has_exact(tokens, *_WHICH_FORMS):
+            return Intent.PROCESS_QUERY, None, "hangi uygulamalar açık"
+    if (
+        _has(tokens, *_PROCESS_NOUN_STEMS)
+        and _has_exact(tokens, *_WHICH_FORMS)
+        and _has_exact(tokens, *_RUNNING_QUERY_FORMS)
+    ):
+        return Intent.PROCESS_QUERY, None, "hangi uygulamalar açık"
+    return None
+
+
+def _app_close_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Not Defteri'ni kapat." / "Chrome'u kapat." — an allowlisted application named with
+    the close verb. The alarm/display/eye families (which own "kapat" with their own nouns)
+    are resolved before this, and a bare "Bunu kapat" names no application and stays the
+    window family's."""
+    if _has_exact(tokens, *_CLOSE_VERB_FORMS) is None:
+        return None
+    from app.operator.plans import resolve_app_alias
+
+    return resolve_app_alias(tokens)
+
+
+# ------------------------------------------ B31: pause, resume, open, answer register
+
+_RESEARCH_PAUSE_FORMS: Final[tuple[str, ...]] = ("duraklat", "beklet", "askıya", "askiya")
+_RESEARCH_PAUSE_NEGATION_FORMS: Final[tuple[str, ...]] = (
+    "duraklatma",
+    "duraklatmayın",
+    "duraklatmayin",
+    "bekletme",
+    "bekletmeyin",
+)
+_RESEARCH_RESUME_FORMS: Final[tuple[str, ...]] = ("devam", "sürdür", "surdur")
+_RESEARCH_OPEN_REFERENCE_WORDS: Final[tuple[str, ...]] = (
+    "önceki",
+    "onceki",
+    "öncekini",
+    "oncekini",
+    "son",
+    "bu",
+    "şu",
+    "su",
+    "o",
+    "ilk",
+    "birinci",
+    "ikinci",
+    "üçüncü",
+    "ucuncu",
+    "dördüncü",
+    "dorduncu",
+    "beşinci",
+    "besinci",
+)
+_ANSWER_MODE_STANDING_MARKERS: Final[tuple[str, ...]] = ("bundan", "artık", "artik", "hep", "her")
+_ANSWER_MODE_LEVEL_WORDS: Final[tuple[tuple[str, ...], str]] = (
+    (("teknik",), "technical"),
+    (("ayrıntılı", "ayrintili", "detaylı", "detayli", "ayrıntı", "ayrinti"), "detail"),
+    (("tam", "tamamını", "tamamini", "uzun"), "full"),
+    (("kısa", "kisa", "özet", "ozet", "yönetici", "yonetici", "kısaca", "kisaca"), "executive"),
+)
+
+
+def _research_pause_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Araştırmayı duraklat." / "Araştırmayı beklet." (B31 req 203) - the research
+    named with a pause verb; "durdur" stays the cancel it always was."""
+    if _has(tokens, *_RESEARCH_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_RESEARCH_CANCEL_NEGATION_FORMS, *_RESEARCH_PAUSE_NEGATION_FORMS):
+        return None
+    if _has(tokens, *_RESEARCH_PAUSE_FORMS):
+        return "araştırmayı duraklat"
+    return None
+
+
+def _research_resume_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Araştırmaya devam et." / "Araştırmayı sürdür." (B31 req 204). The research noun is
+    required: a bare "devam" belongs to the narration and the conversation."""
+    if _has(tokens, *_RESEARCH_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, "etme", "etmeyin"):
+        return None
+    if _has(tokens, *_RESEARCH_RESUME_FORMS):
+        return "araştırmaya devam et"
+    return None
+
+
+def _research_open_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bir önceki araştırmayı aç." / "Son araştırmayı aç." / "İkinci araştırmayı aç."
+    (B31 req 201) - a research POINTED AT with the open verb. Without a pointer ("yeni bir
+    araştırma aç") this is not an open, and the artifact family's "bunu aç" without the
+    research noun is not this either."""
+    if _has(tokens, *_RESEARCH_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
+        return None
+    if _has_exact(tokens, "yeni"):
+        return None
+    if _has_exact(tokens, *_RESEARCH_OPEN_REFERENCE_WORDS) is None:
+        return None
+    return "araştırmayı aç"
+
+
+def _answer_mode_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
+    """ "Bundan sonra teknik anlat." -> ("technical", ...); "Teknik modu kapat." ->
+    ("executive", ...); "Artık kısa anlat." -> ("executive", ...) (B31 req 209). A
+    STANDING register needs a standing marker ("bundan sonra", "artık", "hep", "her
+    zaman") or the word "mod"; a one-off "teknik anlat" stays the follow-up it was."""
+    has_mode_word = _has(tokens, "mod") is not None
+    standing = _has_exact(tokens, *_ANSWER_MODE_STANDING_MARKERS) is not None and (
+        _has_exact(tokens, "sonra", "zaman", "hep", "artık", "artik") is not None
+    )
+    if not (has_mode_word or standing):
+        return None
+    if has_mode_word and _has(tokens, "teknik") and _has_exact(tokens, *_CLOSE_VERB_FORMS):
+        return "executive", "teknik modu kapat"
+    for words, level in _ANSWER_MODE_LEVEL_WORDS:
+        if _has_exact(tokens, *words) or _has(tokens, *words):
+            if has_mode_word or _has(tokens, "anlat", "konuş", "konus", "cevap", "söyle", "soyle"):
+                return level, f"bundan sonra {words[0]} anlat"
+    return None
+
+
+def _scroll_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Aşağı kaydır." -> "down"; "Yukarı kaydır." -> "up"."""
+    if _has_exact(tokens, *_SCROLL_VERB_FORMS) is None:
+        return None
+    for tok in tokens:
+        if _bare(tok) in _SCROLL_DIRECTION_BY_WORD:
+            return _SCROLL_DIRECTION_BY_WORD[_bare(tok)]
     return None
 
 
@@ -2002,6 +2854,12 @@ def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
 _DOCUMENT_NOUN_STEMS: Final[tuple[str, ...]] = (
     "dosya",
     "belge",
+    # B32 req 169/142: "Bu iki dokümanı karşılaştır", "Arşivin içinde ne var?"
+    "doküman",
+    "dokuman",
+    "arşiv",
+    "arsiv",
+    "zip",
     "pdf",
     "sunum",
     "excel",
@@ -2099,6 +2957,382 @@ def _document_compare_match(tokens: tuple[str, ...]) -> str | None:
     if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
         return None
     return "karşılaştır"
+
+
+# ------------------------------------------------ B32: preview, full text, duplicates
+
+_PREVIEW_STEMS: Final[tuple[str, ...]] = ("önizle", "onizle")
+_DUPLICATE_STEMS: Final[tuple[str, ...]] = (
+    "yinelenen",
+    "kopya",
+    "mükerrer",
+    "mukerrer",
+    "çift",
+    "cift",
+)
+_TRASH_FORMS: Final[tuple[str, ...]] = (
+    "çöp",
+    "cop",
+    "temizle",
+    "sil",
+    "kaldır",
+    "kaldir",
+    "gönder",
+    "gonder",
+)
+_IMAGE_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "görsel",
+    "gorsel",
+    "resim",
+    "fotoğraf",
+    "fotograf",
+    "foto",
+)
+_ARCHIVE_NOUN_STEMS: Final[tuple[str, ...]] = ("arşiv", "arsiv", "zip")
+_TEXT_NOUN_STEMS: Final[tuple[str, ...]] = ("metin", "metni", "yazı", "yazi", "yazıyı", "yaziyi")
+_CONTAINS_FORMS: Final[tuple[str, ...]] = ("geçen", "gecen", "yazan", "içeren", "iceren", "bulunan")
+
+
+def _document_preview_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu belgeyi önizle." / "Bu dosyanın önizlemesini göster." (B32 req 152)."""
+    if _has(tokens, *_PREVIEW_STEMS) is None:
+        return None
+    return "önizle"
+
+
+def _document_find_text_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
+    """ "İçinde bütçe geçen belgeyi bul." / "Hetzner yazan dosya hangisi?" (B32 req 148):
+    the words BEFORE the containing verb are the query; the document noun is required so a
+    plain "X geçen" question stays the conversation's."""
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
+        return None
+    verb_index = next((i for i, tok in enumerate(tokens) if tok in _CONTAINS_FORMS), None)
+    if verb_index is None:
+        return None
+    start = 0
+    for i in range(verb_index - 1, -1, -1):
+        if tokens[i] in ("içinde", "icinde", "metninde", "içeriğinde", "iceriginde"):
+            start = i + 1
+            break
+    words = [t for t in tokens[start:verb_index] if t not in ("içinde", "icinde", "bir")]
+    if not words:
+        return None
+    return " ".join(words), "içinde geçen belge"
+
+
+def _document_duplicates_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Yinelenen dosyaları bul." / "Kopya dosyaları bul." (B32 req 151)."""
+    if _has(tokens, *_DUPLICATE_STEMS) is None:
+        return None
+    if _has(tokens, *_DOCUMENT_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_FIND_VERB_FORMS, *_SEARCH_VERB_FORMS, "göster", "goster", "listele"):
+        return "yinelenen dosyaları bul"
+    if _has_exact(tokens, "var") and _has_exact(tokens, "mı", "mi", "mu", "mü"):
+        return "yinelenen dosya var mı"
+    return None
+
+
+# ------------------------------------------------ B34: managed file mutation (153-170)
+
+_MUTATION_DOC_NOUN_STEMS: Final[tuple[str, ...]] = ("dosya", "belge", "doküman", "dokuman", "not")
+#: "aç" is NOT here: "dosyayı aç" is the operator's / the artifact family's OPEN, and the
+#: first gate run measured both stolen by "yeni dosya aç".
+_CREATE_VERB_FORMS: Final[tuple[str, ...]] = ("oluştur", "olustur", "yarat")
+_NAME_MARKERS: Final[tuple[str, ...]] = (
+    "adında",
+    "adinda",
+    "adıyla",
+    "adiyla",
+    "isimli",
+    "adlı",
+    "adli",
+    "ismiyle",
+)
+_APPEND_MARKERS: Final[tuple[str, ...]] = ("sonuna", "altına", "altina")
+_APPEND_VERB_FORMS: Final[tuple[str, ...]] = ("ekle", "eklesene", "yaz", "yazsana")
+_REPLACE_MARKER: Final = "yerine"
+_EDIT_VERB_FORMS: Final[tuple[str, ...]] = ("yaz", "yazsana", "değiştir", "degistir", "koy")
+_UPDATE_SAVE_STEMS: Final[tuple[str, ...]] = ("güncelle", "guncelle")
+_RENAME_MARKERS: Final[tuple[str, ...]] = ("adını", "adini", "ismini", "adi", "adı")
+_RENAME_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yap",
+    "değiştir",
+    "degistir",
+    "koy",
+    "adlandır",
+    "adlandir",
+)
+_MOVE_VERB_STEMS: Final[tuple[str, ...]] = ("taşı", "tasi")
+_COPY_VERB_STEMS: Final[tuple[str, ...]] = ("kopyala", "kopyasını", "kopyasini")
+_DELETE_VERB_FORMS: Final[tuple[str, ...]] = ("sil", "silsene", "siler")
+_TRASH_NOUN_STEMS: Final[tuple[str, ...]] = ("çöp", "cop")
+_UNDO_NOUN_STEMS: Final[tuple[str, ...]] = ("değişikli", "degisikli", "düzenleme", "duzenleme")
+_VERSION_NOUN_STEMS: Final[tuple[str, ...]] = ("sürüm", "surum", "versiyon", "geçmiş", "gecmis")
+_APPLY_FORMS: Final[tuple[str, ...]] = (
+    "uygula",
+    "uygulayabilirsin",
+    "kaydet",
+    "onaylıyorum",
+    "onayliyorum",
+)
+#: Nouns whose families own their own "sil"/"kaldır"/"taşı": never a file mutation.
+_MUTATION_FOREIGN_STEMS: Final[tuple[str, ...]] = (
+    "mail",
+    "posta",
+    "e-posta",
+    "eposta",
+    "etkinli",
+    "toplantı",
+    "toplanti",
+    "randevu",
+    "alarm",
+    "hatırlat",
+    "hatirlat",
+    "kopyalar",  # B32's duplicates keep "kopyaları çöp kutusuna gönder" ("kopyala" is ours)
+    "yinelen",
+    "uygulam",
+    "proje",
+    "kurulum",
+    "sunum",
+    "excel",
+    "tablo",
+    "pdf",
+)
+
+
+def _has_mutation_noun(tokens: tuple[str, ...]) -> bool:
+    return _has(tokens, *_MUTATION_DOC_NOUN_STEMS) is not None
+
+
+def _mutation_foreign(tokens: tuple[str, ...]) -> bool:
+    return _has(tokens, *_MUTATION_FOREIGN_STEMS) is not None
+
+
+def _words_between(tokens: tuple[str, ...], start: int, stop: int) -> str:
+    return " ".join(tokens[start:stop]).strip()
+
+
+_NAME_BEFORE_MARKER_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?P<name>[\w][\w.\-]*)['’]?\s+(?:adında|adinda|adıyla|adiyla|isimli|adlı|adli|ismiyle)\b",
+    re.IGNORECASE,
+)
+_NAME_AFTER_RENAME_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?:adını|adini|ismini)\s+(?P<name>[\w][\w.\-]*)\s+(?:olarak\s+)?(?:yap|değiştir|degistir|koy)\b",
+    re.IGNORECASE,
+)
+_NAME_BEFORE_OLARAK_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?P<name>[\w][\w.\-]*)\s+olarak\s+(?:yeniden\s+)?adlandır", re.IGNORECASE
+)
+
+
+def _spoken_file_name(text: str, *patterns: re.Pattern[str]) -> str | None:
+    """A file name the owner SPELLED in the raw utterance ("notlar-yeni.md adında"): the
+    tokenizer cuts a dotted name into pieces, so the name is read off the text itself."""
+    lowered = turkish_casefold(text)
+    for pattern in patterns:
+        match = pattern.search(lowered)
+        if match:
+            name = match.group("name").strip("'’.")
+            if name and name not in ("bir", "bu", "şu", "su", "yeni"):
+                return name
+    return None
+
+
+def _mutation_foreign_before(tokens: tuple[str, ...], stop: int) -> bool:
+    """Another family's noun in the TARGET part of the sentence (before the marker); the
+    payload after it may say anything ("... sonuna toplantı notu ekle")."""
+    return _has(tokens[:stop], *_MUTATION_FOREIGN_STEMS) is not None
+
+
+def _document_write_match(tokens: tuple[str, ...], text: str) -> tuple[str, str | None] | None:
+    """ "X adında bir dosya oluştur." / "Yeni bir metin dosyası oluştur." (154): the
+    document noun ("dosya" - "sunum oluştur" is M22's) with a create verb; the name is what
+    the owner spelled before "adında/adıyla/isimli", read off the raw text."""
+    if _has(tokens, "dosya") is None:
+        return None
+    if _has_exact(tokens, *_CREATE_VERB_FORMS) is None:
+        return None
+    if _mutation_foreign(tokens):
+        return None
+    return "dosya oluştur", _spoken_file_name(text, _NAME_BEFORE_MARKER_RE)
+
+
+def _document_append_match(tokens: tuple[str, ...]) -> tuple[str, str | None] | None:
+    """ "Bu dosyanın sonuna şunu ekle." (155): the text is what sits between "sonuna" and
+    the verb - or nothing, and the tool asks."""
+    if not _has_mutation_noun(tokens):
+        return None
+    marker = next((i for i, t in enumerate(tokens) if t in _APPEND_MARKERS), None)
+    if marker is None or _mutation_foreign_before(tokens, marker):
+        return None
+    verb = next((i for i, t in enumerate(tokens) if i > marker and t in _APPEND_VERB_FORMS), None)
+    if verb is None:
+        return None
+    text = _words_between(tokens, marker + 1, verb)
+    fillers = ("şunu", "sunu", "bunu", "şu", "su", "diye", "şunları", "sunlari")
+    for filler in fillers:
+        if text.startswith(filler + " "):
+            text = text[len(filler) + 1 :]
+        if text.endswith(" " + filler):
+            text = text[: -(len(filler) + 1)]
+    if text in fillers:
+        text = ""
+    return "sonuna ekle", (text or None)
+
+
+def _document_edit_match(tokens: tuple[str, ...]) -> tuple[str, str | None, str | None] | None:
+    """ "Bu dosyada X yerine Y yaz." (153, 167) -> (matched, find, replace); "Bu belgeyi
+    güncelle ve kaydet." (170) -> (matched, None, None): the new content is the model's."""
+    if not _has_mutation_noun(tokens):
+        return None
+    marker = next((i for i, t in enumerate(tokens) if t == _REPLACE_MARKER), None)
+    if marker is None and _mutation_foreign(tokens):
+        return None
+    if marker is not None:
+        noun_index = next(
+            (i for i, t in enumerate(tokens) if t.startswith(_MUTATION_DOC_NOUN_STEMS)), 0
+        )
+        if _mutation_foreign_before(tokens, noun_index + 1):
+            return None
+        verb = next((i for i, t in enumerate(tokens) if i > marker and t in _EDIT_VERB_FORMS), None)
+        if verb is None:
+            return None
+        noun = next(
+            (
+                i
+                for i, t in enumerate(tokens)
+                if i < marker and t.startswith(_MUTATION_DOC_NOUN_STEMS)
+            ),
+            -1,
+        )
+        find = _words_between(tokens, noun + 1, marker)
+        replace = _words_between(tokens, marker + 1, verb)
+        if not find:
+            return None
+        return "yerine yaz", find, replace
+    if _has(tokens, *_UPDATE_SAVE_STEMS) is not None:
+        return "güncelle ve kaydet", None, None
+    return None
+
+
+def _document_rename_match(tokens: tuple[str, ...], text: str) -> tuple[str, str | None] | None:
+    """ "Bu dosyanın adını X yap." / "... X olarak yeniden adlandır." (156)."""
+    if not _has_mutation_noun(tokens) or _mutation_foreign(tokens):
+        return None
+    if _has(tokens, "adlandır", "adlandir") is not None:
+        return "yeniden adlandır", _spoken_file_name(text, _NAME_BEFORE_OLARAK_RE)
+    marker = next((i for i, t in enumerate(tokens) if t in _RENAME_MARKERS), None)
+    if marker is None:
+        return None
+    verb = next((i for i, t in enumerate(tokens) if i > marker and t in _RENAME_VERB_FORMS), None)
+    if verb is None:
+        return None
+    return "adını değiştir", _spoken_file_name(text, _NAME_AFTER_RENAME_RE)
+
+
+def _document_move_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu dosyayı Masaüstüne taşı." (157): a document noun, a spoken folder, the move verb."""
+    if not _has_mutation_noun(tokens) or _mutation_foreign(tokens):
+        return None
+    if _has(tokens, *_MOVE_VERB_STEMS) is None:
+        return None
+    return "taşı"
+
+
+def _document_copy_match(tokens: tuple[str, ...], text: str) -> tuple[str, str | None] | None:
+    """ "Bu dosyayı kopyala." / "... Masaüstüne kopyala." / "... X adıyla kopyala." (158)."""
+    if not _has_mutation_noun(tokens) or _mutation_foreign(tokens):
+        return None
+    if _has(tokens, *_COPY_VERB_STEMS) is None:
+        return None
+    return "kopyala", _spoken_file_name(text, _NAME_BEFORE_MARKER_RE)
+
+
+def _document_delete_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu dosyayı sil." / "Bu dosyayı çöp kutusuna gönder." (159): the document noun with
+    the delete verb or the bin; the duplicate noun stays B32's dedup, a mail/calendar noun
+    stays its family's."""
+    if not _has_mutation_noun(tokens) or _mutation_foreign(tokens):
+        return None
+    if _has_exact(tokens, *_DELETE_VERB_FORMS) is not None:
+        return "sil"
+    if (
+        _has(tokens, *_TRASH_NOUN_STEMS) is not None
+        and _has(tokens, "gönder", "gonder", "at", "taşı", "tasi") is not None
+    ):
+        return "çöp kutusuna gönder"
+    return None
+
+
+def _document_undo_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Son değişikliği geri al." / "Dosyadaki değişikliği geri al." (160)."""
+    if (
+        _has_exact(tokens, "geri") is None
+        or _has_exact(tokens, "al", "alsana", "alır", "alir") is None
+    ):
+        return None
+    if _has(tokens, *_UNDO_NOUN_STEMS) is None and not _has_mutation_noun(tokens):
+        return None
+    if _mutation_foreign(tokens):
+        return None
+    return "geri al"
+
+
+def _document_versions_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu dosyanın sürüm geçmişini göster." (164)."""
+    if not _has_mutation_noun(tokens) or _mutation_foreign(tokens):
+        return None
+    if _has(tokens, *_VERSION_NOUN_STEMS) is None:
+        return None
+    return "sürüm geçmişi"
+
+
+def _document_apply_match(tokens: tuple[str, ...], *, mutation_pending: bool) -> str | None:
+    """ "Uygula." / "Kaydet." / "Onaylıyorum." - BARE, and only while a file change this
+    session heard is pending (the same shape "Gönder." has with a draft)."""
+    if not mutation_pending:
+        return None
+    for form in _APPLY_FORMS:
+        if _is_bare(tokens, form) or (
+            len(tokens) == 2 and tokens[0] in ("evet", "tamam") and tokens[1] == form
+        ):
+            return form
+    return None
+
+
+def _document_dedup_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Kopyaları çöp kutusuna gönder." / "Yinelenenleri temizle." (B32 req 150) - the
+    duplicate noun with a trash verb; a bare "sil" without the duplicate noun is never
+    this."""
+    if _has(tokens, *_DUPLICATE_STEMS) is None:
+        return None
+    if _has(tokens, *_TRASH_FORMS) is None:
+        return None
+    if _has_exact(tokens, *_FIND_VERB_FORMS):
+        return None
+    return "kopyaları çöp kutusuna gönder"
+
+
+def _image_text_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Görseldeki metni oku." / "Resimdeki yazıyı oku." (B32 req 141): the picture, its
+    text, the read verb. Before the screen-reading family, which owns a bare "metni oku"."""
+    if _has(tokens, *_IMAGE_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_TEXT_NOUN_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_READ_VERB_FORMS, "söyle", "soyle") is None:
+        return None
+    return "görseldeki metni oku"
+
+
+def _image_metadata_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Fotoğrafın bilgilerini oku." / "Bu resmin bilgileri ne?" (B32 req 139)."""
+    if _has(tokens, *_IMAGE_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, "bilgi", "özellik", "ozellik", "boyut", "çekim", "cekim") is None:
+        return None
+    return "fotoğrafın bilgileri"
 
 
 def _document_read_match(tokens: tuple[str, ...]) -> str | None:
@@ -2257,7 +3491,40 @@ def _mail_inbox_match(tokens: tuple[str, ...]) -> str | None:
         return "okunmamış mail"
     if _has(tokens, *_INBOX_NOUN_STEMS) and _has(tokens, "kontrol"):
         return "kutuyu kontrol et"
+    # B27 req 729. "Maillerime bak." / "Mail var mı?" / "Postalarımı kontrol et." — the
+    # audit's most-said mail sentence reached nothing because this matcher knew the inbox
+    # NOUN and the unread ADJECTIVE but not the plain verbs a person uses for "look".
+    # The mail noun is still required: "bak" alone belongs to everybody.
+    mail_noun = _has(tokens, *_MAIL_NOUN_STEMS) or _has(tokens, *_INBOX_NOUN_STEMS)
+    if mail_noun is None:
+        return None
+    if _has_exact(tokens, *_MAIL_LOOK_VERB_FORMS):
+        return "maillere bak"
+    if _has(tokens, "kontrol"):
+        return "mailleri kontrol et"
+    # "Mail var mı?" / "Yeni mail var mı?": a question about the inbox, never a compose
+    # (``_mail_draft_new_match`` refuses questions for the same reason).
+    if _has_exact(tokens, "var") and _is_question(tokens):
+        return "mail var mı"
     return None
+
+
+#: The plain verbs of "look at my mail": exact forms, because the stem "bak" is also the
+#: first three letters of "bakım" (maintenance) and "bakan" (minister).
+_MAIL_LOOK_VERB_FORMS: Final[tuple[str, ...]] = (
+    "bak",
+    "baksana",
+    "bakar",
+    "bakabilir",
+    "göster",
+    "goster",
+    "gösterir",
+    "gosterir",
+    "göstersene",
+    "gostersene",
+    "listele",
+    "listeler",
+)
 
 
 def _mail_search_match(tokens: tuple[str, ...]) -> str | None:
@@ -2291,6 +3558,54 @@ def _mail_read_draft_match(tokens: tuple[str, ...]) -> str | None:
     return "cevabı oku"
 
 
+#: B45 (req 347, 348): the words for a message's attachments - EXACT forms, because the
+#: stem "ek" is also "ekle" (add), "ekip" (team) and "ekran" (screen).
+_MAIL_ATTACHMENT_WORDS: Final[tuple[str, ...]] = (
+    "ek",
+    "eki",
+    "ekini",
+    "ekler",
+    "ekleri",
+    "eklerini",
+    "ekte",
+    "ekteki",
+    "ektekini",
+    "ektekileri",
+)
+_MAIL_ATTACHMENT_SAVE_VERBS: Final[tuple[str, ...]] = (
+    "kaydet",
+    "kaydeder",
+    "kaydetsene",
+    "indir",
+    "indirir",
+    "indirsene",
+)
+
+
+def _mail_save_attachment_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Eki bilgisayarıma kaydet." / "Ekteki dosyayı indir." (B45 req 348)."""
+    if _has_exact(tokens, *_MAIL_ATTACHMENT_WORDS) is None:
+        return None
+    if _has_exact(tokens, *_MAIL_ATTACHMENT_SAVE_VERBS) is None:
+        return None
+    return "eki kaydet"
+
+
+def _mail_attachments_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu mailin eklerini göster." / "Ekte ne var?" (B45 req 347) - an attachment word with
+    a show/what word or the mail noun, and no save verb (that is the save form)."""
+    if _has_exact(tokens, *_MAIL_ATTACHMENT_WORDS) is None:
+        return None
+    if _has_exact(tokens, *_MAIL_ATTACHMENT_SAVE_VERBS) is not None:
+        return None
+    if (
+        _has_exact(tokens, "göster", "goster", "listele", "ne", "neler", "var", "say") is None
+        and _has(tokens, *_MAIL_NOUN_STEMS) is None
+    ):
+        return None
+    return "ekleri göster"
+
+
 def _mail_read_match(tokens: tuple[str, ...]) -> str | None:
     """ "Ali'den gelen son maili oku." (spec §3) — checked after thread/read_draft so
     those more specific nouns win first."""
@@ -2319,6 +3634,10 @@ def _mail_draft_new_match(tokens: tuple[str, ...]) -> str | None:
     names the mail noun at all, which is what keeps the two shapes apart)."""
     if _has(tokens, *_MAIL_NOUN_STEMS) is None:
         return None
+    # B27 (found measuring req 729): "Yeni mail var mı?" is a QUESTION about the inbox and
+    # was being read as a request to compose a new mail. A question never composes.
+    if _is_question(tokens):
+        return None
     if _has(tokens, *_MAIL_NEW_STEMS):
         return "yeni mail"
     if _has_exact(tokens, *_MAIL_SEND_VERB_FORMS):
@@ -2338,6 +3657,52 @@ def _mail_edit_draft_match(tokens: tuple[str, ...]) -> str | None:
     return "konuyu değiştir"
 
 
+#: B26 req 736. The words that may keep a bare confirmation company: a pointer at the thing
+#: just read back, politeness, and discourse. Anything else in the sentence NAMES something,
+#: and a sentence that names something is about that thing rather than about the draft.
+_BARE_CONFIRMATION_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "bunu",
+        "şunu",
+        "sunu",
+        "onu",
+        "bu",
+        "şu",
+        "su",
+        "o",
+        "lütfen",
+        "lutfen",
+        "rica",
+        "ederim",
+        "hadi",
+        "haydi",
+        "tamam",
+        "peki",
+        "evet",
+        "şimdi",
+        "simdi",
+        "artık",
+        "artik",
+    }
+)
+
+
+def _is_bare(tokens: tuple[str, ...], verb: str) -> bool:
+    """True when the sentence is the VERB and nothing that names a thing.
+
+    B26 req 736: "Gönder." is the owner confirming a draft that was just read back to them.
+    "Dosyayı gönder." is about a file — and the audit measured it reaching `mail.send`,
+    which is the one action in this family that cannot be taken back. The old guard only
+    refused the mail noun itself, so every OTHER noun sailed through.
+    """
+    for token in tokens:
+        if token.startswith(verb):
+            continue
+        if token not in _BARE_CONFIRMATION_WORDS:
+            return False
+    return True
+
+
 def _mail_send_match(tokens: tuple[str, ...]) -> str | None:
     """ "Gönder." (spec §3) — a BARE confirmation never names the mail noun itself (the
     owner does not say "maili gönder" to confirm what was just read back to them; that
@@ -2349,7 +3714,12 @@ def _mail_send_match(tokens: tuple[str, ...]) -> str | None:
         return None
     if _has(tokens, *_MAIL_NOUN_STEMS):
         return None
-    return _has_exact(tokens, *_MAIL_SEND_VERB_FORMS)
+    matched = _has_exact(tokens, *_MAIL_SEND_VERB_FORMS)
+    if matched is None:
+        return None
+    # req 736: a confirmation is BARE. Anything else in the sentence names a thing, and
+    # this family's confirmation never names anything (see `_is_bare`).
+    return matched if _is_bare(tokens, "gönder") or _is_bare(tokens, "gonder") else None
 
 
 def _mail_send_negation_match(tokens: tuple[str, ...]) -> str | None:
@@ -2552,17 +3922,472 @@ _AGENDA_QUESTION_WORDS: Final[tuple[str, ...]] = ("ne", "var")
 _FREE_QUESTION_FORMS: Final[tuple[str, ...]] = ("boş", "bos")
 _SLOT_NOUN_STEMS: Final[tuple[str, ...]] = ("boşluk", "bosluk", "müsaitlik", "musaitlik")
 _CALENDAR_ADD_VERB_FORMS: Final[tuple[str, ...]] = ("ekle", "eklesene", "koy", "koysana")
+#: B26 req 739. What makes a sentence with "ekle" a CALENDAR sentence: a day, a calendar
+#: word, or the name of a thing one keeps appointments for. Without one of these the verb
+#: is just "add", and everything gets added to something — the audit measured "Bir hedef
+#: ekle: bu ay kitabı bitir." (a goal for the month) becoming a dated calendar entry.
+_WEEKDAY_STEMS: Final[tuple[str, ...]] = (
+    "pazartesi",
+    "salı",
+    "sali",
+    "çarşamba",
+    "carsamba",
+    "perşembe",
+    "persembe",
+    "cuma",
+    "cumartesi",
+    "pazar",
+)
+_RELATIVE_DAY_FORMS: Final[tuple[str, ...]] = (
+    "yarın",
+    "yarin",
+    "yarına",
+    "yarina",
+    "bugün",
+    "bugun",
+    "öbür",
+    "obur",
+    "haftaya",
+)
+#: The nouns one actually keeps in a calendar. "ay" (month) is deliberately NOT here: it is
+#: the word that let the measured misroute through, and a month is a span, not an
+#: appointment.
+_APPOINTMENT_STEMS: Final[tuple[str, ...]] = (
+    "toplantı",
+    "toplanti",
+    "randevu",
+    "görüşme",
+    "gorusme",
+    "duruşma",
+    "durusma",
+    "etkinlik",
+    "seans",
+    "mülakat",
+    "mulakat",
+)
+
+
+#: B46 (req 356): "her gün / her hafta / her ay / hafta içi" makes "ekle" an appointment even
+#: with no day or calendar word ("Hafta içi her gün 9'da stand-up ekle.") - unless the sentence
+#: names a list, a note, a goal or a task, which own their own "her gün ... ekle".
+_RECURRENCE_UNIT_FORMS: Final[tuple[str, ...]] = (
+    "gün",
+    "gun",
+    "hafta",
+    "ay",
+    "ayın",
+    "ayin",
+    "yıl",
+    "yil",
+    "sabah",
+    "akşam",
+    "aksam",
+)
+_RECURRENCE_ADJECTIVE_FORMS: Final[tuple[str, ...]] = (
+    "haftalık",
+    "haftalik",
+    "aylık",
+    "aylik",
+    "yıllık",
+    "yillik",
+)
+_RECURRENCE_FOREIGN_STEMS: Final[tuple[str, ...]] = (
+    "liste",
+    "not",
+    "hedef",
+    "alışveriş",
+    "alisveris",
+    "görev",
+    "gorev",
+)
+
+
+def _recurrence_anchor(tokens: tuple[str, ...]) -> str | None:
+    if _has(tokens, *_RECURRENCE_FOREIGN_STEMS) is not None:
+        return None
+    if _has_exact(tokens, "her") is not None and _has_exact(tokens, *_RECURRENCE_UNIT_FORMS):
+        return "her"
+    if _has(tokens, "hafta") is not None and _has(tokens, "içi", "ici", "içleri", "icleri"):
+        return "hafta içi"
+    if _has_exact(tokens, *_RECURRENCE_ADJECTIVE_FORMS) is not None:
+        return "tekrar"
+    return None
+
+
+def _calendar_anchor(tokens: tuple[str, ...]) -> str | None:
+    """What makes this an appointment rather than an addition (B26 req 739)."""
+    return (
+        _has(tokens, *_CALENDAR_NOUN_STEMS)
+        or _has(tokens, *_WEEKDAY_STEMS)
+        or _has_exact(tokens, *_RELATIVE_DAY_FORMS)
+        or _has(tokens, *_APPOINTMENT_STEMS)
+        or _recurrence_anchor(tokens)
+    )
+
+
 _CALENDAR_RESCHEDULE_VERB_STEMS: Final[tuple[str, ...]] = ("ertele",)
 _CALENDAR_APPROVE_FORMS: Final[tuple[str, ...]] = ("onayla", "onaylıyorum", "onayliyorum")
 _CALENDAR_APPROVE_OK_FORMS: Final[tuple[str, ...]] = ("tamam",)
 
 
+#: B27 req 730. The spans a person asks a calendar about without naming the calendar:
+#: "Bu hafta ne var?" / "Yarın ne var?" / "Bugün programım ne?". A week word is an anchor
+#: of its own here (it is not one for ``_calendar_anchor``: "ekle" + "hafta" is still not
+#: an appointment), and "program" is the owner's other word for their agenda.
+_WEEK_FORMS: Final[tuple[str, ...]] = ("hafta", "haftaya", "haftalık", "haftalik")
+_AGENDA_NOUN_STEMS: Final[tuple[str, ...]] = ("program",)
+_AGENDA_TELL_VERB_FORMS: Final[tuple[str, ...]] = ("söyle", "soyle", "oku", "göster", "goster")
+
+
+def _agenda_span(tokens: tuple[str, ...]) -> str | None:
+    """The day or week a "ne var" question is about, when it names one."""
+    return (
+        _has_exact(tokens, *_RELATIVE_DAY_FORMS)
+        or _has(tokens, *_WEEK_FORMS)
+        or _has(tokens, *_WEEKDAY_STEMS)
+    )
+
+
 def _calendar_agenda_match(tokens: tuple[str, ...]) -> str | None:
-    """ "Bugün takvimimde ne var?" (spec §3)."""
-    if _has(tokens, *_CALENDAR_NOUN_STEMS) is None:
+    """ "Bugün takvimimde ne var?" (spec §3); B27 req 730: "Bu hafta ne var?" / "Yarın ne
+    var?" / "Bugün programım ne?" / "Haftalık programımı söyle." — the calendar noun is no
+    longer required when the sentence names a DAY or a WEEK, because that is how the
+    question is actually asked. Placed where it always was (after news and documents, so
+    "haberlerde ne var" and "belgede ne var" keep their families) and before the mail
+    block, whose own "kutuda ne var" carries no day."""
+    asks_what = _has_exact(tokens, "ne") and _has_exact(tokens, "var")
+    if _has(tokens, *_CALENDAR_NOUN_STEMS):
+        if asks_what:
+            return "takvimde ne var"
         return None
-    if _has_exact(tokens, "ne") and _has_exact(tokens, "var"):
-        return "takvimde ne var"
+    # "Günaydın, bugün ne var?" is the MORNING BRIEFING's (ADR-0091), which is answered
+    # further down the ladder and covers the calendar among other things: the greeting
+    # decides, and this matcher steps aside for it.
+    if asks_what and _agenda_span(tokens) is not None and not _has_exact(tokens, *_GREETING_WORDS):
+        return "bu hafta ne var"
+    if _has(tokens, *_AGENDA_NOUN_STEMS) and (
+        _has_exact(tokens, "ne", "nedir", "neymiş") or _has_exact(tokens, *_AGENDA_TELL_VERB_FORMS)
+    ):
+        return "programım ne"
+    return None
+
+
+#: B27 req 731. "Toplantıyı iptal et." / "Perşembeki toplantıyı iptal et." / "Randevuyu
+#: sil." — an appointment as the OBJECT of a cancel verb, or the calendar itself. The
+#: accusative forms and not the stems: "toplantı notlarını sil" deletes notes, not a
+#: meeting, and a stem match on "toplantı" would have admitted it (ADR-0133: one word is
+#: not a sentence). The alarm and routine families take their own nouns first
+#: (resolve_intent's own ordering), so "alarmı iptal et" never reaches here; and
+#: "araştırmayı iptal et" is the research family's, checked just before this one.
+_APPOINTMENT_OBJECT_FORMS: Final[tuple[str, ...]] = (
+    "toplantıyı",
+    "toplantiyi",
+    "toplantımı",
+    "toplantimi",
+    "randevuyu",
+    "randevumu",
+    "görüşmeyi",
+    "gorusmeyi",
+    "görüşmemi",
+    "gorusmemi",
+    "duruşmayı",
+    "durusmayi",
+    "etkinliği",
+    "etkinligi",
+    "seansı",
+    "seansi",
+    "mülakatı",
+    "mulakati",
+)
+_CALENDAR_CANCEL_VERB_FORMS: Final[tuple[str, ...]] = ("sil", "silsene", "kaldır", "kaldir")
+
+
+def _calendar_cancel_match(tokens: tuple[str, ...]) -> str | None:
+    if (
+        _has_exact(tokens, *_APPOINTMENT_OBJECT_FORMS) is None
+        and _has(tokens, *_CALENDAR_NOUN_STEMS) is None
+    ):
+        return None
+    # Turkish negation: "iptal etme" is "do NOT cancel".
+    if _has_exact(tokens, "etme", "etmeyin", "silme", "silmeyin", "kaldırma", "kaldirma"):
+        return None
+    if _has_exact(tokens, "iptal"):
+        return "toplantıyı iptal et"
+    if _has_exact(tokens, *_CALENDAR_CANCEL_VERB_FORMS):
+        return "toplantıyı sil"
+    return None
+
+
+# ------------------------------------------------------- B27: the everyday ten (726-735)
+#
+# The audit's own words: 103 plausible sentences, 59 reached nothing. The ten below are the
+# ones a person says every day, and each is matched on its OWN noun plus a verb - the same
+# token/stem primitives as every intent above, and the same rule ADR-0133 drew: a sentence
+# is admitted by a noun AND a verb, never by one word.
+
+#: req 734. The second-person forms of "what can you do", exact. Never the stem "yap"
+#: (OPERATOR_STATUS's "ne yapıyorsun" and EXEC_STATUS's share it), never "yapabilir" alone
+#: ("Bunu yapabilir misin?" asks for a thing, not for a list), and never "biliyorsun"
+#: (the memory family's recall verb: "kahve hakkında ne biliyorsun").
+_CAN_DO_VERB_FORMS: Final[tuple[str, ...]] = (
+    "yapabilirsin",
+    "yapabilirsiniz",
+    "yapabiliyorsun",
+    "yapabiliyorsunuz",
+    "yapabildiklerin",
+    "yapabildiklerini",
+)
+_HELP_NOUN_STEMS: Final[tuple[str, ...]] = ("yardım", "yardim")
+_HELP_VERB_FORMS: Final[tuple[str, ...]] = (
+    "olabilirsin",
+    "olabilirsiniz",
+    "edebilirsin",
+    "edebilirsiniz",
+    "olursun",
+    "edersin",
+)
+#: YOUR abilities, second-person possessive and exact: the bare stem "yetenek" is Capability
+#: Genesis's own noun ("Yetenek durumu ne?" is CAPABILITY_STATUS, M24), and "yeteneklerin
+#: neler" is the only shape that asks the assistant about itself.
+_ABILITY_NOUN_FORMS: Final[tuple[str, ...]] = (
+    "yeteneklerin",
+    "yeteneklerini",
+    "yeteneklerinin",
+    "marifetlerin",
+    "marifetlerini",
+    "becerilerin",
+    "becerilerini",
+    "hünerlerin",
+    "hunerlerin",
+)
+_SAY_TO_YOU_FORMS: Final[tuple[str, ...]] = (
+    "diyebilirim",
+    "söyleyebilirim",
+    "soyleyebilirim",
+    "isteyebilirim",
+    "sorabilirim",
+)
+_UNDERSTAND_FORMS: Final[tuple[str, ...]] = ("anlıyorsun", "anliyorsun", "anlarsın", "anlarsin")
+_WHAT_FORMS: Final[tuple[str, ...]] = ("ne", "neler", "nelerden", "nedir", "nelerdir", "hangi")
+#: The Capability Genesis verbs (M24): "yeni bir yetenek edin" is a request to GROW, and
+#: "yeteneklerin neler" a request to LIST. Same noun; the verb decides.
+_GENESIS_VERB_STEMS: Final[tuple[str, ...]] = (
+    "iste",
+    "edin",
+    "ekle",
+    "kazan",
+    "öğren",
+    "ogren",
+    "geliştir",
+    "gelistir",
+    "talep",
+)
+
+
+def _capabilities_query_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Neler yapabilirsin?" / "Ne yapabiliyorsun?" / "Yeteneklerin neler?" / "Hangi
+    konularda yardımcı olabilirsin?" / "Sana ne diyebilirim?" / "Nelerden anlıyorsun?"."""
+    if _has_exact(tokens, *_CAN_DO_VERB_FORMS):
+        return "neler yapabilirsin"
+    if _has(tokens, *_HELP_NOUN_STEMS) and _has_exact(tokens, *_HELP_VERB_FORMS):
+        return "yardımcı olabilirsin"
+    if (
+        _has_exact(tokens, *_ABILITY_NOUN_FORMS)
+        and _has_exact(tokens, *_WHAT_FORMS)
+        and _has(tokens, *_GENESIS_VERB_STEMS) is None
+    ):
+        return "yeteneklerin neler"
+    if _has_exact(tokens, *_SAY_TO_YOU_FORMS) and _has_exact(tokens, *_WHAT_FORMS):
+        return "sana ne diyebilirim"
+    if _has_exact(tokens, *_UNDERSTAND_FORMS) and _has_exact(tokens, *_WHAT_FORMS):
+        return "nelerden anlıyorsun"
+    return None
+
+
+#: req 734: the area the owner named, as the family KEY ``app.voice.capabilities`` groups
+#: tools by (``FAMILY_TR``'s keys). Literals here rather than an import: this module is
+#: imported by everything under app/voice/ and ``capabilities`` reads the tool registry,
+#: which imports this module back. ``tests/unit/test_intent_daily_coverage.py`` reads the
+#: other side and fails if a key here is not a family there.
+_CAPABILITY_FAMILY_STEMS: Final[tuple[tuple[tuple[str, ...], str], ...]] = (
+    (("mail", "posta", "eposta", "e-posta"), "mail"),
+    (("takvim", "ajanda", "randevu", "toplantı", "toplanti"), "calendar"),
+    (("alarm", "uyandır", "uyandir"), "alarm"),
+    (("hafıza", "hafiza", "bellek", "hatırla", "hatirla"), "memory"),
+    (("araştır", "arastir"), "research"),
+    (("haber",), "news"),
+    (("hava",), "weather"),
+    (("rutin",), "routine"),
+    (("belge", "doküman", "dokuman"), "document"),
+    (("dosya",), "file"),
+    (("ekran", "monitör", "monitor"), "display"),
+    (("kamera", "göz", "goz"), "eye"),
+    (("müzik", "muzik", "şarkı", "sarki", "video", "medya"), "media"),
+    (("uygulama",), "app"),
+    (("pencere", "bilgisayar", "klavye", "masaüstü", "masaustu"), "operator"),
+    (("saat",), "clock"),
+    (("konum",), "location"),
+    (("telaffuz",), "pronunciation"),
+    (("sahne", "üç boyut", "3b"), "scene"),
+    (("sürüm", "surum"), "release"),
+    (("brifing",), "briefing"),
+    (("seslendir", "anlatım", "anlatim"), "narration"),
+    (("çizim", "cizim", "görsel", "gorsel", "resim"), "creative"),
+)
+
+
+def _capability_family(tokens: tuple[str, ...]) -> str | None:
+    """The one family the question names, or None for the whole question."""
+    for stems, family in _CAPABILITY_FAMILY_STEMS:
+        if _has(tokens, *stems):
+            return family
+    return None
+
+
+#: req 732. The research NOUN ("araştırma", "araştırmayı", "araştırmadan"), never the
+#: verb stem "araştır" (that is how a research STARTS). "Araştırmayı yeniden yap." has no
+#: cancel verb and stays the retry it always was.
+_RESEARCH_NOUN_STEMS: Final[tuple[str, ...]] = ("araştırma", "arastirma")
+_RESEARCH_CANCEL_STOP_FORMS: Final[tuple[str, ...]] = ("durdur", "dur", "bırak", "birak", "kes")
+_RESEARCH_CANCEL_NEGATION_FORMS: Final[tuple[str, ...]] = (
+    "etme",
+    "etmeyin",
+    "durdurma",
+    "durdurmayın",
+    "bırakma",
+    "birakma",
+)
+
+
+def _research_cancel_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Araştırmayı iptal et." / "Araştırmayı durdur." / "Araştırmayı bırak." /
+    "Araştırmadan vazgeç." — the research named with a cancel verb. BEFORE the generic
+    stop: "durdur" is a STOP token, and with the research named it is about the research.
+    """
+    if _has(tokens, *_RESEARCH_NOUN_STEMS) is None:
+        return None
+    # Turkish negation: "iptal etme" / "durdurma" is "do NOT".
+    if _has_exact(tokens, *_RESEARCH_CANCEL_NEGATION_FORMS):
+        return None
+    if _has_exact(tokens, "iptal"):
+        return "araştırmayı iptal et"
+    if _has_exact(tokens, *_RESEARCH_CANCEL_STOP_FORMS):
+        return "araştırmayı durdur"
+    if _has(tokens, *_DISCARD_STEMS):
+        return "araştırmadan vazgeç"
+    return None
+
+
+#: req 733. The VOLUME noun, exact: "ses" is also the first three letters of "seslendir"
+#: (narrate) and "sesli" (spoken), neither of which is a volume. "seviye" alone is
+#: nothing; "ses seviyesi" is the noun.
+_VOLUME_NOUN_FORMS: Final[tuple[str, ...]] = (
+    "ses",
+    "sesi",
+    "sesini",
+    "sesin",
+    "sesinin",
+    "sesim",
+    "sesimi",
+    "volüm",
+    "volümü",
+    "volum",
+    "volumu",
+    "volume",
+)
+_VOLUME_DOWN_FORMS: Final[tuple[str, ...]] = (
+    "kıs",
+    "kis",
+    "kıssana",
+    "kissana",
+    "kısar",
+    "kisar",
+    "alçalt",
+    "alcalt",
+    "azalt",
+    "düşür",
+    "dusur",
+    "indir",
+)
+_VOLUME_UP_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "ac",
+    "açsana",
+    "acsana",
+    "açar",
+    "acar",
+    "yükselt",
+    "yukselt",
+    "artır",
+    "artir",
+    "arttır",
+    "arttir",
+)
+_VOLUME_MUTE_FORMS: Final[tuple[str, ...]] = ("kapat", "kapatsana", "sustur", "kes")
+_SILENT_STEMS: Final[tuple[str, ...]] = ("sessiz",)
+_SILENT_VERB_FORMS: Final[tuple[str, ...]] = ("al", "alsana", "geç", "gec", "geçsene", "gecsene")
+
+VOLUME_DOWN: Final = "down"
+VOLUME_UP: Final = "up"
+VOLUME_MUTE: Final = "mute"
+
+
+def _media_volume_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
+    """ "Sesini kıs." / "Sesi biraz aç." / "Sesini yükselt." / "Sesi kapat." / "Sessize
+    al." -> (direction, matched). The alarm family is resolved before this one, so
+    "alarmın sesini kapat" is the alarm's; the display family too, so "ekranı aç" never
+    gets here at all."""
+    if _has(tokens, *_SILENT_STEMS) and _has_exact(tokens, *_SILENT_VERB_FORMS):
+        return VOLUME_MUTE, "sessize al"
+    if _has_exact(tokens, *_VOLUME_NOUN_FORMS) is None:
+        return None
+    if _has_exact(tokens, *_VOLUME_DOWN_FORMS):
+        return VOLUME_DOWN, "sesi kıs"
+    if _has_exact(tokens, *_VOLUME_UP_FORMS):
+        return VOLUME_UP, "sesi aç"
+    if _has_exact(tokens, *_VOLUME_MUTE_FORMS):
+        return VOLUME_MUTE, "sesi kapat"
+    return None
+
+
+#: req 735. "Ekran görüntüsü al." / "Ekranın görüntüsünü al." / "Screenshot al." / "Ekranı
+#: yakala." / "Ekranın fotoğrafını çek." The screen noun in every shape the display family
+#: knows plus the genitive ("ekranın") that family has no use for.
+_SCREEN_GENITIVE_FORMS: Final[tuple[str, ...]] = ("ekranın", "ekranin", "ekranımın", "ekranimin")
+_SCREENSHOT_WORD_FORMS: Final[tuple[str, ...]] = (
+    "screenshot",
+    "screenshotu",
+    "screenshotunu",
+    "skrinşat",
+    "ss",
+)
+_CAPTURE_VERB_FORMS: Final[tuple[str, ...]] = (
+    "al",
+    "alsana",
+    "alır",
+    "alir",
+    "alabilir",
+    "çek",
+    "cek",
+    "çeksene",
+    "ceksene",
+    "kaydet",
+)
+_PHOTO_STEMS: Final[tuple[str, ...]] = ("fotoğraf", "fotograf", "foto")
+_GRAB_VERB_FORMS: Final[tuple[str, ...]] = ("yakala", "yakalasana")
+
+
+def _screenshot_match(tokens: tuple[str, ...]) -> str | None:
+    if _has_exact(tokens, *_SCREENSHOT_WORD_FORMS) and _has_exact(tokens, *_CAPTURE_VERB_FORMS):
+        return "screenshot al"
+    if _screen_noun(tokens) is None and _has_exact(tokens, *_SCREEN_GENITIVE_FORMS) is None:
+        return None
+    if _has(tokens, "görüntü", "goruntu") and _has_exact(tokens, *_CAPTURE_VERB_FORMS):
+        return "ekran görüntüsü al"
+    if _has(tokens, *_PHOTO_STEMS) and _has_exact(tokens, *_CAPTURE_VERB_FORMS):
+        return "ekranın fotoğrafını çek"
+    if _has_exact(tokens, *_GRAB_VERB_FORMS):
+        return "ekranı yakala"
     return None
 
 
@@ -2596,6 +4421,10 @@ def _calendar_propose_match(tokens: tuple[str, ...]) -> str | None:
     """ "Perşembe 15'e diş hekimi ekle." (spec §3) — a NEW event; the summary/time text is
     the model's own argument."""
     if _has_exact(tokens, *_CALENDAR_ADD_VERB_FORMS) is None:
+        return None
+    # req 739: "ekle" alone is the verb "add", and everything gets added to something. The
+    # calendar owns the sentence only when the sentence is about a time or an appointment.
+    if _calendar_anchor(tokens) is None:
         return None
     return "etkinlik ekle"
 
@@ -2769,6 +4598,82 @@ def _extract_artifact_numbers(utterance: str) -> list[float] | None:
 
 
 _NUMBER_TOKEN_RE = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+_ARTIFACT_EDIT_VERB_STEMS: Final[tuple[str, ...]] = (
+    "ekle",
+    "değiştir",
+    "degistir",
+    "çıkar",
+    "cikar",
+    "kaldır",
+    "kaldir",
+)
+_ARTIFACT_PART_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "bölüm",
+    "bolum",
+    "başlı",
+    "basli",
+    "slayt",
+    "satır",
+    "satir",
+    "madde",
+)
+_ARTIFACT_CLONE_VERB_STEMS: Final[tuple[str, ...]] = (
+    "kopyala",
+    "çoğalt",
+    "cogalt",
+    "kopyasını",
+    "kopyasini",
+)
+_ARTIFACT_DELETE_VERB_STEMS: Final[tuple[str, ...]] = ("sil",)
+_ARTIFACT_COMPARE_STEMS: Final[tuple[str, ...]] = (
+    "karşılaştır",
+    "karsilastir",
+    "kıyasla",
+    "kiyasla",
+    "fark",
+    "değişti",
+    "degisti",
+)
+
+
+def _artifact_lifecycle_match(
+    tokens: tuple[str, ...], *, artifact_focused: bool
+) -> tuple[Intent, str, dict[str, Any]] | None:
+    """B42 (req 410-416): edit / clone / delete / compare, gated on an artifact being
+    in focus (the caller's one live fact) so a bare "bunu sil" in an empty room keeps its
+    old owners (the document family's delete, the memory's forget)."""
+    if not artifact_focused:
+        return None
+    deictic = _has_exact(tokens, *_ARTIFACT_DEICTIC_WORDS) is not None
+    file_noun = _has(tokens, *_ARTIFACT_FILE_NOUN_STEMS) is not None
+    if (
+        _has_exact(tokens, "evet") is not None
+        and _has(tokens, *_ARTIFACT_DELETE_VERB_STEMS) is not None
+    ):
+        return (
+            Intent.ARTIFACT_DELETE,
+            "evet sil",
+            {"artifact_ref": "current", "artifact_confirm": True},
+        )
+    if (deictic or file_noun) and _has_exact(tokens, *_ARTIFACT_DELETE_VERB_STEMS) is not None:
+        return Intent.ARTIFACT_DELETE, "bunu sil", {"artifact_ref": "current"}
+    if (deictic or file_noun) and _has(tokens, *_ARTIFACT_CLONE_VERB_STEMS) is not None:
+        return Intent.ARTIFACT_CLONE, "bunu kopyala", {"artifact_ref": "current"}
+    if _has(tokens, *_ARTIFACT_COMPARE_STEMS) is not None and (
+        deictic
+        or file_noun
+        or _has_exact(tokens, *_ARTIFACT_PREVIOUS_WORDS, "öncekiyle", "oncekiyle", "ikisini", "ne")
+    ):
+        return Intent.ARTIFACT_COMPARE, "karşılaştır", {"artifact_ref": "current"}
+    if (
+        (deictic or file_noun)
+        and _has(tokens, *_ARTIFACT_PART_NOUN_STEMS) is not None
+        and _has(tokens, *_ARTIFACT_EDIT_VERB_STEMS) is not None
+    ):
+        return Intent.ARTIFACT_EDIT, "bunu düzenle", {"artifact_ref": "current"}
+    return None
 
 
 def _artifact_create_match(tokens: tuple[str, ...]) -> str | None:
@@ -2989,6 +4894,94 @@ def _appfactory_status_match(tokens: tuple[str, ...]) -> str | None:
     if _has_exact(tokens, *_APP_QUESTION_PARTICLES) is None:
         return None
     return "uygulama çalışıyor mu"
+
+
+_APP_FIX_VERB_STEMS: Final[tuple[str, ...]] = ("düzelt", "duzelt", "onar")
+_APP_FIX_NOUN_STEMS: Final[tuple[str, ...]] = ("hata", "bug", "sorun")
+
+
+_APP_LOG_NOUN_STEMS: Final[tuple[str, ...]] = ("günlü", "gunlu", "log")
+_APP_PACKAGE_VERB_STEMS: Final[tuple[str, ...]] = ("paketle", "paket")
+_APP_RELEASE_NOUN_STEMS: Final[tuple[str, ...]] = ("sürüm", "surum", "paket")
+_APP_HISTORY_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "geçmiş",
+    "gecmis",
+    "sürümler",
+    "surumler",
+    "tarihçe",
+    "tarihce",
+)
+_APP_RESUME_STEMS: Final[tuple[str, ...]] = ("devam", "kaldığımız", "kaldigimiz", "geri dön")
+_APP_VERIFY_STEMS: Final[tuple[str, ...]] = ("doğrula", "dogrula", "kontrol et")
+_APP_ADD_VERB_STEMS: Final[tuple[str, ...]] = ("ekle", "eklesene", "eklensin", "katıl", "katil")
+
+
+def _appfactory_lifecycle_match(
+    tokens: tuple[str, ...], text: str, *, app_project_focused: bool
+) -> tuple[Intent, str, dict[str, Any]] | None:
+    """B41 (req 440-452): the words that belong to a GENERATED application while one is
+    in focus - gated on ``app_project_focused`` the way the native family is gated on
+    ``native_build_focused``, so nothing here fires in an empty room. Checked AFTER the
+    native block, which owns the same words while a native build is in focus."""
+    if not app_project_focused:
+        return None
+    app = _has(tokens, *_APP_NOUN_STEMS) is not None
+    if (
+        app
+        and _has(tokens, *_APP_ADD_VERB_STEMS) is not None
+        and _has_exact(tokens, *_SELF_REFERENCE_FORMS) is None
+    ):
+        return Intent.APP_FACTORY_MODIFY, "uygulamaya ekle", {"app_request": text.strip()}
+    if app and _has(tokens, *_APP_LOG_NOUN_STEMS) is not None:
+        return Intent.APP_FACTORY_LOG, "uygulamanın günlüğünü oku", {}
+    if (
+        _has(tokens, *_APP_HISTORY_NOUN_STEMS) is not None and (app or _has_exact(tokens, "neler"))
+    ) or (
+        app
+        and _has_exact(tokens, "neler", "ne") is not None
+        and _has(tokens, "yapt", "yapıl", "yapil") is not None
+    ):
+        return Intent.APP_FACTORY_HISTORY, "uygulamanın geçmişi", {}
+    if (
+        app
+        and _has(tokens, *_APP_PACKAGE_VERB_STEMS) is not None
+        and _has(tokens, *_APP_RUN_VERB_FORMS) is None
+    ):
+        return Intent.APP_FACTORY_PACKAGE, "uygulamayı paketle", {}
+    if (
+        _has(tokens, *_APP_RELEASE_NOUN_STEMS) is not None
+        and _has_exact(tokens, *_APP_RUN_VERB_FORMS) is not None
+    ):
+        return Intent.APP_FACTORY_LAUNCH, "sürümü başlat", {}
+    if (app or _has(tokens, "arayüz", "arayuz")) and (
+        _has(tokens, *_APP_VERIFY_STEMS) is not None
+        or (_has(tokens, "arayüz", "arayuz") is not None and _has_exact(tokens, "test", "kontrol"))
+    ):
+        return Intent.APP_FACTORY_VERIFY, "uygulamayı doğrula", {}
+    if app and _has(tokens, *_APP_RESUME_STEMS) is not None:
+        return Intent.APP_FACTORY_RESUME, "uygulamaya devam", {"app_name": _extract_app_name(text)}
+    if (
+        _has(tokens, *_APP_FIX_NOUN_STEMS) is not None
+        and _has(tokens, *_APP_FIX_VERB_STEMS) is not None
+        and _has_exact(tokens, *_SELF_REFERENCE_FORMS) is None
+    ):
+        return Intent.APP_FACTORY_FIX, "bu bug'ı düzelt", {}
+    return None
+
+
+def _appfactory_fix_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Testleri düzelt." / "Uygulamadaki hatayı düzelt." (B40 req 435-437) - a fix verb
+    with the test noun, or with a fault noun AND the app noun; never a self-reference
+    (the self-development queue owns "kendin düzelt") and never a bare "bunu düzelt"."""
+    if _has(tokens, *_APP_FIX_VERB_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_SELF_REFERENCE_FORMS) is not None:
+        return None
+    if _has(tokens, *_APP_TEST_NOUN_STEMS):
+        return "testleri düzelt"
+    if _has(tokens, *_APP_FIX_NOUN_STEMS) and _has(tokens, *_APP_NOUN_STEMS):
+        return "uygulamadaki hatayı düzelt"
+    return None
 
 
 def _appfactory_test_match(tokens: tuple[str, ...]) -> str | None:
@@ -3289,6 +5282,58 @@ _SCENE_RENDER_NOUN_STEMS: Final[tuple[str, ...]] = ("render",)
 _SCENE_RENDER_VERB_FORMS: Final[tuple[str, ...]] = ("al", "alsana", "alır", "alir")
 
 
+#: B44 (req 527): the 3D formats a scene export names; "gltf" is written as its binary form.
+_SCENE_EXPORT_FORMAT_WORDS: Final[dict[str, str]] = {"glb": "glb", "gltf": "glb", "fbx": "fbx"}
+#: B44 (req 526): the words that ask for motion rather than a pose.
+_SCENE_ANIMATION_STEMS: Final[tuple[str, ...]] = (
+    "animasyon",
+    "canlandır",
+    "canlandir",
+    "hareketlendir",
+)
+
+
+def _scene_export_format_from_tokens(tokens: tuple[str, ...]) -> str | None:
+    for tok in tokens:
+        fmt = _SCENE_EXPORT_FORMAT_WORDS.get(tok)
+        if fmt is not None:
+            return fmt
+    return None
+
+
+def _scene_export_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Sahneyi dışa aktar." / "Sahneyi FBX olarak dışa aktar." (B44 req 527): the scene
+    noun or a 3D format word, with the export phrase. M25 kept this sentence a deliberate
+    negative because the vocabulary had no export; B44 gives it one. The creative family's
+    export refuses the scene noun and (since B44) a 3D format word, so the two never meet."""
+    if (
+        _has(tokens, *_SCENE_NOUN_STEMS) is None
+        and _scene_export_format_from_tokens(tokens) is None
+    ):
+        return None
+    if _has_exact(tokens, _CREATIVE_EXPORT_OUT_WORD, _CREATIVE_EXPORT_OUT_WORD_ASCII) is None:
+        return None
+    if _has(tokens, *_CREATIVE_EXPORT_VERB_STEMS) is None:
+        return None
+    return "sahneyi dışa aktar"
+
+
+def _scene_animate_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Küreye bir animasyon ekle." / "Küpü canlandır." (B44 req 526): a motion word with
+    an object (a primitive noun, a deictic or the scene). Checked BEFORE SCENE_ADD, which
+    would otherwise read "küreye ... ekle" as a new sphere."""
+    if _has(tokens, *_SCENE_ANIMATION_STEMS) is None:
+        return None
+    has_object = (
+        _has(tokens, *_PRIMITIVE_NOUN_STEMS) is not None
+        or _has_exact(tokens, *_SCENE_DEICTIC_WORDS) is not None
+        or _has(tokens, *_SCENE_NOUN_STEMS) is not None
+    )
+    if not has_object:
+        return None
+    return "animasyon ekle"
+
+
 def _scene_tool_from_tokens(tokens: tuple[str, ...]) -> str | None:
     """ "Blender'da" / "Unity'de" (spec §5) - the tool word, resolved once from the
     SAME utterance every matcher below already checked, never a guess."""
@@ -3578,6 +5623,123 @@ def _creative_design_match(tokens: tuple[str, ...]) -> str | None:
     return "tasarla"
 
 
+# ------------------------------------------------------------- B43: creative lifecycle
+
+_CREATIVE_GENERATE_VERB_STEMS: Final[tuple[str, ...]] = (
+    "üret",
+    "uret",
+    "oluştur",
+    "olustur",
+    "tasarla",
+)
+_CREATIVE_GENERATE_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "görsel",
+    "gorsel",
+    "resim",
+    "resmi",
+    "logo",
+    "afiş",
+    "afis",
+    "ikon",
+    "illüstrasyon",
+    "illustrasyon",
+    "poster",
+    "kapak",
+)
+_CREATIVE_ENHANCE_VERB_STEMS: Final[tuple[str, ...]] = (
+    "düzelt",
+    "duzelt",
+    "iyileştir",
+    "iyilestir",
+    "netleştir",
+    "netlestir",
+    "güzelleştir",
+    "guzellestir",
+)
+_CREATIVE_PHOTO_NOUN_STEMS: Final[tuple[str, ...]] = (
+    "fotoğraf",
+    "fotograf",
+    "foto",
+    "resim",
+    "resmi",
+    "görsel",
+    "gorsel",
+)
+_CREATIVE_DELIVER_PLACE_STEMS: Final[tuple[str, ...]] = (
+    "bilgisayar",
+    "disk",
+    "masaüstü",
+    "masaustu",
+    "indirilenler",
+    "klasör",
+    "klasor",
+)
+_CREATIVE_DELIVER_VERB_STEMS: Final[tuple[str, ...]] = ("indir", "kaydet", "teslim", "koy")
+_CREATIVE_SHOW_VERB_STEMS: Final[tuple[str, ...]] = ("göster", "goster")
+_CREATIVE_REDO_STEMS: Final[tuple[str, ...]] = ("yinele", "yeniden yap", "ileri al")
+
+
+def _creative_generate_match(tokens: tuple[str, ...], text: str) -> tuple[str, str] | None:
+    """ "Bana bir logo üret: mavi bir dalga." / "Bir afiş oluştur." (req 492): an image
+    noun AND a generation verb, never the redraw verb ("yeniden çiz" is CREATIVE_REDRAW)
+    and never a creative tool word with "aç" (CREATIVE_OPEN). The prompt is the owner's
+    sentence after the colon when there is one, else the whole sentence."""
+    if _has(tokens, *_CREATIVE_GENERATE_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_CREATIVE_GENERATE_VERB_STEMS) is None:
+        return None
+    if (
+        _has(tokens, *_CREATIVE_REDRAW_VERB_STEMS) is not None
+        and _has_exact(tokens, "yeniden") is not None
+    ):
+        return None
+    if _has(tokens, "tablo", "belge", "sunum", "sayfa", "uygulama") is not None:
+        return None
+    head, sep, tail = text.partition(":")
+    prompt = tail.strip() if sep and tail.strip() else text.strip()
+    return "görsel üret", prompt[:1000]
+
+
+def _creative_enhance_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Bu fotoğrafı düzelt." (req 512): a photo noun and an improving verb, and NOT the
+    colour word (that is CREATIVE_ADJUST's own sentence)."""
+    if _has(tokens, *_CREATIVE_PHOTO_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_CREATIVE_ENHANCE_VERB_STEMS) is None:
+        return None
+    if _has(tokens, "renk") is not None:
+        return None
+    return "fotoğrafı düzelt"
+
+
+def _creative_lifecycle_match(
+    tokens: tuple[str, ...], *, creative_focused: bool
+) -> tuple[Intent, str, dict[str, Any]] | None:
+    """Undo / redo / deliver / show, gated on a creative run being in focus - so "geri al"
+    in an empty room keeps its owners (the document's undo needs its own noun anyway)."""
+    if not creative_focused:
+        return None
+    if _has_exact(tokens, "geri") is not None and _has(tokens, "al") is not None:
+        return Intent.CREATIVE_UNDO, "geri al", {"creative_ref": "current"}
+    if _has(tokens, *_CREATIVE_REDO_STEMS) is not None or (
+        _has_exact(tokens, "ileri") is not None and _has(tokens, "al") is not None
+    ):
+        return Intent.CREATIVE_REDO, "yinele", {"creative_ref": "current"}
+    tool_word = _creative_tool_from_tokens(tokens)
+    if tool_word == "paint" and _has(tokens, *_CREATIVE_SHOW_VERB_STEMS) is not None:
+        return (
+            Intent.CREATIVE_DELIVER,
+            "paint'te göster",
+            {"creative_ref": "current", "creative_application": "mspaint"},
+        )
+    if (
+        _has(tokens, *_CREATIVE_DELIVER_PLACE_STEMS) is not None
+        and _has(tokens, *_CREATIVE_DELIVER_VERB_STEMS) is not None
+    ):
+        return Intent.CREATIVE_DELIVER, "bilgisayarıma indir", {"creative_ref": "current"}
+    return None
+
+
 def _creative_export_match(tokens: tuple[str, ...]) -> str | None:
     """ "Bunu PNG olarak dışa aktar." (spec §5) - requires BOTH "dışa" and "aktar";
     "aktar" alone is ``_RESEARCH_TELLING_VERBS``' own word, but that branch ALSO
@@ -3598,9 +5760,13 @@ def _creative_export_match(tokens: tuple[str, ...]) -> str | None:
         return None
     if _has(tokens, *_CREATIVE_EXPORT_VERB_STEMS) is None:
         return None
-    if _has(tokens, *_SCENE_NOUN_STEMS) is not None:
-        # Another family's own noun. Its absence of an export operation is that family's
-        # to state, not this one's to satisfy.
+    if (
+        _has(tokens, *_SCENE_NOUN_STEMS) is not None
+        or _scene_export_format_from_tokens(tokens) is not None
+    ):
+        # Another family's own noun - or, since B44, its own format word (GLB/FBX). Its
+        # absence of an export operation is that family's to state, not this one's to
+        # satisfy.
         return None
     return "dışa aktar"
 
@@ -3825,6 +5991,13 @@ _NATIVE_FOREIGN_ALL_STEMS: Final[tuple[str, ...]] = (
     + ("uygulam", "proje")
 )
 
+#: B33: the lifecycle verbs ("uygulamayı aç / doğrula / güncelle / kaldır", "uygulamanın
+#: günlüğünü oku") REQUIRE the application noun that check/fix/rebuild treat as M23's, so
+#: their foreign list is the same one without it.
+_NATIVE_LIFECYCLE_FOREIGN_STEMS: Final[tuple[str, ...]] = tuple(
+    stem for stem in _NATIVE_FOREIGN_ALL_STEMS if stem not in ("uygulam", "proje")
+)
+
 #: The TARGET each artefact noun names, in ``app.nativefactory.spec.NATIVE_TARGETS``'
 #: own vocabulary. "kurulum" is an MSIX here because MSIX is the only installer format
 #: this machine can actually produce (spec §1: Inno Setup and WiX are absent, so an MSI
@@ -3975,6 +6148,113 @@ def _native_emulator_open_match(tokens: tuple[str, ...]) -> str | None:
     if _has_exact(tokens, *_NATIVE_OPEN_VERB_FORMS) is None:
         return None
     return "emülatörde aç"
+
+
+# ------------------------------------------ B33: launch, verify, log, uninstall, update
+
+_NATIVE_LAUNCH_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "ac",
+    "çalıştır",
+    "calistir",
+    "başlat",
+    "baslat",
+)
+#: What makes "aç / çalıştır / başlat" the BUILT application's launch rather than M23's
+#: web-app open (test_voice_native_intents keeps "Uygulamayı aç." M23's even with a build
+#: in the system): the native words, the compile word, or the "program" noun M23 never
+#: uses.
+_NATIVE_LAUNCH_QUALIFIER_STEMS: Final[tuple[str, ...]] = (
+    *_NATIVE_WINDOWS_NOUN_STEMS,
+    *_NATIVE_EXE_NOUN_STEMS,
+    "yerel",
+    "derle",
+    "native",
+    "program",
+)
+_NATIVE_VERIFY_STEMS: Final[tuple[str, ...]] = ("doğrula", "dogrula", "sına", "sina")
+_NATIVE_UI_NOUN_STEMS: Final[tuple[str, ...]] = ("arayüz", "arayuz", "pencere")
+_NATIVE_LOG_NOUN_STEMS: Final[tuple[str, ...]] = ("günlü", "gunlu", "log")  # günlüğünü: k->ğ
+_NATIVE_UNINSTALL_VERB_STEMS: Final[tuple[str, ...]] = ("kaldır", "kaldir")
+_NATIVE_UPDATE_STEMS: Final[tuple[str, ...]] = ("güncelle", "guncelle")
+
+
+def _native_launch_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Masaüstü uygulamasını aç." / "EXE'yi çalıştır." / "Programı başlat." with a
+    native build focused (B33 req 462). The BARE "Uygulamayı aç." stays M23's App Factory
+    even then (the older contract, kept by test_voice_native_intents): the native launch
+    needs a native word, the compile word or the "program" noun. "Emülatör" stays the
+    Android branch above."""
+    if _native_ios_requested(tokens) or not native_build_focused:
+        return None
+    if _has(tokens, *_NATIVE_EMULATOR_NOUN_STEMS) is not None:
+        return None
+    if _has(tokens, *_NATIVE_LAUNCH_QUALIFIER_STEMS) is None:
+        return None
+    if _has_exact(tokens, *_NATIVE_LAUNCH_VERB_FORMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_LIFECYCLE_FOREIGN_STEMS) is not None:
+        return None
+    return "masaüstü uygulamasını aç"
+
+
+def _native_verify_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Uygulamayı doğrula." / "Arayüzünü test et." (B33 req 463-465)."""
+    if _native_ios_requested(tokens) or not native_build_focused:
+        return None
+    if _has(tokens, *_NATIVE_APP_NOUN_STEMS, *_NATIVE_UI_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_VERIFY_STEMS) is None and not (
+        _has(tokens, *_NATIVE_UI_NOUN_STEMS) is not None and _has_exact(tokens, "test", "kontrol")
+    ):
+        return None
+    if _has(tokens, *_NATIVE_LIFECYCLE_FOREIGN_STEMS) is not None:
+        return None
+    return "uygulamayı doğrula"
+
+
+def _native_log_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Uygulamanın günlüğünü oku." (B33 req 466)."""
+    if _native_ios_requested(tokens) or not native_build_focused:
+        return None
+    if (
+        _has(tokens, *_NATIVE_APP_NOUN_STEMS) is None
+        or _has(tokens, *_NATIVE_LOG_NOUN_STEMS) is None
+    ):
+        return None
+    if _has_exact(tokens, *_READ_VERB_FORMS, "göster", "goster", "söyle", "soyle") is None:
+        return None
+    return "uygulamanın günlüğünü oku"
+
+
+def _native_uninstall_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Kurulumu kaldır." / "Uygulamayı kaldır." (B33 req 469)."""
+    if _native_ios_requested(tokens):
+        return None
+    has_installer_noun = _has(tokens, *_NATIVE_INSTALLER_NOUN_STEMS) is not None
+    if not has_installer_noun and not (
+        native_build_focused and _has(tokens, *_NATIVE_APP_NOUN_STEMS) is not None
+    ):
+        return None
+    if _has(tokens, *_NATIVE_UNINSTALL_VERB_STEMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_LIFECYCLE_FOREIGN_STEMS) is not None:
+        return None
+    return "kurulumu kaldır"
+
+
+def _native_update_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
+    """ "Uygulamayı güncelle." (B33 req 471) - with a native build focused; "sistemi
+    güncelle" and the like carry no native noun and stay where they were."""
+    if _native_ios_requested(tokens) or not native_build_focused:
+        return None
+    if _has(tokens, *_NATIVE_APP_NOUN_STEMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_UPDATE_STEMS) is None:
+        return None
+    if _has(tokens, *_NATIVE_LIFECYCLE_FOREIGN_STEMS) is not None:
+        return None
+    return "uygulamayı güncelle"
 
 
 def _native_check_match(tokens: tuple[str, ...], *, native_build_focused: bool) -> str | None:
@@ -5406,6 +7686,11 @@ def resolve_intent(
     genesis_awaiting_approval: bool = False,
     executive_run_state: str | None = None,
     native_build_focused: bool = False,
+    mutation_pending: bool = False,
+    mission_state: str | None = None,
+    app_project_focused: bool = False,
+    artifact_focused: bool = False,
+    creative_focused: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -5489,6 +7774,10 @@ def resolve_intent(
     # ADR-0076: and WHICH research it points at. Decided from the same tokens, in the
     # same pass, so the class and the reference can never describe different utterances.
     base["reference"] = classify_research_reference(tokens, utterance=text)
+    # B31 req 192: the mode in the owner's own words, kept with the turn.
+    from app.research.policy import derive_mode_from_utterance
+
+    base["research_mode"] = derive_mode_from_utterance(text)
 
     # 0. Active Eye privacy stop (M18 spec §2) — checked before even STOP. A camera
     #    disable phrase must never be shadowed by anything this resolver learns
@@ -5516,6 +7805,18 @@ def resolve_intent(
             **base,
         )
 
+    # 0b'-bis. B35 (req 622/623): the owner assigns the system work on itself. After the
+    #      evolution switch (same self-reference), before memory-correct and explain
+    #      (which claimed "düzelt" / "hatayı" for themselves).
+    if selfdev_matched := _selfdev_match(tokens):
+        return ResolvedIntent(
+            selfdev_matched[0],
+            scope=SCOPE_CONVERSATION,
+            matched=selfdev_matched[1],
+            selfdev_request=text.strip() if selfdev_matched[0] != Intent.SELFDEV_STATUS else None,
+            **base,
+        )
+
     # 0b''. M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): the Creative Tools
     #       Operator. BEFORE the alarm/ambient block (0c) and before ARTIFACT_OPEN
     #       (0h) - the module comment above the ``_creative_*_match`` functions names
@@ -5523,6 +7824,24 @@ def resolve_intent(
     #       alarm's own bare-wake fallback; "arka planda" vs. the research
     #       technical-explanation trigger; "bunu ... aç" vs. ARTIFACT_OPEN's own
     #       deictic open, resolved by CREATIVE_OPEN's own tool-word gate either way).
+    # B43: the creative run in focus owns undo / redo / deliver; generation and the
+    # photo fix are their own sentences. All BEFORE the M27 block so 'Paint'te göster'
+    # with a run in focus is a delivery, not a fresh open.
+    if lifecycle_creative := _creative_lifecycle_match(tokens, creative_focused=creative_focused):
+        lc_intent, lc_text, lc_fields = lifecycle_creative
+        return ResolvedIntent(lc_intent, matched=lc_text, **lc_fields, **base)
+    if generate_matched := _creative_generate_match(tokens, text):
+        return ResolvedIntent(
+            Intent.CREATIVE_GENERATE,
+            matched=generate_matched[0],
+            creative_prompt=generate_matched[1],
+            creative_tool=_creative_tool_from_tokens(tokens),
+            **base,
+        )
+    if enhance_matched := _creative_enhance_match(tokens):
+        return ResolvedIntent(
+            Intent.CREATIVE_ENHANCE, matched=enhance_matched, creative_ref="current", **base
+        )
     if creative_redraw_matched := _creative_redraw_match(tokens):
         return ResolvedIntent(
             Intent.CREATIVE_REDRAW,
@@ -5641,6 +7960,57 @@ def resolve_intent(
             native_ref="current",
             **base,
         )
+    # B33: the lifecycle after the build - each needs the focus (or the installer noun) the
+    # same way check/fix/rebuild do, and refuses every other family's noun.
+    if native_launch_matched := _native_launch_match(
+        tokens, native_build_focused=native_build_focused
+    ):
+        return ResolvedIntent(
+            Intent.NATIVE_LAUNCH,
+            scope=SCOPE_CONVERSATION,
+            matched=native_launch_matched,
+            native_target=_native_target_from_tokens(tokens),
+            native_ref="current",
+            **base,
+        )
+    if native_verify_matched := _native_verify_match(
+        tokens, native_build_focused=native_build_focused
+    ):
+        return ResolvedIntent(
+            Intent.NATIVE_VERIFY,
+            scope=SCOPE_CONVERSATION,
+            matched=native_verify_matched,
+            native_ref="current",
+            **base,
+        )
+    if native_log_matched := _native_log_match(tokens, native_build_focused=native_build_focused):
+        return ResolvedIntent(
+            Intent.NATIVE_LOG,
+            scope=SCOPE_CONVERSATION,
+            matched=native_log_matched,
+            native_ref="current",
+            **base,
+        )
+    if native_uninstall_matched := _native_uninstall_match(
+        tokens, native_build_focused=native_build_focused
+    ):
+        return ResolvedIntent(
+            Intent.NATIVE_UNINSTALL,
+            scope=SCOPE_CONVERSATION,
+            matched=native_uninstall_matched,
+            native_ref="current",
+            **base,
+        )
+    if native_update_matched := _native_update_match(
+        tokens, native_build_focused=native_build_focused
+    ):
+        return ResolvedIntent(
+            Intent.NATIVE_UPDATE,
+            scope=SCOPE_CONVERSATION,
+            matched=native_update_matched,
+            native_ref="current",
+            **base,
+        )
     if native_check_matched := _native_check_match(
         tokens, native_build_focused=native_build_focused
     ):
@@ -5728,10 +8098,120 @@ def resolve_intent(
             Intent.CLOCK_QUERY, scope=SCOPE_CONVERSATION, matched=clock_matched[1], **base
         )
 
+    # 0c'''. B27 req 731-735: the everyday sentences that reached nothing. HERE — after
+    #        the alarm/routine/display/clock families (each of which takes its own noun
+    #        first: "alarmı iptal et" is the alarm's) and BEFORE the operator's
+    #        running-gated pair (0d) and the generic stop (1), because "Araştırmayı
+    #        durdur." carries a STOP token and "Araştırmayı iptal et." the operator's
+    #        cancel word, and both are about the research when the research is named.
+    #        Every matcher below requires its own noun, so a bare "Dur." / "İptal et." is
+    #        untouched and keeps the priority it always had.
+    if capabilities_matched := _capabilities_query_match(tokens):
+        return ResolvedIntent(
+            Intent.CAPABILITIES_QUERY,
+            scope=SCOPE_CONVERSATION,
+            matched=capabilities_matched,
+            capability_family=_capability_family(tokens),
+            **base,
+        )
+    # B31 req 203/204/201/209: the research paused / resumed / opened by reference, and
+    # the standing answer register - before cancel ("duraklat" is not "durdur"), before
+    # the artifact family's open ("bir önceki araştırmayı aç" names a research, not the
+    # last artifact), before the follow-up classification ("bundan sonra teknik anlat" is
+    # a register, not one technical answer).
+    if research_pause_matched := _research_pause_match(tokens):
+        return ResolvedIntent(
+            Intent.RESEARCH_PAUSE,
+            scope=SCOPE_CONVERSATION,
+            matched=research_pause_matched,
+            **base,
+        )
+    if research_resume_matched := _research_resume_match(tokens):
+        return ResolvedIntent(
+            Intent.RESEARCH_RESUME,
+            scope=SCOPE_CONVERSATION,
+            matched=research_resume_matched,
+            **base,
+        )
+    if research_open_matched := _research_open_match(tokens):
+        return ResolvedIntent(
+            Intent.RESEARCH_OPEN,
+            scope=SCOPE_CONVERSATION,
+            matched=research_open_matched,
+            **base,
+        )
+    if answer_mode_matched := _answer_mode_match(tokens):
+        answer_level, answer_mode_text = answer_mode_matched
+        return ResolvedIntent(
+            Intent.RESEARCH_ANSWER_MODE,
+            scope=SCOPE_CONVERSATION,
+            matched=answer_mode_text,
+            answer_level=answer_level,
+            **base,
+        )
+    if research_cancel_matched := _research_cancel_match(tokens):
+        return ResolvedIntent(
+            Intent.RESEARCH_CANCEL,
+            scope=SCOPE_CONVERSATION,
+            matched=research_cancel_matched,
+            **base,
+        )
+    if volume_matched := _media_volume_match(tokens):
+        volume_direction, volume_matched_text = volume_matched
+        return ResolvedIntent(
+            Intent.MEDIA_VOLUME,
+            scope=SCOPE_CONVERSATION,
+            matched=volume_matched_text,
+            media_volume_direction=volume_direction,
+            **base,
+        )
+    if screenshot_matched := _screenshot_match(tokens):
+        return ResolvedIntent(
+            Intent.SCREENSHOT_CAPTURE,
+            scope=SCOPE_CONVERSATION,
+            matched=screenshot_matched,
+            **base,
+        )
+    if calendar_cancel_matched := _calendar_cancel_match(tokens):
+        return ResolvedIntent(
+            Intent.CALENDAR_CANCEL,
+            scope=SCOPE_CONVERSATION,
+            matched=calendar_cancel_matched,
+            calendar_ref="current",
+            **base,
+        )
+
     # 0d. M19 (spec §3): the operator's Cancel/Status pair, gated on a task actually
     #     running right now - never on vocabulary alone, the same discipline the alarm's
     #     ringing-aware "Sustur." already established. Checked before the generic stop (1)
     #     so "Dur." while a task runs is never read as a narration stop instead.
+    # 0d-0. B39 (req 129/130): the mission's own words, gated on a mission actually
+    #       parked or running (the caller's ``mission_state``), before the generic
+    #       cancel/status pair so "Evet, başla" while a plan waits is never a bare yes.
+    if mission_state == "awaiting_approval" and (approve_mission := _mission_approve_match(tokens)):
+        return ResolvedIntent(
+            Intent.MISSION_APPROVE,
+            scope=SCOPE_CONVERSATION,
+            matched=approve_mission,
+            mission_action="approve",
+            **base,
+        )
+    if mission_state in ("running", "planned") and (pause_mission := _mission_pause_match(tokens)):
+        return ResolvedIntent(
+            Intent.MISSION_PAUSE,
+            scope=SCOPE_CONVERSATION,
+            matched=pause_mission,
+            mission_action="pause",
+            **base,
+        )
+    if mission_state == "paused" and (resume_mission := _mission_resume_match(tokens)):
+        return ResolvedIntent(
+            Intent.MISSION_RESUME,
+            scope=SCOPE_CONVERSATION,
+            matched=resume_mission,
+            mission_action="resume",
+            **base,
+        )
     if operator_running:
         if cancel_matched := _operator_cancel_match(tokens):
             return ResolvedIntent(
@@ -5754,6 +8234,18 @@ def resolve_intent(
             shell_query=shell_matched[0],
             **base,
         )
+    # 0e-0. B39 (req 127): a sentence that is MORE than one plan, or one no fixed plan
+    #       serves, is a mission - asked of the planner itself (its docstring says
+    #       what stays with the tools below).
+    if mission_matched := _mission_start_match(tokens, text):
+        return ResolvedIntent(
+            Intent.MISSION_START,
+            scope=SCOPE_CONVERSATION,
+            matched=mission_matched,
+            mission_request=text.strip(),
+            mission_action="start",
+            **base,
+        )
     if window_matched := _window_control_match(tokens):
         window_intent, window_matched_text, window_ref = window_matched
         return ResolvedIntent(
@@ -5763,12 +8255,180 @@ def resolve_intent(
             window_ref=window_ref,
             **base,
         )
+    # B34 req 153-167, 170: the managed mutations. Every one needs the document noun and
+    # refuses another family's noun; the duplicate noun keeps B32's dedup below.
+    if undo_matched := _document_undo_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_UNDO, scope=SCOPE_CONVERSATION, matched=undo_matched, **base
+        )
+    if versions_matched := _document_versions_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_VERSIONS,
+            scope=SCOPE_CONVERSATION,
+            matched=versions_matched,
+            document_ref="current",
+            **base,
+        )
+    if (edit_match := _document_edit_match(tokens)) is not None:
+        edit_matched, find_text, replace_text = edit_match
+        return ResolvedIntent(
+            Intent.DOCUMENT_EDIT,
+            scope=SCOPE_CONVERSATION,
+            matched=edit_matched,
+            document_ref="current",
+            find_text=find_text,
+            replace_text=replace_text,
+            **base,
+        )
+    if (append_match := _document_append_match(tokens)) is not None:
+        append_matched, append_text = append_match
+        return ResolvedIntent(
+            Intent.DOCUMENT_APPEND,
+            scope=SCOPE_CONVERSATION,
+            matched=append_matched,
+            document_ref="current",
+            text_to_type=append_text,
+            **base,
+        )
+    if (rename_match := _document_rename_match(tokens, text)) is not None:
+        rename_matched, rename_name = rename_match
+        return ResolvedIntent(
+            Intent.DOCUMENT_RENAME,
+            scope=SCOPE_CONVERSATION,
+            matched=rename_matched,
+            document_ref="current",
+            new_name=rename_name,
+            **base,
+        )
+    if move_matched := _document_move_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_MOVE,
+            scope=SCOPE_CONVERSATION,
+            matched=move_matched,
+            document_ref="current",
+            folder=_extract_document_folder(tokens),
+            **base,
+        )
+    if (copy_match := _document_copy_match(tokens, text)) is not None:
+        copy_matched, copy_name = copy_match
+        return ResolvedIntent(
+            Intent.DOCUMENT_COPY,
+            scope=SCOPE_CONVERSATION,
+            matched=copy_matched,
+            document_ref="current",
+            folder=_extract_document_folder(tokens),
+            new_name=copy_name,
+            **base,
+        )
+    if delete_matched := _document_delete_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_DELETE,
+            scope=SCOPE_CONVERSATION,
+            matched=delete_matched,
+            document_ref="current",
+            **base,
+        )
+    if (write_match := _document_write_match(tokens, text)) is not None:
+        write_matched, write_name = write_match
+        return ResolvedIntent(
+            Intent.DOCUMENT_WRITE,
+            scope=SCOPE_CONVERSATION,
+            matched=write_matched,
+            folder=_extract_document_folder(tokens),
+            new_name=write_name,
+            **base,
+        )
     if type_matched := _type_text_match(tokens):
         return ResolvedIntent(
             Intent.TYPE_TEXT,
             scope=SCOPE_CONVERSATION,
             matched=type_matched,
             text_to_type=_extract_type_text(text),
+            window_ref="current",
+            **base,
+        )
+    # 0e-1. B28 req 92/93/98: a key, a chord, a scroll - each with its own noun (a key
+    #       name or a direction) AND its own verb (bas / kaydır), so "Dur." and "Yaz."
+    #       are untouched and the alarm's "bas"-less vocabulary never gets here.
+    # 0e-000. B32 req 141: "Görseldeki metni oku" names a PICTURE's text - before the
+    #         screen-reading family (0e-0), which owns a bare "metni oku".
+    if image_text_matched := _image_text_match(tokens):
+        return ResolvedIntent(
+            Intent.IMAGE_TEXT, scope=SCOPE_CONVERSATION, matched=image_text_matched, **base
+        )
+    # 0e-00. B30 req 82/119-122: an application closed BY NAME, a service or a process
+    #        asked about or acted on by name. Before the window family ("Chrome'u kapat"
+    #        names an application, not a window) and before the generic repeat ("yeniden
+    #        başlat" carries the repeat word).
+    if service_matched := _service_match(tokens):
+        service_intent, service_word = service_matched
+        return ResolvedIntent(
+            service_intent,
+            scope=SCOPE_CONVERSATION,
+            matched="servis",
+            service_name=service_word,
+            **base,
+        )
+    if process_matched := _process_match(tokens):
+        process_intent, process_word, matched_text = process_matched
+        return ResolvedIntent(
+            process_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=matched_text,
+            process_name=process_word,
+            **base,
+        )
+    if app_close_matched := _app_close_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_CLOSE,
+            scope=SCOPE_CONVERSATION,
+            matched="uygulamayı kapat",
+            application=app_close_matched,
+            **base,
+        )
+    # 0e-0. B29 req 100/102/105: a NAMED button, a control's text, the screen described.
+    #       Before the key press: "Tamam düğmesine bas" carries the press verb and names
+    #       a button, not a key.
+    if ui_invoke_matched := _ui_invoke_match(tokens, text):
+        return ResolvedIntent(
+            Intent.UI_INVOKE,
+            scope=SCOPE_CONVERSATION,
+            matched="düğmeye tıkla",
+            ui_target=ui_invoke_matched,
+            window_ref="current",
+            **base,
+        )
+    if ui_read_matched := _ui_read_match(tokens):
+        return ResolvedIntent(
+            Intent.UI_READ,
+            scope=SCOPE_CONVERSATION,
+            matched=ui_read_matched[0],
+            ui_target=ui_read_matched[1],
+            window_ref="current",
+            **base,
+        )
+    if describe_matched := _screen_describe_match(tokens):
+        return ResolvedIntent(
+            Intent.SCREEN_DESCRIBE,
+            scope=SCOPE_CONVERSATION,
+            matched=describe_matched,
+            **base,
+        )
+    if key_matched := _key_press_match(tokens):
+        return ResolvedIntent(
+            Intent.OPERATOR_KEY,
+            scope=SCOPE_CONVERSATION,
+            matched="tuşa bas",
+            key_press=key_matched,
+            window_ref="current",
+            **base,
+        )
+    if scroll_matched := _scroll_match(tokens):
+        return ResolvedIntent(
+            Intent.OPERATOR_SCROLL,
+            scope=SCOPE_CONVERSATION,
+            matched="kaydır",
+            scroll_direction=scroll_matched,
             window_ref="current",
             **base,
         )
@@ -5854,6 +8514,43 @@ def resolve_intent(
     #     app_open is: none of these words mean anything else this resolver already
     #     claimed higher up, and DOCUMENT_SUMMARIZE must win over the plain SUMMARIZE
     #     control intent whenever a document (not a research) is what "bunu" points at.
+    # B32: the picture's text and headers, the preview, the full-text search, the
+    # duplicate proposal and its confirmation - each needs its own noun, so none can take a
+    # sentence from the families below; checked before them because "önizle" carries no
+    # document verb the rest would recognise and "görseldeki metni oku" must beat the
+    # screen-reading family's bare "metni oku".
+    if image_meta_matched := _image_metadata_match(tokens):
+        return ResolvedIntent(
+            Intent.IMAGE_METADATA, scope=SCOPE_CONVERSATION, matched=image_meta_matched, **base
+        )
+    if dedup_matched := _document_dedup_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_DEDUP, scope=SCOPE_CONVERSATION, matched=dedup_matched, **base
+        )
+    if duplicates_matched := _document_duplicates_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_DUPLICATES,
+            scope=SCOPE_CONVERSATION,
+            matched=duplicates_matched,
+            **base,
+        )
+    if find_text_matched := _document_find_text_match(tokens):
+        text_query, find_text_text = find_text_matched
+        return ResolvedIntent(
+            Intent.DOCUMENT_FIND_TEXT,
+            scope=SCOPE_CONVERSATION,
+            matched=find_text_text,
+            text_query=text_query,
+            **base,
+        )
+    if preview_matched := _document_preview_match(tokens):
+        return ResolvedIntent(
+            Intent.DOCUMENT_PREVIEW,
+            scope=SCOPE_CONVERSATION,
+            matched=preview_matched,
+            document_ref="current",
+            **base,
+        )
     if previous_matched := _document_previous_match(tokens):
         return ResolvedIntent(
             Intent.DOCUMENT_PREVIOUS,
@@ -5974,6 +8671,28 @@ def resolve_intent(
     #       ADD before LIGHT/CAMERA so "Bir ışık ekle."/"Kamera ekle." are never
     #       swallowed by the more general noun-only LIGHT/CAMERA matches.
     scene_tool = _scene_tool_from_tokens(tokens)
+    # B44 (req 526, 527): export and animation first - "küreye bir animasyon ekle"
+    # carries SCENE_ADD's noun and verb, and must not become a new sphere.
+    if scene_export_matched := _scene_export_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_EXPORT,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_export_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            scene_format=_scene_export_format_from_tokens(tokens),
+            **base,
+        )
+    if scene_animate_matched := _scene_animate_match(tokens):
+        return ResolvedIntent(
+            Intent.SCENE_ANIMATE,
+            scope=SCOPE_CONVERSATION,
+            matched=scene_animate_matched,
+            scene_tool=scene_tool,
+            scene_ref="current",
+            scene_kind=_scene_kind_from_tokens(tokens),
+            **base,
+        )
     if scene_create_matched := _scene_create_match(tokens):
         return ResolvedIntent(
             Intent.SCENE_CREATE,
@@ -6058,6 +8777,12 @@ def resolve_intent(
     #     clarification ("Neyi göndereyim?"/"Neyi onaylayayım?") from its OWN service
     #     layer, never a guess made here; ``draft_pending``/``proposal_pending`` decide
     #     only which of the two capabilities a bare DISCARD targets.
+    # B34 req 166: a bare "Uygula." / "Kaydet." is the pending FILE change's confirmation
+    # while one is pending for this session - checked before M21's own confirmations.
+    if apply_matched := _document_apply_match(tokens, mutation_pending=mutation_pending):
+        return ResolvedIntent(
+            Intent.DOCUMENT_APPLY, scope=SCOPE_CONVERSATION, matched=apply_matched, **base
+        )
     if commit_matched := _calendar_commit_match(tokens):
         return ResolvedIntent(
             Intent.CALENDAR_COMMIT, scope=SCOPE_CONVERSATION, matched=commit_matched, **base
@@ -6067,9 +8792,12 @@ def resolve_intent(
             Intent.MAIL_SEND, scope=SCOPE_CONVERSATION, matched=send_matched, **base
         )
     if discard_matched := _discard_word_match(tokens):
-        capability = (
-            "calendar.discard" if (proposal_pending and not draft_pending) else "mail.discard"
-        )
+        if mutation_pending and not draft_pending and not proposal_pending:
+            capability = "document.discard"
+        else:
+            capability = (
+                "calendar.discard" if (proposal_pending and not draft_pending) else "mail.discard"
+            )
         return ResolvedIntent(
             Intent.DISCARD,
             scope=SCOPE_CONVERSATION,
@@ -6088,7 +8816,12 @@ def resolve_intent(
         )
     if propose_matched := _calendar_propose_match(tokens):
         return ResolvedIntent(
-            Intent.CALENDAR_PROPOSE, scope=SCOPE_CONVERSATION, matched=propose_matched, **base
+            Intent.CALENDAR_PROPOSE,
+            scope=SCOPE_CONVERSATION,
+            matched=propose_matched,
+            calendar_rrule=calendar_tr_time.extract_recurrence(text),
+            calendar_reminder_minutes=calendar_tr_time.extract_reminder_minutes(text),
+            **base,
         )
     if read_proposal_matched := _calendar_read_proposal_match(tokens):
         return ResolvedIntent(
@@ -6133,6 +8866,23 @@ def resolve_intent(
             Intent.MAIL_THREAD,
             scope=SCOPE_CONVERSATION,
             matched=thread_matched,
+            mail_ref="current",
+            **base,
+        )
+    # B45 (req 347, 348): a message's attachments - the save form first ("eki kaydet").
+    if save_attachment_matched := _mail_save_attachment_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_SAVE_ATTACHMENT,
+            scope=SCOPE_CONVERSATION,
+            matched=save_attachment_matched,
+            mail_ref="current",
+            **base,
+        )
+    if attachments_matched := _mail_attachments_match(tokens):
+        return ResolvedIntent(
+            Intent.MAIL_ATTACHMENTS,
+            scope=SCOPE_CONVERSATION,
+            matched=attachments_matched,
             mail_ref="current",
             **base,
         )
@@ -6234,6 +8984,27 @@ def resolve_intent(
             app_ref="current",
             **base,
         )
+    # B41 (req 440-452): a generated application in focus owns its lifecycle words.
+    if lifecycle_matched := _appfactory_lifecycle_match(
+        tokens, text, app_project_focused=app_project_focused
+    ):
+        lifecycle_intent, lifecycle_text, lifecycle_fields = lifecycle_matched
+        return ResolvedIntent(
+            lifecycle_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=lifecycle_text,
+            app_ref="current",
+            **lifecycle_fields,
+            **base,
+        )
+    if app_fix_matched := _appfactory_fix_match(tokens):
+        return ResolvedIntent(
+            Intent.APP_FACTORY_FIX,
+            scope=SCOPE_CONVERSATION,
+            matched=app_fix_matched,
+            app_ref="current",
+            **base,
+        )
     if app_test_matched := _appfactory_test_match(tokens):
         return ResolvedIntent(
             Intent.APP_FACTORY_TEST,
@@ -6274,6 +9045,11 @@ def resolve_intent(
             app_template=_appfactory_template_from_tokens(tokens),
             app_name=_extract_app_name(text),
             app_commands=_extract_app_commands(text),
+            # B40 (req 422): no built-in template fits - the whole sentence goes to the
+            # requirements parser, never dropped.
+            app_request=(
+                text.strip() if _appfactory_template_from_tokens(tokens) is None else None
+            ),
             **base,
         )
 
@@ -6285,6 +9061,24 @@ def resolve_intent(
     #     vs. an imperative "üret") that must never collide; ARTIFACT_VALIDATE and
     #     ARTIFACT_OPEN own their own vocabulary ("doğru mu", "aç") that nothing above
     #     claims.
+    # B42 (req 410-416): the artifact in focus owns edit / clone / delete / compare -
+    # BEFORE list/create, because "bunu kopyala" carries no create verb and "bu belgeye
+    # bölüm ekle" must not become a new artifact.
+    if lifecycle_matched := _artifact_lifecycle_match(tokens, artifact_focused=artifact_focused):
+        lifecycle_intent, lifecycle_text, lifecycle_fields = lifecycle_matched
+        return ResolvedIntent(
+            lifecycle_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=lifecycle_text,
+            spoken_numbers=_extract_artifact_numbers(text)
+            if lifecycle_intent is Intent.ARTIFACT_EDIT
+            else None,
+            artifact_title=_extract_artifact_title(text)
+            if lifecycle_intent is Intent.ARTIFACT_CLONE
+            else None,
+            **lifecycle_fields,
+            **base,
+        )
     if list_matched := _artifact_list_match(tokens):
         return ResolvedIntent(
             Intent.ARTIFACT_LIST, scope=SCOPE_CONVERSATION, matched=list_matched, **base

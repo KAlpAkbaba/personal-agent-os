@@ -43,12 +43,13 @@ export const EXECUTIVE_RUNS_PATH = "/v1/executive/runs";
  * them, which it deliberately does not: neither can be asked for without
  * naming a step or a new step, and this page has no such words to offer.
  */
-export const EXECUTIVE_ACTIONS = ["pause", "resume", "cancel", "retry", "amend"] as const;
+export const EXECUTIVE_ACTIONS = ["pause", "resume", "cancel", "retry", "amend", "approve"] as const;
 
 export type ExecutiveAction = (typeof EXECUTIVE_ACTIONS)[number];
 
 /** The three the panel draws, in the order the spec's own sentence names them. */
-export const EXECUTIVE_CHIP_ACTIONS = ["pause", "resume", "cancel"] as const;
+/** B38 (req 544): `approve` is the fourth chip, drawn only while a row names the step it waits on. */
+export const EXECUTIVE_CHIP_ACTIONS = ["pause", "resume", "cancel", "approve"] as const;
 
 export type ExecutiveChipAction = (typeof EXECUTIVE_CHIP_ACTIONS)[number];
 
@@ -99,6 +100,10 @@ export type ExecutiveRunRow = {
   total: number | null;
   /** The steps that did not verify, as the route named them; empty when none did. */
   missing: ExecutiveMissingStep[];
+  /** B38 (req 544): the step waiting for the owner's yes, when the row names one. */
+  awaiting_step: string | null;
+  /** B38 (req 550): `rule` | `model` | `owner` - who built the plan, when the row says. */
+  planner: string | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -191,6 +196,8 @@ export function parseExecutiveRow(raw: unknown): ExecutiveRunRow | null {
     done: count(o.done),
     total: count(o.total),
     missing: parseMissingSteps(o.missing),
+    awaiting_step: str(o.awaiting_step),
+    planner: str(o.planner),
     created_at: str(o.created_at),
     updated_at: str(o.updated_at),
   };
@@ -377,13 +384,16 @@ export type ExecutiveClient = {
   pause: (runId: string) => Promise<ExecutiveActionReceipt>;
   resume: (runId: string) => Promise<ExecutiveActionReceipt>;
   cancel: (runId: string) => Promise<ExecutiveActionReceipt>;
+  /** B38: the owner's yes for the step the run waits on (the Cloud Core knows which). */
+  approve: (runId: string) => Promise<ExecutiveActionReceipt>;
 };
 
-/** The real client: the three POSTs above, through the owner session. */
+/** The real client: the four POSTs above, through the owner session. */
 export const executiveClient: ExecutiveClient = {
   pause: (runId) => executiveAction(runId, "pause"),
   resume: (runId) => executiveAction(runId, "resume"),
   cancel: (runId) => executiveAction(runId, "cancel"),
+  approve: (runId) => executiveAction(runId, "approve"),
 };
 
 // ---------------------------------------------------------- control state
@@ -415,6 +425,7 @@ export type ExecutiveControlProps = {
   onPause: (runId: string) => void;
   onResume: (runId: string) => void;
   onCancel: (runId: string) => void;
+  onApprove: (runId: string) => void;
 };
 
 /**

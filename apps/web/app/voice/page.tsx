@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import OwnerGate, { SignOutButton } from "../components/OwnerGate";
+import Capabilities from "./Capabilities";
 import {
   BrowserMicrophone,
   type GatedDetectorSnapshot,
@@ -280,11 +281,17 @@ function VoiceConsole() {
         <Link href="/core">Çekirdek</Link> ile paylaşılır ve sayfadan ayrılınca kapanmaz.
       </p>
 
+      {/*
+        B25 req 701: before the diagnostics, the thing the owner actually came to find out —
+        what they may say. Derived from the Cloud Core's tool registry, never written here.
+      */}
+      <Capabilities />
+
       <div className="panel">
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <button
             onClick={live ? disconnect : connect}
-            disabled={busy || snapshot === null}
+            disabled={busy || snapshot === null || blocked}
             style={{
               padding: "0.6rem 1.2rem",
               borderRadius: 8,

@@ -294,6 +294,10 @@ describe("the place, in the words the Cloud Core speaks (spec §3)", () => {
     expect(documentKindOf("ayarlar.json")).toBe("json");
     expect(documentKindOf("okubeni")).toBe("unknown");
     expect(documentKindOf("arsiv.rar")).toBe("unknown");
+    // B32: pictures and zip archives are kinds of their own.
+    expect(documentKindOf("metin.PNG")).toBe("image");
+    expect(documentKindOf("foto.jpeg")).toBe("image");
+    expect(documentKindOf("arsiv.zip")).toBe("archive");
     expect(documentKindOf(null)).toBeNull();
     // Only PDF, DOCX and TXT produce a p-ref (§2); a name the client cannot
     // classify gets the spec's general wording rather than a guess at a kind.

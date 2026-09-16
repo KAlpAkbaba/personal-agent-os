@@ -23,6 +23,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.creative.models import CreativeRunRow
@@ -76,6 +77,179 @@ async def list_creative_runs(request: Request) -> dict[str, Any]:
             return [_row_dict(r) for r in rows]
 
     return {"runs": await asyncio.to_thread(load)}
+
+
+# ------------------------------------------------------------ B43: the lifecycle
+
+
+class GenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt: str = Field(min_length=1, max_length=1000)
+    name: str = Field(min_length=1, max_length=64)
+    width: int = Field(default=1024, ge=16, le=8192)
+    height: int = Field(default=1024, ge=16, le=8192)
+    expectation: str | None = Field(default=None, max_length=200)
+    tool: str = "paint"
+
+
+class DeliverRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    application: str | None = Field(default=None, max_length=32)
+
+
+class DriveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actions: list[dict[str, Any]] = Field(min_length=1, max_length=12)
+    path: str | None = Field(default=None, max_length=1024)
+
+
+class EnhanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: str = "auto"
+
+
+def _respond(receipt: dict[str, Any]) -> dict[str, Any]:
+    """An executed receipt is the read-back; a refusal is a 422 with its own error class
+    and sentence; a clarification is a 409 (the route cannot ask back)."""
+    if receipt.get("status") == "needs_clarification":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "needs_clarification", "message": receipt.get("speech")},
+        )
+    if receipt.get("execution_status") not in ("executed", "noop"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": receipt.get("error_class") or "refused",
+                "message": receipt.get("speech"),
+            },
+        )
+    return receipt
+
+
+@router.post("/generate", status_code=201)
+async def generate_creative(request: Request, body: GenerateRequest) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+    owner = str(request.state.owner_session.session_id)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            return service.generate(
+                db,
+                prompt=body.prompt,
+                name=body.name,
+                width=body.width,
+                height=body.height,
+                tool=body.tool,
+                expectation=body.expectation,
+                session_id=f"rest:{owner}",
+            )
+
+    return _respond(await asyncio.to_thread(do))
+
+
+async def _run_action(
+    request: Request, run_id: uuid.UUID, action: str, **kwargs: Any
+) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+    owner = str(request.state.owner_session.session_id)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            if db.get(CreativeRunRow, run_id) is None:
+                raise HTTPException(status_code=404)
+            method = getattr(service, action)
+            return method(db, target=str(run_id), session_id=f"rest:{owner}", **kwargs)
+
+    return _respond(await asyncio.to_thread(do))
+
+
+@router.post("/{run_id}/undo")
+async def undo_creative(request: Request, run_id: uuid.UUID) -> dict[str, Any]:
+    return await _run_action(request, run_id, "undo")
+
+
+@router.post("/{run_id}/redo")
+async def redo_creative(request: Request, run_id: uuid.UUID) -> dict[str, Any]:
+    return await _run_action(request, run_id, "redo")
+
+
+@router.post("/{run_id}/enhance")
+async def enhance_creative(
+    request: Request, run_id: uuid.UUID, body: EnhanceRequest | None = None
+) -> dict[str, Any]:
+    return await _run_action(request, run_id, "enhance", kind=(body.kind if body else "auto"))
+
+
+@router.get("/{run_id}/history")
+async def creative_history(request: Request, run_id: uuid.UUID) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+
+    def load() -> dict[str, Any] | None:
+        with artifacts.session() as db:
+            # A named run that does not exist is a 404 - never the focused or newest run
+            # the voice resolver would fall back to.
+            if db.get(CreativeRunRow, run_id) is None:
+                return None
+            return service.history(db, target=str(run_id))
+
+    out = await asyncio.to_thread(load)
+    if out is None:
+        raise HTTPException(status_code=404)
+    return out
+
+
+@router.post("/{run_id}/deliver")
+async def deliver_creative(
+    request: Request, run_id: uuid.UUID, body: DeliverRequest | None = None
+) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    owner = str(request.state.owner_session.session_id)
+    base_url = getattr(artifacts.settings, "artifact_download_origin", "") or ""
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            if db.get(CreativeRunRow, run_id) is None:
+                raise HTTPException(status_code=404)
+            return service.deliver(
+                db,
+                device_action,
+                target=str(run_id),
+                base_url=base_url,
+                session_id=f"rest:{owner}",
+                application=(body.application if body else None),
+                actor_kind="owner_rest",
+            )
+
+    return _respond(await asyncio.to_thread(do))
+
+
+@router.post("/{run_id}/drive")
+async def drive_creative(request: Request, run_id: uuid.UUID, body: DriveRequest) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    owner = str(request.state.owner_session.session_id)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            if db.get(CreativeRunRow, run_id) is None:
+                raise HTTPException(status_code=404)
+            return service.drive(
+                db,
+                device_action,
+                target=str(run_id),
+                actions=body.actions,
+                path=body.path,
+                session_id=f"rest:{owner}",
+            )
+
+    return _respond(await asyncio.to_thread(do))
 
 
 @router.get("/{run_id}")

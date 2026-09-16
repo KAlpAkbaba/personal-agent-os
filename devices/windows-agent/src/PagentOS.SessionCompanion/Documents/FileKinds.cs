@@ -20,7 +20,17 @@ public static class FileKinds
     public const string Json = "json";
     public const string Source = "source";
     public const string Txt = "txt";
+    /// <summary>B32 req 139-141: a picture — headers on inspect, OCR lines on extract.</summary>
+    public const string Image = "image";
+    /// <summary>B32 req 142: a zip archive — its central directory on inspect, never extracted.</summary>
+    public const string Archive = "archive";
     public const string Unknown = "unknown";
+
+    /// <summary>The extensions of kind <c>image</c>: what WPF's decoders and Windows OCR both read.</summary>
+    public static readonly IReadOnlyList<string> ImageExtensions =
+    [
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp",
+    ];
 
     /// <summary>§2: the extensions of kind <c>source</c>, verbatim from the spec.</summary>
     public static readonly IReadOnlyList<string> SourceExtensions =
@@ -31,6 +41,16 @@ public static class FileKinds
     public static string Of(string extension)
     {
         var e = extension.ToLowerInvariant();
+        if (SourceExtensions.Contains(e, StringComparer.Ordinal))
+        {
+            return Source;
+        }
+
+        if (ImageExtensions.Contains(e, StringComparer.Ordinal))
+        {
+            return Image;
+        }
+
         return e switch
         {
             ".docx" => Docx,
@@ -41,15 +61,16 @@ public static class FileKinds
             ".csv" or ".tsv" => Csv,
             ".json" => Json,
             ".txt" or ".log" or ".text" => Txt,
-            _ => SourceExtensions.Contains(e, StringComparer.Ordinal) ? Source : Unknown,
+            ".zip" => Archive,
+            _ => Unknown,
         };
     }
 
     /// <summary>The kinds whose bytes ARE the text: readable by <c>file.read</c>, compared line by line.</summary>
     public static bool IsTextLike(string kind) => kind is Md or Csv or Json or Source or Txt;
 
-    /// <summary>The kinds an extractor turns into referenced blocks (everything but <c>unknown</c>).</summary>
-    public static bool IsExtractable(string kind) => kind is not Unknown;
+    /// <summary>The kinds an extractor turns into referenced blocks (everything but <c>unknown</c> and an <c>archive</c>, which is only ever listed).</summary>
+    public static bool IsExtractable(string kind) => kind is not (Unknown or Archive);
 
     /// <summary>The kinds that need a parser (a package or a PDF), never returned raw.</summary>
     public static bool IsBinaryDocument(string kind) => kind is Docx or Xlsx or Pptx or Pdf;

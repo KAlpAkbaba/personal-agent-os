@@ -1,0 +1,78 @@
+{
+  "batch": "B29",
+  "name": "Operatör UIA ve sonuç doğrulama",
+  "requirements": [
+    99,
+    100,
+    101,
+    102,
+    103,
+    105,
+    111,
+    116
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except the same live-desktop test B21-B26 recorded (second run; the first run failed six document-answer corpus cases that the bare-question narrowing closed)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10159 passed, 5 skipped (950 s); was 10086 after B28",
+      "Windows agent build + tests": "FAIL - 921/922: NotepadLifecycleTests.A_pointer_click_inside_the_window_lands... 'the foreground was nothing the registry could resolve (a full-screen or elevated window)'. The same measured cause as B21-B26 (a full-screen application in front on the owner's desktop). B29 touched no pointer code. Re-run alone a minute later: 6/6 in the file, including this batch's new UIA lab test.",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest matrix-badges 12 passed (generated matrix module resynced); no web source changed"
+  },
+  "what_this_proves": "The operator uses the highest semantic control surface it has (UI Automation) from the cloud - invoke, set value, select, read - and no action counts as a success until an independent read says it happened: an invoke whose element neither changed nor went away is a failure, a set value is read back through the tree, a selection from its container; every plan the operator can build ends in a verified postcondition (22/22, asserted structurally). Screenshot understanding sits behind a provider interface that answers honestly when no provider is configured. Application knowledge lives in declared adapters.",
+  "measured_first": {
+    "device_half": "OperatorCapabilities.UiInspect/UiInvoke/UiSetValue/UiSelect implemented since M19 (Invoke/Value/SelectionItem patterns, before/after element description, RefuseSecret on set_value); ModalDetectionTests already invoked a real dialog button on this desktop.",
+    "cloud_half_before": "only ui.inspect, and only inside type_text's verify step; no invoke/set/select caller; no vision provider; no adapter; row 111 enforced by the task loop with no structural guarantee.",
+    "vision": "no key configured on this machine: build_vision_provider returns None and operator.see refuses with dependency_unavailable - measured, not assumed."
+  },
+  "closed_fully": {
+    "99_tree_inspect": "operator.inspect -> one bounded ui.inspect; without a target it counts the nodes and names the main controls.",
+    "100_invoke": "Intent UI_INVOKE ('Tamam düğmesine tıkla') -> operator.ui invoke -> plan ui_invoke (activate, ui.invoke retries=0): postcondition compares the device's before/after element (gone or changed); expect=window_gone reads window.list, element_gone/element_present/value_ends_with read ui.inspect - sources the invoke did not write.",
+    "101_set_value": "operator.ui set_value -> ui.set_value (observed_value == value) -> ui.inspect on the same query must end with the value; secret flag on the wire, server gate first.",
+    "102_read_text": "Intent UI_READ ('Ekrandaki metni oku', 'Ne yazıyor?') -> operator.inspect read -> 'Şöyle yazıyor: …' from the tree's first value; 'Belgeyi oku' stays the document family's.",
+    "103_select": "operator.ui select -> ui.select (observed.selected contains item) -> ui.inspect: a node named item is selected.",
+    "105_screenshot_understanding": "Intent SCREEN_DESCRIBE ('Ekranda ne var?', 'Ekranı anlat') -> operator.see: screen.capture, VisionProvider.describe; OpenAIVisionProvider (data-URL PNG in one chat completion, key never logged), FakeVisionProvider (corpus), None -> refusal 'sağlayıcısı tanımlı değil'. Receipt carries provider/model/bytes/sha256, never the image.",
+    "111_postcondition_verification": "test_every_plan_ends_in_a_verified_postcondition iterates every declared plan (22) and asserts the last step has a postcondition; the UI family's verifications are independent reads.",
+    "116_app_adapters": "app/operator/adapters.py: NOTEPAD (Edit control, Kaydet/Kaydetme/İptal, spoken parts belge/metin/yazı) and CALCULATOR; adapter_for(image) from the device's own window image; the generic adapter finds a button by name."
+  },
+  "found_on_the_way": {
+    "shield_caught_two_thefts": "The first read matcher took 'Belgeyi oku' from DOCUMENT_READ and 'Ne görüyorsun?' from EXPLAIN (the eye's question) - B26's misroute set caught both on the first run.",
+    "plan_name_shape": "The structural vocabulary test refused a plan name built from an IfExp; PLAN_BY_READ_MODE declared instead.",
+    "two_window_listings": "The tools listed windows twice per call (resolver + adapter image lookup); a memoised lister (_once) reads the desktop once per call.",
+    "a_mutation_that_stayed_green": "Disabling the window_gone branch left the test red for the wrong reason (the fallback tree read also failed). The mutation was moved into the read itself (always 'gone') and went red.",
+    "a_third_theft_the_gate_caught": "The bare 'ne yazıyor' branch took 'Üçüncü sayfada ne yazıyor?' from DOCUMENT_ANSWER (six corpus cases) - the targeted runs had not included the document family. The bare question is now bare: only the screen's own words may accompany it; a page or a document named makes it the document's."
+  },
+  "tests": {
+    "services/api/tests/unit/test_operator_ui.py": 37,
+    "services/api/tests/voice_corpus/corpus.py (op.ui.*, op.see.*)": "34 cases through the real relay, the harness's FakeVisionProvider answering from the fake device's genuine one-pixel PNG",
+    "devices/windows-agent/tests/.../NotepadLifecycleTests.cs": "A_dialog_button_invoked_through_UI_Automation_is_verified_by_an_independent_read (lab, this desktop; 6/6 in the file)"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`).",
+    "mutations": [
+      "an unchanged element counts as invoked -> 1 failure.",
+      "set_value trusts the device without a read-back -> 1 failure.",
+      "no provider answers anyway (a fake substituted) -> 1 failure.",
+      "the image never reaches the provider -> 1 failure.",
+      "every application is generic -> 2 failures.",
+      "the window_gone read always says gone -> 1 failure (the first attempt, disabling the branch, stayed green and was replaced by this one)."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL (test lab); production command READY_FOR_OWNER; 105 PROVEN_UNVERIFIED until the owner's vision key",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_REAL — gerçek bir uygulamada UIA ile düğme tetiklendi ve sonuç bağımsız okundu'. On this desktop: an unsaved Notepad was asked to close, the save prompt's button was found through ui.inspect by name, invoked through ui.invoke (element gone by the companion's own read), and the consequence was read independently - the process exited and neither the dialog nor the editor is in window.list. The production half is Karar 0's. Vision: the OpenAI path is exercised against an httpx MockTransport (request shape, key in the header only, transport error named); a real model answer needs the owner's key."
+  },
+  "owner_gates": {
+    "karar_0": "production release round",
+    "vision_provider_key": "PAGENTOS_OPENAI_API_KEY (or the existing voice key) for a real 'Ekranda ne var?' answer - checkpoint, does not block"
+  }
+}

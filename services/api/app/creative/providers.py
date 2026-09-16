@@ -28,6 +28,7 @@ from typing import Protocol
 from app.creative.spec import (
     TOOL_FIGMA,
     TOOL_ILLUSTRATOR,
+    TOOL_LAYERED,
     TOOL_PAINT,
     TOOL_PHOTOSHOP,
 )
@@ -47,6 +48,13 @@ ALL_CAPABILITIES: tuple[str, ...] = (
     "background_remove",
     "layer",
     "export",
+    "generate",
+    "object_remove",
+    "object_add",
+    "style",
+    "enhance",
+    "upscale",
+    "semantic_check",
 )
 
 #: Paint has no layer model at all (ADR-0093 decision 2: "Paint today: everything
@@ -290,6 +298,21 @@ class FigmaProvider:
 # --------------------------------------------------------------------------- registry
 
 
+class LayeredProvider:
+    """B43 (req 506-508): the in-house layered editor is THIS process - installed by
+    construction, every capability including ``layer``."""
+
+    tool: str = TOOL_LAYERED
+
+    def detect(self) -> DetectionFacts:
+        return DetectionFacts(installed=True, checked=("pillow",), detail="in-process")
+
+    def capabilities(self) -> ProviderResult:
+        return ProviderResult(
+            ok=True, capabilities=ALL_CAPABILITIES, detail=self.detect().as_dict()
+        )
+
+
 def default_providers() -> dict[str, CreativeProvider]:
     """One instance per tool, keyed by :data:`app.creative.spec.TOOLS` — the SAME shape
     ``app.creative3d``'s own service holds its driver/manifest table in, never a second
@@ -299,6 +322,7 @@ def default_providers() -> dict[str, CreativeProvider]:
         TOOL_PHOTOSHOP: PhotoshopProvider(),
         TOOL_ILLUSTRATOR: IllustratorProvider(),
         TOOL_FIGMA: FigmaProvider(),
+        TOOL_LAYERED: LayeredProvider(),
     }
 
 

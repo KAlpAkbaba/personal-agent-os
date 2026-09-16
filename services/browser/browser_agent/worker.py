@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import atexit
 import base64
+import hashlib
 import json
 import os
 import re
@@ -87,6 +88,10 @@ DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAV_TIMEOUT_MS = 15_000
 DEFAULT_IDLE_TIMEOUT_S = 600
 MAX_RESULT_BYTES = 48 * 1024
+#: B31 req 180/181: a file the browser moves in either direction is capped, and the
+#: authorisation reference that lets it move has a shape - never only "non-empty".
+MAX_TRANSFER_BYTES = 64 * 1024 * 1024
+AUTHORIZATION_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 _REAP_INTERVAL_S = 15.0
 # M13 lifecycle guard (owner-machine incident, 2026-09-03): "deliberate and
 # bounded" tabs. DEFAULT_MAX_TABS is the per-session ceiling unless a
@@ -187,6 +192,70 @@ def redact_forbidden_keys(value: Any) -> tuple[Any, list[str]]:
         return node
 
     return walk(value), found
+
+
+def require_transfer_authorization(state: Any, payload: dict[str, Any], *, op: str) -> str:
+    """B31 req 180: the gate a download or upload must pass BEFORE any click - HIGH_IMPACT
+    in the session policy and an ``authorization_ref`` with a shape (an approval id, an
+    action id), never merely a non-empty string. The reference is echoed into the result
+    so the receipt on the cloud side names what authorised the transfer."""
+    authorization_ref = payload.get("authorization_ref")
+    high_impact = policy.RiskClass.HIGH_IMPACT in state.policy_allowed
+    well_formed = isinstance(authorization_ref, str) and bool(
+        AUTHORIZATION_REF_RE.match(authorization_ref)
+    )
+    if not high_impact or not well_formed:
+        raise BrowserError(
+            ErrorClass.SECURITY_SCOPE_ERROR,
+            f"{op}: requires HIGH_IMPACT in the session policy and a well-formed "
+            "authorization_ref (8-128 characters of letters, digits, '.', '_', ':' or '-')",
+            retryable=False,
+            evidence={
+                "authorization_ref_present": bool(authorization_ref),
+                "authorization_ref_well_formed": well_formed,
+                "high_impact_allowed": high_impact,
+            },
+        )
+    return str(authorization_ref)
+
+
+def transfer_cap(payload: dict[str, Any]) -> int:
+    """The size cap for this transfer: the caller may lower it, never raise it."""
+    raw = payload.get("max_bytes")
+    if raw is None:
+        return MAX_TRANSFER_BYTES
+    try:
+        requested = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR, "max_bytes must be an integer", retryable=False
+        ) from exc
+    if requested < 1:
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR, "max_bytes must be positive", retryable=False
+        )
+    return min(requested, MAX_TRANSFER_BYTES)
+
+
+def enforce_transfer_size(path: Path, *, cap: int, op: str, delete: bool = True) -> int:
+    """B31 req 180: a file over the cap is refused - and a DOWNLOAD over the cap is deleted
+    from disk before the refusal, so an oversized file never stays behind under the
+    companion data dir as though it had been authorised."""
+    size = path.stat().st_size
+    if size > cap:
+        if delete:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        raise BrowserError(
+            ErrorClass.SECURITY_SCOPE_ERROR,
+            f"{op}: the file is {size} bytes, over the {cap} byte cap; "
+            + ("it was deleted" if delete else "nothing was sent"),
+            retryable=False,
+            evidence={"bytes": size, "max_bytes": cap, "deleted": delete},
+        )
+    return size
 
 
 def cap_result_size(result: dict[str, Any], *, max_bytes: int = MAX_RESULT_BYTES) -> dict[str, Any]:
@@ -1969,28 +2038,69 @@ class Worker:
 
     async def _op_download(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         target = payload.get("target")
-        authorization_ref = payload.get("authorization_ref")
-        if policy.RiskClass.HIGH_IMPACT not in state.policy_allowed or not authorization_ref:
-            raise BrowserError(
-                ErrorClass.SECURITY_SCOPE_ERROR,
-                "browser.download: requires HIGH_IMPACT in the session policy and a non-empty "
-                "authorization_ref",
-                retryable=False,
-                evidence={
-                    "authorization_ref_present": bool(authorization_ref),
-                    "high_impact_allowed": policy.RiskClass.HIGH_IMPACT in state.policy_allowed,
-                },
-            )
+        authorization_ref = require_transfer_authorization(state, payload, op="browser.download")
         if not target:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR, "download: 'target' is required", retryable=False
             )
+        cap = transfer_cap(payload)
         downloads_dir = self._data_dir / "downloads"
         result = await state.browser_session.download(coerce_target(target), save_dir=downloads_dir)
+        size = enforce_transfer_size(result.path, cap=cap, op="browser.download")
         return {
             "path": str(result.path),
-            "bytes": result.path.stat().st_size,
+            "bytes": size,
             "sha256": result.sha256,
+            "max_bytes": cap,
+            "authorization_ref": authorization_ref,
+        }
+
+    async def _op_upload(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        """B31 req 181: the operation behind the ``uploads`` flag. A file from the
+        companion data dir's ``uploads/`` folder, under the same policy gate as a
+        download (HIGH_IMPACT + a well-formed ``authorization_ref``) and the same size cap,
+        checked BEFORE the page sees the file."""
+        target = payload.get("target")
+        authorization_ref = require_transfer_authorization(state, payload, op="browser.upload")
+        if not target:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR, "upload: 'target' is required", retryable=False
+            )
+        raw_path = payload.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR, "upload: 'path' is required", retryable=False
+            )
+        uploads_dir = (self._data_dir / "uploads").resolve()
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = uploads_dir / path
+        path = path.resolve()
+        if not path.is_relative_to(uploads_dir):
+            raise BrowserError(
+                ErrorClass.SECURITY_SCOPE_ERROR,
+                "browser.upload: the file must live under the companion data dir's uploads/",
+                retryable=False,
+                evidence={"uploads_dir": str(uploads_dir)},
+            )
+        if not path.is_file():
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"upload: file does not exist: {path.name}",
+                retryable=False,
+                evidence={"file": path.name},
+            )
+        cap = transfer_cap(payload)
+        size = enforce_transfer_size(path, cap=cap, op="browser.upload", delete=False)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        await state.browser_session.upload(coerce_target(target), path)
+        return {
+            "uploaded": True,
+            "path": str(path),
+            "bytes": size,
+            "sha256": digest,
+            "max_bytes": cap,
+            "authorization_ref": authorization_ref,
         }
 
     # ------------------------------------------------------------------ #
@@ -2594,6 +2704,7 @@ _HANDLERS: dict[str, Callable[[Worker, SessionState, dict[str, Any]], Any]] = {
     "browser.snapshot": Worker._op_snapshot,
     "browser.screenshot": Worker._op_screenshot,
     "browser.download": Worker._op_download,
+    "browser.upload": Worker._op_upload,
     "browser.search": Worker._op_search,
     "browser.fetch_evidence": Worker._op_fetch_evidence,
     "browser.media_play": Worker._op_media_play,

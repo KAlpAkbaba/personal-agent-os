@@ -16,6 +16,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import delete as sa_delete
+from sqlalchemy import select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
@@ -40,8 +42,15 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
-from app.calendar.ics import DEFAULT_TIMEZONE
+from app.calendar.ics import (
+    DEFAULT_TIMEZONE,
+    MAX_REMINDER_MINUTES,
+    Occurrence,
+    RRuleError,
+    validate_rrule,
+)
 from app.calendar.models import (
+    PROPOSAL_KIND_CANCEL,
     PROPOSAL_KIND_CREATE,
     PROPOSAL_KIND_RESCHEDULE,
     PROPOSAL_STATE_COMMITTED,
@@ -49,6 +58,7 @@ from app.calendar.models import (
     PROPOSAL_STATE_DISCARDED,
     PROPOSAL_STATE_PREPARED,
     PROPOSAL_STATE_READ_BACK,
+    CalendarIndexRow,
     CalendarProposalRow,
 )
 from app.calendar.providers import (
@@ -66,6 +76,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_CALENDAR,
 )
 from app.logging import get_logger
+from app.notifications import events as notification_events
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_EVENT, FOCUS_KIND_PROPOSAL
 from app.uistate import UiState
@@ -75,11 +86,39 @@ logger = get_logger("app.calendar.service")
 
 SPEECH_ACCOUNT_MISSING = "Tanımlı bir takvim yok efendim."
 SPEECH_NO_EVENT = "Hangi etkinlik?"
+#: B27 req 731. Spec §1's own boundary - "no delete, no move, no mass action" - said out
+#: loud instead of a sentence that reaches nothing. A refusal with a receipt is evidence;
+#: the policy that may one day permit it is B46's (matrix row 354).
+SPEECH_DELETE_NOT_PERMITTED = (
+    "Takvimden etkinlik silme yetkim yok efendim; bunu takviminizden siz yapmalısınız."
+)
+ERROR_DELETE_NOT_PERMITTED = "deletion_not_permitted"
 SPEECH_NO_PROPOSAL = "Önce bir öneri hazırlamam gerekiyor efendim."
 SPEECH_NOT_FOUND = "Aradığınızı bulamadım efendim."
 #: L1-equivalent for calendar (ADR-0084 addendum 2): a provider-side commit failure
 #: reverts to ``read_back`` rather than leaving the row stuck ``committing``.
 ERROR_COMMIT_FAILED = "commit_failed"
+#: B46 (req 354): who may remove an event from the owner's calendar. ``refuse`` - the
+#: default, M21 spec §1's boundary - keeps the honest no; ``confirm`` makes a cancel a
+#: proposal read back and confirmed exactly like a create, never a direct delete.
+CANCEL_POLICY_REFUSE = "refuse"
+CANCEL_POLICY_CONFIRM = "confirm"
+#: B46 (req 356): a recurrence the writer refuses to send.
+ERROR_INVALID_RECURRENCE = "invalid_recurrence"
+#: B46: the writer replaces whole events, so moving or removing one occurrence of a
+#: recurring event would silently rewrite or delete the series.
+ERROR_RECURRING_SERIES = "recurring_series"
+SPEECH_RECURRING_SERIES = (
+    "Bu tekrarlayan bir etkinlik efendim; tek bir tekrarını buradan değiştiremem, "
+    "takviminizden yapmalısınız."
+)
+#: B46 (req 359, 361): how far ahead the clock mirrors the calendar into the index.
+SYNC_HORIZON_DAYS = 14
+#: B46 (req 358): how far ahead each pass looks for a due reminder.
+REMINDER_LOOKAHEAD = timedelta(days=1)
+INDEX_SOURCE_READ = "read"
+INDEX_SOURCE_SYNC = "sync"
+MAX_INDEX_ROWS_PER_PASS = 500
 
 _GATE_SPEECH: dict[str, str] = {
     GATE_ACCOUNT_MISSING: SPEECH_ACCOUNT_MISSING,
@@ -145,6 +184,9 @@ def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
         "start": _local(row.start).isoformat(),
         "end": _local(row.end).isoformat(),
         "location": row.location,
+        "rrule": row.rrule,
+        "recurrence": recurrence_phrase(row.rrule) or None,
+        "reminder_minutes": row.reminder_minutes,
         "conflicts": list(row.conflicts_json or []),
         "state": row.state,
         "read_back_at": _local(row.read_back_at).isoformat() if row.read_back_at else None,
@@ -157,11 +199,73 @@ def _proposal_dict(row: CalendarProposalRow) -> dict[str, Any]:
     }
 
 
+_BYDAY_TR: dict[str, str] = {
+    "MO": "pazartesi",
+    "TU": "salı",
+    "WE": "çarşamba",
+    "TH": "perşembe",
+    "FR": "cuma",
+    "SA": "cumartesi",
+    "SU": "pazar",
+}
+
+
+def recurrence_phrase(rrule: str | None) -> str:
+    """B46 (req 356): the owner's own words for the rule the writer will send."""
+    if not rrule:
+        return ""
+    parts = dict(piece.split("=", 1) for piece in rrule.split(";") if "=" in piece)
+    freq = parts.get("FREQ", "")
+    interval = int(parts.get("INTERVAL", "1") or 1)
+    days = [_BYDAY_TR.get(code, code) for code in parts.get("BYDAY", "").split(",") if code]
+    if freq == "WEEKLY" and days == ["pazartesi", "salı", "çarşamba", "perşembe", "cuma"]:
+        text = "hafta içi her gün"
+    elif freq == "DAILY":
+        text = "her gün" if interval == 1 else f"{interval} günde bir"
+    elif freq == "WEEKLY":
+        text = "her hafta" if interval == 1 else f"{interval} haftada bir"
+        if days:
+            text += " " + ", ".join(days)
+    elif freq == "MONTHLY":
+        text = "her ay" if interval == 1 else f"{interval} ayda bir"
+    elif freq == "YEARLY":
+        text = "her yıl"
+    else:
+        text = "tekrarlayan"
+    if parts.get("COUNT"):
+        text += f", {parts['COUNT']} kez"
+    return text
+
+
+def reminder_phrase(minutes: int | None) -> str:
+    """B46 (req 357): the reminder as the owner hears it in the read-back."""
+    if minutes is None:
+        return ""
+    if minutes == 0:
+        return "başladığında hatırlatarak"
+    if minutes % 1440 == 0:
+        return f"{minutes // 1440} gün önce hatırlatarak"
+    if minutes % 60 == 0:
+        return f"{minutes // 60} saat önce hatırlatarak"
+    return f"{minutes} dakika önce hatırlatarak"
+
+
 def _proposal_speech(row: CalendarProposalRow) -> str:
+    if row.kind == PROPOSAL_KIND_CANCEL:
+        return (
+            f"{row.summary}, {_fmt_time(row.start)} etkinliğini takviminizden silmeyi "
+            "öneriyorum. Onaylıyor musunuz?"
+        )
     verb = "taşımayı" if row.kind == PROPOSAL_KIND_RESCHEDULE else "eklemeyi"
+    extras = [
+        phrase
+        for phrase in (recurrence_phrase(row.rrule), reminder_phrase(row.reminder_minutes))
+        if phrase
+    ]
+    how = f" ({'; '.join(extras)})" if extras else ""
     base = (
-        f"{row.summary}, {_fmt_time(row.start)} - {_local(row.end).strftime('%H:%M')} olarak "
-        f"{verb} öneriyorum."
+        f"{row.summary}, {_fmt_time(row.start)} - {_local(row.end).strftime('%H:%M')}{how} "
+        f"olarak {verb} öneriyorum."
     )
     conflicts = list(row.conflicts_json or [])
     if conflicts:
@@ -172,9 +276,21 @@ def _proposal_speech(row: CalendarProposalRow) -> str:
 
 
 class CalendarService:
-    def __init__(self, provider: CalendarProvider | None, writer: CalendarWriter | None) -> None:
+    def __init__(
+        self,
+        provider: CalendarProvider | None,
+        writer: CalendarWriter | None,
+        *,
+        cancel_policy: str = CANCEL_POLICY_REFUSE,
+    ) -> None:
         self._provider = provider
         self._writer = writer
+        #: B46 (req 354): anything but an explicit "confirm" keeps the refusal.
+        self._cancel_policy = (
+            CANCEL_POLICY_CONFIRM
+            if cancel_policy == CANCEL_POLICY_CONFIRM
+            else CANCEL_POLICY_REFUSE
+        )
         #: See ``app.mail.service.MailService``'s identical field: "account exists" is
         #: decided from the READ provider, independent of whether the writer was built
         #: (which depends on the host flag) — the same account_missing/send_disabled split.
@@ -311,6 +427,9 @@ class CalendarService:
             return self._account_missing(capability="calendar.agenda", session_id=session_id, db=db)
         occs = self._provider.events(start, end)
         clamped, truncated = self._window_notes()
+        # B46 (req 359): what the owner heard is indexed - the table M21 declared and
+        # nothing ever wrote.
+        self._index_occurrences(db, occs, now=_now(), source=INDEX_SOURCE_READ)
         self._ledger(
             db,
             event_type=EVENT_TYPE_CALENDAR_READ,
@@ -378,6 +497,168 @@ class CalendarService:
             extra={"slots": [{"start": s.isoformat(), "end": e.isoformat()} for s, e in slots]},
         )
 
+    # ------------------------------------------------------ INDEX / SYNC / REMINDERS (B46)
+
+    def _index_occurrences(
+        self, db: Session, occs: list[Occurrence], *, now: datetime, source: str
+    ) -> tuple[int, int]:
+        """One index row per (uid, start). An owner read stamps ``last_used_at``; the
+        clock's mirror stamps ``synced_at`` and leaves ``source='sync'``, so the index never
+        claims the owner heard what only the clock read."""
+        occs = occs[:MAX_INDEX_ROWS_PER_PASS]
+        if not occs:
+            return 0, 0
+        uids = sorted({occ.uid for occ in occs})
+        existing: dict[tuple[str, datetime], CalendarIndexRow] = {
+            (row.uid, _aware(row.start)): row
+            for row in db.execute(
+                select(CalendarIndexRow).where(CalendarIndexRow.uid.in_(uids))
+            ).scalars()
+        }
+        added = updated = 0
+        for occ in occs:
+            key = (occ.uid, _utc(occ.start))
+            row = existing.get(key)
+            if row is None:
+                row = CalendarIndexRow(
+                    id=uuid.uuid4(),
+                    uid=occ.uid,
+                    summary=occ.summary[:998],
+                    start=_utc(occ.start),
+                    end=_utc(occ.end),
+                    all_day=occ.all_day,
+                    last_used_at=now,
+                    source=source,
+                    synced_at=now if source == INDEX_SOURCE_SYNC else None,
+                )
+                db.add(row)
+                existing[key] = row
+                added += 1
+                continue
+            row.summary = occ.summary[:998]
+            row.end = _utc(occ.end)
+            row.all_day = occ.all_day
+            if source == INDEX_SOURCE_READ:
+                row.last_used_at = now
+                row.source = INDEX_SOURCE_READ
+            else:
+                row.synced_at = now
+            updated += 1
+        db.commit()
+        return added, updated
+
+    def sync(
+        self, db: Session, *, now: datetime | None = None, horizon_days: int = SYNC_HORIZON_DAYS
+    ) -> dict[str, Any]:
+        """B46 (req 361): the next ``horizon_days`` of the owner's calendar mirrored into
+        the index - added, refreshed, and removed when the event is gone upstream (the index
+        must not remember a deleted event). Reads only; never writes to the calendar. When
+        the provider capped the expansion, nothing is removed: a truncated answer is not
+        evidence that an event no longer exists."""
+        if self._provider is None:
+            return {"status": "no_account", "added": 0, "updated": 0, "removed": 0}
+        now = now or _now()
+        end = now + timedelta(days=horizon_days)
+        occs = self._provider.events(now, end)
+        _clamped, truncated = self._window_notes()
+        added, updated = self._index_occurrences(db, occs, now=now, source=INDEX_SOURCE_SYNC)
+        removed = 0
+        if not truncated and len(occs) <= MAX_INDEX_ROWS_PER_PASS:
+            present = {(occ.uid, _utc(occ.start)) for occ in occs}
+            window_rows = db.execute(
+                select(CalendarIndexRow).where(
+                    CalendarIndexRow.start >= _utc(now), CalendarIndexRow.start < _utc(end)
+                )
+            ).scalars()
+            for row in list(window_rows):
+                start = _aware(row.start)
+                if _utc(now) <= start < _utc(end) and (row.uid, start) not in present:
+                    db.delete(row)
+                    removed += 1
+            db.commit()
+        if added or removed:
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_CALENDAR_READ,
+                action="calendar.sync",
+                summary=f"calendar.sync -> +{added} / -{removed}",
+                detail={
+                    "added": added,
+                    "updated": updated,
+                    "removed": removed,
+                    "horizon_days": horizon_days,
+                },
+            )
+        return {
+            "status": "synced",
+            "added": added,
+            "updated": updated,
+            "removed": removed,
+            "seen": len(occs),
+            "truncated": truncated,
+        }
+
+    def remind_due(self, db: Session, *, now: datetime | None = None) -> dict[str, Any]:
+        """B46 (req 358): the reminder an event carries (its VALARM) raised once, as an owner
+        notification, when its moment has come and the event has not begun. A moment missed
+        while nothing ran is still raised if the event is ahead; once the event has started
+        it would be news, not a reminder. With several alarms the earliest is the one
+        raised, once."""
+        if self._provider is None:
+            return {"status": "no_account", "sent": 0}
+        now = now or _now()
+        due: list[Occurrence] = []
+        for occ in self._provider.events(now, now + REMINDER_LOOKAHEAD):
+            if not occ.reminders or occ.start <= now:
+                continue
+            if occ.start - timedelta(minutes=max(occ.reminders)) <= now:
+                due.append(occ)
+        if not due:
+            return {"status": "checked", "sent": 0}
+        uids = sorted({occ.uid for occ in due})
+        index: dict[tuple[str, datetime], CalendarIndexRow] = {
+            (row.uid, _aware(row.start)): row
+            for row in db.execute(
+                select(CalendarIndexRow).where(CalendarIndexRow.uid.in_(uids))
+            ).scalars()
+        }
+        sent = 0
+        for occ in due:
+            key = (occ.uid, _utc(occ.start))
+            row = index.get(key)
+            if row is not None and row.reminded_at is not None:
+                continue
+            # The notification first, then the stamp: a crash between them repeats one
+            # reminder, where the other order could lose it.
+            notification_events.calendar_reminder(
+                db, event_uid=occ.uid, summary=occ.summary, starts_at=_local(occ.start), now=now
+            )
+            if row is None:
+                row = CalendarIndexRow(
+                    id=uuid.uuid4(),
+                    uid=occ.uid,
+                    summary=occ.summary[:998],
+                    start=_utc(occ.start),
+                    end=_utc(occ.end),
+                    all_day=occ.all_day,
+                    last_used_at=now,
+                    source=INDEX_SOURCE_SYNC,
+                    synced_at=now,
+                )
+                db.add(row)
+                index[key] = row
+            row.reminded_at = now
+            db.commit()
+            sent += 1
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_CALENDAR_READ,
+                action="calendar.reminder",
+                summary=f"calendar.reminder -> {occ.summary}",
+                detail={"event_uid": occ.uid, "start": _local(occ.start).isoformat()},
+            )
+        return {"status": "checked", "sent": sent}
+
     # ------------------------------------------------------------------ PREPARE
 
     def _upsert_proposal_focus(
@@ -404,11 +685,36 @@ class CalendarService:
         start: datetime,
         end: datetime,
         location: str | None = None,
+        rrule: str | None = None,
+        reminder_minutes: int | None = None,
         session_id: str | None = None,
     ) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(
                 capability="calendar.propose", session_id=session_id, db=db
+            )
+        # B46 (req 356, 357): the rule and reminder the owner will HEAR in the read-back are
+        # validated here, so the writer never meets one it would refuse.
+        try:
+            rrule = validate_rrule(rrule) if rrule else None
+            if reminder_minutes is not None and not (
+                0 <= int(reminder_minutes) <= MAX_REMINDER_MINUTES
+            ):
+                raise RRuleError(f"reminder out of range: {reminder_minutes}")
+        except RRuleError as exc:
+            return self._receipt(
+                capability="calendar.propose",
+                requested_state="prepared",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": ERROR_INVALID_RECURRENCE, "detail": str(exc)[:200]},
+                speech=(
+                    "Bu tekrarı ya da hatırlatmayı anlayamadım efendim; "
+                    "daha basit söyler misiniz?"
+                ),
+                db=db,
+                session_id=session_id,
+                error_class=ERROR_INVALID_RECURRENCE,
             )
         window_start = start - timedelta(hours=6)
         window_end = end + timedelta(hours=6)
@@ -423,6 +729,8 @@ class CalendarService:
             start=_utc(start),
             end=_utc(end),
             location=location,
+            rrule=rrule,
+            reminder_minutes=reminder_minutes,
             conflicts_json=conflicts,
             state=PROPOSAL_STATE_PREPARED,
             read_back_at=None,
@@ -472,6 +780,19 @@ class CalendarService:
         occ = self._provider.get_event(uid)
         if occ is None:
             return {"status": "needs_clarification", "speech": SPEECH_NOT_FOUND, "candidates": []}
+        if occ.recurring:
+            # B46: the writer PUTs a whole event; "move this one" would rewrite the series.
+            return self._receipt(
+                capability="calendar.propose",
+                requested_state="prepared",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"event_uid": uid, "reason": ERROR_RECURRING_SERIES},
+                speech=SPEECH_RECURRING_SERIES,
+                db=db,
+                session_id=session_id,
+                error_class=ERROR_RECURRING_SERIES,
+            )
         delta = timedelta(minutes=minutes_delta)
         new_start = occ.start + delta
         new_end = occ.end + delta
@@ -488,6 +809,8 @@ class CalendarService:
             start=_utc(new_start),
             end=_utc(new_end),
             location=None,
+            # B46: a reschedule keeps the reminder the event already had.
+            reminder_minutes=occ.reminders[0] if occ.reminders else None,
             conflicts_json=conflicts,
             state=PROPOSAL_STATE_PREPARED,
             read_back_at=None,
@@ -734,9 +1057,15 @@ class CalendarService:
             start=_aware(row.start),
             end=_aware(row.end),
             location=row.location,
+            rrule=row.rrule,
+            reminder_minutes=row.reminder_minutes,
         )
         try:
-            if row.kind == PROPOSAL_KIND_RESCHEDULE and row.event_uid:
+            if row.kind == PROPOSAL_KIND_CANCEL and row.event_uid:
+                # B46 (req 354): only ever reached under the confirm policy, after the gate.
+                self._writer.delete(row.event_uid)
+                event_uid = row.event_uid
+            elif row.kind == PROPOSAL_KIND_RESCHEDULE and row.event_uid:
                 event_uid = self._writer.update(row.event_uid, proposal_input)
             else:
                 event_uid = self._writer.create(proposal_input)
@@ -778,6 +1107,9 @@ class CalendarService:
         row.state = PROPOSAL_STATE_COMMITTED
         row.committed_event_uid = event_uid
         row.updated_at = now
+        if row.kind == PROPOSAL_KIND_CANCEL and row.event_uid:
+            # The index must not remember an event the owner just removed.
+            db.execute(sa_delete(CalendarIndexRow).where(CalendarIndexRow.uid == row.event_uid))
         db.commit()
         db.refresh(row)
         self._ledger(
@@ -794,7 +1126,11 @@ class CalendarService:
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
             server={"proposal_id": str(row.id), "event_uid": event_uid},
-            speech="Onayladım efendim.",
+            speech=(
+                "Takvimden sildim efendim."
+                if row.kind == PROPOSAL_KIND_CANCEL
+                else "Onayladım efendim."
+            ),
             db=db,
             session_id=session_id,
             extra={"proposal": _proposal_dict(row)},
@@ -835,9 +1171,111 @@ class CalendarService:
             extra={"proposal": _proposal_dict(row)},
         )
 
+    def _propose_cancel(
+        self, db: Session, occ: Occurrence, *, session_id: str | None
+    ) -> dict[str, Any]:
+        """B46 (req 354) under ``calendar_cancel_policy=confirm``: a cancel is a PROPOSAL -
+        read back, confirmed on the owner's next turn, then the writer's delete, through the
+        same gate a create passes. A recurring event is refused: the writer removes whole
+        events, and one "iptal et" must never delete a series."""
+        if occ.recurring:
+            return self._receipt(
+                capability="calendar.cancel",
+                requested_state="prepared",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"event_uid": occ.uid, "reason": ERROR_RECURRING_SERIES},
+                speech=SPEECH_RECURRING_SERIES,
+                db=db,
+                session_id=session_id,
+                error_class=ERROR_RECURRING_SERIES,
+            )
+        now = _now()
+        row = CalendarProposalRow(
+            id=uuid.uuid4(),
+            kind=PROPOSAL_KIND_CANCEL,
+            event_uid=occ.uid,
+            summary=occ.summary,
+            start=_utc(occ.start),
+            end=_utc(occ.end),
+            location=None,
+            conflicts_json=[],
+            state=PROPOSAL_STATE_PREPARED,
+            read_back_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        self._upsert_proposal_focus(db, row, now=now)
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_CALENDAR_PROPOSED,
+            action="calendar.cancel",
+            summary=f"calendar.cancel -> {occ.summary} (öneri)",
+            detail={"proposal_id": str(row.id), "event_uid": occ.uid},
+        )
+        self._publish(event=occ.summary, proposal_state=row.state)
+        return self._receipt(
+            capability="calendar.cancel",
+            requested_state="prepared",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"proposal_id": str(row.id), "event_uid": occ.uid},
+            speech=_proposal_speech(row),
+            db=db,
+            session_id=session_id,
+            extra={"proposal": _proposal_dict(row)},
+        )
+
+    def cancel_event(
+        self, db: Session, *, event_uid: str | None = None, session_id: str | None = None
+    ) -> dict[str, Any]:
+        """ "Toplantıyı iptal et." (B27 req 731) — the focused event, and an honest no.
+
+        The writer has ``create`` and ``update`` and, by spec §1, no ``delete``; this
+        method exists so the sentence reaches the calendar and comes back with a RECEIPT
+        that says which event and why not, instead of reaching nothing. The event is
+        resolved the way every other tool here resolves it (the durable focus), so
+        "which one did it refuse" is on the record too.
+        """
+        if self._provider is None:
+            return self._account_missing(capability="calendar.cancel", session_id=session_id, db=db)
+        entry = None if event_uid else focus_module.current(db, FOCUS_KIND_EVENT)
+        uid = event_uid or (entry.object_id if entry is not None else None)
+        if uid is None:
+            return {"status": "needs_clarification", "speech": SPEECH_NO_EVENT, "candidates": []}
+        occurrence = self._provider.get_event(uid)
+        summary = (
+            occurrence.summary
+            if occurrence is not None
+            else (entry.label if entry is not None and entry.label else uid)
+        )
+        if self._cancel_policy == CANCEL_POLICY_CONFIRM and occurrence is not None:
+            return self._propose_cancel(db, occurrence, session_id=session_id)
+        return self._receipt(
+            capability="calendar.cancel",
+            requested_state="cancelled",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"event_uid": uid, "reason": ERROR_DELETE_NOT_PERMITTED},
+            speech=SPEECH_DELETE_NOT_PERMITTED,
+            db=db,
+            error_class=ERROR_DELETE_NOT_PERMITTED,
+            session_id=session_id,
+            extra={"event": {"uid": uid, "summary": summary}},
+        )
+
 
 __all__ = [
+    "CANCEL_POLICY_CONFIRM",
+    "CANCEL_POLICY_REFUSE",
     "ERROR_COMMIT_FAILED",
+    "ERROR_INVALID_RECURRENCE",
+    "ERROR_RECURRING_SERIES",
+    "ERROR_DELETE_NOT_PERMITTED",
+    "SPEECH_DELETE_NOT_PERMITTED",
     "CalendarService",
     "SPEECH_ACCOUNT_MISSING",
     "SPEECH_NO_EVENT",

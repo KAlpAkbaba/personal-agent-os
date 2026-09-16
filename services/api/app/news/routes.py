@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.artifacts.runtime import ArtifactRuntime
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger
 from app.news import sources_service
@@ -108,7 +109,7 @@ async def create_source(request: Request, body: CreateSourceRequest) -> dict[str
             except NewsSourceError as exc:
                 raise HTTPException(
                     status_code=_ERROR_STATUS.get(exc.error_class, 400),
-                    detail={"error_class": exc.error_class, "detail": exc.message},
+                    detail=owner_detail(exc.error_class),
                 ) from exc
             return view.as_dict()
 
@@ -163,7 +164,7 @@ async def update_source(
             except NewsSourceError as exc:
                 raise HTTPException(
                     status_code=_ERROR_STATUS.get(exc.error_class, 400),
-                    detail={"error_class": exc.error_class, "detail": exc.message},
+                    detail=owner_detail(exc.error_class),
                 ) from exc
             return view.as_dict()
 
@@ -215,9 +216,12 @@ async def resolve(request: Request, body: ResolveRequest) -> dict[str, Any]:
                     session, source, content_type=body.content_type, provider=news_provider
                 )
             except NewsResolveError as exc:
+                # The news domain's own class travels:  is what the
+                # API has always answered here and what a caller matches on. What changed
+                # is the MESSAGE beside it, which used to be the exception's English.
                 raise HTTPException(
                     status_code=409,
-                    detail={"error_class": exc.error_class, "detail": exc.message},
+                    detail=owner_detail(exc.error_class),
                 ) from exc
             result = outcome.result
             return {

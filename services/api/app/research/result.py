@@ -287,6 +287,11 @@ class ResearchDiagnostics:
     #: the thinness in plain Turkish from ``spoken_result``, never these codes.
     thin: bool = False
     thin_reasons: tuple[str, ...] = field(default_factory=tuple)
+    #: B31 req 207: the synthesis substitution, if one happened ({requested, used,
+    #: attempts, reason}), and how many discovery queries answered from a fallback search
+    #: provider. Technical level only; spoken as a substitution, never hidden.
+    synthesis_fallback: dict[str, Any] | None = None
+    search_fallbacks: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -309,6 +314,10 @@ class ResearchDiagnostics:
             "cooled_domains": self.cooled_domains,
             "thin": self.thin,
             "thin_reasons": list(self.thin_reasons),
+            "synthesis_fallback": (
+                dict(self.synthesis_fallback) if self.synthesis_fallback else None
+            ),
+            "search_fallbacks": self.search_fallbacks,
         }
 
     @classmethod
@@ -327,6 +336,7 @@ class ResearchDiagnostics:
         rejected_by_reason = stats.get("rejected_by_reason") or {}
         if not isinstance(rejected_by_reason, dict):
             rejected_by_reason = {}
+        fallback = data.get("synthesis_fallback")
 
         def _float(key: str) -> float:
             try:
@@ -344,6 +354,10 @@ class ResearchDiagnostics:
             quarantined_pages=_int("quarantined"),
             dedup_stats={"deduplicated": _int("deduplicated")},
             synthesis_provider=str(data.get("synthesis_provider") or ""),
+            synthesis_fallback=(dict(fallback) if isinstance(fallback, dict) else None),
+            search_fallbacks=int(data.get("search_fallbacks") or 0)
+            if str(data.get("search_fallbacks") or "0").isdigit()
+            else 0,
             mode=str(stats.get("mode") or ""),
             budget_s=_float("budget_s"),
             elapsed_s=_float("elapsed_s"),

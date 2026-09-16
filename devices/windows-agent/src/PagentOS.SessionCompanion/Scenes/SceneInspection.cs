@@ -14,6 +14,9 @@ namespace PagentOS.SessionCompanion.Scenes;
 /// <summary>The render a driver declared and the companion verified: the path it named, its size and the hash both sides agree on.</summary>
 public sealed record SceneRender(string RelativePath, string ResolvedPath, long Bytes, string Sha256, byte[] Content);
 
+/// <summary>B44 (req 527): an exported scene file the companion verified in place — its format, the path it named, its size and the hash both sides agree on.</summary>
+public sealed record SceneExport(string Format, string RelativePath, long Bytes, string Sha256);
+
 /// <summary>
 /// M25_CREATIVE_3D_SPEC.md §3/§4/§7, ADR-0088 — the device half of the read-back. The rule
 /// the whole milestone rests on: <b>what the tool wrote is what is reported</b>. The driver
@@ -143,6 +146,122 @@ public static class SceneInspection
         }
 
         return new SceneRender(relative.Replace('\\', '/'), path, content.LongLength, actual, content);
+    }
+
+    /// <summary>The key <c>out.json</c> lists its exported scene files under.</summary>
+    public const string ExportsKey = "exports";
+
+    /// <summary>
+    /// B44 (req 527): the exported scene files the inspection declares
+    /// (<c>exports: [{format, path, bytes, sha256}]</c>), each verified IN PLACE — resolved
+    /// inside the project, bounded, re-hashed against the driver's own sha256, and its format
+    /// signature read (a GLB's <c>glTF</c> header, version 2, declaring the file's own length;
+    /// an FBX binary's <c>Kaydara FBX Binary</c> magic). The bytes stay on the owner's disk;
+    /// what travels is the proof. Nothing declared is an empty list, not a failure.
+    /// </summary>
+    public static IReadOnlyList<SceneExport> ReadExports(string projectFolder, string slug, JsonObject inspection)
+    {
+        if (inspection[ExportsKey] is not JsonArray declared || declared.Count == 0)
+        {
+            return [];
+        }
+
+        if (declared.Count > SceneCapabilityNames.MaxExports)
+        {
+            throw Postcondition(
+                $"'{slug}' declares {declared.Count.ToString(CultureInfo.InvariantCulture)} exports, past the bound of {SceneCapabilityNames.MaxExports.ToString(CultureInfo.InvariantCulture)}",
+                "exports_bound");
+        }
+
+        var exports = new List<SceneExport>();
+        foreach (var node in declared)
+        {
+            if (node is not JsonObject entry)
+            {
+                throw Postcondition($"'{slug}' declares an export that is not an object", "export_undeclared");
+            }
+
+            var format = StringOf(entry, "format");
+            if (format is not ("glb" or "fbx"))
+            {
+                throw Postcondition($"'{slug}' declares an export whose format is not glb or fbx", "export_undeclared");
+            }
+
+            var relative = StringOf(entry, "path")
+                ?? throw Postcondition($"'{slug}' declares a {format} export with no 'path'", "export_undeclared");
+            var declaredSha = StringOf(entry, "sha256")
+                ?? throw Postcondition($"'{slug}' declares a {format} export with no 'sha256'; a file nobody hashed is not a proof", "export_undeclared");
+            if (declaredSha.Length != 64 || !declaredSha.All(Uri.IsHexDigit))
+            {
+                throw Postcondition($"'{slug}' declares a {format} export whose sha256 is not 64 hex characters", "export_undeclared");
+            }
+
+            var path = Confine(projectFolder, relative, "the export");
+            var info = new FileInfo(path);
+            if (!info.Exists)
+            {
+                throw Postcondition($"'{slug}' declares a {format} export at '{relative}' that is not there", "export_missing");
+            }
+
+            if (info.Length > SceneCapabilityNames.MaxExportBytes)
+            {
+                throw Postcondition(
+                    $"'{slug}' declares a {format} export of {info.Length.ToString(CultureInfo.InvariantCulture)} bytes, past the {SceneCapabilityNames.MaxExportBytes.ToString(CultureInfo.InvariantCulture)} byte bound; it was not read",
+                    "export_bound");
+            }
+
+            var head = new byte[32];
+            int headLength;
+            string actual;
+            try
+            {
+                using var stream = File.OpenRead(path);
+                headLength = stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false);
+                stream.Position = 0;
+                actual = Convert.ToHexStringLower(SHA256.HashData(stream));
+            }
+            catch (IOException ex)
+            {
+                throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"'{slug}' has an export that could not be read: {ex.Message}", retryable: true);
+            }
+
+            if (!string.Equals(actual, declaredSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw Postcondition(
+                    $"'{slug}' declares a {format} export at '{relative}' whose sha256 is not the file's ({actual[..12]}… on disk); the file is not the one the tool wrote",
+                    "export_sha256_mismatch");
+            }
+
+            if (!SignatureOk(format, head.AsSpan(0, headLength), info.Length))
+            {
+                throw Postcondition(
+                    $"'{slug}' declares a {format} export at '{relative}' whose bytes do not begin the way a {format} file does",
+                    "export_signature_mismatch");
+            }
+
+            exports.Add(new SceneExport(format, relative.Replace('\\', '/'), info.Length, actual));
+        }
+
+        return exports;
+    }
+
+    /// <summary>A format's own first bytes: a GLB header (<c>glTF</c>, version 2, declaring the file's length); an FBX binary magic.</summary>
+    public static bool SignatureOk(string format, ReadOnlySpan<byte> head, long length)
+    {
+        if (format == "glb")
+        {
+            return head.Length >= 12
+                && head[..4].SequenceEqual("glTF"u8)
+                && BitConverter.ToUInt32(head[4..8]) == 2
+                && BitConverter.ToUInt32(head[8..12]) == length;
+        }
+
+        if (format == "fbx")
+        {
+            return head.Length >= 21 && head[..21].SequenceEqual("Kaydara FBX Binary  \0"u8);
+        }
+
+        return false;
     }
 
     /// <summary>

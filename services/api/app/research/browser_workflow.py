@@ -121,6 +121,42 @@ class OwnerVerificationTimeout(Exception):
 
 @workflow.defn
 class BrowserResearchWorkflow:
+    def __init__(self) -> None:
+        # B31 req 203/204: the owner's pause. A signal flips the flag; the run holds at
+        # its NEXT stage boundary (never mid-activity - an activity is a device command
+        # already in flight), and the seconds spent holding are kept out of the budget so
+        # "elapsed" stays the run's own time. Cancellation (handle.cancel) still lands
+        # while paused: workflow.wait_condition is itself cancellable.
+        self._paused = False
+        self._paused_seconds = 0.0
+
+    @workflow.signal
+    def pause(self) -> None:
+        self._paused = True
+
+    @workflow.signal
+    def resume(self) -> None:
+        self._paused = False
+
+    @workflow.query
+    def paused(self) -> bool:
+        return self._paused
+
+    @workflow.query
+    def paused_seconds(self) -> float:
+        return self._paused_seconds
+
+    async def _gate(self) -> None:
+        """Hold here while the owner has the run paused (B31 req 203)."""
+        if not self._paused:
+            return
+        held_from = workflow.now()
+        await workflow.wait_condition(lambda: not self._paused)
+        self._paused_seconds += (workflow.now() - held_from).total_seconds()
+
+    def _elapsed_s(self, run_start) -> float:
+        return (workflow.now() - run_start).total_seconds() - self._paused_seconds
+
     @workflow.run
     async def run(self, request: BrowserResearchRequest) -> dict:
         # ADR-0074: the hard budget is the OWNER's budget, so the clock starts when
@@ -180,6 +216,7 @@ class BrowserResearchWorkflow:
             for source_class in plan["source_classes"]:
                 for i, query_text in enumerate(discovery_queries):
                     query_id = f"{source_class}:{i}"
+                    await self._gate()
                     await self._discover_with_handoff(
                         request,
                         device_id,
@@ -223,6 +260,7 @@ class BrowserResearchWorkflow:
         # has exhausted the shortlist (cooled domains, spent quotas, destination
         # policy), which is a different fact from "the budget is gone" and stops the
         # loop on its own reason.
+        await self._gate()
         targets = await workflow.execute_activity(
             fetch_targets_activity,
             args=[request.task_id, policy.wave_size, request.topic],
@@ -255,7 +293,8 @@ class BrowserResearchWorkflow:
             evidence_count = int(ranked.get("evidence", 0))
 
             while True:
-                elapsed_s = (workflow.now() - run_start).total_seconds()
+                await self._gate()
+                elapsed_s = self._elapsed_s(run_start)
                 decision = decide_next_wave(
                     policy=policy,
                     evidence_count=evidence_count,
@@ -296,12 +335,14 @@ class BrowserResearchWorkflow:
                 )
                 evidence_count = int(ranked.get("evidence", 0))
 
-            elapsed_s = (workflow.now() - run_start).total_seconds()
+            await self._gate()
+            elapsed_s = self._elapsed_s(run_start)
             run_stats = {
                 "mode": policy.mode,
                 "budget_s": policy.hard_budget_s,
                 "elapsed_s": elapsed_s,
                 "waves": waves_used,
+                "paused_s": round(self._paused_seconds, 3),
             }
             report = await workflow.execute_activity(
                 synthesize_activity,

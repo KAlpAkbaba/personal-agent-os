@@ -38,6 +38,7 @@ from app.nativefactory.models import (
 from app.nativefactory.service import plan_build
 from app.nativefactory.stacks import ToolchainFacts
 from app.routines.dispatch import DeviceRunResult
+from tests.voice_corpus.harness import NATIVE_ANDROID_SPEC
 
 FULL = ToolchainFacts(
     dotnet=r"C:\dotnet.exe",
@@ -497,18 +498,81 @@ def test_the_manifest_forms_are_the_ones_the_protocol_document_admits():
 
 
 def test_a_row_this_path_cannot_honestly_build_is_refused_before_the_device_is_asked(db):
-    """Defence in depth for the planner's rule: whatever opened it, a portable or MSIX row
-    that reaches this path is refused, because it would publish and read back an EXE and
-    the judge would call that `verified`."""
-    msix = plan_build(db, {**WINDOWS, "targets": ["windows_msix"]}, facts=FULL)[0]
+    """Defence in depth for the planner's rule: whatever opened it, an Android row that
+    reaches this path is refused, because the device has no JDK and this path would publish
+    and read back nothing it could judge. (B33 moved the two Windows packages INTO this
+    path - see the two tests below.)"""
+    apk = plan_build(db, NATIVE_ANDROID_SPEC, facts=FULL)[0]
     device = _healthy()
 
-    outcome = build_on_device(db, msix, device)
+    outcome = build_on_device(db, apk, device)
 
     assert not outcome.ok
     assert outcome.error_class == "dependency_unavailable"
-    assert msix.state == STATE_UNAVAILABLE
+    assert apk.state == STATE_UNAVAILABLE
     assert device.calls == []
+
+
+def _packaged(kind: str) -> FakeDevice:
+    device = _healthy()
+    device._answers["project_package"] = DeviceRunResult(
+        True,
+        result={
+            "kind": kind,
+            "path": ROOT
+            + chr(92)
+            + "dist"
+            + chr(92)
+            + ("notlarim-portable.zip" if kind == "portable" else "notlarim.msix"),
+            "name": "notlarim-portable.zip" if kind == "portable" else "notlarim.msix",
+            "bytes": 90112,
+            "sha256": "b" * 64,
+            "signed": False,
+            "observed": {"exists": True, "bytes": 90112},
+        },
+    )
+    return device
+
+
+def test_an_msix_row_is_built_then_packaged_by_the_device_and_the_manifest_is_scaffolded(db):
+    """B33 req 457: the device packs what the Cloud Core declared - AppxManifest.xml is
+    scaffolded beside the sources, project.package runs AFTER the EXE was read back and
+    judged, and the row's artefact becomes the package (the EXE kept under it)."""
+    msix = plan_build(db, {**WINDOWS, "targets": ["windows_msix"]}, facts=FULL)[0]
+    device = _packaged("msix")
+
+    outcome = build_on_device(db, msix, device)
+
+    assert outcome.ok, outcome.message
+    assert [c for c, _ in device.calls][-1] == "project.package"
+    assert device.payload_for("project.package") == {
+        "project_id": f"native-{str(msix.id)[:8]}",
+        "kind": "msix",
+    }
+    files = {f["path"]: f["text"] for f in device.payload_for("project.scaffold")["files"]}
+    assert "staging/AppxManifest.xml" in files
+    assert "<Identity" in files["staging/AppxManifest.xml"]
+    assert 'Executable="notlarim.exe"' in files["staging/AppxManifest.xml"]
+    assert msix.state == STATE_VERIFIED
+    assert msix.artifact_path.endswith("notlarim.msix")
+    assert msix.artifact_json["package"]["sha256"] == "b" * 64
+    assert msix.artifact_json["package"]["signed"] is False
+    assert msix.artifact_json["package"]["executable"].endswith("notlarim.exe")
+
+
+def test_a_portable_row_whose_package_the_device_could_not_make_is_failed_not_verified(db):
+    """B33 req 456: a verified EXE with no package is not a verified PORTABLE row."""
+    portable = plan_build(db, {**WINDOWS, "targets": ["windows_portable"]}, facts=FULL)[0]
+    device = _healthy()
+    device._answers["project_package"] = DeviceRunResult(False, "io_error", "disk full")
+
+    outcome = build_on_device(db, portable, device)
+
+    assert not outcome.ok
+    assert portable.state == STATE_FAILED
+    assert "project.package portable" in (portable.error_message or "")
+    files = {f["path"] for f in device.payload_for("project.scaffold")["files"]}
+    assert "staging/AppxManifest.xml" not in files
 
 
 def test_the_manifest_the_device_half_reads_is_the_one_this_module_writes():

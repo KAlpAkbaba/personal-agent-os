@@ -1,6 +1,6 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.4** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.5** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
 
 - v1 (M13, ADR-0050): the family, sessions, risk classes, the error taxonomy, §3's payloads.
@@ -12,6 +12,14 @@ Status: contract **v1.4** — binding for `services/api` (Cloud Core), `devices/
   result is unchanged. The worker advertises `contracts["browser.media"] = 1`; a consumer
   checks it BEFORE planning a media wake, so an agent installed before M18.3 produces a named
   contract mismatch and the local tone fallback rather than a failure inside a firing alarm.
+- **v1.5 (2026-09-14, B31, ADR-0138): transfers are bounded and the `uploads` flag is honest** —
+  `browser.upload` exists (§1, §3), so every capability flag the worker advertises has an
+  operation behind it (a test holds the two lists together); `browser.download` and
+  `browser.upload` share one gate (HIGH_IMPACT + a well-formed `authorization_ref`) and one
+  size cap (64 MiB, lowerable per call), and a download can no longer name a folder outside
+  the worker's `file_io_root`. Additive: every v1.4 name, payload and result is unchanged;
+  the only tightening is that an `authorization_ref` of fewer than eight characters, which
+  no caller ever sent, is now refused.
 - **v1.4 (2026-09-10, ADR-0113): the OWNER's own Chrome, as a profile** — `owner` (§2). No
   new operation names and no new payload field: an attached session serves the same
   `navigate`/`click`/`fill`/`search`/`media_*` family it always did, on the browser the
@@ -66,7 +74,8 @@ Per-operation names (each is a device command `capability`):
 | `browser.extract` | READ | Page text, links, metadata, JSON-LD. |
 | `browser.snapshot` | READ | Accessibility (ARIA) snapshot. |
 | `browser.screenshot` | READ | Viewport JPEG, diagnostics only. |
-| `browser.download` | HIGH_IMPACT | Save a file the owner authorised. Gated (§4). |
+| `browser.download` | HIGH_IMPACT | Save a file the owner authorised. Gated (§4); capped at 64 MiB (v1.5). |
+| `browser.upload` | HIGH_IMPACT | v1.5. Populate a file input from a file under the companion data dir's `uploads/`. Gated like download, capped like download. |
 | `browser.search` | NAVIGATE | Run a web search on a search engine page and read the result links semantically. |
 | `browser.fetch_evidence` | NAVIGATE | navigate + wait + extract + classify in one command (the research primitive). |
 | `browser.media_play` | NAVIGATE | v1.2. Play a named media URL in a `media` session and PROVE it is playing. |
@@ -298,7 +307,9 @@ paraphrase; `injection_markers` counts instruction-like patterns found in the pa
 
 `browser.screenshot` `{"session_id"}` → `{"format":"jpeg","base64":"…","bytes":…}` (viewport only, ≤ 300 KiB).
 
-`browser.download` `{"session_id","target","authorization_ref":"…"}` → `{"path":"…","bytes":…,"sha256":"…"}`; saved under the companion data dir `downloads/`; refused (`security_scope_error`) unless the session policy allows `HIGH_IMPACT` and `authorization_ref` is present.
+`browser.download` `{"session_id","target","authorization_ref":"…","max_bytes":67108864}` → `{"path":"…","bytes":…,"sha256":"…","max_bytes":…,"authorization_ref":"…"}`; saved under the companion data dir `downloads/`; refused (`security_scope_error`) unless the session policy allows `HIGH_IMPACT` and `authorization_ref` is WELL-FORMED (v1.5: 8–128 characters of letters, digits, `.`, `_`, `:`, `-` — an approval or action id, never merely non-empty). v1.5: a file over `max_bytes` (default and ceiling 64 MiB; a caller may lower it, never raise it) is deleted and refused with `security_scope_error`; `save_dir` cannot leave the worker's `file_io_root`.
+
+`browser.upload` (v1.5) `{"session_id","target","path":"…","authorization_ref":"…","max_bytes":…}` → `{"uploaded":true,"path":"…","bytes":…,"sha256":"…","max_bytes":…,"authorization_ref":"…"}`; `path` is a file under the companion data dir `uploads/` (a relative name resolves there; anything outside is `security_scope_error`); the same policy gate and size cap as download, checked BEFORE the page is touched; the hash is the file's, read before the send.
 
 `browser.tab_list` → `{"tabs":[{"index":0,"url":"…","title":"…","active":true}]}`; `browser.tab_new {"url":null}` → `{"index":1}`; `browser.tab_close {"index":1}` → `{"closed":true}` (closing the last tab → `validation_error`); `browser.tab_select {"index":0}` → navigation result.
 

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import OwnerGate, { SignOutButton } from "../components/OwnerGate";
+import { LoadedNotice } from "../core/panels/Panel";
+import { type Loaded, load } from "../lib/cockpit/api";
 import { UnauthorizedError, apiFetch } from "../lib/session";
 
 type RenderInfo = {
@@ -36,7 +38,11 @@ type TaskStatus = {
 // sign-in panel, so an expired or revoked session asks the owner to
 // authenticate instead of showing an empty inbox and a network error.
 function ArtifactInbox() {
-  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  // B22 req 706/707: a bare `useState([])` renders an empty list before the first answer
+  // has arrived, so "yükleniyor" and "hiç yok" looked identical - the same conflation the
+  // cockpit's Panel was built to avoid, on the page an owner is most likely to open first.
+  const [state, setState] = useState<Loaded<ArtifactSummary[]>>({ kind: "loading" });
+  const artifacts = state.kind === "ok" ? state.value : [];
   const [topic, setTopic] = useState("");
   const [pendingTask, setPendingTask] = useState<TaskStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,15 +55,16 @@ function ArtifactInbox() {
   }, []);
 
   const refresh = useCallback(async () => {
-    try {
-      const res = await apiFetch("/v1/artifacts");
-      const data = await res.json();
-      setArtifacts(data.artifacts ?? []);
-      setError(null);
-    } catch (err) {
-      report(err);
-    }
-  }, [report]);
+    // `load` reads the server's own error class and Turkish sentence (req 704/705) and
+    // says which KIND of failure this is, so the notice below can offer a retry only when
+    // one could work.
+    const next = await load<ArtifactSummary[]>("/v1/artifacts", (raw) => {
+      const rows = (raw as { artifacts?: ArtifactSummary[] } | null)?.artifacts;
+      return Array.isArray(rows) ? rows : [];
+    });
+    setState(next);
+    if (next.kind === "ok") setError(null);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -177,7 +184,11 @@ function ArtifactInbox() {
         )}
       </div>
 
-      {artifacts.length === 0 && <p className="muted">Henüz artifact yok.</p>}
+      <LoadedNotice state={state} onRetry={() => void refresh()} />
+
+      {state.kind === "ok" && artifacts.length === 0 && (
+        <p className="muted">Henüz artifact yok.</p>
+      )}
 
       {artifacts.map((a) => (
         <div className="panel" key={a.artifact_id}>

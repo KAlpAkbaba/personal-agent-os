@@ -70,7 +70,7 @@ def _numbers_in_text(text: str) -> list[float]:
 
 
 def _format_spec_number(value: float) -> str:
-    """"12000" rather than "12000.0" in a human-facing refusal message."""
+    """ "12000" rather than "12000.0" in a human-facing refusal message."""
     return str(int(value)) if value.is_integer() else str(value)
 
 
@@ -235,9 +235,7 @@ class ArtifactSpec(_StrictModel):
             width = len(self.columns)
             for row in self.rows:
                 if len(row) != width:
-                    raise ValueError(
-                        f"dataset row {row!r} has {len(row)} cells, expected {width}"
-                    )
+                    raise ValueError(f"dataset row {row!r} has {len(row)} cells, expected {width}")
         return self
 
     # ------------------------------------------------------ dataset formula injection

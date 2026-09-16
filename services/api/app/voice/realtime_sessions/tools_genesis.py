@@ -76,6 +76,7 @@ _ERROR_CLASS_TR: Final[dict[str, str]] = {
     "generation_failed": "yazılamadı",
     "evaluation_failed": "sınavı geçemedi",
     "supply_chain_rejected": "güvenlik denetiminden geçemedi",
+    "security_refused": "güvenlik kapısından geçemedi",
 }
 
 _STATE_TR: Final[dict[str, str]] = {

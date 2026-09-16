@@ -238,14 +238,23 @@ function portsOf(client: SceneClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the 3B Sahne panel", () => {
-  it("is empty, in words, when the list route answered with no scene and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/scenes yok (HTTP 404)." })).toBe("");
+  });
+
+  it("says the bus told it nothing, when there are rows to show anyway", () => {
+    const rows = panel(ok([row()]));
+    expect(rows).toContain('data-scene-activity="untold"');
+    expect(rows).toContain("3B sahne etkinliği bildirilmedi.");
+  });
+
+  it("keeps every word when the bus is telling us something the list cannot show", () => {
+    const html = panel(ok([]), [SCENE_ACTIVITY("blender", "Kure", "rendering")]);
     expect(html).toContain('data-panel="scenes"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Henüz bir sahne yapılmadı.");
-    expect(html).toContain('data-scene-activity="untold"');
-    expect(html).toContain("3B sahne etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).toContain('data-scenes-verified="0"');
     expect(html).toContain(">3B Sahne<");
@@ -271,7 +280,9 @@ describe("the 3B Sahne panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Henüz bir sahne yapılmadı");
 
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/scenes yok (HTTP 404)." });
+    // A route this Cloud Core does not serve still says so WHILE the bus is talking:
+    // "the list is not here" and "nothing is happening" are different facts.
+    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/scenes yok (HTTP 404)." }, [SCENE_ACTIVITY("blender", "Kure", "rendering")]);
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/scenes yok (HTTP 404).");
     expect(absent).not.toContain("Henüz bir sahne yapılmadı");
@@ -518,7 +529,9 @@ describe("the 3B Sahne panel", () => {
 
     // A document, mail, artifact, app or genesis event is not a scene event.
     for (const other of [[DOCUMENT_ANALYSIS()], [MAIL_ACTIVITY()], [ARTIFACT_FACTORY()], [APP_FACTORY()], [CAPABILITY_GENESIS()]]) {
-      const html = panel(ok([]), other);
+      // A row so the panel renders at all: no rows AND no event of its own is a quiet
+      // family now (B24 req 714).
+      const html = panel(ok([row()]), other);
       expect(html).toContain('data-scene-activity="untold"');
       expect(html).toContain('data-scene-posture=""');
     }

@@ -1,0 +1,96 @@
+{
+  "batch": "B45",
+  "name": "Mail canlandırma",
+  "requirements": [
+    278,
+    335,
+    336,
+    338,
+    339,
+    340,
+    341,
+    342,
+    343,
+    344,
+    345,
+    346,
+    347,
+    348,
+    360,
+    362,
+    364
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11013 passed, 5 skipped, 21m49s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 959/959, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "no web source changed in B45; matrix-badges vitest rerun after sync (12 passed)"
+  },
+  "what_this_proves": "With a configured account, a reply keeps its thread, the inbox is indexed on the clock, the morning briefing names the unread mail, and an attachment can be listed and saved to the owner's Downloads through a single-use, hash-checked fetch - all proven against the fixture provider and a socket-level fake IMAP server. A real account is the owner's step.",
+  "measured_first": {
+    "references": "app/mail/service.py send(): DraftInput(..., references=tuple()); tests/unit/test_mail_service.py never read the sent DraftInput's references.",
+    "polling": "no poller; docs/M21_MAIL_CALENDAR_SPEC.md: 'no polling in M21'.",
+    "briefing": "BriefingService.build had no mail clause and no preference for one.",
+    "attachments": "MailMessage.attachments metadata only; fixture attachments carried a size and no bytes; no tool, route or provider method to fetch one."
+  },
+  "closed_fully": {
+    "343_346": "MailService._reply_references (original References + Message-ID, MAX_REFERENCES 50, unreadable-original fallback), used by send.",
+    "360": "app/mail/poller.py MailPoller; MailService.poll; RoutineClock 'mail' sub-tick; settings mail_poll_enabled / mail_poll_interval_s; app.state.mail_poller.",
+    "278_362": "app/briefing/service.py _mail_sentence under include_mail (model + migration 0057).",
+    "347": "providers _is_attachment_part shared; FakeMailProvider bytes kept apart; MailService.attachments; tool mail.attachments; intent MAIL_ATTACHMENTS; corpus mc.attachments.*.",
+    "348": "providers MailAttachment, attachment_from_rfc822 (bounded 25 MiB), ImapMailProvider.get_attachment, FakeMailProvider.get_attachment; app/mail/attachment_fetch.py; MailService.save_attachment; GET /v1/mail/attachments (owner) and GET /v1/mail/attachments/fetch/{token} (device); tool mail.save_attachment; intent MAIL_SAVE_ATTACHMENT; tiers SENSITIVE; catalog entries; corpus mc.save_attachment.*.",
+    "364": "unchanged route, rechecked against the new attachment words."
+  },
+  "blocked_provider": {
+    "335 336 338 339 340 341 342 344 345": "code complete and exercised against the fixture provider and the socket-level fakes; the real IMAP/SMTP account is READY_FOR_OWNER."
+  },
+  "found_on_the_way": {
+    "empty_references": "every reply broke its thread; the reply test checked the draft row, not what the sender received.",
+    "fixture_attachments_without_bytes": "the generator stated sizes for bytes that did not exist, so no test could check them; every attachment now carries deterministic bytes whose length is its size.",
+    "two_attachment_predicates": "listing and extraction would each have had their own 'is this an attachment' condition; one predicate now serves both, and a mutation that diverges them saves the wrong file.",
+    "bytes_in_receipts": "copying fixture attachment dicts verbatim would have put base64 bytes into every read receipt; the metadata strips them.",
+    "naive_stored_date": "poll read the newest indexed date back from SQLite without its timezone and handed it to the provider, which compares aware dates - a TypeError locally that PostgreSQL would have hidden; the stored value is UTC and is now made aware before use.",
+    "a_poll_test_that_could_not_fail": "the first poll test's second pass got an empty answer from the provider's since window, so counting already-indexed messages as new stayed green under mutation; a provider that answers with the whole day again (as IMAP SINCE does) now pins the already-indexed check.",
+    "open_surface": "the device's tokened GET cannot carry an owner credential; it is on its own router and in the identity test's deliberate open list."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_mail_b45.py": "References chain (real send; 100-deep bound; unreadable original); poll twice (second quiet), poll over an overlapping provider answer counts nothing twice, no account, throttle, failure retry, disabled, app wiring; briefing clause, switch-off, no account; fixture bytes; attachments list without bytes; save hands the device the provider's bytes; index bound; no device; listing = extraction; IMAP re-fetch over the fake server; device fetch single-use + hash check + unknown; owner download gated and served; safe names; token expiry and bound; routing and non-routing words; tiers; voice tools through the real registry",
+    "regression suites rerun": "test_mail_*, test_briefing_*, test_mail_calendar_*, test_identity_enforcement, test_voice_realtime_sessions, test_owner_error_language, test_voice_step_up, test_selfmodel_indexer, test_intent_daily_coverage, voice corpus: see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b45_mutate.py.",
+    "mutations": [
+      "M1 a reply leaves with no References chain again (343, 346) -> 1 failure(s).",
+      "M2 a hundred-deep thread grows the References header without bound (346) -> 1 failure(s).",
+      "M3 a poll counts messages it already indexed as new, every time (360) -> 1 failure(s).",
+      "M4 the poller never remembers when it polled, so every clock tick polls (360) -> 1 failure(s).",
+      "M5 the routine clock never runs the inbox poll (360) -> 1 failure(s).",
+      "M6 the owner cannot switch the briefing's mail clause off (278, 362) -> 1 failure(s).",
+      "M7 attachment bytes ride along in every read receipt (347) -> 1 failure(s).",
+      "M8 the extraction counts parts differently from the listing, so '2.' saves the wrong file (348) -> 1 failure(s).",
+      "M9 a fetch token can be redeemed again and again (348) -> 1 failure(s).",
+      "M10 the fetch route serves bytes whose hash is not the one the token named (348) -> 1 failure(s).",
+      "M11 'Eki kaydet' saves the owner's SECOND file instead of the first they heard (348) -> 1 failure(s).",
+      "M12 'Eki bilgisayarıma kaydet' is never routed to the save tool (348) -> 2 failure(s)."
+    ],
+    "result": "12/12 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED against the fixture provider and socket-level fake IMAP/SMTP servers. The roadmap's PROVEN_REAL (a reply sent on a real account appearing in the recipient's thread) is READY_FOR_OWNER."
+  },
+  "owner_gates": {
+    "mail_account": "store the IMAP/SMTP password with scripts/secret-store.ps1 -Set <NAME> (and scripts/cloud/set-cloud-secret.ps1 for the cloud), set the host/user settings, enable mail_send_enabled, then: 'Ali'nin son mailini oku', 'Buna cevap yaz: ...', 'Gönder'; check the recipient's client shows the reply in the thread; 'Eki bilgisayarıma kaydet'."
+  }
+}

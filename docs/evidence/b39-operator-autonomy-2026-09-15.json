@@ -1,0 +1,90 @@
+{
+  "batch": "B39",
+  "name": "Operatör özerklik döngüsü",
+  "requirements": [
+    106,
+    112,
+    113,
+    114,
+    115,
+    123,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {},
+    "web_gates": "no web change in B39; matrix-badges rerun after node scripts/web/sync-feature-matrix.mjs",
+    "run": "2026-09-15 local, third run over the B39 tree (scratchpad b39_gate3.log) after run 1 found the indexer/settings-noun defects and run 2 failed only on an import order: QUALITY GATE: PASS; API pytest 10735 passed / 5 skipped in 19m20s; staged update qualified 89 checks; web vitest/tsc/oxlint green; corpus 2330 cases green inside the run"
+  },
+  "what_this_proves": "The operator can take a multi-step, mixed desktop+browser task from one sentence and drive it as a closed loop: it observes before every decision, rebuilds the plan from what it sees, retries only what a declared taxonomy says is transient, climbs from the tree to a vision-located click exactly once and verifies that click by the tree, and otherwise stops and tells the owner which step, why and what it needs; the task is a durable row driven by a Temporal workflow, can be shown before it runs, paused, resumed and cancelled by voice or REST; and Settings, an Explorer folder, an Office document and an editor have plans that verify by something the action did not write.",
+  "measured_first": {
+    "before": "app/operator/task.py run_task: a fixed OperatorStep list, one pass, first failed postcondition ends the task; plans.py: 22 fixed plans, none for Settings/Explorer/Office/IDE; VisionProvider.describe only; no mission row, no workflow, no pause, no preview; 'Chrome'u aç ve YouTube'a gir' resolved to nothing a tool could do; the allowlist had no settings application on either side."
+  },
+  "closed_fully": {
+    "106_visual_rung": "vision.py VisionLocation/parse_location/LOCATE_QUESTION_TR; FakeVisionProvider(location=); OpenAIVisionProvider.locate; mission._decide_visual: screen.capture -> locate -> plans.visual_click(screen space) -> ui.inspect element gone; no provider -> NeedsOwner vision_unavailable.",
+    "112_loop": "mission.run_mission_step: observe (window.current+window.list) -> decide (DECIDERS by kind) -> run_task -> verify -> strategy; trail entry per round; MAX_ROUNDS_PER_STEP 6.",
+    "113_replanning": "_decide_app_open activates an already-open window; STRATEGY_REOBSERVE rebuilds the plan from a fresh observation (<=2).",
+    "114_taxonomy": "STRATEGY_BY_ERROR_CLASS (retry / reobserve / escalate / owner / stop), STRATEGY_DEFAULT owner; MAX_RETRIES_PER_STEP 2, MAX_REPLANS_PER_STEP 2.",
+    "115_escalation": "_next_rung (ui_automation/keyboard -> visual, once), _escalate -> paused + escalation {step, error_class, speech}; resume() resets the step's rounds; ledger operator.mission.escalated.",
+    "123_settings": "operator-allowlists.json + OperatorCapabilities.cs 'settings' (SystemSettings.exe); plans.UWP_HOSTED_IMAGES title identity in open_application; plans.open_settings (launch/activate -> title -> ui.set_value search -> enter -> tree); SETTINGS_PAGES.",
+    "124_explorer": "plans.explorer_open (launch -> image -> ctrl+l -> shell: target -> enter -> title in titles); EXPLORER_FOLDERS; OperatorStep.payload_from carries the observed window id.",
+    "125_office": "adapters.WORD (Document control, dialog buttons, save chord), adapters.EXCEL; plans.office_type (activate -> type -> adapter document read-back or typed count + foreground).",
+    "126_ide": "adapters.VSCODE (quick_open ctrl+p, command_palette, save); plans.ide_open_file (activate -> chord -> type -> enter -> title names the file).",
+    "127_mixed": "mission.plan_mission (connectors ve/sonra/ardından/,; nine kinds; KNOWN_SITES/domain; preview markers); _decide_navigate opens the browser session on the same device port (owner profile, fallback to the mission profile with the reason in the step note); plans.browser_navigate verifies the host by browser.inspect.",
+    "128_persistence": "mission_models.OperatorMissionRow (migration 0051), mission_service (start/approve/pause/resume/cancel/run_step_db/run_inline/fail_unstarted, active_mission single-flight), mission_workflow.OperatorMissionWorkflow + mission_activities registered on the worker.",
+    "129_pause_cancel": "intents MISSION_PAUSE/MISSION_RESUME gated on mission_state; operator.cancel/status delegate to the mission while one is active; REST pause/resume/cancel; requests on the row honoured by the next round; workflow signals.",
+    "130_preview": "Mission.preview -> awaiting_approval, plan_speech; MISSION_APPROVE ('Evet, başla' / 'Onaylıyorum') gated; REST approve; approve_db."
+  },
+  "found_on_the_way": {
+    "folder_search_stolen": "corpus doc.search.5 ('İndirilenler klasöründe bütçe dosyasını arar mısın?') routed to mission_start; the explorer segment now requires an open verb and refuses ara/bul/oku/listele/göster.",
+    "one_registrar": "test_the_registered_tools_are_the_declared_capabilities reads register_operator_tools; the mission tool is registered from there.",
+    "uwp_identity": "a Settings window belongs to ApplicationFrameHost.exe; open_application recognises UWP_HOSTED_IMAGES by title.",
+    "fake_desktop_must_move": "the first fake device kept Notepad in front after a launch and every loop test paused for the owner; the fake's foreground now follows the launch.",
+    "resume_wait_mutation": "removing the workflow's resume wait finished the workflow before the test could observe 'paused' - red as intended (time-skipping environment).",
+    "adapter_example": "test_operator_ui used winword.exe as the example of an unknown image; Word now has an adapter.",
+    "settings_noun_not_the_verb": "the first settings segment matched any token starting with 'ayar', so 'Işığı ayarla' (scene) and 'Varsayılan konumu ayarla' (location) became missions (corpus scene.light.adjust x5, location.default.set x2); the segment now requires the NOUN (ayarlar/ayarlarda/ayarları/settings).",
+    "gate_run_1": "the first full gate found two more: the self-model indexer reads a tool's name with ast and could not see operator.mission behind an imported constant (the tool now names itself with a literal held equal to the capability), and a file named ayarlar.json ('Bu dosyayı ayarlar-yedek.json adıyla kopyala', test_documents_b34) became a Settings mission because the settings segment needed only the noun - it now needs an OPEN verb and refuses file/copy/move/json words."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_operator_b39.py": "45 (planner: compound, new families x6, clarifications; taxonomy; loop: mixed mission, replan on an open app, retry, second look, visual rung, no provider, permission -> owner -> resume, cancel/preview, pause/resume; plans: payload_from window id, UWP title, explorer, IDE, Word/Excel + no window, browser host + profile fallback, vision parsing; row lifecycle x2; Temporal workflow approve+resume; routes incl. 401/404/422; router x12 + control words ungated; voice tool start/status/'Dur.' delegation; registry+tier+empty; round trip)",
+    "regression suites rerun": "test_operator_* (12 files incl. allowlists/capability vocabulary), test_voice_realtime_sessions, test_intent_daily_coverage, test_route_telemetry, test_release_schema, test_owner_error_language, test_voice_step_up, test_voice_corpus_regressions, test_alarms_wiring, test_scene_wiring: 1101 passed; after gate run 1: selfmodel indexer + documents_b34 + operator/intent suites 814 passed, corpus doc/scene/location/op/app/mail/cal families 845 passed",
+    "corpus": "test_owner_utterance_corpus (2330 cases) + test_intent_misroutes: two misroute families found and fixed (doc.search.5; scene.light.adjust x5 + location.default.set x2), the affected families rerun green (148) and the whole corpus in the gate run",
+    "devices/windows-agent": "dotnet test filter OperatorAllowlistsContractTests|AllowlistTests|ArgumentPolicyTests: 111 passed (the settings application on the device side)"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b39_mutate.py.",
+    "mutations": [
+      "M1 an application already on the desktop is launched again instead of activated (113) -> 1 failure(s).",
+      "M2 a permission refusal is retried instead of handed to the owner (114/115) -> 1 failure(s).",
+      "M3 the loop never climbs to the visual rung (106/115) -> 1 failure(s).",
+      "M4 a missing vision provider is reported as a target not found, not as the provider missing (106) -> 1 failure(s).",
+      "M5 a preview mission runs without the owner's yes (130) -> 1 failure(s).",
+      "M6 a pause request between steps is ignored (129) -> 1 failure(s).",
+      "M7 a step's observed-value payload is never resolved, so a later step names no window (123/124) -> 1 failure(s).",
+      "M8 a second mission is accepted while one is in flight (128) -> 1 failure(s).",
+      "M9 a UWP-hosted window (Settings) is never recognised after its launch (123) -> 1 failure(s).",
+      "M10 every operator sentence becomes a mission, stealing APP_OPEN / TYPE_TEXT (127) -> 4 failure(s).",
+      "M11 the workflow resumes a paused mission on its own, without the owner's word (129) -> 1 failure(s)."
+    ],
+    "result": "11/11 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED: the loop over the scripted device (the same FakeDeviceAction that refuses a bad window id as the companion does), the workflow in the real Temporal test environment, the routes and the voice tool through create_app, the device-side allowlist through the compiled C# tests. The roadmap's PROVEN_REAL (a mixed browser+desktop mission verified end to end on the owner's desktop) and the lab measurement of the four new plans are READY_FOR_OWNER (checkpoint 16)."
+  },
+  "owner_gates": {
+    "lab_measurement": "READY_FOR_OWNER (checkpoint 16): on this desktop, with the companion's operator enabled, say 'Ayarlarda Bluetooth'u aç', 'Dosya Gezgini'nde İndirilenler klasörünü aç', open Word and say 'Word'e merhaba yaz', open VS Code and say 'VS Code'da main.py dosyasını aç'; adjust SETTINGS_PAGES / the adapters to what the tree shows.",
+    "vision_provider": "the fifth rung needs PAGENTOS_OPENAI_API_KEY (vision_provider=auto); without it the loop stops for the owner by name.",
+    "production_round": "a mixed mission ('Chrome'u aç ve YouTube'a gir') on the deployed Cloud Core with the owner's enrolled Chrome (Karar 0)."
+  }
+}

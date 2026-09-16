@@ -1,7 +1,8 @@
 """``calendar_index`` / ``calendar_proposals`` (docs/M21_MAIL_CALENDAR_SPEC.md §3, ADR-0084).
 
 Same discipline as ``app.mail.models``: ``calendar_index`` grows only from owner-initiated
-reads (``agenda``/``find_slot``), never a background sync; portable types throughout.
+reads (``agenda``/``find_slot``) and - since B46 - the clock's two-week mirror
+(``source='sync'``); portable types throughout.
 """
 
 from __future__ import annotations
@@ -37,7 +38,13 @@ PROPOSAL_STATES: tuple[str, ...] = (
 
 PROPOSAL_KIND_CREATE = "create"
 PROPOSAL_KIND_RESCHEDULE = "reschedule"
-PROPOSAL_KINDS: tuple[str, ...] = (PROPOSAL_KIND_CREATE, PROPOSAL_KIND_RESCHEDULE)
+#: B46 (req 354): a cancel, only under ``calendar_cancel_policy=confirm``.
+PROPOSAL_KIND_CANCEL = "cancel"
+PROPOSAL_KINDS: tuple[str, ...] = (
+    PROPOSAL_KIND_CREATE,
+    PROPOSAL_KIND_RESCHEDULE,
+    PROPOSAL_KIND_CANCEL,
+)
 
 
 class CalendarIndexRow(Base):
@@ -56,6 +63,11 @@ class CalendarIndexRow(Base):
     end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     all_day: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: B46 (req 359, 361): ``read`` (the owner heard it) or ``sync`` (the clock's mirror).
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="read")
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: B46 (req 358): when this occurrence's reminder was raised - once each.
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class CalendarProposalRow(Base):
@@ -73,6 +85,9 @@ class CalendarProposalRow(Base):
     start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     location: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    #: B46 (req 356, 357): the rule and reminder the owner heard in the read-back.
+    rrule: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    reminder_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     #: ``[{uid, summary}]`` of every existing event this proposal would overlap — named in
     #: the read-back verbatim (spec §3), never silently dropped.
     conflicts_json: Mapped[list[Any]] = mapped_column(
@@ -102,6 +117,7 @@ class CalendarProposalRow(Base):
 
 __all__ = [
     "PROPOSAL_KINDS",
+    "PROPOSAL_KIND_CANCEL",
     "PROPOSAL_KIND_CREATE",
     "PROPOSAL_KIND_RESCHEDULE",
     "PROPOSAL_STATES",

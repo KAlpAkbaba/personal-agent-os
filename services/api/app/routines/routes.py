@@ -29,6 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts.runtime import ArtifactRuntime
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.routines import service as routines_service
 from app.routines.actions import ACTION_KINDS, InvalidActionDescriptor
@@ -253,7 +254,7 @@ async def create_routine(request: Request, body: CreateRoutineRequest) -> dict[s
     try:
         routine = await asyncio.to_thread(write)
     except _VALIDATION_ERRORS as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     return _routine_dict(routine)
 
 
@@ -297,9 +298,9 @@ async def _writing(write: Any) -> Routine:
     try:
         return await asyncio.to_thread(write)
     except routines_service.RoutineNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     except IllegalRoutineTransition as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=owner_detail("lifecycle_violation")) from exc
 
 
 @router.post("/{routine_id}/cancel")

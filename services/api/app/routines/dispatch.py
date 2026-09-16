@@ -449,6 +449,8 @@ BROWSER_ACTION_ALLOWLIST: frozenset[str] = frozenset(
         "snapshot",
         "screenshot",
         "download",
+        # B31 req 181: the operation behind the worker's ``uploads`` flag (contract v1.5).
+        "upload",
         "search",
         "fetch_evidence",
         # BROWSER_CAPABILITIES.md v1.2 (M18.3 spec §4): the four media operations the

@@ -169,6 +169,16 @@ export type StartResearchInput = {
   /** Owner-handoff mode (spec §5a): the /research page always sends `true`. */
   interactive?: boolean;
   interactive_wait_s?: number;
+  /** B31 req 192: "quick" | "standard" | "deep" — chosen explicitly, never inferred. */
+  research_mode?: ResearchMode;
+};
+
+export type ResearchMode = "quick" | "standard" | "deep";
+export const RESEARCH_MODES: readonly ResearchMode[] = ["quick", "standard", "deep"];
+export const RESEARCH_MODE_LABEL: Record<ResearchMode, string> = {
+  quick: "Hızlı",
+  standard: "Standart",
+  deep: "Derin",
 };
 
 export async function startResearch(req: StartResearchInput): Promise<StartResearchResponse> {
@@ -179,6 +189,7 @@ export async function startResearch(req: StartResearchInput): Promise<StartResea
   if (req.synthesis) body.synthesis = req.synthesis;
   if (req.interactive != null) body.interactive = req.interactive;
   if (req.interactive_wait_s != null) body.interactive_wait_s = req.interactive_wait_s;
+  if (req.research_mode) body.research_mode = req.research_mode;
   const response = await apiFetch("/v1/research", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -200,6 +211,22 @@ export async function getResearchTask(taskId: string): Promise<ResearchTaskDetai
 
 export async function cancelResearch(taskId: string): Promise<void> {
   const response = await apiFetch(`/v1/research/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+  });
+  if (!response.ok) throw await toApiError(response);
+}
+
+/** B31 req 203: the run holds at its next stage boundary; 409 when nothing is running. */
+export async function pauseResearch(taskId: string): Promise<void> {
+  const response = await apiFetch(`/v1/research/${encodeURIComponent(taskId)}/pause`, {
+    method: "POST",
+  });
+  if (!response.ok) throw await toApiError(response);
+}
+
+/** B31 req 204: the paused run continues; 409 when it was not paused. */
+export async function resumeResearch(taskId: string): Promise<void> {
+  const response = await apiFetch(`/v1/research/${encodeURIComponent(taskId)}/resume`, {
     method: "POST",
   });
   if (!response.ok) throw await toApiError(response);

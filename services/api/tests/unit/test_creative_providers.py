@@ -21,7 +21,13 @@ from app.creative.providers import (
     detect_mspaint,
     installed_capability_union,
 )
-from app.creative.spec import TOOL_FIGMA, TOOL_ILLUSTRATOR, TOOL_PAINT, TOOL_PHOTOSHOP
+from app.creative.spec import (
+    TOOL_FIGMA,
+    TOOL_ILLUSTRATOR,
+    TOOL_LAYERED,
+    TOOL_PAINT,
+    TOOL_PHOTOSHOP,
+)
 
 
 def test_detect_mspaint_never_launches_a_process() -> None:
@@ -117,7 +123,14 @@ def test_figma_with_token_is_ok() -> None:
 
 def test_default_providers_covers_every_tool() -> None:
     providers = default_providers()
-    assert set(providers) == {TOOL_PAINT, TOOL_PHOTOSHOP, TOOL_ILLUSTRATOR, TOOL_FIGMA}
+    # B43 (req 496): the layered tool is installed by construction beside the four.
+    assert set(providers) == {
+        TOOL_PAINT,
+        TOOL_PHOTOSHOP,
+        TOOL_ILLUSTRATOR,
+        TOOL_FIGMA,
+        TOOL_LAYERED,
+    }
 
 
 def test_installed_capability_union_is_only_the_installed_ones() -> None:

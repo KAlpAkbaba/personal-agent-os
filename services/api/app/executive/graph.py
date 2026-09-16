@@ -22,7 +22,10 @@ from __future__ import annotations
 from app.executive.refs import parse_reference
 from app.executive.spec import (
     MAX_STEPS,
+    PLANNERS,
     PRECONDITION_STEP_DONE,
+    PRECONDITION_STEP_FAILED,
+    PRECONDITION_STEP_VERIFIED,
     RETRYABLE_ERROR_CLASSES,
     RISK_HIGH_RISK,
     STEP_KIND_PROFILES,
@@ -50,6 +53,8 @@ def validate_graph(graph: TaskGraph) -> None:
     a graph is either well-formed on its own terms or it is not."""
     reasons: list[str] = []
 
+    if graph.planner is not None and graph.planner not in PLANNERS:
+        reasons.append(f"graph names an unknown planner {graph.planner!r}")
     if len(graph.steps) > MAX_STEPS:
         reasons.append(f"graph has {len(graph.steps)} steps, over the bound of {MAX_STEPS}")
 
@@ -122,13 +127,22 @@ def _validate_step(step: Step, index: int, all_steps: list[Step]) -> list[str]:
                 f"which is not an EARLIER step (DAG violation)"
             )
 
-    if step.precondition.check == PRECONDITION_STEP_DONE:
+    if step.precondition.check in (
+        PRECONDITION_STEP_DONE,
+        PRECONDITION_STEP_FAILED,
+        PRECONDITION_STEP_VERIFIED,
+    ):
         arg = step.precondition.arg
         if arg is None or arg not in earlier_ids:
             reasons.append(
-                f"step {step.id!r}: precondition step_done names {arg!r}, "
+                f"step {step.id!r}: precondition {step.precondition.check} names {arg!r}, "
                 f"not an earlier step in this graph"
             )
+    # B38 (req 555): a loop with nothing to reach is a loop for ever - refused.
+    if step.repeat.max_rounds > 1 and step.postcondition.min is None:
+        reasons.append(
+            f"step {step.id!r}: repeat.max_rounds > 1 needs a postcondition.min to reach"
+        )
 
     return reasons
 

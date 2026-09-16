@@ -70,9 +70,10 @@ from app.evolution.sandbox import SandboxPolicy
 from app.evolution.skills import SkillLayout, dump_manifest_yaml, read_manifest
 from app.evolution.supply_chain import scan_dependencies
 from app.evolution.task_resumption import CapabilityDispatcher, DispatchResult
-from app.genesis.adapter import AdapterSpec, HttpAdapterGenerator
-from app.genesis.interface import InterfaceDescription, fetch_interface
+from app.genesis.adapter import DEFAULT_VERSION, AdapterSpec, HttpAdapterGenerator
+from app.genesis.interface import HostPredicate, InterfaceDescription, fetch_interface
 from app.genesis.models import GenesisRun
+from app.genesis.security_gate import review_layout
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import GENESIS_EVENT_TYPE_BY_STATE, SUBSYSTEM_GENESIS
 from app.logging import get_logger
@@ -135,8 +136,16 @@ class GenesisService:
         evaluator: SkillEvaluator | None = None,
         reviewer_sandbox: SandboxPolicy | None = None,
         budget: ResourceBudget | None = None,
+        host_allowed: HostPredicate | None = None,
+        adapter_model: Any | None = None,
+        model_generation_enabled: bool | Callable[[], bool] = False,
     ) -> None:
         self._session_factory = session_factory
+        # B36 req 565: which non-loopback hosts may be researched (owner-authorized).
+        self.host_allowed = host_allowed
+        # B36 req 577: the model seam, asked only under the owner's flag.
+        self.adapter_model = adapter_model
+        self._model_generation_enabled = model_generation_enabled
         self.registry = registry
         # spec §5 "capability_missing": the gap is recorded through the SAME
         # M7 decision tree every other missing-capability request uses —
@@ -160,6 +169,11 @@ class GenesisService:
 
     # ------------------------------------------------------------- request
 
+    @property
+    def model_generation_enabled(self) -> bool:
+        flag = self._model_generation_enabled
+        return bool(flag() if callable(flag) else flag) and self.adapter_model is not None
+
     def request(
         self,
         *,
@@ -169,6 +183,7 @@ class GenesisService:
         arguments: dict[str, Any] | None = None,
         session_id: str | None = None,
         turn: int | None = None,
+        new_version: bool = False,
     ) -> dict[str, Any]:
         """Drives ONE ``GenesisRun`` synchronously from ``capability_missing``
         through to ``verified``/``awaiting_approval``/``failed``.
@@ -181,7 +196,7 @@ class GenesisService:
         capability_id = f"{interface_name}.{operation_id}"
 
         existing = self.registry.resolve(capability_id)
-        if existing is not None:
+        if existing is not None and not new_version:
             return self._use_and_verify_existing(capability_id, arguments, session_id=session_id)
 
         active = self._find_active_run(capability_id)
@@ -199,6 +214,17 @@ class GenesisService:
             session_id=session_id,
             gap_id=gap_id,
         )
+        if existing is not None:
+            # B36 req 571: a new version of a capability that already resolves - the
+            # next patch version after the incumbent's; the registry supersedes the
+            # incumbent on registration and keeps it rollback-capable (req 572).
+            self._patch_evidence(
+                run,
+                {
+                    "requested_version": _next_version(str(existing.get("version") or "")),
+                    "supersedes_version": existing.get("version"),
+                },
+            )
         return self._drive(run, arguments, session_id=session_id, turn=turn)
 
     def _record_gap(
@@ -237,12 +263,15 @@ class GenesisService:
             interface = self._research(run)
             spec = self._design(run, interface)
             layout, skill_version_id = self._build(run, spec, started)
+            self._secure(run, layout, skill_version_id, spec)
             self._test(run, layout, skill_version_id, spec, started)
             authority_class, side_effect_class, mutation_authorized = self._classify(run, spec)
         except EvolutionError as exc:
             return self._fail(run, exc)
 
-        if side_effect_class == "mutate_external" and not mutation_authorized:
+        model_generated = bool((run.evidence_json or {}).get("model_generated"))
+        if (side_effect_class == "mutate_external" and not mutation_authorized) or model_generated:
+            # B36 req 580: what the model wrote waits for the owner whatever it does.
             return self._park_awaiting_approval(run, arguments, session_id=session_id, turn=turn)
         if mutation_authorized:
             # _classify ran AFTER _design built `spec`, so the manifest
@@ -273,7 +302,9 @@ class GenesisService:
 
     def _research(self, run: GenesisRun) -> InterfaceDescription:
         self._transition(run, "researching")
-        interface = fetch_interface(run.evidence_json["interface_url"])
+        interface = fetch_interface(
+            run.evidence_json["interface_url"], host_allowed=self.host_allowed
+        )
         self._patch_evidence(run, {"interface": interface.to_dict()})
         run.interface_json = interface.to_dict()
         self._commit(run)
@@ -281,6 +312,11 @@ class GenesisService:
 
     def _design(self, run: GenesisRun, interface: InterfaceDescription) -> AdapterSpec:
         self._transition(run, "designing")
+        requested = (run.evidence_json or {}).get("requested_version")
+        if isinstance(requested, str) and requested:
+            return AdapterSpec(
+                interface=interface, operation_id=run.operation_id, version=requested
+            )
         spec = AdapterSpec(interface=interface, operation_id=run.operation_id)
         return spec
 
@@ -292,8 +328,22 @@ class GenesisService:
         self.sandbox.prepare()
         work_dir = Path(tempfile.mkdtemp(prefix="genesis-", dir=str(self.sandbox.root)))
         self.sandbox.ensure_within(work_dir, label="genesis workspace")
-        generator = HttpAdapterGenerator()
+        generator = HttpAdapterGenerator(
+            model=self.adapter_model if self.model_generation_enabled else None
+        )
         layout = generator.generate(spec, work_dir)
+        self._patch_evidence(
+            run,
+            {
+                "generator": generator.generator_name,
+                "model_generated": generator.model_generated,
+                **(
+                    {"model": getattr(self.adapter_model, "name", "model")}
+                    if generator.model_generated
+                    else {}
+                ),
+            },
+        )
         self.sandbox.ensure_within(layout.root, label="generated adapter root")
         missing = layout.missing_paths()
         if missing:
@@ -324,6 +374,28 @@ class GenesisService:
             },
         )
         return layout, skill_version_id
+
+    def _secure(
+        self,
+        run: GenesisRun,
+        layout: SkillLayout,
+        skill_version_id: uuid.UUID,
+        spec: AdapterSpec,
+    ) -> None:
+        """B36 req 579/680: the security gate on everything the generator (or the
+        model) wrote, BEFORE a test runs it. Red rejects the skill version and fails the
+        run with ``security_refused``; the findings stay in the evidence."""
+        verdict = review_layout(layout, allowed_hosts=(spec.host,))
+        self._patch_evidence(run, {"security_review": verdict.as_dict()})
+        if not verdict.passed:
+            self.registry.reject_skill_version(
+                skill_version_id, "security gate: " + verdict.summary()[:400]
+            )
+            raise EvolutionError(
+                EvolutionErrorClass.SECURITY_REFUSED,
+                "genesis adapter refused by the security gate: " + verdict.summary(),
+                details={"findings": [f.as_dict() for f in verdict.findings[:12]]},
+            )
 
     def _test(
         self,
@@ -523,8 +595,13 @@ class GenesisService:
         published = self._publish(layout)
         manifest = spec.capability_manifest()
         manifest["source_ref"] = str(published)
+        evidence = run.evidence_json or {}
         manifest["provenance"] = {
-            "generator": HttpAdapterGenerator.name,
+            "generator": str(evidence.get("generator") or HttpAdapterGenerator.name),
+            "model_generated": bool(evidence.get("model_generated")),
+            "security_review_passed": bool(
+                (evidence.get("security_review") or {}).get("passed", False)
+            ),
             "published_at": _utcnow().isoformat(),
             "genesis_run_id": str(run.id),
         }
@@ -724,9 +801,15 @@ class GenesisService:
         # Reaching here means approval was just granted: the manifest built
         # below must carry authority_class=mutating_authorized_asset, never
         # the AdapterSpec default (mutating_unauthorized) — see the matching
-        # comment in _drive.
+        # comment in _drive. B36: a READ operation parked only because the model
+        # wrote it (req 580) stays read_only - approval of the code is not an
+        # authorization of a mutation.
+        mutating = run.side_effect_class == "mutate_external"
         spec = AdapterSpec(
-            interface=interface, operation_id=run.operation_id, authorized_asset=interface.name
+            interface=interface,
+            operation_id=run.operation_id,
+            version=str(evidence.get("version") or DEFAULT_VERSION),
+            authorized_asset=interface.name if mutating else None,
         )
         layout = SkillLayout(
             root=Path(evidence["workspace_root"]),
@@ -735,7 +818,7 @@ class GenesisService:
             version=evidence["version"],
         )
         skill_version_id = uuid.UUID(evidence["skill_version_id"])
-        run.authority_class = "mutating_authorized_asset"
+        run.authority_class = "mutating_authorized_asset" if mutating else "read_only"
         arguments = dict(evidence.get("pending_arguments") or {})
         started = _utcnow()
         try:
@@ -750,6 +833,77 @@ class GenesisService:
         finally:
             self._cleanup_workspace(run)
         return self._run_dict(run)
+
+    # ------------------------------------------------- B36: versions, rollback, use
+
+    def versions(self, capability_id: str) -> dict[str, Any]:
+        """Req 571: every version the registry holds for one capability, the current
+        one named."""
+        capability = self.registry.get_capability(capability_id)
+        if capability is None:
+            raise EvolutionError(
+                EvolutionErrorClass.NOT_FOUND, f"capability {capability_id} is not registered"
+            )
+        return {
+            "capability": capability,
+            "versions": self.registry.list_skill_versions(capability_id=capability_id),
+        }
+
+    def rollback(self, capability_id: str, version: str) -> dict[str, Any]:
+        """Req 572: the registry's own rollback - a previously REGISTERED version
+        serves again, the current one is superseded, nothing is deleted."""
+        restored = self.registry.rollback_to(capability_id, version)
+        self._ledger_capability(capability_id, "rollback", {"to_version": version})
+        return restored
+
+    def deactivate(self, capability_id: str) -> dict[str, Any]:
+        """Req 570: the capability stops resolving (no dispatch, no voice) until it is
+        activated again; its versions and history stay."""
+        updated = self.registry.set_capability_status(capability_id, "deprecated")
+        self._ledger_capability(capability_id, "deactivate", {})
+        return updated
+
+    def activate(self, capability_id: str) -> dict[str, Any]:
+        """Req 570: back to production through the registry's ONE gate onto it - the
+        current registered version is re-served by the rollback path (never a status
+        write, which the registry refuses for 'production')."""
+        capability = self.registry.get_capability(capability_id)
+        if capability is None:
+            raise EvolutionError(
+                EvolutionErrorClass.NOT_FOUND, f"capability {capability_id} is not registered"
+            )
+        restored = self.registry.rollback_to(capability_id, str(capability["version"]))
+        self._ledger_capability(capability_id, "activate", {})
+        return restored
+
+    def use(self, capability_id: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Req 573: dispatch a REGISTERED capability (the production use path the voice
+        tool takes when the registry resolves), or refuse by name."""
+        if self.registry.resolve(capability_id) is None:
+            raise EvolutionError(
+                EvolutionErrorClass.CAPABILITY_MISSING,
+                f"capability {capability_id} does not resolve",
+            )
+        return self._use_and_verify_existing(capability_id, dict(arguments or {}), session_id=None)
+
+    def _ledger_capability(self, capability_id: str, action: str, detail: dict[str, Any]) -> None:
+        try:
+            with self._session_factory() as session:
+                ledger_service.record(
+                    session,
+                    ledger_service.ActivityEvent(
+                        event_type=GENESIS_EVENT_TYPE_BY_STATE["registering"],
+                        subsystem=SUBSYSTEM_GENESIS,
+                        action=f"genesis.capability.{action}",
+                        factual_summary=f"genesis {capability_id} {action}",
+                        occurred_at=_utcnow(),
+                        detail_json={"capability_id": capability_id, **detail},
+                        source="live",
+                        source_ref=f"genesis.capability.{action}:{uuid.uuid4()}",
+                    ),
+                )
+        except Exception:  # noqa: BLE001 - evidence, never a dependency of the act
+            logger.warning("genesis_capability_ledger_failed", action=action)
 
     def cancel(self, run_id: uuid.UUID) -> dict[str, Any]:
         run = self._require(run_id)
@@ -1057,6 +1211,13 @@ class GenesisService:
 
     def _run_dict(self, run: GenesisRun) -> dict[str, Any]:
         return _run_dict(run)
+
+
+def _next_version(current: str) -> str:
+    parts = current.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return DEFAULT_VERSION
+    return f"{parts[0]}.{parts[1]}.{int(parts[2]) + 1}"
 
 
 def _run_dict(run: GenesisRun) -> dict[str, Any]:

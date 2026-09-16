@@ -185,8 +185,21 @@ def technical_speech(report_json: dict[str, Any]) -> str:
         if diag.waves:
             mode_bits.append(f"{cardinal(diag.waves)} dalga")
         parts.append(_tr_list(mode_bits).capitalize() + ".")
-    if diag.synthesis_provider:
+    # B31 req 207: a substitution is said as one - which provider was asked for, which
+    # answered, and why - never only the name that happened to answer.
+    fallback = diag.synthesis_fallback
+    if fallback:
+        parts.append(
+            f"Sentez sağlayıcısı {fallback.get('used') or diag.synthesis_provider}; istenen "
+            f"{fallback.get('requested')} {cardinal(int(fallback.get('attempts') or 0))} "
+            "denemede kabul edilmedi, yedeğe geçildi."
+        )
+    elif diag.synthesis_provider:
         parts.append(f"Sentez sağlayıcısı {diag.synthesis_provider}.")
+    if diag.search_fallbacks:
+        parts.append(
+            f"{cardinal(diag.search_fallbacks)} arama sorgusu yedek sağlayıcıyla cevaplandı."
+        )
     return " ".join(parts)
 
 

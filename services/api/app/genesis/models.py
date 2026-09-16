@@ -106,3 +106,44 @@ class GenesisRun(Base):
 
 
 __all__ = ["AUTHORITY_CLASSES", "GENESIS_STATES", "SIDE_EFFECT_CLASSES", "GenesisRun"]
+
+
+# ------------------------------------------------------------------ B36: the catalogue
+
+CATALOGUE_SOURCE_OWNER_REST = "owner_rest"
+CATALOGUE_SOURCE_OWNER_VOICE = "owner_voice"
+CATALOGUE_SOURCE_DISCOVERY = "discovery"
+CATALOGUE_SOURCES: tuple[str, ...] = (
+    CATALOGUE_SOURCE_OWNER_REST,
+    CATALOGUE_SOURCE_OWNER_VOICE,
+    CATALOGUE_SOURCE_DISCOVERY,
+)
+
+
+class GenesisCatalogueRow(Base):
+    """One controllable interface the OWNER registered (B36 req 562/563): the spoken
+    phrases that name it, the URL its description is fetched from, and the verb aliases
+    of its operations. The in-memory ``GenesisInterfaceCatalogue`` the router reads is
+    built from these rows at startup and after every registration; before B36 the
+    catalogue had no registration surface and was empty in every production process."""
+
+    __tablename__ = "genesis_catalogue"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
+    target_phrases_json: Mapped[list[Any]] = mapped_column(JSONColumn, nullable=False, default=list)
+    operations_json: Mapped[list[Any]] = mapped_column(JSONColumn, nullable=False, default=list)
+    source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=CATALOGUE_SOURCE_OWNER_REST
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    #: The sha256 of the description last fetched from ``url`` (discovery / refresh).
+    spec_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

@@ -164,6 +164,7 @@ def refused(reason: str, **extra: Any) -> DeviceRunResult:
 _OPERATOR_WINDOW: dict[str, Any] = {
     "window_id": window_id(1),
     "pid": 4242,
+    "image": "notepad.exe",
     "title": "Adsız - Not Defteri",
     "state": "normal",
     "foreground": True,
@@ -177,6 +178,158 @@ _OPERATOR_WINDOW: dict[str, Any] = {
 #: the "IP adresimi göster" and "Bilgisayarın adı ne?" postconditions
 #: (``app.operator.plans.shell_query``); the tool reads only the first line for the
 #: hostname's spoken value.
+def _observed_window(payload: dict[str, Any]) -> dict[str, Any]:
+    return {**_OPERATOR_WINDOW, "window_id": str(payload.get("window_id") or window_id(1))}
+
+
+def _key_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(
+        key=payload.get("key"),
+        window_id=payload.get("window_id"),
+        observed={"window": _observed_window(payload)},
+    )
+
+
+def _shortcut_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(
+        keys=list(payload.get("keys") or []),
+        window_id=payload.get("window_id"),
+        observed={"window": _observed_window(payload)},
+    )
+
+
+def _pointer_result(payload: dict[str, Any]) -> DeviceRunResult:
+    """Window space maps onto a fixed fake rect at (100, 100), the way the companion adds
+    the window's rect to window-space coordinates; the cursor is read back exactly there."""
+    x, y = int(payload.get("x") or 0), int(payload.get("y") or 0)
+    if payload.get("space") == "screen":
+        screen_x, screen_y = x, y
+    else:
+        screen_x, screen_y = 100 + x, 100 + y
+    result: dict[str, Any] = {
+        "x": x,
+        "y": y,
+        "space": payload.get("space") or "window",
+        "screen_x": screen_x,
+        "screen_y": screen_y,
+        "window_id": payload.get("window_id"),
+        "observed": {
+            "cursor": {"x": screen_x, "y": screen_y},
+            "window": _observed_window(payload),
+        },
+    }
+    if "delta" in payload:
+        result["delta"] = payload["delta"]
+    return ok(**result)
+
+
+def _ui_invoke_result(payload: dict[str, Any]) -> DeviceRunResult:
+    name = str(payload.get("name") or payload.get("automation_id") or "Tamam")
+    element = {"automation_id": "", "name": name, "control_type": "Button", "enabled": True}
+    return ok(
+        invoked=True,
+        method="Invoke",
+        element=element,
+        window_id=payload.get("window_id"),
+        observed={
+            "element": None,
+            "element_present": False,
+            "window": _observed_window(payload),
+        },
+    )
+
+
+def _ui_set_value_result(payload: dict[str, Any]) -> DeviceRunResult:
+    value = str(payload.get("value") or "")
+    return ok(
+        element={"automation_id": "15", "name": "Metin Düzenleyici", "control_type": "Edit"},
+        observed_value=value,
+        window_id=payload.get("window_id"),
+        observed={"value": value, "window": _observed_window(payload)},
+    )
+
+
+def _ui_select_result(payload: dict[str, Any]) -> DeviceRunResult:
+    item = str(payload.get("item") or "")
+    return ok(
+        element={"automation_id": "", "name": "Liste", "control_type": "List"},
+        selected=item,
+        window_id=payload.get("window_id"),
+        observed={"selected": [item], "window": _observed_window(payload)},
+    )
+
+
+def _window_move_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(
+        window={
+            **_OPERATOR_WINDOW,
+            "window_id": str(payload.get("window_id") or window_id(1)),
+            "rect": {"x": payload.get("x"), "y": payload.get("y"), "width": 800, "height": 600},
+        }
+    )
+
+
+def _window_resize_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(
+        window={
+            **_OPERATOR_WINDOW,
+            "window_id": str(payload.get("window_id") or window_id(1)),
+            "rect": {
+                "x": 100,
+                "y": 100,
+                "width": payload.get("width"),
+                "height": payload.get("height"),
+            },
+        }
+    )
+
+
+#: The processes the fake desktop runs: one Notepad, always; a process.stop marks its image
+#: stopped so the observe step after it sees none left (a fake that kept listing it would
+#: turn every stop into a postcondition failure - and one that never listed it would prove
+#: nothing about the stop).
+_STOPPED_IMAGES: set[str] = set()
+
+
+def _process_list_result(payload: dict[str, Any]) -> DeviceRunResult:
+    wanted = str(payload.get("name") or "").lower()
+    running = [
+        {"pid": 4242, "image": "notepad.exe", "name": "notepad", "window_count": 1},
+        {"pid": 9088, "image": "chrome.exe", "name": "chrome", "window_count": 2},
+    ]
+    running = [p for p in running if p["image"] not in _STOPPED_IMAGES]
+    if wanted:
+        running = [p for p in running if p["image"] == wanted or p["name"] == wanted]
+    return ok(processes=running, observed={"count": len(running)})
+
+
+def _process_stop_result(payload: dict[str, Any]) -> DeviceRunResult:
+    name = str(payload.get("name") or "")
+    _STOPPED_IMAGES.add(name.lower())
+    return ok(stopped=True, name=name, method="wm_close")
+
+
+def _service_status_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(name=payload.get("name"), state="Running", start_mode="Auto")
+
+
+def _service_restart_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(restarted=True, name=payload.get("name"), state="Running")
+
+
+def _terminal_result(payload: dict[str, Any]) -> DeviceRunResult:
+    """``whoami`` answers DOMAIN\\user (B30 req 118); anything else the static line pair
+    the hostname and IP postconditions both accept (see the note above)."""
+    if str(payload.get("command") or "").strip().lower() == "whoami":
+        return ok(exit_code=0, stdout="mail\\alp\r\n", stderr="", duration_ms=9)
+    return ok(
+        exit_code=0,
+        stdout="MAIL\r\nIPv4 Address. . . . . . . . . . . : 192.168.1.50\r\n",
+        stderr="",
+        duration_ms=12,
+    )
+
+
 def _activate_result(payload: dict[str, Any]) -> DeviceRunResult:
     """Echoes back the requested ``window_id`` (M19: a plan that resolved the PREVIOUS
     window's id must see THAT id come back foreground, not always the same one)."""
@@ -185,6 +338,7 @@ def _activate_result(payload: dict[str, Any]) -> DeviceRunResult:
 
 
 def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
+    _STOPPED_IMAGES.clear()  # a fresh desktop per harness: nothing stopped yet
     return {
         "app.launch": ok(pid=4242, window_id=window_id(1), title="Adsız - Not Defteri"),
         "window.current": ok(window=dict(_OPERATOR_WINDOW)),
@@ -197,6 +351,38 @@ def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
         "window.restore": ok(window={**_OPERATOR_WINDOW, "state": "normal"}),
         "window.close": ok(closed=True),
         "keyboard.type": ok(typed_chars=8, window_id=window_id(1)),
+        # B28 req 92-98: the shapes docs/M19_DIGITAL_OPERATOR_SPEC.md §2 gives for the
+        # input family - each echoes what it was asked and re-observes the foreground and
+        # the cursor, exactly where the payload put it (the plan's postcondition reads
+        # both back; a fake that answered "ok" with nothing would prove nothing).
+        "keyboard.key": _key_result,
+        "keyboard.shortcut": _shortcut_result,
+        "pointer.move": _pointer_result,
+        "pointer.click": _pointer_result,
+        "pointer.double_click": _pointer_result,
+        "pointer.right_click": _pointer_result,
+        "pointer.scroll": _pointer_result,
+        # B29 req 100/101/103: the shapes ``OperatorCapabilities.UiInvoke/UiSetValue/
+        # UiSelect`` return. The invoke's element is GONE afterwards (a dialog button that
+        # closed its dialog) - the plan's own postcondition reads before/after; the set
+        # value and the selection are read back through the device's own patterns.
+        "ui.invoke": _ui_invoke_result,
+        "ui.set_value": _ui_set_value_result,
+        "ui.select": _ui_select_result,
+        # B30 req 82/84/85/119-122: the shapes the companion returns for geometry, app
+        # close, processes and services - each re-observed as the plan's postcondition reads
+        # it (a rect within 8 px, a closed flag, a process list, a service state).
+        "window.move": _window_move_result,
+        "window.resize": _window_resize_result,
+        "app.close": ok(closed=True, method="wm_close", observed={"process_alive": False}),
+        "process.list": _process_list_result,
+        "process.stop": _process_stop_result,
+        "service.status": _service_status_result,
+        "service.restart": _service_restart_result,
+        # B27 req 735: the shape docs/M19_DIGITAL_OPERATOR_SPEC.md §2 gives for
+        # ``screen.capture`` - a real (one-pixel) PNG, so the tool's own decode-and-hash
+        # runs on genuine bytes rather than on a sentinel string.
+        "screen.capture": ok(width=1, height=1, png_base64=ONE_PIXEL_PNG_B64),
         # The shape a REAL ui.inspect of a Notepad window returns (captured from the
         # owner's device, 2026-09-09): the window root carries no value of its own and the
         # text sits one node down in the edit control. The flat root-with-a-value this
@@ -216,12 +402,7 @@ def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
                 ],
             }
         ),
-        "terminal.execute": ok(
-            exit_code=0,
-            stdout="MAIL\r\nIPv4 Address. . . . . . . . . . . : 192.168.1.50\r\n",
-            stderr="",
-            duration_ms=12,
-        ),
+        "terminal.execute": _terminal_result,
     }
 
 

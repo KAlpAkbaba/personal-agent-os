@@ -64,6 +64,9 @@ def _error_response(exc: ExecutiveServiceError) -> HTTPException:
 @router.post("/runs")
 async def start_run(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
     directive = str(payload.get("directive") or "").strip()
+    graph = payload.get("graph") if isinstance(payload.get("graph"), dict) else None
+    if graph is not None and not directive:
+        directive = str(graph.get("goal") or "").strip()
     if not directive:
         raise HTTPException(
             status_code=422, detail={"code": "invalid_argument", "message": "directive is required"}
@@ -90,6 +93,7 @@ async def start_run(request: Request, payload: dict[str, Any]) -> dict[str, Any]
                 folder=folder if isinstance(folder, str) else None,
                 source="rest",
                 session_id=owner_session_id,
+                graph=graph,
             )
             try:
                 await executive_service.start_run_workflow(
@@ -156,6 +160,39 @@ async def explain_run(request: Request, run_id: uuid.UUID) -> dict[str, Any]:
 #: send — a request that was always going to be refused must never depend on a live
 #: Temporal server to say so (found via this route's own unit tests: a refusal used to
 #: fail on a connection attempt instead of answering 422).
+
+
+@router.get("/runs/{run_id}/plan")
+async def plan_of_run(request: Request, run_id: uuid.UUID) -> dict[str, Any]:
+    """B38 (req 546): the whole plan with each step's rationale and state."""
+    artifacts = _artifacts(request)
+    try:
+        with artifacts.session() as db:
+            return executive_service.get_plan(db, run_id)
+    except ExecutiveServiceError as exc:
+        raise _error_response(exc) from exc
+
+
+@router.post("/runs/{run_id}/approve")
+async def approve_step(
+    request: Request, run_id: uuid.UUID, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """B38 (req 544): the owner's yes for the step the run waits on. Recorded on the
+    row first, then the workflow is told; the owner-session gate on this router is the
+    authority."""
+    step_id = (payload or {}).get("step_id")
+    artifacts = _artifacts(request)
+    try:
+        with artifacts.session() as db:
+            approved = executive_service.approve_step_db(
+                db, run_id, str(step_id) if isinstance(step_id, str) and step_id else None
+            )
+            speech = executive_service.get_status(db, run_id)["speech"]
+        client = await _temporal_client(request)
+        await executive_service.approve_step_signal(client, run_id, approved)
+        return {"run_id": str(run_id), "step_id": approved, "speech": speech}
+    except ExecutiveServiceError as exc:
+        raise _error_response(exc) from exc
 
 
 @router.post("/runs/{run_id}/pause")

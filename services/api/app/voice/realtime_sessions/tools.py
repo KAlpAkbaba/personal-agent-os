@@ -54,6 +54,7 @@ from app.voice.realtime_sessions.tools_artifacts import (
     ARTIFACT_TOOL_NAMES,
     register_artifacts_tools,
 )
+from app.voice.realtime_sessions.tools_assistant import register as register_assistant_tools
 from app.voice.realtime_sessions.tools_briefing import register_briefing_tools
 from app.voice.realtime_sessions.tools_calendar import (
     CALENDAR_TOOL_NAMES,
@@ -94,6 +95,7 @@ from app.voice.realtime_sessions.tools_pronunciation import (
 # just to have it would be a constant nothing reads.
 from app.voice.realtime_sessions.tools_routines import register_routine_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
+from app.voice.realtime_sessions.tools_selfdev import register_selfdev_tools
 from app.voice.realtime_sessions.tools_weather import (
     WEATHER_TOOL_NAMES,
     register_weather_tools,
@@ -299,7 +301,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     from app.research import service as research_service
     from app.research.dates import default_window, parse_recency_window
     from app.research.plan import DEFAULT_RECENCY_DAYS
-    from app.research.policy import derive_mode_from_utterance
+    from app.research.policy import RESEARCH_MODES, derive_mode_from_utterance
 
     # "son üç gündeki ..." -> 3 (app.research.dates, the same Turkish relative-date
     # parser the REST plan stage uses); an int day count is the only shape the
@@ -318,13 +320,32 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     # karşılaştırmalı" most often lands in one of the two once the model extracts a
     # topic — never guessed at, never chosen because the run happens to look big.
     mode = derive_mode_from_utterance(f"{topic} {scope}")
+    # B31 req 192: the OWNER's sentence is the authority. The turn record carries the mode
+    # derived from what they actually said ("... kapsamlı araştır"); the model's extracted
+    # topic often drops that word, which is how a DEEP asked for aloud ran as QUICK.
+    turn = _turn_record(ctx) or {}
+    spoken_mode = turn.get("research_mode") if isinstance(turn.get("research_mode"), str) else None
+    if spoken_mode in RESEARCH_MODES and _mode_rank(spoken_mode) > _mode_rank(mode):
+        mode = spoken_mode
+    # B31 req 192: the model may NARROW the mode the owner's words gave ("quick" over a
+    # derived "deep" when the owner also said "kısaca"), never widen it - a wider mode is
+    # a decision the owner makes in their own words (owner rule 1).
+    requested_mode = str(arguments.get("mode") or "")
+    if requested_mode in RESEARCH_MODES and _mode_rank(requested_mode) < _mode_rank(mode):
+        mode = requested_mode
+    # B31 req 192: "sesten 12 kaynağa kırpılıyor" - the voice path sent the QUICK default
+    # (research_default_max_sources) for every mode, and browser_activities clamps
+    # min(policy.max_sources, max_sources), so a DEEP run asked for aloud got 12 of its
+    # 24 sources. The mode's own policy is the budget now; the settings default is the
+    # floor for QUICK only.
+    max_sources = _voice_max_sources(mode, artifacts_runtime.settings.research_default_max_sources)
 
     started = research_service.start_browser_research(
         ctx.db,
         broker_runtime,
         input=topic,
         recency_days=recency_days,
-        max_sources=artifacts_runtime.settings.research_default_max_sources,
+        max_sources=max_sources,
         trace_id=None,
         source=research_service.SOURCE_VOICE,
         session_id=ctx.session_id,
@@ -359,7 +380,6 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     call_id = ctx.call_id
     task_id = started.task_id
     workflow_id = started.workflow_id
-    max_sources = artifacts_runtime.settings.research_default_max_sources
     synthesis = artifacts_runtime.settings.research_default_synthesis
     search_provider = artifacts_runtime.settings.research_search_provider
 
@@ -416,13 +436,319 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         "workflow_id": workflow_id,
         "device": started.device,
         "mode": mode,
+        "max_sources": max_sources,
     }
+
+
+def _mode_rank(mode: str) -> int:
+    from app.research.policy import RESEARCH_MODES
+
+    return RESEARCH_MODES.index(mode) if mode in RESEARCH_MODES else 0
+
+
+def _voice_max_sources(mode: str, default_max_sources: int) -> int:
+    """B31 req 192: the source budget a spoken research is started with - the mode's own
+    policy ceiling, with the settings default as the QUICK floor."""
+    from app.research.policy import MODE_QUICK, resolve_policy
+
+    policy_max = int(resolve_policy(mode).max_sources)
+    if mode == MODE_QUICK:
+        return max(1, min(policy_max, int(default_max_sources)))
+    return policy_max
 
 
 #: How long a resolved utterance still speaks for the turn a tool call belongs to. A
 #: provider round trip is seconds; ten minutes is generous and bounded, so a follow-up
 #: turn from an hour ago can never block a research the owner asks for now.
 RESEARCH_TURN_TTL_S = 600.0
+
+
+# ------------------------------------------------- B31 req 203/204: pause and resume
+
+RESEARCH_PAUSE_TOOL_NAME = "research.pause"
+RESEARCH_RESUME_TOOL_NAME = "research.resume"
+RESEARCH_PAUSED_TR = "Araştırmayı duraklattım efendim; devam de diyebilirsiniz."
+RESEARCH_ALREADY_PAUSED_TR = "Araştırma zaten duraklatılmış efendim."
+RESEARCH_RESUMED_TR = "Araştırmaya devam ediyorum efendim."
+RESEARCH_NOT_PAUSED_TR = "Duraklatılmış bir araştırma yok efendim; araştırma zaten sürüyor."
+ERROR_RESEARCH_ALREADY_PAUSED = "already_paused"
+ERROR_RESEARCH_NOT_PAUSED = "not_paused"
+
+
+def _research_control(
+    ctx: ToolContext,
+    *,
+    tool: str,
+    requested_state: str,
+    mark: Callable[[Any, uuid.UUID], bool],
+    signal: str,
+    event_type: str,
+    success_speech: str,
+    noop_speech: str,
+    noop_error: str,
+    summary: str,
+    want_paused: bool | None,
+) -> dict[str, Any]:
+    """The shape research.pause and research.resume share (mirrors research.cancel):
+    a receipt either way, the durable half in THIS transaction through the SAME function
+    the REST route calls, the Temporal signal as a followup after commit."""
+    if ctx.db is None:
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            f"{tool} needs the research tables; no database on this session",
+        )
+    from app.actions.receipt import (
+        EXECUTION_EXECUTED,
+        EXECUTION_REFUSED,
+        TERMINAL_FAILED,
+        TERMINAL_VERIFIED,
+        ActionReceipt,
+        record_receipt,
+    )
+    from app.ledger import service as ledger_service
+    from app.ledger.vocabulary import SUBSYSTEM_RESEARCH
+    from app.research import service as research_service
+
+    action_id = ctx.call_id or str(uuid.uuid4())
+    now = datetime.now(UTC)
+
+    def receipt(
+        *, execution: str, terminal: str, server: dict[str, Any], speech: str, error: str | None
+    ) -> dict[str, Any]:
+        row = ActionReceipt(
+            action_id=action_id,
+            capability=tool,
+            requested_state=requested_state,
+            execution_status=execution,
+            terminal_status=terminal,
+            observed_after={"server": server, "local": {}},
+            evidence_refs=[{"kind": "realtime_session", "ref": str(ctx.session_id)}],
+            error_class=error,
+            speech=speech,
+            started_at=ctx.now,
+            completed_at=now,
+            session_id=str(ctx.session_id),
+            observed_at=now,
+        )
+        record_receipt(ctx.db, row, SUBSYSTEM_RESEARCH)
+        return row.as_dict()
+
+    run = research_service.active_research(ctx.db)
+    if run is None:
+        return receipt(
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_RESEARCH_NOTHING_RUNNING},
+            speech=RESEARCH_CANCEL_NOTHING_RUNNING_TR,
+            error=ERROR_RESEARCH_NOTHING_RUNNING,
+        )
+    task_id = run.task_id
+    stage = run.stage
+    if want_paused is not None and research_service.research_is_paused(run) is want_paused:
+        return receipt(
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": noop_error, "task_id": str(task_id), "stage": stage},
+            speech=noop_speech,
+            error=noop_error,
+        )
+    if not mark(ctx.db, task_id):
+        return receipt(
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": noop_error, "task_id": str(task_id), "stage": stage},
+            speech=noop_speech,
+            error=noop_error,
+        )
+    try:
+        ledger_service.record(
+            ctx.db,
+            ledger_service.ActivityEvent(
+                event_type=event_type,
+                subsystem=SUBSYSTEM_RESEARCH,
+                status="completed",
+                action=tool,
+                research_job_id=task_id,
+                occurred_at=now,
+                factual_summary=f"{summary} ({stage} aşamasında).",
+                detail_json={"task_id": str(task_id), "stage": stage, "action_id": action_id},
+                evidence_refs=[{"kind": "research_task", "ref": str(task_id)}],
+                source="live",
+                source_ref=f"{tool}:{task_id}",
+            ),
+        )
+    except Exception:  # noqa: BLE001 - the ledger is evidence, never a dependency
+        logger.warning("research_control_ledger_failed", tool=tool, task_id=str(task_id))
+
+    artifacts_runtime = ctx.live.get("artifacts_runtime")
+    workflow_id = research_service.workflow_id_for(task_id)
+
+    async def _signal_followup() -> None:
+        if artifacts_runtime is None:
+            logger.warning("research_control_no_artifacts_runtime", task_id=str(task_id))
+            return
+        from app.research.browser_workflow import BrowserResearchWorkflow
+
+        try:
+            client = await research_service.connect_temporal(artifacts_runtime)
+            handle = client.get_workflow_handle(workflow_id)
+            await handle.signal(getattr(BrowserResearchWorkflow, signal))
+        except Exception as exc:  # noqa: BLE001 - the workflow may already be gone
+            logger.warning(
+                "research_control_signal_failed",
+                tool=tool,
+                task_id=str(task_id),
+                error=str(exc)[:200],
+            )
+
+    ctx.add_followup(_signal_followup)
+    return receipt(
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        server={"task_id": str(task_id), "stage": stage, "workflow_id": workflow_id},
+        speech=success_speech,
+        error=None,
+    )
+
+
+def research_pause(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Araştırmayı duraklat." (B31 req 203) - the run holds at its next stage boundary
+    and says so; already paused or nothing running is a refused receipt."""
+    del arguments
+    from app.ledger.vocabulary import EVENT_TYPE_RESEARCH_PAUSED
+    from app.research import service as research_service
+
+    return _research_control(
+        ctx,
+        tool=RESEARCH_PAUSE_TOOL_NAME,
+        requested_state="paused",
+        mark=research_service.mark_research_paused,
+        signal="pause",
+        event_type=EVENT_TYPE_RESEARCH_PAUSED,
+        success_speech=RESEARCH_PAUSED_TR,
+        noop_speech=RESEARCH_ALREADY_PAUSED_TR,
+        noop_error=ERROR_RESEARCH_ALREADY_PAUSED,
+        summary="Sahip araştırmayı duraklattı",
+        want_paused=True,
+    )
+
+
+def research_resume(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Araştırmaya devam et." (B31 req 204) - the paused run continues; a run that was
+    never paused is a refused receipt, never a silent success."""
+    del arguments
+    from app.ledger.vocabulary import EVENT_TYPE_RESEARCH_RESUMED
+    from app.research import service as research_service
+
+    return _research_control(
+        ctx,
+        tool=RESEARCH_RESUME_TOOL_NAME,
+        requested_state="resumed",
+        mark=research_service.mark_research_resumed,
+        signal="resume",
+        event_type=EVENT_TYPE_RESEARCH_RESUMED,
+        success_speech=RESEARCH_RESUMED_TR,
+        noop_speech=RESEARCH_NOT_PAUSED_TR,
+        noop_error=ERROR_RESEARCH_NOT_PAUSED,
+        summary="Sahip araştırmayı devam ettirdi",
+        want_paused=False,
+    )
+
+
+# ------------------------------------------------- B31 req 201: open a research by reference
+
+RESEARCH_OPEN_TOOL_NAME = "research.open"
+
+
+def research_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bir önceki araştırmayı aç." / "İkinci araştırmayı aç." (B31 req 201).
+
+    The reference is the turn's (previous / ordinal / current / by topic), resolved by the
+    same resolver every follow-up uses; the research becomes the focus, its executive
+    summary is spoken, and its report artifact is opened on the owner's device through
+    ``artifact.open`` when one can - the speech says which of the two happened.
+    """
+    del arguments
+    from app.research.answers import LEVEL_EXECUTIVE, speech_for_level
+
+    if ctx.db is None:
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            "research.open needs the research tables; no database on this session",
+        )
+    resolution = _resolve_research(ctx)
+    if not resolution.resolved or not resolution.research_job_id:
+        return _needs_clarification(resolution)
+    topic = resolution.entry.topic if resolution.entry is not None else ""
+    report_json = _report_for(ctx, resolution.research_job_id)
+    summary = (
+        speech_for_level(report_json, level=LEVEL_EXECUTIVE, topic=topic)
+        if report_json is not None
+        else RESEARCH_NO_REPORT_TR
+    )
+    out: dict[str, Any] = {
+        "status": RESULT_OK,
+        "research_job_id": resolution.research_job_id,
+        "research_artifact_id": resolution.artifact_id,
+        "resolution_reason": resolution.reason,
+        "research_reference": resolution.reference,
+        "topic": topic,
+        "routed": ROUTED_RESEARCH_REPORT,
+        "opened": False,
+    }
+    label = f"{topic} araştırmasını" if topic else "Araştırmayı"
+    if resolution.artifact_id and ctx.live.get("device_action") is not None:
+        from app.voice.realtime_sessions.tools_artifacts import artifact_open
+
+        opened = artifact_open(ctx, {"artifact_id": str(resolution.artifact_id)})
+        out["open_receipt"] = opened
+        if opened.get("execution_status") == "executed":
+            out["opened"] = True
+            out["speech"] = f"{label} açtım efendim. {summary}"
+            return out
+        out["speech"] = f"{label} odağa aldım efendim; cihazda açamadım. {summary}"
+        return out
+    out["speech"] = f"{label} odağa aldım efendim; açacak bir cihaz yok. {summary}"
+    return out
+
+
+# ---------------------------------------------- B31 req 209: the owner's answer register
+
+RESEARCH_ANSWER_MODE_TOOL_NAME = "research.answer_mode"
+ANSWER_MODE_SET_TR = {
+    "technical": "Bundan sonra araştırmaları teknik anlatacağım efendim.",
+    "detail": "Bundan sonra araştırmaları ayrıntılı anlatacağım efendim.",
+    "executive": "Bundan sonra araştırmaları kısa, yönetici özetiyle anlatacağım efendim.",
+    "full": "Bundan sonra araştırmaları tam haliyle anlatacağım efendim.",
+}
+
+
+def research_answer_mode(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bundan sonra teknik anlat." / "Teknik modu kapat." (B31 req 209) - a durable
+    register for research answers, kept in the owner's research state and read by
+    ``_research_level`` whenever a turn does not name a level itself."""
+    from app.research import focus as focus_module
+    from app.research.answers import FOLLOWUP_LEVELS
+
+    if ctx.db is None:
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            "research.answer_mode needs the research tables; no database on this session",
+        )
+    turn = _turn_record(ctx) or {}
+    level = turn.get("answer_level") if isinstance(turn.get("answer_level"), str) else None
+    level = level or str(arguments.get("level") or "")
+    if level not in FOLLOWUP_LEVELS:
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            f"level must be one of {', '.join(FOLLOWUP_LEVELS)}",
+        )
+    focus_module.set_answer_level(ctx.db, level, now=ctx.now)
+    return {
+        "status": RESULT_OK,
+        "level": level,
+        "speech": ANSWER_MODE_SET_TR[level],
+    }
 
 
 def research_followup_refusal(
@@ -582,7 +908,22 @@ RESEARCH_EMPTY_ANSWER_TR = "Bu araştırma için anlatabileceğim bir sonuç bul
 #: a clarification ("Hangi pencere?", "Ne yazmamı istersiniz?") rather than a receipt —
 #: not research-bound, so they need their own small extension of the ADR-0077 contract
 #: below (never a second copy of it).
-OPERATOR_CLARIFYING_TOOLS: frozenset[str] = frozenset({"operator.window_control", "operator.type"})
+OPERATOR_CLARIFYING_TOOLS: frozenset[str] = frozenset(
+    # B28: "Hangi tuş?" / "Hangi pencere?" - the input tools ask the same way type does.
+    {
+        "operator.window_control",
+        "operator.type",
+        "operator.key",
+        "operator.pointer",
+        # B29: "Hangi düğme ya da alan?" / "Hangi öğeyi seçeyim?"
+        "operator.ui",
+        "operator.inspect",
+        # B30: "Hangi pencere?" / "Hangi uygulamayı sonlandırayım?" / "Hangi servis?"
+        "operator.app_close",
+        "operator.process",
+        "operator.service",
+    }
+)
 
 #: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): every document tool may answer
 #: "Hangi belge?" / "Dönebileceğim önceki bir belge yok efendim." rather than a receipt —
@@ -834,6 +1175,44 @@ def _resolve_research(ctx: ToolContext, *, question: str | None = None) -> Any:
     return resolution
 
 
+def _previous_report_on_topic(ctx: ToolContext, resolution: Any) -> dict[str, Any] | None:
+    """The most recent OTHER completed research whose topic shares every content word of
+    this one's (the reference resolver's own topic rule), older than this one."""
+    from app.research.reference import _topic_matches as topic_matches
+    from app.research.reference import completed_entries, spoken_candidate
+    from app.voice.intents import normalize_transcript
+
+    entry = resolution.entry
+    if entry is None or not entry.topic:
+        return None
+    _normalized, tokens, _dropped = normalize_transcript(entry.topic)
+    words = tuple(t for t in tokens if len(t) > 3)[:4]
+    if not words:
+        return None
+    try:
+        candidates = completed_entries(ctx.db, now=ctx.now)
+    except Exception:  # noqa: BLE001 - a citation is a convenience, never a dependency
+        return None
+    older = [
+        c
+        for c in topic_matches(candidates, words)
+        if c.research_job_id != entry.research_job_id
+        and c.completed_at is not None
+        and (entry.completed_at is None or c.completed_at < entry.completed_at)
+    ]
+    if not older:
+        return None
+    previous = older[0]
+    when = spoken_candidate(previous, today=ctx.now.date(), with_day=True)
+    return {
+        "research_job_id": previous.research_job_id,
+        "artifact_id": previous.artifact_id,
+        "topic": previous.topic,
+        "completed_at": previous.completed_at.isoformat() if previous.completed_at else None,
+        "speech": f"Bu konuda daha önce de bir araştırma var: {when} raporu.",
+    }
+
+
 def _needs_clarification(resolution: Any) -> dict[str, Any]:
     """ONE short question, the candidates behind it, and no crawl (ADR-0076)."""
     from app.research.reference import MISSING_QUESTION_TR, STATUS_AMBIGUOUS
@@ -925,6 +1304,13 @@ def _followup(
     if report_json is None:
         return {**out, "status": RESULT_NO_REPORT, "speech": RESEARCH_NO_REPORT_TR}
     out["speech"] = speak(report_json, resolution)
+    # B31 req 199: an earlier completed research on the same topic is cited, not hidden -
+    # the owner asked about this topic before and the answer says so, with the time the
+    # earlier one finished, so "o zamanki" has something to land on.
+    previous = _previous_report_on_topic(ctx, resolution) if out["speech"] else None
+    if previous is not None:
+        out["previous_report"] = previous
+        out["speech"] = f"{out['speech']} {previous['speech']}"
     return out
 
 
@@ -934,9 +1320,12 @@ def research_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     The level is the model's only argument, and even it is a presentation choice; which
     research is never one. Nothing here starts, resumes or re-runs anything.
     """
+    from app.research import focus as focus_module
     from app.research.answers import FOLLOWUP_LEVELS, speech_for_level
 
-    level = str(arguments.get("level") or "executive")
+    # B31 req 209: no level from the model -> the owner's standing register, then executive.
+    stored = focus_module.get_answer_level(ctx.db) if ctx.db is not None else None
+    level = str(arguments.get("level") or stored or "executive")
     if level not in FOLLOWUP_LEVELS:
         raise VoiceError(
             VoiceErrorClass.VALIDATION_ERROR,
@@ -973,6 +1362,124 @@ def research_finding_detail(ctx: ToolContext, arguments: dict[str, Any]) -> dict
     out = _followup(ctx, lambda report, _resolution: finding_detail_speech(report, index))
     out["finding_index"] = index
     return out
+
+
+RESEARCH_CANCEL_TOOL_NAME = "research.cancel"
+RESEARCH_CANCEL_NOTHING_RUNNING_TR = "Devam eden bir araştırma yok efendim."
+RESEARCH_CANCELLED_TR = "Araştırmayı iptal ettim efendim."
+ERROR_RESEARCH_NOTHING_RUNNING = "nothing_running"
+
+
+def research_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Araştırmayı iptal et." (B27 req 732) — the research still in flight, ended.
+
+    ``POST /v1/research/{id}/cancel`` has existed since M13 and no sentence reached it.
+    The durable half (run -> CANCELLED, task closed) is ``research_service.
+    mark_research_cancelled``, the SAME function the REST route calls, inside this tool
+    call's own transaction; the Temporal half (``handle.cancel()``) is only ever a
+    coroutine and goes to ``ctx.followups`` the way ``research.start``'s workflow start
+    does, awaited by the route once this transaction has committed. A cancel the
+    workflow never receives leaves a run the orphan sweep already closes (ADR-0123).
+
+    Nothing running is a refused RECEIPT, spoken as such - never a success over nothing.
+    """
+    del arguments
+    if ctx.db is None:
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE,
+            "research.cancel needs the research tables; no database on this session",
+        )
+    from app.actions.receipt import (
+        EXECUTION_EXECUTED,
+        EXECUTION_REFUSED,
+        TERMINAL_FAILED,
+        TERMINAL_VERIFIED,
+        ActionReceipt,
+        record_receipt,
+    )
+    from app.ledger import service as ledger_service
+    from app.ledger.vocabulary import EVENT_TYPE_RESEARCH_CANCELLED, SUBSYSTEM_RESEARCH
+    from app.research import service as research_service
+
+    action_id = ctx.call_id or str(uuid.uuid4())
+    now = datetime.now(UTC)
+
+    def receipt(
+        *, execution: str, terminal: str, server: dict[str, Any], speech: str, error: str | None
+    ) -> dict[str, Any]:
+        row = ActionReceipt(
+            action_id=action_id,
+            capability=RESEARCH_CANCEL_TOOL_NAME,
+            requested_state="cancelled",
+            execution_status=execution,
+            terminal_status=terminal,
+            observed_after={"server": server, "local": {}},
+            evidence_refs=[{"kind": "realtime_session", "ref": str(ctx.session_id)}],
+            error_class=error,
+            speech=speech,
+            started_at=ctx.now,
+            completed_at=now,
+            session_id=str(ctx.session_id),
+            observed_at=now,
+        )
+        record_receipt(ctx.db, row, SUBSYSTEM_RESEARCH)
+        return row.as_dict()
+
+    run = research_service.active_research(ctx.db)
+    if run is None:
+        return receipt(
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"reason": ERROR_RESEARCH_NOTHING_RUNNING},
+            speech=RESEARCH_CANCEL_NOTHING_RUNNING_TR,
+            error=ERROR_RESEARCH_NOTHING_RUNNING,
+        )
+    task_id = run.task_id
+    was = run.stage
+    research_service.mark_research_cancelled(ctx.db, task_id)
+    try:
+        ledger_service.record(
+            ctx.db,
+            ledger_service.ActivityEvent(
+                event_type=EVENT_TYPE_RESEARCH_CANCELLED,
+                subsystem=SUBSYSTEM_RESEARCH,
+                status="completed",
+                action=RESEARCH_CANCEL_TOOL_NAME,
+                research_job_id=task_id,
+                occurred_at=now,
+                factual_summary=f"Sahip araştırmayı iptal etti ({was} aşamasındaydı).",
+                detail_json={"task_id": str(task_id), "was": was, "action_id": action_id},
+                evidence_refs=[{"kind": "research_task", "ref": str(task_id)}],
+                source="live",
+                source_ref=f"research_cancel:{task_id}",
+            ),
+        )
+    except Exception:  # noqa: BLE001 - the ledger is evidence, never a dependency
+        logger.warning("research_cancel_ledger_failed", task_id=str(task_id))
+
+    artifacts_runtime = ctx.live.get("artifacts_runtime")
+    workflow_id = research_service.workflow_id_for(task_id)
+
+    async def _cancel_workflow_followup() -> None:
+        if artifacts_runtime is None:
+            logger.warning("research_cancel_no_artifacts_runtime", task_id=str(task_id))
+            return
+        try:
+            client = await research_service.connect_temporal(artifacts_runtime)
+            await client.get_workflow_handle(workflow_id).cancel()
+        except Exception as exc:  # noqa: BLE001 - the workflow may already be gone
+            logger.warning(
+                "research_cancel_workflow_failed", task_id=str(task_id), error=str(exc)[:200]
+            )
+
+    ctx.add_followup(_cancel_workflow_followup)
+    return receipt(
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        server={"task_id": str(task_id), "was": was, "workflow_id": workflow_id},
+        speech=RESEARCH_CANCELLED_TR,
+        error=None,
+    )
 
 
 def plan_redirect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1307,7 +1814,9 @@ def _ledger_note(
         logger.warning("voice_ledger_note_failed", event_type=event_type)
 
 
-def _research_level(*, shape: str | None, intent: str, explicit: str | None) -> str:
+def _research_level(
+    *, shape: str | None, intent: str, explicit: str | None, stored_default: str | None = None
+) -> str:
     """The presentation level of a research answer on this turn (ADR-0077).
 
     The turn's shape wins ("teknik anlat" is technical whatever the model passed); then the
@@ -1327,11 +1836,16 @@ def _research_level(*, shape: str | None, intent: str, explicit: str | None) -> 
     }
     if explicit in by_argument:
         return by_argument[explicit]
-    return {
+    by_intent = {
         Intent.TECHNICAL.value: LEVEL_TECHNICAL,
         Intent.DETAIL.value: LEVEL_DETAIL,
         Intent.FULL.value: LEVEL_FULL,
-    }.get(intent, LEVEL_EXECUTIVE)
+    }
+    if intent in by_intent:
+        return by_intent[intent]
+    # B31 req 209: the owner's standing register ("bundan sonra teknik anlat"), read from
+    # the research owner state; executive when none was ever set.
+    return stored_default or LEVEL_EXECUTIVE
 
 
 def _research_answer_for_turn(
@@ -1367,10 +1881,13 @@ def _research_answer_for_turn(
             "narration_session_id": None,
             "answered_by": RESEARCH_EXPLAIN_TOOL_NAME,
         }
+    from app.research import focus as focus_module
+
     answer_level = _research_level(
         shape=source.get("research_shape") or source.get("research_class"),
         intent=str(source.get("intent") or resolved.intent.value),
         explicit=level,
+        stored_default=focus_module.get_answer_level(ctx.db) if ctx.db is not None else None,
     )
     wants_sources = "kaynak" in question.casefold()
 
@@ -1718,12 +2235,16 @@ def default_registry() -> ToolRegistry:
     reg.register(
         ToolSpec(
             name="research.start",
-            description="Bir konuda araştırma başlatır; sonuç hazır olunca kısaca haber verilir.",
+            description=(
+                "Bir konuda araştırma başlatır; sonuç hazır olunca kısaca haber verilir. "
+                "'mode' yalnız sahibin sözünü DARALTMAK için (kısaca -> quick); genişletmez."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "topic": {"type": "string", "maxLength": 500},
                     "scope": {"type": "string", "maxLength": 500},
+                    "mode": {"type": "string", "enum": ["quick", "standard", "deep"]},
                 },
                 "required": ["topic"],
                 "additionalProperties": False,
@@ -1789,6 +2310,81 @@ def default_registry() -> ToolRegistry:
                 "additionalProperties": False,
             },
             handler=research_finding_detail,
+        )
+    )
+    # B27 req 732: "Araştırmayı iptal et." - the REST cancel's voice.
+    reg.register(
+        ToolSpec(
+            name=RESEARCH_CANCEL_TOOL_NAME,
+            description=(
+                "DEVAM EDEN araştırmayı İPTAL EDER: 'araştırmayı iptal et', 'araştırmayı "
+                "durdur', 'araştırmayı bırak', 'araştırmadan vazgeç'. Hangi araştırma "
+                "olduğunu sunucu bilir (süren en son araştırma); devam eden bir araştırma "
+                "yoksa bunu olduğu gibi söyler. Bitmiş bir araştırmayı geri almaz. Dönen "
+                "'speech' metnini aynen oku."
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=research_cancel,
+        )
+    )
+    # B31 req 203/204: "Araştırmayı duraklat." / "Araştırmaya devam et."
+    reg.register(
+        ToolSpec(
+            name=RESEARCH_PAUSE_TOOL_NAME,
+            description=(
+                "DEVAM EDEN araştırmayı DURAKLATIR (iptal etmez): 'araştırmayı duraklat', "
+                "'araştırmayı beklet'. Süren araştırma yoksa ya da zaten duraklatılmışsa "
+                "bunu olduğu gibi söyler. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=research_pause,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=RESEARCH_RESUME_TOOL_NAME,
+            description=(
+                "DURAKLATILMIŞ araştırmayı DEVAM ETTİRİR: 'araştırmaya devam et', "
+                "'araştırmayı sürdür'. Duraklatılmış araştırma yoksa bunu söyler. Dönen "
+                "'speech' metnini aynen oku."
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=research_resume,
+        )
+    )
+    # B31 req 201: "Bir önceki araştırmayı aç."
+    reg.register(
+        ToolSpec(
+            name=RESEARCH_OPEN_TOOL_NAME,
+            description=(
+                "Bir araştırmayı AÇAR: 'bir önceki araştırmayı aç', 'ikinci araştırmayı aç', "
+                "'X araştırmasını aç'. Hangi araştırma olduğunu sunucu sahibin cümlesinden "
+                "çözer; raporu cihazda açar ve özetini söyler. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            handler=research_open,
+        )
+    )
+    # B31 req 209: "Bundan sonra teknik anlat."
+    reg.register(
+        ToolSpec(
+            name=RESEARCH_ANSWER_MODE_TOOL_NAME,
+            description=(
+                "Araştırma cevaplarının KALICI seviyesini ayarlar: 'bundan sonra teknik "
+                "anlat' -> technical, 'teknik modu kapat' / 'kısa anlat' -> executive. Tek "
+                "seferlik 'teknik anlat' bu değil, research.explain'dir."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "level": {
+                        "type": "string",
+                        "enum": ["executive", "detail", "technical", "full"],
+                    }
+                },
+                "additionalProperties": False,
+            },
+            handler=research_answer_mode,
         )
     )
     reg.register(
@@ -1884,6 +2480,10 @@ def default_registry() -> ToolRegistry:
             handler=actions.release_promote,
         )
     )
+    # B25 req 701: the assistant's answer to "Neler yapabilirsin?", derived from THIS
+    # registry rather than from a written list. Registered first so it is present for
+    # every session; it reads the registry at call time, never at registration time.
+    register_assistant_tools(reg)
     # M18.3 spec §3.8: the alarm, display and ambient tools. One line, by design — the
     # manifest stays a manifest and `tools_ambient` stays the receipt discipline.
     register_ambient_tools(reg)
@@ -1920,6 +2520,8 @@ def default_registry() -> ToolRegistry:
     register_creative_tools(reg)
     # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory's voice tools.
     register_native_tools(reg)
+    # B35 (req 622/623): the owner assigns the system work on itself.
+    register_selfdev_tools(reg)
     # B14 req 287-291: the owner's voice over their own ROUTINES. The engine has been
     # complete since M18 and the owner could not reach any of it by speaking - every one of
     # the seven routines in production was created by the alarm subsystem on their behalf.

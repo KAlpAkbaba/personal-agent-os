@@ -448,6 +448,19 @@ public static class OperatorCapabilityNames
     public const string TerminalExecute = "terminal.execute";
     public const string TerminalStatus = "terminal.status";
 
+    /// <summary>
+    /// B30 (requirements 119-122): the processes and the Windows services of this machine.
+    /// <c>process.list</c> and <c>service.status</c> are reads; <c>process.stop</c> is allowed
+    /// only for an image <c>packages/protocol/operator-allowlists.json</c> names as stoppable
+    /// and <c>service.restart</c> only for a service it names as restartable, both refused with
+    /// <c>permission_denied</c> before anything is touched — and a restart also needs an
+    /// elevated companion, which the owner grants through UAC and this device never bypasses.
+    /// </summary>
+    public const string ProcessList = "process.list";
+    public const string ProcessStop = "process.stop";
+    public const string ServiceStatus = "service.status";
+    public const string ServiceRestart = "service.restart";
+
     /// <summary>Every operator name, in the order of the specification's table.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -460,6 +473,7 @@ public static class OperatorCapabilityNames
         ScreenCapture, ScreenInspect,
         FileOpen, FileReveal,
         TerminalOpen, TerminalExecute, TerminalStatus,
+        ProcessList, ProcessStop, ServiceStatus, ServiceRestart,
     ];
 
     /// <summary>The names that synthesise input and therefore run under the focus guard (§1, invariant 2).</summary>
@@ -511,10 +525,32 @@ public static class DocumentCapabilityNames
     /// </summary>
     public const string FileFetch = "file.fetch";
 
-    /// <summary>Every documents name, in the order of the specification's table (<c>file.fetch</c> last, M22).</summary>
+    /// <summary>
+    /// B32 requirement 150 (DEVICE_PROTOCOL.md §6j): move ONE file inside the authorised
+    /// roots to the Recycle Bin — never a permanent delete — after the Cloud Core's
+    /// duplicate proposal and the owner's explicit word. Appended after <c>file.fetch</c>.
+    /// </summary>
+    public const string FileTrash = "file.trash";
+
+    /// <summary>
+    /// B34 requirements 153–165 (DEVICE_PROTOCOL.md §6m, appended): the managed mutations.
+    /// Each acts on ONE file inside the authorised roots, backs the file up to the root's
+    /// undo store before changing it (write / append / trash), writes atomically, and answers
+    /// the record BEFORE and AFTER with sha256. Only text-like kinds are written or appended
+    /// to. <c>file.restore</c> puts a backup back. Nothing here deletes permanently.
+    /// </summary>
+    public const string FileWrite = "file.write";
+    public const string FileAppend = "file.append";
+    public const string FileRename = "file.rename";
+    public const string FileMove = "file.move";
+    public const string FileCopy = "file.copy";
+    public const string FileRestore = "file.restore";
+
+    /// <summary>Every documents name, in the order of the specification's table (<c>file.fetch</c> M22, <c>file.trash</c> B32, the six mutations B34, appended).</summary>
     public static readonly IReadOnlyList<string> All =
     [
-        FileSearch, FileLocate, FileInspect, FileRead, FileCompare, DocumentExtract, FileFetch,
+        FileSearch, FileLocate, FileInspect, FileRead, FileCompare, DocumentExtract, FileFetch, FileTrash,
+        FileWrite, FileAppend, FileRename, FileMove, FileCopy, FileRestore,
     ];
 
     /// <summary>§6k: the most <c>file.fetch</c> will download — the same 50 MiB the family reads.</summary>
@@ -575,10 +611,24 @@ public static class ProjectCapabilityNames
     public const string ProjectStop = "project.stop";
     public const string ProjectTest = "project.test";
 
-    /// <summary>Every projects name, in the order of the specification's table.</summary>
+    /// <summary>
+    /// B33 requirements 456/457/468/469/471 (DEVICE_PROTOCOL.md §6l, appended): a built native
+    /// application packaged (portable zip / MSIX through makeappx, unsigned), installed as a
+    /// Start Menu shortcut to the built executable, uninstalled (shortcut and record removed,
+    /// the build kept), and its artefact read back in bounded base64 chunks for a Cloud Core
+    /// that cannot see this disk. Appended after <c>project.test</c> so the manifest reads as
+    /// an addition.
+    /// </summary>
+    public const string ProjectPackage = "project.package";
+    public const string ProjectInstall = "project.install";
+    public const string ProjectUninstall = "project.uninstall";
+    public const string ProjectArtifact = "project.artifact";
+
+    /// <summary>Every projects name, in the order of the specification's table (the B33 four appended).</summary>
     public static readonly IReadOnlyList<string> All =
     [
         ProjectScaffold, ProjectRun, ProjectStatus, ProjectStop, ProjectTest,
+        ProjectPackage, ProjectInstall, ProjectUninstall, ProjectArtifact,
     ];
 
     /// <summary>§2: a generated file set carries at most this many files.</summary>
@@ -671,6 +721,12 @@ public static class SceneCapabilityNames
 
     /// <summary>§7: the render <c>scene.inspect</c> carries back as base64 is bounded too.</summary>
     public const long MaxRenderBytes = 512L * 1024;
+
+    /// <summary>B44 (req 527): an exported scene file (GLB/FBX) is verified IN PLACE and never carried back — a scene file can be megabytes and the connection's frame is one — but it is hashed, so its size is bounded too.</summary>
+    public const long MaxExportBytes = 64L * 1024 * 1024;
+
+    /// <summary>B44: at most this many exports one inspection may declare (one per format).</summary>
+    public const int MaxExports = 2;
 
     /// <summary>The first token of the Blender shape (resolved to the installed <c>blender.exe</c> — detected, never searched for on PATH).</summary>
     public const string BlenderProgram = "blender";
@@ -853,6 +909,8 @@ public static class BrowserCapabilities
     public const string Snapshot = "browser.snapshot";
     public const string Screenshot = "browser.screenshot";
     public const string Download = "browser.download";
+    /// <summary>B31 requirement 181 (contract v1.5): the operation behind the worker's <c>uploads</c> flag.</summary>
+    public const string Upload = "browser.upload";
     public const string Search = "browser.search";
     public const string FetchEvidence = "browser.fetch_evidence";
 
@@ -872,7 +930,7 @@ public static class BrowserCapabilities
         Navigate, Back, Forward,
         TabList, TabNew, TabClose, TabSelect,
         Inspect, Find, Click, Fill, SelectOption, SetChecked, Scroll, Wait,
-        Extract, Snapshot, Screenshot, Download, Search, FetchEvidence,
+        Extract, Snapshot, Screenshot, Download, Upload, Search, FetchEvidence,
         MediaPlay, MediaVolume, MediaStatus, MediaStop,
     ];
 

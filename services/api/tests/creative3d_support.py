@@ -54,6 +54,14 @@ class _FakeMeshMaterials(list):
 class FakeLightData:
     def __init__(self) -> None:
         self.energy = 0.0
+        self.color = [1.0, 1.0, 1.0]
+
+
+class FakeCameraData:
+    """B44: a camera carries data too - its focal length (Blender's default is 50 mm)."""
+
+    def __init__(self) -> None:
+        self.lens = 50.0
 
 
 class FakeMeshData:
@@ -71,9 +79,87 @@ class FakeObject:
         if obj_type == "LIGHT":
             self.data: Any = FakeLightData()
         elif obj_type == "CAMERA":
-            self.data = None
+            self.data = FakeCameraData()
         else:
             self.data = FakeMeshData()
+        self.animation_data: _FakeAnimationData | None = None
+
+    def keyframe_insert(self, data_path: str, frame: int = 0, **_: Any) -> None:
+        """Blender's own: the property's CURRENT value recorded at ``frame``, one F-curve
+        per component."""
+        if self.animation_data is None:
+            self.animation_data = _FakeAnimationData()
+        for index, value in enumerate(list(getattr(self, data_path))):
+            self.animation_data.action.curve(data_path, index).insert(float(frame), float(value))
+
+
+class _FakeKeyframePoint:
+    def __init__(self, frame: float, value: float) -> None:
+        self.co = (frame, value)
+
+
+class _FakeFCurve:
+    def __init__(self, data_path: str, array_index: int) -> None:
+        self.data_path = data_path
+        self.array_index = array_index
+        self.keyframe_points: list[_FakeKeyframePoint] = []
+
+    def insert(self, frame: float, value: float) -> None:
+        self.keyframe_points = [p for p in self.keyframe_points if p.co[0] != frame]
+        self.keyframe_points.append(_FakeKeyframePoint(frame, value))
+        self.keyframe_points.sort(key=lambda p: p.co[0])
+
+    def evaluate(self, frame: float) -> float:
+        points = self.keyframe_points
+        if not points:
+            return 0.0
+        if frame <= points[0].co[0]:
+            return points[0].co[1]
+        for left, right in zip(points, points[1:], strict=False):
+            if left.co[0] <= frame <= right.co[0]:
+                span = right.co[0] - left.co[0]
+                t = 0.0 if span == 0 else (frame - left.co[0]) / span
+                return left.co[1] + t * (right.co[1] - left.co[1])
+        return points[-1].co[1]
+
+
+class _FakeAction:
+    """A LAYERED action, the Blender 4.4+ shape, with no legacy ``fcurves`` at all - so the
+    unit suite runs the driver's layered read-back path (the real lab runs the other)."""
+
+    def __init__(self) -> None:
+        self._curves: dict[tuple[str, int], _FakeFCurve] = {}
+        self.layers = [_FakeLayer(self)]
+
+    def curve(self, data_path: str, index: int) -> _FakeFCurve:
+        key = (data_path, index)
+        if key not in self._curves:
+            self._curves[key] = _FakeFCurve(data_path, index)
+        return self._curves[key]
+
+
+class _FakeChannelbag:
+    def __init__(self, action: _FakeAction) -> None:
+        self._action = action
+
+    @property
+    def fcurves(self) -> list[_FakeFCurve]:
+        return list(self._action._curves.values())
+
+
+class _FakeStrip:
+    def __init__(self, action: _FakeAction) -> None:
+        self.channelbags = [_FakeChannelbag(action)]
+
+
+class _FakeLayer:
+    def __init__(self, action: _FakeAction) -> None:
+        self.strips = [_FakeStrip(action)]
+
+
+class _FakeAnimationData:
+    def __init__(self) -> None:
+        self.action = _FakeAction()
 
 
 class _FakeObjectsCollection:
@@ -119,12 +205,26 @@ class _FakeRenderSettings:
         self.resolution_percentage = 100
         self.filepath = ""
         self.image_settings = _FakeImageSettings()
+        self.fps = 24
 
 
 class _FakeScene:
     def __init__(self) -> None:
         self.camera: FakeObject | None = None
         self.render = _FakeRenderSettings()
+        self.frame_start = 1
+        self.frame_end = 250
+
+    def frame_set(self, frame: int) -> None:
+        """Blender's own: every animated property evaluated at ``frame``."""
+        for obj in getattr(self, "_objects", None) or []:
+            animation = getattr(obj, "animation_data", None)
+            if animation is None:
+                continue
+            for (data_path, index), curve in animation.action._curves.items():
+                values = list(getattr(obj, data_path))
+                values[index] = curve.evaluate(float(frame))
+                setattr(obj, data_path, values)
 
 
 class _FakeContext:
@@ -211,12 +311,37 @@ class _FakeOpsWm:
         Path(filepath).write_bytes(b"FAKE-BLEND-FILE")
 
 
+class _FakeOpsExportScene:
+    """Blender's bundled exporters, faked to write files with the REAL format signatures (a
+    GLB header whose declared length is the file's; an FBX binary magic) - so the fake
+    device's signature check runs against bytes shaped like the real thing."""
+
+    def gltf(self, filepath: str = "", export_format: str = "GLB", **_: Any) -> None:
+        import json as _json
+        import struct
+
+        body = _json.dumps({"asset": {"version": "2.0", "generator": "fake bpy"}}).encode("utf-8")
+        body += b" " * ((4 - len(body) % 4) % 4)
+        total = 12 + 8 + len(body)
+        data = (
+            b"glTF" + struct.pack("<II", 2, total) + struct.pack("<I", len(body)) + b"JSON" + body
+        )
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        Path(filepath).write_bytes(data)
+
+    def fbx(self, filepath: str = "", **_: Any) -> None:
+        data = b"Kaydara FBX Binary  \x00\x1a\x00" + (7400).to_bytes(4, "little") + b"\x00" * 160
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        Path(filepath).write_bytes(data)
+
+
 class _FakeOps:
     def __init__(self, data: _FakeData, context: _FakeContext) -> None:
         self.mesh = _FakeOpsMesh(data, context)
         self.object = _FakeOpsObject(data, context)
         self.render = _FakeOpsRender(context)
         self.wm = _FakeOpsWm()
+        self.export_scene = _FakeOpsExportScene()
 
 
 class _FakeData:
@@ -235,6 +360,7 @@ def build_fake_bpy() -> ModuleType:
     module = ModuleType("bpy")
     data = _FakeData()
     scene = _FakeScene()
+    scene._objects = data.objects  # type: ignore[attr-defined]
     context = _FakeContext(scene)
     module.data = data  # type: ignore[attr-defined]
     module.context = context  # type: ignore[attr-defined]
@@ -271,6 +397,57 @@ UNITY_LICENSE_MESSAGE = "No valid Unity Editor license found. Please activate yo
 #: (DEVICE_PROTOCOL.md §6m). Spelled here rather than imported so the fake states the
 #: expectation itself rather than agreeing with whatever the service happens to send.
 PROJECT_ROOT_3D_NAME = "3d"
+
+
+def _device_file_check(
+    folder: Path, declared: dict[str, Any], what: str
+) -> tuple[str, bytes, str] | DeviceRunResult:
+    """SceneInspection.ReadRender / ReadExports, restated for the fake: a relative path
+    inside the project (an absolute or escaping one is permission_denied), present, and
+    hashing to the sha256 the driver declared."""
+    import hashlib
+
+    relative = declared.get("path")
+    declared_sha = declared.get("sha256")
+    if not isinstance(relative, str) or not relative:
+        return DeviceRunResult(False, "postcondition_failed", f"{what}_undeclared")
+    if not isinstance(declared_sha, str) or len(declared_sha) != 64:
+        return DeviceRunResult(False, "postcondition_failed", f"{what}_undeclared")
+    candidate = Path(relative)
+    if (
+        candidate.is_absolute()
+        or ":" in relative
+        or relative.startswith(("/", "\\"))
+        or ".." in candidate.parts
+    ):
+        return DeviceRunResult(
+            False, "permission_denied", f"the {what} path is not relative inside the project"
+        )
+    path = folder / relative
+    if not path.exists():
+        return DeviceRunResult(False, "postcondition_failed", f"{what}_missing")
+    content = path.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    if digest != declared_sha.lower():
+        return DeviceRunResult(False, "postcondition_failed", f"{what}_sha256_mismatch")
+    return relative.replace("\\", "/"), content, digest
+
+
+def device_signature_ok(fmt: str, content: bytes) -> bool:
+    """SceneInspection.SignatureOk: a GLB header (glTF, version 2, the file's length); an FBX
+    binary magic."""
+    import struct
+
+    if fmt == "glb":
+        return (
+            len(content) >= 12
+            and content[:4] == b"glTF"
+            and struct.unpack("<I", content[4:8])[0] == 2
+            and struct.unpack("<I", content[8:12])[0] == len(content)
+        )
+    if fmt == "fbx":
+        return content[:21] == b"Kaydara FBX Binary  \x00"
+    return False
 
 
 class FakeCreative3DDevice:
@@ -390,22 +567,57 @@ class FakeCreative3DDevice:
     # --------------------------------------------------------------- scene.inspect
 
     def inspect(self, payload: dict[str, Any]) -> DeviceRunResult:
+        """The DEVICE's answer (ProjectCapabilities.Inspect / SceneInspection,
+        DEVICE_PROTOCOL.md 6m): the render and every export are paths RELATIVE to the project
+        folder, re-hashed against what the driver declared, each export's format signature
+        read - and an absolute path is refused, as the device refuses it. B44: this fake used
+        to hand back whatever path the driver wrote and a top-level ``render_png_base64`` the
+        device never sends, which is how neither defect could be seen from here."""
         project_id = str(payload["project_id"])
-        inspection = self._inspections.get(
-            project_id, {"objects": [], "camera": None, "lights": [], "render": None, "errors": []}
-        )
-        render_png_base64 = None
+        inspection = self._inspections.get(project_id)
+        if inspection is None:
+            return DeviceRunResult(False, "postcondition_failed", "inspection_missing")
+        folder = Path(self._render_dir or Path.cwd())
+        plan = self._plans.get(project_id, {})
+        result: dict[str, Any] = {
+            "project_id": project_id,
+            "slug": f"{plan.get('project', 'scene')}-{plan.get('scene', 'scene')}",
+            "root_path": str(folder),
+            "inspection": inspection,
+            "inspection_path": str(folder / "out.json"),
+            "render": None,
+            "exports": [],
+        }
         render = inspection.get("render")
-        if render and render.get("path"):
-            try:
-                render_png_base64 = base64.b64encode(Path(render["path"]).read_bytes()).decode(
-                    "ascii"
-                )
-            except OSError:
-                render_png_base64 = None
-        return DeviceRunResult(
-            True, result={"inspection": inspection, "render_png_base64": render_png_base64}
-        )
+        if isinstance(render, dict):
+            checked = _device_file_check(folder, render, "render")
+            if isinstance(checked, DeviceRunResult):
+                return checked
+            relative, content, digest = checked
+            result["render"] = {
+                "path": relative,
+                "bytes": len(content),
+                "sha256": digest,
+                "verified": True,
+                "png_base64": base64.b64encode(content).decode("ascii"),
+            }
+        for declared in inspection.get("exports") or []:
+            checked = _device_file_check(folder, declared, "export")
+            if isinstance(checked, DeviceRunResult):
+                return checked
+            relative, content, digest = checked
+            if not device_signature_ok(str(declared.get("format")), content):
+                return DeviceRunResult(False, "postcondition_failed", "export_signature_mismatch")
+            result["exports"].append(
+                {
+                    "format": declared.get("format"),
+                    "path": relative,
+                    "bytes": len(content),
+                    "sha256": digest,
+                    "verified": True,
+                }
+            )
+        return DeviceRunResult(True, result=result)
 
     def capability_results(self) -> dict[str, Any]:
         """``{capability: callable}`` for ``tests.alarms_support.FakeDeviceAction``

@@ -36,6 +36,9 @@ TOOL_SCENE_LIGHT: Final = "scene.light"
 TOOL_SCENE_CAMERA: Final = "scene.camera"
 TOOL_SCENE_RENDER: Final = "scene.render"
 TOOL_SCENE_INSPECT: Final = "scene.inspect"
+#: B44 (req 526, 527): the production path's motion and export.
+TOOL_SCENE_ANIMATE: Final = "scene.animate"
+TOOL_SCENE_EXPORT: Final = "scene.export"
 
 SCENE_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_SCENE_CREATE,
@@ -46,6 +49,8 @@ SCENE_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_SCENE_CAMERA,
     TOOL_SCENE_RENDER,
     TOOL_SCENE_INSPECT,
+    TOOL_SCENE_ANIMATE,
+    TOOL_SCENE_EXPORT,
 )
 
 SPEECH_NO_TOOL = "Hangi araçla efendim: Blender mi, Unity mi?"
@@ -253,7 +258,11 @@ def scene_light(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     energy = arguments.get("energy")
     if not isinstance(name, str) or not name or not isinstance(energy, int | float):
         return service.clarification("Hangi ışığı ayarlayayım efendim, ve ne kadar?")
-    op = {"op": "set_light", "name": name, "energy": float(energy)}
+    op: dict[str, Any] = {"op": "set_light", "name": name, "energy": float(energy)}
+    color = arguments.get("color")
+    if isinstance(color, list) and len(color) == 3:
+        # B44 (req 524): the light's colour, linear RGB.
+        op["color"] = [float(c) for c in color]
     return service.apply(
         db,
         device_action,
@@ -278,9 +287,16 @@ def scene_camera(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         else "Kamera"
     )
     look_at = arguments.get("look_at")
-    if not isinstance(look_at, str) or not look_at:
+    lens = arguments.get("lens")
+    has_lens = isinstance(lens, int | float)
+    if (not isinstance(look_at, str) or not look_at) and not has_lens:
         return service.clarification("Kamerayı hangi nesneye çevireyim efendim?")
-    op = {"op": "set_camera", "name": name, "look_at": look_at}
+    op: dict[str, Any] = {"op": "set_camera", "name": name}
+    if isinstance(look_at, str) and look_at:
+        op["look_at"] = look_at
+    if has_lens:
+        # B44 (req 525): the focal length in millimetres.
+        op["lens"] = float(lens)
     return service.apply(
         db,
         device_action,
@@ -327,6 +343,101 @@ def scene_inspect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     device_action = ctx.live.get("device_action")
     return service.inspect(
         db, device_action, target=_target(ctx, arguments), session_id=str(ctx.session_id)
+    )
+
+
+# ------------------------------------------------------ B44: scene.animate / export
+
+#: B44 (req 526): the rate a voice-made animation plays at, and its longest duration.
+ANIMATION_FPS: Final = 24
+MAX_ANIMATION_SECONDS: Final = 60.0
+
+
+def scene_animate(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Küreye bir animasyon ekle." (B44 req 526): the object's channel moved from its
+    CURRENT read-back value (or ``from``) to ``to`` over ``seconds`` - two keyframes, flat
+    arguments (the model names numbers, never a list of objects)."""
+    db = _require_db(ctx, TOOL_SCENE_ANIMATE)
+    service = _service(ctx, TOOL_SCENE_ANIMATE)
+    device_action = ctx.live.get("device_action")
+    name = arguments.get("name")
+    target_value = arguments.get("to")
+    if (
+        not isinstance(name, str)
+        or not name
+        or not (isinstance(target_value, list) and len(target_value) == 3)
+    ):
+        return service.clarification("Hangi nesneyi nereye hareket ettireyim efendim?")
+    row = service.resolve_scene(db, _target(ctx, arguments))
+    if row is None:
+        return service.clarification("Önce bir sahne oluşturalım efendim.")
+    if row.tool != "blender":
+        return service.clarification(
+            "Animasyonu şimdilik yalnız Blender sahnelerinde yapabiliyorum efendim."
+        )
+    channel = arguments.get("channel")
+    if channel not in ("location", "rotation", "scale"):
+        channel = "location"
+    objects = (row.inspection_json or {}).get("objects") or []
+    obj = next((o for o in objects if o.get("name") == name), None)
+    if obj is None:
+        return service.clarification(f"Sahnede {name} diye bir nesne yok efendim.")
+    start_value = arguments.get("from")
+    if not (isinstance(start_value, list) and len(start_value) == 3):
+        start_value = obj.get(channel) or [0.0, 0.0, 0.0]
+    seconds = arguments.get("seconds")
+    duration = (
+        min(float(seconds), MAX_ANIMATION_SECONDS)
+        if isinstance(seconds, int | float) and seconds > 0
+        else 2.0
+    )
+    end_frame = max(2, 1 + round(duration * ANIMATION_FPS))
+    operations = [
+        {"op": "set_frames", "start": 1, "end": end_frame, "fps": ANIMATION_FPS},
+        {
+            "op": "animate",
+            "name": name,
+            "channel": channel,
+            "keyframes": [
+                {"frame": 1, "value": [float(c) for c in start_value]},
+                {"frame": end_frame, "value": [float(c) for c in target_value]},
+            ],
+        },
+    ]
+    return service.apply(
+        db,
+        device_action,
+        target=str(row.id),
+        operations=operations,
+        capability=TOOL_SCENE_ANIMATE,
+        session_id=str(ctx.session_id),
+    )
+
+
+def scene_export(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Sahneyi GLB olarak dışa aktar." (B44 req 527): the owner's format word wins, else
+    the model's argument, else GLB. The file stays on the owner's disk beside the scene."""
+    db = _require_db(ctx, TOOL_SCENE_EXPORT)
+    service = _service(ctx, TOOL_SCENE_EXPORT)
+    device_action = ctx.live.get("device_action")
+    turn = _turn_record(ctx)
+    fmt = turn.get("scene_format")
+    if fmt not in ("glb", "fbx"):
+        fmt = arguments.get("format") if arguments.get("format") in ("glb", "fbx") else "glb"
+    row = service.resolve_scene(db, _target(ctx, arguments))
+    if row is None:
+        return service.clarification("Dışa aktarılacak bir sahne yok efendim.")
+    if row.tool != "blender":
+        return service.clarification(
+            "Dışa aktarmayı şimdilik yalnız Blender sahnelerinde yapabiliyorum efendim."
+        )
+    return service.apply(
+        db,
+        device_action,
+        target=str(row.id),
+        operations=[{"op": "export", "format": fmt}],
+        capability=TOOL_SCENE_EXPORT,
+        session_id=str(ctx.session_id),
     )
 
 
@@ -467,6 +578,12 @@ def register_scene_tools(reg: ToolRegistry) -> ToolRegistry:
                     "name": {"type": "string", "maxLength": 64},
                     "energy": {"type": "number"},
                     "target": {"type": "string", "maxLength": 200},
+                    "color": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -485,6 +602,7 @@ def register_scene_tools(reg: ToolRegistry) -> ToolRegistry:
                 "properties": {
                     "name": {"type": "string", "maxLength": 64},
                     "look_at": {"type": "string", "maxLength": 64},
+                    "lens": {"type": "number", "minimum": 1, "maximum": 500},
                     "target": {"type": "string", "maxLength": 200},
                 },
                 "additionalProperties": False,
@@ -510,6 +628,59 @@ def register_scene_tools(reg: ToolRegistry) -> ToolRegistry:
                 "additionalProperties": False,
             },
             handler=scene_render,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_SCENE_ANIMATE,
+            description=(
+                "ODAKTAKİ Blender sahnesinde bir nesneye ANİMASYON ekler: 'küreye bir animasyon "
+                "ekle', 'küpü yukarı kaldırarak canlandır'. 'name' nesne adı, 'channel' location/"
+                "rotation/scale, 'to' hedef değer [x, y, z], 'from' başlangıç (verilmezse şimdiki "
+                "değer), 'seconds' süre. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "maxLength": 64},
+                    "channel": {"type": "string", "enum": ["location", "rotation", "scale"]},
+                    "to": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "from": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 3,
+                        "maxItems": 3,
+                    },
+                    "seconds": {"type": "number", "minimum": 0.1, "maximum": 60},
+                    "target": {"type": "string", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+            handler=scene_animate,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_SCENE_EXPORT,
+            description=(
+                "ODAKTAKİ Blender sahnesini GLB ya da FBX olarak DIŞA AKTARIR (dosya sahibin "
+                "diskinde, sahnenin yanında): 'sahneyi dışa aktar', 'sahneyi FBX olarak dışa "
+                "aktar'. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "enum": ["glb", "fbx"]},
+                    "target": {"type": "string", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+            handler=scene_export,
         )
     )
     reg.register(

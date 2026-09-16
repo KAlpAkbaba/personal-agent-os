@@ -282,14 +282,23 @@ function portsOf(client: CreativeClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the Yaratıcı panel", () => {
-  it("is empty, in words, when the list route answered with no run and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/creative/runs yok (HTTP 404)." })).toBe("");
+  });
+
+  it("says the bus told it nothing, when there are rows to show anyway", () => {
+    const rows = panel(ok([row()]));
+    expect(rows).toContain('data-creative-activity="untold"');
+    expect(rows).toContain("Görsel çalışması etkinliği bildirilmedi.");
+  });
+
+  it("keeps every word when the bus is telling us something the list cannot show", () => {
+    const html = panel(ok([]), [CREATIVE_ACTIVITY("paint", "draw", "comparing")]);
     expect(html).toContain('data-panel="creative"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Henüz bir görsel çalışması yapılmadı.");
-    expect(html).toContain('data-creative-activity="untold"');
-    expect(html).toContain("Görsel çalışması etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).toContain('data-creative-verified="0"');
     expect(html).toContain(">Yaratıcı<");
@@ -321,7 +330,12 @@ describe("the Yaratıcı panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Henüz bir görsel çalışması yapılmadı");
 
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/creative/runs yok (HTTP 404)." });
+    // A route this Cloud Core does not serve still says so WHILE the bus is talking:
+    // "the list is not here" and "nothing is happening" are different facts.
+    const absent = panel(
+      { kind: "absent", detail: "Bu Cloud Core sürümünde /v1/creative/runs yok (HTTP 404)." },
+      [CREATIVE_ACTIVITY("paint", "draw", "comparing")],
+    );
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/creative/runs yok (HTTP 404).");
     expect(absent).not.toContain("Henüz bir görsel çalışması yapılmadı");
@@ -652,7 +666,9 @@ describe("the Yaratıcı panel", () => {
       [SCENE_ACTIVITY()],
       [EXECUTIVE_RUN()],
     ]) {
-      const html = panel(ok([]), other);
+      // A row so the panel renders at all: no rows AND no event of its own is a quiet
+      // family now (B24 req 714).
+      const html = panel(ok([row()]), other);
       expect(html).toContain('data-creative-activity="untold"');
       expect(html).toContain('data-creative-posture=""');
     }

@@ -24,6 +24,8 @@ class BriefingPreferencesRow(Base):
     include_weather: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     include_system_status: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     include_calendar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    #: B45 (req 278, 362): the unread-mail clause.
+    include_mail: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     include_overnight_work: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     include_news_summary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     #: Defaults FALSE (task brief §3, non-negotiable): nothing may open a video without

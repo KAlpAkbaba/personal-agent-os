@@ -78,9 +78,7 @@ def _edge(session: Session, report: GraphReport, src: Any, dst: Any, relation: s
     if src is None or dst is None:
         return
     try:
-        memory_service.create_edge(
-            session, src_id=src.id, dst_id=dst.id, relation=relation
-        )
+        memory_service.create_edge(session, src_id=src.id, dst_id=dst.id, relation=relation)
     except Exception as exc:  # noqa: BLE001 - one edge, not the pass
         report.errors += 1
         logger.warning("entity_edge_failed", relation=relation, error=f"{type(exc).__name__}")

@@ -240,9 +240,13 @@ def list_artifacts(session: Session, *, limit: int = 100) -> list[Artifact]:
 
 
 def get_artifact_for_task(session: Session, task_id: uuid.UUID) -> Artifact | None:
-    return session.execute(
-        select(Artifact).where(Artifact.task_id == task_id).order_by(Artifact.created_at)
-    ).scalars().first()
+    return (
+        session.execute(
+            select(Artifact).where(Artifact.task_id == task_id).order_by(Artifact.created_at)
+        )
+        .scalars()
+        .first()
+    )
 
 
 def get_or_create_artifact_for_task(
@@ -334,6 +338,7 @@ def add_artifact_version(
     canonical_body: str,
     content_hash: str,
     source_manifest: dict[str, Any] | None = None,
+    provenance: dict[str, Any] | None = None,
 ) -> ArtifactVersion:
     """Create the next version, or return the current one if its content_hash is
     unchanged (idempotent re-compose)."""
@@ -350,6 +355,7 @@ def add_artifact_version(
         canonical_body=canonical_body,
         content_hash=content_hash,
         source_manifest_json=source_manifest,
+        provenance_json=provenance,
     )
     session.add(version)
     artifact.current_version = next_version
@@ -365,9 +371,18 @@ def get_current_version(session: Session, artifact_id: uuid.UUID) -> ArtifactVer
     return get_version(session, artifact_id, artifact.current_version)
 
 
-def get_version(
-    session: Session, artifact_id: uuid.UUID, version: int
-) -> ArtifactVersion | None:
+def list_versions(session: Session, artifact_id: uuid.UUID) -> list[ArtifactVersion]:
+    """B42 (req 409): every version of an artifact, oldest first."""
+    return list(
+        session.execute(
+            select(ArtifactVersion)
+            .where(ArtifactVersion.artifact_id == artifact_id)
+            .order_by(ArtifactVersion.version.asc())
+        ).scalars()
+    )
+
+
+def get_version(session: Session, artifact_id: uuid.UUID, version: int) -> ArtifactVersion | None:
     return session.execute(
         select(ArtifactVersion).where(
             ArtifactVersion.artifact_id == artifact_id,
@@ -430,9 +445,7 @@ def record_render(
     return render
 
 
-def get_render(
-    session: Session, artifact_version_id: uuid.UUID, fmt: str
-) -> ArtifactRender | None:
+def get_render(session: Session, artifact_version_id: uuid.UUID, fmt: str) -> ArtifactRender | None:
     return session.execute(
         select(ArtifactRender).where(
             ArtifactRender.artifact_version_id == artifact_version_id,

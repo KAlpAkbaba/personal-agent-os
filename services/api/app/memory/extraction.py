@@ -180,9 +180,7 @@ def extract_from_summary(
         try:
             outcome = memory_service.record_observation(session, embedder, observation)
         except Exception as exc:  # noqa: BLE001 - see the docstring
-            logger.warning(
-                "memory_extraction_failed", error=f"{type(exc).__name__}: {exc}"
-            )
+            logger.warning("memory_extraction_failed", error=f"{type(exc).__name__}: {exc}")
             try:
                 session.rollback()
             except Exception:  # noqa: BLE001 - nothing further to do about it

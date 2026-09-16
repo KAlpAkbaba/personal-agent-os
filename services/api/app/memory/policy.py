@@ -80,11 +80,11 @@ EXPLICIT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bfrom now on\b"),
     re.compile(r"(?i)\bi prefer\b"),
     re.compile(r"(?i)\balways use\b"),
-    re.compile(r"(?i)hat[ıi]rla"),          # "hatırla" / "hatırlar mısın"
-    re.compile(r"(?i)unutma"),               # "unutma"
-    re.compile(r"(?i)bundan sonra"),         # "bundan sonra"
-    re.compile(r"(?i)tercih ederim"),        # "tercih ederim"
-    re.compile(r"(?i)akl[ıi]nda tut"),       # "aklında tut"
+    re.compile(r"(?i)hat[ıi]rla"),  # "hatırla" / "hatırlar mısın"
+    re.compile(r"(?i)unutma"),  # "unutma"
+    re.compile(r"(?i)bundan sonra"),  # "bundan sonra"
+    re.compile(r"(?i)tercih ederim"),  # "tercih ederim"
+    re.compile(r"(?i)akl[ıi]nda tut"),  # "aklında tut"
 )
 
 # Signal words that make an inferred observation candidate-worthy (rule 4).

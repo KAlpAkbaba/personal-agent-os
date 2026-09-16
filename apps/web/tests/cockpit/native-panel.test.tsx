@@ -310,17 +310,30 @@ describe("a row says what it said, and says its absences", () => {
 // --------------------------------------------------------------- the panel
 
 describe("the Yerel Uygulamalar panel", () => {
-  it("says the route answered and holds nothing, which is not silence", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: `Bu Cloud Core sürümünde ${NATIVE_BUILDS_PATH} yok (HTTP 404).` })).toBe("");
+  });
+
+  it("says the route answered and holds nothing, while the bus is telling us something", () => {
+    const html = panel(ok([]), [NATIVE_BUILD("Notlarim", "windows_exe", "building")]);
     expect(html).toContain('data-panel="native"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain(NATIVE_EMPTY);
-    // And the bus's own silence is its own sentence.
+  });
+
+  it("says the bus's own silence in its own sentence, when there is a row to show", () => {
+    const html = panel(ok([VERIFIED()]));
     expect(html).toContain(NATIVE_UNTOLD);
   });
 
   it("says 'henüz yok' for a Cloud Core without the route, never an empty list", () => {
-    const html = panel({ kind: "absent", detail: `Bu Cloud Core sürümünde ${NATIVE_BUILDS_PATH} yok (HTTP 404).` });
+    // With the bus talking: "the list route is not on this server" and "nothing is
+    // happening" are different facts, and req 714 silences the panel only when both hold.
+    const html = panel(
+      { kind: "absent", detail: `Bu Cloud Core sürümünde ${NATIVE_BUILDS_PATH} yok (HTTP 404).` },
+      [NATIVE_BUILD("Notlarim", "windows_exe", "building")],
+    );
 
     expect(html).toContain("Henüz yok.");
     expect(html).toContain(NATIVE_BUILDS_PATH);
@@ -412,13 +425,15 @@ describe("the Yerel Uygulamalar panel", () => {
   });
 
   it("ignores another family's event entirely", () => {
-    const html = panel(ok([]), [CREATIVE_ACTIVITY()]);
+    // A row so the panel renders at all: no builds AND no build event is quiet (req 714).
+    const html = panel(ok([VERIFIED()]), [CREATIVE_ACTIVITY()]);
     expect(html).toContain(NATIVE_UNTOLD);
     expect(html).not.toContain('data-native-activity="active"');
   });
 
   it("draws a bus event whose publisher named nothing as a build and no more", () => {
     const html = panel(ok([]), [NATIVE_BUILD_BARE()]);
+
     expect(html).toContain('data-native-activity="active"');
     expect(html).toContain("Yerel uygulama");
     expect(html).not.toContain("doğrulandı");

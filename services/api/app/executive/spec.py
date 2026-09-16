@@ -132,6 +132,42 @@ PRECONDITION_DEVICE_CAPABILITY = "device_capability"
 PRECONDITION_ARTIFACT_VALID = "artifact_valid"
 PRECONDITION_ACCOUNT_PRESENT = "account_present"
 PRECONDITION_NONE = "none"
+#: B38 (req 554/557): a fallback branch runs only when the named step FAILED (any
+#: unsuccessful terminal state); a strict dependency runs only when it VERIFIED.
+PRECONDITION_STEP_FAILED = "step_failed"
+PRECONDITION_STEP_VERIFIED = "step_verified"
+#: B38 (req 544): the step waits for the owner's explicit yes before it runs.
+PRECONDITION_OWNER_APPROVAL = "owner_approval"
+
+#: B38 (req 555): a step may run again, bounded, until its postcondition minimum is met.
+MAX_REPEAT_ROUNDS = 3
+
+#: B38 (req 550/551): who built the graph - the deterministic shapes, the model under
+#: the owner's flag, or the owner's own graph through the REST route.
+PLANNER_RULE = "rule"
+PLANNER_MODEL = "model"
+PLANNER_OWNER = "owner"
+PLANNERS: tuple[str, ...] = (PLANNER_RULE, PLANNER_MODEL, PLANNER_OWNER)
+#: B38 (req 556): the timeout a kind gets when a proposal names none - the rule-based
+#: shapes' own numbers, so the model's plan and the rules' plan wait the same.
+DEFAULT_TIMEOUT_S_BY_KIND: dict[str, int] = {
+    STEP_KIND_RESEARCH_RUN: 900,
+    STEP_KIND_RESEARCH_SYNTHESIZE: 120,
+    STEP_KIND_DOCUMENTS_FIND: 120,
+    STEP_KIND_DOCUMENTS_COMPARE: 180,
+    STEP_KIND_DOCUMENTS_EXTRACT: 180,
+    STEP_KIND_ARTIFACTS_CREATE: 180,
+    STEP_KIND_ARTIFACTS_RENDER: 300,
+    STEP_KIND_MAIL_ANALYZE_THREAD: 120,
+    STEP_KIND_MAIL_DRAFT: 120,
+    STEP_KIND_CALENDAR_PROPOSE: 120,
+    STEP_KIND_APPS_CREATE: 600,
+    STEP_KIND_APPS_TEST: 600,
+    STEP_KIND_SCENE_CREATE: 300,
+    STEP_KIND_SCENE_RENDER: 600,
+    STEP_KIND_SYNTHESIS: 60,
+}
+
 PRECONDITION_CHECKS: tuple[str, ...] = (
     PRECONDITION_FOCUS_EXISTS,
     PRECONDITION_STEP_DONE,
@@ -139,6 +175,9 @@ PRECONDITION_CHECKS: tuple[str, ...] = (
     PRECONDITION_ARTIFACT_VALID,
     PRECONDITION_ACCOUNT_PRESENT,
     PRECONDITION_NONE,
+    PRECONDITION_STEP_FAILED,
+    PRECONDITION_STEP_VERIFIED,
+    PRECONDITION_OWNER_APPROVAL,
 )
 
 #: Only these two error classes may ever appear in a step's ``retry.only_on`` (spec §1,
@@ -277,6 +316,9 @@ class Precondition(_StrictModel):
         "artifact_valid",
         "account_present",
         "none",
+        "step_failed",
+        "step_verified",
+        "owner_approval",
     ] = PRECONDITION_NONE
     arg: str | None = Field(default=None, max_length=200)
 
@@ -306,6 +348,12 @@ class Retry(_StrictModel):
     only_on: list[str] = Field(default_factory=list, max_length=2)
 
 
+class Repeat(_StrictModel):
+    #: B38 (req 555): how many times the SAME step may run, bounded, until its
+    #: postcondition minimum is met; 1 = no loop.
+    max_rounds: int = Field(default=1, ge=1, le=MAX_REPEAT_ROUNDS)
+
+
 class Step(_StrictModel):
     id: str = Field(min_length=1, max_length=MAX_STEP_ID_CHARS)
     kind: str
@@ -319,6 +367,10 @@ class Step(_StrictModel):
     retry: Retry = Field(default_factory=Retry)
     risk_class: str
     compensation: str = COMPENSATION_NONE
+    #: B38 (req 555): the bounded loop; graph.py refuses a loop with no minimum to meet.
+    repeat: Repeat = Field(default_factory=Repeat)
+    #: B38 (req 546): why this step is in the plan, in the owner's language.
+    rationale: str | None = Field(default=None, max_length=300)
 
     @model_validator(mode="after")
     def _inputs_bounded(self) -> Step:
@@ -334,6 +386,8 @@ class TaskGraph(_StrictModel):
     #: The owner's own words, bounded (spec §1) — never re-derived from a paraphrase.
     goal: str = Field(min_length=1, max_length=MAX_GOAL_CHARS)
     steps: Annotated[list[Step], Field(min_length=1, max_length=MAX_STEPS)]
+    #: B38: rule | model | owner - who built it; None on graphs from before B38.
+    planner: str | None = Field(default=None, max_length=16)
 
     def step(self, step_id: str) -> Step | None:
         return next((s for s in self.steps if s.id == step_id), None)

@@ -48,7 +48,12 @@ export type DocumentKind =
   | "json"
   | "source"
   | "txt"
+  | "image"
+  | "archive"
   | "unknown";
+
+/** B32: the picture and archive extensions the device's FileKinds tells apart. */
+const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(["png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp"]);
 
 /** Spec §2: `source` = these extensions. */
 const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -85,6 +90,8 @@ export function documentKindOf(name: string | null): DocumentKind | null {
   const ext = name.slice(dot + 1).toLowerCase();
   if (PLAIN_KINDS.has(ext)) return ext as DocumentKind;
   if (SOURCE_EXTENSIONS.has(ext)) return "source";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (ext === "zip") return "archive";
   return "unknown";
 }
 

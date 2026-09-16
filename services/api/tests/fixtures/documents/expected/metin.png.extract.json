@@ -1,0 +1,23 @@
+{
+  "path": "metin.png",
+  "kind": "image",
+  "title": null,
+  "match": "contains",
+  "structure": {
+    "lines": 1,
+    "engine": "windows.media.ocr",
+    "width": 600,
+    "height": 120
+  },
+  "blocks": [
+    {
+      "ref": "o1",
+      "kind": "ocr_line",
+      "text": "Merhaba Dünya 1234",
+      "contains": [
+        "Merhaba",
+        "1234"
+      ]
+    }
+  ]
+}

@@ -413,8 +413,7 @@ class AnthropicEngineeringModel:
                 rejected.append(f"block {n} in {path}: the SEARCH text is empty")
             elif (count := current.count(old)) != 1:
                 rejected.append(
-                    f"block {n} in {path}: the SEARCH text occurs {count} times, "
-                    "not exactly once"
+                    f"block {n} in {path}: the SEARCH text occurs {count} times, not exactly once"
                 )
             else:
                 texts[path] = current.replace(old, new, 1)

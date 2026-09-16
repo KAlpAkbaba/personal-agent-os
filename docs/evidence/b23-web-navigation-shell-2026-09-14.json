@@ -1,0 +1,67 @@
+{
+  "batch": "B23",
+  "name": "Web gezinme kabuğu",
+  "requirements": [
+    685,
+    686,
+    690,
+    691,
+    692,
+    695,
+    716,
+    720,
+    722,
+    723
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except the same live-desktop test B21/B22 recorded",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS (966 s)",
+      "Windows agent build + tests": "919/920 - NotepadLifecycleTests pointer click",
+      "Staged-update qualification": "PASS"
+    },
+    "web_gates": "vitest 1730 passed / 93 files, tsc clean, oxlint 0 errors",
+    "the_one_failure": "Third batch running, same test, same measured cause: the operator lab needs the desktop's foreground and this session's own client holds it (B22's evidence names `claude.exe`; this run reported a foreground the registry could not resolve, which is the same disturbance in its full-screen form). This batch changed no device code. READY_FOR_OWNER: run the device step with the app not in front, or set PAGENTOS_OPERATOR_LAB=0 for that run; CI skips the lab for want of an interactive desktop."
+  },
+  "what_this_proves": "Every page of the web shell can reach every other page, including from the installed PWA where there is no address bar. The Core keeps its stage — the nav is quiet there and fades with the control cluster. And the two renderer decisions that were made once at startup now answer to what the machine actually does.",
+  "the_shape_of_this_batch": "Measured before anything was written, by reading every `href` in every page: `/` linked to all five, `/research` to `/artifacts`, `/voice` to `/core`, and `/artifacts`, `/core` and `/core/cockpit` to NOTHING. `layout.tsx` was `<body>{children}</body>`. So the page an owner reaches from a notification had no way out but the browser's own button — and installed as a PWA (`start_url: \"/core\"`, `display: standalone`) not even that.",
+  "closed_fully": {
+    "685_716_692_one_list_in_the_layout": "`SiteNav` renders the six pages from a single `NAV` list, in `layout.tsx`, so a page added later is added in one place and cannot be half-linked. On the Core's routes it renders as a quiet floating strip rather than a bar, because the manifest's own rule is that chrome around a full-viewport presence is the thing the owner wanted rid of — and a Core with no nav is how the Core became a dead end in the first place. The test walks the list and asserts every page reaches every other, which is a property rather than a habit.",
+    "686_the_home_page_is_the_index": "It carried a hand-written row of five links that had already drifted; it now renders the same `NAV` list with what each page is for.",
+    "690_691_the_two_halves_of_the_task_surface": "Tasks are started on `/artifacts` and followed on `/research`, and until now the return path did not exist. Both are reachable from everywhere, and `/artifacts` also stopped rendering an empty list before its first answer (B22 req 706/707).",
+    "695_the_devices_had_a_client_and_no_surface": "`fetchDeviceStatus`, `parseDevice` and `CockpitData.devices` have existed since M18.3. The only place a device appeared was a line about its SCREEN inside \"Ekran / Ortam\" — whether the machine is connected at all, when it was last heard from, how long the owner has been away, whether an alarm is armed or ringing on it: all fetched, parsed, held in state, never shown. `DevicesPanel` is that surface, at `/core/cockpit#devices`, and it keeps the parser's `statusKnown` distinction in words (\"durum bildirmedi\", never \"boşta 0 sn\").",
+    "720_minimal_mode_means_the_stage_is_alone": "The control cluster has faded after four idle seconds since M18.3. The nav this batch added would have been the one piece of chrome that never went away, so it follows the SAME fade state rather than a second timer — and it fades rather than disappearing, because a deliberate move of the pointer bringing it back is the difference between quiet and gone.",
+    "722_the_tier_answers_to_the_machine": "Three tiers, real budgets, a persisted owner choice and a capability cap have existed since M18; nothing compared the tier to the frames the machine delivered, so a Core that stuttered stayed stuttering until the owner noticed the control and guessed. `degradedTier` steps DOWN one level when most frames miss the budget — never up (that would fight the owner's choice and oscillate), never below `low`, and never before `FRAME_HEALTH_MIN_SAMPLES` frames, so a cold start decides nothing.",
+    "723_a_context_can_go_away_after_the_probe": "`detectRenderCapability()` ran once, on mount. A context lost to a driver reset, a laptop switching GPUs or a browser reclaiming a backgrounded context left a dead canvas on screen still claiming to be the Core. `webglcontextlost` now switches to the 2D view (the same facts, and it says why) and `webglcontextrestored` switches back — which only works because the loss event's default is prevented."
+  },
+  "found_on_the_way": {
+    "the_nav_had_to_be_invited_onto_the_core": "The obvious implementation — render the bar everywhere — would have framed the Core in exactly the chrome its manifest refuses. The obvious alternative — no nav on the Core — is the dead end this batch exists to remove. Two weights of one component, and the test asserts the Core carries every link.",
+    "a_prefix_match_lights_two_entries": "`/core/cockpit` starts with `/core`, so a naive current-page check marks both. `currentHref` takes the longest match and the test counts the marks."
+  },
+  "tests": {
+    "apps/web/tests/uistate/site-nav.test.tsx": 10,
+    "apps/web/tests/uistate/quality-adaptation.test.ts": 8
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, restored from sha256-verified backups.",
+    "mutations": [
+      "drop `/artifacts` from `NAV` -> four navigation tests fail, including \"every page can reach every other page\".",
+      "remove the minimum-sample guard from `degradedTier` -> \"says nothing until it has seen enough frames\" fails, i.e. a cold start could drop the tier."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED for this batch is the navigation test in CI, which B02 made possible and which runs there. The PWA half (`start_url` opening at `/core` with no address bar) and a real context loss are owner-device observations for the production round."
+  },
+  "owner_gates": {
+    "karar_0": "production release round"
+  }
+}

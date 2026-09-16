@@ -1,0 +1,306 @@
+{
+  "batch": "B44",
+  "name": "3B üretim yolu",
+  "requirements": [
+    520,
+    521,
+    522,
+    523,
+    524,
+    525,
+    526,
+    527
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (10957 passed, 5 skipped, 22m10s)",
+      "windows_agent_build_tests": "PASS (76.8s; PagentOS.Agent.Tests 959/959 incl. SceneExportTests with real Blender, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "no web source changed in B44; matrix-badges vitest rerun after sync (12 passed)",
+    "run": "2026-09-15 local, one clean run over the B44 tree (scratchpad b44_gate.log): QUALITY GATE: PASS, 10957 passed / 5 skipped."
+  },
+  "what_this_proves": "A scene can be created and modified over REST as well as by voice; its material, light colour and camera lens are set and read back; it can be animated with keyframes read back from Blender's F-curves; it can be exported to GLB/FBX with each file verified in place by the device; and the render and every file path now satisfy the device's own checks, which the shipped driver and the Cloud Core did not before.",
+  "measured_first": {
+    "before": "app/creative3d after M25: voice-only creation, no REST create/apply; set_material colour/metallic/roughness written but only colour read back; set_light energy only; set_camera look_at only; no animation; no export (the corpus kept 'Sahneyi dışa aktar.' as a negative); 0 production scenes.",
+    "contract_defects": "blender_driver.do_render declared 'path': <absolute path> (SceneInspection.Confine refuses it: permission_denied); SceneService._inspect_device read payload['render_png_base64'] while ProjectCapabilities.Inspect answers render.png_base64; tests/creative3d_support.FakeCreative3DDevice answered the Cloud Core's shape, and SceneLab.DriverScript (not the shipped driver) was what the device lab ran; scripts/tests/blender-scene-lab.py checked demo.blend after the driver began saving scene.blend."
+  },
+  "closed_fully": {
+    "520": "build_inspection: material metallic/roughness, camera lens, light colour, frames, animation tracks (animation_tracks over _fcurves_of), exports; the fake device and the device verify render + exports.",
+    "521": "POST /v1/scenes; the render path relative; service reads render.png_base64; fake device in the device's shape with its refusals; Python contract test over ProjectCapabilities.cs; C# SceneExportTests runs the shipped driver through the real job.",
+    "522": "POST /v1/scenes/{id}/apply.",
+    "523": "compare: material_metallic / material_roughness.",
+    "524": "set_light.color (Blender), apply_light by type, compare colour, scene.light color argument.",
+    "525": "set_camera.lens (1..500), apply_camera lens, compare lens, scene.camera lens argument.",
+    "526": "SetFrames / Animate spec; apply_frames / apply_animation (keyframe_insert, frame_set at start); F-curve read-back; compare frames + keyframe values, animated channel exempt from the static pose check; scene.animate; SCENE_ANIMATE before SCENE_ADD.",
+    "527": "ExportScene spec; do_export (gltf GLB / fbx) relative + sha256; SceneInspection.ReadExports + SignatureOk (64 MiB, max 2); ProjectCapabilities.Inspect exports proof; _device_exports + exports_json (migration 0056); compare declared vs verified hash; scene.export; SCENE_EXPORT; creative export refuses 3D format words; corpus negative converted to scene.export.regression.",
+    "surfaces": "2 routes, 2 voice tools (TIER_SENSITIVE), 2 intents + scene_format on the turn record, DEVICE_PROTOCOL.md 6m (exports, relative render path, error details), corpus +7 cases (export x3 families + regression, animate x3 families)."
+  },
+  "found_on_the_way": {
+    "absolute_render_path": "the shipped driver's render path was absolute; the device has always refused absolute paths inside out.json, so every real render through the Cloud Core would have ended in permission_denied.",
+    "render_key": "the Cloud Core read render_png_base64; the device sends render.png_base64. Only the fake sent the former.",
+    "fake_kinder_than_the_device": "the fake device returned whatever path the driver wrote and a top-level base64 key, so neither defect could fail a Python test; it now answers and refuses like SceneInspection, and its keys are pinned to the C# source.",
+    "lab_ran_its_own_driver": "the device lab's real-Blender test drove SceneLab.DriverScript; the new SceneExportTests test drives the repository's blender_driver.py.",
+    "lab_script_stale_blend": "scripts/tests/blender-scene-lab.py looked for demo.blend; the driver saves scene.blend since M25's service-command lab.",
+    "light_on_a_camera": "apply_light accepted any object with data; a camera has data too, and setting energy on it was an AttributeError reported as a vague error; lights are now known by type.",
+    "export_proof_overwritten": "each inspection replaced the scene row's exports with the current run's, so exporting FBX erased the verified proof of the GLB still on the owner's disk; proofs now merge by format (a re-proven format replaces its own entry).",
+    "animated_pose": "after keyframes are inserted the object holds its LAST keyframe's value; the driver now evaluates the scene at its first frame so the read-back is the scene's opening pose."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_creative3d_b44.py": "spec bounds + Blender-only refusals; driver read-back of every new control (relative render, first-frame pose, lens, light colour, material, frames, F-curve keys, GLB export signature); FBX magic and light-by-type; compare names every drift (frames, keyframe value, frame range, lens, light colour, metallic, unverified export, lying hash); fake device refusals; fake keys == C# Inspect keys; service end to end (render stored, exports_json, FBX re-export); router words; voice animate + export (owner's word wins); clarification before any device call; tools tiered; REST create/apply/422/404",
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Scenes/SceneExportTests.cs": "export verified in place (proof without bytes); missing / hash / signature (version, length, fbx over glb) / unknown format / bound / escaping path / absolute render path refusals; SignatureOk; the shipped cloud driver through the real job with real Blender (render verified, GLB verified, keyframes, frames, lens, light colour)",
+    "regression suites rerun": "test_scene_* (8 files), test_blender_driver, test_device_fakes_match_the_device, test_voice_realtime_sessions, test_owner_error_language, test_voice_step_up, test_selfmodel_indexer, test_owner_utterance_corpus, dotnet Scenes tests: see local_gate"
+  },
+  "real_editor": {
+    "blender_lab_script": {
+      "kind": "m25_blender_lab",
+      "measured_at": "2026-09-15T131014Z",
+      "driver_path": "E:\\AI\\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\\services\\api\\app\\creative3d\\drivers\\blender_driver.py",
+      "blender_exe": "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe",
+      "driver_sha256": "a0278a1f8886e0f3da8a52587ca2cdc8e524480fdd44b2641f1aee8993f25713",
+      "fixture_root": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-0onbbri2",
+      "refusals": [
+        {
+          "case": "name_outside_alphabet",
+          "refused": true,
+          "detail": "1 validation error for ScenePlan\n  Value error, add_primitive.name 'Kup; DROP TABLE scenes;--' is not a plain identifier ([A-Za-z][A-Za-z0-9_]{0,63}) [type=value_error, input_value={'tool': 'blender',"
+        },
+        {
+          "case": "operation_outside_vocabulary",
+          "refused": true,
+          "detail": "1 validation error for ScenePlan\noperations.0\n  Input tag 'delete_everything' found using 'op' does not match any of the expected tags: 'create_scene', 'add_primitive', 'transform', 'set_material', 's"
+        },
+        {
+          "case": "path_outside_root",
+          "refused": true,
+          "detail": "C:\\Users\\alpak\\AppData\\Local\\Temp\\outside-the-root\\out.json does not resolve inside the fixture root C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-0onbbri2"
+        }
+      ],
+      "duration_s": 2.14,
+      "blender_exit_code": 0,
+      "blender_stderr_tail": "",
+      "inspection": {
+        "animation": [
+          {
+            "channel": "location",
+            "frames": [
+              1,
+              24
+            ],
+            "object": "Kup",
+            "values": [
+              [
+                2.5,
+                0.0,
+                0.0
+              ],
+              [
+                2.5,
+                0.0,
+                2.0
+              ]
+            ]
+          }
+        ],
+        "camera": "Kamera",
+        "errors": [],
+        "exports": [
+          {
+            "bytes": 72828,
+            "format": "glb",
+            "path": "scene.glb",
+            "sha256": "55ab3fbeb23b719973cacf5aae2f5363ad92c31d67d300b9b9d198afc93bdcc2"
+          },
+          {
+            "bytes": 53708,
+            "format": "fbx",
+            "path": "scene.fbx",
+            "sha256": "5dfdbb42791b51deafd041aeb6077b20d7d17c19573cecb97832964f95bb66aa"
+          }
+        ],
+        "frames": {
+          "end": 24,
+          "fps": 24,
+          "start": 1
+        },
+        "lights": [
+          {
+            "color": [
+              1.0,
+              0.85,
+              0.7
+            ],
+            "energy": 3.0,
+            "name": "Gunes"
+          }
+        ],
+        "objects": [
+          {
+            "location": [
+              0.0,
+              0.0,
+              5.0
+            ],
+            "name": "Gunes",
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "type": "LIGHT"
+          },
+          {
+            "lens": 35.0,
+            "location": [
+              1.0,
+              -6.0,
+              1.5
+            ],
+            "name": "Kamera",
+            "rotation": [
+              76.147334,
+              0.0,
+              9.462322
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "type": "CAMERA"
+          },
+          {
+            "location": [
+              2.5,
+              0.0,
+              0.0
+            ],
+            "name": "Kup",
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.5,
+              1.5,
+              1.5
+            ],
+            "type": "MESH"
+          },
+          {
+            "location": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "material_color": [
+              0.9,
+              0.1,
+              0.1,
+              1.0
+            ],
+            "material_metallic": 0.1,
+            "material_roughness": 0.6,
+            "name": "Kure",
+            "rotation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "type": "MESH"
+          }
+        ],
+        "render": {
+          "bytes": 65771,
+          "engine": "workbench",
+          "height": 240,
+          "path": "render.png",
+          "sha256": "f7e20d3b6008cafedc2746f29afbd22f08f2d08ee02a103f7514f300b55cb209",
+          "width": 320
+        }
+      },
+      "driver_errors": [],
+      "blend_file_present": true,
+      "blend_file_bytes": 491353,
+      "render_path": "C:\\Users\\alpak\\AppData\\Local\\Temp\\pagentos-blender-lab-0onbbri2\\render.png",
+      "render_bytes_on_disk": 65771,
+      "render_sha256_recomputed": "f7e20d3b6008cafedc2746f29afbd22f08f2d08ee02a103f7514f300b55cb209",
+      "render_sha256_matches_driver": true,
+      "render_independent_check": "non_trivial",
+      "exports_checked": [
+        {
+          "format": "glb",
+          "path": "scene.glb",
+          "bytes": 72828,
+          "sha256": "55ab3fbeb23b719973cacf5aae2f5363ad92c31d67d300b9b9d198afc93bdcc2",
+          "verified": true
+        },
+        {
+          "format": "fbx",
+          "path": "scene.fbx",
+          "bytes": 53708,
+          "sha256": "5dfdbb42791b51deafd041aeb6077b20d7d17c19573cecb97832964f95bb66aa",
+          "verified": true
+        }
+      ],
+      "compare": {
+        "ok": true,
+        "checked": 22,
+        "mismatches": [],
+        "reason": null
+      },
+      "ok": true,
+      "problems": []
+    },
+    "device_lab": {
+      "command": "dotnet test devices/windows-agent/tests/PagentOS.Agent.Tests/PagentOS.Agent.Tests.csproj --filter FullyQualifiedName~Scenes",
+      "summary": "Başarılı!  - Başarısız:     0, Başarılı:    55, Atlanan:     0, Toplam:    55, Süre: 19 s - PagentOS.Agent.Tests.dll (net10.0)",
+      "includes": "SceneExportTests (export proof, bounds, signatures, escaping path, absolute render path refusal) and the shipped cloud blender_driver.py through the real device job with the installed Blender 4.5"
+    }
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b44_mutate.py.",
+    "mutations": [
+      "M1 the driver declares its render with an absolute path the device refuses (521) -> 1 failure(s).",
+      "M2 the Cloud Core reads the render from a key only the fake ever sent (521) -> 1 failure(s).",
+      "M3 an animated scene is left at its last keyframe instead of its first frame (526) -> 1 failure(s).",
+      "M4 the comparison never checks WHICH frames carry the keys (526) -> 1 failure(s).",
+      "M5 an export the device hashed differently from the driver still passes (527) -> 1 failure(s).",
+      "M6 the read-back never looks inside a layered action, so no keyframe is reported (526) -> 1 failure(s).",
+      "M7 a Unity plan may name an operation only the Blender driver implements (526/527) -> 1 failure(s).",
+      "M8 'Küreye bir animasyon ekle' becomes a new sphere (the animate match never runs first) (526) -> 1 failure(s).",
+      "M9 the creative export takes 'Bunu GLB olarak dışa aktar' from the scene (527) -> 1 failure(s).",
+      "M10 the model's format argument overrides the owner's own format word (527) -> 1 failure(s).",
+      "M11 a later export erases the verified proof of an earlier one (527) -> 1 failure(s).",
+      "M12 the Cloud Core drops the device's 'verified' word, so no export is ever proven (527) -> 1 failure(s)."
+    ],
+    "result": "12/12 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL on this machine (Blender 4.5.4 LTS): the shipped driver run by scripts/tests/blender-scene-lab.py and by the device's own job in SceneExportTests, every fact from out.json, the PNG and the GLB on disk. The roadmap's PROVEN_REAL in PRODUCTION (the first real scene made on the production path, its render independently verified) is READY_FOR_OWNER: it needs the owner's device connected to production with the companion's 3D root."
+  },
+  "owner_gates": {
+    "production_scene": "with the device connected to production: POST /v1/scenes (or 'Blender'da yeni sahne aç' by voice), add a sphere, 'Render al', 'Sahneyi GLB olarak dışa aktar'; read GET /v1/scenes/{id} for the render and the export proof."
+  }
+}

@@ -271,8 +271,16 @@ const DEVICE: DeviceStatus = {
 
 describe("the cockpit's new panels tell 'not built yet' from 'nothing there'", () => {
   it("says 'henüz yok' for a route this Cloud Core does not have", () => {
+    // B24 req 714: on the cockpit an absent route draws nothing — the sentence is on
+    // /availability with the other twenty-six families. On /alarms it is the answer.
+    expect(
+      renderToStaticMarkup(
+        <AlarmsPanel state={{ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/alarms yok (HTTP 404)." }} now={T0} />,
+      ),
+    ).toBe("");
+
     const html = renderToStaticMarkup(
-      <AlarmsPanel state={{ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/alarms yok (HTTP 404)." }} now={T0} />,
+      <AlarmsPanel state={{ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/alarms yok (HTTP 404)." }} now={T0} always />,
     );
     expect(html).toContain("data-panel-absent");
     expect(html).toContain("Henüz yok.");
@@ -281,9 +289,13 @@ describe("the cockpit's new panels tell 'not built yet' from 'nothing there'", (
     expect(html).not.toContain("Kurulu alarm yok.");
   });
 
-  it("says 'no alarms' only when it actually asked and got none", () => {
+  it("says 'no alarms' only when it actually asked and got none — on the page, not the cockpit", () => {
+    expect(
+      renderToStaticMarkup(<AlarmsPanel state={{ kind: "ok", value: [], at: 0 }} now={T0} />),
+    ).toBe("");
+
     const html = renderToStaticMarkup(
-      <AlarmsPanel state={{ kind: "ok", value: [], at: 0 }} now={T0} />,
+      <AlarmsPanel state={{ kind: "ok", value: [], at: 0 }} now={T0} always />,
     );
     expect(html).toContain("Kurulu alarm yok.");
     expect(html).toContain('data-panel-empty="yes"');
@@ -339,10 +351,21 @@ describe("the cockpit's new panels tell 'not built yet' from 'nothing there'", (
   });
 
   it("renders the policy panel's own absence truthfully", () => {
+    // req 714 again: quiet on the cockpit, said in words on /settings.
+    expect(
+      renderToStaticMarkup(
+        <AmbientPanel
+          policy={{ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/ambient/policy yok (HTTP 404)." }}
+          devices={{ kind: "ok", value: [DEVICE], at: 0 }}
+        />,
+      ),
+    ).toBe("");
+
     const html = renderToStaticMarkup(
       <AmbientPanel
         policy={{ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/ambient/policy yok (HTTP 404)." }}
         devices={{ kind: "ok", value: [DEVICE], at: 0 }}
+        always
       />,
     );
     expect(html).toContain("Henüz yok.");

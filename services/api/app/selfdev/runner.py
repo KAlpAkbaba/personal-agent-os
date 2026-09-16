@@ -65,6 +65,10 @@ class CandidateRunner:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(package) + os.pathsep + env.get("PYTHONPATH", "")
         env["PYTHONUTF8"] = "1"
+        # No bytecode in a worktree: a .pyc left beside a source restored within the same
+        # second (same size) is loaded in its place, and the base would be judged by the
+        # patched module's bytecode.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         return self._run(
             [
                 self.python,

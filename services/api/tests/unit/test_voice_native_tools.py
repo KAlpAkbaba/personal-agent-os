@@ -34,7 +34,8 @@ from sqlalchemy import select
 from app.nativefactory import service as native_service
 from app.nativefactory.artifacts import ArtifactFacts
 from app.nativefactory.models import NativeBuildRow
-from app.nativefactory.stacks import SPEECH_DEVICE_PACKAGING_NOT_WIRED, ToolchainFacts
+from app.nativefactory.stacks import ToolchainFacts
+from app.routines.dispatch import DeviceRunResult
 from app.voice.realtime_sessions.tools_native import (
     SPEECH_ANDROID_NEEDS_JDK,
     SPEECH_INSTALL_NEEDS_DEVICE,
@@ -262,17 +263,38 @@ def test_fix_with_nothing_broken_says_so_rather_than_pretending_a_repair() -> No
     assert "Düzeltilecek bir hata görünmüyor" in body["speech"]
 
 
-def test_fix_with_something_broken_reads_the_error_and_says_it_did_not_fix_it() -> None:
-    """Spec §9: the coding-model seam is inert here. The truthful answer is the ERROR
-    ITSELF plus an explicit statement that the fix was not written."""
+def test_fix_with_something_broken_and_no_device_reads_the_error_and_says_so() -> None:
+    """Spec §9: the coding-model seam is inert here. With no device to rebuild on, the
+    truthful answer is the ERROR ITSELF plus an explicit statement that the fix was not
+    written."""
     h = build_harness()
     h.seed(CTX_NATIVE_BUILT)
+    h.runtime.register_live(device_action=None)
     sid = h.new_session()
     h.say(sid, "Hata varsa düzelt.")
     body = h.tool(sid, "c-1", "native.fix", {})["result"]
     assert body["execution_status"] == "refused"
     assert body["fixed"] is False
     assert "düzeltmeyi kendi başıma yazamıyorum" in body["speech"]
+
+
+def test_fix_with_a_device_regenerates_and_rebuilds_there_and_reports_the_verdict() -> None:
+    """B33 req 470: the one repair this factory can honestly perform is deterministic - the
+    source is re-rendered from the spec and the whole build runs again ON THE DEVICE; the
+    row's new state is the device's verdict, and "düzelttim" is said only for verified."""
+    h = build_harness()
+    h.seed(CTX_NATIVE_BUILT)
+    sid = h.new_session()
+    h.say(sid, "Hata varsa düzelt.")
+    body = h.tool(sid, "c-1", "native.fix", {})["result"]
+    assert body["execution_status"] == "executed", body.get("speech")
+    assert body["fixed"] is True
+    assert body["build"]["state"] == "verified"
+    assert body["speech"].startswith("Düzelttim efendim")
+    assert "yeniden derledim" in body["speech"]
+    assert h.device.capabilities_called()[:2] == ["project.scaffold", "project.run"]
+    assert body["observed_after"]["server"]["was"] == "unverified"
+    assert body["observed_after"]["server"]["attempt"] == 2
 
 
 def test_rebuild_opens_a_new_row_at_the_next_version_and_leaves_the_old_verdict_alone(
@@ -321,14 +343,110 @@ def test_package_makes_a_real_portable_package_and_says_what_it_did_not_make() -
         assert bundle.namelist()
 
 
-def test_install_refuses_because_the_package_installs_where_the_owner_is() -> None:
+def test_fix_whose_device_rebuild_still_fails_says_so_in_the_compilers_words() -> None:
+    """B33 req 470, the other half: a failure that survives the regenerate-and-rebuild is
+    reported as the DEVICE's own error and "fixed" stays False - never a repair claimed."""
     h = build_harness()
     h.seed(CTX_NATIVE_BUILT)
+    h.device.results["project.test"] = DeviceRunResult(
+        False, "tests_failed", "Failed!  - Failed: 1, Passed: 2 (NoteStore.Add)"
+    )
+    sid = h.new_session()
+    h.say(sid, "Hata varsa düzelt.")
+    body = h.tool(sid, "c-1", "native.fix", {})["result"]
+    assert body["execution_status"] == "refused"
+    assert body["fixed"] is False
+    assert body["speech"].startswith("Düzeltemedim efendim")
+    assert "NoteStore.Add" in body["speech"]
+    assert body["build"]["state"] == "failed"
+    assert "project.scaffold" in h.device.capabilities_called()
+
+
+def test_install_refuses_with_no_device_because_the_package_installs_where_the_owner_is() -> None:
+    h = build_harness()
+    h.seed(CTX_NATIVE_BUILT)
+    h.runtime.register_live(device_action=None)
     sid = h.new_session()
     body = h.tool(sid, "c-1", "native.install", {})["result"]
     assert body["execution_status"] == "refused"
     assert body["error_class"] == "dependency_unavailable"
     assert body["speech"] == SPEECH_INSTALL_NEEDS_DEVICE
+
+
+def test_install_then_uninstall_go_through_the_device_and_a_second_removal_is_refused() -> None:
+    """B33 req 468/469: project.install writes the Start Menu shortcut and the receipt
+    carries what the device OBSERVED; project.uninstall removes it and keeps the build;
+    removing what this system never installed is refused by name (spec §6's negative)."""
+    h = build_harness()
+    h.seed(CTX_NATIVE_BUILT)
+    sid = h.new_session()
+    installed = h.tool(sid, "c-1", "native.install", {})["result"]
+    assert installed["execution_status"] == "executed", installed.get("speech")
+    observed = installed["observed_after"]["server"]
+    assert observed["installed"] is True
+    assert observed["method"] == "start_menu_shortcut"
+    assert installed["shortcut"].endswith("PagentOS\\Notlarim.lnk")
+    assert observed["observed"] == {"shortcut_exists": True, "exe_exists": True}
+    assert "Başlat menüsünde" in installed["speech"]
+    assert "project.install" in h.device.capabilities_called()
+
+    removed = h.tool(sid, "c-2", "native.uninstall", {})["result"]
+    assert removed["execution_status"] == "executed", removed.get("speech")
+    assert removed["observed_after"]["server"]["uninstalled"] is True
+    assert removed["observed_after"]["server"]["build_kept"] is True
+    assert "derleme klasörü yerinde" in removed["speech"]
+
+    again = h.tool(sid, "c-3", "native.uninstall", {})["result"]
+    assert again["execution_status"] == "refused"
+    assert again["error_class"] == "not_found"
+    assert "kurulmamış" in again["speech"]
+
+
+def test_launch_on_windows_goes_through_the_device_and_reads_the_window_back() -> None:
+    """B33 req 462/463: app.launch with the built executable, then one ui.inspect. The
+    harness's device shows a Notepad tree, so the template's controls are NOT found and the
+    receipt says the window came up but the UI was not read - never "verified"."""
+    h = build_harness()
+    h.seed(CTX_NATIVE_BUILT)
+    sid = h.new_session()
+    h.say(sid, "Masaüstü uygulamasını aç.")
+    body = h.tool(sid, "c-1", "native.launch", {})["result"]
+    assert body["execution_status"] == "executed", body.get("speech")
+    assert body["terminal_status"] == "unverified"
+    assert body["ui_verified"] is False
+    assert body["window_id"]
+    assert "açıldı" in body["speech"] and "tam okuyamadım" in body["speech"]
+    called = h.device.capabilities_called()
+    assert "app.launch" in called and "ui.inspect" in called
+
+
+def test_verify_with_a_window_that_lacks_the_template_controls_names_the_failed_step() -> None:
+    """B33 req 463-466: the verification is the 26.15 flow; with the wrong window (the
+    harness's Notepad tree) it stops at the first read-back and NAMES it."""
+    h = build_harness()
+    h.seed(CTX_NATIVE_BUILT)
+    sid = h.new_session()
+    h.say(sid, "Uygulamayı doğrula.")
+    body = h.tool(sid, "c-1", "native.verify", {})["result"]
+    assert body["execution_status"] == "executed", body.get("speech")
+    assert body["terminal_status"] == "unverified"
+    assert body["verification"]["verified"] is False
+    assert body["verification"]["failed_step"] == "ui.inspect"
+    assert "doğrulanamadı" in body["speech"] and "ui.inspect" in body["speech"]
+
+
+def test_log_reads_the_apps_own_log_through_the_device() -> None:
+    """B33 req 466: file.read of data\\app.log beside the executable; the tail lands on
+    the row."""
+    h = build_harness()
+    h.seed(CTX_NATIVE_BUILT)
+    sid = h.new_session()
+    h.say(sid, "Uygulamanın günlüğünü oku.")
+    body = h.tool(sid, "c-1", "native.log", {})["result"]
+    assert body["execution_status"] == "executed", body.get("speech")
+    assert body["observed_after"]["server"]["path"].endswith("\\data\\app.log")
+    assert "günlüğü" in body["speech"]
+    assert "file.read" in h.device.capabilities_called()
 
 
 def test_launch_on_android_names_the_owner_item_rather_than_the_missing_device() -> None:
@@ -392,9 +510,7 @@ LINUX_CLOUD_CORE = ToolchainFacts(
 
 def _production_shaped():
     h = build_harness()
-    h.runtime.register_live(
-        native_runner=None, native_root=None, native_toolchain=LINUX_CLOUD_CORE
-    )
+    h.runtime.register_live(native_runner=None, native_root=None, native_toolchain=LINUX_CLOUD_CORE)
     return h
 
 
@@ -411,9 +527,9 @@ def test_production_plans_a_windows_app_for_the_device_and_builds_it_there() -> 
     sid = h.new_session()
     h.say(sid, "Bana Windows için masaüstü not uygulaması yap.")
 
-    created = h.tool(
-        sid, "c-1", "native.create", {"targets": ["windows_exe"], "name": "Notlarim"}
-    )["result"]
+    created = h.tool(sid, "c-1", "native.create", {"targets": ["windows_exe"], "name": "Notlarim"})[
+        "result"
+    ]
 
     assert created["execution_status"] == "executed", created.get("speech")
     assert [b["state"] for b in created["builds"]] == ["planned"]
@@ -421,19 +537,20 @@ def test_production_plans_a_windows_app_for_the_device_and_builds_it_there() -> 
     assert "cihaz" in created["speech"]
     assert ".NET SDK bu makinede yok" not in created["speech"]
 
-    built = h.tool(
-        sid, "c-2", "native.build", {"build_id": created["builds"][0]["build_id"]}
-    )["result"]
+    built = h.tool(sid, "c-2", "native.build", {"build_id": created["builds"][0]["build_id"]})[
+        "result"
+    ]
 
     assert built["built_on"] == "device", built.get("speech")
     assert built["build"]["state"] == "verified"
     assert h.device.capabilities_called()[:2] == ["project.scaffold", "project.run"]
 
 
-def test_a_packaging_target_is_refused_by_name_when_the_device_would_build_it() -> None:
-    """The device path makes the EXE and nothing else. The judge compares version and
-    subsystem, not kind - so an MSIX row sent to the device would have come back `verified`
-    carrying an EXE. It is refused by name instead, and the device is never asked."""
+def test_a_packaging_target_is_built_on_the_device_and_packaged_there_unsigned() -> None:
+    """B33 req 456/457/472: until this batch an MSIX row was refused by name because the
+    device made the EXE and nothing else. Now the device packs it (project.package) after
+    the EXE is read back, the row's artefact is the package, and the owner hears the
+    signing policy - unsigned, and why."""
     h = _production_shaped()
     sid = h.new_session()
     created = h.tool(
@@ -443,13 +560,38 @@ def test_a_packaging_target_is_refused_by_name_when_the_device_would_build_it() 
         {"targets": ["windows_exe", "windows_msix"], "name": "Notlarim"},
     )["result"]
     states = {b["target"]: b["state"] for b in created["builds"]}
-    assert states == {"windows_exe": "planned", "windows_msix": "unavailable"}
+    assert states == {"windows_exe": "planned", "windows_msix": "planned"}
     msix = next(b for b in created["builds"] if b["target"] == "windows_msix")
 
     built = h.tool(sid, "c-2", "native.build", {"build_id": msix["build_id"]})["result"]
 
+    assert built["execution_status"] == "executed", built.get("speech")
+    assert built["build"]["state"] == "verified"
+    called = h.device.capabilities_called()
+    assert called[-1] == "project.package"
+    assert h.device.payload_for("project.package")["kind"] == "msix"
+    scaffolded = {f["path"] for f in h.device.payload_for("project.scaffold")["files"]}
+    assert "staging/AppxManifest.xml" in scaffolded
+    with h.factory() as db:
+        row = db.get(NativeBuildRow, uuid.UUID(msix["build_id"]))
+        assert row.artifact_path.endswith(".msix")
+        assert row.artifact_json["package"]["kind"] == "msix"
+        assert row.artifact_json["package"]["signed"] is False
+        assert row.artifact_json["package"]["executable"].endswith(".exe")
+
+
+def test_an_android_target_is_still_refused_by_name_before_the_device_is_asked() -> None:
+    """The device path builds the three Windows targets and nothing else."""
+    h = _production_shaped()
+    sid = h.new_session()
+    created = h.tool(sid, "c-1", "native.create", {"targets": ["android_apk"], "name": "Notlarim"})[
+        "result"
+    ]
+    assert [b["state"] for b in created["builds"]] == ["unavailable"]
+    built = h.tool(sid, "c-2", "native.build", {"build_id": created["builds"][0]["build_id"]})[
+        "result"
+    ]
     assert built["execution_status"] == "refused"
-    assert SPEECH_DEVICE_PACKAGING_NOT_WIRED in built["speech"]
     assert "project.scaffold" not in h.device.capabilities_called()
 
 
@@ -458,9 +600,9 @@ def test_the_lab_still_plans_against_the_machine_it_runs_on() -> None:
     are the right ones and the reason names the SDK it measured."""
     h = build_harness()
     sid = h.new_session()
-    created = h.tool(
-        sid, "c-1", "native.create", {"targets": ["windows_exe"], "name": "Notlarim"}
-    )["result"]
+    created = h.tool(sid, "c-1", "native.create", {"targets": ["windows_exe"], "name": "Notlarim"})[
+        "result"
+    ]
     assert [b["state"] for b in created["builds"]] == ["planned"]
     assert ".NET 10.0.400" in created["speech"]
     assert "cihaz" not in created["speech"]

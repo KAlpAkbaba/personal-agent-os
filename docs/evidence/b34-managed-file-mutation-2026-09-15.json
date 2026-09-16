@@ -1,0 +1,89 @@
+{
+  "batch": "B34",
+  "name": "Yönetilen dosya mutasyonu",
+  "requirements": [153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 170, 674],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 on the third run (the first lost the operator's and the artifact family's 'dosyayı aç' to a create verb and the ADR-0083 delete test to its superseded premise; the second lost B33's native log cases to the new fake file.read answering not_found for a path outside the corpus)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10529 passed, 5 skipped (pytest 1339 s); was 10465 after B33",
+      "Windows agent build + tests": "PASS - Agent.Tests (DocumentCapabilityNames.All 14, FileMutationTests 8) + Companion.Audio.Tests",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest tests/cockpit + tests/pages + tests/features 494/494 (mutations-approvals 6, quiet-families 28, approvals-client six routes); tsc --noEmit clean; oxlint no new warnings; node scripts/web/sync-feature-matrix.mjs + matrix-badges 12/12"
+  },
+  "what_this_proves": "The documents family is no longer structurally read-only. A file is written, appended to, edited, renamed, moved, copied or sent to the Recycle Bin only through a journaled mutation: the device backs the file up to its own undo store first, writes atomically, and answers the record before and after with sha256; the Cloud Core records every change as a file_mutations row (the version history, the approval queue, the receipt), applies the risky ones only after the owner's word through the same read-back + confirmation gate mail drafts use, and undoes any applied change by running its inverse plan and reading the result back. One host flag closes the whole surface. Nothing deletes permanently.",
+  "measured_first": {
+    "cloud_before": "No write/append/rename/move/copy/delete tool in tools_documents (ADR-0083 decision 7); the corpus case doc.neg.delete proved 'Bu dosyayı sil.' reached nothing; DocumentCapabilityNames.All = 8; no undo journal, no mutation receipt, no hash-before/after, no approval surface for files; documents_mutation_enabled did not exist.",
+    "router_before": "'Bu dosyada X yerine Y yaz' → type_text (the operator's typing took it); 'Bu dosyanın sonuna ... ekle' → calendar_propose ('... ekle' with a meeting word); 'Bu dosyayı kopyala' → none; 'Uygula.' → none; 'Bu dosyayı sil' → none. Measured 2026-09-15 before the matchers were written.",
+    "relay": "the realtime relay refuses a tool argument named 'text' (FORBIDDEN_KEY_PARTS treats it as transcript-shaped); the mutation tools take 'content'.",
+    "device_probe": "the documents lab's fixture copy is the only authorised root, so a bucket name (documents/desktop) resolves outside it there and is refused by the same confinement the real desktop applies; the lab tests use absolute paths inside the lab root and the cloud tests use the fake's bucket prefixes."
+  },
+  "closed_fully": {
+    "153_167_edit": "document.edit: 'Bu dosyada X yerine Y yaz' → the file's current text through file.read (64 KiB pages), the words replaced the way the owner SAID them (Turkish casefold, and without diacritics when ASR dropped them), a PROPOSAL row (sensitive) with the plan {file.write, expected_sha256 = the hash it read}; nothing written until 'Uygula.'; a word not in the file is text_not_found, never a guess.",
+    "154_write": "document.write: 'X adında bir dosya oluştur' + the model's content → a NEW text file in Belgeler (or the spoken folder, as a bucket the device resolves); low risk, applied at once, journaled, undo = Recycle Bin with a backup.",
+    "155_append": "document.append: 'Bu dosyanın sonuna ... ekle' → file.append with expected_sha256; low risk, applied at once, backup kept, undo = file.restore.",
+    "156_rename": "document.rename: 'Bu dosyanın adını X yap' → proposal → file.rename (the extension kept when none was said); undo renames back.",
+    "157_move": "document.move: 'Bu dosyayı Masaüstüne taşı' → proposal (critical) → file.move {destination_folder: bucket}; undo moves back to the folder of path_before.",
+    "158_copy": "document.copy: 'Bu dosyayı kopyala / ... X adıyla kopyala / ... Masaüstüne kopyala' → proposal → file.copy (never over an existing file; '<name> - kopya.<ext>' when nothing was said); undo trashes the copy with a backup.",
+    "159_161_delete": "document.delete: 'Bu dosyayı sil' / 'çöp kutusuna gönder' → proposal (critical) → file.trash {backup: true}: the Recycle Bin, a copy in the undo store first; undo = file.restore. Permanent deletion is offered by nothing (the shape of that policy is the owner's checkpoint).",
+    "160_undo": "document.undo: the last applied row's inverse plan (derived from the device's ANSWER, never from the request) run on the device and read back; the original row becomes undone and the restore is a row of its own (undo_of); nothing to undo is refused by name.",
+    "162_163_receipt_hashes": "every receipt is composed from the row: sha_before/sha_after/backup_id/path_after in the receipt and the ledger event; a device answer without an 'after' record carrying a hash (or, for a delete, observed.exists false) is recorded failed, never verified.",
+    "164_versions": "document.versions: the journal rows for the file's path, newest first, spoken with time and kind; the REST journal lists them all.",
+    "165_atomic": "device: FileMutations.WriteAtomic - a temporary file beside the target and one rename over it; a BOM the file had is kept; the artifacts family's atomic write is now matched on the documents side.",
+    "166_approval": "risk_of: write-new/append low (applied at once), overwrite/edit/rename/copy sensitive, move/delete critical; sensitive and critical are proposals read back to the session (read_back_at/read_back_session_id/read_back_turn) and applied only by 'Uygula.'/'Kaydet.' (the router resolves DOCUMENT_APPLY only while a change is pending for THIS session, and the tool's owner_intent_ok is the router's verdict) or the Cockpit's confirm; another session's 'Uygula.' is not_read_back; a second 'Uygula.' is nothing_pending.",
+    "674_permission": "settings.documents_mutation_enabled (default True) closes the whole surface with one flag (mutation_disabled); the device's authorised roots, secret-name refusal and text-like-only rule stand under it; step-up tiers: write/append/apply/undo CRITICAL, the proposals SENSITIVE.",
+    "device": "DocumentCapabilityNames.All 8 → 14: file.write / file.append / file.rename / file.move / file.copy / file.restore (+ file.trash {backup}); FileMutations.cs (backup store <root>\\.pagentos-undo with sidecars, newest 500 kept, hidden, skipped by file.search; text-like kinds only for write/append; every answer before/after/backup/observed); DocumentCapabilities dispatch with the family's own confinement (ResolveTarget for existing files, ConfineNewFile for a path that does not exist yet, ConfineFolderEntry for a bucket); DEVICE_PROTOCOL.md §6 rows.",
+    "rest_and_cockpit": "GET /v1/documents/mutations (journal), GET /pending (lists = read-back for the owner session), POST /{id}/confirm|discard|undo through the same MutationService and the same device port the voice tools use; the Cockpit's Documents panel lists pending changes with the sentence the owner heard, the hash of what is there, and the same Onayla/Vazgeç pair drafts and proposals use (approvals.ts + useApprovalPair mutations family; the twenty-eighth quiet family).",
+    "router": "Intent.DOCUMENT_WRITE/APPEND/EDIT/RENAME/MOVE/COPY/DELETE/APPLY/UNDO/VERSIONS; the block sits before the operator's typing matcher (which owned 'X yerine Y yaz') and before M21's confirmations; names are read off the RAW text (the tokenizer cuts 'notlar-yeni.md' into pieces); other families' nouns (mail, calendar, alarm, duplicates, native, artifacts) are refused in the TARGET part of the sentence; the bare 'Vazgeç.' targets document.discard when a file change is the only thing pending."
+  },
+  "found_on_the_way": {
+    "forbidden_argument_name": "the relay refuses tool arguments named 'text' (transcript-shaped); the first run of the write test died on it - the mutation tools take 'content'.",
+    "turn_record": "find_text / replace_text / new_name had to be copied into ctx['last_utterance'] in record_client_events or the edit tool never saw the owner's words (the same field-travel gap B27/B28 recorded).",
+    "journal_table_in_the_harness": "the harness creates tables from its own TABLES list; the first flow died on 'no such table: file_mutations' until FileMutationRow joined it.",
+    "overlay_reset": "the fake desktop's mutable overlay leaked between tests (gunluk.md from one test in the next one's Recycle Bin) until seed() resets it for every context.",
+    "case_and_diacritics": "'Bütçe' in the file, 'bütçe' from the router, 'butce' from ASR - replace_spoken matches casefolded and, failing that, without diacritics, one-to-one so the slices line up.",
+    "folder_of_a_bare_name": "_dir_of('rapor.pdf') answered 'rapor.pdf' and the move's undo asked the device for a folder named like the file; '' is the root now, and the fake accepts an absolute destination_dir beside a bucket.",
+    "rest_device_port": "the REST confirm used app.state.device_action (the broker's) while the voice tools use the runtime's live 'device_action'; the route now reads the runtime's live source first so a Cockpit confirmation and a spoken one reach one device through one path.",
+    "quiet_families": "adding a fetched family made it the twenty-eighth: req 714's rule (data or hidden) now applies to the Documents panel whenever it carries the pending list, and the test pins 28.",
+    "first_gate_ac": "the first full gate caught 'aç' among the create verbs ('yeni dosya aç' = create): 'Dosya gezginini aç' (the operator) and 'Son ürettiğin / Önceki dosyayı aç' (the artifact family) were taken by document.write; the create verbs are oluştur/yarat only now, and test_documents_tools' ADR-0083 test ('Bu dosyayı sil' reaches nothing) is rewritten to what B34 promises instead: a proposal that locates and moves nothing."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_documents_b34.py": "35 (vocabulary + contract halves + policy; write/undo; write refusals; append/undo; edit propose→apply→hashes→second apply refused; decline; text not found; office refused; stale proposal (hash moved) fails honestly; rename/undo; move/undo; copy/undo; delete/restore; undo nothing + versions; host flag; REST list/confirm/undo/discard; router neighbours ×17; cross-session gate; verification unit)",
+    "services/api/tests/voice_corpus/corpus.py": "doc.write.* / append / edit.* / edit.update_save / apply.after_edit / apply.nothing_pending / discard.after_edit / rename / move / copy.* / undo.after_append / undo.nothing / versions / edit.office_refused / two neighbours; doc.neg.delete rewritten (a proposal, never an act); SIDE_EFFECTS_DOCUMENTS_MUTATION",
+    "devices/windows-agent/tests/.../Documents/FileMutationTests.cs": "8 (create atomically; overwrite backs up + restore brings the original back + the search never lists the store + a restore is itself undoable; refusals: changed file / secret name / office / outside roots / relative; append + backup + not_found; rename/move/copy keep content and never overwrite + traversal refused + outside refused; trash with backup + restore + unknown backup; corrupt backup never restored; the six names after file.trash)",
+    "count tests": "Documents/Operator/Native/Projects/Scenes advertisement tests +36+14+9+1; Documents.Count 14; FileFetch pins file.trash at [7] and file.restore last",
+    "apps/web/tests/cockpit/mutations-approvals.test.tsx": "6 (parser, paths and family, outcome text, panel with a pending change, quiet/loading, unchanged without the source)",
+    "apps/web/tests/cockpit/quiet-families.test.tsx": "twenty-eight families",
+    "apps/web/tests/cockpit/approvals-client.test.ts": "six routes"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); the C# mutations rebuild the agent tests and run the lab suite, then the restored tree is rebuilt.",
+    "mutations": [
+      "M1 document.apply skips the read-back/confirmation gate -> 1 failure (another session's 'Uygula.' applied).",
+      "M2 a device answer without a hashed record counts as verified -> 1 failure (verification unit).",
+      "M3 a delete applies at once without the owner's word -> 1 failure (delete is a proposal).",
+      "M4 the undo of a rename renames to the NEW name -> 1 failure (old name not back).",
+      "M5 a bare 'uygula' is a file-change confirmation with nothing pending -> 1 failure (router contract).",
+      "M6 (C#) file.write overwrites without taking the backup -> 2 failures in FileMutationTests (no backup to restore from; corrupt-backup test has no backup).",
+      "M7 (C#) file.write ignores expected_sha256 and writes over a changed file -> 1 failure (the changed file was overwritten). Restored tree rebuilt."
+    ],
+    "result": "7/7 red; every file restored to its sha256 before the mutation"
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL (device lab, this desktop): a real file in the lab's fixture copy was overwritten atomically, its backup written to the undo store with a hash, and file.restore brought the original bytes back (the hash read back equal to the original's); a real file was renamed, moved, copied, sent to the Recycle Bin with a backup and restored. The Cloud Core flows (journal, gate, undo, REST, Cockpit) are proven against the fake desktop whose answers are the shapes the real device's lab tests answer. The production round (a file changed through the owner's voice, its hash journaled, undone, the original back on the owner's machine) is Karar 0's (READY_FOR_OWNER).",
+    "why": "REAL_PROOF_REQUIRED names production; no commit is made in this run by the owner's instruction, so no production round exists yet."
+  },
+  "owner_gates": {
+    "permanent_delete_policy": "READY_FOR_OWNER (checkpoint 14): no setting or tool deletes permanently; a delete is the Recycle Bin with a backup; whether a permanent delete should ever exist, and behind what confirmation, is the owner's decision - nothing waits on it.",
+    "karar_0": "production release round: edit a text file by voice, confirm, undo, confirm the original is back."
+  }
+}

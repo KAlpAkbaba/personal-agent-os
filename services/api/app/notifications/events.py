@@ -18,7 +18,7 @@ owner is told "yedek alınamadı", not "backup-cloud-core.sh exited 95".
 from __future__ import annotations
 
 import dataclasses
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, Final
 
 from sqlalchemy.orm import Session
@@ -39,6 +39,9 @@ BACKUP_FAILED: Final[str] = "backup.failed"
 ALARM_FAILED: Final[str] = "alarm.failed"
 RESEARCH_FINISHED: Final[str] = "research.finished"
 CANDIDATE_READY: Final[str] = "selfdev.candidate_ready"
+CALENDAR_REMINDER: Final[str] = "calendar.reminder"
+#: A quiet window that never contains a moment (start == end): see ``calendar_reminder``.
+_NO_QUIET_HOURS: Final[time] = time(0, 0)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -113,6 +116,15 @@ EVENTS: Final[dict[str, EventSpec]] = {
             "system produces, and it is the one most likely to arrive in batches"
         ),
     ),
+    CALENDAR_REMINDER: EventSpec(
+        kind=CALENDAR_REMINDER,
+        priority=PRIORITY_NORMAL,
+        why=(
+            "the owner set this reminder on the event themselves; it is normal priority "
+            "because it is expected, and it ignores quiet hours because its moment is the "
+            "whole point"
+        ),
+    ),
 }
 
 
@@ -125,8 +137,12 @@ def _emit(
     group_key: str = "",
     data: dict[str, Any] | None = None,
     now: datetime | None = None,
+    honour_quiet_hours: bool = True,
 ) -> NotificationRow:
     spec = EVENTS[event]
+    quiet: dict[str, time] = (
+        {} if honour_quiet_hours else {"quiet_start": _NO_QUIET_HOURS, "quiet_end": _NO_QUIET_HOURS}
+    )
     return notifications.record(
         db,
         kind=spec.kind,
@@ -136,6 +152,7 @@ def _emit(
         group_key=group_key,
         data=data,
         now=now,
+        **quiet,
     )
 
 
@@ -282,6 +299,29 @@ def candidate_ready(
     )
 
 
+def calendar_reminder(
+    db: Session,
+    *,
+    event_uid: str,
+    summary: str,
+    starts_at: datetime,
+    now: datetime | None = None,
+) -> NotificationRow:
+    """B46 req 358. A reminder the owner put on the event themselves (its VALARM) is due at
+    the moment they chose, so quiet hours do not hold it back: they are for what the system
+    decides to say, and a 07:00 meeting's reminder delivered at 07:30 is not a reminder."""
+    return _emit(
+        db,
+        CALENDAR_REMINDER,
+        title="Takvim hatırlatması",
+        body=f"{summary} başlıyor efendim: saat {starts_at.strftime('%H:%M')}.",
+        group_key=f"calendar:{event_uid}:{starts_at.isoformat()}",
+        data={"event_uid": event_uid, "starts_at": starts_at.isoformat()},
+        now=now,
+        honour_quiet_hours=False,
+    )
+
+
 #: event -> the function that raises it. Read by the guard that checks each one is actually
 #: called from somewhere, so a new event cannot be declared and left unwired.
 EMITTERS: Final[dict[str, str]] = {
@@ -293,6 +333,7 @@ EMITTERS: Final[dict[str, str]] = {
     ALARM_FAILED: "alarm_failed",
     RESEARCH_FINISHED: "research_finished",
     CANDIDATE_READY: "candidate_ready",
+    CALENDAR_REMINDER: "calendar_reminder",
 }
 
 
@@ -300,6 +341,7 @@ __all__ = [
     "ALARM_FAILED",
     "APPROVAL_REQUIRED",
     "BACKUP_FAILED",
+    "CALENDAR_REMINDER",
     "CANDIDATE_READY",
     "EMITTERS",
     "EVENTS",
@@ -311,6 +353,7 @@ __all__ = [
     "alarm_failed",
     "approval_required",
     "backup_failed",
+    "calendar_reminder",
     "candidate_ready",
     "research_finished",
     "rollback_happened",

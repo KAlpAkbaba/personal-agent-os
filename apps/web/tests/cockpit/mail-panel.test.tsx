@@ -144,6 +144,10 @@ function fakeClient(overrides: Partial<ApprovalClient> = {}): ApprovalClient {
     discardDraft: vi.fn(async () => ({ state: "discarded", summary: null, receiptId: "r2" })),
     confirmProposal: vi.fn(async () => ({ state: "committed", summary: null, receiptId: "r3" })),
     discardProposal: vi.fn(async () => ({ state: "discarded", summary: null, receiptId: "r4" })),
+    confirmMutation: vi.fn(async () => ({ state: "applied", summary: null, receiptId: "r5" })),
+    discardMutation: vi.fn(async () => ({ state: "discarded", summary: null, receiptId: "r6" })),
+    approveCandidate: vi.fn(async () => ({ state: "approved", summary: null, receiptId: "r7" })),
+    rejectCandidate: vi.fn(async () => ({ state: "rejected", summary: null, receiptId: "r8" })),
     ...overrides,
   };
 }
@@ -172,14 +176,23 @@ function portsOf(client: ApprovalClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the Posta panel", () => {
-  it("is empty, in words, when the pending route answered with no draft and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when nothing waits and the bus is silent (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/mail/drafts/pending yok (HTTP 404)." })).toBe("");
+  });
+
+  it("says the bus told it nothing, when there is a draft to show anyway", () => {
+    const rows = panel(ok([draft()]));
+    expect(rows).toContain('data-mail-activity="untold"');
+    expect(rows).toContain("Posta etkinliği bildirilmedi.");
+  });
+
+  it("keeps every word while the bus is telling us something", () => {
+    const html = panel(ok([]), [MAIL_ACTIVITY("INBOX", "Proje planı", "read_back")]);
     expect(html).toContain('data-panel="mail"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Bekleyen taslak yok");
-    expect(html).toContain('data-mail-activity="untold"');
-    expect(html).toContain("Posta etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).not.toContain("<button");
     expect(html).not.toContain("data-approval-pair");
@@ -201,7 +214,12 @@ describe("the Posta panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Bekleyen taslak yok");
 
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/mail/drafts/pending yok (HTTP 404)." });
+    // Absent still says so WHILE the bus is talking: "the route is not here" and
+    // "nothing is happening" are different facts (req 714 only silences both together).
+    const absent = panel(
+      { kind: "absent", detail: "Bu Cloud Core sürümünde /v1/mail/drafts/pending yok (HTTP 404)." },
+      [MAIL_ACTIVITY("INBOX")],
+    );
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/mail/drafts/pending yok (HTTP 404).");
     expect(absent).not.toContain("Bekleyen taslak yok");
@@ -319,8 +337,9 @@ describe("the Posta panel", () => {
     expect(stale).toContain('data-mail-last-known="active"');
     expect(stale).toContain("Son bilinen: Gelen kutusu okunuyor · 46 sn önce");
 
-    // A calendar event is not a mail event.
-    expect(panel(ok([]), [CALENDAR_ACTIVITY("today")])).toContain('data-mail-activity="untold"');
+    // A calendar event is not a mail event. The draft is there so the panel renders at
+    // all: a mail family with no draft AND no mail event is quiet now (req 714).
+    expect(panel(ok([draft()]), [CALENDAR_ACTIVITY("today")])).toContain('data-mail-activity="untold"');
   });
 
   it("says what a row did not report rather than filling it in", () => {

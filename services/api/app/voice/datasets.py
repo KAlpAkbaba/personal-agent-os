@@ -36,24 +36,34 @@ TTS_CASES: tuple[TTSCase, ...] = (
     TTSCase("short-1", "short", "Bugün hava çok güzel."),
     TTSCase("short-2", "short", "Toplantı saat üçte başlıyor."),
     TTSCase("short-3", "short", "Lütfen raporu bana gönder."),
-    TTSCase("technical-1", "technical",
-            "PostgreSQL veritabanında pgvector uzantısını etkinleştir."),
-    TTSCase("technical-2", "technical",
-            "API isteği zaman aşımına uğradı ve yeniden denendi."),
+    TTSCase(
+        "technical-1", "technical", "PostgreSQL veritabanında pgvector uzantısını etkinleştir."
+    ),
+    TTSCase("technical-2", "technical", "API isteği zaman aşımına uğradı ve yeniden denendi."),
     TTSCase("number-1", "number_date_currency", "Toplam tutar ₺1.250.000 olarak hesaplandı."),
     TTSCase("number-2", "number_date_currency", "Rapor 31.08.2026 tarihinde yayımlandı."),
     TTSCase("number-3", "number_date_currency", "Büyüme oranı %17,2 olarak açıklandı."),
-    TTSCase("mixed-1", "mixed_tr_en",
-            "Deployment sırasında container image build aşaması başarısız oldu."),
-    TTSCase("mixed-2", "mixed_tr_en",
-            "Bu feature flag production ortamında henüz enable edilmedi."),
-    TTSCase("long-1", "long",
-            "Yapay zekâ ajanları, karmaşık görevleri küçük adımlara bölerek "
-            "planlar, araçları çağırır ve sonuçları değerlendirir. Bu döngü, "
-            "istenen sonuca ulaşılana kadar tekrar eder."),
-    TTSCase("table-1", "table",
-            "Tabloda üç bölge var: Kuzey bölgesi yüzde kırk, güney bölgesi yüzde "
-            "otuz beş, doğu bölgesi yüzde yirmi beş pay aldı."),
+    TTSCase(
+        "mixed-1",
+        "mixed_tr_en",
+        "Deployment sırasında container image build aşaması başarısız oldu.",
+    ),
+    TTSCase(
+        "mixed-2", "mixed_tr_en", "Bu feature flag production ortamında henüz enable edilmedi."
+    ),
+    TTSCase(
+        "long-1",
+        "long",
+        "Yapay zekâ ajanları, karmaşık görevleri küçük adımlara bölerek "
+        "planlar, araçları çağırır ve sonuçları değerlendirir. Bu döngü, "
+        "istenen sonuca ulaşılana kadar tekrar eder.",
+    ),
+    TTSCase(
+        "table-1",
+        "table",
+        "Tabloda üç bölge var: Kuzey bölgesi yüzde kırk, güney bölgesi yüzde "
+        "otuz beş, doğu bölgesi yüzde yirmi beş pay aldı.",
+    ),
 )
 
 
@@ -79,21 +89,41 @@ STT_CASES: tuple[STTCase, ...] = (
 # docs/VOICE_TURKISH_EVAL_SET.md §M12; scoring them for real is owner-gated.
 
 M12_TERMINOLOGY: tuple[str, ...] = (
-    "PagentOS", "Tailscale", "Hetzner", "PostgreSQL", "PowerShell", "FortiGate",
-    "OpenAI", "Claude", "Windows", "Kubernetes", "Redis", "Temporal",
+    "PagentOS",
+    "Tailscale",
+    "Hetzner",
+    "PostgreSQL",
+    "PowerShell",
+    "FortiGate",
+    "OpenAI",
+    "Claude",
+    "Windows",
+    "Kubernetes",
+    "Redis",
+    "Temporal",
 )
 
 TURKISH_PHONETICS: tuple[str, ...] = ("ı", "İ", "ğ", "ş", "ç", "ö", "ü")
 
 M12_TERMINOLOGY_CASES: tuple[TTSCase, ...] = (
-    TTSCase("m12-term-1", "mixed_tr_en",
-            "PagentOS, Tailscale üzerinden Hetzner'daki PostgreSQL veritabanına bağlanıyor."),
-    TTSCase("m12-term-2", "mixed_tr_en",
-            "PowerShell betiği FortiGate yapılandırmasını Windows makinesinden okudu."),
-    TTSCase("m12-term-3", "mixed_tr_en",
-            "OpenAI ve Claude modellerini aynı görevde karşılaştırdım."),
-    TTSCase("m12-term-4", "mixed_tr_en",
-            "Kubernetes kümesinde Redis önbellek, Temporal ise iş akışlarını yönetiyor."),
+    TTSCase(
+        "m12-term-1",
+        "mixed_tr_en",
+        "PagentOS, Tailscale üzerinden Hetzner'daki PostgreSQL veritabanına bağlanıyor.",
+    ),
+    TTSCase(
+        "m12-term-2",
+        "mixed_tr_en",
+        "PowerShell betiği FortiGate yapılandırmasını Windows makinesinden okudu.",
+    ),
+    TTSCase(
+        "m12-term-3", "mixed_tr_en", "OpenAI ve Claude modellerini aynı görevde karşılaştırdım."
+    ),
+    TTSCase(
+        "m12-term-4",
+        "mixed_tr_en",
+        "Kubernetes kümesinde Redis önbellek, Temporal ise iş akışlarını yönetiyor.",
+    ),
 )
 
 TURKISH_PHONETICS_CASES: tuple[TTSCase, ...] = (

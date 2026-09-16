@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+import { NAV } from "./components/SiteNav";
 import { API_BASE } from "./lib/session";
 
 // NB: /v1/system/health is the one endpoint that is deliberately reachable
@@ -59,27 +60,27 @@ export default function Home() {
     <main>
       <h1>Personal Agent OS</h1>
       <p className="subtitle">
-        Web shell —{" "}
-        <Link href="/research" style={{ color: "var(--accent)" }}>
-          Araştırma →
-        </Link>
-        {" · "}
-        <Link href="/artifacts" style={{ color: "var(--accent)" }}>
-          Araştırma Gelen Kutusu →
-        </Link>
-        {" · "}
-        <Link href="/voice" style={{ color: "var(--accent)" }}>
-          Sesli Asistan →
-        </Link>
-        {" · "}
-        <Link href="/core" style={{ color: "var(--accent)" }}>
-          Ajan Çekirdeği →
-        </Link>
-        {" · "}
-        <Link href="/core/cockpit" style={{ color: "var(--accent)" }}>
-          Kokpit →
-        </Link>
+        Tek sahipli kişisel ajan işletim sistemi — web kabuğu.
       </p>
+
+      {/*
+        B23 req 686: the home page is the index, and it is built from the SAME list the
+        nav is built from (`NAV` in components/SiteNav). Before this it carried a hand
+        written row of five links that had already drifted from the pages that existed;
+        one list means a seventh page appears here and in the nav together, or not at all.
+      */}
+      <div className="panel" data-home-index>
+        <ul className="home-index">
+          {NAV.filter((item) => item.href !== "/").map((item) => (
+            <li key={item.href}>
+              <Link href={item.href} data-home-link={item.href} style={{ color: "var(--accent)" }}>
+                {item.label} →
+              </Link>
+              <span className="muted"> {item.hint}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
 
       <div className="panel">
         <div className="status-row">

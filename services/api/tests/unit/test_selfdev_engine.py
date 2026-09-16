@@ -39,6 +39,7 @@ from app.selfdev.model import (
 from app.selfdev.runner import CandidateRunner
 from app.selfdev.workspace import GitWorkspace, WorkspaceLimits
 
+LF = chr(10)
 CALC = "services/api/app/calc.py"
 REGRESSION = "services/api/tests/unit/test_calc_regression.py"
 BUGGY = "def add(a, b):\n    return a - b\n\n\ndef double(x):\n    return x * 2\n"
@@ -166,6 +167,7 @@ def test_a_defect_becomes_a_verified_candidate_on_its_own_branch_and_the_engine_
         "regression_red_on_base": True,
         "autofix": True,
         "scope": True,
+        "security_review": True,
         "regression_green": True,
         "targeted_tests": True,
         "lint": True,
@@ -212,25 +214,65 @@ def test_wrong_first_right_second_is_diagnosed_and_fixed_within_budget(
 def test_a_high_risk_candidate_says_it_is_never_promoted_automatically(
     repo: Path, tmp_path: Path
 ) -> None:
-    tokens = "services/api/app/identity/tokens.py"
-    patch = Patch(
-        edits=(
-            FileEdit(tokens, "SECRET_LEN = 64\n"),
-            FileEdit(
-                REGRESSION,
-                "from app.identity.tokens import SECRET_LEN\n\n\n"
-                "def test_len() -> None:\n    assert SECRET_LEN == 64\n",
-            ),
+    """Tier 4 (deployment mechanics) is NEVER_AUTO_PROMOTE and the record says so."""
+    knob = "services/recovery-supervisor/knob.txt"
+    (repo / knob).parent.mkdir(parents=True)
+    (repo / knob).write_text("32" + LF, encoding="utf-8", newline=LF)
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "knob")
+    knob_test = LF.join(
+        (
+            "from pathlib import Path",
+            "",
+            "",
+            "def test_knob() -> None:",
+            "    root = Path(__file__).resolve().parents[3]",
+            "    assert (root / 'recovery-supervisor' / 'knob.txt').read_text().strip() == '64'",
+            "",
         )
     )
-    model = _model(patch, plan_paths=(tokens,))
+    patch = Patch(edits=(FileEdit(knob, "64" + LF), FileEdit(REGRESSION, knob_test)))
+    model = _model(patch, plan_paths=(knob,))
     record = _engine(repo, tmp_path, model).run(
-        _defect(scope=(tokens,)), base_sha=_base(repo), targeted_tests=[]
+        _defect(scope=(knob,)), base_sha=_base(repo), targeted_tests=[]
     )
 
     assert record.status == STATUS_STOPPED_AT_POLICY, record.reason
-    assert record.risk["tier"] == 5
+    assert record.risk["tier"] == 4
     assert record.promotion_class == "NEVER_AUTO_PROMOTE"
+
+
+def test_the_identity_boundary_is_refused_by_the_security_review_not_merely_tiered(
+    repo: Path, tmp_path: Path
+) -> None:
+    """B35 req 598/680: before B35 an edit to app/identity/ became a tier-5 candidate the
+    owner was asked about; now the mandatory security review refuses the path and the run
+    is quarantined with the finding named - no candidate, no branch, no question."""
+    tokens = "services/api/app/identity/tokens.py"
+    len_test = LF.join(
+        (
+            "from app.identity.tokens import SECRET_LEN",
+            "",
+            "",
+            "def test_len() -> None:",
+            "    assert SECRET_LEN == 64",
+            "",
+        )
+    )
+    patch = Patch(edits=(FileEdit(tokens, "SECRET_LEN = 64" + LF), FileEdit(REGRESSION, len_test)))
+    model = _model(patch, plan_paths=(tokens,))
+    record = _engine(repo, tmp_path, model, budget=Budget(max_attempts=1)).run(
+        _defect(scope=(tokens,)), base_sha=_base(repo), targeted_tests=[]
+    )
+
+    assert record.status == STATUS_QUARANTINED
+    assert "security_review" in record.reason and "no_guarded_path" in record.reason
+    assert record.candidate_sha == ""
+    checks = {c["name"]: c["passed"] for c in record.attempts[-1]["checks"]}
+    assert checks["security_review"] is False
+    # The finding is a path and a line in the record, not prose.
+    findings = [c for c in record.attempts[-1]["checks"] if c["name"] == "security_review"]
+    assert tokens in findings[0]["detail"]
 
 
 # ------------------------------------------------------------------ what it refuses
@@ -284,6 +326,11 @@ def test_the_models_review_can_refuse_what_the_reviewer_passed_but_never_the_rev
     )
     assert record.status == STATUS_QUARANTINED
     assert record.attempts[0]["failure"] == "model review: not minimal"
+    # The second attempt was judged against the BASE: before B35 the reset restored the
+    # staged (patched) index and the regression test "passed without the fix" here.
+    second = {c["name"]: c["passed"] for c in record.attempts[1]["checks"]}
+    assert second["regression_red_on_base"] is True
+    assert record.attempts[1]["failure"] == "model review: not minimal"
 
 
 def test_the_token_budget_quarantines_the_run_and_names_the_bound(
@@ -473,3 +520,91 @@ def test_a_safe_lint_fix_does_not_cost_an_attempt(repo: Path, tmp_path: Path) ->
     assert record.status == STATUS_STOPPED_AT_POLICY, record.reason
     committed = _git(repo, "show", f"{record.candidate_sha}:{REGRESSION}")
     assert committed.startswith("import os\nimport sys\n")
+
+
+# ------------------------------------------------------------------ B35: gate, shadow, trigger
+
+
+class _ScriptedGate:
+    """Red on the first call, green after: the gate as the fix loop sees it (req 600/603)."""
+
+    def __init__(self, *states: str) -> None:
+        self.states = list(states)
+        self.calls = 0
+
+    def run(self, worktree: Path):
+        from app.selfdev.gate import GateResult
+
+        self.calls += 1
+        state = self.states.pop(0) if self.states else "passed"
+        return GateResult(state, "pytest: 1 failed" if state == "failed" else "")
+
+
+class _Trigger:
+    def __init__(self) -> None:
+        self.branches: list[str] = []
+
+    def push(self, branch: str):
+        from app.selfdev.gate import TriggerResult
+
+        self.branches.append(branch)
+        return TriggerResult(True, "pushed " + branch)
+
+
+def test_a_red_gate_is_fed_back_to_the_model_and_the_green_run_records_gate_shadow_and_push(
+    repo: Path, tmp_path: Path
+) -> None:
+    """B35 req 600/603/608/601: the gate runs after both reviews; red costs an attempt and is
+    diagnosed like any failure; the committed candidate is run in the shadow and pushed by
+    the trigger; the record carries all three as facts."""
+    from app.selfdev.shadow import SHADOW_PASSED, ScriptedShadowRunner, ShadowReport
+
+    model = _model(_patch(FIXED), _patch(FIXED))
+    engine = _engine(repo, tmp_path, model, budget=Budget(max_attempts=2))
+    engine.gate = _ScriptedGate("failed", "passed")
+    engine.shadow = ScriptedShadowRunner(ShadowReport(SHADOW_PASSED, port=5555))
+    engine.ci_trigger = _Trigger()
+
+    record = engine.run(_defect(), base_sha=_base(repo), targeted_tests=[])
+
+    assert record.status == STATUS_STOPPED_AT_POLICY, record.reason
+    assert engine.gate.calls == 2
+    assert record.attempts[0]["failure"].startswith("gate: pytest")
+    assert record.attempts[0]["gate"]["state"] == "failed"
+    assert record.gate["state"] == "passed"
+    assert "review_failure" in model.calls and "fix_patch" in model.calls
+    assert record.shadow == {
+        "state": "passed",
+        "detail": "",
+        "port": 5555,
+        "started_in_s": None,
+        "probes": [],
+        "mismatches": [],
+    }
+    assert engine.shadow.seen == [Path(record.worktree)]
+    assert record.ci_trigger["pushed"] is True
+    assert engine.ci_trigger.branches == [record.branch]
+    assert record.security_review["passed"] is True
+    assert record.security_review["grant"] == "security_review_candidate"
+
+
+def test_a_gate_red_past_the_attempt_budget_quarantines_with_the_gate_named(
+    repo: Path, tmp_path: Path
+) -> None:
+    engine = _engine(repo, tmp_path, _model(_patch(FIXED)), budget=Budget(max_attempts=1))
+    engine.gate = _ScriptedGate("failed")
+    record = engine.run(_defect(), base_sha=_base(repo), targeted_tests=[])
+    assert record.status == STATUS_QUARANTINED
+    assert "gate: pytest" in record.reason
+    assert record.candidate_sha == ""
+
+
+def test_without_a_gate_a_shadow_or_a_trigger_the_record_says_so(
+    repo: Path, tmp_path: Path
+) -> None:
+    record = _engine(repo, tmp_path, _model(_patch(FIXED))).run(
+        _defect(), base_sha=_base(repo), targeted_tests=[]
+    )
+    assert record.gate["state"] == "skipped" and "no gate" in record.gate["detail"]
+    assert record.shadow["state"] == "skipped"
+    assert record.ci_trigger == {}

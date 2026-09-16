@@ -104,13 +104,32 @@ function MinimalCore() {
       ? contractLagNote(truth.contractVersion, KNOWN_CONTRACT_VERSION)
       : null;
 
+  // B23 req 720: Minimal mode means the stage is alone with the owner. The control
+  // cluster has faded after four idle seconds since M18.3; the site nav (req 685) is new
+  // here and would otherwise be the one piece of chrome that never goes away. It fades
+  // with the same state rather than on a second timer, and it fades rather than
+  // disappearing: a deliberate move of the pointer brings it back, which is the whole
+  // difference between quiet and gone.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.body.dataset.coreFaded = fade.faded ? "yes" : "no";
+    return () => {
+      delete document.body.dataset.coreFaded;
+    };
+  }, [fade.faded]);
+
   return (
-    <div
+    // B25 req 724: the Core is a landmark and has a heading, like every other page. The
+    // heading is for screen readers only — a visible title would be exactly the chrome the
+    // manifest refuses around a full-viewport presence, and "no chrome" was being paid for
+    // by a page a screen reader could not enter.
+    <main
       className="core-shell"
       data-core-mode="minimal"
       data-core-build={CORE_BUILD_ID}
       data-fullscreen={fullscreen.active ? "yes" : "no"}
     >
+      <h1 className="visually-hidden">Çekirdek</h1>
       <div
         className="core-shell-stage"
         data-core-stage
@@ -164,7 +183,7 @@ function MinimalCore() {
           alarm={alarm}
         />
       </div>
-    </div>
+    </main>
   );
 }
 

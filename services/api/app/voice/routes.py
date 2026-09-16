@@ -9,6 +9,7 @@ Endpoints:
 - POST /v1/voice/benchmark/run               -> generate + persist reports
 - GET  /v1/voice/benchmark/reports           -> last generated report(s)
 - GET  /v1/voice/providers                   -> provider list + capabilities
+- GET  /v1/voice/capabilities                -> what the owner may say (B25 req 701)
 
 All DB/object-store work runs in a thread (sync SQLAlchemy + boto3). Typed
 VoiceError is mapped to a stable HTTP status + error_class body.
@@ -19,13 +20,14 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.identity.dependencies import require_owner_session
 from app.identity.service import SessionContext
 from app.logging import get_logger
 from app.security import step_up
+from app.voice import capabilities as voice_capabilities
 from app.voice import registry, service
 from app.voice.benchmark import run_stt_benchmark, run_tts_benchmark
 from app.voice.device_trust import device_is_trusted
@@ -97,8 +99,7 @@ async def get_preferences(request: Request) -> dict[str, Any]:
 @router.patch("/preferences")
 async def patch_preferences(request: Request, body: PreferencesUpdate) -> dict[str, Any]:
     runtime = _runtime(request)
-    updates = {k: v for k, v in body.model_dump().items()
-               if k != "source" and v is not None}
+    updates = {k: v for k, v in body.model_dump().items() if k != "source" and v is not None}
     if not updates:
         raise HTTPException(status_code=422, detail="no preference fields supplied")
 
@@ -161,8 +162,11 @@ async def enroll_speaker(request: Request, body: EnrollRequest) -> dict[str, Any
     def do() -> dict[str, Any]:
         with runtime.session() as session:
             row = service.enroll_and_store_owner(
-                session, runtime.store, runtime.cipher,
-                sample_embeddings=body.sample_embeddings, model_id=body.model_id,
+                session,
+                runtime.store,
+                runtime.cipher,
+                sample_embeddings=body.sample_embeddings,
+                model_id=body.model_id,
                 prefix=runtime.settings.voice_speaker_object_prefix,
             )
             return {
@@ -177,8 +181,9 @@ async def enroll_speaker(request: Request, body: EnrollRequest) -> dict[str, Any
         result = await asyncio.to_thread(do)
     except VoiceError as exc:
         _raise_http(exc)
-    logger.info("voice_speaker_enrolled", model_id=body.model_id,
-                samples=len(body.sample_embeddings))
+    logger.info(
+        "voice_speaker_enrolled", model_id=body.model_id, samples=len(body.sample_embeddings)
+    )
     return result
 
 
@@ -196,8 +201,11 @@ async def verify_speaker_route(
             # about THIS request's authenticated session, and nothing the body carries.
             trusted = device_is_trusted(session, owner)
             verdict = service.verify_owner(
-                session, runtime.store, runtime.cipher,
-                probe_embedding=body.probe_embedding, device_trusted=trusted,
+                session,
+                runtime.store,
+                runtime.cipher,
+                probe_embedding=body.probe_embedding,
+                device_trusted=trusted,
                 thresholds=None,  # server-configured band only; not caller-overridable
             )
             if verdict is not None:
@@ -220,8 +228,12 @@ async def verify_speaker_route(
         _raise_http(exc)
     if result is None:
         raise HTTPException(status_code=404, detail="no enrolled owner profile")
-    logger.info("voice_speaker_verified", decision=result["decision"],
-                device_trusted=trusted, derived_from="owner_session")
+    logger.info(
+        "voice_speaker_verified",
+        decision=result["decision"],
+        device_trusted=trusted,
+        derived_from="owner_session",
+    )
     return result
 
 
@@ -258,19 +270,27 @@ async def run_benchmark(request: Request) -> dict[str, Any]:
         tts_keys = service.store_benchmark_report(runtime.store, tts_report, prefix=prefix)
         stt_keys = service.store_benchmark_report(runtime.store, stt_report, prefix=prefix)
         return {
-            "tts": {"providers": tts_report.providers, "keys": tts_keys,
-                    "compares_provider_count": len(tts_report.providers)},
-            "stt": {"providers": stt_report.providers, "keys": stt_keys,
-                    "compares_provider_count": len(stt_report.providers)},
+            "tts": {
+                "providers": tts_report.providers,
+                "keys": tts_keys,
+                "compares_provider_count": len(tts_report.providers),
+            },
+            "stt": {
+                "providers": stt_report.providers,
+                "keys": stt_keys,
+                "compares_provider_count": len(stt_report.providers),
+            },
         }
 
     try:
         result = await asyncio.to_thread(do)
     except VoiceError as exc:
         _raise_http(exc)
-    logger.info("voice_benchmark_generated",
-                tts_providers=result["tts"]["compares_provider_count"],
-                stt_providers=result["stt"]["compares_provider_count"])
+    logger.info(
+        "voice_benchmark_generated",
+        tts_providers=result["tts"]["compares_provider_count"],
+        stt_providers=result["stt"]["compares_provider_count"],
+    )
     return result
 
 
@@ -302,6 +322,31 @@ async def list_providers(request: Request) -> dict[str, Any]:
     runtime = _runtime(request)
     caps = registry.all_provider_capabilities(runtime.settings)
     return {"providers": caps, "count": len(caps)}
+
+
+@router.get("/capabilities")
+async def list_capabilities(
+    family: str | None = Query(default=None, max_length=32),
+) -> dict[str, Any]:
+    """B25 req 701: what the owner may SAY to this system, derived from the tool registry.
+
+    Not a hand-written list, which the requirement forbids in four words (*elle liste
+    yasak*) for the reason a hand-written list always fails: it is a second source of truth
+    about the system's own abilities, and it starts drifting the day after it is written.
+
+    The example phrases are lifted out of the tool descriptions rather than reworded, so
+    what the page tells the owner to say is literally what the model was told to listen for.
+    """
+    items = voice_capabilities.capabilities()
+    if family:
+        wanted = family.strip().lower()
+        items = [item for item in items if item.family == wanted]
+    return {
+        "capabilities": [item.as_dict() for item in items],
+        "families": voice_capabilities.families(voice_capabilities.capabilities()),
+        "count": len(items),
+        "speech": voice_capabilities.speech(items),
+    }
 
 
 __all__ = ["router"]

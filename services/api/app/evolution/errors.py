@@ -52,6 +52,8 @@ class EvolutionErrorClass(StrEnum):
     # M24: a genesis run's own bound was exceeded (>1 active run per capability,
     # >10 minutes end to end, >3 runs/hour per interface).
     RATE_LIMITED = "rate_limited"
+    # B36 (req 579/680): the security gate on a generated adapter refused it.
+    SECURITY_REFUSED = "security_refused"
     # Anything unexpected.
     INTERNAL_BUG = "internal_bug"
 

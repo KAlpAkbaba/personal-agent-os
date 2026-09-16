@@ -438,7 +438,7 @@ describe("the cockpit's channel telemetry prints the intent as it is", () => {
 });
 
 describe("panels tell empty apart from unknown", () => {
-  const render = (state: Parameters<typeof Panel<string[]>>[0]["state"]) =>
+  const render = (state: Parameters<typeof Panel<string[]>>[0]["state"], always = false) =>
     renderToStaticMarkup(
       <Panel<string[]>
         id="demo"
@@ -447,6 +447,7 @@ describe("panels tell empty apart from unknown", () => {
         empty="Hedef yok."
         isEmpty={(v) => v.length === 0}
         badge={(v) => `${v.length}`}
+        always={always}
       >
         {(v) => (
           <ul>
@@ -458,8 +459,12 @@ describe("panels tell empty apart from unknown", () => {
       </Panel>,
     );
 
-  it("says 'no goals' only when it actually asked and got none", () => {
-    const html = render({ kind: "ok", value: [], at: 0 });
+  it("says 'no goals' only when it actually asked and got none, and only where it belongs", () => {
+    // B24 req 714: on the cockpit an empty family draws no panel at all — thirteen of
+    // twenty-seven were empty at once and the page read as a system doing nothing.
+    expect(render({ kind: "ok", value: [], at: 0 })).toBe("");
+
+    const html = render({ kind: "ok", value: [], at: 0 }, true);
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Hedef yok.");
   });

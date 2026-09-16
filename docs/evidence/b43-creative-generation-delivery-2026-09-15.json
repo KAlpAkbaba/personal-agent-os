@@ -1,0 +1,98 @@
+{
+  "batch": "B43",
+  "name": "Yaratıcı üretim ve teslim",
+  "requirements": [
+    489,
+    490,
+    491,
+    492,
+    493,
+    494,
+    495,
+    498,
+    500,
+    502,
+    504,
+    506,
+    507,
+    508,
+    509,
+    511,
+    512
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (10926 passed, 5 skipped, 21m08s)",
+      "windows_agent_build_tests": "PASS (57.9s; PagentOS.Agent.Tests 955/955, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "the -Fast summary table lists no web step; no web source changed in B43; matrix-badges vitest rerun separately after node scripts/web/sync-feature-matrix.mjs (12 passed)",
+    "run": "2026-09-15 local. First run (scratchpad b43_gate.log): API unit tests FAIL, 1 failed / 10925 passed - tests/unit/test_operator_ui.py::test_the_tool_context_type_is_what_main_wires pinned the literal vision_provider=build_vision_provider(settings), which B43 replaced by one provider built once and handed to both the creative semantic check and the voice live sources; the test now asserts that shared wiring. Second, clean run (scratchpad b43_gate2.log): QUALITY GATE: PASS, 10926 passed / 5 skipped in 21m08s."
+  },
+  "what_this_proves": "The creative service generates from a prompt through one provider seam (refusing by name when none is configured), removes and adds objects, styles, enhances and upscales deterministically, asks the vision provider whether the picture shows what was asked, keeps layers and writes/reads OpenRaster and real SVG and reads PSD, delivers its output to the owner's disk as an image artifact through the artifact open path, drives Paint by its own shortcuts on the delivered file, and undoes/redoes over its own output history; and the creative words fire only where they belong.",
+  "measured_first": {
+    "before": "app/creative after M27/B34: new/open/draw/add_text/shape/transform/color_adjust/crop/background_remove/export with Pillow; layer refused; output only in the object store; no provider, no generation, no semantic check, no PSD/SVG/ORA, no delivery, no undo, Paint never driven."
+  },
+  "closed_fully": {
+    "489_495": "imaging.py: ImageProvider protocol; LocalImageProvider (upscale x2/x4, enhance, style x5, object_remove by border, background via the executor); object_add (shape/text/image); OpenAIImageProvider (generations + edits with a box mask, MockTransport-tested); build_image_provider (settings; keyless openai -> local); spec ops generate/object_remove/object_add/style/enhance/upscale; ProviderRefusal -> refused receipt with the owner sentence.",
+    "498": "semantic_check op -> lifecycle.semantic_check over the vision provider; semantic_json; 'hayır' -> unverified; no provider -> checked=false.",
+    "500_502_504": "drivers.py: open_in_application (app.launch + args + window by title/image), PaintDriver (resize/invert/clear/select_all/undo/redo/save/capture), AdobeDriver (undo/redo/save/select_all/capture); lifecycle.drive through operator.task.run_task; creative.drive tool; POST /drive.",
+    "506_507_508": "layers.py: LayeredDocument (add/get/merge/flatten, opacity), from_psd (Pillow plugin), to_ora/from_ora, to_svg/from_svg; TOOL_LAYERED + LayeredProvider; executor: layer add/merge, ora export, svg export as vectors, PSD/ORA/SVG sources.",
+    "509": "lifecycle.deliver: register_image_artifact (B42) + open_service.open_artifact(application=); OpenOutcome.path; delivery_json; creative.deliver tool ('Paint'te göster' -> mspaint); POST /deliver.",
+    "511": "record_output history (own key per output), undo/redo/history; tools + routes; corpus 'Geri al.' / 'Yinele.' in CTX_CREATIVE_PAINT.",
+    "512": "CREATIVE_ENHANCE intent + creative.enhance tool (auto) on the run in focus.",
+    "surfaces": "6 routes, 6 voice tools (all TIER_SENSITIVE), 5 intents + creative_focused flag (+ creative_prompt / creative_application on the turn record), settings creative_image_provider/creative_openai_image_model/creative_image_timeout_s, ledger creative.generate/deliver/undo/drive, 7 catalog entries, migration 0055, corpus +9 cases."
+  },
+  "found_on_the_way": {
+    "artifact_open_image_kind": "open_service._pick_render iterated KIND_FORMATS[kind] and an image artifact (B42) had no entry - it could never be opened; the fallback now takes any valid render of the version.",
+    "file_fetch_application_unused": "the device's file.fetch has accepted an allowlisted `application` since M22 and no cloud caller ever passed one; open_artifact now forwards it.",
+    "provider_refusal_shape": "the executor's only hard error was 'source could not be opened' (ERROR_VALIDATION); a provider refusal needed its own class so the owner hears 'sağlayıcı tanımlı değil' rather than 'kaynak görsel açılamadı'.",
+    "history_route_fallback": "GET /v1/creative/{id}/history passed a random unknown id to resolve_run, whose voice fallback returns the focused (or newest) run - so a wrong id answered 200 with ANOTHER run's history. The route now 404s an id that does not exist, like the other action routes already did.",
+    "enhance_claimed_a_fix": "'Bu fotoğrafı düzelt' on an image that needs nothing came back byte-identical, the history rightly kept no empty step, and the owner still heard it was fixed; enhance now reports changed=false and says it found nothing to fix.",
+    "duplicate_catalog_key": "the draft added a second 'nothing_to_undo' owner message (F601) while document edits already own one; the existing sentence now serves both.",
+    "corpus_undo_on_nothing": "the corpus ran 'Geri al.'/'Yinele.' on a run with one output, where the honest answer is a refusal; two seeded contexts now give each a real step (creative_undoable, creative_redoable).",
+    "open_needs_a_source": "an 'open' plan must name its source in the schema; the draft tests omitted it, and a paint plan with a layer op is refused at validation, not at run time.",
+    "new_dispatcher": "the Paint driver types into the owner's window, so keyboard.type now has two real senders in the self-model (operator plans and creative drivers); the providers set gained the layered tool.",
+    "gate_caught_a_source_pin": "the first local gate failed on test_operator_ui, whose source-reading assertion pinned the old inline vision provider; the neighbour run before the gate had not included it."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_creative_b43.py": "local provider ops; object_add; refusal without a provider; executor through the scripted provider; OpenAI provider over MockTransport; settings choice; layers + ORA round trip; hand-built PSD; SVG write/read/open; layered tool; LayeredProvider; generate + semantic check + ledger; 'hayır' and no-provider verdicts; refused generation receipt; undo/redo/history/branch drop; enhance; deliver -> artifact + file.fetch + reuse; deliver refusals; Paint driver shortcut sequence; failed step named; drive before delivery; Adobe shortcuts; routes; router x8; focus gate; voice generate/undo/deliver; six tools tiered; corpus fixture enhanced by voice; a photo that needs no fix is said so; unknown run history 404",
+    "regression suites rerun": "test_creative_* (existing), test_artifact_b42, test_artifact_tools, test_voice_realtime_sessions, test_intent_daily_coverage, test_intent_misroutes, test_route_telemetry, test_owner_error_language, test_voice_step_up, test_selfmodel_indexer (keyboard.type senders), test_creative_providers (layered), test_owner_utterance_corpus (2322, undo/redo on seeded contexts): see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b43_mutate.py.",
+    "mutations": [
+      "M1 without a provider, generation draws a blank canvas in the prompt's place (492) -> 1 failure(s).",
+      "M2 object removal never fills the box from its surroundings (490) -> 1 failure(s).",
+      "M3 upscale accepts any factor (495) -> 1 failure(s).",
+      "M4 a layer's opacity is ignored when the stack is flattened (506) -> 1 failure(s).",
+      "M5 the SVG writer drops rectangles, so what was vector is not written as vector (508) -> 1 failure(s).",
+      "M6 undo moves the pointer but the run keeps showing the later output (511) -> 1 failure(s).",
+      "M7 a new edit after an undo keeps the undone branch (511) -> 1 failure(s).",
+      "M8 the semantic check reads every answer as a yes (498) -> 1 failure(s).",
+      "M9 the delivery never tells the device which application to open the file in (500/509) -> 1 failure(s).",
+      "M10 the Paint driver presses the wrong shortcut for invert (500) -> 1 failure(s).",
+      "M11 a failed drive does not name the step it stopped at (500) -> 1 failure(s).",
+      "M12 undo / redo / deliver fire with no creative run in focus (509-512) -> 1 failure(s)."
+    ],
+    "result": "12/12 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED: real Pillow pixels re-read after every operation, a real PSD header, real OpenRaster zips and SVG documents parsed back, the OpenAI provider over an in-process HTTP transport, the artifact open path and the operator task runner against the scripted device, the routes and tools through create_app. The roadmap's PROVEN_REAL (a generated image opened on the owner's disk and verified pixel by pixel) is READY_FOR_OWNER: it needs the owner's provider key and the device (checkpoint 19)."
+  },
+  "owner_gates": {
+    "image_provider": "set creative_image_provider=openai and store voice_openai_api_key with scripts/secret-store.ps1 -Set (never in a file); or keep local.",
+    "device_lab": "on the owner's device: 'Bana bir logo üret: ...' (with the provider) or a Paint drawing, then 'Bunu bilgisayarıma indir', 'Paint'te göster', and creative.drive [resize 50, invert, save]; check Downloads and the Paint window.",
+    "adobe": "Photoshop/Illustrator licences and the device allowlist entries before the Adobe drivers can launch anything."
+  }
+}

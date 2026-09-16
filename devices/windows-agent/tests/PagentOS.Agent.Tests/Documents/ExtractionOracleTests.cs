@@ -31,8 +31,23 @@ public sealed class ExtractionOracleTests : IDisposable
     [MemberData(nameof(Fixtures))]
     public void Every_fixture_extracts_to_its_expected_extract(string relative)
     {
-        var expected = DocumentLab.Expected(relative);
         var truth = DocumentLab.TruthFor(relative);
+        if (truth["extract"]?.GetValue<bool>() == false)
+        {
+            // B32: an archive is listed by file.inspect and never extracted (ImageArchiveTests
+            // holds the refusal); it has no expected extract by design.
+            return;
+        }
+
+        if (string.Equals(truth["oracle"]?.GetValue<string>(), "ocr", StringComparison.Ordinal)
+            && new OcrHost().AvailableLanguages(CancellationToken.None).Count == 0)
+        {
+            // B32: the OCR oracle needs a Windows OCR language pack; a machine without one is
+            // an honest dependency_unavailable (ImageArchiveTests asserts that), not a match.
+            return;
+        }
+
+        var expected = DocumentLab.Expected(relative);
         var result = _lab.Exec(DocumentCapabilityNames.DocumentExtract, new JsonObject { ["path"] = _lab.PathOf(relative) });
 
         Assert.Equal(expected["kind"]!.GetValue<string>(), result["kind"]!.GetValue<string>());

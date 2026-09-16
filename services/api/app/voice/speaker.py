@@ -85,8 +85,7 @@ def _validate_vector(vec: list[float], *, name: str = "embedding") -> list[float
     try:
         out = [float(x) for x in vec]
     except (TypeError, ValueError) as exc:
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"{name} must be numeric") from exc
+        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"{name} must be numeric") from exc
     return out
 
 
@@ -101,8 +100,9 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     a = _validate_vector(a, name="probe")
     b = _validate_vector(b, name="profile")
     if len(a) != len(b):
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         f"dimension mismatch: {len(a)} != {len(b)}")
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR, f"dimension mismatch: {len(a)} != {len(b)}"
+        )
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(x * x for x in b))
     if na == 0.0 or nb == 0.0:
@@ -158,12 +158,12 @@ def enroll_owner(
     vectors = [_validate_vector(v, name="sample") for v in sample_embeddings]
     dim = len(vectors[0])
     if any(len(v) != dim for v in vectors):
-        raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                         "all enrollment samples must share one dimension")
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR, "all enrollment samples must share one dimension"
+        )
     mean = [sum(v[i] for v in vectors) / len(vectors) for i in range(dim)]
     profile = l2_normalize(mean)
-    return OwnerProfile(model_id=model_id, embedding=profile,
-                        sample_count=len(vectors), dim=dim)
+    return OwnerProfile(model_id=model_id, embedding=profile, sample_count=len(vectors), dim=dim)
 
 
 # ----------------------------------------------------------------- verification
@@ -186,31 +186,43 @@ def verify_speaker(
 
     if score <= th.not_owner_max:
         return SpeakerVerdict(
-            SpeakerDecision.NOT_OWNER, score,
+            SpeakerDecision.NOT_OWNER,
+            score,
             f"similarity {score:.3f} <= reject threshold {th.not_owner_max:.3f}",
-            device_trusted, effective_accept,
+            device_trusted,
+            effective_accept,
         )
 
     if score >= effective_accept:
         if not device_trusted:
             # Strong voice but unknown device -> never auto-OWNER on voice alone.
             return SpeakerVerdict(
-                SpeakerDecision.UNCERTAIN, score,
-                (f"voice match {score:.3f} but device untrusted; voice is not the "
-                 "sole secret (requires trusted device or step-up)"),
-                device_trusted, effective_accept,
+                SpeakerDecision.UNCERTAIN,
+                score,
+                (
+                    f"voice match {score:.3f} but device untrusted; voice is not the "
+                    "sole secret (requires trusted device or step-up)"
+                ),
+                device_trusted,
+                effective_accept,
             )
         return SpeakerVerdict(
-            SpeakerDecision.OWNER, score,
+            SpeakerDecision.OWNER,
+            score,
             f"similarity {score:.3f} >= accept threshold {effective_accept:.3f} on trusted device",
-            device_trusted, effective_accept,
+            device_trusted,
+            effective_accept,
         )
 
     return SpeakerVerdict(
-        SpeakerDecision.UNCERTAIN, score,
-        (f"similarity {score:.3f} in uncertain band "
-         f"({th.not_owner_max:.3f}, {effective_accept:.3f})"),
-        device_trusted, effective_accept,
+        SpeakerDecision.UNCERTAIN,
+        score,
+        (
+            f"similarity {score:.3f} in uncertain band "
+            f"({th.not_owner_max:.3f}, {effective_accept:.3f})"
+        ),
+        device_trusted,
+        effective_accept,
     )
 
 

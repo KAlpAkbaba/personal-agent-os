@@ -111,8 +111,12 @@ class TimingEvent:
     payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"kind": self.kind, "t_ms": self.t_ms, "turn": self.turn,
-                "payload": dict(self.payload)}
+        return {
+            "kind": self.kind,
+            "t_ms": self.t_ms,
+            "turn": self.turn,
+            "payload": dict(self.payload),
+        }
 
 
 # ------------------------------------------------------------------ targets
@@ -177,7 +181,9 @@ def summarize(values: Iterable[int]) -> dict[str, Any]:
 
 
 def pair_metric(
-    events: list[TimingEvent], start_kind: str, end_kind: str,
+    events: list[TimingEvent],
+    start_kind: str,
+    end_kind: str,
     cancel_kinds: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Chronological pairing: each start is matched with the NEXT end; a start
@@ -190,24 +196,45 @@ def pair_metric(
     for ev in ordered:
         if ev.kind == start_kind:
             if open_start is not None:
-                samples.append({"turn": open_start.turn, "start_ms": open_start.t_ms,
-                                "end_ms": None, "value_ms": None, "unmatched": True})
+                samples.append(
+                    {
+                        "turn": open_start.turn,
+                        "start_ms": open_start.t_ms,
+                        "end_ms": None,
+                        "value_ms": None,
+                        "unmatched": True,
+                    }
+                )
             open_start = ev
         elif ev.kind == end_kind and open_start is not None:
-            samples.append({"turn": open_start.turn, "start_ms": open_start.t_ms,
-                            "end_ms": ev.t_ms, "value_ms": ev.t_ms - open_start.t_ms,
-                            "unmatched": False})
+            samples.append(
+                {
+                    "turn": open_start.turn,
+                    "start_ms": open_start.t_ms,
+                    "end_ms": ev.t_ms,
+                    "value_ms": ev.t_ms - open_start.t_ms,
+                    "unmatched": False,
+                }
+            )
             open_start = None
         elif ev.kind in cancel_kinds and open_start is not None:
             open_start = None
     if open_start is not None:
-        samples.append({"turn": open_start.turn, "start_ms": open_start.t_ms,
-                        "end_ms": None, "value_ms": None, "unmatched": True})
+        samples.append(
+            {
+                "turn": open_start.turn,
+                "start_ms": open_start.t_ms,
+                "end_ms": None,
+                "value_ms": None,
+                "unmatched": True,
+            }
+        )
     return samples
 
 
-def detect_gaps(events: list[TimingEvent], *, max_gap_ms: int,
-                max_tool_silence_ms: int) -> list[dict[str, Any]]:
+def detect_gaps(
+    events: list[TimingEvent], *, max_gap_ms: int, max_tool_silence_ms: int
+) -> list[dict[str, Any]]:
     """Audible silence: consecutive audio frames further apart than
     ``max_gap_ms`` inside one response, and tool-call silence longer than
     ``max_tool_silence_ms`` before any preamble/resumed audio."""
@@ -223,16 +250,28 @@ def detect_gaps(events: list[TimingEvent], *, max_gap_ms: int,
                 # the preamble may end long before the tool completes.
                 silent = ev.t_ms - tool_last_sound_ms
                 if silent > max_tool_silence_ms:
-                    gaps.append({"kind": "tool_silence", "turn": tool_open.turn,
-                                 "from_ms": tool_last_sound_ms, "to_ms": ev.t_ms,
-                                 "gap_ms": silent})
+                    gaps.append(
+                        {
+                            "kind": "tool_silence",
+                            "turn": tool_open.turn,
+                            "from_ms": tool_last_sound_ms,
+                            "to_ms": ev.t_ms,
+                            "gap_ms": silent,
+                        }
+                    )
                 tool_last_sound_ms = ev.t_ms
             elif last_frame is not None and ev.turn == last_frame.turn:
                 delta = ev.t_ms - last_frame.t_ms
                 if delta > max_gap_ms:
-                    gaps.append({"kind": "audio_gap", "turn": ev.turn,
-                                 "from_ms": last_frame.t_ms, "to_ms": ev.t_ms,
-                                 "gap_ms": delta})
+                    gaps.append(
+                        {
+                            "kind": "audio_gap",
+                            "turn": ev.turn,
+                            "from_ms": last_frame.t_ms,
+                            "to_ms": ev.t_ms,
+                            "gap_ms": delta,
+                        }
+                    )
             last_frame = ev
         elif ev.kind in (EV_RESPONSE_DONE, EV_PLAYBACK_STOPPED, EV_END_OF_TURN):
             last_frame = None
@@ -243,8 +282,15 @@ def detect_gaps(events: list[TimingEvent], *, max_gap_ms: int,
         elif ev.kind == EV_TOOL_DONE and tool_open is not None:
             silent = ev.t_ms - tool_last_sound_ms
             if silent > max_tool_silence_ms:
-                gaps.append({"kind": "tool_silence", "turn": tool_open.turn,
-                             "from_ms": tool_last_sound_ms, "to_ms": ev.t_ms, "gap_ms": silent})
+                gaps.append(
+                    {
+                        "kind": "tool_silence",
+                        "turn": tool_open.turn,
+                        "from_ms": tool_last_sound_ms,
+                        "to_ms": ev.t_ms,
+                        "gap_ms": silent,
+                    }
+                )
             tool_open = None
             last_frame = None
     return gaps
@@ -277,12 +323,20 @@ class RealtimeBenchReport:
                 met = None
             else:
                 met = summary["p95"] <= target and unmatched == 0
-            out[metric] = {"target_ms": target, "observed_p95_ms": summary["p95"],
-                           "observed_max_ms": summary["max"], "n": summary["n"],
-                           "unmatched": unmatched, "met": met}
+            out[metric] = {
+                "target_ms": target,
+                "observed_p95_ms": summary["p95"],
+                "observed_max_ms": summary["max"],
+                "n": summary["n"],
+                "unmatched": unmatched,
+                "met": met,
+            }
         out["gaps"] = {"target": "none", "observed": len(self.gaps), "met": not self.gaps}
-        out["false_barge"] = {"target": 0, "observed": self.false_barge_count,
-                              "met": self.false_barge_count == 0}
+        out["false_barge"] = {
+            "target": 0,
+            "observed": self.false_barge_count,
+            "met": self.false_barge_count == 0,
+        }
         return out
 
     def all_targets_met(self, *, require_samples: bool = True) -> bool:
@@ -334,8 +388,9 @@ def build_report(
 ) -> RealtimeBenchReport:
     targets = targets or BenchTargets()
     evs = list(events)
-    samples = {m: pair_metric(evs, *METRIC_PAIRS[m], cancel_kinds=METRIC_CANCELS[m])
-               for m in METRICS}
+    samples = {
+        m: pair_metric(evs, *METRIC_PAIRS[m], cancel_kinds=METRIC_CANCELS[m]) for m in METRICS
+    }
     metrics = {
         m: summarize(s["value_ms"] for s in samples[m] if s["value_ms"] is not None)
         for m in METRICS
@@ -346,11 +401,19 @@ def build_report(
         "(owner machine, microphone, network, Hetzner Cloud Core).",
     ]
     return RealtimeBenchReport(
-        source=source, generated_at=_now(), targets=targets, metrics=metrics,
+        source=source,
+        generated_at=_now(),
+        targets=targets,
+        metrics=metrics,
         samples=samples,
-        gaps=detect_gaps(evs, max_gap_ms=targets.max_audio_gap_ms,
-                         max_tool_silence_ms=targets.max_tool_silence_ms),
-        false_barge_count=false_barge_count, event_count=len(evs), notes=notes,
+        gaps=detect_gaps(
+            evs,
+            max_gap_ms=targets.max_audio_gap_ms,
+            max_tool_silence_ms=targets.max_tool_silence_ms,
+        ),
+        false_barge_count=false_barge_count,
+        event_count=len(evs),
+        notes=notes,
         context=dict(context or {}),
     )
 
@@ -381,8 +444,9 @@ def events_from_simulator(session: SimulatedRealtimeSession) -> list[TimingEvent
             out.append(TimingEvent(EV_END_OF_TURN, ev.at_ms, turn))
             awaiting_first_audio = True
         elif ev.kind == RT_TOOL_CALL:
-            out.append(TimingEvent(EV_TOOL_CALL, ev.at_ms, turn,
-                                   {"call_id": ev.payload.get("call_id")}))
+            out.append(
+                TimingEvent(EV_TOOL_CALL, ev.at_ms, turn, {"call_id": ev.payload.get("call_id")})
+            )
             tool_running = True
             awaiting_first_audio = False  # the tool turn resumes via tool_done
         elif ev.kind == RT_RESPONSE_AUDIO:
@@ -402,8 +466,9 @@ def events_from_simulator(session: SimulatedRealtimeSession) -> list[TimingEvent
     # tool_done -> speech resumed: the first non-preamble frame after each
     # final tool result the simulated client submitted.
     tool_done_times = sorted(m.at_ms for m in session.client_marks if m.kind == "tool_done")
-    frames = [e for e in session.events
-              if e.kind == RT_RESPONSE_AUDIO and not e.payload.get("preamble")]
+    frames = [
+        e for e in session.events if e.kind == RT_RESPONSE_AUDIO and not e.payload.get("preamble")
+    ]
     for td in tool_done_times:
         nxt = next((f for f in frames if f.at_ms >= td), None)
         if nxt is not None:
@@ -429,16 +494,19 @@ def default_script() -> list[SimulatedTurn]:
         SimulatedTurn.reply("Raporun ilk bölümünü özetliyorum: üç ana bulgu var."),  # turn 2
         SimulatedTurn.reply("Devam ediyorum."),  # turn 2, after the overlap barge-in
         SimulatedTurn.reply("İkinci bulgu maliyetle ilgili."),  # turn 3, stopped with "dur"
-        SimulatedTurn.tool_call("research.start",
-                                {"topic": "OpenAI, Anthropic, Google ve açık kaynak gelişmeleri"}),
+        SimulatedTurn.tool_call(
+            "research.start", {"topic": "OpenAI, Anthropic, Google ve açık kaynak gelişmeleri"}
+        ),
         SimulatedTurn.reply("Anladım, sadece OpenAI kısmına bakıyorum."),  # turn 5 (hesitation)
     ]
 
 
 def _speak(session: SimulatedRealtimeSession, *, frames: int, filler_last: bool = False) -> None:
     for i in range(frames):
-        session.push_audio(synth_frame(i, frame_ms=session.timings.frame_ms),
-                           filler=filler_last and i == frames - 1)
+        session.push_audio(
+            synth_frame(i, frame_ms=session.timings.frame_ms),
+            filler=filler_last and i == frames - 1,
+        )
         session.advance(session.timings.frame_ms)
 
 
@@ -447,7 +515,7 @@ def run_simulator_benchmark(
     timings: SimulatorTimings | None = None,
     targets: BenchTargets | None = None,
     preamble: str = "Bakıyorum. OpenAI, Anthropic, Google ve önemli açık kaynak "
-                    "gelişmelerini karşılaştıracağım.",
+    "gelişmelerini karşılaştıracağım.",
 ) -> RealtimeBenchReport:
     """Play a scripted Turkish conversation against the simulator and report.
 
@@ -485,8 +553,9 @@ def run_simulator_benchmark(
     assert call is not None, "simulator must have emitted the scripted tool call"
     session.submit_tool_result(call["call_id"], {"status": "running", "preamble": preamble})
     session.advance(t.tool_preamble_delay_ms + t.preamble_duration_ms + 400)
-    session.submit_tool_result(call["call_id"], {"status": "succeeded",
-                                                 "summary": "3 kaynak, 1 özet"})
+    session.submit_tool_result(
+        call["call_id"], {"status": "succeeded", "summary": "3 kaynak, 1 özet"}
+    )
     session.run_until_idle()
 
     # turn 5: hesitation — end-of-turn must wait for the guard, not cut the owner
@@ -500,13 +569,26 @@ def run_simulator_benchmark(
 
     events = events_from_simulator(session)
     return build_report(
-        events, source=SOURCE_SIMULATOR, targets=targets, false_barge_count=false_barge,
+        events,
+        source=SOURCE_SIMULATOR,
+        targets=targets,
+        false_barge_count=false_barge,
         context={
             "provider": provider.name,
-            "timings_ms": {f: getattr(t, f) for f in (
-                "uplink_delay_ms", "end_of_turn_delay_ms", "hesitation_guard_ms",
-                "first_audio_delay_ms", "barge_in_stop_delay_ms", "tool_call_delay_ms",
-                "tool_preamble_delay_ms", "tool_done_to_speech_ms", "response_gap_ms")},
+            "timings_ms": {
+                f: getattr(t, f)
+                for f in (
+                    "uplink_delay_ms",
+                    "end_of_turn_delay_ms",
+                    "hesitation_guard_ms",
+                    "first_audio_delay_ms",
+                    "barge_in_stop_delay_ms",
+                    "tool_call_delay_ms",
+                    "tool_preamble_delay_ms",
+                    "tool_done_to_speech_ms",
+                    "response_gap_ms",
+                )
+            },
             "turns": session.turn,
             "audio_in_bytes": session.audio_in_bytes,
             "audio_out_bytes": session.audio_out_bytes,
@@ -525,8 +607,14 @@ def events_from_client_reports(rows: Iterable[dict[str, Any]]) -> list[TimingEve
         kind = str(row.get("kind", ""))
         if kind not in TIMING_EVENT_KINDS:
             continue
-        out.append(TimingEvent(kind, int(row.get("t_ms", 0)), int(row.get("turn", 0) or 0),
-                               dict(row.get("payload") or {})))
+        out.append(
+            TimingEvent(
+                kind,
+                int(row.get("t_ms", 0)),
+                int(row.get("turn", 0) or 0),
+                dict(row.get("payload") or {}),
+            )
+        )
     return out
 
 

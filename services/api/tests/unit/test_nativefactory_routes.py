@@ -52,11 +52,18 @@ def _row(**overrides) -> NativeBuildRow:
         "target": "windows_exe",
         "version": "0.1.0",
         "state": STATE_VERIFIED,
-        "spec_json": {"name": "Notlarim", "template": "notes-desktop",
-                      "targets": ["windows_exe"], "version": "0.1.0"},
+        "spec_json": {
+            "name": "Notlarim",
+            "template": "notes-desktop",
+            "targets": ["windows_exe"],
+            "version": "0.1.0",
+        },
         "artifact_json": {
-            "size_bytes": 162304, "sha256": "a" * 64, "version": "0.1.0",
-            "architecture": "x64", "subsystem": "windows_gui",
+            "size_bytes": 162304,
+            "sha256": "a" * 64,
+            "version": "0.1.0",
+            "architecture": "x64",
+            "subsystem": "windows_gui",
         },
         "verdict_json": {"ok": True, "mismatches": []},
         "tests_json": {"passed": True, "summary": "Passed! - Failed: 0, Passed: 5"},
@@ -111,10 +118,15 @@ def test_an_unknown_build_is_404(h) -> None:
 
 
 def test_a_build_with_no_artefact_is_409_not_404(h) -> None:
-    """"I never made that" and "I made it and it produced nothing" are different answers,
+    """ "I never made that" and "I made it and it produced nothing" are different answers,
     and an owner acts differently on each."""
-    row = _row(state=STATE_FAILED, artifact_path=None, artifact_json=None,
-               error_class="build_failed", error_message="error CS0103")
+    row = _row(
+        state=STATE_FAILED,
+        artifact_path=None,
+        artifact_json=None,
+        error_class="build_failed",
+        error_message="error CS0103",
+    )
     with h.factory() as db:
         db.add(row)
         db.commit()
@@ -122,6 +134,81 @@ def test_a_build_with_no_artefact_is_409_not_404(h) -> None:
     response = h.client.get(f"/v1/native/{row.id}/artifact")
     assert response.status_code == 409
     assert response.json()["detail"]["error_class"] == "build_failed"
+
+
+def test_an_artefact_the_cloud_cannot_see_is_pulled_off_the_device_and_hash_verified(
+    h, monkeypatch
+) -> None:
+    """B33 req 456: a device build's file is a Windows path a Linux Cloud Core cannot stat -
+    until this batch that was a 410 every time in production. The bytes now come off the
+    device in bounded chunks (project.artifact), hash-verified, and the response says so."""
+    import base64
+    import hashlib
+
+    from app.executive import activities
+    from app.routines.dispatch import DeviceRunResult
+
+    blob = bytes(range(256)) * 200  # 51 200 bytes: two chunks
+    digest = hashlib.sha256(blob).hexdigest()
+    calls: list[dict] = []
+
+    class Device:
+        def run(self, *, capability, payload, idempotency_key, timeout_s):
+            calls.append({"capability": capability, **payload})
+            assert capability == "project.artifact"
+            offset = int(payload.get("offset") or 0)
+            part = blob[offset : offset + int(payload["length"])]
+            return DeviceRunResult(
+                True,
+                result={
+                    "path": r"C:\builds\notlarim\out\notlarim.exe",
+                    "name": "notlarim.exe",
+                    "bytes": len(blob),
+                    "sha256": digest,
+                    "offset": offset,
+                    "length": len(part),
+                    "base64": base64.b64encode(part).decode("ascii"),
+                    "eof": offset + len(part) >= len(blob),
+                },
+            )
+
+    monkeypatch.setattr(activities, "get_device_action", lambda: Device())
+    row = _row(artifact_path=r"C:\builds\notlarim\out\notlarim.exe")
+    with h.factory() as db:
+        db.add(row)
+        db.commit()
+
+    response = h.client.get(f"/v1/native/{row.id}/artifact")
+
+    assert response.status_code == 200, response.text
+    assert response.content == blob
+    assert response.headers["X-Artifact-Sha256"] == digest
+    assert response.headers["X-Artifact-Source"] == "device"
+    assert 'filename="notlarim.exe"' in response.headers["Content-Disposition"]
+    assert [c["offset"] for c in calls] == [0, 32768]
+    assert calls[0]["project_id"] == f"native-{str(row.id)[:8]}"
+
+
+def test_an_artefact_the_device_does_not_have_either_is_410_by_name(h, monkeypatch) -> None:
+    from app.executive import activities
+    from app.routines.dispatch import DeviceRunResult
+
+    class Device:
+        def run(self, *, capability, payload, idempotency_key, timeout_s):
+            return DeviceRunResult(False, "not_found", r"out\notlarim.exe does not exist")
+
+    monkeypatch.setattr(activities, "get_device_action", lambda: Device())
+    row = _row(artifact_path=r"C:\builds\gone\notlarim.exe")
+    with h.factory() as db:
+        db.add(row)
+        db.commit()
+
+    response = h.client.get(f"/v1/native/{row.id}/artifact")
+    assert response.status_code == 410
+    assert response.json()["detail"]["error_class"] == "artifact_gone"
+    assert response.json()["detail"]["details"]["reason"] == "not_found"
+    # The owner reads a sentence, never the device's exception text.
+    assert "does not exist" not in response.json()["detail"]["message"]
 
 
 def test_an_artefact_whose_file_is_gone_is_410(h) -> None:

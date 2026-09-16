@@ -22,7 +22,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger, trace_id_var
@@ -173,6 +173,57 @@ def reindex(session: Session, new_embedder: Embedder) -> int:
             "rows": count,
         },
     )
+    session.commit()
+    return count
+
+
+def embedding_coverage(session: Session, embedder: Embedder) -> dict[str, Any]:
+    """B37 req 54: how much of the memory table the ACTIVE model has indexed, and how
+    many rows every model holds - the number a re-index is judged by."""
+    memories = int(session.scalar(select(func.count()).select_from(Memory)) or 0)
+    per_model = {
+        str(model_id): int(count)
+        for model_id, count in session.execute(
+            select(MemoryEmbedding.model_id, func.count()).group_by(MemoryEmbedding.model_id)
+        )
+    }
+    embedded = per_model.get(embedder.model_id, 0)
+    return {
+        "model_id": embedder.model_id,
+        "memories": memories,
+        "embedded": embedded,
+        "missing": max(0, memories - embedded),
+        "models": dict(sorted(per_model.items())),
+    }
+
+
+def reindex_missing(session: Session, embedder: Embedder) -> int:
+    """B37 req 54: embed only the memories that have no row for this model - the
+    resumable half of a provider change. Returns the rows written; a second pass
+    writes none."""
+    done = select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model_id == embedder.model_id)
+    memories = session.execute(select(Memory).where(Memory.id.not_in(done))).scalars().all()
+    count = 0
+    for memory in memories:
+        upsert_embedding(session, embedder, memory)
+        count += 1
+    if count:
+        session.flush()
+        record_audit(
+            session,
+            action="reindexed",
+            memory_id=None,
+            memory_class=None,
+            key=None,
+            actor=Actor.SYSTEM,
+            detail={
+                "model_id": embedder.model_id,
+                "model_version": embedder.model_version,
+                "dim": embedder.dim,
+                "rows": count,
+                "only_missing": True,
+            },
+        )
     session.commit()
     return count
 

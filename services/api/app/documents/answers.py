@@ -310,14 +310,18 @@ def _containing_line_block(doc: DocRef, line: Any) -> dict[str, Any] | None:
     return doc.blocks[0] if doc.blocks else None
 
 
-def references(doc: DocRef, question: str, *, k: int = 3) -> list[dict[str, Any]]:
+def references(
+    doc: DocRef, question: str, *, k: int = 3, embedder: Any | None = None
+) -> list[dict[str, Any]]:
     """The refs :func:`answer` would look at for ``question`` — used to name what was
     searched even when nothing answered it."""
-    results = retrieval.top_k(doc.blocks, question, kind=doc.kind, structure=doc.structure, k=k)
+    results = retrieval.top_k(
+        doc.blocks, question, kind=doc.kind, structure=doc.structure, k=k, embedder=embedder
+    )
     return [_ref_dict(doc, r.block) for r in results]
 
 
-def answer(doc: DocRef, question: str) -> dict[str, Any]:
+def answer(doc: DocRef, question: str, *, embedder: Any | None = None) -> dict[str, Any]:
     """Retrieval -> the best block(s) -> a Turkish sentence naming the file and the
     place. A question no block answers gets an honest "bulamadım" naming what was
     searched — never an invented value (ADR-0083 decision 2)."""
@@ -325,7 +329,9 @@ def answer(doc: DocRef, question: str) -> dict[str, Any]:
     if structural is not None:
         return structural
 
-    results = retrieval.top_k(doc.blocks, question, kind=doc.kind, structure=doc.structure, k=3)
+    results = retrieval.top_k(
+        doc.blocks, question, kind=doc.kind, structure=doc.structure, k=3, embedder=embedder
+    )
     if not results:
         looked_at = doc.blocks[:3]
         refs = [_ref_dict(doc, b) for b in looked_at]

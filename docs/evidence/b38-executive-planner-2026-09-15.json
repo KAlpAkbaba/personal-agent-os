@@ -1,0 +1,76 @@
+{
+  "batch": "B38",
+  "name": "Genel yürütme planlayıcısı",
+  "requirements": [
+    536,
+    537,
+    538,
+    544,
+    546,
+    549,
+    550,
+    551,
+    552,
+    553,
+    554,
+    555,
+    556,
+    557
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {},
+    "web_gates": "vitest 104 files / 1878 tests (executive-approve 3, executive-panel, quiet-families); tsc --noEmit clean; oxlint no new warnings",
+    "run": "2026-09-15 local, one clean run over the B37+B38 tree (scratchpad b38_gate.log): QUALITY GATE: PASS; API pytest 10682 passed / 5 skipped in 18m33s; staged update qualified 89 checks; web vitest/tsc/oxlint green"
+  },
+  "what_this_proves": "The executive plans past its three shapes without trusting the planner: a model proposes only ids, kinds, inputs, preconditions, minimums, timeouts, retries, loops and reasons, the fixed risk/compensation/evidence fields come from the kind's profile and the same validator judges every graph (rule, model or the owner's own); steps branch on a failure, depend strictly on a verification, loop bounded until a minimum is met and park for the owner's recorded yes while their siblings keep running; the research shape builds its two artifacts side by side; and every plan explains each step.",
+  "measured_first": {
+    "before": "RuleBasedExecutivePlanner: three shapes, everything else PlanningClarificationNeeded; ClaudeExecutivePlanner.plan raised NotImplementedError; Precondition checks step_done/none only (plus four unused names treated as satisfied); no Repeat, no rationale, no planner tag; the research shape chained s3 -> s4; run_dict had no awaiting_step; POST /v1/executive/runs took a directive only; the Cockpit had three chips."
+  },
+  "closed_fully": {
+    "536_preconditions": "spec: PRECONDITION_STEP_FAILED / STEP_VERIFIED / OWNER_APPROVAL; graph.py requires step_failed/step_verified to name an EARLIER step; activities._precondition_satisfied decides by the real rows.",
+    "537_538_postconditions_retry": "postcondition.min is the loop target; each round bumps attempt and keeps partial evidence; the last round is judged by _evidence_meets_minimum.",
+    "544_owner_approval": "workflow._needs_approval parks the step (mark_awaiting_approval_activity -> awaiting_step + status note), approve_step signal releases it; service.approve_step_db records approvals_json {step: at}; activity second wall; POST /v1/executive/runs/{id}/approve; web Onayla chip gated by rowAwaitsApproval.",
+    "546_explanation": "Step.rationale on every rule-shape step and every proposal; GET /runs/{id}/plan; explain adds the rationale.",
+    "550_551_model_planner": "model_planner.py: vocabulary(), PROPOSAL_SCHEMA, PlannerModel protocol, ScriptedPlannerModel, AnthropicPlannerModel (forced tool use, key never in errors), graph_from_proposal, ModelExecutivePlanner, CompositeExecutivePlanner(rule, model, enabled) installed by create_app; config executive_model_planner_enabled=False, executive_planner_model.",
+    "552_every_kind": "start_run_db(graph=) validates the owner's graph as planner=owner; invalid_graph 422 names every reason; the route test runs scene.create -> scene.render(owner_approval) -> synthesis.",
+    "553_parallel": "research shape: s3 and s4 both precondition s2; _step_dependencies reads step_done/step_failed/step_verified; the workflow batch (<=3) runs siblings together.",
+    "554_557_branches_recovery": "step_failed runs only after a non-verified terminal state and is skipped with 'yedek dal gerekmedi' after success; step_verified skips by name; the run outcome stays honest.",
+    "555_loops": "Repeat(max_rounds 1..3); validator refuses max_rounds > 1 without postcondition.min; run_step_activity loop with __prior_evidence__ / __round__ in the inputs; repeat_json on the step row (migration 0050).",
+    "556_timeouts": "DEFAULT_TIMEOUT_S_BY_KIND applied when a proposal omits timeout_s; Step.timeout_s bounds unchanged."
+  },
+  "found_on_the_way": {
+    "unknown_reference_is_a_literal": "validate_graph treats 'sX.name' for a step that does not exist as a literal by design (ADR-0089); the refusal test now uses a real DAG violation (s1 reads s2).",
+    "wait_condition_closure": "the parked set is bound into the wait_condition lambda as a default argument (ruff B023) so a later batch cannot change what an earlier wait watches.",
+    "owner_graph_profile_fields": "an owner graph must carry the kind's fixed risk/compensation/evidence exactly; the route test builds them from STEP_KIND_PROFILES.",
+    "redundant_wrapper": "validate_graph had grown a private twin during the patch; folded back into one function.",
+    "web_types": "reasonKind union, the fake client and the quiet-families control needed the approve members; tsc caught all three."
+  },
+  "partial": {
+    "549_mail_sequence": "BLOCKED_PROVIDER — the mail step kinds are reachable from a model or owner graph now; the account is B45's (checkpoint 5)."
+  },
+  "tests": {
+    "services/api/tests/unit/test_executive_b38.py": "14 (spec+validator bounds and refusals; research siblings + rationales; scripted proposal -> graph with looked-up fields; 4 clarifications; composite under the flag; step_failed/step_verified/owner_approval on rows; bounded repeat through run_step_activity; mark_awaiting_approval; Temporal park + signal in WorkflowEnvironment; owner graph + plan + approve routes through create_app)",
+    "regression suites rerun": "test_executive_* (11 files) + test_release_schema: 168 passed; test_owner_error_language + test_scene_wiring: 130 passed",
+    "apps/web/tests/cockpit/executive-approve.test.tsx": "3 (chip gate, row parse, render with/without a waiting step)",
+    "apps/web full": "104 files / 1878 tests; tsc clean; oxlint no new warnings"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b38_mutate.py.",
+    "mutations": [
+      "M9 the research shape chains the slides after the document instead of beside it (553) -> 1 failure(s)."
+    ],
+    "result": "1/1 red; every file restored to its sha256 before the mutation (M9 v1 targeted the spreadsheet shape's step by mistake and stayed green; retargeted to the research shape's presentation step)."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED: the approval gate in the real Temporal test environment (WorkflowEnvironment + Worker, a fake mark-awaiting activity, the approve_step signal), the loop through the real run_step_activity with a scripted dispatch, the model planner through a scripted model, the routes through create_app with Temporal faked at the client seam. The roadmap's PROVEN_REAL (a shapeless directive planned end to end by the model on the deployed Cloud Core) is READY_FOR_OWNER: it needs executive_model_planner_enabled=true and PAGENTOS_ANTHROPIC_API_KEY on the host (checkpoint 15)."
+  },
+  "owner_gates": {
+    "model_budget": "READY_FOR_OWNER (checkpoint 15): set PAGENTOS_ANTHROPIC_API_KEY (scripts/secret-store.ps1 -Set / set-cloud-secret.ps1), set PAGENTOS_EXECUTIVE_MODEL_PLANNER_ENABLED=true, give the executive a directive outside the three shapes.",
+    "mail_account": "549 waits for B45's account."
+  }
+}

@@ -27,6 +27,7 @@ from app.ambient import service as ambient_service
 from app.ambient.holdoff import get_holdoffs
 from app.ambient.policy import decide
 from app.artifacts.runtime import ArtifactRuntime
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 
 AMBIENT_VERSION = 1
@@ -118,7 +119,7 @@ async def put_policy(request: Request, body: PolicyIn) -> dict[str, Any]:
     try:
         payload, applied = await asyncio.to_thread(write)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     if "auto_off_enabled" in applied:
         speech = (
             alarm_speech.AMBIENT_AUTO_OFF_ON_TR

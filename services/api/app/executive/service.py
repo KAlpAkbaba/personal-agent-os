@@ -25,6 +25,7 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app.executive import activities
 from app.executive.graph import GraphValidationError, validate_graph
+from app.executive.model_planner import get_executive_planner
 from app.executive.models import (
     SOURCE_VOICE,
     STATE_CANCELLED,
@@ -42,13 +43,19 @@ from app.executive.models import (
     ExecutiveRunRow,
     ExecutiveStepRow,
 )
-from app.executive.planner import PlanningClarificationNeeded, RuleBasedExecutivePlanner
-from app.executive.spec import MAX_ACTIVE_RUNS, STEP_KIND_PROFILES, Step, TaskGraph
+from app.executive.planner import PlanningClarificationNeeded
+from app.executive.spec import (
+    MAX_ACTIVE_RUNS,
+    PLANNER_OWNER,
+    PRECONDITION_OWNER_APPROVAL,
+    STEP_KIND_PROFILES,
+    Step,
+    TaskGraph,
+)
 from app.executive.workflow import ExecutiveRunRequest, ExecutiveWorkflow
 from app.logging import get_logger
 
 logger = get_logger("app.executive.service")
-
 
 
 class ExecutiveServiceError(Exception):
@@ -60,7 +67,6 @@ class ExecutiveServiceError(Exception):
         self.error_class = error_class
         self.speech = speech
         super().__init__(speech)
-
 
 
 def workflow_id_for(run_id: uuid.UUID) -> str:
@@ -118,6 +124,8 @@ def start_run_db(
     folder: str | None = None,
     source: str = SOURCE_VOICE,
     session_id: str | None = None,
+    graph: dict[str, Any] | None = None,
+    planner: Any | None = None,
 ) -> ExecutiveRunRow:
     """The synchronous half (module docstring): plans, validates (already inside the
     planner — ADR-0089 decision 1), enforces the <= 2 active runs bound (spec §4), and
@@ -129,10 +137,26 @@ def start_run_db(
     # first check only saves the planning work when the answer is already no.
     if _count_active_runs(db) >= MAX_ACTIVE_RUNS:
         raise _too_many_active_runs()
-    try:
-        graph = RuleBasedExecutivePlanner().plan(directive, folder=folder)
-    except PlanningClarificationNeeded as exc:
-        raise ExecutiveServiceError("clarification_needed", exc.speech) from exc
+    if graph is not None:
+        # B38 (req 552): the owner's OWN graph through the product surface - every kind
+        # in the vocabulary reachable, under the same validator as every planner.
+        try:
+            task_graph = TaskGraph.model_validate(
+                {**graph, "goal": str(graph.get("goal") or directive), "planner": PLANNER_OWNER}
+            )
+            validate_graph(task_graph)
+        except (ValidationError, GraphValidationError) as exc:
+            raise ExecutiveServiceError(
+                "invalid_graph", f"Bu planı kurallara göre kuramadım efendim: {str(exc)[:300]}"
+            ) from exc
+        graph_obj = task_graph
+    else:
+        chosen = planner if planner is not None else get_executive_planner()
+        try:
+            graph_obj = chosen.plan(directive, folder=folder)
+        except PlanningClarificationNeeded as exc:
+            raise ExecutiveServiceError("clarification_needed", exc.speech) from exc
+    graph = graph_obj
 
     now = datetime.now(UTC)
     run = ExecutiveRunRow(
@@ -177,6 +201,7 @@ def start_run_db(
                 precondition_json=step.precondition.model_dump(),
                 postcondition_json=step.postcondition.model_dump(),
                 retry_json=step.retry.model_dump(),
+                repeat_json=step.repeat.model_dump(),
                 timeout_s=step.timeout_s,
                 risk_class=step.risk_class,
                 compensation=step.compensation,
@@ -300,9 +325,7 @@ def _status_speech(run: ExecutiveRunRow) -> str:
         # would count a failed step as still to come.
         left = max(run.steps_total - run.steps_done - run.steps_failed, 0)
         failed = f", {run.steps_failed} başarısız" if run.steps_failed else ""
-        return (
-            f"Duraklatıldı efendim: {run.steps_done} adım tamam{failed}, {left} bekliyor."
-        )
+        return f"Duraklatıldı efendim: {run.steps_done} adım tamam{failed}, {left} bekliyor."
     if run.state == STATE_COMPLETED:
         tail = f" {run.synthesis_text}" if run.synthesis_text else ""
         return f"Tamamlandı efendim.{tail}".strip()
@@ -356,6 +379,9 @@ def run_dict(run: ExecutiveRunRow) -> dict[str, Any]:
         "failed": run.steps_failed,
         "total": run.steps_total,
         "missing": missing_steps(run),
+        # B38 (req 544): the step waiting for the owner's yes, when one is.
+        "awaiting_step": run.awaiting_step,
+        "planner": (run.graph_json or {}).get("planner"),
         "created_at": run.created_at.isoformat() if run.created_at else None,
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
     }
@@ -381,11 +407,88 @@ def get_explain(db: Session, run_id: uuid.UUID) -> dict[str, Any]:
     precondition = step.precondition_json or {}
     if precondition.get("check") == "step_done" and precondition.get("arg"):
         waits_for = f" ({precondition['arg']} adımının bitmesini bekliyordum)"
+    # B38 (req 546): the planner's own reason for the step, when it gave one.
+    rationale = next(
+        (
+            s.get("rationale")
+            for s in ((run.graph_json or {}).get("steps") or [])
+            if str(s.get("id")) == step.step_id and s.get("rationale")
+        ),
+        None,
+    )
+    why = f" Neden: {rationale}" if rationale else ""
     return {
         "run_id": str(run.id),
         "step_id": step.step_id,
-        "speech": f"Şu an {description} işini yapıyorum efendim{waits_for}.",
+        "rationale": rationale,
+        "speech": f"Şu an {description} işini yapıyorum efendim{waits_for}.{why}",
     }
+
+
+def get_plan(db: Session, run_id: uuid.UUID) -> dict[str, Any]:
+    """B38 (req 546): the whole plan as the owner reads it - every step with its kind,
+    its rationale (the planner's own reason), its precondition, its state and what it
+    produced - and who planned it."""
+    run = _get_run(db, run_id)
+    graph = run.graph_json or {}
+    rationale_by_id = {str(s.get("id")): s.get("rationale") for s in (graph.get("steps") or [])}
+    steps = []
+    for row in list_steps(db, run_id):
+        profile = STEP_KIND_PROFILES.get(row.kind)
+        evidence = row.evidence_json or {}
+        steps.append(
+            {
+                "step_id": row.step_id,
+                "kind": row.kind,
+                "description": profile.description if profile else row.kind,
+                "rationale": rationale_by_id.get(row.step_id),
+                "precondition": dict(row.precondition_json or {}),
+                "repeat": dict(row.repeat_json or {}),
+                "state": row.state,
+                "attempt": row.attempt,
+                "error_class": row.error_class,
+                "error_message": row.error_message,
+                "evidence_keys": sorted(evidence.keys()),
+            }
+        )
+    return {
+        "run_id": str(run.id),
+        "goal": run.goal,
+        "planner": graph.get("planner"),
+        "state": run.state,
+        "awaiting_step": run.awaiting_step,
+        "approvals": dict(run.approvals_json or {}),
+        "steps": steps,
+    }
+
+
+def approve_step_db(db: Session, run_id: uuid.UUID, step_id: str | None) -> str:
+    """B38 (req 544): the owner's yes for the step the run waits on (or a named step).
+    Recorded on the row BEFORE the workflow is told; returns the step id approved."""
+    run = _get_run(db, run_id)
+    if run.state in TERMINAL_RUN_STATES:
+        raise ExecutiveServiceError("invalid_state", "Bu iş bitmiş; onaylanacak adım yok efendim.")
+    target = step_id or run.awaiting_step
+    if not target:
+        raise ExecutiveServiceError("invalid_state", "Bu işte onay bekleyen bir adım yok efendim.")
+    step = get_step_row(db, run_id, target)
+    if step is None:
+        raise ExecutiveServiceError("not_found", "Böyle bir adım bulamadım efendim.")
+    if (step.precondition_json or {}).get("check") != PRECONDITION_OWNER_APPROVAL:
+        raise ExecutiveServiceError("invalid_state", f"{target} adımı onay istemiyor efendim.")
+    approvals = dict(run.approvals_json or {})
+    approvals[target] = datetime.now(UTC).isoformat()
+    run.approvals_json = approvals
+    if run.awaiting_step == target:
+        run.awaiting_step = None
+    run.updated_at = datetime.now(UTC)
+    db.commit()
+    activities.publish_run_state(run)
+    return target
+
+
+async def approve_step_signal(client: Client, run_id: uuid.UUID, step_id: str) -> None:
+    await _signal(client, run_id, ExecutiveWorkflow.approve_step, step_id)
 
 
 def list_runs(db: Session, *, limit: int = 50) -> list[ExecutiveRunRow]:
@@ -556,6 +659,7 @@ def amend_run_db(db: Session, run_id: uuid.UUID, new_step: dict[str, Any]) -> St
             precondition_json=candidate.precondition.model_dump(),
             postcondition_json=candidate.postcondition.model_dump(),
             retry_json=candidate.retry.model_dump(),
+            repeat_json=candidate.repeat.model_dump(),
             timeout_s=candidate.timeout_s,
             risk_class=candidate.risk_class,
             compensation=candidate.compensation,

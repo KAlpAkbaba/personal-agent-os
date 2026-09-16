@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -49,6 +49,7 @@ from app.appfactory.models import STATE_SCAFFOLDED, STATE_TESTED, AppProjectRow
 from app.appfactory.service import AppFactoryService
 from app.artifacts import service as artifact_service
 from app.artifacts.factory import create as artifacts_factory_create
+from app.artifacts.provenance import ACTOR_EXECUTIVE_RUN, Actor
 from app.artifacts.runtime import build_artifact_context
 from app.artifacts.spec import ArtifactSpec
 from app.calendar.models import PROPOSAL_STATE_PREPARED, CalendarProposalRow
@@ -98,7 +99,10 @@ from app.executive.spec import (
     EVIDENCE_SCENE_ID,
     EVIDENCE_TEXT,
     PRECONDITION_NONE,
+    PRECONDITION_OWNER_APPROVAL,
     PRECONDITION_STEP_DONE,
+    PRECONDITION_STEP_FAILED,
+    PRECONDITION_STEP_VERIFIED,
     STEP_KIND_APPS_CREATE,
     STEP_KIND_APPS_TEST,
     STEP_KIND_ARTIFACTS_CREATE,
@@ -286,6 +290,33 @@ def _precondition_satisfied(
         if sibling is None or sibling.state not in STEP_TERMINAL_STATES:
             return False, f"{arg} henüz tamamlanmadı"
         return True, None
+    # B38 (req 554/557): the fallback branch - runs ONLY after a failure of the named
+    # step; skipped (with the reason) when that step verified, which is the plan working.
+    if check == PRECONDITION_STEP_FAILED:
+        arg = condition.get("arg")
+        sibling = _get_step_row(db, run_id, arg) if arg else None
+        if sibling is None or sibling.state not in STEP_TERMINAL_STATES:
+            return False, f"{arg} henüz tamamlanmadı"
+        if sibling.state == STEP_STATE_VERIFIED:
+            return False, f"{arg} başarılı oldu; yedek dal gerekmedi"
+        return True, None
+    # B38: the strict dependency - a failed or skipped upstream skips this step by name.
+    if check == PRECONDITION_STEP_VERIFIED:
+        arg = condition.get("arg")
+        sibling = _get_step_row(db, run_id, arg) if arg else None
+        if sibling is None or sibling.state not in STEP_TERMINAL_STATES:
+            return False, f"{arg} henüz tamamlanmadı"
+        if sibling.state != STEP_STATE_VERIFIED:
+            return False, f"{arg} doğrulanamadı ({sibling.state})"
+        return True, None
+    # B38 (req 544): the owner's yes is a fact on the run row; the workflow parks the
+    # step until it is there, and this is the second wall behind that gate.
+    if check == PRECONDITION_OWNER_APPROVAL:
+        run = db.get(ExecutiveRunRow, run_id)
+        approvals = dict((run.approvals_json or {}) if run is not None else {})
+        if step_row.step_id not in approvals:
+            return False, "sahibin onayı verilmedi"
+        return True, None
     # focus_exists / device_capability / artifact_valid / account_present: no step this
     # milestone's planner produces uses these (RuleBasedExecutivePlanner's three shapes
     # only ever emit step_done/none). Treated as satisfied rather than refused, so a
@@ -307,6 +338,8 @@ class _Prepared:
     #: retry policy (spec §1), read once here so the internal retry loop in
     #: ``run_step_activity`` never has to re-open a session just to learn it.
     retry: dict[str, Any]
+    #: B38 (req 555): {"max_rounds": int} - the step's own loop bound.
+    repeat: dict[str, Any] = field(default_factory=dict)
 
 
 def _prepare(run_id: uuid.UUID, step_id: str) -> _Prepared:
@@ -316,6 +349,7 @@ def _prepare(run_id: uuid.UUID, step_id: str) -> _Prepared:
         if step_row is None:
             raise StepError("not_found", f"executive step {step_id!r} has no row")
         retry = dict(step_row.retry_json or {})
+        repeat = dict(step_row.repeat_json or {})
         if step_row.state == STEP_STATE_VERIFIED:
             return _Prepared(
                 "cached",
@@ -325,6 +359,7 @@ def _prepare(run_id: uuid.UUID, step_id: str) -> _Prepared:
                 step_row.kind,
                 step_row.postcondition_json,
                 retry,
+                repeat,
             )
         satisfied, reason = _precondition_satisfied(db, run_id, step_row)
         if not satisfied:
@@ -335,7 +370,14 @@ def _prepare(run_id: uuid.UUID, step_id: str) -> _Prepared:
             step_row.updated_at = step_row.finished_at
             db.commit()
             return _Prepared(
-                "skip", None, {}, reason, step_row.kind, step_row.postcondition_json, retry
+                "skip",
+                None,
+                {},
+                reason,
+                step_row.kind,
+                step_row.postcondition_json,
+                retry,
+                repeat,
             )
         resolved = _resolve_inputs(db, run_id, step_row)
         prior_evidence = dict(step_row.evidence_json or {})
@@ -347,7 +389,14 @@ def _prepare(run_id: uuid.UUID, step_id: str) -> _Prepared:
         db.commit()
         resolved["__prior_evidence__"] = prior_evidence
         return _Prepared(
-            "run", None, resolved, None, step_row.kind, step_row.postcondition_json, retry
+            "run",
+            None,
+            resolved,
+            None,
+            step_row.kind,
+            step_row.postcondition_json,
+            retry,
+            repeat,
         )
 
 
@@ -550,7 +599,8 @@ def _run_compensation(db: Session, step_row: ExecutiveStepRow) -> None:
                 row.render_sha256 = None
                 row.render_bytes = None
                 outcome = (
-                    COMPENSATION_OUTCOME_UNDONE if error is None
+                    COMPENSATION_OUTCOME_UNDONE
+                    if error is None
                     else COMPENSATION_OUTCOME_ATTEMPTED_AND_FAILED
                 )
     except Exception as exc:  # noqa: BLE001 - best-effort, see docstring
@@ -567,9 +617,7 @@ def _run_compensation(db: Session, step_row: ExecutiveStepRow) -> None:
         evidence["compensation_error"] = error
     step_row.evidence_json = evidence
     step_row.state = (
-        STEP_STATE_COMPENSATED
-        if outcome == COMPENSATION_OUTCOME_UNDONE
-        else STEP_STATE_CANCELLED
+        STEP_STATE_COMPENSATED if outcome == COMPENSATION_OUTCOME_UNDONE else STEP_STATE_CANCELLED
     )
     step_row.updated_at = datetime.now(UTC)
 
@@ -652,9 +700,18 @@ def _kind_documents_find(resolved: dict[str, Any]) -> dict[str, Any]:
 
 def _kind_documents_compare(resolved: dict[str, Any]) -> dict[str, Any]:
     factory, _store = build_artifact_context(get_settings())
+    # B32 req 169: the planner's own targets (the find step's document refs) name the two
+    # documents; only without them is the compare "current vs previous".
+    targets = [t for t in list(resolved.get("targets") or []) if isinstance(t, dict)]
+    named = [
+        str(t.get("path") or t.get("ref") or "") for t in targets if t.get("path") or t.get("ref")
+    ]
+    kwargs: dict[str, Any] = {}
+    if len(named) >= 2:
+        kwargs = {"target_a": named[0], "target_b": named[1]}
     with factory() as db:
         service = get_document_service()
-        receipt = service.compare(db, get_device_action())
+        receipt = service.compare(db, get_device_action(), **kwargs)
         if receipt.get("execution_status") != EXECUTION_EXECUTED:
             raise StepError(
                 receipt.get("error_class") or "documents_compare_failed",
@@ -800,7 +857,9 @@ def _kind_artifacts_create(resolved: dict[str, Any]) -> dict[str, Any]:
         title = f"Yönetici Çalışması: {kind}"
         spec = _artifact_spec_from_text(kind, title, body_text)
         if artifact_id is None:
-            result = artifacts_factory_create(db, store, spec=spec)
+            result = artifacts_factory_create(
+                db, store, spec=spec, actor=Actor(ACTOR_EXECUTIVE_RUN, ref="executive.step")
+            )
             artifact_id = str(result.artifact_id)
         artifact = artifact_service.get_artifact(db, uuid.UUID(artifact_id))
         if artifact is None:
@@ -1147,6 +1206,13 @@ async def run_step_activity(run_id: str, step_id: str) -> dict[str, Any]:
     backoff_s = max(0.0, min(float(prepared.retry.get("backoff_s") or 0.0), 60.0))
     only_on = set(prepared.retry.get("only_on") or [])
 
+    # B38 (req 555): the bounded loop - the step runs again while its evidence is below
+    # the postcondition minimum, up to repeat.max_rounds; the LAST round's evidence is
+    # what is judged, and every round is one more attempt on the row.
+    max_rounds = max(1, min(int(prepared.repeat.get("max_rounds") or 1), 3))
+    postcondition = prepared.postcondition or {}
+    rounds = 0
+
     error: StepError | None = None
     evidence: dict[str, Any] | None = None
     attempt = 1
@@ -1154,6 +1220,16 @@ async def run_step_activity(run_id: str, step_id: str) -> dict[str, Any]:
         try:
             evidence = await _dispatch_with_heartbeat(run_uuid, step_id, kind, resolved)
             error = None
+            rounds += 1
+            if rounds < max_rounds and not _evidence_meets_minimum(
+                postcondition.get("evidence"), evidence, postcondition.get("min")
+            ):
+                if activity.in_activity():
+                    activity.heartbeat(f"round {rounds}/{max_rounds}: below minimum")
+                await asyncio.to_thread(_bump_attempt, run_uuid, step_id)
+                resolved["__prior_evidence__"] = dict(evidence)
+                resolved["__round__"] = rounds + 1
+                continue
             break
         except StepError as exc:
             error = exc
@@ -1214,7 +1290,35 @@ async def settle_crashed_step_activity(run_id: str, step_id: str, reason: str) -
     )
 
 
-EXECUTIVE_ACTIVITIES = [run_step_activity, settle_crashed_step_activity]
+def _mark_awaiting_approval(run_id: uuid.UUID, step_id: str) -> dict[str, Any]:
+    factory, _store = build_artifact_context(get_settings())
+    with factory() as db:
+        run = db.get(ExecutiveRunRow, run_id)
+        if run is None:
+            return {"run_id": str(run_id), "awaiting_step": None}
+        approvals = dict(run.approvals_json or {})
+        if step_id in approvals:
+            run.awaiting_step = None
+        else:
+            run.awaiting_step = step_id
+        run.updated_at = datetime.now(UTC)
+        db.commit()
+        publish_run_state(run)
+        return {"run_id": str(run_id), "awaiting_step": run.awaiting_step}
+
+
+@activity.defn(name="executive_mark_awaiting_approval")
+async def mark_awaiting_approval_activity(run_id: str, step_id: str) -> dict[str, Any]:
+    """B38 (req 544): the run row says WHICH step waits for the owner - the Cockpit and
+    the voice read it from the row, never from the workflow's memory."""
+    return await asyncio.to_thread(_mark_awaiting_approval, uuid.UUID(run_id), step_id)
+
+
+EXECUTIVE_ACTIVITIES = [
+    run_step_activity,
+    settle_crashed_step_activity,
+    mark_awaiting_approval_activity,
+]
 
 __all__ = [
     "EXECUTIVE_ACTIVITIES",

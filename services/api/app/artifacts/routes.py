@@ -21,12 +21,14 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app.artifacts import factory, open_service, render_store, service
+from app.artifacts import lifecycle as artifact_lifecycle
 from app.artifacts.models import (
     CANONICAL_FORMAT_ARTIFACT_SPEC_JSON,
     Artifact,
     ArtifactVersion,
     Task,
 )
+from app.artifacts.provenance import ACTOR_OWNER_REST, Actor
 from app.artifacts.render_fetch_store import RenderFetchStore, get_render_fetch_store
 from app.artifacts.renderers import (
     DEFAULT_RENDER_FORMATS,
@@ -36,6 +38,7 @@ from app.artifacts.renderers import (
 )
 from app.artifacts.runtime import ArtifactRuntime
 from app.artifacts.spec import ArtifactSpec
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.research.provider import DeterministicResearchProvider
@@ -225,6 +228,9 @@ def _artifact_payload(
         "current_version": artifact.current_version,
         "executive_summary": artifact.executive_summary,
         "content_hash": version.content_hash if version else None,
+        # B42 (req 405-408): the current version's provenance and source manifest.
+        "provenance": version.provenance_json if version else None,
+        "source_manifest": version.source_manifest_json if version else None,
         "available_renders": _render_payload(renders),
         "created_at": _iso(artifact.created_at),
         "updated_at": _iso(artifact.updated_at),
@@ -245,9 +251,7 @@ async def list_artifacts(request: Request) -> dict[str, Any]:
             for artifact in service.list_artifacts(session):
                 version = service.get_current_version(session, artifact.id)
                 renders = service.list_renders(session, version.id) if version else []
-                out.append(
-                    _artifact_payload(artifact, version, renders, include_body=False)
-                )
+                out.append(_artifact_payload(artifact, version, renders, include_body=False))
             return out
 
     items = await asyncio.to_thread(load)
@@ -345,7 +349,7 @@ async def create_render(
         # render_factory() refuses a format the artifact's own kind cannot produce
         # (ArtifactSpec.formats()) — a 422, not a 500: the caller asked for something
         # this artifact was never going to be able to make.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="artifact or canonical body not found")
     return payload
@@ -380,7 +384,7 @@ async def get_render(request: Request, artifact_id: uuid.UUID, fmt: str) -> Resp
     try:
         result = await asyncio.to_thread(load)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="artifact or canonical body not found")
     data, mime, chash, _title = result
@@ -459,15 +463,19 @@ async def create_factory_artifact(
         # model_validator failure, which json.dumps cannot serialize -- without
         # this the error handler itself crashes (a real bug this route's own test
         # caught: a 500 with no body, not the 422 the caller was owed).
-        raise HTTPException(
-            status_code=422, detail=exc.errors(include_context=False, include_url=False)
-        ) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     import asyncio
 
     def do_create() -> factory.FactoryResult:
         with runtime.session() as session:
             return factory.create(
-                session, runtime.store, spec=spec, conversation_id=body.conversation_id
+                session,
+                runtime.store,
+                spec=spec,
+                conversation_id=body.conversation_id,
+                actor=Actor(
+                    ACTOR_OWNER_REST, session_id=str(request.state.owner_session.session_id)
+                ),
             )
 
     result = await asyncio.to_thread(do_create)
@@ -495,6 +503,203 @@ class OpenArtifactRequest(BaseModel):
     #: ``POST .../open`` with an empty body sends — ADR-0085 addendum 2 item 5) lets the
     #: factory pick the first VALID render in the artifact kind's own format order.
     format: str | None = Field(default=None, max_length=16)
+
+
+# ------------------------------------------------------------ B42: the lifecycle
+
+
+class EditArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    edit: dict[str, Any]
+
+
+class CloneArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = Field(default=None, max_length=500)
+    version: int | None = Field(default=None, ge=1)
+
+
+class DeleteArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: bool = False
+
+
+def _lifecycle_error(exc: artifact_lifecycle.ArtifactLifecycleError) -> HTTPException:
+    status = 404 if exc.code == "not_found" else 422
+    return HTTPException(status_code=status, detail={"code": exc.code, "message": exc.speech})
+
+
+class ImageArtifactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=500)
+    object_key: str = Field(min_length=1, max_length=512)
+    sources: list[dict[str, Any]] | None = Field(default=None, max_length=200)
+    conversation_id: uuid.UUID | None = None
+
+
+@router.post("/artifacts/image", status_code=201)
+async def register_image_artifact(request: Request, body: ImageArtifactRequest) -> dict[str, Any]:
+    """B42 (req 400): an image the creative path stored (``creative/<run>/<name>``) becomes
+    an artifact with the same provenance, versions, clone, delete and compare as every
+    other kind - the bytes copied under the artifact's own key."""
+    runtime = _runtime(request)
+    actor = Actor(ACTOR_OWNER_REST, session_id=str(request.state.owner_session.session_id))
+
+    def do() -> dict[str, Any]:
+        with runtime.session() as session:
+            return artifact_lifecycle.register_image_artifact(
+                session,
+                runtime.store,
+                title=body.title,
+                object_key=body.object_key,
+                actor=actor,
+                sources=body.sources,
+                conversation_id=body.conversation_id,
+            ).as_dict()
+
+    try:
+        return await asyncio.to_thread(do)
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        raise _lifecycle_error(exc) from exc
+    except ValueError as exc:  # validate_object_key
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
+
+
+@router.get("/artifacts/{artifact_id}/versions")
+async def list_artifact_versions(request: Request, artifact_id: uuid.UUID) -> dict[str, Any]:
+    """B42 (req 409): every version with its provenance and source manifest."""
+    runtime = _runtime(request)
+
+    def load() -> dict[str, Any] | None:
+        with runtime.session() as session:
+            artifact = service.get_artifact(session, artifact_id)
+            if artifact is None:
+                return None
+            versions = service.list_versions(session, artifact_id)
+            return {
+                "artifact_id": str(artifact.id),
+                "title": artifact.title,
+                "current_version": artifact.current_version,
+                "versions": [artifact_lifecycle.version_payload(v) for v in versions],
+            }
+
+    payload = await asyncio.to_thread(load)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="unknown artifact")
+    return payload
+
+
+@router.post("/artifacts/{artifact_id}/edit", status_code=201)
+async def edit_artifact(
+    request: Request, artifact_id: uuid.UUID, body: EditArtifactRequest
+) -> dict[str, Any]:
+    """B42 (req 410): the edit becomes the next version of the SAME artifact."""
+    runtime = _runtime(request)
+    try:
+        edit = artifact_lifecycle.ArtifactEdit.model_validate(body.edit)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
+    actor = Actor(ACTOR_OWNER_REST, session_id=str(request.state.owner_session.session_id))
+
+    def do() -> dict[str, Any]:
+        with runtime.session() as session:
+            return artifact_lifecycle.edit_artifact(
+                session, runtime.store, artifact_id, edit, actor=actor
+            ).as_dict()
+
+    try:
+        return await asyncio.to_thread(do)
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        raise _lifecycle_error(exc) from exc
+    except (ValidationError, ValueError) as exc:
+        # The edited spec failed the spec's own rules (never invented, no formula
+        # injection): 422 with the owner sentence, the failing input never echoed.
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
+
+
+@router.post("/artifacts/{artifact_id}/clone", status_code=201)
+async def clone_artifact(
+    request: Request, artifact_id: uuid.UUID, body: CloneArtifactRequest
+) -> dict[str, Any]:
+    """B42 (req 411): a new artifact whose provenance names this one."""
+    runtime = _runtime(request)
+    actor = Actor(ACTOR_OWNER_REST, session_id=str(request.state.owner_session.session_id))
+
+    def do() -> dict[str, Any]:
+        with runtime.session() as session:
+            return artifact_lifecycle.clone_artifact(
+                session,
+                runtime.store,
+                artifact_id,
+                title=body.title,
+                actor=actor,
+                version_number=body.version,
+            ).as_dict()
+
+    try:
+        return await asyncio.to_thread(do)
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        raise _lifecycle_error(exc) from exc
+
+
+@router.post("/artifacts/{artifact_id}/delete")
+async def delete_artifact(
+    request: Request, artifact_id: uuid.UUID, body: DeleteArtifactRequest | None = None
+) -> dict[str, Any]:
+    """B42 (req 412): under the owner's delete policy (settings.artifact_delete_policy)."""
+    runtime = _runtime(request)
+    policy = str(getattr(runtime.settings, "artifact_delete_policy", "confirm") or "confirm")
+    confirmed = bool(body.confirm) if body is not None else False
+
+    def do() -> dict[str, Any]:
+        with runtime.session() as session:
+            return artifact_lifecycle.delete_artifact(
+                session, runtime.store, artifact_id, policy=policy, confirmed=confirmed
+            ).as_dict()
+
+    try:
+        outcome = await asyncio.to_thread(do)
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        raise _lifecycle_error(exc) from exc
+    return {**outcome, "policy": policy}
+
+
+@router.get("/artifacts/{artifact_id}/compare")
+async def compare_artifact(
+    request: Request,
+    artifact_id: uuid.UUID,
+    against: Annotated[uuid.UUID | None, Query()] = None,
+    version: Annotated[int | None, Query(ge=1)] = None,
+    against_version: Annotated[int | None, Query(ge=1)] = None,
+) -> dict[str, Any]:
+    """B42 (req 415/416): what differs, named, and the diff. With no ``against`` the
+    artifact's current version is compared with the version before it."""
+    runtime = _runtime(request)
+
+    def do() -> dict[str, Any]:
+        with runtime.session() as session:
+            other = against or artifact_id
+            other_version = against_version
+            if against is None and against_version is None:
+                artifact = service.get_artifact(session, artifact_id)
+                if artifact is None:
+                    raise artifact_lifecycle.ArtifactLifecycleError(
+                        artifact_lifecycle.ERROR_NOT_FOUND, "Böyle bir artefakt bulamadım efendim."
+                    )
+                if artifact.current_version < 2:
+                    raise artifact_lifecycle.ArtifactLifecycleError(
+                        artifact_lifecycle.ERROR_NO_PREVIOUS_VERSION,
+                        "Bu artefaktın karşılaştırılacak önceki sürümü yok efendim.",
+                    )
+                other_version = artifact.current_version - 1
+            return artifact_lifecycle.compare_versions(
+                session, other, artifact_id, a_version=other_version, b_version=version
+            )
+
+    try:
+        return await asyncio.to_thread(do)
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        raise _lifecycle_error(exc) from exc
 
 
 @router.post("/artifacts/{artifact_id}/open")
@@ -551,8 +756,7 @@ async def open_artifact_route(
 
 def _render_fetch_store(request: Request) -> RenderFetchStore:
     return (
-        getattr(request.app.state, "artifact_render_fetch_store", None)
-        or get_render_fetch_store()
+        getattr(request.app.state, "artifact_render_fetch_store", None) or get_render_fetch_store()
     )
 
 

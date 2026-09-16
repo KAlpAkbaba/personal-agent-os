@@ -1,0 +1,92 @@
+{
+  "batch": "B33",
+  "name": "Yerel fabrika yaşam döngüsü",
+  "requirements": [456, 457, 462, 463, 464, 465, 466, 468, 469, 470, 471, 472, 473],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 on the third run (the first lost three tests to the bare-sentence contract, the owner-language rule and the browser worker race; the second lost the other half of that race)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10465 passed, 5 skipped (pytest 1327 s); was 10342 after B32",
+      "Windows agent build + tests": "PASS - 947/947 (Agent.Tests: ProjectCapabilityNames.All 9, NativeLifecycleTests 8, BrowserWorkerHostTests 74) + 135/135 (Companion.Audio.Tests)",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "node scripts/web/sync-feature-matrix.mjs; vitest tests/features/matrix-badges.test.tsx 12/12; tsc --noEmit clean"
+  },
+  "what_this_proves": "The built native application no longer stops at 'verified on disk'. The device packages it (portable zip, or MSIX through makeappx with the Cloud Core's scaffolded manifest, never signed), installs it as a Start Menu shortcut it can observe, uninstalls exactly that, and streams the artefact back in hash-verified chunks so the owner can download a device build from a Cloud Core that cannot see the device's disk. The Cloud Core launches the application through the device, drives the template's own controls through UI Automation, closes and relaunches it, reads the note count and the application's own log, and says 'verified' only when every read-back answered; fixes by regenerating and rebuilding on the device and reports the compiler's words otherwise; updates into a new version row; and speaks a signing policy that is explicit about being unsigned.",
+  "measured_first": {
+    "cloud_before": "native.install / native.launch / native.fix refused with a dependency_unavailable sentence on every call (ctx.live ports native_installer / native_launcher / native_fix_worker, never registered); DEVICE_BUILDABLE_TARGETS = {windows_exe} so a portable or MSIX row was 'unavailable' before the device was asked; GET /v1/native/{id}/artifact was 410 for every device build (Path.exists on a Windows path from Linux); no signing setting anywhere.",
+    "device_before": "ProjectCapabilityNames.All = 5 (scaffold/run/status/stop/test); nothing packaged, installed, uninstalled or read an artefact back; DocumentCapabilityNames.MaxFileBytes = 50 MiB is the bound the artefact read reuses.",
+    "router_before": "with a native build focused: 'Masaüstü uygulamasını aç' → app_factory_open, 'Programı başlat' → none, 'Uygulamayı doğrula' → none, 'Uygulamanın günlüğünü oku' → none, 'Uygulamayı güncelle' → none, 'Uygulamayı kaldır' → alarm_create ('kaldır' = wake); measured 2026-09-15 before the matchers were written. The bare 'Uygulamayı aç / çalıştır' → app_factory_open/run with and without a build, and stays so (the M28 contract test).",
+    "shortcut_probe": "WScript.Shell.CreateShortcut saved 'Notlarim.lnk' and reported success for 'Notlarım.lnk' while writing no such file; IShellLinkW + IPersistFile wrote both, from STA and MTA alike, but answered E_FAIL (0x80004005) for a target that is a 70 KB random 'MZ' stub and succeeded for a real executable."
+  },
+  "closed_fully": {
+    "456_portable": "project.package portable (ZipFile over the publish folder → dist/<slug>-portable.zip, sha256/bytes/observed); device_build asks for it AFTER the EXE is read back and judged, sets row.artifact_path to the package and artifact_json.package{kind,path,bytes,sha256,signed:false,executable}; the artefact route pulls chunks through project.artifact (device_lifecycle.pull_artifact, 32 KiB, ≤50 MiB, hash verified) with X-Artifact-Sha256 / X-Artifact-Source headers; 410 only when the device has no such file (reason carried).",
+    "457_msix": "packaging.appx_manifest_text scaffolded to staging/AppxManifest.xml by device_build for an MSIX row; NativeLifecycle.Package(msix) stages publish + manifest (+ Assets) and runs makeappx pack /o /nv with a 5-minute ceiling; dependency_unavailable without makeappx; native.package goes through the device when the row's output is not local and speaks the signing policy.",
+    "462_launch": "launch_on_device: app.launch {application: <absolute exe under the native root>} (a packaged row launches the executable the package was made from); pid without window → window.list; native.launch = launch + inspect_window, terminal verified only when NoteInput/AddButton/StatusText are all found; Android keeps the item-33 refusal; no device keeps the old honest refusal.",
+    "463_465_466_verify": "verify_on_device = the 26.15 flow (10 device calls in order: app.launch, ui.inspect, ui.set_value NoteInput, ui.invoke AddButton, ui.inspect, window.close, app.launch, ui.inspect, window.close, file.read); verdict {verified, ui_verified, relaunched, persisted, log_read, log_has_startup_line, notes_after_add, notes_after_relaunch, failed_step}; failed_step names the refusing device step or the read that came back wrong (ui.inspect / status_count / persistence / file.read); native.verify records the verdict on the row (verdict_json.lifecycle, log_tail).",
+    "466_log": "read_log_on_device: file.read <exe dir>\\data\\app.log (8000 chars); native.log speaks line count and last line, keeps log_tail, names a missing log.",
+    "468_install": "NativeLifecycle.Install: exe must be inside the project folder (Denied otherwise), Start Menu shortcut Programs\\PagentOS\\<name>.lnk (or PAGENTOS_NATIVE_PROGRAMS_DIR in the lab) through IShellLinkW/IPersistFile on an STA thread, installed.json under the native root {project_id, slug, name, exe, shortcut, sha256, installed_at}; result observed{shortcut_exists, exe_exists}; install_on_device verified only by observed.shortcut_exists; native.install refuses an unsigned MSIX row with the signing policy's sentence (owner_action 472).",
+    "469_uninstall": "NativeLifecycle.Uninstall: record entry required (not_found otherwise), shortcut deleted, record removed, build_kept:true, observed.shortcut_exists read back; uninstall_on_device refuses while the shortcut is still there; native.uninstall CRITICAL tier, ACTING_INTENTS both halves.",
+    "470_fix": "native.fix with a device: attempt+1, regenerate + build_on_device on the same row; verified → 'Düzelttim efendim: kaynağı yeniden üretip cihazda yeniden derledim'; otherwise refused 'Düzeltemedim efendim: …' with the row's error_class and the device's message, fixed:false; nothing broken → NOOP as before; no device → the old refusal.",
+    "471_update": "native.update: plan_build(spec at _next_version, on_device=True) → new row → _build_on_device → install_on_device; receipt carries previous_build_id; old row untouched.",
+    "472_policy": "app.nativefactory.signing: SigningPolicy(mode).implemented/signs/speech_for(kind)/as_dict; policy_from_settings(settings.native_signing_mode, default unsigned, unknown → unsigned); SPEECH_UNSIGNED_PORTABLE / SPEECH_UNSIGNED_MSIX / SPEECH_SIGNING_NOT_DECIDED; step_up tiers native.verify/log/update SENSITIVE, native.uninstall CRITICAL; session tool list carries the four new tools.",
+    "router": "Intent.NATIVE_LAUNCH/VERIFY/LOG/UNINSTALL/UPDATE + CAPABILITY_BY_INTENT; matchers gated on native_build_focused (uninstall also on the installer noun), placed before check/fix/rebuild; the launch needs a native qualifier (_NATIVE_LAUNCH_QUALIFIER_STEMS: masaüstü/windows/exe/yerel/derle/native/program) so the bare 'uygulamayı aç' stays M23's; _NATIVE_LIFECYCLE_FOREIGN_STEMS = the foreign list without 'uygulam'/'proje'; 'günlü' stem for günlüğünü."
+  },
+  "partial": {
+    "473_test_certificate": "The policy recognises test_certificate and owner_certificate and refuses them by name until the owner decides; no certificate is generated, stored or used (a certificate is a credential; only the secret store may hold it); signtool stays in NativeCapabilityNames.ForbiddenPrograms. READY_FOR_OWNER: choose self-signed test certificate / owner certificate / stay unsigned."
+  },
+  "found_on_the_way": {
+    "shortcut_unicode": "WScript.Shell could not save a shortcut whose name carries 'ı'; replaced by the shell's Unicode IShellLinkW + IPersistFile (ShellLinkInterop.cs).",
+    "shortcut_target_pe": "IPersistFile.Save reads the target as a PE: a random 'MZ' stub answered E_FAIL; the lab test copies the test host's own executable as the placeholder and derives the expected chunk count from its size.",
+    "turkish_mutation": "'günlüğünü' (k→ğ) never matched the stem 'günlük'; the stem is 'günlü'.",
+    "foreign_noun_list": "_NATIVE_FOREIGN_ALL_STEMS carries 'uygulam'/'proje' for the noun-less check/fix/rebuild; the lifecycle verbs REQUIRE that noun and were refused by their own guard until they got the list without it.",
+    "documents_position": "ProjectAdvertisementTests pinned the documents list with SkipLast(6) — the projects+scenes count spelled by hand; now SkipLast(Projects.Count + Scenes.Count).",
+    "device_build_names": "device_build used TARGET_WINDOWS_MSIX/PORTABLE and PACKAGE_TIMEOUT_S before importing/defining them (NameError caught by the first native test run); project id rule now ONE function (device_lifecycle.project_id_for) both halves import.",
+    "route_status": "the first pull path answered 503/502 for 'no device to ask' / 'device has no file'; both are 410 artifact_gone with the reason, and only a mismatched hash or an oversize file is 502.",
+    "receipt_shape": "receipts keep device facts under observed_after.server and the terminal under terminal_status — three new tests read the wrong keys first.",
+    "bare_sentence_contract": "The first launch matcher took the bare 'Uygulamayı aç / çalıştır' while a native build was focused; the first full gate failed test_voice_native_intents (M28's contract: every other family keeps its own utterance even with a build in the system). The launch now needs a native word (masaüstü/Windows/exe/yerel/derlenen) or 'program'; corpus, unit tests and documents were rewritten to the qualified sentences.",
+    "owner_language": "test_owner_error_language caught the artefact route answering the owner with the caught exception's text (f'{exc}') and, after the rewrite through log_and_detail, the class 'artifact_gone' no longer declared as a literal anywhere; the route now logs the exception, answers a Turkish sentence with details.reason, and declares ERROR_ARTIFACT_GONE as a module constant.",
+    "browser_worker_grace": "The first full gate also lost BrowserWorkerHostTests.A_worker_that_stops_answering_pings_is_killed_and_replaced under load: the healthy REPLACEMENT worker was killed for three missed 100 ms pings while serving its first request (its own history records the same coin toss twice). BrowserWorkerHost now gives a worker that has never answered a ping a 2 s startup grace before missed pongs count (a worker that never answers is still killed after it; one that has answered loses the grace); the test asserts the kill's reason without the count. The second full gate lost the same test to the other half of the race: a request arriving right after the liveness kill was handed the DYING worker (Process.HasExited lags the kill under load) and failed with 'stdin is closed; it is being restarted' instead of starting the replacement; WorkerProcess.Alive is now false from the moment a kill is requested, so EnsureWorkerAsync settles the exit and spawns the replacement for that request."
+  },
+  "tests": {
+    "services/api/tests/unit/test_nativefactory_lifecycle.py": "22 (scripted device: launch/window.list fallback, inspect, the 10-step verify with four negative verdicts, log path, package/install/uninstall verification, artefact pull round-trip/mismatch/dist path/refusal, one project-id rule, signing policy)",
+    "services/api/tests/unit/test_voice_intents_native_lifecycle.py": "35 (with/without focus, the bare application sentence stays M23's even with a build, installer noun, other families' nouns, iOS)",
+    "services/api/tests/unit/test_voice_native_intents.py": "the eight-tools test knows the four; the 'every other family keeps its own utterance even with a build' contract kept",
+    "services/api/tests/unit/test_owner_error_language.py": "kept green: the artefact route answers a sentence, never the exception",
+    "devices/windows-agent/tests/.../BrowserWorkerHostTests.cs": "the ping test asserts the kill's reason, not its count (startup grace)",
+    "services/api/tests/unit/test_voice_native_tools.py": "31 (+8: fix no-device / rebuilt / still failing, install no-device / install→uninstall→not_found, launch, verify, log, msix built and packaged on the device, android still refused)",
+    "services/api/tests/unit/test_nativefactory_device_build.py": "22 (+2: msix packaged with the scaffolded manifest; portable whose package failed is failed not verified; the refusal test moved to Android)",
+    "services/api/tests/unit/test_nativefactory_routes.py": "9 (+2: device pull 200 with hash headers and two chunks; device has no file → 410 by name)",
+    "services/api/tests/voice_corpus/corpus.py": "nativeapps.win.launch.* / verify.* / log.* / uninstall.* / update.* in CTX_NATIVE_BUILT (+variants), nativeapps.fix.rebuilt_on_device, four negative twins (no build); 143 nativeapps cases green through the real relay; SIDE_EFFECTS_NATIVE_LIFECYCLE names the 15 device capabilities a lifecycle case may reach (the M28 constant foresaw this day); the harness lets native.update open a build row like create/rebuild",
+    "devices/windows-agent/tests/.../Native/NativeLifecycleTests.cs": "8 (portable zip + hash, kind/unpublished refusals, msix without manifest, msix through makeappx [NativeLabFact], real Start Menu shortcut written/recorded/removed + second removal not_found, exe outside the folder denied, artefact chunks reassemble to the hash + path outside denied, the four names after project.test)",
+    "count tests": "DocumentAdvertisementTests / NativeBoundsTests / Operator AdvertisementTests / ProjectAdvertisementTests / SceneAdvertisementTests: +36+8+9+1, Projects.Count 9"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); the C# mutation rebuilds the agent tests, runs the lab suite, then the restored tree is rebuilt.",
+    "mutations": [
+      "M1 persistence no longer reads the note count after the relaunch -> 1 failure (test_nativefactory_lifecycle: persistence).",
+      "M2 an install the device did not observe (shortcut_exists) counts as done -> 1 failure.",
+      "M3 a portable/MSIX row is verified with the bare EXE and never packaged -> 2 failures (device_build msix + portable).",
+      "M4 the artefact route answers 410 without asking the device -> 1 failure (routes device pull).",
+      "M5 the native launch no longer needs a native build focused -> failures in test_without_a_native_build_the_same_words_stay_where_they_were ('Masaüstü uygulamasını aç' / 'EXE'yi aç' / 'Programı başlat' taken without a build); re-run red after the qualified-sentence rewrite.",
+      "M6 native.fix says 'Düzelttim' whatever the device's rebuild answered -> 1 failure.",
+      "M7 (C#) project.uninstall reports the shortcut removed without deleting it -> 1 failure in NativeLifecycleTests (8 run); restored tree rebuilt."
+    ],
+    "result": "7/7 red; every file restored to its sha256 before the mutation"
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL (device lab, this desktop): project.package zipped a real publish folder and reported its hash; project.install wrote a real Start Menu shortcut (Notlarım.lnk) through the shell and read it back, installed.json recorded it, project.uninstall removed it and the second removal was not_found; project.artifact streamed a real executable in 32 KiB chunks that reassembled to the reported sha256. Cloud flows proven against a scripted device that answers what the real device's own tests answer. The production round 26.16 (the built notes app installed, launched, verified through UI Automation, uninstalled on the owner's machine) is Karar 0's (READY_FOR_OWNER).",
+    "why": "REAL_PROOF_REQUIRED names 26.16 in production; no commit is made in this run by the owner's instruction, so no production round exists yet. The window-driving flow is the one the owner's qualification script proved by hand once (docs/QUALIFICATION.md row 26.15); this batch makes it code the device runs on command."
+  },
+  "owner_gates": {
+    "473_signing": "READY_FOR_OWNER — self-signed test certificate, the owner's certificate, or stay unsigned; the policy refuses the two certificate modes by name until decided (checkpoint, does not block)",
+    "karar_0": "production release round: 26.16 install / launch / UIA verify / uninstall on the owner's machine, and a device build downloaded from the panel through the device pull"
+  }
+}

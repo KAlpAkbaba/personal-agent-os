@@ -194,6 +194,13 @@ def apply_camera(op: dict[str, Any], errors: list[str]) -> None:
         errors.append(f"set_camera: object {name!r} not found")
         return
     bpy.context.scene.camera = obj
+    if op.get("lens") is not None:
+        # B44 (req 525): the camera's own focal length, read back from the same data.
+        camera_data = getattr(obj, "data", None)
+        if camera_data is None or not hasattr(camera_data, "lens"):
+            errors.append(f"set_camera: {name!r} has no lens")
+        else:
+            camera_data.lens = float(op["lens"])
     look_at = op.get("look_at")
     if look_at is not None:
         target = bpy.data.objects.get(look_at)
@@ -206,10 +213,15 @@ def apply_camera(op: dict[str, Any], errors: list[str]) -> None:
 def apply_light(op: dict[str, Any], errors: list[str]) -> None:
     name = op.get("name")
     obj = bpy.data.objects.get(name)
-    if obj is None or getattr(obj, "data", None) is None:
+    # A light is known by its TYPE: a camera carries data too, and setting energy on it
+    # was an AttributeError the run turned into a vague error instead of this one.
+    if obj is None or getattr(obj, "type", None) != "LIGHT" or getattr(obj, "data", None) is None:
         errors.append(f"set_light: light {name!r} not found")
         return
     obj.data.energy = float(op["energy"])
+    if op.get("color") is not None:
+        # B44 (req 524): the light's colour, linear RGB.
+        obj.data.color = tuple(float(c) for c in op["color"])
 
 
 def do_render(op: dict[str, Any], out_dir: str, errors: list[str]) -> dict[str, Any] | None:
@@ -233,7 +245,10 @@ def do_render(op: dict[str, Any], out_dir: str, errors: list[str]) -> dict[str, 
         return None
     digest, size = sha256_bytes(render_path)
     return {
-        "path": render_path,
+        # RELATIVE to the project folder: the device resolves every path in out.json
+        # inside the project and refuses an absolute one (DEVICE_PROTOCOL.md 6m). B44
+        # found the absolute path this used to write: every real render was refused.
+        "path": Path(render_path).name,
         "sha256": digest,
         "bytes": size,
         "width": width,
@@ -242,7 +257,135 @@ def do_render(op: dict[str, Any], out_dir: str, errors: list[str]) -> dict[str, 
     }
 
 
-def build_inspection(errors: list[str], render_info: dict[str, Any] | None) -> dict[str, Any]:
+_ANIMATION_DATA_PATHS: dict[str, str] = {
+    "location": "location",
+    "rotation": "rotation_euler",
+    "scale": "scale",
+}
+_CHANNEL_BY_DATA_PATH: dict[str, str] = {v: k for k, v in _ANIMATION_DATA_PATHS.items()}
+#: B44 (req 527): one file per format, beside the scene file, named the same on every run.
+EXPORT_FILE_BY_FORMAT: dict[str, str] = {"glb": "scene.glb", "fbx": "scene.fbx"}
+
+
+def apply_frames(op: dict[str, Any], errors: list[str]) -> None:
+    """B44 (req 526): the frame range and rate the animation plays over."""
+    scene = bpy.context.scene
+    scene.frame_start = int(op.get("start", 1))
+    scene.frame_end = int(op.get("end", 48))
+    scene.render.fps = int(op.get("fps", 24))
+
+
+def apply_animation(op: dict[str, Any], errors: list[str]) -> None:
+    """B44 (req 526): each keyframe's value set on the property and recorded with Blender's
+    own ``keyframe_insert`` - the read-back comes from the F-curves this creates."""
+    name = op.get("name")
+    obj = bpy.data.objects.get(name)
+    if obj is None:
+        errors.append(f"animate: object {name!r} not found")
+        return
+    channel = op.get("channel")
+    data_path = _ANIMATION_DATA_PATHS.get(channel or "")
+    if data_path is None:
+        errors.append(f"animate: unknown channel {channel!r}")
+        return
+    for keyframe in op.get("keyframes") or []:
+        value = tuple(float(c) for c in keyframe["value"])
+        if channel == "rotation":
+            value = tuple(math.radians(c) for c in value)
+        setattr(obj, data_path, value)
+        obj.keyframe_insert(data_path=data_path, frame=int(keyframe["frame"]))
+    # The scene opens at its first frame: evaluate the animation there, so every
+    # read-back of this channel is the value the scene starts with, not the last
+    # keyframe this loop happened to write.
+    scene = bpy.context.scene
+    frame_set = getattr(scene, "frame_set", None)
+    if callable(frame_set):
+        frame_set(int(getattr(scene, "frame_start", 1)))
+
+
+def do_export(op: dict[str, Any], out_dir: str, errors: list[str]) -> dict[str, Any] | None:
+    """B44 (req 527): the scene written by Blender's own bundled exporters (glTF 2.0 binary,
+    FBX binary) beside the scene file, declared RELATIVE with its size and sha256 - the
+    device re-hashes the file and reads its format signature before it reports it."""
+    fmt = str(op.get("format", "glb"))
+    file_name = EXPORT_FILE_BY_FORMAT.get(fmt)
+    if file_name is None:
+        errors.append(f"export: unknown format {fmt!r}")
+        return None
+    target = str(Path(out_dir) / file_name)
+    if fmt == "glb":
+        bpy.ops.export_scene.gltf(filepath=target, export_format="GLB", export_animations=True)
+    else:
+        bpy.ops.export_scene.fbx(filepath=target, bake_anim=True)
+    if not Path(target).exists():
+        errors.append(f"export: no {fmt} file was written")
+        return None
+    digest, size = sha256_bytes(target)
+    return {"format": fmt, "path": file_name, "sha256": digest, "bytes": size}
+
+
+def _fcurves_of(action: Any) -> list[Any]:
+    """An action's F-curves: the legacy ``action.fcurves`` where Blender still offers it,
+    else every channel bag of the layered action (Blender 4.4+)."""
+    if action is None:
+        return []
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        try:
+            curves = list(legacy)
+        except Exception:  # noqa: BLE001 - a deprecated accessor that refuses is not fatal
+            curves = []
+        if curves:
+            return curves
+    found: list[Any] = []
+    for layer in getattr(action, "layers", None) or []:
+        for strip in getattr(layer, "strips", None) or []:
+            for bag in getattr(strip, "channelbags", None) or []:
+                found.extend(list(getattr(bag, "fcurves", None) or []))
+    return found
+
+
+def animation_tracks() -> list[dict[str, Any]]:
+    """Every animated object and channel, read from the F-curves Blender holds: the key
+    frames and the evaluated value at each (rotation in degrees, like every read-back)."""
+    tracks: list[dict[str, Any]] = []
+    for obj in bpy.data.objects:
+        animation = getattr(obj, "animation_data", None)
+        curves = _fcurves_of(getattr(animation, "action", None))
+        by_channel: dict[str, dict[int, Any]] = {}
+        for curve in curves:
+            channel = _CHANNEL_BY_DATA_PATH.get(getattr(curve, "data_path", ""))
+            if channel is None:
+                continue
+            by_channel.setdefault(channel, {})[int(curve.array_index)] = curve
+        for channel, curve_by_index in sorted(by_channel.items()):
+            frames = sorted(
+                {
+                    int(round(point.co[0]))
+                    for curve in curve_by_index.values()
+                    for point in curve.keyframe_points
+                }
+            )
+            values: list[list[float]] = []
+            for frame in frames:
+                vec = [
+                    float(curve_by_index[i].evaluate(frame)) if i in curve_by_index else 0.0
+                    for i in range(3)
+                ]
+                if channel == "rotation":
+                    vec = [math.degrees(c) for c in vec]
+                values.append(_round(vec))
+            tracks.append(
+                {"object": obj.name, "channel": channel, "frames": frames, "values": values}
+            )
+    return tracks
+
+
+def build_inspection(
+    errors: list[str],
+    render_info: dict[str, Any] | None,
+    exports: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     objects: list[dict[str, Any]] = []
     camera_name: str | None = None
     lights: list[dict[str, Any]] = []
@@ -262,16 +405,38 @@ def build_inspection(errors: list[str], render_info: dict[str, Any] | None) -> d
                 entry["material_color"] = _round(
                     getattr(mat, "diffuse_color", (0.8, 0.8, 0.8, 1.0))
                 )
+                # B44 (req 523): the whole material the plan can set, not only its colour.
+                entry["material_metallic"] = round(float(getattr(mat, "metallic", 0.0)), 6)
+                entry["material_roughness"] = round(float(getattr(mat, "roughness", 0.5)), 6)
         objects.append(entry)
         if obj_type == "CAMERA":
             camera_name = obj.name
+            lens = getattr(getattr(obj, "data", None), "lens", None)
+            if lens is not None:
+                entry["lens"] = round(float(lens), 6)
         if obj_type == "LIGHT":
-            lights.append({"name": obj.name, "energy": float(getattr(obj.data, "energy", 0.0))})
+            light: dict[str, Any] = {
+                "name": obj.name,
+                "energy": float(getattr(obj.data, "energy", 0.0)),
+            }
+            light_color = getattr(obj.data, "color", None)
+            if light_color is not None:
+                light["color"] = _round(light_color)
+            lights.append(light)
+    scene = bpy.context.scene
     return {
         "objects": objects,
         "camera": camera_name,
         "lights": lights,
         "render": render_info,
+        # B44 (req 526, 527): the frame range, the F-curves' own keyframes, the exports.
+        "frames": {
+            "start": int(getattr(scene, "frame_start", 1)),
+            "end": int(getattr(scene, "frame_end", 250)),
+            "fps": int(getattr(scene.render, "fps", 24)),
+        },
+        "animation": animation_tracks(),
+        "exports": list(exports or []),
         "errors": errors,
     }
 
@@ -279,6 +444,7 @@ def build_inspection(errors: list[str], render_info: dict[str, Any] | None) -> d
 def apply_operations(plan: dict[str, Any], out_dir: str) -> dict[str, Any]:
     errors: list[str] = []
     render_info: dict[str, Any] | None = None
+    exports: list[dict[str, Any]] = []
     for op in plan.get("operations", []):
         kind = op.get("op")
         try:
@@ -302,13 +468,21 @@ def apply_operations(plan: dict[str, Any], out_dir: str) -> dict[str, Any]:
             elif kind == "render":
                 info = do_render(op, out_dir, errors)
                 render_info = info if info is not None else render_info
+            elif kind == "set_frames":
+                apply_frames(op, errors)
+            elif kind == "animate":
+                apply_animation(op, errors)
+            elif kind == "export":
+                exported = do_export(op, out_dir, errors)
+                if exported is not None:
+                    exports.append(exported)
             elif kind == "inspect":
                 pass  # the inspection is always written, at the end, regardless.
             else:
                 errors.append(f"unknown operation {kind!r}")
         except Exception as exc:  # noqa: BLE001 - captured as data, never crashes the run
             errors.append(f"{kind}: {exc}")
-    return build_inspection(errors, render_info)
+    return build_inspection(errors, render_info, exports)
 
 
 #: The one scene file a project holds; the device's command names it literally.

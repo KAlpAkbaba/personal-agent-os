@@ -8,6 +8,11 @@ that put them in the same room.
 This is that test. It reads the path constants out of the web client's own source - not a
 copy of them - and asks the real application object whether anything answers there.
 
+B24 widened the reader. It used to see only `export const X_PATH = "/v1/…"`, which is how a
+minority of the clients spell their route; the family pages added by 689/693/694/696/697/698/699
+spell theirs inline in the `load(…)` call, and eleven routes the product had never asked for
+went in with them. A guard that only reads the constants would have called that clean.
+
 What it does NOT yet check: the METHOD. A path served only for GET while the Cockpit POSTs to
 it would still pass here. That is a narrower gap than the one this closes, and naming it is
 better than implying a completeness the test does not have.
@@ -25,8 +30,16 @@ from app.config import Settings
 from app.main import create_app
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-COCKPIT = REPO_ROOT / "apps" / "web" / "app" / "lib"
+#: The whole web client, not just `app/lib`. B25 put `POST /v1/identity/panic` behind a
+#: control in `app/security/PanicControl.tsx`, and a reader that only walked `app/lib`
+#: would have called that clean — the kill switch pointed at a route nobody checked.
+COCKPIT = REPO_ROOT / "apps" / "web" / "app"
 _PATH_CONSTANT = re.compile(r'export const ([A-Z0-9_]+_PATH)\s*=\s*"(/v1/[^"]*)"')
+
+#: A route spelled where it is called: ``load<Row[]>("/v1/alarms/history?limit=40", …)`` or
+#: ``apiFetch("/v1/…")``. The query string is dropped; a template literal carrying ``${…}``
+#: is skipped, because a path built at runtime is not a literal this reader can check.
+_PATH_INLINE = re.compile(r'(?:load|apiFetch|getJson)[^("\n]*\(\s*"(/v1/[^"$]*)"')
 
 #: A constant the web declares but deliberately does not call yet. Each entry must say why,
 #: and the list may only shrink: an unserved path with no reason here fails the test.
@@ -35,9 +48,15 @@ DECLARED_BUT_NOT_SERVED: dict[str, str] = {}
 
 def _declared_paths() -> dict[str, str]:
     found: dict[str, str] = {}
-    for source in sorted(COCKPIT.rglob("*.ts")):
-        for name, path in _PATH_CONSTANT.findall(source.read_text("utf-8")):
+    for source in sorted([*COCKPIT.rglob("*.ts"), *COCKPIT.rglob("*.tsx")]):
+        text = source.read_text("utf-8")
+        for name, path in _PATH_CONSTANT.findall(text):
             found[name] = path
+        for path in _PATH_INLINE.findall(text):
+            # Named by where it is, so a failure says which file to open. The query string
+            # is not part of the route the API declares.
+            bare = path.split("?", 1)[0]
+            found[f"{source.name}:{bare}"] = bare
     return found
 
 
@@ -59,8 +78,13 @@ def _served_paths() -> set[str]:
 def test_the_reader_finds_the_constants_at_all() -> None:
     """A guard that matches nothing passes for ever."""
     declared = _declared_paths()
-    assert len(declared) >= 8, declared
+    assert len(declared) >= 30, declared
     assert declared.get("CREATIVE_RUNS_PATH") == "/v1/creative/runs"
+    # One of each spelling, so neither reader can quietly stop matching.
+    assert declared.get("detail.ts:/v1/alarms/history") == "/v1/alarms/history"
+    assert declared.get("api.ts:/v1/world") == "/v1/world"
+    # A .tsx file outside `app/lib`: the kill switch's route (B25 req 660).
+    assert declared.get("PANIC_PATH") == "/v1/identity/panic"
 
 
 @pytest.mark.parametrize(

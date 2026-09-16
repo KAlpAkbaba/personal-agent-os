@@ -1,0 +1,75 @@
+{
+  "batch": "B25",
+  "name": "Keşfedilebilirlik",
+  "requirements": [
+    660,
+    701,
+    702,
+    703,
+    724,
+    725
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except the same live-desktop test B21/B22/B23/B24 recorded",
+    "web_gates": "vitest 1852 passed / 99 files (was 1807/96), tsc clean, oxlint 0 errors",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 9744 passed, 5 skipped (967 s); was 9719 before this batch",
+      "Windows agent build + tests": "FAIL - 919/920, NotepadLifecycleTests pointer click",
+      "Staged-update qualification": "PASS"
+    },
+    "the_one_failure": "Fifth batch running, same test, same measured cause, word for word: \"after 3 attempt(s) the click landed while the foreground was nothing the registry could resolve (a full-screen or elevated window)\". The owner's `CarlaUE4-Win64-Shipping` simulator is running full-screen on this machine. B25 changed nothing under `devices/`. READY_FOR_OWNER: run the device step with no full-screen application in front, or set PAGENTOS_OPERATOR_LAB=0 for that run; CI is unaffected because a runner has no interactive desktop."
+  },
+  "what_this_proves": "The audit's lowest score in the whole product was discoverability — 0.5 out of 5 — and it was three separate absences wearing one number. The owner of a voice-first system could not find out what to say to it; there was no way to search the product by name; and the kill switch existed only as a line in a security document. All three are now answered from lists the system already keeps, and the keyboard can reach every one of them.",
+  "the_shape_of_this_batch": "Every requirement here is the same defect: a thing this system HAS and the owner cannot get at. `POST /v1/identity/panic` has revoked every session since B05, and the matrix's whole note on it is three words — `Arayüzde görünmüyor`. The tool registry has held 130 tool descriptions, written in Turkish, most of them quoting the owner's own sentences so the model can recognise them, and the only reader was the model. Nothing was missing. What was missing was a door.",
+  "closed_fully": {
+    "701_what_you_may_say_is_derived": "`app/voice/capabilities.py` reads `default_registry()` — the requirement forbids a written list in four words (*elle liste yasak*) — and lifts the example phrases OUT of the tool descriptions rather than rewording them, so what the product tells the owner to say is literally what the model was told to listen for. 130 capabilities, 31 areas, 196 example sentences. The only hand-written thing is one Turkish name per family, and a test fails in both directions if the registry and that list disagree.",
+    "701_and_it_can_be_asked_out_loud": "`assistant.capabilities`, registered from `default_registry()` by ONE line like every other family. It deliberately does not read the list aloud: a hundred and thirty tool names is a refusal wearing an answer's clothes. The spoken form says how many and which areas and names the surface that shows them all — the constitution's rule for a finished task, applied to a question. The ROUTING half ('Neler yapabilirsin?' landing here without the model guessing) is req 734, B27.",
+    "702_703_one_palette_is_the_search": "⌘K / Ctrl+K anywhere, `/` when the owner is not typing. It searches three lists the product already keeps and never a fourth written for it: the pages from `NAV`, the cockpit's panels from `FAMILIES` (using the anchors B24 gave them), and the capabilities from the registry. Typing `alarm` now answers both 'where do I look' and 'what do I say'. Case folding is `tr-TR`, so `HAFIZA` finds `Hafıza` and `GÜVENLİK` finds `/security`.",
+    "660_the_kill_switch_has_a_door": "On `/security`, first, because the one moment it exists for is not a moment for scrolling. Two deliberate steps — a control reachable by one stray click is a control the owner disables. It states what it does NOT do (the owner credential stays valid; you sign back in on a device you still hold), because a control people are afraid of is a control they do not press when they should. A 401 from the call is treated as SUCCESS: this session was one of the ones revoked. And it is findable by the words somebody would type in that moment — `acil`, `panik`, `oturum` all reach it in the palette, which is the one panel there that belongs to no data family and is therefore named rather than derived.",
+    "724_the_shell_can_be_entered": "A skip link first in the document, a `:focus-visible` ring defined once for everything, `lang=\"tr\"`, and a reduced-motion answer for every animated rule. The accessibility test walks every `page.tsx` in the directory rather than any one page, so the fifteenth page cannot ship without them.",
+    "725_the_keyboard_is_a_model_not_a_habit": "`paletteAction` is a pure function: every key, in every state, decided in one place and tested exhaustively in Node. The list wraps at both ends (a palette that stops dead at the last row sends the owner back to the pointer), Escape always closes, Enter never points past a list the query just shortened, and focus returns to whatever had it before the palette opened."
+  },
+  "found_on_the_way": {
+    "the_turkish_apostrophe_is_a_suffix_not_a_quote": "The obvious phrase extractor — `'([^']+)'` — is wrong in Turkish and wrong in this repository's most repeated way. In `Active Eye'ı (kamerayı) KAPATIR: 'gözünü kapat'` it opens a quote at `Eye'` and closes it before `gözünü`, extracting the LABEL and losing the phrase. Three of the six families checked by hand were damaged: `İstanbul'da hava nasıl?`, `Not Defteri'ni aç` and `Chrome'u aç` all came out as fragments or vanished. The fixed reader requires a boundary on both sides of a delimiter and treats an apostrophe with letters on BOTH sides as part of a word.",
+    "the_core_had_no_landmark_and_no_heading": "The accessibility test found it before it was written to pass: `/core` and `/core/cockpit` rendered a bare `<div>`. The densest page in the product gave a screen reader twenty-seven panels and nothing to enter AT. Both are now `<main>` with a visually-hidden `<h1>` — hidden because a visible title is exactly the chrome the manifest refuses around a full-viewport presence, and 'no chrome' was being paid for by a page a screen reader could not enter.",
+    "an_existing_guard_caught_the_new_tool": "`test_every_registered_tool_has_a_tier` failed the moment `assistant.capabilities` was registered: the step-up policy refuses a tool nobody classified. Classified OPEN — it reads the manifest the provider is already sent, touches no owner data, no device and no provider, and gating 'what can you do' would gate the one answer an owner needs before they can ask for anything else.",
+    "a_whole_file_grep_standing_in_for_a_claim": "B23's fade test asserted the WHOLE stylesheet contains no `display: none`, meaning to say 'the quiet nav fades rather than disappearing'. It went red when this batch added a screen-reader-only class whose COMMENT mentions the phrase. Rewritten to read the two rules it is actually about — with a guard that the reader found them, so the scoped version cannot pass vacuously either.",
+    "the_route_guard_could_not_see_tsx": "`test_web_asks_for_routes_that_exist.py` walked `apps/web/app/lib/**/*.ts`. The kill switch lives in `app/security/PanicControl.tsx`, so the one route whose absence would matter most was the one route the guard could not see. Widened to the whole web client and both extensions: 43 → 47 paths.",
+    "focus_went_back_to_an_element_that_no_longer_existed": "Found in a browser, not in the suite. Closing the palette focused the node that had focus when it opened — and the node that most often had it is the palette's OWN open button, which is unmounted while the palette is up. Focusing a detached element does nothing: `document.activeElement` came back as `<body>`, leaving a keyboard user at the top of the document, which is precisely the failure the restore exists to prevent. The decision is now a pure function (`focusTargetAfterClose`) that falls back to the freshly mounted button when the remembered node is no longer connected, and the restore runs in an effect AFTER the re-render rather than inside `close()`."
+  },
+  "tests": {
+    "services/api/tests/unit/test_capability_list.py": 19,
+    "apps/web/tests/uistate/palette.test.tsx": 21,
+    "apps/web/tests/pages/discoverability.test.tsx": 15,
+    "apps/web/tests/uistate/accessibility.test.ts": 9,
+    "services/api/tests/unit/test_web_asks_for_routes_that_exist.py": 47,
+    "updated": "test_voice_realtime_sessions.py (the session contract now names the new tool), test_voice_step_up.py (via the tier table), site-nav.test.tsx (the fade assertion scoped)"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`).",
+    "mutations": [
+      "the naive quote pattern `'([^']+)'` -> all three Turkish apostrophe cases fail, naming exactly the fragments the real descriptions produced.",
+      "`ArrowDown` clamps instead of wrapping -> 'the arrows move, and the list wraps at both ends' fails.",
+      "remove the skip link from the layout -> the accessibility test and the palette's layout test both fail.",
+      "the panic control fires on one click -> 'arms before it fires, so one stray click cannot revoke everything' fails.",
+      "point `PANIC_PATH` at `/v1/identity/kill` -> the widened Python guard names the constant and the path.",
+      "NOT a mutation but the same evidence: the accessibility test's landmark assertion failed against the REAL `/core` and `/core/cockpit` before either was fixed. It was written to describe the shell, and it found a defect rather than confirming one."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is PROVEN_AUTOMATED; the capability list's derivation, the palette's keyboard model and the panic control's two steps are all asserted in CI. The ⌘K keystroke itself and a screen reader's reading of the shell are owner-device observations for the production round.",
+    "also_observed": "`next dev` on 3210, driven by keyboard: Ctrl+K opens the dialog and focus lands in the box; `aria-activedescendant` tracks the selection (ArrowDown x2 -> 'Kokpit', `page:/core/cockpit`); typing 'güven' narrows to the single 'Güvenlik' row; Escape closes and focus returns to the open button; the skip link is the FIRST focusable element in the document. Signed out on `/`, the palette shows Sayfalar and Paneller and says the capability list could not be fetched — which is the honest answer, not an empty section. Typing 'acil' into the palette returns exactly one row — 'Acil durdurma' → /security#panic."
+  },
+  "owner_gates": {
+    "karar_0": "production release round"
+  }
+}

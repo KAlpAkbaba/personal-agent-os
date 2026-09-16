@@ -35,6 +35,8 @@ LOCATION_TOLERANCE = 0.01
 ROTATION_TOLERANCE_DEG = 1.0
 SCALE_TOLERANCE = 0.01
 COLOR_TOLERANCE = 0.02
+#: B44 (req 525): a focal length round-trips exactly through Blender's own float.
+LENS_TOLERANCE = 0.01
 CAMERA_AIM_TOLERANCE_DEG = 2.0
 #: A render is "non-trivial" when its pixel-value standard deviation exceeds this —
 #: a genuinely flat/uniform image (a bug, a black frame, a missing camera) reads as
@@ -204,7 +206,11 @@ def check_render(png_bytes: bytes | None) -> Mismatch | None:
 
 
 def compare(
-    plan: ScenePlan, inspection: dict[str, Any], *, render_bytes: bytes | None = None
+    plan: ScenePlan,
+    inspection: dict[str, Any],
+    *,
+    render_bytes: bytes | None = None,
+    device_exports: list[dict[str, Any]] | None = None,
 ) -> CompareResult:
     """Every requested constraint the plan named, checked against the inspection —
     NEVER against the plan's own numbers restated. ``checked`` counts how many
@@ -234,6 +240,12 @@ def compare(
     aimed_at_index: dict[str, int] = {}
     light_energy: dict[str, float] = {}
     last_render_op = None
+    # B44 (req 523-527): the production path's constraints.
+    light_color: dict[str, tuple[float, float, float]] = {}
+    camera_lens: dict[str, float] = {}
+    animations: dict[tuple[str, str], Any] = {}
+    frames_op = None
+    exports_wanted: list[str] = []
 
     for index, op in enumerate(plan.operations):
         if op.op == "add_primitive":
@@ -254,13 +266,27 @@ def compare(
         elif op.op == "set_material":
             entry = expected_by_object.setdefault(op.name, {})
             entry["material_color"] = op.color
+            if op.metallic is not None:
+                entry["material_metallic"] = op.metallic
+            if op.roughness is not None:
+                entry["material_roughness"] = op.roughness
         elif op.op == "set_camera" and op.look_at is not None:
             camera_aim[op.name] = op.look_at
             aimed_at_index[op.name] = index
         elif op.op == "set_light":
             light_energy[op.name] = op.energy
+            if op.color is not None:
+                light_color[op.name] = op.color
         elif op.op == "render":
             last_render_op = op
+        elif op.op == "set_frames":
+            frames_op = op
+        elif op.op == "animate":
+            animations[(op.name, op.channel)] = op
+        elif op.op == "export" and op.format not in exports_wanted:
+            exports_wanted.append(op.format)
+        if op.op == "set_camera" and op.lens is not None:
+            camera_lens[op.name] = op.lens
 
     # A ``set_camera ... look_at`` supersedes whatever rotation ``add_primitive``/
     # ``transform`` last stated for that SAME object, exactly the way a later
@@ -277,6 +303,11 @@ def compare(
             # is the constraint, and the aim is checked beside it.
             continue
         expected_by_object.get(cam_name, {}).pop("rotation", None)
+
+    # B44: an ANIMATED channel has no single value to hold the object to - its keyframes
+    # are the constraint, checked below against the F-curves Blender holds.
+    for animated_name, animated_channel in animations:
+        expected_by_object.get(animated_name, {}).pop(animated_channel, None)
 
     for name, expected in expected_by_object.items():
         obj = _find_object(inspection, name)
@@ -309,6 +340,23 @@ def compare(
                     ROTATION_TOLERANCE_DEG,
                 )
             )
+        for material_field in ("material_metallic", "material_roughness"):
+            if material_field in expected:
+                checked += 1
+                actual_value = obj.get(material_field)
+                if (
+                    actual_value is None
+                    or abs(float(actual_value) - float(expected[material_field])) > COLOR_TOLERANCE
+                ):
+                    mismatches.append(
+                        Mismatch(
+                            name,
+                            material_field,
+                            expected[material_field],
+                            actual_value,
+                            f"{material_field} differs",
+                        )
+                    )
         if "material_color" in expected:
             checked += 1
             expected_color = expected["material_color"]
@@ -394,6 +442,130 @@ def compare(
                 Mismatch(light_name, "energy", energy, actual.get("energy"), "energy mismatch")
             )
 
+    for (animated_name, channel), animate_op in animations.items():
+        checked += 1
+        track = next(
+            (
+                t
+                for t in inspection.get("animation") or []
+                if t.get("object") == animated_name and t.get("channel") == channel
+            ),
+            None,
+        )
+        wanted_frames = [k.frame for k in animate_op.keyframes]
+        if track is None:
+            mismatches.append(
+                Mismatch(
+                    animated_name,
+                    f"animation.{channel}",
+                    wanted_frames,
+                    None,
+                    "no keyframes for this channel in the inspection",
+                )
+            )
+            continue
+        if list(track.get("frames") or []) != wanted_frames:
+            mismatches.append(
+                Mismatch(
+                    animated_name,
+                    f"animation.{channel}.frames",
+                    wanted_frames,
+                    track.get("frames"),
+                    "the key frames Blender holds are not the ones asked for",
+                )
+            )
+            continue
+        tolerance = (
+            ROTATION_TOLERANCE_DEG
+            if channel == "rotation"
+            else SCALE_TOLERANCE
+            if channel == "scale"
+            else LOCATION_TOLERANCE
+        )
+        for keyframe, actual_value in zip(
+            animate_op.keyframes, track.get("values") or [], strict=False
+        ):
+            mismatches.extend(
+                _vec_mismatches(
+                    animated_name,
+                    f"animation.{channel}@{keyframe.frame}",
+                    keyframe.value,
+                    actual_value,
+                    tolerance,
+                )
+            )
+
+    if frames_op is not None:
+        checked += 1
+        frames = inspection.get("frames") or {}
+        wanted = {"start": frames_op.start, "end": frames_op.end, "fps": frames_op.fps}
+        actual_frames = {key: frames.get(key) for key in wanted}
+        if actual_frames != wanted:
+            mismatches.append(
+                Mismatch("scene", "frames", wanted, actual_frames, "the frame range differs")
+            )
+
+    for camera_name, lens in camera_lens.items():
+        checked += 1
+        camera_obj = _find_object(inspection, camera_name)
+        actual_lens = camera_obj.get("lens") if camera_obj else None
+        if actual_lens is None or abs(float(actual_lens) - lens) > LENS_TOLERANCE:
+            mismatches.append(
+                Mismatch(camera_name, "lens", lens, actual_lens, "the focal length differs")
+            )
+
+    for colored_light, color in light_color.items():
+        checked += 1
+        by_name = {light.get("name"): light for light in inspection.get("lights") or []}
+        actual_color = (by_name.get(colored_light) or {}).get("color")
+        if (
+            actual_color is None
+            or len(actual_color) != 3
+            or any(
+                abs(float(a) - float(b)) > COLOR_TOLERANCE
+                for a, b in zip(color, actual_color, strict=True)
+            )
+        ):
+            mismatches.append(
+                Mismatch(colored_light, "color", list(color), actual_color, "light colour differs")
+            )
+
+    if exports_wanted:
+        declared = {e.get("format"): e for e in inspection.get("exports") or []}
+        verified = {e.get("format"): e for e in device_exports or [] if e.get("verified")}
+        for fmt in exports_wanted:
+            checked += 1
+            if fmt not in declared:
+                mismatches.append(
+                    Mismatch(
+                        "scene",
+                        f"export.{fmt}",
+                        "written",
+                        None,
+                        "the driver declared no such export",
+                    )
+                )
+            elif fmt not in verified:
+                mismatches.append(
+                    Mismatch(
+                        "scene",
+                        f"export.{fmt}",
+                        "verified",
+                        None,
+                        "the device did not verify the exported file",
+                    )
+                )
+            elif verified[fmt].get("sha256") != declared[fmt].get("sha256"):
+                mismatches.append(
+                    Mismatch(
+                        "scene",
+                        f"export.{fmt}.sha256",
+                        declared[fmt].get("sha256"),
+                        verified[fmt].get("sha256"),
+                        "the device's hash is not the driver's",
+                    )
+                )
+
     if last_render_op is not None:
         checked += 1
         render_mismatch = check_render(render_bytes)
@@ -413,6 +585,7 @@ def compare(
 __all__ = [
     "CAMERA_AIM_TOLERANCE_DEG",
     "COLOR_TOLERANCE",
+    "LENS_TOLERANCE",
     "NO_CONSTRAINTS",
     "LOCATION_TOLERANCE",
     "RENDER_MIN_BYTES",

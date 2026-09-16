@@ -13,8 +13,8 @@
     414
   ],
   "recorded_at": "2026-09-14T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "087332bee07568e5d6382a167208403d6d64aaba",
+  "ci_run": "35028859336",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS except one live-desktop test",

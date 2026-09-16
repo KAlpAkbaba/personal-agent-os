@@ -63,6 +63,8 @@ CAPABILITIES: tuple[str, ...] = (
     "browser.snapshot",
     "browser.screenshot",
     "browser.download",
+    # B31 (contract v1.5): the operation behind the ``uploads`` flag.
+    "browser.upload",
     "browser.search",
     "browser.fetch_evidence",
     # M18.3 (contract v1.2): the alarm media surface. NAVIGATE for the three
@@ -98,6 +100,7 @@ CAPABILITY_RISK_CLASS: dict[str, RiskClass] = {
     "browser.snapshot": RiskClass.READ,
     "browser.screenshot": RiskClass.READ,
     "browser.download": RiskClass.HIGH_IMPACT,
+    "browser.upload": RiskClass.HIGH_IMPACT,
     "browser.search": RiskClass.NAVIGATE,
     "browser.fetch_evidence": RiskClass.NAVIGATE,
     "browser.media_play": RiskClass.NAVIGATE,

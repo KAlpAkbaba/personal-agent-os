@@ -213,9 +213,7 @@ async def search(
 
 
 @router.get("/audit")
-async def audit(
-    request: Request, limit: int = Query(default=50, ge=1, le=200)
-) -> dict[str, Any]:
+async def audit(request: Request, limit: int = Query(default=50, ge=1, le=200)) -> dict[str, Any]:
     runtime = _runtime(request)
     events = await _call(runtime.backend.audit_events, limit=limit)
     return {"events": events, "count": len(events)}
@@ -267,8 +265,7 @@ async def list_entities(
     def load():
         with runtime.session() as session:
             return [
-                _entity_payload(e)
-                for e in service.list_entities(session, kind=kind, limit=limit)
+                _entity_payload(e) for e in service.list_entities(session, kind=kind, limit=limit)
             ]
 
     items = await _call(load)
@@ -336,6 +333,33 @@ async def create_edge(request: Request, body: CreateEdgeRequest) -> dict[str, An
 # ------------------------------------------------------- per-memory endpoints
 
 
+# ------------------------------------------------------------- B37: the index
+
+
+class ReindexRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    only_missing: bool = True
+
+
+@router.get("/embedding")
+async def embedding_status(request: Request) -> dict[str, Any]:
+    """B37 req 53/54: which embedder serves retrieval, whether it is semantic, and how
+    much of the table it has indexed."""
+    runtime = _runtime(request)
+    return await _call(runtime.embedding_status)
+
+
+@router.post("/reindex")
+async def reindex(request: Request, body: ReindexRequest) -> dict[str, Any]:
+    """B37 req 54: the re-index pipeline - the gaps for the active model, or every
+    memory. Canonical rows are never touched; the audit records the pass."""
+    runtime = _runtime(request)
+    result = await _call(runtime.reindex, only_missing=body.only_missing)
+    logger.info("memory_reindexed", **{k: v for k, v in result.items() if k != "only_missing"})
+    return result
+
+
 @router.get("/{memory_id}")
 async def inspect(request: Request, memory_id: uuid.UUID) -> dict[str, Any]:
     runtime = _runtime(request)
@@ -373,6 +397,15 @@ async def pin(request: Request, memory_id: uuid.UUID) -> dict[str, Any]:
     return payload
 
 
+@router.post("/{memory_id}/unpin")
+async def unpin(request: Request, memory_id: uuid.UUID) -> dict[str, Any]:
+    """B37 req 58: the pin comes off from the page as well as by voice."""
+    runtime = _runtime(request)
+    payload = await _call(runtime.backend.unpin, memory_id, actor=Actor.OWNER)
+    logger.info("memory_unpinned", memory_id=str(memory_id))
+    return payload
+
+
 class SupersedeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -394,9 +427,7 @@ async def supersede(
         value=body.value,
         reason=body.reason,
     )
-    logger.info(
-        "memory_superseded", memory_id=str(memory_id), new_memory_id=payload["memory_id"]
-    )
+    logger.info("memory_superseded", memory_id=str(memory_id), new_memory_id=payload["memory_id"])
     return payload
 
 

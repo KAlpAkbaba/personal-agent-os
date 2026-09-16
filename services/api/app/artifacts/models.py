@@ -134,16 +134,12 @@ class Task(Base):
     announce_quarantined_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    announced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    announced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class TaskRun(Base):
     __tablename__ = "task_runs"
-    __table_args__ = (
-        UniqueConstraint("task_id", "attempt", name="uq_task_runs_task_attempt"),
-    )
+    __table_args__ = (UniqueConstraint("task_id", "attempt", name="uq_task_runs_task_attempt"),)
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     task_id: Mapped[uuid.UUID] = mapped_column(
@@ -208,6 +204,8 @@ class ArtifactVersion(Base):
     canonical_body: Mapped[str] = mapped_column(Text, nullable=False)
     canonical_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     source_manifest_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    #: B42 (req 405-407, migration 0054): who asked, what rendered it, what it came from.
+    provenance_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -217,9 +215,7 @@ class ArtifactVersion(Base):
 class ArtifactRender(Base):
     __tablename__ = "artifact_renders"
     __table_args__ = (
-        UniqueConstraint(
-            "artifact_version_id", "format", name="uq_artifact_renders_format"
-        ),
+        UniqueConstraint("artifact_version_id", "format", name="uq_artifact_renders_format"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

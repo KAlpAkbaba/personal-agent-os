@@ -57,9 +57,7 @@ class ArtifactRuntime:
         try:
             await asyncio.to_thread(self.store.ensure_bucket)
         except Exception as exc:  # noqa: BLE001 - object store may be down at boot
-            logger.warning(
-                "artifact_bucket_ensure_failed", error=f"{type(exc).__name__}: {exc}"
-            )
+            logger.warning("artifact_bucket_ensure_failed", error=f"{type(exc).__name__}: {exc}")
 
     def health_check(self) -> dict[str, object]:
         """Object-store reachability for /v1/system/health ('artifacts')."""

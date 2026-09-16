@@ -106,3 +106,546 @@ h1 {
   color: var(--muted);
   font-size: 0.85rem;
 }
+
+/* --------------------------------------------------------------- site nav (B23 req 685)
+ *
+ * Two weights of the same nav. On ordinary pages it is a bar above the content; on the
+ * Core's routes it is a quiet strip that stays out of the stage's way — the manifest's own
+ * rule is that chrome around a full-viewport presence is what the owner wanted rid of, and
+ * the Core draws to the edges. Both keep the same links, so neither surface is a dead end.
+ */
+.site-nav {
+  border-bottom: 1px solid #232734;
+  background: color-mix(in srgb, var(--bg) 92%, black);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.site-nav-list {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  align-items: center;
+  list-style: none;
+  margin: 0 auto;
+  padding: 0.4rem 1rem;
+  max-width: 1100px;
+}
+
+.site-nav-list a {
+  display: inline-block;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.site-nav-list a:hover,
+.site-nav-list a:focus-visible {
+  color: var(--text);
+  background: #1b1f28;
+}
+
+.site-nav-list a[data-nav-current="yes"] {
+  color: var(--text);
+  background: #232a38;
+}
+
+/* The Core: floating, dim until touched, and never taking a row from the stage. */
+.site-nav-quiet {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-bottom: none;
+  background: transparent;
+  opacity: 0.28;
+  transition: opacity 160ms ease;
+  pointer-events: auto;
+}
+
+.site-nav-quiet:hover,
+.site-nav-quiet:focus-within {
+  opacity: 1;
+}
+
+.site-nav-quiet .site-nav-list {
+  padding: 0.3rem 0.6rem;
+  justify-content: center;
+}
+
+.site-nav-quiet .site-nav-list a {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.55rem;
+}
+
+/* Motion is a preference, not a default (the Core's own rule, applied here too). */
+@media (prefers-reduced-motion: reduce) {
+  .site-nav-quiet {
+    transition: none;
+  }
+}
+
+/* B22 req 708: the retry control lives inside a failure line. */
+.panel-retry {
+  margin-left: 0.6rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid #2c3550;
+  border-radius: 999px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.panel-hint {
+  color: var(--muted);
+}
+
+/* The home index (B23 req 686): one row per destination, built from the nav's own list. */
+.home-index {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.home-index a {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* B23 req 720: in Minimal mode the nav fades with the control cluster — the stage is
+ * alone with the owner. It fades rather than disappearing, so a deliberate move of the
+ * pointer brings it back; `pointer-events` stay on for exactly that reason. */
+body[data-core-faded="yes"] .site-nav-quiet {
+  opacity: 0.06;
+}
+
+body[data-core-faded="yes"] .site-nav-quiet:hover,
+body[data-core-faded="yes"] .site-nav-quiet:focus-within {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------- B24: the two nav rows (req 685)
+ *
+ * Fourteen pages in one row would be a wall of chips. The main row is the shell an owner
+ * moves through; the family row is the subsystems, quieter and one step back. Same list in
+ * the source, so a fifteenth page still lands in both places or in neither.
+ */
+.site-nav-family {
+  padding-top: 0;
+  padding-bottom: 0.4rem;
+  border-top: 1px solid #1c202a;
+}
+
+.site-nav-family a {
+  font-size: 0.82rem;
+  opacity: 0.85;
+}
+
+.site-nav-quiet .site-nav-family {
+  border-top: none;
+}
+
+/* B24 req 714: the one line that keeps a hidden family from being a lost one. */
+.panel-quiet {
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed #2a3040;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.panel-quiet a {
+  color: var(--accent);
+}
+
+/* B24 req 712/713: the status and proof badges, in the matrix's own vocabulary. */
+.feature-badge {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid currentcolor;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.tone-good {
+  color: var(--ok);
+}
+
+.tone-warn {
+  color: var(--warn);
+}
+
+.tone-bad {
+  color: var(--fail);
+}
+
+.tone-wait {
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ B24: the availability page */
+.family-group h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 1rem 0 0.15rem;
+  font-size: 0.95rem;
+}
+
+.family-list,
+.feature-list,
+.impl-totals,
+.detail-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.impl-totals {
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  gap: 0.9rem;
+  font-size: 0.85rem;
+  overflow-x: auto;
+}
+
+.family-list a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.feature-search,
+.memory-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+
+.feature-search input,
+.memory-search input {
+  flex: 1;
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #232734;
+  background: #0f1115;
+  color: var(--text);
+  font: inherit;
+}
+
+.feature-section {
+  margin-top: 0.6rem;
+  border-top: 1px solid #1c202a;
+  padding-top: 0.5rem;
+}
+
+.feature-section summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.feature-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.feature-id {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5rem;
+}
+
+.feature-name {
+  flex: 1 1 14rem;
+}
+
+.feature-batch {
+  font-size: 0.75rem;
+}
+
+.feature-owner {
+  color: var(--warn);
+  font-size: 0.75rem;
+}
+
+/* --------------------------------------------------------------- B24: the family pages */
+.detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+  padding: 0.15rem 0;
+}
+
+.detail-row.tone-bad .detail-head {
+  color: var(--fail);
+}
+
+.detail-row.tone-wait .detail-head {
+  color: var(--warn);
+}
+
+.detail-head {
+  font-weight: 600;
+}
+
+.detail-facts {
+  font-size: 0.8rem;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  flex-wrap: wrap;
+}
+
+/* ================================================ B25: discoverability and the keyboard
+ *
+ * The audit's lowest score was discoverability, 0.5/5. Three things answer it: a skip link
+ * and a visible focus ring so the keyboard is a first-class way through (724/725), a
+ * palette that searches everything the product can name (702/703), and the list of what the
+ * owner may SAY, on the page where they say it (701).
+ */
+
+/* req 724: the first focusable thing in the document, invisible until it is focused. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 100;
+  padding: 0.5rem 0.9rem;
+  background: var(--accent);
+  color: #0f1115;
+  font-weight: 600;
+  border-radius: 0 0 8px 0;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  left: 0;
+}
+
+/* The skip target takes focus programmatically; it must not draw a ring for that. */
+.main-target:focus {
+  outline: none;
+}
+
+/* req 725: one visible focus ring for everything the keyboard can reach. A shell whose
+   focus is invisible is a shell the keyboard cannot be used on, however correct its tab
+   order is. `:focus-visible` so a pointer click does not light it up. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------------------------------------------------------------- the command palette */
+.palette-open {
+  position: fixed;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  z-index: 30;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid #232734;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, black);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.palette-open:hover,
+.palette-open:focus-visible {
+  opacity: 1;
+  color: var(--text);
+}
+
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 55%);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 1rem 1rem;
+}
+
+.palette {
+  width: min(640px, 100%);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid #2a3040;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.palette-input {
+  padding: 0.8rem 1rem;
+  border: none;
+  border-bottom: 1px solid #232734;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 1rem;
+}
+
+.palette-results {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0;
+  overflow-y: auto;
+}
+
+.palette-section {
+  margin: 0.5rem 0 0.15rem;
+  padding: 0 1rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.palette-item {
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.palette-item a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.palette-item.current {
+  background: #232a38;
+}
+
+.palette-item.current a {
+  color: var(--accent);
+}
+
+.palette-empty,
+.palette-foot {
+  padding: 0.6rem 1rem;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.palette-foot {
+  border-top: 1px solid #232734;
+}
+
+kbd {
+  padding: 0 0.3rem;
+  border: 1px solid #2a3040;
+  border-radius: 4px;
+  font-size: 0.75em;
+  font-family: inherit;
+}
+
+/* -------------------------------------------------------- req 701: what you can say */
+.capability-families {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.6rem 0;
+}
+
+.capability-group h4 {
+  margin: 0.9rem 0 0.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.capability-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.capability-phrases {
+  display: block;
+}
+
+.capability-phrases q {
+  display: inline-block;
+  margin: 0 0.35rem 0.15rem 0;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: #1b1f28;
+  quotes: "“" "”";
+}
+
+.capability-summary {
+  display: block;
+  font-size: 0.8rem;
+}
+
+/* ------------------------------------------------------------- req 660: the kill switch */
+.panic-button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--fail);
+  border-radius: 8px;
+  background: none;
+  color: var(--fail);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.panic-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.panic-confirm p {
+  flex: 1 1 100%;
+  margin: 0.3rem 0;
+}
+
+/* req 724: a heading a screen reader can enter at, on the two pages whose whole point is
+   that they carry no visible chrome. Clipped rather than `display: none`, because a hidden
+   element is not announced and not focusable — which would leave the Core exactly as it
+   was: a page with no landmark and no heading. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

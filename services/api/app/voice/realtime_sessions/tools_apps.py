@@ -31,6 +31,8 @@ TOOL_APP_STOP: Final = "app.stop"
 TOOL_APP_STATUS: Final = "app.status"
 TOOL_APP_OPEN: Final = "app.open"
 TOOL_APP_LIST: Final = "app.list"
+#: B40 (req 435-437): the bounded fix loop over a failed test run.
+TOOL_APP_FIX: Final = "app.fix"
 
 APP_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_APP_CREATE,
@@ -99,6 +101,17 @@ def app_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
     raw_spec = arguments.get("spec")
     spec_dict: dict[str, Any] = dict(raw_spec) if isinstance(raw_spec, dict) else {}
+    # B40 (req 422): a sentence no template serves is the composed path - the owner's
+    # own words (app_request from the ONE router) win over the model's `content`.
+    request_text = turn.get("app_request") if isinstance(turn.get("app_request"), str) else None
+    request_text = request_text or (
+        str(arguments.get("content")) if isinstance(arguments.get("content"), str) else None
+    )
+    if not template and "template" not in spec_dict and request_text:
+        composed = {"request": request_text}
+        if name:
+            composed["name"] = name
+        return service.create(db, device_action, spec=composed, session_id=str(ctx.session_id))
     if template:
         spec_dict.setdefault("template", template)
     if name:
@@ -153,6 +166,16 @@ def app_test(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def app_fix(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Testleri düzelt." / "Uygulamadaki hatayı düzelt." (B40 req 435-437)."""
+    db = _require_db(ctx, TOOL_APP_FIX)
+    service = _service(ctx, TOOL_APP_FIX)
+    device_action = ctx.live.get("device_action")
+    return service.fix(
+        db, device_action, target=_target(ctx, arguments), session_id=str(ctx.session_id)
+    )
+
+
 def app_stop(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Uygulamayı durdur." (spec §5)."""
     db = _require_db(ctx, TOOL_APP_STOP)
@@ -197,6 +220,98 @@ def app_list(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     return service.list(db, session_id=str(ctx.session_id))
 
 
+# ------------------------------------------------------------ B41: the lifecycle tools
+
+TOOL_APP_VERIFY: Final = "app.verify"
+TOOL_APP_LOG: Final = "app.log"
+TOOL_APP_PACKAGE: Final = "app.package"
+TOOL_APP_LAUNCH: Final = "app.launch"
+TOOL_APP_HISTORY: Final = "app.history"
+TOOL_APP_RESUME: Final = "app.resume"
+TOOL_APP_MODIFY: Final = "app.modify"
+
+
+def app_verify(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Uygulamayı doğrula." / "Arayüzünü test et." (B41 req 443/444)."""
+    db = _require_db(ctx, TOOL_APP_VERIFY)
+    service = _service(ctx, TOOL_APP_VERIFY)
+    return service.verify(
+        db,
+        ctx.live.get("device_action"),
+        target=_target(ctx, arguments),
+        session_id=str(ctx.session_id),
+    )
+
+
+def app_log(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Uygulamanın günlüğünü oku." (B41 req 445)."""
+    db = _require_db(ctx, TOOL_APP_LOG)
+    service = _service(ctx, TOOL_APP_LOG)
+    return service.log(
+        db,
+        ctx.live.get("device_action"),
+        target=_target(ctx, arguments),
+        session_id=str(ctx.session_id),
+    )
+
+
+def app_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Uygulamayı paketle." (B41 req 441/446)."""
+    db = _require_db(ctx, TOOL_APP_PACKAGE)
+    service = _service(ctx, TOOL_APP_PACKAGE)
+    return service.package(db, target=_target(ctx, arguments), session_id=str(ctx.session_id))
+
+
+def app_launch(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Paketlenmiş sürümü başlat." (B41 req 442)."""
+    db = _require_db(ctx, TOOL_APP_LAUNCH)
+    service = _service(ctx, TOOL_APP_LAUNCH)
+    return service.launch(
+        db,
+        ctx.live.get("device_action"),
+        target=_target(ctx, arguments),
+        session_id=str(ctx.session_id),
+    )
+
+
+def app_history(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu uygulamada neler yaptık?" (B41 req 447)."""
+    db = _require_db(ctx, TOOL_APP_HISTORY)
+    service = _service(ctx, TOOL_APP_HISTORY)
+    return service.history(db, target=_target(ctx, arguments), session_id=str(ctx.session_id))
+
+
+def app_resume(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Kitaplık uygulamasına devam edelim." (B41 req 448)."""
+    db = _require_db(ctx, TOOL_APP_RESUME)
+    service = _service(ctx, TOOL_APP_RESUME)
+    turn = _turn_record(ctx)
+    name = turn.get("app_name") if isinstance(turn.get("app_name"), str) else None
+    name = name or (str(arguments.get("name")) if isinstance(arguments.get("name"), str) else None)
+    return service.resume(
+        db, target=_target(ctx, arguments), name=name, session_id=str(ctx.session_id)
+    )
+
+
+def app_modify(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu uygulamaya siparişlere teslim tarihi ekle." (B41 req 449/450) - the owner's
+    own sentence (app_request from the ONE router) wins over the model's content."""
+    db = _require_db(ctx, TOOL_APP_MODIFY)
+    service = _service(ctx, TOOL_APP_MODIFY)
+    turn = _turn_record(ctx)
+    text = turn.get("app_request") if isinstance(turn.get("app_request"), str) else None
+    text = text or (
+        str(arguments.get("content")) if isinstance(arguments.get("content"), str) else ""
+    )
+    return service.modify(
+        db,
+        ctx.live.get("device_action"),
+        target=_target(ctx, arguments),
+        request=text or "",
+        session_id=str(ctx.session_id),
+    )
+
+
 def register_apps_tools(reg: ToolRegistry) -> ToolRegistry:
     from app.voice.realtime_sessions.tools import ToolSpec
 
@@ -219,10 +334,159 @@ def register_apps_tools(reg: ToolRegistry) -> ToolRegistry:
                     },
                     "name": {"type": "string", "maxLength": 100},
                     "spec": {"type": "object"},
+                    "content": {
+                        "type": "string",
+                        "maxLength": 600,
+                        "description": (
+                            "The owner's whole sentence when no template fits: the records the "
+                            "application keeps, their fields, whether it needs a login."
+                        ),
+                    },
                 },
                 "additionalProperties": False,
             },
             handler=app_create,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_VERIFY,
+            description=(
+                "ODAKTAKİ çalışan uygulamanın ARAYÜZÜNÜ cihazın tarayıcısında doğrular ve yeniden "
+                "başlatınca kaydın kaldığını kontrol eder: 'uygulamayı doğrula', 'arayüzünü test "
+                "et'."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+            handler=app_verify,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_LOG,
+            description=(
+                "ODAKTAKİ uygulamanın çalışma GÜNLÜĞÜNÜ cihazdan okur: 'uygulamanın günlüğünü "
+                "oku', "
+                "'logları göster'."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+            handler=app_log,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_PACKAGE,
+            description=(
+                "ODAKTAKİ test edilmiş uygulamayı SÜRÜM PAKETİ olarak çıkarır: 'uygulamayı "
+                "paketle', "
+                "'sürüm paketi çıkar'."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+            handler=app_package,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_LAUNCH,
+            description=(
+                "ODAKTAKİ uygulamanın PAKETLENMİŞ sürümünü kendi klasöründe başlatır: 'paketlenmiş "
+                "sürümü başlat', 'sürümü çalıştır'."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+            handler=app_launch,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_HISTORY,
+            description=(
+                "ODAKTAKİ uygulamanın GEÇMİŞİNİ anlatır (sürümler, olaylar, paketler): 'bu "
+                "uygulamada "
+                "neler yaptık', 'uygulamanın geçmişi'."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+            handler=app_history,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_RESUME,
+            description=(
+                "Daha önce yapılmış bir uygulamaya GERİ DÖNER ve odağa alır: 'Kitaplık "
+                "uygulamasına "
+                "devam edelim', 'uygulamaya devam et'. 'name' alanına sahibin söylediği adı ver."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 100},
+                    **{"name": {"type": "string", "maxLength": 100}},
+                },
+                "additionalProperties": False,
+            },
+            handler=app_resume,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_MODIFY,
+            description=(
+                "ODAKTAKİ bileşik uygulamaya ÖZELLİK EKLER (yeni kayıt türü, alan, giriş) ve yeni "
+                "sürümü test eder: 'bu uygulamaya siparişlere teslim tarihi ekle'. 'content' "
+                "alanına "
+                "sahibin cümlesini aynen yaz."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 100},
+                    **{"content": {"type": "string", "maxLength": 600}},
+                },
+                "additionalProperties": False,
+            },
+            handler=app_modify,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_APP_FIX,
+            description=(
+                "ODAKTAKİ uygulamanın BAŞARISIZ testlerini analiz eder ve sınırlı bir döngüde "
+                "düzeltmeyi dener: 'testleri düzelt', 'uygulamadaki hatayı düzelt' denince bu "
+                "araç çağrılır. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 100}},
+                "additionalProperties": False,
+            },
+            handler=app_fix,
         )
     )
     reg.register(

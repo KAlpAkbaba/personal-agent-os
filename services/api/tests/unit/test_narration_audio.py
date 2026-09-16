@@ -31,6 +31,7 @@ from app.artifacts.models import (
     Artifact,
     ArtifactRender,
     ArtifactVersion,
+    ResearchSource,
     Task,
     TaskRun,
 )
@@ -93,6 +94,7 @@ def wired():
         Artifact.__table__,
         ArtifactVersion.__table__,
         ArtifactRender.__table__,
+        ResearchSource.__table__,
         NarrationSession.__table__,
         PronunciationEntry.__table__,
     ):

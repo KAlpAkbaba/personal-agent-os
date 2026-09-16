@@ -17,7 +17,9 @@ import {
   getResearchTask,
   listDevices,
   listResearchTasks,
+  pauseResearch,
   previewSelection,
+  resumeResearch,
   startResearch,
 } from "../../app/lib/research/api";
 import { DEVICES, REPORT, taskAt } from "./fixtures";
@@ -52,6 +54,24 @@ describe("startResearch", () => {
     await startResearch({ input: "konu", target_device: null });
     const [, init] = apiFetch.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string)).toEqual({ input: "konu" });
+  });
+
+  it("sends the research mode only when the owner chose one (B31 req 192)", async () => {
+    apiFetch.mockResolvedValueOnce(json(202, { task_id: "t1", status: "planned", device: null }));
+    await startResearch({ input: "konu", research_mode: "deep" });
+    const [, init] = apiFetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ input: "konu", research_mode: "deep" });
+  });
+
+  it("pauses and resumes a run through the two B31 routes (req 203/204)", async () => {
+    apiFetch.mockResolvedValueOnce(json(200, { task_id: "t1", status: "paused" }));
+    await pauseResearch("t 1");
+    expect(apiFetch.mock.calls[0]).toEqual(["/v1/research/t%201/pause", { method: "POST" }]);
+    apiFetch.mockResolvedValueOnce(json(200, { task_id: "t1", status: "resumed" }));
+    await resumeResearch("t1");
+    expect(apiFetch.mock.calls[1]).toEqual(["/v1/research/t1/resume", { method: "POST" }]);
+    apiFetch.mockResolvedValueOnce(json(409, { detail: "research is not paused" }));
+    await expect(resumeResearch("t1")).rejects.toThrow("research is not paused");
   });
 
   it("sends interactive (owner-handoff mode) only when explicitly set", async () => {

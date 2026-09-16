@@ -65,11 +65,13 @@ from app.calendar.models import (
 from app.calendar.providers import FakeCalendarWriter
 from app.calendar.service import CalendarService
 from app.config import Settings
+from app.creative.imaging import ScriptedImageProvider
 from app.creative.models import CreativeRunRow
 from app.creative.providers import (
     DetectionFacts,
     FigmaProvider,
     IllustratorProvider,
+    LayeredProvider,
     PaintProvider,
     PhotoshopProvider,
 )
@@ -78,14 +80,15 @@ from app.creative3d.models import SceneRow
 from app.creative3d.service import SceneService
 from app.devices.status import DeviceStatusRegistry
 from app.documents.index import DocumentIndex
-from app.documents.models import DocumentIndexRow
+from app.documents.models import DocumentIndexRow, FileMutationRow
+from app.documents.mutations import MutationService
 from app.documents.service import DocumentService
 from app.evolution.models import Capability, CapabilityGap, EvolutionOpportunity, SkillVersion
 from app.evolution.runtime import EvolutionRuntime
 from app.evolution.supervisor import is_paused
 from app.executive.models import ExecutiveRunRow, ExecutiveStepRow
 from app.genesis.catalogue import GenesisInterfaceCatalogue, set_catalogue
-from app.genesis.models import GenesisRun
+from app.genesis.models import GenesisCatalogueRow, GenesisRun
 from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
 from app.identity.root import InMemoryCredentialRoot
@@ -122,6 +125,7 @@ from app.news.models import NewsPlaybackContextRow, NewsResolutionRow, NewsSourc
 from app.news.provider import FixtureNewsProvider
 from app.object_store import InMemoryObjectStore
 from app.operator import focus as operator_focus
+from app.operator.mission_models import OperatorMissionRow
 from app.operator.models import (
     FOCUS_KIND_ARTIFACT,
     FOCUS_KIND_DOCUMENT,
@@ -132,6 +136,7 @@ from app.operator.models import (
 )
 from app.operator.service import OperatorService, register_operator_service
 from app.operator.task import STATUS_RUNNING, OperatorTask
+from app.operator.vision import FakeVisionProvider
 from app.presence.engine import PresenceFusionEngine, set_engine
 from app.presence.eye import disable_eye, is_eye_enabled
 from app.presence.service import reset_heartbeat
@@ -148,6 +153,8 @@ from app.research.models import (
 )
 from app.routines.models import Routine, RoutineFiring
 from app.security.models import AuthorizedAsset
+from app.selfdev.models import SelfDevDefectRow
+from app.selfdev.service import SelfDevService
 from app.uistate.publisher import UiStatePublisher, set_publisher
 from app.voice.models import VoiceProfile
 from app.voice.providers import FakeTTSProvider
@@ -159,12 +166,16 @@ from app.voice.simulator import SimulatedRealtimeProvider
 from app.weather.models import WeatherQueryEvidenceRow
 from app.weather.providers import FakeWeatherProvider
 from app.weather.service import WeatherService
-from tests.alarms_support import FakeDeviceAction, happy_device_results
+from tests.alarms_support import FakeDeviceAction, happy_device_results, ok
 from tests.alarms_support import window_id as window_id_for
 from tests.appfactory_support import appfactory_capability_results
 from tests.artifacts_support import artifact_capability_results
 from tests.creative3d_support import FakeCreative3DDevice
-from tests.documents_support import document_capability_results, extract_result
+from tests.documents_support import (
+    document_capability_results,
+    extract_result,
+    reset_mutations,
+)
 from tests.identity_support import IDENTITY_TABLES
 from tests.mail_calendar_support import build_fake_calendar_provider, build_fake_mail_provider
 from tests.voice_corpus.corpus import (
@@ -174,10 +185,13 @@ from tests.voice_corpus.corpus import (
     CTX_ALARM_WAKE_SONG_URL,
     CTX_APP_RUNNING,
     CTX_APP_SCAFFOLDED,
+    CTX_ARCHIVE_FOCUSED,
     CTX_ARTIFACT_FOCUSED,
     CTX_COMMON_POINTS_FOCUSED,
     CTX_COUNTERBOX_RUNNING,
     CTX_CREATIVE_PAINT,
+    CTX_CREATIVE_REDOABLE,
+    CTX_CREATIVE_UNDOABLE,
     CTX_DOCUMENT_ARTIFACT_FOCUSED,
     CTX_DOCUMENT_FOCUSED,
     CTX_DOCX_FOCUSED,
@@ -185,7 +199,9 @@ from tests.voice_corpus.corpus import (
     CTX_EVENT_FOCUSED,
     CTX_EYE_DISABLED,
     CTX_FILE_FOCUSED,
+    CTX_IMAGE_FOCUSED,
     CTX_LAMPBOX_RUNNING,
+    CTX_MEDIA_PLAYING,
     CTX_MEMORY_EXISTS,
     CTX_MESSAGE_FOCUSED,
     CTX_NATIVE_ANDROID,
@@ -196,6 +212,8 @@ from tests.voice_corpus.corpus import (
     CTX_PPTX_FOCUSED,
     CTX_PROPOSAL_READ_BACK,
     CTX_RESEARCH_FOCUS_B,
+    CTX_RESEARCH_PAUSED,
+    CTX_RESEARCH_RUNNING,
     CTX_ROUTINE_EXISTS,
     CTX_SCENE_BLENDER,
     CTX_SECRET_FILE_FOCUSED,
@@ -321,7 +339,12 @@ TABLES = (
     Routine.__table__,
     RoutineFiring.__table__,
     ObjectFocusRow.__table__,
+    OperatorMissionRow.__table__,
     DocumentIndexRow.__table__,
+    # B34: the managed file mutation journal (the approval queue and the version history).
+    FileMutationRow.__table__,
+    # B35: the self-development queue.
+    SelfDevDefectRow.__table__,
     MailIndexRow.__table__,
     MailDraftRow.__table__,
     CalendarIndexRow.__table__,
@@ -561,6 +584,11 @@ class Harness:
         return str(task_id), str(artifact_id)
 
     def seed(self, context: str) -> None:
+        # The desktop's window list is per CONTEXT (CTX_WINDOW_FOCUSED installs a live one
+        # below); every other context starts from the empty desktop the happy results give.
+        self.device.results["window.list"] = ok(windows=[])
+        # B34: the fake desktop's mutable overlay starts empty for every context.
+        reset_mutations()
         if context == CTX_RESEARCH_FOCUS_B:
             base = datetime.now(UTC).replace(microsecond=0) - timedelta(hours=2)
             a_task, a_art = self._complete_research(topic=SHARED_TOPIC, marker="A", ready_at=base)
@@ -593,6 +621,61 @@ class Harness:
                     assert decision.fired, decision
             self.ids["alarm"] = str(alarm_id)
             self.device.reset()
+            reset_mutations()
+        elif context in (CTX_RESEARCH_RUNNING, CTX_RESEARCH_PAUSED):
+            # B27 req 732: a research genuinely in flight - the task RUNNING, its workflow
+            # id set the way ``start_browser_research_workflow`` sets it, and the run row in
+            # ``discovering`` - so ``research.cancel`` acts on what the sweep, the task list
+            # and the world model all agree is running.
+            from app.artifacts.models import TASK_STATUS_RUNNING
+            from app.research import service as research_service
+            from app.research.models import STAGE_DISCOVERING
+
+            with self.factory() as db:
+                task = Task(
+                    id=uuid.uuid4(),
+                    intent="araştır",
+                    status=TASK_STATUS_RUNNING,
+                    created_at=datetime.now(UTC),
+                )
+                task.workflow_id = research_service.workflow_id_for(task.id)
+                db.add(task)
+                db.flush()
+                runs_service.get_or_create_run(db, task.id)
+                runs_service.update_run(
+                    db,
+                    task.id,
+                    stage=STAGE_DISCOVERING,
+                    event={"stage": STAGE_DISCOVERING, "detail": "corpus fixture"},
+                )
+                if context == CTX_RESEARCH_PAUSED:
+                    # B31 req 204: paused by the SAME function the tool and the route use.
+                    assert research_service.mark_research_paused(db, task.id)
+                db.commit()
+                self.ids["research_running"] = str(task.id)
+        elif context == CTX_MEDIA_PLAYING:
+            # B27 req 733: a playback THIS service opened and still live - the row
+            # ``live_playback`` reads, with the session id the device's ``media_volume``
+            # is asked about. Written the way ``play_request`` writes it, never a sentinel.
+            from app.media.models import PLAYBACK_STATUS_PLAYING
+            from app.media.playback_service import SESSION_PREFIX
+
+            with self.factory() as db:
+                playback = OwnerMediaPlaybackRow(
+                    id=uuid.uuid4(),
+                    request_text="Doğum günün kutlu olsun Kadir",
+                    query="Doğum günün kutlu olsun Kadir youtube",
+                    video_id="dQw4w9WgXcQ",
+                    video_title="Dogum Gunun Kutlu Olsun",
+                    url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    session_id="",
+                    status=PLAYBACK_STATUS_PLAYING,
+                    receipt_json={"playing": True, "verified": True},
+                )
+                playback.session_id = f"{SESSION_PREFIX}{playback.id}"
+                db.add(playback)
+                db.commit()
+                self.ids["playback"] = str(playback.id)
         elif context == CTX_ROUTINE_EXISTS:
             # B14 req 289/290/291: one armed routine the owner can name. Created through
             # the real service, so the control tools act on a row the engine would evaluate
@@ -664,6 +747,38 @@ class Harness:
                     source="test_context",
                     now=base + timedelta(seconds=1),
                 )
+            # B30 req 82: the device's OWN list of what is open - the two remembered windows
+            # with their process images (a name-addressed close finds its window by image,
+            # never by the focus stack) - and, like ``test_operator_tools._focus_window``,
+            # a window closed earlier in the case is gone from the next listing.
+            rows = [
+                {
+                    "window_id": window_id_for(0),
+                    "pid": 4100,
+                    "image": "calc.exe",
+                    "title": "Hesap Makinesi",
+                    "state": "normal",
+                    "foreground": False,
+                },
+                {
+                    "window_id": window_id_for(1),
+                    "pid": 4242,
+                    "image": "notepad.exe",
+                    "title": "Adsız - Not Defteri",
+                    "state": "normal",
+                    "foreground": True,
+                },
+            ]
+
+            def _listing(_payload, _device=self.device, _rows=rows):
+                closed = {
+                    call["payload"].get("window_id")
+                    for call in _device.calls
+                    if call["capability"] in ("window.close", "app.close")
+                }
+                return ok(windows=[dict(r) for r in _rows if r["window_id"] not in closed])
+
+            self.device.results["window.list"] = _listing
         elif context == CTX_DOCUMENT_FOCUSED:
             # Exactly the pair the task brief names: rapor.pdf current, sunum-q3.pptx
             # the previous (a genuine distinct earlier row, the same two-timestamp
@@ -691,6 +806,25 @@ class Harness:
                 now = datetime.now(UTC)
                 row = self._index_document(db, "sunum-q3.pptx", now=now)
                 self._focus_document(db, row, source="test_context", now=now)
+        elif context == CTX_IMAGE_FOCUSED:
+            # B32 req 141: the OCR fixture already read once (its lines in the index).
+            with self.factory() as db:
+                now = datetime.now(UTC)
+                row = self._index_document(db, "metin.png", now=now)
+                self._focus_document(db, row, source="test_context", now=now)
+        elif context == CTX_ARCHIVE_FOCUSED:
+            # B32 req 142: the archive found as a FILE, never extracted (the device refuses).
+            from tests.documents_support import file_id_for, file_record
+
+            with self.factory() as db:
+                record = file_record("arsiv.zip")
+                operator_focus.set_focus(
+                    db,
+                    FOCUS_KIND_FILE,
+                    file_id_for("arsiv.zip"),
+                    label=record["name"],
+                    source="test_context",
+                )
         elif context == CTX_FILE_FOCUSED:
             # A FILE is focused (as if a search just found it) but never extracted: the
             # spec §3 branch "current file not yet extracted -> extract it first".
@@ -976,7 +1110,7 @@ class Harness:
                 )
                 assert created["execution_status"] == "executed", created
                 self.ids["scene:current"] = created["scene_id"]
-        elif context == CTX_CREATIVE_PAINT:
+        elif context in (CTX_CREATIVE_PAINT, CTX_CREATIVE_UNDOABLE, CTX_CREATIVE_REDOABLE):
             # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, ADR-0093): a REAL creative_runs
             # row, made through the real CreativeService.create against the fixture
             # Paint provider (the same "genuine fixture, not a sentinel" discipline
@@ -1011,6 +1145,24 @@ class Harness:
                 )
                 assert created["execution_status"] == "executed", created
                 self.ids["creative:current"] = created["run_id"]
+                if context in (CTX_CREATIVE_UNDOABLE, CTX_CREATIVE_REDOABLE):
+                    # B43 (req 511): a second, real step on the run's history...
+                    styled = self.creative.apply(
+                        db,
+                        target=created["run_id"],
+                        operations=[
+                            {"op": "style", "kind": "grayscale"},
+                            {"op": "export", "format": "png"},
+                        ],
+                        session_id="seed:creative_paint",
+                    )
+                    assert styled["execution_status"] == "executed", styled
+                if context == CTX_CREATIVE_REDOABLE:
+                    # ...and, for redo, that step undone.
+                    undone = self.creative.undo(
+                        db, target=created["run_id"], session_id="seed:creative_paint"
+                    )
+                    assert undone["execution_status"] == "executed", undone
         elif context in (CTX_NATIVE_PLANNED, CTX_NATIVE_ANDROID, CTX_NATIVE_BUILT):
             # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §4, §6, ADR-0095): REAL
             # ``native_builds`` rows, opened through the REAL ``plan_build`` against the
@@ -1289,6 +1441,7 @@ def build_harness() -> Harness:
         CapabilityGap.__table__,
         EvolutionOpportunity.__table__,
         GenesisRun.__table__,
+        GenesisCatalogueRow.__table__,
         # app.security.provider.RegistryAuthorizationProvider (the default
         # mutation-authorization source, app.evolution.runtime.EvolutionRuntime
         # .authorization) queries this table for ANY genesis run against a
@@ -1328,7 +1481,10 @@ def build_harness() -> Harness:
     register_operator_service(operator_service)
     # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): the SAME fake device, through
     # the SAME live-source path - one document authority, never a second one.
-    document_service = DocumentService()
+    document_service = DocumentService(embedder=memory.embedder)
+    document_mutations = MutationService(document_service, enabled=True)
+    # B35: the queue the voice tools write, bounded by a policy the corpus can read.
+    selfdev_service = SelfDevService(enabled=True)
     # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §2, §4, ADR-0084): the FAKE providers loading
     # the fixture mailbox/calendar directly (never the reals ``create_app`` itself would
     # have built from empty settings) — replaces what ``create_app`` wired, the same way
@@ -1346,7 +1502,7 @@ def build_harness() -> Harness:
     # the SAME fake device port every other family holds, plus the M13 fake browser
     # gateway (task brief: "the M13 fake gateway in unit tests") for ``app.open``/
     # exercising a running web project.
-    app_factory_service = AppFactoryService()
+    app_factory_service = AppFactoryService(store=artifacts.store)
     browser_gateway = FakeBrowserGateway()
     app.state.app_factory_service = app_factory_service
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): 3D Creation's own service,
@@ -1367,7 +1523,12 @@ def build_harness() -> Harness:
             "photoshop": PhotoshopProvider(),
             "illustrator": IllustratorProvider(),
             "figma": FigmaProvider(token_present=False),
+            "layered": LayeredProvider(),
         },
+        # B43: the scripted image provider (generation without the network) and the
+        # SAME fake vision provider the operator's screenshot questions use.
+        image_provider=ScriptedImageProvider(),
+        vision_provider=FakeVisionProvider(answer="Evet, mavi bir dalga logosu görünüyor."),
     )
     app.state.creative_service = creative_service
     # ADR-0091 (Owner Location Context / Live Weather / Morning Briefing): the FAKE
@@ -1409,7 +1570,13 @@ def build_harness() -> Harness:
         settings=settings,
         device_action=device,
         operator=operator_service,
+        # B29 req 105: a scripted vision provider, so "Ekranda ne var?" is answered from
+        # a genuine capture (the fake device's one-pixel PNG) by a provider the corpus
+        # controls - never the network, never a guess.
+        vision_provider=FakeVisionProvider(),
         document_service=document_service,
+        document_mutations=document_mutations,
+        selfdev_service=selfdev_service,
         mail_service=mail_service,
         calendar_service=calendar_service,
         app_factory_service=app_factory_service,
@@ -2109,12 +2276,13 @@ def _run_case(case: UtteranceCase, harness: Harness | None) -> CaseResult:
         if case.expected_tool != "alarm.create" and h.alarm_rows() != alarms_before:
             result.problems.append("an alarm row was created")
             result.verdict = "forbidden_side_effect"
-        # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §9): only the two tools that OPEN a
-        # build row may leave one behind. Any other case that grew a native_builds row
-        # took a route it was never meant to take - the same table-level check the alarm
-        # and research families already get for their own rows.
+        # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §9): only the tools that OPEN a build
+        # row may leave one behind - create, rebuild and (B33 req 471) update, which is a
+        # rebuild at the next version followed by an install. Any other case that grew a
+        # native_builds row took a route it was never meant to take - the same table-level
+        # check the alarm and research families already get for their own rows.
         if (
-            case.expected_tool not in ("native.create", "native.rebuild")
+            case.expected_tool not in ("native.create", "native.rebuild", "native.update")
             and h.native_build_ids() != native_builds_before
         ):
             result.problems.append("a native build row was created")

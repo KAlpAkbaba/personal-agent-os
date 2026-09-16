@@ -355,9 +355,7 @@ def register_routine_tools(reg: ToolRegistry) -> ToolRegistry:
     reg.register(
         ToolSpec(
             name=TOOL_ROUTINE_CANCEL,
-            description=(
-                "Bir rutini kalıcı olarak iptal eder. Dönen 'speech' metnini aynen oku."
-            ),
+            description=("Bir rutini kalıcı olarak iptal eder. Dönen 'speech' metnini aynen oku."),
             parameters=_CONTROL_PARAMETERS,
             handler=routine_cancel,
         )

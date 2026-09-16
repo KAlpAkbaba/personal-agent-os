@@ -175,14 +175,25 @@ function portsOf(client: AppsClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the Uygulamalar panel", () => {
-  it("is empty, in words, when the list route answered with no project and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    // The audit counted thirteen of the twenty-seven panels empty at once, and thirteen
+    // titles over thirteen "henüz yok" lines is a page that reads as a system doing
+    // nothing. The sentences did not become untrue - they moved to /availability, which
+    // lists every family with what it answered.
+    expect(panel(ok([]))).toBe("");
+    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/apps yok (HTTP 404)." });
+    expect(absent).toBe("");
+  });
+
+  it("keeps every word when the bus is telling us something the list cannot show", () => {
+    // req 714 is about a family with nothing to say, not a family with no ROWS. A project
+    // being scaffolded right now is worth a panel even though the finished list is empty,
+    // which is why the rule takes the bus into account and not just the route.
+    const html = panel(ok([]), [APP_FACTORY("Görev Takip", "scaffolded")], controlOf(), T0 + 3_000);
     expect(html).toContain('data-panel="apps"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Henüz bir uygulama yapılmadı");
-    expect(html).toContain('data-app-activity="untold"');
-    expect(html).toContain("Uygulama etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).toContain('data-apps-running="0"');
     expect(html).toContain(">Uygulamalar<");
@@ -197,6 +208,12 @@ describe("the Uygulamalar panel", () => {
     expect(html).toContain("Bu ekran süreç başlatmaz, durdurmaz, dosya yazmaz.");
   });
 
+  it("says the bus told it nothing, when there are rows to show anyway", () => {
+    const html = panel(ok([row()]));
+    expect(html).toContain('data-app-activity="untold"');
+    expect(html).toContain("Uygulama etkinliği bildirilmedi.");
+  });
+
   it("never renders the empty sentence for a route that is loading, failed or absent", () => {
     const loading = panel({ kind: "loading" });
     expect(loading).toContain("data-panel-loading");
@@ -209,7 +226,12 @@ describe("the Uygulamalar panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Henüz bir uygulama yapılmadı");
 
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/apps yok (HTTP 404)." });
+    // A route this Cloud Core does not serve still says so WHILE the bus is talking:
+    // "the list is not here" and "nothing is happening" are different facts.
+    const absent = panel(
+      { kind: "absent", detail: "Bu Cloud Core sürümünde /v1/apps yok (HTTP 404)." },
+      [APP_FACTORY("Görev Takip", "scaffolded")],
+    );
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/apps yok (HTTP 404).");
     expect(absent).not.toContain("Henüz bir uygulama yapılmadı");
@@ -439,10 +461,11 @@ describe("the Uygulamalar panel", () => {
     expect(stale).toContain('data-app-last-known="active"');
     expect(stale).toContain("Son bilinen: Görev Takip testleri geçti (12/12) · 46 sn önce");
 
-    // A document, mail or artifact event is not an app event.
-    expect(panel(ok([]), [DOCUMENT_ANALYSIS()])).toContain('data-app-activity="untold"');
-    expect(panel(ok([]), [MAIL_ACTIVITY()])).toContain('data-app-activity="untold"');
-    expect(panel(ok([]), [ARTIFACT_FACTORY()])).toContain('data-app-activity="untold"');
+    // A document, mail or artifact event is not an app event. Rows are present so the
+    // panel renders at all: an app family with no rows AND no app event is quiet now.
+    expect(panel(ok([row()]), [DOCUMENT_ANALYSIS()])).toContain('data-app-activity="untold"');
+    expect(panel(ok([row()]), [MAIL_ACTIVITY()])).toContain('data-app-activity="untold"');
+    expect(panel(ok([row()]), [ARTIFACT_FACTORY()])).toContain('data-app-activity="untold"');
   });
 });
 

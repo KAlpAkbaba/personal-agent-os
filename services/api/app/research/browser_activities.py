@@ -42,6 +42,7 @@ from app.devices.selection import NoCapableDeviceError, select_device
 from app.ledger import briefing as ledger_briefing
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import (
+    EVENT_TYPE_RESEARCH_PROVIDER_FALLBACK,
     EVENT_TYPE_RESEARCH_QUALITY_GATE,
     STATUS_INFO,
     SUBSYSTEM_RESEARCH,
@@ -1510,6 +1511,7 @@ def synthesize_activity(
         thin = 0 < len(primary_only) < MIN_REPORT_FINDINGS
         thin_reasons: tuple[str, ...] = ()
         synthesis_attempts: list[dict[str, Any]] = []
+        requested_provider: str | None = None
         if thin:
             provider = resolve_synthesis_provider("deterministic", settings)
             result, thin_reasons = synthesize_thin(
@@ -1534,6 +1536,7 @@ def synthesize_activity(
             )
         else:
             provider = resolve_synthesis_provider(synthesis_name, settings)
+            requested_provider = provider.name
             try:
                 result, provider, synthesis_attempts = _synthesize_with_fallback(
                     provider,
@@ -1624,9 +1627,27 @@ def synthesize_activity(
             thin=thin,
         )
         report = run_provenance_gate(report, evidence_by_id)
+        report_json = report.as_dict()
+
+        # B31 req 207: a substitution is a fact of the run, written where the owner and
+        # the web can read it - the report itself, the run's events and the ledger - never
+        # only a log line. Discovery's own per-query search fallbacks (recorded as events
+        # by discover_activity) are counted into the same place.
+        run_row = runs_service.get_run(session, tid)
+        report_json["search_fallbacks"] = _count_search_fallbacks(run_row)
+        if requested_provider is not None and provider.name != requested_provider:
+            last = synthesis_attempts[-1] if synthesis_attempts else {}
+            fallback = {
+                "requested": requested_provider,
+                "used": provider.name,
+                "attempts": len(synthesis_attempts),
+                "reason": str(last.get("error_class") or last.get("reason") or "rejected"),
+            }
+            report_json["synthesis_fallback"] = fallback
+            _record_provider_fallback(session, tid, fallback)
 
         runs_service.upsert_report(
-            session, tid, report_json=report.as_dict(), synthesis_provider=provider.name
+            session, tid, report_json=report_json, synthesis_provider=provider.name
         )
         runs_service.update_run(
             session,
@@ -1635,7 +1656,57 @@ def synthesize_activity(
             event={"stage": STAGE_SYNTHESIZING, "detail": f"synthesized via {provider.name}"},
         )
     logger.info("browser_research_synthesized", task_id=task_id, provider=provider.name)
-    return report.as_dict()
+    return report_json
+
+
+def _count_search_fallbacks(run_row: Any) -> int:
+    """How many discovery queries answered from a provider other than the one asked for
+    (``discover_activity`` writes ``event["search"]["fallback"]`` per query)."""
+    events = getattr(run_row, "events_json", None) or []
+    count = 0
+    for event in events:
+        search = event.get("search") if isinstance(event, dict) else None
+        if isinstance(search, dict) and search.get("fallback") is True:
+            count += 1
+    return count
+
+
+def _record_provider_fallback(session: Any, tid: uuid.UUID, fallback: dict[str, Any]) -> None:
+    """B31 req 207: the run event and the ledger row for a synthesis substitution. Neither
+    may fail the synthesis that already succeeded."""
+    detail = (
+        f"synthesis fell back from {fallback['requested']} to {fallback['used']} "
+        f"after {fallback['attempts']} attempt(s): {fallback['reason']}"
+    )
+    try:
+        runs_service.update_run(
+            session,
+            tid,
+            event={"stage": STAGE_SYNTHESIZING, "detail": detail, "provider_fallback": fallback},
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("research_provider_fallback_event_failed", task_id=str(tid))
+    try:
+        ledger_service.record(
+            session,
+            ledger_service.ActivityEvent(
+                event_type=EVENT_TYPE_RESEARCH_PROVIDER_FALLBACK,
+                subsystem=SUBSYSTEM_RESEARCH,
+                action="synthesis_fallback",
+                status=STATUS_INFO,
+                result=f"{fallback['requested']} -> {fallback['used']}",
+                factual_summary=(
+                    f"Sentez sağlayıcısı {fallback['requested']} kabul edilmedi; "
+                    f"{fallback['used']} yedeğine geçildi."
+                ),
+                occurred_at=datetime.now(UTC),
+                research_job_id=tid,
+                evidence_refs=[{"kind": "research_run", "ref": str(tid)}],
+                detail_json=dict(fallback),
+            ),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("research_provider_fallback_ledger_failed", task_id=str(tid))
 
 
 # ---------------------------------------------------------------- persist

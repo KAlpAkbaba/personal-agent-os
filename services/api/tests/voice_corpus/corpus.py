@@ -43,6 +43,15 @@ CTX_ROUTINE_EXISTS: Final = "routine_exists"
 #: `memory.forget` HARD-deletes and `memory.correct` versions, so a corpus case that
 #: proves either has to act on a row the rest of the system agrees exists.
 CTX_MEMORY_EXISTS: Final = "memory_exists"
+#: B27 req 732: one research genuinely in flight (a task RUNNING with its run row in
+#: ``discovering``), so "Araştırmayı iptal et." has something real to end - and the
+#: same sentence with nothing running is a refusal, not a success over nothing.
+CTX_RESEARCH_RUNNING: Final = "research_running"
+#: B31 req 204: the same running research, paused by the owner (the flag, never a stage).
+CTX_RESEARCH_PAUSED: Final = "research_paused"
+#: B27 req 733: a playback THIS service opened, still live, so "Sesini kıs." has a
+#: session to send ``browser.media_volume`` to.
+CTX_MEDIA_PLAYING: Final = "media_playing"
 #: 2026-09-08 wake-song defect fix: the owner has already approved a wake song
 #: (``alarms_service.set_wake_song``) — the one precondition a plain "Yarın 07:30'da beni
 #: uyandır." (no media named) needs to resolve to something real rather than the tone, the
@@ -70,6 +79,10 @@ CTX_OPERATOR_RUNNING: Final = "operator_running"
 #: The current document is rapor.pdf (5 pages), the previous is sunum-q3.pptx (7 slides) —
 #: exactly the pair the task brief names.
 CTX_DOCUMENT_FOCUSED: Final = "document_focused"
+#: B32: the OCR fixture (metin.png) already read and focused; the archive fixture focused
+#: as a FILE (never extracted); the duplicate proposal already heard (dedup may act).
+CTX_IMAGE_FOCUSED: Final = "image_focused"
+CTX_ARCHIVE_FOCUSED: Final = "archive_focused"
 #: A payment contract (sozlesmeler/2026/sozlesme.docx) is the current document — for the
 #: content questions the pdf/pptx pair cannot answer ("Ödeme süresi kaç gün?").
 CTX_DOCX_FOCUSED: Final = "docx_focused"
@@ -143,6 +156,11 @@ CTX_SCENE_BLENDER: Final = "scene_blender"
 #: planını kaldır." / "Renkleri biraz düzelt." / "Bunu PNG olarak dışa aktar." resolve
 #: to something real.
 CTX_CREATIVE_PAINT: Final = "creative_paint"
+#: B43 (req 511): the same real Paint run with one more step - so "Geri al." has a step
+#: to undo - and with that step already undone, so "Yinele." has one to redo. A single
+#: seeded output has neither, and the honest answer to both would be a refusal.
+CTX_CREATIVE_UNDOABLE: Final = "creative_undoable"
+CTX_CREATIVE_REDOABLE: Final = "creative_redoable"
 
 #: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §4, §6, ADR-0095): REAL ``native_builds``
 #: rows, opened through the real ``app.nativefactory.service.plan_build`` against a
@@ -223,6 +241,35 @@ SIDE_EFFECTS_OPERATOR_TYPE: Final[frozenset[str]] = frozenset(
     {"window.activate", "keyboard.type", "ui.inspect", "window.list"}
 )
 SIDE_EFFECTS_OPERATOR_SHELL: Final[frozenset[str]] = frozenset({"terminal.execute"})
+#: B28 req 92/93/98: activate, then ONE input, re-observed.
+SIDE_EFFECTS_OPERATOR_KEY: Final[frozenset[str]] = frozenset(
+    {"window.activate", "keyboard.key", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_SHORTCUT: Final[frozenset[str]] = frozenset(
+    {"window.activate", "keyboard.shortcut", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_SCROLL: Final[frozenset[str]] = frozenset(
+    {"window.activate", "pointer.scroll", "window.list"}
+)
+#: B29 req 100/102/105: an invoke (activate, invoke - the device's own before/after read
+#: is the verification), a read (ONE ui.inspect), a description (ONE screen.capture).
+SIDE_EFFECTS_OPERATOR_UI_INVOKE: Final[frozenset[str]] = frozenset(
+    {"window.activate", "ui.invoke", "window.list"}
+)
+SIDE_EFFECTS_OPERATOR_UI_READ: Final[frozenset[str]] = frozenset({"ui.inspect", "window.list"})
+SIDE_EFFECTS_OPERATOR_SEE: Final[frozenset[str]] = frozenset({"screen.capture"})
+# B30 req 82/84/85/118-122: geometry re-observed from the device's own rect, an
+# application closed by name (its window found by image in the device's list), the third
+# shell query, and the process/service family.
+SIDE_EFFECTS_OPERATOR_APP_CLOSE: Final[frozenset[str]] = frozenset({"window.list", "app.close"})
+SIDE_EFFECTS_OPERATOR_PROCESS_LIST: Final[frozenset[str]] = frozenset({"process.list"})
+SIDE_EFFECTS_OPERATOR_PROCESS_STOP: Final[frozenset[str]] = frozenset(
+    {"process.stop", "process.list"}
+)
+SIDE_EFFECTS_OPERATOR_SERVICE_STATUS: Final[frozenset[str]] = frozenset({"service.status"})
+SIDE_EFFECTS_OPERATOR_SERVICE_RESTART: Final[frozenset[str]] = frozenset(
+    {"service.restart", "service.status"}
+)
 
 #: M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §4): exactly the device capabilities
 #: each documents tool may reach on the fake device (tests/documents_support.py) — the
@@ -232,6 +279,26 @@ SIDE_EFFECTS_OPERATOR_SHELL: Final[frozenset[str]] = frozenset({"terminal.execut
 SIDE_EFFECTS_DOCUMENTS_SEARCH: Final[frozenset[str]] = frozenset({"file.search"})
 SIDE_EFFECTS_DOCUMENTS_READ: Final[frozenset[str]] = frozenset({"document.extract"})
 SIDE_EFFECTS_DOCUMENTS_COMPARE: Final[frozenset[str]] = frozenset({"file.compare"})
+# B32 req 139/142/150/151: headers only, a scan that hashes, and the Recycle Bin move.
+SIDE_EFFECTS_DOCUMENTS_INSPECT: Final[frozenset[str]] = frozenset({"file.inspect"})
+SIDE_EFFECTS_DOCUMENTS_DUPLICATES: Final[frozenset[str]] = frozenset({"file.search", "file.locate"})
+SIDE_EFFECTS_DOCUMENTS_TRASH: Final[frozenset[str]] = frozenset({"file.trash"})
+#: B34 req 153-165: what a managed mutation may reach on the fake desktop - the locate and
+#: the read a proposal needs, the six mutations, the Recycle Bin with a backup, the restore.
+SIDE_EFFECTS_DOCUMENTS_MUTATION: Final[frozenset[str]] = frozenset(
+    {
+        "file.search",
+        "file.locate",
+        "file.read",
+        "file.write",
+        "file.append",
+        "file.rename",
+        "file.move",
+        "file.copy",
+        "file.trash",
+        "file.restore",
+    }
+)
 
 #: M21 (docs/M21_MAIL_CALENDAR_SPEC.md §5): NOT a fake-DEVICE capability like every set
 #: above — mail/calendar never touch the device at all. This is the harness's OWN token
@@ -314,6 +381,12 @@ SIDE_EFFECTS_MEDIA_PLAY: Final[frozenset[str]] = frozenset(
 )
 #: "Şarkıyı durdur." stops the session this family opened -- nothing else.
 SIDE_EFFECTS_MEDIA_STOP: Final[frozenset[str]] = frozenset({"browser.media_stop"})
+#: B27 req 733: the level is READ from the page first (``media_status.volume``), then moved.
+SIDE_EFFECTS_MEDIA_VOLUME: Final[frozenset[str]] = frozenset(
+    {"browser.media_status", "browser.media_volume"}
+)
+#: B27 req 735: one ``screen.capture`` and nothing else touches the device.
+SIDE_EFFECTS_SCREENSHOT: Final[frozenset[str]] = frozenset({"screen.capture"})
 
 #: M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5, §7, ADR-0093): the Creative Tools Operator
 #: reaches the FAKE DEVICE never at all in this Cloud Core half — Paint's own edit runs
@@ -324,6 +397,8 @@ SIDE_EFFECTS_MEDIA_STOP: Final[frozenset[str]] = frozenset({"browser.media_stop"
 #: round trip through the M19 operator) is a visible, deliberate change to this
 #: constant rather than a silent widening of an already-shared one.
 SIDE_EFFECTS_CREATIVE: Final[frozenset[str]] = frozenset()
+#: B43 (req 509): a delivery reaches the owner's disk through the artifact open path.
+SIDE_EFFECTS_CREATIVE_DELIVER: Final[frozenset[str]] = frozenset({"file.fetch"})
 
 #: M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §5, §6, §9): the Native App Factory reaches
 #: the fake DEVICE never at all in this Cloud Core half. The compiler is the device's
@@ -334,6 +409,31 @@ SIDE_EFFECTS_CREATIVE: Final[frozenset[str]] = frozenset()
 #: own name, like ``SIDE_EFFECTS_CREATIVE``, so the day the runner does become a device
 #: call it is a visible change to this constant.
 SIDE_EFFECTS_NATIVE: Final[frozenset[str]] = frozenset()
+
+#: B33 (456-471): the day the comment above foresaw. The lifecycle AFTER the build is the
+#: device's - the build itself (project.scaffold / run / test, file.inspect read back), the
+#: package, the shortcut install and its removal, the launch and the UI Automation reads
+#: of the running window, the application's own log. A lifecycle case may reach exactly
+#: these and nothing else (no file.trash, no process.stop, no browser).
+SIDE_EFFECTS_NATIVE_LIFECYCLE: Final[frozenset[str]] = frozenset(
+    {
+        "project.scaffold",
+        "project.run",
+        "project.test",
+        "file.inspect",
+        "project.package",
+        "project.install",
+        "project.uninstall",
+        "project.artifact",
+        "app.launch",
+        "window.list",
+        "window.close",
+        "ui.inspect",
+        "ui.set_value",
+        "ui.invoke",
+        "file.read",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -561,6 +661,104 @@ def _research_cases() -> list[UtteranceCase]:
                 category="research",
                 source=source,
                 tool_arguments={"topic": text},
+            )
+        )
+    # B31 req 203/204: pause and resume, each against the state it needs - and each
+    # refused, as a receipt, against the state it does not (never a success over nothing).
+    for case_id, text, source, context in (
+        ("r.hold.1", "Araştırmayı duraklat.", "canonical", CTX_RESEARCH_RUNNING),
+        ("r.hold.2", "Araştırmayı beklet.", "paraphrase", CTX_RESEARCH_RUNNING),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="research_pause",
+                expected_tool="research.pause",
+                forbidden_tools=("research.cancel",),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=context,
+                category="research",
+                source=source,
+            )
+        )
+    for case_id, text, source in (
+        ("r.continue.1", "Araştırmaya devam et.", "canonical"),
+        ("r.continue.2", "Araştırmayı sürdür.", "paraphrase"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="research_resume",
+                expected_tool="research.resume",
+                forbidden_tools=("research.start",),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_RESEARCH_PAUSED,
+                category="research",
+                source=source,
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="r.hold.already",
+            utterance="Araştırmayı duraklat.",
+            expected_intent="research_pause",
+            expected_tool="research.pause",
+            expected_response=RESPONSE_REFUSED,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_RESEARCH_PAUSED,
+            category="research",
+            source="regression",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="r.continue.not_paused",
+            utterance="Araştırmaya devam et.",
+            expected_intent="research_resume",
+            expected_tool="research.resume",
+            expected_response=RESPONSE_REFUSED,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_RESEARCH_RUNNING,
+            category="research",
+            source="regression",
+        )
+    )
+    # B31 req 201: "Bir önceki araştırmayı aç." names a RESEARCH, resolved by the same
+    # reference the follow-ups use, never the artifact family's "bunu aç".
+    cases.append(
+        UtteranceCase(
+            case_id="r.open.prev",
+            utterance="Bir önceki araştırmayı aç.",
+            expected_intent="research_open",
+            expected_tool="research.open",
+            expected_target="previous",
+            forbidden_tools=("artifact.open", "research.start"),
+            side_effects=SIDE_EFFECTS_ARTIFACT_OPEN,
+            context=CTX_RESEARCH_FOCUS_B,
+            category="research",
+            source="canonical",
+        )
+    )
+    # B31 req 209: the standing register - a marker ("bundan sonra", "mod") makes it one;
+    # the one-off "teknik anlat" above (r.tech.*) stays the follow-up it was.
+    for case_id, text, source in (
+        ("r.mode.1", "Bundan sonra teknik anlat.", "canonical"),
+        ("r.mode.2", "Teknik modu kapat.", "paraphrase"),
+        ("r.mode.3", "Artık kısa anlat.", "paraphrase"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="research_answer_mode",
+                expected_tool="research.answer_mode",
+                forbidden_tools=("research.explain", "research.start"),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_RESEARCH_FOCUS_B,
+                category="research",
+                source=source,
             )
         )
     # A question about the system itself stays with the ledger even with a research in focus.
@@ -1446,6 +1644,149 @@ def _operator_window_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _operator_input_cases() -> list[UtteranceCase]:
+    """B28 req 92/93/98: a key, a chord and a scroll the owner can SAY, each running the
+    real plan against the fake device: activate, one guarded input, re-observed."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source, effects in (
+        ("op.key.1", "Enter'a bas.", "canonical", SIDE_EFFECTS_OPERATOR_KEY),
+        ("op.key.2", "Escape'e bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
+        ("op.key.3", "Tab tuşuna bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
+        ("op.key.4", "Yukarı ok tuşuna bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
+        ("op.shortcut.1", "Ctrl S'ye bas.", "canonical", SIDE_EFFECTS_OPERATOR_SHORTCUT),
+        ("op.shortcut.2", "Kontrol Z'ye bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_SHORTCUT),
+        ("op.shortcut.3", "Alt F4'e bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_SHORTCUT),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="operator_key",
+                    expected_tool="operator.key",
+                    forbidden_tools=("operator.type",),
+                    side_effects=effects,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    for case_id, text, source in (
+        ("op.scroll.1", "Aşağı kaydır.", "canonical"),
+        ("op.scroll.2", "Yukarı kaydır.", "paraphrase"),
+        ("op.scroll.3", "Biraz aşağıya kaydır.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="operator_scroll",
+                    expected_tool="operator.pointer",
+                    side_effects=SIDE_EFFECTS_OPERATOR_SCROLL,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # B29 req 100: a NAMED button through UI Automation - never a coordinate.
+    for case_id, text, source in (
+        ("op.ui.invoke.1", "Tamam düğmesine tıkla.", "canonical"),
+        ("op.ui.invoke.2", "Kaydet düğmesine bas.", "paraphrase"),
+        ("op.ui.invoke.3", "İptal butonuna tıkla.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="ui_invoke",
+                    expected_tool="operator.ui",
+                    forbidden_tools=("operator.pointer", "operator.key"),
+                    side_effects=SIDE_EFFECTS_OPERATOR_UI_INVOKE,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # B29 req 102: the text a control holds, read through the tree.
+    for case_id, text, source in (
+        ("op.ui.read.1", "Ekrandaki metni oku.", "canonical"),
+        ("op.ui.read.2", "Ne yazıyor?", "paraphrase"),
+        ("op.ui.read.3", "Ekrandaki yazıyı oku.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="ui_read",
+                    expected_tool="operator.inspect",
+                    forbidden_tools=("operator.see",),
+                    side_effects=SIDE_EFFECTS_OPERATOR_UI_READ,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # B29 req 105: the visual rung, answered by the harness's scripted provider from a
+    # genuine (one-pixel) capture.
+    for case_id, text, source in (
+        ("op.see.1", "Ekranda ne var?", "canonical"),
+        ("op.see.2", "Ekranı anlat.", "paraphrase"),
+        ("op.see.3", "Ekranımı tarif et.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="screen_describe",
+                    expected_tool="operator.see",
+                    forbidden_tools=("display.off", "display.wake", "operator.inspect"),
+                    side_effects=SIDE_EFFECTS_OPERATOR_SEE,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # "Düğmeye bas." names no key: a question, never a guess (and no device call).
+    cases.append(
+        UtteranceCase(
+            case_id="op.key.no_key",
+            utterance="Düğmeye bas.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            forbidden_tools=("operator.key",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_WINDOW_FOCUSED,
+            category="operator",
+            source="canonical",
+        )
+    )
+    # No window focused: a clarification before any device call.
+    cases.append(
+        UtteranceCase(
+            case_id="op.key.no_window",
+            utterance="Enter'a bas.",
+            expected_intent="operator_key",
+            expected_tool="operator.key",
+            expected_response=RESPONSE_CLARIFY,
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    return cases
+
+
 def _operator_type_cases() -> list[UtteranceCase]:
     cases: list[UtteranceCase] = []
     for case_id, text, source in (
@@ -1521,6 +1862,9 @@ def _operator_shell_cases() -> list[UtteranceCase]:
         ("op.shell.ip.2", "IP adresim ne?", "paraphrase"),
         ("op.shell.host.1", "Bilgisayarın adı ne?", "canonical"),
         ("op.shell.host.2", "Bilgisayarımın adı nedir?", "paraphrase"),
+        # B30 req 118: the third bounded shell question.
+        ("op.shell.who.1", "Kullanıcı adım ne?", "canonical"),
+        ("op.shell.who.2", "Hangi kullanıcıyla oturum açtım?", "paraphrase"),
     ):
         cases.extend(
             _with_variants(
@@ -1608,13 +1952,170 @@ def _operator_control_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _operator_process_service_cases() -> list[UtteranceCase]:
+    """B30 req 82, 119-122: an application closed by NAME, processes and services asked
+    about by name, and the two policy-gated actions. The harness's desktop lists a Notepad
+    and a Calculator (CTX_WINDOW_FOCUSED), runs a Notepad and a Chrome, and answers every
+    service as Running; the Cloud Core's own policy refuses what the contract does not
+    name BEFORE any device call (the ``op.process.stop.policy`` / ``op.service.policy``
+    cases: no side effect, a refusal receipt)."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("op.app_close.1", "Not Defteri'ni kapat.", "canonical"),
+        ("op.app_close.2", "Hesap makinesini kapat.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="app_close",
+                    expected_tool="operator.app_close",
+                    forbidden_tools=("operator.window_control", "operator.process"),
+                    side_effects=SIDE_EFFECTS_OPERATOR_APP_CLOSE,
+                    context=CTX_WINDOW_FOCUSED,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # An application that is not open: the truthful "already closed", no device close.
+    cases.append(
+        UtteranceCase(
+            case_id="op.app_close.not_running",
+            utterance="Chrome'u kapat.",
+            expected_intent="app_close",
+            expected_tool="operator.app_close",
+            side_effects=frozenset({"window.list"}),
+            context=CTX_WINDOW_FOCUSED,
+            category="operator",
+            source="regression",
+        )
+    )
+    for case_id, text, source in (
+        ("op.process.query.1", "Chrome çalışıyor mu?", "canonical"),
+        ("op.process.query.2", "Hangi uygulamalar açık?", "paraphrase"),
+        ("op.process.query.3", "Not Defteri açık mı?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="process_query",
+                    expected_tool="operator.process",
+                    forbidden_tools=("operator.app_close", "operator.app_open"),
+                    side_effects=SIDE_EFFECTS_OPERATOR_PROCESS_LIST,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    for case_id, text, source in (
+        ("op.process.stop.1", "Chrome'u sonlandır.", "canonical"),
+        ("op.process.stop.2", "Not Defteri'ni sonlandır.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="process_stop",
+                    expected_tool="operator.process",
+                    forbidden_tools=("operator.app_close",),
+                    side_effects=SIDE_EFFECTS_OPERATOR_PROCESS_STOP,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    # PowerShell is an application the owner may OPEN but not one the stop policy names:
+    # refused by the Cloud Core's own reading of the contract, before any device call.
+    cases.append(
+        UtteranceCase(
+            case_id="op.process.stop.policy",
+            utterance="PowerShell'i sonlandır.",
+            expected_intent="process_stop",
+            expected_tool="operator.process",
+            expected_response=RESPONSE_REFUSED,
+            side_effects=SIDE_EFFECTS_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    for case_id, text, source in (
+        ("op.service.query.1", "Yazdırma servisi çalışıyor mu?", "canonical"),
+        ("op.service.query.2", "Spooler servisinin durumu ne?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="service_query",
+                    expected_tool="operator.service",
+                    side_effects=SIDE_EFFECTS_OPERATOR_SERVICE_STATUS,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    for case_id, text, source in (
+        ("op.service.restart.1", "Yazdırma servisini yeniden başlat.", "canonical"),
+        ("op.service.restart.2", "Spooler servisini yeniden başlat.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="service_restart",
+                    expected_tool="operator.service",
+                    forbidden_tools=("operator.shell",),
+                    side_effects=SIDE_EFFECTS_OPERATOR_SERVICE_RESTART,
+                    category="operator",
+                    source=source,
+                )
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="op.service.policy",
+            utterance="Bluetooth servisini yeniden başlat.",
+            expected_intent="service_restart",
+            expected_tool="operator.service",
+            expected_response=RESPONSE_REFUSED,
+            side_effects=SIDE_EFFECTS_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    # The generic repeat keeps "yeniden" when no service is named.
+    cases.append(
+        UtteranceCase(
+            case_id="op.service.not_repeat",
+            utterance="Yeniden başlat.",
+            expected_intent="repeat",
+            expected_tool=None,
+            expected_response=RESPONSE_CONTROL,
+            forbidden_tools=("operator.service",),
+            side_effects=SIDE_EFFECTS_NONE,
+            category="operator",
+            source="regression",
+        )
+    )
+    return cases
+
+
 def _operator_cases() -> list[UtteranceCase]:
     return [
         *_operator_app_open_cases(),
         *_operator_window_cases(),
         *_operator_type_cases(),
+        *_operator_input_cases(),
         *_operator_shell_cases(),
         *_operator_control_cases(),
+        *_operator_process_service_cases(),
     ]
 
 
@@ -1716,6 +2217,148 @@ def _document_summarize_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _document_b32_cases() -> list[UtteranceCase]:
+    """B32 req 139/141/142/148/150/151/152/169 through the real relay."""
+    cases: list[UtteranceCase] = []
+    # 152: the preview of the focused (already read) document - no device call.
+    for case_id, text, source in (
+        ("doc.preview.1", "Bu belgeyi önizle.", "canonical"),
+        ("doc.preview.2", "Bu dosyanın önizlemesini göster.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_preview",
+                    expected_tool="document.preview",
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_DOCUMENT_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    # 148: full text over the index (rapor.pdf names Hetzner) - no device call, no crawl.
+    for case_id, text, source in (
+        ("doc.text.1", "İçinde Hetzner geçen belgeyi bul.", "canonical"),
+        ("doc.text.2", "Hetzner yazan dosya hangisi?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_find_text",
+                    expected_tool="document.find_text",
+                    forbidden_tools=("file.search",),
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_DOCUMENT_FOCUSED,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    # 151: the duplicate scan lists then hashes; 150: the move needs the proposal first.
+    for case_id, text, source in (
+        ("doc.dupes.1", "Yinelenen dosyaları bul.", "canonical"),
+        ("doc.dupes.2", "Kopya dosyaları bul.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="document_duplicates",
+                    expected_tool="document.duplicates",
+                    forbidden_tools=("document.dedup",),
+                    side_effects=SIDE_EFFECTS_DOCUMENTS_DUPLICATES,
+                    category="documents",
+                    source=source,
+                )
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="doc.dedup.no_plan",
+            utterance="Kopyaları çöp kutusuna gönder.",
+            expected_intent="document_dedup",
+            expected_tool="document.dedup",
+            expected_response=RESPONSE_CLARIFY,
+            forbidden_tools=("document.duplicates",),
+            side_effects=SIDE_EFFECTS_NONE,
+            category="documents",
+            source="regression",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="doc.dedup.after_plan",
+            utterance="Kopyaları çöp kutusuna gönder.",
+            expected_intent="document_dedup",
+            expected_tool="document.dedup",
+            preceding_turns=(("Yinelenen dosyaları bul.", "document.duplicates"),),
+            side_effects=SIDE_EFFECTS_DOCUMENTS_DUPLICATES | SIDE_EFFECTS_DOCUMENTS_TRASH,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # 141/139: the picture's text (already read) and its headers.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.image.text",
+            utterance="Görseldeki metni oku.",
+            expected_intent="image_text",
+            expected_tool="document.read",
+            forbidden_tools=("operator.inspect", "operator.see"),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_IMAGE_FOCUSED,
+            category="documents",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="doc.image.meta",
+            utterance="Fotoğrafın bilgilerini oku.",
+            expected_intent="image_metadata",
+            expected_tool="document.inspect",
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_IMAGE_FOCUSED,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # 142: an archive focused as a file - inspected, never extracted.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.archive.inspect",
+            utterance="Arşivin içinde ne var?",
+            expected_intent="document_inspect",
+            expected_tool="document.inspect",
+            forbidden_tools=("document.read",),
+            side_effects=SIDE_EFFECTS_DOCUMENTS_INSPECT,
+            context=CTX_ARCHIVE_FOCUSED,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # 169: the two-documents phrasing.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.cmp.two",
+            utterance="Bu iki dokümanı karşılaştır.",
+            expected_intent="document_compare",
+            expected_tool="document.compare",
+            side_effects=SIDE_EFFECTS_DOCUMENTS_COMPARE,
+            context=CTX_DOCUMENT_FOCUSED,
+            category="documents",
+            source="canonical",
+        )
+    )
+    return cases
+
+
 def _document_compare_cases() -> list[UtteranceCase]:
     cases: list[UtteranceCase] = []
     for case_id, text, source in (
@@ -1736,6 +2379,245 @@ def _document_compare_cases() -> list[UtteranceCase]:
                     category="documents",
                     source=source,
                 )
+            )
+        )
+    return cases
+
+
+def _document_b34_cases() -> list[UtteranceCase]:
+    """B34 req 153-167, 170 through the real relay: every mutation journaled, the risky
+    ones proposals until "Uygula.", every applied one undoable. The fake desktop's
+    overlay (tests.documents_support.MUTATED) is what the receipts are read back from."""
+    cases: list[UtteranceCase] = []
+    focus_notes = (("notlar dosyasını bul.", "file.search"),)
+    # 154: a new text file - low risk, applied at once, journaled, undoable.
+    for case_id, text, source in (
+        ("doc.write.new", "gunluk.md adında bir dosya oluştur.", "canonical"),
+        ("doc.write.asr", "gunluk.md adinda bir dosya olustur", "asr_noise"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="document_write",
+                expected_tool="document.write",
+                tool_arguments={"content": "# Günlük\n"},
+                expected={"speech_contains": "oluşturdum"},
+                side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
+                context=CTX_NONE,
+                category="documents",
+                source=source,
+            )
+        )
+    # 155: append - low risk, applied at once.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.append.canonical",
+            utterance="Bu dosyanın sonuna toplantı notu ekle.",
+            expected_intent="document_append",
+            expected_tool="document.append",
+            preceding_turns=focus_notes,
+            expected={"speech_contains": "sonuna ekledim"},
+            side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
+            context=CTX_NONE,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # 153/167: an edit is a proposal - nothing written on the first sentence.
+    for case_id, text, source in (
+        ("doc.edit.canonical", "Bu dosyada Bütçe yerine Tahmin yaz.", "canonical"),
+        ("doc.edit.asr", "bu dosyada butce yerine tahmin yaz", "asr_noise"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="document_edit",
+                expected_tool="document.edit",
+                preceding_turns=focus_notes,
+                expected={"speech_contains": "Uygulayayım mı?"},
+                side_effects=frozenset({"file.search", "file.locate", "file.read"}),
+                context=CTX_NONE,
+                category="documents",
+                source=source,
+            )
+        )
+    # 170: "güncelle ve kaydet" is the same proposal shape with the model's new content.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.edit.update_save",
+            utterance="Bu belgeyi güncelle ve kaydet.",
+            expected_intent="document_edit",
+            expected_tool="document.edit",
+            tool_arguments={"content": "# Yeni\n"},
+            preceding_turns=focus_notes,
+            expected={"speech_contains": "Uygulayayım mı?"},
+            side_effects=frozenset({"file.search", "file.locate"}),
+            context=CTX_NONE,
+            category="documents",
+            source="paraphrase",
+        )
+    )
+    # 166: "Uygula." applies the proposal this session heard - and only then.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.apply.after_edit",
+            utterance="Uygula.",
+            expected_intent="document_apply",
+            expected_tool="document.apply",
+            preceding_turns=(
+                *focus_notes,
+                ("Bu dosyada Bütçe yerine Tahmin yaz.", "document.edit"),
+            ),
+            expected={"speech_contains": "eski hâli yedekte"},
+            side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
+            context=CTX_NONE,
+            category="documents",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="doc.apply.nothing_pending",
+            utterance="Uygula.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            forbidden_tools=("document.apply",),
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="documents",
+            source="regression",
+            regression_issue_id=(
+                "B34: a bare 'uygula' with nothing pending is nobody's confirmation"
+            ),
+        )
+    )
+    # "Vazgeç." with a file change pending discards IT (not a mail draft).
+    cases.append(
+        UtteranceCase(
+            case_id="doc.discard.after_edit",
+            utterance="Vazgeç.",
+            expected_intent="discard",
+            expected_tool="document.discard",
+            preceding_turns=(
+                *focus_notes,
+                ("Bu dosyada Bütçe yerine Tahmin yaz.", "document.edit"),
+            ),
+            expected={"speech_contains": "dokunmadım"},
+            side_effects=frozenset({"file.search", "file.locate", "file.read"}),
+            context=CTX_NONE,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # 156-158: rename / move / copy are proposals.
+    for case_id, text, intent, tool in (
+        (
+            "doc.rename.canonical",
+            "Bu dosyanın adını gunluk-notlari.md yap.",
+            "document_rename",
+            "document.rename",
+        ),
+        ("doc.move.canonical", "Bu dosyayı Masaüstüne taşı.", "document_move", "document.move"),
+        ("doc.copy.canonical", "Bu dosyayı kopyala.", "document_copy", "document.copy"),
+        ("doc.copy.named", "Bu dosyayı yedek.md adıyla kopyala.", "document_copy", "document.copy"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent=intent,
+                expected_tool=tool,
+                preceding_turns=focus_notes,
+                expected={"speech_contains": "Uygulayayım mı?"},
+                side_effects=frozenset({"file.search", "file.locate"}),
+                context=CTX_NONE,
+                category="documents",
+                source="canonical",
+            )
+        )
+    # 160: undo of the last applied change (the write above), read back.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.undo.after_append",
+            utterance="Son değişikliği geri al.",
+            expected_intent="document_undo",
+            expected_tool="document.undo",
+            preceding_turns=(
+                *focus_notes,
+                ("Bu dosyanın sonuna toplantı notu ekle.", "document.append"),
+            ),
+            expected={"speech_contains": "Geri aldım"},
+            side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
+            context=CTX_NONE,
+            category="documents",
+            source="canonical",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="doc.undo.nothing",
+            utterance="Son değişikliği geri al.",
+            expected_intent="document_undo",
+            expected_tool="document.undo",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "nothing_to_undo"},
+            side_effects=SIDE_EFFECTS_NONE,
+            context=CTX_NONE,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # 164: the version history of the focused file.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.versions.canonical",
+            utterance="Bu dosyanın sürüm geçmişini göster.",
+            expected_intent="document_versions",
+            expected_tool="document.versions",
+            preceding_turns=focus_notes,
+            expected={"speech_contains": "kayıtlı bir değişiklik yok"},
+            side_effects=frozenset({"file.search", "file.locate"}),
+            context=CTX_NONE,
+            category="documents",
+            source="canonical",
+        )
+    )
+    # An Office document is never edited byte by byte: refused by name, nothing touched.
+    cases.append(
+        UtteranceCase(
+            case_id="doc.edit.office_refused",
+            utterance="Bu belgeyi güncelle ve kaydet.",
+            expected_intent="document_edit",
+            expected_tool="document.edit",
+            tool_arguments={"content": "x"},
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "not_text"},
+            side_effects=frozenset({"file.locate"}),
+            context=CTX_PPTX_FOCUSED,
+            category="documents",
+            source="regression",
+        )
+    )
+    # The neighbours keep their owners (measured 2026-09-15 before the matchers were written).
+    for case_id, text, intent, tool in (
+        ("doc.neg.mail_delete_is_not_a_file", "Tüm mailleri sil.", "none", None),
+        ("doc.neg.type_text_stays_operator", "Buraya merhaba yaz.", "type_text", "operator.type"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent=intent,
+                expected_tool=tool,
+                expected_response=RESPONSE_NONE if tool is None else RESPONSE_OK,
+                forbidden_tools=("document.delete", "document.edit", "document.write"),
+                side_effects=SIDE_EFFECTS_NONE if tool is None else SIDE_EFFECTS_OPERATOR_TYPE,
+                context=CTX_NONE if tool is None else CTX_WINDOW_FOCUSED,
+                category="documents",
+                source="regression",
             )
         )
     return cases
@@ -1863,21 +2745,25 @@ def _document_negative_cases() -> list[UtteranceCase]:
             )
         )
     )
-    # "Bu dosyayı sil." reaches no tool and no device capability at all — there is no
-    # delete/move/write tool in M20 (ADR-0083 decision 7); the router resolves nothing.
+    # "Bu dosyayı sil." reached no tool at all until B34 (ADR-0083 decision 7). It is a
+    # PROPOSAL now (B34 req 159/166): the Recycle Bin with a backup, after the owner's
+    # word - and still NOT an act on the first sentence: nothing on the device moves.
     cases.extend(
         _with_variants(
             UtteranceCase(
                 case_id="doc.neg.delete",
                 utterance="Bu dosyayı sil.",
-                expected_intent="none",
-                expected_tool=None,
-                expected_response=RESPONSE_NONE,
-                side_effects=SIDE_EFFECTS_NONE,
+                expected_intent="document_delete",
+                expected_tool="document.delete",
+                expected={"speech_contains": "Uygulayayım mı?"},
+                forbidden_tools=("document.dedup",),
+                side_effects=frozenset({"file.locate"}),
                 context=CTX_FILE_FOCUSED,
                 category="documents",
                 source="canonical",
-                regression_issue_id="ADR-0083 decision 7",
+                regression_issue_id=(
+                    "ADR-0083 decision 7 -> B34 (ADR-0141): a proposal, never an act"
+                ),
             )
         )
     )
@@ -1909,6 +2795,8 @@ def _documents_cases() -> list[UtteranceCase]:
         *_document_read_cases(),
         *_document_summarize_cases(),
         *_document_compare_cases(),
+        *_document_b32_cases(),
+        *_document_b34_cases(),
         *_document_inspect_cases(),
         *_document_answer_cases(),
         *_document_common_points_cases(),
@@ -1989,6 +2877,45 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
                     expected_intent="mail_thread",
                     expected_tool="mail.thread",
                     context=CTX_MESSAGE_FOCUSED,
+                    category="mail_calendar",
+                    source=source,
+                )
+            )
+        )
+
+    # B45 (req 347, 348): a focused message's attachments, listed and saved.
+    attachments = [
+        ("mc.attachments.1", "Bu mailin eklerini göster.", "canonical"),
+        ("mc.attachments.2", "Ekte ne var?", "paraphrase"),
+    ]
+    for case_id, text, source in attachments:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_attachments",
+                    expected_tool="mail.attachments",
+                    context=CTX_MESSAGE_FOCUSED,
+                    category="mail_calendar",
+                    source=source,
+                )
+            )
+        )
+    save_attachment = [
+        ("mc.save_attachment.1", "Eki bilgisayarıma kaydet.", "canonical"),
+        ("mc.save_attachment.2", "Bu maildeki eki indir.", "paraphrase"),
+    ]
+    for case_id, text, source in save_attachment:
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_save_attachment",
+                    expected_tool="mail.save_attachment",
+                    context=CTX_MESSAGE_FOCUSED,
+                    side_effects=SIDE_EFFECTS_ARTIFACT_OPEN,
                     category="mail_calendar",
                     source=source,
                 )
@@ -2203,6 +3130,43 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
             )
         )
     )
+    # B46 (req 356, 357): recurrence and reminder words ride on the same PREPARE sentence.
+    for case_id, text, when, summary, source in (
+        (
+            "mc.propose.recurring.1",
+            "Her pazartesi 10'da ekip toplantısı ekle.",
+            "Her pazartesi 10'da",
+            "Ekip toplantısı",
+            "canonical",
+        ),
+        (
+            "mc.propose.weekdays.1",
+            "Hafta içi her gün 9'da stand-up ekle.",
+            "Hafta içi her gün 9'da",
+            "Stand-up",
+            "paraphrase",
+        ),
+        (
+            "mc.propose.reminder.1",
+            "Yarın 15'e diş hekimi ekle, bir saat önce hatırlat.",
+            "Yarın 15'e, bir saat önce hatırlat",
+            "Diş hekimi",
+            "canonical",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="calendar_propose",
+                    expected_tool="calendar.propose",
+                    category="mail_calendar",
+                    source=source,
+                    tool_arguments={"when_spoken": when, "summary": summary},
+                )
+            )
+        )
     cases.extend(
         _with_variants(
             UtteranceCase(
@@ -2590,21 +3554,23 @@ def _artifact_validate_cases() -> list[UtteranceCase]:
 
 def _artifact_negative_cases() -> list[UtteranceCase]:
     cases: list[UtteranceCase] = []
-    # "Sil." reaches no tool at all (M22 spec §5 names five tools, none of them a
-    # delete) — even with a real artifact focused, the router resolves nothing.
+    # "Bunu sil." was M22's deliberate miss: its five tools had no delete. B42 (req 412)
+    # gives the artifact in focus a delete under the owner's policy, and under the default
+    # policy (confirm) the first call only ASKS - so the same sentence now reaches
+    # artifact.delete and deletes nothing, touching no device. Kept as the regression that
+    # proves the change was meant, not drifted into.
     cases.extend(
         _with_variants(
             UtteranceCase(
-                case_id="art.neg.delete",
+                case_id="art.delete.asks_first",
                 utterance="Bunu sil.",
-                expected_intent="none",
-                expected_tool=None,
-                expected_response=RESPONSE_NONE,
+                expected_intent="artifact_delete",
+                expected_tool="artifact.delete",
                 side_effects=SIDE_EFFECTS_NONE,
                 context=CTX_ARTIFACT_FOCUSED,
                 category="artifacts",
-                source="canonical",
-                regression_issue_id="M22 spec §5: no delete tool",
+                source="regression",
+                regression_issue_id="B42 req 412: delete under the owner's policy, asking first",
             )
         )
     )
@@ -3548,6 +4514,58 @@ def _scene_inspect_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _scene_export_cases() -> list[UtteranceCase]:
+    """B44 (req 527): the scene in focus exported; the file stays on the owner's disk."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.export.fbx", "Sahneyi FBX olarak dışa aktar.", "canonical"),
+        ("scene.export.glb", "Sahneyi GLB olarak dışa aktarır mısın?", "paraphrase"),
+        ("scene.export.asr", "sahneyi glb olarak disa aktar", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_export",
+                    expected_tool="scene.export",
+                    side_effects=SIDE_EFFECTS_SCENE_MUTATE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
+def _scene_animate_cases() -> list[UtteranceCase]:
+    """B44 (req 526): the motion words reach scene.animate. The corpus scene is empty, so
+    the tool asks which object - an honest clarification before any device call."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, source in (
+        ("scene.animate.canonical", "Küreye bir animasyon ekle.", "canonical"),
+        ("scene.animate.para", "Küpü canlandır.", "paraphrase"),
+        ("scene.animate.asr", "kupu canlandir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="scene_animate",
+                    expected_tool="scene.animate",
+                    expected_response=RESPONSE_CLARIFY,
+                    side_effects=SIDE_EFFECTS_NONE,
+                    context=CTX_SCENE_BLENDER,
+                    category="creative3d",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
 def _scene_negative_cases() -> list[UtteranceCase]:
     cases: list[UtteranceCase] = []
     # "Sahneyi sil." reaches no tool at all (spec §5's own negative case) - the closed
@@ -3584,20 +4602,20 @@ def _scene_negative_cases() -> list[UtteranceCase]:
             )
         )
     )
-    # An operation outside the vocabulary ("Sahneyi kaydet." - no such tool/intent
-    # exists) reaches no tool: a plain, honest miss, never a guess.
+    # "Sahneyi dışa aktar." was M25's deliberate miss: its vocabulary had no export. B44
+    # (req 527) gives the scene one, so the same sentence now reaches scene.export - kept as
+    # the regression that proves the change was meant, not drifted into.
     cases.append(
         UtteranceCase(
-            case_id="scene.neg.unknown_op",
+            case_id="scene.export.regression",
             utterance="Sahneyi dışa aktar.",
-            expected_intent="none",
-            expected_tool=None,
-            expected_response=RESPONSE_NONE,
-            side_effects=SIDE_EFFECTS_NONE,
+            expected_intent="scene_export",
+            expected_tool="scene.export",
+            side_effects=SIDE_EFFECTS_SCENE_MUTATE,
             context=CTX_SCENE_BLENDER,
             category="creative3d",
             source="regression",
-            regression_issue_id="M25 spec §7: an operation outside the vocabulary is never guessed",
+            regression_issue_id="B44 req 527: the export M25 did not have",
         )
     )
     # "Bunu teknik anlat." stays exactly what M18.2/M21/M22/M23 already made it - the
@@ -3650,6 +4668,8 @@ def _scene_cases() -> list[UtteranceCase]:
         *_scene_camera_cases(),
         *_scene_render_cases(),
         *_scene_inspect_cases(),
+        *_scene_export_cases(),
+        *_scene_animate_cases(),
         *_scene_negative_cases(),
     ]
 
@@ -4747,6 +5767,103 @@ def _creative_export_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _creative_lifecycle_cases() -> list[UtteranceCase]:
+    """B43 (req 492, 509, 511, 512): generation and the photo fix from any room; undo /
+    redo / delivery only with a creative run in focus."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, intent, tool, context, source in (
+        (
+            "creative.generate.canonical",
+            "Bana bir logo üret: mavi bir dalga.",
+            "creative_generate",
+            "creative.generate",
+            CTX_NONE,
+            "canonical",
+        ),
+        (
+            "creative.generate.para",
+            "Bir afiş oluştur: yaz konseri, kırmızı fon.",
+            "creative_generate",
+            "creative.generate",
+            CTX_NONE,
+            "paraphrase",
+        ),
+        (
+            "creative.generate.asr",
+            "bana bir gorsel uret mavi dalga",
+            "creative_generate",
+            "creative.generate",
+            CTX_NONE,
+            "asr_noise",
+        ),
+        (
+            "creative.enhance.canonical",
+            "Bu fotoğrafı düzelt.",
+            "creative_enhance",
+            "creative.enhance",
+            CTX_CREATIVE_PAINT,
+            "canonical",
+        ),
+        (
+            "creative.enhance.para",
+            "Resmi netleştirir misin?",
+            "creative_enhance",
+            "creative.enhance",
+            CTX_CREATIVE_PAINT,
+            "paraphrase",
+        ),
+        (
+            "creative.undo.canonical",
+            "Geri al.",
+            "creative_undo",
+            "creative.undo",
+            CTX_CREATIVE_UNDOABLE,
+            "canonical",
+        ),
+        (
+            "creative.redo.canonical",
+            "Yinele.",
+            "creative_redo",
+            "creative.redo",
+            CTX_CREATIVE_REDOABLE,
+            "canonical",
+        ),
+        (
+            "creative.deliver.canonical",
+            "Bunu bilgisayarıma indir.",
+            "creative_deliver",
+            "creative.deliver",
+            CTX_CREATIVE_PAINT,
+            "canonical",
+        ),
+        (
+            "creative.deliver.paint",
+            "Paint'te göster.",
+            "creative_deliver",
+            "creative.deliver",
+            CTX_CREATIVE_PAINT,
+            "paraphrase",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent=intent,
+                    expected_tool=tool,
+                    side_effects=SIDE_EFFECTS_CREATIVE_DELIVER
+                    if tool == "creative.deliver"
+                    else SIDE_EFFECTS_CREATIVE,
+                    context=context,
+                    category="creative",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
 def _creative_negative_cases() -> list[UtteranceCase]:
     cases: list[UtteranceCase] = []
     # "Orijinali sil." names no creative tool at all (spec §5's own negative case) -
@@ -4842,6 +5959,7 @@ def _creative_cases() -> list[UtteranceCase]:
         *_creative_cleanup_cases(),
         *_creative_design_cases(),
         *_creative_export_cases(),
+        *_creative_lifecycle_cases(),
         *_creative_negative_cases(),
     ]
 
@@ -5409,21 +6527,22 @@ def _native_check_fix_rebuild_cases() -> list[UtteranceCase]:
                 )
             )
         )
-    # ... and with something genuinely wrong and no coding worker connected (spec §9:
-    # the coding-model seam is inert here), the truthful answer is the ERROR ITSELF plus
-    # an explicit statement that the fix was NOT written.
+    # ... and with something genuinely wrong and a device connected (B33 req 470), the
+    # one repair this factory can honestly perform: the source re-rendered from the spec
+    # and the whole build run again ON THE DEVICE, whose verdict becomes the row's. (With
+    # no device the answer is still the error itself and "not written" -
+    # test_voice_native_tools has that twin.)
     cases.append(
         UtteranceCase(
-            case_id="nativeapps.fix.unfixed",
+            case_id="nativeapps.fix.rebuilt_on_device",
             utterance="Hata varsa düzelt.",
             expected_intent="native_fix",
             expected_tool="native.fix",
-            expected_response=RESPONSE_REFUSED,
             expected={
-                "error_class": "dependency_unavailable",
-                "speech_contains": "düzeltmeyi kendi başıma yazamıyorum",
+                "native_state": "verified",
+                "speech_contains": "yeniden derledim",
             },
-            side_effects=SIDE_EFFECTS_NATIVE,
+            side_effects=SIDE_EFFECTS_NATIVE_LIFECYCLE,
             context=CTX_NATIVE_BUILT,
             category="nativeapps",
             source="canonical",
@@ -5450,6 +6569,268 @@ def _native_check_fix_rebuild_cases() -> list[UtteranceCase]:
                     category="nativeapps",
                     source=source,
                 )
+            )
+        )
+    return cases
+
+
+# ------------------------------------------- B35: the owner assigns the system work on itself
+
+
+def _selfdev_cases() -> list[UtteranceCase]:
+    """B35 (req 622/623): "Şu bug'ı kendin düzelt." / "Şu özelliği kendine ekle." are QUEUED
+    rows and a receipt saying so - no device call, no branch in this process, nothing
+    promoted. The speech says both that it was queued and that the owner decides."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, intent, tool, source in (
+        (
+            "selfdev.fix.canonical",
+            "Şu bug'ı kendin düzelt.",
+            "selfdev_fix",
+            "selfdev.defect",
+            "canonical",
+        ),
+        (
+            "selfdev.fix.hata",
+            "Bu hatayı kendin düzelt.",
+            "selfdev_fix",
+            "selfdev.defect",
+            "paraphrase",
+        ),
+        ("selfdev.fix.sen", "Şu hatayı sen düzelt.", "selfdev_fix", "selfdev.defect", "paraphrase"),
+        (
+            "selfdev.fix.coz",
+            "Kendindeki bu hatayı çöz.",
+            "selfdev_fix",
+            "selfdev.defect",
+            "paraphrase",
+        ),
+        (
+            "selfdev.feature.canonical",
+            "Şu özelliği kendine ekle.",
+            "selfdev_feature",
+            "selfdev.feature",
+            "canonical",
+        ),
+        (
+            "selfdev.feature.front",
+            "Kendine şu özelliği ekle.",
+            "selfdev_feature",
+            "selfdev.feature",
+            "paraphrase",
+        ),
+        (
+            "selfdev.feature.yetenek",
+            "Bu yeteneği kendine kazandır.",
+            "selfdev_feature",
+            "selfdev.feature",
+            "paraphrase",
+        ),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent=intent,
+                    expected_tool=tool,
+                    expected={"speech_contains": "onayınızı"},
+                    forbidden_tools=("release.promote", "evolution.control"),
+                    category="selfdev",
+                    source=source,
+                )
+            )
+        )
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="selfdev.status.canonical",
+                utterance="Kendinde ne düzeltiyorsun?",
+                expected_intent="selfdev_status",
+                expected_tool="selfdev.status",
+                expected={"speech_contains": "kuyruk"},
+                category="selfdev",
+                source="canonical",
+            )
+        )
+    )
+    # The neighbours the new block must NOT steal: the evolution switch shares the
+    # self-reference, and a bare "düzelt" is still the memory correction.
+    cases.append(
+        UtteranceCase(
+            case_id="selfdev.neg.evolution_pause_keeps_its_switch",
+            utterance="Kendi kendini geliştirmeyi duraklat.",
+            expected_intent="evolution_pause",
+            expected_tool="evolution.control",
+            expected={"evolution_paused_after": True},
+            forbidden_tools=("selfdev.defect", "selfdev.feature"),
+            category="selfdev",
+            source="canonical",
+        )
+    )
+    return cases
+
+
+def _native_lifecycle_cases() -> list[UtteranceCase]:
+    """B33 (462-471): the lifecycle after the build, each sentence gated on
+    ``native_build_focused`` like check/fix/rebuild, each answered by the DEVICE through
+    the harness's fake (which shows a Notepad window and an empty log - so the receipts
+    below are the honest "opened, UI not read" / "could not verify" / "log empty" ones,
+    measured, not the happy sentences)."""
+    cases: list[UtteranceCase] = []
+    # 462: "Masaüstü uygulamasını aç." - the NATIVE word is what reaches the built
+    # application's launch; the bare "Uygulamayı aç." stays M23's app_factory_open even
+    # with a build (test_voice_native_intents), and the same qualified sentence is M23's
+    # without one (``nativeapps.neg.app_open_without_a_build_is_m23``).
+    for case_id, text, source in (
+        ("nativeapps.win.launch.canonical", "Masaüstü uygulamasını aç.", "canonical"),
+        ("nativeapps.win.launch.run", "Windows uygulamasını çalıştır.", "paraphrase"),
+        ("nativeapps.win.launch.exe", "EXE'yi çalıştır.", "paraphrase"),
+        ("nativeapps.win.launch.program", "Programı başlat.", "paraphrase"),
+        ("nativeapps.win.launch.asr", "masaustu uygulamasini ac", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_launch",
+                    expected_tool="native.launch",
+                    expected={"speech_contains": "açıldı"},
+                    side_effects=SIDE_EFFECTS_NATIVE_LIFECYCLE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # 463-466: the verification is the 26.15 flow; against the fake's Notepad tree it
+    # stops at the first read-back and names it.
+    for case_id, text, source in (
+        ("nativeapps.verify.canonical", "Uygulamayı doğrula.", "canonical"),
+        ("nativeapps.verify.ui", "Arayüzünü test et.", "paraphrase"),
+        ("nativeapps.verify.asr", "uygulamayi dogrula", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_verify",
+                    expected_tool="native.verify",
+                    expected={"speech_contains": "doğrulanamadı"},
+                    side_effects=SIDE_EFFECTS_NATIVE_LIFECYCLE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # 466: the application's own log, read by the device (empty in the fake).
+    for case_id, text, source in (
+        ("nativeapps.log.canonical", "Uygulamanın günlüğünü oku.", "canonical"),
+        ("nativeapps.log.para", "Uygulamanın logunu göster.", "paraphrase"),
+        ("nativeapps.log.asr", "uygulamanin gunlugunu oku", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_log",
+                    expected_tool="native.log",
+                    expected={"speech_contains": "günlüğü"},
+                    side_effects=SIDE_EFFECTS_NATIVE_LIFECYCLE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # 469: spec §6's own negative - removing what this system never installed is refused
+    # BY NAME (the fake device's not_found), never reported as done.
+    for case_id, text, source in (
+        ("nativeapps.uninstall.canonical", "Kurulumu kaldır.", "canonical"),
+        ("nativeapps.uninstall.app", "Uygulamayı kaldır.", "paraphrase"),
+        ("nativeapps.uninstall.asr", "kurulumu kaldir", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_uninstall",
+                    expected_tool="native.uninstall",
+                    expected_response=RESPONSE_REFUSED,
+                    expected={"error_class": "not_found", "speech_contains": "kurulmamış"},
+                    side_effects=SIDE_EFFECTS_NATIVE_LIFECYCLE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # 471: the update is a NEW row at the next version, built on the device, installed.
+    for case_id, text, source in (
+        ("nativeapps.update.canonical", "Uygulamayı güncelle.", "canonical"),
+        ("nativeapps.update.asr", "uygulamayi guncelle", "asr_noise"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="native_update",
+                    expected_tool="native.update",
+                    expected={"native_version": "0.1.1", "speech_contains": "sürümüne güncellendi"},
+                    side_effects=SIDE_EFFECTS_NATIVE_LIFECYCLE,
+                    context=CTX_NATIVE_BUILT,
+                    category="nativeapps",
+                    source=source,
+                )
+            )
+        )
+    # The twins: with NO native build the same words stay where they were (measured
+    # against the live router on 2026-09-15 before the B33 matchers were gated).
+    cases.append(
+        UtteranceCase(
+            case_id="nativeapps.neg.app_open_without_a_build_is_m23",
+            utterance="Masaüstü uygulamasını aç.",
+            expected_intent="app_factory_open",
+            expected_tool="app.open",
+            forbidden_tools=("native.launch",),
+            side_effects=SIDE_EFFECTS_APP_OPEN,
+            context=CTX_APP_SCAFFOLDED,
+            category="nativeapps",
+            source="regression",
+            regression_issue_id=(
+                "B33: 'masaüstü uygulamasını aç' is the built native application's launch "
+                "ONLY while a native build is focused; M23's app.open keeps the sentence "
+                "otherwise (and keeps the bare 'uygulamayı aç' always)"
+            ),
+        )
+    )
+    for case_id, text in (
+        ("nativeapps.neg.verify_without_a_build_is_nothing", "Uygulamayı doğrula."),
+        ("nativeapps.neg.update_without_a_build_is_nothing", "Uygulamayı güncelle."),
+        ("nativeapps.neg.log_without_a_build_is_nothing", "Uygulamanın günlüğünü oku."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=("native.verify", "native.update", "native.log"),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="nativeapps",
+                source="regression",
+                regression_issue_id=(
+                    "B33: the lifecycle verbs need a native build to be about; with none "
+                    "they resolve to nothing rather than to a guess"
+                ),
             )
         )
     return cases
@@ -5739,6 +7120,7 @@ def _nativeapps_cases() -> list[UtteranceCase]:
         *_native_package_cases(),
         *_native_emulator_cases(),
         *_native_check_fix_rebuild_cases(),
+        *_native_lifecycle_cases(),
         *_native_negative_cases(),
     ]
 
@@ -6051,11 +7433,266 @@ def _memory_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _daily_cases() -> list[UtteranceCase]:
+    """B27 req 729-735: the everyday sentences the audit measured as reaching nothing.
+
+    Every case here runs through the relay to a REAL tool, the same way every other family
+    does - so "routes" means the receipt came back, not that an enum value was produced.
+    Requirements 726-728 are covered by ``_clock_cases`` and ``_memory_cases`` already
+    (they routed before this batch; the audit's "yönlenmiyor" for them was measured
+    against a router that has since gained both families).
+    """
+    cases: list[UtteranceCase] = []
+
+    # ------------------------------------------------------------- 729: "Maillerime bak."
+    for case_id, text, source in (
+        ("d.inbox.1", "Maillerime bak.", "canonical"),
+        ("d.inbox.2", "Mail var mı?", "paraphrase"),
+        ("d.inbox.3", "Gelen kutuma bak.", "paraphrase"),
+        ("d.inbox.4", "Postalarımı kontrol et.", "paraphrase"),
+        ("d.inbox.5", "Yeni mail var mı?", "regression"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="mail_inbox",
+                    expected_tool="mail.inbox",
+                    forbidden_tools=("mail.draft",),
+                    category="daily",
+                    source=source,
+                    notes=(
+                        "'Yeni mail var mı?' was read as a request to COMPOSE (found "
+                        "measuring req 729); a question never composes."
+                        if case_id == "d.inbox.5"
+                        else ""
+                    ),
+                )
+            )
+        )
+
+    # ----------------------------------------------------------- 730: "Bu hafta ne var?"
+    for case_id, text, source in (
+        ("d.agenda.1", "Bu hafta ne var?", "canonical"),
+        ("d.agenda.2", "Yarın ne var?", "paraphrase"),
+        ("d.agenda.3", "Bugün programım ne?", "paraphrase"),
+        ("d.agenda.4", "Haftalık programımı söyle.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="calendar_agenda",
+                    expected_tool="calendar.agenda",
+                    forbidden_tools=("calendar.propose", "briefing.morning"),
+                    category="daily",
+                    source=source,
+                    tool_arguments={"when_spoken": text},
+                )
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="d.agenda.collision.greeting",
+            utterance="Günaydın, bugün ne var?",
+            expected_intent="morning_briefing",
+            expected_tool="briefing.morning",
+            forbidden_tools=("calendar.agenda",),
+            category="daily",
+            source="regression",
+            notes="The greeting makes it the briefing (ADR-0091); the agenda steps aside.",
+        )
+    )
+
+    # ------------------------------------------------------ 731: "Toplantıyı iptal et."
+    cases.extend(
+        _with_variants(
+            UtteranceCase(
+                case_id="d.cancel_event.1",
+                utterance="Toplantıyı iptal et.",
+                expected_intent="calendar_cancel",
+                expected_tool="calendar.cancel",
+                expected_response=RESPONSE_REFUSED,
+                expected={"error_class": "deletion_not_permitted"},
+                forbidden_tools=("calendar.propose", "alarm.cancel", "routine.cancel"),
+                context=CTX_EVENT_FOCUSED,
+                category="daily",
+                source="canonical",
+                notes="Spec §1: no delete. The refusal is a receipt naming the event.",
+            )
+        )
+    )
+    for case_id, text, source in (
+        ("d.cancel_event.2", "Perşembeki toplantıyı iptal et.", "canonical"),
+        ("d.cancel_event.3", "Yarınki randevuyu iptal et.", "paraphrase"),
+        ("d.cancel_event.4", "Toplantıyı takvimden sil.", "paraphrase"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="calendar_cancel",
+                expected_tool="calendar.cancel",
+                expected_response=RESPONSE_CLARIFY,
+                forbidden_tools=("calendar.propose", "alarm.cancel", "routine.cancel"),
+                category="daily",
+                source=source,
+                notes="No event focused: 'Hangi etkinlik?' - never a guess, never a creation.",
+            )
+        )
+
+    # ----------------------------------------------------- 732: "Araştırmayı iptal et."
+    for case_id, text, source in (
+        ("d.research_cancel.1", "Araştırmayı iptal et.", "canonical"),
+        ("d.research_cancel.2", "Araştırmayı durdur.", "paraphrase"),
+        ("d.research_cancel.3", "Araştırmayı bırak.", "paraphrase"),
+        ("d.research_cancel.4", "Araştırmadan vazgeç.", "paraphrase"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="research_cancel",
+                expected_tool="research.cancel",
+                forbidden_tools=("research.start", "executive.cancel", "operator.cancel"),
+                context=CTX_RESEARCH_RUNNING,
+                category="daily",
+                source=source,
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="d.research_cancel.nothing",
+            utterance="Araştırmayı iptal et.",
+            expected_intent="research_cancel",
+            expected_tool="research.cancel",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "nothing_running"},
+            forbidden_tools=("research.start",),
+            category="daily",
+            source="canonical",
+            notes="Nothing in flight: a refused receipt, never a success over nothing.",
+        )
+    )
+    cases.append(
+        UtteranceCase(
+            case_id="d.research_cancel.negation",
+            utterance="Araştırmayı iptal etme.",
+            expected_intent="none",
+            expected_tool=None,
+            expected_response=RESPONSE_NONE,
+            forbidden_tools=("research.cancel",),
+            context=CTX_RESEARCH_RUNNING,
+            category="daily",
+            source="regression",
+            notes="Turkish negation: 'etme' is 'do NOT'. The running research stays running.",
+        )
+    )
+
+    # ------------------------------------------------------------- 733: "Sesini kıs."
+    for case_id, text, source in (
+        ("d.volume.1", "Sesini kıs.", "canonical"),
+        ("d.volume.2", "Sesi biraz aç.", "paraphrase"),
+        ("d.volume.3", "Sesini yükselt.", "paraphrase"),
+        ("d.volume.4", "Sessize al.", "paraphrase"),
+        ("d.volume.5", "Sesi kapat.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="media_volume",
+                    expected_tool="media.volume",
+                    forbidden_tools=("media.play", "display.off", "display.wake", "alarm.stop"),
+                    side_effects=SIDE_EFFECTS_MEDIA_VOLUME,
+                    context=CTX_MEDIA_PLAYING,
+                    category="daily",
+                    source=source,
+                )
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="d.volume.nothing",
+            utterance="Sesini kıs.",
+            expected_intent="media_volume",
+            expected_tool="media.volume",
+            expected_response=RESPONSE_REFUSED,
+            expected={"error_class": "nothing_playing"},
+            forbidden_tools=("media.play",),
+            category="daily",
+            source="canonical",
+            notes="Nothing playing: the honest refusal, and no device call for a level.",
+        )
+    )
+
+    # ------------------------------------------------------ 734: "Neler yapabilirsin?"
+    for case_id, text, source in (
+        ("d.caps.1", "Neler yapabilirsin?", "canonical"),
+        ("d.caps.2", "Ne yapabiliyorsun?", "paraphrase"),
+        ("d.caps.3", "Yeteneklerin neler?", "paraphrase"),
+        ("d.caps.4", "Hangi konularda yardımcı olabilirsin?", "paraphrase"),
+        ("d.caps.5", "Mail konusunda neler yapabilirsin?", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="capabilities_query",
+                    expected_tool="assistant.capabilities",
+                    forbidden_tools=("capability.request", "capability.status", "operator.status"),
+                    category="daily",
+                    source=source,
+                )
+            )
+        )
+    cases.append(
+        UtteranceCase(
+            case_id="d.caps.collision.genesis_status",
+            utterance="Yetenek durumu ne?",
+            expected_intent="capability_status",
+            expected_tool="capability.status",
+            forbidden_tools=("assistant.capabilities",),
+            category="daily",
+            source="regression",
+            notes="M24's own noun: the bare stem 'yetenek' stays Capability Genesis's.",
+        )
+    )
+
+    # ------------------------------------------------------ 735: "Ekran görüntüsü al."
+    for case_id, text, source in (
+        ("d.shot.1", "Ekran görüntüsü al.", "canonical"),
+        ("d.shot.2", "Ekranın görüntüsünü al.", "paraphrase"),
+        ("d.shot.3", "Screenshot al.", "paraphrase"),
+        ("d.shot.4", "Ekranı yakala.", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent="screenshot_capture",
+                    expected_tool="operator.screenshot",
+                    forbidden_tools=("display.off", "display.wake", "eye.enable", "eye.disable"),
+                    side_effects=SIDE_EFFECTS_SCREENSHOT,
+                    category="daily",
+                    source=source,
+                )
+            )
+        )
+    return cases
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_clock_cases(),
         *_routine_cases(),
         *_memory_cases(),
+        *_daily_cases(),
         *_research_cases(),
         *_alarm_create_cases(),
         *_alarm_control_cases(),
@@ -6064,6 +7701,7 @@ def all_cases() -> list[UtteranceCase]:
         *_eye_cases(),
         *_control_cases(),
         *_evolution_cases(),
+        *_selfdev_cases(),
         *_operator_cases(),
         *_documents_cases(),
         *_mail_calendar_cases(),
@@ -6091,7 +7729,9 @@ __all__ = [
     "CTX_COUNTERBOX_RUNNING",
     "CTX_EYE_DISABLED",
     "CTX_LAMPBOX_RUNNING",
+    "CTX_MEDIA_PLAYING",
     "CTX_NEWS_SOURCE_CONFIGURED",
+    "CTX_RESEARCH_RUNNING",
     "CTX_NONE",
     "CTX_OPERATOR_RUNNING",
     "CTX_RESEARCH_FOCUS_B",

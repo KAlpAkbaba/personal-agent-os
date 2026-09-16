@@ -83,10 +83,11 @@ public sealed class NativeBoundsTests
         // The families are M19's operator, M20's documents, M23's projects and M25's scenes,
         // and M28 adds none: a build is a batch `project.run` of an allowlisted command under a
         // third root. 40 capabilities with -DisplayPower and the browser worker, as
-        // scripts/qualify-staged-update.ps1 asserts, and 45 more with -Operator.
+        // scripts/qualify-staged-update.ps1 asserts, and 49 more with -Operator (45 before B30 added
+        // the process/service four to the operator family).
         var without = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: false);
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
-        Assert.Equal(without.Count + 32 + 7 + 5 + 1, with.Count);
+        Assert.Equal(without.Count + 36 + 14 + 9 + 1, with.Count);
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
         Assert.DoesNotContain("native.build", with, StringComparer.Ordinal);
         Assert.DoesNotContain("native.publish", with, StringComparer.Ordinal);

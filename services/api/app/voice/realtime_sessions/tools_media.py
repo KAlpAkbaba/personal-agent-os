@@ -34,13 +34,17 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_MEDIA_OPENED,
     EVENT_TYPE_MEDIA_STOPPED,
     EVENT_TYPE_MEDIA_UNVERIFIED,
+    EVENT_TYPE_MEDIA_VOLUME_CHANGED,
     SUBSYSTEM_MEDIA,
 )
 from app.logging import get_logger
 from app.media.models import PLAYBACK_STATUS_PLAYING, PLAYBACK_STATUS_UNVERIFIED
 from app.media.playback_service import (
     ERROR_PLAYBACK_UNVERIFIED,
+    VOLUME_DIRECTION_DOWN,
+    VOLUME_DIRECTIONS,
     play_request,
+    set_volume,
     stop_playback,
 )
 from app.voice.errors import VoiceError, VoiceErrorClass
@@ -52,6 +56,9 @@ logger = get_logger("app.voice.realtime_sessions.tools_media")
 
 TOOL_MEDIA_PLAY: Final = "media.play"
 TOOL_MEDIA_STOP: Final = "media.stop"
+#: B27 req 733. The device has ramped media volume for the wake alarm since M18.3 and no
+#: tool let the OWNER touch it - "Sesini kıs." reached nothing.
+TOOL_MEDIA_VOLUME: Final = "media.volume"
 
 MAX_QUERY_CHARS: Final = 200
 
@@ -226,8 +233,60 @@ def media_stop(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _spoken_direction(ctx: ToolContext, arguments: dict[str, Any]) -> str:
+    """Which way: the owner's own verb first (``media_volume_direction`` on the turn),
+    the model's ``direction`` argument only when the router classified nothing."""
+    turn = _turn_record(ctx)
+    spoken = turn.get("media_volume_direction")
+    if isinstance(spoken, str) and spoken in VOLUME_DIRECTIONS:
+        return spoken
+    argued = arguments.get("direction")
+    if isinstance(argued, str) and argued in VOLUME_DIRECTIONS:
+        return argued
+    return VOLUME_DIRECTION_DOWN
+
+
+def media_volume(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Sesini kıs." / "Sesi biraz aç." / "Sessize al." — the playback THIS service opened."""
+    db = _require_db(ctx, TOOL_MEDIA_VOLUME)
+    direction = _spoken_direction(ctx, arguments)
+    level = arguments.get("level")
+    numeric = isinstance(level, int | float) and not isinstance(level, bool)
+    outcome = set_volume(
+        db,
+        ctx.live.get("device_action"),
+        direction=direction,
+        level=float(level) if numeric else None,
+    )
+    if outcome.ok:
+        _ledger(
+            ctx,
+            event_type=EVENT_TYPE_MEDIA_VOLUME_CHANGED,
+            summary=(
+                f"Sahibin açtığı medyanın sesi değişti ({direction}): "
+                f"{outcome.level_from} -> {outcome.level_to}."
+            ),
+            detail={
+                "playback_id": outcome.playback_id,
+                "direction": direction,
+                "level_from": outcome.level_from,
+                "level_to": outcome.level_to,
+            },
+        )
+    return _receipt(
+        ctx,
+        capability=TOOL_MEDIA_VOLUME,
+        requested_state=direction,
+        execution=EXECUTION_EXECUTED if outcome.ok else EXECUTION_REFUSED,
+        terminal=TERMINAL_VERIFIED if outcome.ok else TERMINAL_FAILED,
+        server=outcome.as_dict(),
+        speech=outcome.speech,
+        error_class=outcome.error_class,
+    )
+
+
 def register_media_tools(reg: ToolRegistry) -> ToolRegistry:
-    """Register both tools (ONE line in ``default_registry``)."""
+    """Register all three tools (ONE line in ``default_registry``)."""
     from app.voice.realtime_sessions.tools import ToolSpec
 
     reg.register(
@@ -267,6 +326,27 @@ def register_media_tools(reg: ToolRegistry) -> ToolRegistry:
             handler=media_stop,
         )
     )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MEDIA_VOLUME,
+            description=(
+                "Bu araçla açılan videonun/şarkının SES SEVİYESİNİ değiştirir: 'sesini "
+                "kıs', 'sesi biraz aç', 'sesini yükselt', 'sessize al', 'sesi kapat'. "
+                "'direction' down | up | mute; yönü sahibin sözcüğünden SUNUCU okur. "
+                "Alarmın ya da haber videosunun sesini DEĞİŞTİRMEZ. Hiçbir şey çalmıyorsa "
+                "bunu olduğu gibi söyler. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": list(VOLUME_DIRECTIONS)},
+                    "level": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "additionalProperties": False,
+            },
+            handler=media_volume,
+        )
+    )
     return reg
 
 
@@ -274,7 +354,9 @@ __all__ = [
     "ERROR_PLAYBACK_UNVERIFIED",
     "TOOL_MEDIA_PLAY",
     "TOOL_MEDIA_STOP",
+    "TOOL_MEDIA_VOLUME",
     "media_play",
     "media_stop",
+    "media_volume",
     "register_media_tools",
 ]

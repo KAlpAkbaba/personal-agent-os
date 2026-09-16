@@ -88,15 +88,16 @@ class PackageResult:
     note: str
 
 
-def write_appx_manifest(spec: NativeAppSpec, target_dir: Path) -> Path:
+def appx_manifest_text(spec: NativeAppSpec) -> str:
     """The manifest, escaped by XML's own rules rather than by hoping.
 
     `quoteattr` and `escape` are the standard library's, and they are used because the
     display name is the one field that carries owner-facing text into a file that decides
-    what the package claims to be.
+    what the package claims to be. B33: the same text is scaffolded onto the device
+    (``staging/AppxManifest.xml``) for ``project.package`` to pack.
     """
     identity = f"PagentOS.{spec.slug.replace('-', '')}"
-    manifest = _APPX_TEMPLATE.format(
+    return _APPX_TEMPLATE.format(
         identity=quoteattr(identity),
         version=quoteattr(spec.assembly_version),
         publisher=quoteattr(UNSIGNED_PUBLISHER),
@@ -105,8 +106,11 @@ def write_appx_manifest(spec: NativeAppSpec, target_dir: Path) -> Path:
         executable=quoteattr(f"{spec.slug}.exe"),
         display_attr=quoteattr(spec.display_title),
     )
+
+
+def write_appx_manifest(spec: NativeAppSpec, target_dir: Path) -> Path:
     path = target_dir / "AppxManifest.xml"
-    path.write_text(manifest, encoding="utf-8")
+    path.write_text(appx_manifest_text(spec), encoding="utf-8")
     return path
 
 
@@ -209,6 +213,7 @@ __all__ = [
     "UNSIGNED_PUBLISHER",
     "PackageResult",
     "PackagingError",
+    "appx_manifest_text",
     "make_msix",
     "make_portable_zip",
     "write_appx_manifest",

@@ -302,6 +302,120 @@ def creative_export(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     )
 
 
+# ------------------------------------------------------------ B43: the lifecycle tools
+
+TOOL_CREATIVE_GENERATE: Final = "creative.generate"
+TOOL_CREATIVE_ENHANCE: Final = "creative.enhance"
+TOOL_CREATIVE_UNDO: Final = "creative.undo"
+TOOL_CREATIVE_REDO: Final = "creative.redo"
+TOOL_CREATIVE_DELIVER: Final = "creative.deliver"
+TOOL_CREATIVE_DRIVE: Final = "creative.drive"
+DELIVER_APPLICATIONS: Final[tuple[str, ...]] = ("mspaint",)
+
+
+def creative_generate(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bana bir logo üret: mavi bir dalga." (req 492) - the owner's own sentence is the
+    prompt (the router's ``creative_prompt``); the model's ``prompt`` argument only fills
+    in when the router carried none."""
+    db = _require_db(ctx, TOOL_CREATIVE_GENERATE)
+    service = _service(ctx, TOOL_CREATIVE_GENERATE)
+    turn = _turn_record(ctx)
+    prompt = turn.get("creative_prompt")
+    if not (isinstance(prompt, str) and prompt.strip()):
+        prompt = arguments.get("prompt") if isinstance(arguments.get("prompt"), str) else ""
+    if not prompt.strip():
+        return service.clarification("Neyi üreteyim efendim? Bir cümleyle anlatın.")
+    name = (
+        str(arguments.get("name"))
+        if isinstance(arguments.get("name"), str) and arguments.get("name")
+        else _default_name(ctx, "uretim")
+    )
+    width = int(arguments["width"]) if isinstance(arguments.get("width"), int | float) else 1024
+    height = int(arguments["height"]) if isinstance(arguments.get("height"), int | float) else 1024
+    expectation = (
+        arguments.get("expectation") if isinstance(arguments.get("expectation"), str) else None
+    )
+    return service.generate(
+        db,
+        # The owner's own sentence, without its closing punctuation ("...: mavi bir dalga.").
+        prompt=prompt.strip().rstrip(".!?…").strip(),
+        name=name,
+        width=width,
+        height=height,
+        tool=_resolve_tool(ctx, arguments, default=TOOL_PAINT) or TOOL_PAINT,
+        expectation=expectation,
+        session_id=str(ctx.session_id),
+    )
+
+
+def creative_enhance(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu fotoğrafı düzelt." (req 512 / 494)."""
+    db = _require_db(ctx, TOOL_CREATIVE_ENHANCE)
+    service = _service(ctx, TOOL_CREATIVE_ENHANCE)
+    kind = (
+        arguments.get("kind")
+        if arguments.get("kind") in ("auto", "sharpen", "denoise", "autocontrast")
+        else "auto"
+    )
+    return service.enhance(
+        db, target=_target(ctx, arguments), kind=kind, session_id=str(ctx.session_id)
+    )
+
+
+def creative_undo(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Geri al." with a creative run in focus (req 511)."""
+    db = _require_db(ctx, TOOL_CREATIVE_UNDO)
+    service = _service(ctx, TOOL_CREATIVE_UNDO)
+    return service.undo(db, target=_target(ctx, arguments), session_id=str(ctx.session_id))
+
+
+def creative_redo(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Yinele." / "İleri al." with a creative run in focus (req 511)."""
+    db = _require_db(ctx, TOOL_CREATIVE_REDO)
+    service = _service(ctx, TOOL_CREATIVE_REDO)
+    return service.redo(db, target=_target(ctx, arguments), session_id=str(ctx.session_id))
+
+
+def creative_deliver(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bunu bilgisayarıma indir." / "Paint'te göster." (req 509 / 500): the output
+    becomes an image artifact and is fetched onto the owner's disk through the artifact
+    open path - opened in Paint when the owner named it."""
+    db = _require_db(ctx, TOOL_CREATIVE_DELIVER)
+    service = _service(ctx, TOOL_CREATIVE_DELIVER)
+    turn = _turn_record(ctx)
+    application = turn.get("creative_application")
+    if not (isinstance(application, str) and application in DELIVER_APPLICATIONS):
+        arg = arguments.get("application")
+        application = arg if isinstance(arg, str) and arg in DELIVER_APPLICATIONS else None
+    runtime = ctx.live.get("artifacts_runtime")
+    base_url = getattr(getattr(runtime, "settings", None), "artifact_download_origin", "") or ""
+    return service.deliver(
+        db,
+        ctx.live.get("device_action"),
+        target=_target(ctx, arguments),
+        base_url=base_url,
+        session_id=str(ctx.session_id),
+        application=application,
+    )
+
+
+def creative_drive(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The delivered file driven in the real application by its own shortcuts (req 500,
+    502, 504): the actions are a closed list, the path is the delivery's own."""
+    db = _require_db(ctx, TOOL_CREATIVE_DRIVE)
+    service = _service(ctx, TOOL_CREATIVE_DRIVE)
+    actions = arguments.get("actions")
+    if not isinstance(actions, list) or not actions:
+        return service.clarification("Uygulamada hangi adımları uygulayayım efendim?")
+    return service.drive(
+        db,
+        ctx.live.get("device_action"),
+        target=_target(ctx, arguments),
+        actions=[a for a in actions if isinstance(a, dict | str)][:12],
+        session_id=str(ctx.session_id),
+    )
+
+
 def register_creative_tools(reg: ToolRegistry) -> ToolRegistry:
     from app.voice.realtime_sessions.tools import ToolSpec
 
@@ -441,6 +555,120 @@ def register_creative_tools(reg: ToolRegistry) -> ToolRegistry:
                 "additionalProperties": False,
             },
             handler=creative_export,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CREATIVE_GENERATE,
+            description=(
+                "Sahibin tarif ettiği bir GÖRSELİ ÜRETİR: 'bana bir logo üret: mavi bir dalga', "
+                "'bir afiş oluştur'. Sağlayıcı tanımlı değilse adıyla reddeder. 'prompt' alanına "
+                "sahibin tarifini, 'expectation' alanına görselde görünmesi gerekeni yaz. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "maxLength": 1000},
+                    "name": {"type": "string", "maxLength": 64},
+                    "width": {"type": "integer"},
+                    "height": {"type": "integer"},
+                    "expectation": {"type": "string", "maxLength": 200},
+                    "tool": {"type": "string", "enum": list(TOOLS)},
+                },
+                "additionalProperties": False,
+            },
+            handler=creative_generate,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CREATIVE_ENHANCE,
+            description=(
+                "ODAKTAKİ fotoğrafı/görseli İYİLEŞTİRİR (otomatik kontrast + netlik): "
+                "'bu fotoğrafı düzelt', 'resmi netleştir'. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["auto", "sharpen", "denoise", "autocontrast"],
+                    },
+                    "target": {"type": "string", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+            handler=creative_enhance,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CREATIVE_UNDO,
+            description=(
+                "ODAKTAKİ görsel çalışmasında son adımı GERİ ALIR: 'geri al'. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 200}},
+                "additionalProperties": False,
+            },
+            handler=creative_undo,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CREATIVE_REDO,
+            description=(
+                "ODAKTAKİ görsel çalışmasında geri alınan adımı YİNELER: 'yinele', 'ileri al'. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 200}},
+                "additionalProperties": False,
+            },
+            handler=creative_redo,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CREATIVE_DELIVER,
+            description=(
+                "ODAKTAKİ görsel çalışmasını sahibin BİLGİSAYARINA İNDİRİR (artefakt olarak, "
+                "İndirilenler klasörüne) ve açar: 'bunu bilgisayarıma indir', 'diskime kaydet', "
+                "'Paint'te göster' (application=mspaint). Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "application": {"type": "string", "enum": list(DELIVER_APPLICATIONS)},
+                    "target": {"type": "string", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+            handler=creative_deliver,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CREATIVE_DRIVE,
+            description=(
+                "İndirilmiş görseli GERÇEK uygulamada (Paint/Photoshop/Illustrator) açar ve "
+                "uygulamanın kendi kısayollarıyla adımları uygular: actions = "
+                "[{action: resize|invert|clear|undo|redo|save|select_all|capture, percent?}]. "
+                "Önce creative.deliver çağrılmış olmalı. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "actions": {"type": "array", "items": {"type": "object"}, "maxItems": 12},
+                    "target": {"type": "string", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+            handler=creative_drive,
         )
     )
     return reg

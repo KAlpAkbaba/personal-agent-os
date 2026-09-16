@@ -141,15 +141,24 @@ describe("the six routes, exactly", () => {
     if (absent.kind === "absent") expect(absent.detail).toContain("/v1/mail/drafts/pending");
     apiFetch.mockResolvedValueOnce(new Response("", { status: 500 }));
     const failed = await fetchPendingProposals();
-    expect(failed).toEqual({ kind: "failed", error: "HTTP 500" });
+    expect(failed).toMatchObject({ kind: "failed", error: "HTTP 500" });
+    // B22 req 708-711: and it now carries WHICH failure this was, so a panel can tell
+    // "try again" from "waiting on a key". A 500 with no class stays a plain failure.
+    expect(failed.kind === "failed" && failed.failure?.kind).toBe("failed");
   });
 
-  it("POSTs each of the four actions to its own route, once, with the id as a segment", async () => {
+  it("POSTs each of the six actions to its own route, once, with the id as a segment", async () => {
     const cases: Array<[() => Promise<unknown>, string]> = [
       [() => confirmDraft("d 1"), "/v1/mail/drafts/d%201/confirm"],
       [() => discardDraft("d1"), "/v1/mail/drafts/d1/discard"],
       [() => confirmProposal("p1"), "/v1/calendar/proposals/p1/confirm"],
       [() => discardProposal("p1"), "/v1/calendar/proposals/p1/discard"],
+      // B34: the proposed file changes, through the same pair.
+      [() => approvalClient.confirmMutation("m1"), "/v1/documents/mutations/m1/confirm"],
+      [() => approvalClient.discardMutation("m 2"), "/v1/documents/mutations/m%202/discard"],
+      // B35: the self-development candidates, through the same pair; approve records, never promotes.
+      [() => approvalClient.approveCandidate("c1"), "/v1/selfdev/defects/c1/approve"],
+      [() => approvalClient.rejectCandidate("c 2"), "/v1/selfdev/defects/c%202/reject"],
     ];
     for (const [call, expected] of cases) {
       apiFetch.mockReset();
@@ -161,8 +170,17 @@ describe("the six routes, exactly", () => {
       expect(init.method).toBe("POST");
       expect(init.body).toBeUndefined(); // the gate takes the id and the session, nothing this page could add
     }
-    // The client object the page hands the hook is these four and no other.
-    expect(Object.keys(approvalClient).toSorted()).toEqual(["confirmDraft", "confirmProposal", "discardDraft", "discardProposal"]);
+    // The client object the page hands the hook is these eight and no other.
+    expect(Object.keys(approvalClient).toSorted()).toEqual([
+      "approveCandidate",
+      "confirmDraft",
+      "confirmMutation",
+      "confirmProposal",
+      "discardDraft",
+      "discardMutation",
+      "discardProposal",
+      "rejectCandidate",
+    ]);
   });
 
   it("reads the receipt from either shape, and never invents a state", async () => {

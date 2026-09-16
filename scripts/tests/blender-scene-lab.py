@@ -69,6 +69,22 @@ def _ensure_under_root(path: Path, root: Path) -> None:
         raise ValueError(f"{path} does not resolve inside the fixture root {root}")
 
 
+def _signature_ok(fmt: str, content: bytes) -> bool:
+    """The device's own format signature check (SceneInspection.SignatureOk), restated."""
+    import struct
+
+    if fmt == "glb":
+        return (
+            len(content) >= 12
+            and content[:4] == b"glTF"
+            and struct.unpack("<I", content[4:8])[0] == 2
+            and struct.unpack("<I", content[8:12])[0] == len(content)
+        )
+    if fmt == "fbx":
+        return content[:21] == b"Kaydara FBX Binary  \x00"
+    return False
+
+
 def run_driver(blender_exe: Path, plan_path: Path, out_path: Path) -> subprocess.CompletedProcess:
     argv = [
         str(blender_exe),
@@ -139,8 +155,21 @@ def build_plan() -> ScenePlan:
                     "metallic": 0.1,
                     "roughness": 0.6,
                 },
-                {"op": "set_light", "name": "Gunes", "energy": 3.0},
+                {"op": "set_light", "name": "Gunes", "energy": 3.0, "color": [1.0, 0.85, 0.7]},
+                {"op": "set_camera", "name": "Kamera", "look_at": "Kure", "lens": 35.0},
+                {"op": "set_frames", "start": 1, "end": 24, "fps": 24},
+                {
+                    "op": "animate",
+                    "name": "Kup",
+                    "channel": "location",
+                    "keyframes": [
+                        {"frame": 1, "value": [2.5, 0.0, 0.0]},
+                        {"frame": 24, "value": [2.5, 0.0, 2.0]},
+                    ],
+                },
                 {"op": "render", "width": 320, "height": 240, "engine": "workbench"},
+                {"op": "export", "format": "glb"},
+                {"op": "export", "format": "fbx"},
                 {"op": "inspect"},
             ],
         }
@@ -271,14 +300,17 @@ def main() -> int:
         evidence["inspection"] = inspection
         evidence["driver_errors"] = inspection.get("errors") or []
 
-        blend_path = root / "demo.blend"
+        # The driver saves ONE scene file, always scene.blend (blender_driver.main); B44
+        # found this lab still looking for the plan's scene word and failing on that.
+        blend_path = root / "scene.blend"
         evidence["blend_file_present"] = blend_path.exists()
         evidence["blend_file_bytes"] = blend_path.stat().st_size if blend_path.exists() else 0
 
         render_info = inspection.get("render")
         render_bytes: bytes | None = None
         if render_info and render_info.get("path"):
-            render_path = Path(render_info["path"])
+            # Relative to the project folder, as the device reads it (B44).
+            render_path = root / str(render_info["path"])
             if render_path.exists():
                 render_bytes = render_path.read_bytes()
                 evidence["render_path"] = str(render_path)
@@ -293,7 +325,26 @@ def main() -> int:
             "non_trivial" if render_check is None else render_check.as_dict()
         )
 
-        cmp_result = compare(plan, inspection, render_bytes=render_bytes)
+        # B44 (req 527): every export the driver declared, re-hashed and its signature read
+        # here - the device's own check, restated independently of the driver.
+        device_exports: list[dict] = []
+        for declared in inspection.get("exports") or []:
+            export_path = root / str(declared.get("path") or "")
+            data = export_path.read_bytes() if export_path.exists() else b""
+            digest = hashlib.sha256(data).hexdigest()
+            signature = _signature_ok(str(declared.get("format")), data)
+            device_exports.append(
+                {
+                    "format": declared.get("format"),
+                    "path": declared.get("path"),
+                    "bytes": len(data),
+                    "sha256": digest,
+                    "verified": bool(data) and digest == declared.get("sha256") and signature,
+                }
+            )
+        evidence["exports_checked"] = device_exports
+
+        cmp_result = compare(plan, inspection, render_bytes=render_bytes, device_exports=device_exports)
         evidence["compare"] = cmp_result.as_dict()
 
         problems: list[str] = []

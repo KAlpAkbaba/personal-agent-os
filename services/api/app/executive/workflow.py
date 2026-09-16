@@ -31,7 +31,11 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from app.executive.activities import run_step_activity, settle_crashed_step_activity
+    from app.executive.activities import (
+        mark_awaiting_approval_activity,
+        run_step_activity,
+        settle_crashed_step_activity,
+    )
     from app.executive.refs import parse_reference
     from app.executive.spec import MAX_RUN_WALL_CLOCK_S, MAX_TIMEOUT_S
 
@@ -42,7 +46,11 @@ MAX_CONCURRENT_STEPS = 3
 def _step_dependencies(step: dict[str, Any]) -> set[str]:
     deps: set[str] = set()
     precondition = step.get("precondition") or {}
-    if precondition.get("check") == "step_done" and precondition.get("arg"):
+    if precondition.get("check") in (
+        "step_done",
+        "step_failed",
+        "step_verified",
+    ) and precondition.get("arg"):
         deps.add(str(precondition["arg"]))
     for value in (step.get("inputs") or {}).values():
         if not isinstance(value, str):
@@ -51,6 +59,11 @@ def _step_dependencies(step: dict[str, Any]) -> set[str]:
         if ref is not None:
             deps.add(ref[0])
     return deps
+
+
+def _needs_approval(step: dict[str, Any]) -> bool:
+    """B38 (req 544): a step whose precondition is the owner's yes."""
+    return (step.get("precondition") or {}).get("check") == "owner_approval"
 
 
 def _crash_reason(exc: BaseException) -> str:
@@ -118,6 +131,9 @@ class ExecutiveWorkflow:
         self._amendments: list[dict[str, Any]] = []
         self._current_step: str | None = None
         self._status_note = "planlandı"
+        # B38 (req 544): the steps the owner approved (signal) and the one parked now.
+        self._approved: set[str] = set()
+        self._awaiting_step: str | None = None
 
     # --------------------------------------------------------------------- signals
 
@@ -138,6 +154,12 @@ class ExecutiveWorkflow:
         self._retry_requests.add(step_id)
 
     @workflow.signal
+    def approve_step(self, step_id: str) -> None:
+        """B38 (req 544): the owner's yes for ONE step - recorded on the run row by
+        ``app.executive.service.approve_step_db`` before this signal was sent."""
+        self._approved.add(step_id)
+
+    @workflow.signal
     def amend(self, step: dict[str, Any]) -> None:
         """A step ALREADY validated and persisted by ``app.executive.service.amend_run``
         before this signal was sent (module docstring) — the workflow only learns its
@@ -153,6 +175,7 @@ class ExecutiveWorkflow:
             "paused": self._paused,
             "cancelled": self._cancelled,
             "note": self._status_note,
+            "awaiting_step": self._awaiting_step,
         }
 
     @workflow.query
@@ -236,6 +259,46 @@ class ExecutiveWorkflow:
             ready = {
                 sid for sid, view in steps.items() if sid not in settled and view.deps <= settled
             } | retry_now
+            # B38 (req 544): a ready step that needs the owner's yes is HELD, not run - the
+            # row is told which step waits, and the loop waits for approve_step (or cancel,
+            # or something else to do). Other ready steps still run.
+            held = {
+                sid
+                for sid in ready
+                if _needs_approval(raw_by_id[sid]) and sid not in self._approved
+            }
+            if held:
+                parked = sorted(held)[0]
+                if self._awaiting_step != parked:
+                    self._awaiting_step = parked
+                    await workflow.execute_activity(
+                        mark_awaiting_approval_activity,
+                        args=[request.run_id, parked],
+                        start_to_close_timeout=timedelta(seconds=30),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                ready = ready - held
+                if not ready:
+                    self._status_note = f"onay bekleniyor: {parked}"
+                    remaining = deadline - workflow.now()
+                    if remaining.total_seconds() <= 0:
+                        break
+                    held_now = frozenset(held)
+                    try:
+                        await workflow.wait_condition(
+                            lambda held_now=held_now: (
+                                self._cancelled
+                                or bool(self._approved & held_now)
+                                or bool(self._retry_requests)
+                                or bool(self._amendments)
+                            ),
+                            timeout=remaining,
+                        )
+                    except TimeoutError:
+                        break
+                    continue
+            else:
+                self._awaiting_step = None
             if not ready:
                 remaining = deadline - workflow.now()
                 if remaining.total_seconds() <= 0:

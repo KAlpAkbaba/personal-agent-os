@@ -128,7 +128,9 @@ def enroll_and_store_owner(
     }
     if row is None:
         row = SpeakerProfile(
-            label=label, model_id=model_id, embedding_ref=key,
+            label=label,
+            model_id=model_id,
+            embedding_ref=key,
             enrollment_metadata_json=metadata,
         )
         session.add(row)
@@ -174,9 +176,7 @@ def verify_owner(
     )
 
 
-def get_speaker_profile_row(
-    session: Session, *, label: str = OWNER_LABEL
-) -> SpeakerProfile | None:
+def get_speaker_profile_row(session: Session, *, label: str = OWNER_LABEL) -> SpeakerProfile | None:
     return session.execute(
         select(SpeakerProfile).where(SpeakerProfile.label == label)
     ).scalar_one_or_none()
@@ -194,16 +194,20 @@ def store_benchmark_report(
     store: S3ObjectStore, report: BenchmarkReport, *, prefix: str
 ) -> dict[str, str]:
     json_key, md_key = _report_keys(prefix, report.kind)
-    store.put(json_key, json.dumps(report.to_dict(), ensure_ascii=False).encode("utf-8"),
-              content_type="application/json")
-    store.put(md_key, report_to_markdown(report).encode("utf-8"),
-              content_type="text/markdown; charset=utf-8")
+    store.put(
+        json_key,
+        json.dumps(report.to_dict(), ensure_ascii=False).encode("utf-8"),
+        content_type="application/json",
+    )
+    store.put(
+        md_key,
+        report_to_markdown(report).encode("utf-8"),
+        content_type="text/markdown; charset=utf-8",
+    )
     return {"json_key": json_key, "markdown_key": md_key}
 
 
-def load_benchmark_report(
-    store: S3ObjectStore, *, kind: str, prefix: str
-) -> dict | None:
+def load_benchmark_report(store: S3ObjectStore, *, kind: str, prefix: str) -> dict | None:
     json_key, _ = _report_keys(prefix, kind)
     try:
         raw = store.get(json_key)

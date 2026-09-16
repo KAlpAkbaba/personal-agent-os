@@ -18,13 +18,21 @@
  * same class of lie as animating work that is not happening.
  */
 
+import { type Failure, classifyFailure, failureFromBody } from "../errors/failure";
 import { type FocusState, parseFocusState } from "../research/focus";
 import { UnauthorizedError, apiFetch } from "../session";
 
 export type Loaded<T> =
   | { kind: "loading" }
   | { kind: "ok"; value: T; at: number }
-  | { kind: "failed"; error: string }
+  /**
+   * B22 req 705/708-711: `error` is what a reader sees and `failure` is what the panel
+   * DECIDES with. The server answers a failure with its own class and a Turkish sentence
+   * (`app.errors.catalog`); this used to throw both away and keep "HTTP 500", which tells
+   * the owner that something went wrong, not what, and above all not whether pressing
+   * anything would help.
+   */
+  | { kind: "failed"; error: string; failure?: Failure }
   /**
    * The endpoint is not on this server yet (a 404 from a route a parallel
    * track is still building).
@@ -49,10 +57,29 @@ class NotFoundError extends Error {
   }
 }
 
+/** A non-OK answer, carrying what the server said about it. */
+class ApiFailure extends Error {
+  constructor(readonly failure: Failure) {
+    super(failure.message);
+    this.name = "ApiFailure";
+  }
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const response = await apiFetch(path);
   if (response.status === 404) throw new NotFoundError(path);
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (!response.ok) {
+    // Read the body BEFORE deciding what to say: it holds the class the panel needs to
+    // tell "waiting on a key" from "try again" (req 708/709), and the Turkish sentence
+    // the owner should read instead of a status line.
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    throw new ApiFailure(failureFromBody(body, response.status));
+  }
   return (await response.json()) as T;
 }
 
@@ -65,7 +92,16 @@ export async function load<T>(path: string, pick: (raw: unknown) => T): Promise<
     if (err instanceof NotFoundError) {
       return { kind: "absent", detail: `Bu Cloud Core sürümünde ${path} yok (HTTP 404).` };
     }
-    return { kind: "failed", error: err instanceof Error ? err.message : String(err) };
+    if (err instanceof ApiFailure) {
+      // `error` keeps the shape every panel already renders; `failure` is the decision.
+      return {
+        kind: "failed",
+        error: err.failure.status ? `HTTP ${err.failure.status}` : err.failure.message,
+        failure: err.failure,
+      };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { kind: "failed", error: message, failure: classifyFailure("", message, 0) };
   }
 }
 
@@ -401,9 +437,9 @@ export const fetchAlarms = () =>
   load<WakeAlarm[]>("/v1/alarms", (raw) => arrayAt<unknown>(raw, "alarms").map(parseAlarm));
 
 /**
- * The ambient policy (spec §3.9). Read-only here, as everything in the cockpit
- * is: the policy is changed by voice or by the API that owns it, never from
- * this page. **Nothing in the renderer decides physical policy.**
+ * The ambient policy (spec §3.9). Since B48 the owner may flip its four switches from
+ * the panel ({@link updateAmbientPolicy}), which writes through the same API the voice
+ * tool uses; the Cloud Core decides. **Nothing in the renderer decides physical policy.**
  */
 export type AmbientPolicy = {
   auto_off_enabled: boolean | null;
@@ -436,6 +472,38 @@ export const fetchAmbientPolicy = () =>
       quiet_hours: str(p, "quiet_hours"),
     };
   });
+
+/** The four ambient switches an owner may flip from the panel (B48 req 331, 332). */
+export type AmbientToggle = "auto_off_enabled" | "off_when_away" | "off_when_asleep" | "wake_on_return";
+
+export const AMBIENT_TOGGLES: readonly AmbientToggle[] = [
+  "auto_off_enabled",
+  "off_when_away",
+  "off_when_asleep",
+  "wake_on_return",
+];
+
+/**
+ * PUT one switch to `/v1/ambient/policy` — the same write the voice tool makes. Resolves with
+ * the Cloud Core's own sentence, or the failure in words; never throws.
+ */
+export async function updateAmbientPolicy(
+  field: AmbientToggle,
+  value: boolean,
+): Promise<{ ok: boolean; speech: string }> {
+  try {
+    const response = await apiFetch("/v1/ambient/policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [field]: value }),
+    });
+    if (!response.ok) return { ok: false, speech: `Politika güncellenemedi (HTTP ${response.status}).` };
+    const body = (await response.json()) as { speech?: unknown };
+    return { ok: true, speech: typeof body.speech === "string" ? body.speech : "Politika güncellendi." };
+  } catch (err) {
+    return { ok: false, speech: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 /**
  * A device and the status its heartbeat carried (spec §5.3).

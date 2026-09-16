@@ -44,6 +44,7 @@ from app.alarms.tr_time import (
     parse_when_text,
 )
 from app.artifacts.runtime import ArtifactRuntime
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 
 #: Bumped whenever this surface's shape changes (mirrors ROUTINES_VERSION / LEDGER_VERSION).
@@ -141,7 +142,16 @@ async def create_alarm(request: Request, body: CreateAlarmRequest) -> dict[str, 
         else:
             raise UnparsedWhen("either 'when' or 'when_text' is required")
     except UnparsedWhen as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=owner_detail(
+                "validation_error",
+                specific=(
+                    "Söylediğin zamanı kesin olarak yerleştiremedim; "
+                    "saati başka türlü söyler misin?"
+                ),
+            ),
+        ) from exc
 
     def write() -> WakeAlarm:
         with artifacts.session() as session:
@@ -246,7 +256,9 @@ async def put_wake_song(request: Request, body: WakeSongRequest) -> dict[str, An
             try:
                 return alarms_service.set_wake_song(session, url=body.url, title=body.title)
             except alarms_service.InvalidAlarmRequest as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=422, detail=owner_detail("validation_error")
+                ) from exc
 
     return {"wake_song": await asyncio.to_thread(write)}
 
@@ -284,9 +296,9 @@ async def cancel_alarm(
     try:
         payload = await asyncio.to_thread(write)
     except alarms_service.AlarmNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     except IllegalAlarmTransition as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=owner_detail("lifecycle_violation")) from exc
     return {**payload, "speech": alarm_speech.ALARM_CANCELLED_TR}
 
 
@@ -303,7 +315,7 @@ async def stop_alarm(request: Request, alarm_id: uuid.UUID) -> dict[str, Any]:
     try:
         payload = await asyncio.to_thread(write)
     except alarms_service.AlarmNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     return {**payload, "speech": alarm_speech.ALARM_STOPPED_TR}
 
 
@@ -325,9 +337,9 @@ async def snooze_alarm(
     try:
         payload = await asyncio.to_thread(write)
     except alarms_service.AlarmNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     except alarms_service.InvalidAlarmRequest as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=owner_detail("lifecycle_violation")) from exc
     return {
         **payload,
         "speech": alarm_speech.alarm_snoozed_speech(

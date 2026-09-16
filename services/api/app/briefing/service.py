@@ -87,6 +87,7 @@ _UPDATABLE_FIELDS = (
     "include_weather",
     "include_system_status",
     "include_calendar",
+    "include_mail",
     "include_overnight_work",
     "include_news_summary",
     "auto_open_news_video",
@@ -307,6 +308,22 @@ def _calendar_sentence(
     return str(speech) if speech else None
 
 
+def _mail_sentence(session: Session, *, live: dict[str, Any], session_id: str | None) -> str | None:
+    """B45 (req 278, 362): the unread mail, asked rather than assumed. No mail service, no
+    account or a failed read is an absent clause - the calendar's rule - never a guess."""
+    mail_service = live.get("mail_service")
+    if mail_service is None:
+        return None
+    result = mail_service.inbox_summary(session, session_id=session_id)
+    if result.get("execution_status") != "executed":
+        return None
+    unread = [m for m in result.get("messages") or [] if m.get("unread")]
+    if not unread:
+        return str(result.get("speech") or "") or None
+    senders = list(dict.fromkeys(m.get("from_name") or m.get("from_email") or "?" for m in unread))
+    return f"{len(unread)} okunmamış mailiniz var efendim; en yeniler: {', '.join(senders[:3])}."
+
+
 class BriefingService:
     def build(
         self,
@@ -362,6 +379,12 @@ class BriefingService:
             if calendar:
                 sections["calendar"] = calendar
                 sentences.append(calendar)
+
+        if prefs.include_mail:
+            mail = _mail_sentence(session, live=live, session_id=session_id)
+            if mail:
+                sections["mail"] = mail
+                sentences.append(mail)
 
         if prefs.include_overnight_work:
             # req 276, under the same preference as the overnight clause: a research that

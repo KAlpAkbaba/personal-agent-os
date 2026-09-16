@@ -565,7 +565,18 @@ class CapabilityRegistry:
                 )
             current_id = capability.current_skill_version_id
             if current_id == target.id:
-                return _capability_dict(capability)
+                if capability.status == "production":
+                    return _capability_dict(capability)
+                # B36 (req 570): the version that is already current serving AGAIN after
+                # a deactivation - a registered, gate-passed version (registered_at is
+                # checked above), through this one sanctioned path back to production.
+                capability.status = "production"
+                capability.updated_at = _utcnow()
+                session.commit()
+                logger.info("capability_reactivated", capability_id=capability_id)
+                resolved = _capability_dict(capability)
+                resolved["skill_version"] = _skill_version_dict(target)
+                return resolved
             now = _utcnow()
             if current_id is not None:
                 current = session.get(SkillVersion, current_id)

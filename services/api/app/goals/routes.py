@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.artifacts.runtime import ArtifactRuntime
+from app.errors import owner_detail
 from app.goals import service as goals_service
 from app.goals.models import GOAL_HORIZONS, GOAL_STATUSES, Goal
 from app.goals.service import CHECK_KINDS
@@ -248,7 +249,7 @@ async def update_goal(
     try:
         goal = await asyncio.to_thread(write)
     except goals_service.GoalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     return _goal_dict(goal)
 
 
@@ -269,12 +270,18 @@ async def update_status(
     try:
         goal = await asyncio.to_thread(write)
     except goals_service.GoalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     except goals_service.OwnerApprovalRequiredError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=403,
+            detail=owner_detail(
+                "permission_denied",
+                specific="Bu adım için senin onayın gerekiyor efendim.",
+            ),
+        ) from exc
     except ValueError as exc:
         # covers app.goals.state.IllegalGoalTransition (a ValueError subclass)
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=owner_detail("lifecycle_violation")) from exc
     return _goal_dict(goal)
 
 
@@ -289,9 +296,9 @@ async def approve_goal(request: Request, goal_id: uuid.UUID) -> dict[str, Any]:
     try:
         goal = await asyncio.to_thread(write)
     except goals_service.GoalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail=owner_detail("lifecycle_violation")) from exc
     return _goal_dict(goal)
 
 
@@ -310,7 +317,7 @@ async def evaluate_goal(request: Request, goal_id: uuid.UUID) -> dict[str, Any]:
     try:
         result, goal = await asyncio.to_thread(run)
     except goals_service.GoalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     return {**result, "goal": _goal_dict(goal)}
 
 
@@ -327,7 +334,13 @@ async def add_dependency(
     try:
         goal = await asyncio.to_thread(write)
     except goals_service.GoalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=owner_detail("not_found")) from exc
     except goals_service.GoalCycleError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail=owner_detail(
+                "constraint_violation",
+                specific="Bu bağlantı hedefleri bir döngüye sokuyor; kurmadım.",
+            ),
+        ) from exc
     return _goal_dict(goal)

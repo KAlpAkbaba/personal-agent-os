@@ -80,6 +80,8 @@ class MemoryBackend(Protocol):
 
     def pin(self, memory_id: uuid.UUID, *, actor: Actor) -> dict[str, Any]: ...
 
+    def unpin(self, memory_id: uuid.UUID, *, actor: Actor) -> dict[str, Any]: ...
+
     def forget(
         self, memory_id: uuid.UUID, *, actor: Actor, reason: str = "owner_request"
     ) -> dict[str, Any]: ...
@@ -188,6 +190,19 @@ class NativeMemoryBackend:
         with self._session_scope() as session:
             return retrieval.to_payload(service.pin_memory(session, memory_id, actor=actor))
 
+    def unpin(self, memory_id: uuid.UUID, *, actor: Actor) -> dict[str, Any]:
+        with self._session_scope() as session:
+            return retrieval.to_payload(service.unpin_memory(session, memory_id, actor=actor))
+
+    # ----------------------------------------------------------- B37: the index
+    def embedding_coverage(self) -> dict[str, Any]:
+        with self._session_scope() as session:
+            return lifecycle.embedding_coverage(session, self.embedder)
+
+    def reindex_missing(self) -> int:
+        with self._session_scope() as session:
+            return lifecycle.reindex_missing(session, self.embedder)
+
     def forget(
         self, memory_id: uuid.UUID, *, actor: Actor, reason: str = "owner_request"
     ) -> dict[str, Any]:
@@ -209,9 +224,7 @@ class NativeMemoryBackend:
                 {
                     **retrieval.to_payload(item.memory),
                     "score": round(item.score, 6),
-                    "score_components": {
-                        name: round(v, 6) for name, v in item.components.items()
-                    },
+                    "score_components": {name: round(v, 6) for name, v in item.components.items()},
                 }
                 for item in scored
             ]
@@ -280,6 +293,9 @@ class Mem0Backend:
 
     def pin(self, memory_id: uuid.UUID, **_kwargs: Any) -> dict[str, Any]:
         raise _not_implemented("pin")
+
+    def unpin(self, memory_id: uuid.UUID, **_kwargs: Any) -> dict[str, Any]:
+        raise _not_implemented("unpin")
 
     def forget(self, memory_id: uuid.UUID, **_kwargs: Any) -> dict[str, Any]:
         raise _not_implemented("forget")

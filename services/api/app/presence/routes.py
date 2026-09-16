@@ -19,12 +19,14 @@ never a lesser or presence-derived credential.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import uuid
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.artifacts.runtime import ArtifactRuntime
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.presence import service as presence_service
 from app.presence.engine import DEFAULT_POLICY, get_engine
@@ -92,6 +94,47 @@ async def get_presence_policy() -> dict[str, Any]:
     }
 
 
+@router.get("/history")
+async def get_presence_history(
+    request: Request, limit: Annotated[int, Query(ge=1, le=200)] = 50
+) -> dict[str, Any]:
+    """B48 (req 330): the owner's presence over time - the durable transitions the ledger
+    recorded (newest first) and the engine's recent in-memory episodes. Assertions, never
+    facts: every entry carries its confidence and the sources it rested on."""
+    from app.ledger import service as ledger_service
+    from app.ledger.vocabulary import EVENT_TYPE_PRESENCE_STATE_CHANGED
+
+    artifacts = _artifacts(request)
+
+    def read() -> list[dict[str, Any]]:
+        with artifacts.session() as session:
+            rows = ledger_service.query(
+                session, event_types=[EVENT_TYPE_PRESENCE_STATE_CHANGED], limit=limit
+            )
+            return [
+                {
+                    "at": row.occurred_at.isoformat() if row.occurred_at else None,
+                    "state": (row.detail_json or {}).get("to_state"),
+                    "confidence": (row.detail_json or {}).get("confidence"),
+                    "reason": (row.detail_json or {}).get("reason"),
+                    "sources": (row.detail_json or {}).get("signal_sources") or [],
+                }
+                for row in rows
+            ]
+
+    transitions = await asyncio.to_thread(read)
+    episodes = [
+        {
+            "state": episode.state.value,
+            "start_at": episode.start_at.isoformat(),
+            "end_at": episode.end_at.isoformat(),
+            "confidence": episode.confidence,
+        }
+        for episode in get_engine().episodes(limit=min(limit, 50))
+    ]
+    return {"transitions": transitions, "episodes": episodes}
+
+
 @router.get("/state")
 async def get_presence_state(request: Request) -> dict[str, Any]:
     artifacts = _artifacts(request)
@@ -120,9 +163,15 @@ async def post_observation(request: Request, body: dict[str, Any]) -> dict[str, 
     try:
         observation_dict, assertion_dict, changed = await asyncio.to_thread(write)
     except ObservationRejected as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     except presence_service.EyeDisabledError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=409,
+            detail=owner_detail(
+                "lifecycle_violation",
+                specific="Göz kapalı; açmadan gözlem alamam.",
+            ),
+        ) from exc
     return {"observation": observation_dict, "assertion": assertion_dict, "changed": changed}
 
 
@@ -139,6 +188,40 @@ async def post_eye_enable(request: Request, body: EyeActionRequest | None = None
 
     await asyncio.to_thread(write)
     return {"eye_enabled": True}
+
+
+@router.post("/eye/stream-stopped")
+async def post_eye_stream_stopped(
+    request: Request, body: EyeActionRequest | None = None
+) -> dict[str, Any]:
+    """B48 (req 301): the browser tab that ran the camera is going away. Recorded as evidence
+    (``eye.stream_stopped``) so "the camera went quiet" has a reason on the record - and
+    deliberately NOT a disable: the owner's consent is the owner's to withdraw, and a closed
+    tab is not a decision."""
+    from app.ledger import service as ledger_service
+    from app.ledger.vocabulary import EVENT_TYPE_EYE_STREAM_STOPPED, SUBSYSTEM_PRESENCE
+
+    artifacts = _artifacts(request)
+    reason = (body.reason if body else "") or "tab_closed"
+
+    def write() -> None:
+        with artifacts.session() as session:
+            ledger_service.record(
+                session,
+                ledger_service.ActivityEvent(
+                    event_type=EVENT_TYPE_EYE_STREAM_STOPPED,
+                    subsystem=SUBSYSTEM_PRESENCE,
+                    action="stream_stopped",
+                    factual_summary=f"the browser camera stream stopped ({reason[:60]})",
+                    source="web_eye",
+                    # The ledger keeps one row per (source, source_ref); every stop is its own.
+                    source_ref=f"stream-stopped:{uuid.uuid4()}",
+                    detail_json={"reason": reason[:200]},
+                ),
+            )
+
+    await asyncio.to_thread(write)
+    return {"recorded": True}
 
 
 @router.post("/eye/disable")

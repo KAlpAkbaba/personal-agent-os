@@ -17,29 +17,7 @@
 import {
   type CockpitData,
 } from "../../lib/cockpit/useCockpitData";
-import {
-  ALARM_STATE_LABEL,
-  type AmbientPolicy,
-  type EvolutionSupervisorStatus,
-  GOAL_STATUS_LABEL,
-  type Goal,
-  type Health,
-  type LedgerEvent,
-  type Lesson,
-  type Loaded,
-  type MemoryAuditEvent,
-  type Opportunity,
-  type PendingBriefing,
-  PROMOTION_CLASS_LABEL,
-  type ResearchTask,
-  type ShadowReady,
-  TRUTH_KIND_LABEL,
-  VOICE_QUALIFICATION_LABEL,
-  type VoiceQualification,
-  type WakeAlarm,
-  type World,
-  isHealthy,
-} from "../../lib/cockpit/api";
+import { ALARM_STATE_LABEL, AMBIENT_TOGGLES, GOAL_STATUS_LABEL, isHealthy, PROMOTION_CLASS_LABEL, TRUTH_KIND_LABEL, type AmbientPolicy, type AmbientToggle, type DeviceStatus, type EvolutionSupervisorStatus, type Goal, type Health, type LedgerEvent, type Lesson, type Loaded, type MemoryAuditEvent, type Opportunity, type PendingBriefing, type ResearchTask, type ShadowReady, type VoiceQualification, type WakeAlarm, type World, VOICE_QUALIFICATION_LABEL } from "../../lib/cockpit/api";
 import {
   type ApprovalGate,
   approvalGate,
@@ -52,10 +30,16 @@ import {
   rowPending,
   rowReadBack,
 } from "../../lib/cockpit/approval-rows";
-import type {
-  ApprovalPairProps,
-  PendingDraft,
-  PendingProposal,
+import {
+  type ApprovalFamily,
+  type ApprovalPairProps,
+  MUTATION_KIND_TR,
+  PROMOTION_CLASS_TR,
+  type PendingCandidate,
+  type PendingDraft,
+  type PendingMutation,
+  type PendingProposal,
+  approvalFamily,
 } from "../../lib/cockpit/approvals";
 import {
   ROUTINE_ROWS_SHOWN,
@@ -105,7 +89,7 @@ import {
   rowIsRunning,
 } from "../../lib/cockpit/app-rows";
 import { APP_ACTIONS, type AppAction, type AppProjectRow, type AppsControlProps } from "../../lib/cockpit/apps";
-import type { GenesisAction, GenesisControlProps, GenesisRunRow } from "../../lib/cockpit/genesis";
+import type { CatalogueEntryRow, GenesisAction, GenesisControlProps, GenesisRunRow } from "../../lib/cockpit/genesis";
 import {
   GENESIS_ACTION_LABEL,
   GENESIS_ROWS_SHOWN,
@@ -264,7 +248,8 @@ import {
   recentDescending,
   sceneClaim,
 } from "../../lib/uistate/truth";
-import Panel, { LoadedNotice } from "./Panel";
+import { EMPTY_WHEN, familyQuality, isQuiet } from "../../lib/cockpit/families";
+import Panel, { LoadedNotice, quietSection } from "./Panel";
 
 function when(iso: string | null | undefined, now: number): string {
   if (!iso) return "";
@@ -306,14 +291,20 @@ export function ResearchPanel({
   const known = focus?.kind === "ok";
   const currentId = focus?.kind === "ok" ? (focus.value.current?.research_job_id ?? null) : null;
   const previousId = focus?.kind === "ok" ? (focus.value.previous?.research_job_id ?? null) : null;
+  // B24 req 714: two families draw through this one panel. It goes quiet only when BOTH
+  // are quiet — a focus route that failed or is still answering has something to say even
+  // though the task list is empty, and hiding it would drop that fact silently.
+  const focusSpeaks =
+    focus !== undefined && !isQuiet(familyQuality(focus, EMPTY_WHEN.researchFocus));
 
   return (
     <Panel<ResearchTask[]>
       id="research"
       title="Araştırma"
       state={state}
+      always={focusSpeaks}
       empty="Kayıtlı araştırma işi yok."
-      isEmpty={(tasks) => tasks.length === 0}
+      isEmpty={EMPTY_WHEN.research}
       badge={(tasks) => `${tasks.length}`}
       attention={(tasks) => tasks.some((t) => t.stage === "waiting_for_owner_verification")}
     >
@@ -407,7 +398,7 @@ export function GoalsPanel({ state, now }: { state: CockpitData["goals"]; now: n
       state={state}
       // The spec's rule, stated plainly: no goals means say so, not draw orbits.
       empty="Hedef yok."
-      isEmpty={(goals) => goals.length === 0}
+      isEmpty={EMPTY_WHEN.goals}
       badge={(goals) => `${goals.filter((g) => g.status === "active").length} etkin / ${goals.length}`}
       attention={(goals) => goals.some((g) => g.status === "waiting_owner")}
     >
@@ -432,14 +423,23 @@ export function GoalsPanel({ state, now }: { state: CockpitData["goals"]; now: n
   );
 }
 
-export function MemoryPanel({ state, now }: { state: CockpitData["memory"]; now: number }) {
+export function MemoryPanel({
+  state,
+  now,
+  always,
+}: {
+  state: CockpitData["memory"];
+  now: number;
+  always?: boolean;
+}) {
   return (
     <Panel<MemoryAuditEvent[]>
       id="memory"
+      always={always}
       title="Hafıza"
       state={state}
       empty="Kayıtlı hafıza işlemi yok."
-      isEmpty={(events) => events.length === 0}
+      isEmpty={EMPTY_WHEN.memory}
       badge={(events) => `${events.length}`}
     >
       {(events) => (
@@ -461,14 +461,21 @@ export function MemoryPanel({ state, now }: { state: CockpitData["memory"]; now:
   );
 }
 
-export function LessonsPanel({ state }: { state: CockpitData["lessons"] }) {
+export function LessonsPanel({
+  state,
+  always,
+}: {
+  state: CockpitData["lessons"];
+  always?: boolean;
+}) {
   return (
     <Panel<Lesson[]>
       id="lessons"
+      always={always}
       title="Dersler"
       state={state}
       empty="Derlenmiş ders yok."
-      isEmpty={(lessons) => lessons.length === 0}
+      isEmpty={EMPTY_WHEN.lessons}
       badge={(lessons) => `${lessons.length}`}
     >
       {(lessons) => (
@@ -498,7 +505,7 @@ export function WorldPanel({ state }: { state: CockpitData["world"] }) {
       title="Dünya modeli"
       state={state}
       empty="Kayıtlı olgu yok."
-      isEmpty={(world) => world.facts.length === 0 && world.uncertainties.length === 0}
+      isEmpty={EMPTY_WHEN.world}
       badge={(world) => `${world.facts.length} olgu · ${world.uncertainties.length} belirsiz`}
     >
       {(world) => (
@@ -533,14 +540,21 @@ export function WorldPanel({ state }: { state: CockpitData["world"] }) {
   );
 }
 
-export function EvolutionPanel({ state }: { state: CockpitData["opportunities"] }) {
+export function EvolutionPanel({
+  state,
+  always,
+}: {
+  state: CockpitData["opportunities"];
+  always?: boolean;
+}) {
   return (
     <Panel<Opportunity[]>
       id="evolution"
+      always={always}
       title="Evrim"
       state={state}
       empty="Aday yok."
-      isEmpty={(items) => items.length === 0}
+      isEmpty={EMPTY_WHEN.opportunities}
       badge={(items) => `${items.length}`}
     >
       {(items) => (
@@ -582,17 +596,20 @@ export function EvolutionPanel({ state }: { state: CockpitData["opportunities"] 
 export function EvolutionSupervisorPanel({
   state,
   now,
+  always,
 }: {
   state: CockpitData["evolutionSupervisor"];
   now: number;
+  always?: boolean;
 }) {
   return (
     <Panel<EvolutionSupervisorStatus>
       id="evolution-supervisor"
+      always={always}
       title="Evrim gözetmeni"
       state={state}
       empty="Gözetmen henüz taramadı."
-      isEmpty={(s) => s.last_scan === null && !s.paused}
+      isEmpty={EMPTY_WHEN.evolutionSupervisor}
       badge={(s) => (s.paused ? "duraklatıldı" : s.enabled ? "tarıyor" : "kapalı")}
       attention={(s) => s.paused || s.release_failures.length > 0}
     >
@@ -692,14 +709,80 @@ function riskLine(item: Opportunity, floor: number | null): string {
  * that: it asks the Cloud Core to run its own gate and decides nothing —
  * see `MailPanel`.)
  */
-export function ShadowReadyPanel({ state }: { state: CockpitData["shadowReady"] }) {
+/**
+ * B36 (req 562/563/576): the interfaces the owner registered - what the voice router can
+ * be asked about by name. A disabled entry stays listed and says so; an entry with no
+ * operations says the router will resolve the target but no verb.
+ */
+export function GenesisCataloguePanel({
+  state,
+  always,
+}: {
+  state: Loaded<CatalogueEntryRow[]>;
+  always?: boolean;
+}) {
+  return (
+    <Panel<CatalogueEntryRow[]>
+      id="genesis-catalogue"
+      always={always}
+      title="Kayıtlı arayüzler"
+      state={state}
+      empty="Kayıtlı arayüz yok — bir uygulamayı kataloğa ekleyince adıyla istenebilir."
+      isEmpty={(rows) => rows.length === 0}
+      badge={(rows) => `${rows.filter((r) => r.enabled !== false).length} açık / ${rows.length}`}
+    >
+      {(rows) => (
+        <ul data-genesis-catalogue>
+          {rows.map((entry) => {
+            let host = entry.url ?? "";
+            try {
+              host = entry.url ? new URL(entry.url).host : "";
+            } catch {
+              host = entry.url ?? "";
+            }
+            return (
+              <li
+                key={entry.name}
+                data-catalogue-entry={entry.name}
+                data-catalogue-enabled={entry.enabled === false ? "no" : "yes"}
+                data-catalogue-source={entry.source ?? ""}
+              >
+                <div className="event-row">
+                  <span>{entry.name}</span>
+                  <span className="event-when">{[host, entry.enabled === false ? "devre dışı" : null].filter(Boolean).join(" · ")}</span>
+                </div>
+                <span className="muted" data-catalogue-phrases>
+                  {entry.target_phrases.length ? entry.target_phrases.join(", ") : "sözlü ad bildirilmedi"}
+                </span>
+                <span className="muted" data-catalogue-operations>
+                  {entry.operations.length
+                    ? entry.operations.map((op) => `${op.operation_id}: ${op.verbs.join("/") || "fiil yok"}`).join(" · ")
+                    : "işlem fiili yok — hedef çözülür, fiil çözülmez"}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+export function ShadowReadyPanel({
+  state,
+  always,
+}: {
+  state: CockpitData["shadowReady"];
+  always?: boolean;
+}) {
   return (
     <Panel<ShadowReady>
       id="shadow-ready"
+      always={always}
       title="Onay merkezi"
       state={state}
       empty="Sahip onayı bekleyen aday yok."
-      isEmpty={(value) => value.awaiting_approval.length === 0}
+      isEmpty={EMPTY_WHEN.shadowReady}
       badge={(value) => `${value.awaiting_approval.length}`}
       attention={(value) => value.awaiting_approval.length > 0}
     >
@@ -776,6 +859,10 @@ export function OwnerActionsPanel({
           ? "Bekleyen sahip işlemi yok."
           : "Bekleyen brifing yok."
       }
+      // The one composite predicate, and deliberately not `EMPTY_WHEN.briefings`:
+      // this panel answers "what is waiting for YOU" across three families, so
+      // req 714 hides it only when all three have nothing. A briefing-shaped
+      // emptiness here would hide a goal that is waiting for an answer.
       isEmpty={(items) => items.length === 0 && waitingGoals.length === 0 && readyCount === 0}
       badge={(items) => `${items.length + waitingGoals.length + readyCount}`}
       attention={(items) => items.length + waitingGoals.length + readyCount > 0}
@@ -819,7 +906,7 @@ export function LedgerPanel({ state, now }: { state: CockpitData["ledger"]; now:
       title="Defter"
       state={state}
       empty="Kayıtlı olay yok."
-      isEmpty={(events) => events.length === 0}
+      isEmpty={EMPTY_WHEN.ledger}
       badge={(events) => `${events.length}`}
       attention={(events) => events.some((e) => e.severity === "critical")}
     >
@@ -855,7 +942,7 @@ export function HealthPanel({ state }: { state: CockpitData["health"] }) {
       title="Sistem sağlığı"
       state={state}
       empty="Sağlık kontrolü bildirilmedi."
-      isEmpty={(health) => Object.keys(health.checks).length === 0}
+      isEmpty={EMPTY_WHEN.health}
       badge={(health) => health.status}
       attention={(health) => health.status !== "ok"}
     >
@@ -898,7 +985,8 @@ export function RunningToolsPanel({ truth, now }: { truth: CoreTruth; now: numbe
   const live = [tool, researching].filter((e): e is NonNullable<typeof e> => e !== null);
 
   return (
-    <section className="panel" data-panel="running-tools" data-panel-empty={live.length ? "no" : "yes"}>
+    <section className="panel" id="running-tools"
+      data-panel="running-tools" data-panel-empty={live.length ? "no" : "yes"}>
       <h3 className="panel-title">
         <span>Çalışan araçlar</span>
         <span className="panel-count">{live.length}</span>
@@ -960,6 +1048,7 @@ export function DigitalOperatorPanel({ truth, now }: { truth: CoreTruth; now: nu
   return (
     <section
       className={`panel ${failed ? "attention" : ""}`}
+      id="digital-operator"
       data-panel="digital-operator"
       data-panel-empty={told ? "no" : "yes"}
       data-operator-stage={view.stage}
@@ -1035,26 +1124,219 @@ export function DigitalOperatorPanel({ truth, now }: { truth: CoreTruth; now: nu
  * three, the previous document the bus itself carried and the refs of the
  * newest answer, each dated by its own event.
  */
-export function DocumentsPanel({ truth, now }: { truth: CoreTruth; now: number }) {
+/** B34: one proposed file change, with the pair that asks the Cloud Core to run its gate. */
+function MutationRow({ mutation, now, pair }: { mutation: PendingMutation; now: number; pair: ApprovalPairProps }) {
+  const pending = rowPending(mutation.state);
+  const readBack = rowReadBack(mutation);
+  const kind = mutation.kind ? (MUTATION_KIND_TR[mutation.kind] ?? mutation.kind) : "değişiklik";
+  return (
+    <li
+      data-mutation={mutation.mutation_id}
+      data-mutation-kind={mutation.kind ?? ""}
+      data-mutation-risk={mutation.risk ?? ""}
+      data-mutation-state={mutation.state ?? ""}
+      data-mutation-pending={pending ? "yes" : "no"}
+      data-mutation-read-back={readBack ? "yes" : "no"}
+    >
+      <div className="event-row">
+        <span>{mutation.name ?? "dosya bildirilmedi"}</span>
+        <span className="event-when">{[kind, when(mutation.created_at, now)].filter(Boolean).join(" · ")}</span>
+      </div>
+      {/* The sentence the owner heard, verbatim; the plan itself stays on the Cloud Core. */}
+      <span className="muted" data-mutation-summary>
+        {mutation.summary ?? "özet bildirilmedi"}
+      </span>
+      {mutation.sha_before && (
+        <span className="muted" data-mutation-sha-before>
+          {`önce: ${mutation.sha_before.slice(0, 12)}`}
+        </span>
+      )}
+      {pending && (
+        <ApprovalPair
+          id={mutation.mutation_id}
+          family="mutation"
+          gate={approvalGate(mutation, pair.busy)}
+          pair={pair}
+          confirmLabel="Onayla — uygula"
+        />
+      )}
+    </li>
+  );
+}
+
+// ------------------------------------------------------------- B35: the self-development queue
+
+/** A candidate waits for the owner in exactly one state; every other state is settled. */
+function candidatePending(candidate: PendingCandidate): boolean {
+  return candidate.state === null || candidate.state === "awaiting_owner";
+}
+
+function CandidateRow({ candidate, now, pair }: { candidate: PendingCandidate; now: number; pair: ApprovalPairProps }) {
+  const pending = candidatePending(candidate);
+  const facts = [
+    candidate.kind === "feature" ? "özellik" : "hata",
+    candidate.promotion_class ? (PROMOTION_CLASS_TR[candidate.promotion_class] ?? candidate.promotion_class) : null,
+    candidate.risk_tier !== null ? `risk ${candidate.risk_tier}` : null,
+    candidate.security_review_passed === null
+      ? "güvenlik incelemesi yok"
+      : candidate.security_review_passed
+        ? "güvenlik incelemesi geçti"
+        : "güvenlik incelemesi RED",
+    candidate.gate_state ? `kapı ${candidate.gate_state}` : null,
+    candidate.shadow_state ? `gölge ${candidate.shadow_state}` : null,
+    candidate.ci_state && candidate.ci_state !== "none" ? `CI ${candidate.ci_state}` : null,
+    when(candidate.finished_at, now),
+  ].filter((f): f is string => f !== null && f !== "");
+  return (
+    <li
+      data-candidate={candidate.defect_id}
+      data-candidate-kind={candidate.kind ?? ""}
+      data-candidate-state={candidate.state ?? ""}
+      data-candidate-class={candidate.promotion_class ?? ""}
+      data-candidate-never-auto={candidate.never_auto_promote ? "yes" : "no"}
+      data-candidate-security={candidate.security_review_passed === null ? "" : candidate.security_review_passed ? "passed" : "failed"}
+    >
+      <div className="event-row">
+        <span>{candidate.title ?? candidate.defect_id}</span>
+        <span className="event-when">{candidate.branch ?? ""}</span>
+      </div>
+      <span className="muted" data-candidate-facts>
+        {facts.join(" · ")}
+      </span>
+      {candidate.explanation && (
+        <span className="muted" data-candidate-explanation>
+          {candidate.explanation}
+        </span>
+      )}
+      {candidate.never_auto_promote && (
+        <span className="panel-unknown" data-candidate-never-auto-line>
+          Onayınız kaydedilir; bu sınıf hiçbir zaman kendiliğinden canlıya alınmaz.
+        </span>
+      )}
+      {pending && (
+        <ApprovalPair
+          id={candidate.defect_id}
+          family="candidate"
+          gate={approvalGate({ state: null, read_back_at: candidate.read_back_at }, pair.busy)}
+          pair={pair}
+          confirmLabel="Onayla — kaydet (canlıya almaz)"
+        />
+      )}
+    </li>
+  );
+}
+
+/**
+ * B35 (req 609, 621): the candidates the engine finished and stopped on, with the facts
+ * the owner decides by - the security review, the gate, the shadow, CI, the promotion
+ * class - and the pair. Approval is a recorded decision; the panel says so on the button.
+ */
+export function SelfDevQueuePanel({
+  state,
+  now,
+  pair,
+  always,
+}: {
+  state: Loaded<PendingCandidate[]>;
+  now: number;
+  pair: ApprovalPairProps;
+  always?: boolean;
+}) {
+  return (
+    <Panel<PendingCandidate[]>
+      id="selfdev-queue"
+      always={always}
+      title="Onay bekleyen adaylar"
+      state={state}
+      empty="Onayınızı bekleyen aday yok."
+      isEmpty={(rows) => rows.filter(candidatePending).length === 0}
+      badge={(rows) => `${rows.filter(candidatePending).length}`}
+    >
+      {(rows) => (
+        <div data-selfdev-queue>
+          <p className="panel-subheading">
+            Kendi dalında düzeltildi, test edildi, güvenlik incelemesinden ve gölgeden geçti — karar sizin; onay canlıya almaz.
+          </p>
+          <ul>
+            {rows
+              .filter(candidatePending)
+              .map((candidate) => (
+                <CandidateRow key={candidate.defect_id} candidate={candidate} now={now} pair={pair} />
+              ))}
+          </ul>
+          <ApprovalOutcomeLine pair={pair} family="candidate" now={now} />
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+export function DocumentsPanel({
+  truth,
+  now,
+  pending,
+  pair,
+}: {
+  truth: CoreTruth;
+  now: number;
+  /** B34: the proposed file changes awaiting the owner; absent on pages that do not load them. */
+  pending?: Loaded<PendingMutation[]>;
+  pair?: ApprovalPairProps;
+}) {
   const claim = documentClaim(truth, now);
   const view = documentView(claim);
   const told = view.lastKnown !== null;
   const previous = previousDocument(truth, claim.event);
   const answer = lastAnswerRefs(truth);
   const badge = !told ? "0" : view.stage === "none" ? "son bilinen" : "inceleniyor";
+  const mutations = pending && pending.kind === "ok" ? pending.value.filter((m) => rowPending(m.state)) : [];
+  // B24 req 714 applies once this panel carries a REST family too: with the pending list
+  // answered and empty, nothing on the bus and no outcome to show, the panel goes quiet.
+  if (
+    pending &&
+    quietSection(pending, (rows) => rows.filter((m) => rowPending(m.state)).length === 0, told || (pair?.outcome ?? null) !== null)
+  ) {
+    return null;
+  }
 
   return (
     <section
-      className="panel"
+      className={`panel ${mutations.length ? "attention" : ""}`}
+      id="documents"
       data-panel="documents"
-      data-panel-empty={told ? "no" : "yes"}
+      data-panel-empty={told || mutations.length ? "no" : "yes"}
       data-document-stage={view.stage}
       data-document-last-known={view.lastKnown ?? ""}
+      data-document-mutations={pending ? String(mutations.length) : ""}
+      data-document-mutations-state={pending?.kind ?? ""}
     >
       <h3 className="panel-title">
         <span>Belgeler</span>
         <span className="panel-count">{badge}</span>
       </h3>
+      {pending && pair && (
+        <div data-document-mutations-list>
+          <p className="panel-subheading" data-document-mutations-heading>
+            Bekleyen dosya değişiklikleri — onayınızla uygulanır, geri alınabilir
+          </p>
+          {pending.kind !== "ok" ? (
+            <p className="panel-empty" data-document-mutations-empty>
+              {pending.kind === "loading" ? "Yükleniyor." : "Bekleyen değişiklikler okunamadı."}
+            </p>
+          ) : mutations.length === 0 ? (
+            <p className="panel-empty" data-document-mutations-empty>
+              Bekleyen dosya değişikliği yok.
+            </p>
+          ) : (
+            <ul>
+              {mutations.map((mutation) => (
+                <MutationRow key={mutation.mutation_id} mutation={mutation} now={now} pair={pair} />
+              ))}
+            </ul>
+          )}
+          <ApprovalOutcomeLine pair={pair} family="mutation" now={now} />
+        </div>
+      )}
       {!told ? (
         <p className="panel-empty">{DOCUMENT_EMPTY}</p>
       ) : (
@@ -1167,7 +1449,7 @@ function ApprovalPair({
   confirmLabel,
 }: {
   id: string;
-  family: "draft" | "proposal";
+  family: ApprovalFamily;
   gate: ApprovalGate;
   pair: ApprovalPairProps;
   confirmLabel: string;
@@ -1211,11 +1493,18 @@ function ApprovalPair({
 }
 
 /** The last answer the pair got, for the family this panel shows, dated. */
-function ApprovalOutcomeLine({ pair, family, now }: { pair: ApprovalPairProps; family: "draft" | "proposal"; now: number }) {
+function ApprovalOutcomeLine({
+  pair,
+  family,
+  now,
+}: {
+  pair: ApprovalPairProps;
+  family: ApprovalFamily;
+  now: number;
+}) {
   const outcome = pair.outcome;
   if (!outcome) return null;
-  const draft = outcome.action === "confirm_draft" || outcome.action === "discard_draft";
-  if ((family === "draft") !== draft) return null;
+  if (approvalFamily(outcome.action) !== family) return null;
   return (
     <p
       className={`approval-outcome ${outcome.ok ? "muted" : "panel-unknown"}`}
@@ -1313,9 +1602,15 @@ export function MailPanel({
   const drafts = pending.kind === "ok" ? pending.value : [];
   const open = drafts.filter((d) => rowPending(d.state));
   const awaiting = open.filter((d) => rowReadBack(d));
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  // The pair's last answer counts as something to show: an owner who just pressed
+  // "Onayla" must not watch the panel that answered them disappear.
+  if (quietSection(pending, () => open.length === 0, told || pair.outcome !== null)) return null;
+
   return (
     <section
       className={`panel ${awaiting.length ? "attention" : ""}`}
+      id="mail"
       data-panel="mail"
       data-panel-state={pending.kind}
       data-panel-empty={pending.kind === "ok" ? (open.length ? "no" : "yes") : ""}
@@ -1454,9 +1749,17 @@ export function CalendarPanel({
   const proposals = pending.kind === "ok" ? pending.value : [];
   const open = proposals.filter((p) => rowPending(p.state));
   const awaiting = open.filter((p) => rowReadBack(p));
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (
+    quietSection(pending, () => open.length === 0 && today.length === 0, told || pair.outcome !== null)
+  ) {
+    return null;
+  }
+
   return (
     <section
       className={`panel ${awaiting.length ? "attention" : ""}`}
+      id="calendar"
       data-panel="calendar"
       data-panel-state={pending.kind}
       data-panel-empty={pending.kind === "ok" ? (open.length || today.length ? "no" : "yes") : ""}
@@ -1688,9 +1991,13 @@ export function ArtifactsPanel({
   const told = view.lastKnown !== null;
   const rows = artifacts.kind === "ok" ? artifacts.value : [];
   const shown = rows.slice(0, ARTIFACT_ROWS_SHOWN);
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(artifacts, EMPTY_WHEN.artifacts, told)) return null;
+
   return (
     <section
       className="panel"
+      id="artifacts"
       data-panel="artifacts"
       data-panel-state={artifacts.kind}
       data-panel-empty={artifacts.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -1885,9 +2192,13 @@ export function AppsPanel({
   const shown = rows.slice(0, APP_ROWS_SHOWN);
   const running = rows.filter(rowIsRunning).length;
   const failed = rows.some((row) => row.state === "failed");
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(apps, EMPTY_WHEN.apps, told)) return null;
+
   return (
     <section
       className={`panel ${failed ? "attention" : ""}`}
+      id="apps"
       data-panel="apps"
       data-panel-state={apps.kind}
       data-panel-empty={apps.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -2068,9 +2379,13 @@ export function GenesisPanel({
   const shown = rows.slice(0, GENESIS_ROWS_SHOWN);
   const awaiting = rows.filter(genesisRowIsAwaiting).length;
   const failed = rows.some(genesisRowIsFailed);
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(runs, EMPTY_WHEN.genesisRuns, told)) return null;
+
   return (
     <section
       className={`panel ${awaiting > 0 || failed ? "attention" : ""}`}
+      id="genesis"
       data-panel="genesis"
       data-panel-state={runs.kind}
       data-panel-empty={runs.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -2311,9 +2626,13 @@ export function ScenesPanel({
   const shown = rows.slice(0, SCENE_ROWS_SHOWN);
   const verified = rows.filter(sceneRowIsVerified).length;
   const attention = rows.some((row) => sceneRowIsMismatch(row) || sceneRowIsFailed(row));
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(scenes, EMPTY_WHEN.scenes, told)) return null;
+
   return (
     <section
       className={`panel ${attention ? "attention" : ""}`}
+      id="scenes"
       data-panel="scenes"
       data-panel-state={scenes.kind}
       data-panel-empty={scenes.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -2393,6 +2712,7 @@ function ExecutiveControls({ row, control }: { row: ExecutiveRunRow; control: Ex
     pause: control.onPause,
     resume: control.onResume,
     cancel: control.onCancel,
+    approve: control.onApprove,
   };
   const gates = actions.map((action) => ({ action, gate: executiveActionGate(row, action, control.busy) }));
   const inFlight = control.busy !== null && control.busy.id === row.run_id;
@@ -2525,9 +2845,13 @@ export function ExecutivePanel({
   // one ended with something missing, the other stopped. A completed run
   // needs no attention, and a paused one is where the owner put it.
   const attention = rows.some((row) => executiveRowIsPartial(row) || executiveRowIsFailed(row));
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(runs, EMPTY_WHEN.executiveRuns, told)) return null;
+
   return (
     <section
       className={`panel ${attention ? "attention" : ""}`}
+      id="executive"
       data-panel="executive"
       data-panel-state={runs.kind}
       data-panel-empty={runs.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -2592,7 +2916,8 @@ export function ExecutivePanel({
 export function StateStreamPanel({ truth, now }: { truth: CoreTruth; now: number }) {
   const events = recentDescending(truth, 12);
   return (
-    <section className="panel" data-panel="state-stream" data-panel-empty={events.length ? "no" : "yes"}>
+    <section className="panel" id="state-stream"
+      data-panel="state-stream" data-panel-empty={events.length ? "no" : "yes"}>
       <h3 className="panel-title">
         <span>Durum akışı</span>
         <span className="panel-count">{events.length}</span>
@@ -2859,9 +3184,13 @@ export function CreativePanel({
   const shown = rows.slice(0, CREATIVE_ROWS_SHOWN);
   const verified = rows.filter(creativeRowIsVerified).length;
   const attention = rows.some((row) => creativeRowIsMismatch(row) || creativeRowIsFailed(row));
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(runs, EMPTY_WHEN.creativeRuns, told)) return null;
+
   return (
     <section
       className={`panel ${attention ? "attention" : ""}`}
+      id="creative"
       data-panel="creative"
       data-panel-state={runs.kind}
       data-panel-empty={runs.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -3030,9 +3359,13 @@ export function NativePanel({
   const shown = rows.slice(0, NATIVE_ROWS_SHOWN);
   const verified = rows.filter(nativeRowIsVerified).length;
   const attention = rows.some((row) => nativeRowIsMismatch(row) || nativeRowIsFailed(row));
+  // req 714: no rows and nothing on the bus - this family draws nothing.
+  if (quietSection(builds, EMPTY_WHEN.nativeBuilds, told)) return null;
+
   return (
     <section
       className={`panel ${attention ? "attention" : ""}`}
+      id="native"
       data-panel="native"
       data-panel-state={builds.kind}
       data-panel-empty={builds.kind === "ok" ? (rows.length ? "no" : "yes") : ""}
@@ -3084,14 +3417,23 @@ export function NativePanel({
  * each one is in, and — when the route is not on this Cloud Core yet — says
  * exactly that rather than an empty list that would read as "no alarms".
  */
-export function AlarmsPanel({ state, now }: { state: CockpitData["alarms"]; now: number }) {
+export function AlarmsPanel({
+  state,
+  now,
+  always,
+}: {
+  state: CockpitData["alarms"];
+  now: number;
+  always?: boolean;
+}) {
   return (
     <Panel<WakeAlarm[]>
       id="alarms"
+      always={always}
       title="Alarmlar"
       state={state}
       empty="Kurulu alarm yok."
-      isEmpty={(alarms) => alarms.length === 0}
+      isEmpty={EMPTY_WHEN.alarms}
       badge={(alarms) => `${alarms.length}`}
       attention={(alarms) => alarms.some((a) => a.state === "FAILED")}
     >
@@ -3142,20 +3484,109 @@ export function AlarmsPanel({ state, now }: { state: CockpitData["alarms"]; now:
  * the renderer has no write path, and display power is decided by Cloud Core
  * and executed on the device.
  */
+/**
+ * B23 req 695: the devices, as devices.
+ *
+ * `fetchDeviceStatus`, `parseDevice` and `CockpitData.devices` have existed since M18.3,
+ * and the only place a device appeared was a line inside "Ekran / Ortam" about its SCREEN.
+ * Everything else the heartbeat carries — whether the machine is even connected, when it
+ * was last heard from, how long the owner has been away from it, whether an alarm is
+ * armed or ringing on it right now — was fetched, parsed, held in state and never shown.
+ *
+ * `statusKnown` is why each line reads the way it does: a device that answered the
+ * inventory but carried no heartbeat status is "durum bildirmedi", never "ekran kapalı" or
+ * "boşta 0 sn". The parser preserves that distinction deliberately and a panel that
+ * flattened it would undo the work.
+ */
+export function DevicesPanel({
+  devices,
+  now,
+}: {
+  devices: CockpitData["devices"];
+  now: number;
+}) {
+  return (
+    <Panel<DeviceStatus[]>
+      id="devices"
+      title="Cihazlar"
+      state={devices}
+      empty="Kayıtlı cihaz yok."
+      isEmpty={EMPTY_WHEN.devices}
+      badge={(rows) => `${rows.filter((d) => d.online === true).length}/${rows.length} çevrimiçi`}
+      attention={(rows) => rows.some((d) => d.alarm_ringing === true)}
+    >
+      {(rows) => (
+        <ul>
+          {rows.map((device) => (
+            <li
+              key={device.device_id}
+              data-device-row={device.device_id}
+              data-device-online={device.online === null ? "unknown" : String(device.online)}
+              data-device-status-known={device.statusKnown ? "yes" : "no"}
+            >
+              <div className="event-row">
+                <span>{device.label ?? device.device_id}</span>
+                <span className="event-when">
+                  {device.online === null
+                    ? "bağlantı bildirilmedi"
+                    : device.online
+                      ? "çevrimiçi"
+                      : "çevrimdışı"}
+                </span>
+              </div>
+              <span className="muted">
+                {device.last_seen_at ? `son görülme ${when(device.last_seen_at, now)}` : "son görülme bildirilmedi"}
+                {" · "}
+                {device.statusKnown
+                  ? device.input_idle_s === null
+                    ? "boşta süresi bildirilmedi"
+                    : `${Math.round(device.input_idle_s)} sn boşta`
+                  : "durum bildirmedi"}
+                {device.statusKnown && device.armed_alarms !== null && (
+                  <>{` · ${device.armed_alarms} kurulu alarm`}</>
+                )}
+              </span>
+              {device.alarm_ringing === true && (
+                <span className="muted" data-device-ringing="yes">
+                  Şu anda bir alarm çalıyor.
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
+/** The panel's words for each owner switch (B48 req 331, 332). */
+export const AMBIENT_TOGGLE_LABEL: Record<AmbientToggle, string> = {
+  auto_off_enabled: "Otomatik ekran kapatma",
+  off_when_away: "Yokken kapat",
+  off_when_asleep: "Uyurken kapat",
+  wake_on_return: "Dönünce aç",
+};
+
 export function AmbientPanel({
   policy,
   devices,
+  always,
+  onToggle,
 }: {
   policy: CockpitData["ambientPolicy"];
   devices: CockpitData["devices"];
+  always?: boolean;
+  /** B48: present where the owner may change the policy; absent, the panel stays read-only. */
+  onToggle?: (field: AmbientToggle, value: boolean) => void;
 }) {
   return (
     <Panel<AmbientPolicy>
       id="ambient"
+      always={always}
       title="Ekran / Ortam"
       state={policy}
       empty="Ortam politikası bildirilmedi."
-      isEmpty={(p) => p.auto_off_enabled === null}
+      isEmpty={EMPTY_WHEN.ambientPolicy}
       badge={(p) => (p.auto_off_enabled ? "otomatik açık" : "otomatik kapalı")}
     >
       {(p) => (
@@ -3188,6 +3619,23 @@ export function AmbientPanel({
                 : `giriş beklemesi ${p.input_holdoff_s} sn`}
             </span>
           </li>
+          {onToggle && (
+            <li data-ambient-toggles>
+              {AMBIENT_TOGGLES.map((field) => (
+                <button
+                  key={field}
+                  type="button"
+                  className="core-chip"
+                  data-ambient-toggle={field}
+                  aria-pressed={p[field] === true}
+                  disabled={p[field] === null}
+                  onClick={() => onToggle(field, !p[field])}
+                >
+                  {AMBIENT_TOGGLE_LABEL[field]}: {p[field] ? "açık" : "kapalı"}
+                </button>
+              ))}
+            </li>
+          )}
           <li data-ambient-devices={devices.kind}>
             <DeviceDisplayRows devices={devices} />
           </li>
@@ -3249,17 +3697,20 @@ function DeviceDisplayRows({ devices }: { devices: CockpitData["devices"] }) {
 export function VoiceQualificationPanel({
   state,
   now,
+  always,
 }: {
   state: CockpitData["voiceQualification"];
   now: number;
+  always?: boolean;
 }) {
   return (
     <Panel<VoiceQualification>
       id="voice-qualification"
+      always={always}
       title="Ses yönlendirme sınaması"
       state={state}
       empty="Henüz hiç sınama kaydı yok."
-      isEmpty={(q) => q.state === "NOT_YET_RUN"}
+      isEmpty={EMPTY_WHEN.voiceQualification}
       badge={(q) => VOICE_QUALIFICATION_LABEL[q.state] ?? q.state}
       attention={(q) => q.state === "REGRESSION_FOUND" || q.state === "SELF_HEALING"}
     >
@@ -3340,18 +3791,21 @@ export function NotificationsPanel({
   state,
   onMarkRead,
   busyId,
+  always,
 }: {
   state: CockpitData["notifications"];
   onMarkRead: (notificationId: string) => void;
   busyId: string | null;
+  always?: boolean;
 }) {
   return (
     <Panel<Inbox>
       id="notifications"
+      always={always}
       title="Bildirimler"
       state={state}
       empty="Bildirim yok."
-      isEmpty={(inbox) => inbox.rows.length === 0}
+      isEmpty={EMPTY_WHEN.notifications}
       badge={(inbox) => inboxBadge(inbox.unread)}
       // Only an URGENT row nothing carried. An urgent row that WAS delivered already
       // interrupted the owner once, and a panel that shouts about everything is a panel
@@ -3410,17 +3864,20 @@ export function NotificationsPanel({
 export function RoutinesPanel({
   state,
   control,
+  always,
 }: {
   state: CockpitData["routines"];
   control: RoutineControlProps;
+  always?: boolean;
 }) {
   return (
     <Panel<RoutineRow[]>
       id="routines"
+      always={always}
       title="Rutinler"
       state={state}
       empty="Kurulu rutin yok."
-      isEmpty={(rows) => rows.length === 0}
+      isEmpty={EMPTY_WHEN.routines}
       badge={(rows) => routinesBadge(rows)}
       // A paused routine the owner may have forgotten. Nothing here is WRONG - this is the
       // one state a list can hide, and a morning routine turned off in March is invisible

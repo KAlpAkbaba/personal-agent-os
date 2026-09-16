@@ -128,16 +128,17 @@ function click(node: ElementLike | null): void {
 // ---------------------------------------------------------------- the panel
 
 describe("the Takvim panel", () => {
-  it("is empty, in words, when nothing was published for today and no proposal waits", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when nothing waits, nothing was published and the bus is silent (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/calendar/proposals/pending yok (HTTP 404)." })).toBe("");
+  });
+
+  it("keeps every word while the bus is telling us something", () => {
+    const html = panel(ok([]), [CALENDAR_ACTIVITY("today", "Ali ile toplantı", "read_back", 2)]);
     expect(html).toContain('data-panel="calendar"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
-    expect(html).toContain('data-calendar-today="0"');
-    expect(html).toContain("Bugün için kayıt yok");
     expect(html).toContain("Bekleyen öneri yok.");
-    expect(html).toContain('data-calendar-activity="untold"');
-    expect(html).toContain("Takvim etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).not.toContain("<button");
     expect(html).not.toContain("attention");
@@ -155,7 +156,12 @@ describe("the Takvim panel", () => {
     const failed = panel({ kind: "failed", error: "HTTP 500" });
     expect(failed).toContain("Alınamadı: HTTP 500");
     expect(failed).not.toContain("Bekleyen öneri yok");
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/calendar/proposals/pending yok (HTTP 404)." });
+    // Absent still says so WHILE the bus is talking: "the route is not here" and
+    // "nothing is happening" are different facts (req 714 only silences both together).
+    const absent = panel(
+      { kind: "absent", detail: "Bu Cloud Core sürümünde /v1/calendar/proposals/pending yok (HTTP 404)." },
+      [CALENDAR_ACTIVITY("today")],
+    );
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/calendar/proposals/pending yok (HTTP 404).");
     expect(absent).not.toContain("Bekleyen öneri yok");
     for (const html of [loading, failed, absent]) expect(html).not.toContain("<button");
@@ -285,7 +291,9 @@ describe("the Takvim panel", () => {
     expect(stale).toContain('data-calendar-stage="none"');
     expect(stale).toContain('data-calendar-last-known="active"');
     expect(stale).toContain("Son bilinen: Bugünün takvimi · 46 sn önce");
-    expect(panel(ok([]), [MAIL_ACTIVITY()])).toContain('data-calendar-activity="untold"');
+    // A mail event is not a calendar event; the pending row is there so the panel renders
+    // at all, since a calendar family with nothing at all is quiet now (req 714).
+    expect(panel(ok([proposal()]), [MAIL_ACTIVITY()])).toContain('data-calendar-activity="untold"');
   });
 });
 
@@ -298,6 +306,10 @@ describe("the approval runner, for proposals", () => {
       discardDraft: vi.fn(async () => ({ state: "discarded", summary: null, receiptId: null })),
       confirmProposal: vi.fn(async () => ({ state: "committed", summary: "Takvime eklendi.", receiptId: "r1" })),
       discardProposal: vi.fn(async () => ({ state: "discarded", summary: null, receiptId: "r2" })),
+      confirmMutation: vi.fn(async () => ({ state: "applied", summary: null, receiptId: "r5" })),
+      discardMutation: vi.fn(async () => ({ state: "discarded", summary: null, receiptId: "r6" })),
+      approveCandidate: vi.fn(async () => ({ state: "approved", summary: null, receiptId: "r7" })),
+      rejectCandidate: vi.fn(async () => ({ state: "rejected", summary: null, receiptId: "r8" })),
     };
     let state: ApprovalPairState = APPROVAL_PAIR_IDLE;
     const onSettled = vi.fn();

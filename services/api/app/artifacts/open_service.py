@@ -92,6 +92,8 @@ class OpenOutcome:
     window_title: str | None = None
     artifact_id: str | None = None
     format: str | None = None
+    #: B43 (req 509): where the device put the file (its own answer), for the driver.
+    path: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -120,7 +122,10 @@ def _pick_render(
             return None, ERROR_INVALID_RENDER
         return row, None
     rows = {r.format: r for r in service.list_renders(session, version.id)}
-    for candidate in KIND_FORMATS.get(artifact.kind, ()):
+    # B42/B43: an image artifact (kind outside the spec's formats table) opens its
+    # one valid render.
+    candidates = KIND_FORMATS.get(artifact.kind) or tuple(rows)
+    for candidate in candidates:
         row = rows.get(candidate)
         if row is not None and row.state == RENDER_STATE_VALID:
             return row, None
@@ -137,6 +142,7 @@ def open_artifact(
     idempotency_key: str | None = None,
     timeout_s: float = 30.0,
     render_fetch_store: RenderFetchStore | None = None,
+    application: str | None = None,
 ) -> OpenOutcome:
     """Fetch + open one artifact's render on the owner's machine (spec §4). ``base_url``
     is THIS request's own origin (never a configured URL — ADR-0069's rule, the same one
@@ -194,6 +200,9 @@ def open_artifact(
             "sha256": row.content_hash,
             "size": row.size_bytes,
             "open": True,
+            # B43 (req 500/509): the allowlisted application the device hands the file
+            # to (mspaint), when the owner named one; the default app otherwise.
+            **({"application": application} if application else {}),
         },
         idempotency_key=key,
         timeout_s=timeout_s,
@@ -241,6 +250,7 @@ def open_artifact(
         window_title=window_title,
         artifact_id=str(artifact_id),
         format=row.format,
+        path=str(payload.get("path") or "") or None,
     )
 
 

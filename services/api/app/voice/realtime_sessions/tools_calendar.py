@@ -31,6 +31,8 @@ TOOL_CALENDAR_PROPOSE: Final = "calendar.propose"
 TOOL_CALENDAR_READ_PROPOSAL: Final = "calendar.read_proposal"
 TOOL_CALENDAR_COMMIT: Final = "calendar.commit"
 TOOL_CALENDAR_DISCARD: Final = "calendar.discard"
+#: B27 req 731: "Toplantıyı iptal et." reaches the calendar and is answered with a receipt.
+TOOL_CALENDAR_CANCEL: Final = "calendar.cancel"
 
 CALENDAR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_CALENDAR_AGENDA,
@@ -39,7 +41,16 @@ CALENDAR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_CALENDAR_READ_PROPOSAL,
     TOOL_CALENDAR_COMMIT,
     TOOL_CALENDAR_DISCARD,
+    TOOL_CALENDAR_CANCEL,
 )
+
+#: B27 req 730. "Bu hafta ne var?" / "Haftalık programımı söyle." - a WEEK, which the
+#: day parser has no word for. "haftaya" / "gelecek hafta" is the next Monday-to-Sunday;
+#: "bu hafta" is from today through this Sunday (what is still ahead, never what passed).
+_WEEK_STEMS: Final[tuple[str, ...]] = ("hafta",)
+_NEXT_WEEK_FORMS: Final[tuple[str, ...]] = ("haftaya", "gelecek", "önümüzdeki", "onumuzdeki")
+RANGE_THIS_WEEK: Final = "this_week"
+RANGE_NEXT_WEEK: Final = "next_week"
 
 #: Europe/Istanbul (CLAUDE.md, spec §2's product default) — the same zone
 #: ``app.calendar.ics.DEFAULT_TIMEZONE`` names, kept as a literal here rather than
@@ -96,13 +107,28 @@ def _tokenize(text: str) -> tuple[str, tuple[str, ...], int]:
 # --------------------------------------------------------------------- READ tools
 
 
+def _range_bounds(ctx: ToolContext, when_spoken: str) -> tuple[datetime, datetime, str]:
+    """(start, end, label): a week when the owner said one, else the day ``_day_bounds``
+    resolves - the same tokens, read once."""
+    now = _local_now(ctx)
+    _, tokens, _ = _tokenize(when_spoken)
+    if any(token.startswith(_WEEK_STEMS) for token in tokens):
+        today = datetime.combine(now.date(), datetime.min.time(), tzinfo=_ZONE)
+        next_monday = today + timedelta(days=7 - today.weekday())
+        if any(token.startswith(_NEXT_WEEK_FORMS) for token in tokens):
+            return next_monday, next_monday + timedelta(days=7), RANGE_NEXT_WEEK
+        return today, next_monday, RANGE_THIS_WEEK
+    start, end = _day_bounds(ctx, when_spoken)
+    label = "today" if start.date() == now.date() else start.date().isoformat()
+    return start, end, label
+
+
 def calendar_agenda(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """ "Bugün takvimimde ne var?" (spec §3)."""
+    """ "Bugün takvimimde ne var?" (spec §3); B27 req 730: "Bu hafta ne var?"."""
     db = _require_db(ctx, TOOL_CALENDAR_AGENDA)
     service = _service(ctx, TOOL_CALENDAR_AGENDA)
     when_spoken = str(arguments.get("when_spoken") or "bugün")
-    start, end = _day_bounds(ctx, when_spoken)
-    label = "today" if start.date() == _local_now(ctx).date() else start.date().isoformat()
+    start, end, label = _range_bounds(ctx, when_spoken)
     return service.agenda(
         db, start=start, end=end, range_label=label, session_id=str(ctx.session_id)
     )
@@ -155,7 +181,9 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     _, tokens, _ = _tokenize(when_spoken)
     hint = tr_time.extract_day(tokens)
     day = tr_time.resolve_date(now, hint)
-    clock = tr_time.extract_clock(when_spoken)
+    # B46: "15 dakika önce hatırlat" is neither the event's clock nor its duration.
+    timing = tr_time.without_reminder(when_spoken)
+    clock = tr_time.extract_clock(timing)
     hour, minute = clock or (now.hour, 0)
     start = datetime.combine(day, datetime.min.time(), tzinfo=_ZONE).replace(
         hour=hour, minute=minute
@@ -164,11 +192,27 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     duration_minutes = (
         int(duration)
         if isinstance(duration, int | float) and duration > 0
-        else (tr_time.extract_duration_minutes(when_spoken) or tr_time.DEFAULT_EVENT_MINUTES)
+        else (tr_time.extract_duration_minutes(timing) or tr_time.DEFAULT_EVENT_MINUTES)
     )
     end = start + timedelta(minutes=duration_minutes)
+    # B46 (req 356, 357): the router's reading of the owner's own sentence wins; the model's
+    # when_spoken is read only when the router found nothing, and its reminder_minutes
+    # argument only when neither did.
+    rrule = turn.get("calendar_rrule") or tr_time.extract_recurrence(when_spoken)
+    reminder = turn.get("calendar_reminder_minutes")
+    if not isinstance(reminder, int):
+        reminder = tr_time.extract_reminder_minutes(when_spoken)
+    model_reminder = arguments.get("reminder_minutes")
+    if reminder is None and isinstance(model_reminder, int) and 0 <= model_reminder <= 10080:
+        reminder = model_reminder
     return service.propose(
-        db, summary=summary, start=start, end=end, session_id=str(ctx.session_id)
+        db,
+        summary=summary,
+        start=start,
+        end=end,
+        rrule=rrule if isinstance(rrule, str) else None,
+        reminder_minutes=reminder,
+        session_id=str(ctx.session_id),
     )
 
 
@@ -211,6 +255,21 @@ def calendar_commit(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
         host_flag_enabled=host_flag,
         session_id=str(ctx.session_id),
         confirmation=confirmation,
+    )
+
+
+def calendar_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Toplantıyı iptal et." / "Perşembeki toplantıyı iptal et." (B27 req 731) — the
+    focused event, answered by the calendar service with a receipt: today an honest
+    refusal (spec §1: no delete), tomorrow whatever B46's policy allows, from the SAME
+    method."""
+    db = _require_db(ctx, TOOL_CALENDAR_CANCEL)
+    service = _service(ctx, TOOL_CALENDAR_CANCEL)
+    uid = arguments.get("event_uid")
+    return service.cancel_event(
+        db,
+        event_uid=str(uid) if isinstance(uid, str) and uid.strip() else None,
+        session_id=str(ctx.session_id),
     )
 
 
@@ -274,7 +333,9 @@ def register_calendar_tools(reg: ToolRegistry) -> ToolRegistry:
                 "'Perşembe 15'e diş hekimi ekle' -> 'when_spoken' ve 'summary' ver; "
                 "ODAKTAKİ etkinliği ertelemek için 'Bunu bir saat ertele' -> sadece "
                 "'when_spoken' (süre ifadesi) ver, 'summary' verme. Çakışmalar "
-                "sahibe okunur; ONAY olmadan hiçbir şey değişmez. Dönen 'speech' "
+                "sahibe okunur; ONAY olmadan hiçbir şey değişmez. Tekrar ('her hafta "
+                "pazartesi') ve hatırlatma ('15 dakika önce hatırlat') sözcüklerini "
+                "'when_spoken' içinde aynen bırak. Dönen 'speech' "
                 "metnini aynen oku."
             ),
             parameters={
@@ -283,6 +344,7 @@ def register_calendar_tools(reg: ToolRegistry) -> ToolRegistry:
                     "when_spoken": {"type": "string", "maxLength": 200},
                     "summary": {"type": "string", "maxLength": 200},
                     "duration_minutes": {"type": "integer", "minimum": 1, "maximum": 480},
+                    "reminder_minutes": {"type": "integer", "minimum": 0, "maximum": 10080},
                 },
                 "additionalProperties": False,
             },
@@ -322,12 +384,30 @@ def register_calendar_tools(reg: ToolRegistry) -> ToolRegistry:
             handler=calendar_discard,
         )
     )
+    reg.register(
+        ToolSpec(
+            name=TOOL_CALENDAR_CANCEL,
+            description=(
+                "Odaktaki takvim ETKİNLİĞİNİ İPTAL ETMEYİ ister: 'toplantıyı iptal et', "
+                "'perşembeki toplantıyı iptal et', 'randevuyu sil'. Takvimden silme "
+                "yetkisi yoksa bunu olduğu gibi söyler; bir öneriden vazgeçmek için "
+                "calendar.discard kullanılır. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"event_uid": {"type": "string", "maxLength": 500}},
+                "additionalProperties": False,
+            },
+            handler=calendar_cancel,
+        )
+    )
     return reg
 
 
 __all__ = [
     "CALENDAR_TOOL_NAMES",
     "TOOL_CALENDAR_AGENDA",
+    "TOOL_CALENDAR_CANCEL",
     "TOOL_CALENDAR_COMMIT",
     "TOOL_CALENDAR_DISCARD",
     "TOOL_CALENDAR_FIND_SLOT",

@@ -101,6 +101,8 @@ function row(overrides: Partial<ExecutiveRunRow> = {}): ExecutiveRunRow {
     done: 2,
     total: 5,
     missing: [],
+    awaiting_step: null,
+    planner: null,
     created_at: iso(-90_000),
     updated_at: iso(-30_000),
     ...overrides,
@@ -131,7 +133,7 @@ const ok = (rows: ExecutiveRunRow[]) => ({ kind: "ok" as const, value: rows, at:
 const noop = () => {};
 
 function controlOf(overrides: Partial<ExecutiveControlProps> = {}): ExecutiveControlProps {
-  return { ...EXECUTIVE_CONTROL_IDLE, onPause: noop, onResume: noop, onCancel: noop, ...overrides };
+  return { ...EXECUTIVE_CONTROL_IDLE, onPause: noop, onResume: noop, onCancel: noop, onApprove: noop, ...overrides };
 }
 
 function detailsOf(explains: Record<string, string> = {}, notice: string | null = null): ExecutiveDetailProps {
@@ -205,6 +207,7 @@ function fakeClient(overrides: Partial<ExecutiveClient> = {}): ExecutiveClient {
     pause: vi.fn(async () => RECEIPT_PAUSED),
     resume: vi.fn(async () => ({ ...RECEIPT_PAUSED, state: "running", summary: null })),
     cancel: vi.fn(async () => RECEIPT_CANCELLED),
+    approve: vi.fn(async () => ({ ...RECEIPT_PAUSED, state: "running", summary: null })),
     ...overrides,
   };
 }
@@ -233,14 +236,23 @@ function portsOf(client: ExecutiveClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the Görevler panel", () => {
-  it("is empty, in the spec's own words, when the list route answered with no run and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: `Bu Cloud Core sürümünde ${EXECUTIVE_RUNS_PATH} yok (HTTP 404).` })).toBe("");
+  });
+
+  it("says the bus told it nothing, when there are rows to show anyway", () => {
+    const rows = panel(ok([row()]));
+    expect(rows).toContain('data-executive-activity="untold"');
+    expect(rows).toContain("Çok adımlı iş etkinliği bildirilmedi.");
+  });
+
+  it("keeps every word when the bus is telling us something the list cannot show", () => {
+    const html = panel(ok([]), [EXECUTIVE_RUN("r1", "running", "s3", 2, 5)]);
     expect(html).toContain('data-panel="executive"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Devam eden bir iş yok.");
-    expect(html).toContain('data-executive-activity="untold"');
-    expect(html).toContain("Çok adımlı iş etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).toContain('data-executive-active="0"');
     expect(html).toContain(">Görevler<");
@@ -266,7 +278,9 @@ describe("the Görevler panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Devam eden bir iş yok.");
 
-    const absent = panel({ kind: "absent", detail: `Bu Cloud Core sürümünde ${EXECUTIVE_RUNS_PATH} yok (HTTP 404).` });
+    // A route this Cloud Core does not serve still says so WHILE the bus is talking:
+    // "the list is not here" and "nothing is happening" are different facts.
+    const absent = panel({ kind: "absent", detail: `Bu Cloud Core sürümünde ${EXECUTIVE_RUNS_PATH} yok (HTTP 404).` }, [EXECUTIVE_RUN("r1", "running", "s3", 2, 5)]);
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/executive/runs yok (HTTP 404).");
     expect(absent).not.toContain("Devam eden bir iş yok.");
@@ -527,7 +541,9 @@ describe("the Görevler panel", () => {
 
     // A document, mail, artifact, app, genesis or scene event is not an executive event.
     for (const other of [[DOCUMENT_ANALYSIS()], [MAIL_ACTIVITY()], [ARTIFACT_FACTORY()], [APP_FACTORY()], [CAPABILITY_GENESIS()], [SCENE_ACTIVITY()]]) {
-      const html = panel(ok([]), other);
+      // A row so the panel renders at all: no rows AND no event of its own is a quiet
+      // family now (B24 req 714).
+      const html = panel(ok([row()]), other);
       expect(html).toContain('data-executive-activity="untold"');
       expect(html).toContain('data-executive-posture=""');
     }
@@ -568,8 +584,8 @@ describe("the rows", () => {
       if (state !== "paused") expect(actions, String(state)).not.toContain("resume");
       if (state !== "planned" && state !== "running") expect(actions, String(state)).not.toContain("pause");
     }
-    expect(EXECUTIVE_ACTION_LABEL).toEqual({ pause: "Duraklat", resume: "Devam", cancel: "İptal" });
-    expect(EXECUTIVE_CHIP_ACTIONS).toEqual(["pause", "resume", "cancel"]);
+    expect(EXECUTIVE_ACTION_LABEL).toEqual({ pause: "Duraklat", resume: "Devam", cancel: "İptal", approve: "Onayla" });
+    expect(EXECUTIVE_CHIP_ACTIONS).toEqual(["pause", "resume", "cancel", "approve"]);
   });
 
   it("the gate opens each chip only for a row the Cloud Core would not refuse, while nothing is in flight", () => {
@@ -637,7 +653,7 @@ describe("the routes and the shapes they answer with", () => {
   it("spells every route the spec names, with the id as a path segment", () => {
     expect(EXECUTIVE_RUNS_PATH).toBe("/v1/executive/runs");
     expect(executiveRunPath("r1")).toBe("/v1/executive/runs/r1");
-    expect(EXECUTIVE_ACTIONS).toEqual(["pause", "resume", "cancel", "retry", "amend"]);
+    expect(EXECUTIVE_ACTIONS).toEqual(["pause", "resume", "cancel", "retry", "amend", "approve"]);
     for (const action of EXECUTIVE_ACTIONS) {
       expect(executiveActionPath("r1", action)).toBe(`/v1/executive/runs/r1/${action}`);
     }

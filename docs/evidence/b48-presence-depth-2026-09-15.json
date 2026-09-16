@@ -1,0 +1,113 @@
+{
+  "batch": "B48",
+  "name": "Varlık derinliği ve kamera",
+  "requirements": [
+    300,
+    301,
+    302,
+    303,
+    307,
+    308,
+    310,
+    312,
+    313,
+    320,
+    326,
+    327,
+    330,
+    331,
+    332,
+    333,
+    671
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11109 passed, 5 skipped, 20m30s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 959/959, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "web is not in the -Fast table, so run by hand: tsc --noEmit clean; vitest full suite 1886/1886 (105 files) after node scripts/web/sync-feature-matrix.mjs; oxlint on the changed files"
+  },
+  "measured_first": {
+    "unreachable_rest": "engine._bucket needs posture=='resting'; apps/web lib/eye/signal.ts derivePosture() returns 'unknown'; ambient/ingest.py input observations carry posture 'unknown'.",
+    "policy_needs_camera": "ambient/policy.py decide: display.off for LIKELY_ASLEEP also requires eye_enabled and perception_age_s <= camera_unknown_grace_s.",
+    "no_history_route": "presence routes: policy, state, observations, eye enable/disable, greeting; episodes in memory only.",
+    "read_only_panel": "AmbientPanel rendered the four switches as text; no PUT caller in the web app.",
+    "tab_close": "no pagehide handling in lib/eye; the server flag stayed enabled and ambient saw only perception_stale."
+  },
+  "closed": {
+    "301": "POST /v1/presence/eye/stream-stopped (eye.stream_stopped), notifyEyeStreamStopped keepalive on pagehide while running.",
+    "302_303": "EyeControlView notice when server eye active and this tab's camera not running.",
+    "310": "engine._freshness_weight in _base_confidence (FusionPolicy.freshness_decay).",
+    "312": "engine._inside_quiet_hours/_time_of_day_policy in classify_window.",
+    "313": "service._apply_owner_preferences (ambient quiet_hours + asleep_after_outside_quiet_s), engine.set_policy.",
+    "330": "GET /v1/presence/history.",
+    "331_332": "AmbientPanel onToggle (AMBIENT_TOGGLES), updateAmbientPolicy PUT, cockpit + settings wiring."
+  },
+  "gated_owner": {
+    "karar_8_camera": [
+      300,
+      307,
+      308,
+      326,
+      327,
+      333,
+      671
+    ],
+    "hardware_judgement": [
+      320
+    ]
+  },
+  "found_on_the_way": {
+    "sleep_policy_requires_camera": "the display-off-while-asleep decision requires fresh camera perception on top of LIKELY_ASLEEP, so no non-camera signal could ever trigger 333 - inferring sleep from input idle was rejected for the same reason (ADR-0155 decision 1).",
+    "tab_close_silence": "a closed camera tab left the server believing the eye was on until perception went stale; it is now evidence on the record.",
+    "sleep_flapped_back_to_rest": "pre-B48: escalating to LIKELY_ASLEEP started that state's own clock, and the next reading re-measured the 20-minute threshold from it, so sleep lasted one reading before RESTING returned; sleep now holds while the rest evidence does (regression: the 30-minute night rest test, mutation M12).",
+    "impossible_quiet_hour": "'25:00' parsed as minute 1500 and made a window every minute fell outside of; hours and minutes are range-checked and an impossible time changes nothing (mutation M13).",
+    "stream_stopped_crashed": "the new route built its ledger event without source_ref and returned 500 on its first call; the route test caught it before any gate, and every stop now has its own ref.",
+    "decay_scaled_confidence": "the first freshness weighting multiplied confidence down, which failed test_presence_engine's mild-conflict majority (0.343 < 0.35); it is a weighted average now.",
+    "route_tests_dialed_postgres": "the first B48 route tests used the app's real database identity runtime; they now use the presence routes' own SQLite fixture shape.",
+    "badge_union_lost_broken": "B45 closed the last BROKEN rows, the generated ImplClass union dropped BROKEN, and badges.ts's word for it became a TypeScript error that neither the fast gate (no web step) nor the badge vitest (no type check) could see; the implementation vocabulary is closed while its use is not.",
+    "family_page_panel_pin": "the settings page's inline onToggle arrow put a '>' between <AmbientPanel and `always`, so tests/pages/family-pages.test.ts (req 699: the reused panel must stay visible) failed in the full web suite; the handler is a named callback and `always` is last. The same test's 'no family page can change what it shows' comment named routines as the only exception; it now names the ambient switches (ADR-0155 decision 5) and pins them to updateAmbientPolicy."
+  },
+  "tests": {
+    "services/api/tests/unit/test_presence_b48.py": "freshness weighting (fresh-led > old-led, evenly aged keeps confidence) and decay=0 equivalence; quiet hours across midnight in their own zone; outside-quiet threshold; 30-minute rest = sleep at night / rest in the afternoon; owner quiet hours reach the engine on ingest; classify_window threshold; history route (list, 422 bound, owner gate); stream-stopped keeps consent",
+    "apps/web/tests/eye/b48-web.test.tsx": "tab notice only on server-on/local-off; toggles only with a handler, pressed state; PUT body and refusal words; keepalive stream-stopped, never a disable",
+    "regression suites rerun": "test_presence_* and test_ambient_* (430 passed), web tsc --noEmit clean, vitest eye/ cockpit/ features/ (604 passed); full suites: see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b48_mutate.py.",
+    "mutations": [
+      "M1 an observation counts fully until the instant it expires again (310) -> 1 failure(s).",
+      "M2 an afternoon nap reads as sleep: the quiet window never lengthens the threshold (312) -> 1 failure(s).",
+      "M3 classify_window ignores the time of day (312) -> 1 failure(s).",
+      "M4 the owner's quiet hours never reach the engine (313) -> 1 failure(s).",
+      "M5 a quiet window crossing midnight is never inside (312) -> 1 failure(s).",
+      "M6 a closed camera tab withdraws the owner's consent (301) -> 1 failure(s).",
+      "M7 the history route reads an unbounded or zero limit (330) -> 1 failure(s).",
+      "M8 the 'camera not running here' notice shows while the camera runs (303) -> 1 failure(s).",
+      "M9 the ambient switches appear where the panel must stay read-only (331) -> 1 failure(s).",
+      "M10 the closing tab's notice dies with the page (no keepalive) (301) -> 1 failure(s).",
+      "M11 flipping one switch silently writes another (332) -> 1 failure(s).",
+      "M12 sleep lasts one reading, then the threshold is re-measured from its own start (312) -> 1 failure(s).",
+      "M13 an impossible quiet hour (25:00) is read as a real window (312) -> 1 failure(s)."
+    ],
+    "result": "13/13 red; every file restored to its sha256 before the mutation."
+  },
+  "browser_check": "Next dev server (launch config web, port 3210) compiled the changed pages with no server errors; /settings and /core/cockpit stop at the owner sign-in screen, and the only console errors were refused connections to the Cloud Core API (127.0.0.1:8001, not running). Reaching the ambient panel needs a live API and the owner credential, which is not entered by the agent; the switches, the tab notice and the keepalive are proven by apps/web/tests/eye/b48-web.test.tsx.",
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED (pure engine, routes through create_app, web rendered with react-dom/server) plus a browser check of the panel and the eye control on the local web app. PROVEN_REAL for the posture signal and the sleep policy needs Karar 8."
+  },
+  "owner_gates": {
+    "karar_8": "decide whether a device camera may run (and with which retention rules - raw frames are never stored, rows 328/329).",
+    "row_320": "judge multi-monitor power behaviour on the owner's hardware."
+  }
+}

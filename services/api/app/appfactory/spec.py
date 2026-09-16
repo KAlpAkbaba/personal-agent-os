@@ -16,7 +16,7 @@ docstring states for its own numbers.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -31,8 +31,22 @@ APP_KINDS: tuple[str, ...] = (KIND_WEB_STATIC, KIND_WEB_API, KIND_CLI)
 TEMPLATE_TASK_TRACKER = "task-tracker"
 TEMPLATE_STATIC_PAGE = "static-page"
 TEMPLATE_CLI_TOOL = "cli-tool"
+#: B40 (req 425-434): the composed shape - not a template on disk but a plan the
+#: composer builds from the owner's requirements (app.appfactory.composer).
+TEMPLATE_COMPOSED = "composed"
+#: B40 (req 425-434): the composed shape - not a template on disk but a plan the
+#: composer builds from the owner's requirements (app.appfactory.composer).
+TEMPLATE_COMPOSED = "composed"
+#: B40 (req 425-434): the composed shape - not a template on disk but a plan the
+#: composer builds from the owner's requirements (app.appfactory.composer).
+TEMPLATE_COMPOSED = "composed"
 
-APP_TEMPLATES: tuple[str, ...] = (TEMPLATE_TASK_TRACKER, TEMPLATE_STATIC_PAGE, TEMPLATE_CLI_TOOL)
+APP_TEMPLATES: tuple[str, ...] = (
+    TEMPLATE_TASK_TRACKER,
+    TEMPLATE_STATIC_PAGE,
+    TEMPLATE_CLI_TOOL,
+    TEMPLATE_COMPOSED,
+)
 
 #: Every built-in template is pinned to exactly one kind (spec §1's table: "desktop/mobile
 #: are M28" — ``web_api`` names a kind no built-in template renders yet either, reserved
@@ -42,6 +56,7 @@ TEMPLATE_KIND: dict[str, str] = {
     TEMPLATE_TASK_TRACKER: KIND_WEB_STATIC,
     TEMPLATE_STATIC_PAGE: KIND_WEB_STATIC,
     TEMPLATE_CLI_TOOL: KIND_CLI,
+    TEMPLATE_COMPOSED: KIND_WEB_API,
 }
 
 MAX_NAME_CHARS = 100
@@ -55,6 +70,9 @@ MAX_TEXT_CHARS = 2_000
 _FIELD_TYPES = ("text", "number", "boolean", "date")
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+#: B41 (found on the way): a Turkish project name ("Kitaplık") must not become a
+#: mangled folder ("kitapl-k"); fold the six letters the way the composer already does.
+_TR_FOLD = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosucgiosu")
 
 
 def slug_for_name(name: str) -> str:
@@ -62,7 +80,7 @@ def slug_for_name(name: str) -> str:
     root, spec §1) — lowercase ASCII, dashes, bounded, never empty. Deterministic:
     the same name always slugifies the same way, the same discipline
     ``app.evolution.skills``'s own ``_ref_slugify`` uses for a skill's directory name."""
-    lowered = name.strip().lower()
+    lowered = name.strip().translate(_TR_FOLD).lower()
     slug = _SLUG_RE.sub("-", lowered).strip("-")
     if not slug:
         slug = "app"
@@ -152,7 +170,7 @@ class Command(_StrictModel):
 class AppSpec(_StrictModel):
     name: str = Field(min_length=1, max_length=MAX_NAME_CHARS)
     kind: Literal["web_static", "web_api", "cli"]
-    template: Literal["task-tracker", "static-page", "cli-tool"]
+    template: Literal["task-tracker", "static-page", "cli-tool", "composed"]
 
     # task-tracker
     entities: list[Entity] | None = Field(default=None, max_length=MAX_ENTITIES)
@@ -165,6 +183,18 @@ class AppSpec(_StrictModel):
 
     # cli-tool
     commands: list[Command] | None = Field(default=None, max_length=MAX_COMMANDS)
+    #: B40 (req 422): the parsed requirements a composed application is built from
+    #: (``app.appfactory.requirements.Requirements.as_dict()``) - what was read from the
+    #: owner's sentence, and what could not be.
+    requirements: dict[str, Any] | None = None
+    #: B40 (req 422): the parsed requirements a composed application is built from
+    #: (``app.appfactory.requirements.Requirements.as_dict()``) - what was read from the
+    #: owner's sentence, and what could not be.
+    requirements: dict[str, Any] | None = None
+    #: B40 (req 422): the parsed requirements a composed application is built from
+    #: (``app.appfactory.requirements.Requirements.as_dict()``) - what was read from the
+    #: owner's sentence, and what could not be.
+    requirements: dict[str, Any] | None = None
 
     @field_validator("name", "page_title", "page_heading")
     @classmethod
@@ -219,16 +249,30 @@ class AppSpec(_StrictModel):
             "page_heading": self.page_heading is not None,
             "page_body": self.page_body is not None,
             "commands": self.commands is not None,
+            "requirements": self.requirements is not None,
         }
         allowed: dict[str, tuple[str, ...]] = {
             TEMPLATE_TASK_TRACKER: ("entities", "screens"),
             TEMPLATE_STATIC_PAGE: ("page_title", "page_heading", "page_body"),
             TEMPLATE_CLI_TOOL: ("commands",),
+            TEMPLATE_COMPOSED: ("requirements",),
         }
         ok_fields = allowed[self.template]
         for field_name, is_present in present.items():
             if is_present and field_name not in ok_fields:
                 raise ValueError(f"template {self.template!r} must not carry {field_name!r}")
+        if self.template == TEMPLATE_COMPOSED:
+            entities = (self.requirements or {}).get("entities") or []
+            if not entities:
+                raise ValueError("composed requires at least one record kind in requirements")
+        if self.template == TEMPLATE_COMPOSED:
+            entities = (self.requirements or {}).get("entities") or []
+            if not entities:
+                raise ValueError("composed requires at least one record kind in requirements")
+        if self.template == TEMPLATE_COMPOSED:
+            entities = (self.requirements or {}).get("entities") or []
+            if not entities:
+                raise ValueError("composed requires at least one record kind in requirements")
         if self.template == TEMPLATE_CLI_TOOL:
             if not self.commands:
                 raise ValueError("cli-tool requires at least one command")
@@ -259,6 +303,9 @@ __all__ = [
     "MAX_TEXT_CHARS",
     "Screen",
     "TEMPLATE_CLI_TOOL",
+    "TEMPLATE_COMPOSED",
+    "TEMPLATE_COMPOSED",
+    "TEMPLATE_COMPOSED",
     "TEMPLATE_KIND",
     "TEMPLATE_STATIC_PAGE",
     "TEMPLATE_TASK_TRACKER",

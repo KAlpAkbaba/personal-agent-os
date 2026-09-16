@@ -37,6 +37,7 @@ export const EXECUTIVE_OUTCOME_NO_STATE_TR: Record<ExecutiveChipAction, string> 
   pause: "Duraklatma isteği iletildi; makbuz durumu bildirmedi.",
   resume: "Sürdürme isteği iletildi; makbuz durumu bildirmedi.",
   cancel: "İptal isteği iletildi; makbuz durumu bildirmedi.",
+  approve: "Onay iletildi; makbuz durumu bildirmedi.",
 };
 
 /** The first letter up, the Turkish way (`i` → `İ`), for a state word opening a sentence. */
@@ -77,6 +78,8 @@ function call(client: ExecutiveClient, action: ExecutiveChipAction, id: string):
       return client.resume(id);
     case "cancel":
       return client.cancel(id);
+    case "approve":
+      return client.approve(id);
   }
 }
 
@@ -148,6 +151,7 @@ export function useExecutiveControl(client: ExecutiveClient, onSettled?: () => v
       onPause: (id: string) => run("pause", id),
       onResume: (id: string) => run("resume", id),
       onCancel: (id: string) => run("cancel", id),
+      onApprove: (id: string) => run("approve", id),
     }),
     [state, run],
   );

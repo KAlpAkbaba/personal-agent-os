@@ -160,9 +160,10 @@ def test_check_is_a_query_and_the_rest_are_actions():
 
 
 def test_all_eight_spec_tools_are_registered():
-    """Spec §6 names eight tools. ``native.install`` has no utterance of its own in that
-    list and is registered all the same - the model reaches it after a package exists,
-    the same way ``artifact.render`` is reached with no ARTIFACT_RENDER intent."""
+    """Spec §6 names eight tools; B33 (req 462-471) adds the four of the lifecycle after
+    the build. ``native.install`` has no utterance of its own in that list and is
+    registered all the same - the model reaches it after a package exists, the same way
+    ``artifact.render`` is reached with no ARTIFACT_RENDER intent."""
     registered = set(default_registry().names())
     assert set(NATIVE_TOOL_NAMES) <= registered
     assert set(NATIVE_TOOL_NAMES) == {
@@ -174,6 +175,10 @@ def test_all_eight_spec_tools_are_registered():
         "native.check",
         "native.fix",
         "native.rebuild",
+        "native.verify",
+        "native.log",
+        "native.uninstall",
+        "native.update",
     }
 
 

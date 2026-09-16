@@ -11,11 +11,11 @@ from enum import StrEnum
 class MemoryClass(StrEnum):
     """The six first-class memory classes (M5 brief + MEMORY_SPEC §2)."""
 
-    PREFERENCE = "preference"          # owner/profile: explicit + inferred
-    EPISODIC = "episodic"              # what happened, when, where
-    PROJECT = "project"                # project identity/decisions/context
-    SEMANTIC = "semantic"              # learned facts with provenance/validity
-    PROCEDURAL = "procedural"          # repeated workflows / proposed procedures
+    PREFERENCE = "preference"  # owner/profile: explicit + inferred
+    EPISODIC = "episodic"  # what happened, when, where
+    PROJECT = "project"  # project identity/decisions/context
+    SEMANTIC = "semantic"  # learned facts with provenance/validity
+    PROCEDURAL = "procedural"  # repeated workflows / proposed procedures
     VOICE_PREFERENCE = "voice_preference"  # narration/pronunciation/style
 
 
@@ -39,16 +39,16 @@ class MemoryStatus(StrEnum):
 
 
 class RetentionClass(StrEnum):
-    SESSION = "session"    # ephemeral; swept after the session ends
-    SHORT = "short"        # short-lived observations
+    SESSION = "session"  # ephemeral; swept after the session ends
+    SHORT = "short"  # short-lived observations
     STANDARD = "standard"  # default durable retention
-    PINNED = "pinned"      # owner-pinned; never auto-expired or auto-rewritten
+    PINNED = "pinned"  # owner-pinned; never auto-expired or auto-rewritten
 
 
 class Actor(StrEnum):
     """Who caused a memory mutation (audit + authority ordering)."""
 
-    OWNER = "owner"    # explicit owner instruction — highest authority
+    OWNER = "owner"  # explicit owner instruction — highest authority
     SYSTEM = "system"  # deterministic system bookkeeping
     POLICY = "policy"  # inference/write-policy decisions — lowest authority
 

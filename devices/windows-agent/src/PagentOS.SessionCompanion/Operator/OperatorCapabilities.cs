@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Management;
 using System.Runtime.Versioning;
 using System.Text.Json.Nodes;
 using System.Windows.Automation;
@@ -144,6 +145,9 @@ public sealed class OperatorCapabilities
             ["powershell"] = TerminalRunner.DefaultPowerShellPath(),
             ["chrome"] = chrome,
             ["msedge"] = edge,
+            // B39 (req 123): the Settings app. Its window is hosted by ApplicationFrameHost,
+            // so the Cloud Core verifies it by title; it takes no arguments (ArgumentPolicy.None).
+            ["settings"] = Path.Combine(windows, "ImmersiveControlPanel", "SystemSettings.exe"),
         };
     }
 
@@ -247,6 +251,10 @@ public sealed class OperatorCapabilities
             OperatorCapabilityNames.TerminalOpen => TerminalOpen(payload, cancellationToken),
             OperatorCapabilityNames.TerminalExecute => TerminalExecute(payload, cancellationToken),
             OperatorCapabilityNames.TerminalStatus => TerminalStatus(payload),
+            OperatorCapabilityNames.ProcessList => ProcessList(payload),
+            OperatorCapabilityNames.ProcessStop => ProcessStop(payload, cancellationToken),
+            OperatorCapabilityNames.ServiceStatus => ServiceStatus(payload),
+            OperatorCapabilityNames.ServiceRestart => ServiceRestart(payload, cancellationToken),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
 
@@ -1081,6 +1089,394 @@ public sealed class OperatorCapabilities
             ["tracked"] = tracked is not null,
             ["observed"] = new JsonObject { ["alive"] = alive, ["windows"] = new JsonArray([.. Registry.Enumerate(pid).Select(w => (JsonNode)w.WindowId)]) },
         };
+    }
+
+    // ================================================================== process.* / service.* (B30)
+
+    /// <summary>
+    /// B30 requirement 120: the images <c>process.stop</c> may be asked for — the owner's own
+    /// applications, never a system process. Held equal to
+    /// <c>packages/protocol/operator-allowlists.json</c> by <c>OperatorAllowlistsContractTests</c>;
+    /// the Cloud Core reads the same file and refuses before asking, this device refuses again
+    /// before touching anything.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DefaultStoppableImages =
+    [
+        "notepad.exe", "calc.exe", "calculatorapp.exe", "mspaint.exe", "chrome.exe", "msedge.exe",
+    ];
+
+    /// <summary>B30 requirement 122: the services <c>service.restart</c> may be asked for.</summary>
+    public static readonly IReadOnlyList<string> DefaultRestartableServices = ["Spooler"];
+
+    /// <summary>How long a stopped process is given to leave after WM_CLOSE before the answer is "not closed".</summary>
+    public static readonly TimeSpan ProcessStopWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a service is given to reach Stopped, then Running, on a restart.</summary>
+    public static readonly TimeSpan ServiceWait = TimeSpan.FromSeconds(20);
+
+    private static string BareImage(string value)
+    {
+        var bare = value.Replace('\\', '/');
+        var slash = bare.LastIndexOf('/');
+        if (slash >= 0)
+        {
+            bare = bare[(slash + 1)..];
+        }
+
+        return bare.Trim().ToLowerInvariant();
+    }
+
+    private static string ImageOf(Process process)
+    {
+        try
+        {
+            var path = process.MainModule?.FileName;
+            if (!string.IsNullOrEmpty(path))
+            {
+                return BareImage(path);
+            }
+        }
+        catch (Exception)
+        {
+            // Access denied on another user's / a protected process: the name is still known.
+        }
+
+        return process.ProcessName.ToLowerInvariant() + ".exe";
+    }
+
+    private List<(Process Process, string Image)> ProcessesNamed(string? image)
+    {
+        var wanted = image is null ? null : BareImage(image);
+        var wantedBare = wanted is null ? null : Path.GetFileNameWithoutExtension(wanted);
+        var found = new List<(Process, string)>();
+        foreach (var process in Process.GetProcesses())
+        {
+            string current;
+            try
+            {
+                if (process.HasExited)
+                {
+                    process.Dispose();
+                    continue;
+                }
+
+                current = ImageOf(process);
+            }
+            catch (Exception)
+            {
+                process.Dispose();
+                continue;
+            }
+
+            if (wanted is null
+                || string.Equals(current, wanted, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(process.ProcessName, wantedBare, StringComparison.OrdinalIgnoreCase))
+            {
+                found.Add((process, current));
+            }
+            else
+            {
+                process.Dispose();
+            }
+        }
+
+        return found;
+    }
+
+    private JsonObject ProcessRow(Process process, string image)
+    {
+        var pid = process.Id;
+        var windows = Registry.Enumerate(pid);
+        string? title = null;
+        try
+        {
+            title = process.MainWindowTitle;
+        }
+        catch (Exception)
+        {
+            // Not ours to read.
+        }
+
+        return new JsonObject
+        {
+            ["pid"] = pid,
+            ["image"] = image,
+            ["name"] = Path.GetFileNameWithoutExtension(image),
+            ["window_count"] = windows.Count,
+            ["title"] = string.IsNullOrEmpty(title) ? null : title,
+        };
+    }
+
+    /// <summary>
+    /// B30 requirement 119: what runs right now, optionally only the processes of one image. A
+    /// read; <c>observed.count</c> is the number returned. The list is capped at 200 rows
+    /// (a desktop runs a few hundred processes; an unfiltered listing is for "hangi
+    /// uygulamalar açık", where the ones WITH a window come first).
+    /// </summary>
+    private JsonObject ProcessList(JsonObject payload)
+    {
+        var image = payload["name"] is null ? null : RequireString(payload, "name", 260);
+        var found = ProcessesNamed(image);
+        try
+        {
+            var rows = found
+                .Select(pair => ProcessRow(pair.Process, pair.Image))
+                .OrderByDescending(row => row["window_count"]!.GetValue<int>())
+                .ThenBy(row => row["image"]!.GetValue<string>(), StringComparer.OrdinalIgnoreCase)
+                .Take(200)
+                .ToList();
+            return new JsonObject
+            {
+                ["processes"] = new JsonArray([.. rows.Select(r => (JsonNode)r)]),
+                ["filter"] = image is null ? null : BareImage(image),
+                ["observed"] = new JsonObject { ["count"] = rows.Count, ["total"] = found.Count },
+            };
+        }
+        finally
+        {
+            foreach (var (process, _) in found)
+            {
+                process.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// B30 requirement 120: end every process of one allowlisted image. WM_CLOSE to each of
+    /// its top-level windows first (a save prompt is reported as <c>modal</c>, never answered);
+    /// <c>force</c> terminates what is still there after the wait. Never a system process:
+    /// the image must be in <see cref="DefaultStoppableImages"/> or the answer is
+    /// <c>permission_denied</c> before any process is looked at.
+    /// </summary>
+    private JsonObject ProcessStop(JsonObject payload, CancellationToken cancellationToken)
+    {
+        var image = BareImage(RequireString(payload, "name", 260));
+        var force = OptionalBool(payload, "force") ?? false;
+        if (!DefaultStoppableImages.Contains(image, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new CapabilityException(
+                ErrorClasses.PermissionDenied,
+                $"'{image}' is not an image the stop policy allows ({string.Join(", ", DefaultStoppableImages)}); nothing was stopped",
+                retryable: false);
+        }
+
+        var found = ProcessesNamed(image);
+        var pids = found.Select(pair => pair.Process.Id).ToList();
+        foreach (var (process, _) in found)
+        {
+            process.Dispose();
+        }
+
+        if (pids.Count == 0)
+        {
+            return new JsonObject
+            {
+                ["stopped"] = true,
+                ["name"] = image,
+                ["method"] = "none_running",
+                ["pids"] = new JsonArray(),
+                ["observed"] = new JsonObject { ["remaining"] = 0 },
+            };
+        }
+
+        var before = new HashSet<long>();
+        foreach (var pid in pids)
+        {
+            foreach (var window in Registry.Enumerate(pid).Where(w => !w.Owned))
+            {
+                before.Add(window.Handle.ToInt64());
+                WindowActions.RequestClose(window.Handle);
+            }
+        }
+
+        JsonObject? modal = null;
+        WindowActions.WaitUntil(
+            () =>
+            {
+                if (pids.All(pid => !IsAlive(pid)))
+                {
+                    return true;
+                }
+
+                foreach (var pid in pids.Where(IsAlive))
+                {
+                    modal = DetectModal(pid, before);
+                    if (modal is not null)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            force ? TimeSpan.FromMilliseconds(1500) : ProcessStopWait,
+            cancellationToken,
+            stepMs: 100);
+
+        var method = "wm_close";
+        if (pids.Any(IsAlive) && force)
+        {
+            foreach (var pid in pids.Where(IsAlive))
+            {
+                Terminate(pid);
+            }
+
+            WindowActions.WaitUntil(() => pids.All(pid => !IsAlive(pid)), TimeSpan.FromSeconds(3), cancellationToken, stepMs: 100);
+            method = "terminated";
+            modal = null;
+        }
+
+        var remaining = pids.Where(IsAlive).ToList();
+        var result = new JsonObject
+        {
+            ["stopped"] = remaining.Count == 0,
+            ["name"] = image,
+            ["method"] = method,
+            ["pids"] = new JsonArray([.. pids.Select(p => (JsonNode)p)]),
+            ["observed"] = new JsonObject
+            {
+                ["remaining"] = remaining.Count,
+                ["remaining_pids"] = new JsonArray([.. remaining.Select(p => (JsonNode)p)]),
+            },
+        };
+        if (modal is not null)
+        {
+            result["modal"] = modal;
+        }
+
+        return result;
+    }
+
+    private static string ServiceName(JsonObject payload)
+    {
+        var name = RequireString(payload, "name", 256);
+        if (name.IndexOfAny(['\'', '"', ';', '\\', '/', '\r', '\n', '\0']) >= 0)
+        {
+            throw new CapabilityException(ErrorClasses.ValidationError, "payload.name is not a service name", retryable: false);
+        }
+
+        return name;
+    }
+
+    private static ManagementObject? FindService(string name)
+    {
+        using var searcher = new ManagementObjectSearcher($"SELECT Name, DisplayName, State, StartMode, ProcessId FROM Win32_Service WHERE Name = '{name}'");
+        using var results = searcher.Get();
+        foreach (var item in results)
+        {
+            return (ManagementObject)item;
+        }
+
+        return null;
+    }
+
+    private static JsonObject ServiceRow(ManagementObject service) => new()
+    {
+        ["name"] = service["Name"] as string,
+        ["display_name"] = service["DisplayName"] as string,
+        ["state"] = service["State"] as string,
+        ["start_mode"] = service["StartMode"] as string,
+        ["pid"] = service["ProcessId"] is null ? null : Convert.ToInt32(service["ProcessId"], CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>B30 requirement 121: one service's state, read from the Service Control Manager (Win32_Service). Any name; a read.</summary>
+    private static JsonObject ServiceStatus(JsonObject payload)
+    {
+        var name = ServiceName(payload);
+        using var service = FindService(name)
+            ?? throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"no service named '{name}'", retryable: false);
+        var row = ServiceRow(service);
+        row["observed"] = new JsonObject { ["state"] = row["state"]?.GetValue<string>() };
+        return row;
+    }
+
+    private static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return new System.Security.Principal.WindowsPrincipal(identity).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+    }
+
+    private static string? ServiceStateNow(string name)
+    {
+        using var service = FindService(name);
+        return service?["State"] as string;
+    }
+
+    /// <summary>
+    /// B30 requirement 122: stop then start one service the restart policy names, and re-read
+    /// its state until it is Running. Refused with <c>permission_denied</c> for any other
+    /// service and for an unelevated companion — the Service Control Manager would refuse
+    /// too, but this answer names the reason (UAC is the owner's) instead of an access error.
+    /// </summary>
+    private static JsonObject ServiceRestart(JsonObject payload, CancellationToken cancellationToken)
+    {
+        var name = ServiceName(payload);
+        if (!DefaultRestartableServices.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new CapabilityException(
+                ErrorClasses.PermissionDenied,
+                $"'{name}' is not a service the restart policy allows ({string.Join(", ", DefaultRestartableServices)}); nothing was restarted",
+                retryable: false);
+        }
+
+        if (!IsElevated())
+        {
+            throw new CapabilityException(
+                ErrorClasses.PermissionDenied,
+                $"restarting '{name}' needs an elevated companion (UAC); this one is not elevated and nothing was restarted",
+                retryable: false);
+        }
+
+        using var service = FindService(name)
+            ?? throw new CapabilityException(ErrorClasses.UiTargetNotFound, $"no service named '{name}'", retryable: false);
+        var canonical = service["Name"] as string ?? name;
+        var before = service["State"] as string;
+
+        if (string.Equals(before, "Running", StringComparison.OrdinalIgnoreCase) || string.Equals(before, "Start Pending", StringComparison.OrdinalIgnoreCase))
+        {
+            Invoke(service, "StopService");
+            WindowActions.WaitUntil(
+                () => string.Equals(ServiceStateNow(canonical), "Stopped", StringComparison.OrdinalIgnoreCase),
+                ServiceWait,
+                cancellationToken,
+                stepMs: 250);
+        }
+
+        using var again = FindService(canonical)
+            ?? throw new CapabilityException(ErrorClasses.UiStateChanged, $"'{canonical}' vanished while restarting", retryable: false);
+        Invoke(again, "StartService");
+        WindowActions.WaitUntil(
+            () => string.Equals(ServiceStateNow(canonical), "Running", StringComparison.OrdinalIgnoreCase),
+            ServiceWait,
+            cancellationToken,
+            stepMs: 250);
+
+        using var after = FindService(canonical)
+            ?? throw new CapabilityException(ErrorClasses.UiStateChanged, $"'{canonical}' vanished while restarting", retryable: false);
+        var row = ServiceRow(after);
+        var state = row["state"]?.GetValue<string>();
+        row["restarted"] = string.Equals(state, "Running", StringComparison.OrdinalIgnoreCase);
+        row["state_before"] = before;
+        row["observed"] = new JsonObject { ["state"] = state };
+        return row;
+    }
+
+    private static void Invoke(ManagementObject service, string method)
+    {
+        var code = Convert.ToInt32(service.InvokeMethod(method, null), CultureInfo.InvariantCulture);
+        // Win32_Service return codes: 0 success, 10 already running / 5 already stopped are
+        // not failures for a restart; 2 is access denied.
+        if (code is 0 or 5 or 10)
+        {
+            return;
+        }
+
+        if (code == 2)
+        {
+            throw new CapabilityException(ErrorClasses.PermissionDenied, $"{method} on '{service["Name"]}' was refused by the Service Control Manager (access denied)", retryable: false);
+        }
+
+        throw new CapabilityException(ErrorClasses.UiStateChanged, $"{method} on '{service["Name"]}' returned {code}", retryable: true);
     }
 
     // ================================================================== helpers: windows + processes

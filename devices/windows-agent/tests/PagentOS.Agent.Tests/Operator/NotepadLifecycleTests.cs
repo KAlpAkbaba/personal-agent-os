@@ -237,4 +237,100 @@ public sealed class NotepadLifecycleTests : IDisposable
         Assert.NotEmpty(screen["monitors"]!.AsArray());
         Assert.Equal(windowId, screen["foreground"]!["window_id"]!.GetValue<string>());
     }
+
+    /// <summary>
+    /// B28 (req 92/93/98): the input the cloud can now ask for, on this desktop, each read back.
+    /// A key press lands where the caret is (Home, then a typed letter appears at the FRONT of
+    /// the document); a chord is a chord (Ctrl+A then Delete empties it); a scroll is guarded
+    /// and echoes its notches with the cursor re-observed inside the window. Every assertion
+    /// is on something the companion READ after acting, the same discipline as the lifecycle
+    /// test above.
+    /// </summary>
+    [LabFact]
+    public void A_key_a_chord_and_a_scroll_are_guarded_and_re_observed()
+    {
+        var (_, windowId, window) = _lab.LaunchNotepad();
+        _lab.Activate(windowId);
+        _lab.Exec(OperatorCapabilityNames.KeyboardType, new JsonObject { ["window_id"] = windowId, ["text"] = "abc" });
+        Assert.Equal("abc", _lab.WaitForDocument(windowId, "abc"));
+
+        // keyboard.key: Home moves the caret to the front, and the next character proves it.
+        _lab.Activate(windowId);
+        var home = _lab.Exec(OperatorCapabilityNames.KeyboardKey, new JsonObject { ["window_id"] = windowId, ["key"] = "home" });
+        Assert.Equal("home", home["key"]!.GetValue<string>());
+        Assert.Equal(windowId, home["observed"]!["window"]?["window_id"]?.GetValue<string>());
+        _lab.Activate(windowId);
+        _lab.Exec(OperatorCapabilityNames.KeyboardType, new JsonObject { ["window_id"] = windowId, ["text"] = "X" });
+        Assert.Equal("Xabc", _lab.WaitForDocument(windowId, "Xabc"));
+
+        // keyboard.shortcut: Ctrl+A selects everything; keyboard.key Delete removes it.
+        _lab.Activate(windowId);
+        var chord = _lab.Exec(OperatorCapabilityNames.KeyboardShortcut, new JsonObject { ["window_id"] = windowId, ["keys"] = new JsonArray("ctrl", "a") });
+        Assert.Equal(new[] { "ctrl", "a" }, chord["keys"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray());
+        _lab.Activate(windowId);
+        _lab.Exec(OperatorCapabilityNames.KeyboardKey, new JsonObject { ["window_id"] = windowId, ["key"] = "delete" });
+        Assert.Equal(string.Empty, _lab.WaitForDocument(windowId, string.Empty));
+
+        // pointer.scroll: three notches at the window's centre, guarded, cursor re-observed
+        // within two pixels and the notches echoed back.
+        var rect = window["rect"]!;
+        var x = Math.Max(0, rect["width"]!.GetValue<int>() / 2);
+        var y = Math.Max(0, rect["height"]!.GetValue<int>() / 2);
+        _lab.Activate(windowId);
+        var scroll = _lab.Exec(OperatorCapabilityNames.PointerScroll, new JsonObject { ["window_id"] = windowId, ["x"] = x, ["y"] = y, ["delta"] = -3 });
+        Assert.Equal(-3, scroll["delta"]!.GetValue<int>());
+        var cursor = scroll["observed"]!["cursor"]!;
+        Assert.InRange(cursor["x"]!.GetValue<int>(), scroll["screen_x"]!.GetValue<int>() - 2, scroll["screen_x"]!.GetValue<int>() + 2);
+        Assert.InRange(cursor["y"]!.GetValue<int>(), scroll["screen_y"]!.GetValue<int>() - 2, scroll["screen_y"]!.GetValue<int>() + 2);
+
+        // A key the vocabulary does not know is refused BEFORE anything is sent.
+        var refused = _lab.ExpectFailure(OperatorCapabilityNames.KeyboardKey, new JsonObject { ["window_id"] = windowId, ["key"] = "hyperspace" });
+        Assert.Equal(ErrorClasses.ValidationError, refused.ErrorClass);
+    }
+
+    /// <summary>
+    /// B29 (req 100/111): the cloud's <c>ui_invoke</c> plan, run against a real dialog on this
+    /// desktop. An unsaved Notepad is asked to close, the save prompt appears, its "Don't save"
+    /// button is FOUND through the tree (ui.inspect), INVOKED through UI Automation (ui.invoke),
+    /// and the result is read from a source the invoke did not write: the window list no longer
+    /// carries the dialog or the editor. Every assertion is on the companion's own read-back.
+    /// </summary>
+    [LabFact]
+    public void A_dialog_button_invoked_through_UI_Automation_is_verified_by_an_independent_read()
+    {
+        var (pid, windowId, _) = _lab.LaunchNotepad();
+        _lab.Activate(windowId);
+        _lab.Exec(OperatorCapabilityNames.KeyboardType, new JsonObject { ["window_id"] = windowId, ["text"] = "unsaved" });
+        Assert.Equal("unsaved", _lab.WaitForDocument(windowId, "unsaved"));
+
+        var attempt = _lab.Exec(OperatorCapabilityNames.WindowClose, new JsonObject { ["window_id"] = windowId });
+        var modal = attempt["modal"] as JsonObject;
+        Assert.NotNull(modal);
+        var dialogId = modal!["window_id"]!.GetValue<string>();
+
+        // OBSERVE: the button exists in the dialog's tree, by name.
+        var buttons = modal["dialog"]!["buttons"]!.AsArray().Select(b => b!["name"]!.GetValue<string>()).ToList();
+        var dontSave = buttons.FirstOrDefault(n => n.Contains("Kaydetme", StringComparison.OrdinalIgnoreCase) || n.Contains("Don't", StringComparison.OrdinalIgnoreCase));
+        if (dontSave is null)
+        {
+            // Not this locale: dismiss and force, so the lab leaves nothing behind.
+            _lab.Exec(OperatorCapabilityNames.KeyboardKey, new JsonObject { ["window_id"] = dialogId, ["key"] = "escape" });
+            _lab.Exec(OperatorCapabilityNames.AppClose, new JsonObject { ["pid"] = pid, ["force"] = true });
+            return;
+        }
+
+        var found = _lab.Exec(OperatorCapabilityNames.UiInspect, new JsonObject { ["window_id"] = dialogId, ["name"] = dontSave });
+        Assert.Equal(dontSave, found["root"]!["name"]!.GetValue<string>());
+
+        // ACT: invoke through the Invoke pattern; the companion reports the element gone.
+        var invoked = _lab.Exec(OperatorCapabilityNames.UiInvoke, new JsonObject { ["window_id"] = dialogId, ["name"] = dontSave });
+        Assert.True(invoked["invoked"]!.GetValue<bool>());
+        Assert.False(invoked["observed"]!["element_present"]!.GetValue<bool>());
+
+        // VERIFY, independently: the process is gone and neither window is listed.
+        Assert.True(OperatorLab.WaitForExit(pid, TimeSpan.FromSeconds(5)));
+        var windows = _lab.Exec(OperatorCapabilityNames.WindowList, new JsonObject())["windows"]!.AsArray();
+        Assert.DoesNotContain(windows, w => w!["window_id"]!.GetValue<string>() == dialogId);
+        Assert.DoesNotContain(windows, w => w!["window_id"]!.GetValue<string>() == windowId);
+    }
 }

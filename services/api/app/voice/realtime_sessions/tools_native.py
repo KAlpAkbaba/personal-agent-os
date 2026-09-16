@@ -1,9 +1,18 @@
 """The Native App Factory's voice tools (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6).
 
-Eight tools - ``native.create | build | package | install | launch | check | fix |
-rebuild`` - registered from ``tools.default_registry()`` by ONE added line
-(:func:`register_native_tools`), the same discipline ``tools_apps``/``tools_creative``
-already establish for their own families.
+Twelve tools - ``native.create | build | package | install | launch | check | fix |
+rebuild`` and, since B33, ``native.verify | log | uninstall | update`` - registered from
+``tools.default_registry()`` by ONE added line (:func:`register_native_tools`), the same
+discipline ``tools_apps``/``tools_creative`` already establish for their own families.
+
+**B33 (req 456-473).** ``install``, ``launch`` and ``fix`` were dead until this batch -
+each waited on a ``ctx.live`` port nothing registered. They now go through the enrolled
+DEVICE (``app.nativefactory.device_lifecycle``): ``app.launch`` + ``ui.inspect`` for the
+launch, ``project.install`` / ``project.uninstall`` for the shortcut, the 26.15 flow for
+``verify`` (type a note through UI Automation, add it, close, relaunch, read the count and
+the app's own log), and a regenerate-and-rebuild on the device for ``fix``. Every receipt
+is what the device answered. The signing policy (``app.nativefactory.signing``) is spoken
+with every package: unsigned, and why.
 
 Thin adapters, and deliberately so: every decision that could be wrong lives in
 ``app.nativefactory`` (the spec's one door ``parse_spec``, the stack rule ``choose``,
@@ -56,6 +65,16 @@ from app.actions.receipt import (
 from app.ledger.vocabulary import SUBSYSTEM_NATIVEFACTORY
 from app.logging import get_logger
 from app.nativefactory.device_build import build_on_device
+from app.nativefactory.device_lifecycle import (
+    inspect_window,
+    install_on_device,
+    launch_on_device,
+    package_on_device,
+    read_log_on_device,
+    row_is_launchable,
+    uninstall_on_device,
+    verify_on_device,
+)
 from app.nativefactory.models import (
     STATE_FAILED,
     STATE_MISMATCH,
@@ -72,6 +91,7 @@ from app.nativefactory.service import (
     publish_and_validate,
     receipt_for,
 )
+from app.nativefactory.signing import policy_from_settings
 from app.nativefactory.spec import (
     ANDROID_TARGETS,
     NATIVE_TARGETS,
@@ -106,6 +126,12 @@ TOOL_NATIVE_CHECK: Final = "native.check"
 TOOL_NATIVE_FIX: Final = "native.fix"
 TOOL_NATIVE_REBUILD: Final = "native.rebuild"
 
+# B33 req 462-471: the lifecycle after the build.
+TOOL_NATIVE_VERIFY: Final = "native.verify"
+TOOL_NATIVE_LOG: Final = "native.log"
+TOOL_NATIVE_UNINSTALL: Final = "native.uninstall"
+TOOL_NATIVE_UPDATE: Final = "native.update"
+
 NATIVE_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_NATIVE_CREATE,
     TOOL_NATIVE_BUILD,
@@ -115,6 +141,10 @@ NATIVE_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_NATIVE_CHECK,
     TOOL_NATIVE_FIX,
     TOOL_NATIVE_REBUILD,
+    TOOL_NATIVE_VERIFY,
+    TOOL_NATIVE_LOG,
+    TOOL_NATIVE_UNINSTALL,
+    TOOL_NATIVE_UPDATE,
 )
 
 #: Error classes, in the project taxonomy's own spelling (app.voice.errors). Named here
@@ -266,6 +296,17 @@ def _refused(
         error_class=error_class,
         extra=extra,
     )
+
+
+def _facts_settings(ctx: ToolContext) -> Any:
+    """The settings the signing policy reads (B33 req 472): injected in a test, the
+    process's own otherwise."""
+    injected = ctx.live.get("settings")
+    if injected is not None:
+        return injected
+    from app.config import get_settings
+
+    return get_settings()
 
 
 def _row_summary(row: NativeBuildRow) -> dict[str, Any]:
@@ -486,9 +527,7 @@ def _run_lifecycle(
             error_class=row.error_class,
             extra={"build": _row_summary(row)},
         )
-    row = publish_and_validate(
-        db, row, runner, dotnet=facts.dotnet, out_dir=workdir / "publish"
-    )
+    row = publish_and_validate(db, row, runner, dotnet=facts.dotnet, out_dir=workdir / "publish")
     return _receipt(
         ctx,
         capability=capability,
@@ -570,9 +609,7 @@ def native_rebuild(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     payload["version"] = _next_version(str(arguments.get("version") or previous.version))
     facts = _facts(ctx)
     try:
-        rows = plan_build(
-            db, payload, facts=facts, on_device=_builds_on_device(ctx, facts)
-        )
+        rows = plan_build(db, payload, facts=facts, on_device=_builds_on_device(ctx, facts))
     except NativeFactoryError as exc:
         return _refused(
             ctx,
@@ -620,6 +657,11 @@ def native_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
             extra={"build": _row_summary(row), "owner_action": "33"},
         )
     publish_dir = Path(row.artifact_path).parent if row.artifact_path else None
+    device = ctx.live.get("device_action")
+    if publish_dir is not None and not publish_dir.is_dir() and device is not None:
+        # B33 req 456/457: a device build's output is on the DEVICE; project.package makes
+        # the zip or the MSIX there and answers the path and the hash it observed.
+        return _package_on_device(ctx, row, device, target=target)
     if publish_dir is None or not publish_dir.is_dir():
         return _refused(
             ctx,
@@ -648,7 +690,12 @@ def native_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     # What was actually made, and - when an MSIX was what the owner's word meant - what
     # was NOT. A tool that answered "kurulum dosyası" with a zip and left it there would
     # be the same rounding-up this milestone exists to refuse.
-    msix_note = f" {SPEECH_MSIX_IS_THE_DEVICES}" if target == TARGET_WINDOWS_MSIX else ""
+    policy = policy_from_settings(_facts_settings(ctx))
+    msix_note = (
+        f" {SPEECH_MSIX_IS_THE_DEVICES} {policy.speech_for('msix')}"
+        if target == TARGET_WINDOWS_MSIX
+        else f" {policy.speech_for('portable')}"
+    )
     return _receipt(
         ctx,
         capability=TOOL_NATIVE_PACKAGE,
@@ -661,6 +708,50 @@ def native_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         ),
         server={"package": str(package.path), "signed": package.signed},
         extra={"build": _row_summary(row), "package_path": str(package.path)},
+    )
+
+
+def _package_on_device(
+    ctx: ToolContext, row: NativeBuildRow, device: Any, *, target: str
+) -> dict[str, Any]:
+    kind = "msix" if target == TARGET_WINDOWS_MSIX else "portable"
+    policy = policy_from_settings(_facts_settings(ctx))
+    outcome = package_on_device(device, row, kind=kind)
+    if not outcome.ok:
+        speech = (
+            f"{row.display_name} için MSIX yapamadım efendim: cihazda makeappx yok."
+            if kind == "msix" and outcome.error_class == ERROR_DEPENDENCY_UNAVAILABLE
+            else f"{row.display_name} paketlenemedi efendim: {outcome.message[:160]}"
+        )
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_PACKAGE,
+            requested_state=target,
+            speech=speech,
+            error_class=outcome.error_class or "device_error",
+            extra={"build": _row_summary(row), "signing": policy.as_dict()},
+        )
+    package = outcome.result
+    row.artifact_json = {**dict(row.artifact_json or {}), "package": {**package, "kind": kind}}
+    row.updated_at = datetime.now(UTC)
+    _require_db(ctx, TOOL_NATIVE_PACKAGE).commit()
+    size_kb = int(package.get("bytes") or 0) // 1024
+    return _receipt(
+        ctx,
+        capability=TOOL_NATIVE_PACKAGE,
+        requested_state=target,
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        speech=(
+            f"{row.display_name} cihazda paketlendi efendim: {package.get('name')}, "
+            f"{size_kb} KB. {policy.speech_for(kind)}"
+        ),
+        server={"package": package.get("path"), "sha256": package.get("sha256"), "signed": False},
+        extra={
+            "build": _row_summary(row),
+            "package_path": package.get("path"),
+            "signing": policy.as_dict(),
+        },
     )
 
 
@@ -677,25 +768,69 @@ def native_install(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     """
     db = _require_db(ctx, TOOL_NATIVE_INSTALL)
     row = _resolve_row(ctx, db, arguments)
-    installer = ctx.live.get("native_installer")
-    if installer is None:
+    if row is None:
+        return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
+    # B33 req 468: the install IS the device's - project.install writes a Start Menu
+    # shortcut to the executable the device built and records it; the receipt carries what
+    # the device observed afterwards, never a claim from here.
+    device = ctx.live.get("device_action")
+    if device is None:
         return _refused(
             ctx,
             capability=TOOL_NATIVE_INSTALL,
-            requested_state=(row.target if row is not None else "unknown"),
+            requested_state=row.target,
             speech=SPEECH_INSTALL_NEEDS_DEVICE,
             error_class=ERROR_DEPENDENCY_UNAVAILABLE,
-            extra={"build": _row_summary(row) if row is not None else None},
+            extra={"build": _row_summary(row)},
         )
-    result = installer.install(row)
+    if not row.artifact_path:
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_INSTALL,
+            requested_state=row.target,
+            speech=SPEECH_NO_ARTIFACT_TO_LAUNCH,
+            error_class=ERROR_VALIDATION,
+            extra={"build": _row_summary(row)},
+        )
+    if row.target == TARGET_WINDOWS_MSIX:
+        policy = policy_from_settings(_facts_settings(ctx))
+        if not policy.signs:
+            # An unsigned MSIX cannot be installed on the owner's machine without their
+            # certificate decision (472/473); the portable shortcut install is offered.
+            return _refused(
+                ctx,
+                capability=TOOL_NATIVE_INSTALL,
+                requested_state=row.target,
+                speech=policy.speech_for("msix"),
+                error_class="signing_not_decided",
+                extra={
+                    "build": _row_summary(row),
+                    "signing": policy.as_dict(),
+                    "owner_action": "472",
+                },
+            )
+    outcome = install_on_device(device, row)
+    if not outcome.ok:
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_INSTALL,
+            requested_state=row.target,
+            speech=f"{row.display_name} kurulamadı efendim: {outcome.message[:160]}",
+            error_class=outcome.error_class or "device_error",
+            extra={"build": _row_summary(row)},
+        )
     return _receipt(
         ctx,
         capability=TOOL_NATIVE_INSTALL,
-        requested_state=row.target if row is not None else "unknown",
+        requested_state=row.target,
         execution=EXECUTION_EXECUTED,
         terminal=TERMINAL_VERIFIED,
-        speech=str(result.get("speech") or ""),
-        server=dict(result),
+        speech=(
+            f"{row.display_name} kuruldu efendim: Başlat menüsünde kısayolu var, "
+            f"cihaz kısayolu ve dosyayı yerinde gördü."
+        ),
+        server=outcome.result,
+        extra={"build": _row_summary(row), "shortcut": outcome.result.get("shortcut")},
     )
 
 
@@ -719,25 +854,62 @@ def native_launch(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
             error_class=ERROR_DEPENDENCY_UNAVAILABLE,
             extra={"build": _row_summary(row) if row is not None else None, "owner_action": "33"},
         )
-    launcher = ctx.live.get("native_launcher")
-    if launcher is None:
+    if row is None:
+        return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
+    # B33 req 462/463: app.launch into the native root (ADR-0098), then one ui.inspect so
+    # the receipt says what window came up and which of the template's controls it holds.
+    device = ctx.live.get("device_action")
+    if device is None:
         return _refused(
             ctx,
             capability=TOOL_NATIVE_LAUNCH,
             requested_state=str(target or "unknown"),
             speech=SPEECH_LAUNCH_NEEDS_DEVICE,
             error_class=ERROR_DEPENDENCY_UNAVAILABLE,
-            extra={"build": _row_summary(row) if row is not None else None},
+            extra={"build": _row_summary(row)},
         )
-    result = launcher.launch(row)
+    if not row_is_launchable(row):
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_LAUNCH,
+            requested_state=str(target or "unknown"),
+            speech=SPEECH_NO_ARTIFACT_TO_LAUNCH,
+            error_class=ERROR_VALIDATION,
+            extra={"build": _row_summary(row)},
+        )
+    launched = launch_on_device(device, row)
+    if not launched.ok:
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_LAUNCH,
+            requested_state=str(target or "unknown"),
+            speech=f"{row.display_name} açılamadı efendim: {launched.message[:160]}",
+            error_class=launched.error_class or "device_error",
+            extra={"build": _row_summary(row)},
+        )
+    window_id = str(launched.result["window_id"])
+    seen = inspect_window(device, row, window_id, tag="launch")
+    controls = seen.result.get("controls", {}) if seen.ok else {}
+    ui_ok = seen.ok and all(controls.values())
+    speech = (
+        f"{row.display_name} açıldı efendim; penceresini gördüm ve arayüzündeki "
+        f"not alanı, ekle düğmesi ve durum satırı yerinde."
+        if ui_ok
+        else f"{row.display_name} açıldı efendim; pencere geldi ama arayüzünü tam okuyamadım."
+    )
     return _receipt(
         ctx,
         capability=TOOL_NATIVE_LAUNCH,
         requested_state=str(target or "unknown"),
         execution=EXECUTION_EXECUTED,
-        terminal=TERMINAL_VERIFIED,
-        speech=str(result.get("speech") or ""),
-        server=dict(result),
+        terminal=TERMINAL_VERIFIED if ui_ok else TERMINAL_UNVERIFIED,
+        speech=speech,
+        server={
+            **launched.result,
+            "controls": controls,
+            "status_text": seen.result.get("status_text") if seen.ok else None,
+        },
+        extra={"build": _row_summary(row), "window_id": window_id, "ui_verified": ui_ok},
     )
 
 
@@ -790,9 +962,14 @@ def native_fix(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             server=_row_summary(row),
             extra={"build": _row_summary(row), "fixed": False},
         )
-    worker = ctx.live.get("native_fix_worker")
     detail = row.error_message or row.log_tail or "ayrıntı yok"
-    if worker is None:
+    # B33 req 470: the fix this factory can honestly perform is deterministic - the source
+    # is re-rendered from the spec (a stale or hand-edited tree is the one class of
+    # breakage it owns) and the whole build runs again on the device, whose verdict is
+    # then the row's. A failure that survives that is reported as the compiler's own
+    # words, never as a repair.
+    device = ctx.live.get("device_action")
+    if device is None:
         return _refused(
             ctx,
             capability=TOOL_NATIVE_FIX,
@@ -801,16 +978,298 @@ def native_fix(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             error_class=ERROR_DEPENDENCY_UNAVAILABLE,
             extra={"build": _row_summary(row), "fixed": False},
         )
-    result = worker.fix(row)
-    return _receipt(
+    was = row.state
+    row.attempt = int(row.attempt or 1) + 1
+    built = _build_on_device(ctx, row, device, capability=TOOL_NATIVE_FIX)
+    if built.get("execution_status") == EXECUTION_EXECUTED and row.state == STATE_VERIFIED:
+        return _receipt(
+            ctx,
+            capability=TOOL_NATIVE_FIX,
+            requested_state="fix",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            speech=(
+                f"Düzelttim efendim: kaynağı yeniden üretip cihazda yeniden derledim; "
+                f"{receipt_for(row)}"
+            ),
+            server={"was": was, "now": row.state, "attempt": row.attempt},
+            extra={"build": _row_summary(row), "fixed": True},
+        )
+    detail = row.error_message or row.log_tail or detail
+    return _refused(
         ctx,
         capability=TOOL_NATIVE_FIX,
         requested_state="fix",
+        speech=f"{SPEECH_FIX_ATTEMPTED_FAILED}: {row.display_name} {row.state} — {detail[:200]}",
+        error_class=row.error_class or "fix_failed",
+        extra={"build": _row_summary(row), "fixed": False, "was": was, "attempt": row.attempt},
+    )
+
+
+# ---------------------------------------------------- B33: the lifecycle after the build
+
+TOOL_NATIVE_VERIFY: Final = "native.verify"
+TOOL_NATIVE_LOG: Final = "native.log"
+TOOL_NATIVE_UNINSTALL: Final = "native.uninstall"
+TOOL_NATIVE_UPDATE: Final = "native.update"
+
+SPEECH_NO_DEVICE_FOR_LIFECYCLE = (
+    "Bunu ancak kayıtlı cihaz yapabilir efendim; şu an bağlı bir cihaz yok, o yüzden "
+    "yaptım diyemem."
+)
+SPEECH_NO_ARTIFACT_TO_LAUNCH = (
+    "Açacak bir çıktı yok efendim: bu derleme bir dosya üretmedi ya da henüz derlenmedi."
+)
+SPEECH_FIX_ATTEMPTED_FAILED = (
+    "Düzeltemedim efendim: kaynağı yeniden üretip cihazda yeniden derledim, sonuç yine "
+    "aynı yerde takıldı"
+)
+
+
+def _device_or_refusal(
+    ctx: ToolContext, *, capability: str, requested_state: str, row: NativeBuildRow | None
+):
+    device = ctx.live.get("device_action")
+    if device is not None:
+        return device, None
+    return None, _refused(
+        ctx,
+        capability=capability,
+        requested_state=requested_state,
+        speech=SPEECH_NO_DEVICE_FOR_LIFECYCLE,
+        error_class=ERROR_DEPENDENCY_UNAVAILABLE,
+        extra={"build": _row_summary(row) if row is not None else None},
+    )
+
+
+def native_verify(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Uygulamayı doğrula." (B33 req 463-466) - the 26.15 flow on the device: launch,
+    drive the template's own controls through UI Automation, read the status line, close,
+    relaunch, read it again, read the app's own log. Verified only when every read-back
+    answered; otherwise the step that did not is named."""
+    db = _require_db(ctx, TOOL_NATIVE_VERIFY)
+    row = _resolve_row(ctx, db, arguments)
+    if row is None:
+        return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
+    if not row_is_launchable(row):
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_VERIFY,
+            requested_state="verified",
+            speech=SPEECH_NO_ARTIFACT_TO_LAUNCH,
+            error_class=ERROR_VALIDATION,
+            extra={"build": _row_summary(row)},
+        )
+    device, refusal = _device_or_refusal(
+        ctx, capability=TOOL_NATIVE_VERIFY, requested_state="verified", row=row
+    )
+    if refusal is not None:
+        return refusal
+    verdict = verify_on_device(device, row)
+    row.verdict_json = {
+        **dict(row.verdict_json or {}),
+        "lifecycle": {k: v for k, v in verdict.items() if k != "steps"},
+    }
+    log_tail = next(
+        (
+            s.get("log_tail")
+            for s in verdict["steps"]
+            if s.get("step") == "file.read" and s.get("ok")
+        ),
+        None,
+    )
+    if log_tail:
+        row.log_tail = str(log_tail)[-4000:]
+    row.updated_at = datetime.now(UTC)
+    db.commit()
+    if verdict["verified"]:
+        speech = (
+            f"{row.display_name} doğrulandı efendim: açıldı, arayüzünden bir not eklendi "
+            f"({verdict['notes_after_add']} not), kapatılıp yeniden açılınca not yerinde "
+            f"({verdict['notes_after_relaunch']} not), günlüğünde başlangıç satırı var."
+        )
+        return _receipt(
+            ctx,
+            capability=TOOL_NATIVE_VERIFY,
+            requested_state="verified",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            speech=speech,
+            server={k: v for k, v in verdict.items() if k != "steps"},
+            extra={"build": _row_summary(row), "verification": verdict},
+        )
+    failed = verdict.get("failed_step", "read_back")
+    speech = (
+        f"{row.display_name} doğrulanamadı efendim: {failed} adımı beklendiği gibi cevap vermedi."
+    )
+    return _receipt(
+        ctx,
+        capability=TOOL_NATIVE_VERIFY,
+        requested_state="verified",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_UNVERIFIED,
+        speech=speech,
+        server={k: v for k, v in verdict.items() if k != "steps"},
+        error_class="verification_failed",
+        extra={"build": _row_summary(row), "verification": verdict},
+    )
+
+
+def native_log(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Uygulamanın günlüğünü oku." (B33 req 466) - the app's own data\\app.log, read by
+    the device, its tail kept on the row."""
+    db = _require_db(ctx, TOOL_NATIVE_LOG)
+    row = _resolve_row(ctx, db, arguments)
+    if row is None:
+        return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
+    if not row.artifact_path:
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_LOG,
+            requested_state="log",
+            speech=SPEECH_NO_ARTIFACT_TO_LAUNCH,
+            error_class=ERROR_VALIDATION,
+            extra={"build": _row_summary(row)},
+        )
+    device, refusal = _device_or_refusal(
+        ctx, capability=TOOL_NATIVE_LOG, requested_state="log", row=row
+    )
+    if refusal is not None:
+        return refusal
+    outcome = read_log_on_device(device, row)
+    if not outcome.ok:
+        speech = (
+            f"{row.display_name} günlüğü yerinde değil efendim; uygulama henüz hiç "
+            f"açılmamış olabilir."
+            if outcome.error_class == "not_found"
+            else f"{row.display_name} günlüğünü okuyamadım efendim: {outcome.message[:160]}"
+        )
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_LOG,
+            requested_state="log",
+            speech=speech,
+            error_class=outcome.error_class or "device_error",
+            extra={"build": _row_summary(row)},
+        )
+    text = outcome.result.get("text", "")
+    row.log_tail = text[-4000:] or None
+    row.updated_at = datetime.now(UTC)
+    db.commit()
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    last = lines[-1][:160] if lines else ""
+    speech = (
+        f"{row.display_name} günlüğünde {len(lines)} satır var efendim; son satır: {last}"
+        if lines
+        else f"{row.display_name} günlüğü boş efendim."
+    )
+    return _receipt(
+        ctx,
+        capability=TOOL_NATIVE_LOG,
+        requested_state="log",
         execution=EXECUTION_EXECUTED,
         terminal=TERMINAL_VERIFIED,
-        speech=str(result.get("speech") or ""),
-        server=dict(result),
-        extra={"build": _row_summary(row), "fixed": True},
+        speech=speech,
+        server={"path": outcome.result.get("path"), "lines": len(lines)},
+        extra={"build": _row_summary(row), "log_tail": text[-2000:]},
+    )
+
+
+def native_uninstall(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Kurulumu kaldır." (B33 req 469) - the shortcut and the record go, the build stays."""
+    db = _require_db(ctx, TOOL_NATIVE_UNINSTALL)
+    row = _resolve_row(ctx, db, arguments)
+    if row is None:
+        return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
+    device, refusal = _device_or_refusal(
+        ctx, capability=TOOL_NATIVE_UNINSTALL, requested_state="uninstalled", row=row
+    )
+    if refusal is not None:
+        return refusal
+    outcome = uninstall_on_device(device, row)
+    if not outcome.ok:
+        speech = (
+            f"{row.display_name} bu sistemce kurulmamış efendim; kaldıracak bir kurulum yok."
+            if outcome.error_class == "not_found"
+            else f"{row.display_name} kurulumunu kaldıramadım efendim: {outcome.message[:160]}"
+        )
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_UNINSTALL,
+            requested_state="uninstalled",
+            speech=speech,
+            error_class=outcome.error_class or "device_error",
+            extra={"build": _row_summary(row)},
+        )
+    return _receipt(
+        ctx,
+        capability=TOOL_NATIVE_UNINSTALL,
+        requested_state="uninstalled",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        speech=(
+            f"{row.display_name} kurulumunu kaldırdım efendim; kısayol gitti, "
+            f"derleme klasörü yerinde."
+        ),
+        server=outcome.result,
+        extra={"build": _row_summary(row)},
+    )
+
+
+def native_update(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Uygulamayı güncelle." (B33 req 471) - the same spec at the next version, built on
+    the device as a NEW row (the old verdict untouched), then installed over the shortcut."""
+    db = _require_db(ctx, TOOL_NATIVE_UPDATE)
+    row = _resolve_row(ctx, db, arguments)
+    if row is None:
+        return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
+    device, refusal = _device_or_refusal(
+        ctx, capability=TOOL_NATIVE_UPDATE, requested_state="updated", row=row
+    )
+    if refusal is not None:
+        return refusal
+    spec = dict(row.spec_json)
+    spec["version"] = _next_version(row.version)
+    try:
+        rows = plan_build(db, spec, facts=_facts(ctx), on_device=True)
+    except NativeFactoryError as exc:
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_UPDATE,
+            requested_state="updated",
+            speech=exc.speech,
+            error_class=exc.error_class,
+            extra={"build": _row_summary(row)},
+        )
+    new_row = rows[0]
+    built = _build_on_device(ctx, new_row, device, capability=TOOL_NATIVE_UPDATE)
+    if built.get("execution_status") != EXECUTION_EXECUTED:
+        return built
+    installed = install_on_device(device, new_row)
+    if not installed.ok:
+        return _refused(
+            ctx,
+            capability=TOOL_NATIVE_UPDATE,
+            requested_state="updated",
+            speech=(
+                f"{new_row.display_name} {new_row.version} derlendi ama kurulamadı "
+                f"efendim: {installed.message[:160]}"
+            ),
+            error_class=installed.error_class or "device_error",
+            extra={"build": _row_summary(new_row)},
+        )
+    return _receipt(
+        ctx,
+        capability=TOOL_NATIVE_UPDATE,
+        requested_state="updated",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        speech=(
+            f"{new_row.display_name} {new_row.version} sürümüne güncellendi efendim: "
+            f"cihazda derlendi, {receipt_for(new_row)} Kısayol yeni sürüme bakıyor."
+        ),
+        server={"previous_build_id": str(row.id), **installed.result},
+        extra={"build": _row_summary(new_row)},
     )
 
 
@@ -963,6 +1422,71 @@ def register_native_tools(reg: ToolRegistry) -> ToolRegistry:
                 "additionalProperties": False,
             },
             handler=native_rebuild,
+        )
+    )
+    # B33 req 462-471: the lifecycle after the build.
+    reg.register(
+        ToolSpec(
+            name=TOOL_NATIVE_VERIFY,
+            description=(
+                "Derlenen Windows uygulamasını CİHAZDA DOĞRULAR: açar, arayüzünden bir not "
+                "ekler, durum satırını okur, kapatıp yeniden açar, notun kaldığını ve kendi "
+                "günlüğünü okur ('uygulamayı doğrula', 'arayüzünü test et'). Dönen 'speech' "
+                "metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"build_id": build_ref},
+                "additionalProperties": False,
+            },
+            handler=native_verify,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_NATIVE_LOG,
+            description=(
+                "Derlenen uygulamanın KENDİ GÜNLÜĞÜNÜ cihazdan okur ('uygulamanın günlüğünü "
+                "oku', 'logunu göster'). Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"build_id": build_ref},
+                "additionalProperties": False,
+            },
+            handler=native_log,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_NATIVE_UNINSTALL,
+            description=(
+                "Bu sistemin KURDUĞU uygulamayı kaldırır ('kurulumu kaldır', 'uygulamayı "
+                "kaldır'): Başlat menüsü kısayolu ve kayıt gider, derleme klasörü kalır. "
+                "Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"build_id": build_ref},
+                "additionalProperties": False,
+            },
+            handler=native_uninstall,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_NATIVE_UPDATE,
+            description=(
+                "Uygulamayı GÜNCELLER ('uygulamayı güncelle'): aynı tarifi bir sonraki sürümle "
+                "cihazda yeniden derler ve kısayolu yeni sürüme çevirir. Dönen 'speech' "
+                "metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"build_id": build_ref},
+                "additionalProperties": False,
+            },
+            handler=native_update,
         )
     )
     return reg

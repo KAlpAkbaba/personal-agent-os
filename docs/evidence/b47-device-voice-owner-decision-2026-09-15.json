@@ -1,0 +1,61 @@
+{
+  "batch": "B47",
+  "name": "Cihaz tarafı ses",
+  "status": "STOPPED_OWNER_DECISION",
+  "requirements": [
+    239,
+    240,
+    241,
+    242,
+    243,
+    244,
+    250,
+    251,
+    252,
+    253,
+    254,
+    255
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "NONE (no code)",
+  "ci_run": "NONE",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11098 passed, 5 skipped, 20m11s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 959/959, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "B47 is a docs-only stop point; the gate ran over the tree that carries its docs together with B46"
+  },
+  "why_stopped": "Standing rule: stop for a privacy decision and for a physical microphone evaluation. Every B47 row depends on row 239 (device microphone provider). Roadmap owner table: Karar 7 'Cihaz tarafı ses / sürekli mikrofon (mahremiyet)'.",
+  "measured": {
+    "device_capture_code_scan": {
+      "command": "git grep -n -I -E 'WaveIn|WasapiCapture|MMDevice.*Capture|IAudioCaptureClient|waveInOpen' -- devices/windows-agent",
+      "hits": [
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:151:        => new WasapiCaptureDevice(catalog.Open(deviceId), format, frameMs, logger);",
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:177:/// 2. NAudio's plain <see cref=\"WasapiCapture\"/>, used when the category path throws or —",
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:182:public sealed class WasapiCaptureDevice : IAudioCapture, IReportsDriverProcessing",
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:200:    public WasapiCaptureDevice(MMDevice device, AudioFormat format, int frameMs, ILogger? logger)",
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:375:        private readonly WasapiCapture _capture;",
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:379:            _capture = new WasapiCapture(device, useEventSync: true, audioBufferMillisecondsLength: frameMs);",
+        "devices/windows-agent/src/PagentOS.Companion.Audio/Wasapi/WasapiAudioBackend.cs:396:    /// set to Communications before <c>Initialize</c>. NAudio's <see cref=\"WasapiCapture\"/>"
+      ]
+    },
+    "device_capture_capability_scan": {
+      "command": "git grep -n -I -E '\"(audio|microphone|mic|voice)\\.(capture|listen|record)' -- devices/windows-agent",
+      "hits": []
+    }
+  },
+  "decision_packet": "docs/DECISIONS.md ADR-0154 (PROPOSED): push-to-talk only / local wake word / always streaming (not recommended), with the rows each unlocks.",
+  "unchanged": "The browser voice path (B05/B11) and row 249 (raw audio never stored).",
+  "owner_gates": {
+    "karar_7": "choose push-to-talk only or a local wake word (or neither); with a wake word, choose the word and whether offline commands may act without the Cloud Core.",
+    "physical_evaluation": "after the decision: a lab run on this machine's microphone (false wakes / utterance end / hardware mute)."
+  }
+}

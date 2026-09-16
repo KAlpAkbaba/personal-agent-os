@@ -164,14 +164,23 @@ function portsOf(client: ArtifactClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the Üretilenler panel", () => {
-  it("is empty, in words, when the list route answered with no artifact and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/artifacts yok (HTTP 404)." })).toBe("");
+  });
+
+  it("says the bus told it nothing, when there are rows to show anyway", () => {
+    const rows = panel(ok([row()]));
+    expect(rows).toContain('data-artifact-activity="untold"');
+    expect(rows).toContain("Üretim etkinliği bildirilmedi.");
+  });
+
+  it("keeps every word when the bus is telling us something the list cannot show", () => {
+    const html = panel(ok([]), [ARTIFACT_FACTORY("Bütçe 2026", "xlsx", "rendering")]);
     expect(html).toContain('data-panel="artifacts"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Henüz bir şey üretilmedi.");
-    expect(html).toContain('data-artifact-activity="untold"');
-    expect(html).toContain("Üretim etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).toContain(">Üretilenler<");
     expect(html).not.toContain("<button");
@@ -195,7 +204,12 @@ describe("the Üretilenler panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Henüz bir şey üretilmedi");
 
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/artifacts yok (HTTP 404)." });
+    // A route this Cloud Core does not serve still says so WHILE the bus is talking:
+    // "the list is not here" and "nothing is happening" are different facts.
+    const absent = panel(
+      { kind: "absent", detail: "Bu Cloud Core sürümünde /v1/artifacts yok (HTTP 404)." },
+      [ARTIFACT_FACTORY("Bütçe 2026", "xlsx", "rendering")],
+    );
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/artifacts yok (HTTP 404).");
     expect(absent).not.toContain("Henüz bir şey üretilmedi");
@@ -360,9 +374,10 @@ describe("the Üretilenler panel", () => {
     expect(stale).toContain('data-artifact-last-known="making"');
     expect(stale).toContain("Son bilinen: Bütçe 2026 · XLSX · doğrulandı · 46 sn önce");
 
-    // A document or mail event is not a factory event.
-    expect(panel(ok([]), [DOCUMENT_ANALYSIS()])).toContain('data-artifact-activity="untold"');
-    expect(panel(ok([]), [MAIL_ACTIVITY()])).toContain('data-artifact-activity="untold"');
+    // A document or mail event is not a factory event. Rows are present so the panel
+    // renders at all: no rows AND no factory event is a quiet family now (req 714).
+    expect(panel(ok([row()]), [DOCUMENT_ANALYSIS()])).toContain('data-artifact-activity="untold"');
+    expect(panel(ok([row()]), [MAIL_ACTIVITY()])).toContain('data-artifact-activity="untold"');
   });
 });
 

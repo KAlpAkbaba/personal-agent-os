@@ -123,6 +123,13 @@ public static class FileSearch
 
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
+                    if (string.Equals(child.Name, FileMutations.UndoFolderName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // B34: the undo store is the companion's own; its backups are not
+                        // the owner's documents and never surface in a search.
+                        continue;
+                    }
+
                     pending.Enqueue(child.FullName);
                     continue;
                 }

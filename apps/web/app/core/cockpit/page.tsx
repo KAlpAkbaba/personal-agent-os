@@ -27,6 +27,7 @@
  * words until the row was read back to the owner.
  */
 
+import { updateAmbientPolicy } from "../../lib/cockpit/api";
 import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
@@ -40,6 +41,7 @@ import { type SceneRow, sceneClient } from "../../lib/cockpit/scenes";
 import { useApprovalPair } from "../../lib/cockpit/useApprovalPair";
 import { useAppsControl } from "../../lib/cockpit/useAppsControl";
 import { useArtifactOpen } from "../../lib/cockpit/useArtifactOpen";
+import { quietFamilies } from "../../lib/cockpit/families";
 import { useCockpitData } from "../../lib/cockpit/useCockpitData";
 import { useNotificationRead } from "../../lib/cockpit/useNotificationRead";
 import { useRoutineControl } from "../../lib/cockpit/useRoutineControl";
@@ -72,8 +74,10 @@ import EyeControl from "../EyeControl";
 import StateReadout from "../StateReadout";
 import VoiceControl from "../VoiceControl";
 import { useCorePreferences } from "../usePreferences";
+import { QuietFamilies } from "../panels/Panel";
 import {
   AlarmsPanel,
+  DevicesPanel,
   AmbientPanel,
   AppsPanel,
   ArtifactsPanel,
@@ -238,9 +242,16 @@ function Cockpit() {
   const release = useMemo(() => releaseView(releaseClaim(truth, now)), [truth, now]);
   const display = useMemo(() => displayView(displayClaim(truth, now)), [truth, now]);
   const alarm = useMemo(() => alarmView(alarmClaim(truth, now)), [truth, now]);
+  // req 714: which families answered with nothing, from the same loaded data the
+  // panels themselves read - never a second count of the same thing.
+  const quiet = useMemo(() => quietFamilies(data).map((family) => family.label), [data]);
 
   return (
-    <div className="core-page">
+    // B25 req 724: a landmark and a heading. The densest page in the product had neither,
+    // so a screen reader entered twenty-seven panels with nothing to enter AT. The heading
+    // is visually hidden: the Core's own stage is the title here.
+    <main className="core-page">
+      <h1 className="visually-hidden">Kokpit</h1>
       <CoreBar
         mode="cockpit"
         connection={truth.connection}
@@ -277,6 +288,11 @@ function Cockpit() {
         </div>
 
         <div className="cockpit-panels">
+          {/* B24 req 714: an empty family draws no panel, and this is why the page
+              does not simply lose it. The audit counted thirteen empty panels at
+              once; hiding thirteen things silently would trade one lie for
+              another, so they are named here and explained on /availability. */}
+          <QuietFamilies labels={quiet} />
           {/* What needs the owner comes first: it is the only thing here that
               is blocked on a human rather than on the system. */}
           <OwnerActionsPanel
@@ -302,12 +318,20 @@ function Cockpit() {
           {/* M18.3: what is set to wake the owner, and what the screens are
               doing. Both are read-only here; the renderer owns no policy. */}
           <AlarmsPanel state={data.alarms} now={now} />
+          {/* B23 req 695: the device family had a client, a parser and a slot in
+              CockpitData since M18.3, and appeared only as a line about SCREENS inside
+              Ekran/Ortam. This is the device surface, addressable at #devices. */}
+          <DevicesPanel devices={data.devices} now={now} />
           {/* B14 req 295: what this system does on its own, and whether each of them is
               actually running. Beside the alarms, because a recurring alarm IS a routine -
               the panel is where the owner finds out that seven of them were created for
               them rather than by them. */}
           <RoutinesPanel state={data.routines} control={routineControl} />
-          <AmbientPanel policy={data.ambientPolicy} devices={data.devices} />
+          <AmbientPanel
+            policy={data.ambientPolicy}
+            devices={data.devices}
+            onToggle={(field, value) => void updateAmbientPolicy(field, value).then(refreshPanels)}
+          />
           {/* ADR-0080: whether the owner's words still route where they say. */}
           <VoiceQualificationPanel state={data.voiceQualification} now={now} />
           <ShadowReadyPanel state={data.shadowReady} />
@@ -320,7 +344,7 @@ function Cockpit() {
           {/* M20 §3: which of the owner's documents the Core is reading, which
               it read before, and what its last answer cited — from the bus,
               never from a file. The owner's files stay on the owner's machine. */}
-          <DocumentsPanel truth={truth} now={now} />
+          <DocumentsPanel truth={truth} now={now} pending={data.documentMutations} pair={approvals.mutations} />
           {/* M22 §4: what the factory made — each render with the verdict
               the independent parser gave it, a download per valid render on
               the owner-session-gated route, and "Aç" for the device. */}
@@ -402,7 +426,7 @@ function Cockpit() {
           <StateStreamPanel truth={truth} now={now} />
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 

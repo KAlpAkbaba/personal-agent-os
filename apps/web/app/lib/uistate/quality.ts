@@ -247,6 +247,71 @@ export function tierFor(chosen: QualityTier, capability: RenderCapability): Qual
   return chosen;
 }
 
+// ------------------------------------------------ B23 req 722: the measured tier
+
+/**
+ * How many frame intervals are needed before the measurement is allowed an opinion.
+ *
+ * A cold start is always slow — shaders compile, textures upload, the first layout runs —
+ * and a tier dropped on the strength of that would punish every launch. At sixty samples
+ * this is about a second of ordinary rendering.
+ */
+export const FRAME_HEALTH_MIN_SAMPLES = 60;
+
+/**
+ * How far past the tier's own budget a frame has to be to count as slow. The budget is a
+ * CAP, not a target, so exceeding it slightly is normal; 1.6x is a frame the owner can see.
+ */
+export const SLOW_FRAME_FACTOR = 1.6;
+
+/** The share of slow frames past which the tier is more than this machine can hold. */
+export const SLOW_FRAME_SHARE = 0.5;
+
+export type FrameHealth = {
+  /** Intervals measured. */
+  samples: number;
+  /** How many of them were past `SLOW_FRAME_FACTOR` x the tier's budget. */
+  slowFrames: number;
+  /** The median interval in milliseconds — the number a person would call "the frame rate". */
+  medianMs: number;
+};
+
+/** Summarise measured frame intervals against what the tier asked for. */
+export function frameHealthFrom(intervalsMs: readonly number[], tier: QualityTier): FrameHealth {
+  const budgetMs = 1000 / TIER_BUDGETS[tier].fps;
+  const slow = intervalsMs.filter((ms) => ms > budgetMs * SLOW_FRAME_FACTOR).length;
+  const sorted = [...intervalsMs].sort((a, b) => a - b);
+  const median = sorted.length === 0 ? 0 : sorted[Math.floor(sorted.length / 2)];
+  return { samples: intervalsMs.length, slowFrames: slow, medianMs: median };
+}
+
+/**
+ * The tier this machine can actually hold, or null when the chosen one is fine.
+ *
+ * B23 req 722: the tiers, their budgets and the owner's control have existed since M18;
+ * what did not was any relationship between the tier and what the machine DELIVERS. A
+ * Core that stutters stayed stuttering until the owner noticed the control and guessed.
+ *
+ * Two rules make this safe to run continuously:
+ *
+ * * **It only ever steps DOWN, one step at a time.** Stepping up would fight the owner's
+ *   own choice and would oscillate the moment the machine got busy; if they want `high`
+ *   back, the control is right there and it is theirs.
+ * * **It needs a sample.** Under `FRAME_HEALTH_MIN_SAMPLES` it answers null, so a cold
+ *   start, a tab that was just restored and a single hitch decide nothing.
+ */
+export function degradedTier(chosen: QualityTier, health: FrameHealth): QualityTier | null {
+  if (health.samples < FRAME_HEALTH_MIN_SAMPLES) return null;
+  if (health.slowFrames / health.samples <= SLOW_FRAME_SHARE) return null;
+  const next: Record<QualityTier, QualityTier | null> = {
+    high: "balanced",
+    balanced: "low",
+    low: null,
+  };
+  return next[chosen];
+}
+
+
 /**
  * The default tier from coarse device signals, when the owner has not chosen.
  *

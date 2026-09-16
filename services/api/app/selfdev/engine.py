@@ -47,9 +47,11 @@ from app.evolution.supervisor import (
 )
 from app.selfdev.budget import Budget, BudgetMeter
 from app.selfdev.ci import CI_FAILURE, CIReader, CIStatus
+from app.selfdev.gate import GATE_SKIPPED, GateRunner, NoGate
 from app.selfdev.model import ChangePlan, DefectSpec, EngineeringModel, ModelError, Patch
 from app.selfdev.reviewer import IndependentReviewer
 from app.selfdev.runner import CandidateRunner
+from app.selfdev.shadow import ScriptedShadowRunner, ShadowRunner
 from app.selfdev.workspace import BRANCH_PREFIX, GitWorkspace, WorkspaceError, safe_relative_path
 
 STATUS_STOPPED_AT_POLICY = "STOPPED_AT_POLICY_BOUNDARY"
@@ -96,6 +98,13 @@ class RunRecord:
     promotion_class: str = ""
     next_step: str = ""
     candidate_ci: dict[str, str] = field(default_factory=dict)
+    #: B35: the mandatory security review's findings (req 598/680), the full gate in the
+    #: worktree (req 600), the CI trigger (req 601) and the shadow run (req 608) - each a
+    #: fact of this run, never a claim.
+    security_review: dict[str, Any] = field(default_factory=dict)
+    gate: dict[str, Any] = field(default_factory=dict)
+    ci_trigger: dict[str, Any] = field(default_factory=dict)
+    shadow: dict[str, Any] = field(default_factory=dict)
     explanation: str = ""
     error: str = ""
     model: dict[str, Any] = field(default_factory=dict)
@@ -119,6 +128,13 @@ class SelfDevEngine:
     ci: CIReader
     runs_dir: Path
     budget: Budget = field(default_factory=Budget)
+    #: B35: the full gate (req 600) runs in the worktree after the reviewer and the model
+    #: both approved and before the commit; red feeds the fix loop (req 603). The shadow
+    #: (req 608) runs on the committed candidate; the trigger (req 601) pushes only when
+    #: the owner enabled it. Each defaults to "not configured", which the record says.
+    gate: GateRunner = field(default_factory=NoGate)
+    shadow: ShadowRunner = field(default_factory=ScriptedShadowRunner)
+    ci_trigger: Any = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -307,10 +323,19 @@ class SelfDevEngine:
                     )
                     attempt["model_review"] = asdict(review)
                     if review.approved:
-                        record.attempts.append(attempt)
-                        record.model_review = asdict(review)
-                        break
-                    failure = "model review: " + "; ".join(review.findings)
+                        # B35 req 600/603: the whole package's gate, in the worktree, after
+                        # both reviews - a red gate is one more failure fed back to the model.
+                        gate = self.gate.run(worktree)
+                        attempt["gate"] = gate.as_dict()
+                        if gate.ok or gate.state == GATE_SKIPPED:
+                            record.attempts.append(attempt)
+                            record.model_review = asdict(review)
+                            record.security_review = dict(verdict.security)
+                            record.gate = gate.as_dict()
+                            break
+                        failure = "gate: " + gate.detail
+                    else:
+                        failure = "model review: " + "; ".join(review.findings)
                 else:
                     first = verdict.first_failure
                     failure = f"{first.name}: {first.detail}" if first else "review failed"
@@ -352,6 +377,17 @@ class SelfDevEngine:
         }
         record.promotion_class = promotion_class_for_tier(int(assessment.tier))
         record.next_step = NEXT_STEP[record.promotion_class]
+        # B35 req 608: the committed candidate runs in the shadow before the slot is freed.
+        try:
+            record.shadow = self.shadow.run(worktree).as_dict()
+        except Exception as exc:  # noqa: BLE001 - a shadow that broke is a failed shadow
+            record.shadow = {"state": "failed", "detail": f"{type(exc).__name__}: {exc}"[:500]}
+        # B35 req 601: CI is a push the owner enabled, or a recorded refusal.
+        if self.ci_trigger is not None:
+            try:
+                record.ci_trigger = self.ci_trigger.push(record.branch).as_dict()
+            except Exception as exc:  # noqa: BLE001 - the push failing is a fact of the run
+                record.ci_trigger = {"pushed": False, "detail": f"{type(exc).__name__}: {exc}"}
         candidate_ci: CIStatus = self.ci.status(record.candidate_sha)
         record.candidate_ci = {"state": candidate_ci.state, "detail": candidate_ci.detail}
         # The branch keeps the candidate; the worktree slot is freed for the next run.

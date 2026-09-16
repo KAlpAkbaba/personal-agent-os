@@ -24,25 +24,45 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFont, ImageMath, ImageOps
 
+from app.creative import imaging
+from app.creative import layers as layers_module
+from app.creative.imaging import ImageProvider, ImageProviderError, LocalImageProvider
 from app.creative.spec import (
     MAX_DIMENSION,
+    TOOL_LAYERED,
     AddText,
     BackgroundRemove,
     ColorAdjust,
     CreativePlan,
     Crop,
     Draw,
+    Enhance,
     Export,
+    Generate,
     Inspect,
     Layer,
     New,
+    ObjectAdd,
+    ObjectRemove,
     Open,
+    SemanticCheck,
     Shape,
+    Style,
     Transform,
+    Upscale,
     next_output_name,
 )
 
 MAX_SOURCE_BYTES = 50 * 1024 * 1024
+
+
+class ProviderRefusal(RuntimeError):
+    """B43: the image provider refused or failed by name (``provider_not_configured``,
+    ``provider_failed``) - a refusal receipt, never a soft ``errors[]`` entry."""
+
+    def __init__(self, error_class: str, message: str) -> None:
+        self.error_class = error_class
+        super().__init__(message)
 
 
 class ExecutionError(RuntimeError):
@@ -97,6 +117,9 @@ class ExecutionResult:
     background_removed: bool = False
     output_name: str | None = None
     errors: list[str] = field(default_factory=list)
+    #: B43: what the vision provider must confirm (498) and the layer stack (506).
+    semantic_expectations: list[str] = field(default_factory=list)
+    layers: list[dict[str, Any]] = field(default_factory=list)
 
     def inspection(self) -> dict[str, Any]:
         """The independent-reader-shaped read-back: every fact
@@ -111,6 +134,8 @@ class ExecutionResult:
             "background_removed": self.background_removed,
             "output_name": self.output_name,
             "errors": list(self.errors),
+            "semantic_expectations": list(self.semantic_expectations),
+            "layers": list(self.layers),
         }
 
 
@@ -315,6 +340,44 @@ def _apply_background_remove(canvas: Image.Image, op: BackgroundRemove) -> Image
     return out
 
 
+def _png_of(canvas: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _int_box(box: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+    return int(box[0]), int(box[1]), int(box[2]), int(box[3])
+
+
+def _open_layered_source(source_bytes: bytes) -> layers_module.LayeredDocument | None:
+    """A PSD or an OpenRaster source becomes the layer stack; anything else is flat."""
+    for reader in (layers_module.from_psd, layers_module.from_ora):
+        try:
+            return reader(source_bytes)
+        except layers_module.LayerError:
+            continue
+    return None
+
+
+def _open_svg_source(
+    plan: CreativePlan, source_bytes: bytes, provider: ImageProvider
+) -> Image.Image:
+    """An SVG source is re-drawn from its own closed element set (req 508)."""
+    parsed = layers_module.from_svg(source_bytes)
+    rasters = [op for op in parsed["operations"] if op.get("op") == "_raster"]
+    vector_ops = [op for op in parsed["operations"] if op.get("op") != "_raster"]
+    sub = CreativePlan.model_validate(
+        {"tool": plan.tool, "name": plan.name, "operations": vector_ops}
+    )
+    result = execute(sub, None, image_provider=provider)
+    canvas = Image.open(io.BytesIO(result.image_bytes)).convert("RGBA")
+    for raster in rasters:
+        sprite = Image.open(io.BytesIO(base64.b64decode(raster["png_base64"]))).convert("RGBA")
+        canvas.alpha_composite(sprite, (int(raster["x"]), int(raster["y"])))
+    return canvas
+
+
 def _export_bytes(canvas: Image.Image, fmt: str) -> bytes:
     buf = io.BytesIO()
     if fmt == "png":
@@ -323,6 +386,10 @@ def _export_bytes(canvas: Image.Image, fmt: str) -> bytes:
         canvas.convert("RGB").save(buf, format="JPEG")
     elif fmt == "pdf":
         canvas.convert("RGB").save(buf, format="PDF")
+    elif fmt == "ora":
+        stack = layers_module.LayeredDocument(canvas.width, canvas.height)
+        stack.add("working", canvas)
+        return layers_module.to_ora(stack)
     elif fmt == "svg":
         # Pillow produces raster images only; Paint's own document model is a bitmap
         # (ADR-0093 decision 1), so "export as svg" from Paint is an HONEST vector
@@ -342,7 +409,13 @@ def _export_bytes(canvas: Image.Image, fmt: str) -> bytes:
     return buf.getvalue()
 
 
-def execute(plan: CreativePlan, source_bytes: bytes | None) -> ExecutionResult:
+def execute(
+    plan: CreativePlan,
+    source_bytes: bytes | None,
+    *,
+    image_provider: ImageProvider | None = None,
+    assets: dict[str, bytes] | None = None,
+) -> ExecutionResult:
     """Runs every operation in ``plan.operations`` in order over an in-memory Pillow
     canvas, returning the produced bytes and the read-back inspection
     (:meth:`ExecutionResult.inspection`). Never raises for an operation that merely
@@ -359,20 +432,91 @@ def execute(plan: CreativePlan, source_bytes: bytes | None) -> ExecutionResult:
     export_format = "png"
     output_name: str | None = None
     final_bytes: bytes | None = None
+    provider: ImageProvider = image_provider or LocalImageProvider()
+    semantic_expectations: list[str] = []
+    layered: layers_module.LayeredDocument | None = None
 
     for op in plan.operations:
         try:
             if isinstance(op, New):
                 canvas = _apply_new(op)
+                if plan.tool == TOOL_LAYERED:
+                    layered = layers_module.LayeredDocument(canvas.width, canvas.height)
             elif isinstance(op, Open):
                 if source_bytes is None:
                     errors.append("open: no source bytes provided")
                     continue
-                canvas = _open_source(source_bytes)
+                stripped = source_bytes.lstrip()[:64].lower()
+                if stripped.startswith(b"<?xml") or stripped.startswith(b"<svg"):
+                    canvas = _open_svg_source(plan, source_bytes, provider)
+                elif plan.tool == TOOL_LAYERED and (doc := _open_layered_source(source_bytes)):
+                    layered = doc
+                    canvas = doc.flatten()
+                else:
+                    canvas = _open_source(source_bytes)
+                    if plan.tool == TOOL_LAYERED:
+                        layered = layers_module.LayeredDocument(canvas.width, canvas.height)
             elif isinstance(op, Inspect):
                 continue  # the inspection is always produced, at the end, regardless.
+            elif isinstance(op, Generate):
+                try:
+                    canvas = _open_source(
+                        provider.generate(op.prompt, width=op.width, height=op.height)
+                    )
+                except ImageProviderError as exc:
+                    raise ProviderRefusal(exc.error_class, f"generate: {exc}") from exc
+                if layered is not None:
+                    layered.layers.clear()
+                    layered.width, layered.height = canvas.width, canvas.height
             elif canvas is None:
                 errors.append(f"{op.op}: no canvas yet (missing 'new' or 'open')")
+            elif isinstance(op, ObjectRemove):
+                box = _int_box(op.box)
+                try:
+                    if op.prompt:
+                        canvas = _open_source(
+                            provider.edit(_png_of(canvas), prompt=op.prompt, box=box)
+                        )
+                    else:
+                        canvas = _open_source(provider.object_remove(_png_of(canvas), box=box))
+                except ImageProviderError as exc:
+                    raise ProviderRefusal(exc.error_class, f"object_remove: {exc}") from exc
+            elif isinstance(op, ObjectAdd):
+                box = _int_box(op.box)
+                try:
+                    if op.kind == "prompt":
+                        canvas = _open_source(
+                            provider.edit(_png_of(canvas), prompt=op.prompt or "", box=box)
+                        )
+                    else:
+                        canvas = _open_source(
+                            imaging.object_add(
+                                _png_of(canvas),
+                                box=box,
+                                kind=op.kind,
+                                fill=tuple(op.fill),
+                                content=op.text,
+                                asset=(assets or {}).get(op.asset or ""),
+                            )
+                        )
+                except ImageProviderError as exc:
+                    raise ProviderRefusal(exc.error_class, f"object_add: {exc}") from exc
+            elif isinstance(op, Style):
+                try:
+                    if op.prompt:
+                        canvas = _open_source(
+                            provider.edit(_png_of(canvas), prompt=op.prompt, box=None)
+                        )
+                    else:
+                        canvas = _open_source(provider.style(_png_of(canvas), kind=op.kind))
+                except ImageProviderError as exc:
+                    raise ProviderRefusal(exc.error_class, f"style: {exc}") from exc
+            elif isinstance(op, Enhance):
+                canvas = _open_source(provider.enhance(_png_of(canvas), kind=op.kind))
+            elif isinstance(op, Upscale):
+                canvas = _open_source(provider.upscale(_png_of(canvas), factor=op.factor))
+            elif isinstance(op, SemanticCheck):
+                semantic_expectations.append(op.expectation)
             elif isinstance(op, Draw):
                 _apply_draw(canvas, op, drawn_shapes)
             elif isinstance(op, Shape):
@@ -388,6 +532,16 @@ def execute(plan: CreativePlan, source_bytes: bytes | None) -> ExecutionResult:
             elif isinstance(op, BackgroundRemove):
                 canvas = _apply_background_remove(canvas, op)
                 background_removed = True
+            elif isinstance(op, Layer) and layered is not None:
+                # B43 (req 506): the layered tool - `add` snapshots the canvas as a named
+                # layer and starts a fresh transparent one; `merge` folds the canvas into the
+                # named layer. Every later draw lands on the canvas = the working layer.
+                if op.action == "add":
+                    layered.add(op.name, canvas)
+                    canvas = Image.new("RGBA", (layered.width, layered.height), (0, 0, 0, 0))
+                else:
+                    layered.get(op.name).image.alpha_composite(canvas)
+                    canvas = layered.flatten()
             elif isinstance(op, Layer):
                 # Paint carries no layer model (``CreativePlan`` already refuses this
                 # op for tool="paint" before it ever reaches here); kept only so a
@@ -401,8 +555,27 @@ def execute(plan: CreativePlan, source_bytes: bytes | None) -> ExecutionResult:
                     continue
                 export_format = op.format
                 output_name = op.path or next_output_name(plan.name, op.format)
-                final_bytes = _export_bytes(canvas, export_format)
-        except ExecutionError:
+                if layered is not None and op.format == "ora":
+                    stack = layers_module.LayeredDocument(
+                        layered.width, layered.height, list(layered.layers)
+                    )
+                    if not any(layer.name == "working" for layer in stack.layers):
+                        stack.add("working", canvas)
+                    final_bytes = layers_module.to_ora(stack)
+                elif op.format == "ora":
+                    stack = layers_module.LayeredDocument(canvas.width, canvas.height)
+                    stack.add("working", canvas)
+                    final_bytes = layers_module.to_ora(stack)
+                elif op.format == "svg" and (drawn_shapes or drawn_texts) and layered is None:
+                    final_bytes = layers_module.to_svg(
+                        width=canvas.width,
+                        height=canvas.height,
+                        shapes=[s.as_dict() for s in drawn_shapes],
+                        texts=[t.as_dict() for t in drawn_texts],
+                    )
+                else:
+                    final_bytes = _export_bytes(canvas, export_format)
+        except (ExecutionError, ProviderRefusal):
             # A source image that could not even be opened is a hard refusal the
             # caller (``app.creative.service``) turns into a refused receipt BEFORE
             # anything is stored — never downgraded to a soft ``errors[]`` entry the
@@ -428,6 +601,8 @@ def execute(plan: CreativePlan, source_bytes: bytes | None) -> ExecutionResult:
         background_removed=background_removed,
         output_name=output_name,
         errors=errors,
+        semantic_expectations=semantic_expectations,
+        layers=[layer.as_dict() for layer in layered.layers] if layered is not None else [],
     )
 
 

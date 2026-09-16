@@ -25,7 +25,15 @@ export const EXECUTIVE_ACTION_LABEL: Record<ExecutiveChipAction, string> = {
   pause: "Duraklat",
   resume: "Devam",
   cancel: "İptal",
+  approve: "Onayla",
 };
+
+export const EXECUTIVE_REASON_NOT_AWAITING = "onay bekleyen adım yok";
+
+/** B38 (req 544): true for an unfinished row that names the step it waits on. */
+export function rowAwaitsApproval(row: Pick<ExecutiveRunRow, "state" | "awaiting_step">): boolean {
+  return rowIsActive(row) && typeof row.awaiting_step === "string" && row.awaiting_step !== "";
+}
 
 /** The row's state when it is one of the seven this build knows, else `null`. */
 export function rowState(row: Pick<ExecutiveRunRow, "state">): ExecutiveRunState | null {
@@ -82,8 +90,9 @@ export function rowIsComplete(row: Pick<ExecutiveRunRow, "state">): boolean {
  * inventing state. The owner's voice ("Bu işi durdur", "Devam et", "Bunu
  * iptal et") still reaches the Cloud Core, which decides on its own terms.
  */
-export function executiveRowActions(row: Pick<ExecutiveRunRow, "state">): ExecutiveChipAction[] {
+export function executiveRowActions(row: Pick<ExecutiveRunRow, "state"> & { awaiting_step?: string | null }): ExecutiveChipAction[] {
   const actions: ExecutiveChipAction[] = [];
+  if (rowAwaitsApproval({ state: row.state, awaiting_step: row.awaiting_step ?? null })) actions.push("approve");
   if (rowIsPausable(row)) actions.push("pause");
   if (rowIsPaused(row)) actions.push("resume");
   if (rowIsActive(row)) actions.push("cancel");
@@ -145,7 +154,7 @@ export const EXECUTIVE_REASON_NOT_ACTIVE = "İş bitmiş; iptal edilecek bir şe
 export type ExecutiveActionGate = {
   enabled: boolean;
   reason: string | null;
-  reasonKind: "busy" | "not_running" | "not_paused" | "not_active" | null;
+  reasonKind: "busy" | "not_running" | "not_paused" | "not_active" | "not_awaiting" | null;
 };
 
 /**
@@ -158,12 +167,16 @@ export type ExecutiveActionGate = {
  * Cloud Core twice.
  */
 export function executiveActionGate(
-  row: Pick<ExecutiveRunRow, "state">,
+  row: Pick<ExecutiveRunRow, "state"> & { awaiting_step?: string | null },
   action: ExecutiveChipAction,
   busy: ExecutiveBusy | null,
 ): ExecutiveActionGate {
   if (busy !== null) return { enabled: false, reason: EXECUTIVE_REASON_BUSY, reasonKind: "busy" };
   switch (action) {
+    case "approve":
+      if (!rowAwaitsApproval({ state: row.state, awaiting_step: row.awaiting_step ?? null }))
+        return { enabled: false, reason: EXECUTIVE_REASON_NOT_AWAITING, reasonKind: "not_awaiting" };
+      return { enabled: true, reason: null, reasonKind: null };
     case "pause":
       if (!rowIsPausable(row)) return { enabled: false, reason: EXECUTIVE_REASON_NOT_RUNNING, reasonKind: "not_running" };
       return { enabled: true, reason: null, reasonKind: null };

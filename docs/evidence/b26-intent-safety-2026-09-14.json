@@ -1,0 +1,74 @@
+{
+  "batch": "B26",
+  "name": "Niyet güvenliği ve misroute tespiti",
+  "requirements": [
+    736,
+    737,
+    738,
+    739,
+    741,
+    749,
+    750
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except the same live-desktop test B21-B25 recorded",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 9807 passed, 5 skipped (960 s); was 9744 before this batch",
+      "Windows agent build + tests": "FAIL - 919/920, NotepadLifecycleTests pointer click",
+      "Staged-update qualification": "PASS"
+    },
+    "the_one_failure": "Sixth batch running, same test, same measured cause: the operator lab needs a desktop nobody else is using and a full-screen application is holding this one. B26 touched no `devices/` code and no web code at all. READY_FOR_OWNER: run the device step with no full-screen application in front, or set PAGENTOS_OPERATOR_LAB=0 for that run; CI is unaffected because a runner has no interactive desktop.",
+    "web_gates": "vitest 1852 passed / 99 files, tsc clean (the generated matrix module was resynced)"
+  },
+  "what_this_proves": "All seven measured misroutes are closed, the deterministic router is still the safety shield that closes them, and the class can no longer only be found by a person sitting down with a table of sentences: 107 sentences are measured in CI at misroute count 0, and the running system now records what the router decided and notices when the owner objects to it.",
+  "the_shape_of_this_batch": "Four root causes behind seven sentences, and every one of them is the same mistake: a rule that admits a sentence on ONE word. `otomatik` alone meant the screen policy. `gönder` alone meant sending mail. `ekle` alone meant a calendar event. And `yaz` — matched by prefix — meant `yazdır` too, which in Turkish is not 'write' but 'PRINT'.",
+  "measured_first": {
+    "the_seven_reproduced": "Every one of the audit's misroutes was reproduced on this machine, against the live router, before anything was changed. The audit named four; measuring found the other three in the same families: `Otomatik yedeklemeyi kapat.` and `Otomatik kaydetmeyi kapat.` share the update sentence's root, and `Bu dosyayı bana gönder.` shares the file sentence's.",
+    "the_baseline": "107 cases, 8 misroutes (the seven plus `Bu belgeyi gönder.`, found while writing the critical-verb pairs). After the four narrowings: 107 cases, 0 misroutes.",
+    "what_this_batch_does_NOT_claim": "59 of the audit's 103 sentences reached nothing, and this batch does not make them route. Requirements 726-735 are B27's, and seven of them are in the set here with `expected=None` — present only for their FORBIDDEN sets, so 'Sesini kıs.' still fails the suite if it ever reaches something that acts."
+  },
+  "closed_fully": {
+    "738_otomatik_alone_is_not_a_screen": "The gate read `if _screen_noun(tokens) is None and not _has(tokens, \"otomatik\"): return None` — so the bare word admitted the sentence and the branch below turned the screen automation off. Software updates, backups and autosave all went through it. This family is about screens; the screen has to be in the sentence. The half that WRITES `auto_off_enabled` was narrowed the same way: one call site today, and a reader that flips the switch for any sentence containing `otomatik` is one call site away from the defect again.",
+    "736_a_confirmation_is_bare": "`Gönder.` is the owner confirming a draft that was just read back. The matcher refused the mail noun itself and let every OTHER noun through, so `Dosyayı gönder.` sent mail — the one action in this family that cannot be taken back. A confirmation is now BARE: the verb, plus words that name nothing (a pointer at the thing read back, politeness, discourse).",
+    "737_yazdir_is_print": "`_WRITE_VERB_STEMS = (\"yaz\",)` matched by prefix, and Turkish builds words by suffix: `yazdır` (causative — have it written — i.e. PRINT), `yazıcı` (printer), `yazılım` (software), `yazım` (spelling). `Bunu yazdır.` typed into whatever window happened to be focused. A closed list of the non-verbs rather than a cleverer stemmer, and the payload reader's regex carries the same exclusions as a lookahead so the two halves cannot drift.",
+    "739_ekle_needs_a_calendar_anchor": "`ekle` alone meant a calendar event, and everything gets added to something. The owner's month-long goal became a dated entry. The calendar owns the sentence only with an anchor: a weekday, a relative day, a calendar word, or the name of a thing one keeps appointments for. `ay` (month) is deliberately NOT an anchor — it is the word that let the measured misroute through, and a month is a span rather than an appointment.",
+    "741_the_shield_stays_a_shield": "Every fix is a narrowing, and a narrowing is the change most likely to take a working sentence with it. Twenty sentences that must keep working are asserted in the same run — the standing screen preference, the owner's own 2026-09-10 sentence, the bare confirmation, the operator's typing phrases, the calendar's own additions, `Dur.`, `Gözünü kapat.`, and the memory pair that must never invert.",
+    "749_route_telemetry": "Every resolution is recorded: the intent, the rule that matched, and whether it routed. The owner's WORDS are not — the transcript is the most private thing this system handles, and the detector does not need it. The one exception is a flag drawn from a closed set of eight reaction words.",
+    "750_misroute_auto_detection": "A router cannot notice its own mistake; if it could see it, it would not make it. What it can notice is what the owner does NEXT. An acting intent followed within twelve seconds by a stop, a discard or a bare 'hayır' is a candidate, written to the Activity Ledger as a warning. It is a CANDIDATE detector on purpose: it reports, changes no route and blocks no tool. One objection names one action — the nearest preceding one — because reporting three suspects for one 'dur' drowns the real one."
+  },
+  "found_on_the_way": {
+    "the_three_unnamed_misroutes": "The audit named four of its seven. The other three were found by reproducing the named ones and asking what else shared their root — which is the only way to close a class rather than four sentences.",
+    "an_eighth_in_the_same_family": "`Bu belgeyi gönder.` was written as a critical-verb pair, not as a known defect, and it failed on the first run. Same root as the file sentences; closed by the same narrowing.",
+    "the_corpus_forbade_its_own_expectation": "The first draft's default forbidden set was every acting intent, applied to cases whose EXPECTED intent was an acting one — so `Gözünü aç.` failed for resolving to exactly what it should. A case that forbids its own expectation fails for every router including a correct one, which is how a corpus stops being read."
+  },
+  "tests": {
+    "services/api/tests/unit/test_intent_misroutes.py": 46,
+    "services/api/tests/unit/test_route_telemetry.py": 16,
+    "services/api/tests/voice_corpus/routing.py": "107 cases (the audit measured 103; the set may only grow)"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`).",
+    "mutations": [
+      "put the `otomatik` escape hatch back -> 5 failures, naming all three update/backup/autosave sentences.",
+      "drop the bare-confirmation rule -> 5 failures, naming both file sentences and the document one.",
+      "let `yaz` swallow `yazdır` again -> 3 failures, naming the print sentence.",
+      "let `ekle` need nothing -> 3 failures, naming the goal sentence.",
+      "And the baseline itself: 8 misroutes against the unmodified router, reported together rather than one at a time."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_AUTOMATED — 103 cümlelik ölçüm seti CI'da; misroute sayısı 0', which `test_intent_misroutes.py` asserts over 107 cases in one run. The detector's real-world half — an owner actually objecting to a route — is an owner-device observation for the production round."
+  },
+  "owner_gates": {
+    "karar_0": "production release round"
+  }
+}

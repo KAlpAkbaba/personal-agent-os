@@ -1,0 +1,86 @@
+{
+  "batch": "B27",
+  "name": "Günlük niyet kapsamı",
+  "requirements": [
+    726,
+    727,
+    728,
+    729,
+    730,
+    731,
+    732,
+    733,
+    734,
+    735
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 (second run; the first run failed two guards that the fixes below closed)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10015 passed, 5 skipped (888 s); was 9807 before this batch",
+      "Windows agent build + tests": "PASS - 920/920 (the operator-lab desktop test passed this time: no full-screen application in front)",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "first_run": "API 10009/2 failed: test_owner_error_language (the four new error classes had no Turkish sentence) and test_selfmodel_indexer (operator.screenshot registered through a bare imported name the indexer cannot resolve). Both are contract-halves guards doing their job; both fixed, gate re-run.",
+    "web_gates": "vitest 1852 passed / 99 files, tsc clean (generated matrix module resynced)"
+  },
+  "what_this_proves": "The ten everyday sentences the audit measured as reaching nothing now reach a tool that answers, measured as a SET in one run: 49 sentences (the ten plus at least three Turkish synonyms each), uncovered ratio 65.3% before, 0% after; and on B26's 107-sentence set the unrouted count fell from 19 to 12 with the misroute count still 0.",
+  "measured_first": {
+    "baseline": "49 sentences, 32 unrouted (65.3%) against the router as B26 left it, on this machine, before anything was changed. The audit's own number was 59/103 (57%).",
+    "already_routing": "726 (clock), 727 (remember), 728 (forget) resolved before this batch - B15 and B16 closed them after the audit. Measured and put in the set; the matrix rows said MISSING.",
+    "no_tool_at_all": "732 research cancel (REST only), 733 media volume (device capability, no caller), 735 screenshot (agent answers screen.capture, no caller) - three of the seven unrouted sentences had nothing to route TO.",
+    "no_delete_by_policy": "731: the calendar writer has create/update and no delete (spec §1). The sentence now reaches the calendar and gets a refusal RECEIPT naming the event.",
+    "after": "49/49 route; misroutes on the 107-set: 0."
+  },
+  "closed_fully": {
+    "726_saat_kac": "clock_query -> clock.now; four forms measured.",
+    "727_bunu_hatirla": "memory_remember; four forms measured; `unutma` stays REMEMBER.",
+    "728_bunu_unut": "memory_forget; four forms measured.",
+    "729_maillerime_bak": "`_mail_inbox_match` now takes the mail noun with the plain look/show/check verbs and the 'var mı' question. Found on the way: 'Yeni mail var mı?' opened a DRAFT - a question never composes.",
+    "730_bu_hafta_ne_var": "`_calendar_agenda_match` takes a day or week anchor without the calendar noun; `calendar.agenda` gained a week range (today..Sunday; 'haftaya' = next Monday..Sunday). 'Günaydın, bugün ne var?' stays the morning briefing.",
+    "731_toplantiyi_iptal_et": "New intent CALENDAR_CANCEL (accusative appointment object + cancel verb; 'toplantı notlarını sil' is not a meeting) -> new tool calendar.cancel -> CalendarService.cancel_event: focused event resolved, refusal receipt `deletion_not_permitted`; no focus -> 'Hangi etkinlik?'.",
+    "732_arastirmayi_iptal_et": "New intent RESEARCH_CANCEL (research NOUN + iptal/durdur/bırak/vazgeç; negation 'etme' refused) -> new tool research.cancel: active run -> mark_research_cancelled (the SAME function the REST route now calls), ledger row research.cancelled, Temporal handle.cancel() as a follow-up; nothing running -> refused receipt.",
+    "733_sesini_kis": "New intent MEDIA_VOLUME with the direction read off the verb -> new tool media.volume -> set_volume: media_status.volume read first, one 0.25 step (mute = 0), browser.media_volume with ramp 0; nothing playing -> refused, no device call.",
+    "734_neler_yapabilirsin": "New intent CAPABILITIES_QUERY (second-person 'yapabilirsin/olabilirsin' forms, possessive 'yeteneklerin') -> assistant.capabilities (B25). The family the owner named travels on the intent and beats the model's argument.",
+    "735_ekran_goruntusu_al": "New intent SCREENSHOT_CAPTURE -> new tool operator.screenshot -> device screen.capture (its first caller, row 104): PNG decoded and hashed, stored under screenshots/<session>/<call>.png, receipt carries size+sha256+key and never the image; no device / undeclared capability -> capability_missing refusal; no image -> unverified failure."
+  },
+  "found_on_the_way": {
+    "yeni_mail_var_mi_composed": "A question about the inbox was read as a request to compose. Closed by refusing questions in `_mail_draft_new_match`; the corpus case d.inbox.5 keeps it closed.",
+    "shield_caught_two_thefts": "The first agenda widening took 'Günaydın, bugün ne var?' from the briefing and the first capabilities matcher took 'Yetenek durumu ne?' from Capability Genesis - both caught by B26's misroute set on the first run, before any new test was written.",
+    "ledger_row_dropped_silently": "research.cancel's ledger row passed `research_job_id` as a string to a UUID column; the write failed inside the best-effort try and the corpus case still passed. The unit test that reads the ledger rows caught it.",
+    "half_written_b27_traces": "The previous session had left a duplicate research_cancel handler in tools.py and a harness context branch that had overwritten CTX_ROUTINE_EXISTS. Both found by grep before writing, both fixed.",
+    "two_guards_on_the_first_gate": "The error dictionary guard (B22) refused four new error classes with no Turkish sentence - and revealed that `ERROR_X: Final = ...` is invisible to its regex, so the two new constants are written without Final. The self-model indexer guard refused `operator.screenshot` because it was registered via a bare imported name; registered as `operator_capabilities.CAPABILITY_SCREENSHOT` like its six siblings."
+  },
+  "tests": {
+    "services/api/tests/unit/test_intent_daily_coverage.py": 82,
+    "services/api/tests/unit/test_daily_intent_tools.py": 24,
+    "services/api/tests/voice_corpus/corpus.py (d.*)": "98 cases through the real relay (categories daily)",
+    "services/api/tests/unit/test_intent_misroutes.py": "B26's set, misroute count still 0 with six of the seven UNROUTED cases now naming their intent"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`).",
+    "mutations": [
+      "capabilities matcher removed -> 5 failures (req 734 sentences named).",
+      "a question composes again -> 1 failure ('Yeni mail var mı?').",
+      "greeting guard removed -> 2 failures ('Günaydın, bugün ne var?' in both suites).",
+      "volume never reads the level first -> 1 failure.",
+      "the image leaks into the receipt -> 1 failure.",
+      "And the baseline: 32/49 unrouted before the router changed."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_AUTOMATED — 103 cümlelik sette kapsanmayan oran %57'den hedefe iner'. The daily set's ratio 65.3% -> 0% and the 107-set's unrouted 19 -> 12 are asserted in CI. The four new tools acting on a real device (a real screenshot, a real volume step) are owner-device observations for the production round."
+  },
+  "owner_gates": {
+    "karar_0": "production release round",
+    "mail_calendar_provider": "729/730/731 answer truthfully without an account (account_missing); a real mailbox/calendar is B45/B46's owner checkpoint"
+  }
+}

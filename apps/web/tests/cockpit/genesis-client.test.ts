@@ -125,7 +125,11 @@ describe("the three routes, exactly", () => {
     expect(absent.kind).toBe("absent");
     if (absent.kind === "absent") expect(absent.detail).toContain("/v1/genesis/runs");
     apiFetch.mockResolvedValueOnce(new Response("", { status: 500 }));
-    expect(await fetchGenesisRuns()).toEqual({ kind: "failed", error: "HTTP 500" });
+    const failedState = await fetchGenesisRuns();
+    expect(failedState).toMatchObject({ kind: "failed", error: "HTTP 500" });
+    // B22 req 708-711: and it now carries WHICH failure this was, so a panel can tell
+    // "try again" from "waiting on a key". A 500 with no class stays a plain failure.
+    expect(failedState.kind === "failed" && failedState.failure?.kind).toBe("failed");
   });
 
   it("POST /v1/genesis/runs/{id}/approve and /cancel, once each, with the id as a segment and no body", async () => {

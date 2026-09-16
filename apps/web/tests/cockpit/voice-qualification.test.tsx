@@ -29,9 +29,9 @@ function run(overrides: Partial<VoiceQualificationRun> = {}): VoiceQualification
   };
 }
 
-function render(value: VoiceQualification) {
+function render(value: VoiceQualification, always = false) {
   return renderToStaticMarkup(
-    <VoiceQualificationPanel state={{ kind: "ok", value, at: NOW }} now={NOW} />,
+    <VoiceQualificationPanel state={{ kind: "ok", value, at: NOW }} now={NOW} always={always} />,
   );
 }
 
@@ -78,27 +78,35 @@ describe("the voice routing qualification panel", () => {
     expect(html).toContain("2 açık evrim fırsatı");
   });
 
-  it("is empty, not failed, before the first run", () => {
-    const html = render({
+  it("is empty, not failed, before the first run — and on the cockpit that means gone", () => {
+    // B24 req 714: nothing to show takes no slot on the cockpit. On /settings, where the
+    // owner went to read about voice routing, `always` keeps the sentence.
+    const never: VoiceQualification = {
       state: "NOT_YET_RUN",
       routing_state: "NOT_YET_RUN",
       owner_audio_qualified: false,
       open_opportunities: 0,
       latest_synthetic_run: null,
       latest_owner_audio_run: null,
-    });
-    expect(html).toContain('data-panel-empty="yes"');
-    expect(html).toContain("Henüz hiç sınama kaydı yok.");
+    };
+    expect(render(never)).toBe("");
+
+    const page = render(never, true);
+    expect(page).toContain('data-panel-empty="yes"');
+    expect(page).toContain("Henüz hiç sınama kaydı yok.");
   });
 
   it("says 'not on this server' for a 404 rather than an empty list", () => {
-    const html = renderToStaticMarkup(
-      <VoiceQualificationPanel
-        state={{ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/voice/qualification yok (HTTP 404)." }}
-        now={NOW}
-      />,
-    );
-    expect(html).toContain("Henüz yok.");
-    expect(html).not.toContain("sınama kaydı yok");
+    const absent = {
+      kind: "absent" as const,
+      detail: "Bu Cloud Core sürümünde /v1/voice/qualification yok (HTTP 404).",
+    };
+    // On the cockpit a route this server does not serve is one of req 714's quiet
+    // families; the sentence lives on /availability and on the family's own page.
+    expect(renderToStaticMarkup(<VoiceQualificationPanel state={absent} now={NOW} />)).toBe("");
+
+    const page = renderToStaticMarkup(<VoiceQualificationPanel state={absent} now={NOW} always />);
+    expect(page).toContain("Henüz yok.");
+    expect(page).not.toContain("sınama kaydı yok");
   });
 });

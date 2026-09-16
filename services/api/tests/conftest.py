@@ -46,6 +46,19 @@ def _reset_operator_service_registry():
     register_operator_service(None)
 
 
+@pytest.fixture(autouse=True)
+def _reset_route_telemetry():
+    """B26 req 749: the router's telemetry ring is module-wide for the same reason the
+    operator registry is — `record_client_events` is a function, not a service object. A
+    ring that survived a test would let one test's resolutions pair with the next test's
+    "dur" and report a misroute nobody caused."""
+    from app.voice.route_telemetry import reset_telemetry
+
+    reset_telemetry()
+    yield
+    reset_telemetry()
+
+
 @pytest.fixture()
 def owner_auth() -> Callable[..., object]:
     """M9: `owner_auth(app, client)` bootstraps identity and authenticates.

@@ -154,6 +154,11 @@ EXPECTED_OPEN = {
     # no body -- the artifact id is never named. Deliberately open, like the greeting
     # audio route above, which this mirrors.
     ("GET", "/v1/artifacts/renders/fetch/{token}"),
+    # B45 (req 348, ADR-0152): the device's file.fetch of ONE mail attachment - the same
+    # single-use, ten-minute, 256-bit token discipline as the render fetch above
+    # (app.mail.attachment_fetch); unknown, expired, redeemed and hash-mismatched tokens
+    # are all the same bare 404. Deliberately open, mirroring that route.
+    ("GET", "/v1/mail/attachments/fetch/{token}"),
     # M18.4 gap 1 (ADR-0081 addendum 3): the device handoff between the two colours. The
     # release script calls these from INSIDE the draining container, which holds no owner
     # session and must not need one to finish a release; the routes are loopback-only

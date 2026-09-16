@@ -1,0 +1,98 @@
+{
+  "batch": "B36",
+  "name": "Genesis ön kapısı",
+  "requirements": [
+    561,
+    562,
+    563,
+    564,
+    565,
+    569,
+    570,
+    571,
+    572,
+    573,
+    574,
+    575,
+    576,
+    577,
+    578,
+    579,
+    580
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 (the same clean run B35's record cites, over the B35+B36 tree). Before it, the targeted genesis suites caught the wiring path set and a route answering with str(exc); both fixed before the gate.",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10646 passed, 6 skipped (pytest 961 s); was 10529 after B34",
+      "Windows agent build + tests": "PASS - unchanged device tree (955 agent, 135 audio)",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest 102 files / 1870 tests (selfdev-queue 6, genesis-catalogue 3, approvals-client eight routes, matrix-badges 12/12 after node scripts/web/sync-feature-matrix.mjs); tsc --noEmit clean; oxlint no new warnings"
+  },
+  "what_this_proves": "Capability Genesis is reachable from the product and cannot register unsafe code. An interface the owner registers (or discovers from its own description) is a row that rebuilds the spoken-name catalogue at once and after a restart; a request has a route; a non-loopback host is researched only when the owner enrolled it as an authorized asset with network permission on itself; every generated adapter - rendered or model-proposed - passes a deterministic security gate before a single test runs and is refused by name when it fails; the model is asked only under the owner's flag, may replace only the adapter module, and everything it writes waits for the owner; a capability can be versioned, rolled back, deactivated, re-activated and used through the registry's own gates.",
+  "measured_first": {
+    "before": "GenesisInterfaceCatalogue was an in-memory list with a register() nobody called (empty in every production process; the corpus seeded it per case); requests came only from capability.request (voice) or a test; fetch_interface refused every non-loopback host; no security gate on generated code (supply-chain scan on declared dependencies only); HttpAdapterGenerator had no model seam; request() reused an existing capability and could not build a new version; no rollback/deactivate/activate/use route; the matrix said 575 (voice tool) and 578 (restricted generation) were missing - both were measurement errors (the four tools exist since M24; the generator already covers every spec-subset interface)."
+  },
+  "closed_fully": {
+    "561_request_route": "POST /v1/genesis/runs {interface_name, operation_id, arguments?, interface_url?, new_version?} -> the run dict (201); url from the catalogue when omitted; not registered and no url -> 422 naming the interface.",
+    "562_563_catalogue": "genesis_catalogue table (migration 0049: name unique, url, target_phrases_json, operations_json, source, enabled, spec_digest, last_seen_at); CatalogueStore.register/disable/list/load; load() at lifespan start (never blocks startup) and after every write rebuilds the process-wide catalogue app.voice.intents reads; POST /v1/genesis/catalogue (shape errors -> 422 with a sentence, never the exception; url under the host rule), DELETE /v1/genesis/catalogue/{name} (disabled stays listed, leaves the spoken index).",
+    "564_discovery": "CatalogueStore.discover(url) -> {name, url, base_url, operations [{operation_id, verbs=[id], side_effect}], read_back, spec_digest(sha256 of the parsed description)}; POST /v1/genesis/catalogue/discover; registers nothing.",
+    "565_hosts": "fetch_interface(url, host_allowed=): loopback rules unchanged (http, explicit port 1024-65535, none of this system's own ports, /spec); a non-loopback host only when host_allowed(hostname) is true (http or https, default port); GenesisRuntime.host_allowed asks RegistryAuthorizationProvider.verify(host) and covers({network_permissions: [host]}) - enrolled without the grant is no; genesis_authorized_hosts_enabled can switch it off.",
+    "569_registration": "unchanged gates (evaluation, independent review, shadow, canary, register) plus provenance {generator, model_generated, security_review_passed, published_at, genesis_run_id} in the registered manifest.",
+    "570_activation": "service.deactivate -> registry.set_capability_status('deprecated') (resolve() None; use() capability_missing); service.activate -> registry.rollback_to(current version), which now re-serves an already-current registered version on a non-production capability (the one sanctioned path back: a status write to 'production' is refused by design); routes /capabilities/{id}/deactivate|activate.",
+    "571_versioning": "request(new_version=True) on a resolving capability: evidence requested_version = next patch of the incumbent; _design builds the AdapterSpec with that version; registration supersedes the incumbent; GET /capabilities/{id}/versions lists every skill version with the current capability row.",
+    "572_rollback": "service.rollback -> registry.rollback_to (only a previously registered version; nothing deleted; unknown version 404); POST /capabilities/{id}/rollback {version}; a ledger row per act.",
+    "573_use": "service.use(capability_id, arguments) -> dispatcher (registered adapter in its subprocess) or capability_missing; POST /capabilities/{id}/use; the voice path (capability.request) already uses a registered capability without a run.",
+    "574_rest": "13 paths on the router (test_genesis_wiring pins them); security_refused answers 409; every route owner-session gated (401 without).",
+    "575_voice": "measurement correction: capability.request/status/approve/cancel exist since M24 (tools_genesis.py, corpus category genesis); B36 fills the catalogue they need in production.",
+    "576_cockpit": "GenesisCataloguePanel on /selfdev (host, spoken phrases, operation verbs, disabled state, source) from fetchGenesisCatalogue (GET /v1/genesis/catalogue); the cockpit's Yeni Yetenek panel (runs, approve/cancel) unchanged.",
+    "577_model": "AdapterCodeModel protocol; ScriptedAdapterCodeModel; AnthropicAdapterCodeModel (tool-forced messages call, key from settings/env, never logged; GENERATOR_NOT_CONFIGURED without a key); HttpAdapterGenerator(model=) replaces only src/<skill>.py with the proposal, model_generated/generator_name per call; GenesisService.model_generation_enabled = flag AND a model; genesis_model_generation_enabled default False.",
+    "578_generation": "measurement correction: the generator renders any interface/operation in the spec subset (test_genesis_generalisation); the model extends it under the same gates.",
+    "579_680_security_gate": "security_gate.review_layout(layout, allowed_hosts=(spec.host,)): review_texts (B35) minus its egress rule, plus CHECK_IMPORT (allowlist), CHECK_FOREIGN_HOST (any URL host not the interface's), CHECK_SYSTEM_ACCESS (subprocess, open(...,'w'), os.system/popen/remove/..., shutil, ctypes, socket.socket); runs in _secure between _build and _test; red -> reject_skill_version('security gate: ...') + EvolutionError(SECURITY_REFUSED) with findings in details; evidence.security_review kept on the run.",
+    "580_owner_approval": "model_generated -> _park_awaiting_approval whatever the side-effect class; approve() rebuilds the spec with authorized_asset only for a mutating operation and sets authority_class read_only otherwise."
+  },
+  "found_on_the_way": {
+    "registry_rollback_early_return": "rollback_to returned the row unchanged when the target was already the current version, so activate() after deactivate() could not restore production; the early return now applies only when the capability is already production, otherwise it re-serves the registered version (a registered_at check guards it).",
+    "route_answered_with_the_exception": "the catalogue registration route first answered a shape error with str(exc); the owner-language test caught it on the first run - a fixed sentence now, the reason in the log.",
+    "matrix_pipe_again": "row 574 carried '|' between route names and split for the web sync; spelled with slashes. Twice in one day: a rule for the writer.",
+    "port_precedence": "the first draft of the host rule wrote `A or B and C` where `A or (C and B)` was meant; caught by reading it back before the tests ran."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_genesis_b36.py": "13 (gate findings by line; rendered passes / hostile proposal refused; no model = not asked; model-written read adapter waits then registers read_only with provenance; hostile proposal -> security_refused + rejected version; flag off -> never asked; catalogue persist/rebuild/discover/disable; 4 shape refusals; versions/rollback/deactivate/activate/use; host rule (unauthorized, authorized, privileged port); runtime host rule from the asset registry; REST end to end; 401 without a session)",
+    "services/api/tests/unit/test_genesis_wiring.py": "13 router paths pinned",
+    "services/api/tests/unit/test_evolution_registry.py": "unchanged and green with the rollback change",
+    "apps/web/tests/cockpit/genesis-catalogue.test.tsx": "3 (fetch + parse defensively; panel facts, disabled and no-verb sentences; empty sentence)",
+    "apps/web/tests/pages/family-pages.test.ts": "selfdev/page.tsx must call fetchGenesisCatalogue"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b36_mutate.py, log b36_mutate.log.",
+    "mutations": [
+      "M1 the security gate records its findings but never refuses an adapter -> 1 failure (hostile proposal registered).",
+      "M2 a model-written read adapter is registered without the owner's word -> 1 failure (verified instead of awaiting_approval).",
+      "M3 the model is asked with the owner's flag off -> 1 failure (model.asked not empty).",
+      "M4 any host on the internet may be researched -> 1 failure (validation_error expected, network attempted).",
+      "M5 a generated adapter may name a foreign host -> 1 failure (evil.example.com not a finding).",
+      "M6 disabling a catalogue entry leaves it resolvable by voice -> 1 failure (still resolved after disable).",
+      "M7 an enrolled asset with no network grant authorizes research -> 1 failure (other.example.invalid allowed).",
+      "M8 activate() after a deactivation leaves the capability unresolvable -> 1 failure (resolve None after activate)."
+    ],
+    "result": "8/8 red; every file restored to its sha256 before the mutation"
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED with real processes: the counter box fixture is a real HTTP application on a loopback port, the adapters are executed in subprocesses by the dispatcher, the routes run through create_app with an owner session. The production round (register a real local application on the deployed Cloud Core, ask for it by voice, use it) needs the deploy and is READY_FOR_OWNER."
+  },
+  "owner_gates": {
+    "production_round": "READY_FOR_OWNER: after the deploy, POST /v1/genesis/catalogue with a real interface, say its spoken name, watch the run on /selfdev.",
+    "model_generation": "genesis_model_generation_enabled stays off until the owner turns it on (and supplies PAGENTOS_ANTHROPIC_API_KEY); every model-written adapter waits for the owner regardless.",
+    "authorized_hosts": "a non-loopback interface is researched only after the owner enrols its host as an asset with network permission on itself (POST /v1/security/assets)."
+  }
+}

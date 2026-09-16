@@ -73,8 +73,9 @@ class RealtimeSession:
 
     def _require_open(self) -> None:
         if self.state == RealtimeState.CLOSED:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "session is closed",
-                             provider=self.provider)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "session is closed", provider=self.provider
+            )
 
     # -------------------------------------------------------------- transitions
 
@@ -99,9 +100,11 @@ class RealtimeSession:
         leave TOOL_RUNNING, and is still interruptible by a stop word."""
         self._require_open()
         if self.state != RealtimeState.TOOL_RUNNING:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             "progress reports are only valid during a tool call",
-                             provider=self.provider)
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                "progress reports are only valid during a tool call",
+                provider=self.provider,
+            )
         self._emit("assistant_progress", detail)
 
     def finish_tool_call(self, detail: str = "") -> None:

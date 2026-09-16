@@ -82,6 +82,14 @@ class FusionPolicy:
     #: reported as UNKNOWN rather than a low-confidence guess dressed up as
     #: a state.
     min_confidence: float = 0.35
+    #: B48 (req 312, 313): the owner's quiet hours ({"start": "HH:MM", "end": "HH:MM",
+    #: "timezone"?}), taken from the ambient policy on every ingest. Outside them a rest
+    #: must hold ``likely_asleep_after_outside_quiet_s`` before it reads as sleep.
+    quiet_hours: dict[str, object] | None = None
+    likely_asleep_after_outside_quiet_s: float = 45 * 60.0
+    #: B48 (req 310): how far a fresh observation's weight fades across its trust
+    #: lifespan (0 = not at all, the pre-B48 behaviour).
+    freshness_decay: float = 0.5
 
 
 DEFAULT_POLICY = FusionPolicy()
@@ -146,8 +154,66 @@ def _presence_vote(fresh: Sequence[Observation], policy: FusionPolicy) -> tuple[
     return fraction, conflict
 
 
-def _base_confidence(fresh: Sequence[Observation], present_fraction: float) -> float:
-    avg_conf = sum(o.presence_confidence for o in fresh) / len(fresh)
+def _freshness_weight(observation: Observation, *, now: datetime, policy: FusionPolicy) -> float:
+    """B48 (req 310): 1.0 for an observation made now, fading linearly to
+    ``1 - freshness_decay`` at the end of its source's trust lifespan - evidence about "a
+    few minutes ago" is still evidence, but not as much as evidence about now."""
+    if policy.freshness_decay <= 0:
+        return 1.0
+    ttl = policy.ttl_s.get(observation.source) or 60.0
+    age = max(0.0, (now - _aware(observation.observed_at)).total_seconds())
+    return 1.0 - policy.freshness_decay * min(1.0, age / ttl)
+
+
+def _inside_quiet_hours(window: dict[str, object] | None, now: datetime) -> bool | None:
+    """B48 (req 312, 313): whether ``now`` falls inside the owner's quiet window, or None
+    when there is no readable window - an unreadable setting never changes a threshold."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    if not isinstance(window, dict) or not window.get("start") or not window.get("end"):
+        return None
+    try:
+        start_h, start_m = (int(x) for x in str(window["start"]).split(":"))
+        end_h, end_m = (int(x) for x in str(window["end"]).split(":"))
+        zone = ZoneInfo(str(window.get("timezone") or "Europe/Istanbul"))
+    except (ValueError, TypeError, ZoneInfoNotFoundError):
+        return None
+    if not (0 <= start_h < 24 and 0 <= end_h < 24 and 0 <= start_m < 60 and 0 <= end_m < 60):
+        return None
+    start, end = start_h * 60 + start_m, end_h * 60 + end_m
+    if start == end:
+        return None
+    local = _aware(now).astimezone(zone)
+    minute = local.hour * 60 + local.minute
+    return start <= minute < end if start < end else (minute >= start or minute < end)
+
+
+def _time_of_day_policy(policy: FusionPolicy, now: datetime) -> FusionPolicy:
+    """Outside the owner's quiet hours a rest must hold ``likely_asleep_after_outside_quiet_s``
+    before it escalates to LIKELY_ASLEEP; inside them (or with none set), the normal threshold."""
+    if _inside_quiet_hours(policy.quiet_hours, now) is False:
+        longer = max(policy.likely_asleep_after_s, policy.likely_asleep_after_outside_quiet_s)
+        return replace(policy, likely_asleep_after_s=longer)
+    return policy
+
+
+def _base_confidence(
+    fresh: Sequence[Observation],
+    present_fraction: float,
+    *,
+    now: datetime | None = None,
+    policy: FusionPolicy | None = None,
+) -> float:
+    if now is not None and policy is not None:
+        # A weighted average: freshness decides how much each observation counts against the
+        # others, never how confident the whole assertion may be - an evenly aged window keeps
+        # its confidence, so decay cannot push an honest majority below min_confidence.
+        weights = [_freshness_weight(o, now=now, policy=policy) for o in fresh]
+        avg_conf = sum(
+            o.presence_confidence * w for o, w in zip(fresh, weights, strict=True)
+        ) / sum(weights)
+    else:
+        avg_conf = sum(o.presence_confidence for o in fresh) / len(fresh)
     # Distance from the 50/50 line: a unanimous 0.9-confidence vote reads
     # more confident than a bare 0.51 majority carrying the same average.
     decisiveness = abs(present_fraction - 0.5) * 2.0
@@ -185,6 +251,11 @@ def _bucket(
         # previous reading also happened to be resting" (that would
         # escalate on the very next classification, however soon it
         # arrived, making the threshold decorative rather than enforced).
+        # Once reached, sleep holds for as long as the rest evidence does: the escalation
+        # starts LIKELY_ASLEEP's own clock, so re-measuring the threshold from there would
+        # drop the owner straight back to RESTING on the next reading.
+        if prev_state == PresenceState.LIKELY_ASLEEP:
+            return PresenceState.LIKELY_ASLEEP
         if prev_state in _REST_LIKE and prior_rest_duration_s >= policy.likely_asleep_after_s:
             return PresenceState.LIKELY_ASLEEP
         return PresenceState.RESTING
@@ -219,7 +290,8 @@ def classify_window(
     posture = _majority(o.posture for o in fresh)
     awake = _majority(o.awake_state for o in fresh)
 
-    confidence = _base_confidence(fresh, present_fraction)
+    confidence = _base_confidence(fresh, present_fraction, now=now, policy=policy)
+    policy = _time_of_day_policy(policy, now)
     if conflict:
         confidence *= policy.conflict_confidence_multiplier
 
@@ -324,6 +396,11 @@ class PresenceFusionEngine:
     @property
     def policy(self) -> FusionPolicy:
         return self._policy
+
+    def set_policy(self, policy: FusionPolicy) -> None:
+        """B48 (req 313): the owner's preferences change the thresholds at run time."""
+        with self._lock:
+            self._policy = policy
 
     def current(self) -> PresenceAssertion | None:
         with self._lock:

@@ -46,6 +46,12 @@ from app.operator import focus as focus_module
 from app.operator.capabilities import RECEIPT_BY_PLAN, receipt_capability_for_plan
 from app.operator.models import FOCUS_KIND_WINDOW
 from app.operator.task import (
+    LEVEL_API,
+    LEVEL_DOM,
+    LEVEL_KEYBOARD,
+    LEVEL_POINTER,
+    LEVEL_UI_AUTOMATION,
+    LEVEL_VISUAL,
     STATUS_CANCELLED,
     STATUS_FAILED,
     STATUS_RUNNING,
@@ -64,6 +70,18 @@ from app.uistate import publish as publish_ui_state
 logger = get_logger("app.operator.service")
 
 _RUNNING_STATUSES: frozenset[str] = frozenset({STATUS_RUNNING, STATUS_VERIFYING})
+
+#: spec §2's interaction ladder, lowest rung first. The receipt records the HIGHEST rung a
+#: plan used ("the planner records which level it used"), so a plan that activated a
+#: window (api) and then clicked (pointer) is a pointer action on the record.
+_LEVEL_RANK: dict[str, int] = {
+    LEVEL_API: 0,
+    LEVEL_DOM: 1,
+    LEVEL_UI_AUTOMATION: 2,
+    LEVEL_KEYBOARD: 3,
+    LEVEL_VISUAL: 4,
+    LEVEL_POINTER: 5,
+}
 
 _LEDGER_EVENT_BY_STATUS: dict[str, str] = {
     STATUS_SUCCEEDED: EVENT_TYPE_OPERATOR_TASK_COMPLETED,
@@ -310,6 +328,17 @@ class OperatorService:
         # incident the Supervisor raised from the receipt named a capability the self-model
         # could not find. The plan is still recorded — as ``observed_after.server.plan``,
         # detail about the action rather than the identity of it.
+        # B28 req 110 (and the test plan's "kısmi gönderim muhasebelendi"): the receipt
+        # says how far the plan got, which step stopped it, and the interaction level the
+        # plan used (spec §2: the planner records which rung of the ladder it used). A
+        # focus guard refusal mid-plan is therefore a receipt that names the step that
+        # was refused and counts the ones before it - never a bare "failed".
+        completed = sum(1 for receipt in task.receipts if receipt.ok)
+        stopped_at = next(
+            (receipt.step_name for receipt in reversed(task.receipts) if not receipt.ok), None
+        )
+        levels = [step.level for step in task.steps]
+        interaction_level = max(levels, key=_LEVEL_RANK.__getitem__) if levels else LEVEL_API
         receipt = ActionReceipt(
             action_id=str(task.id),
             capability=receipt_capability_for_plan(task.plan_name),
@@ -317,8 +346,15 @@ class OperatorService:
             execution_status=execution,
             terminal_status=terminal,
             observed_after={
-                "server": {"status": task.status, "plan": task.plan_name},
-                "local": dict(task.last_observed),
+                "server": {
+                    "status": task.status,
+                    "plan": task.plan_name,
+                    "steps_completed": completed,
+                    "step_count": len(task.steps),
+                    "stopped_at": stopped_at if task.status != STATUS_SUCCEEDED else None,
+                    "interaction_level": interaction_level,
+                },
+                "local": {**dict(task.last_observed), "interaction_level": interaction_level},
             },
             evidence_refs=[{"kind": "operator_task", "ref": str(task.id)}],
             error_class=error_class if task.status != STATUS_SUCCEEDED else None,

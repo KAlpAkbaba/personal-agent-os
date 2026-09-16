@@ -151,8 +151,15 @@ class GitWorkspace:
             target.write_bytes(edit.new_text.encode("utf-8"))
 
     def reset(self, worktree: Path) -> None:
-        """Back to the base commit: tracked changes discarded, files the patch added removed."""
-        _run([self.git, "checkout", "--", "."], worktree)
+        """Back to the base commit: tracked changes discarded, files the patch added removed.
+
+        A hard reset, not ``checkout -- .``: ``diff``/``changed_paths`` STAGE the patch
+        (``git add -A``) so new files show, and a checkout restores the index - the
+        patched tree - so a second attempt after a model-review refusal or a red gate
+        judged its regression test against the fix that was still there and called it
+        "passed on the base" (B35, found by the gate's fix loop).
+        """
+        _run([self.git, "reset", "-q", "--hard"], worktree)
         _run([self.git, "clean", "-fdq"], worktree)
 
     # ---------------------------------------------------------------- the change

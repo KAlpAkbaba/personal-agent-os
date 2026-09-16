@@ -7,6 +7,11 @@ import OwnerGate, { SignOutButton } from "../components/OwnerGate";
 import type { Loaded } from "../lib/cockpit/api";
 import {
   cancelResearch,
+  pauseResearch,
+  resumeResearch,
+  RESEARCH_MODES,
+  RESEARCH_MODE_LABEL,
+  type ResearchMode,
   explainError,
   fetchReportJson,
   getResearchFocus,
@@ -73,6 +78,8 @@ function ResearchSurface() {
   const [deviceValue, setDeviceValue] = useState<string>(AUTO);
   const [recencyDays, setRecencyDays] = useState<number>(DEFAULT_RECENCY_DAYS);
   const [maxSources, setMaxSources] = useState<number>(DEFAULT_MAX_SOURCES);
+  // B31 req 192: the mode is the owner's explicit choice; QUICK unless they pick another.
+  const [mode, setMode] = useState<ResearchMode>("quick");
 
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
@@ -86,6 +93,7 @@ function ResearchSurface() {
   const [active, setActive] = useState<ResearchTaskDetail | null>(null);
   const [starting, setStarting] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -186,6 +194,7 @@ function ResearchSurface() {
         target_device: deviceValue || null,
         recency_days: clampRecencyDays(recencyDays),
         max_sources: clampMaxSources(maxSources),
+        research_mode: mode,
         // Owner-handoff mode (spec §5a): the web page is always attended, so
         // a Google interstitial brings Chrome to the front instead of
         // silently falling back to DuckDuckGo.
@@ -208,7 +217,7 @@ function ResearchSurface() {
     } finally {
       setStarting(false);
     }
-  }, [topic, starting, deviceValue, recencyDays, maxSources, report, refreshTasks]);
+  }, [topic, starting, deviceValue, recencyDays, maxSources, mode, report, refreshTasks]);
 
   const open = useCallback(
     async (taskId: string) => {
@@ -241,6 +250,32 @@ function ResearchSurface() {
       report(err);
     } finally {
       setCancelBusy(false);
+    }
+  }, [active, report]);
+
+  // B31 req 203/204: pause and resume ride the same poller; the next tick shows the
+  // paused flag (the stage stays where it was), so nothing here guesses the state.
+  const pause = useCallback(async () => {
+    if (!active) return;
+    setPauseBusy(true);
+    try {
+      await pauseResearch(active.task_id);
+    } catch (err) {
+      report(err);
+    } finally {
+      setPauseBusy(false);
+    }
+  }, [active, report]);
+
+  const resume = useCallback(async () => {
+    if (!active) return;
+    setPauseBusy(true);
+    try {
+      await resumeResearch(active.task_id);
+    } catch (err) {
+      report(err);
+    } finally {
+      setPauseBusy(false);
     }
   }, [active, report]);
 
@@ -313,6 +348,22 @@ function ResearchSurface() {
             />
           </label>
           <label className="muted" style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+            Araştırma modu
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as ResearchMode)}
+              aria-label="Araştırma modu"
+              disabled={starting}
+              style={{ ...inputStyle, width: 120 }}
+            >
+              {RESEARCH_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {RESEARCH_MODE_LABEL[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="muted" style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
             En fazla kaynak (≤ {MAX_MAX_SOURCES})
             <input
               type="number"
@@ -351,7 +402,15 @@ function ResearchSurface() {
       </div>
 
       {active && (
-        <ProgressPanel task={active} onCancel={cancel} cancelBusy={cancelBusy} pollError={pollError} />
+        <ProgressPanel
+          task={active}
+          onCancel={cancel}
+          cancelBusy={cancelBusy}
+          onPause={pause}
+          onResume={resume}
+          pauseBusy={pauseBusy}
+          pollError={pollError}
+        />
       )}
 
       {active?.report && (

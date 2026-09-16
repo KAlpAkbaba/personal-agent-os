@@ -152,7 +152,7 @@ def _receipt(
 
 
 def alarm_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Yarın sabah 07:30'da beni uyandır." / "90 saniye sonra test alarmı kur." (spec §3.8).
+    """ "Yarın sabah 07:30'da beni uyandır." / "90 saniye sonra test alarmı kur." (spec §3.8).
 
     Two refusals worth naming, because both are the system declining to invent something:
 
@@ -263,7 +263,7 @@ def _target_alarm(
 
 
 def alarm_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Alarmı iptal et." Defaults to the NEXT scheduled alarm (spec §3.8)."""
+    """ "Alarmı iptal et." Defaults to the NEXT scheduled alarm (spec §3.8)."""
     db = _db(ctx, TOOL_ALARM_CANCEL)
     alarm = _target_alarm(db, arguments, now=ctx.now)
     if alarm is None:
@@ -302,7 +302,7 @@ def alarm_cancel(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def alarm_stop(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Alarmı kapat." Idempotent (spec §3.8): nothing ringing is a truthful, calm answer."""
+    """ "Alarmı kapat." Idempotent (spec §3.8): nothing ringing is a truthful, calm answer."""
     db = _db(ctx, TOOL_ALARM_STOP)
     alarm = _target_alarm(db, arguments, ringing_only=True, now=ctx.now)
     if alarm is None:
@@ -330,7 +330,7 @@ def alarm_stop(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def alarm_snooze(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Beş dakika ertele." Only while the alarm is actually ringing (spec §3.8)."""
+    """ "Beş dakika ertele." Only while the alarm is actually ringing (spec §3.8)."""
     db = _db(ctx, TOOL_ALARM_SNOOZE)
     alarm = _target_alarm(db, arguments, ringing_only=True, now=ctx.now)
     if alarm is None:
@@ -381,7 +381,7 @@ def alarm_snooze(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def alarm_status(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Sabah alarmım kaçta?" — a QUERY: ``speech`` plus the facts, and no receipt, because
+    """ "Sabah alarmım kaçta?" — a QUERY: ``speech`` plus the facts, and no receipt, because
     nothing mutated (docs/M18_ACTION_CONTRACT.md §2)."""
     del arguments
     db = _db(ctx, TOOL_ALARM_STATUS)
@@ -397,7 +397,7 @@ def alarm_status(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def display_off(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Ekranları kapat." The one machine-state capability, and only ever the display.
+    """ "Ekranları kapat." The one machine-state capability, and only ever the display.
 
     A device REFUSAL (``recent_input`` / ``alarm_active``) is ``execution_status=refused``
     with its own sentence, and a ``recent_input`` refusal additionally starts the cloud's
@@ -444,7 +444,7 @@ def display_off(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 
 
 def display_wake(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Ekranları aç." """
+    """ "Ekranları aç." """
     del arguments
     db = _db(ctx, TOOL_DISPLAY_WAKE)
     sequence = _sequence(ctx)
@@ -459,9 +459,7 @@ def display_wake(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             speech=alarm_speech.DISPLAY_OFF_NO_DEVICE_TR,
             error_class=ERROR_NO_CAPABLE_DEVICE,
         )
-    step = sequence.display_wake(
-        db, reason="owner_command", action_id=_action_id(ctx), now=ctx.now
-    )
+    step = sequence.display_wake(db, reason="owner_command", action_id=_action_id(ctx), now=ctx.now)
     # ADR-0079 §5: an explicit wake starts the owner-command holdoff, so a stale AWAY
     # cannot darken the screens the owner just asked for.
     ambient_service.note_owner_display_command(db, now=ctx.now, reason="display_wake")
@@ -481,8 +479,7 @@ def display_status(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         "speech": alarm_speech.display_status_speech(state),
         "display": state,
         "devices": [
-            status.as_dict()
-            for status in (statuses.all().values() if statuses is not None else [])
+            status.as_dict() for status in (statuses.all().values() if statuses is not None else [])
         ],
     }
 
@@ -609,7 +606,7 @@ def _policy_speech(applied: dict[str, Any], requested: dict[str, Any]) -> str:
 
 
 def ambient_set_policy(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Uyurken ekranları kapat." / "Otomatik ekran kapatmayı aç." (spec §3.8, §6).
+    """ "Uyurken ekranları kapat." / "Otomatik ekran kapatmayı aç." (spec §3.8, §6).
 
     ADR-0079 §7: when the turn's recorded utterance carries the fields the owner's words
     set, THOSE are applied - the model's booleans are only used when no such record
@@ -648,7 +645,7 @@ def ambient_set_policy(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str,
 
 
 def ambient_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Ekranları neden kapattın?" / "Neden açık bıraktın?" / "Şu an ekran politikası ne?"
+    """ "Ekranları neden kapattın?" / "Neden açık bıraktın?" / "Şu an ekran politikası ne?"
     (ADR-0079 §12). A QUERY: the live decision, the presence assertion behind it, the
     holdoffs, the latest input and the latest display receipt - and nothing invented."""
     del arguments
@@ -658,7 +655,7 @@ def ambient_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
 
 
 def ambient_test_display(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-    """"Ekran uyku otomasyonunu test et." (spec §8.2).
+    """ "Ekran uyku otomasyonunu test et." (spec §8.2).
 
     Arms the moment; the clock issues the real ``display.off`` receipt when it arrives. The
     delay is the point of the test — the owner has to be able to take their hand off the
@@ -885,9 +882,7 @@ def register_ambient_tools(reg: ToolRegistry) -> ToolRegistry:
             ),
             parameters={
                 "type": "object",
-                "properties": {
-                    "delay_seconds": {"type": "integer", "minimum": 1, "maximum": 120}
-                },
+                "properties": {"delay_seconds": {"type": "integer", "minimum": 1, "maximum": 120}},
                 "additionalProperties": False,
             },
             handler=ambient_test_display,

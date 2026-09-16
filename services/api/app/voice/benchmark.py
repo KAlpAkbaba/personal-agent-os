@@ -104,34 +104,42 @@ def _now() -> str:
 def _require_two(providers: list[Any], kind: str) -> None:
     names = [p.name for p in providers]
     if len(set(names)) < 2:
-        raise ValueError(
-            f"{kind} benchmark must compare >= 2 distinct providers, got {names}"
-        )
+        raise ValueError(f"{kind} benchmark must compare >= 2 distinct providers, got {names}")
 
 
 # ------------------------------------------------------------------ STT bench
 
 
 def run_stt_benchmark(
-    providers: list[STTProvider], *, cases: tuple[STTCase, ...] = STT_CASES,
+    providers: list[STTProvider],
+    *,
+    cases: tuple[STTCase, ...] = STT_CASES,
     language: str = "tr-TR",
 ) -> BenchmarkReport:
     _require_two(providers, "STT")
     case_rows: list[dict[str, Any]] = []
-    agg: dict[str, dict[str, float]] = {p.name: {"wer": 0.0, "cer": 0.0, "latency_ms": 0.0}
-                                        for p in providers}
+    agg: dict[str, dict[str, float]] = {
+        p.name: {"wer": 0.0, "cer": 0.0, "latency_ms": 0.0} for p in providers
+    }
 
     for case in cases:
         audio = synthesize_wav(case.reference)  # deterministic offline "recording"
-        row: dict[str, Any] = {"case_id": case.case_id, "category": case.category,
-                               "reference": case.reference, "results": {}}
+        row: dict[str, Any] = {
+            "case_id": case.case_id,
+            "category": case.category,
+            "reference": case.reference,
+            "results": {},
+        }
         for provider in providers:
             res = provider.transcribe(audio, language=language)
             wer = word_error_rate(case.reference, res.text)
             cer = char_error_rate(case.reference, res.text)
             row["results"][provider.name] = {
-                "hypothesis": res.text, "wer": round(wer, 4), "cer": round(cer, 4),
-                "confidence": res.confidence, "latency_ms": res.latency_ms,
+                "hypothesis": res.text,
+                "wer": round(wer, 4),
+                "cer": round(cer, 4),
+                "confidence": res.confidence,
+                "latency_ms": res.latency_ms,
             }
             agg[provider.name]["wer"] += wer
             agg[provider.name]["cer"] += cer
@@ -150,8 +158,12 @@ def run_stt_benchmark(
     }
     ranked = sorted(per_provider, key=lambda k: per_provider[k]["mean_wer"])
     return BenchmarkReport(
-        kind="stt", schema_version=REPORT_SCHEMA_VERSION, generated_at=_now(),
-        providers=[p.name for p in providers], cases=case_rows, per_provider=per_provider,
+        kind="stt",
+        schema_version=REPORT_SCHEMA_VERSION,
+        generated_at=_now(),
+        providers=[p.name for p in providers],
+        cases=case_rows,
+        per_provider=per_provider,
         notes=[
             f"lowest mean WER: {ranked[0]} ({per_provider[ranked[0]]['mean_wer']})",
             "Audio is synthesized deterministically from labels (offline); real-mic "
@@ -165,8 +177,11 @@ def run_stt_benchmark(
 
 
 def run_tts_benchmark(
-    providers: list[TTSProvider], *, cases: tuple[TTSCase, ...] = TTS_CASES,
-    voice: str = "default", fmt: str = "wav",
+    providers: list[TTSProvider],
+    *,
+    cases: tuple[TTSCase, ...] = TTS_CASES,
+    voice: str = "default",
+    fmt: str = "wav",
 ) -> BenchmarkReport:
     _require_two(providers, "TTS")
     case_rows: list[dict[str, Any]] = []
@@ -175,17 +190,27 @@ def run_tts_benchmark(
     }
 
     for case in cases:
-        row: dict[str, Any] = {"case_id": case.case_id, "category": case.category,
-                               "char_count": len(case.text), "results": {}}
+        row: dict[str, Any] = {
+            "case_id": case.case_id,
+            "category": case.category,
+            "char_count": len(case.text),
+            "results": {},
+        }
         for provider in providers:
-            use_fmt = fmt if fmt in provider.capabilities().output_formats else \
-                provider.capabilities().output_formats[0]
+            use_fmt = (
+                fmt
+                if fmt in provider.capabilities().output_formats
+                else provider.capabilities().output_formats[0]
+            )
             res = provider.synthesize(case.text, voice=voice, fmt=use_fmt)
             audio_ms = res.duration_ms or wav_duration_ms(res.audio)
             row["results"][provider.name] = {
-                "latency_ms": res.latency_ms, "output_format": res.audio_format,
-                "audio_bytes": len(res.audio), "audio_ms": audio_ms,
-                "valid_audio": res.audio[:4] == b"RIFF" if res.audio_format in ("wav", "pcm16")
+                "latency_ms": res.latency_ms,
+                "output_format": res.audio_format,
+                "audio_bytes": len(res.audio),
+                "audio_ms": audio_ms,
+                "valid_audio": res.audio[:4] == b"RIFF"
+                if res.audio_format in ("wav", "pcm16")
                 else bool(res.audio),
             }
             agg[provider.name]["latency_ms"] += res.latency_ms
@@ -204,8 +229,12 @@ def run_tts_benchmark(
         for name, v in agg.items()
     }
     return BenchmarkReport(
-        kind="tts", schema_version=REPORT_SCHEMA_VERSION, generated_at=_now(),
-        providers=[p.name for p in providers], cases=case_rows, per_provider=per_provider,
+        kind="tts",
+        schema_version=REPORT_SCHEMA_VERSION,
+        generated_at=_now(),
+        providers=[p.name for p in providers],
+        cases=case_rows,
+        per_provider=per_provider,
         notes=[
             "Capability/coverage + latency + audio length are measured objectively.",
             "Perceptual quality (naturalness, long-form stability, pronunciation of "
@@ -224,20 +253,18 @@ def report_to_markdown(report: BenchmarkReport) -> str:
         "",
         f"- Generated: {report.generated_at}",
         f"- Schema: {report.schema_version}",
-        f"- Providers compared: {len(report.providers)} "
-        f"({', '.join(report.providers)})",
+        f"- Providers compared: {len(report.providers)} ({', '.join(report.providers)})",
         "",
     ]
     if report.kind == "stt":
-        lines += ["| Provider | Mean WER | Mean CER | Mean latency (ms) |",
-                  "|---|---|---|---|"]
+        lines += ["| Provider | Mean WER | Mean CER | Mean latency (ms) |", "|---|---|---|---|"]
         for name, m in sorted(report.per_provider.items(), key=lambda kv: kv[1]["mean_wer"]):
-            lines.append(
-                f"| {name} | {m['mean_wer']} | {m['mean_cer']} | {m['mean_latency_ms']} |"
-            )
+            lines.append(f"| {name} | {m['mean_wer']} | {m['mean_cer']} | {m['mean_latency_ms']} |")
     else:
-        lines += ["| Provider | Cases | Mean latency (ms) | Mean audio (ms) | Stability |",
-                  "|---|---|---|---|---|"]
+        lines += [
+            "| Provider | Cases | Mean latency (ms) | Mean audio (ms) | Stability |",
+            "|---|---|---|---|---|",
+        ]
         for name, m in report.per_provider.items():
             stab = m["capabilities"]["long_form_stability"]
             lines.append(

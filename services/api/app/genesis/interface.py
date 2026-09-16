@@ -23,6 +23,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -388,20 +389,39 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         )
 
 
-def _require_loopback_url(url: str) -> tuple[str, int]:
+#: B36 (req 565): a predicate saying whether a NON-loopback host may be researched -
+#: in production, whether the owner enrolled it as an authorized asset with network
+#: permission on itself (``app.genesis.runtime.GenesisRuntime.host_allowed``). None
+#: keeps M24's loopback-only rule.
+HostPredicate = Callable[[str], bool]
+
+
+def _require_loopback_url(
+    url: str, *, host_allowed: HostPredicate | None = None
+) -> tuple[str, int]:
     parts = urlsplit(url)
-    if parts.scheme != "http":
+    hostname = parts.hostname
+    loopback = hostname in LOOPBACK_HOSTS
+    if not loopback:
+        if host_allowed is None or not hostname or not host_allowed(hostname):
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR,
+                "genesis fetch url must name 127.0.0.1 or localhost, or a host the owner "
+                "authorized as an asset (B36)",
+            )
+        if parts.scheme not in ("http", "https"):
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR,
+                "genesis fetch url must use http or https",
+            )
+    elif parts.scheme != "http":
         raise EvolutionError(
             EvolutionErrorClass.VALIDATION_ERROR, "genesis fetch url must use the http scheme"
         )
-    hostname = parts.hostname
-    if hostname not in LOOPBACK_HOSTS:
-        raise EvolutionError(
-            EvolutionErrorClass.VALIDATION_ERROR,
-            "genesis fetch url must name 127.0.0.1 or localhost only (M24 scope)",
-        )
     port = parts.port
-    if port is None or not (MIN_PORT <= port <= MAX_PORT):
+    if port is None and not loopback:
+        port = 443 if parts.scheme == "https" else 80
+    if port is None or (loopback and not (MIN_PORT <= port <= MAX_PORT)):
         raise EvolutionError(
             EvolutionErrorClass.VALIDATION_ERROR, "genesis fetch url must carry an explicit port"
         )
@@ -412,13 +432,13 @@ def _require_loopback_url(url: str) -> tuple[str, int]:
     return hostname, port
 
 
-def fetch_interface(url: str) -> InterfaceDescription:
+def fetch_interface(url: str, *, host_allowed: HostPredicate | None = None) -> InterfaceDescription:
     """``GET <base_url>/spec`` (spec §2): 5 s timeout, 64 KiB cap, no redirects,
     loopback only. Raises ``dependency_unavailable`` for anything network-shaped
     (refused connection, timeout, non-2xx, a redirect) and ``validation_error``
     for a url outside the loopback subset or a body outside the closed schema.
     """
-    hostname, port = _require_loopback_url(url)
+    hostname, port = _require_loopback_url(url, host_allowed=host_allowed)
     opener = urllib.request.build_opener(_NoRedirect)
     request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
     try:

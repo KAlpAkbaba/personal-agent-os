@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.appfactory.validation import validate_files
 from app.nativefactory.artifacts import ArtifactFacts, validate_against_spec
+from app.nativefactory.device_lifecycle import project_id_for
 from app.nativefactory.generator import render
 from app.nativefactory.models import (
     STATE_BUILDING,
@@ -52,7 +53,12 @@ from app.nativefactory.models import (
 )
 from app.nativefactory.roots import check_extensions
 from app.nativefactory.service import _tail, _touch
-from app.nativefactory.spec import NativeAppSpec, NativeFactoryError
+from app.nativefactory.spec import (
+    TARGET_WINDOWS_MSIX,
+    TARGET_WINDOWS_PORTABLE,
+    NativeAppSpec,
+    NativeFactoryError,
+)
 from app.nativefactory.stacks import (
     DEVICE_BUILDABLE_TARGETS,
     SPEECH_DEVICE_PACKAGING_NOT_WIRED,
@@ -61,6 +67,9 @@ from app.routines.dispatch import DeviceActionPort, DeviceRunResult
 
 #: The capabilities this path needs. A device that does not advertise all of them cannot build,
 #: and saying which one is missing is more useful than "unavailable".
+#: B33 req 456/457: makeappx on a cold machine, bounded (the device's own ceiling is 5 min).
+PACKAGE_TIMEOUT_S: float = 330.0
+
 REQUIRED_CAPABILITIES: tuple[str, ...] = (
     "project.scaffold",
     "project.run",
@@ -166,7 +175,7 @@ def build_on_device(
     Windows path because a Windows device produced it.
     """
     project_slug = slug or row.slug
-    project_id = f"native-{str(row.id)[:8]}"
+    project_id = project_id_for(row)  # B33: ONE rule, shared with device_lifecycle
 
     # ---- only what this path can honestly make -------------------------------------------
     # It publishes and reads back ONE artefact, the EXE. The judge (validate_against_spec)
@@ -205,6 +214,16 @@ def build_on_device(
     manifest = json.loads(next(f.text for f in project.files if f.path == "manifest.json"))
     csproj = str(manifest["entry"])
     publish_dir = "out"
+    scaffold_files = [{"path": f.path, "text": f.text} for f in project.files]
+    if row.target == TARGET_WINDOWS_MSIX:
+        # B33 req 457: the device packs what the Cloud Core declares - the manifest is
+        # scaffolded beside the sources (never generated on the device), so what the
+        # package claims to be is what this row's spec says.
+        from app.nativefactory.packaging import appx_manifest_text
+
+        scaffold_files.append(
+            {"path": "staging/AppxManifest.xml", "text": appx_manifest_text(spec)}
+        )
 
     # ---- scaffold: the rendered files, written by the DEVICE under its native root -------
     scaffolded = device.run(
@@ -213,7 +232,7 @@ def build_on_device(
             "project_id": project_id,
             "slug": project_slug,
             "root": "native",
-            "files": [{"path": f.path, "text": f.text} for f in project.files],
+            "files": scaffold_files,
             "manifest": native_manifest(csproj, publish_dir),
         },
         idempotency_key=f"nativefactory-scaffold:{row.id}",
@@ -348,7 +367,8 @@ def build_on_device(
             reason = (
                 "the device's file.inspect answered nothing usable about the artefact ("
                 + ", ".join(missing)
-                + "); " + reason
+                + "); "
+                + reason
             )
         row.artifact_path = artifact_path
         row.artifact_json = artifact
@@ -390,6 +410,47 @@ def build_on_device(
     row.tests_json = tests
     row.updated_at = datetime.now(UTC)
     _touch(db, row, STATE_VERIFIED if outcome_verdict.ok else STATE_MISMATCH)
+
+    # ---- B33 req 456/457: the package, made by the device from the EXE it just read back --
+    if row.target in (TARGET_WINDOWS_PORTABLE, TARGET_WINDOWS_MSIX):
+        kind = "msix" if row.target == TARGET_WINDOWS_MSIX else "portable"
+        packed = device.run(
+            capability="project.package",
+            payload={"project_id": project_id, "kind": kind},
+            idempotency_key=f"nativefactory-package:{row.id}:{kind}",
+            timeout_s=PACKAGE_TIMEOUT_S,
+        )
+        if not packed.ok:
+            return _fail(db, row, packed, step=f"project.package {kind}")
+        package = dict(packed.result or {})
+        if not package.get("path") or not package.get("sha256"):
+            _touch(
+                db,
+                row,
+                STATE_FAILED,
+                error_class="package_unreadable",
+                error_message="the device answered no path or hash for the package",
+            )
+            return DeviceBuildOutcome(
+                ok=False, error_class="package_unreadable", message="the device answered no package"
+            )
+        row.artifact_path = str(package["path"])
+        row.artifact_json = {
+            **artifact,
+            "package": {
+                "kind": kind,
+                "path": package["path"],
+                "bytes": package.get("bytes"),
+                "sha256": package["sha256"],
+                "signed": package.get("signed") is True,
+                "executable": artifact_path,
+            },
+        }
+        row.updated_at = datetime.now(UTC)
+        db.commit()
+        artifact_path = row.artifact_path
+        artifact = row.artifact_json
+
     return DeviceBuildOutcome(
         ok=True,
         root_path=root_path,

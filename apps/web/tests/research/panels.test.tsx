@@ -82,6 +82,38 @@ describe("ProgressPanel", () => {
     expect(html).toContain("9 sorgu");
   });
 
+  it("offers Duraklat while running, Devam et while paused, and neither once terminal (B31)", () => {
+    const running = renderToStaticMarkup(
+      <ProgressPanel task={taskAt("fetching")} onCancel={noop} onPause={noop} onResume={noop} />,
+    );
+    expect(running).toContain('data-action="pause"');
+    expect(running).toContain("Duraklat");
+    expect(running).not.toContain('data-action="resume"');
+    expect(running).not.toContain("duraklatıldı");
+
+    const paused = renderToStaticMarkup(
+      <ProgressPanel
+        task={taskAt("fetching", { progress: { fetch_done: 3, fetch_total: 12, paused: true } })}
+        onCancel={noop}
+        onPause={noop}
+        onResume={noop}
+      />,
+    );
+    expect(paused).toContain('data-paused="yes"');
+    expect(paused).toContain("Araştırma duraklatıldı");
+    expect(paused).toContain('data-action="resume"');
+    expect(paused).toContain("Devam et");
+    expect(paused).not.toContain('data-action="pause"');
+    // The stage is still the stage: pausing is a flag, not a place.
+    expect(paused).toContain('data-stage="fetching"');
+
+    const ready = renderToStaticMarkup(
+      <ProgressPanel task={taskAt("ready")} onCancel={noop} onPause={noop} onResume={noop} />,
+    );
+    expect(ready).not.toContain('data-action="pause"');
+    expect(ready).not.toContain('data-action="resume"');
+  });
+
   it("drops the cancel button and announces readiness on terminal stages", () => {
     const ready = renderToStaticMarkup(<ProgressPanel task={taskAt("ready")} onCancel={noop} />);
     expect(ready).toContain('data-terminal="yes"');

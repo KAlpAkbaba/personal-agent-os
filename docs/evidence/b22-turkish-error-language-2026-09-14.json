@@ -1,0 +1,70 @@
+{
+  "batch": "B22",
+  "name": "Türkçe hata dili ve dürüst durumlar",
+  "requirements": [
+    704,
+    705,
+    706,
+    707,
+    708,
+    709,
+    710,
+    711
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except the same live-desktop test B21 recorded",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS (909 s)",
+      "Windows agent build + tests": "919/920 - NotepadLifecycleTests pointer click",
+      "Staged-update qualification": "PASS"
+    },
+    "web_gates": "vitest 1712 passed / 91 files, tsc clean, oxlint 0 errors"
+  },
+  "the_desktop_test_now_names_its_cause": {
+    "measured": "B21 left this READY_FOR_OWNER with the intruder unnamed. The diagnosis added there has now answered it: \"after 3 attempt(s) the click landed while the foreground was Claude [claude.exe]\". Sampling the foreground directly confirms it - hwnd 5834690, process `claude`, held continuously while this session works. It is not the owner's video, not a leftover Notepad and not a flake: the agent's own client owns the desktop's foreground while the agent is working, so `window.activate` succeeds and is reverted within milliseconds.",
+    "consequence": "The operator lab's Notepad tests cannot pass from inside this client. They failed 5 of 5 runs while the app was in front, and passed three times earlier the same day. No code in B21 or B22 touches devices/.",
+    "for_the_owner": "Run the gate's device step with the Claude app not in the foreground, or set PAGENTOS_OPERATOR_LAB=0 for that run. CI is unaffected: a runner has no interactive desktop, so `OperatorLab.SkipReason()` skips the lab there.",
+    "not_done": "The assertion was not loosened, the retry count was not raised (each attempt already re-activates and verifies `foreground: true`, and the disturbance is continuous rather than periodic - more attempts would sample the same state), and the lab was not disabled from inside the batch."
+  },
+  "what_this_proves": "A failure now says, in Turkish, what happened and what can be done about it — and the four kinds of waiting are four different sentences with four different controls. The owner cannot be shown a Python exception by any route, and a route that tried to would fail a test rather than a person.",
+  "the_shape_of_this_batch": "A vocabulary problem with a structural fix. Eight subsystems declared their own error taxonomies (fifty-six classes) and forty more classes lived as string constants; not one of them said anything in Turkish, and thirty-three route handlers answered a failed request with `HTTPException(detail=str(exc))` — developer English, rendered verbatim by the web. The dictionary is the visible half; the AST guard is the half that keeps it true.",
+  "closed_fully": {
+    "704_one_dictionary_and_it_is_complete": "`app.errors.catalog.TR` holds 96 entries, each saying WHAT happened and WHAT CAN BE DONE. `test_every_error_class_has_turkish` reads BOTH sources of truth — the eight Enum families by import, and the `ERROR_* = \"...\"` constants and inline `\"error_class\"` literals by scanning the source — and fails in both directions.",
+    "705_no_route_can_answer_with_an_exception": "All 33 sites now build their body with `app.errors.owner_detail`, which puts the exception in the LOG (with the trace id) and a Turkish sentence on the wire. The guard is an AST scan: inside an `except X as exc:` handler, an `HTTPException` whose `detail` mentions `exc` fails — with one exception, `exc.error_class`, because a class token is a closed-taxonomy value the catalogue translates and the news domain's own classes are part of the API contract. The web has a second lock: a body that carries a Python failure is dropped in favour of the fallback sentence, so an old Cloud Core or a proxy error page cannot show a traceback either.",
+    "706_707_loading_is_not_empty": "The cockpit's `Panel` has distinguished loading / failed / absent / empty since it was built. The pages had not: `/artifacts` held `useState<ArtifactSummary[]>([])`, so before the first answer it rendered the same empty list it would render for an account with no artifacts. It now holds a `Loaded<T>` and renders through the same `LoadedNotice`.",
+    "708_a_retry_only_where_a_retry_can_work": "`RETRYABLE_CLASSES` is the set of failures that can clear on their own — a timeout, a rate limit, an unreachable dependency. The button is bound to that, not to \"this is a failure\": a retry control on a missing API key is an invitation to press it forever.",
+    "709_710_711_three_kinds_of_waiting": "A provider that is not configured, a permission that was never granted, and a decision that is the owner's are three waits, not three errors. Each has its own heading, its own hint about who can act, and no retry. `owner_action` deliberately never prints the word \"Alınamadı\": nothing failed."
+  },
+  "found_on_the_way": {
+    "the_completeness_test_that_read_only_half_the_taxonomy": "The first version of `test_every_error_class_has_turkish` imported the eight Enum families — the same eight the catalogue was written from. It passed, and the dictionary was missing forty classes that live as module constants (`news`, `research`, `artifacts`, the device action path, the operator). It surfaced only because a route rewrite replaced `identity_unresolved` with a generic class and a news test that pinned the token by name went red. Both halves of an assertion from one source cannot fail; the test now scans the source as well.",
+    "the_class_token_is_part_of_the_contract": "That same news test is the reason `owner_detail(exc.error_class)` exists: callers match on the class, so a rewrite that 'tidied' it into `constraint_violation` broke a contract. What changed for the owner was never the token — it is the MESSAGE beside it.",
+    "a_hint_that_contained_the_button": "`expect(html).not.toContain(\"Tekrar dene\")` failed on a panel that correctly had no button: the hint sentence is \"Tekrar denenebilir.\" The assertion now names the control (`data-panel-retry`), because asserting on words that appear inside other words is how a test passes while the thing it is about is missing."
+  },
+  "tests": {
+    "services/api/tests/unit/test_owner_error_language.py": 105,
+    "apps/web/tests/uistate/failure-states.test.tsx": 18
+  },
+  "red_first_proof": {
+    "method": "Executed mutations of the production source, restored from sha256-verified backups.",
+    "mutations": [
+      "restore `detail=str(exc)` in an alarms route -> the AST guard fails and names the file and line.",
+      "put `timeout` in two web buckets -> `test_no_class_is_in_two_web_buckets` fails.",
+      "(the catalogue's completeness was proved red by the defect itself: forty classes were missing until the test learned to read the second source)."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED asks for the ten failed production research runs' messages to be Turkish when reproduced. The mechanism is proven here end to end — every class in the product's taxonomy has a Turkish sentence, no route can answer with an exception, and the web renders each failure kind with its own words and controls — but the production round that replays those ten runs is Karar 0."
+  },
+  "owner_gates": {
+    "karar_0": "production release round; the ten failed research runs are replayed there"
+  }
+}

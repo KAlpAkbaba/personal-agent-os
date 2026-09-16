@@ -178,6 +178,13 @@ class Settings(BaseSettings):
     #: "turn the injection off and the persona goes back to what it was", which has to
     #: be a flag and not a revert.
     memory_injection_enabled: bool = True
+    #: B37 req 51/53: which embedding provider serves memory retrieval -
+    #: "deterministic" (the seeded n-gram hash, offline, NOT semantic), "openai"
+    #: (text-embedding-3-small at the index width; needs a key) or "auto" (OpenAI when a
+    #: key is configured, otherwise deterministic). Every fallback is reported with its
+    #: reason by /v1/system/health and /v1/memory/embedding.
+    memory_embedding_provider: str = "auto"
+    memory_embedding_model: str = "text-embedding-3-small"
 
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that
     # asks "is anything due?". The routines package still has no timer of its own and
@@ -216,6 +223,17 @@ class Settings(BaseSettings):
     # real deployment sets it to the same origin devices already dial (the same rule
     # ``alarm_audio_origin`` follows for the greeting WAV).
     artifact_download_origin: str = ""
+    # B42 (req 412): the owner's delete policy for artifacts - confirm (the default:
+    # an explicit yes in the same call), deny, or free. Checkpoint 14 is the owner's.
+    artifact_delete_policy: str = "confirm"
+    # B43 (req 492): the image provider - local (Pillow, deterministic; generation
+    # refused by name) or openai (gpt-image-1 over the owner's voice_openai_api_key).
+    creative_image_provider: str = "local"
+    creative_openai_image_model: str = "gpt-image-1"
+    creative_image_timeout_s: float = 60.0
+    # B45 (req 360): the inbox checked on the routine clock - a no-op without an account.
+    mail_poll_enabled: bool = True
+    mail_poll_interval_s: float = 300.0
 
     # Devices layer (M13 track C, PROJECT_CONSTITUTION.md §11a). Presence is
     # "online" (live WS) vs "stale" (recently seen but disconnected, within
@@ -235,6 +253,13 @@ class Settings(BaseSettings):
     # `voice_openai_api_key` (same owner key, nothing new to install) — env
     # vars PAGENTOS_OPENAI_API_KEY / PAGENTOS_ANTHROPIC_API_KEY per spec.
     openai_api_key: str = ""
+    # B29 req 105 (app.operator.vision): screenshot understanding behind a provider
+    # interface. "auto" = OpenAI when an OpenAI key is configured (the same owner key the
+    # synthesis and the realtime voice use), otherwise no provider and the tool answers
+    # honestly that none is configured; "none" turns it off explicitly.
+    vision_provider: str = "auto"
+    vision_openai_model: str = "gpt-4o-mini"
+    vision_request_timeout_s: float = 30.0
     research_openai_model: str = "gpt-4o-mini"
     research_openai_base_url: str = "https://api.openai.com/v1"
     research_openai_timeout_s: float = 30.0
@@ -244,6 +269,10 @@ class Settings(BaseSettings):
     research_anthropic_timeout_s: float = 30.0
     research_default_synthesis: str = "auto"
     research_default_max_sources: int = 12
+    #: B33 req 472/473: the native factory's signing policy. Only "unsigned" is implemented;
+    #: "test_certificate" and "owner_certificate" are the owner's decision (a certificate is
+    #: a credential) and are refused by name until decided (app.nativefactory.signing).
+    native_signing_mode: str = "unsigned"
     research_max_sources_ceiling: int = 30
     # PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the DEFAULT production
     # search provider for Research; Google is not attempted first automatically
@@ -310,6 +339,55 @@ class Settings(BaseSettings):
     caldav_password: str = ""
     calendar_ics_url: str = ""
     calendar_write_enabled: bool = False
+    # B46 (req 354): 'refuse' (default) or 'confirm' - the owner's decision, never inferred.
+    calendar_cancel_policy: str = "refuse"
+    # B46 (req 358, 361): the calendar mirror + reminders on the routine clock.
+    calendar_sync_enabled: bool = True
+    calendar_sync_interval_s: float = 120.0
+
+    # B34 req 674: the managed file mutation surface (write/append/edit/rename/move/copy/
+    # delete-to-Recycle-Bin, each journaled and undoable). ONE host flag closes the whole
+    # surface (the roadmap's rollback plan); the device's authorised roots and the
+    # per-mutation proposal/confirmation gate stand on top of it. Permanent deletion is
+    # not offered by any setting - the shape of that policy is the owner's checkpoint.
+    documents_mutation_enabled: bool = True
+
+    # B35 (req 581-623, 680): the self-development queue and its bounds. ONE host flag
+    # closes the whole surface (the roadmap's rollback plan: the runner stops, the
+    # worktrees stay). The bounds are the owner's numbers, read beside what is spent.
+    selfdev_enabled: bool = True
+    #: Req 620: candidates in flight at once. One, because two candidates on one
+    #: machine race for the same worktree slots and the same model budget.
+    selfdev_max_parallel: int = 1
+    #: Req 618: tokens the queue may spend per calendar day (UTC), all runs together.
+    selfdev_daily_token_budget: int = 1_000_000
+    #: Req 619: the free-space floor under the worktrees root; below it nothing starts.
+    selfdev_min_free_bytes: int = 5 * 1024**3
+    #: Req 603: how many CI-red -> fix follow-ups one candidate may spawn.
+    selfdev_max_ci_fix_rounds: int = 2
+    #: Req 601: push selfdev/* branches so CI runs on them. Off: the owner pushes.
+    selfdev_ci_push: bool = False
+    #: A claim older than this with no result is queued again (a worker died).
+    selfdev_claim_ttl_s: float = 7200.0
+    #: Where the worker keeps worktrees; None = beside the repository (the CLI default).
+    selfdev_worktrees_root: str | None = None
+
+    # B36 (req 565, 577): Capability Genesis - the front door. Model-backed adapter
+    # generation is OFF until the owner turns it on; every model-written adapter still
+    # passes the security gate and waits for the owner. A non-loopback interface may be
+    # researched only when the owner enrolled its host as an authorized asset.
+    genesis_model_generation_enabled: bool = False
+    # B38 (req 550/551): model-backed executive planning for a directive the deterministic
+    # shapes cannot plan. OFF by default (the owner's model budget); every proposal still
+    # passes the same graph validator as the rule-based plans.
+    executive_model_planner_enabled: bool = False
+    executive_planner_model: str = "claude-sonnet-5"
+    # B40 (req 425, 435-437): the App Factory's code model - the composed generator's
+    # model slots and the fix loop. Off by default: the budget is the owner's.
+    appfactory_model_generation_enabled: bool = False
+    appfactory_code_model: str = "claude-sonnet-5"
+    appfactory_max_fix_attempts: int = 3
+    genesis_authorized_hosts_enabled: bool = True
 
     # Owner Location Context / Live Weather (docs/DECISIONS.md ADR-0091). Open-Meteo needs
     # no signup and no API key for non-commercial use (verified against the vendor's own

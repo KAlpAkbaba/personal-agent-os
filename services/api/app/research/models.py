@@ -243,6 +243,9 @@ class ResearchOwnerStateRow(Base):
     pending_clarification_json: Mapped[dict[str, Any] | None] = mapped_column(
         JSONColumn, nullable=True
     )
+    #: B31 req 209: the owner's standing register for research answers -
+    #: {answer_level: executive|detail|technical|full, set_at} or NULL (executive).
+    preferences_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

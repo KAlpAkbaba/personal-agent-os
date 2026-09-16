@@ -30,6 +30,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.actions.receipt import EXECUTION_EXECUTED
@@ -63,6 +64,8 @@ def _row_dict(row: SceneRow) -> dict[str, Any]:
         "state": wire_step(row.state, row.compare_json),
         "objects": objects,
         "has_render": bool(row.render_object_key),
+        # B44 (req 527): the device's proof of each exported file (on the owner's disk).
+        "exports": list(row.exports_json or []),
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -175,6 +178,76 @@ async def _act(request: Request, scene_id: uuid.UUID, action: str) -> dict[str, 
                 )
             return service.inspect(
                 db, device_action, target=str(scene_id), session_id=f"rest:{owner_session_id}"
+            )
+
+    return _respond(await asyncio.to_thread(do), scene_id)
+
+
+class CreateSceneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan: dict[str, Any]
+
+
+class ApplySceneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operations: list[dict[str, Any]] = Field(min_length=1, max_length=64)
+
+
+@router.post("", status_code=201)
+async def create_scene(request: Request, body: CreateSceneRequest) -> dict[str, Any]:
+    """B44 (req 521): the production path - the SAME ``SceneService.create`` the voice tool
+    calls, on the SAME device port. Before B44 a scene could only be made by voice, and no
+    production scene had ever been made at all."""
+    service = _service(request)
+    artifacts = _artifacts(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    owner_session_id = str(request.state.owner_session.session_id)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            return service.create(
+                db, device_action, plan=body.plan, session_id=f"rest:{owner_session_id}"
+            )
+
+    receipt = await asyncio.to_thread(do)
+    scene_id = receipt.get("scene_id")
+    if receipt.get("execution_status") != EXECUTION_EXECUTED or not scene_id:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": receipt.get("error_class") or receipt.get("status") or "refused",
+                "message": receipt.get("speech"),
+            },
+        )
+    return _respond(receipt, uuid.UUID(str(scene_id)))
+
+
+@router.post("/{scene_id}/apply")
+async def apply_scene(
+    request: Request, scene_id: uuid.UUID, body: ApplySceneRequest
+) -> dict[str, Any]:
+    """B44 (req 522): an existing scene modified - the operations applied to the scene file
+    the device kept, read back and compared like every other change."""
+    service = _service(request)
+    artifacts = _artifacts(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    owner_session_id = str(request.state.owner_session.session_id)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            if db.get(SceneRow, scene_id) is None:
+                return {
+                    "execution_status": "refused",
+                    "error_class": "not_found",
+                    "speech": "Böyle bir sahne yok.",
+                }
+            return service.apply(
+                db,
+                device_action,
+                target=str(scene_id),
+                operations=body.operations,
+                capability="scene.apply",
+                session_id=f"rest:{owner_session_id}",
             )
 
     return _respond(await asyncio.to_thread(do), scene_id)

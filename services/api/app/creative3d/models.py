@@ -137,6 +137,8 @@ class SceneRow(Base):
     render_object_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     render_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     render_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: B44 (req 527, migration 0056): the exported files the device verified in place.
+    exports_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONColumn, nullable=True)
     error_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

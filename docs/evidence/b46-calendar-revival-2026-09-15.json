@@ -1,0 +1,103 @@
+{
+  "batch": "B46",
+  "name": "Takvim canlandırma",
+  "requirements": [
+    277,
+    337,
+    349,
+    350,
+    351,
+    352,
+    353,
+    354,
+    355,
+    356,
+    357,
+    358,
+    359,
+    361,
+    363,
+    365,
+    366
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11098 passed, 5 skipped, 20m11s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 959/959, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "no web change in B46; matrix-badges rerun after node scripts/web/sync-feature-matrix.mjs"
+  },
+  "what_this_proves": "A recurring event with a reminder is proposed from the owner's own words, read back with both, written as a validated RRULE and VALARM and read back by the same parser; the index mirrors the calendar on the clock and forgets deleted events; reminders arrive once at the owner's moment; a cancel happens only under the owner's confirm policy, through the same gate as a create. Proven against the fixture calendar; a real account is the owner's step.",
+  "measured_first": {
+    "writer": "app/calendar/ics.py build_vevent wrote UID/DTSTAMP/DTSTART/DTEND/SUMMARY/LOCATION only.",
+    "index": "calendar_index declared in M21 with no writer anywhere.",
+    "clock": "no calendar sub-tick; no reminder path.",
+    "cancel": "an honest refusal (B27) with the policy left to B46."
+  },
+  "closed_fully": {
+    "356": "validate_rrule; build_vevent RRULE; tr_time.extract_recurrence; ResolvedIntent.calendar_rrule; _recurrence_anchor; proposal rrule column; read-back phrase.",
+    "357": "build_vevent VALARM; parse_trigger_minutes; VALARM parsing isolated; VEvent.alarms / Occurrence.reminders; tr_time.extract_reminder_minutes / without_reminder; proposal reminder_minutes column.",
+    "358": "CalendarService.remind_due; notifications calendar.reminder (quiet hours bypassed); CalendarSyncer; clock 'calendar' sub-tick; index reminded_at.",
+    "359": "_index_occurrences from agenda (source=read).",
+    "361": "CalendarService.sync (14 days, removal, truncation guard); settings calendar_sync_enabled / calendar_sync_interval_s.",
+    "354": "calendar_cancel_policy (refuse default / confirm); _propose_cancel; PROPOSAL_KIND_CANCEL; writer delete (CalDAV DELETE, fake); index cleanup; series refusal.",
+    "277_363": "the briefing's calendar clause proven against the fixture calendar.",
+    "365_366": "routing unchanged; 366 now reaches the policy."
+  },
+  "blocked_provider": {
+    "337 349 350 351 352 353": "code complete and exercised against the fixture calendar; the real CalDAV account is READY_FOR_OWNER."
+  },
+  "deferred": {
+    "355": "RSVP needs attendee lines and the scheduling server's iTIP behaviour; not written without a real account to prove it against."
+  },
+  "found_on_the_way": {
+    "valarm_summary_leak": "parse_calendar handled SUMMARY anywhere inside VEVENT, so an email VALARM's SUMMARY replaced the event's title.",
+    "reschedule_rewrites_series": "propose_reschedule -> writer.update PUT a single VEVENT; on a recurring event that replaces the series with one event and drops its VALARM. One occurrence of a series is now refused; a reschedule keeps the reminder.",
+    "reminder_as_duration": "extract_duration_minutes read '15 dakika önce hatırlat' as a 15-minute event (and 'bir saat önce' as an hour); the clause is removed before time parsing.",
+    "reminder_after_the_event": "quiet hours (23:00-07:30) would defer a 06:45 reminder to 07:30; the owner's own reminder now bypasses them without joining the urgent set.",
+    "routing_gap": "'Hafta içi her gün 9'da stand-up ekle.' and 'Her ay ilk gün kira ödemesi ekle.' reached nothing: _calendar_anchor had no recurrence anchor.",
+    "oracle_pinned_shape": "Occurrence.as_dict is compared with truth.json; the new fields stay on the object, not in the dict."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_calendar_b46.py": "rule canonicalisation and refusals; writer -> reader round trip (weekly BYDAY series with reminders); reminder range; VALARM SUMMARY isolation; trigger table; recurrence and reminder word tables; reminder clause not clock/duration; proposal read-back + commit carries rule and reminder; invalid rule refused before read-back; series never moved alone; cancel default refusal, confirm proposal -> read-back -> single delete + index cleanup, series refusal, unknown policy; agenda indexing once; sync twice quiet, upstream deletion, truncation guard, no account; reminder once at night, not after start, other notifications still deferred; syncer throttle + failure; app wiring order; briefing calendar clause; routing with the owner's words, list/goal negatives; voice through the real registry (router words win, reminder clause not a duration)",
+    "regression suites rerun": "test_calendar_*, test_mail_calendar_*, test_briefing_*, test_notification_events, test_voice_realtime_sessions, test_intent_daily_coverage, test_owner_error_language, test_selfmodel_indexer, voice corpus: see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b46_mutate.py.",
+    "mutations": [
+      "M1 a VALARM's SUMMARY overwrites the event's title again (357) -> 1 failure(s).",
+      "M2 the writer drops the rule the owner heard (356) -> 1 failure(s).",
+      "M3 an occurrence of a series no longer says it is recurring, so one is moved alone -> 1 failure(s).",
+      "M4 'her ay ilk gün' becomes a DAILY rule (the day word wins over the month) (356) -> 1 failure(s).",
+      "M5 '15 dakika önce hatırlat' is read as a 15-minute event -> 1 failure(s).",
+      "M6 the reminder the owner said is lost when the model drops it (357) -> 1 failure(s).",
+      "M7 an event deleted upstream stays in the index for ever (361) -> 1 failure(s).",
+      "M8 a capped expansion is taken as proof events were deleted (361) -> 1 failure(s).",
+      "M9 the same reminder is raised on every clock pass (358) -> 1 failure(s).",
+      "M10 the owner's own reminder waits for morning like a finished task (358) -> 1 failure(s).",
+      "M11 a cancel becomes a delete proposal without the owner's confirm policy (354) -> 1 failure(s).",
+      "M12 what the owner heard is never indexed - the dead table again (359) -> 1 failure(s).",
+      "M13 'Hafta içi her gün 9'da stand-up ekle.' reaches nothing again (356) -> 1 failure(s).",
+      "M14 'Her gün alışveriş listeme süt ekle.' becomes a daily calendar event -> 1 failure(s)."
+    ],
+    "result": "14/14 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED against the fixture calendar (the same parser the real providers use) and the scripted writer. The roadmap's PROVEN_REAL (a recurring event with a reminder on a real calendar) is READY_FOR_OWNER."
+  },
+  "owner_gates": {
+    "calendar_account": "store the CalDAV password with scripts/secret-store.ps1 -Set <NAME> (and scripts/cloud/set-cloud-secret.ps1), set caldav_url/user, calendar_write_enabled=true; then 'Her hafta pazartesi 10'da ekip toplantısı ekle, 15 dakika önce hatırlat', 'Öneriyi oku', 'Onayla'; check the calendar client shows the series and the alarm.",
+    "cancel_policy": "decide calendar_cancel_policy: 'refuse' (default) or 'confirm'."
+  }
+}

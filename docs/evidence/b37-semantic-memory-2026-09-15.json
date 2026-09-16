@@ -1,0 +1,72 @@
+{
+  "batch": "B37",
+  "name": "Anlamsal bellek ve bellek arayüzü",
+  "requirements": [
+    51,
+    53,
+    54,
+    57,
+    58,
+    59,
+    60,
+    149
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {},
+    "web_gates": "vitest 103 files / 1875 tests (memory-controls 5, family-pages memory row); tsc --noEmit clean; oxlint no new warnings; matrix-badges 12/12 after node scripts/web/sync-feature-matrix.mjs",
+    "run": "2026-09-15 local, one clean run over the B37+B38 tree (scratchpad b38_gate.log): QUALITY GATE: PASS; API pytest 10682 passed / 5 skipped in 18m33s; staged update qualified 89 checks; web vitest/tsc/oxlint green"
+  },
+  "what_this_proves": "Memory retrieval can run on a real embedding provider behind the same Embedder seam the deterministic hash serves, chosen by configuration and reported honestly (a hash never calls itself semantic); a provider change is a new model id whose index is filled without touching canonical rows and without re-embedding what already exists; the owner can pin, unpin, forget (in two presses) and correct a memory from the page; and a question over a document, or a search across the indexed documents, ranks by meaning beside words under the same embedder.",
+  "measured_first": {
+    "before": "app/memory/embedding.py: DeterministicEmbedder only (seeded n-gram hash, dim 256, 'NOT a semantic model'); MemoryRuntime hard-wired it; /v1/system/health reported model_id deterministic-ngram with no notion of provider; lifecycle.reindex re-embedded every row; no unpin (pin only); the /memory page listed rows with no control; documents/retrieval.top_k ranked by token overlap only and no route searched across indexed documents. The corpus harness installs a fake voice OpenAI key for the realtime fake - the first B37 run selected OpenAI from it under 'auto' and every memory write in the harness hit the network (401): the selection was narrowed to the dedicated key."
+  },
+  "closed_fully": {
+    "51_provider": "app/memory/providers.py OpenAIEmbedder: POST /v1/embeddings {model: text-embedding-3-small, input, dimensions: 256}; bearer from the key; the vector L2-normalised; wrong width refused; 4xx/5xx and transport errors become EmbeddingProviderError naming the status and never the key or the text; OrderedDict LRU of 512 texts; model_id 'openai-text-embedding-3-small', model_version 'dim256'.",
+    "53_selection": "build_embedder(settings): memory_embedding_provider deterministic | openai | auto (default auto); auto reads only openai_api_key, explicit openai also accepts voice_openai_api_key; unknown provider, missing key and a provider that cannot be built all fall back to DeterministicEmbedder with the reason on the EmbedderReport; MemoryRuntime keeps embedder_report; /v1/system/health embedder.{provider, semantic, fallback_reason}; GET /v1/memory/embedding {provider, coverage}.",
+    "54_reindex": "lifecycle.embedding_coverage (memories, embedded for the active model, missing, rows per model); lifecycle.reindex_missing (memories with no row for the active model; audit 'reindexed' with only_missing; a second pass writes 0); backend.embedding_coverage/reindex_missing; MemoryRuntime.embedding_status/reindex(only_missing); POST /v1/memory/reindex {only_missing} -> {rows, model_id, only_missing}; the page's two buttons.",
+    "57_audit_ui": "the /memory page (B24's rows, entities and MemoryPanel audit) gains the 'Anlamsal indeks' section (embeddingSentence: provider, coverage, fallback reason) and per-row controls.",
+    "58_pin_unpin": "service.unpin_memory (pinned False, retention PINNED -> STANDARD, audit 'unpinned', owner-gated for explicit rows like pin); NativeMemoryBackend.unpin; Mem0Backend stub; POST /v1/memory/{id}/unpin; the row's Sabitle / Sabitlemeyi kaldır chip.",
+    "59_forget_ui": "the row's Unut chip asks a second time ('Evet, unut (geri alınamaz)') before DELETE /v1/memory/{id}; the outcome line names the rows removed.",
+    "60_correction_ui": "the row's Düzelt chip opens an inline text prefilled with the memory; Kaydet -> POST /v1/memory/{id}/supersede {text, reason: owner_correction}; an empty text is refused without a call; the outcome names the new memory.",
+    "149_semantic_documents": "app/documents/semantic.py score_blocks/search_rows (lexical overlap + 4 x cosine, components on every hit, the document's own name as a block '@name'); DocumentService(embedder=) built with memory.embedder in create_app and the harness; DocumentService.search_indexed over index.latest(50); GET /v1/documents/search?q=&limit= -> {query, embedder{model_id, semantic}, hits}; retrieval.top_k(embedder=) adds int(round(cosine*10)) to a block's lexical score (or ranks a no-word block at cosine >= 0.35) so the literal-reference sentinel and exact-word weighting keep their order; answers.answer/references pass the embedder."
+  },
+  "found_on_the_way": {
+    "auto_must_not_bill_the_voice_key": "the first run selected OpenAI under 'auto' from the harness's fake voice key and every memory write hit the network (401 -> document.answer and the injection test failed); 'auto' now reads only the dedicated key, an explicit 'openai' still accepts the voice key.",
+    "frozen_scored_block": "ScoredBlock is a frozen dataclass; the reranker computes the bonus first and builds the blocks with it.",
+    "owner_gate_on_the_server": "the memory page renders behind the owner gate in a server render, so its test reads the page source for the controls and renders only the gate.",
+    "memory_classes": "MemoryClass has no FACT (preference/episodic/project/semantic/procedural/voice_preference) and the REST body takes the lowercase value; backend.remember takes no actor.",
+    "matrix_pipes_again": "rows 53 and 58 carried '|' inside a cell; spelled with slashes before the sync."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_memory_b37.py": "15 (provider request/normalise/cache; failure names the status not the key; wrong width; empty key; selection matrix x6 incl. the voice-key rule; runtime report + health; coverage/reindex_missing/second pass 0/old rows kept/semantic hit under the new model; unpin retention + audit; REST embedding/reindex/unpin/404; 401 without a session; block ranking with components + lexical-only + top_k reranker; GET /v1/documents/search over the harness's indexed document, empty result, 422 without q)",
+    "apps/web/tests/pages/memory-controls.test.tsx": "5 (routes; client methods/bodies; runner one-at-a-time + empty correction refused; embedding status sentence + reindex call; page source + gated render)",
+    "apps/web/tests/pages/family-pages.test.ts": "memory/page.tsx must call fetchEmbeddingStatus and useMemoryControl",
+    "regression suites rerun": "test_memory_store/routes/retrieval/service/injection, test_documents_tools/answers/retrieval/b34, test_health_endpoint, test_owner_error_language, test_operator_ui, test_research_health: 345 passed"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b37_mutate.py.",
+    "mutations": [
+      "M1 the provider is asked for its default width, not the index's -> 1 failure (dimensions missing from the request).",
+      "M2 a vector of the wrong width is stored into the fixed-width index -> 1 failure (no 'dimensions' refusal).",
+      "M3 'openai' without a key builds a provider anyway / 'auto' never falls back with a reason -> 1 failure (selection matrix).",
+      "M4 reindex_missing re-embeds every memory on every pass -> 1 failure (second pass wrote rows).",
+      "M5 unpin leaves the memory in the pinned retention class -> 1 failure (retention_class still pinned).",
+      "M6 the embedder is passed but never changes a document ranking -> 1 failure (semantic component / reranker).",
+      "M7 the health check calls the n-gram hash semantic -> 1 failure (semantic must be False)."
+    ],
+    "result": "7/7 red; every file restored to its sha256 before the mutation (M6 v1 was green: the reranker assertion only checked the winning ref, which words alone decided; it now asserts the embedder changes the score)"
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED: the OpenAI provider against a recorded httpx transport (the exact request and the vector it returns), the selection and coverage on the real backend (SQLite), the routes through create_app with an owner session, the document search over the harness's indexed fixture. The roadmap's PROVEN_REAL (a semantic query after a re-index returns the right record on the deployed Cloud Core with the owner's key) is READY_FOR_OWNER: it needs PAGENTOS_OPENAI_API_KEY on the host (checkpoint 9) and the deploy."
+  },
+  "owner_gates": {
+    "embedding_provider": "READY_FOR_OWNER (checkpoint 9): set PAGENTOS_OPENAI_API_KEY (scripts/secret-store.ps1 -Set / set-cloud-secret.ps1), leave memory_embedding_provider=auto, press 'Eksikleri indeksle' on /memory, ask a semantic question.",
+    "cost": "the provider is billed per text; the in-process cache and the missing-only re-index keep it to what changed."
+  }
+}

@@ -10895,3 +10895,1514 @@ guards must NOT touch: `A/B`, `km/s`, a slashed date, a CIDR mask), and in
 `test_voice_realtime_sessions.py` the end-to-end proofs that a taught rule reaches the
 instruction, that "teknik anlat" changes the reading, and that an artifact can be read
 aloud because the owner asked for it.
+
+## ADR-0129 — The owner reads Turkish, and a route cannot say otherwise (2026-09-14, B22)
+
+**Context.** Eight subsystems declare their own error taxonomy (`app.voice.errors`,
+`app.memory.errors`, `app.mobile.errors`, `app.evolution.errors`, `app.release.errors`,
+`app.security.errors`, `app.selfhealing.errors`, `app.identity.errors`) — fifty-six classes
+— and forty more classes live as module constants in news, research, artifacts, the device
+action path and the operator. None of them said anything in Turkish. Thirty-three route
+handlers answered a failed request with `HTTPException(detail=str(exc))`, and the
+exceptions behind those are developer English: "no matching weekday within a week —
+refusing to guess", "only a ringing alarm can be snoozed", "unknown IANA timezone: 'x'".
+The web rendered `detail` verbatim. A system that answers in the language of its own stack
+traces is telling its owner they are the wrong audience for their own assistant.
+
+**Decision.**
+
+* **One dictionary.** `app.errors.catalog.TR` maps every class the product can emit to two
+  Turkish sentences: what happened, and what can be done. Where only the owner can act, the
+  remedy says so — "yalnızca sen ekleyebilirsin" — because a remedy with no actor waits for
+  nobody. An unmapped class falls back to a sentence carrying the TOKEN, which is honest and
+  greppable, rather than a generic "bir hata oluştu" that hides which failure this was.
+* **One door.** `app.errors.owner_detail` builds the response body — the same
+  `{error_class, message}` shape the voice family has produced since M12, so no client has
+  to learn a second one — and `log_and_detail` puts the exception where it belongs, in the
+  structured log under the request's trace id.
+* **The invariant is structural, not remembered.** `test_no_route_answers_the_owner_with_a_python_exception`
+  walks every `except X as exc:` in `app/` and fails on any `HTTPException` whose `detail`
+  mentions `exc` — with exactly one carve-out, `exc.error_class`, because a class token is a
+  closed-taxonomy value the catalogue translates and callers match on it.
+* **Four kinds of waiting, four sets of words** (`apps/web/app/lib/errors/failure.ts`): a
+  failure that can clear on its own gets a retry control; a provider that is not configured,
+  a permission that was never granted, and a decision that is the owner's each get their own
+  heading, their own hint about who can act, and NO retry. A retry button on a missing API
+  key is an invitation to press it forever, and `owner_action` never prints "Alınamadı",
+  because nothing failed.
+* **Loading is not empty, on every surface.** The cockpit's `Panel` had this right from the
+  start; the pages did not. `/artifacts` rendered an empty list before its first answer.
+
+**Reversible.** The catalogue is data; `owner_detail` is one function; the web's four class
+sets are four constants. Reverting any one of them restores the previous behaviour of that
+surface alone.
+
+**Guards.** `test_owner_error_language.py` (completeness in both directions, read from BOTH
+the Enum families and the source's string constants; the sanitiser; the AST scan; and the
+cross-language contract that the web's buckets only name classes the server can send and
+that no class sits in two buckets) and `failure-states.test.tsx` (the six outcomes as
+rendered, including the case where the retry control must be absent).
+
+## ADR-0130 — One nav, two weights, and a renderer that answers to the machine (2026-09-14, B23)
+
+**Context.** Measured before writing anything, by reading every `href` in every page: `/`
+linked to all five, `/research` to `/artifacts`, `/voice` to `/core`, and `/artifacts`,
+`/core` and `/core/cockpit` to nothing at all. `layout.tsx` was `<body>{children}</body>`.
+An owner who opened a report from a notification had the browser's back button and nothing
+else; installed as a PWA (`start_url: "/core"`, `display: standalone`) they did not have
+that either. Separately, two renderer decisions were made exactly once: the quality tier
+never looked at the frames the machine delivered, and WebGL capability was probed on mount
+and never again.
+
+**Decision.**
+
+* **The six pages live in one list** (`NAV` in `components/SiteNav`), rendered by the
+  layout and reused by the home index. A seventh page is added in one place or not at all,
+  and the test walks the list rather than trusting a habit.
+* **The Core gets the same links in a quieter weight.** A bar across the top would be the
+  chrome the manifest explicitly refuses around a full-viewport presence; no nav at all is
+  how the Core became a dead end. So: a floating strip at 28% that comes up on hover, and
+  in Minimal mode it fades with the control cluster the Core already has — one fade state,
+  not a second timer — and it FADES rather than disappearing, so a deliberate move brings
+  it back.
+* **The device family gets a surface.** `fetchDeviceStatus` and `CockpitData.devices` have
+  existed since M18.3 and only a line about SCREENS was ever rendered. `DevicesPanel` shows
+  what the heartbeat carries and keeps `statusKnown` in words: a device that answered the
+  inventory with no status says "durum bildirmedi", never "boşta 0 sn".
+* **The tier answers to measurement** (`degradedTier`): down one step when most frames miss
+  the budget, never up (that would fight the owner's own choice and oscillate), never below
+  `low`, and never before sixty samples so a cold start decides nothing.
+* **A lost context falls back** (`webglcontextlost` → the 2D view, which shows the same
+  facts and says why; `webglcontextrestored` → back). The loss event's default must be
+  prevented or the browser never restores the context, which would make the fallback
+  permanent.
+
+**Reversible.** The nav is one component and one line in the layout; the panel is one
+mount; the two renderer behaviours are one pure function and one pair of listeners.
+
+**Guards.** `site-nav.test.tsx` (every page reaches every other, exactly one entry current,
+the Core carries every link, the layout renders the nav, the device panel exists and is
+addressable, minimal mode fades it) and `quality-adaptation.test.ts` (the sample floor, the
+single downward step, the floor at `low`, and the source-level proof that the context-loss
+listeners and `preventDefault` are there).
+
+## ADR-0131 — An empty family draws no panel, and the record becomes a page (2026-09-14, B24)
+
+**Context.** Two measurements, taken before anything was written.
+
+The first is the matrix's own, and it is five words: **13/27 boş**. Thirteen of the
+cockpit's twenty-seven panels drew a title, a badge and a sentence saying there was
+nothing — at the same time, on a system that was doing plenty. Read down the column and the
+product says "I do nothing" in thirteen different fonts. The second: seven families the
+system has had for months — memory, routines, alarms, security, self-development,
+notifications, settings — had no page at all, and the reason each was `MISSING` was the
+same shape this repository has hit before. **The client existed and nothing called it.**
+`fetchNotificationHistory` parses req 377's delivery record, *including the rows no channel
+carried*, and had zero callers. `/v1/alarms/history` has served every alarm OCCURRENCE
+since B13 req 285 — the only question an owner actually asks about an alarm, and the one
+the scheduled-alarm row cannot answer, because a recurring alarm reuses its row and rewinds
+its terminal state when it schedules tomorrow. The security authorization trail records
+every refusal enforcing a constitutional invariant, and nothing in the product read it. In
+total, eleven served routes with no caller.
+
+**Decision.**
+
+* **A family with nothing to show renders no panel** (req 714). `Panel` returns `null` for
+  `empty` and for `absent`; `failed` and `loading` never hide, because "I could not find
+  out" and "I have not asked yet" are not "there is nothing". The nine panels that pair a
+  live bus caption with a REST list go quiet only when BOTH halves are silent — a build
+  running right now is worth a panel even with an empty list — and the two approval panels
+  also stay while their last answer is on screen.
+* **What is hidden is not lost.** The cockpit keeps one line naming the quiet families and
+  linking to `/availability`, which lists all twenty-seven with what each answered. Trading
+  thirteen misleading panels for thirteen silent omissions would be the same failure in the
+  other coat.
+* **`families.ts` is the one definition of "a family"**: the twenty-seven keys, each one's
+  label, its panel id, the page that owns it, and the single emptiness predicate every
+  panel now uses. Previously each panel spelled its own `isEmpty`, so a page counting empty
+  families and a panel hiding itself could disagree.
+* **Hiding is a prop, not a context** (`always`). These components are called as plain
+  functions by their own tests, where hooks cannot run; and the family pages need the
+  opposite behaviour — on `/alarms`, "there are no alarms" is the answer the owner came
+  for, so a page that hid its only content would be a worse dead end than the empty panel.
+* **Seven family pages, each wider than its panel.** Every one keeps the cockpit panel for
+  the summary and adds the routes the cockpit never fetched. All GET: setting an alarm,
+  changing a policy, forgetting a memory and enrolling an asset go through the one gated
+  path (ADR-0053 §5), and a button on a list is exactly how one gets pressed by accident.
+  The two existing writes — B14's routine pause/resume and B11's mark-as-read — move with
+  their panels on their existing clients rather than gaining new ones.
+* **`/settings` shows the rules rather than offering a form.** Six subsystems publish a
+  `/policy` route saying what this Cloud Core understands, and nothing had ever asked one.
+  A second surface able to change the same rules would be a second authority. What the
+  owner CAN change here is what genuinely lives in this browser: the render tier and the 2D
+  view, both `localStorage`.
+* **The FEATURE MATRIX is generated into the product** (req 700/712/713).
+  `scripts/web/sync-feature-matrix.mjs` derives `matrix.generated.ts` from the document —
+  including the proof abbreviations, read from the document's own LEGEND table — and the
+  web suite runs the same script's `--check`. Badges therefore cannot invent a vocabulary:
+  every one carries the raw class in `data-badge-class`.
+* **`/availability` measures the live half and reads the recorded half, side by side.**
+  Requirement 78 settled this: an answer read from a hand-maintained document is only as
+  true as the document. So "does this family have anything in it right now" comes from the
+  same `useCockpitData` the panels read, and the matrix sits beside it, never instead of it.
+
+**Rejected.** Hiding an empty panel behind a collapse (still a row of chrome per family,
+twenty-seven of them); keeping the empty sentences and shrinking them (the page still reads
+as a system doing nothing); a hand-written TypeScript copy of the 750 rows (a second source
+of truth that drifts silently — the failure this repository has hit most); answering "what
+is broken" from the matrix on `/availability` (req 78's rule, and the reason its own answer
+is read from the world model instead).
+
+**Guards.** `quiet-families.test.tsx` renders every one of the twenty-seven panels with its
+family empty and asserts the markup is empty — then asserts the opposite for `failed`, for
+`loading`, and for one row anywhere; it also reads `useCockpitData.ts`'s own source for the
+family list rather than importing it. `matrix-badges.test.tsx` regenerates the module from
+the markdown and compares byte for byte, and re-parses the document with a SECOND, naive
+reader to check every row's status and proof class. `family-pages.test.ts` drives the new
+clients through the real session boundary and reads each page for the client it claims and
+the `always` that keeps its answer visible. `test_web_asks_for_routes_that_exist.py` was
+widened from twelve paths to forty-three: it used to read only `export const X_PATH`, and
+the eleven routes these pages added are spelled inline.
+
+## ADR-0132 — The system says what it can do, and the keyboard can reach it (2026-09-14, B25)
+
+**Context.** The audit's lowest score in the entire product was discoverability: **0.5 out
+of 5**. It was not one defect. It was three things this system HAS, none of which the owner
+could get at.
+
+`POST /v1/identity/panic` has revoked every session since B05; the matrix's whole note on it
+is three words — *Arayüzde görünmüyor*. The tool registry has held a hundred and thirty tool
+descriptions, written in Turkish, most of them quoting the owner's own sentences so the
+model can recognise them (`'beş dakika ertele'`, `'gözünü kapat'`, `'İstanbul'da hava
+nasıl?'`), and its only reader was the model. And the shell had no skip link, no focus ring,
+and — measured this batch, not assumed — no `<main>` and no `<h1>` on either Core page at
+all, which is the densest surface in the product.
+
+Nothing was missing. What was missing was a door.
+
+**Decision.**
+
+* **The capability list is DERIVED, and derived from the registry** (req 701). *Elle liste
+  yasak* is the test plan's whole sentence, and the reason is the one that governs every
+  list in this repository: a written list of a system's own abilities is a second source of
+  truth about the thing it must never be wrong about. `app/voice/capabilities.py` reads
+  `default_registry()`; the only hand-written thing is a Turkish name per family, checked in
+  both directions against the registry.
+* **The example phrases are LIFTED, not reworded.** They come out of the tool descriptions
+  the model was given, so the sentence the product tells the owner to say is the sentence
+  the assistant was told to hear. Rewording them would have created exactly the drift the
+  previous point exists to prevent, one layer down.
+* **The spoken answer is not the list.** `assistant.capabilities` says how many things and
+  which areas and names the surface that shows them all. Reading a hundred and thirty tool
+  names aloud is a refusal wearing an answer's clothes — the constitution's "notify briefly
+  and wait", applied to a question rather than to a finished task.
+* **The palette IS the search** (req 702/703). One component, in the layout, searching three
+  lists the product already keeps — `NAV`, `FAMILIES`, and the registry — and never a
+  fourth written for it. Case folding is `tr-TR`, because a search that cannot fold `İ` and
+  `ı` is a search a Turkish owner cannot use.
+* **The keyboard is a pure function** (req 725). `paletteAction` decides every key in every
+  state; the component only wires events to it. The suite runs in Node with no DOM, and a
+  keyboard contract asserted by grepping the component for the word "ArrowDown" is a
+  spelling check that passes for a handler wired to nothing.
+* **The kill switch arms before it fires** (req 660), states what it does NOT do (the owner
+  credential stays valid), and treats a 401 from its own call as success — because this
+  session was one of the ones it revoked.
+* **The Core keeps its chrome-free stage AND becomes enterable** (req 724): `<main>` with a
+  visually-hidden `<h1>`. A visible title would be the chrome the manifest refuses; having
+  neither meant "no chrome" was being paid for by a page a screen reader could not enter.
+
+**Rejected.** A hand-written "what I can do" page (the requirement forbids it, and it would
+be wrong within a batch); reading the list aloud (see above); a fifteenth nav entry for the
+capability list (it belongs on `/voice`, where the owner already goes to talk, and the
+palette reaches it from everywhere else); a jsdom test for the palette (this suite is
+deliberately Node-only, and the pure model is a stronger assertion than a rendered smoke
+test); a one-click panic button.
+
+**Guards.** `test_capability_list.py` proves the derivation with a registry of two invented
+tools — a hard-coded answer could not follow it — and pins the Turkish apostrophe cases that
+the first draft got wrong. `palette.test.tsx` walks every key in every state.
+`accessibility.test.ts` walks every `page.tsx` in the directory rather than any one page, so
+the fifteenth cannot ship without a landmark. `discoverability.test.tsx` holds the panic
+control to its two steps and to the sentence about what it does not do.
+
+## ADR-0133 — One word is not a sentence (2026-09-14, B26)
+
+**Context.** The audit ran 103 plausible Turkish sentences past the deterministic intent
+router. Fifty-nine reached nothing. **Seven reached the wrong capability**, and the
+difference between those two numbers is the whole of this batch: a sentence that reaches
+nothing leaves the owner to say it differently, while a sentence that reaches the wrong
+capability *acts*. "Otomatik güncellemeleri kapat." — turn off automatic updates — switched
+the screen automation off. "Dosyayı gönder." sent mail. "Bunu yazdır." typed into whatever
+window happened to be focused. "Bir hedef ekle: bu ay kitabı bitir." put the owner's
+month-long intention in the calendar as an appointment.
+
+All seven were reproduced on this machine before anything was changed. The audit named four;
+measuring found the other three in the same families, which is the point — these are four
+root causes, not seven sentences.
+
+And every root cause is the same mistake. **A rule that admits a sentence on one word.**
+
+**Decision.**
+
+* **`otomatik` needs a screen.** The ambient gate read *"no screen noun AND no `otomatik`
+  → not ours"*, so the bare word was a second door into a family that is entirely about
+  screens. Both halves are narrowed — the matcher and the reader that writes
+  `auto_off_enabled` — because one call site today is one call site away from the defect
+  returning.
+* **A confirmation is bare.** `Gönder.` is the owner confirming a draft that was just read
+  back to them. The matcher refused the mail noun and let every *other* noun through. A
+  confirmation now has to be the verb plus words that name nothing: a pointer at the thing
+  read back, politeness, discourse. Anything else means the sentence is about something.
+* **`yaz` is not `yazdır`.** Turkish builds words by suffix, so a prefix match on "write"
+  also matches the causative "have it written" — which is *print* — and "printer",
+  "software" and "spelling" besides. A closed list of the non-verbs rather than a cleverer
+  stemmer: the words are few and known, and a rule that guesses morphology is what produced
+  the defect. The payload reader carries the same exclusions as a lookahead, because two
+  lists of the same words is how two halves drift.
+* **`ekle` needs a calendar anchor.** Everything gets added to something. The calendar owns
+  the sentence only when it names a day, a calendar word, or a thing one keeps appointments
+  for. `ay` (month) is deliberately not an anchor — it is the word that let the measured
+  misroute through, and a month is a span, not an appointment.
+* **The deterministic router stays the shield** (req 741). Every fix here is a *narrowing*,
+  which is the change most likely to take a working sentence with it, so each is paired in
+  the same test run with the sentences it must not have touched.
+* **The class is measured in CI** (req 739/748): 107 sentences, each carrying both what it
+  must reach and what it must never reach. A case with `expected=None` — B27's ten among
+  them — still fails if it reaches something that acts.
+* **The running system reports** (req 749/750). Every resolution is recorded without the
+  owner's words; a misroute announces itself in the SEQUENCE rather than in the sentence.
+  An acting intent followed within twelve seconds by a stop, a discard or a bare "hayır" is
+  a candidate, written to the ledger as a warning.
+
+**Rejected.** A semantic/model router for these sentences (req 740 is B51's, and putting a
+model between the owner and `mail.send` is the opposite of what this batch is for); making
+the detector BLOCK a route (a detector that stopped resolving an intent because the owner
+coughed would be worse than the defect); recording the transcript in the telemetry (the
+detector does not need it, and the transcript is the most private thing here); reporting
+every preceding action for one "dur" (three suspects for one objection drowns the real one).
+
+**Guards.** `test_intent_misroutes.py` runs all 107 and reports every failure at once —
+fixing a router one failure at a time, re-running between each, is how the seventh gets
+missed. `test_route_telemetry.py` holds the detector to its window, its ordering, its
+one-objection-one-action rule, and to the claim that the transcript never reaches the
+record. Both halves of the `yaz` fix are asserted against the same words.
+
+## ADR-0134 — The ten sentences a person actually says (2026-09-14, B27)
+
+**Context.** The audit's other number: of 103 plausible Turkish sentences, 59 reached
+nothing. B26 closed the seven that reached the *wrong* capability; this batch is the ten the
+audit singled out as the ones a person says every day (req 726-735). Measured before
+anything was changed, against a set of the ten plus at least three synonyms each: 49
+sentences, 32 unrouted, 65.3 %. Three of the ten (726-728) already routed — B15 and B16
+had closed them after the audit — and the record now says so instead of leaving the row
+at MISSING.
+
+Seven reached nothing, and the reason was not one cause. Three had **no tool at all**:
+research cancel existed only as `POST /v1/research/{id}/cancel`; the device had ramped
+media volume for the wake alarm since M18.3 and no tool let the owner touch it; the agent
+has answered `screen.capture` since M19 and nothing in Cloud Core ever asked (matrix row
+104: "Çağıran yok"). One, calendar cancel, has no delete **by policy** (spec §1). The
+other three (mail inbox, calendar agenda, capabilities) had tools and matchers that knew
+the family's nouns but not the verbs a person uses.
+
+**Decision.**
+
+1. **A sentence routes only when it reaches something that answers.** For the three
+   with no tool, the tool is built as the caller the capability never had: `research.cancel`
+   runs the SAME `mark_research_cancelled` the REST route now calls (one function, two
+   halves, req 202) and cancels the Temporal workflow as a follow-up; `media.volume` reads
+   the level from the page first (`media_status.volume`) and moves it one step; and
+   `operator.screenshot` asks the device registry for `screen.capture`, stores the PNG in
+   the object store, and puts only the size, the hash and the key in the receipt — the
+   ledger never carries an image.
+2. **A refusal is an answer.** `calendar.cancel` reaches the calendar service and comes
+   back with a receipt naming the event and `deletion_not_permitted`. The policy that may
+   permit it is B46's (row 354); the sentence no longer reaches nothing, and the day the
+   policy changes, the same method changes.
+3. **Every new matcher requires a noun and a verb** (ADR-0133), and every widening is
+   held to its neighbours in the same run: "Günaydın, bugün ne var?" stays the briefing,
+   "Yetenek durumu ne?" stays Capability Genesis, "Bunu yapabilir misin?" is not a request
+   for a list, "Toplantı notlarını sil." is not a meeting (the appointment must be the
+   accusative object), and "iptal etme" is Turkish for do not.
+4. **The owner's words travel with the intent.** The family named in "mail konusunda
+   neler yapabilirsin?" and the direction in "sesini kıs" are fields on the resolved
+   intent; the tools prefer them over the model's arguments, the rule every family since
+   ADR-0079 §7 follows.
+5. **The two lists of "intents that act" read each other.** The corpus's default forbidden
+   set and the misroute detector's watch list gained the same three intents, and a test
+   asserts one is a subset of the other.
+
+**Consequences.** Coverage on the daily set 65.3 % → 0 %; on B26's 107-sentence set the
+unrouted count fell 19 → 12 with the misroute count still 0. Five executed mutations went
+red (matcher removed, question composes again, greeting guard removed, volume never reads
+the level, image leaks into the receipt). Found on the way: "Yeni mail var mı?" was opening
+a draft — a question never composes; and the research-cancel ledger row was being dropped
+silently because `research_job_id` travelled as a string while the corpus passed — the
+unit test that reads the ledger caught what the relay test could not. The four new tools
+are SENSITIVE under step-up; `operator.screenshot` is a declared operator capability with
+no plan, so `RECEIPT_BY_PLAN` is untouched.
+
+## ADR-0135 — The pointer is the last rung, and the receipt says which rung was used (2026-09-14, B28)
+
+**Context.** The Digital Operator's device half has been complete since M19: the companion
+answers `keyboard.key`, `keyboard.shortcut` and the five `pointer.*` operations behind a
+focus guard, refuses a payload flagged `secret`, and re-observes the foreground and the
+cursor after every input. Matrix rows 92-98 all read "Çağıran yok": nothing in Cloud Core
+ever asked. Row 109 said the `secret` flag never left the cloud, row 110 that a receipt did
+not say how far a plan got, and row 107 that "raw coordinates only as last resort" was a
+rule the browser worker enforced and the operator merely described.
+
+**Decision.**
+
+1. **Two tools, seven plans, one receipt each.** `operator.key` (a key or a chord) and
+   `operator.pointer` (move, click, double click, right click, scroll) are plans of the same
+   shape as `type_text`: activate the target window, ONE guarded input, read back. The input
+   step has `retries=0` - a chord that was sent and not read back is not sent twice, because
+   Ctrl+Z twice is two undos. The key and modifier vocabulary is the companion's `KeyMap`,
+   restated once on the server and held equal by a test that reads the C#.
+2. **A focus guard refusal is accounted for, not retried.** `focus_mismatch` from the device
+   ends the task with that class; the receipt's `observed_after.server` now carries
+   `steps_completed`, `step_count`, `stopped_at` and `interaction_level` for every operator
+   action (req 110), and the owner hears "Pencere önden çekildi; gönderimi durdurdum."
+3. **The pointer is the last rung, enforced.** `operator.pointer` refuses a move or click
+   that does not carry `last_resort: true` (`coordinate_not_last_resort`, no window
+   resolved, no device touched); when it does, the model's `reason` travels in the receipt
+   and the receipt records `interaction_level: pointer` - spec §2's "the planner records
+   which level it used", computed as the highest rung any step of the plan used. Scrolling
+   is exempt: it targets the window's own centre (from the device's rect), never an element.
+4. **The `secret` flag is sent.** `type_text`'s payload carries `secret` computed by the
+   same heuristic the server gate uses, so a caller that skipped the gate is refused by the
+   layer that actually has the keyboard; a test reads `payload["secret"]` on the C# side.
+5. **PROVEN_REAL in the test lab, READY_FOR_OWNER in production.** The lab test on this
+   desktop presses Home in a real Notepad and proves it by where the next letter lands,
+   selects all with Ctrl+A and empties the document with Delete, and scrolls with the cursor
+   re-observed within two pixels. A command *from production* is Karar 0's.
+
+**Consequences.** Found on the way: the relay test for `key_press` showed the field never
+reached the tool - `record_client_events` copies the resolved intent into the turn record
+field by field, and B27's `capability_family` and `media_volume_direction` were missing
+from the same list while B27's hand-built unit tests passed. All four added, with a relay
+test on B27's fields. The relay counted `operator.key`'s "Hangi tuş?" as a success until
+the two tools joined `OPERATOR_CLARIFYING_TOOLS`. Five executed mutations went red.
+
+## ADR-0136 — No action is done until something else says so (2026-09-14, B29)
+
+**Context.** The Digital Operator's UI Automation half has answered `ui.inspect`,
+`ui.invoke`, `ui.set_value` and `ui.select` since M19; the cloud called only `ui.inspect`,
+and only to verify typing. Rows 99-103 read "Çağıran yok". Row 111 — "no action counts as
+success until its postcondition is verified" — was a product principle with one enforcement
+(the task loop) and no structural guarantee; row 105 had no vision provider; row 116 had no
+application knowledge at all.
+
+**Decision.**
+
+1. **Three tools on the ladder's highest semantic rung.** `operator.ui` (invoke, set_value,
+   select), `operator.inspect` (the tree, or the text a control holds) and `operator.see`
+   (the visual rung). "Tamam düğmesine tıkla" resolves to a Button named Tamam through
+   the tree, never to a coordinate.
+2. **An action's own answer is not its verification.** `ui.invoke`'s postcondition compares
+   the device's before/after description of the element: unchanged and still present means
+   the button did nothing observable, and that is `postcondition_failed` spoken as "bir
+   sonuç göremedim". A stated expectation (`window_gone`, `element_gone`,
+   `element_present`, `value_ends_with`) is read from a source the invoke did not write.
+   `set_value` and `select` end with a `ui.inspect` on the same query. Structurally: every
+   plan the operator can build ends in a step with a postcondition — a test iterates all 22.
+3. **Vision is a provider interface** (CLAUDE.md). `OpenAIVisionProvider` behind the owner's
+   existing OpenAI key, `FakeVisionProvider` for the corpus, and `None` when nothing is
+   configured — spoken as "sağlayıcısı tanımlı değil", never as a guess about the picture.
+   The image is never persisted; the receipt carries size and hash.
+4. **Adapters are declared facts, not heuristics.** `app/operator/adapters.py` holds what a
+   person knows and a tree does not: Notepad's text is the `Edit` control, its save prompt
+   says Kaydet / Kaydetme / İptal, "belge" means that control. Measured before written.
+5. **PROVEN_REAL in the lab.** On this desktop: an unsaved Notepad asked to close, the
+   dialog's button found by `ui.inspect`, invoked by `ui.invoke`, and the consequence read
+   from `window.list` and the process table. A command from production is Karar 0's.
+
+**Consequences.** Found on the way: the first read matcher stole "Belgeyi oku" from the
+document family and "Ne görüyorsun?" from the activity explanation (B26's shield caught
+both); the plan-name structural test refused an `IfExp` (a declared mapping now); the tools
+listed windows twice per call (the resolver and the adapter lookup) and now read once,
+because a desktop can change between two readings; the first `window_gone` mutation stayed
+green because the fallback verification also failed, so the mutation was moved into the
+read itself. Six executed mutations went red.
+
+*Addendum (same day).* The first gate run caught a third theft the targeted runs had not:
+the bare "ne yazıyor" branch took "Üçüncü sayfada ne yazıyor?" from `DOCUMENT_ANSWER`.
+The bare question is now bare — only the screen's own words may stand beside it — and a
+named page or document makes the question the document family's, as it was.
+
+## ADR-0137 — One allowlist, read by both halves; a policy refuses before a device is asked (2026-09-14, B30)
+
+**Context.** The Cloud Core decided what the owner may ask for and the device decided what
+it would do, from two lists nobody held equal: six applications against seven (mspaint on
+the device only), two shell commands against eight terminal patterns. Rows 82, 84 and 85
+had a device half since M19 and no caller; rows 119-122 had nothing on either side. The
+roadmap's own words for the batch: "iki izin listesi tek kaynaktan okunsun".
+
+**Decision.**
+
+1. **`packages/protocol/operator-allowlists.json` is the list.** Applications (id, Turkish
+   name, image, spoken aliases), the device's terminal patterns verbatim, the commands the
+   cloud sends per shell-query kind, the images `process.stop` may end, the services
+   `service.restart` may touch. `app/operator/allowlists.py` reads it at import and
+   `plans.APP_ALLOWLIST` *is* its id tuple; the companion keeps compiled tables (it has no
+   repository at runtime) and `OperatorAllowlistsContractTests` holds them equal to the
+   file, while `test_operator_allowlists.py` reads the C# source as well — a drift on
+   either side is red in Python alone (mutation M5).
+2. **A policy is refused before any device call, and again on the device.** `operator.process`
+   stop and `operator.service` restart answer `permission_denied` with the reason
+   (`not_in_stop_policy` / `not_in_restart_policy`) from the cloud's own reading of the
+   contract; the device reads the same policy before looking at a process or the SCM.
+   Two refusals of the same rule, neither trusting the other.
+3. **UAC is the owner's.** `service.restart` on an unelevated companion is
+   `permission_denied` naming UAC, and nothing is touched — spoken as "yönetici yetkisi
+   istiyor; bunu siz onaylamalısınız". The companion is not made to run elevated for this;
+   whether it ever may is the owner's checkpoint.
+4. **An application is closed by its own window, found by image.** "Not Defteri'ni kapat"
+   resolves the application, finds its window in the device's `window.list` by image
+   (never the focus stack, which remembers windows long closed), sends `app.close`
+   (WM_CLOSE; terminate only on the owner's `force`), and reads the list again. A save
+   prompt is `modal_open`, reported and never answered. Not running is "zaten açık değil"
+   with no close sent.
+5. **Geometry is re-observed.** `move_window`/`resize_window` accept the device's rect only
+   within the companion's own `RectTolerance` (8 px), restated as `RECT_TOLERANCE_PX`.
+6. **The process/service family is four capabilities**, `OperatorCapabilityNames.All`
+   32 → 36: `process.list` (Process table, window-first, capped), `process.stop`
+   (policy, WM_CLOSE, modal, force), `service.status` and `service.restart`
+   (Win32_Service through `System.Management`, injection-shaped names refused).
+
+**Consequences.** The first run of the `process.stop` lab test sent WM_CLOSE to the
+owner's own unsaved Notepad — by image is what the product promises — and the companion
+did the right thing: reported the save prompt as `modal`, answered nothing, the owner's
+editor survived. A lab must not do that twice; the test now lists `notepad.exe` first and
+declines to run over a foreign one. The fake desktop's window rows carried no image
+(the companion's do), so the fakes now do too, per context. Rows 86-88 were stale, not
+missing. Six executed mutations went red.
+
+## ADR-0138 — A research the owner can hold, and a browser that only promises what it does (2026-09-14, B31)
+
+**Context.** The research family could be started and cancelled and nothing else: no pause,
+no resume (rows 203/204), a DEEP asked for aloud clamped to the QUICK default's twelve
+sources (192), "bir önceki araştırmayı aç" routed to the artifact family (201), an earlier
+report on the same topic never cited (199), a standing "teknik anlat" impossible (209),
+and a synthesis that fell back to the deterministic provider recorded in a log line only
+(207). On the browser side the worker advertised `uploads=True` on every backend with no
+`browser.upload` operation (181, the roadmap's "yalan duyuru"), a download had no size cap
+and an authorisation that was only "non-empty" (180), and the owner's-Chrome boundary
+(172, ADR-0113) had no test holding it.
+
+**Decision.**
+
+1. **Pausing is a flag, never a stage.** `mark_research_paused` / `mark_research_resumed`
+   (one function each, shared by `POST /{id}/pause`, `/{id}/resume` and the voice tools
+   `research.pause` / `research.resume`) keep the run's stage and set
+   `progress_json.paused`; `active_research()` and the orphan sweep still see the run.
+   The Temporal half is a signal: `BrowserResearchWorkflow.pause/resume` flip a flag the
+   run reads at every stage boundary (`_gate()` before each discovery query, before the
+   first fetch wave, at the top of every later wave, before synthesis) through
+   `workflow.wait_condition`, which a cancel still interrupts. The held seconds are
+   subtracted from the budget's elapsed time and reported as `paused_s`.
+2. **The owner's own words choose the mode, and the budget follows the mode.** The router
+   keeps `research_mode` on the turn (`derive_mode_from_utterance` of what the owner
+   said); `research.start` takes the wider of that and the model's topic-derived mode, may
+   only be NARROWED by the model's `mode` argument, and starts with the mode's own policy
+   ceiling (`_voice_max_sources`) - the settings default is the QUICK floor only. The web
+   page has a mode selector and sends `research_mode`.
+3. **A research is opened by reference.** `research.open` resolves previous / ordinal /
+   current with the follow-ups' own resolver, moves the focus, speaks the executive summary
+   and opens the report artifact on a device when one can - and says which of the two
+   happened. **An earlier report on the same topic is cited**: every follow-up answer
+   appends "Bu konuda daha önce de bir araştırma var: … raporu." with the earlier run's
+   time, from the reference resolver's own topic rule.
+4. **A standing register is durable.** "Bundan sonra teknik anlat" / "Teknik modu kapat"
+   (`research.answer_mode`) write `research_owner_state.preferences_json.answer_level`
+   (migration 0046); `research.explain` and the turn-level chooser read it when no turn
+   names a level. A one-off "teknik anlat" stays the follow-up it was.
+5. **A substitution is a fact of the run.** A synthesis fallback is written into the report
+   (`synthesis_fallback` = requested / used / attempts / reason), the run's events and the
+   ledger (`research.provider_fallback`); discovery's per-query search fallbacks are
+   counted into `search_fallbacks`. The technical answer says "istenen X … denemede kabul
+   edilmedi, yedeğe geçildi", the web report shows it.
+6. **Browser contract v1.5.** `browser.upload` exists (worker handler, policy risk class
+   HIGH_IMPACT, C# `BrowserCapabilities.Upload`, the cloud allowlist, the three PowerShell
+   operation lists); a test holds every capability flag that names an operation to a
+   handler. Download and upload share one gate - HIGH_IMPACT plus a WELL-FORMED
+   `authorization_ref` (8-128 chars of `[A-Za-z0-9._:-]`) - and one cap (64 MiB,
+   lowerable per call, never raisable); an oversized download is deleted before the
+   refusal, an oversized upload is refused before the page sees it; a download's folder
+   cannot leave `file_io_root`.
+7. **The owner's Chrome stays closed to autonomous research** (ADR-0113 preserved): the
+   enrolment script writes `owner_authorized_for_research = $false`, no cloud code names
+   the flag, the gateway opens the `research` profile only, the worker's own gate stands -
+   all held by a test. Whether that ever changes is the owner's privacy checkpoint.
+   Session reuse (173) is held by a test too: known-open per process, a reopen after a
+   restart accepted as the same session.
+
+**Consequences.** Found on the way: the first corpus ids collided with the routine
+family's `r.pause.*`; the model's extracted topic dropped "kapsamlı" so a DEEP asked aloud
+ran as QUICK until the turn carried the mode itself; the fake device's replay of a
+terminal ack made a "restart" test wrong until the fake's factory was used. Six executed
+mutations went red.
+
+## ADR-0139 — Pictures and archives are kinds; the local OCR engine; duplicates go to the Recycle Bin (2026-09-15, B32)
+
+**Context.** The documents family knew nine kinds and treated a `.png` or a `.zip` as
+`unknown`: inspect fell to a text decode, extract refused. Nothing read an image's
+headers (139), nothing did OCR (140/496), nothing listed an archive (142). The cloud could
+find a file by name and answer from one document's text, but not find documents by the
+words in their text (148); it could not see duplicates (151), remove them (150) or preview
+a document (152); the executive compare ignored its planner's targets (169). The roadmap
+asked for a local OCR engine as a checkpoint.
+
+**Decision.**
+
+1. **Two new kinds on the device.** `image` (png/jpg/jpeg/gif/bmp/tif/tiff/webp) and
+   `archive` (zip) in `FileKinds`, the protocol's kind list and the web's `DocumentKind`.
+   An image inspects to its own headers through WPF's `BitmapDecoder` (pixel size, format,
+   DPI, date taken, camera, application, title) with no pixels decoded; an archive
+   inspects to its central directory (`ArchiveInspector`, the same bounds `ContainerGuard`
+   applies to a package, ≤200 entries listed) and is never extracted.
+2. **The OCR engine is Windows' own, hosted locally.** `Windows.Media.Ocr` — present on
+   every Windows 10/11 with the owner's installed language packs (this machine: `tr`,
+   `en-US`; measured: the fixture read exactly in 15 ms) — reached through a headless
+   PowerShell 5.1 WinRT host (`OcrHost`, the script embedded and sent as
+   `-EncodedCommand`, path and language through the environment, UTF-8 forced on
+   stdout). Chosen over bumping the companion's target framework to a Windows SDK version
+   (every project, the installer and the staged-update qualification would move) and over
+   bundling a native engine. A different engine sits behind `IDocumentExtractor`; the
+   owner's checkpoint stands recorded. No language pack is `dependency_unavailable`
+   (`ocr_language_missing`), never an empty success. `document.extract` accepts
+   `language`; an image's blocks are `o<n>` lines.
+3. **`file.trash` is the family's eighth capability** — the Recycle Bin, never a permanent
+   delete, one file inside the roots, no secret-bearing name, no directory, the path
+   re-read afterwards. It exists so that "sadeleşir" is a real act the owner can undo.
+4. **Duplicates are a proposal first, an act second.** `document.duplicates` lists with
+   `file.search`, hashes each hit ≤ 8 MiB with `file.locate` (a search never opens a
+   file), groups by sha256 and proposes (keep the oldest, remove the rest); the proposal
+   lives on the session. `document.dedup` moves exactly that proposal, one `file.trash`
+   each, verified from the device's `observed.exists`, CRITICAL tier, refused without a
+   proposal heard.
+5. **Full text is the index, honestly bounded.** `document.find_text` scores every indexed
+   document's blocks with the retrieval module's own rule and says how many documents it
+   looked through; nothing crawls. Postgres full-text indexing waits for an index that
+   needs it.
+6. **Preview, picture text, archive contents, two documents.** `document.preview` (kind
+   facts in the kind's units + first words; an archive from its directory), `document.read`
+   on an image speaks its OCR lines, `document.inspect` on an archive speaks its entries,
+   "doküman" is a document noun, and the executive `documents.compare` passes its
+   planner's first two targets.
+
+**Consequences.** Found on the way: the PowerShell child wrote in the console code page
+("D�nya") until UTF-8 was forced; `kind is not Unknown and kind is not Archive` is a
+pattern combinator, not two tests; the oracle's `contains` match wants an array; the
+FileFetch test pinned `file.fetch` as the family's last name; the four new tools had to
+join `DOCUMENT_TOOL_NAMES` or the relay recorded a clarification as a success; the fake
+search treated `*` as a word. The first C# mutation stayed green (two guards, one
+behaviour) and was replaced by one that removes the archive listing. Six mutations red.
+
+## ADR-0140 — The native factory's lifecycle runs on the device; the signature is a spoken policy (2026-09-15, B33)
+
+**Context.** After M28 and B03 the factory could plan, generate and build a Windows
+application on the enrolled device and judge the executable it read back — and stop
+there. `native.install`, `native.launch` and `native.fix` waited on `ctx.live` ports
+(`native_installer`, `native_launcher`, `native_fix_worker`) nothing ever registered,
+so each refused with a sentence about the device (462, 468, 470). Nothing verified the
+running window (463–466), nothing uninstalled or updated (469, 471), a portable or MSIX
+row was refused by name before the device was asked (456, 457), the artefact route
+answered 410 for every device build because a Linux Cloud Core cannot stat a Windows
+path, and there was no signing policy at all (472, 473).
+
+**Decision.**
+
+1. **Four capabilities appended to the device's projects family** (5 → 9, `project.package
+   | install | uninstall | artifact`), native scope only, every path the project's own.
+   Package = the publish folder zipped under `dist/`, or staged with the Cloud Core's
+   scaffolded `AppxManifest.xml` and packed by `makeappx pack /o /nv`; every answer says
+   `signed: false`. Install = the executable stays where it was built; a Start Menu
+   shortcut points at it (`IShellLinkW` + `IPersistFile` on an STA thread — the scripting
+   host could not save a link named with a Turkish letter) and `installed.json` under the
+   native root records it. Uninstall = the shortcut and the record go, the build stays;
+   what this system did not install is `not_found`. Artifact = one bounded base64 chunk
+   of a file inside the project folder, with the whole file's sha256.
+2. **The Cloud Core's lifecycle half reads back everything** (`app.nativefactory.device_lifecycle`):
+   launch is `app.launch` with the built executable's absolute path plus one
+   `ui.inspect`; verification is the owner's qualification flow 26.15 as code — set a
+   note through UI Automation, invoke Add, read `StatusText`, close, relaunch, read it
+   again, read the app's own `data\app.log` — `verified` only when every read answered
+   as the template promises, and the step that did not is named. Install is verified by
+   the device's `observed.shortcut_exists`, never by the request having been sent.
+3. **The dead tools are wired to that half; three tools are new.** `native.fix`'s one
+   honest repair is deterministic: the source re-rendered from the spec and the whole
+   build run again on the device — "Düzelttim" only for `verified`, else the compiler's
+   own words with `fixed: false`; the model-assisted repair stays B40's. `native.update`
+   opens a NEW row at the next version, builds it there and installs it.
+   `native.uninstall` is CRITICAL and an acting intent. Portable and MSIX rows are now
+   device-buildable: the package is asked for AFTER the EXE is read back and judged,
+   and the row's artefact becomes the package. The artefact route pulls the bytes off the
+   device in chunks and verifies the hash; 410 now means the device has no such file
+   either.
+4. **The signature is a policy the owner hears, not a flag that pretends.**
+   `native_signing_mode` defaults to `unsigned`, the only implemented mode;
+   `test_certificate` / `owner_certificate` are recognised and refused BY NAME until the
+   owner decides (a certificate is a credential and lives nowhere but the secret store).
+   Every package receipt says whether it is signed and why; an unsigned MSIX's install is
+   refused with the same sentence; `signtool` stays in the device's forbidden programs.
+5. **Five router intents, gated like check/fix/rebuild.** "Masaüstü / Windows
+   uygulamasını aç", "EXE'yi çalıştır", "programı başlat", "uygulamayı doğrula /
+   arayüzünü test et", "günlüğünü oku", "kurulumu / uygulamayı kaldır", "uygulamayı
+   güncelle" resolve to the native tools only while a native build is focused (the
+   installer noun needs no focus); without one M23 keeps the application sentences and
+   the rest resolve to nothing. The BARE "Uygulamayı aç / çalıştır" stays M23's even with
+   a build — the older contract test_voice_native_intents keeps — so the launch needs a
+   native word, the compile word or "program". The lifecycle matchers' foreign list is
+   check/fix's minus the application noun, which they require.
+
+**Consequences.** The production round 26.16 (install, launch, UI Automation, uninstall
+on the owner's machine) is Karar 0's; the lab here wrote and removed a real shortcut,
+zipped a real folder and streamed a real executable back by hash. Found on the way: the
+shell reads a shortcut's target as a PE and answers E_FAIL for a random "MZ" stub (the
+test copies a real executable); "günlüğünü" mutates k→ğ, so the stem is "günlü"; the
+existing foreign-noun list swallowed every lifecycle verb until the application noun was
+taken out of it for them; `SkipLast(6)` in the documents-position test was the family
+count spelled by hand. The first full gate caught three more: the bare "Uygulamayı aç"
+had been taken from M23 (M28's contract test), the artefact route answered the owner with
+the caught exception's text (`log_and_detail` now, `artifact_gone` declared as a
+constant), and the browser worker host killed a healthy replacement worker under load for
+three missed 100 ms pings — a worker that has never answered a ping now gets a 2 s startup
+grace, and one that never answers is still killed after it; the second gate showed the other
+half of that race (a request handed the dying worker before `Process.HasExited` noticed the
+kill), so a worker is not `Alive` from the moment its kill is requested. Seven mutations red.
+
+## ADR-0141 — Files change only through a journaled, reversible, owner-approved mutation (2026-09-15, B34)
+
+**Context.** ADR-0083 decision 7 made the documents family structurally read-only: no
+tool wrote, appended, renamed, moved, copied or deleted a file, and the corpus proved
+"Bu dosyayı sil" reached nothing. The roadmap's B34 (153–167, 170, 674) asks for the
+opposite under three conditions the constitution names: every change reversible, every
+change receipted with hashes, every risky change approved by the owner — and the whole
+surface closable with one flag.
+
+**Decision.**
+
+1. **The device does the act, with a backup first, atomically, and answers what it
+   observed.** Six capabilities appended to the documents family (`file.write | append |
+   rename | move | copy | restore`) plus `file.trash {backup}`. Before an existing file is
+   overwritten, appended to or sent to the Recycle Bin, a copy goes to the undo store of
+   the root that contains it (`<root>\.pagentos-undo\`, a `.bak` beside a sidecar with
+   source path, hash, size, time; the newest 500 kept; hidden; never listed by
+   `file.search`). A write is a temporary file beside the target and one rename over it.
+   Every answer carries the record before and after with sha256; `expected_sha256`
+   refuses to write over a file whose hash moved. Only text-like kinds are written or
+   appended to — an Office document would be corrupted by a byte-level edit and is
+   refused as `not_text`. Nothing deletes permanently.
+2. **The Cloud Core keeps the journal, and the journal is three things at once.** A
+   `file_mutations` row exists BEFORE the device is asked (the proposal: kind, risk, the
+   plan, the record and hash read) and is completed from the device's ANSWER (path and
+   hash after, the backup id, the inverse plan derived from what came back). The rows
+   for one path are its version history; the `proposed` rows are the approval queue;
+   the receipt the owner hears is composed from the row. An answer without a hashed
+   record is recorded `failed`, never verified.
+3. **Risk decides who acts first.** A new file and an append are low risk: applied at
+   once, journaled, undoable. Overwriting, editing, renaming and copying are sensitive;
+   moving and deleting are critical — all of these are proposals the owner hears
+   ("… Uygulayayım mı?") and confirms with a bare "Uygula." / "Kaydet." or the Cockpit's
+   Onayla, through the SAME read-back + confirmation gate mail drafts and calendar
+   proposals pass: never applied unless read back to this session (or listed to the owner
+   session) and confirmed after that; another session's word is `not_read_back`; a
+   second word is `nothing_pending`. The router resolves the bare confirmation only while
+   a change is pending for this session, and the tool's `owner_intent_ok` is the router's
+   verdict, never the model's argument.
+4. **Undo runs the inverse plan and reads it back.** Restore from the backup for a
+   write/append/edit/delete, rename back, move back, trash the copy; the original row
+   becomes `undone` and the restore is a row of its own. The Recycle Bin remains the
+   owner's own way back for a delete.
+5. **One host flag closes the surface.** `documents_mutation_enabled` (default on); under
+   it the device's authorised roots, the secret-name refusal and the text-only rule
+   stand; step-up tiers: the acts CRITICAL, the proposals SENSITIVE. A permanent delete is
+   offered by no setting — the shape of that policy is the owner's checkpoint (14).
+6. **The Cockpit's Approval Center gets its third source.** `/v1/documents/mutations
+   /pending` (listing is the read-back for the owner session), `/confirm`, `/discard`,
+   `/undo`; the Documents panel lists pending changes with the sentence the owner heard
+   and the hash of what is there, behind the same Onayla/Vazgeç pair.
+
+**Consequences.** ADR-0083 decision 7 is superseded; `doc.neg.delete` is a proposal
+case now. Found on the way: the relay refuses a tool argument named `text` (the mutation
+tools take `content`); the edit's find/replace and the file name had to be copied into
+the turn record or the tool never saw them; the corpus harness needed the journal table
+in its own list and the fake desktop's overlay reset per context; the owner's word is
+casefolded and ASR drops diacritics, so the replacement matches both ways; the folder of a
+bare file name is the root, not the name; the REST confirmation must read the runtime's
+live device port, not the broker's; a fetched family is a quiet family (req 714), so the
+Documents panel goes quiet with nothing pending and nothing on the bus; the first full gate
+caught "aç" among the create verbs stealing the operator's and the artifact family's
+"dosyayı aç" (create is oluştur/yarat only). Seven mutations red.
+
+
+## ADR-0142 — Self-development is wired to the product and made safe: queue, security review, gate, shadow, owner decision (2026-09-15, B35)
+
+**Context.** ADR-0124's engine turned a hand-written JSON defect into a verified candidate
+on its own branch and stopped — seven runs, all quarantined, one candidate (`db9ed85`)
+nobody could look at from any product surface. Fourteen evolution opportunities waited
+with a promotion class the supervisor derived and nothing consumed. `Grant.SECURITY_REVIEW
+_CANDIDATE` was declared and had no consumer. The constitution's path names a sandbox and
+a shadow the engine never ran, and the roadmap's B35 (581, 583, 585, 589, 598, 600, 601,
+603, 608, 609, 615, 618–623, 680) asks for all of it under one unmovable rule: no
+autonomous high-risk promotion (624).
+
+**Decision.**
+
+1. **The queue is the product surface.** A `selfdev_defects` row (migration 0048) for
+   every defect the owner assigns — by voice ("Şu bug'ı kendin düzelt." / "Şu özelliği
+   kendine ekle."), by REST, by the bridge from an evolution opportunity, or by the CI fix
+   loop — carrying the run's outcome and the owner's decision on the same row. States:
+   `queued → claimed → running → awaiting_owner → approved | rejected`, or `refused |
+   quarantined | failed` with the engine's reason. Every transition is a ledger event under
+   its own subsystem (`selfdev`).
+2. **The security review is mandatory and gated on the grant.** `security_review.
+   review_candidate` runs inside the independent reviewer after the safe autofix and the
+   scope check, before a single test: it refuses secret literals, dangerous calls
+   (`eval`/`exec`/`os.system`/`shell=True`/`pickle.loads`), the guarded paths (identity,
+   security, the authority and risk modules, this module, the confirmation gate, CI
+   workflows, deploy and secret scripts, dependency manifests, `.env`), new network egress a
+   base file did not have, and a test module that ends with fewer tests. Each finding is a
+   path and a line; the verdict is kept whole in the record. The reviewer's authority holds
+   exactly `SECURITY_REVIEW_CANDIDATE`; without it the review raises, and a candidate is
+   never committed without it. The identity boundary is no longer a tier-5 candidate the
+   owner is asked about; it is a refused patch.
+3. **The gate runs in the worktree, and red feeds the loop.** After both reviews approve,
+   `PackageGate` runs the whole unit suite and the lint in the candidate's worktree before
+   the commit; a red gate is one more failure diagnosed and fixed within the same attempt
+   budget (600, 603). A committed candidate is run in the shadow (`ProcessShadowRunner`:
+   its own API on a free loopback port from its own worktree, the ready path awaited,
+   read-only probes compared with the live application's answers, the process killed) and
+   pushed for CI only when the owner enabled `selfdev_ci_push` (off by default; the record
+   says why it did not push). CI red on a waiting candidate opens ONE follow-up defect
+   naming the parent, the branch and CI's words, bounded by `selfdev_max_ci_fix_rounds`.
+4. **The promotion class is consumed, not re-derived.** The bridge carries the
+   supervisor's class (derived from the paths when the row has none, never defaulted) and
+   the queue keeps it when the run ends; the entry says `never_auto_promote` and the
+   Cockpit row says in as many words that such a class is never promoted by itself.
+5. **The owner decides from a verified session, and the decision promotes nothing.**
+   `/v1/selfdev/defects/{id}/approve|reject` mint the capability from the session the
+   dependency verified — never from a body field — and record the decision with
+   `promoted: false` in the ledger. The release pipeline's own owner gate is the only way
+   to production; 624 is not a setting.
+6. **The bounds are numbers the owner reads beside what was spent.** One candidate at a
+   time (620), a daily token budget over all runs (618), a free-space floor under the
+   worktrees root (619), a claim TTL after which a dead worker's row is queued again — each
+   refusal a named reason in `/v1/selfdev/status`. One flag (`selfdev_enabled`) closes the
+   surface; the worktrees stay.
+7. **The worker is the owner's machine.** The cloud holds the queue and no repository; the
+   development machine holds the repository and the model key. `python -m app.selfdev
+   worker --api URL` claims through the owner's bearer token (from the environment, never
+   printed), builds the engine with the gate, the shadow and the trigger, runs, posts the
+   record back; a crash is posted as a failed record, never swallowed.
+
+**Consequences.** Found on the way, in the engine that had seven real runs behind it: the
+workspace's `reset` was `git checkout -- .`, and `diff`/`changed_paths` STAGE the patch
+(`git add -A`), so a second attempt after a model-review refusal judged its regression
+test against the fix still in the index and called it "passed on the base" — the existing
+refusal test only asserted the quarantine and hid it; `reset` is a hard reset now and the
+test reads the second attempt. Also: "özelliği"/"yeteneği" soften k→ğ so the feature stems
+stop short; a noun guard against the evolution switch inside the selfdev matcher was dead
+code (the ORDER is the guard) and was removed after a mutation turned nothing red; a pipe in
+a matrix cell splits the row for the web sync. The production round — a defect assigned by
+voice, run by the worker on the committed tree, shadowed, decided in the Cockpit — is
+READY_FOR_OWNER together with the fate of `db9ed85` (a quarantined run: nothing to approve;
+its branch is the owner's to delete or keep). Nine mutations red.
+
+## ADR-0143 — Capability Genesis gets its front door: a persisted catalogue, a request route, a security gate before any test, the model behind the owner's flag and the owner's word (2026-09-15, B36)
+
+**Context.** M24 (ADR-0087) built the genesis run — research a small HTTP interface,
+render an adapter, test it against the live application, review, shadow, canary,
+register, use, verify — and the corpus proved it by voice against two fixture
+applications. But the spoken-name catalogue the router reads was an in-memory list nothing
+registered into, empty in every production process; a capability could be requested by
+voice or by a test and by nothing else; the fetch was loopback-only; generated code went to
+the tests with no security gate; the model was never asked; a capability that already
+resolved was reused and could not be versioned, rolled back or switched off. The roadmap's
+B36 (561–565, 569–580) asks for the door, with 577 (the model) allowed only after 579 (the
+gate).
+
+**Decision.**
+
+1. **The catalogue is rows.** `genesis_catalogue` (migration 0049): name, url, the spoken
+   phrases, the operations' verb aliases, the source, an enabled flag, the description's
+   digest. `CatalogueStore` writes the row AND rebuilds the process-wide catalogue the
+   router reads, so an interface registered through `POST /v1/genesis/catalogue` is
+   spoken to at once and after a restart (the lifespan loads the rows; a database without
+   the table is an empty catalogue, never a failed start). `POST /catalogue/discover`
+   fetches a description and PROPOSES an entry — the interface's own name, its operations
+   as verbs of their own ids, the read-back, the digest — and registers nothing; a disabled
+   entry stays listed and leaves the spoken index.
+2. **The request has a route.** `POST /v1/genesis/runs {interface_name, operation_id,
+   arguments?, interface_url?, new_version?}`; the url comes from the catalogue when the
+   body names none, and an interface that is neither registered nor given a url is refused
+   by name. Every route is owner-session gated.
+3. **The host rule is the owner's asset registry.** `fetch_interface(url, host_allowed=)`
+   keeps every loopback rule (http only, explicit unprivileged port, none of this system's
+   own ports, `/spec` only) and admits a non-loopback host only when the predicate says yes
+   — in production `GenesisRuntime.host_allowed`, which asks the SAME
+   `RegistryAuthorizationProvider` the M7 reviewer asks whether the owner enrolled that host
+   as an asset whose grants cover network permission on itself. Enrolled without the grant
+   is no.
+4. **The security gate runs before any test.** `security_gate.review_layout` — B35's
+   deterministic review (secrets, dangerous calls, guarded paths, test removal) plus what a
+   generated adapter may never do: import outside the standard-library allowlist, name any
+   host but the one it was researched from, touch the filesystem, spawn a process, open a
+   socket. A finding is a path and a line; the verdict is in the run's evidence; red rejects
+   the skill version and fails the run with the new `security_refused` class. Registration
+   carries `provenance.security_review_passed`.
+5. **The model is a candidate behind the owner's flag.** `HttpAdapterGenerator(model=)`
+   hands the rendered adapter module to an `AdapterCodeModel` and takes its proposal as a
+   REPLACEMENT for that one file; the tests, the evals and the manifest stay rendered, and the
+   proposal is judged by them, by the supply-chain scan and by the gate exactly as the
+   rendered module is. `genesis_model_generation_enabled` is off by default; off, the model
+   is never asked and the provenance says `http_adapter`. `AnthropicAdapterCodeModel` is the
+   real seam (the key from settings or the environment, never logged).
+6. **What the model wrote waits for the owner, and approval of code is not authorization of
+   a mutation.** A model-generated run parks at `awaiting_approval` whatever its side-effect
+   class; the owner's word through the same read-back + session gate as M24's mutation
+   approval resumes it; a READ operation approved this way is registered `read_only`, never
+   `mutating_authorized_asset`.
+7. **Versions, rollback, activation, use.** `new_version=True` builds the next patch version
+   of a capability that already resolves (the registry supersedes the incumbent and keeps it
+   rollback-capable); `rollback` is the registry's own `rollback_to` (a previously
+   REGISTERED version serves again; nothing is deleted); `deactivate` sets the capability
+   `deprecated` (it stops resolving, by dispatch and by voice); `activate` re-serves the
+   current registered version through that same rollback path — the registry now treats
+   "roll back to the version that is already current" on a non-production capability as
+   the one sanctioned way back, because a plain status write to `production` is refused by
+   design. `use` dispatches a registered capability or refuses `capability_missing`.
+
+**Consequences.** Two matrix rows were measurement corrections: 575 (the four voice tools
+existed since M24; an empty catalogue made the path invisible) and 578 (the five-function
+list was M7's pure transforms; M24's generator already covered every §2 interface). Found on
+the way: a pipe inside a matrix cell splits the row for the web sync (twice now: a rule for
+the writer, not a bug in the reader); the owner-language test caught a route answering with
+`str(exc)` on the first run; the registry's rollback returned early for "already current"
+and so could not re-activate. The production round — an interface registered on the
+deployed Cloud Core, requested by voice, used — is READY_FOR_OWNER with the deploy. Eight
+mutations red.
+
+## ADR-0144 — Memory retrieval gets a real embedder behind the same seam, a re-index that fills only the gaps, and a page the owner can act on (2026-09-15, B37)
+
+**Context.** The memory index had one embedder — a seeded character n-gram hash, offline
+and deterministic, honest about being test-grade and NOT semantic — and no way to choose
+another; `reindex` rebuilt every row for a model with no notion of "missing for this
+model"; the memory page listed what the system remembered and offered nothing to press;
+a question over a document was answered by word overlap alone, and there was no search
+across the indexed documents. The roadmap's B37 (51, 53, 54, 57–60, 149) asks for the real
+provider, its selection, the re-index, the page's controls and semantic document search,
+with the deterministic fallback kept (52).
+
+**Decision.**
+
+1. **One seam, two providers, one report.** `OpenAIEmbedder` implements the existing
+   `Embedder` protocol with `text-embedding-3-small` asked for exactly the index width
+   (the pgvector column is fixed at 256), L2-normalised, an in-process LRU so a text is not
+   billed twice, the key from `openai_api_key` (an explicit `openai` also accepts the voice
+   key the owner already installed; `auto` never does - a memory write must not start
+   billing the voice key behind the owner's back), and errors that name the status and never
+   the key or the text. `build_embedder(settings)` is the ONE selection:
+   `memory_embedding_provider` = `deterministic` | `openai` | `auto` (OpenAI when the
+   dedicated key is configured). Every fallback carries its reason in an
+   `EmbedderReport`, published by `/v1/system/health` and `GET /v1/memory/embedding`, so a
+   process hashing n-grams never reports itself semantic.
+2. **A provider change is a new model id, never a rewrite.** `memory_embeddings` rows are
+   per model; `embedding_coverage` counts the active model's rows against the memory table
+   and every model's rows beside it; `reindex_missing` embeds only what the active model
+   lacks and writes nothing on a second pass; `POST /v1/memory/reindex {only_missing}`
+   runs either the gaps or everything. The old model's rows stay until someone decides
+   otherwise; retrieval under a model with no rows degrades to keyword and structured
+   candidates.
+3. **The page acts, one call at a time.** Every memory row carries Sabitle / Sabitlemeyi
+   kaldır (`unpin_memory` returns retention to standard, audited `unpinned`), Unut (two
+   presses — the one irreversible act — then `DELETE`), and Düzelt (an inline text, then
+   `supersede` with `reason: owner_correction`; nothing is edited in place; an empty text is
+   refused without a call). The outcome line says what the route answered. The page also
+   shows the embedding status and offers the two re-index buttons.
+4. **Documents rank by meaning beside words, under the same embedder.** `top_k` takes an
+   optional embedder and adds a small integer bonus from the cosine, so the literal-reference
+   sentinel and the exact-word weighting keep their order and a block no word matched still
+   ranks on a clear similarity; `DocumentService` is built with the memory runtime's embedder;
+   `GET /v1/documents/search?q=` ranks blocks across the indexed documents (the document's
+   own name is one more block) with the score components on every hit and says which embedder
+   served.
+
+**Consequences.** The real provider is proven against a recorded transport; the production
+round (a semantic query after a re-index with the owner's key) is READY_FOR_OWNER together
+with the key itself (checkpoint 9). Found on the way: the page renders behind the owner
+gate on the server, so its test reads the source for the controls and renders only the
+gate; `backend.remember` takes no actor (the owner is implied); `ScoredBlock` is frozen, so
+the reranker builds new blocks rather than mutating. Seven mutations red.
+
+## ADR-0145 — The executive plans beyond its three shapes: a model that only proposes, an owner graph through the same validator, and steps that branch, loop and wait for the owner (2026-09-15, B38)
+
+**Context.** The executive (M26, B10) knew three rule shapes and refused everything else;
+its model seam raised `NotImplementedError`; a graph could carry only `step_done`/`none`
+preconditions and a retry policy; nothing waited for the owner, nothing looped, the
+research shape ran its report and its slides one after the other, and `explain` named the
+current step's kind and nothing of why it was in the plan. The roadmap's B38 (536–538, 544,
+546, 549–557) asks for model-assisted planning past the shapes, parallel, conditional and
+loop steps, full pre/postconditions and honest recovery — with the rule shapes and the
+422 refusal kept as the rollback.
+
+**Decision.**
+
+1. **The vocabulary is the spec, and the model only proposes.** `app/executive/spec.py`
+   gains `step_failed`, `step_verified` and `owner_approval` preconditions, a `Repeat`
+   (`max_rounds` 1–3), `Step.rationale` (≤300 chars), `TaskGraph.planner`
+   (`rule`/`model`/`owner`) and `DEFAULT_TIMEOUT_S_BY_KIND`. `model_planner.py` gives the
+   model exactly that vocabulary (`vocabulary()` from `STEP_KIND_PROFILES`) through a
+   forced tool call (`PROPOSAL_SCHEMA`); `graph_from_proposal` copies only id, kind,
+   inputs, precondition, min, timeout, retry, repeat and rationale from the proposal and
+   takes risk class, compensation and evidence kind from the kind's fixed profile, then
+   runs `validate_graph`. Anything outside the vocabulary or the rules is a
+   `PlanningClarificationNeeded` in Turkish, never a partially trusted graph.
+2. **Rules first, the model only under the owner's flag.** `CompositeExecutivePlanner`
+   plans the three shapes itself (tagging `planner=rule`) and asks the model only when a
+   directive matches no shape AND `executive_model_planner_enabled` is on AND a key is
+   configured; `create_app` installs the one composite both REST and voice plan through.
+   The flag is off by default: the model budget is the owner's (checkpoint 15).
+3. **The owner's own graph goes through the same door.** `POST /v1/executive/runs` accepts
+   `{graph}`; `start_run_db` validates it as `planner=owner` with the same validator and
+   refuses with `invalid_graph` (422) naming every reason. Every one of the 15 step kinds
+   is therefore reachable (552) without a shape for it.
+4. **Branches, strict dependencies and loops decide by the rows.** `_precondition_satisfied`
+   runs a `step_failed` branch only after the named step ended without verifying (and skips
+   it with the reason "yedek dal gerekmedi" when it verified), skips a `step_verified`
+   dependant by name when its upstream did not verify, and treats `owner_approval` as
+   satisfied only when the run row's `approvals_json` records that step. `run_step_activity`
+   re-runs a step up to `repeat.max_rounds` while its evidence is below `postcondition.min`,
+   feeding the prior evidence and the round number back into the inputs; the last round is
+   what is judged and every round is one more attempt on the row. The validator refuses a
+   `repeat` with no `min` to reach and a branch that names a later step.
+5. **The approval gate lives in the workflow, with a second wall in the activity.**
+   `ExecutiveWorkflow` parks a ready `owner_approval` step (`mark_awaiting_approval_activity`
+   writes `awaiting_step` so the Cockpit sees which step waits), keeps running every other
+   ready step, and releases it on the `approve_step` signal; `approve_step_db` records
+   `{step: at}` durably before the signal. The Cockpit draws the `Onayla` chip only while a
+   row names its waiting step. 624 stays intact: nothing in the code path approves for the
+   owner.
+6. **Siblings run side by side.** The research shape makes the document and the
+   presentation both depend on the synthesis alone, so the workflow's ≤3 batch runs them
+   together; `_step_dependencies` derives edges from all three step-named preconditions.
+7. **Every step says why.** The rule shapes carry a rationale per step; `GET
+   /runs/{id}/plan` returns the graph with them; `explain` adds "çünkü …".
+
+**Consequences.** Migration `0050_executive_approvals` (two nullable run columns, one
+defaulted step column, reversible). Model-generated plans are opt-in and cost the owner's
+budget; the rule shapes and the honest 422 remain the default and the rollback. 549 stays
+BLOCKED_PROVIDER: the mail kinds are reachable now, the account is B45's. Found on the way:
+the validator deliberately treats a reference to a step that does not exist as a literal
+(ADR-0089), so the refusal test was moved to a real DAG violation; a `wait_condition`
+lambda inside the batch loop must bind the parked set as a default argument. Nine
+mutations red (branch runs after success, approval without a record, loop never loops,
+unknown planner accepted, min-less loop accepted, flat timeout, model asked without the
+flag, workflow never parks, slides chained after the report).
+
+## ADR-0146 — The operator closes its loop: observe first, decide from what is seen, climb the ladder once, then ask the owner (2026-09-15, B39)
+
+**Context.** Every operator plan was a fixed list of steps run once inside a voice tool
+call (M19-B30). A failed postcondition ended the task; nothing looked again, nothing
+re-planned, nothing climbed from the tree to the picture; a sentence with two parts
+("Chrome'u aç ve YouTube'a gir") reached nothing; Settings, an Explorer folder, an Office
+document and an editor had no plan; nothing outlived the call, nothing paused, and the
+owner never saw a plan before it ran. The roadmap's B39 (106, 112-115, 123-130) asks for
+the closed loop inside Temporal, mixed and multi-step tasks, pause/cancel and "show me
+first" — with the fixed plans as the rollback.
+
+**Decision.**
+
+1. **A mission is a list of asks, never of clicks.** `app/operator/mission.py` plans the
+   owner's sentence into steps of nine declared kinds; each step is turned into a concrete
+   plan only at decision time, from a FRESH observation (`window.current` + `window.list`),
+   by the same deterministic plans the voice tools build. The loop for one step is
+   observe → decide → act (`run_task`, the one device port) → verify (the plan's own
+   postconditions) → and on failure a strategy from a declared table keyed by the error
+   class (`STRATEGY_BY_ERROR_CLASS`): retry (transient, ≤2), re-observe and rebuild (≤2),
+   climb one rung, or stop for the owner. A class the table does not name is the owner's;
+   the loop never guesses at a retry. Six rounds per step, six steps per mission.
+2. **Re-planning is a decision made again, not a plan edited.** An application already on
+   the desktop is activated, not launched twice; a foreground that settled late is seen on
+   the second look. Every round writes what was observed, decided, answered and chosen
+   into the mission's trail — the evidence, on the row.
+3. **The fifth rung is the picture, verified by the tree.** When UI Automation cannot find
+   or move the element, the loop captures the window, asks the vision provider WHERE the
+   named thing is (`VisionProvider.locate`, one JSON object parsed by `parse_location` —
+   `found: false` is `None`, prose is an error, never a coordinate invented), clicks there
+   in screen space and reads the tree again: the element is gone or the click did nothing.
+   No provider is a named escalation ("görsel sağlayıcı tanımlı değil"), never a blind
+   click. The receipt's level says `visual`.
+4. **The owner is the top of the ladder.** Permission, validation, a modal, a missing
+   capability, an unknown class, or the bounds running out park the mission (`paused`,
+   `escalation` naming the step, the class and the sentence) and write
+   `operator.mission.escalated`; `resume` gives that step a fresh set of rounds.
+5. **New plans, the same discipline.** `open_settings` (the Settings app is now on BOTH
+   sides of the allowlist contract; its window is hosted by ApplicationFrameHost and known
+   by title; a page is reached through the app's own search box and read back from the
+   tree), `explorer_open` (Ctrl+L, a locale-independent `shell:` folder, the window title
+   is the folder), `ide_open_file` (VS Code's documented quick-open; the title names the
+   file), `office_type` (Word's Document control read back; Excel by the device's count and
+   the foreground, and the level says so), `browser_navigate` (the URL read by a second
+   command), `visual_click`. `OperatorStep.payload_from` lets a later step carry the window
+   id an earlier step observed — a plan is still fixed; it can now name a thing that did
+   not exist when it was built. The adapters WORD, EXCEL and VSCODE are declared from the
+   applications' documented surfaces; their lab measurement on the owner's desktop is
+   checkpoint 16.
+6. **Durable, in Temporal, owner-facing on the row.** `operator_missions` (migration 0051)
+   is the truth; `OperatorMissionWorkflow` runs one activity per step and waits between
+   activities for approve/resume, or ends on cancel; pause and cancel requests are written
+   to the row first and honoured by the next round. REST `/v1/operator/missions` and the
+   voice tool `operator.mission` call the same `MissionService`; "Dur." and "Ne
+   yapıyorsun?" reach the mission through `operator.cancel` / `operator.status` while one
+   is active, so there is one stop word for whatever the operator is doing.
+7. **"Önce göster."** A preview mission is spoken as its plan and parks `awaiting_approval`
+   with no device call; "Evet, başla" (gated on `mission_state`) or REST approve starts it.
+
+**Consequences.** The rule shapes and every single-step tool are untouched: a sentence the
+planner reads as ONE simple step stays with APP_OPEN / TYPE_TEXT / UI_INVOKE / WINDOW_CLOSE.
+The lab measurement of the four new plans and a mixed mission on the deployed Cloud Core
+(PROVEN_REAL) are READY_FOR_OWNER. Found on the way: the first explorer segment took
+"İndirilenler klasöründe bütçe dosyasını ara" from the document family (corpus doc.search.5)
+— a folder segment now requires an OPEN verb and refuses a search verb; the settings
+segment matched the VERB "ayarla" (adjust) and took "Işığı ayarla" from the scene and
+"Varsayılan konumu ayarla" from the location family — it now requires the noun; the mission tool is
+registered from the operator's own registrar so the declared capabilities and the registered
+tools stay one set; the mutation that removed the workflow's resume wait went red because the
+time-skipping environment finished the workflow before the test could see it paused; the
+first full gate added two - the self-model indexer reads a tool's name with ``ast`` and could
+not see ``operator.mission`` behind an imported constant (the tool names itself with a literal
+held equal to the capability), and "Bu dosyayı ayarlar-yedek.json adıyla kopyala" became a
+Settings mission (the settings segment now needs an open verb and refuses file words). Eleven
+mutations red.
+
+## ADR-0147 — The App Factory builds what the owner described: a parser that names what it could not read, planners with reasons, a composed stdlib-only application whose own tests run, and a fix loop that never rewrites in place (2026-09-15, B40)
+
+**Context.** The App Factory (M23, B03) rendered three templates from a spec the voice
+tool built out of a template word and a name; everything else the owner said was parsed
+and dropped in silence (row 422); there was no architecture or project planner; the
+Claude seam raised unconditionally; no database, API, login or test was ever generated;
+a failed test run ended with a sentence and no analysis, no fix, no loop, no lint and no
+security scan of generated code. The roadmap's B40 (422-439) asks for all of it, with the
+three templates kept as the rollback.
+
+**Decision.**
+
+1. **The parser says what it could not read.** `app/appfactory/requirements.py` reads a
+   Turkish sentence into record kinds (the nouns before a keep-verb, the groups after a
+   colon), fields with types read off their names, the login / API / API-only features
+   and a name; every part it cannot place goes to `unparsed`, which the receipt speaks.
+   A sentence with no record kind is a question back to the owner, not a default app.
+   The three templates keep their words.
+2. **Plans are deterministic and reasoned.** `plan_architecture` chooses the only shape
+   the device may run (`node <entry>`, no installs): a schema-checked JSON-file store, a
+   REST layer per kind, an optional scrypt login, a plain page, and the tests - each layer
+   with its reason; `plan_project` lists the files in writing order with purpose and
+   author. `POST /v1/apps/plan` shows both with nothing written (req 423/424).
+3. **The composer writes a real application and its proof.** `composer.py` produces
+   schema/store/(auth)/server/public/tests/README/manifest from fixed sources with the
+   plan's values spliced as JSON or escaped text (the templates' splice discipline). The
+   generated unit suite (schema) and integration suite (the server on an ephemeral port,
+   CRUD and the login flow over HTTP) run under the real node in the unit tests - 28/28,
+   14/14 and 21/21 on the three sample sentences - and print exactly what the device
+   parses. A composed application carries its own browser oracle on the row; `exercise`
+   reads it. The validator admits `node <entry>` for the manifest's own entry file, the
+   device's rule spelled on this side too.
+4. **The model only fills its slots.** `CodeModel` (scripted; Anthropic through a forced
+   tool call) may author `custom.js` and `tests/custom.js` - the owner's free-text
+   behaviour as pure functions - and nothing else; `_confine` refuses any other path. The
+   flag is off by default and a refusing model leaves the deterministic application whole,
+   with the note on the receipt.
+5. **Every generated file passes the lint and the scan before the device sees it.**
+   `lint.py` is a pure-Python structural lint (balanced brackets past strings, comments
+   and regex literals; `eval` / `new Function` / `document.write` / `with` /
+   `child_process` / `vm`; tabs; long lines; page language, charset, script tags; JSON);
+   `appsecurity.scan_files` is the self-development queue's own review (secrets,
+   dangerous calls, egress off the loopback) - one scanner for code the system writes,
+   wherever it writes it (req 680). A finding refuses the scaffold and is recorded.
+6. **A fix is a new version.** `analyze_failures` names the failing tests from the
+   device's report; `run_fix_loop` asks the model to diagnose and to propose full-file
+   edits within its slots, lints, scans the diff against the previous files, validates,
+   scaffolds a NEW project version (`<slug>-vN`, `parent_id`) - the device never rewrites
+   a project in place - and runs its tests; it stops on green, on the bound (3), on the
+   same failure twice, on a refusal, or, without a model, after the analysis - and says
+   which. `app.fix` by voice, `POST /v1/apps/{id}/fix` by REST.
+
+**Consequences.** Migration `0052_app_projects_composed` (plan, reports, oracle, fix,
+version, parent - nullable/defaulted). The three templates and their acceptance gate are
+untouched. The model budget, the device-side `project.test` of a composed application and
+its browser oracle in the lab are READY_FOR_OWNER (checkpoint 17). Found on the way: the
+secret-hygiene scanner refuses any `password:` key, so the wire field is `parola`; the
+device hands a node run no port, so the server binds the manifest's own; a composed spec
+needs `requirements`, and the voice tool's `content` argument carries the sentence when
+the router found no template. Eleven mutations red.
+
+## ADR-0148 — A generated application has a life after its tests: verified in the device's browser across a restart, packaged with its hashes, launched from the package, remembered, resumed and extended (2026-09-15, B41)
+
+**Context.** After B40 a composed application could be created, run, tested and fixed,
+and then it was finished: nothing verified its page, nothing checked that a record
+survived a restart, the run log was the device's alone, there was no release artifact,
+no way to launch what had been packaged rather than the working folder, no history, no
+way back to a project by its name, and no way to add to it. B41 (440-452, 480) asks for
+that lifecycle; the native factory (B33) had already shown the shape for a native build.
+
+**Decision.**
+
+1. **The oracle is the UI verification, replayed by the device.** `lifecycle.verify_ui`
+   opens an isolated browser session on the device, navigates to the running project,
+   asserts the oracle's initial selectors with `browser.find`, replays its steps with
+   `browser.fill` / `browser.click` / `browser.wait` / `browser.extract`, records every
+   step, and names the first one that failed. What the device's find cannot report (a
+   class list) is recorded as "not checked here", never claimed.
+2. **Persistence is a real restart.** After the steps, the service stops and runs the
+   project again (the same `project.stop` / `project.run` the owner uses), replays the
+   login steps, and re-reads the last assertion: a store that forgot is `persistence:
+   false` with the step named.
+3. **A release is exactly what was scaffolded.** `package_release` zips the project's
+   regenerated files with a `release.json` (name, version, build id, per-file sha256,
+   manifest, spec) into the same object store artifacts use; only a tested project is
+   packaged; the build id is a digest of every path and text.
+4. **Launch runs the package, not the folder.** `files_from_release` reads the zip back
+   and refuses any file whose bytes differ from its recorded hash; the release is
+   scaffolded as its own project version (`<slug>-release-vN`, `parent_id`,
+   `launched_from`) and run - so what runs is what was packaged.
+5. **History is the lineage and the ledger.** Every version of a project (by name, in
+   creation order) with its parent, state, tests, release and launch origin, and every
+   `app.project.*` event that named one of them. `resume` finds the latest version by
+   name or by focus, makes it the focus and says where things stand.
+6. **A later request is merged, never re-parsed from scratch.** `parse_addition` reads
+   "bu uygulamaya X ekle" with the same parser (the add-verb as the keep-verb),
+   `merge_requirements` folds new kinds, new fields and a login into the stored
+   requirements, the composed build runs again and a NEW version is scaffolded and
+   tested. A request that is neither a kind, a field nor a login goes to the model's two
+   slots when the owner's flag is on, and is refused by name otherwise. Template
+   applications stay fixed.
+7. **The words belong to the application in focus.** Seven intents and "Bu bug'ı düzelt"
+   are gated on `app_project_focused` (a `project` focus row), the way the native family
+   is gated on its build focus - so nothing fires in an empty room, "Şu özelliği kendine
+   ekle" stays the self-development queue's, and "Bu bug'ı düzelt" with no application in
+   focus stays the memory's.
+
+**Consequences.** Migration `0053_app_projects_lifecycle` (one nullable JSON column).
+480 stays DEFERRED (P3); the lineage it will need (`parent_id`, `launched_from`) is
+already on the row. The device-side replay of an oracle by the browser worker and a
+launch from a package on the owner's machine are READY_FOR_OWNER. Ten mutations red.
+
+## ADR-0149 — An artifact has a life after its first render: provenance written on the version, edits as new versions, clones with lineage, deletion under the owner's policy, and comparisons that name what differs (2026-09-15, B42)
+
+**Context.** Since M22 the factory rendered a spec into files and stopped: nothing said
+who asked, which library versions produced the bytes or what the file was made of
+(the `source_manifest_json` column existed and was never written); a changed spec was a
+new artifact, so "add a Risks section" lost the original's identity; there was no copy,
+no delete (deliberately - no policy existed) and no way to say what differed between two
+files except by reading both. B42 (393-394, 398-400, 405-412, 415-416) asks for that
+lifecycle; B24/M22 had already fixed the spec's rules ("never invented", no formula
+injection) that any later version must still pass.
+
+**Decision.**
+
+1. **Provenance is written when the version is made, never inferred later.** Every
+   version row carries `provenance_json`: the actor (`Actor(kind, ref, session_id)` -
+   the owner's voice call, a REST session, an executive run, a research task, an edit,
+   a clone, or the system), the runtime (Python and the installed versions of the
+   libraries behind the formats rendered, read from `importlib.metadata`), the lineage
+   (`derived_from`: artifact, version, how) and the moment; and `source_manifest_json`
+   (kind, title, spec hash, formats, spoken numbers, counts, sources). The three callers
+   of the factory pass their actor; an actor of an unknown kind is refused.
+2. **An edit is the next version of the same artifact.** `apply_edit` applies a bounded
+   set of structural operations to the CURRENT version's spec and re-validates it with
+   the spec's own rules - the numbers an edit may introduce are the ones the owner said
+   in the edit sentence (merged into `spoken_numbers`), so a model cannot smuggle a figure
+   into version two that version one refused. Every format is re-rendered; the past
+   stays readable; an operation that does not fit the kind is refused by name.
+3. **A clone is a new artifact whose provenance names its source.** The first version
+   is the copy of the source's (chosen) version; the source is untouched; the copy takes
+   the focus.
+4. **Deletion is the owner's policy, not the model's initiative.** `artifact_delete_policy`
+   is `confirm` (the default: an explicit "Evet, sil" in the same exchange - the router's
+   own `artifact_confirm`, never only the model's flag), `deny` (never, whatever is said)
+   or `free`. Deleting removes every rendered object from the store and archives the
+   artifact: the row, its versions and their provenance remain as the record that it
+   existed; an archived artifact cannot be edited back to life.
+5. **A comparison names what differs.** Kind, title, the parts added / removed / changed,
+   the row counts and the numbers only one side has, in one sentence; and a bounded
+   unified diff of the two canonical specs. "Öncekiyle karşılaştır" is the previous
+   version; "previous_artifact" is the focus stack's previous entry.
+6. **An image the creative path stored becomes an artifact of its own.** The bytes are
+   COPIED under the artifact's key (deleting the artifact never deletes the creative
+   run's output and vice versa), the render is validated against its own hash, and the
+   image takes the same provenance, versions, clone, delete and compare (by sha256);
+   editing an image is the creative tool's job and is refused by name here.
+7. **The words belong to the artifact in focus.** Edit / clone / delete / compare are
+   gated on `artifact_focused` (a focus row of kind `artifact`), the way B41 gated the
+   application's words, so "bunu sil" in an empty room keeps its old owners.
+
+**Consequences.** Migration `0054_artifact_provenance` (one nullable JSON column;
+older versions read as provenance `null`). The roadmap's PROVEN_REAL (xlsx/pptx/csv/json
+produced on the production VM and independently verified) and the delete-policy choice
+are READY_FOR_OWNER (checkpoint 18). Twelve mutations red.
+
+## ADR-0150 — Creative generation and delivery: one image-provider seam (local pixels or a named provider), a layered document with honest formats, the real application driven by its own shortcuts, and the output delivered as an artifact (2026-09-15, B43)
+
+**Context.** After M27 the creative service could draw, adjust, crop and remove a
+background with Pillow, and its output lived only in the object store: no generation, no
+semantic edits, no styles, no enhancement, no upscale, no check that the picture showed
+what was asked, no layers, no PSD/SVG, no undo, no delivery to the owner's disk, and the
+Paint provider stopped at "present on disk". B43 (489-495, 498, 500, 502, 504, 506-509,
+511, 512) asks for all of it; the owner's constraint is that an external image provider
+needs an account the owner has not made.
+
+**Decision.**
+
+1. **One provider interface, two implementations, one honest refusal.** `ImageProvider`
+   (generate, edit, upscale, enhance, style, object_remove). `LocalImageProvider` does
+   what pixels alone can do, deterministically, and REFUSES generation and prompt-driven
+   edits by name (`provider_not_configured`) - nothing is ever drawn in a prompt's place.
+   `OpenAIImageProvider` speaks the Images API behind the same interface, is chosen only
+   by `creative_image_provider=openai` AND the owner's key, never logs the key, and
+   re-opens every returned image before trusting it. A scripted provider stands in for
+   the prompt half in tests; the network is never touched.
+2. **Semantic edits are bounded operations, not free text into a driver.** `object_remove`
+   fills a box from its own border (median + blur - a continuation, never an
+   invention); `object_add` places a shape, a text or a stored image; `style`, `enhance`
+   and `upscale` are closed vocabularies; each may carry a prompt only where a provider
+   exists to honour it.
+3. **The check asks the vision provider one closed question.** `semantic_check` records
+   the answer as data (`semantic_json`): a "no" makes the run unverified, no provider is
+   recorded as "not run" - never as passed.
+4. **Layers are an in-house tool with honest formats.** The `layered` tool is this
+   process (always installed): PSD is READ through Pillow's own plugin, a layered document
+   is WRITTEN as OpenRaster (Pillow has no PSD writer; the limitation is stated), SVG is
+   written as real vector elements for what was vector and read back into operations.
+   Paint's document stays a flat bitmap (ADR-0093 decision 2).
+5. **Delivery is the artifact path, not a second one.** The run's output becomes an image
+   artifact (B42: its own copy, provenance naming the run) and reaches the owner's disk
+   through the artifact open path (`file.fetch`, hash-checked, Downloads, opened - in
+   Paint when the owner named it). Same bytes, same artifact; new bytes, new artifact.
+6. **The real application is driven by its own shortcuts.** `PaintDriver` opens the
+   delivered file with `app.launch` (the file as the ONE argument the device's policy
+   admits), verifies the window by title, presses Paint's documented shortcuts and closes
+   with a capture; the first failed step is named and nothing after it runs. The Adobe
+   drivers share the open/save/undo/redo shortcuts and refuse what they cannot verify.
+7. **Undo is a history of the run's own outputs.** Every output keeps its own key;
+   `history_index` is the pointer; a new edit after an undo drops the redo branch.
+8. **The words.** Generation and the photo fix are their own sentences; undo / redo /
+   deliver / "Paint'te göster" belong to the creative run in focus (`creative_focused`),
+   so nothing fires in an empty room.
+
+**Consequences.** Migration `0055_creative_history` (five nullable/defaulted columns).
+The provider account, the device lab for delivery and driving, and the Adobe licences are
+READY_FOR_OWNER (checkpoint 19). Twelve mutations red.
+
+## ADR-0151 — The 3D production path: two halves that finally read each other, a REST path, motion and exports proven by the editor's own read-back, and scene files verified where they lie (2026-09-15, B44)
+
+**Context.** M25 built scene creation by voice, closed-loop: plan -> driver -> inspection
+-> compare. No production scene had ever been made, and B44 found why the first one would
+have failed. The shipped Blender driver declared its render with an ABSOLUTE path, which the
+device's `scene.inspect` has always refused; and the Cloud Core read the render bytes from a
+top-level `render_png_base64` the device never sends (it answers `render.png_base64`). Both
+suites were green: the fake device agreed with the Cloud Core, and the device lab drove its
+OWN lab driver rather than the one the Cloud Core ships. The lab script, for its part, still
+looked for the plan's scene word (`demo.blend`) after the driver was changed to always save
+`scene.blend`. B44 (520-527) also asks for a REST path, material/light/camera control,
+animation and FBX/glTF export.
+
+**Decision.**
+
+1. **The two halves read each other.** The driver declares every file RELATIVE; the Cloud
+   Core reads the device's own `render.png_base64`; the fake device answers in the device's
+   shape and refuses what the device refuses (absolute or escaping paths, a hash that is not
+   the driver's, a file that is not its format); a Python test reads the result keys out of
+   `ProjectCapabilities.Inspect`'s C# source and requires the fake to answer exactly them;
+   and a device-lab test runs the SHIPPED `blender_driver.py`, read from the repository,
+   through the real job and the real checks.
+2. **Exports are verified where they lie.** A scene file can be megabytes and the device
+   connection's frame is one, so an exported GLB/FBX never travels: the device resolves it
+   inside the project, bounds it (64 MiB, at most two), re-hashes it against the driver's
+   sha256 and reads its format signature (a GLB header of version 2 declaring the file's own
+   length; the FBX binary magic), and returns the proof. The Cloud Core keeps that proof
+   (`exports_json`) and its comparison requires the device's hash to be the driver's.
+3. **Motion is read back from the editor, not restated.** Keyframes are inserted with
+   Blender's own `keyframe_insert` and read back from the action's F-curves (the legacy
+   accessor where Blender still offers it, the 4.4+ layered channel bags otherwise); the scene
+   is left at its first frame so a static read-back is the value the scene opens with; an
+   animated channel is checked through its keyframes, not as a pose.
+4. **What only Blender proves, only Blender accepts.** `set_frames`, `animate`, `export`, a
+   light colour and a lens are refused by name in a Unity plan: the Unity driver is pinned and
+   its licence is the owner's to obtain, and nothing here can prove a Unity change.
+5. **One service, three doors.** POST /v1/scenes and POST /v1/scenes/{id}/apply call the same
+   `SceneService` the voice tools call, on the same device port. `scene.animate` takes flat
+   numbers (name, channel, to, from, seconds) - never a list of objects from the model -
+   and `scene.export` lets the owner's own format word win.
+6. **The words.** SCENE_ANIMATE is matched before SCENE_ADD ("küreye bir animasyon ekle"
+   carries ADD's noun and verb); SCENE_EXPORT takes "Sahneyi dışa aktar." - M25's deliberate
+   negative, now its positive regression - and the creative export refuses a 3D format word.
+
+**Consequences.** Migration `0056_scenes_exports`. The driver's pin is recomputed. The
+roadmap's PROVEN_REAL (the first real scene in production, its render independently
+verified) is READY_FOR_OWNER; on this machine the real Blender ran the shipped driver both
+through the lab script and through the device's own job. Twelve mutations red.
+
+## ADR-0152 — Mail that works the day an account exists: a reply that keeps its thread, an inbox on the clock, a briefing that names the unread, and attachments saved through a single-use token (2026-09-15, B45)
+
+**Context.** M21 built mail behind provider interfaces and a confirmation gate that had never
+run against a real account. B45 (278, 335-348, 360, 362, 364) asks for the code to be ready
+the moment the owner configures one. Measured first: `MailService.send` passed
+`references=tuple()` for every reply, so a reply left with In-Reply-To and no References and
+broke its thread in every client that follows References; the existing reply test stopped at
+the draft and never read what the sender received. Nothing polled the inbox ("no polling in
+M21"); the briefing had no mail clause; attachments were listed as metadata only, the fixture
+attachments had a size and no bytes, and nothing could save one.
+
+**Decision.**
+
+1. **References are recomputed at send time** from the original: its own References, then its
+   Message-ID, the most recent 50 links; when the original can no longer be read the chain is
+   at least the message the reply answers. The test reads the draft the sender received.
+2. **The inbox is polled on the routine clock** by `MailPoller` (300 s by default, never under
+   60 s), stamped before the call so a failing provider is retried at the next interval, not
+   every clock tick. A poll lists and indexes; it never marks, moves, sends or deletes. No
+   account is a quiet no-op. A second poll over the same inbox writes nothing.
+3. **The briefing asks the mail service** for the unread count and the newest senders under
+   its own `include_mail` preference (migration `0057_briefing_include_mail`); no account or a
+   failed read is an absent clause, never a guess.
+4. **One predicate decides what an attachment is**, shared by the listing the owner hears and
+   the extraction that saves it, so "the second attachment" is the same part both times.
+5. **Attachment bytes never ride in a receipt.** The fake provider keeps the fixture's bytes
+   apart from the metadata every read returns; the IMAP provider re-fetches the message by
+   Message-ID read-only when the owner asks to save.
+6. **Saving is the artifact open path's discipline.** The bytes are stored under their own
+   hash, a 256-bit single-use ten-minute token names exactly that object and hash, and the
+   device's `file.fetch` pulls it into Downloads (not opened) and re-hashes it. The fetch GET
+   carries no owner credential, so the route lives on its own router and joins the deliberate
+   list of open surfaces; unknown, expired, redeemed and hash-mismatched tokens are the same
+   bare 404. The owner's web download stays owner-gated. File names are reduced to a safe
+   base name.
+7. **The words are exact.** "ek/eki/ekleri/ekte..." as whole words: the stem would catch
+   "ekle" (add), "ekip" (team) and "ekran" (screen). The save form is matched first.
+
+**Consequences.** Sending stays off by default (the roadmap's rollback). The fixture generator
+gives every attachment deterministic bytes whose size it states. The roadmap's PROVEN_REAL (a
+reply sent on a real account appearing in the recipient's thread) is READY_FOR_OWNER: it needs
+the owner's IMAP/SMTP account stored through `scripts/secret-store.ps1`. Twelve mutations red.
+
+## ADR-0153 — A calendar that keeps what the owner said: rules and reminders written as heard, a mirror on the clock, reminders that arrive on time, and cancels only under the owner's policy (2026-09-15, B46)
+
+**Context.** M21 built CalDAV reading, proposals and a confirmation gate. B46 (277, 337,
+349-359, 361, 363, 365, 366) asks for recurrence, reminders, an index and a sync. Measured
+first: `build_vevent` wrote neither RRULE nor VALARM; `calendar_index` was declared and never
+written; nothing ran on the clock. Measured on the way: the parser let a VALARM's SUMMARY
+overwrite the event's title; rescheduling one occurrence of a recurring event would have
+PUT a single event over the whole series (and dropped its reminder); a reminder clause
+("15 dakika önce hatırlat") was read as the event's duration; and a notification at 06:45
+would have been deferred by quiet hours to 07:30, after a 07:00 event began.
+
+**Decision.**
+
+1. **A small rule vocabulary, validated where it is proposed.** FREQ (daily/weekly/monthly/
+   yearly), INTERVAL, COUNT, UNTIL, BYDAY (weekly only). `validate_rrule` canonicalises and
+   dateutil parses the result, so what the writer sends is what the reader expands. A rule
+   outside it is refused before the owner hears a read-back that could not be kept.
+2. **The owner's words win.** The router reads recurrence and reminder words from the
+   utterance itself (`calendar_rrule`, `calendar_reminder_minutes` on the turn record); the
+   tool falls back to the model's `when_spoken`, then to its `reminder_minutes` argument.
+   The reminder clause is stripped before the clock and duration are read.
+3. **A reminder is a VALARM** (DISPLAY, `TRIGGER:-PT{m}M`, at most seven days) and reads back
+   as minutes before the start; absolute, end-related and after-start triggers are not
+   turned into reminders. A VALARM's properties stay inside the alarm.
+4. **A series is never changed one occurrence at a time.** The writer replaces whole events,
+   so moving or cancelling an occurrence of a recurring event is refused by name; a
+   reschedule of a single event keeps its reminder.
+5. **Cancel is the owner's policy.** `calendar_cancel_policy` defaults to `refuse` (M21's
+   boundary). Under `confirm` a cancel is a proposal - read back, confirmed on the next turn
+   through the same gate as a create - then the writer's delete; a 404 is the outcome asked
+   for. Any other word keeps the refusal. Choosing the policy is the owner's decision.
+6. **The index is a mirror, not a memory of deleted events.** Agenda reads index what the
+   owner heard (`source=read`); the clock mirrors fourteen days (`source=sync`) and removes
+   rows whose event is gone - except when the provider truncated its answer, which is not
+   evidence of deletion. A second pass writes nothing.
+7. **Reminders on time, once.** The clock's `calendar` sub-tick raises `calendar.reminder`
+   (normal priority) for an occurrence whose earliest alarm has come and which has not
+   begun, stamps `reminded_at`, and never repeats. It ignores quiet hours: they are for what
+   the system decides to say; the owner chose this moment. The urgent set stays the three.
+8. **RSVP is deferred.** Answering an invitation depends on the scheduling server's iTIP
+   behaviour and on attendee lines the reader does not keep; a reply path that cannot be
+   proven against a real account is not written.
+
+**Consequences.** Migration `0058_calendar_recurrence`. Writing stays off by default (the
+roadmap's rollback). The roadmap's PROVEN_REAL (a recurring event with a reminder created on
+a real calendar) is READY_FOR_OWNER: it needs the owner's CalDAV account through
+`scripts/secret-store.ps1` and `calendar_write_enabled`.
+
+## ADR-0154 — PROPOSED, awaiting the owner: how the device may listen (B47 stopped at a privacy decision) (2026-09-15, B47)
+
+**Status.** PROPOSED. Not accepted: the choice is the owner's (roadmap Karar 7), and the
+standing rules stop B47 for a privacy decision and for a physical microphone evaluation. No
+capture code was written.
+
+**Context.** Every B47 row (239-244, 250-255) depends on row 239, a microphone provider on
+the owner's Windows device. Today the assistant's front door is the browser tab: listening
+starts with a click, and the device agent has no audio capture path (the evidence file
+records the scan). Raw audio is never stored (row 249) under any option.
+
+**Options.**
+
+1. **Push-to-talk only (243).** A global hotkey (and a tray button) opens the microphone for
+   one utterance; the indicator (254) is lit exactly while it is open. No audio is captured
+   between presses. Unlocks 239 (on demand), 240 (browser-independent), 243, 244 (VAD to end
+   the utterance), 250-252, 254, 255. Leaves 241/242 (wake word) unbuilt. Cheapest in privacy.
+2. **Local wake word (241, 242).** The microphone is open continuously but audio never leaves
+   the device and is never written: a small on-device detector keeps a rolling in-memory
+   buffer of at most two seconds and discards it unless the wake word is detected; only then
+   does an utterance stream to the Cloud Core. The indicator shows "listening for the wake
+   word" and "streaming" as different states; an owner toggle (242) and the hardware mute
+   (255) stop it completely. Unlocks every row. Needs a detector model choice and a physical
+   evaluation of false wakes on this machine.
+3. **Always streaming.** The microphone streams to the Cloud Core whenever the device is on.
+   Not recommended: it contradicts the product's privacy posture and gains nothing over (2).
+
+**What the owner decides.** One of (1) or (2) - or neither, which keeps the browser path as
+the only way in. With (2): the wake word itself, and whether the offline command subset (253)
+may act without the Cloud Core (the alarm's offline path is the precedent).
+
+**Consequences once decided.** A companion-process audio service (the Session 0 rule keeps
+capture out of the Windows Service), a capability in the device manifest, the indicator on
+the device, health and restart recovery, and a physical lab run on the owner's microphone.
+
+## ADR-0155 — Presence reasons further without a camera, and sleep is never inferred from an idle keyboard (2026-09-15, B48)
+
+**Context.** B48 (300-303, 307, 308, 310, 312, 313, 320, 326, 327, 330-333, 671) is presence
+depth and a device camera. Measured first: RESTING and LIKELY_ASLEEP are unreachable in
+production because no signal ever carries a resting posture (the browser camera derives
+`unknown`; the input provider reports `unknown`), and the ambient policy's "display off while
+asleep" additionally requires fresh camera perception. A device camera is the owner's decision
+(Karar 8); multi-monitor power needs a hardware judgement.
+
+**Decision.**
+
+1. **Sleep is not inferred from an idle keyboard.** Doing so would reach 307/308/333 without a
+   camera, but it would turn "watching a film without touching the mouse" into sleep and a dark
+   screen; the policy's own camera requirement exists to prevent exactly that. These rows wait
+   for Karar 8.
+2. **Confidence fades with age (310).** An observation's weight falls linearly across its
+   source's trust lifespan to `1 - freshness_decay` (0.5), instead of counting fully until it
+   expires. The weights enter a weighted AVERAGE: they decide how much each observation counts
+   against the others, never how sure the whole assertion is - scaling it down pushed an honest
+   25%-conflict majority below `min_confidence` and turned it into UNKNOWN.
+3. **The owner's quiet hours shape sleep (312, 313).** The ambient policy's quiet window and its
+   outside-quiet threshold are copied into the fusion policy on every ingest; outside the window
+   a rest must hold longer before it reads as LIKELY_ASLEEP. An unreadable window changes
+   nothing.
+4. **History is visible (330).** `GET /v1/presence/history` returns the ledger's durable
+   transitions and the engine's recent episodes, each with its confidence and sources.
+5. **The owner's switches are on the panel (331, 332).** The four ambient switches PUT the same
+   policy the voice tool writes. Thresholds and quiet hours stay read-only in the UI.
+6. **A closed camera tab is evidence, never a decision (301-303).** The tab reports
+   `eye.stream_stopped` with a keepalive request; the consent flag is untouched. When the server
+   says the eye is on and this tab's camera is not running, the control says so and offers
+   "Gözü aç"; the camera never opens by itself.
+
+**Consequences.** No migration. The camera rows keep their statuses with notes pointing at
+Karar 8.

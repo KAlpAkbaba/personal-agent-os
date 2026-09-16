@@ -137,6 +137,15 @@ class CreativeRunRow(Base):
     output_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     output_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     output_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: B43 (migration 0055): every output in order + the pointer (511), the vision
+    #: provider's verdict (498), the image artifact and the delivery (509).
+    history_json: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONColumn, nullable=True)
+    history_index: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    semantic_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(SAUuid, nullable=True)
+    delivery_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
     error_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

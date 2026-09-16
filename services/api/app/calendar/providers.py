@@ -40,6 +40,9 @@ class ProposalInput:
     start: datetime
     end: datetime
     location: str | None = None
+    #: B46 (req 356, 357): the validated rule and the reminder read back to the owner.
+    rrule: str | None = None
+    reminder_minutes: int | None = None
 
 
 class CalendarProvider(Protocol):
@@ -61,6 +64,10 @@ class CalendarWriter(Protocol):
 
     def update(self, event_uid: str, changes: ProposalInput) -> str:
         """Updates ``event_uid`` (a reschedule) and returns the (possibly unchanged) uid."""
+        ...
+
+    def delete(self, event_uid: str) -> None:
+        """B46 (req 354): removes ``event_uid`` - reached only by a confirmed cancel."""
         ...
 
 
@@ -208,6 +215,8 @@ class CalDavCalendarProvider:
             start=proposal.start,
             end=proposal.end,
             location=proposal.location,
+            rrule=proposal.rrule,
+            reminder_minutes=proposal.reminder_minutes,
         )
         with self._client() as client:
             response = client.put(
@@ -223,6 +232,8 @@ class CalDavCalendarProvider:
             start=changes.start,
             end=changes.end,
             location=changes.location,
+            rrule=changes.rrule,
+            reminder_minutes=changes.reminder_minutes,
         )
         with self._client() as client:
             response = client.put(
@@ -230,6 +241,15 @@ class CalDavCalendarProvider:
             )
             response.raise_for_status()
         return event_uid
+
+    def delete(self, event_uid: str) -> None:
+        """B46 (req 354): a confirmed cancel. An event already gone (404) is the
+        outcome the owner asked for."""
+        with self._client() as client:
+            response = client.delete(f"/{event_uid}.ics")
+            if response.status_code == 404:
+                return
+            response.raise_for_status()
 
 
 def start_timezone():
@@ -349,6 +369,7 @@ class FakeCalendarWriter:
 
     created: list[ProposalInput] = field(default_factory=list)
     updated: list[tuple[str, ProposalInput]] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
 
     def create(self, proposal: ProposalInput) -> str:
         event_uid = proposal.event_uid or f"fake-{uuid.uuid4()}@fixture.example"
@@ -358,6 +379,9 @@ class FakeCalendarWriter:
     def update(self, event_uid: str, changes: ProposalInput) -> str:
         self.updated.append((event_uid, changes))
         return event_uid
+
+    def delete(self, event_uid: str) -> None:
+        self.deleted.append(event_uid)
 
 
 # --------------------------------------------------------------------------- wiring

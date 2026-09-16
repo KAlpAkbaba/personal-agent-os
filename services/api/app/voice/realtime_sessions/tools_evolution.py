@@ -424,7 +424,6 @@ def evolution_status(ctx: Any, arguments: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------- registry
 
 
-
 # ------------------------------------------------ what to say instead of "yapamıyorum"
 
 
@@ -463,9 +462,7 @@ def capability_propose(ctx: Any, arguments: dict[str, Any]) -> dict[str, Any]:
             "routed": TOOL_CAPABILITY_PROPOSE,
         }
     try:
-        proposal = proposals.propose(
-            runtime.detector, runtime.gaps, request_text=request_text
-        )
+        proposal = proposals.propose(runtime.detector, runtime.gaps, request_text=request_text)
     except Exception as exc:  # noqa: BLE001 - an unrecorded request is a fact, not a crash
         logger.error("capability_propose_failed", error=str(exc)[:200])
         return {

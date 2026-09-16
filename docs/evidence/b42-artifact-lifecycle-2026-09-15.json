@@ -1,0 +1,96 @@
+{
+  "batch": "B42",
+  "name": "Artefakt provenans ve yaşam döngüsü",
+  "requirements": [
+    393,
+    394,
+    398,
+    399,
+    400,
+    405,
+    406,
+    407,
+    408,
+    409,
+    410,
+    411,
+    412,
+    415,
+    416
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (10849 passed, 5 skipped, 24m13s)",
+      "windows_agent_build_tests": "PASS (64.9s; PagentOS.Agent.Tests 955/955, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "the -Fast summary table lists no web step; no web source changed in B42; matrix-badges vitest rerun separately after node scripts/web/sync-feature-matrix.mjs (12 passed)",
+    "run": "2026-09-15 local, one clean run over the B42 tree (scratchpad b42_gate.log): QUALITY GATE: PASS, GATE_EXIT 0; API pytest 10849 passed / 5 skipped in 24m13s (10804 after B41); corpus inside the run"
+  },
+  "what_this_proves": "Every artifact version now says who asked for it, which Python and library versions rendered it, and what it is made of; an edit becomes the next version of the same artifact under the spec's own rules; a clone is a new artifact that names its source; deletion follows the owner's policy and leaves the record; two versions or artifacts are compared in a sentence that names what differs, with a diff; an image the creative path stored becomes an artifact with its own copy; and none of the lifecycle words fire without an artifact in focus.",
+  "measured_first": {
+    "before": "app/artifacts after B24: factory create/render/validate/open/list; source_manifest_json never written; no actor, no runtime record, no versions listing, no edit (a changed spec = a new artifact), no clone, no delete, no compare/diff; images lived only on creative_runs.output_object_key."
+  },
+  "closed_fully": {
+    "393_394_398_399": "the four renderers unchanged and green; every version they render now carries provenance + manifest; production smoke is the owner's (checkpoint 18).",
+    "400": "lifecycle.register_image_artifact + POST /v1/artifacts/image (copy under artifacts/<id>/v1, validated render, provenance with pillow's version, sources naming the creative run); clone/delete/compare on images; edit refused by name.",
+    "405_406_407_408": "provenance.py: Actor (7 kinds, unknown refused), runtime_provenance (importlib.metadata), source_manifest; factory.create(actor=, sources=) writes both; callers: voice tool (owner_voice + call id), REST (owner_rest + session), executive activity (executive_run).",
+    "409": "service.list_versions; lifecycle.add_version (idempotent on hash, renders every format); GET /versions.",
+    "410": "lifecycle.apply_edit/edit_artifact (7 ops, ≤20); ArtifactEdit.spoken_numbers merged; invented number / formula injection refused with the ref; artifact.edit tool; POST /edit.",
+    "411": "lifecycle.clone_artifact (+ version_number); artifact.clone tool sets focus; POST /clone.",
+    "412": "lifecycle.delete_artifact (confirm/deny/free; renders removed; ARCHIVED); settings.artifact_delete_policy; artifact.delete tool (router's artifact_confirm from 'Evet, sil'); POST /delete; ledger artifact.delete.",
+    "415_416": "compare_specs + compare_sentence + diff_specs (≤400 lines); compare_versions; artifact.compare tool (previous_version | previous_artifact); GET /compare.",
+    "surfaces": "6 routes, 4 voice tools (tiers: edit/clone sensitive, delete critical, compare open), 4 intents gated on artifact_focused (+ artifact_confirm on the turn record), ledger events artifact.edit/clone/delete, catalog entries, migration 0054."
+  },
+  "found_on_the_way": {
+    "never_invented_on_version_two": "an edit's paragraphs are scanned by the same rule as a create; the edit sentence's numbers are merged into spoken_numbers so the owner's own figure is admitted and the model's is refused (test: 99999 refused, then admitted when spoken).",
+    "image_copy": "registering an image under the artifact's own key was necessary so that delete (which removes render objects) cannot remove the creative run's output.",
+    "executive_actor_ref": "the executive activity has no run id in scope at the artifact step; the actor's ref is the step kind, the run is on the ledger.",
+    "illegal_state_transition": "a clone (new artifact, DRAFT) and an image registration walked DRAFT -> READY, which app.artifacts.state forbids (the voice clone failed as internal_bug); both now walk DRAFT -> CANONICAL_READY -> RENDERS_PENDING -> READY like the factory.",
+    "formulas_did_not_move": "appending a row to the budget sheet left its fixed-cell formulas (A6 'KDV', B6 '=B5*0.2') where they were, so the independent xlsx validation found the totals row overwritten and marked version two invalid; append_row now shifts every formula key and reference at or below the first row under the data.",
+    "duplicate_section": "append_section accepted a heading that already existed, producing two sections of one name that replace/remove could not tell apart; it is now refused by name.",
+    "edit_refusal_class": "apply_edit wrapped the spec's own invented-number refusal as invalid_edit, so the voice receipt said 'does not fit' instead of 'the numbers do not match what you said'; the spec's refusals now keep their class.",
+    "error_constants_invisible": "ERROR_X: Final = '...' does not match the owner-error test's declaration pattern, so seven catalog entries read as undeclared; the lifecycle constants are plain assignments.",
+    "corpus_delete_negative_converted": "the utterance corpus kept M22's deliberate negative 'Bunu sil.' (artifact focused -> no tool, because M22 had no delete); B42 req 412 adds that delete, so the case failed on the new route. It is now the positive regression art.delete.asks_first: the sentence reaches artifact.delete, which under the default confirm policy only asks and touches no device.",
+    "resumed_patch_duplicated_routes": "a patch re-run after a mid-way failure inserted the six lifecycle routes twice (ruff F811 caught it); deduplicated, and the tool registrations were unrolled from a loop so the self-model indexer sees them."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_artifact_b42.py": "runtime provenance; unknown actor; create writes provenance+manifest; system actor; edit = v2 with lineage and stored renders; invented number refused then admitted; unfitting op named; row edit; clone lineage + named version; delete confirm/deny/free/invalid; compare named parts + sentence + diff; identical; across kinds; unknown version; REST versions/edit/clone/delete/compare/image; voice edit/clone/delete(ask→yes)/deny/compare; focus gate; tiers + ledger vocabulary; image register/clone/compare/refusals",
+    "regression suites rerun": "test_artifact_* (10 files), test_executive_b38, test_voice_realtime_sessions, test_intent_daily_coverage, test_intent_misroutes, test_route_telemetry, test_owner_error_language, test_voice_step_up, test_selfmodel_indexer, test_owner_utterance_corpus: see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b42_mutate.py.",
+    "mutations": [
+      "M1 the factory records the SYSTEM as the actor whatever the caller said (406) -> 1 failure(s).",
+      "M2 an edit's lineage says 'clone' (409/410) -> 1 failure(s).",
+      "M3 the edit's spoken numbers are NOT merged, so the owner's own figure is refused too (410) -> 1 failure(s).",
+      "M4 the confirm policy deletes without the owner's yes (412) -> 1 failure(s).",
+      "M5 the deny policy yields to a yes (412) -> 1 failure(s).",
+      "M6 a delete archives the row but leaves every rendered object in the store (412) -> 1 failure(s).",
+      "M7 a comparison never names an added part (415) -> 1 failure(s).",
+      "M8 an archived artifact can be edited back to life (412) -> 1 failure(s).",
+      "M9 an image artifact points at the creative run's own object instead of its copy (400) -> 1 failure(s).",
+      "M10 the lifecycle words fire with no artifact in focus, stealing 'Bunu sil' (410-416) -> 1 failure(s).",
+      "M11 the voice delete treats every call as the owner's yes (412) -> 1 failure(s).",
+      "M12 the runtime provenance records no library versions (407) -> 1 failure(s)."
+    ],
+    "result": "12/12 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED: the real renderers (python-docx/openpyxl/python-pptx/csv/json) against the in-memory object store, the routes through create_app, the voice tools through the corpus harness (router → tool → ledger → focus). The roadmap's PROVEN_REAL (xlsx/pptx/csv/json produced on the production VM and independently verified) is READY_FOR_OWNER (checkpoint 18)."
+  },
+  "owner_gates": {
+    "production_smoke": "on the production VM: create one artifact of each of xlsx/pptx/csv/json through the voice or REST path, download it, open it, and read GET /v1/artifacts/{id}/versions for its provenance.",
+    "delete_policy": "choose artifact_delete_policy (confirm is the default; deny never deletes; free deletes at once)."
+  }
+}

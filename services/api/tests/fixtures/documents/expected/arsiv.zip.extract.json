@@ -1,0 +1,9 @@
+{
+  "path": "arsiv.zip",
+  "kind": "archive",
+  "title": null,
+  "match": "equals_normalised",
+  "structure": {},
+  "blocks": [],
+  "note": "never extracted (B32 req 142): file.inspect lists the central directory; document.extract answers unsupported_format/unknown_kind"
+}

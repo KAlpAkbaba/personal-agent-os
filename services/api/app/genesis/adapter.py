@@ -217,9 +217,22 @@ class AdapterSpec:
 
 
 class HttpAdapterGenerator:
-    """Generic ``SkillGenerator``: any ``AdapterSpec`` within the §2 subset."""
+    """Generic ``SkillGenerator``: any ``AdapterSpec`` within the §2 subset.
+
+    B36 (req 577): with ``model`` set, the rendered adapter module is handed to the
+    model as a starting point and the model's proposal REPLACES that one file - the
+    tests, the evals and the manifest stay rendered, and the proposal is judged by
+    them and by the security gate exactly as the rendered module would be.
+    ``model_generated`` says, per call, which happened.
+    """
 
     name = "http_adapter"
+    MODEL_NAME = "http_adapter+model"
+
+    def __init__(self, model: Any | None = None) -> None:
+        self.model = model
+        self.model_generated = False
+        self.generator_name = self.name
 
     def generate(self, spec: AdapterSpec, workspace: Path) -> SkillLayout:
         if not isinstance(spec, AdapterSpec):
@@ -241,7 +254,19 @@ class HttpAdapterGenerator:
         manifest = spec.capability_manifest()
         layout.manifest_path.write_text(dump_manifest_yaml(manifest), encoding="utf-8")
         layout.readme_path.write_text(self._render_readme(spec), encoding="utf-8")
-        layout.module_path.write_text(self._render_src(spec), encoding="utf-8")
+        rendered = self._render_src(spec)
+        self.model_generated = False
+        self.generator_name = self.name
+        if self.model is not None:
+            proposed = self.model.propose_adapter(spec, rendered)
+            if not isinstance(proposed, str) or not proposed.strip():
+                raise EvolutionError(
+                    EvolutionErrorClass.GENERATION_FAILED, "the model proposed no module"
+                )
+            rendered = proposed
+            self.model_generated = True
+            self.generator_name = self.MODEL_NAME
+        layout.module_path.write_text(rendered, encoding="utf-8")
         layout.test_path.write_text(self._render_tests(spec), encoding="utf-8")
         layout.eval_path.write_text(self._render_evals(spec), encoding="utf-8")
         layout.cases_path.write_text(self._render_cases(spec), encoding="utf-8")

@@ -111,6 +111,104 @@ def file_reveal_ok(_payload: dict[str, Any]) -> DeviceRunResult:
     return DeviceRunResult(True, result={"revealed": True, "window_id": 1})
 
 
+# --------------------------------------------------------------- B33 lifecycle fakes
+
+#: What the fake desktop installed (shortcut paths), and the artefact bytes it serves.
+INSTALLED: dict[str, str] = {}
+ARTIFACT_BYTES = b"MZ\x90\x00" + b"PagentOS native artefact fixture " * 64
+
+
+def project_package_ok(payload: dict[str, Any]) -> DeviceRunResult:
+    import hashlib
+
+    kind = str(payload.get("kind") or "portable")
+    project_id = str(payload.get("project_id") or "")
+    name = f"{project_id}-portable.zip" if kind == "portable" else f"{project_id}.msix"
+    path = f"C:\\Users\\owner\\Documents\\PagentOS Projects\\native\\{project_id}\\dist\\{name}"
+    return DeviceRunResult(
+        True,
+        result={
+            "kind": kind,
+            "path": path,
+            "name": name,
+            "bytes": len(ARTIFACT_BYTES),
+            "sha256": hashlib.sha256(ARTIFACT_BYTES).hexdigest(),
+            "signed": False,
+            "observed": {"exists": True, "bytes": len(ARTIFACT_BYTES)},
+        },
+    )
+
+
+def project_install_ok(payload: dict[str, Any]) -> DeviceRunResult:
+    project_id = str(payload.get("project_id") or "")
+    name = str(payload.get("name") or project_id)
+    programs = "C:\\Users\\owner\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs"
+    shortcut = f"{programs}\\PagentOS\\{name}.lnk"
+    INSTALLED[project_id] = shortcut
+    return DeviceRunResult(
+        True,
+        result={
+            "installed": True,
+            "method": "start_menu_shortcut",
+            "name": name,
+            "exe": f"C:\\...\\native\\{project_id}\\out\\{project_id}.exe",
+            "shortcut": shortcut,
+            "observed": {"shortcut_exists": True, "exe_exists": True},
+        },
+    )
+
+
+def project_uninstall_ok(payload: dict[str, Any]) -> DeviceRunResult:
+    project_id = str(payload.get("project_id") or "")
+    shortcut = INSTALLED.pop(project_id, None)
+    if shortcut is None:
+        return DeviceRunResult(False, "not_found", "not installed by this system")
+    return DeviceRunResult(
+        True,
+        result={
+            "uninstalled": True,
+            "shortcut_removed": True,
+            "shortcut": shortcut,
+            "build_kept": True,
+            "observed": {"shortcut_exists": False},
+        },
+    )
+
+
+def project_artifact_ok(payload: dict[str, Any]) -> DeviceRunResult:
+    import base64
+    import hashlib
+
+    offset = int(payload.get("offset") or 0)
+    length = min(int(payload.get("length") or 32768), 32768)
+    chunk = ARTIFACT_BYTES[offset : offset + length]
+    return DeviceRunResult(
+        True,
+        result={
+            "path": "C:\\...\\out\\app.exe",
+            "name": "app.exe",
+            "bytes": len(ARTIFACT_BYTES),
+            "sha256": hashlib.sha256(ARTIFACT_BYTES).hexdigest(),
+            "offset": offset,
+            "length": len(chunk),
+            "base64": base64.b64encode(chunk).decode("ascii"),
+            "eof": offset + len(chunk) >= len(ARTIFACT_BYTES),
+        },
+    )
+
+
+def native_lifecycle_capability_results() -> dict[str, Any]:
+    """B33: the four projects-family lifecycle answers (the UI tree the notes app shows
+    after a launch is ``tests.alarms_support``'s ``ui.inspect`` fake, overridden by tests
+    that need the template's own controls)."""
+    return {
+        "project.package": project_package_ok,
+        "project.install": project_install_ok,
+        "project.uninstall": project_uninstall_ok,
+        "project.artifact": project_artifact_ok,
+    }
+
+
 def appfactory_capability_results() -> dict[str, Any]:
     """``{capability: DeviceRunResult | callable}`` for ``FakeDeviceAction`` (the same
     shape ``tests.artifacts_support.artifact_capability_results`` returns)."""
@@ -121,6 +219,7 @@ def appfactory_capability_results() -> dict[str, Any]:
         "project.stop": project_stop_ok,
         "project.test": project_test_ok,
         "file.reveal": file_reveal_ok,
+        **native_lifecycle_capability_results(),
     }
 
 

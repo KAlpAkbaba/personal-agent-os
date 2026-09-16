@@ -24,9 +24,15 @@ export type ProgressPanelProps = {
   task: ResearchTaskDetail;
   onCancel?: () => void;
   cancelBusy?: boolean;
+  /** B31 req 203/204: pause while running, resume while paused. */
+  onPause?: () => void;
+  onResume?: () => void;
+  pauseBusy?: boolean;
   pollError?: string | null;
   maxEvents?: number;
 };
+
+export const PAUSED_NOTICE = "Araştırma duraklatıldı; devam edince kaldığı aşamadan sürer.";
 
 function counter(label: string, value: number | undefined, total?: number | undefined) {
   if (value == null && total == null) return null;
@@ -42,11 +48,15 @@ export default function ProgressPanel({
   task,
   onCancel,
   cancelBusy,
+  onPause,
+  onResume,
+  pauseBusy,
   pollError,
   maxEvents = 8,
 }: ProgressPanelProps) {
   const terminal = isTerminal(task);
   const progress = task.progress ?? {};
+  const paused = progress.paused === true;
   const events = (task.events ?? []).slice(-maxEvents).toReversed();
   const error = describeTaskError(task.error);
   const stage = String(task.stage ?? "");
@@ -82,6 +92,26 @@ export default function ProgressPanel({
       {error && (
         <p style={{ margin: "0.5rem 0", color: "var(--fail)" }} className="task-error">
           {error}
+        </p>
+      )}
+      {!terminal && paused && (
+        <p className="notice" data-paused="yes" style={{ margin: "0.5rem 0", color: "var(--warn, #b26a00)" }}>
+          {PAUSED_NOTICE}
+        </p>
+      )}
+      {!terminal && (onPause || onResume) && (
+        <p style={{ margin: "0.5rem 0" }}>
+          {paused
+            ? onResume && (
+                <button type="button" onClick={onResume} disabled={pauseBusy} data-action="resume">
+                  Devam et
+                </button>
+              )
+            : onPause && (
+                <button type="button" onClick={onPause} disabled={pauseBusy} data-action="pause">
+                  Duraklat
+                </button>
+              )}
         </p>
       )}
       {stage === "waiting_for_owner_verification" && (

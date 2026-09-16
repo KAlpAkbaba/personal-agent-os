@@ -75,8 +75,7 @@ class ProviderRouter[P]:
 
     def __init__(self, providers: list[P], *, kind: str) -> None:
         if not providers:
-            raise VoiceError(VoiceErrorClass.CAPABILITY_MISSING,
-                             f"no {kind} providers configured")
+            raise VoiceError(VoiceErrorClass.CAPABILITY_MISSING, f"no {kind} providers configured")
         self._providers = providers
         self._kind = kind
 
@@ -90,9 +89,7 @@ class ProviderRouter[P]:
             )
         return eligible
 
-    def run[R](
-        self, request: CapabilityRequest, call: Callable[[P], R]
-    ) -> RouteResult[R]:
+    def run[R](self, request: CapabilityRequest, call: Callable[[P], R]) -> RouteResult[R]:
         attempts: list[ProviderAttempt] = []
         for provider in self._eligible(request):
             name = provider.name  # type: ignore[attr-defined]
@@ -100,24 +97,29 @@ class ProviderRouter[P]:
                 result = call(provider)
             except VoiceError as exc:
                 attempts.append(ProviderAttempt(name, False, str(exc.error_class), exc.message))
-                logger.info("voice_provider_failed", kind=self._kind, provider=name,
-                            error_class=str(exc.error_class),
-                            fallbackable=exc.error_class in FALLBACKABLE)
+                logger.info(
+                    "voice_provider_failed",
+                    kind=self._kind,
+                    provider=name,
+                    error_class=str(exc.error_class),
+                    fallbackable=exc.error_class in FALLBACKABLE,
+                )
                 if exc.error_class in FALLBACKABLE:
                     continue  # try the next candidate
                 raise  # caller error / non-recoverable: surface immediately
             attempts.append(ProviderAttempt(name, True))
-            logger.info("voice_provider_ok", kind=self._kind, provider=name,
-                        attempts=len(attempts))
+            logger.info("voice_provider_ok", kind=self._kind, provider=name, attempts=len(attempts))
             return RouteResult(result=result, provider=name, attempts=attempts)
 
         raise VoiceError(
             VoiceErrorClass.ALL_PROVIDERS_FAILED,
             f"all {self._kind} providers failed",
-            details={"attempts": [
-                {"provider": a.provider, "error_class": a.error_class, "message": a.message}
-                for a in attempts
-            ]},
+            details={
+                "attempts": [
+                    {"provider": a.provider, "error_class": a.error_class, "message": a.message}
+                    for a in attempts
+                ]
+            },
         )
 
 
@@ -126,8 +128,13 @@ class TTSRouter(ProviderRouter[TTSProvider]):
         super().__init__(providers, kind="tts")
 
     def synthesize(
-        self, text: str, *, request: CapabilityRequest | None = None,
-        voice: str = "default", speed: float = 1.0, fmt: str = "wav",
+        self,
+        text: str,
+        *,
+        request: CapabilityRequest | None = None,
+        voice: str = "default",
+        speed: float = 1.0,
+        fmt: str = "wav",
     ) -> RouteResult[TTSResult]:
         req = request or CapabilityRequest()
         return self.run(req, lambda p: p.synthesize(text, voice=voice, speed=speed, fmt=fmt))
@@ -138,7 +145,11 @@ class STTRouter(ProviderRouter[STTProvider]):
         super().__init__(providers, kind="stt")
 
     def transcribe(
-        self, audio: bytes, *, request: CapabilityRequest | None = None, language: str = "tr-TR",
+        self,
+        audio: bytes,
+        *,
+        request: CapabilityRequest | None = None,
+        language: str = "tr-TR",
     ) -> RouteResult[STTResult]:
         req = request or CapabilityRequest(language=language)
         return self.run(req, lambda p: p.transcribe(audio, language=language))

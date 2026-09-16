@@ -31,6 +31,8 @@ from typing import Any, Protocol
 #: spec §2 bounds: at most 50 messages per list/search, a body bounded to 32 KB.
 MAX_LIST_MESSAGES = 50
 MAX_BODY_BYTES = 32 * 1024
+#: B45 (req 348): the largest attachment the Cloud Core fetches to hand to the device.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 #: M1 (security review): ``email.message.Message.walk()`` recurses one Python stack frame
 #: per MIME nesting level with no bound of its own - a ~3000-level nested multipart
 #: message raised ``RecursionError`` there, taking the whole folder's fetch/search/thread
@@ -114,6 +116,22 @@ class DraftInput:
 # ------------------------------------------------------------------------ protocols
 
 
+@dataclass(frozen=True, slots=True)
+class MailAttachment:
+    """B45 (req 347, 348): one attachment's bytes, fetched only when the owner asks to keep
+    it - never part of a listing, a receipt or a ledger row."""
+
+    filename: str
+    content_type: str
+    data: bytes
+
+    @property
+    def sha256(self) -> str:
+        import hashlib
+
+        return hashlib.sha256(self.data).hexdigest()
+
+
 class MailProvider(Protocol):
     def folders(self) -> list[str]: ...
 
@@ -124,6 +142,8 @@ class MailProvider(Protocol):
     def search(self, query: str, *, limit: int = MAX_LIST_MESSAGES) -> list[MailMessage]: ...
 
     def get_message(self, message_id: str) -> MailMessage | None: ...
+
+    def get_attachment(self, message_id: str, index: int) -> MailAttachment | None: ...
 
     def thread(self, message_id: str) -> list[MailMessage]: ...
 
@@ -267,6 +287,42 @@ def _iter_parts_bounded(
     return parts
 
 
+def _is_attachment_part(part: Any) -> bool:
+    """ONE predicate for "this part is an attachment" (B45): the listing below and
+    :func:`attachment_from_rfc822` both use it, so the index the owner hears is the index
+    the extraction reaches - two copies of this condition would drift."""
+    disposition = str(part.get("Content-Disposition") or "")
+    content_type = part.get_content_type()
+    return "attachment" in disposition or bool(
+        part.get_filename() and content_type not in ("text/plain", "text/html")
+    )
+
+
+def attachment_from_rfc822(raw: bytes, index: int) -> MailAttachment | None:
+    """B45 (req 347, 348): the ``index``-th attachment part of one full RFC822 message,
+    decoded, bounded by :data:`MAX_ATTACHMENT_BYTES`; None when there is no such part."""
+    if index < 0:
+        return None
+    msg = message_from_bytes(raw, policy=policy.compat32)
+    if not msg.is_multipart():
+        return None
+    seen = 0
+    for part in _iter_parts_bounded(msg):
+        if not _is_attachment_part(part):
+            continue
+        if seen == index:
+            data = part.get_payload(decode=True) or b""
+            if len(data) > MAX_ATTACHMENT_BYTES:
+                return None
+            return MailAttachment(
+                filename=_decode_header_value(part.get_filename()) or "attachment",
+                content_type=part.get_content_type(),
+                data=data,
+            )
+        seen += 1
+    return None
+
+
 def message_from_rfc822(raw: bytes, *, uid: str, folder: str, unread: bool) -> MailMessage:
     """Parse one full RFC822 message (an IMAP ``BODY[]``/``RFC822`` fetch result) into a
     :class:`MailMessage` — the ONE place header decoding and body reduction happen, so the
@@ -300,11 +356,8 @@ def message_from_rfc822(raw: bytes, *, uid: str, folder: str, unread: bool) -> M
         plain_part = None
         html_part = None
         for part in _iter_parts_bounded(msg):
-            disposition = str(part.get("Content-Disposition") or "")
             content_type = part.get_content_type()
-            if "attachment" in disposition or (
-                part.get_filename() and content_type not in ("text/plain", "text/html")
-            ):
+            if _is_attachment_part(part):
                 payload = part.get_payload(decode=True) or b""
                 attachments.append(
                     {
@@ -534,6 +587,41 @@ class ImapMailProvider:
             except Exception:  # noqa: BLE001
                 pass
 
+    def get_attachment(self, message_id: str, index: int) -> MailAttachment | None:
+        """B45 (req 347, 348): the message fetched again by its Message-ID (read-only
+        EXAMINE, so nothing is marked seen) and its ``index``-th attachment extracted by the
+        same predicate the listing used."""
+        conn = self._connect()
+        try:
+            for folder in self.folders() or ["INBOX"]:
+                raw = self._fetch_raw(conn, folder, ["HEADER", "MESSAGE-ID", f'"{message_id}"'])
+                if raw is not None:
+                    return attachment_from_rfc822(raw, index)
+            return None
+        finally:
+            try:
+                conn.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _fetch_raw(self, conn: imaplib.IMAP4, folder: str, criteria: list[str]) -> bytes | None:
+        typ, _ = conn.select(folder.encode("utf-8"), readonly=True)
+        if typ != "OK":
+            return None
+        encoded_criteria = [c.encode("utf-8") if isinstance(c, str) else c for c in criteria]
+        typ, data = conn.uid("SEARCH", "CHARSET", "UTF-8", *encoded_criteria)
+        if typ != "OK" or not data or not data[0]:
+            return None
+        last = data[0].split()[-1]
+        uid = last.decode("ascii") if isinstance(last, bytes) else str(last)
+        typ, fetch_data = conn.uid("FETCH", uid, "(RFC822)")
+        if typ != "OK" or not fetch_data:
+            return None
+        for part in fetch_data:
+            if isinstance(part, tuple):
+                return part[1]
+        return None
+
     def thread(self, message_id: str) -> list[MailMessage]:
         self.last_unparseable_count = 0
         anchor = self.get_message(message_id)
@@ -653,7 +741,10 @@ def _fixture_to_message(entry: dict[str, Any]) -> MailMessage:
         unread="\\Seen" not in (entry.get("flags") or []),
         body_text=_bounded(body_text),
         has_attachments=bool(entry.get("attachments")),
-        attachments=tuple(dict(a) for a in entry.get("attachments") or []),
+        attachments=tuple(
+            {key: value for key, value in a.items() if key != "content_b64"}
+            for a in entry.get("attachments") or []
+        ),
         in_reply_to=entry.get("in_reply_to"),
         references=tuple(entry.get("references") or ()),
         thread_key=entry.get("thread") or entry.get("subject", ""),
@@ -668,6 +759,16 @@ class FakeMailProvider:
     def __init__(self, fixture_path: Path) -> None:
         raw = _load_mailbox_fixture(fixture_path)
         self._messages: list[MailMessage] = [_fixture_to_message(m) for m in raw["messages"]]
+        #: B45 (req 347, 348): the fixture's attachment BYTES, kept apart from the metadata
+        #: every listing and receipt carries (a base64 body in a read receipt is a leak).
+        self._attachment_bytes: dict[tuple[str, int], bytes] = {}
+        for entry in raw["messages"]:
+            for index, attachment in enumerate(entry.get("attachments") or []):
+                encoded = attachment.get("content_b64")
+                if isinstance(encoded, str):
+                    import base64
+
+                    self._attachment_bytes[(entry["message_id"], index)] = base64.b64decode(encoded)
         self._folders: list[str] = list(raw["folders"])
 
     def folders(self) -> list[str]:
@@ -702,6 +803,20 @@ class FakeMailProvider:
             if m.message_id == message_id:
                 return m
         return None
+
+    def get_attachment(self, message_id: str, index: int) -> MailAttachment | None:
+        """The fixture's own bytes for this attachment, or None - never invented bytes for an
+        attachment the fixture does not carry."""
+        message = self.get_message(message_id)
+        data = self._attachment_bytes.get((message_id, index))
+        if message is None or data is None or not 0 <= index < len(message.attachments):
+            return None
+        meta = message.attachments[index]
+        return MailAttachment(
+            filename=str(meta.get("filename") or "attachment"),
+            content_type=str(meta.get("content_type") or "application/octet-stream"),
+            data=data,
+        )
 
     def thread(self, message_id: str) -> list[MailMessage]:
         anchor = self.get_message(message_id)

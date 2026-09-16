@@ -1,4 +1,7 @@
 import type { Metadata, Viewport } from "next";
+
+import CommandPalette from "./components/CommandPalette";
+import SiteNav from "./components/SiteNav";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -28,7 +31,32 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="tr">
-      <body>{children}</body>
+      <body>
+        {/*
+          B25 req 724: the first thing in the document, and the first thing a keyboard or a
+          screen reader meets. Without it, reaching the content past a fourteen-item nav
+          costs fourteen tab stops on every page.
+        */}
+        <a className="skip-link" href="#main" data-skip-link>
+          İçeriğe geç
+        </a>
+        {/*
+          B23 req 685/716: the pages, on every page, including the Core — where it renders
+          as a quiet affordance rather than a bar, because the manifest installs `/core`
+          with no address bar and the alternative to a nav there is a room with no door.
+          Rendered in the layout so a page added later cannot forget it — which B24 relied
+          on, adding eight pages and touching nothing here.
+        */}
+        <SiteNav />
+        {/*
+          B25 req 702/703: one palette, in the layout, so ⌘K works on every page for the
+          same reason the nav does — a page added later cannot forget it.
+        */}
+        <CommandPalette />
+        <div id="main" tabIndex={-1} className="main-target">
+          {children}
+        </div>
+      </body>
     </html>
   );
 }

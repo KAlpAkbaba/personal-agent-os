@@ -485,6 +485,42 @@ def clear_pending_clarification(db: Session) -> None:
         logger.warning("research_pending_clarification_clear_failed")
 
 
+# ----------------------------------------------------------- answer register (B31)
+
+#: B31 req 209: the key under ``research_owner_state.preferences_json``.
+PREFERENCE_ANSWER_LEVEL = "answer_level"
+
+
+def get_answer_level(db: Session) -> str | None:
+    """The owner's standing register for research answers, or None (executive)."""
+    row = _state_row(db)
+    prefs = dict(getattr(row, "preferences_json", None) or {}) if row else {}
+    level = prefs.get(PREFERENCE_ANSWER_LEVEL)
+    return level if isinstance(level, str) and level else None
+
+
+def set_answer_level(db: Session, level: str, *, now: datetime | None = None) -> bool:
+    """Record "bundan sonra teknik anlat" durably. False when the state table is absent
+    (a deployment without the migration must not fail the owner's sentence)."""
+    row = _state_row(db, create=True)
+    if row is None:
+        return False
+    now = now or datetime.now(UTC)
+    try:
+        with db.begin_nested():
+            row.preferences_json = {
+                **dict(row.preferences_json or {}),
+                PREFERENCE_ANSWER_LEVEL: level,
+                "set_at": now.isoformat(),
+            }
+            row.updated_at = now
+            db.flush()
+    except Exception:  # noqa: BLE001
+        logger.warning("research_answer_level_write_failed")
+        return False
+    return True
+
+
 def pending_candidates(payload: dict[str, Any] | None) -> tuple[FocusEntry, ...]:
     raw = (payload or {}).get("candidates") or ()
     return tuple(FocusEntry.from_candidate(c) for c in raw if isinstance(c, dict))

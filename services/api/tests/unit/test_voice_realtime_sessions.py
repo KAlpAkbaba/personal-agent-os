@@ -246,12 +246,38 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
     assert {t["name"] for t in data["tools"]} == {
         "clock.now",
         "voice.intent",
+        # B25 req 701: the assistant's own answer to "Neler yapabilirsin?".
+        "assistant.capabilities",
         "narration.control",
         "research.start",
         # ADR-0076: follow-ups on a FINISHED research, resolved server-side.
         "research.explain",
         "research.sources",
         "research.finding_detail",
+        # B27 req 732: the REST cancel has existed since M13; this is its voice.
+        "research.cancel",
+        # B31 req 201/203/204/209.
+        "research.pause",
+        "research.resume",
+        "research.open",
+        "research.answer_mode",
+        # B32 req 148/150/151/152.
+        "document.preview",
+        "document.find_text",
+        "document.duplicates",
+        "document.dedup",
+        # B34 req 153-167, 170.
+        "document.write",
+        "document.append",
+        "document.edit",
+        "document.rename",
+        "document.move",
+        "document.copy",
+        "document.delete",
+        "document.apply",
+        "document.discard",
+        "document.undo",
+        "document.versions",
         "plan.redirect",
         "activity.explain",
         "state.now",
@@ -285,6 +311,19 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "operator.shell",
         "operator.cancel",
         "operator.status",
+        # B27 req 735: the first caller ``screen.capture`` has had (matrix row 104).
+        "operator.screenshot",
+        # B28 req 92-98: keys, chords and the pointer, through the focus guard.
+        "operator.key",
+        "operator.pointer",
+        # B29 req 99-105: UI Automation actions and reads, and the visual rung.
+        "operator.ui",
+        "operator.inspect",
+        "operator.see",
+        # B30 req 82/119-122: applications closed, processes and services by policy.
+        "operator.app_close",
+        "operator.process",
+        "operator.service",
         # M20 (docs/M20_FILE_DOCUMENT_INTELLIGENCE_SPEC.md §3): File & Document
         # Intelligence.
         "file.search",
@@ -305,18 +344,28 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "mail.read_draft",
         "mail.send",
         "mail.discard",
+        # B45 (req 347, 348): a message's attachments.
+        "mail.attachments",
+        "mail.save_attachment",
         "calendar.agenda",
         "calendar.find_slot",
         "calendar.propose",
         "calendar.read_proposal",
         "calendar.commit",
         "calendar.discard",
+        # B27 req 731: "Toplantıyı iptal et." reaches the calendar and gets a receipt.
+        "calendar.cancel",
         # M22 (docs/M22_ARTIFACT_FACTORY_SPEC.md §5): the Artifact Factory.
         "artifact.create",
         "artifact.render",
         "artifact.validate",
         "artifact.open",
         "artifact.list",
+        # B42 (req 410-416): the artifact's lifecycle after its first render.
+        "artifact.edit",
+        "artifact.clone",
+        "artifact.delete",
+        "artifact.compare",
         # M23 (docs/M23_APP_FACTORY_SPEC.md §5): the App Factory.
         "app.create",
         "app.run",
@@ -339,6 +388,9 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "scene.camera",
         "scene.render",
         "scene.inspect",
+        # B44 (req 526, 527): the 3D production path's motion and export.
+        "scene.animate",
+        "scene.export",
         # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §5): Executive Autonomy.
         "executive.start",
         "executive.status",
@@ -362,6 +414,8 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         # ADR-0112: the owner may ask for a video by name.
         "media.play",
         "media.stop",
+        # B27 req 733: the volume the alarm has ramped since M18.3, reachable by the owner.
+        "media.volume",
         "news.summarize",
         "news.query_latest",
         # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools Operator.
@@ -372,6 +426,13 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "creative.cleanup",
         "creative.design",
         "creative.export",
+        # B43 (req 492-512): generation, the photo fix, undo/redo, delivery, driving.
+        "creative.generate",
+        "creative.enhance",
+        "creative.undo",
+        "creative.redo",
+        "creative.deliver",
+        "creative.drive",
         # M28 (docs/M28_NATIVE_APP_FACTORY_SPEC.md §6): the Native App Factory's eight.
         # ``native.install`` has no utterance of its own in spec §6's list and is served
         # all the same - the model reaches it once a package exists, the same way
@@ -384,6 +445,27 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "native.check",
         "native.fix",
         "native.rebuild",
+        # B33 req 462-471.
+        "native.verify",
+        "native.log",
+        "native.uninstall",
+        "native.update",
+        # B35 (req 622/623): the owner assigns the system work on itself.
+        "selfdev.defect",
+        "selfdev.feature",
+        "selfdev.status",
+        # B39 (req 127-130): multi-step operator missions.
+        "operator.mission",
+        # B40 (req 435-437): the App Factory's fix loop.
+        "app.fix",
+        # B41 (req 440-452): the generated application's lifecycle.
+        "app.verify",
+        "app.log",
+        "app.package",
+        "app.launch",
+        "app.history",
+        "app.resume",
+        "app.modify",
         # B14 req 287-291: the owner's own routines. The engine has been complete since M18
         # and the model was never offered a way to reach it, so every routine in production
         # was made by the alarm subsystem on the owner's behalf.

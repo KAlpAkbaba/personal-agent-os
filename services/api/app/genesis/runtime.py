@@ -12,19 +12,65 @@ outside the M7 sandbox boundary any more than a pure-transform skill can.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from app.evolution.authorization import AuthorizationProvider
 from app.evolution.runtime import EvolutionRuntime
 from app.evolution.sandbox import SandboxPolicy
 from app.evolution.task_resumption import CapabilityDispatcher
+from app.genesis.catalogue import CatalogueStore
+from app.genesis.model_generator import AnthropicAdapterCodeModel
 from app.genesis.service import GenesisService
 
 
 class GenesisRuntime:
-    def __init__(self, evolution: EvolutionRuntime) -> None:
+    def __init__(
+        self,
+        evolution: EvolutionRuntime,
+        *,
+        model_generation_enabled: bool | Callable[[], bool] = False,
+        authorized_hosts_enabled: bool = True,
+        adapter_model: object | None = None,
+    ) -> None:
         self._evolution = evolution
         self._service: GenesisService | None = None
+        self._catalogue_store: CatalogueStore | None = None
+        self._model_generation_enabled = model_generation_enabled
+        self._authorized_hosts_enabled = authorized_hosts_enabled
+        self._adapter_model = adapter_model
+
+    # ------------------------------------------------------------ B36
+
+    @property
+    def catalogue_store(self) -> CatalogueStore:
+        """The rows behind the spoken-name catalogue (req 562/563); nothing is read
+        until ``load_catalogue`` (the lifespan) or a registration asks."""
+        if self._catalogue_store is None:
+            self._catalogue_store = CatalogueStore(self._evolution.session)
+        return self._catalogue_store
+
+    def load_catalogue(self) -> int:
+        return self.catalogue_store.load()
+
+    def host_allowed(self, hostname: str) -> bool:
+        """Req 565: a non-loopback host may be researched only when the owner enrolled
+        it as an authorized asset whose grants cover network permission on itself."""
+        if not self._authorized_hosts_enabled:
+            return False
+        verified = self.mutation_authorization.verify(hostname)
+        if verified is None:
+            return False
+        approved, _unauthorized = verified.covers({"network_permissions": [hostname]})
+        return bool(approved)
+
+    @property
+    def adapter_model(self) -> object:
+        if self._adapter_model is None:
+            self._adapter_model = AnthropicAdapterCodeModel(
+                api_key=self._evolution.settings.anthropic_api_key or None
+            )
+        return self._adapter_model
 
     @property
     def skills_root(self) -> Path:
@@ -76,6 +122,9 @@ class GenesisRuntime:
                 dispatcher=self.dispatcher,
                 mutation_authorization=self.mutation_authorization,
                 budget=self._evolution.budget,
+                host_allowed=self.host_allowed,
+                adapter_model=self.adapter_model,
+                model_generation_enabled=self._model_generation_enabled,
             )
         return self._service
 

@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Index, String, UniqueConstraint, Uuid
+from sqlalchemy import BigInteger, DateTime, Index, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -79,4 +79,116 @@ class DocumentIndexRow(Base):
     last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-__all__ = ["MAX_BLOCKS_JSON_BYTES", "DocumentIndexRow"]
+#: B34 req 160-166: the undo journal. One row per managed mutation, written when it is
+#: PROPOSED and completed when the device carried it out; the rows for one path are its
+#: version history; the ``proposed`` rows are the approval queue.
+MUTATION_KIND_WRITE = "write"
+MUTATION_KIND_APPEND = "append"
+MUTATION_KIND_EDIT = "edit"
+MUTATION_KIND_RENAME = "rename"
+MUTATION_KIND_MOVE = "move"
+MUTATION_KIND_COPY = "copy"
+MUTATION_KIND_DELETE = "delete"
+MUTATION_KIND_RESTORE = "restore"
+MUTATION_KINDS = (
+    MUTATION_KIND_WRITE,
+    MUTATION_KIND_APPEND,
+    MUTATION_KIND_EDIT,
+    MUTATION_KIND_RENAME,
+    MUTATION_KIND_MOVE,
+    MUTATION_KIND_COPY,
+    MUTATION_KIND_DELETE,
+    MUTATION_KIND_RESTORE,
+)
+
+#: ``proposed`` (waiting for the owner's word) -> ``applied`` -> ``undone``; ``discarded``
+#: from ``proposed``; ``failed`` when the device refused or the read-back did not verify.
+MUTATION_STATE_PROPOSED = "proposed"
+MUTATION_STATE_APPLIED = "applied"
+MUTATION_STATE_UNDONE = "undone"
+MUTATION_STATE_DISCARDED = "discarded"
+MUTATION_STATE_FAILED = "failed"
+
+#: The risk the policy assigned (app.documents.mutations.risk_of): ``low`` applies at once
+#: (journaled, undoable), ``sensitive`` and ``critical`` wait for the owner's word.
+MUTATION_RISK_LOW = "low"
+MUTATION_RISK_SENSITIVE = "sensitive"
+MUTATION_RISK_CRITICAL = "critical"
+
+
+class FileMutationRow(Base):
+    __tablename__ = "file_mutations"
+    __table_args__ = (
+        Index("ix_file_mutations_state_created", "state", "created_at"),
+        Index("ix_file_mutations_path_after", "path_after"),
+        Index("ix_file_mutations_path_before", "path_before"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    device_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, default=MUTATION_STATE_PROPOSED)
+    risk: Mapped[str] = mapped_column(String(16), nullable=False, default=MUTATION_RISK_SENSITIVE)
+    #: The device's location id of the file BEFORE the act (None for a file not yet created).
+    file_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    path_before: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    path_after: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    sha_before: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sha_after: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_before: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    size_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: The device's undo-store entry for what was displaced (write/append/edit/delete).
+    backup_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: ``{"capability": "file.write", "payload": {...}}`` - exactly what the device is asked.
+    plan_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False, default=dict
+    )
+    #: The inverse plan, derived from the device's ANSWER after the act (never from hope).
+    undo_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    #: What the device answered.
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    #: One Turkish sentence describing the change, the same one the owner heard.
+    summary: Mapped[str] = mapped_column(String(512), nullable=False, default="")
+    error_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    #: For a ``restore`` row: the mutation it undid.
+    undo_of: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    #: The proposal was spoken / listed to the owner (the same read-back gate mail drafts keep).
+    read_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_back_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    read_back_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+__all__ = [
+    "MAX_BLOCKS_JSON_BYTES",
+    "MUTATION_KINDS",
+    "MUTATION_KIND_APPEND",
+    "MUTATION_KIND_COPY",
+    "MUTATION_KIND_DELETE",
+    "MUTATION_KIND_EDIT",
+    "MUTATION_KIND_MOVE",
+    "MUTATION_KIND_RENAME",
+    "MUTATION_KIND_RESTORE",
+    "MUTATION_KIND_WRITE",
+    "MUTATION_RISK_CRITICAL",
+    "MUTATION_RISK_LOW",
+    "MUTATION_RISK_SENSITIVE",
+    "MUTATION_STATE_APPLIED",
+    "MUTATION_STATE_DISCARDED",
+    "MUTATION_STATE_FAILED",
+    "MUTATION_STATE_PROPOSED",
+    "MUTATION_STATE_UNDONE",
+    "DocumentIndexRow",
+    "FileMutationRow",
+]

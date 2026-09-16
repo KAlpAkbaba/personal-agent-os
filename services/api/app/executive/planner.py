@@ -20,7 +20,7 @@ wires a real proposer behind the same ``ExecutivePlanner`` protocol without touc
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.executive.graph import validate_graph
 from app.executive.spec import (
@@ -99,6 +99,7 @@ def _step(
     retry_max_attempts: int = 1,
     retry_backoff_s: float = 5.0,
     evidence_min: int | None = None,
+    rationale: str | None = None,
 ) -> Step:
     precondition = (
         Precondition(check=PRECONDITION_STEP_DONE, arg=precondition_step)
@@ -117,6 +118,7 @@ def _step(
         ),
         risk_class=risk_class,
         compensation=compensation,
+        rationale=rationale,
     )
 
 
@@ -129,6 +131,7 @@ def _synthesis_step(step_id: str, refs: dict[str, str], precondition_step: str) 
         evidence=EVIDENCE_TEXT,
         risk_class=RISK_READ,
         timeout_s=60,
+        rationale="Ne yapıldığını, nerede olduğunu ve neyin eksik kaldığını tek cümlede söylemek için.",  # noqa: E501
     )
 
 
@@ -144,6 +147,7 @@ def _shape_research(directive: str, *, want_presentation: bool) -> TaskGraph:
             retry_only_on=("dependency_unavailable", "timeout"),
             retry_max_attempts=3,
             retry_backoff_s=30.0,
+            rationale="İstenen konuyu cihazdaki tarayıcıyla araştırmak için.",
         ),
         _step(
             "s2",
@@ -156,6 +160,7 @@ def _shape_research(directive: str, *, want_presentation: bool) -> TaskGraph:
             retry_only_on=("timeout",),
             retry_max_attempts=2,
             retry_backoff_s=10.0,
+            rationale="Raporun etkisini yönetici özeti olarak çıkarmak için.",
         ),
         _step(
             "s3",
@@ -169,6 +174,7 @@ def _shape_research(directive: str, *, want_presentation: bool) -> TaskGraph:
             retry_only_on=("timeout",),
             retry_max_attempts=2,
             retry_backoff_s=10.0,
+            rationale="Özeti istenen Word raporuna dökmek için.",
         ),
     ]
     refs = {"document": "s3.artifact_id"}
@@ -179,6 +185,8 @@ def _shape_research(directive: str, *, want_presentation: bool) -> TaskGraph:
                 "s4",
                 STEP_KIND_ARTIFACTS_CREATE,
                 inputs={"kind": "presentation", "source": "s2.text"},
+                # B38 (req 553): a sibling of s3, not its successor - both depend on s2
+                # alone, so the workflow runs the document and the slides side by side.
                 precondition_step="s2",
                 evidence=EVIDENCE_ARTIFACT_ID,
                 risk_class=RISK_MUTATE_LOCAL,
@@ -187,6 +195,7 @@ def _shape_research(directive: str, *, want_presentation: bool) -> TaskGraph:
                 retry_only_on=("timeout",),
                 retry_max_attempts=2,
                 retry_backoff_s=10.0,
+                rationale="Aynı özetten istenen sunumu, rapora paralel hazırlamak için.",
             )
         )
         refs["presentation"] = "s4.artifact_id"
@@ -321,18 +330,26 @@ class RuleBasedExecutivePlanner:
 
 
 class ClaudeExecutivePlanner:
-    """The model seam (spec §2): INERT in M26. A future milestone wires a real model
-    call here; until then this raises rather than silently falling back to the rule-based
-    planner (a caller that asked for the model seam specifically must know it got
-    nothing, not receive an answer it did not ask for)."""
+    """The model seam (spec §2), wired in B38 (req 550): a ``PlannerModel`` proposes a
+    graph as data and ``app.executive.model_planner.graph_from_proposal`` judges it
+    through the SAME ``validate_graph`` this module's own output goes through (ADR-0089
+    decision 2). Without a model this raises rather than silently falling back to the
+    rule-based planner (a caller that asked for the model seam must know it got
+    nothing)."""
+
+    def __init__(self, model: Any | None = None) -> None:
+        self.model = model
 
     def plan(self, directive: str, *, folder: str | None = None) -> TaskGraph:
-        raise NotImplementedError(
-            "ClaudeExecutivePlanner is an inert seam in M26: no model proposer is wired. "
-            "Any graph it eventually proposes MUST still pass app.executive.graph."
-            "validate_graph before it may run (ADR-0089 decision 2) — that gate is not "
-            "optional for a model-proposed graph any more than for the rule-based one."
-        )
+        if self.model is None:
+            raise NotImplementedError(
+                "ClaudeExecutivePlanner has no PlannerModel: pass one (B38), or use the "
+                "CompositeExecutivePlanner the application installs. Any graph it proposes "
+                "MUST still pass app.executive.graph.validate_graph (ADR-0089 decision 2)."
+            )
+        from app.executive.model_planner import ModelExecutivePlanner
+
+        return ModelExecutivePlanner(self.model).plan(directive, folder=folder)
 
 
 __all__ = [

@@ -18,6 +18,8 @@ from app.config import Settings, get_settings
 from app.executive.activities import EXECUTIVE_ACTIVITIES
 from app.executive.workflow import ExecutiveWorkflow
 from app.logging import configure_logging, get_logger
+from app.operator.mission_activities import MISSION_ACTIVITIES
+from app.operator.mission_workflow import OperatorMissionWorkflow
 from app.research.activities import (
     compose_activity,
     gather_sources_activity,
@@ -61,12 +63,15 @@ def build_worker(
             # workflow as its own, independent execution (app.executive.activities.
             # _run_research), never a child needing a separate worker/queue.
             ExecutiveWorkflow,
+            # B39 (req 128): the operator mission's durable driver, same queue.
+            OperatorMissionWorkflow,
         ],
         activities=[
             ping_activity,
             *RESEARCH_ACTIVITIES,
             *BROWSER_RESEARCH_ACTIVITIES,
             *EXECUTIVE_ACTIVITIES,
+            *MISSION_ACTIVITIES,
         ],
         activity_executor=executor,
     )

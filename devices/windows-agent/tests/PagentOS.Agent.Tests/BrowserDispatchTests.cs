@@ -73,7 +73,7 @@ public sealed class BrowserDispatchTests : IDisposable
         // operations (v1.2); the M18.3 ambient group sits between the alarm pair and the
         // browser family.
         Assert.Equal(
-            AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + AgentCapabilities.Ambient.Count + 1 + 28,
+            AgentCapabilities.Desktop.Count + AgentCapabilities.Alarm.Count + AgentCapabilities.Ambient.Count + 1 + 29,
             composed.Count);
         Assert.Equal(AgentCapabilities.Desktop, composed.Take(2));
         Assert.Equal(AgentCapabilities.Alarm, composed.Skip(2).Take(2));
@@ -81,7 +81,7 @@ public sealed class BrowserDispatchTests : IDisposable
 
         // The browser family still begins with its marker, wherever the ambient group pushed it.
         Assert.Equal(BrowserCapabilities.Family, composed[4 + AgentCapabilities.Ambient.Count]);
-        Assert.Equal(28, BrowserCapabilities.Operations.Count);
+        Assert.Equal(29, BrowserCapabilities.Operations.Count);
         Assert.Equal(composed.Count, composed.Distinct(StringComparer.Ordinal).Count());
         Assert.All(composed, name => Assert.Matches(CapabilityName, name));
         Assert.All(BrowserCapabilities.All, name => Assert.StartsWith("browser.", name, StringComparison.Ordinal));
@@ -95,7 +95,7 @@ public sealed class BrowserDispatchTests : IDisposable
                 "browser.tab_list", "browser.tab_new", "browser.tab_close", "browser.tab_select",
                 "browser.inspect", "browser.find", "browser.click", "browser.fill", "browser.select_option",
                 "browser.set_checked", "browser.scroll", "browser.wait", "browser.extract", "browser.snapshot",
-                "browser.screenshot", "browser.download", "browser.search", "browser.fetch_evidence",
+                "browser.screenshot", "browser.download", "browser.upload", "browser.search", "browser.fetch_evidence",
                 "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop",
             },
             BrowserCapabilities.Operations);

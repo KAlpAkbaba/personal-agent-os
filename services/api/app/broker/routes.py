@@ -28,6 +28,7 @@ from app.broker.ws import deliver_command
 from app.devices import service as devices_service
 from app.devices.authority import DeviceCommandRefused
 from app.devices.selection import NoCapableDeviceError, select_device
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 
@@ -121,7 +122,9 @@ async def enroll(request: Request, body: EnrollRequest) -> dict[str, Any]:
                     trace_id=trace_id_var.get(),
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+                raise HTTPException(
+                    status_code=400, detail=owner_detail("validation_error")
+                ) from exc
             return device.id
 
 
@@ -227,10 +230,10 @@ async def patch_device(
     except devices_service.AliasConflictError as exc:
         raise HTTPException(
             status_code=409,
-            detail={
-                "error_class": "alias_conflict",
-                "detail": f"'{exc.alias}' takma adı zaten başka bir cihazda kullanılıyor.",
-            },
+            detail=owner_detail(
+                "constraint_violation",
+                specific="Bu ad başka bir cihazda kullanılıyor; başka bir ad seçelim.",
+            ),
         ) from exc
     if payload is None:
         raise HTTPException(status_code=404, detail="unknown device")
@@ -415,7 +418,7 @@ async def create_command(
         # 403, not 404/409: the device is known and the caller is the owner. What is refused
         # is this capability ON this device, and the reason says which of the two it was.
         raise HTTPException(
-            status_code=403, detail={"error": "capability_refused", **exc.decision.as_dict()}
+            status_code=403, detail=owner_detail("permission_denied")
         ) from exc
     if created:
         runtime.counters["commands_created"] += 1

@@ -51,7 +51,14 @@ import {
   fetchVoiceQualification,
   fetchWorld,
 } from "./api";
-import { type PendingDraft, type PendingProposal, fetchPendingDrafts, fetchPendingProposals } from "./approvals";
+import {
+  type PendingDraft,
+  type PendingMutation,
+  type PendingProposal,
+  fetchPendingDrafts,
+  fetchPendingMutations,
+  fetchPendingProposals,
+} from "./approvals";
 import { type AppProjectRow, fetchApps } from "./apps";
 import { type ArtifactRow, fetchArtifacts } from "./artifacts";
 import { type CreativeRunRow, fetchCreativeRuns } from "./creative";
@@ -98,6 +105,11 @@ export type CockpitData = {
    */
   mailDrafts: Loaded<PendingDraft[]>;
   calendarProposals: Loaded<PendingProposal[]>;
+  /**
+   * B34 §166: the file changes the Cloud Core proposed and has not carried out, from
+   * `/v1/documents/mutations/pending` - the third pending source, same gate, same pair.
+   */
+  documentMutations: Loaded<PendingMutation[]>;
   /**
    * M22 §4: the artifacts the factory made, from M13's list route, with each
    * render's validation state once the Cloud Core half publishes it. The
@@ -196,6 +208,7 @@ const INITIAL: CockpitData = {
   evolutionSupervisor: { kind: "loading" },
   mailDrafts: { kind: "loading" },
   calendarProposals: { kind: "loading" },
+  documentMutations: { kind: "loading" },
   artifacts: { kind: "loading" },
   apps: { kind: "loading" },
   genesisRuns: { kind: "loading" },
@@ -235,6 +248,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         evolutionSupervisor,
         mailDrafts,
         calendarProposals,
+        documentMutations,
         artifacts,
         apps,
         genesisRuns,
@@ -264,6 +278,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         fetchEvolutionSupervisor(),
         fetchPendingDrafts(),
         fetchPendingProposals(),
+        fetchPendingMutations(),
         fetchArtifacts(),
         fetchApps(),
         fetchGenesisRuns(),
@@ -294,6 +309,7 @@ export function useCockpitData(enabled = true): { data: CockpitData; refresh: ()
         evolutionSupervisor,
         mailDrafts,
         calendarProposals,
+        documentMutations,
         artifacts,
         apps,
         genesisRuns,

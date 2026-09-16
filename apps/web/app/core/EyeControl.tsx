@@ -22,6 +22,7 @@
 
 import { useEffect } from "react";
 
+import { notifyEyeStreamStopped } from "../lib/eye/client";
 import { useActivePerception } from "../lib/eye/useActivePerception";
 import type { EyeView } from "../lib/uistate/ambient";
 import EyeControlView from "./EyeControlView";
@@ -56,6 +57,16 @@ export default function EyeControl({ eye }: EyeControlProps) {
   useEffect(() => {
     stopLocalIfStale({ status: eyeStatus, ageMs: eyeAgeMs, expired: eyeExpired });
   }, [eyeStatus, eyeAgeMs, eyeExpired, stopLocalIfStale]);
+
+  // B48 (req 301): the browser releases the camera with the document; the Cloud Core would
+  // otherwise only notice the silence. Registered only while this tab's camera runs.
+  const running = status.running;
+  useEffect(() => {
+    if (!running) return undefined;
+    const onPageHide = () => notifyEyeStreamStopped("tab_closed");
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, [running]);
 
   return (
     <EyeControlView

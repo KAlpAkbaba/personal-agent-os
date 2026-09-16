@@ -25,12 +25,38 @@ export type CoreCanvasProps = {
   still: boolean;
   /** The tab is hidden: draw nothing and run nothing until it is shown again. */
   hidden: boolean;
+  /**
+   * B23 req 723: the context went away. A driver reset, a laptop switching GPUs, or a
+   * browser reclaiming a backgrounded context all end the same way — a canvas that is
+   * still on screen and no longer drawing. The default must be prevented for
+   * `webglcontextrestored` to ever fire, which is why this is handled here rather than
+   * left to three.js.
+   */
+  onContextLost?: (reason: string) => void;
+  onContextRestored?: () => void;
 };
 
-export default function CoreCanvas({ intent, tier, still, hidden }: CoreCanvasProps) {
+export default function CoreCanvas({
+  intent,
+  tier,
+  still,
+  hidden,
+  onContextLost,
+  onContextRestored,
+}: CoreCanvasProps) {
   const budget = TIER_BUDGETS[tier];
   return (
     <Canvas
+      onCreated={({ gl }) => {
+        const canvas = gl.domElement;
+        canvas.addEventListener("webglcontextlost", (event) => {
+          // Without this the browser will never restore the context, and the fallback
+          // would be permanent even when the GPU came back.
+          event.preventDefault();
+          onContextLost?.("tarayıcı bağlamı geri aldı");
+        });
+        canvas.addEventListener("webglcontextrestored", () => onContextRestored?.());
+      }}
       // `demand` while still or hidden: three renders only when the scene asks
       // (a settled frame on an intent change under reduced motion; never while
       // hidden), rather than spinning a loop that early-returns.

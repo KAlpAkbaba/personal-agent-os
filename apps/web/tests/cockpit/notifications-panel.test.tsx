@@ -263,12 +263,19 @@ describe("the panel", () => {
     expect(html).toContain(DELIVERY_TR.read);
   });
 
-  it("says there are no notifications rather than showing nothing", () => {
-    const html = renderToStaticMarkup(
-      <NotificationsPanel state={loaded([], 0)} onMarkRead={() => {}} busyId={null} />,
-    );
+  it("says there are no notifications on its own page, and takes no slot on the cockpit", () => {
+    // B24 req 714. On the cockpit an empty inbox is one of thirteen panels saying nothing;
+    // on /notifications it is the answer the owner opened the page for.
+    expect(
+      renderToStaticMarkup(
+        <NotificationsPanel state={loaded([], 0)} onMarkRead={() => {}} busyId={null} />,
+      ),
+    ).toBe("");
 
-    expect(html).toContain("Bildirim yok.");
+    const page = renderToStaticMarkup(
+      <NotificationsPanel state={loaded([], 0)} onMarkRead={() => {}} busyId={null} always />,
+    );
+    expect(page).toContain("Bildirim yok.");
   });
 
   it("says it could not find out rather than showing an empty inbox", () => {

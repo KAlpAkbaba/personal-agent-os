@@ -78,6 +78,11 @@ class OperatorStep:
     #: A short name for receipts/errors ("open_application:launch"); defaults to the
     #: capability when the plan does not need to disambiguate steps sharing one.
     name: str = ""
+    #: B39: fields resolved at DISPATCH time from what an EARLIER step of the same plan
+    #: observed (the window id a launch produced). Merged over ``payload``; the receipt
+    #: records the payload that was actually sent. A plan still never re-plans - this
+    #: only lets a fixed step name a thing that did not exist when the plan was built.
+    payload_from: Callable[[], dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         if self.timeout_s <= 0 or self.timeout_s > MAX_STEP_TIMEOUT_S:
@@ -221,9 +226,12 @@ def run_task(
 
             task.status = STATUS_RUNNING
             started_at = datetime.now(UTC)
+            payload = dict(step.payload)
+            if step.payload_from is not None:
+                payload.update(step.payload_from())
             result = device_action.run(
                 capability=step.capability,
-                payload=dict(step.payload),
+                payload=payload,
                 idempotency_key=f"operator:{task.id}:{index}:{attempt}",
                 timeout_s=step.timeout_s,
             )
@@ -231,9 +239,7 @@ def run_task(
             last_result = result
             # ACT is done; this is OBSERVE AGAIN -> VERIFY POSTCONDITION (module docstring).
             task.status = STATUS_VERIFYING
-            modal = (
-                result.ok and isinstance(result.result, dict) and result.result.get("modal")
-            )
+            modal = result.ok and isinstance(result.result, dict) and result.result.get("modal")
             postcondition_ok = bool(
                 result.ok
                 and not modal
@@ -242,7 +248,7 @@ def run_task(
             receipt = StepReceipt(
                 step_name=step.step_name,
                 capability=step.capability,
-                payload=dict(step.payload),
+                payload=payload,
                 attempt=attempt,
                 ok=postcondition_ok,
                 observed=dict(result.result) if isinstance(result.result, dict) else {},

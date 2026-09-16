@@ -24,6 +24,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.logging import get_logger, trace_id_var
 from app.selfhealing.errors import SelfHealingError, SelfHealingErrorClass
@@ -292,7 +293,7 @@ async def heal_opportunity(
     except EvolutionError as exc:
         raise HTTPException(
             status_code=_EVOLUTION_HTTP_STATUS.get(str(exc.error_class), 500),
-            detail={"error_class": str(exc.error_class), "message": str(exc)},
+            detail=owner_detail(str(exc.error_class)),
         ) from exc
 
 

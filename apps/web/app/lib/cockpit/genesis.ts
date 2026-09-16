@@ -119,6 +119,57 @@ export function parseGenesisRow(raw: unknown): GenesisRunRow | null {
 export const fetchGenesisRuns = (): Promise<Loaded<GenesisRunRow[]>> =>
   load<GenesisRunRow[]>(GENESIS_RUNS_PATH, (raw) => listAt(raw, ["runs", "items"]).map(parseGenesisRow).filter(isPresent));
 
+// --------------------------------------------------------- B36: the catalogue
+
+/** B36 (req 562/563): the interfaces the owner registered, as `/v1/genesis/catalogue` lists them. */
+export const GENESIS_CATALOGUE_PATH = "/v1/genesis/catalogue";
+
+export type CatalogueEntryRow = {
+  name: string;
+  url: string | null;
+  target_phrases: string[];
+  operations: Array<{ operation_id: string; verbs: string[] }>;
+  /** `owner_rest` | `owner_voice` | `discovery`, or whatever the row says. */
+  source: string | null;
+  enabled: boolean | null;
+  updated_at: string | null;
+};
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v !== "") : [];
+}
+
+/** One catalogue entry from a raw row; `null` for a row with no name. */
+export function parseCatalogueEntry(raw: unknown): CatalogueEntryRow | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const name = str(o.name);
+  if (name === null) return null;
+  const operations = Array.isArray(o.operations)
+    ? o.operations
+        .map((op) => {
+          if (!op || typeof op !== "object") return null;
+          const id = str((op as Record<string, unknown>).operation_id);
+          return id === null ? null : { operation_id: id, verbs: strings((op as Record<string, unknown>).verbs) };
+        })
+        .filter(isPresent)
+    : [];
+  return {
+    name,
+    url: str(o.url),
+    target_phrases: strings(o.target_phrases),
+    operations,
+    source: str(o.source),
+    enabled: flag(o.enabled),
+    updated_at: str(o.updated_at),
+  };
+}
+
+export const fetchGenesisCatalogue = (): Promise<Loaded<CatalogueEntryRow[]>> =>
+  load<CatalogueEntryRow[]>(GENESIS_CATALOGUE_PATH, (raw) =>
+    listAt(raw, ["entries", "items"]).map(parseCatalogueEntry).filter(isPresent),
+  );
+
 // -------------------------------------------------------------- the receipt
 
 /** What an action answered, read from the receipt the route returns. */

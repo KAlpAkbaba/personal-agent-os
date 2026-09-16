@@ -167,6 +167,10 @@ class ExecutiveRunRow(Base):
     error_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     workflow_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: B38 (req 544): {step_id: iso timestamp} of the owner's approvals, and the step the
+    #: run is parked on (None when nothing waits).
+    approvals_json: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn, nullable=True)
+    awaiting_step: Mapped[str | None] = mapped_column(String(8), nullable=True)
     #: "rest" | "voice" (module docstring) — provenance only, behaviour is identical.
     source: Mapped[str] = mapped_column(String(16), nullable=False, default=SOURCE_VOICE)
     session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -202,6 +206,8 @@ class ExecutiveStepRow(Base):
     )
     postcondition_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False)
     retry_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
+    #: B38 (req 555): {max_rounds} - the step's bounded loop; empty = one round.
+    repeat_json: Mapped[dict[str, Any]] = mapped_column(JSONColumn, nullable=False, default=dict)
     timeout_s: Mapped[int] = mapped_column(Integer, nullable=False)
     risk_class: Mapped[str] = mapped_column(String(24), nullable=False)
     compensation: Mapped[str] = mapped_column(String(24), nullable=False, default="none")

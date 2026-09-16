@@ -1,0 +1,84 @@
+{
+  "batch": "B32",
+  "name": "Belge arama, OCR ve yineleme",
+  "requirements": [
+    139,
+    140,
+    141,
+    142,
+    148,
+    150,
+    151,
+    152,
+    169,
+    496
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 on the first run",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10342 passed, 5 skipped (1215 s); was 10298 after B31",
+      "Windows agent build + tests": "PASS - 939/939 (Agent.Tests, DocumentCapabilityNames.All 8, ImageArchiveTests 5, oracle metin.png with the tr pack) + 135/135 (Companion.Audio.Tests)",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest document-states + documents-panel; tsc --noEmit clean; matrix-badges after resync"
+  },
+  "what_this_proves": "The device reads pictures and archives as kinds of their own: an image's headers from WPF's decoder without decoding pixels, its text through the local Windows OCR engine (the owner's installed language packs, Turkish first, a typed refusal when none), a zip's central directory without inflating an entry. The cloud finds documents by the words in their text (from the index, no crawl), proposes duplicates by sha256 after locating each hit, sends exactly the proposal the owner heard to the Recycle Bin through a new reversible device capability, previews any document in its own units, speaks a picture's text and an archive's contents, and the executive compare finally honours its planner's two targets.",
+  "measured_first": {
+    "device_before": "FileKinds knew docx/xlsx/pptx/pdf/md/csv/json/source/txt/unknown; .png/.zip were 'unknown' (inspect fell to a text-decode, extract refused unknown_kind); no OCR/EXIF/zip listing anywhere; DocumentCapabilityNames.All=7; the companion TFM net10.0-windows carries no WinRT projection.",
+    "ocr_engine_probe": "Windows.Media.Ocr on this machine: languages en-US, tr; a generated 600x120 PNG 'Merhaba Dünya 1234' recognised exactly in 15 ms through PowerShell 5.1 WinRT (measured before any code was written).",
+    "cloud_before": "no full-text search over document_index (only the file-name search and the within-one-document token overlap); no duplicate/preview code; file.search records carry no sha256 (file.locate does); _kind_documents_compare ignored the planner's targets; 'Bu iki dokümanı karşılaştır' resolved to none ('doküman' unknown); 'Görseldeki metni oku' resolved to ui_read."
+  },
+  "closed_fully": {
+    "139_image_metadata": "ImageExtractor.ReadHeaders (BitmapDecoder DelayCreation: width/height/format/dpi/frames + BitmapMetadata date_taken/camera/application/title/author) on file.inspect; _inspect_speech speaks it; Intent IMAGE_METADATA -> document.inspect.",
+    "140_496_ocr": "OcrHost: embedded PowerShell script (-EncodedCommand; image path and language via environment; UTF-8 forced on stdout) hosting Windows.Media.Ocr; language = payload.language -> tr -> first installed; no engine -> dependency_unavailable/ocr_language_missing; ImageExtractor.Extract -> o<n> ocr_line blocks under the character budget, structure width/height/format/lines/language/engine/text_angle; ExtractRequest.Language + payload `language`.",
+    "141_image_text": "document.read on an image speaks 'görselinde şu yazıyor: …' from the OCR blocks (index when read before, device otherwise); Intent IMAGE_TEXT placed before the screen-reading family.",
+    "142_archive": "FileKinds.Archive (.zip), IsExtractable excludes it; ArchiveInspector lists the central directory under DocumentBounds (entries ≤200 listed, entry_count/total sizes/over_inflate_bound); file.inspect carries `archive`; document.extract refuses unsupported_format; _inspect_speech 'N öğe var: …'.",
+    "148_full_text": "DocumentService.find_text over index.latest(500) with retrieval.content_words/score_block; best block per document; speech names file + place; focus moves to the top hit; Intent DOCUMENT_FIND_TEXT extracts the query ('içinde X geçen', 'X yazan').",
+    "151_duplicates": "DocumentService.duplicates: file.search (pattern '*', roots from a spoken folder) -> file.locate per hit ≤ 8 MiB -> groups by sha256 -> keep oldest, remove the rest; proposal kept on the session (DEDUP_PLAN_KEY); fixture yedek/veri-kopya.csv byte-identical to veri.csv.",
+    "150_dedup": "device file.trash (Recycle Bin via Microsoft.VisualBasic FileSystem.DeleteFile SendToRecycleBin; roots + secret names + directory refused; observed.exists read back) appended to the documents family (All=8; five count tests, FileFetch position test); DocumentService.dedup trashes exactly the plan's remove list, verified per file, partial/failed receipts; document.dedup CRITICAL tier, ACTING_INTENTS; needs the proposal first.",
+    "152_preview": "DocumentService.preview: kind facts (_preview_facts) + first 240 chars; archive falls back to inspect (preview.kind=headers); web DocumentKind image/archive.",
+    "169_two_documents": "'doküman/dokuman' + 'arşiv/zip' in _DOCUMENT_NOUN_STEMS; _kind_documents_compare passes the planner's first two targets as target_a/target_b."
+  },
+  "found_on_the_way": {
+    "console_codepage": "The PowerShell OCR host answered 'Merhaba D�nya 1234' - the child wrote in the console code page while the parent read UTF-8; [Console]::OutputEncoding is forced to UTF-8 in the script.",
+    "csharp_pattern": "`kind is not Unknown and kind is not Archive` parses `and` as a pattern combinator (CS9135); `kind is not (Unknown or Archive)` is the form.",
+    "oracle_contains_shape": "the oracle's 'contains' match reads a `contains` array per block, not `text`; the PNG expected extract carries both.",
+    "fetch_position": "FileFetchTests pinned file.fetch as the LAST documents name; file.trash is appended after it and the test now pins both positions.",
+    "clarifying_registry": "a tool that answers needs_clarification must be in its family's *_CLARIFYING_TOOLS (DOCUMENT_TOOL_NAMES) or the relay records a success - two tests went red until the four names were listed.",
+    "duplicate_fixture_glob": "the fake file.search treated '*' as a word; it now honours a glob like the device."
+  },
+  "tests": {
+    "services/api/tests/unit/test_documents_b32.py": 15,
+    "services/api/tests/voice_corpus/corpus.py (doc.preview.*, doc.text.*, doc.dupes.*, doc.dedup.*, doc.image.*, doc.archive.inspect, doc.cmp.two)": "177 document cases green through the real relay",
+    "devices/windows-agent/tests/.../Documents/ImageArchiveTests.cs": "5 (kinds, image headers, OCR or honest refusal, archive directory + refusal, Recycle Bin)",
+    "devices/windows-agent/tests/.../Documents/ExtractionOracleTests.cs": "metin.png in the oracle (skipped only where no OCR language is installed; arsiv.zip skipped as never-extracted)",
+    "apps/web/tests/uistate/document-states.test.ts": "+3 kind assertions"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); the C# mutation rebuilds the agent tests and runs the lab test, then rebuilds the restored tree.",
+    "mutations": [
+      "M1 the image-text matcher no longer needs the picture noun ('Ekrandaki metni oku' stolen) -> 1 failure.",
+      "M2 full text scores no query words -> 1 failure.",
+      "M3 dedup acts without a proposal -> 1 failure.",
+      "M4 a trash the device did not verify counts as done -> 1 failure.",
+      "M5 every file becomes a duplicate group -> 1 failure.",
+      "M6 (C#) file.inspect no longer lists an archive's directory -> 1 failure in the lab test (the first C# mutation, letting IsExtractable admit archives, stayed green because the extractor lookup refuses anyway - two guards, one behaviour; replaced)."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL (test lab, this desktop): Windows OCR read the committed fixture exactly ('Merhaba Dünya 1234', language tr), the archive fixture listed its two entries and refused extraction, a lab file went to the Recycle Bin and was gone from its folder; the production 'üretimde bir görselden metin çıkarıldı' is Karar 0's (READY_FOR_OWNER)",
+    "why": "REAL_PROOF_REQUIRED names production; no commit is made in this run by the owner's instruction, so no production round exists yet. The engine itself was exercised on this machine before and after the code was written."
+  },
+  "owner_gates": {
+    "ocr_engine": "Windows.Media.Ocr (local, no new binaries, the owner's installed language packs) chosen and recorded; a different engine would sit behind IDocumentExtractor - checkpoint, does not block",
+    "karar_0": "production release round (OCR from a real picture on the owner's machine through the whole path)"
+  }
+}

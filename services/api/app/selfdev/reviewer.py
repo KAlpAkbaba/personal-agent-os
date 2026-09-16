@@ -26,9 +26,20 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.evolution.authority import Authority, LabAuthority
 from app.selfdev.model import ChangePlan, Patch
 from app.selfdev.runner import CandidateRunner, CommandResult
+from app.selfdev.security_review import REQUIRED_GRANT, review_candidate
 from app.selfdev.workspace import GitWorkspace
+
+CHECK_SECURITY_REVIEW = "security_review"
+
+
+def reviewer_authority() -> Authority:
+    """The lab authority the reviewer holds: exactly the grant the security review demands
+    (B35 req 598/680), nothing that could write production. Issued per reviewer so a test
+    can hand one WITHOUT the grant and watch the review refuse."""
+    return LabAuthority.issue("selfdev-reviewer", {REQUIRED_GRANT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +52,9 @@ class Check:
 @dataclass(slots=True)
 class ReviewVerdict:
     checks: list[Check] = field(default_factory=list)
+    #: The security review's own verdict (findings with path and line), kept whole for
+    #: the run record beside the one-line check.
+    security: dict[str, object] = field(default_factory=dict)
 
     @property
     def approved(self) -> bool:
@@ -64,6 +78,7 @@ def _tail(result: CommandResult) -> str:
 class IndependentReviewer:
     workspace: GitWorkspace
     runner: CandidateRunner
+    authority: Authority = field(default_factory=reviewer_authority)
 
     def review(
         self,
@@ -102,6 +117,7 @@ class IndependentReviewer:
 
         # 2. The whole patch.
         self.workspace.reset(worktree)
+        base_texts = self.workspace.read(worktree, patch.paths)
         self.workspace.write(worktree, patch)
         changed = self.workspace.changed_paths(worktree)
         fixed = self.runner.fix(worktree, changed)
@@ -110,6 +126,18 @@ class IndependentReviewer:
         verdict.checks.append(
             Check("scope", not outside, "outside scope: " + ", ".join(outside) if outside else "")
         )
+        # 3. The mandatory security review (B35 req 598/680), on what the patch WRITES after
+        #    the safe autofix, against what the base had - before a single test runs, because
+        #    a patch that carries a key or edits the identity boundary is not run at all.
+        security = review_candidate(
+            self.authority,
+            self.workspace.read(worktree, patch.paths),
+            base_texts={path: base_texts.get(path) for path in patch.paths},
+        )
+        verdict.security = security.as_dict()
+        verdict.checks.append(Check(CHECK_SECURITY_REVIEW, security.passed, security.summary()))
+        if not security.passed:
+            return verdict
         green = self.runner.pytest(worktree, [test_path])
         verdict.checks.append(Check("regression_green", green.ok, "" if green.ok else _tail(green)))
         if targeted_tests:

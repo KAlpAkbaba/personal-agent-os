@@ -43,10 +43,15 @@ from app.actions.receipt import (
     record_receipt,
 )
 from app.artifacts import factory, open_service, service
+from app.artifacts import lifecycle as artifact_lifecycle
+from app.artifacts.provenance import ACTOR_OWNER_VOICE, Actor
 from app.artifacts.spec import ArtifactSpec
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import (
+    EVENT_TYPE_ARTIFACT_CLONED,
     EVENT_TYPE_ARTIFACT_CREATED,
+    EVENT_TYPE_ARTIFACT_DELETED,
+    EVENT_TYPE_ARTIFACT_EDITED,
     EVENT_TYPE_ARTIFACT_LISTED,
     EVENT_TYPE_ARTIFACT_OPENED,
     EVENT_TYPE_ARTIFACT_RENDERED,
@@ -91,9 +96,7 @@ ERROR_INVENTED_NUMBER: Final = "invented_number"
 ERROR_FORMULA_INJECTION: Final = "formula_injection"
 ERROR_SECRET_REFUSED: Final = "secret_refused"
 
-SPEECH_INVENTED_NUMBER: Final = (
-    "Bunu dosyaya dökemedim efendim; söylediğiniz rakamlarla uyuşmuyor."
-)
+SPEECH_INVENTED_NUMBER: Final = "Bunu dosyaya dökemedim efendim; söylediğiniz rakamlarla uyuşmuyor."
 SPEECH_FORMULA_INJECTION: Final = (
     "Bunu dosyaya dökemedim efendim; bu içerik bir formül gibi yorumlanabilir."
 )
@@ -199,9 +202,7 @@ def _no_target_speech(ctx: ToolContext) -> str:
     return SPEECH_NO_ARTIFACT
 
 
-def _ledger(
-    db: Any, *, event_type: str, action: str, summary: str, detail: dict[str, Any]
-) -> None:
+def _ledger(db: Any, *, event_type: str, action: str, summary: str, detail: dict[str, Any]) -> None:
     if db is None:
         return
     try:
@@ -368,7 +369,12 @@ def artifact_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
             error_class=ERROR_SECRET_REFUSED,
         )
 
-    result = factory.create(db, runtime.store, spec=spec)
+    result = factory.create(
+        db,
+        runtime.store,
+        spec=spec,
+        actor=Actor(ACTOR_OWNER_VOICE, ref=ctx.call_id, session_id=str(ctx.session_id)),
+    )
     focus_module.set_focus(
         db,
         FOCUS_KIND_ARTIFACT,
@@ -580,8 +586,9 @@ def artifact_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         idempotency_key=f"artifact-open:{ctx.call_id or uuid.uuid4()}",
     )
     if outcome.ok and outcome.error_class is None:
-        execution, terminal = EXECUTION_EXECUTED, (
-            TERMINAL_VERIFIED if outcome.state == "opened" else TERMINAL_UNVERIFIED
+        execution, terminal = (
+            EXECUTION_EXECUTED,
+            (TERMINAL_VERIFIED if outcome.state == "opened" else TERMINAL_UNVERIFIED),
         )
     elif outcome.ok:
         # Fetched but the device could not open it (DEVICE_PROTOCOL.md §6k step 10):
@@ -658,6 +665,258 @@ def artifact_list(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
 # ------------------------------------------------------------------ registration
 
 
+# --------------------------------------------------------- B42: the lifecycle tools
+
+TOOL_ARTIFACT_EDIT: Final = "artifact.edit"
+TOOL_ARTIFACT_CLONE: Final = "artifact.clone"
+TOOL_ARTIFACT_DELETE: Final = "artifact.delete"
+TOOL_ARTIFACT_COMPARE: Final = "artifact.compare"
+SPEECH_DELETE_DENIED: Final = "Silme politikanız artefakt silmeye izin vermiyor efendim."
+
+
+def _lifecycle_refusal(
+    ctx: ToolContext,
+    tool: str,
+    requested_state: str,
+    exc: artifact_lifecycle.ArtifactLifecycleError,
+) -> dict[str, Any]:
+    return _receipt(
+        ctx,
+        capability=tool,
+        requested_state=requested_state,
+        execution=EXECUTION_REFUSED,
+        terminal=TERMINAL_FAILED,
+        server={"reason": exc.code},
+        speech=exc.speech,
+        error_class=exc.code,
+    )
+
+
+def artifact_edit(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu belgeye 'Riskler' bölümünü ekle." (B42 req 410) - the model names the edit
+    as structured ops; the owner's own numbers (the router's ``spoken_numbers``) are the
+    only numbers the edit may introduce."""
+    db = _require_db(ctx, TOOL_ARTIFACT_EDIT)
+    runtime = _artifacts_runtime(ctx, TOOL_ARTIFACT_EDIT)
+    artifact_id = _resolve_artifact_id(ctx, arguments)
+    if artifact_id is None:
+        return _clarification(_no_target_speech(ctx))
+    turn = _turn_record(ctx)
+    raw_ops = arguments.get("ops")
+    if not isinstance(raw_ops, list) or not raw_ops:
+        return _clarification("Neyi nasıl değiştireyim efendim?")
+    numbers = turn.get("spoken_numbers")
+    payload = {"ops": raw_ops, "spoken_numbers": list(numbers) if isinstance(numbers, list) else []}
+    try:
+        edit = artifact_lifecycle.ArtifactEdit.model_validate(payload)
+        result = artifact_lifecycle.edit_artifact(
+            db,
+            runtime.store,
+            artifact_id,
+            edit,
+            actor=Actor(ACTOR_OWNER_VOICE, ref=ctx.call_id, session_id=str(ctx.session_id)),
+        )
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        return _lifecycle_refusal(ctx, TOOL_ARTIFACT_EDIT, "edited", exc)
+    except (ValidationError, ValueError) as exc:
+        # The spec's own rules (never invented, no formula injection) hold on version
+        # two exactly as on version one - the SAME refusal shapes create uses, naming
+        # the ref and nothing else.
+        detail = str(exc)
+        for pattern, error_class, speech in (
+            (_FORMULA_INJECTION_REF_RE, ERROR_FORMULA_INJECTION, SPEECH_FORMULA_INJECTION),
+            (_INVENTED_NUMBER_REF_RE, ERROR_INVENTED_NUMBER, SPEECH_INVENTED_NUMBER),
+        ):
+            match = pattern.search(detail)
+            if match:
+                return _receipt(
+                    ctx,
+                    capability=TOOL_ARTIFACT_EDIT,
+                    requested_state="edited",
+                    execution=EXECUTION_REFUSED,
+                    terminal=TERMINAL_FAILED,
+                    server={"reason": error_class, "ref": match.group(1)},
+                    speech=speech,
+                    error_class=error_class,
+                    extra={"failing_ref": match.group(1)},
+                )
+        return _clarification("Düzenlemeyi anlayamadım efendim; neyi değiştireyim?")
+    _ledger(
+        db,
+        event_type=EVENT_TYPE_ARTIFACT_EDITED,
+        action="artifact.edit",
+        summary=f"artifact.edit -> {artifact_id} v{result.version} ({len(edit.ops)} op)",
+        detail={
+            "artifact_id": str(artifact_id),
+            "version": result.version,
+            "ops": [o.op for o in edit.ops],
+        },
+    )
+    valid = result.all_valid
+    return _receipt(
+        ctx,
+        capability=TOOL_ARTIFACT_EDIT,
+        requested_state="edited",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED if valid else TERMINAL_UNVERIFIED,
+        server=result.as_dict(),
+        speech=(
+            f"Düzenledim efendim; sürüm {result.version} hazır."
+            if valid
+            else f"Düzenledim efendim; sürüm {result.version} hazır ama bir biçim doğrulanamadı."
+        ),
+        extra={"artifact_id": str(artifact_id), "version": result.version},
+    )
+
+
+def artifact_clone(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu belgeyi kopyala." (B42 req 411)."""
+    db = _require_db(ctx, TOOL_ARTIFACT_CLONE)
+    runtime = _artifacts_runtime(ctx, TOOL_ARTIFACT_CLONE)
+    artifact_id = _resolve_artifact_id(ctx, arguments)
+    if artifact_id is None:
+        return _clarification(_no_target_speech(ctx))
+    turn = _turn_record(ctx)
+    title = turn.get("artifact_title") if isinstance(turn.get("artifact_title"), str) else None
+    title = title or (
+        str(arguments.get("title")) if isinstance(arguments.get("title"), str) else None
+    )
+    try:
+        result = artifact_lifecycle.clone_artifact(
+            db,
+            runtime.store,
+            artifact_id,
+            title=title,
+            actor=Actor(ACTOR_OWNER_VOICE, ref=ctx.call_id, session_id=str(ctx.session_id)),
+        )
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        return _lifecycle_refusal(ctx, TOOL_ARTIFACT_CLONE, "cloned", exc)
+    focus_module.set_focus(
+        db,
+        FOCUS_KIND_ARTIFACT,
+        str(result.artifact_id),
+        label=title or "kopya",
+        source="artifact_clone",
+    )
+    _ledger(
+        db,
+        event_type=EVENT_TYPE_ARTIFACT_CLONED,
+        action="artifact.clone",
+        summary=f"artifact.clone -> {result.artifact_id} from {artifact_id}",
+        detail={"artifact_id": str(result.artifact_id), "from": str(artifact_id)},
+    )
+    return _receipt(
+        ctx,
+        capability=TOOL_ARTIFACT_CLONE,
+        requested_state="cloned",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED if result.all_valid else TERMINAL_UNVERIFIED,
+        server=result.as_dict(),
+        speech="Kopyaladım efendim; kopya artık odakta.",
+        extra={"artifact_id": str(result.artifact_id), "from": str(artifact_id)},
+    )
+
+
+def artifact_delete(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu belgeyi sil." then "Evet, sil." (B42 req 412) - under the owner's policy."""
+    db = _require_db(ctx, TOOL_ARTIFACT_DELETE)
+    runtime = _artifacts_runtime(ctx, TOOL_ARTIFACT_DELETE)
+    artifact_id = _resolve_artifact_id(ctx, arguments)
+    if artifact_id is None:
+        return _clarification(_no_target_speech(ctx))
+    turn = _turn_record(ctx)
+    confirmed = bool(turn.get("artifact_confirm")) or bool(arguments.get("confirm"))
+    policy = str(getattr(runtime.settings, "artifact_delete_policy", "confirm") or "confirm")
+    try:
+        outcome = artifact_lifecycle.delete_artifact(
+            db, runtime.store, artifact_id, policy=policy, confirmed=confirmed
+        )
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        return _lifecycle_refusal(ctx, TOOL_ARTIFACT_DELETE, "deleted", exc)
+    if outcome.status == "needs_confirmation":
+        return {
+            "status": "needs_confirmation",
+            "speech": outcome.speech,
+            "artifact_id": str(artifact_id),
+            "candidates": [],
+        }
+    if outcome.status == "denied":
+        return _receipt(
+            ctx,
+            capability=TOOL_ARTIFACT_DELETE,
+            requested_state="deleted",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={"policy": policy},
+            speech=SPEECH_DELETE_DENIED,
+            error_class=artifact_lifecycle.ERROR_DELETE_DENIED,
+        )
+    _ledger(
+        db,
+        event_type=EVENT_TYPE_ARTIFACT_DELETED,
+        action="artifact.delete",
+        summary=f"artifact.delete -> {artifact_id} ({outcome.renders_removed} render)",
+        detail={
+            "artifact_id": str(artifact_id),
+            "policy": policy,
+            "renders_removed": outcome.renders_removed,
+        },
+    )
+    return _receipt(
+        ctx,
+        capability=TOOL_ARTIFACT_DELETE,
+        requested_state="deleted",
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED,
+        server=outcome.as_dict(),
+        speech=outcome.speech,
+        extra={"artifact_id": str(artifact_id), "renders_removed": outcome.renders_removed},
+    )
+
+
+def artifact_compare(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Öncekiyle karşılaştır." / "İkisini karşılaştır." (B42 req 415/416): the current
+    artifact against its previous version, or against the previous artifact in focus."""
+    db = _require_db(ctx, TOOL_ARTIFACT_COMPARE)
+    _artifacts_runtime(ctx, TOOL_ARTIFACT_COMPARE)
+    current_id = _resolve_artifact_id(ctx, arguments, default="current")
+    if current_id is None:
+        return _clarification(_no_target_speech(ctx))
+    against = arguments.get("against")
+    other_id: uuid.UUID | None = None
+    other_version: int | None = None
+    if against == "previous_artifact":
+        entry = focus_module.previous(db, FOCUS_KIND_ARTIFACT)
+        if entry is not None:
+            try:
+                other_id = uuid.UUID(entry.object_id)
+            except ValueError:
+                other_id = None
+        if other_id is None:
+            return _clarification(SPEECH_NO_PREVIOUS_ARTIFACT)
+    else:
+        artifact = service.get_artifact(db, current_id)
+        if artifact is None:
+            return _clarification(_no_target_speech(ctx))
+        if artifact.current_version < 2:
+            return _clarification("Bu artefaktın karşılaştırılacak önceki sürümü yok efendim.")
+        other_id = current_id
+        other_version = artifact.current_version - 1
+    try:
+        result = artifact_lifecycle.compare_versions(
+            db, other_id, current_id, a_version=other_version
+        )
+    except artifact_lifecycle.ArtifactLifecycleError as exc:
+        return _clarification(exc.speech)
+    return {
+        "speech": result["speech"],
+        "comparison": result["comparison"],
+        "diff": result["diff"],
+        "a": result["a"],
+        "b": result["b"],
+    }
+
+
 def register_artifacts_tools(reg: ToolRegistry) -> ToolRegistry:
     """Register all five tools (module docstring: ONE line in ``default_registry``)."""
     from app.voice.realtime_sessions.tools import ToolSpec
@@ -687,6 +946,93 @@ def register_artifacts_tools(reg: ToolRegistry) -> ToolRegistry:
                 "additionalProperties": False,
             },
             handler=artifact_create,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_ARTIFACT_EDIT,
+            description=(
+                "ODAKTAKİ artefaktı DÜZENLER ve yeni bir SÜRÜM yapar: 'bu belgeye Riskler bölümünü "
+                "ekle', 'başlığı X yap', 'tabloya şu satırı ekle', 'sunuma bir slayt ekle'. 'ops' "
+                "alanına yapısal düzenlemeleri ver "
+                "(set_title / append_section / replace_section / remove_section / "
+                "append_slide / append_row / append_bullet). Sahibin söylemediği hiçbir sayıyı "
+                "ekleme."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 32},
+                    **{"ops": {"type": "array", "items": {"type": "object"}, "maxItems": 20}},
+                },
+                "additionalProperties": False,
+            },
+            handler=artifact_edit,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_ARTIFACT_CLONE,
+            description=(
+                "ODAKTAKİ artefaktı KOPYALAR (yeni bir artefakt, kaynağı kayıtlı): 'bunu kopyala', "
+                "'belgeyi çoğalt'. 'title' alanına sahibin söylediği yeni adı ver."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 32},
+                    **{"title": {"type": "string", "maxLength": 500}},
+                },
+                "additionalProperties": False,
+            },
+            handler=artifact_clone,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_ARTIFACT_DELETE,
+            description=(
+                "ODAKTAKİ artefaktı sahibin silme politikasına göre SİLER: 'bunu sil', 'belgeyi "
+                "sil'. Politika onay istiyorsa 'needs_confirmation' döner; sahip 'Evet, sil' derse "
+                "'confirm': true ile yeniden çağır."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 32},
+                    **{"confirm": {"type": "boolean"}},
+                },
+                "additionalProperties": False,
+            },
+            handler=artifact_delete,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_ARTIFACT_COMPARE,
+            description=(
+                "ODAKTAKİ artefaktı önceki sürümüyle ya da önceki artefaktla KARŞILAŞTIRIR: "
+                "'öncekiyle karşılaştır', 'ikisini karşılaştır', 'ne değişti'. 'against' alanı "
+                "'previous_version' (varsayılan) ya da 'previous_artifact'."
+                " Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "maxLength": 32},
+                    **{
+                        "against": {
+                            "type": "string",
+                            "enum": ["previous_version", "previous_artifact"],
+                        }
+                    },
+                },
+                "additionalProperties": False,
+            },
+            handler=artifact_compare,
         )
     )
     reg.register(

@@ -27,7 +27,7 @@ from app.evolution.models import Capability, CapabilityGap, SkillVersion
 from app.evolution.registry import CapabilityRegistry
 from app.evolution.sandbox import SandboxPolicy
 from app.evolution.task_resumption import CapabilityDispatcher
-from app.genesis.models import GenesisRun
+from app.genesis.models import GenesisCatalogueRow, GenesisRun
 from app.genesis.service import GenesisService
 from app.ledger.models import ActivityEventRow
 
@@ -36,6 +36,7 @@ TABLES = [
     SkillVersion.__table__,
     CapabilityGap.__table__,
     GenesisRun.__table__,
+    GenesisCatalogueRow.__table__,
     ActivityEventRow.__table__,
 ]
 

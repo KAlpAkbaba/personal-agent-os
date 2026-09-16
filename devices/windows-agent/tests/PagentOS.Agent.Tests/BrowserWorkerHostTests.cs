@@ -389,8 +389,11 @@ public sealed class BrowserWorkerHostTests : IDisposable
         // WHY it was killed, from the host's own words. `PongsReceived == 0` used to stand
         // in for this and cannot any more - the healthy replacement answers pings - but it
         // was always the weaker claim: it says no pong arrived, not that this kill was
-        // because of that.
-        Assert.True(_log.Any("missed 3 consecutive pings"));
+        // because of that. The COUNT is not asserted: a worker that never answers is given
+        // the startup grace (2026-09-15: a healthy replacement was killed under a loaded
+        // gate before it could reach its message loop), so at 100 ms pings it has missed
+        // many more than three by the time the grace ends - and every one of them counted.
+        Assert.True(_log.Any("consecutive pings; killing it"));
 
         // No retry loop and no deadline: the replacement answers pings, so nothing kills it.
         var result = await Exec(host, BrowserCapabilities.Inspect, Payload("echo"));

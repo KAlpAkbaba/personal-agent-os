@@ -86,6 +86,16 @@ export default function EyeControlView({
         </span>
       )}
 
+      {/* B48 (req 302, 303): the server's "on" and this tab's camera can disagree - after a
+          tab was closed, or on another device. Said plainly, with the way back; the camera
+          never opens without the owner's press. */}
+      {eye.status === "active" && !status.running && (
+        <span className="muted" data-eye-tab-notice="not-running">
+          Göz sunucuda açık görünüyor ama bu sekmede kamera çalışmıyor. Açmak için “Gözü aç”a
+          basın; kendiliğinden açılmaz.
+        </span>
+      )}
+
       <button
         type="button"
         className="core-chip"

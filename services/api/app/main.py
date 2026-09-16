@@ -7,6 +7,7 @@ Run locally:
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -21,6 +22,7 @@ from app.alarms.routes import router as alarms_router
 from app.alarms.routine_port import WakeAlarmRunner
 from app.alarms.sequence import WakeSequence
 from app.ambient.routes import router as ambient_router
+from app.appfactory.code_model import AnthropicCodeModel, ModelAssistedGenerator
 from app.appfactory.routes import router as apps_router
 from app.appfactory.service import AppFactoryService
 from app.artifacts.render_fetch_store import get_render_fetch_store
@@ -35,7 +37,9 @@ from app.broker.ws import router as broker_ws_router
 from app.calendar.providers import build_calendar_provider, build_calendar_writer
 from app.calendar.routes import router as calendar_router
 from app.calendar.service import CalendarService
+from app.calendar.syncer import CalendarSyncer
 from app.config import Settings, get_settings
+from app.creative.imaging import build_image_provider
 from app.creative.routes import router as creative_router
 from app.creative.service import CreativeService
 from app.creative3d.routes import router as scenes_router
@@ -45,10 +49,19 @@ from app.devices import authority as device_authority
 from app.devices.commands import DeviceCommandClient, register_broker_runtime
 from app.devices.routes import router as devices_router
 from app.devices.status import get_status_registry, lowest_idle_seconds
+from app.documents.mutations import MutationService
+from app.documents.routes import router as documents_router
 from app.documents.service import DocumentService
 from app.evolution.routes import router as evolution_router
 from app.evolution.runtime import EvolutionRuntime
 from app.executive import reconcile as executive_reconcile
+from app.executive.model_planner import (
+    AnthropicPlannerModel,
+    CompositeExecutivePlanner,
+    ModelExecutivePlanner,
+    set_executive_planner,
+)
+from app.executive.planner import RuleBasedExecutivePlanner
 from app.executive.routes import router as executive_router
 from app.experience.routes import router as experience_router
 from app.experience.scheduler import ExperienceScheduler
@@ -71,7 +84,9 @@ from app.location.providers import (
 )
 from app.location.service import LocationService
 from app.logging import configure_logging, get_logger
+from app.mail.poller import MailPoller
 from app.mail.providers import build_mail_provider, build_mail_sender
+from app.mail.routes import device_router as mail_device_router
 from app.mail.routes import router as mail_router
 from app.mail.service import MailService
 from app.maintenance import RetentionSweeper
@@ -87,7 +102,9 @@ from app.news.routes import router as news_router
 from app.notifications import events as notification_events
 from app.notifications import ladder as notification_ladder
 from app.notifications.routes import router as notifications_router
+from app.operator.mission_routes import router as operator_mission_router
 from app.operator.service import OperatorService, register_operator_service
+from app.operator.vision import build_vision_provider
 from app.presence.routes import router as presence_router
 from app.release.routes import router as release_router
 from app.release.version import release_model
@@ -110,6 +127,8 @@ from app.security import step_up as step_up_policy
 from app.security.redaction import assert_redacted, redact_value
 from app.security.routes import router as security_router
 from app.security.runtime import SecurityRuntime
+from app.selfdev.routes import router as selfdev_router
+from app.selfdev.service import BudgetPolicy, SelfDevService
 from app.selfhealing.defects import register_defect_sink
 from app.selfhealing.routes import router as selfhealing_router
 from app.selfhealing.runtime import SelfHealingRuntime
@@ -233,14 +252,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # own service, reading the SAME device port every other family holds — one desktop/
     # file authority, never a second path. No process-wide registry of its own (unlike
     # OperatorService): nothing outside a tool call needs to ask "is a read running?".
-    document_service = DocumentService()
+    # B37 req 149: the SAME embedder the memory index uses ranks document blocks too.
+    document_service = DocumentService(embedder=memory.embedder)
+    # B34 req 153-167, 674: the managed mutations - journaled, reversible, approved by risk;
+    # ONE host flag closes the whole surface (the roadmap's rollback plan).
+    document_mutations = MutationService(
+        document_service, enabled=lambda: bool(settings.documents_mutation_enabled)
+    )
+    # B35 (req 581-623, 680): the self-development queue - the product surface the
+    # engine never had. Bounds from settings; ONE flag closes it.
+    selfdev_service = SelfDevService(
+        enabled=lambda: bool(settings.selfdev_enabled),
+        policy=BudgetPolicy(
+            max_parallel=settings.selfdev_max_parallel,
+            daily_token_budget=settings.selfdev_daily_token_budget,
+            min_free_bytes=settings.selfdev_min_free_bytes,
+            worktrees_root=(
+                Path(settings.selfdev_worktrees_root) if settings.selfdev_worktrees_root else None
+            ),
+            claim_ttl_s=settings.selfdev_claim_ttl_s,
+            max_ci_fix_rounds=settings.selfdev_max_ci_fix_rounds,
+        ),
+    )
     # M21 (docs/M21_MAIL_CALENDAR_SPEC.md §2, §3, ADR-0084): Mail & Calendar's own
     # providers, built from settings — never a fake in production (module docstrings of
     # app.mail.providers / app.calendar.providers). With nothing configured the provider
     # (and therefore the service) is honest about `account_missing`.
     mail_service = MailService(build_mail_provider(settings), build_mail_sender(settings))
     calendar_service = CalendarService(
-        build_calendar_provider(settings), build_calendar_writer(settings)
+        build_calendar_provider(settings),
+        build_calendar_writer(settings),
+        # B46 (req 354): the owner's cancel policy - refuse unless they chose confirm.
+        cancel_policy=settings.calendar_cancel_policy,
     )
     # ADR-0091 (Owner Location Context / Live Weather / Morning Briefing): the location
     # resolver (no live device provider yet - measured unavailable, app.location.
@@ -279,6 +322,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         briefing_live={
             "weather_service": weather_service,
             "calendar_service": calendar_service,
+            # B45 (req 278, 362): the briefing's unread-mail clause reads the same service.
+            "mail_service": mail_service,
             "device_statuses": get_status_registry(),
             # No `news_provider` key on purpose: nothing registers one anywhere in this
             # process (`app.state.news_provider` is never set either), so the resolver
@@ -296,7 +341,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # like ``document_service``'s own honest ``capability_missing`` when no device runtime
     # exists at all. ``app.appfactory.service`` catches that failure and returns a
     # truthful refused receipt rather than crashing the tool call.
-    app_factory_service = AppFactoryService()
+    # B40 (req 425, 435-437): the composed generator (deterministic; the model's slots
+    # only under the owner's flag) and the code model the fix loop asks - configured
+    # only when a key is present, so a host without one stops at the analysis and says so.
+    appfactory_model = (
+        AnthropicCodeModel(
+            model=settings.appfactory_code_model, api_key=settings.anthropic_api_key or None
+        )
+        if settings.anthropic_api_key
+        else None
+    )
+    app_factory_service = AppFactoryService(
+        composed=ModelAssistedGenerator(
+            model=appfactory_model,
+            enabled=lambda: bool(settings.appfactory_model_generation_enabled),
+        ),
+        code_model=appfactory_model if settings.appfactory_model_generation_enabled else None,
+        max_fix_attempts=int(settings.appfactory_max_fix_attempts),
+        # B41 (req 441/446): release artifacts go to the SAME object store artifacts use.
+        store=artifacts.store,
+    )
     browser_gateway = UnwiredBrowserGateway()
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §2-§4, ADR-0088): 3D Creation's own service,
     # reading the SAME device port every other family holds (project.scaffold/
@@ -309,7 +373,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # own service — Paint edits, executed entirely with Pillow, share the SAME object
     # store the Artifact Factory and 3D Creation already use, one bucket, never a
     # second one for the same kind of file.
-    creative_service = CreativeService(object_store=artifacts.store)
+    vision_provider = build_vision_provider(settings)
+    creative_service = CreativeService(
+        object_store=artifacts.store,
+        image_provider=build_image_provider(settings),
+        vision_provider=vision_provider,
+    )
     voice_realtime.register_live(
         wake_sequence=wake_sequence,
         device_statuses=get_status_registry(),
@@ -320,7 +389,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings=settings,
         device_action=device_action,
         operator=operator_service,
+        # B29 req 105: screenshot understanding behind a provider interface; None when
+        # no vision provider is configured, and the tool says so.
+        vision_provider=vision_provider,
         document_service=document_service,
+        document_mutations=document_mutations,
+        selfdev_service=selfdev_service,
         mail_service=mail_service,
         calendar_service=calendar_service,
         app_factory_service=app_factory_service,
@@ -417,6 +491,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # 0 memories. It throttles itself to `experience_ingest_interval_s`, so most
             # ten-second ticks it returns "not_due" and touches nothing.
             experience_tick=lambda session, now: experience_scheduler.tick(session, now=now),
+            # B45 (req 360): the inbox poll, throttled to mail_poll_interval_s.
+            mail_tick=lambda session, now: mail_poller.tick(session, now=now),
+            # B46 (req 358, 361): the calendar mirror + reminders, throttled.
+            calendar_tick=lambda session, now: calendar_syncer.tick(session, now=now),
             interval_s=settings.routine_clock_interval_s,
             enabled=settings.routine_clock_enabled,
         )
@@ -441,6 +519,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # invented: vectors from a different model in the one embeddings table make every
     # semantic search quietly worse (ADR-0078's lesson, third time).
     experience_scheduler.bind_embedder(memory.embedder)
+    mail_poller = MailPoller(
+        mail_service,
+        enabled=settings.mail_poll_enabled,
+        interval_s=settings.mail_poll_interval_s,
+    )
+    calendar_syncer = CalendarSyncer(
+        calendar_service,
+        enabled=settings.calendar_sync_enabled,
+        interval_s=settings.calendar_sync_interval_s,
+    )
     routine_clock = _build_routine_clock()
 
     def _in_session(session_scope, sweep):  # noqa: ANN001, ANN202 - two local call sites
@@ -523,6 +611,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         register_routine_clock(routine_clock)
         await routine_clock.start()
         await artifacts.start()
+        # B36 (req 562/563): the spoken-name catalogue is built from its rows at
+        # startup - a registered interface must survive a restart. Never blocks
+        # startup: a database without the table yet is an empty catalogue.
+        try:
+            loaded = await asyncio.to_thread(genesis.load_catalogue)
+            logger.info("genesis_catalogue_loaded", entries=loaded)
+        except Exception as exc:  # noqa: BLE001 - startup must not depend on it
+            logger.warning("genesis_catalogue_load_failed", error=f"{type(exc).__name__}: {exc}")
         # M9: the artifact-ready announcer runs HERE, in the process that holds
         # the push registrations. The Temporal worker only makes a task READY;
         # this drains READY-but-unannounced tasks (app/mobile/announcer.py).
@@ -609,6 +705,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.briefing_announcer = briefing_announcer
     app.state.retention_sweeper = retention_sweeper
     app.state.experience_scheduler = experience_scheduler
+    app.state.mail_poller = mail_poller
+    app.state.calendar_syncer = calendar_syncer
     # M18.3: the routes and the voice tools reach the device through these, injected
     # rather than imported as singletons (docs/M18_ACTION_CONTRACT.md §4).
     app.state.wake_sequence = wake_sequence
@@ -621,6 +719,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.artifact_render_fetch_store = get_render_fetch_store()
     app.state.operator_service = operator_service
     app.state.document_service = document_service
+    app.state.document_mutations = document_mutations
+    app.state.selfdev_service = selfdev_service
     app.state.mail_service = mail_service
     app.state.calendar_service = calendar_service
     app.state.app_factory_service = app_factory_service
@@ -662,6 +762,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # deliberately not owner-gated — the device holds a one-time token instead of a
     # session (app/artifacts/routes.py's device_router docstring).
     app.include_router(artifacts_device_router)
+    # B45 (req 348): the device's single-use fetch of a mail attachment (no owner credential).
+    app.include_router(mail_device_router)
     app.include_router(voice_router)
     app.include_router(voice_realtime_router)
     app.include_router(narration_router)
@@ -698,6 +800,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # router applies.
     app.include_router(mail_router)
     app.include_router(calendar_router)
+    app.include_router(documents_router)
+    # B35: the self-development queue's REST surface (the Cockpit and the worker).
+    app.include_router(selfdev_router)
     # M25 (docs/M25_CREATIVE_3D_SPEC.md §6): the Cockpit's "3B Sahne" panel — owner-
     # gated, the same require_owner_session dependency every other router applies.
     app.include_router(scenes_router)
@@ -706,6 +811,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # M26 (docs/M26_EXECUTIVE_AUTONOMY_SPEC.md §6): executive.* reads the SAME
     # ExecutiveService the voice tools (app.executive.tools_executive) drive.
     app.include_router(executive_router)
+    # B39 (req 128-130): operator missions - the SAME mission service the voice tool
+    # (tools_mission) drives; the Temporal worker runs the loop.
+    app.include_router(operator_mission_router)
+    # B38 (req 550/551): rules first, the model only under the owner's flag - the ONE
+    # planner the REST route and the voice tool both plan through.
+    set_executive_planner(
+        CompositeExecutivePlanner(
+            RuleBasedExecutivePlanner(),
+            ModelExecutivePlanner(
+                AnthropicPlannerModel(
+                    model=settings.executive_planner_model,
+                    api_key=settings.anthropic_api_key or None,
+                )
+            ),
+            enabled=lambda: bool(settings.executive_model_planner_enabled),
+        )
+    )
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §7): news.* reads the SAME device_action/
     # broker/artifacts runtime every other family above already reads — one device
     # authority, never a second path.

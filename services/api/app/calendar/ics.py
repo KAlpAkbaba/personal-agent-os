@@ -17,9 +17,10 @@ directly by the provider, never round-tripped through this parser).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dateutil.rrule import rrulestr
@@ -47,6 +48,9 @@ MAX_OCCURRENCES_PER_WINDOW = 10000
 #: the raw number of occurrences dateutil is allowed to generate while searching,
 #: independent of how many of them actually land inside ``[start, end)``.
 MAX_RRULE_RAW_SCAN = 200_000
+#: B46 (req 357, 358): the furthest ahead a reminder may be, and how many one event keeps.
+MAX_REMINDER_MINUTES = 7 * 24 * 60
+MAX_ALARMS_PER_EVENT = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +65,8 @@ class VEvent:
     rrule: str | None = None
     exdates: tuple[datetime, ...] = ()
     location: str | None = None
+    #: B46 (req 357): minutes before the start each VALARM asks for.
+    alarms: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +78,10 @@ class Occurrence:
     start: datetime
     end: datetime
     all_day: bool
+    #: B46 (req 358): the event's reminders (minutes before its start).
+    reminders: tuple[int, ...] = ()
+    #: B46: an occurrence of a recurring event - it cannot be moved or removed alone.
+    recurring: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -168,12 +178,33 @@ def parse_calendar(text: str) -> list[VEvent]:
     exdates: list[datetime] = []
     in_vevent = False
     in_vtimezone = False
+    in_valarm = False
+    alarms: list[int] = []
     for line in lines:
         name, params, value = _split_prop(line)
         if name == "BEGIN" and value == "VEVENT":
             in_vevent = True
             cur = {}
             exdates = []
+            alarms = []
+            in_valarm = False
+            continue
+        if in_vevent and name == "BEGIN" and value == "VALARM":
+            in_valarm = True
+            continue
+        if in_valarm:
+            # B46 (req 357): a VALARM's own properties (TRIGGER, ACTION, DESCRIPTION - and a
+            # SUMMARY on an email alarm) belong to the alarm, never to the event around it.
+            if name == "END" and value == "VALARM":
+                in_valarm = False
+            elif name == "TRIGGER":
+                minutes = parse_trigger_minutes(value, params)
+                if (
+                    minutes is not None
+                    and minutes not in alarms
+                    and len(alarms) < MAX_ALARMS_PER_EVENT
+                ):
+                    alarms.append(minutes)
             continue
         if name == "BEGIN" and value == "VTIMEZONE":
             in_vtimezone = True
@@ -204,6 +235,7 @@ def parse_calendar(text: str) -> list[VEvent]:
                         rrule=cur.get("RRULE"),
                         exdates=tuple(exdates),
                         location=cur.get("LOCATION"),
+                        alarms=tuple(sorted(alarms)),
                     )
                 )
             cur = None
@@ -293,6 +325,8 @@ def _expand_with_caps(
                         start=occ_start,
                         end=occ_end,
                         all_day=ev.all_day,
+                        reminders=ev.alarms,
+                        recurring=True,
                     )
                 )
                 per_event += 1
@@ -312,6 +346,7 @@ def _expand_with_caps(
                     start=ev.dtstart,
                     end=ev.dtend,
                     all_day=ev.all_day,
+                    reminders=ev.alarms,
                 )
             )
         if len(out) >= MAX_OCCURRENCES_PER_WINDOW:
@@ -338,6 +373,97 @@ def expand_events_report(
     return _expand_with_caps(events, start=start, end=end)
 
 
+class RRuleError(ValueError):
+    """A recurrence rule (or reminder) this writer will not send (B46 req 356, 357)."""
+
+
+_RRULE_FREQS: Final[tuple[str, ...]] = ("DAILY", "WEEKLY", "MONTHLY", "YEARLY")
+_RRULE_DAYS: Final[tuple[str, ...]] = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+_RRULE_ORDER: Final[tuple[str, ...]] = ("FREQ", "INTERVAL", "COUNT", "UNTIL", "BYDAY")
+MAX_RRULE_INTERVAL: Final = 99
+MAX_RRULE_COUNT: Final = 730
+_UNTIL_RE = re.compile(r"^\d{8}(T\d{6}Z)?$")
+_TRIGGER_RE = re.compile(
+    r"^(?P<sign>[+-])?P(?:(?P<w>\d+)W)?(?:(?P<d>\d+)D)?"
+    r"(?:T(?:(?P<h>\d+)H)?(?:(?P<m>\d+)M)?(?:(?P<s>\d+)S)?)?$"
+)
+
+
+def validate_rrule(rule: str) -> str:
+    """The canonical form of a rule this writer is willing to send, or :class:`RRuleError`.
+
+    A deliberately small vocabulary - FREQ (daily/weekly/monthly/yearly), INTERVAL, COUNT,
+    UNTIL, BYDAY - because every rule the owner can say maps into it and a rule the owner
+    cannot hear read back must not reach their calendar. The result is also parsed by
+    dateutil, the same library the reader expands with, so what is written can be read."""
+    text = (rule or "").strip()
+    if text.upper().startswith("RRULE:"):
+        text = text[6:]
+    if not text or len(text) > 200:
+        raise RRuleError("empty or oversized rule")
+    parts: dict[str, str] = {}
+    for piece in text.split(";"):
+        if "=" not in piece:
+            raise RRuleError(f"malformed part {piece!r}")
+        key, value = piece.split("=", 1)
+        key, value = key.strip().upper(), value.strip().upper()
+        if key not in _RRULE_ORDER or key in parts:
+            raise RRuleError(f"unsupported or repeated part {key}")
+        parts[key] = value
+    if parts.get("FREQ") not in _RRULE_FREQS:
+        raise RRuleError("FREQ must be DAILY, WEEKLY, MONTHLY or YEARLY")
+    interval = parts.get("INTERVAL")
+    if interval is not None and not (
+        interval.isdigit() and 1 <= int(interval) <= MAX_RRULE_INTERVAL
+    ):
+        raise RRuleError("INTERVAL out of range")
+    count = parts.get("COUNT")
+    if count is not None and not (count.isdigit() and 1 <= int(count) <= MAX_RRULE_COUNT):
+        raise RRuleError("COUNT out of range")
+    if count is not None and "UNTIL" in parts:
+        raise RRuleError("COUNT and UNTIL together")
+    if "UNTIL" in parts and not _UNTIL_RE.match(parts["UNTIL"]):
+        raise RRuleError("UNTIL must be a date or a UTC date-time")
+    if "BYDAY" in parts:
+        days = parts["BYDAY"].split(",")
+        if parts.get("FREQ") != "WEEKLY":
+            raise RRuleError("BYDAY is accepted only on a weekly rule")
+        if not days or any(d not in _RRULE_DAYS for d in days) or len(set(days)) != len(days):
+            raise RRuleError("BYDAY must name weekdays (MO..SU) once each")
+        parts["BYDAY"] = ",".join(sorted(days, key=_RRULE_DAYS.index))
+    if parts.get("INTERVAL") == "1":
+        parts.pop("INTERVAL")
+    canonical = ";".join(f"{key}={parts[key]}" for key in _RRULE_ORDER if key in parts)
+    try:
+        rrulestr(canonical, dtstart=datetime(2026, 1, 1, tzinfo=UTC))
+    except (ValueError, TypeError) as exc:
+        raise RRuleError(str(exc)) from exc
+    return canonical
+
+
+def parse_trigger_minutes(value: str, params: dict[str, str]) -> int | None:
+    """Minutes BEFORE the event's start a VALARM asks for, or None for a trigger this
+    reader does not turn into a reminder (an absolute time, one related to the end, one
+    after the start, or one further ahead than :data:`MAX_REMINDER_MINUTES`)."""
+    if params.get("VALUE", "").upper() == "DATE-TIME":
+        return None
+    if params.get("RELATED", "START").upper() != "START":
+        return None
+    match = _TRIGGER_RE.match(value.strip().upper())
+    if match is None:
+        return None
+    total = (
+        int(match["w"] or 0) * 7 * 1440
+        + int(match["d"] or 0) * 1440
+        + int(match["h"] or 0) * 60
+        + int(match["m"] or 0)
+        + int(match["s"] or 0) // 60
+    )
+    if match["sign"] != "-" and total > 0:
+        return None
+    return total if total <= MAX_REMINDER_MINUTES else None
+
+
 def build_vevent(
     *,
     uid: str,
@@ -345,6 +471,8 @@ def build_vevent(
     start: datetime,
     end: datetime,
     location: str | None = None,
+    rrule: str | None = None,
+    reminder_minutes: int | None = None,
 ) -> str:
     """A single VEVENT, folded into a full VCALENDAR document — the PUT body
     ``CalDavCalendarProvider.create``/``update`` sends. Escaping mirrors :func:`_unescape`
@@ -371,12 +499,31 @@ def build_vevent(
     ]
     if location:
         lines.append(f"LOCATION:{esc(location)}")
+    # B46 (req 356): the rule the owner heard read back, in its validated canonical form.
+    if rrule:
+        lines.append(f"RRULE:{validate_rrule(rrule)}")
+    # B46 (req 357): one display alarm the given minutes before the start.
+    if reminder_minutes is not None:
+        minutes = int(reminder_minutes)
+        if not 0 <= minutes <= MAX_REMINDER_MINUTES:
+            raise RRuleError(f"reminder out of range: {minutes}")
+        lines += [
+            "BEGIN:VALARM",
+            "ACTION:DISPLAY",
+            f"DESCRIPTION:{esc(summary)}",
+            f"TRIGGER:-PT{minutes}M",
+            "END:VALARM",
+        ]
     lines += ["END:VEVENT", "END:VCALENDAR", ""]
     return "\r\n".join(lines)
 
 
 __all__ = [
     "DEFAULT_TIMEZONE",
+    "MAX_REMINDER_MINUTES",
+    "RRuleError",
+    "parse_trigger_minutes",
+    "validate_rrule",
     "MAX_OCCURRENCES_PER_EVENT",
     "MAX_OCCURRENCES_PER_WINDOW",
     "MAX_RRULE_RAW_SCAN",

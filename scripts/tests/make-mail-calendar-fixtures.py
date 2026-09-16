@@ -36,6 +36,18 @@ def addr(key: str) -> dict:
     return {"name": name, "email": email}
 
 
+def _with_bytes(attachment: dict) -> dict:
+    """B45 (req 347, 348): each attachment carries deterministic bytes (base64) and the size
+    of THOSE bytes, so the fake provider never invents what a real provider would fetch."""
+    import base64
+    import hashlib
+
+    name = attachment["filename"]
+    content = ("PagentOS fixture attachment\n" + name + "\n").encode("utf-8")
+    content += hashlib.sha256(name.encode("utf-8")).digest() * 4
+    return {**attachment, "size": len(content), "content_b64": base64.b64encode(content).decode("ascii")}
+
+
 def msg(uid: int, folder: str, frm: str, to: list[str], subject: str, when: datetime, body: str, *, seen: bool = True,
         cc: list[str] | None = None, attachments: list[dict] | None = None, html: str | None = None,
         in_reply_to: str | None = None, references: list[str] | None = None, thread: str | None = None) -> dict:
@@ -52,7 +64,7 @@ def msg(uid: int, folder: str, frm: str, to: list[str], subject: str, when: date
         "flags": ["\\Seen"] if seen else [],
         "body_text": body,
         "body_html": html,
-        "attachments": attachments or [],
+        "attachments": [_with_bytes(a) for a in attachments or []],
         "in_reply_to": in_reply_to,
         "references": references or [],
         "thread": thread or subject,

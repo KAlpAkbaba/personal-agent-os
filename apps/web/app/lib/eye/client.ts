@@ -129,6 +129,20 @@ export const enableEye = (reason = "", identity?: EyeActionIdentity) =>
 export const disableEye = (reason = "", identity?: EyeActionIdentity) =>
   postEyeAction("/v1/presence/eye/disable", reason, identity);
 
+/**
+ * B48 (req 301): this tab is going away while its camera runs. A keepalive request, so it
+ * survives the page's unload; never awaited and never thrown - there is nobody left to tell.
+ * It is not a disable: the owner's consent stays exactly as they left it.
+ */
+export function notifyEyeStreamStopped(reason = "tab_closed"): void {
+  void apiFetch("/v1/presence/eye/stream-stopped", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
 /** Owner-facing text for anything thrown above. */
 export function explainEyeError(err: unknown): string {
   if (err instanceof UnauthorizedError) return "Sahip oturumu reddedildi.";

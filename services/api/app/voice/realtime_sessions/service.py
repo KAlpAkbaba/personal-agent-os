@@ -37,6 +37,7 @@ from app.narration.commands import NarrationState, State
 from app.security import step_up as step_up_policy
 from app.uistate import UiState
 from app.uistate import publish as publish_ui
+from app.voice import route_telemetry
 from app.voice import service as voice_service
 from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
@@ -167,12 +168,16 @@ def fail_interrupted_tool_calls(
     """
     now = now or utcnow()
     cutoff = now - older_than
-    rows = db.execute(
-        select(RealtimeToolCall).where(
-            RealtimeToolCall.status == TOOL_STATUS_RUNNING,
-            RealtimeToolCall.long_running.is_(False),
+    rows = (
+        db.execute(
+            select(RealtimeToolCall).where(
+                RealtimeToolCall.status == TOOL_STATUS_RUNNING,
+                RealtimeToolCall.long_running.is_(False),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     closed = 0
     for call in rows:
         if _aware(call.created_at, now) >= cutoff:
@@ -1471,6 +1476,52 @@ def record_client_events(
                     operator_running_known = bool(svc is not None and svc.is_running())
                 except Exception:  # noqa: BLE001 - a process with no operator runtime
                     operator_running_known = False
+            # B39 (req 129/130): a mission parked or running is the one fact the
+            # mission's three words need; while one is active, "Dur." / "Ne
+            # yapıyorsun?" belong to it too (operator.cancel/status delegate).
+            mission_state_known: str | None = None
+            try:
+                from app.operator.mission_service import active_mission
+
+                active = active_mission(db)
+                mission_state_known = active.status if active is not None else None
+            except Exception:  # noqa: BLE001 - a deployment without the missions table
+                mission_state_known = None
+            if mission_state_known is not None:
+                operator_running_known = True
+            # B42 (req 410-416): an artifact in focus owns edit / clone / delete / compare.
+            artifact_focused_known = False
+            try:
+                from app.operator import focus as artifact_focus_module
+                from app.operator.models import FOCUS_KIND_ARTIFACT
+
+                artifact_focused_known = (
+                    artifact_focus_module.current(db, FOCUS_KIND_ARTIFACT) is not None
+                )
+            except Exception:  # noqa: BLE001 - a deployment without the focus table
+                artifact_focused_known = False
+            # B43 (req 509-512): a creative run in focus owns undo / redo / deliver.
+            creative_focused_known = False
+            try:
+                from app.operator import focus as creative_focus_module
+                from app.operator.models import FOCUS_KIND_CREATIVE
+
+                creative_focused_known = (
+                    creative_focus_module.current(db, FOCUS_KIND_CREATIVE) is not None
+                )
+            except Exception:  # noqa: BLE001 - a deployment without the focus table
+                creative_focused_known = False
+            # B41 (req 440-452): a generated application in focus owns its lifecycle words.
+            app_project_focused_known = False
+            try:
+                from app.operator import focus as project_focus_module
+                from app.operator.models import FOCUS_KIND_PROJECT
+
+                app_project_focused_known = (
+                    project_focus_module.current(db, FOCUS_KIND_PROJECT) is not None
+                )
+            except Exception:  # noqa: BLE001 - a deployment without the focus table
+                app_project_focused_known = False
             if document_focused_known is None:
                 from app.operator import focus as document_focus_module
                 from app.operator.models import FOCUS_KIND_DOCUMENT
@@ -1572,6 +1623,28 @@ def record_client_events(
                     )
                 except Exception:  # noqa: BLE001 - a deployment without the native tables
                     native_build_focused_known = False
+            # B34 req 166: a file change proposed to THIS session and not yet decided - the
+            # one fact a bare "Uygula." / "Vazgeç." needs, read from the journal like
+            # draft_pending is read from the drafts.
+            mutation_pending_known = False
+            try:
+                from app.documents.models import MUTATION_STATE_PROPOSED, FileMutationRow
+
+                mutation_pending_known = (
+                    db.execute(
+                        select(FileMutationRow.id)
+                        .where(
+                            FileMutationRow.state == MUTATION_STATE_PROPOSED,
+                            FileMutationRow.session_id == str(row.id),
+                        )
+                        .limit(1)
+                    )
+                    .scalars()
+                    .first()
+                    is not None
+                )
+            except Exception:  # noqa: BLE001 - a deployment without the journal table
+                mutation_pending_known = False
             intent: ResolvedIntent = resolve_intent(
                 text,
                 session_state=RealtimeState(fsm) if fsm else None,
@@ -1586,8 +1659,25 @@ def record_client_events(
                 genesis_awaiting_approval=genesis_awaiting_approval_known,
                 executive_run_state=executive_run_state_known,
                 native_build_focused=native_build_focused_known,
+                mutation_pending=mutation_pending_known,
+                mission_state=mission_state_known,
+                app_project_focused=app_project_focused_known,
+                artifact_focused=artifact_focused_known,
+                creative_focused=creative_focused_known,
             )
             ctx["last_intent"] = intent.intent.value
+            # B26 req 749/750: what the router decided, recorded without the owner's words,
+            # and the one thing a router cannot notice about itself — the owner objecting
+            # to what it just did. `observe` writes a ledger note only for the turn that
+            # completes a suspicion, so one misroute is one row.
+            route_telemetry.observe(
+                db,
+                intent.intent,
+                matched=intent.matched or None,
+                tokens=intent.tokens,
+                session_id=str(row.id),
+                now=now,
+            )
             # ADR-0075: the LATEST resolved utterance of this session, kept on the
             # session row so a tool call arriving moments later can be keyed to the turn
             # it belongs to. Overwritten every utterance on purpose - an intervening
@@ -1621,6 +1711,12 @@ def record_client_events(
                 "pattern": intent.pattern,
                 "folder": intent.folder,
                 "extensions": intent.extensions,
+                # B34 (req 153-158): the edit's find/replace and the file name the owner's
+                # WORDS carried - listed here, or the tool never sees them (the comment
+                # below says why this list is explicit).
+                "find_text": intent.find_text,
+                "replace_text": intent.replace_text,
+                "new_name": intent.new_name,
                 # M21 (spec §3): the mail/calendar fields the owner's WORDS carried, for
                 # the same "owner's words win over the model's argument" reason.
                 # ADR-0112: the title the owner NAMED, for the same reason -- a song
@@ -1631,13 +1727,39 @@ def record_client_events(
                 # corpus and not by the tool's own unit test (which builds the turn
                 # record by hand and so cannot prove the field travels).
                 "media_query": intent.media_query,
+                # B27 req 733/734: the volume DIRECTION and the capability FAMILY the
+                # owner's words carried. Found missing here by B28's relay test, exactly
+                # the way the comment above says a field goes missing: the tools' own unit
+                # tests built the turn record by hand and passed while the field never
+                # travelled through the session.
+                "media_volume_direction": intent.media_volume_direction,
+                "capability_family": intent.capability_family,
+                # B28 req 92/93/98: the key, the chord and the scroll direction the owner
+                # SAID, for the same "owner's words win over the model's argument" reason.
+                "key_press": intent.key_press,
+                "scroll_direction": intent.scroll_direction,
+                # B29 req 100/102: the button or control the owner NAMED.
+                "ui_target": intent.ui_target,
+                # B30 req 119-122: the process and the service the owner NAMED.
+                "process_name": intent.process_name,
+                "service_name": intent.service_name,
+                # B31 req 209: the standing answer register the owner named.
+                "answer_level": intent.answer_level,
+                # B31 req 192: the research mode the owner's own words carried.
+                "research_mode": intent.research_mode,
+                # B32 req 148: the words to find in a document's text.
+                "text_query": intent.text_query,
                 "mail_ref": intent.mail_ref,
                 "calendar_ref": intent.calendar_ref,
+                "calendar_rrule": intent.calendar_rrule,
+                "calendar_reminder_minutes": intent.calendar_reminder_minutes,
                 # M22 (spec §5): the artifact fields the owner's WORDS carried, for the
                 # same "owner's words win over the model's argument" reason.
                 "artifact_ref": intent.artifact_ref,
                 "artifact_kind": intent.artifact_kind,
                 "artifact_title": intent.artifact_title,
+                "artifact_confirm": intent.artifact_confirm,
+                "creative_prompt": intent.creative_prompt,
                 "spoken_numbers": intent.spoken_numbers,
                 # M23 (spec §5): the App Factory fields the owner's WORDS carried, for
                 # the same "owner's words win over the model's argument" reason.
@@ -1645,6 +1767,8 @@ def record_client_events(
                 "app_template": intent.app_template,
                 "app_name": intent.app_name,
                 "app_commands": intent.app_commands,
+                # B40 (req 422): the owner's sentence for the requirements parser.
+                "app_request": intent.app_request,
                 # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): the Capability Genesis
                 # fields the owner's WORDS carried, for the same "owner's words win
                 # over the model's argument" reason.
@@ -1657,6 +1781,7 @@ def record_client_events(
                 "scene_tool": intent.scene_tool,
                 "scene_ref": intent.scene_ref,
                 "scene_kind": intent.scene_kind,
+                "scene_format": intent.scene_format,
                 # M27 (docs/M27_CREATIVE_TOOLS_SPEC.md §5): the Creative Tools fields
                 # the owner's WORDS carried, for the same "owner's words win over the
                 # model's argument" reason.
@@ -1704,6 +1829,12 @@ def record_client_events(
                 # reason every family above follows.
                 "native_target": intent.native_target,
                 "native_ref": intent.native_ref,
+                # B35 (req 622/623): the owner's own sentence, for the queue row.
+                "selfdev_request": intent.selfdev_request,
+                # B39 (req 127-130): the owner's own sentence for the mission planner
+                # and the mission word the router heard.
+                "mission_request": intent.mission_request,
+                "mission_action": intent.mission_action,
             }
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}

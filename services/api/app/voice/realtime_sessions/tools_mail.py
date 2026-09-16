@@ -36,6 +36,9 @@ TOOL_MAIL_EDIT_DRAFT: Final = "mail.edit_draft"
 TOOL_MAIL_READ_DRAFT: Final = "mail.read_draft"
 TOOL_MAIL_SEND: Final = "mail.send"
 TOOL_MAIL_DISCARD: Final = "mail.discard"
+#: B45 (req 347, 348): a message's attachments, listed and saved.
+TOOL_MAIL_ATTACHMENTS: Final = "mail.attachments"
+TOOL_MAIL_SAVE_ATTACHMENT: Final = "mail.save_attachment"
 
 MAIL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_MAIL_INBOX,
@@ -47,6 +50,8 @@ MAIL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_MAIL_READ_DRAFT,
     TOOL_MAIL_SEND,
     TOOL_MAIL_DISCARD,
+    TOOL_MAIL_ATTACHMENTS,
+    TOOL_MAIL_SAVE_ATTACHMENT,
 )
 
 
@@ -221,6 +226,42 @@ def mail_discard(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
 # ------------------------------------------------------------------ registration
 
 
+# ---------------------------------------------------------- ATTACHMENTS (B45)
+
+
+def mail_attachments(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Bu mailin eklerini göster." (B45 req 347)."""
+    db = _require_db(ctx, TOOL_MAIL_ATTACHMENTS)
+    service = _service(ctx, TOOL_MAIL_ATTACHMENTS)
+    return service.attachments(db, target=_target(ctx, arguments), session_id=str(ctx.session_id))
+
+
+def mail_save_attachment(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ "Eki bilgisayarıma kaydet." (B45 req 348): ``index`` is the 1-based number the owner
+    heard in the listing (the first when unsaid)."""
+    db = _require_db(ctx, TOOL_MAIL_SAVE_ATTACHMENT)
+    service = _service(ctx, TOOL_MAIL_SAVE_ATTACHMENT)
+    runtime = ctx.live.get("artifacts_runtime")
+    if runtime is None:
+        raise VoiceError(
+            VoiceErrorClass.DEPENDENCY_UNAVAILABLE, "mail.save_attachment needs the object store"
+        )
+    from app.mail.attachment_fetch import get_attachment_fetch_store
+
+    raw_index = arguments.get("index")
+    index = int(raw_index) if isinstance(raw_index, int | float) and raw_index >= 1 else 1
+    return service.save_attachment(
+        db,
+        ctx.live.get("device_action"),
+        store=runtime.store,
+        fetch_store=get_attachment_fetch_store(),
+        base_url=getattr(runtime.settings, "artifact_download_origin", "") or "",
+        target=_target(ctx, arguments),
+        index=index,
+        session_id=str(ctx.session_id),
+    )
+
+
 def register_mail_tools(reg: ToolRegistry) -> ToolRegistry:
     """Register all nine tools (module docstring: ONE line in ``default_registry``)."""
     from app.voice.realtime_sessions.tools import ToolSpec
@@ -359,6 +400,40 @@ def register_mail_tools(reg: ToolRegistry) -> ToolRegistry:
             ),
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             handler=mail_discard,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MAIL_ATTACHMENTS,
+            description=(
+                "ODAKTAKİ mailin EKLERİNİ listeler (ad, tür, boyut): 'bu mailin eklerini göster', "
+                "'ekte ne var'. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"target": {"type": "string", "maxLength": 200}},
+                "additionalProperties": False,
+            },
+            handler=mail_attachments,
+        )
+    )
+    reg.register(
+        ToolSpec(
+            name=TOOL_MAIL_SAVE_ATTACHMENT,
+            description=(
+                "ODAKTAKİ mailin bir EKİNİ sahibin bilgisayarına (İndirilenler) KAYDEDER: 'eki "
+                "bilgisayarıma kaydet', 'ikinci eki indir' (index=2). 'index' listede duyulan "
+                "sıra numarası. Dönen 'speech' metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "target": {"type": "string", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+            handler=mail_save_attachment,
         )
     )
     return reg

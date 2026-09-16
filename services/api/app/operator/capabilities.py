@@ -68,6 +68,35 @@ CAPABILITY_TYPE: Final = "operator.type"
 CAPABILITY_SHELL: Final = "operator.shell"
 CAPABILITY_CANCEL: Final = "operator.cancel"
 CAPABILITY_STATUS: Final = "operator.status"
+#: B27 req 735 (matrix row 104 "Çağıran yok"): the device has answered ``screen.capture``
+#: since M19 and nothing in Cloud Core ever asked. One device call, no plan - so it has
+#: no row in ``RECEIPT_BY_PLAN`` and mints its receipt under this name directly.
+CAPABILITY_SCREENSHOT: Final = "operator.screenshot"
+#: B28 req 92/93: one key or one modifier chord, through the focus guard - the device has
+#: answered ``keyboard.key`` / ``keyboard.shortcut`` since M19 and nothing asked.
+CAPABILITY_KEY: Final = "operator.key"
+#: B28 req 94-98, 107: the pointer family (move, click, double/right click, scroll).
+#: Raw coordinates are the LAST rung of the interaction ladder (spec §2), and this tool
+#: is the place that rule is enforced rather than described.
+CAPABILITY_POINTER: Final = "operator.pointer"
+#: B29 req 100/101/103: UI Automation actions (invoke, set value, select) - the highest
+#: semantic rung below the API, each verified by an INDEPENDENT read after acting.
+CAPABILITY_UI: Final = "operator.ui"
+#: B29 req 99/102: the UI Automation tree, read; the text a control holds, read.
+CAPABILITY_INSPECT: Final = "operator.inspect"
+#: B29 req 105: the visual rung - a capture described by a vision provider.
+CAPABILITY_SEE: Final = "operator.see"
+#: B30 req 82: close an application (WM_CLOSE first, terminate only with force) - the
+#: device has answered ``app.close`` since M19 and nothing asked.
+CAPABILITY_APP_CLOSE: Final = "operator.app_close"
+#: B30 req 119/120: processes - list by name, stop under the allowlist policy.
+CAPABILITY_PROCESS: Final = "operator.process"
+#: B30 req 121/122: services - status by name, restart under the allowlist policy.
+CAPABILITY_SERVICE: Final = "operator.service"
+#: B39 req 127-130: a multi-step mission - planned from the owner's sentence, run as a
+#: closed loop (observe, decide, act, verify, replan), parked for the owner's yes when
+#: they ask to see the plan first, paused/resumed/cancelled by voice or REST.
+CAPABILITY_MISSION: Final = "operator.mission"
 
 OPERATOR_CAPABILITIES: Final[tuple[str, ...]] = (
     CAPABILITY_APP_OPEN,
@@ -76,6 +105,16 @@ OPERATOR_CAPABILITIES: Final[tuple[str, ...]] = (
     CAPABILITY_SHELL,
     CAPABILITY_CANCEL,
     CAPABILITY_STATUS,
+    CAPABILITY_SCREENSHOT,
+    CAPABILITY_KEY,
+    CAPABILITY_POINTER,
+    CAPABILITY_UI,
+    CAPABILITY_INSPECT,
+    CAPABILITY_SEE,
+    CAPABILITY_APP_CLOSE,
+    CAPABILITY_PROCESS,
+    CAPABILITY_SERVICE,
+    CAPABILITY_MISSION,
 )
 
 # ----------------------------------------------------------------- the plan names
@@ -85,6 +124,8 @@ OPERATOR_CAPABILITIES: Final[tuple[str, ...]] = (
 #: activity event carries as detail. It is NOT a capability and never becomes one.
 PLAN_OPEN_APPLICATION: Final = "open_application"
 PLAN_TYPE_TEXT: Final = "type_text"
+#: B30 req 82.
+PLAN_CLOSE_APPLICATION: Final = "close_application"
 
 #: ``operator.window_control``'s ``action`` argument -> the plan that performs it. The
 #: tool used to build this name with ``f"{action}_window"``; declaring it means the six
@@ -97,14 +138,54 @@ PLAN_BY_WINDOW_ACTION: Final[dict[str, str]] = {
     "minimize": "minimize_window",
     "previous": "previous_window",
     "restore": "restore_window",
+    # B30 req 84/85: the two geometry actions the device has answered since M19.
+    "move": "move_window",
+    "resize": "resize_window",
 }
 
 #: ``operator.shell``'s ``query`` argument -> the plan that answers it, for the same
-#: reason.
+#: reason. B30 req 118 adds ``whoami``; every command the Cloud Core sends is held against
+#: the device's patterns by ``packages/protocol/operator-allowlists.json``.
 PLAN_BY_SHELL_QUERY: Final[dict[str, str]] = {
     "hostname": "shell_query_hostname",
     "ip": "shell_query_ip",
+    "whoami": "shell_query_whoami",
 }
+
+#: B30 req 119-122: ``operator.process`` / ``operator.service`` ``action`` -> plan.
+PLAN_BY_PROCESS_ACTION: Final[dict[str, str]] = {
+    "list": "process_list",
+    "stop": "process_stop",
+}
+PLAN_BY_SERVICE_ACTION: Final[dict[str, str]] = {
+    "status": "service_status",
+    "restart": "service_restart",
+}
+
+#: B28: ``operator.key``'s two shapes and ``operator.pointer``'s ``action`` argument -> the
+#: plan that performs it, declared for the same reason the window table is.
+PLAN_PRESS_KEY: Final = "press_key"
+PLAN_PRESS_SHORTCUT: Final = "press_shortcut"
+PLAN_BY_POINTER_ACTION: Final[dict[str, str]] = {
+    "move": "pointer_move",
+    "click": "pointer_click",
+    "double_click": "pointer_double_click",
+    "right_click": "pointer_right_click",
+    "scroll": "pointer_scroll",
+}
+
+#: B29: ``operator.ui``'s ``action`` argument -> the plan, and the two read plans behind
+#: ``operator.inspect``.
+PLAN_BY_UI_ACTION: Final[dict[str, str]] = {
+    "invoke": "ui_invoke",
+    "set_value": "ui_set_value",
+    "select": "ui_select",
+}
+PLAN_UI_READ: Final = "ui_read"
+PLAN_UI_INSPECT: Final = "ui_inspect"
+#: ``operator.inspect``'s two modes -> the plan, so the tool builds its plan name from a
+#: declared mapping (the structural test reads exactly that shape).
+PLAN_BY_READ_MODE: Final[dict[str, str]] = {"read": PLAN_UI_READ, "inspect": PLAN_UI_INSPECT}
 
 # ------------------------------------------------------- plan -> receipt capability
 
@@ -129,6 +210,31 @@ RECEIPT_BY_PLAN: Final[dict[str, str]] = {
     "restore_window": CAPABILITY_WINDOW_CONTROL,
     "shell_query_hostname": CAPABILITY_SHELL,
     "shell_query_ip": CAPABILITY_SHELL,
+    "shell_query_whoami": CAPABILITY_SHELL,
+    # B30 req 82/84/85/119-122.
+    "close_application": CAPABILITY_APP_CLOSE,
+    "move_window": CAPABILITY_WINDOW_CONTROL,
+    "resize_window": CAPABILITY_WINDOW_CONTROL,
+    "process_list": CAPABILITY_PROCESS,
+    "process_stop": CAPABILITY_PROCESS,
+    "service_status": CAPABILITY_SERVICE,
+    "service_restart": CAPABILITY_SERVICE,
+    # B28 req 92-98: the input family. Two plans collapse onto ``operator.key`` and five
+    # onto ``operator.pointer`` for the reason the window family's six do.
+    "press_key": CAPABILITY_KEY,
+    "press_shortcut": CAPABILITY_KEY,
+    "pointer_move": CAPABILITY_POINTER,
+    "pointer_click": CAPABILITY_POINTER,
+    "pointer_double_click": CAPABILITY_POINTER,
+    "pointer_right_click": CAPABILITY_POINTER,
+    "pointer_scroll": CAPABILITY_POINTER,
+    # B29 req 99-103: three UI Automation actions onto ``operator.ui``, two reads onto
+    # ``operator.inspect``.
+    "ui_invoke": CAPABILITY_UI,
+    "ui_set_value": CAPABILITY_UI,
+    "ui_select": CAPABILITY_UI,
+    "ui_read": CAPABILITY_INSPECT,
+    "ui_inspect": CAPABILITY_INSPECT,
 }
 
 # --------------------------------------------------------------- the retired names
@@ -185,9 +291,29 @@ def capability_for_retired_name(name: str) -> str | None:
 
 
 __all__ = [
+    "CAPABILITY_APP_CLOSE",
     "CAPABILITY_APP_OPEN",
     "CAPABILITY_CANCEL",
+    "CAPABILITY_INSPECT",
+    "CAPABILITY_PROCESS",
+    "CAPABILITY_SERVICE",
+    "PLAN_BY_PROCESS_ACTION",
+    "PLAN_BY_SERVICE_ACTION",
+    "PLAN_CLOSE_APPLICATION",
+    "CAPABILITY_KEY",
+    "CAPABILITY_MISSION",
+    "CAPABILITY_POINTER",
+    "CAPABILITY_SCREENSHOT",
+    "CAPABILITY_SEE",
     "CAPABILITY_SHELL",
+    "CAPABILITY_UI",
+    "PLAN_BY_POINTER_ACTION",
+    "PLAN_BY_READ_MODE",
+    "PLAN_BY_UI_ACTION",
+    "PLAN_UI_INSPECT",
+    "PLAN_UI_READ",
+    "PLAN_PRESS_KEY",
+    "PLAN_PRESS_SHORTCUT",
     "CAPABILITY_STATUS",
     "CAPABILITY_TYPE",
     "CAPABILITY_WINDOW_CONTROL",

@@ -35,6 +35,15 @@ def test_genesis_router_is_mounted_with_the_expected_paths():
         "/v1/genesis/runs/{run_id}",
         "/v1/genesis/runs/{run_id}/approve",
         "/v1/genesis/runs/{run_id}/cancel",
+        # B36 (req 561-565, 570-574): the front door, the catalogue and the versions.
+        "/v1/genesis/catalogue",
+        "/v1/genesis/catalogue/discover",
+        "/v1/genesis/catalogue/{name}",
+        "/v1/genesis/capabilities/{capability_id}/versions",
+        "/v1/genesis/capabilities/{capability_id}/rollback",
+        "/v1/genesis/capabilities/{capability_id}/deactivate",
+        "/v1/genesis/capabilities/{capability_id}/activate",
+        "/v1/genesis/capabilities/{capability_id}/use",
     }
 
 

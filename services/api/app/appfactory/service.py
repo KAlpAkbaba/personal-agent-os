@@ -33,6 +33,9 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
+from app.appfactory import composed_service, lifecycle_service
+from app.appfactory.code_model import CodeModel, ModelAssistedGenerator
+from app.appfactory.composer import TEMPLATE_COMPOSED
 from app.appfactory.generator import AppGenerator, AppGeneratorError, DeterministicAppGenerator
 from app.appfactory.models import (
     STATE_FAILED,
@@ -51,6 +54,7 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_APP_PROJECT_CREATED,
     EVENT_TYPE_APP_PROJECT_EXERCISED,
     EVENT_TYPE_APP_PROJECT_FAILED,
+    EVENT_TYPE_APP_PROJECT_FIXED,
     EVENT_TYPE_APP_PROJECT_LISTED,
     EVENT_TYPE_APP_PROJECT_RUN,
     EVENT_TYPE_APP_PROJECT_SCAFFOLDED,
@@ -117,8 +121,23 @@ def _translate_error(error_class: str) -> tuple[str, str]:
 
 
 class AppFactoryService:
-    def __init__(self, generator: AppGenerator | None = None) -> None:
+    def __init__(
+        self,
+        generator: AppGenerator | None = None,
+        *,
+        composed: ModelAssistedGenerator | None = None,
+        code_model: CodeModel | None = None,
+        max_fix_attempts: int = 3,
+        store: Any = None,
+    ) -> None:
         self._generator = generator or DeterministicAppGenerator()
+        # B40: the composed generator (deterministic, the model's slots under the flag)
+        # and the code model the fix loop asks; None means the loop stops at analysis.
+        self._composed = composed or ModelAssistedGenerator()
+        self._code_model = code_model
+        self._max_fix_attempts = max_fix_attempts
+        # B41 (req 441/446): the object store a release artifact is written to.
+        self._store = store
 
     # ------------------------------------------------------------- device plumbing
 
@@ -268,53 +287,10 @@ class AppFactoryService:
         if missing is not None:
             return missing
 
-        try:
-            app_spec = AppSpec.model_validate(spec)
-        except ValidationError as exc:
-            return self._receipt(
-                capability="app.create",
-                requested_state="scaffolded",
-                execution=EXECUTION_REFUSED,
-                terminal=TERMINAL_FAILED,
-                server={"reason": "invalid_spec"},
-                speech="Bu uygulama tarifini işleyemedim efendim.",
-                db=db,
-                error_class=ERROR_VALIDATION,
-                session_id=session_id,
-                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
-            )
-
-        try:
-            files = self._generator.generate(app_spec)
-        except AppGeneratorError as exc:
-            return self._receipt(
-                capability="app.create",
-                requested_state="scaffolded",
-                execution=EXECUTION_REFUSED,
-                terminal=TERMINAL_FAILED,
-                server={"reason": "generation_failed"},
-                speech="Bu uygulamayı oluşturamadım efendim.",
-                db=db,
-                error_class=ERROR_VALIDATION,
-                session_id=session_id,
-                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
-            )
-
-        try:
-            _report, manifest = validate(files)
-        except AppValidationError as exc:
-            return self._receipt(
-                capability="app.create",
-                requested_state="scaffolded",
-                execution=EXECUTION_REFUSED,
-                terminal=TERMINAL_FAILED,
-                server={"reason": exc.code},
-                speech="Bu uygulamayı güvenlik denetiminden geçiremedim efendim.",
-                db=db,
-                error_class=ERROR_VALIDATION,
-                session_id=session_id,
-                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500], "code": exc.code},
-            )
+        built = self._build(spec, db=db, session_id=session_id)
+        if isinstance(built, dict):
+            return built
+        app_spec, files, manifest, composed_build = built
 
         project_id = uuid.uuid4()
         now = datetime.now(UTC)
@@ -329,6 +305,10 @@ class AppFactoryService:
             created_at=now,
             updated_at=now,
         )
+        if composed_build is not None:
+            row.plan_json = composed_build.plan.as_dict()
+            row.reports_json = composed_build.reports()
+            row.oracle_json = composed_build.oracle
         db.add(row)
         db.commit()
         self._ledger(
@@ -397,14 +377,351 @@ class AppFactoryService:
             execution=EXECUTION_EXECUTED,
             terminal=TERMINAL_VERIFIED,
             server={"root_path": root_path},
-            speech=f"{app_spec.name} uygulamasını oluşturdum efendim.",
+            speech=f"{app_spec.name} uygulamasını oluşturdum efendim."
+            + (
+                composed_service.unparsed_sentence(composed_build.requirements)
+                if composed_build is not None
+                else ""
+            ),
             db=db,
             session_id=session_id,
             extra={
                 "project_id": str(project_id),
                 "state": STATE_SCAFFOLDED,
                 "root_path": root_path,
+                "reports": composed_build.reports() if composed_build is not None else None,
+                "template": app_spec.template,
             },
+        )
+
+    # ---------------------------------------------------------------- B40: the build
+
+    def _build(self, spec: dict[str, Any], *, db: Session, session_id: str | None) -> Any:
+        """The spec -> (AppSpec, files, manifest, composed build | None), or a refusal
+        receipt. A composed request (req 422-434) goes through the requirements parser,
+        the planners, the composer, the lint and the security scan; a template request
+        goes the way it always did."""
+        wants_composed = spec.get("template") == TEMPLATE_COMPOSED or (
+            "template" not in spec and bool(spec.get("request") or spec.get("requirements"))
+        )
+        if wants_composed:
+            try:
+                build = composed_service.build_composed(spec, generator=self._composed)
+            except composed_service.ComposedRefusal as exc:
+                clarification = exc.code == "clarification_needed"
+                return self._receipt(
+                    capability="app.create",
+                    requested_state="scaffolded",
+                    execution=EXECUTION_REFUSED,
+                    terminal=TERMINAL_FAILED,
+                    server={"reason": exc.code, **exc.detail},
+                    speech=exc.speech,
+                    db=db,
+                    error_class="clarification_needed" if clarification else ERROR_VALIDATION,
+                    session_id=session_id,
+                    extra={
+                        "error_class": "clarification_needed"
+                        if clarification
+                        else ERROR_VALIDATION,
+                        "code": exc.code,
+                        **exc.detail,
+                    },
+                )
+            return build.spec, build.files, build.manifest, build
+
+        try:
+            app_spec = AppSpec.model_validate(spec)
+        except ValidationError as exc:
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "invalid_spec"},
+                speech="Bu uygulama tarifini işleyemedim efendim.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
+            )
+
+        try:
+            files = self._generator.generate(app_spec)
+        except AppGeneratorError as exc:
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "generation_failed"},
+                speech="Bu uygulamayı oluşturamadım efendim.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500]},
+            )
+
+        try:
+            _report, manifest = validate(files)
+        except AppValidationError as exc:
+            return self._receipt(
+                capability="app.create",
+                requested_state="scaffolded",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": exc.code},
+                speech="Bu uygulamayı güvenlik denetiminden geçiremedim efendim.",
+                db=db,
+                error_class=ERROR_VALIDATION,
+                session_id=session_id,
+                extra={"error_class": ERROR_VALIDATION, "detail": str(exc)[:500], "code": exc.code},
+            )
+
+        return app_spec, files, manifest, None
+
+    # ------------------------------------------------------------- B40: plan and fix
+
+    def plan(self, text: str) -> dict[str, Any]:
+        """Req 423/424: the plan the owner may read before anything is written."""
+        return composed_service.plan_preview(text)
+
+    def _scaffold_version(
+        self,
+        db: Session,
+        device_action: DeviceActionPort,
+        parent: AppProjectRow,
+        build: Any,
+        version: int,
+    ) -> AppProjectRow | None:
+        """A fixed application is a NEW project version on the device (the device never
+        rewrites a project in place); the row carries its parent and its version."""
+        project_id = uuid.uuid4()
+        now = datetime.now(UTC)
+        row = AppProjectRow(
+            id=project_id,
+            name=parent.name,
+            kind=parent.kind,
+            template=parent.template,
+            spec_json=build.spec.model_dump(mode="json"),
+            device_id=parent.device_id,
+            state=STATE_PLANNED,
+            plan_json=build.plan.as_dict(),
+            reports_json=build.reports(),
+            oracle_json=build.oracle,
+            version=version,
+            parent_id=parent.id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        db.commit()
+        result = device_action.run(
+            capability=CAPABILITY_PROJECT_SCAFFOLD,
+            payload={
+                "project_id": str(project_id),
+                "slug": f"{build.spec.slug()}-v{version}",
+                "files": [{"path": f.path, "text": f.text} for f in build.files.files],
+                "manifest": build.manifest,
+            },
+            idempotency_key=f"appfactory-scaffold:{project_id}",
+            timeout_s=30.0,
+        )
+        if not result.ok:
+            row.state = STATE_FAILED
+            row.updated_at = datetime.now(UTC)
+            db.commit()
+            return None
+        row.root_path = str((result.result or {}).get("root_path") or "") or None
+        row.state = STATE_SCAFFOLDED
+        row.updated_at = datetime.now(UTC)
+        db.commit()
+        focus_module.set_focus(
+            db, FOCUS_KIND_PROJECT, str(project_id), label=parent.name, source="app_fix"
+        )
+        return row
+
+    def fix(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 435-437: analyse the failed run, then the bounded fix loop through the
+        code model - each attempt a new version scaffolded and tested on the device."""
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        project = self.resolve_project(db, target)
+        if project is None:
+            return self._clarification(SPEECH_NO_PROJECT)
+        if project.test_report_json is None:
+            return self._invalid_argument(
+                capability="app.fix",
+                requested_state="fixed",
+                speech="Önce testleri çalıştırmalıyım efendim.",
+                db=db,
+                session_id=session_id,
+            )
+        record, latest, analysis = composed_service.run_fix_loop(
+            db,
+            device_action,  # type: ignore[arg-type]
+            project,
+            generator=self._composed,
+            code_model=self._code_model,
+            max_attempts=self._max_fix_attempts,
+            scaffold_version=self._scaffold_version,
+        )
+        project.fix_json = {
+            "record": record.as_dict(),
+            "analysis": analysis.as_dict(),
+            "latest": str(latest.id),
+        }
+        project.updated_at = datetime.now(UTC)
+        db.commit()
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_APP_PROJECT_FIXED,
+            action="app.project.fix",
+            summary=f"app.project.fix -> {project.name}: {record.status} ({record.reason})",
+            detail={
+                "project_id": str(project.id),
+                "latest": str(latest.id),
+                "status": record.status,
+                "attempts": len(record.attempts),
+            },
+        )
+        self._publish(project_name=project.name, state=latest.state)
+        fixed = record.status == "fixed"
+        if fixed:
+            speech = (
+                f"{project.name} uygulamasını düzelttim efendim: {record.reason}; "
+                f"yeni sürüm {latest.version}."
+            )
+        elif record.status == "not_needed":
+            speech = f"{project.name} testleri zaten geçiyor efendim."
+        else:
+            speech = f"{project.name}: {analysis.summary}. {record.reason}."
+        return self._receipt(
+            capability="app.fix",
+            requested_state="fixed",
+            execution=EXECUTION_EXECUTED
+            if fixed or record.status == "not_needed"
+            else EXECUTION_REFUSED,
+            terminal=TERMINAL_VERIFIED
+            if fixed or record.status == "not_needed"
+            else TERMINAL_FAILED,
+            server={
+                "status": record.status,
+                "attempts": len(record.attempts),
+                "latest": str(latest.id),
+            },
+            speech=speech,
+            db=db,
+            error_class=None if fixed or record.status == "not_needed" else record.status,
+            session_id=session_id,
+            extra={
+                "project_id": str(project.id),
+                "latest_project_id": str(latest.id),
+                "state": latest.state,
+                "fix": record.as_dict(),
+                "analysis": analysis.as_dict(),
+                "version": latest.version,
+            },
+        )
+
+    # -------------------------------------------------------- B41: the lifecycle
+
+    def _translate(self, error_class: str) -> tuple[str, str]:
+        return _translate_error(error_class)
+
+    def verify(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 443/444: the oracle replayed in the device's browser, then a restart."""
+        return lifecycle_service.verify(
+            self, db, device_action, target=target, session_id=session_id
+        )
+
+    def log(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 445: the run log the device captured, read back."""
+        return lifecycle_service.log(self, db, device_action, target=target, session_id=session_id)
+
+    def package(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None = None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 441/446: the release artifact in the object store."""
+        del device_action
+        return lifecycle_service.package(self, db, target=target, session_id=session_id)
+
+    def launch(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 442: the packaged release scaffolded as its own version and run."""
+        return lifecycle_service.launch(
+            self, db, device_action, target=target, session_id=session_id
+        )
+
+    def history(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None = None,
+        *,
+        target: str | None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 447: every version and every event of the project."""
+        del device_action
+        return lifecycle_service.history(self, db, target=target, session_id=session_id)
+
+    def resume(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None = None,
+        *,
+        target: str | None,
+        name: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 448: back to the latest version of a project, by name or by focus."""
+        del device_action
+        return lifecycle_service.resume(self, db, target=target, name=name, session_id=session_id)
+
+    def modify(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str | None,
+        request: str,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Req 449/450: a later request merged into the requirements, a new version."""
+        return lifecycle_service.modify(
+            self, db, device_action, target=target, request=request, session_id=session_id
         )
 
     # ------------------------------------------------------------------------ run
@@ -529,7 +846,8 @@ class AppFactoryService:
             return self._capability_missing_receipt(capability="app.open", session_id=session_id)
 
         url = f"http://127.0.0.1:{project.run_port}/"
-        oracle = load_oracle(project.template)
+        # B40 (req 434): a composed application carries its own oracle on the row.
+        oracle = project.oracle_json or load_oracle(project.template)
         try:
             records = browser_gateway.fetch_evidence(
                 [FetchQuery(query=url, source_class="app_factory", max_results=1)]

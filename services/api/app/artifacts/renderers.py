@@ -80,9 +80,7 @@ MIME_TYPES = {
     FORMAT_MD: "text/markdown; charset=utf-8",
     FORMAT_XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     FORMAT_CSV: "text/csv; charset=utf-8",
-    FORMAT_PPTX: (
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    ),
+    FORMAT_PPTX: ("application/vnd.openxmlformats-officedocument.presentationml.presentation"),
     FORMAT_JSON: "application/json",
 }
 
@@ -131,8 +129,7 @@ class Renderer(Protocol):
     format: str
     mime_type: str
 
-    def render(self, *, title: str, canonical_markdown: str) -> bytes:
-        ...
+    def render(self, *, title: str, canonical_markdown: str) -> bytes: ...
 
 
 # ------------------------------------------------------------- markdown parsing
@@ -328,17 +325,11 @@ class HtmlRenderer:
         # those three characters across the whole body is lossless for our
         # markup and removes every HTML-injection vector. (M3 security review #1.)
         safe_markdown = (
-            canonical_markdown.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
+            canonical_markdown.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
-        body = markdown_lib.markdown(
-            safe_markdown, extensions=["extra", "sane_lists"]
-        )
+        body = markdown_lib.markdown(safe_markdown, extensions=["extra", "sane_lists"])
         body = _sanitize_generated_html(body)
-        escaped_title = (
-            title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        )
+        escaped_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         html = (
             "<!DOCTYPE html>\n"
             '<html lang="tr">\n<head>\n'

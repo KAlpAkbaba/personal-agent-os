@@ -60,7 +60,8 @@ public sealed record ExtractRequest(
     (int From, int To)? PageRange = null,
     string? Sheet = null,
     (int From, int To)? SlideRange = null,
-    int MaxChars = DocumentCapabilityNames.MaxExtractChars);
+    int MaxChars = DocumentCapabilityNames.MaxExtractChars,
+    string? Language = null);
 
 /// <summary>
 /// The blocks an extractor produced, under the character budget: a block that fits is

@@ -142,6 +142,18 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
             "answer's `detail` rather than reporting a toast the owner never saw buttons on"
         ),
     ),
+    "operator-allowlists.json": Contract(
+        guard="test_the_application_allowlist_is_the_contracts_in_its_order",
+        why=(
+            "the Cloud Core's application allowlist had six names and the device's seven "
+            "(mspaint), the Cloud Core's shell vocabulary two commands against the device's "
+            "eight terminal patterns; neither half read the other, so a name the owner could "
+            "say was refused by the device and a command the device would run could not be "
+            "said (B30). The C# side is held by OperatorAllowlistsContractTests; the Python "
+            "side reads the C# source as well, so a drift on either half is red in one suite"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+    ),
     "device-protocol.schema.json": Contract(
         guard="test_hello_knows_exactly_the_fields_the_schema_declares",
         why=(

@@ -904,8 +904,14 @@ class ElevenLabsTTSProvider:
     name = "elevenlabs"
     _BASE = "https://api.elevenlabs.io/v1"
 
-    def __init__(self, api_key: str | None = None, *, model_id: str = "eleven_multilingual_v2",
-                 default_voice: str = "Rachel", timeout_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        model_id: str = "eleven_multilingual_v2",
+        default_voice: str = "Rachel",
+        timeout_s: float = 30.0,
+    ) -> None:
         self._api_key = api_key
         self._model_id = model_id
         self._default_voice = default_voice
@@ -913,11 +919,18 @@ class ElevenLabsTTSProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="tts", languages=("tr-TR", "en-US", "de-DE"), streaming=True,
-            long_form_stability="high", pronunciation_dict=True, voice_selection=True,
+            name=self.name,
+            kind="tts",
+            languages=("tr-TR", "en-US", "de-DE"),
+            streaming=True,
+            long_form_stability="high",
+            pronunciation_dict=True,
+            voice_selection=True,
             speed_control=True,
             cost_metadata={"unit": "characters", "usd_per_1k": 0.30, "billing": "subscription"},
-            output_formats=("mp3", "pcm16", "opus"), latency_class="low", requires_api_key=True,
+            output_formats=("mp3", "pcm16", "opus"),
+            latency_class="low",
+            requires_api_key=True,
         )
 
     def build_request(self, text: str, *, voice: str, speed: float, fmt: str) -> ProviderRequest:
@@ -925,8 +938,11 @@ class ElevenLabsTTSProvider:
         return ProviderRequest(
             method="POST",
             url=f"{self._BASE}/text-to-speech/{voice_id}",
-            headers={"xi-api-key": self._api_key or "", "accept": "audio/mpeg",
-                     "content-type": "application/json"},
+            headers={
+                "xi-api-key": self._api_key or "",
+                "accept": "audio/mpeg",
+                "content-type": "application/json",
+            },
             json_body={
                 "text": text,
                 "model_id": self._model_id,
@@ -946,9 +962,13 @@ class ElevenLabsTTSProvider:
         resp = _send(req, timeout_s=self._timeout_s, provider=self.name)
         audio = resp.content
         return TTSResult(
-            audio=audio, audio_format=fmt, duration_ms=0,
+            audio=audio,
+            audio_format=fmt,
+            duration_ms=0,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            provider=self.name, voice=voice, char_count=len(text),
+            provider=self.name,
+            voice=voice,
+            char_count=len(text),
         )
 
 
@@ -957,8 +977,14 @@ class AzureTTSProvider:
 
     name = "azure"
 
-    def __init__(self, api_key: str | None = None, *, region: str = "westeurope",
-                 default_voice: str = "tr-TR-EmelNeural", timeout_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        region: str = "westeurope",
+        default_voice: str = "tr-TR-EmelNeural",
+        timeout_s: float = 30.0,
+    ) -> None:
         self._api_key = api_key
         self._region = region
         self._default_voice = default_voice
@@ -966,11 +992,18 @@ class AzureTTSProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="tts", languages=("tr-TR", "en-US"), streaming=True,
-            long_form_stability="high", pronunciation_dict=True, voice_selection=True,
+            name=self.name,
+            kind="tts",
+            languages=("tr-TR", "en-US"),
+            streaming=True,
+            long_form_stability="high",
+            pronunciation_dict=True,
+            voice_selection=True,
             speed_control=True,
             cost_metadata={"unit": "characters", "usd_per_1m": 15.0, "billing": "pay-as-you-go"},
-            output_formats=("mp3", "pcm16", "opus"), latency_class="low", requires_api_key=True,
+            output_formats=("mp3", "pcm16", "opus"),
+            latency_class="low",
+            requires_api_key=True,
         )
 
     def build_request(self, text: str, *, voice: str, speed: float, fmt: str) -> ProviderRequest:
@@ -1003,9 +1036,13 @@ class AzureTTSProvider:
         started = time.perf_counter()
         resp = _send(req, timeout_s=self._timeout_s, provider=self.name)
         return TTSResult(
-            audio=resp.content, audio_format=fmt, duration_ms=0,
+            audio=resp.content,
+            audio_format=fmt,
+            duration_ms=0,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            provider=self.name, voice=voice, char_count=len(text),
+            provider=self.name,
+            voice=voice,
+            char_count=len(text),
         )
 
 
@@ -1015,8 +1052,14 @@ class OpenAITTSProvider:
     name = "openai"
     _URL = "https://api.openai.com/v1/audio/speech"
 
-    def __init__(self, api_key: str | None = None, *, model: str = "tts-1",
-                 default_voice: str = "alloy", timeout_s: float = 30.0) -> None:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        model: str = "tts-1",
+        default_voice: str = "alloy",
+        timeout_s: float = 30.0,
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._default_voice = default_voice
@@ -1024,19 +1067,28 @@ class OpenAITTSProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="tts", languages=("tr-TR", "en-US"), streaming=True,
-            long_form_stability="medium", pronunciation_dict=False, voice_selection=True,
+            name=self.name,
+            kind="tts",
+            languages=("tr-TR", "en-US"),
+            streaming=True,
+            long_form_stability="medium",
+            pronunciation_dict=False,
+            voice_selection=True,
             speed_control=True,
             cost_metadata={"unit": "characters", "usd_per_1m": 15.0, "billing": "pay-as-you-go"},
-            output_formats=("mp3", "opus", "aac", "wav"), latency_class="low",
+            output_formats=("mp3", "opus", "aac", "wav"),
+            latency_class="low",
             requires_api_key=True,
         )
 
     def build_request(self, text: str, *, voice: str, speed: float, fmt: str) -> ProviderRequest:
         return ProviderRequest(
-            method="POST", url=self._URL,
-            headers={"Authorization": f"Bearer {self._api_key or ''}",
-                     "Content-Type": "application/json"},
+            method="POST",
+            url=self._URL,
+            headers={
+                "Authorization": f"Bearer {self._api_key or ''}",
+                "Content-Type": "application/json",
+            },
             json_body={
                 "model": self._model,
                 "input": text,
@@ -1056,9 +1108,13 @@ class OpenAITTSProvider:
         started = time.perf_counter()
         resp = _send(req, timeout_s=self._timeout_s, provider=self.name)
         return TTSResult(
-            audio=resp.content, audio_format=fmt, duration_ms=0,
+            audio=resp.content,
+            audio_format=fmt,
+            duration_ms=0,
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            provider=self.name, voice=voice, char_count=len(text),
+            provider=self.name,
+            voice=voice,
+            char_count=len(text),
         )
 
 
@@ -1068,19 +1124,27 @@ class OpenAISTTProvider:
     name = "openai-whisper"
     _URL = "https://api.openai.com/v1/audio/transcriptions"
 
-    def __init__(self, api_key: str | None = None, *, model: str = "whisper-1",
-                 timeout_s: float = 60.0) -> None:
+    def __init__(
+        self, api_key: str | None = None, *, model: str = "whisper-1", timeout_s: float = 60.0
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout_s = timeout_s
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="stt", languages=("tr-TR", "en-US"), streaming=False,
-            long_form_stability="n/a", pronunciation_dict=False, voice_selection=False,
+            name=self.name,
+            kind="stt",
+            languages=("tr-TR", "en-US"),
+            streaming=False,
+            long_form_stability="n/a",
+            pronunciation_dict=False,
+            voice_selection=False,
             speed_control=False,
             cost_metadata={"unit": "audio_minutes", "usd_per_min": 0.006, "billing": "usage"},
-            output_formats=("text",), latency_class="batch", requires_api_key=True,
+            output_formats=("text",),
+            latency_class="batch",
+            requires_api_key=True,
         )
 
     def build_request(self, audio: bytes, *, language: str) -> ProviderRequest:
@@ -1096,7 +1160,8 @@ class OpenAISTTProvider:
         else:
             file_part = ("speech.bin", audio, "application/octet-stream")
         return ProviderRequest(
-            method="POST", url=self._URL,
+            method="POST",
+            url=self._URL,
             headers={"Authorization": f"Bearer {self._api_key or ''}"},
             form={
                 "model": self._model,
@@ -1115,9 +1180,12 @@ class OpenAISTTProvider:
         resp = _send(req, timeout_s=self._timeout_s, provider=self.name)
         payload = resp.json()
         return STTResult(
-            text=payload.get("text", ""), confidence=payload.get("confidence", 1.0),
-            word_timings=(), latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            provider=self.name, language=language,
+            text=payload.get("text", ""),
+            confidence=payload.get("confidence", 1.0),
+            word_timings=(),
+            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            provider=self.name,
+            language=language,
         )
 
 
@@ -1126,28 +1194,40 @@ class AzureSTTProvider:
 
     name = "azure-stt"
 
-    def __init__(self, api_key: str | None = None, *, region: str = "westeurope",
-                 timeout_s: float = 60.0) -> None:
+    def __init__(
+        self, api_key: str | None = None, *, region: str = "westeurope", timeout_s: float = 60.0
+    ) -> None:
         self._api_key = api_key
         self._region = region
         self._timeout_s = timeout_s
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="stt", languages=("tr-TR", "en-US"), streaming=True,
-            long_form_stability="n/a", pronunciation_dict=True, voice_selection=False,
+            name=self.name,
+            kind="stt",
+            languages=("tr-TR", "en-US"),
+            streaming=True,
+            long_form_stability="n/a",
+            pronunciation_dict=True,
+            voice_selection=False,
             speed_control=False,
             cost_metadata={"unit": "audio_hours", "usd_per_hour": 1.0, "billing": "usage"},
-            output_formats=("text",), latency_class="low", requires_api_key=True,
+            output_formats=("text",),
+            latency_class="low",
+            requires_api_key=True,
         )
 
     def build_request(self, audio: bytes, *, language: str) -> ProviderRequest:
         return ProviderRequest(
             method="POST",
-            url=(f"https://{self._region}.stt.speech.microsoft.com"
-                 "/speech/recognition/conversation/cognitiveservices/v1"),
-            headers={"Ocp-Apim-Subscription-Key": self._api_key or "",
-                     "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000"},
+            url=(
+                f"https://{self._region}.stt.speech.microsoft.com"
+                "/speech/recognition/conversation/cognitiveservices/v1"
+            ),
+            headers={
+                "Ocp-Apim-Subscription-Key": self._api_key or "",
+                "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
+            },
             data=audio,
             query={"language": language, "format": "detailed"},
         )
@@ -1163,9 +1243,11 @@ class AzureSTTProvider:
         best = (payload.get("NBest") or [{}])[0]
         return STTResult(
             text=payload.get("DisplayText", best.get("Display", "")),
-            confidence=best.get("Confidence", 1.0), word_timings=(),
+            confidence=best.get("Confidence", 1.0),
+            word_timings=(),
             latency_ms=round((time.perf_counter() - started) * 1000, 2),
-            provider=self.name, language=language,
+            provider=self.name,
+            language=language,
         )
 
 
@@ -1179,8 +1261,9 @@ class FasterWhisperSTTProvider:
 
     name = "faster-whisper"
 
-    def __init__(self, *, model_size: str = "small", device: str = "cpu",
-                 compute_type: str = "int8") -> None:
+    def __init__(
+        self, *, model_size: str = "small", device: str = "cpu", compute_type: str = "int8"
+    ) -> None:
         self._model_size = model_size
         self._device = device
         self._compute_type = compute_type
@@ -1188,11 +1271,18 @@ class FasterWhisperSTTProvider:
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            name=self.name, kind="stt", languages=("tr-TR", "en-US"), streaming=False,
-            long_form_stability="n/a", pronunciation_dict=False, voice_selection=False,
+            name=self.name,
+            kind="stt",
+            languages=("tr-TR", "en-US"),
+            streaming=False,
+            long_form_stability="n/a",
+            pronunciation_dict=False,
+            voice_selection=False,
             speed_control=False,
             cost_metadata={"unit": "local_compute", "usd": 0.0, "billing": "local/offline"},
-            output_formats=("text",), latency_class="batch", requires_api_key=False,
+            output_formats=("text",),
+            latency_class="batch",
+            requires_api_key=False,
         )
 
     def available(self) -> bool:

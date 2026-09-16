@@ -786,7 +786,10 @@ public sealed class FileFetchTests : IDisposable
     public async Task File_fetch_is_advertised_with_the_family_behind_OperatorEnabled_and_the_service_pins_its_origin_before_the_pipe()
     {
         Assert.Equal("file.fetch", DocumentCapabilityNames.FileFetch);
-        Assert.Equal(DocumentCapabilityNames.FileFetch, AgentCapabilities.Documents[^1]);
+        // B32 appended file.trash after it and B34 the six mutations after that; file.fetch keeps its place as the seventh name.
+        Assert.Equal(DocumentCapabilityNames.FileFetch, AgentCapabilities.Documents[6]);
+        Assert.Equal(DocumentCapabilityNames.FileTrash, AgentCapabilities.Documents[7]);
+        Assert.Equal(DocumentCapabilityNames.FileRestore, AgentCapabilities.Documents[^1]);
         Assert.True(AgentCapabilities.IsDocuments(DocumentCapabilityNames.FileFetch));
         Assert.True(AgentCapabilities.IsInteractive(DocumentCapabilityNames.FileFetch));
         Assert.False(AgentCapabilities.IsOperator(DocumentCapabilityNames.FileFetch));

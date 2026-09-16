@@ -24,7 +24,10 @@ import { isCalendarProposalState, isMailDraftState } from "../uistate/contract";
 import { MAIL_DRAFT_CAPTION } from "../uistate/mail";
 import {
   APPROVAL_PAIR_IDLE,
+  CANDIDATE_STATE_TR,
+  MUTATION_STATE_TR,
   type ApprovalAction,
+  approvalFamily,
   type ApprovalClient,
   type ApprovalOutcome,
   type ApprovalPairProps,
@@ -39,19 +42,28 @@ export const OUTCOME_NO_STATE_TR: Record<ApprovalAction, string> = {
   discard_draft: "Vazgeçme iletildi; makbuz taslağın durumunu bildirmedi.",
   confirm_proposal: "Onay iletildi; makbuz önerinin durumunu bildirmedi.",
   discard_proposal: "Vazgeçme iletildi; makbuz önerinin durumunu bildirmedi.",
+  confirm_mutation: "Onay iletildi; makbuz dosya değişikliğinin durumunu bildirmedi.",
+  discard_mutation: "Vazgeçme iletildi; makbuz dosya değişikliğinin durumunu bildirmedi.",
+  approve_candidate: "Onay kaydedildi; makbuz adayın durumunu bildirmedi. Canlıya alınmadı.",
+  reject_candidate: "Ret kaydedildi; makbuz adayın durumunu bildirmedi.",
 };
 
 function isDraftAction(action: ApprovalAction): boolean {
-  return action === "confirm_draft" || action === "discard_draft";
+  return approvalFamily(action) === "draft";
 }
 
 /** The outcome line from a 2xx receipt: the row's state in the spec's words, then the receipt's own sentence. */
 export function outcomeText(action: ApprovalAction, receipt: ApprovalReceipt): string {
   const parts: string[] = [];
   const state = receipt.state;
+  const family = approvalFamily(action);
   if (state !== null && isDraftAction(action) && isMailDraftState(state)) parts.push(MAIL_DRAFT_CAPTION[state]);
-  else if (state !== null && !isDraftAction(action) && isCalendarProposalState(state)) {
+  else if (state !== null && family === "proposal" && isCalendarProposalState(state)) {
     parts.push(CALENDAR_PROPOSAL_CAPTION[state]);
+  } else if (state !== null && family === "mutation" && MUTATION_STATE_TR[state]) {
+    parts.push(MUTATION_STATE_TR[state]);
+  } else if (state !== null && family === "candidate" && CANDIDATE_STATE_TR[state]) {
+    parts.push(CANDIDATE_STATE_TR[state]);
   } else if (state !== null) parts.push(`durum: ${state}`);
   else parts.push(OUTCOME_NO_STATE_TR[action]);
   if (receipt.summary) parts.push(receipt.summary);
@@ -78,6 +90,14 @@ function call(client: ApprovalClient, action: ApprovalAction, id: string): Promi
       return client.confirmProposal(id);
     case "discard_proposal":
       return client.discardProposal(id);
+    case "confirm_mutation":
+      return client.confirmMutation(id);
+    case "discard_mutation":
+      return client.discardMutation(id);
+    case "approve_candidate":
+      return client.approveCandidate(id);
+    case "reject_candidate":
+      return client.rejectCandidate(id);
   }
 }
 
@@ -112,7 +132,12 @@ export async function runApproval(ports: ApprovalPorts, action: ApprovalAction, 
 export function useApprovalPair(
   client: ApprovalClient,
   onSettled?: () => void,
-): { drafts: ApprovalPairProps; proposals: ApprovalPairProps } {
+): {
+  drafts: ApprovalPairProps;
+  proposals: ApprovalPairProps;
+  mutations: ApprovalPairProps;
+  candidates: ApprovalPairProps;
+} {
   const [state, setState] = useState<ApprovalPairState>(APPROVAL_PAIR_IDLE);
   const latest = useRef<ApprovalPairState>(APPROVAL_PAIR_IDLE);
   const settled = useRef(onSettled);
@@ -153,6 +178,18 @@ export function useApprovalPair(
         outcome: state.outcome,
         onConfirm: (id: string) => run("confirm_proposal", id),
         onDiscard: (id: string) => run("discard_proposal", id),
+      },
+      mutations: {
+        busy: state.busy,
+        outcome: state.outcome,
+        onConfirm: (id: string) => run("confirm_mutation", id),
+        onDiscard: (id: string) => run("discard_mutation", id),
+      },
+      candidates: {
+        busy: state.busy,
+        outcome: state.outcome,
+        onConfirm: (id: string) => run("approve_candidate", id),
+        onDiscard: (id: string) => run("reject_candidate", id),
       },
     }),
     [state, run],

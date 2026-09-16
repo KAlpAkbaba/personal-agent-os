@@ -118,6 +118,10 @@ export type ResearchReport = {
   uncertainty: Statement[];
   sources: ReportSource[];
   stats?: ReportStats | null;
+  /** B31 req 207: the synthesis substitution, when one happened — never hidden. */
+  synthesis_fallback?: { requested: string; used: string; attempts: number; reason: string } | null;
+  /** B31 req 207: discovery queries answered by a fallback search provider. */
+  search_fallbacks?: number | null;
 };
 
 export const SOURCE_CLASS_LABEL: Record<string, string> = {
@@ -230,6 +234,10 @@ export type ResearchProgress = {
   /** Set while stage === "waiting_for_owner_verification" (spec §5a); cleared once discovery resumes. */
   verification_url?: string | null;
   verification_provider?: string | null;
+  /** B31 req 203: set while the owner has the run paused; the stage stays where it was. */
+  paused?: boolean | null;
+  paused_at?: string | null;
+  paused_seconds?: number | null;
 };
 
 export type ResearchEvent = { at: string; stage: string; detail?: string | null };

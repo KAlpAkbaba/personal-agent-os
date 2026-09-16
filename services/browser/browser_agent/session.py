@@ -489,6 +489,11 @@ class BrowserSession:
         require_capability(self._backend, "downloads")
         spec = coerce_target(target)
         directory = Path(save_dir) if save_dir else Path(tempfile.mkdtemp(prefix="pagentos-dl-"))
+        # B31 req 180: like upload and screenshot, a download lands only inside the
+        # session's file_io_root when one is configured (the worker sets it to its data
+        # dir); a caller cannot name a folder elsewhere on the machine.
+        if save_dir is not None and self._file_io_root is not None:
+            directory = self._require_within_file_io_root(directory, op="download")
         directory.mkdir(parents=True, exist_ok=True)
         async with self._oplog("download", target=spec.as_dict()):
             locator = await self._resolve(spec, timeout_ms=timeout_ms, op="download")

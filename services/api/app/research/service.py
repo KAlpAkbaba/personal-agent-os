@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
     from app.artifacts.runtime import ArtifactRuntime
     from app.broker.runtime import BrokerRuntime
+    from app.research.models import ResearchRunRow
 
 logger = get_logger("app.research.service")
 
@@ -315,6 +316,140 @@ async def start_browser_research_workflow(
     await asyncio.to_thread(persist_wf)
 
 
+#: B27 req 732. The owner cancelled a research that was still running - the run's own
+#: terminal stage, and the task's error class so the task list says WHY it ended.
+ERROR_RESEARCH_CANCELLED = "cancelled_by_owner"
+CANCELLED_BY_OWNER_TR: Final = "Sahip iptal etti."
+
+
+def active_research(db: Session) -> ResearchRunRow | None:
+    """The most recent research still in flight, or ``None``.
+
+    "In flight" is the run's own vocabulary (``TERMINAL_STAGES``), read from the run row
+    rather than the task status: a task can sit READY for days while its run is long
+    finished, and the world model already learned that lesson once (ADR-0123).
+    """
+    from app.research.models import TERMINAL_STAGES, ResearchRunRow
+
+    return (
+        db.execute(
+            select(ResearchRunRow)
+            .where(ResearchRunRow.stage.notin_(tuple(TERMINAL_STAGES)))
+            .order_by(ResearchRunRow.created_at.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+
+
+def mark_research_cancelled(
+    db: Session, task_id: uuid.UUID, *, detail: str = CANCELLED_BY_OWNER_TR
+) -> bool:
+    """The durable half of a cancellation: the run to CANCELLED, the task closed.
+
+    ONE function for both callers - the REST route (``POST /v1/research/{id}/cancel``)
+    and the voice tool (``research.cancel``) - so the two halves of req 732 cannot record
+    a cancellation differently. Returns False for a run that is already terminal: a
+    research that finished is finished, and cancelling it would rewrite history.
+    """
+    from app.artifacts.state import TASK_TERMINAL_STATUSES
+    from app.research.models import STAGE_CANCELLED, TERMINAL_STAGES
+
+    run = runs_service.get_run(db, task_id)
+    if run is None or run.stage in TERMINAL_STAGES:
+        return False
+    task = db.get(Task, task_id)
+    if task is not None and task.status not in TASK_TERMINAL_STATUSES:
+        artifact_service.transition_task(
+            db,
+            task_id,
+            TASK_STATUS_FAILED_TERMINAL,
+            error_class=ERROR_RESEARCH_CANCELLED,
+            error_message=detail[:1000],
+        )
+    runs_service.update_run(
+        db,
+        task_id,
+        stage=STAGE_CANCELLED,
+        event={"stage": STAGE_CANCELLED, "detail": detail[:500]},
+    )
+    logger.info("research_cancelled", task_id=str(task_id), was=run.stage)
+    return True
+
+
+# B31 req 203/204. A research the owner paused waits where it is - the Temporal workflow
+# holds at its next stage boundary (BrowserResearchWorkflow.pause) and the durable record
+# says so - and resumes on the owner's word. Pausing is not a stage: the run keeps the stage
+# it was in, the flag lives in progress_json, so a paused run is still "in flight" to
+# active_research() and to the orphan sweep alike.
+PAUSED_BY_OWNER_TR: Final = "Sahip duraklattı."
+RESUMED_BY_OWNER_TR: Final = "Sahip devam ettirdi."
+PROGRESS_PAUSED_KEY: Final = "paused"
+PROGRESS_PAUSED_AT_KEY: Final = "paused_at"
+PROGRESS_PAUSED_SECONDS_KEY: Final = "paused_seconds"
+
+
+def research_is_paused(run: Any) -> bool:
+    progress = getattr(run, "progress_json", None) or {}
+    return bool(progress.get(PROGRESS_PAUSED_KEY))
+
+
+def mark_research_paused(
+    db: Session, task_id: uuid.UUID, *, detail: str = PAUSED_BY_OWNER_TR
+) -> bool:
+    """The durable half of a pause: the run keeps its stage and is flagged paused. ONE
+    function for the REST route and the voice tool, like ``mark_research_cancelled``.
+    Returns False for a terminal run or one already paused."""
+    from app.research.models import TERMINAL_STAGES
+
+    run = runs_service.get_run(db, task_id)
+    if run is None or run.stage in TERMINAL_STAGES or research_is_paused(run):
+        return False
+    now = datetime.now(UTC).isoformat()
+    runs_service.update_run(
+        db,
+        task_id,
+        progress={PROGRESS_PAUSED_KEY: True, PROGRESS_PAUSED_AT_KEY: now},
+        event={"stage": run.stage, "detail": detail[:500], PROGRESS_PAUSED_KEY: True},
+    )
+    logger.info("research_paused", task_id=str(task_id), stage=run.stage)
+    return True
+
+
+def mark_research_resumed(
+    db: Session, task_id: uuid.UUID, *, detail: str = RESUMED_BY_OWNER_TR
+) -> bool:
+    """The durable half of a resume; the paused seconds are kept so the report's elapsed
+    time can be honest about what the run itself spent. False unless the run is paused."""
+    from app.research.models import TERMINAL_STAGES
+
+    run = runs_service.get_run(db, task_id)
+    if run is None or run.stage in TERMINAL_STAGES or not research_is_paused(run):
+        return False
+    progress = dict(run.progress_json or {})
+    paused_seconds = float(progress.get(PROGRESS_PAUSED_SECONDS_KEY) or 0.0)
+    paused_at = progress.get(PROGRESS_PAUSED_AT_KEY)
+    if isinstance(paused_at, str):
+        try:
+            started = datetime.fromisoformat(paused_at)
+            paused_seconds += max(0.0, (datetime.now(UTC) - started).total_seconds())
+        except ValueError:
+            pass
+    runs_service.update_run(
+        db,
+        task_id,
+        progress={
+            PROGRESS_PAUSED_KEY: False,
+            PROGRESS_PAUSED_AT_KEY: None,
+            PROGRESS_PAUSED_SECONDS_KEY: round(paused_seconds, 3),
+        },
+        event={"stage": run.stage, "detail": detail[:500], PROGRESS_PAUSED_KEY: False},
+    )
+    logger.info("research_resumed", task_id=str(task_id), stage=run.stage)
+    return True
+
+
 async def connect_temporal(artifacts: ArtifactRuntime) -> Client:
     """The same connection recipe ``app.research.routes`` has always used, factored
     out so the voice follow-up (a different call site, same settings) does not
@@ -324,6 +459,16 @@ async def connect_temporal(artifacts: ArtifactRuntime) -> Client:
 
 
 __all__ = [
+    "CANCELLED_BY_OWNER_TR",
+    "ERROR_RESEARCH_CANCELLED",
+    "PAUSED_BY_OWNER_TR",
+    "PROGRESS_PAUSED_KEY",
+    "RESUMED_BY_OWNER_TR",
+    "active_research",
+    "mark_research_cancelled",
+    "mark_research_paused",
+    "mark_research_resumed",
+    "research_is_paused",
     "DEFAULT_INTERACTIVE_WAIT_S",
     "MAX_INTERACTIVE_WAIT_S",
     "MIN_INTERACTIVE_WAIT_S",

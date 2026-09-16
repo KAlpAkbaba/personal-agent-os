@@ -1,0 +1,100 @@
+{
+  "batch": "B24",
+  "name": "Eksik sayfalar ve durum rozetleri",
+  "requirements": [
+    689,
+    693,
+    694,
+    696,
+    697,
+    698,
+    699,
+    700,
+    712,
+    713,
+    714
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS except the same live-desktop test B21/B22/B23 recorded",
+    "web_gates": "vitest 1807 passed / 96 files (was 1730/93), tsc clean, oxlint 0 errors",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 9719 passed, 5 skipped (962 s)",
+      "Windows agent build + tests": "FAIL - 919/920, NotepadLifecycleTests pointer click",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "the_one_failure": "Fourth batch running, same test, and this time the test's own message names the cause it was given in B22: \"after 3 attempt(s) the click landed while the foreground was nothing the registry could resolve (a full-screen or elevated window)\". Measured on this machine: `CarlaUE4-Win64-Shipping` (the owner's simulator, ~26,000 CPU-seconds) is running full-screen and holding the desktop. B24 changed nothing under `devices/`. READY_FOR_OWNER: run the device step with no full-screen application in front, or set PAGENTOS_OPERATOR_LAB=0 for that run; CI is unaffected because a runner has no interactive desktop."
+  },
+  "what_this_proves": "The cockpit stops saying 'nothing' thirteen times at once, and nothing it stops saying is lost: every one of the twenty-seven families is listed on a page that measures them live. Seven families that had a client, a parser and no surface now have a page each. And the record this product is measured against — 750 rows with their status and, for the first time in the product, HOW each claim was proven — is generated into the app rather than living only in a markdown file.",
+  "the_shape_of_this_batch": "Two defects, one root. The matrix measured 13/27 panels empty at once; the seven MISSING family pages were all missing for the same reason, which is this repository's most repeated shape — complete code with no caller. `fetchNotificationHistory` parses req 377's delivery record INCLUDING the rows no channel carried, and had zero callers. `/v1/alarms/history` has served every alarm occurrence since B13 req 285 (the one question the scheduled-alarm row cannot answer, because a recurring alarm reuses its row and rewinds its terminal state) and nothing asked. The security authorization trail records every refusal enforcing a constitutional invariant and had no surface. Eleven served routes, no callers.",
+  "measured_first": {
+    "the_27": "`CockpitData` has exactly 27 `Loaded<…>` keys, which is the audit's denominator. 30 panels are mounted: 27 families plus four bus-only panels (running tools, digital operator, documents, state stream) with `research`/`researchFocus` sharing one and `briefings`/`goals`/`shadowReady` also feeding the Approval Center.",
+    "the_permanent_422_was_already_gone": "The matrix's '1 kalıcı 422' is requirement 715, closed in B03 (commit 9ddf243): `/{run_id}` was swallowing the literal `runs` segment. Re-measured this batch against the real application object — all 27 cockpit paths resolve in the OpenAPI document. What remained of 714 was the 13 empty panels.",
+    "eleven_routes_with_no_caller": [
+      "/v1/alarms/history",
+      "/v1/alarms/policy",
+      "/v1/routines/policy",
+      "/v1/memory/search",
+      "/v1/memory/entities",
+      "/v1/notifications/history",
+      "/v1/security/assets",
+      "/v1/security/findings",
+      "/v1/security/assessments",
+      "/v1/security/audit",
+      "/v1/evolution/gaps + /v1/evolution/skill-versions + /v1/evolution/policy + /v1/presence/policy + /v1/experience/policy + /v1/selfmodel/policy"
+    ]
+  },
+  "closed_fully": {
+    "714_an_empty_family_draws_no_panel": "`Panel` returns null for `empty` and for `absent`. `failed` and `loading` never hide — 'I could not find out' and 'I have not asked yet' are not 'there is nothing', which is the distinction `Loaded` exists for. The nine panels pairing a live bus caption with a REST list go quiet only when BOTH halves are silent, so a build running right now keeps its panel with an empty list; the two approval panels also stay while their last answer is on screen, because an owner who just pressed Onayla must not watch the panel that answered them disappear.",
+    "714_and_nothing_hidden_is_lost": "One line on the cockpit names the quiet families and links to /availability. Trading thirteen misleading panels for thirteen silent omissions would be the same failure in the other coat.",
+    "one_definition_of_a_family": "`app/lib/cockpit/families.ts`: the 27 keys, each label, panel id and owning page, plus `EMPTY_WHEN` — the single emptiness predicate every panel now passes to `Panel`. Before this each panel spelled its own, so a page counting empty families and a panel hiding itself could disagree.",
+    "689_memory": "The cockpit's Hafıza panel lists the AUDIT and has never shown a single memory. `/memory` lists what is remembered through the retrieval path itself (`hybrid_search`), so an empty box is the ordinary listing and a typed word is the SAME ranking the assistant uses when it answers — what the owner sees is what would actually have been retrieved. Plus the entity graph and the audit. Read-only: forgetting is a hard delete (req 36) and correcting rewrites what the assistant believes.",
+    "693_routines": "B14's panel with its pause/resume, on a page wide enough to read it, beside the rules this Cloud Core runs routines under. Same client, not a second authority.",
+    "694_alarms": "The scheduled list, then the OCCURRENCES from the Activity Ledger — 'did my 07:30 ring on Tuesday' is unanswerable from the alarm row by construction — then the alarm vocabulary and bounds this Cloud Core understands.",
+    "696_security": "Four questions, four sections: what am I allowed to test, what was tested, what was found, and what was REFUSED. The refusals are listed with the grants because a system that shows only what it allowed is showing half of an authorization record — and 'security testing is allowed only for enrolled assets' is a constitutional invariant the owner has had no way to watch being enforced. The panic switch (660) lands on this page in B25.",
+    "697_selfdev": "The constitution's pipeline in its order on one page: the gaps the system noticed it could not do, the skill versions it produced, the supervisor's scanning, the backlog, what is finished and waiting on the owner, and the lessons. Four separate cockpit panels had shown one stage each with nothing saying they were the same pipeline. Approving stays where it is (ADR-0053 §5).",
+    "698_notifications": "The inbox says what is waiting; the delivery record says what happened to everything the system ever tried to tell the owner — which ladder rung carried it, or that NOTHING did. That last part is req 377's whole point and its client had no callers.",
+    "699_settings": "Deliberately not a form. Six subsystems publish a `/policy` route saying what this Cloud Core understands and nothing had ever asked one; a second surface able to change those rules would be a second authority beside the voice router. What the owner can change here is what genuinely lives in this browser — the render tier and the 2D view — and the page says so.",
+    "700_712_713_the_record_becomes_a_page": "`scripts/web/sync-feature-matrix.mjs` generates `matrix.generated.ts` from the FEATURE MATRIX, including the proof abbreviations read from the document's own LEGEND table. `/availability` shows the 750 rows by section with a status badge and a proof badge, and — beside it, never instead of it — the live measurement of all 27 families. Requirement 78 settled which half may answer 'is it working': an answer read from a hand-maintained document is only as true as the document."
+  },
+  "found_on_the_way": {
+    "the_hook_that_could_not_run": "The first implementation used a React context so a family page could turn the hiding off. Nine panel tests call their component as a plain function (`findByData` expands function components by calling them), where `useContext` throws. A prop says the same thing, works in both, and is visible at the call site.",
+    "two_families_draw_through_one_panel": "`researchFocus` has no panel of its own — the focus strip is inside the research panel. With the task list empty and the focus route FAILED, the panel hid and the failure vanished. `ResearchPanel` now stays whenever either half has something to say.",
+    "the_route_guard_read_the_minority_spelling": "`test_web_asks_for_routes_that_exist.py` (B03 req 510/715) matched only `export const X_PATH = \"/v1/…\"`. Most clients spell the path inline in the `load(…)` call, so it was checking 12 of the product's routes; the eleven this batch added would have gone in unchecked. Widened to 43, all served.",
+    "the_anchor_that_was_never_an_anchor": "`/availability` links to `${page}#${panel}`, and no panel had an HTML id: `Panel` rendered the id into `data-panel` only. B23's claim that the device panel is \"addressable at #devices\" was true in its test and false in the browser, and every link this batch added would have scrolled to nothing. All thirteen hand-written sections and the shared shell now carry `id`, and the test asserts it for all 27."
+  },
+  "tests": {
+    "apps/web/tests/cockpit/quiet-families.test.tsx": 11,
+    "apps/web/tests/features/matrix-badges.test.tsx": 12,
+    "apps/web/tests/pages/family-pages.test.ts": 35,
+    "services/api/tests/unit/test_web_asks_for_routes_that_exist.py": 43,
+    "updated_for_the_new_contract": "20 existing panel tests across 11 files now assert the panel draws NOTHING when its family is empty, and assert the sentence separately where it still belongs (the family's own page, or a talking bus)."
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`).",
+    "mutations": [
+      "remove `if (!always && isQuiet(...)) return null;` from `Panel` -> quiet-families 'and every one of their panels renders nothing at all' and 'a route this Cloud Core does not serve is quiet' both fail.",
+      "delete the `quietSection` guard from `ArtifactsPanel` alone -> the same two fail plus artifacts-panel's own 'draws nothing at all' (3 failures), i.e. the completeness test really covers each panel individually.",
+      "drop `alarms` from `FAMILIES` -> 'the list is exactly the families the cockpit loads' fails against `useCockpitData.ts`'s own source, and the quiet line's count changes.",
+      "make `ProofBadge` emit `data-badge-class=\"verified\"` -> 'a rendered badge carries the raw class' and 'no badge invents a class the document does not have' fail.",
+      "flip requirement 714's IMPL to DONE in the markdown WITHOUT regenerating -> 'regenerating from the markdown produces exactly the file on disk' and 'says what each row's status and proof are, agreeing with a second reader' fail.",
+      "remove `always` from `<AlarmsPanel>` on /alarms -> 'req 694: the cockpit panel it reuses is told to stay visible' fails.",
+      "point `fetchAlarmHistory` at `/v1/alarms/occurrences` -> the widened Python guard names the file and the path: 'detail.ts:/v1/alarms/occurrences ... nothing in the API answers there'."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_AUTOMATED - 27 panelin tamamı ya veri gösteriyor ya gizli', and that is exactly what `quiet-families.test.tsx` renders and asserts, panel by panel, in CI.",
+    "also_observed": "`next dev` on port 3210: `/` lists all 13 destinations, `/availability` and `/security` render (owner gate, API down), the nav carries 14 items in two groups and marks `/availability` current on that route. The pages' loaded content against a live Cloud Core is an owner-round observation."
+  },
+  "owner_gates": {
+    "karar_0": "production release round"
+  }
+}

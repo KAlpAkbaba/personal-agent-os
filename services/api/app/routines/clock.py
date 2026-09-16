@@ -146,6 +146,8 @@ class RoutineClock:
         evolution_tick: Callable[[Session, datetime], Any] | None = None,
         executive_tick: Callable[[Session, datetime], Any] | None = None,
         experience_tick: Callable[[Session, datetime], Any] | None = None,
+        mail_tick: Callable[[Session, datetime], Any] | None = None,
+        calendar_tick: Callable[[Session, datetime], Any] | None = None,
         interval_s: float = DEFAULT_INTERVAL_S,
         enabled: bool = True,
     ) -> None:
@@ -166,6 +168,11 @@ class RoutineClock:
         #: slowest thing on this clock and the least urgent. It throttles itself to its own
         #: interval, so most ticks it does nothing at all.
         self._experience_tick = experience_tick
+        #: B45 (req 360): the inbox poll. Behind the owner-facing ticks, ahead of the
+        #: experience pass (which may want what it indexed); it throttles itself.
+        self._mail_tick = mail_tick
+        #: B46 (req 358, 361): the calendar mirror and its reminders; throttles itself.
+        self._calendar_tick = calendar_tick
         self._interval_s = max(MIN_INTERVAL_S, float(interval_s))
         self._enabled = enabled
         self._task: asyncio.Task[None] | None = None
@@ -234,6 +241,8 @@ class RoutineClock:
             ("ambient", self._ambient_tick),
             ("evolution", self._evolution_tick),
             ("executive", self._executive_tick),
+            ("mail", self._mail_tick),
+            ("calendar", self._calendar_tick),
             ("experience", self._experience_tick),
         ]
         return [(name, fn) for name, fn in candidates if fn is not None]

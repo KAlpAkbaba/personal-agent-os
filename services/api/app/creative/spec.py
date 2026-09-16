@@ -30,7 +30,10 @@ TOOL_PAINT = "paint"
 TOOL_PHOTOSHOP = "photoshop"
 TOOL_ILLUSTRATOR = "illustrator"
 TOOL_FIGMA = "figma"
-TOOLS: tuple[str, ...] = (TOOL_PAINT, TOOL_PHOTOSHOP, TOOL_ILLUSTRATOR, TOOL_FIGMA)
+#: B43 (req 506-508): the in-house LAYERED editor - Pillow layers, PSD read, OpenRaster
+#: and SVG write/read - always installed because it is this process.
+TOOL_LAYERED = "layered"
+TOOLS: tuple[str, ...] = (TOOL_PAINT, TOOL_PHOTOSHOP, TOOL_ILLUSTRATOR, TOOL_FIGMA, TOOL_LAYERED)
 
 #: docs/M27_CREATIVE_TOOLS_SPEC.md §2/§4: the CLOSED operation vocabulary. "shape" is kept
 #: as its own op, distinct from "draw" — the spec's own enumeration lists both by name.
@@ -52,6 +55,14 @@ OPERATIONS: tuple[str, ...] = (
     "background_remove",
     "layer",
     "export",
+    # B43 (req 489-498): generation, semantic edits, styles, enhancement, upscale, check.
+    "generate",
+    "object_remove",
+    "object_add",
+    "style",
+    "enhance",
+    "upscale",
+    "semantic_check",
 )
 
 DRAW_KINDS: tuple[str, ...] = ("line", "rect", "ellipse", "polygon")
@@ -61,7 +72,9 @@ FLIP_DIRECTIONS: tuple[str, ...] = ("horizontal", "vertical")
 COLOR_ADJUST_FIELDS: tuple[str, ...] = ("brightness", "contrast", "saturation", "levels")
 BACKGROUND_REMOVE_METHODS: tuple[str, ...] = ("flood", "threshold")
 LAYER_OPS: tuple[str, ...] = ("add", "merge")
-EXPORT_FORMATS: tuple[str, ...] = ("png", "jpg", "svg", "pdf")
+#: B43 (req 507): "ora" (OpenRaster) is the layered export; PSD is READ, never written
+#: (Pillow has no PSD writer and the limitation is stated, not papered over).
+EXPORT_FORMATS: tuple[str, ...] = ("png", "jpg", "svg", "pdf", "ora")
 
 #: docs/M27_CREATIVE_TOOLS_SPEC.md §2: a closed, bounded font catalogue — never an
 #: arbitrary owner/model string resolved to a filesystem path (that would be exactly the
@@ -301,7 +314,7 @@ class Layer(_StrictModel):
 
 class Export(_StrictModel):
     op: Literal["export"] = "export"
-    format: Literal["png", "jpg", "svg", "pdf"]
+    format: Literal["png", "jpg", "svg", "pdf", "ora"]
     #: Optional — when omitted, the service derives the name from the plan's own
     #: ``name`` field via :func:`next_output_name` (the naming rule, module docstring).
     #: When given, it is validated the SAME way ``CreativePlan.name`` is: a plain slug,
@@ -321,6 +334,88 @@ class Export(_StrictModel):
         return value
 
 
+# ------------------------------------------------------------------- B43: 489-498
+
+
+class Generate(_StrictModel):
+    """Req 492: an image from the owner's prompt, through the configured provider."""
+
+    op: Literal["generate"] = "generate"
+    prompt: str = Field(min_length=1, max_length=1000)
+    width: int = Field(default=1024, ge=16, le=MAX_DIMENSION)
+    height: int = Field(default=1024, ge=16, le=MAX_DIMENSION)
+
+    @field_validator("prompt")
+    @classmethod
+    def _plain_prompt(cls, value: str) -> str:
+        return _no_control_characters(value, "generate.prompt")
+
+
+class ObjectRemove(_StrictModel):
+    """Req 490: the box's content removed - locally by continuing its surroundings, or
+    by the provider when a prompt names what to remove."""
+
+    op: Literal["object_remove"] = "object_remove"
+    box: Box
+    prompt: str | None = Field(default=None, max_length=500)
+
+
+class ObjectAdd(_StrictModel):
+    """Req 491: a shape, a text, a stored image or (with a prompt) a provider-made object
+    placed INTO the box."""
+
+    op: Literal["object_add"] = "object_add"
+    box: Box
+    kind: Literal["rect", "ellipse", "text", "image", "prompt"] = "rect"
+    fill: Color = (0, 0, 0, 255)
+    text: str | None = Field(default=None, max_length=MAX_TEXT_CHARS)
+    asset: str | None = Field(default=None, max_length=256)
+    prompt: str | None = Field(default=None, max_length=500)
+
+    @field_validator("asset")
+    @classmethod
+    def _asset_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if _is_path_shaped(value) or not _SOURCE_RE.match(value):
+            raise ValueError("object_add.asset must be an object-key-shaped reference")
+        return value
+
+
+class Style(_StrictModel):
+    """Req 493: a named local style, or a provider style when a prompt is given."""
+
+    op: Literal["style"] = "style"
+    kind: Literal["grayscale", "sepia", "posterize", "edges", "invert"] = "grayscale"
+    prompt: str | None = Field(default=None, max_length=500)
+
+
+class Enhance(_StrictModel):
+    """Req 494 / 512: autocontrast + unsharp mask (auto), or one of them, or a denoise."""
+
+    op: Literal["enhance"] = "enhance"
+    kind: Literal["auto", "sharpen", "denoise", "autocontrast"] = "auto"
+
+
+class Upscale(_StrictModel):
+    """Req 495: Lanczos x2 / x4, bounded by MAX_DIMENSION."""
+
+    op: Literal["upscale"] = "upscale"
+    factor: Literal[2, 4] = 2
+
+
+class SemanticCheck(_StrictModel):
+    """Req 498: what the output must SHOW, asked of the vision provider after the run."""
+
+    op: Literal["semantic_check"] = "semantic_check"
+    expectation: str = Field(min_length=1, max_length=200)
+
+    @field_validator("expectation")
+    @classmethod
+    def _plain_expectation(cls, value: str) -> str:
+        return _no_control_characters(value, "semantic_check.expectation")
+
+
 Operation = Annotated[
     New
     | Open
@@ -333,7 +428,14 @@ Operation = Annotated[
     | Crop
     | BackgroundRemove
     | Layer
-    | Export,
+    | Export
+    | Generate
+    | ObjectRemove
+    | ObjectAdd
+    | Style
+    | Enhance
+    | Upscale
+    | SemanticCheck,
     Field(discriminator="op"),
 ]
 
@@ -342,7 +444,7 @@ Operation = Annotated[
 
 
 class CreativePlan(_StrictModel):
-    tool: Literal[TOOL_PAINT, TOOL_PHOTOSHOP, TOOL_ILLUSTRATOR, TOOL_FIGMA]
+    tool: Literal[TOOL_PAINT, TOOL_PHOTOSHOP, TOOL_ILLUSTRATOR, TOOL_FIGMA, TOOL_LAYERED]
     #: The base name every output is derived from (the naming rule, module docstring) —
     #: a plain slug, never a path.
     name: str = Field(min_length=1, max_length=64)

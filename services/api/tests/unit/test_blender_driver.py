@@ -154,7 +154,8 @@ def test_apply_operations_builds_the_expected_inspection(driver, tmp_path) -> No
     names = {o["name"] for o in inspection["objects"]}
     assert names == {"Kure", "Kamera", "Sun"}
     assert inspection["camera"] == "Kamera"
-    assert inspection["lights"] == [{"name": "Sun", "energy": 3.0}]
+    # B44 (req 524): a light's colour is read back too; an unset one is Blender's white.
+    assert inspection["lights"] == [{"name": "Sun", "energy": 3.0, "color": [1.0, 1.0, 1.0]}]
 
     kure = next(o for o in inspection["objects"] if o["name"] == "Kure")
     assert kure["type"] == "MESH"
@@ -234,7 +235,10 @@ def test_render_writes_a_real_nonuniform_png_and_reports_sha256(driver, tmp_path
     assert render is not None
     assert render["width"] == 64
     assert render["height"] == 48
-    png_bytes = Path(render["path"]).read_bytes()
+    # B44 (req 521): the driver declares its render RELATIVE to the project - the device
+    # refuses an absolute path inside out.json - so it is read from there.
+    assert not Path(render["path"]).is_absolute()
+    png_bytes = (tmp_path / render["path"]).read_bytes()
     assert render["bytes"] == len(png_bytes)
     assert render["sha256"] == hashlib.sha256(png_bytes).hexdigest()
     # The independent reader (the same one app.creative3d.service uses before ever

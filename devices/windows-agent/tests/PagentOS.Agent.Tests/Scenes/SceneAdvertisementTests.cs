@@ -35,8 +35,8 @@ public sealed class SceneAdvertisementTests
 
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
         Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(1));
-        Assert.Equal(AgentCapabilities.Projects, with.SkipLast(1).TakeLast(5));
-        Assert.Equal(without.Count + 32 + 7 + 5 + 1, with.Count);
+        Assert.Equal(AgentCapabilities.Projects, with.SkipLast(1).TakeLast(AgentCapabilities.Projects.Count));
+        Assert.Equal(without.Count + 36 + 14 + 9 + 1, with.Count);
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
 
         // The first agent that advertises the family.

@@ -314,9 +314,7 @@ def _apply_write(
     # ---------------------------------------------------------- keyed path
     if obs.key is not None:
         incumbents = _active_by_key(session, obs.memory_class.value, obs.key)
-        same_value = next(
-            (m for m in incumbents if _states_the_same_thing(m, obs)), None
-        )
+        same_value = next((m for m in incumbents if _states_the_same_thing(m, obs)), None)
         conflicting = [m for m in incumbents if not _states_the_same_thing(m, obs)]
 
         if same_value is not None and not conflicting:
@@ -370,7 +368,12 @@ def _apply_write(
             if decision.explicit:
                 # Owner changed their mind: supersede the incumbent.
                 new = _supersede(
-                    session, embedder, incumbent, obs, decision, links,
+                    session,
+                    embedder,
+                    incumbent,
+                    obs,
+                    decision,
+                    links,
                     reason="explicit owner re-teach",
                 )
                 return ObserveResult(
@@ -513,9 +516,7 @@ def remember_explicit(
 def get_memory(session: Session, memory_id: uuid.UUID) -> Memory:
     memory = session.get(Memory, memory_id)
     if memory is None:
-        raise MemorySubsystemError(
-            MemoryErrorClass.NOT_FOUND, f"unknown memory {memory_id}"
-        )
+        raise MemorySubsystemError(MemoryErrorClass.NOT_FOUND, f"unknown memory {memory_id}")
     return memory
 
 
@@ -601,8 +602,11 @@ def edit_memory(
         memory_class=memory.memory_class,
         key=memory.key,
         actor=actor,
-        detail={"version": memory.version, "text_changed": text_changed,
-                "change_reason": change_reason},
+        detail={
+            "version": memory.version,
+            "text_changed": text_changed,
+            "change_reason": change_reason,
+        },
     )
     session.commit()
     return memory
@@ -667,6 +671,27 @@ def pin_memory(session: Session, memory_id: uuid.UUID, *, actor: Actor) -> Memor
     record_audit(
         session,
         action="pinned",
+        memory_id=memory.id,
+        memory_class=memory.memory_class,
+        key=memory.key,
+        actor=actor,
+        detail={},
+    )
+    session.commit()
+    return memory
+
+
+def unpin_memory(session: Session, memory_id: uuid.UUID, *, actor: Actor) -> Memory:
+    """B37 req 58: the owner takes the pin off; retention returns to standard."""
+    memory = get_memory(session, memory_id)
+    _require_owner_for_explicit(memory, actor)
+    memory.pinned = False
+    if memory.retention_class == RetentionClass.PINNED.value:
+        memory.retention_class = RetentionClass.STANDARD.value
+    memory.updated_at = utcnow()
+    record_audit(
+        session,
+        action="unpinned",
         memory_id=memory.id,
         memory_class=memory.memory_class,
         key=memory.key,
@@ -753,9 +778,7 @@ def inspect_memory(session: Session, memory_id: uuid.UUID) -> dict[str, Any]:
         for v in versions
     ]
     payload["audit"] = [_audit_payload(a) for a in audit]
-    payload["conflicts"] = [
-        _audit_payload(a) for a in audit if a.action == "contradicted"
-    ]
+    payload["conflicts"] = [_audit_payload(a) for a in audit if a.action == "contradicted"]
     return payload
 
 
@@ -775,9 +798,7 @@ def _audit_payload(event: MemoryAuditEvent) -> dict[str, Any]:
 
 def list_audit_events(session: Session, *, limit: int = 50) -> list[dict[str, Any]]:
     events = (
-        session.execute(
-            select(MemoryAuditEvent).order_by(MemoryAuditEvent.id.desc()).limit(limit)
-        )
+        session.execute(select(MemoryAuditEvent).order_by(MemoryAuditEvent.id.desc()).limit(limit))
         .scalars()
         .all()
     )
@@ -812,9 +833,7 @@ def create_entity(
 def get_entity(session: Session, entity_id: uuid.UUID) -> Entity:
     entity = session.get(Entity, entity_id)
     if entity is None:
-        raise MemorySubsystemError(
-            MemoryErrorClass.NOT_FOUND, f"unknown entity {entity_id}"
-        )
+        raise MemorySubsystemError(MemoryErrorClass.NOT_FOUND, f"unknown entity {entity_id}")
     return entity
 
 

@@ -127,9 +127,7 @@ def seed_corpus(
     return projects
 
 
-def _filters_from_query(
-    query: dict[str, Any], projects: dict[str, uuid.UUID]
-) -> RetrievalFilters:
+def _filters_from_query(query: dict[str, Any], projects: dict[str, uuid.UUID]) -> RetrievalFilters:
     raw = query.get("filters") or {}
     project = raw.get("project")
     return RetrievalFilters(
@@ -159,9 +157,7 @@ def run_evaluation(
     if seed:
         projects = seed_corpus(session, embedder, corpus)
     else:
-        projects = {
-            e.name: e.id for e in service.list_entities(session, kind="project", limit=500)
-        }
+        projects = {e.name: e.id for e in service.list_entities(session, kind="project", limit=500)}
 
     id_to_slug = {slug_id(r["slug"]): r["slug"] for r in corpus}
 
@@ -172,9 +168,7 @@ def run_evaluation(
     for query in queries:
         k = int(query.get("k", DEFAULT_K))
         filters = _filters_from_query(query, projects)
-        results = hybrid_search(
-            session, embedder, query.get("q"), filters, k=k, now=EVAL_NOW
-        )
+        results = hybrid_search(session, embedder, query.get("q"), filters, k=k, now=EVAL_NOW)
         returned_ids = [r.memory.id for r in results]
         expected_ids = {slug_id(slug) for slug in query["expected"]}
         hits = [mid for mid in returned_ids if mid in expected_ids]
@@ -206,12 +200,8 @@ def run_evaluation(
     mean_precision = (
         sum(q["precision_at_k"] for q in per_query) / query_count if query_count else 0.0
     )
-    mean_hit_rate = (
-        sum(q["hit_rate"] for q in per_query) / query_count if query_count else 0.0
-    )
-    contamination_rate = (
-        scoped_contaminated / scoped_returned if scoped_returned else 0.0
-    )
+    mean_hit_rate = sum(q["hit_rate"] for q in per_query) / query_count if query_count else 0.0
+    contamination_rate = scoped_contaminated / scoped_returned if scoped_returned else 0.0
 
     return {
         "corpus_size": len(corpus),

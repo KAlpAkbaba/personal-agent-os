@@ -18,6 +18,7 @@ import app.media.models  # noqa: F401 - register ADR-0112 owner_media_playbacks
 import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
 import app.mobile.models  # noqa: F401 - register push_registrations on Base.metadata
 import app.narration.models  # noqa: F401 - register narration tables on Base.metadata
+import app.operator.mission_models  # noqa: F401 - register B39 operator_missions
 import app.operator.models  # noqa: F401 - register M19 object_focus on Base.metadata
 import app.routines.models  # noqa: F401 - register M18 routine tables on Base.metadata
 import app.security.models  # noqa: F401 - register security tables on Base.metadata

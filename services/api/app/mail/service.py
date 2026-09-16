@@ -106,6 +106,15 @@ _GATE_SPEECH: dict[str, str] = {
 }
 
 
+#: B45 (req 346): the longest References chain a reply carries - a thread hundreds deep
+#: keeps its most recent links, never a header that grows without bound.
+MAX_REFERENCES = 50
+#: B45 (req 347, 348): the owner-facing error classes of attachments.
+ERROR_ATTACHMENT_NOT_FOUND = "attachment_not_found"
+ERROR_ATTACHMENT_TOO_LARGE = "attachment_too_large"
+ERROR_ATTACHMENT_DELIVERY_FAILED = "attachment_delivery_failed"
+
+
 def confirmed_by_label(confirmation: Confirmation) -> str:
     """``"rest:<session>"`` / ``"voice:<session>:<turn>"`` — the exact literal ADR-0084
     addendum 2 names, stamped on the row at the moment a confirmation actually succeeds."""
@@ -344,6 +353,53 @@ class MailService:
             },
         )
 
+    def poll(
+        self, db: Session, *, now: datetime | None = None, folder: str = "INBOX"
+    ) -> dict[str, Any]:
+        """B45 (req 360): the inbox checked on the clock, not only when the owner asks - new
+        messages indexed, the new unread ones counted, one ledger row when something
+        arrived. It lists and indexes; it never marks, moves, sends or deletes. No account
+        is a quiet no-op."""
+        if self._provider is None:
+            return {"status": "no_account", "new": 0, "new_unread": 0}
+        now = now or _now()
+        latest = db.execute(
+            select(MailIndexRow.date)
+            .where(MailIndexRow.folder == folder, MailIndexRow.date.is_not(None))
+            .order_by(MailIndexRow.date.desc())
+            .limit(1)
+        ).scalar()
+        # SQLite hands a DateTime(timezone=True) column back naive; the stored value is UTC,
+        # and the provider compares it with aware message dates.
+        if latest is not None and latest.tzinfo is None:
+            latest = latest.replace(tzinfo=UTC)
+        messages = self._provider.list_messages(folder, limit=50, since=latest)
+        new = 0
+        new_unread = 0
+        for message in messages:
+            known = (
+                db.execute(
+                    select(MailIndexRow.id).where(
+                        MailIndexRow.provider_message_id == message.message_id
+                    )
+                ).scalar()
+                is not None
+            )
+            self._index_upsert(db, message, now=now)
+            if not known:
+                new += 1
+                if message.unread:
+                    new_unread += 1
+        if new:
+            self._ledger(
+                db,
+                event_type=EVENT_TYPE_MAIL_READ,
+                action="mail.poll",
+                summary=f"mail.poll -> {folder}: {new} yeni ({new_unread} okunmamış)",
+                detail={"folder": folder, "new": new, "new_unread": new_unread},
+            )
+        return {"status": "polled", "new": new, "new_unread": new_unread, "seen": len(messages)}
+
     def search(self, db: Session, query: str, *, session_id: str | None = None) -> dict[str, Any]:
         if self._provider is None:
             return self._account_missing(capability="mail.search", session_id=session_id, db=db)
@@ -509,6 +565,189 @@ class MailService:
         )
 
     # ------------------------------------------------------------------ PREPARE
+
+    # ------------------------------------------------------- ATTACHMENTS (B45)
+
+    def attachments(
+        self, db: Session, *, target: str = "current", session_id: str | None = None
+    ) -> dict[str, Any]:
+        """B45 (req 347): the focused (or named) message's attachments - name, type, size -
+        read from the message itself, never remembered."""
+        if self._provider is None:
+            return self._account_missing(
+                capability="mail.attachments", session_id=session_id, db=db
+            )
+        message, clar = self._resolve_message(db, target)
+        if clar is not None:
+            return {
+                "status": "needs_clarification",
+                "speech": clar["clarification"],
+                "candidates": [],
+            }
+        assert message is not None
+        items = [
+            {
+                "index": i + 1,
+                "filename": a.get("filename"),
+                "content_type": a.get("content_type"),
+                "size": a.get("size"),
+            }
+            for i, a in enumerate(message.attachments)
+        ]
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_MAIL_READ,
+            action="mail.attachments",
+            summary=f"mail.attachments -> {message.subject} ({len(items)})",
+            detail={"message_id": message.message_id, "count": len(items)},
+        )
+        if not items:
+            speech = f"'{message.subject}' mailinde ek yok efendim."
+        else:
+            names = ", ".join(f"{item['index']}. {item['filename']}" for item in items[:10])
+            speech = f"'{message.subject}' mailinde {len(items)} ek var efendim: {names}."
+        return self._receipt(
+            capability="mail.attachments",
+            requested_state="read",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"message_id": message.message_id, "count": len(items)},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={"message_id": message.message_id, "attachments": items},
+        )
+
+    def attachment_bytes(self, message_id: str, index: int) -> Any:
+        """The provider's bytes for the ``index``-th (0-based) attachment, or None."""
+        getter = getattr(self._provider, "get_attachment", None) if self._provider else None
+        return getter(message_id, index) if getter is not None else None
+
+    @staticmethod
+    def _safe_attachment_name(filename: str) -> str:
+        import re
+        from pathlib import PurePath
+
+        name = PurePath((filename or "").replace("\\", "/")).name or "attachment"
+        name = re.sub(r"[^\w.\- ()]+", "_", name).strip(" .") or "attachment"
+        return name[:120]
+
+    def save_attachment(
+        self,
+        db: Session,
+        device_action: Any,
+        *,
+        store: Any,
+        fetch_store: Any,
+        base_url: str,
+        target: str = "current",
+        index: int = 1,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """B45 (req 348): the attachment's bytes fetched from the provider, kept in the object
+        store under their own hash, and pulled onto the owner's disk by the device's
+        ``file.fetch`` through a single-use token - the artifact open path's discipline: the
+        device's GET carries no owner credential, so the token names exactly this file and
+        the device re-hashes what it received. ``index`` is the 1-based number the owner
+        heard in the listing."""
+        import hashlib
+
+        from app.mail.attachment_fetch import FETCH_PATH_PREFIX
+        from app.mail.providers import MAX_ATTACHMENT_BYTES
+        from app.object_store import validate_object_key
+
+        capability = "mail.save_attachment"
+        if self._provider is None:
+            return self._account_missing(capability=capability, session_id=session_id, db=db)
+        message, clar = self._resolve_message(db, target)
+        if clar is not None:
+            return {
+                "status": "needs_clarification",
+                "speech": clar["clarification"],
+                "candidates": [],
+            }
+        assert message is not None
+
+        def refused(error_class: str, speech: str) -> dict[str, Any]:
+            return self._receipt(
+                capability=capability,
+                requested_state="saved",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"message_id": message.message_id, "reason": error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+            )
+
+        if device_action is None:
+            return refused(
+                "capability_missing", "Eki bilgisayarınıza indirecek bağlı bir cihaz yok efendim."
+            )
+        attachment = self.attachment_bytes(message.message_id, index - 1)
+        if attachment is None:
+            return refused(
+                ERROR_ATTACHMENT_NOT_FOUND, f"Bu mailde {index}. bir ek bulamadım efendim."
+            )
+        if len(attachment.data) > MAX_ATTACHMENT_BYTES:
+            return refused(ERROR_ATTACHMENT_TOO_LARGE, "Bu ek indirmek için fazla büyük efendim.")
+        digest = hashlib.sha256(attachment.data).hexdigest()
+        name = self._safe_attachment_name(attachment.filename)
+        key = validate_object_key(f"mail/attachments/{digest}/{name}")
+        if not store.exists(key):
+            store.put(key, attachment.data, content_type=attachment.content_type)
+        token = fetch_store.put(
+            object_key=key, sha256=digest, filename=name, content_type=attachment.content_type
+        )
+        result = device_action.run(
+            capability="file.fetch",
+            payload={
+                "url": f"{base_url.rstrip('/')}{FETCH_PATH_PREFIX}{token}",
+                "name": name,
+                "sha256": digest,
+                "size": len(attachment.data),
+                "open": False,
+            },
+            idempotency_key=f"mail-attachment:{digest}:{uuid.uuid4().hex[:8]}",
+            timeout_s=60.0,
+        )
+        if not result.ok:
+            return refused(
+                ERROR_ATTACHMENT_DELIVERY_FAILED, "Eki bilgisayarınıza indiremedim efendim."
+            )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_MAIL_READ,
+            action=capability,
+            summary=f"mail.save_attachment -> {name} ({len(attachment.data)} bayt)",
+            detail={
+                "message_id": message.message_id,
+                "index": index,
+                "sha256": digest,
+                "bytes": len(attachment.data),
+            },
+        )
+        return self._receipt(
+            capability=capability,
+            requested_state="saved",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={
+                "message_id": message.message_id,
+                "sha256": digest,
+                "bytes": len(attachment.data),
+            },
+            speech=f"{name} İndirilenler klasörüne kaydedildi efendim.",
+            db=db,
+            session_id=session_id,
+            extra={
+                "filename": name,
+                "sha256": digest,
+                "bytes": len(attachment.data),
+                "path": (result.result or {}).get("path"),
+            },
+        )
 
     def _upsert_draft_focus(self, db: Session, row: MailDraftRow, *, now: datetime) -> None:
         focus_module.set_focus(
@@ -762,6 +1001,26 @@ class MailService:
 
     # ---------------------------------------------------------- EXTERNAL MUTATION
 
+    def _reply_references(self, row: MailDraftRow) -> tuple[str, ...]:
+        """B45 (req 343, 346): the References chain a reply carries (RFC 5322 3.6.4) - the
+        original's own References, then the original's Message-ID. The draft path always
+        said this was "recomputed at send time"; until B45 ``send`` passed an empty tuple
+        instead, so every reply left with In-Reply-To and no References and broke its
+        thread in clients that follow References. When the original can no longer be read
+        the chain is at least the message the reply answers."""
+        if row.kind != DRAFT_KIND_REPLY or not row.in_reply_to:
+            return ()
+        original = None
+        if self._provider is not None:
+            try:
+                original = self._provider.get_message(row.in_reply_to)
+            except Exception:  # noqa: BLE001 - a failed lookup falls back, never blocks a send
+                original = None
+        chain = [r for r in (original.references if original is not None else ()) if r]
+        if row.in_reply_to not in chain:
+            chain.append(row.in_reply_to)
+        return tuple(chain[-MAX_REFERENCES:])
+
     def send(
         self,
         db: Session,
@@ -875,7 +1134,7 @@ class MailService:
             subject=row.subject,
             body=row.body,
             in_reply_to=row.in_reply_to,
-            references=tuple(),
+            references=self._reply_references(row),
         )
         try:
             sent_message_id = self._sender.send(draft_input)

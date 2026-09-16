@@ -31,7 +31,7 @@ public sealed class AdvertisementTests
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), without);
 
         // M20 appends the documents family (6; 7 since M22's file.fetch) after the operator
-        // family (32) under the same flag, M23 the projects family (5) after that, and M25 the
+        // family (32; 36 since B30's process/service four) under the same flag, M23 the projects family (5) after that, and M25 the
         // scenes family (1) after that; the operator family itself is exactly where it was.
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
         var appended = AgentCapabilities.Operator.Count + AgentCapabilities.Documents.Count + AgentCapabilities.Projects.Count + AgentCapabilities.Scenes.Count;
@@ -40,9 +40,9 @@ public sealed class AdvertisementTests
         Assert.Equal(AgentCapabilities.Projects, with.TakeLast(AgentCapabilities.Projects.Count + AgentCapabilities.Scenes.Count).Take(AgentCapabilities.Projects.Count));
         Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(AgentCapabilities.Scenes.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(32, AgentCapabilities.Operator.Count);
-        Assert.Equal(7, AgentCapabilities.Documents.Count);
-        Assert.Equal(5, AgentCapabilities.Projects.Count);
+        Assert.Equal(36, AgentCapabilities.Operator.Count);
+        Assert.Equal(14, AgentCapabilities.Documents.Count);
+        Assert.Equal(9, AgentCapabilities.Projects.Count);
         Assert.Single(AgentCapabilities.Scenes);
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true), with.Take(with.Count - appended));
     }

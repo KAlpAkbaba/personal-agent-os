@@ -32,6 +32,7 @@ from app.artifacts.models import (
     CANONICAL_FORMAT_ARTIFACT_SPEC_JSON,
     RENDER_STATE_INVALID,
 )
+from app.artifacts.provenance import ACTOR_SYSTEM, Actor, build_provenance, source_manifest
 from app.artifacts.renderers import content_hash
 from app.artifacts.spec import ArtifactSpec
 from app.ledger.vocabulary import SUBSYSTEM_ARTIFACTS
@@ -117,6 +118,8 @@ def create(
     *,
     spec: ArtifactSpec,
     conversation_id: uuid.UUID | None = None,
+    actor: Actor | None = None,
+    sources: list[dict[str, Any]] | None = None,
 ) -> FactoryResult:
     """Create (or idempotently re-use) an artifact for ``spec``, render every format
     its kind produces, and independently validate each one. A render whose
@@ -139,11 +142,16 @@ def create(
             canonical_format=CANONICAL_FORMAT_ARTIFACT_SPEC_JSON,
             conversation_id=conversation_id,
         )
+        # B42 (req 405-408): the version says who asked, what rendered it and what it is
+        # made of - recorded now, never inferred later.
+        who = actor or Actor(ACTOR_SYSTEM)
         version = service.add_artifact_version(
             session,
             artifact_id=artifact.id,
             canonical_body=canonical,
             content_hash=chash,
+            source_manifest=source_manifest(spec, content_hash=chash, sources=sources),
+            provenance=build_provenance(spec, actor=who),
         )
         service.set_artifact_state(session, artifact.id, ARTIFACT_STATE_CANONICAL_READY)
         service.set_artifact_state(session, artifact.id, ARTIFACT_STATE_RENDERS_PENDING)

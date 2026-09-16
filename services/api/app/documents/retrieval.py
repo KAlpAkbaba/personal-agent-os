@@ -251,6 +251,10 @@ def literal_ref(question: str, *, kind: str, structure: dict[str, Any]) -> str |
     return None
 
 
+#: B37: a block no question word matched still ranks when its meaning is this close.
+SEMANTIC_ALONE_FLOOR = 0.35
+
+
 @dataclass(frozen=True, slots=True)
 class ScoredBlock:
     block: dict[str, Any]
@@ -265,6 +269,7 @@ def top_k(
     kind: str = "",
     structure: dict[str, Any] | None = None,
     k: int = 3,
+    embedder: Any | None = None,
 ) -> list[ScoredBlock]:
     """The best ``k`` blocks for ``question``, most relevant first.
 
@@ -285,12 +290,45 @@ def top_k(
             return [ScoredBlock(block=by_ref[ref], score=1000, ref=ref)]
 
     words = content_words(question)
+    bonus = _semantic_bonus(blocks, question, embedder)
     scored = [
-        ScoredBlock(block=b, score=score_block(words, b), ref=str(b.get("ref"))) for b in blocks
+        ScoredBlock(
+            block=b,
+            score=_with_bonus(score_block(words, b), bonus.get(i, 0.0)),
+            ref=str(b.get("ref")),
+        )
+        for i, b in enumerate(blocks)
     ]
     scored = [s for s in scored if s.score > 0]
     scored.sort(key=lambda s: s.score, reverse=True)
     return scored[: max(1, k)]
+
+
+def _semantic_bonus(
+    blocks: list[dict[str, Any]], question: str, embedder: Any | None
+) -> dict[int, float]:
+    """B37 req 149: the cosine similarity (0..1) of each block to the question under
+    the memory subsystem's embedder; empty without one."""
+    if embedder is None:
+        return {}
+    from app.memory.embedding import cosine_similarity
+
+    query_vec = embedder.embed(question)
+    out: dict[int, float] = {}
+    for i, block in enumerate(blocks):
+        text = _block_text_for_index(block)
+        if text.strip():
+            out[i] = max(0.0, cosine_similarity(query_vec, embedder.embed(text)))
+    return out
+
+
+def _with_bonus(lexical: int, similarity: float) -> int:
+    """Meaning beside words: the cosine becomes a small integer so the literal-reference
+    sentinel and the exact-word weighting keep their order; a block no word matched still
+    ranks on a clear similarity."""
+    if lexical > 0 or similarity >= SEMANTIC_ALONE_FLOOR:
+        return lexical + int(round(similarity * 10))
+    return lexical
 
 
 __all__ = [

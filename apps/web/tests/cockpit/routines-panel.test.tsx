@@ -287,12 +287,15 @@ describe("the panel", () => {
     expect(html).toContain("sesle kuruldu");
   });
 
-  it("says there are none rather than showing nothing", () => {
-    const html = renderToStaticMarkup(
-      <RoutinesPanel state={loaded([])} control={IDLE_CONTROL} />,
-    );
+  it("says there are none on its own page, and takes no slot on the cockpit", () => {
+    // B24 req 714: an owner with no routines does not need a cockpit panel telling them
+    // so thirteen times over; on /routines the sentence is what they came to read.
+    expect(renderToStaticMarkup(<RoutinesPanel state={loaded([])} control={IDLE_CONTROL} />)).toBe("");
 
-    expect(html).toContain("Kurulu rutin yok.");
+    const page = renderToStaticMarkup(
+      <RoutinesPanel state={loaded([])} control={IDLE_CONTROL} always />,
+    );
+    expect(page).toContain("Kurulu rutin yok.");
   });
 
   it("says it could not find out rather than showing an empty list", () => {

@@ -28,23 +28,23 @@ public sealed class DocumentAdvertisementTests
     [Fact]
     public void Compose_lists_the_seven_names_after_the_operator_family_only_when_operator_is_enabled()
     {
-        Assert.Equal(["file.search", "file.locate", "file.inspect", "file.read", "file.compare", "document.extract", "file.fetch"], AgentCapabilities.Documents);
-        Assert.Equal(7, AgentCapabilities.Documents.Count);
-        Assert.Equal(32, AgentCapabilities.Operator.Count);
+        Assert.Equal(["file.search", "file.locate", "file.inspect", "file.read", "file.compare", "document.extract", "file.fetch", "file.trash", "file.write", "file.append", "file.rename", "file.move", "file.copy", "file.restore"], AgentCapabilities.Documents);
+        Assert.Equal(14, AgentCapabilities.Documents.Count);
+        Assert.Equal(36, AgentCapabilities.Operator.Count);
 
         var without = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: false);
         Assert.DoesNotContain(without, AgentCapabilities.IsDocuments);
         Assert.DoesNotContain(without, AgentCapabilities.IsOperator);
 
         // M23 appends the projects family (5) after the documents family under the same flag;
-        // the documents family itself is exactly where it was, right after the operator's 32.
+        // the documents family itself is exactly where it was, right after the operator's 32 (36 since B30's process/service four).
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
         // M25 appended the scenes family after the projects family; documents keeps its place.
         var tail = AgentCapabilities.Projects.Count + AgentCapabilities.Scenes.Count;
         Assert.Equal(AgentCapabilities.Documents, with.SkipLast(tail).TakeLast(AgentCapabilities.Documents.Count));
         Assert.Equal(AgentCapabilities.Operator, with.SkipLast(AgentCapabilities.Documents.Count + tail).TakeLast(AgentCapabilities.Operator.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(without.Count + 32 + 7 + 5 + 1, with.Count);
+        Assert.Equal(without.Count + 36 + 14 + 9 + 1, with.Count);
 
         // The deployed 0.1.0 / 0.2.0 baseline — no operator — is untouched by M20, M22 and M23.
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), AgentCapabilities.Compose(browserEnabled: false, displayPowerEnabled: false, operatorEnabled: false));

@@ -132,6 +132,12 @@ public sealed class ProjectCapabilities : IDisposable
             ProjectCapabilityNames.ProjectStatus => Task.Run(() => Status(payload), CancellationToken.None),
             ProjectCapabilityNames.ProjectStop => StopAsync(payload, cancellationToken),
             ProjectCapabilityNames.ProjectTest => TestAsync(payload, budget, cancellationToken),
+            // B33: the lifecycle after the build. Every one resolves the project through Locate
+            // (the roots, the marker), never a payload path; native scope only.
+            ProjectCapabilityNames.ProjectPackage => Task.Run(() => NativeLifecycle.Package(RequireNative(Locate(payload)), payload, _logger, cancellationToken), CancellationToken.None),
+            ProjectCapabilityNames.ProjectInstall => Task.Run(() => NativeLifecycle.Install(RequireNative(Locate(payload)), payload, RootsNative.RequireRoot()), CancellationToken.None),
+            ProjectCapabilityNames.ProjectUninstall => Task.Run(() => NativeLifecycle.Uninstall(RequireNative(Locate(payload)), RootsNative.RequireRoot()), CancellationToken.None),
+            ProjectCapabilityNames.ProjectArtifact => Task.Run(() => NativeLifecycle.Artifact(RequireNative(Locate(payload)), payload), CancellationToken.None),
             SceneCapabilityNames.Inspect => Task.Run(() => Inspect(payload), CancellationToken.None),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
@@ -380,6 +386,7 @@ public sealed class ProjectCapabilities : IDisposable
         var project = Locate3d(payload);
         var inspection = SceneInspection.ReadInspection(project.Folder, project.Slug);
         var render = SceneInspection.ReadRender(project.Folder, project.Slug, inspection);
+        var exports = SceneInspection.ReadExports(project.Folder, project.Slug, inspection);
         _logger.LogInformation(
             "scene.inspect '{Slug}' inspection_keys={Keys} render={Render}",
             project.Slug,
@@ -394,6 +401,22 @@ public sealed class ProjectCapabilities : IDisposable
             ["inspection"] = inspection,
             ["inspection_path"] = Path.Combine(project.Folder, SceneCapabilityNames.InspectionFileName),
         };
+
+        // B44 (req 527): the proof of each exported file, never its bytes.
+        var exported = new JsonArray();
+        foreach (var export in exports)
+        {
+            exported.Add(new JsonObject
+            {
+                ["format"] = export.Format,
+                ["path"] = export.RelativePath,
+                ["bytes"] = export.Bytes,
+                ["sha256"] = export.Sha256,
+                ["verified"] = true,
+            });
+        }
+
+        result["exports"] = exported;
 
         if (render is null)
         {
@@ -420,6 +443,17 @@ public sealed class ProjectCapabilities : IDisposable
     /// re-validated against the scope of the root it was FOUND under (a tampered command, or a
     /// 3D runtime in a web project, is refused HERE, before any process).
     /// </summary>
+    /// <summary>B33: the lifecycle capabilities act on a NATIVE project only - a web or 3D project has no executable to install.</summary>
+    private static ProjectContext RequireNative(ProjectContext project)
+    {
+        if (project.Scope != ProjectScope.Native)
+        {
+            throw DocumentErrors.Invalid($"'{project.Slug}' is a {project.Scope} project; only a native build can be packaged, installed or uninstalled");
+        }
+
+        return project;
+    }
+
     private ProjectContext Locate(JsonObject payload)
     {
         var projectId = RequireString(payload, "project_id", ProjectRoots.MaxProjectIdChars);

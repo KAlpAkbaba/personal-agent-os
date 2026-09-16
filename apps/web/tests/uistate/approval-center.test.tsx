@@ -27,14 +27,14 @@ function candidate(overrides: Partial<Opportunity> = {}): Opportunity {
   };
 }
 
-function render(items: Opportunity[], floor: number | null = 3) {
+function render(items: Opportunity[], floor: number | null = 3, always = false) {
   const value: ShadowReady = {
     awaiting_approval: items,
     count: items.length,
     note: "",
     second_confirmation_floor: floor,
   };
-  return renderToStaticMarkup(<ShadowReadyPanel state={{ kind: "ok", value, at: 0 }} />);
+  return renderToStaticMarkup(<ShadowReadyPanel state={{ kind: "ok", value, at: 0 }} always={always} />);
 }
 
 describe("the Approval Center shows what decides the answer", () => {
@@ -77,10 +77,14 @@ describe("the Approval Center shows what decides the answer", () => {
     expect(html).toContain("gölge hazır");
   });
 
-  it("is empty with its own sentence, not a blank", () => {
-    const html = render([]);
-    expect(html).toContain("Sahip onayı bekleyen aday yok.");
-    expect(html).toContain('data-panel-empty="yes"');
+  it("is empty with its own sentence on /selfdev, and takes no cockpit slot", () => {
+    // B24 req 714: nothing waiting for the owner is good news that needs no panel. It is
+    // still said in words where the owner went to look for it.
+    expect(render([])).toBe("");
+
+    const page = render([], 3, true);
+    expect(page).toContain("Sahip onayı bekleyen aday yok.");
+    expect(page).toContain('data-panel-empty="yes"');
   });
 });
 

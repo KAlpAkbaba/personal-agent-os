@@ -67,6 +67,12 @@ def _row_dict(row: AppProjectRow) -> dict[str, Any]:
         "port": row.run_port,
         "root_path": row.root_path,
         "tests": _counts(row.test_report_json),
+        "version": row.version,
+        "parent_id": str(row.parent_id) if row.parent_id else None,
+        "plan": row.plan_json,
+        "reports": row.reports_json,
+        "fix": row.fix_json,
+        "lifecycle": row.lifecycle_json,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
@@ -149,6 +155,92 @@ async def run_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]
 @router.post("/{project_id}/stop")
 async def stop_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
     return await _act(request, project_id, "stop")
+
+
+@router.post("/plan")
+async def plan_project(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+    """B40 (req 423/424): the plan the owner may read before anything is written."""
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=422, detail={"code": "invalid_argument", "message": "text is required"}
+        )
+    return await asyncio.to_thread(_service(request).plan, text)
+
+
+@router.post("/{project_id}/verify")
+async def verify_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
+    return await _act(request, project_id, "verify")
+
+
+@router.get("/{project_id}/log")
+async def log_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
+    return await _act(request, project_id, "log")
+
+
+@router.post("/{project_id}/package")
+async def package_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
+    return await _act(request, project_id, "package")
+
+
+@router.post("/{project_id}/launch")
+async def launch_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
+    return await _act(request, project_id, "launch")
+
+
+@router.get("/{project_id}/history")
+async def history_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            if db.get(AppProjectRow, project_id) is None:
+                raise HTTPException(
+                    status_code=404, detail={"code": "not_found", "message": "Böyle bir proje yok."}
+                )
+            return service.history(db, target=str(project_id))
+
+    return await asyncio.to_thread(do)
+
+
+@router.post("/{project_id}/modify")
+async def modify_project(
+    request: Request, project_id: uuid.UUID, payload: dict[str, Any]
+) -> dict[str, Any]:
+    service = _service(request)
+    artifacts = _artifacts(request)
+    device_action = getattr(request.app.state, "device_action", None)
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(
+            status_code=422, detail={"code": "invalid_argument", "message": "text is required"}
+        )
+    owner_session_id = str(request.state.owner_session.session_id)
+
+    def do() -> dict[str, Any]:
+        with artifacts.session() as db:
+            if db.get(AppProjectRow, project_id) is None:
+                return {
+                    "execution_status": "refused",
+                    "error_class": "not_found",
+                    "speech": "Böyle bir proje yok.",
+                }
+            return service.modify(
+                db,
+                device_action,
+                target=str(project_id),
+                request=text,
+                session_id=f"rest:{owner_session_id}",
+            )
+
+    return _respond(await asyncio.to_thread(do), project_id)
+
+
+@router.post("/{project_id}/fix")
+async def fix_project(request: Request, project_id: uuid.UUID) -> dict[str, Any]:
+    """B40 (req 435-437): the bounded fix loop over a failed test run."""
+    return await _act(request, project_id, "fix")
 
 
 @router.post("/{project_id}/test")

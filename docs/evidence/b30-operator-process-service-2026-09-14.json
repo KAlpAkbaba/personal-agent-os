@@ -1,0 +1,85 @@
+{
+  "batch": "B30",
+  "name": "Operatör pencere, süreç ve servis",
+  "requirements": [
+    82,
+    84,
+    85,
+    86,
+    87,
+    88,
+    117,
+    118,
+    119,
+    120,
+    121,
+    122
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 on the second run (the first run: API 10252 passed / 1 failed - the shared-contract registry refusing the unregistered operator-allowlists.json - and agent 930/931 - NativeBoundsTests still summing the operator family as 32; both registries updated)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10257 passed, 5 skipped (906 s); was 10159 after B29",
+      "Windows agent build + tests": "PASS - 931/931 (Agent.Tests) + 135/135 (Companion.Audio.Tests); the live-desktop pointer test B21-B29 recorded as flaky passed on both runs this time",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest matrix-badges (generated matrix module resynced); no web source changed"
+  },
+  "what_this_proves": "The two operator allowlists are one file. packages/protocol/operator-allowlists.json names the seven applications (with Turkish names, images and spoken aliases), the device's eight terminal patterns and the three commands the cloud sends, the images process.stop may end and the services service.restart may touch; app/operator/allowlists.py reads it at import (plans.APP_ALLOWLIST IS the contract's id tuple), and a C# test holds DefaultApplications/DefaultAllowlist/DefaultStoppableImages/DefaultRestartableServices equal to the same file while a Python test reads the C# source too. On top of that: an application is closed BY NAME through its own window found by image in the device's list (app.close, WM_CLOSE, a save prompt reported as modal and never answered); a window is moved and resized with the rect re-observed within 8 px; the third shell query (whoami) speaks the user part; process.list/process.stop and service.status/service.restart exist on the device (Process table + Win32_Service through System.Management) and in the cloud, with both policies refused as permission_denied BEFORE any device call, and an unelevated companion answering a restart with permission_denied that names UAC rather than bypassing it.",
+  "measured_first": {
+    "allowlists_before": "plans.APP_ALLOWLIST had six ids, the device's DefaultApplications() seven (mspaint device-only); shell_query knew ip/hostname (two commands) against the device's eight patterns; no test read both halves.",
+    "callers_before": "app.close, window.move, window.resize implemented on the device since M19 (the lifecycle lab test exercises them) with no cloud caller; window.minimize/maximize/restore already had cloud callers (operator.window_control since M19, corpus op.window.*) - rows 86-88 were stale, not missing.",
+    "process_service_before": "no process.* or service.* capability on the device (OperatorCapabilityNames.All = 32); no cloud tool; no intents."
+  },
+  "closed_fully": {
+    "82_app_close": "Intent APP_CLOSE ('Not Defteri'ni kapat', 'Chrome'u kapat') -> operator.app_close: the application's window is found by IMAGE in the device's own window.list (never the focus stack), plan close_application = app.close (postcondition closed) + window.list (window gone); not running -> noop/already 'zaten açık değil' with no close sent; modal -> modal_open 'kaydedilmemiş bir şey soruyor'; force only on the owner's word.",
+    "84_85_move_resize": "operator.window_control action=move (x,y) / resize (width,height) -> plans move_window/resize_window: device window.move/window.resize, postcondition the re-observed rect within RECT_TOLERANCE_PX=8 (the companion's own tolerance); a rect that did not land is postcondition_failed 'Pencereyi boyutlandıramadım'.",
+    "86_87_88_min_max_restore": "already callable (operator.window_control minimize/maximize/restore, corpus op.window.* cases); matrix rows corrected from 'çağıran yok' to DONE with their existing tests.",
+    "117_allowlist_unified": "packages/protocol/operator-allowlists.json read by app/operator/allowlists.py; APP_ALIAS_PHRASES (longest first) feed resolve_app_alias; C# OperatorAllowlistsContractTests + Python test_operator_allowlists hold both halves equal (ids, images, patterns, cloud commands, policies).",
+    "118_terminal_expansion": "SHELL_COMMANDS from the contract (hostname, ipconfig, whoami); every command asserted to match a device pattern with the companion's own token rule restated (terminal_pattern_matches: composition characters refused, '*'/<path>/<project-entry> one token each); Intent SHELL_QUERY whoami ('Kullanıcı adım ne?', 'Hangi kullanıcıyla oturum açtım?') -> 'Kullanıcı adınız alp.' (domain dropped).",
+    "119_process_inspect": "device process.list (Process table, image/name/pid/window_count/title, window-first, capped 200, optional name filter) + cloud operator.process action=list; Intent PROCESS_QUERY ('Chrome çalışıyor mu?', 'Hangi uygulamalar açık?', 'Not Defteri açık mı?').",
+    "120_process_stop_policy": "device process.stop: image must be in DefaultStoppableImages else permission_denied before any process is looked at; WM_CLOSE to each window, modal reported, force terminates; cloud operator.process action=stop refuses not_in_stop_policy before any device call, plan process_stop = process.stop (stopped) + process.list (none of that image left). Intent PROCESS_STOP ('Chrome'u sonlandır'); 'PowerShell'i sonlandır' refused.",
+    "121_service_inspect": "device service.status (Win32_Service: state, start_mode, pid; injection-shaped names refused validation_error; unknown -> ui_target_not_found) + cloud operator.service action=status; Turkish service words mapped (yazdırma -> Spooler); Intent SERVICE_QUERY.",
+    "122_service_restart_policy": "device service.restart: DefaultRestartableServices policy, then IsElevated() - unelevated -> permission_denied naming UAC, nothing touched; elevated -> StopService/StartService via WMI and the state re-read until Running; cloud operator.service action=restart refuses not_in_restart_policy first, plan service_restart = service.restart (restarted) + service.status (running); tier CRITICAL. Intent SERVICE_RESTART ('Spooler servisini yeniden başlat'); bare 'Yeniden başlat' stays REPEAT."
+  },
+  "found_on_the_way": {
+    "the_lab_reached_the_owners_notepad": "The first run of the process.stop lab test sent WM_CLOSE to the owner's own unsaved a.txt Notepad (process.stop is by image, as the product promises) and, correctly, reported its save prompt as modal and answered nothing. The test now lists notepad.exe first and, with a foreign Notepad running, logs that it proves nothing and returns instead of touching it. The owner's Notepad (pid 20356, *a.txt) was alive afterwards.",
+    "window_list_needs_the_image": "A name-addressed close finds its window by image; the fake desktop's rows carried no image (the companion's WindowInfo.ToJson does), so _OPERATOR_WINDOW and the corpus CTX_WINDOW_FOCUSED listing now carry it, per context, reset per case.",
+    "stale_matrix_rows": "86-88 said 'çağıran yok' for actions the cloud has called since M19.",
+    "the_gate_caught_two_registries": "First full run (10252 passed, 1 failed; agent 930/931): test_contract_falsification refused the new shared artifact until it was registered with its guard (test_the_application_allowlist_is_the_contracts_in_its_order, held by services/api and devices/windows-agent), and NativeBoundsTests still summed the operator family as 32 (the '45 more with -Operator' comment is now 49). Both are the registries doing their job; both updated, second run below."
+  },
+  "tests": {
+    "services/api/tests/unit/test_operator_allowlists.py": 16,
+    "services/api/tests/unit/test_operator_process_service.py": 24,
+    "services/api/tests/unit/test_operator_capability_regression.py": "PLAN_STEPS +9 (move_window, resize_window, close_application, shell_query_whoami, process_list, process_stop, service_status, service_restart) - 31 plans, every one ending in a verified postcondition",
+    "services/api/tests/voice_corpus/corpus.py (op.app_close.*, op.process.*, op.service.*, op.shell.who.*)": "53 cases through the real relay against the fake device, including two policy refusals with no side effect and 'Yeniden başlat.' kept as REPEAT",
+    "devices/windows-agent/tests/.../OperatorAllowlistsContractTests.cs": 4,
+    "devices/windows-agent/tests/.../ProcessServiceTests.cs": "5 (one LabFact, gated on no foreign Notepad); 42/42 with the advertisement suites (Operator.Count 32 -> 36)"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`); CRLF-aware.",
+    "mutations": [
+      "M1 image_stoppable always True (policy off) -> 1 failure.",
+      "M2 the relay drops process_name (service.py copy list) -> 1 failure (the field never reaches the tool).",
+      "M3 process_stop's listing postcondition always True -> 1 failure.",
+      "M4 app_close no longer needs the close verb -> 1 failure ('Not Defteri'ni aç' stolen).",
+      "M5 the companion's DefaultStoppableImages gains explorer.exe -> 1 failure in the PYTHON contract test (drift caught without running C#).",
+      "M6 service_status accepts a device answer without a state -> 1 failure."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL (test lab, this desktop) for the process/service family and the contract; the production 'pencere taşındı/boyutlandı' command READY_FOR_OWNER (Karar 0)",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_REAL — üretimden pencere taşındı/boyutlandı'. window.move/window.resize are exercised against a real Notepad in NotepadLifecycleTests (rect re-observed) and the cloud plans now call them; a command from production is Karar 0's. On this desktop the new capabilities ran for real: process.list found the test host by image, process.stop refused powershell.exe/svchost.exe by policy, service.status read Spooler from the SCM, service.restart refused bthserv by policy and Spooler with the UAC answer (unelevated), the state unchanged before/after."
+  },
+  "owner_gates": {
+    "karar_0": "production release round (window move/resize from production)",
+    "uac_service_restart": "service.restart needs an elevated companion; the companion runs in the owner's session unelevated by design, so a real restart is READY_FOR_OWNER (checkpoint: the owner decides whether the companion may ever run elevated; the product never bypasses UAC)"
+  }
+}

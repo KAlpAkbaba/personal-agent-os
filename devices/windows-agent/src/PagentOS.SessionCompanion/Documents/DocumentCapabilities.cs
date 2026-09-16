@@ -80,7 +80,7 @@ public sealed class DocumentCapabilities
         Roots = new AuthorisedRoots(options.AuthorisedRoots);
     }
 
-    public static IReadOnlyList<IDocumentExtractor> DefaultExtractors() => [new OpenXmlExtractor(), new PdfPigExtractor(), new TextLikeExtractor()];
+    public static IReadOnlyList<IDocumentExtractor> DefaultExtractors() => [new OpenXmlExtractor(), new PdfPigExtractor(), new TextLikeExtractor(), new ImageExtractor()];
 
     /// <summary>The same gate as the operator (<c>PAGENTOS_AGENT_OperatorEnabled</c>): the companion may touch the owner's files.</summary>
     public bool Enabled => _options.Enabled;
@@ -182,8 +182,230 @@ public sealed class DocumentCapabilities
             DocumentCapabilityNames.FileRead => Read(payload),
             DocumentCapabilityNames.FileCompare => Compare(payload, cancellationToken),
             DocumentCapabilityNames.DocumentExtract => Extract(payload, cancellationToken),
+            DocumentCapabilityNames.FileTrash => Trash(payload),
+            // B34 (153-165): the managed mutations. Every target is resolved through the
+            // same confinement the reads use; the acts themselves live in FileMutations.
+            DocumentCapabilityNames.FileWrite => WriteFile(payload),
+            DocumentCapabilityNames.FileAppend => AppendFile(payload),
+            DocumentCapabilityNames.FileRename => RenameFile(payload),
+            DocumentCapabilityNames.FileMove => MoveFile(payload),
+            DocumentCapabilityNames.FileCopy => CopyFile(payload),
+            DocumentCapabilityNames.FileRestore => RestoreFile(payload),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
+
+    // ================================================================== B34: mutations
+
+    private JsonObject WriteFile(JsonObject payload)
+    {
+        var text = RequireText(payload);
+        var (resolved, before) = ResolveWritable(payload);
+        var result = FileMutations.Write(Roots, resolved, before, text, OptionalString(payload, "expected_sha256", 64));
+        Remember(result);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileWrite, status: before is null ? "created" : "replaced", detail: result["after"]!["file_id"]!.GetValue<string>());
+        return result;
+    }
+
+    private JsonObject AppendFile(JsonObject payload)
+    {
+        var text = RequireText(payload);
+        var target = ResolveTarget(payload, "payload");
+        var result = FileMutations.Append(Roots, target.Path, target.Record, text, OptionalString(payload, "expected_sha256", 64));
+        Remember(result);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileAppend, status: "appended", detail: target.Record.FileId);
+        return result;
+    }
+
+    private JsonObject RenameFile(JsonObject payload)
+    {
+        var target = ResolveTarget(payload, "payload");
+        var result = FileMutations.Rename(target.Path, target.Record, RequireString(payload, "new_name", DocumentCapabilityNames.MaxFetchNameChars));
+        Forget(target);
+        Remember(result);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileRename, status: "renamed", detail: target.Record.FileId);
+        return result;
+    }
+
+    private JsonObject MoveFile(JsonObject payload)
+    {
+        var target = ResolveTarget(payload, "payload");
+        var destinationEntry = OptionalString(payload, "destination_dir", MaxPathChars)
+            ?? OptionalString(payload, "destination_folder", MaxPathChars)
+            ?? throw DocumentErrors.Invalid("payload.destination_dir or payload.destination_folder is required");
+        var destination = ConfineFolderEntry(destinationEntry, "payload.destination_dir");
+        var result = FileMutations.Move(target.Path, target.Record, destination);
+        Forget(target);
+        Remember(result);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileMove, status: "moved", detail: target.Record.FileId);
+        return result;
+    }
+
+    private JsonObject CopyFile(JsonObject payload)
+    {
+        var target = ResolveTarget(payload, "payload");
+        var destinationPath = OptionalString(payload, "destination_path", MaxPathChars);
+        var destinationDir = OptionalString(payload, "destination_dir", MaxPathChars)
+            ?? OptionalString(payload, "destination_folder", MaxPathChars);
+        var newName = OptionalString(payload, "new_name", DocumentCapabilityNames.MaxFetchNameChars);
+        string resolvedTarget;
+        if (destinationPath is not null)
+        {
+            resolvedTarget = ConfineNewFile(destinationPath, "payload.destination_path");
+        }
+        else
+        {
+            var dir = destinationDir is null ? System.IO.Path.GetDirectoryName(target.Path)! : ConfineFolderEntry(destinationDir, "payload.destination_dir");
+            var name = newName is null
+                ? (destinationDir is null ? throw DocumentErrors.Invalid("payload.destination_path, payload.destination_dir or payload.new_name is required") : target.Record.Name)
+                : FileMutations.RequireFileName(newName, "payload.new_name");
+            resolvedTarget = System.IO.Path.Combine(dir, name);
+        }
+
+        var result = FileMutations.Copy(target.Path, target.Record, resolvedTarget);
+        Remember(result);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileCopy, status: "copied", detail: target.Record.FileId);
+        return result;
+    }
+
+    private JsonObject RestoreFile(JsonObject payload)
+    {
+        var backupId = RequireString(payload, "backup_id", 64);
+        var backup = FileMutations.FindBackup(Roots, backupId)
+            ?? throw DocumentErrors.NotFound($"{backupId} is not a backup in any authorised root's undo store");
+        var targetPath = OptionalString(payload, "target_path", MaxPathChars);
+        var resolvedTarget = targetPath is null ? null : ConfineNewFile(targetPath, "payload.target_path");
+        var result = FileMutations.Restore(Roots, backup, resolvedTarget);
+        Remember(result);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileRestore, status: "restored", detail: backup.BackupId);
+        return result;
+    }
+
+    private static string RequireText(JsonObject payload)
+    {
+        var node = payload["text"];
+        if (node is null || node.GetValueKind() != JsonValueKind.String)
+        {
+            throw DocumentErrors.Invalid("payload.text is required and must be a string");
+        }
+
+        var text = node.GetValue<string>();
+        if (text.Length > FileMutations.MaxTextChars)
+        {
+            throw DocumentErrors.Unsupported($"payload.text is {text.Length} characters, over the {FileMutations.MaxTextChars} bound", DocumentErrors.TooLarge);
+        }
+
+        return text;
+    }
+
+    /// <summary>
+    /// A write target: an existing file (through <see cref="ResolveTarget"/>, id or path) or a
+    /// path that does not exist yet, whose PARENT resolves inside the roots and whose name is
+    /// not secret-bearing. Returns the resolved path and the record before, null when new.
+    /// </summary>
+    private (string Path, FileRecord? Before) ResolveWritable(JsonObject payload)
+    {
+        var path = OptionalString(payload, "path", MaxPathChars);
+        var folder = OptionalString(payload, "folder", MaxPathChars);
+        if (path is null && folder is not null)
+        {
+            // The Cloud Core cannot name the owner's Documents folder - only this machine can
+            // - so a NEW file arrives as a bucket (or bucket/relative) plus a name, the same
+            // shape file.search's roots take; confined exactly as an absolute path would be.
+            var name = FileMutations.RequireFileName(OptionalString(payload, "name", DocumentCapabilityNames.MaxFetchNameChars), "payload.name");
+            path = System.IO.Path.Combine(ConfineFolderEntry(folder, "payload.folder"), name);
+        }
+
+        if (path is null || payload["file_id"] is not null)
+        {
+            var target = ResolveTarget(payload, "payload");
+            return (target.Path, target.Record);
+        }
+
+        var candidate = ConfineNewFile(path, "payload.path");
+        if (File.Exists(candidate))
+        {
+            var target = ResolveTarget(payload, "payload");
+            return (target.Path, target.Record);
+        }
+
+        return (candidate, null);
+    }
+
+    /// <summary>A file path that may not exist yet: its parent must resolve inside the roots, its name must not be secret-bearing or a directory.</summary>
+    private string ConfineNewFile(string raw, string where)
+    {
+        if (!System.IO.Path.IsPathRooted(raw))
+        {
+            throw DocumentErrors.Invalid($"{where} must be absolute");
+        }
+
+        string full;
+        try
+        {
+            full = System.IO.Path.GetFullPath(raw);
+        }
+        catch (Exception)
+        {
+            throw DocumentErrors.Denied(RootsRefusal(where));
+        }
+
+        var name = FileMutations.RequireFileName(System.IO.Path.GetFileName(full), where);
+        if (Roots.Confine(full) is { } existing)
+        {
+            if (Directory.Exists(existing))
+            {
+                throw DocumentErrors.Invalid($"{where} names a directory, not a file");
+            }
+
+            return existing;
+        }
+
+        var parent = System.IO.Path.GetDirectoryName(full);
+        var parentResolved = parent is null ? null : Roots.Confine(parent);
+        if (parentResolved is null)
+        {
+            throw DocumentErrors.Denied(RootsRefusal(where));
+        }
+
+        return System.IO.Path.Combine(parentResolved, name);
+    }
+
+    /// <summary>A bucket name (or bucket/relative segments) as a real, authorised directory - the search-roots rule.</summary>
+    private string ConfineFolderEntry(string entry, string where)
+    {
+        var candidate = System.IO.Path.IsPathRooted(entry)
+            ? entry
+            : WellKnownFolders.ResolveEntry(entry)
+              ?? throw DocumentErrors.Invalid($"{where} takes an absolute path or one of: {WellKnownFolders.NamesForMessage} (optionally followed by relative segments)");
+        return ConfineDirectory(candidate, where);
+    }
+
+    private string ConfineDirectory(string raw, string where)
+    {
+        if (!System.IO.Path.IsPathRooted(raw))
+        {
+            throw DocumentErrors.Invalid($"{where} must be absolute");
+        }
+
+        var resolved = Roots.Confine(raw) ?? throw DocumentErrors.Denied(RootsRefusal(where));
+        if (!Directory.Exists(resolved))
+        {
+            throw DocumentErrors.Invalid($"{where} does not name a folder");
+        }
+
+        return resolved;
+    }
+
+    /// <summary>A mutation's <c>after</c> record is a file this companion can now be asked about by id.</summary>
+    private void Remember(JsonObject result)
+    {
+        if (result["after"] is JsonObject after && after["file_id"]?.GetValue<string>() is { } id && after["path"]?.GetValue<string>() is { } path)
+        {
+            _known[id] = path;
+        }
+    }
+
+    private void Forget(Target target) => _known.TryRemove(target.Record.FileId, out _);
 
     // ================================================================== file.fetch (M22)
 
@@ -393,7 +615,12 @@ public sealed class DocumentCapabilities
         }
 
         var extractor = ExtractorFor(target.Kind);
-        if (extractor is not null)
+        if (target.Kind == FileKinds.Archive)
+        {
+            // B32 req 142: the central directory, never an entry inflated.
+            result["archive"] = ArchiveInspector.Inspect(target.Path);
+        }
+        else if (extractor is not null)
         {
             RequireBoundedContainer(target);
             foreach (var (key, value) in extractor.Inspect(target.Path, target.Kind, cancellationToken))
@@ -537,7 +764,62 @@ public sealed class DocumentCapabilities
             OptionalRange(payload, "page_range", DocumentCapabilityNames.MaxPdfPages),
             OptionalString(payload, "sheet", 64),
             OptionalRange(payload, "slide_range", 10_000),
-            OptionalInt(payload, "max_chars", 1, DocumentCapabilityNames.MaxExtractChars) ?? DocumentCapabilityNames.MaxExtractChars);
+            OptionalInt(payload, "max_chars", 1, DocumentCapabilityNames.MaxExtractChars) ?? DocumentCapabilityNames.MaxExtractChars,
+            OptionalString(payload, "language", 16));
+    }
+
+    // ================================================================== file.trash (B32)
+
+    /// <summary>
+    /// B32 requirement 150: send ONE file to the Recycle Bin — never a permanent delete, so
+    /// the owner's own undo is a right-click away. The target goes through the same
+    /// resolution every other capability uses (roots, secret-bearing names, existence), the
+    /// result re-reads the path afterwards and says what it observed. A directory is refused.
+    /// </summary>
+    private JsonObject Trash(JsonObject payload)
+    {
+        var target = ResolveTarget(payload, "payload");
+        if (Directory.Exists(target.Path))
+        {
+            throw DocumentErrors.Invalid("payload names a directory; file.trash moves one file");
+        }
+
+        var before = target.Record.ToJson();
+        // B34 req 159/161: a delete the Cloud Core wants to be able to undo takes a copy
+        // into the undo store first; the Recycle Bin stays the owner's own way back.
+        FileMutations.BackupRecord? backup = null;
+        if (payload["backup"]?.GetValue<bool>() == true)
+        {
+            backup = FileMutations.Backup(Roots, target.Path, "trash");
+        }
+
+        try
+        {
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                target.Path,
+                Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin,
+                Microsoft.VisualBasic.FileIO.UICancelOption.ThrowException);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw DocumentErrors.Denied($"'{target.Record.Name}' could not be moved to the Recycle Bin: {ex.Message}");
+        }
+        catch (IOException ex)
+        {
+            throw DocumentErrors.Denied($"'{target.Record.Name}' could not be moved to the Recycle Bin: {ex.Message}");
+        }
+
+        var stillThere = File.Exists(target.Path);
+        _audit?.Write(AuditRequestEvent, capability: DocumentCapabilityNames.FileTrash, status: stillThere ? "still_present" : "trashed", detail: target.Record.FileId);
+        return new JsonObject
+        {
+            ["trashed"] = !stillThere,
+            ["method"] = "recycle_bin",
+            ["file"] = before,
+            ["backup"] = backup?.ToJson(),
+            ["observed"] = new JsonObject { ["exists"] = stillThere },
+        };
     }
 
     // ================================================================== file.compare

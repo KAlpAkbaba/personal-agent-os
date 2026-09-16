@@ -44,6 +44,118 @@ export function calendarProposalDiscardPath(proposalId: string): string {
   return `/v1/calendar/proposals/${encodeURIComponent(proposalId)}/discard`;
 }
 
+// B34 (req 160, 162, 166): the third pending source - file changes the Cloud Core proposed
+// and has not yet carried out. Same gate, same pair, same read-back rule.
+export const DOCUMENT_MUTATIONS_PENDING_PATH = "/v1/documents/mutations/pending";
+
+export function mutationConfirmPath(mutationId: string): string {
+  return `/v1/documents/mutations/${encodeURIComponent(mutationId)}/confirm`;
+}
+
+export function mutationDiscardPath(mutationId: string): string {
+  return `/v1/documents/mutations/${encodeURIComponent(mutationId)}/discard`;
+}
+
+// B35 (req 609, 621): the fourth pending source - self-development candidates the
+// engine finished and STOPPED on. Same pair; the decision is recorded, nothing is promoted
+// (req 624), and the row is read back the moment the list shows it (the run's own
+// record is what the owner reads - there is no spoken read-back for a candidate).
+export const SELFDEV_PENDING_PATH = "/v1/selfdev/defects/pending";
+
+export function candidateApprovePath(defectId: string): string {
+  return `/v1/selfdev/defects/${encodeURIComponent(defectId)}/approve`;
+}
+
+export function candidateRejectPath(defectId: string): string {
+  return `/v1/selfdev/defects/${encodeURIComponent(defectId)}/reject`;
+}
+
+/** A `selfdev_defects` row awaiting the owner (B35), every field verbatim or `null`. */
+export type PendingCandidate = {
+  defect_id: string;
+  /** `bug` | `feature`. */
+  kind: string | null;
+  /** `owner_voice` | `owner_rest` | `opportunity` | `ci_failure`. */
+  source: string | null;
+  title: string | null;
+  state: string | null;
+  branch: string | null;
+  candidate_sha: string | null;
+  promotion_class: string | null;
+  never_auto_promote: boolean;
+  risk_tier: number | null;
+  security_review_passed: boolean | null;
+  gate_state: string | null;
+  shadow_state: string | null;
+  ci_state: string | null;
+  explanation: string | null;
+  tokens_used: number | null;
+  finished_at: string | null;
+  /** The pair's read-back gate: a candidate is read back when its record is on the page. */
+  read_back_at: string | null;
+};
+
+export const CANDIDATE_STATE_TR: Record<string, string> = {
+  queued: "kuyrukta",
+  claimed: "çalıştırıcı aldı",
+  running: "çalışıyor",
+  awaiting_owner: "onayınızı bekliyor",
+  approved: "onaylandı — canlıya alınmadı",
+  rejected: "reddedildi",
+  refused: "reddetti",
+  quarantined: "karantinada",
+  failed: "başarısız",
+};
+
+export const PROMOTION_CLASS_TR: Record<string, string> = {
+  AUTO_SAFE: "güvenli sınıf",
+  AUTO_CANARY: "kanarya sınıfı",
+  OWNER_APPROVAL_REQUIRED: "sahip onayı gerekir",
+  NEVER_AUTO_PROMOTE: "hiçbir zaman kendiliğinden canlıya alınmaz",
+};
+
+/** A `file_mutations` row as the pending route lists it (B34), every field verbatim or `null`. */
+export type PendingMutation = {
+  mutation_id: string;
+  /** `write` | `append` | `edit` | `rename` | `move` | `copy` | `delete` | `restore`, or whatever the row says. */
+  kind: string | null;
+  /** `low` | `sensitive` | `critical`. */
+  risk: string | null;
+  name: string | null;
+  path_before: string | null;
+  path_after: string | null;
+  sha_before: string | null;
+  sha_after: string | null;
+  /** The Turkish sentence the owner heard for this change. */
+  summary: string | null;
+  /** `proposed` | `applied` | `undone` | `discarded` | `failed`, or whatever the row says. */
+  state: string | null;
+  read_back_at: string | null;
+  confirmed_at: string | null;
+  created_at: string | null;
+};
+
+/** Turkish for a mutation's kind, for the row's label. */
+export const MUTATION_KIND_TR: Record<string, string> = {
+  write: "yazma",
+  append: "ekleme",
+  edit: "düzenleme",
+  rename: "yeniden adlandırma",
+  move: "taşıma",
+  copy: "kopyalama",
+  delete: "çöp kutusuna gönderme",
+  restore: "geri alma",
+};
+
+/** Turkish for a mutation's state, for the outcome line. */
+export const MUTATION_STATE_TR: Record<string, string> = {
+  proposed: "öneri bekliyor",
+  applied: "uygulandı",
+  undone: "geri alındı",
+  discarded: "vazgeçildi",
+  failed: "uygulanamadı",
+};
+
 // ------------------------------------------------------------------ the rows
 
 /** A `mail_drafts` row as the pending route lists it (spec §3), every field verbatim or `null`. */
@@ -192,6 +304,71 @@ export function parseProposal(raw: unknown): PendingProposal | null {
   };
 }
 
+/** One pending file change from a raw row; `null` for a row with no id. */
+export function parseMutation(raw: unknown): PendingMutation | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const id = str(o.mutation_id) ?? str(o.id);
+  if (id === null) return null;
+  return {
+    mutation_id: id,
+    kind: str(o.kind),
+    risk: str(o.risk),
+    name: str(o.name),
+    path_before: str(o.path_before),
+    path_after: str(o.path_after),
+    sha_before: str(o.sha_before),
+    sha_after: str(o.sha_after),
+    summary: str(o.summary),
+    state: str(o.state),
+    read_back_at: str(o.read_back_at),
+    confirmed_at: str(o.confirmed_at),
+    created_at: str(o.created_at),
+  };
+}
+
+/** One pending candidate from a raw row; `null` for a row with no id. */
+export function parseCandidate(raw: unknown): PendingCandidate | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const id = str(o.defect_id);
+  if (!id) return null;
+  const review = o.security_review && typeof o.security_review === "object" ? (o.security_review as Record<string, unknown>) : {};
+  const gate = o.gate && typeof o.gate === "object" ? (o.gate as Record<string, unknown>) : {};
+  const shadow = o.shadow && typeof o.shadow === "object" ? (o.shadow as Record<string, unknown>) : {};
+  const ci = o.ci && typeof o.ci === "object" ? (o.ci as Record<string, unknown>) : {};
+  return {
+    defect_id: id,
+    kind: str(o.kind),
+    source: str(o.source),
+    title: str(o.title),
+    state: str(o.state),
+    branch: str(o.branch),
+    candidate_sha: str(o.candidate_sha),
+    promotion_class: str(o.promotion_class),
+    never_auto_promote: o.never_auto_promote === true,
+    risk_tier: typeof o.risk_tier === "number" ? o.risk_tier : null,
+    security_review_passed: typeof review.passed === "boolean" ? review.passed : null,
+    gate_state: str(gate.state),
+    shadow_state: str(shadow.state),
+    ci_state: str(ci.state),
+    explanation: str(o.explanation),
+    tokens_used: typeof o.tokens_used === "number" ? o.tokens_used : null,
+    finished_at: str(o.finished_at),
+    read_back_at: str(o.finished_at),
+  };
+}
+
+export const fetchPendingCandidates = (): Promise<Loaded<PendingCandidate[]>> =>
+  load<PendingCandidate[]>(SELFDEV_PENDING_PATH, (raw) =>
+    listAt(raw, ["pending", "defects", "items"]).map(parseCandidate).filter(isPresent),
+  );
+
+export const fetchPendingMutations = (): Promise<Loaded<PendingMutation[]>> =>
+  load<PendingMutation[]>(DOCUMENT_MUTATIONS_PENDING_PATH, (raw) =>
+    listAt(raw, ["pending", "mutations", "items"]).map(parseMutation).filter(isPresent),
+  );
+
 export const fetchPendingDrafts = (): Promise<Loaded<PendingDraft[]>> =>
   load<PendingDraft[]>(MAIL_DRAFTS_PENDING_PATH, (raw) =>
     listAt(raw, ["drafts", "items", "pending"]).map(parseDraft).filter(isPresent),
@@ -225,7 +402,9 @@ export function parseReceipt(raw: unknown): ApprovalReceipt {
       ? (body.draft as Record<string, unknown>)
       : body.proposal && typeof body.proposal === "object"
         ? (body.proposal as Record<string, unknown>)
-        : null;
+        : body.defect && typeof body.defect === "object"
+          ? (body.defect as Record<string, unknown>)
+          : null;
   return {
     state:
       str(body.state) ??
@@ -336,14 +515,54 @@ export type ApprovalClient = {
   discardDraft: (draftId: string) => Promise<ApprovalReceipt>;
   confirmProposal: (proposalId: string) => Promise<ApprovalReceipt>;
   discardProposal: (proposalId: string) => Promise<ApprovalReceipt>;
+  confirmMutation: (mutationId: string) => Promise<ApprovalReceipt>;
+  discardMutation: (mutationId: string) => Promise<ApprovalReceipt>;
+  approveCandidate: (defectId: string) => Promise<ApprovalReceipt>;
+  rejectCandidate: (defectId: string) => Promise<ApprovalReceipt>;
 };
 
-/** The real client: the four POSTs above, through the owner session. */
-export const approvalClient: ApprovalClient = { confirmDraft, discardDraft, confirmProposal, discardProposal };
+export const confirmMutation = (mutationId: string): Promise<ApprovalReceipt> =>
+  post(mutationConfirmPath(mutationId));
+export const discardMutation = (mutationId: string): Promise<ApprovalReceipt> =>
+  post(mutationDiscardPath(mutationId));
+export const approveCandidate = (defectId: string): Promise<ApprovalReceipt> =>
+  post(candidateApprovePath(defectId));
+export const rejectCandidate = (defectId: string): Promise<ApprovalReceipt> =>
+  post(candidateRejectPath(defectId));
+
+/** The real client: the eight POSTs above, through the owner session. */
+export const approvalClient: ApprovalClient = {
+  confirmDraft,
+  discardDraft,
+  confirmProposal,
+  discardProposal,
+  confirmMutation,
+  discardMutation,
+  approveCandidate,
+  rejectCandidate,
+};
 
 // ------------------------------------------------------------- pair state
 
-export type ApprovalAction = "confirm_draft" | "discard_draft" | "confirm_proposal" | "discard_proposal";
+export type ApprovalAction =
+  | "confirm_draft"
+  | "discard_draft"
+  | "confirm_proposal"
+  | "discard_proposal"
+  | "confirm_mutation"
+  | "discard_mutation"
+  | "approve_candidate"
+  | "reject_candidate";
+
+export type ApprovalFamily = "draft" | "proposal" | "mutation" | "candidate";
+
+/** Which pending family an action belongs to. */
+export function approvalFamily(action: ApprovalAction): ApprovalFamily {
+  if (action === "confirm_draft" || action === "discard_draft") return "draft";
+  if (action === "confirm_proposal" || action === "discard_proposal") return "proposal";
+  if (action === "approve_candidate" || action === "reject_candidate") return "candidate";
+  return "mutation";
+}
 
 /** The one call in flight. There is never more than one: an external mutation is asked for one at a time. */
 export type ApprovalBusy = { action: ApprovalAction; id: string };

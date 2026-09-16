@@ -33,13 +33,16 @@ from sqlalchemy.orm import Session
 
 from app.actions.receipt import (
     EXECUTION_EXECUTED,
+    EXECUTION_FAILED,
     EXECUTION_REFUSED,
     TERMINAL_FAILED,
+    TERMINAL_UNVERIFIED,
     TERMINAL_VERIFIED,
     ActionReceipt,
     record_receipt,
 )
 from app.documents import answers as answers_module
+from app.documents import retrieval
 from app.documents.answers import DocRef, spoken_file_name
 from app.documents.index import DocumentIndex
 from app.documents.models import DocumentIndexRow
@@ -49,6 +52,7 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_DOCUMENT_COMPARED,
     EVENT_TYPE_DOCUMENT_READ,
     EVENT_TYPE_DOCUMENT_SEARCHED,
+    EVENT_TYPE_DOCUMENT_TRASHED,
     SUBSYSTEM_DOCUMENTS,
 )
 from app.logging import get_logger
@@ -86,6 +90,7 @@ ERROR_INVALID_ARGUMENT = "invalid_argument"
 # model's own argument"). Used by :meth:`DocumentService.search` and every
 # named-target resolution path (``_resolve_document``, ``_resolve_target_file``) —
 # the one place in this module a caller-supplied string reaches ``file.search``.
+
 
 def _load_bucket_names() -> tuple[str, ...]:
     """The bucket names ``file.search`` accepts, from the contract BOTH halves read.
@@ -140,9 +145,7 @@ _MAX_PATTERN_CHARS: Final = 200
 #: with a capital İ was refused as unknown. ``I``/``ı`` are folded the same way on purpose:
 #: this is matching a closed vocabulary of folder words, where being lenient about a dot is
 #: right and a false refusal is not.
-_TURKISH_I_FORMS: Final[dict[int, str]] = str.maketrans(
-    {"İ": "i", "I": "i", "ı": "i", "̇": ""}
-)
+_TURKISH_I_FORMS: Final[dict[int, str]] = str.maketrans({"İ": "i", "I": "i", "ı": "i", "̇": ""})
 
 
 def _fold(text: str) -> str:
@@ -236,15 +239,66 @@ def _translate_error(error_class: str) -> tuple[str, str]:
         "timeout": ("Dosyayı okurken zaman aşımına uğradım efendim.", "timeout"),
         "invalid_argument": ("Bu isteği işleyemedim efendim.", "invalid_argument"),
         "no_capable_device": (SPEECH_NO_DEVICE, ERROR_CAPABILITY_MISSING),
+        # B32 req 140: no OCR language pack on the device - the owner's to install.
+        "dependency_unavailable": (
+            "Cihazda bu görseli okuyacak bir OCR dil paketi yok efendim.",
+            "dependency_unavailable",
+        ),
     }
     return table.get(
         error_class, (f"Bunu yapamadım efendim ({error_class}).", error_class or "device_error")
     )
 
 
+# ------------------------------------------------------------------- B32 helpers
+
+#: B32 req 152: how much of a document's text a preview speaks.
+PREVIEW_CHARS: Final = 240
+#: B32 req 148: how many indexed documents a full-text search reads through.
+FULL_TEXT_ROWS: Final = 500
+#: B32 req 151: how many search hits a duplicate scan hashes (one file.locate each).
+DUPLICATE_SCAN_FILES: Final = 60
+#: The device's own rule: a record carries sha256 only when the file is ≤ 8 MiB.
+HASHABLE_BYTES: Final = 8 * 1024 * 1024
+CAPABILITY_FILE_LOCATE: Final = "file.locate"
+CAPABILITY_FILE_TRASH: Final = "file.trash"
+
+
+def _spoken_bytes(count: int) -> str:
+    if count >= 1024 * 1024:
+        return f"{count / (1024 * 1024):.1f} megabayt"
+    if count >= 1024:
+        return f"{count // 1024} kilobayt"
+    return f"{count} bayt"
+
+
+def _preview_facts(doc: DocRef) -> str:
+    """The kind's own units: pages, sheets, slides, lines, pixels, entries."""
+    structure = dict(doc.structure or {})
+    kind = doc.kind
+    if kind == "pdf" and structure.get("pages"):
+        return f"{structure['pages']} sayfalık PDF"
+    if kind in ("xlsx", "xls") and structure.get("sheets"):
+        return f"{len(structure['sheets'])} sayfalı Excel tablosu"
+    if kind in ("pptx", "ppt") and structure.get("slide_count"):
+        return f"{structure['slide_count']} slaytlık sunum"
+    if kind in ("docx", "odt", "rtf", "doc"):
+        return f"{structure.get('paragraphs') or len(doc.blocks)} paragraflık belge"
+        w, h = structure.get("width"), structure.get("height")
+        lines = structure.get("lines") or 0
+        return f"{w}x{h} görsel, {lines} satır metin okundu"
+    if kind in ("md", "csv", "json", "source", "txt"):
+        count = structure.get("lines") or structure.get("rows") or len(doc.blocks)
+        return f"{count} satırlık {kind} dosyası"
+    return f"{kind} dosyası"
+
+
 class DocumentService:
-    def __init__(self, index: DocumentIndex | None = None) -> None:
+    def __init__(self, index: DocumentIndex | None = None, embedder: Any | None = None) -> None:
         self._index = index or DocumentIndex()
+        # B37 req 149: the memory subsystem's embedder, so a question over a document is
+        # ranked by meaning as well as by words; None keeps the lexical ranking alone.
+        self.embedder = embedder
 
     # ------------------------------------------------------------- device plumbing
 
@@ -584,6 +638,15 @@ class DocumentService:
         )
         self._publish(file_label=row.name, part=None)
         speech = f"{spoken_file_name(row.name)} dosyasını okudum efendim."
+        if row.kind == "image":
+            # B32 req 141: what the picture SAYS, from the device's OCR lines.
+            text = " ".join(str(b.get("text") or "") for b in list(row.blocks or [])).strip()
+            speech = (
+                f"{spoken_file_name(row.name)} görselinde şu yazıyor efendim: "
+                f"{answers_module._bounded_spoken_excerpt(text, limit=PREVIEW_CHARS)}"
+                if text
+                else f"{spoken_file_name(row.name)} görselinde okunabilir metin bulamadım efendim."
+            )
         return self._receipt(
             capability=CAPABILITY_DOCUMENT_EXTRACT,
             requested_state="read",
@@ -595,6 +658,19 @@ class DocumentService:
             session_id=session_id,
             extra={"file_id": row.file_id, "doc_id": row.doc_id, "path": row.path},
         )
+
+    # ------------------------------------------------------- B37: semantic search
+
+    def search_indexed(
+        self, db: Session, question: str, *, k: int = 5, device_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Req 149: the best blocks across the indexed documents, ranked by words and,
+        under an embedder, by meaning; each hit carries its score components."""
+        from app.documents import semantic
+
+        rows = self._index.latest(db, device_id=device_id, limit=50)
+        hits = semantic.search_rows(question, rows, self.embedder, k=k)
+        return [hit.as_dict() for hit in hits]
 
     # --------------------------------------------------------------- resolution
 
@@ -718,12 +794,16 @@ class DocumentService:
         if device_action is None:
             return None, None, _clarification(SPEECH_NO_DOCUMENT)
         if not _validate_pattern(target):
-            return None, None, self._invalid_argument_receipt(
-                capability=CAPABILITY_FILE_SEARCH,
-                requested_state="inspected",
-                speech=SPEECH_INVALID_PATTERN,
-                db=db,
-                session_id=session_id,
+            return (
+                None,
+                None,
+                self._invalid_argument_receipt(
+                    capability=CAPABILITY_FILE_SEARCH,
+                    requested_state="inspected",
+                    speech=SPEECH_INVALID_PATTERN,
+                    db=db,
+                    session_id=session_id,
+                ),
             )
         found = device_action.run(
             capability=CAPABILITY_FILE_SEARCH,
@@ -736,9 +816,408 @@ class DocumentService:
             return None, None, _clarification(SPEECH_NO_DOCUMENT)
         return str(files[0].get("file_id")), None, None
 
+    # ------------------------------------------------------------ B32: preview
+
+    def preview(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        target: str = "current",
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """B32 req 152: what a document IS, in a breath - its kind, its size in the kind's
+        own units (pages / sheets / slides / lines / pixels / entries) and the first words of
+        its text. An archive (never extracted) previews from ``file.inspect`` instead."""
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        row, clar = self._resolve_document(
+            db, device_action, device_id, target, extract_if_needed=True, session_id=session_id
+        )
+        if clar is not None:
+            if clar.get("error_class") == "unsupported_format":
+                # An archive, or a kind the device only inspects: preview its headers.
+                inspected = self.inspect(db, device_action, target=target, session_id=session_id)
+                inspected["preview"] = {"kind": "headers", "text": inspected.get("speech")}
+                return inspected
+            return clar
+        assert row is not None
+        doc = self._doc_ref(db, row)
+        text = " ".join(str(b.get("text") or "") for b in doc.blocks[:6]).strip()
+        snippet = answers_module._bounded_spoken_excerpt(text, limit=PREVIEW_CHARS) if text else ""
+        facts = _preview_facts(doc)
+        name = spoken_file_name(row.name)
+        if snippet:
+            speech = f"{name}: {facts}. Başı şöyle: {snippet}"
+        else:
+            speech = f"{name}: {facts}. Metin çıkmadı efendim."
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_DOCUMENT_READ,
+            action="document.preview",
+            summary=f"document.preview -> {row.name}",
+            detail={"file_id": row.file_id, "doc_id": row.doc_id},
+        )
+        self._publish(file_label=row.name, part=doc.blocks[0].get("ref") if doc.blocks else None)
+        return self._receipt(
+            capability="document.preview",
+            requested_state="previewed",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"file_id": row.file_id, "doc_id": row.doc_id},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={
+                "file_id": row.file_id,
+                "doc_id": row.doc_id,
+                "path": row.path,
+                "kind": row.kind,
+                "preview": {"kind": row.kind, "facts": facts, "text": snippet},
+            },
+        )
+
+    # ---------------------------------------------------------- B32: full text
+
+    def find_text(
+        self,
+        db: Session,
+        *,
+        query: str,
+        device_id: str | None = None,
+        limit: int = 5,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """B32 req 148: the documents whose TEXT carries the owner's words - every indexed
+        document's blocks scored with the retrieval module's own rule (exact word 2, shared
+        stem 1), best block per document, documents ranked. Reads the index only: no device
+        call, no crawl (ADR-0083's "no background crawling" stands - what was never read is
+        not searched, and the answer says how many documents it looked through)."""
+        words = retrieval.content_words(query)
+        rows = self._index.latest(db, device_id=device_id, limit=FULL_TEXT_ROWS)
+        hits: list[dict[str, Any]] = []
+        if words:
+            for row in rows:
+                best_score = 0
+                best_block: dict[str, Any] | None = None
+                for block in list(row.blocks or []):
+                    score = retrieval.score_block(words, block)
+                    if score > best_score:
+                        best_score, best_block = score, block
+                if best_block is not None and best_score > 0:
+                    hits.append(
+                        {
+                            "file_id": row.file_id,
+                            "doc_id": row.doc_id,
+                            "name": row.name,
+                            "path": row.path,
+                            "kind": row.kind,
+                            "ref": best_block.get("ref"),
+                            "score": best_score,
+                            "excerpt": answers_module._bounded_spoken_excerpt(
+                                str(best_block.get("text") or ""), limit=120
+                            ),
+                        }
+                    )
+        hits.sort(key=lambda h: (-int(h["score"]), str(h["name"])))
+        hits = hits[: max(1, limit)]
+        if not words:
+            speech = "Neyi arayayım efendim?"
+        elif hits:
+            named = ", ".join(
+                f"{spoken_file_name(h['name'])} "
+                f"({answers_module.place_phrase(str(h['ref']), kind=str(h['kind']))})"
+                for h in hits
+            )
+            speech = f"'{query}' geçen {len(hits)} belge buldum efendim: {named}."
+        else:
+            speech = (
+                f"'{query}' geçen bir belge bulamadım efendim; {len(rows)} okunmuş belgeye baktım."
+            )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_DOCUMENT_SEARCHED,
+            action="document.find_text",
+            summary=f"document.find_text -> {len(hits)} of {len(rows)}",
+            detail={"query": query[:200], "hits": [h["file_id"] for h in hits]},
+        )
+        if hits:
+            self._publish(
+                file_label=str(hits[0]["name"]),
+                part=str(hits[0]["ref"] or ""),
+                refs=[{"ref": h["ref"], "path": h["path"]} for h in hits],
+            )
+            focus_module.set_focus(
+                db,
+                FOCUS_KIND_DOCUMENT,
+                str(hits[0]["doc_id"]),
+                label=str(hits[0]["name"]),
+                source="document_find_text",
+            )
+        return self._receipt(
+            capability="document.find_text",
+            requested_state="searched",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"query": query[:200], "hits": len(hits), "searched": len(rows)},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={"hits": hits, "searched": len(rows), "query": query},
+        )
+
+    # ---------------------------------------------------------- B32: duplicates
+
+    def duplicates(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        folder: str | None = None,
+        pattern: str = "*",
+        max_files: int = DUPLICATE_SCAN_FILES,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """B32 req 151: files with the SAME BYTES. ``file.search`` lists, then each hit
+        small enough to hash (the device's own 8 MiB rule) is ``file.locate``d for its
+        sha256 - a search never opens a file, a locate does - and identical hashes are
+        grouped. The answer is a proposal: which copy to keep (the oldest, at the shortest
+        path) and which to send to the Recycle Bin; nothing is moved here."""
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        assert device_action is not None
+        payload: dict[str, Any] = {"pattern": pattern or "*", "max": max_files}
+        roots = [canonical_folder(folder)] if folder and canonical_folder(folder) else None
+        if roots:
+            payload["roots"] = roots
+        found = device_action.run(
+            capability=CAPABILITY_FILE_SEARCH,
+            payload=payload,
+            idempotency_key=f"document-duplicates:{folder or '*'}:{pattern}",
+            timeout_s=15.0,
+        )
+        if not found.ok:
+            speech, error_class = _translate_error(found.error_class)
+            return self._receipt(
+                capability="document.duplicates",
+                requested_state="scanned",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"error_class": found.error_class},
+                speech=speech,
+                db=db,
+                error_class=error_class,
+                session_id=session_id,
+            )
+        files = list((found.result or {}).get("files") or [])[:max_files]
+        by_hash: dict[str, list[dict[str, Any]]] = {}
+        hashed = 0
+        skipped_large = 0
+        for record in files:
+            size = int(record.get("size") or 0)
+            if size > HASHABLE_BYTES:
+                skipped_large += 1
+                continue
+            located = device_action.run(
+                capability=CAPABILITY_FILE_LOCATE,
+                payload={"file_id": record.get("file_id")},
+                idempotency_key=f"document-duplicates-locate:{record.get('file_id')}",
+                timeout_s=10.0,
+            )
+            digest = str(((located.result or {}).get("file") or {}).get("sha256") or "")
+            if not located.ok or not digest:
+                continue
+            hashed += 1
+            by_hash.setdefault(digest, []).append(
+                {**dict((located.result or {}).get("file") or {}), "sha256": digest}
+            )
+        groups = []
+        for digest, members in by_hash.items():
+            if len(members) < 2:
+                continue
+            ordered = sorted(
+                members, key=lambda m: (str(m.get("mtime") or ""), len(str(m.get("path") or "")))
+            )
+            keep, remove = ordered[0], ordered[1:]
+            groups.append(
+                {
+                    "sha256": digest,
+                    "size": int(keep.get("size") or 0),
+                    "keep": {
+                        "file_id": keep.get("file_id"),
+                        "path": keep.get("path"),
+                        "name": keep.get("name"),
+                    },
+                    "remove": [
+                        {"file_id": m.get("file_id"), "path": m.get("path"), "name": m.get("name")}
+                        for m in remove
+                    ],
+                }
+            )
+        groups.sort(key=lambda g: (-g["size"] * len(g["remove"]), str(g["keep"]["name"])))
+        removable = sum(len(g["remove"]) for g in groups)
+        reclaim = sum(g["size"] * len(g["remove"]) for g in groups)
+        if groups:
+            named = "; ".join(
+                f"{spoken_file_name(str(g['keep']['name']))} {len(g['remove']) + 1} yerde"
+                for g in groups[:4]
+            )
+            speech = (
+                f"{len(groups)} yinelenen grup buldum efendim: {named}. {removable} kopya "
+                f"çöp kutusuna gönderilebilir ({_spoken_bytes(reclaim)}); isterseniz "
+                "'kopyaları çöp kutusuna gönder' deyin."
+            )
+        else:
+            speech = (
+                f"Yinelenen dosya bulamadım efendim; {hashed} dosyaya baktım"
+                + (f", {skipped_large} büyük dosyayı atladım" if skipped_large else "")
+                + "."
+            )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_DOCUMENT_SEARCHED,
+            action="document.duplicates",
+            summary=f"document.duplicates -> {len(groups)} groups / {hashed} hashed",
+            detail={"groups": len(groups), "hashed": hashed, "skipped_large": skipped_large},
+        )
+        return self._receipt(
+            capability="document.duplicates",
+            requested_state="scanned",
+            execution=EXECUTION_EXECUTED,
+            terminal=TERMINAL_VERIFIED,
+            server={"groups": len(groups), "hashed": hashed, "scanned": len(files)},
+            speech=speech,
+            db=db,
+            session_id=session_id,
+            extra={
+                "groups": groups,
+                "scanned": len(files),
+                "hashed": hashed,
+                "skipped_large": skipped_large,
+                "removable": removable,
+                "reclaim_bytes": reclaim,
+                "truncated": bool((found.result or {}).get("truncated")),
+            },
+        )
+
+    def dedup(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        *,
+        plan: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """B32 req 150: the proposal, carried out - every ``remove`` file of every group
+        sent to the Recycle Bin through ``file.trash`` (never a permanent delete), each
+        move read back from the device's own ``observed.exists``. Only a plan
+        ``duplicates`` produced in this session is accepted; nothing is re-scanned here,
+        so what the owner heard is exactly what moves."""
+        device_id, missing = self._select_device(device_action)
+        if missing is not None:
+            return missing
+        assert device_action is not None
+        groups = list(plan.get("groups") or [])
+        targets = [m for g in groups for m in list(g.get("remove") or [])]
+        if not targets:
+            return self._receipt(
+                capability="document.dedup",
+                requested_state="trashed",
+                execution=EXECUTION_REFUSED,
+                terminal=TERMINAL_FAILED,
+                server={"reason": "nothing_to_remove"},
+                speech="Gönderilecek kopya yok efendim; önce yinelenen dosyaları bulmamı isteyin.",
+                db=db,
+                error_class="nothing_to_remove",
+                session_id=session_id,
+            )
+        trashed: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        for member in targets:
+            outcome = device_action.run(
+                capability=CAPABILITY_FILE_TRASH,
+                payload={"file_id": member.get("file_id")},
+                idempotency_key=f"document-dedup-trash:{member.get('file_id')}",
+                timeout_s=15.0,
+            )
+            body = dict(outcome.result or {})
+            gone = (
+                outcome.ok
+                and body.get("trashed") is True
+                and not (body.get("observed") or {}).get("exists", True)
+            )
+            (trashed if gone else failed).append(
+                {**member, "error_class": None if gone else (outcome.error_class or "not_trashed")}
+            )
+        self._ledger(
+            db,
+            event_type=EVENT_TYPE_DOCUMENT_TRASHED,
+            action="document.dedup",
+            summary=f"document.dedup -> {len(trashed)} trashed, {len(failed)} failed",
+            detail={
+                "trashed": [t.get("file_id") for t in trashed],
+                "failed": [f.get("file_id") for f in failed],
+            },
+        )
+        if trashed and not failed:
+            speech = f"{len(trashed)} kopyayı çöp kutusuna gönderdim efendim; geri alınabilir."
+            execution, terminal, error = EXECUTION_EXECUTED, TERMINAL_VERIFIED, None
+        elif trashed:
+            speech = (
+                f"{len(trashed)} kopyayı çöp kutusuna gönderdim, "
+                f"{len(failed)} kopyayı gönderemedim efendim."
+            )
+            execution, terminal, error = EXECUTION_EXECUTED, TERMINAL_UNVERIFIED, "partial"
+        else:
+            speech = "Kopyaları çöp kutusuna gönderemedim efendim."
+            execution, terminal, error = (
+                EXECUTION_FAILED,
+                TERMINAL_FAILED,
+                str(failed[0].get("error_class")),
+            )
+        return self._receipt(
+            capability="document.dedup",
+            requested_state="trashed",
+            execution=execution,
+            terminal=terminal,
+            server={"trashed": len(trashed), "failed": len(failed)},
+            speech=speech,
+            db=db,
+            error_class=error,
+            session_id=session_id,
+            extra={"trashed": trashed, "failed": failed},
+        )
+
     def _inspect_speech(self, name: str, body: dict[str, Any]) -> str:
         name = spoken_file_name(name)
         kind = body.get("kind")
+        # B32 req 139/142: a picture's headers, an archive's directory.
+        if kind == "image" and isinstance(body.get("image"), dict):
+            image = body["image"]
+            taken = (image.get("metadata") or {}).get("date_taken")
+            camera = (image.get("metadata") or {}).get("camera_model")
+            bits = [
+                (
+                    f"{image.get('width')}x{image.get('height')} {image.get('format') or ''} görsel"
+                ).strip()
+            ]
+            if taken:
+                bits.append(f"çekim {taken}")
+            if camera:
+                bits.append(f"kamera {camera}")
+            return f"{name}: {', '.join(bits)} efendim."
+        if kind == "archive" and isinstance(body.get("archive"), dict):
+            archive = body["archive"]
+            entries = list(archive.get("entries") or [])
+            names = ", ".join(str(e.get("name")) for e in entries[:5])
+            more = " ve daha fazlası" if archive.get("truncated") or len(entries) > 5 else ""
+            return (
+                f"{name}: {archive.get('entry_count', len(entries))} öğe var efendim: "
+                f"{names}{more}; "
+                f"toplam {_spoken_bytes(int(archive.get('total_uncompressed') or 0))}."
+            )
         if kind == "xlsx" and body.get("sheets"):
             sheets = ", ".join(str(s) for s in body["sheets"])
             return f"{name}: {sheets} sayfalarını içeriyor efendim."
@@ -894,7 +1373,7 @@ class DocumentService:
             return clar
         assert row is not None
         doc = self._doc_ref(db, row)
-        result = answers_module.answer(doc, question)
+        result = answers_module.answer(doc, question, embedder=self.embedder)
         self._ledger(
             db,
             event_type=EVENT_TYPE_DOCUMENT_ANSWERED,

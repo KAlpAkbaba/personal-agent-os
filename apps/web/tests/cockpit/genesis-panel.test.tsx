@@ -185,14 +185,23 @@ function portsOf(client: GenesisClient, onSettled = vi.fn()) {
 // ---------------------------------------------------------------- the panel
 
 describe("the Yeni Yetenek panel", () => {
-  it("is empty, in words, when the list route answered with no run and the bus said nothing", () => {
-    const html = panel(ok([]));
+  it("draws nothing at all when the list is empty and the bus said nothing (B24 req 714)", () => {
+    expect(panel(ok([]))).toBe("");
+    expect(panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/genesis/runs yok (HTTP 404)." })).toBe("");
+  });
+
+  it("says the bus told it nothing, when there are rows to show anyway", () => {
+    const rows = panel(ok([row()]));
+    expect(rows).toContain('data-genesis-activity="untold"');
+    expect(rows).toContain("Yeni yetenek etkinliği bildirilmedi.");
+  });
+
+  it("keeps every word when the bus is telling us something the list cannot show", () => {
+    const html = panel(ok([]), [CAPABILITY_GENESIS("counterbox.increment", "building")]);
     expect(html).toContain('data-panel="genesis"');
     expect(html).toContain('data-panel-state="ok"');
     expect(html).toContain('data-panel-empty="yes"');
     expect(html).toContain("Henüz yeni bir yetenek istenmedi.");
-    expect(html).toContain('data-genesis-activity="untold"');
-    expect(html).toContain("Yeni yetenek etkinliği bildirilmedi.");
     expect(html).toContain('data-panel-badge="true">0<');
     expect(html).toContain('data-genesis-awaiting="0"');
     expect(html).toContain(">Yeni Yetenek<");
@@ -220,7 +229,9 @@ describe("the Yeni Yetenek panel", () => {
     expect(failed).toContain("Alınamadı: HTTP 503");
     expect(failed).not.toContain("Henüz yeni bir yetenek istenmedi");
 
-    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/genesis/runs yok (HTTP 404)." });
+    // A route this Cloud Core does not serve still says so WHILE the bus is talking:
+    // "the list is not here" and "nothing is happening" are different facts.
+    const absent = panel({ kind: "absent", detail: "Bu Cloud Core sürümünde /v1/genesis/runs yok (HTTP 404)." }, [CAPABILITY_GENESIS("counterbox.increment", "building")]);
     expect(absent).toContain("data-panel-absent");
     expect(absent).toContain("Henüz yok. Bu Cloud Core sürümünde /v1/genesis/runs yok (HTTP 404).");
     expect(absent).not.toContain("Henüz yeni bir yetenek istenmedi");
@@ -435,7 +446,9 @@ describe("the Yeni Yetenek panel", () => {
 
     // A document, mail, artifact or app event is not a genesis event.
     for (const other of [[DOCUMENT_ANALYSIS()], [MAIL_ACTIVITY()], [ARTIFACT_FACTORY()], [APP_FACTORY()]]) {
-      const html = panel(ok([]), other);
+      // A row so the panel renders at all: no rows AND no event of its own is a quiet
+      // family now (B24 req 714).
+      const html = panel(ok([row()]), other);
       expect(html).toContain('data-genesis-activity="untold"');
       expect(html).toContain('data-genesis-posture=""');
     }

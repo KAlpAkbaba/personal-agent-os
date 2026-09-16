@@ -1,0 +1,108 @@
+{
+  "batch": "B35",
+  "name": "SelfDev'in bağlanması ve güvenlik",
+  "requirements": [
+    581,
+    583,
+    585,
+    589,
+    598,
+    600,
+    601,
+    603,
+    608,
+    609,
+    615,
+    618,
+    619,
+    620,
+    621,
+    622,
+    623,
+    680
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 on the third run. Run 1 (B35 alone) failed one test: the new selfdev tool family had no Turkish name in app.voice.capabilities (fixed). Run 2 failed one test because B36's migration 0049 landed in the tree while the run was in flight (the release-schema head test read the file tip after alembic had cached 0048) - a self-inflicted contamination, not a B35 defect. Run 3 was the clean run over the B35+B36 tree and is the run this record and B36's record both cite.",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10646 passed, 6 skipped (pytest 961 s); was 10529 after B34",
+      "Windows agent build + tests": "PASS - unchanged device tree (955 agent, 135 audio)",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest 102 files / 1870 tests (selfdev-queue 6, genesis-catalogue 3, approvals-client eight routes, matrix-badges 12/12 after node scripts/web/sync-feature-matrix.mjs); tsc --noEmit clean; oxlint no new warnings"
+  },
+  "what_this_proves": "The self-development engine is reachable from the product and cannot produce an unsafe candidate. A defect assigned by the owner's voice, the Cockpit, the bridge from an evolution opportunity or a red CI is a queued row; a worker on the development machine claims it through the owner's session, runs the engine, and the engine now (a) refuses a patch that carries a secret, a dangerous call, a guarded path, new network egress or a removed test - through a review that cannot run without Grant.SECURITY_REVIEW_CANDIDATE - (b) runs the package's gate in the worktree and feeds a red gate back to the model, (c) runs the committed candidate's API in a real loopback shadow and compares it with the live one, (d) pushes for CI only when the owner enabled it and turns a red CI into one bounded follow-up; the row then waits for the owner, whose approve/reject is minted from a verified owner session and recorded with promoted=false. Nothing in this batch promotes anything (624).",
+  "measured_first": {
+    "cloud_before": "app/selfdev had an engine and a CLI that read a hand-written JSON defect; seven real runs (all quarantined) lived in a folder beside the repository; no table, no route, no voice tool, no page listed a run or let the owner decide; Grant.SECURITY_REVIEW_CANDIDATE had no consumer; the reviewer ran regression/targeted/lint/scope only; the engine never ran the full gate, a shadow or a push; fourteen opportunities carried a promotion class nothing consumed; budgets were per-run only (attempts/seconds/tokens), no daily total, no disk floor, no parallel bound.",
+    "router_before": "'Şu bug'ı kendin düzelt.' -> memory_correct; 'Bu hatayı kendin düzelt.' -> explain/failures; 'Şu özelliği kendine ekle.' -> none; 'Kendinde ne düzeltiyorsun?' -> explain/world_state. Measured with resolve_intent before the block was written.",
+    "engine_defect_found": "GitWorkspace.reset was `git checkout -- .` while diff/changed_paths stage the patch with `git add -A`: after a model-review refusal (or B35's red gate) the second attempt's regression test was judged against the fix still in the index and reported 'PASSED without the fix'. test_the_models_review_can_refuse... only asserted the quarantine and the first failure, so seven real runs had this under them. Reproduced by the new gate fix-loop test (STOPPED expected, QUARANTINED observed), fixed with `git reset -q --hard`, the refusal test now reads the second attempt's checks."
+  },
+  "closed_fully": {
+    "581_intake": "POST /v1/selfdev/defects {title, evidence, kind, scope, failing_test, priority} -> selfdev_defects row (migration 0048) with source owner_rest; voice rows owner_voice; bridge rows opportunity; fix-loop rows ci_failure. Ledger selfdev.defect_queued.",
+    "583_bridge": "bridge.defect_from_opportunity: kind bug for incident/failure-born opportunities, feature otherwise; scope from detail.paths/scope/changed_paths/footprint or the default (app + tests); promotion class from the row or DERIVED from the paths (never defaulted); priority from detail.priority. intake_opportunity refuses a second live row for the same opportunity (409); POST /v1/selfdev/defects/from-opportunity/{id} reads the one backlog through the evolution service.",
+    "585_promotion_class_consumed": "finish keeps the row's class when the bridge set one (AUTO_SAFE from the engine cannot overwrite NEVER_AUTO_PROMOTE from the supervisor); entry.never_auto_promote; the Cockpit row prints the class in Turkish and the never-auto sentence.",
+    "589_planning": "The engine drives analysis -> plan -> patch -> review loop -> gate -> commit -> shadow -> trigger; worker.defect_spec_of turns the queue row into the DefectSpec (scope default when the row names none; the failing test becomes the targeted test).",
+    "598_680_security_review": "security_review.review_candidate(authority, edits, base_texts): CHECK_SECRET (AWS/OpenAI-Anthropic/GitHub key shapes, private key block, credential assignment), CHECK_DANGEROUS_CALL (shell=True, eval, exec, os.system, pickle.loads, __import__, subprocess with a shell string), CHECK_GUARDED_PATH (identity/, security/, authority.py, risk.py, this module, confirmation_gate.py, .github/, secret-store.ps1, scripts/cloud/, scripts/release/, deploy/, infra/, pyproject/uv.lock/package.json/pnpm-lock/requirements/Dockerfile/docker-compose/.env*), CHECK_NETWORK (url literal outside loopback, httpx/requests/urllib/socket - only when the line is new and the hit is not in the base), CHECK_TEST_REMOVAL (fewer `def test_` than the base). Findings carry path + line; verdict.as_dict() in the run record. The reviewer holds LabAuthority.issue('selfdev-reviewer', {SECURITY_REVIEW_CANDIDATE}); review_candidate calls authority.require(...) and refuses a non-Authority. The check runs after autofix/scope and before any test; red returns the verdict (no tests, no commit).",
+    "600_gate": "PackageGate(python, ruff): pytest tests/unit -q -x then ruff check app tests, in <worktree>/services/api with PYTHONDONTWRITEBYTECODE; GateResult(state, detail, seconds, steps). Engine: after model review approved, gate.run(worktree); ok or skipped -> break; failed -> failure 'gate: ...' into the diagnose/fix loop; record.gate + attempt['gate']. NoGate -> skipped with its reason in the record.",
+    "601_ci_trigger": "GitPushTrigger(repo, remote, enabled=False): refuses when disabled (detail names PAGENTOS_SELFDEV_CI_PUSH), refuses any branch not selfdev/*, otherwise `git push origin branch:branch`; record.ci_trigger. Worker: --ci-push flag; setting selfdev_ci_push default False.",
+    "603_fix_loop": "Local: a red gate is one more failure in the attempt loop (diagnosis -> fix_patch -> review again). Remote: SelfDevService.reconcile_ci(state, detail) / POST /defects/{id}/ci - a red CI on an awaiting_owner row opens ONE queued defect (source ci_failure, parent_id, the candidate sha, branch and CI's words in the evidence), bounded by selfdev_max_ci_fix_rounds (the row records ci_fix_rounds_exhausted past it); the same red does not open a second; finish() reconciles automatically when the record's candidate_ci is failure.",
+    "608_shadow": "ProcessShadowRunner(command template with {port}, package_root, ready_path, probes, live_base_url, startup_timeout_s): free loopback port, Popen in <worktree>/services/api with PAGENTOS_SHADOW=1, waits for the ready path (exit before answering -> failed with the output tail; timeout -> failed 'did not answer'), probes each path on the shadow and (when given) on the live base, Probe.agrees when statuses match, kills the process in finally. ShadowReport.as_dict() with mismatches in the record. Engine runs it on the committed candidate before freeing the worktree; an exception is a failed shadow. Worker default: uvicorn app.main:app --port {port}.",
+    "609_owner_decision": "POST /v1/selfdev/defects/{id}/approve|reject {note?}: mint_owner_capability(session) from require_owner_session; SelfDevService._decide refuses anything that is not an OwnerCapability (AuthorityError), refuses a row not awaiting_owner (409 not_awaiting_owner), records decision/decided_at/decided_by(owner_session:<id>)/note, ledger selfdev.decided with promoted:false; the route answers {defect, promoted:false}.",
+    "615_scheduler_worker": "POST /v1/selfdev/worker/claim {worker_id}: expire_stale_claims (claimed_at older than selfdev_claim_ttl_s -> queued again, error_class claim_expired) then the oldest queued row by priority/created_at if parallel/token/disk bounds allow; the answer carries the reason and the budget report. POST /defects/{id}/start {run_id}, POST /defects/{id}/finish {record} (engine statuses -> awaiting_owner/refused/quarantined/failed; tokens summed; attempt check details trimmed to 1500). worker.run_once/run_forever: claim -> start -> engine.run(base_sha=git rev-parse HEAD) -> finish (a crash posts a FAILED record); HttpQueueClient with the bearer token from PAGENTOS_OWNER_TOKEN; `python -m app.selfdev worker --api URL [--repo --worktrees --runs --model --worker-id --poll-seconds --max-runs --ci-push --no-shadow --no-full-gate --max-*]`.",
+    "618_token_budget": "BudgetPolicy.daily_token_budget (setting selfdev_daily_token_budget, default 1,000,000): tokens_used_since(UTC day start) over finished rows; claim refuses budget_exhausted; status.budget {tokens_used_today, daily_token_budget, tokens_remaining, token_budget_ok}.",
+    "619_disk_budget": "BudgetPolicy.min_free_bytes (selfdev_min_free_bytes, default 5 GiB) measured with shutil.disk_usage on the nearest existing ancestor of worktrees_root (selfdev_worktrees_root); claim refuses disk_floor; status.budget {disk_free_bytes, min_free_bytes, disk_ok}.",
+    "620_parallel_limit": "BudgetPolicy.max_parallel (selfdev_max_parallel, default 1) against rows in claimed/running; claim refuses parallel_limit; status.budget {active, max_parallel, parallel_ok}; last_refusal on the service.",
+    "621_cockpit": "apps/web: approvals.ts SELFDEV_PENDING_PATH, candidateApprovePath/RejectPath, PendingCandidate + parseCandidate (security/gate/shadow/ci states flattened, read_back_at = finished_at), fetchPendingCandidates, CANDIDATE_STATE_TR, PROMOTION_CLASS_TR, approveCandidate/rejectCandidate on the ApprovalClient (eight routes), ApprovalAction approve_candidate/reject_candidate, ApprovalFamily 'candidate'; useApprovalPair returns candidates; CockpitPanels SelfDevQueuePanel + CandidateRow (facts line: kind, class, risk tier, security review, gate, shadow, CI, when; explanation; never-auto sentence; ApprovalPair 'Onayla — kaydet (canlıya almaz)' / 'Vazgeç'); /selfdev page renders it first with useApprovalPair(approvalClient, candidates.refresh).",
+    "622_623_voice": "Intent SELFDEV_FIX / SELFDEV_FEATURE / SELFDEV_STATUS; _selfdev_match (self-reference kendin/kendine/kendini/kendinde/kendindeki/kendinden/sen + defect noun bug/hata/kusur/sorun/arıza + fix verb düzelt/çöz/onar/gider; feature noun özelli/yetene/fonksiyon + add verb ekle/kazandır/getir/koy; status: kendinde + fix verb + question word), placed after the evolution switch and before memory-correct/explain; ResolvedIntent.selfdev_request (the owner's whole sentence) copied into the turn record; tools selfdev.defect / selfdev.feature (content, evidence) / selfdev.status registered in default_registry; step-up tiers SENSITIVE/SENSITIVE/OPEN; the receipt says 'Kuyruğa aldım ... onayınızı isteyeceğim, kendi başıma canlıya almam' with server.promoted=false; no request text -> refused invalid_defect; disabled -> refused selfdev_disabled."
+  },
+  "found_on_the_way": {
+    "workspace_reset_read_the_index": "see measured_first.engine_defect_found - a real defect in the engine since ADR-0124; fixed and covered.",
+    "softened_consonant": "'özelliği'/'yeteneği' soften k->ğ under the accusative; the feature noun stems are 'özelli'/'yetene'.",
+    "dead_guard": "a `_EVOLUTION_NOUN_STEMS` guard inside _selfdev_match could never decide anything (the evolution block runs first); mutation M7 v1 removed it and nothing turned red, so the guard was removed and M7 now removes the self-reference requirement, which two neighbour cases catch.",
+    "matrix_pipe": "a '|' inside a matrix cell (approve|reject) split row 609 into 15 columns for scripts/web/sync-feature-matrix.mjs; spelled 'approve / reject'.",
+    "artifact_runtime_injection": "ArtifactRuntime takes no engine kwarg; a route test injects _engine/_session_factory the way test_evolution_closed_loop does.",
+    "claim_picks_the_oldest": "two tests finished the row they had just created while claim() had taken the older queued row; the tests now finish the row claim() answered - which is the contract.",
+    "no_bytecode_in_worktrees": "PYTHONDONTWRITEBYTECODE=1 in the runner and the gate (a stale .pyc beside a restored source of the same size within the same second would be loaded in its place)."
+  },
+  "partial": {},
+  "tests": {
+    "services/api/tests/unit/test_selfdev_b35.py": "38 (security review: findings by path/line, base-vs-new lines, grant gate, guarded paths x8; gate/shadow value objects; real-subprocess shadow (200/404 probes, live mismatch, never-answers timeout); push trigger off/foreign; service intake->claim->finish->approve with parallel refusal, capability refusal, ledger promoted:false; bridge + class kept + duplicate refusal + feature default scope; bounds by name + status; stale claim + status mapping; CI fix loop bounded; worker run_once + crash; REST end to end (create, claim, start, finish, pending, status, approve promoted:false, 409, 404, 422); bridge route + ci route; disabled 503 owner words; 401 without a session; voice bug + feature + status end to end; refusal without words; intents + neighbours x12; tools registered and tiered)",
+    "services/api/tests/unit/test_selfdev_engine.py": "27 (+3: red gate fed back then gate/shadow/push recorded; gate red past the budget quarantines with the gate named; no gate/shadow/trigger says so) and the tier-4 / identity-refusal rewrite; the refusal test now reads the second attempt",
+    "services/api/tests/voice_corpus/corpus.py": "selfdev.fix.* x4, selfdev.feature.* x3, selfdev.status, selfdev.neg.evolution_pause_keeps_its_switch (with ASR variants: 35 cases)",
+    "services/api/tests/unit/test_voice_realtime_sessions.py": "tool list +3",
+    "apps/web/tests/cockpit/selfdev-queue.test.tsx": "6 (parse, routes/family, outcome text with 'canlıya alınmadı', panel facts + pair label, NEVER_AUTO sentence + failed review, settled row out of the count)",
+    "apps/web/tests/cockpit/approvals-client.test.ts": "eight routes; calendar/mail panel fakes carry the two new methods; family-pages requires fetchPendingCandidates on selfdev/page.tsx"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b35_mutate.py, log b35_mutate.log.",
+    "mutations": [
+      "M1 the security review's verdict is recorded but never refuses a candidate -> 1 failure (identity boundary committed instead of quarantined).",
+      "M2 the review runs without the SECURITY_REVIEW_CANDIDATE grant -> 1 failure (read-only authority reviewed).",
+      "M3 dependency manifests and .env files are open to a candidate -> 2 failures (pyproject.toml, package.json/.env params).",
+      "M4 a second worker claims while one candidate is running -> 1 failure (parallel_limit not answered).",
+      "M5 anything at all can approve a candidate -> 1 failure (object() approved).",
+      "M6 the decision's ledger row claims the candidate was promoted -> 1 failure (promoted must be false).",
+      "M7 'Bu hatayı düzelt.' (no self-reference) becomes a self-development assignment -> 2 failures (explain and memory-correct neighbours stolen). [v1 of M7 removed a noun guard and turned nothing red: the guard was dead code and was deleted.]",
+      "M8 a red gate does not stop the candidate from being committed -> 1 failure (candidate committed under a red gate).",
+      "M9 a red CI spawns follow-ups without bound -> 1 failure (grandchild opened past max_ci_fix_rounds)."
+    ],
+    "result": "9/9 red; every file restored to its sha256 before the mutation"
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED over the real application object and real processes: the queue's REST surface through create_app with an owner session; the shadow runner against a real loopback subprocess; the engine on a real git repository with real worktrees, pytest and ruff; the voice flow through the real relay, router and tools with the fake desktop (no device call). The production round - a defect assigned by voice on the deployed Cloud Core, claimed by the worker on the owner's machine from the COMMITTED tree, gated, shadowed and decided in the Cockpit - needs the commit this batch series is holding back and is READY_FOR_OWNER (the worker's base SHA is HEAD; today HEAD predates B30-B35).",
+    "existing_candidates": "db9ed85 and the six other selfdev/* runs are QUARANTINED records (candidate_sha empty): there is nothing to approve; their branches are the owner's to delete or keep (checkpoint 3)."
+  },
+  "owner_gates": {
+    "candidate_approval": "READY_FOR_OWNER: /selfdev lists awaiting candidates once the worker has run one; approving records a decision and promotes nothing.",
+    "db9ed85": "READY_FOR_OWNER (checkpoint 3): a quarantined run, no candidate; delete or keep the seven selfdev/* branches.",
+    "production_round": "READY_FOR_OWNER: commit B30-B35, start `python -m app.selfdev worker --api <cloud> --repo <checkout>` with PAGENTOS_OWNER_TOKEN, say 'Şu bug'ı kendin düzelt: ...', decide in the Cockpit.",
+    "ci_push": "selfdev_ci_push stays off until the owner turns it on (601)."
+  }
+}

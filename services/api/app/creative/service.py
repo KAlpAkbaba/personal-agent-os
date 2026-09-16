@@ -44,9 +44,11 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
+from app.creative import lifecycle as creative_lifecycle
 from app.creative.compare import NO_CONSTRAINTS as COMPARE_NO_CONSTRAINTS
 from app.creative.compare import CompareResult, compare
-from app.creative.execute import ExecutionError, ExecutionResult, execute
+from app.creative.execute import ExecutionError, ExecutionResult, ProviderRefusal, execute
+from app.creative.imaging import ImageProvider, LocalImageProvider
 from app.creative.models import (
     MAX_SELF_CORRECTION_ROUNDS,
     STATE_APPLIED,
@@ -127,9 +129,15 @@ class CreativeService:
         self,
         object_store: ObjectStore | None = None,
         providers: dict[str, CreativeProvider] | None = None,
+        image_provider: ImageProvider | None = None,
+        vision_provider: Any | None = None,
     ) -> None:
         self._object_store = object_store
         self._providers = providers if providers is not None else default_providers()
+        #: B43: the image provider (492-495; local by default) and the vision provider
+        #: the semantic check asks (498; None = the check is recorded as not run).
+        self.image_provider: ImageProvider = image_provider or LocalImageProvider()
+        self.vision_provider = vision_provider
 
     # ------------------------------------------------------------- receipts / ledger
 
@@ -282,7 +290,8 @@ class CreativeService:
         if self._object_store is None:
             return
         name = result.output_name or f"{row.name}.{result.format}"
-        key = validate_object_key(f"creative/{row.id}/{name}")
+        # B43 (req 511): every output keeps its own key so undo/redo can point back.
+        key = validate_object_key(f"creative/{row.id}/v{len(row.history_json or []) + 1}/{name}")
         content_type = {
             "png": "image/png",
             "jpg": "image/jpeg",
@@ -430,10 +439,16 @@ class CreativeService:
                 round=len(rounds) + 1,
             )
             try:
-                result = execute(current_plan, source_bytes)
-            except ExecutionError as exc:
+                result = execute(
+                    current_plan,
+                    source_bytes,
+                    image_provider=self.image_provider,
+                    assets=self._assets_for(current_plan),
+                )
+            except (ExecutionError, ProviderRefusal) as exc:
+                refusal_class = getattr(exc, "error_class", ERROR_VALIDATION)
                 row.state = STATE_FAILED
-                row.error_class = ERROR_VALIDATION
+                row.error_class = refusal_class
                 row.error_message = str(exc)
                 self._publish(tool=plan.tool, name=row.name, step=CREATIVE_STEP_FAILED)
                 row.rounds_json = rounds
@@ -451,14 +466,24 @@ class CreativeService:
                     requested_state="applied",
                     execution=EXECUTION_REFUSED,
                     terminal=TERMINAL_FAILED,
-                    server={"reason": ERROR_VALIDATION},
-                    speech="Kaynak görsel açılamadı efendim.",
+                    server={"reason": refusal_class},
+                    speech=(
+                        "Kaynak görsel açılamadı efendim."
+                        if refusal_class == ERROR_VALIDATION
+                        else (
+                            "Görsel üretimi için bir sağlayıcı tanımlı değil efendim; "
+                            "ayarlardan seçilebilir."
+                        )
+                        if refusal_class == "provider_not_configured"
+                        else "Görsel sağlayıcı bu isteği yapamadı efendim."
+                    ),
                     db=db,
-                    error_class=ERROR_VALIDATION,
+                    error_class=refusal_class,
                     session_id=session_id,
                     extra={"run_id": str(row.id)},
                 )
             self._store_output(row, result)
+            creative_lifecycle.record_output(row, ops=[op.op for op in current_plan.operations])
             self._publish(tool=plan.tool, name=row.name, step=CREATIVE_STEP_COMPARING)
             cmp_result = compare(
                 current_plan,
@@ -494,6 +519,13 @@ class CreativeService:
             row.state = STATE_UNVERIFIED
         else:
             row.state = STATE_MISMATCH
+        # B43 (req 498): the semantic check, when the plan asked for one - recorded as
+        # not run without a vision provider, never as passed.
+        if result.semantic_expectations:
+            verdict = creative_lifecycle.semantic_check(
+                self, result.image_bytes, expectation="; ".join(result.semantic_expectations)
+            )
+            creative_lifecycle.apply_semantic_verdict(row, verdict)
         row.updated_at = datetime.now(UTC)
         db.commit()
         # The settled word, from the row's own state through the ONE mapping - so the
@@ -769,6 +801,102 @@ class CreativeService:
             reference_bytes=reference_bytes,
             session_id=session_id,
         )
+
+    # ----------------------------------------------------------- B43: the lifecycle
+
+    def generate(
+        self,
+        db: Session,
+        *,
+        prompt: str,
+        name: str,
+        width: int = 1024,
+        height: int = 1024,
+        tool: str = TOOL_PAINT,
+        expectation: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return creative_lifecycle.generate(
+            self,
+            db,
+            prompt=prompt,
+            name=name,
+            width=width,
+            height=height,
+            tool=tool,
+            expectation=expectation,
+            session_id=session_id,
+        )
+
+    def enhance(
+        self, db: Session, *, target: str | None, kind: str = "auto", session_id: str | None = None
+    ) -> dict[str, Any]:
+        return creative_lifecycle.enhance(self, db, target=target, kind=kind, session_id=session_id)
+
+    def undo(
+        self, db: Session, *, target: str | None, session_id: str | None = None
+    ) -> dict[str, Any]:
+        return creative_lifecycle.undo(self, db, target=target, session_id=session_id)
+
+    def redo(
+        self, db: Session, *, target: str | None, session_id: str | None = None
+    ) -> dict[str, Any]:
+        return creative_lifecycle.redo(self, db, target=target, session_id=session_id)
+
+    def history(self, db: Session, *, target: str | None) -> dict[str, Any] | None:
+        return creative_lifecycle.history(self, db, target=target)
+
+    def deliver(
+        self,
+        db: Session,
+        device_action: Any,
+        *,
+        target: str | None,
+        base_url: str,
+        session_id: str | None = None,
+        application: str | None = None,
+        actor_kind: str = "owner_voice",
+    ) -> dict[str, Any]:
+        return creative_lifecycle.deliver(
+            self,
+            db,
+            device_action,
+            target=target,
+            base_url=base_url,
+            session_id=session_id,
+            application=application,
+            actor_kind=actor_kind,
+        )
+
+    def drive(
+        self,
+        db: Session,
+        device_action: Any,
+        *,
+        target: str | None,
+        actions: list[Any],
+        path: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return creative_lifecycle.drive(
+            self,
+            db,
+            device_action,
+            target=target,
+            actions=actions,
+            path=path,
+            session_id=session_id,
+        )
+
+    def _assets_for(self, plan: CreativePlan) -> dict[str, bytes]:
+        out: dict[str, bytes] = {}
+        for op in plan.operations:
+            key = getattr(op, "asset", None)
+            if isinstance(key, str) and key and key not in out:
+                data = self._fetch_bytes(key)
+                if data is not None:
+                    out[key] = data
+        return out
 
     # ----------------------------------------------------------------------- status
 

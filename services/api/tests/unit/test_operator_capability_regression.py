@@ -42,22 +42,45 @@ from app.evolution import supervisor
 from app.ledger.models import ActivityEventRow
 from app.ledger.vocabulary import EVENT_TYPE_ACTION_RECEIPT, SUBSYSTEM_OPERATOR
 from app.operator.capabilities import (
+    PLAN_BY_POINTER_ACTION,
+    PLAN_BY_PROCESS_ACTION,
+    PLAN_BY_SERVICE_ACTION,
     PLAN_BY_SHELL_QUERY,
+    PLAN_BY_UI_ACTION,
     PLAN_BY_WINDOW_ACTION,
+    PLAN_CLOSE_APPLICATION,
     PLAN_OPEN_APPLICATION,
+    PLAN_PRESS_KEY,
+    PLAN_PRESS_SHORTCUT,
     PLAN_TYPE_TEXT,
+    PLAN_UI_INSPECT,
+    PLAN_UI_READ,
     RECEIPT_BY_PLAN,
     RETIRED_RECEIPT_CAPABILITIES,
 )
 from app.operator.models import ObjectFocusRow
 from app.operator.plans import (
     activate_window,
+    close_app,
     close_window,
     maximize_window,
     minimize_window,
+    move_window,
     open_application,
+    pointer,
+    press_key,
+    press_shortcut,
     previous_window,
+    process_list,
+    process_stop,
+    resize_window,
     restore_window,
+    service_restart,
+    service_status,
+    ui_invoke,
+    ui_read,
+    ui_select,
+    ui_set_value,
 )
 from app.operator.plans import shell_query as build_shell_query_steps
 from app.operator.plans import type_text as build_type_text_steps
@@ -86,6 +109,32 @@ PLAN_STEPS: dict[str, Any] = {
     PLAN_BY_WINDOW_ACTION["restore"]: lambda: restore_window(WINDOW),
     PLAN_BY_SHELL_QUERY["ip"]: lambda: build_shell_query_steps("ip"),
     PLAN_BY_SHELL_QUERY["hostname"]: lambda: build_shell_query_steps("hostname"),
+    # B28 req 92-98: the input family's seven plans.
+    PLAN_PRESS_KEY: lambda: press_key(WINDOW, "enter"),
+    PLAN_PRESS_SHORTCUT: lambda: press_shortcut(WINDOW, ["ctrl", "s"]),
+    PLAN_BY_POINTER_ACTION["move"]: lambda: pointer(WINDOW, "move", x=10, y=10),
+    PLAN_BY_POINTER_ACTION["click"]: lambda: pointer(WINDOW, "click", x=10, y=10),
+    PLAN_BY_POINTER_ACTION["double_click"]: lambda: pointer(WINDOW, "double_click", x=10, y=10),
+    PLAN_BY_POINTER_ACTION["right_click"]: lambda: pointer(WINDOW, "right_click", x=10, y=10),
+    PLAN_BY_POINTER_ACTION["scroll"]: lambda: pointer(WINDOW, "scroll", x=10, y=10, delta=-3),
+    # B29 req 99-103: the UI Automation family's five plans.
+    PLAN_BY_UI_ACTION["invoke"]: lambda: ui_invoke(WINDOW, {"name": "Tamam"}),
+    PLAN_BY_UI_ACTION["set_value"]: lambda: ui_set_value(
+        WINDOW, {"control_type": "Edit"}, "merhaba"
+    ),
+    PLAN_BY_UI_ACTION["select"]: lambda: ui_select(WINDOW, {"name": "Liste"}, "Bir"),
+    PLAN_UI_READ: lambda: ui_read(WINDOW, {"control_type": "Edit"}),
+    PLAN_UI_INSPECT: lambda: ui_read(WINDOW),
+    # B30 req 82/84-88/117-122: geometry, application close, the third shell query, and
+    # the process/service family's four plans.
+    PLAN_BY_WINDOW_ACTION["move"]: lambda: move_window(WINDOW, 100, 100),
+    PLAN_BY_WINDOW_ACTION["resize"]: lambda: resize_window(WINDOW, 800, 600),
+    PLAN_CLOSE_APPLICATION: lambda: close_app(WINDOW, force=False),
+    PLAN_BY_SHELL_QUERY["whoami"]: lambda: build_shell_query_steps("whoami"),
+    PLAN_BY_PROCESS_ACTION["list"]: lambda: process_list("chrome.exe"),
+    PLAN_BY_PROCESS_ACTION["stop"]: lambda: process_stop("chrome.exe", force=False),
+    PLAN_BY_SERVICE_ACTION["status"]: lambda: service_status("Spooler"),
+    PLAN_BY_SERVICE_ACTION["restart"]: lambda: service_restart("Spooler"),
 }
 
 

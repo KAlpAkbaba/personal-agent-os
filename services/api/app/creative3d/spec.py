@@ -103,6 +103,18 @@ ENERGY_MIN, ENERGY_MAX = 0.0, 100_000.0
 RENDER_WIDTH_MAX = 1920
 RENDER_HEIGHT_MAX = 1080
 
+#: B44 (req 524-527): the production path's controls, bounded like every number above.
+ANIMATABLE_CHANNELS: tuple[str, ...] = ("location", "rotation", "scale")
+SCENE_EXPORT_FORMATS: tuple[str, ...] = ("glb", "fbx")
+MAX_KEYFRAMES = 32
+FRAME_BOUND = 10_000
+FPS_MIN, FPS_MAX = 1, 120
+LENS_MIN, LENS_MAX = 1.0, 500.0
+#: Operations only the Blender driver implements and the Blender lab proves. The Unity
+#: driver is pinned and its licence is the owner's to obtain, so a Unity plan naming one is
+#: refused by name before any device is asked - attach_script's rule, the other way round.
+BLENDER_ONLY_OPS: tuple[str, ...] = ("set_frames", "animate", "export")
+
 
 # ------------------------------------------------------------------ the operations
 
@@ -146,12 +158,16 @@ class SetCamera(_StrictModel):
     op: Literal["set_camera"] = "set_camera"
     name: str = Field(min_length=1, max_length=64)
     look_at: str | None = Field(default=None, min_length=1, max_length=64)
+    #: B44 (req 525): the camera's focal length in millimetres.
+    lens: float | None = Field(default=None, ge=LENS_MIN, le=LENS_MAX)
 
 
 class SetLight(_StrictModel):
     op: Literal["set_light"] = "set_light"
     name: str = Field(min_length=1, max_length=64)
     energy: float
+    #: B44 (req 524): the light's colour, linear RGB in [0, 1].
+    color: tuple[float, float, float] | None = None
 
 
 class AttachScript(_StrictModel):
@@ -167,6 +183,65 @@ class Render(_StrictModel):
     engine: Literal["workbench", "eevee"] = "workbench"
 
 
+class SetFrames(_StrictModel):
+    """B44 (req 526): the animation's frame range and rate."""
+
+    op: Literal["set_frames"] = "set_frames"
+    start: int = 1
+    end: int = 48
+    fps: int = 24
+
+    @model_validator(mode="after")
+    def _ordered(self) -> SetFrames:
+        _bounded(self.start, 0, FRAME_BOUND, "set_frames.start")
+        _bounded(self.end, 0, FRAME_BOUND, "set_frames.end")
+        _bounded(self.fps, FPS_MIN, FPS_MAX, "set_frames.fps")
+        if self.end <= self.start:
+            raise ValueError("set_frames.end must come after set_frames.start")
+        return self
+
+
+class Keyframe(_StrictModel):
+    frame: int
+    value: Vec3
+
+
+class Animate(_StrictModel):
+    """B44 (req 526): keyframes on one object's location / rotation / scale. The driver
+    inserts them with Blender's own ``keyframe_insert``; the read-back comes from the
+    action's F-curves, never from this list restated."""
+
+    op: Literal["animate"] = "animate"
+    name: str = Field(min_length=1, max_length=64)
+    channel: Literal["location", "rotation", "scale"]
+    keyframes: list[Keyframe] = Field(min_length=2, max_length=MAX_KEYFRAMES)
+
+    @model_validator(mode="after")
+    def _frames_increase(self) -> Animate:
+        frames = [k.frame for k in self.keyframes]
+        for frame in frames:
+            _bounded(frame, 0, FRAME_BOUND, "animate.frame")
+        if any(later <= earlier for earlier, later in zip(frames, frames[1:], strict=False)):
+            raise ValueError("animate.keyframes must be in strictly increasing frame order")
+        for keyframe in self.keyframes:
+            for component in keyframe.value:
+                if self.channel == "scale":
+                    _bounded(float(component), SCALE_MIN, SCALE_MAX, "animate.value")
+                elif self.channel == "rotation":
+                    _bounded(float(component), -ROTATION_BOUND, ROTATION_BOUND, "animate.value")
+                else:
+                    _bounded(float(component), -LOCATION_BOUND, LOCATION_BOUND, "animate.value")
+        return self
+
+
+class ExportScene(_StrictModel):
+    """B44 (req 527): the scene written as GLB or FBX beside the scene file, on the owner's
+    disk; the device verifies the file (hash and format signature) before it is reported."""
+
+    op: Literal["export"] = "export"
+    format: Literal["glb", "fbx"] = "glb"
+
+
 class Inspect(_StrictModel):
     op: Literal["inspect"] = "inspect"
 
@@ -180,7 +255,10 @@ Operation = Annotated[
     | SetLight
     | AttachScript
     | Render
-    | Inspect,
+    | Inspect
+    | SetFrames
+    | Animate
+    | ExportScene,
     Field(discriminator="op"),
 ]
 
@@ -193,6 +271,7 @@ _NAME_BEARING_OPS: tuple[str, ...] = (
     "set_camera",
     "set_light",
     "attach_script",
+    "animate",
 )
 
 
@@ -276,6 +355,19 @@ class ScenePlan(_StrictModel):
             height = getattr(op, "height", None)
             if height is not None:
                 _bounded(int(height), 1, RENDER_HEIGHT_MAX, "render.height")
+        return self
+
+    @model_validator(mode="after")
+    def _blender_only_controls(self) -> ScenePlan:
+        if self.tool == TOOL_BLENDER:
+            return self
+        for op in self.operations:
+            if op.op in BLENDER_ONLY_OPS:
+                raise ValueError(f"{op.op} is only valid when tool='blender'")
+            if op.op == "set_light" and op.color is not None:
+                raise ValueError("set_light.color is only valid when tool='blender'")
+            if op.op == "set_camera" and op.lens is not None:
+                raise ValueError("set_camera.lens is only valid when tool='blender'")
         return self
 
     @model_validator(mode="after")

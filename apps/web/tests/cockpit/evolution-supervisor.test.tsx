@@ -33,9 +33,9 @@ function status(overrides: Partial<EvolutionSupervisorStatus> = {}): EvolutionSu
   };
 }
 
-function render(value: EvolutionSupervisorStatus) {
+function render(value: EvolutionSupervisorStatus, always = false) {
   return renderToStaticMarkup(
-    <EvolutionSupervisorPanel state={{ kind: "ok", value, at: NOW }} now={NOW} />,
+    <EvolutionSupervisorPanel state={{ kind: "ok", value, at: NOW }} now={NOW} always={always} />,
   );
 }
 
@@ -68,10 +68,16 @@ describe("the Evolution Supervisor panel", () => {
     expect(html).toContain("kayıtlı düzeltilmiş olay yok");
   });
 
-  it("is empty, not failed, before the first scan", () => {
-    const html = render(status({ last_scan: null, last_scan_at: null, building: [], pending_candidates: [] }));
-    expect(html).toContain('data-panel-empty="yes"');
-    expect(html).toContain("Gözetmen henüz taramadı.");
+  it("is empty, not failed, before the first scan — and on the cockpit that means gone", () => {
+    // B24 req 714: a supervisor that has never scanned has nothing to show, so on the
+    // cockpit it takes no slot. On /selfdev, where the owner came to read about exactly
+    // this, `always` keeps the sentence — the emptiness IS the answer there.
+    const quiet = status({ last_scan: null, last_scan_at: null, building: [], pending_candidates: [] });
+    expect(render(quiet)).toBe("");
+
+    const page = render(quiet, true);
+    expect(page).toContain('data-panel-empty="yes"');
+    expect(page).toContain("Gözetmen henüz taramadı.");
   });
 });
 

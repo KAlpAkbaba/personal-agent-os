@@ -63,11 +63,14 @@ class VoicePreferences:
 
     def validate(self) -> VoicePreferences:
         if not (0.5 <= self.narration_speed <= 3.0):
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             "narration_speed must be in [0.5, 3.0]")
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR, "narration_speed must be in [0.5, 3.0]"
+            )
         if not self.locale or "-" not in self.locale:
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             f"locale must look like 'tr-TR', got {self.locale!r}")
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"locale must look like 'tr-TR', got {self.locale!r}",
+            )
         for name in _BOOL_FIELDS:
             if not isinstance(getattr(self, name), bool):
                 raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"{name} must be a bool")
@@ -81,13 +84,16 @@ class VoicePreferences:
         has already set explicitly (VOICE_SPEC §12: explicit overrides inferred).
         """
         if source not in ("owner", "inferred"):
-            raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                             f"source must be 'owner' or 'inferred', got {source!r}")
+            raise VoiceError(
+                VoiceErrorClass.VALIDATION_ERROR,
+                f"source must be 'owner' or 'inferred', got {source!r}",
+            )
         valid = {f.name for f in fields(self)} - {"owner_set"}
         for key, value in updates.items():
             if key not in valid:
-                raise VoiceError(VoiceErrorClass.VALIDATION_ERROR,
-                                 f"unknown preference field: {key!r}")
+                raise VoiceError(
+                    VoiceErrorClass.VALIDATION_ERROR, f"unknown preference field: {key!r}"
+                )
             if source == "inferred" and key in self.owner_set:
                 continue  # explicit owner value is protected
             setattr(self, key, value)

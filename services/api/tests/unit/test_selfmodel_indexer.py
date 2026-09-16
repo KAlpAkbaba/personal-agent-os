@@ -817,7 +817,9 @@ def test_a_real_incident_resolves_to_a_file_without_reading_the_tree() -> None:
                     )
                 )
             }
-            assert dispatched_by == {"app.operator.plans"}
+            # B43 (req 500): the Paint driver types into the owner's Paint window too, so
+            # keyboard.type has two real senders - and still not the tool that answered.
+            assert dispatched_by == {"app.operator.plans", "app.creative.drivers"}
     finally:
         engine.dispose()
 

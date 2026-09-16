@@ -1,0 +1,80 @@
+{
+  "batch": "B28",
+  "name": "Operatör girdi erişimi",
+  "requirements": [
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    104,
+    107,
+    109,
+    110
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 (first run)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10086 passed, 5 skipped (919 s); was 10015 after B27",
+      "Windows agent build + tests": "PASS - 921/921 (920 + the new lab test, on this desktop)",
+      "Staged-update qualification": "PASS - 89 checks"
+    },
+    "web_gates": "vitest matrix-badges 12 passed (generated matrix module resynced); no web source changed"
+  },
+  "what_this_proves": "The operator's input the device has answered since M19 now has callers: one key or one chord (operator.key), the five pointer operations (operator.pointer), each a plan of activate -> ONE guarded input -> read back; a focus-guard refusal stops the send and the receipt counts what ran; the device's `secret` flag is sent from the cloud; raw coordinates are refused unless declared the last resort, and the receipt records the rung used.",
+  "measured_first": {
+    "device_half": "keyboard.key / keyboard.shortcut / pointer.* implemented in PagentOS.SessionCompanion.Operator.OperatorCapabilities behind FocusGuard; RefuseSecret reads payload[\"secret\"]; KeyMap holds 27 key names and 3 modifiers. All of it unreached from Cloud Core (matrix 92-98: 'Çağıran yok').",
+    "cloud_half_before": "plans only for app.launch, window.*, keyboard.type, ui.inspect, terminal.execute; keyboard.type's payload carried no `secret`; the task receipt said status and plan name only; no coordinate policy outside the browser worker.",
+    "lab_before": "NotepadLifecycleTests already typed, read back through UI Automation and clicked on this desktop; no key, chord or scroll had ever been exercised for real."
+  },
+  "closed_fully": {
+    "91_keyboard_typing": "type_text's payload now carries `secret`; the task receipt carries steps_completed/step_count/stopped_at/interaction_level; a focus_mismatch mid-plan ends the task with that class and 'Pencere önden çekildi efendim; gönderimi durdurdum.'",
+    "92_single_key": "Intent OPERATOR_KEY ('Enter'a bas', 'Yukarı ok tuşuna bas', 'F5'e bas') -> operator.key -> plan press_key (activate, keyboard.key, retries=0) -> postcondition: the device echoes the key and the foreground is still the target.",
+    "93_shortcuts": "'Ctrl S'ye bas' -> key_press 'ctrl+s' -> plan press_shortcut; the server's valid_shortcut is the companion's ValidateShortcut rule (modifiers then exactly one key); a chord is sent once.",
+    "94_97_move_click_double_right": "operator.pointer with last_resort=true and a reason: activate, pointer.<action>, postcondition = device cursor within 2 px of screen_x/y AND the foreground still the target; a cursor read back elsewhere is postcondition_failed, never verified.",
+    "98_scroll": "'Aşağı kaydır.' -> OPERATOR_SCROLL -> operator.pointer scroll at the window's own centre from the device's rect (fallback (50,50) when no rect), delta -3 / +3; no last-resort gate (no element is targeted).",
+    "104_screenshot": "Closed in B27 (operator.screenshot -> screen.capture); the matrix row was updated there.",
+    "107_last_resort": "operator.pointer refuses move/click without last_resort=true: refused receipt `coordinate_not_last_resort`, no window resolved, no device call; with it, `last_resort_reason` and interaction_level=pointer travel in the receipt. The receipt's interaction_level is the HIGHEST rung any step used (_LEVEL_RANK).",
+    "109_secret_flag": "plans.type_text computes `secret` with the same contains_secret_reference the server gate uses and puts it on the wire; the test reads OperatorCapabilities.cs for payload[\"secret\"] and RefuseSecret(payload). The server gate still refuses first (test kept).",
+    "110_per_action_receipt": "Every operator action is one action.receipt with the accounting fields; asserted over a key press and a scroll through the real relay."
+  },
+  "found_on_the_way": {
+    "fields_that_never_travelled": "The relay test showed `key_press` never reached the tool: record_client_events copies the resolved intent into the turn record field by field, and the list is explicit. B27's `capability_family` and `media_volume_direction` were missing too — B27's unit tests built the turn record by hand and could not see it. All four added; a relay test on B27's fields added to test_daily_intent_tools.py.",
+    "clarifying_tools_list": "'Hangi tuş?' from operator.key was recorded as a SUCCEEDED call: the relay maps needs_clarification only for tools in OPERATOR_CLARIFYING_TOOLS. Both new tools added.",
+    "regression_plan_table": "test_operator_capability_regression drives every declared plan through the real service; the seven new plans had to be added to its PLAN_STEPS or the receipt set would not match RECEIPT_BY_PLAN."
+  },
+  "tests": {
+    "services/api/tests/unit/test_operator_input.py": 33,
+    "services/api/tests/voice_corpus/corpus.py (op.key.*, op.shortcut.*, op.scroll.*)": "37 cases through the real relay",
+    "services/api/tests/unit/test_daily_intent_tools.py": "+1 relay test (B27 fields travel)",
+    "devices/windows-agent/tests/.../NotepadLifecycleTests.cs": "A_key_a_chord_and_a_scroll_are_guarded_and_re_observed (lab, this desktop, 5/5 in the file)"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`).",
+    "mutations": [
+      "secret flag not sent -> 1 failure.",
+      "last-resort gate removed -> 1 failure (policy test).",
+      "a refused key is sent again (retries=1) -> 1 failure (focus guard accounting).",
+      "partial send not accounted (steps_completed = step_count) -> 1 failure.",
+      "the pointer never checks where it landed -> 1 failure."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_REAL (test lab); production command READY_FOR_OWNER",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_REAL — üretimden verilen bir komut gerçek pencerede iş yaptı, postcondition doğrulandı, FocusGuard ihlali kaydedilmedi'. The lab half is real on this desktop: Home moved the caret of a real Notepad (the next typed letter appeared at the front: 'Xabc'), Ctrl+A then Delete emptied the document (read back through UI Automation), pointer.scroll re-observed the cursor within 2 px — every assertion on the companion's own read-back, no focus_mismatch recorded. The production half (a command from the deployed Cloud Core to the enrolled device) is Karar 0's owner round."
+  },
+  "owner_gates": {
+    "karar_0": "production release round: one spoken 'Enter'a bas' from the deployed core into a real window"
+  }
+}

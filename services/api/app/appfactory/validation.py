@@ -217,8 +217,12 @@ def validate_manifest(files: ProjectFiles) -> dict:
             "manifest 'run' is required and must be a non-empty mapping of {key: command}",
             code="invalid_manifest",
         )
+    # B40 (req 428): the device admits `node <entry>` for exactly the manifest's own entry
+    # file (DEVICE_PROTOCOL.md §6l); this side says the same, so a composed application's
+    # `node server.js` passes here for the reason it passes there.
+    allowed_run = set(ALLOWED_RUN_COMMANDS) | {f"node {entry}"}
     for key, command in run.items():
-        if not isinstance(command, str) or command not in ALLOWED_RUN_COMMANDS:
+        if not isinstance(command, str) or command not in allowed_run:
             raise AppValidationError(
                 f"manifest run command {key!r} is not on the allowlist",
                 code="command_not_allowed",

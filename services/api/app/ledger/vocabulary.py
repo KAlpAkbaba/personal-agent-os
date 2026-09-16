@@ -131,6 +131,11 @@ SUBSYSTEM_CREATIVE = "creative"
 #: own SUBSYSTEMS already carries for this milestone, so a receipt row and the UI
 #: event it belongs with can never disagree about who made it.
 SUBSYSTEM_NATIVEFACTORY = "nativefactory"
+#: B35 (req 581-623, 680): the self-development queue - defects assigned by the owner,
+#: bridged from opportunities or opened by a red CI; the run's outcome; the owner's
+#: decision. Its own subsystem so the Cockpit can tell "what the system is fixing in
+#: itself" from "what evolved".
+SUBSYSTEM_SELFDEV = "selfdev"
 
 SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_RESEARCH,
@@ -163,6 +168,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_MEDIA,
     SUBSYSTEM_CREATIVE,
     SUBSYSTEM_NATIVEFACTORY,
+    SUBSYSTEM_SELFDEV,
 )
 
 # ------------------------------------------------------------------ statuses
@@ -244,6 +250,14 @@ EVENT_TYPE_RESEARCH_QUALITY_GATE = "research.quality_gate"
 #: The owner's own qualification verdict for a research run, recorded by the owner
 #: command from its evidence file (digest in evidence_refs); never derived by the system.
 EVENT_TYPE_RESEARCH_QUALIFIED = "research.qualified"
+#: B27 req 732: the owner cancelled a research that was still running.
+EVENT_TYPE_RESEARCH_CANCELLED = "research.cancelled"
+#: B31 req 203/204: the owner paused / resumed a research still in flight.
+EVENT_TYPE_RESEARCH_PAUSED = "research.paused"
+EVENT_TYPE_RESEARCH_RESUMED = "research.resumed"
+#: B31 req 207: a run's synthesis (or a discovery query's search) did not use the provider
+#: it asked for; the substitution is a fact of the run and is written here, never silent.
+EVENT_TYPE_RESEARCH_PROVIDER_FALLBACK = "research.provider_fallback"
 EVENT_TYPE_BROWSER_SESSION_OPENED = "browser.session.opened"
 EVENT_TYPE_BROWSER_SESSION_CLOSED = "browser.session.closed"
 EVENT_TYPE_BROWSER_SEARCH = "browser.search"
@@ -305,6 +319,8 @@ EVENT_TYPE_PRESENCE_GREETING_DELIVERED = "presence.greeting_delivered"
 #: an owner action, always explicit, never inferred from observations.
 EVENT_TYPE_EYE_ENABLED = "eye.enabled"
 EVENT_TYPE_EYE_DISABLED = "eye.disabled"
+#: B48 (req 301): the browser tab running the camera closed - evidence, not a disable.
+EVENT_TYPE_EYE_STREAM_STOPPED = "eye.stream_stopped"
 #: M18 Routine Engine (app.routines.service). Every backlog-style state change a routine
 #: goes through — created, armed, triggering, executing, skipped, cancelled — writes exactly
 #: one of these (task brief: "no transition may be invisible").
@@ -387,12 +403,24 @@ EVENT_TYPE_OPERATOR_TASK_STARTED = "operator.task.started"
 EVENT_TYPE_OPERATOR_TASK_COMPLETED = "operator.task.completed"
 EVENT_TYPE_OPERATOR_TASK_FAILED = "operator.task.failed"
 EVENT_TYPE_OPERATOR_TASK_CANCELLED = "operator.task.cancelled"
+#: B39 (req 128): one row when a mission is planned, one when the loop hands it back
+#: to the owner (escalation), one when it ends - the trail itself is on the row.
+EVENT_TYPE_OPERATOR_MISSION_STARTED = "operator.mission.started"
+EVENT_TYPE_OPERATOR_MISSION_ESCALATED = "operator.mission.escalated"
+EVENT_TYPE_OPERATOR_MISSION_FINISHED = "operator.mission.finished"
 #: M20 File & Document Intelligence (spec §3): one row per document interaction the owner
 #: initiated — never on a schedule, per the module's "no background crawling" rule.
 EVENT_TYPE_DOCUMENT_SEARCHED = "document.search"
 EVENT_TYPE_DOCUMENT_READ = "document.read"
 EVENT_TYPE_DOCUMENT_ANSWERED = "document.answer"
 EVENT_TYPE_DOCUMENT_COMPARED = "document.compare"
+#: B32 req 150: duplicate copies sent to the Recycle Bin on the owner's word (reversible).
+EVENT_TYPE_DOCUMENT_TRASHED = "document.trashed"
+# B34 req 160/162: the managed file mutations - proposed, applied, undone, discarded.
+EVENT_TYPE_DOCUMENT_MUTATION_PROPOSED = "document.mutation_proposed"
+EVENT_TYPE_DOCUMENT_MUTATION_APPLIED = "document.mutation_applied"
+EVENT_TYPE_DOCUMENT_MUTATION_UNDONE = "document.mutation_undone"
+EVENT_TYPE_DOCUMENT_MUTATION_DISCARDED = "document.mutation_discarded"
 #: M21 Mail & Calendar (spec §3, ADR-0084): one row per owner-initiated mail/calendar
 #: interaction — the three tiers (READ/PREPARE/EXTERNAL MUTATION) each get their own event
 #: type so "did it actually send, or only draft?" is answerable from the ledger alone.
@@ -411,6 +439,10 @@ EVENT_TYPE_ARTIFACT_RENDERED = "artifact.render"
 EVENT_TYPE_ARTIFACT_VALIDATED = "artifact.validate"
 EVENT_TYPE_ARTIFACT_OPENED = "artifact.open"
 EVENT_TYPE_ARTIFACT_LISTED = "artifact.list"
+#: B42 (req 410-412): the lifecycle after the first render.
+EVENT_TYPE_ARTIFACT_EDITED = "artifact.edit"
+EVENT_TYPE_ARTIFACT_CLONED = "artifact.clone"
+EVENT_TYPE_ARTIFACT_DELETED = "artifact.delete"
 #: M23 App Factory (spec §1, ADR-0086): one row per owner-initiated project lifecycle
 #: transition — the same "one row per transition" discipline operator.task.* already
 #: gives M19's tasks.
@@ -422,6 +454,13 @@ EVENT_TYPE_APP_PROJECT_TESTED = "app.project.test"
 EVENT_TYPE_APP_PROJECT_STOPPED = "app.project.stop"
 EVENT_TYPE_APP_PROJECT_FAILED = "app.project.failed"
 EVENT_TYPE_APP_PROJECT_LISTED = "app.project.list"
+#: B40 (req 435-437): one row per fix loop, whatever it ended with.
+EVENT_TYPE_APP_PROJECT_FIXED = "app.project.fix"
+#: B41 (req 440-452): the lifecycle after the tests.
+EVENT_TYPE_APP_PROJECT_VERIFIED = "app.project.verify"
+EVENT_TYPE_APP_PROJECT_PACKAGED = "app.project.package"
+EVENT_TYPE_APP_PROJECT_LAUNCHED = "app.project.launch"
+EVENT_TYPE_APP_PROJECT_MODIFIED = "app.project.modify"
 #: M24 Capability Genesis (spec §5, ADR-0087): one row per GenesisRun state
 #: transition — "genesis.<state>" for every state in
 #: app.genesis.models.GENESIS_STATES (the literal strings below are kept in sync
@@ -476,6 +515,8 @@ EVENT_TYPE_MEDIA_OPENED = "media.opened"
 EVENT_TYPE_MEDIA_UNVERIFIED = "media.playback_unverified"
 EVENT_TYPE_MEDIA_FAILED = "media.playback_failed"
 EVENT_TYPE_MEDIA_STOPPED = "media.stopped"
+#: B27 req 733: the owner moved the volume of the playback they asked for.
+EVENT_TYPE_MEDIA_VOLUME_CHANGED = "media.volume_changed"
 
 # M27 Creative Tools Operator (docs/M27_CREATIVE_TOOLS_SPEC.md §3, §4, ADR-0093): one
 # row per creative-run lifecycle transition — the same "one row per transition"
@@ -489,6 +530,16 @@ EVENT_TYPE_CREATIVE_MISMATCH = "creative.mismatch"
 EVENT_TYPE_CREATIVE_DEPENDENCY_UNAVAILABLE = "creative.dependency_unavailable"
 EVENT_TYPE_CREATIVE_FAILED = "creative.failed"
 EVENT_TYPE_CREATIVE_LISTED = "creative.list"
+#: B43 (req 492, 509, 511, 500): generation, delivery to disk, undo/redo, driving.
+EVENT_TYPE_CREATIVE_GENERATED = "creative.generate"
+EVENT_TYPE_CREATIVE_DELIVERED = "creative.deliver"
+EVENT_TYPE_CREATIVE_UNDONE = "creative.undo"
+EVENT_TYPE_CREATIVE_DRIVEN = "creative.drive"
+#: B35: the self-development queue's four facts.
+EVENT_TYPE_SELFDEV_DEFECT_QUEUED = "selfdev.defect_queued"
+EVENT_TYPE_SELFDEV_RUN_ENDED = "selfdev.run_ended"
+EVENT_TYPE_SELFDEV_CANDIDATE_READY = "selfdev.candidate_ready"
+EVENT_TYPE_SELFDEV_DECIDED = "selfdev.decided"
 
 EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_RESEARCH_PLANNED,
@@ -526,6 +577,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_PRESENCE_GREETING_DELIVERED,
     EVENT_TYPE_EYE_ENABLED,
     EVENT_TYPE_EYE_DISABLED,
+    EVENT_TYPE_EYE_STREAM_STOPPED,
     EVENT_TYPE_ROUTINE_CREATED,
     EVENT_TYPE_ROUTINE_ARMED,
     EVENT_TYPE_ROUTINE_TRIGGERED,
@@ -563,10 +615,18 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_OPERATOR_TASK_COMPLETED,
     EVENT_TYPE_OPERATOR_TASK_FAILED,
     EVENT_TYPE_OPERATOR_TASK_CANCELLED,
+    EVENT_TYPE_OPERATOR_MISSION_STARTED,
+    EVENT_TYPE_OPERATOR_MISSION_ESCALATED,
+    EVENT_TYPE_OPERATOR_MISSION_FINISHED,
     EVENT_TYPE_DOCUMENT_SEARCHED,
     EVENT_TYPE_DOCUMENT_READ,
     EVENT_TYPE_DOCUMENT_ANSWERED,
     EVENT_TYPE_DOCUMENT_COMPARED,
+    EVENT_TYPE_DOCUMENT_TRASHED,
+    EVENT_TYPE_DOCUMENT_MUTATION_PROPOSED,
+    EVENT_TYPE_DOCUMENT_MUTATION_APPLIED,
+    EVENT_TYPE_DOCUMENT_MUTATION_UNDONE,
+    EVENT_TYPE_DOCUMENT_MUTATION_DISCARDED,
     EVENT_TYPE_MAIL_READ,
     EVENT_TYPE_MAIL_DRAFTED,
     EVENT_TYPE_MAIL_SENT,
@@ -580,6 +640,9 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ARTIFACT_VALIDATED,
     EVENT_TYPE_ARTIFACT_OPENED,
     EVENT_TYPE_ARTIFACT_LISTED,
+    EVENT_TYPE_ARTIFACT_EDITED,
+    EVENT_TYPE_ARTIFACT_CLONED,
+    EVENT_TYPE_ARTIFACT_DELETED,
     EVENT_TYPE_APP_PROJECT_CREATED,
     EVENT_TYPE_APP_PROJECT_SCAFFOLDED,
     EVENT_TYPE_APP_PROJECT_RUN,
@@ -588,6 +651,11 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_APP_PROJECT_STOPPED,
     EVENT_TYPE_APP_PROJECT_FAILED,
     EVENT_TYPE_APP_PROJECT_LISTED,
+    EVENT_TYPE_APP_PROJECT_FIXED,
+    EVENT_TYPE_APP_PROJECT_VERIFIED,
+    EVENT_TYPE_APP_PROJECT_PACKAGED,
+    EVENT_TYPE_APP_PROJECT_LAUNCHED,
+    EVENT_TYPE_APP_PROJECT_MODIFIED,
     EVENT_TYPE_GENESIS_CAPABILITY_MISSING,
     EVENT_TYPE_GENESIS_RESEARCHING,
     EVENT_TYPE_GENESIS_DESIGNING,
@@ -623,6 +691,11 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_MEDIA_UNVERIFIED,
     EVENT_TYPE_MEDIA_FAILED,
     EVENT_TYPE_MEDIA_STOPPED,
+    EVENT_TYPE_MEDIA_VOLUME_CHANGED,
+    EVENT_TYPE_RESEARCH_CANCELLED,
+    EVENT_TYPE_RESEARCH_PAUSED,
+    EVENT_TYPE_RESEARCH_RESUMED,
+    EVENT_TYPE_RESEARCH_PROVIDER_FALLBACK,
     EVENT_TYPE_CREATIVE_CREATED,
     EVENT_TYPE_CREATIVE_APPLIED,
     EVENT_TYPE_CREATIVE_VERIFIED,
@@ -630,6 +703,14 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_CREATIVE_DEPENDENCY_UNAVAILABLE,
     EVENT_TYPE_CREATIVE_FAILED,
     EVENT_TYPE_CREATIVE_LISTED,
+    EVENT_TYPE_CREATIVE_GENERATED,
+    EVENT_TYPE_CREATIVE_DELIVERED,
+    EVENT_TYPE_CREATIVE_UNDONE,
+    EVENT_TYPE_CREATIVE_DRIVEN,
+    EVENT_TYPE_SELFDEV_DEFECT_QUEUED,
+    EVENT_TYPE_SELFDEV_RUN_ENDED,
+    EVENT_TYPE_SELFDEV_CANDIDATE_READY,
+    EVENT_TYPE_SELFDEV_DECIDED,
 )
 
 #: "genesis.<state>" for every state in app.genesis.models.GENESIS_STATES — the

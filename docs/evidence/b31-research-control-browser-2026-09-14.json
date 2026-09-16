@@ -1,0 +1,95 @@
+{
+  "batch": "B31",
+  "name": "Araştırma kontrolü ve tarayıcı boşlukları",
+  "requirements": [
+    172,
+    173,
+    180,
+    181,
+    192,
+    198,
+    199,
+    200,
+    201,
+    202,
+    203,
+    204,
+    207,
+    209,
+    210
+  ],
+  "recorded_at": "2026-09-14T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS 7/7 on the second run (first run: API 10297 passed / 1 failed - the research contracts audit refusing two bare-key reads of synthesis_fallback; fixed, see found_on_the_way)",
+    "steps": {
+      "Required files": "PASS",
+      "Secret hygiene": "PASS",
+      "API lint (ruff)": "PASS",
+      "Other services lint (ruff)": "PASS",
+      "API unit tests": "PASS - 10298 passed, 5 skipped (922 s); was 10257 after B30",
+      "Windows agent build + tests": "PASS - 931/931 (Agent.Tests, BrowserCapabilities.Operations 29) + 135/135 (Companion.Audio.Tests)",
+      "Staged-update qualification": "PASS - 89 checks (the three PowerShell browser operation lists now carry browser.upload)"
+    },
+    "web_gates": "vitest tests/research 69 passed (6 files) + matrix-badges; tsc --noEmit clean",
+    "browser_gates": "services/browser tests/unit 435 passed (no browser launched)"
+  },
+  "what_this_proves": "A research the owner can hold: pause/resume are one durable function each (REST route and voice tool share it), a flag on the run (never a stage), and a Temporal signal the workflow reads at every stage boundary with the held time kept out of the budget. A DEEP asked for aloud runs as DEEP with its own source budget because the owner's words travel with the turn. A research can be opened by reference, an earlier report on the same topic is cited, a standing technical register survives sessions, and a provider substitution is written into the report, the run events and the ledger. On the browser side contract v1.5 makes the uploads flag honest (browser.upload exists, a test holds every flag to a handler), bounds every transfer (64 MiB, well-formed authorization_ref, file_io_root) and holds ADR-0113's owner-Chrome boundary under test.",
+  "measured_first": {
+    "research_before": "no pause/resume anywhere (grep pause|resume|paused in app/research: only a durability-test sleep); no workflow signals or wait_condition; voice research.start sent research_default_max_sources=12 for every mode and browser_activities clamps min(policy, 12) so DEEP (24) ran with 12; 'Bir önceki araştırmayı aç.' resolved to artifact_open; technical_speech spoke only the provider that answered; no answer register anywhere.",
+    "browser_before": "uploads=True advertised on ManagedBackend and ExistingSessionBackend with no browser.upload handler in _HANDLERS (worker.py); _op_download gated on `not authorization_ref` (truthiness), no size cap, save_dir not contained; C# BrowserCapabilities.Operations=28; owner_authorized_for_research read only by the worker's require_research_authorization, written $false by the enrol script, never by the cloud."
+  },
+  "closed_fully": {
+    "203_204_pause_resume": "service.mark_research_paused/resumed (progress_json paused/paused_at/paused_seconds + events); routes POST /{id}/pause and /resume (409 when nothing to do) signalling BrowserResearchWorkflow.pause/resume; tools research.pause/research.resume (receipts, ledger research.paused/resumed, followup signal); workflow __init__ flags, _gate() before every discovery query, first fetch wave, every later wave and synthesis, _elapsed_s subtracts paused seconds, run_stats.paused_s; intents RESEARCH_PAUSE ('duraklat','beklet') / RESEARCH_RESUME ('devam','sürdür') requiring the research noun; corpus CTX_RESEARCH_PAUSED; web Duraklat/Devam et buttons and the paused notice.",
+    "192_deep": "ResolvedIntent.research_mode (derive_mode_from_utterance of the owner's sentence) copied by record_client_events; research.start takes the wider of spoken and topic-derived modes, narrows only on the model's `mode`, starts with _voice_max_sources(mode) = the policy ceiling (deep 24 / standard / quick min(policy, settings 12)); web mode selector sends research_mode.",
+    "201_open": "Intent RESEARCH_OPEN (research noun + open verb + a pointer word; 'yeni' excluded) -> research.open: _resolve_research (moves focus), executive summary, artifact.open on a device when one exists; speech says opened / focused-only.",
+    "199_previous_reference": "_previous_report_on_topic: completed_entries filtered by the reference resolver's topic rule, older than the focused one -> out['previous_report'] + 'Bu konuda daha önce de bir araştırma var: … raporu.'",
+    "209_200_register": "research.answer_mode + intents RESEARCH_ANSWER_MODE (standing marker or 'mod'); research_owner_state.preferences_json.answer_level (alembic 0046_research_owner_preferences); focus.get_answer_level/set_answer_level; research.explain and _research_level read it as the fallback level.",
+    "207_fallback": "synthesize_activity records synthesis_fallback {requested, used, attempts, reason} into report_json, a run event and ledger research.provider_fallback; search_fallbacks counted from discovery events; ResearchDiagnostics carries both; technical_speech speaks the substitution; ReportView shows it.",
+    "198_focus": "measured working (focus stack, r.cur.* corpus, focus tests); research.open and the citation build on it.",
+    "202_cancel": "unchanged; a paused research can still be cancelled (test).",
+    "210_history_ui": "mode selector, pause/resume, paused notice, fallback line; api.ts pauseResearch/resumeResearch/research_mode; 69 web tests.",
+    "181_upload": "worker _op_upload (uploads/ containment, gate, cap before the page, sha256), _HANDLERS, policy CAPABILITIES + HIGH_IMPACT, C# Upload + Operations (29), cloud allowlist 'upload', InstallEvidence.ps1 / qualify-staged-update.ps1 / installer-evidence.tests.ps1 lists, contract v1.5 rows; test_every_capability_flag_that_names_an_operation_has_a_handler.",
+    "180_download": "require_transfer_authorization (HIGH_IMPACT + AUTHORIZATION_REF_RE), transfer_cap (lowerable only), enforce_transfer_size (oversized download deleted), session.download contains save_dir in file_io_root; contract text.",
+    "172_owner_chrome": "boundary held by test_the_owners_chrome_stays_closed_to_autonomous_research (enrol script $false, no cloud reference, gateway 'research' profile only, worker gate present); opening it is the owner's privacy checkpoint.",
+    "173_session_reuse": "test_a_live_session_is_reused_in_process_and_across_a_restart (known-open registry, created:false, reopen once after reset)."
+  },
+  "found_on_the_way": {
+    "corpus_id_collision": "r.pause.*/r.resume.* already belonged to the routine family; the research cases are r.hold.*/r.continue.*.",
+    "the_model_drops_the_mode_word": "research.start derived the mode from the model's topic+scope; 'Yapay zekâ düzenlemelerini kapsamlı araştır' became topic 'yapay zekâ düzenlemeleri' and QUICK. The turn now carries research_mode from the owner's own sentence.",
+    "fake_replay": "FakeDeviceCommandClient replays a consumed idempotency key (the real terminal-ack guarantee), so a 'restart' scenario must use its factory to answer created:false.",
+    "ledger_event_registry": "new event types must be listed in vocabulary's registered set or ledger writes fail silently (caught by the tool test's ledger assertion).",
+    "a_citation_must_not_manufacture_words": "test_research_focus::test_an_ok_without_words_is_recorded_as_failed_never_as_succeeded went red: the citation sentence was appended to an EMPTY answer and turned a contract failure into a success. The citation is now added only when there is an answer to add it to.",
+    "the_gate_caught_a_raw_key": "First full run (10297 passed, 1 failed; agent 931/931): test_research_contracts refused two bare-key reads of the new synthesis_fallback payload outside the contract layer (browser_activities, result) - the KeyError('label') audit doing its job; both now read through a local from .get(). Second run below."
+  },
+  "tests": {
+    "services/api/tests/unit/test_research_control.py": 16,
+    "services/api/tests/unit/test_voice_research_b31.py": 11,
+    "services/api/tests/unit/test_browser_transfer_contract.py": 5,
+    "services/api/tests/voice_corpus/corpus.py (r.hold.*, r.continue.*, r.open.prev, r.mode.*)": 12,
+    "services/browser/tests/unit/test_transfer_policy.py": 22,
+    "apps/web/tests/research (api.test.ts, panels.test.tsx)": "+3 tests, 69 in the folder",
+    "devices/windows-agent BrowserDispatchTests": "Operations 28 -> 29 (browser.upload), 138/138 in the browser/advertisement suites"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations, each restored from a sha256-verified backup copy (never `git checkout --`); CRLF-aware; the browser mutation runs in the browser service's own venv.",
+    "mutations": [
+      "M1 the workflow gate never waits (returns before wait_condition) -> 1 failure (fake-clock gate test).",
+      "M2 mark_research_paused records no flag -> 1 failure.",
+      "M3 the voice source budget ignores the mode -> 1 failure.",
+      "M4 a one-off 'teknik anlat' becomes the standing register -> 1 failure.",
+      "M5 the worker's authorisation is 'non-empty' again -> 1 failure (services/browser venv).",
+      "M6 an earlier report on the same topic is never cited -> 1 failure."
+    ]
+  },
+  "runtime_proof": {
+    "status": "PROVEN_UNVERIFIED locally against a fake Temporal (signals asserted on the handle) and the real routes/tools/tables; the production half - a research cancelled aloud in production and one DEEP run completed - is Karar 0's (READY_FOR_OWNER)",
+    "why": "REAL_PROOF_REQUIRED is 'PROVEN_REAL — üretimde sesle iptal edilen bir araştırma durdu; bir DEEP koşusu tamamlandı'. Both need the production device and Temporal; no commit is made in this run by the owner's instruction, so no production round exists yet."
+  },
+  "owner_gates": {
+    "karar_0": "production release round (voice cancel/pause of a live research; one DEEP run)",
+    "owner_chrome_for_research": "opening the owner's own Chrome to autonomous research (owner_authorized_for_research) is a privacy decision - checkpoint; the product keeps the boundary until the owner says otherwise"
+  }
+}

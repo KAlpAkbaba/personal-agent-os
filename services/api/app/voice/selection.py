@@ -60,7 +60,9 @@ class SelectionResult:
 
 
 def missing_requirements(
-    caps: ProviderCapabilities, *, language: str = "tr-TR",
+    caps: ProviderCapabilities,
+    *,
+    language: str = "tr-TR",
     require_ephemeral_credentials: bool = False,
 ) -> tuple[str, ...]:
     """The hard requirements ``caps`` fails for ConversationRealtime (empty = eligible)."""
@@ -138,7 +140,8 @@ def select_conversation_provider(
     rejected: dict[str, tuple[str, ...]] = {}
     for caps in candidates:
         missing = missing_requirements(
-            caps, language=language,
+            caps,
+            language=language,
             require_ephemeral_credentials=require_ephemeral_credentials,
         )
         if missing:

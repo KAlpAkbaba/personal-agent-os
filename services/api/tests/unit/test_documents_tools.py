@@ -202,19 +202,24 @@ def test_document_summarize_with_no_focus_asks_which_document_and_touches_nothin
 # ------------------------------------------------------------------- the "sil" negative
 
 
-def test_delete_reaches_no_tool_and_no_device_capability() -> None:
-    """ADR-0083 decision 7: there is no delete/move/write tool in M20 at all - "Bu dosyayı
-    sil." must resolve to no intent this family owns, and the fake device must never see
-    a single call, whether or not a file happens to be focused."""
+def test_delete_is_a_proposal_and_moves_nothing_on_the_first_word() -> None:
+    """ADR-0083 decision 7 (no delete tool at all) is superseded by B34 / ADR-0141: "Bu
+    dosyayı sil." now resolves to the managed delete - a PROPOSAL. What the old test
+    protected still holds where it matters: the sentence itself reaches the device for
+    nothing, and the tool only LOCATES the file; nothing goes to the Recycle Bin until the
+    owner's "Uygula." (test_documents_b34 has that half)."""
     h = build_harness()
     h.seed(CTX_FILE_FOCUSED)
     sid = h.new_session()
     h.device.reset()
     said = h.say(sid, "Bu dosyayı sil.")
     resolved = said["resolved_intents"][0]
-    assert resolved.get("intent") == "none"
-    assert not resolved.get("capability")
+    assert resolved.get("intent") == "document_delete"
     assert h.device.calls == []
+    proposal = h.tool(sid, "c-1", "document.delete", {})["result"]
+    assert proposal["state"] == "proposed", proposal
+    assert h.device.capabilities_called() == ["file.locate"]
+    assert "Uygulayayım mı?" in proposal["speech"]
 
 
 # ------------------------------------------------------------------- secret refusal

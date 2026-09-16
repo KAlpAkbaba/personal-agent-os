@@ -381,9 +381,7 @@ def memory_search(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     query = str(arguments.get("query") or "").strip()
     limit = max(1, min(int(arguments.get("limit") or SPOKEN_SEARCH_MAX), 20))
     requested = arguments.get("memory_class")
-    filters = RetrievalFilters(
-        memory_class=_memory_class(arguments).value if requested else None
-    )
+    filters = RetrievalFilters(memory_class=_memory_class(arguments).value if requested else None)
 
     try:
         hits = hybrid_search(db, embedder, query or None, filters, k=limit, now=ctx.now)

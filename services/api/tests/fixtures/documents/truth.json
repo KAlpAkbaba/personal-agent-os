@@ -8,7 +8,9 @@
     "md": "h<level>:<title> per heading section; text = the section body",
     "csv": "r<n> per line including the header line",
     "json": "$.<key> per top-level key; text = compact JSON of the value",
-    "source": "L<a>-<b> per 40-line chunk; structure.symbols from def/class lines"
+    "source": "L<a>-<b> per 40-line chunk; structure.symbols from def/class lines",
+    "image": "o<n> per OCR line in reading order (Windows.Media.Ocr); match=contains; oracle=ocr (skipped where no OCR language is installed)",
+    "archive": "never extracted; file.inspect lists the central directory"
   },
   "files": [
     {
@@ -79,6 +81,56 @@
       "size": 419,
       "sha256": "3a07e4210feb6bc9f43a9cf89a0293c608f0c7fc279b0b5e07161eecfcf77565",
       "blocks": 1
+    },
+    {
+      "path": "metin.png",
+      "kind": "image",
+      "size": 3086,
+      "sha256": "606ea5d27e0701a632335af8cca0d4467f03d64cd10080ec559667d1d9f22d27",
+      "oracle": "ocr",
+      "blocks": 1,
+      "title": null,
+      "image": {
+        "width": 600,
+        "height": 120
+      },
+      "ocr_text": "Merhaba Dünya 1234",
+      "rendered_by": "scripts/tests/make-ocr-fixture.ps1 (System.Drawing, Arial 28, white 600x120)"
+    },
+    {
+      "path": "arsiv.zip",
+      "kind": "archive",
+      "size": 700,
+      "sha256": "42d6b1ed104a3a14184600cfdef31381bbb77dc6ddd579c1a43a6f011babf2f6",
+      "extract": false,
+      "blocks": 0,
+      "title": null,
+      "archive": {
+        "entry_count": 2,
+        "entries": [
+          {
+            "name": "notlar.md",
+            "size": 386,
+            "compressed_size": 286,
+            "kind": "md"
+          },
+          {
+            "name": "veri.csv",
+            "size": 296,
+            "compressed_size": 206,
+            "kind": "csv"
+          }
+        ],
+        "total_uncompressed": 682
+      }
+    },
+    {
+      "path": "yedek/veri-kopya.csv",
+      "kind": "csv",
+      "size": 296,
+      "sha256": "3e3c051c0a6041938f138b9574cd17f59c7df36fd5f79e31a0428baf12a76484",
+      "blocks": 11,
+      "duplicate_of": "veri.csv"
     }
   ],
   "questions": [

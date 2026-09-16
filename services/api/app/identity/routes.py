@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.errors import owner_detail
 from app.identity.dependencies import require_owner_session
 from app.identity.errors import (
     AlreadyBootstrapped,
@@ -201,7 +202,7 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
             status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"}
         ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=owner_detail("validation_error")) from exc
     return _issued_payload(issued, runtime.settings.session_idle_timeout_s)
 
 

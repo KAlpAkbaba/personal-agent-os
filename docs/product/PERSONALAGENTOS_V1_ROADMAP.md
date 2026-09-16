@@ -948,7 +948,7 @@ TEST_PLAN           : seam imzasının gerçek sağlayıcıyla uyuştuğu (sözl
 REAL_PROOF_REQUIRED : PROVEN_REAL — uzun metinden gerçek ses baytı üretildi (kota yoksa
                       PROVEN_PROXY + BLOCKED notu)
 ROLLBACK_PLAN       : anlatım bayrakla kapatılır; metin yolu korunur
-KAPANIŞ             : commit PENDING_B21 · CI PENDING · 9/9 DONE
+KAPANIŞ             : commit 087332b · CI 35028859336 yeşil (7/7) · 9/9 DONE
                       kanıt docs/evidence/b21-narration-and-pronunciation-2026-09-14.json
                       224/414 için PROVEN_PROXY + BLOCKED (TTS kredisi yok); geri kalanı
                       PROVEN_AUTOMATED
@@ -999,6 +999,37 @@ TEST_PLAN           : bilinen hata sınıflarının sözlüğe eşlendiği; eşl
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED + PROVEN_REAL (üretimdeki 10 başarısız araştırmanın
                       mesajları yeniden üretildiğinde Türkçe)
 ROLLBACK_PLAN       : sözlük katmanı geçirgen moda alınır
+KAPANIŞ             : commit PENDING_B22 · CI PENDING · 8/8 DONE
+                      kanıt docs/evidence/b22-turkish-error-language-2026-09-14.json
+                      PROVEN_AUTOMATED; 10 üretim koşusunun yeniden oynatılması Karar 0'da
+                      Yerel kapı: API 9583 test PASS, lint PASS, web 1712 test PASS;
+                      cihaz süitinde yine aynı tek test (NotepadLifecycleTests pointer
+                      click) düşüyor. B21'de adı konmamıştı, artık ölçüldü: ön planı
+                      SÜREKLİ olarak `claude.exe` tutuyor (ajanın kendi istemcisi), bu
+                      yüzden `window.activate` başarılı dönüp milisaniyeler içinde geri
+                      alınıyor. B21/B22 devices/ altında hiçbir şeye dokunmadı; CI'da
+                      etkilenmez (etkileşimli masaüstü yok, laboratuvar atlanır).
+ÖLÇÜM               : Sözlük hiç yoktu ve taksonomi TEK yerde de değildi: sekiz alt sistem
+                      Enum ile 56 sınıf tanımlıyor, kırk sınıf daha modül sabiti olarak
+                      yaşıyordu. 33 rota `HTTPException(detail=str(exc))` ile yanıt
+                      veriyordu; arkalarındaki cümleler geliştirici İngilizcesi
+                      ("no matching weekday within a week - refusing to guess") ve web
+                      bunları olduğu gibi basıyordu.
+                      706/707 kokpitte zaten doğruydu (Panel yükleniyor/alınamadı/henüz
+                      yok/boş ayrımını kuruluşundan beri yapıyor); SAYFALARDA yoktu:
+                      /artifacts ilk yanıttan önce boş liste gösteriyordu.
+YOL ÜSTÜNDE         : (1) Eksiksizlik testinin ilk hâli, sözlüğün yazıldığı SEKİZ Enum'u
+                      okuyordu — yani iddianın iki yarısı tek kaynaktan geliyordu. Yeşil
+                      geçti ve kırk sınıf eksikti; ancak bir rota düzenlemesi
+                      `identity_unresolved`i genel bir sınıfla değiştirince, o tokenı adıyla
+                      sabitleyen haber testi kırmızıya döndü ve eksik görüldü. Test artık
+                      kaynağı da tarıyor.
+                      (2) Aynı test, sınıf tokenının SÖZLEŞMENİN parçası olduğunu gösterdi:
+                      çağıran ona bakıyor. Sahip için değişen şey token değil, yanındaki
+                      cümle.
+                      (3) `not.toContain("Tekrar dene")` doğru davranan bir panelde patladı:
+                      ipucu cümlesi "Tekrar denenebilir." ve içinde o kelimeler geçiyor.
+                      Artık kontrolün kendisi (`data-panel-retry`) doğrulanıyor.
 ```
 
 ```
@@ -1014,6 +1045,29 @@ OWNER_ACTION        : no
 TEST_PLAN           : her sayfadan her sayfaya yol olduğu; PWA girişinden gezinmenin çalıştığı
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED (gezinme testi CI'da — B02 sayesinde koşar)
 ROLLBACK_PLAN       : layout değişikliği geri alınır
+KAPANIŞ             : commit PENDING_B23 · CI PENDING · 10/10 DONE
+                      kanıt docs/evidence/b23-web-navigation-shell-2026-09-14.json
+                      web: 1730 test PASS, tsc temiz, oxlint 0 hata; API 9583 test PASS
+                      cihaz süitinde yine aynı tek test (masaüstü ön planı) — B22 kaydına
+                      bakınız, sebep ölçüldü ve bu batch devices/ altına dokunmadı
+ÖLÇÜM               : Yazmadan önce ölçüldü — her sayfadaki her `href` okundu:
+                      / → beşi de, /research → /artifacts, /voice → /core, ve
+                      /artifacts, /core, /core/cockpit → HİÇBİR YERE. `layout.tsx`
+                      `<body>{children}</body>` idi. Bildirimden gelen sahip için tek
+                      çıkış tarayıcının kendi düğmesiydi; PWA olarak kurulduğunda
+                      (start_url /core, standalone) o da yoktu.
+                      695 klasik şekil: cihaz istemcisi, ayrıştırıcısı ve durumu M18.3'ten
+                      beri var; gösterilen tek şey "Ekran / Ortam" içindeki EKRAN satırıydı.
+                      722/723 ise "bir kez karar verilmiş" şekli: kademe makinenin ne
+                      teslim ettiğine hiç bakmıyordu, WebGL yeteneği yalnızca mount'ta
+                      ölçülüyordu.
+YOL ÜSTÜNDE         : (1) Nav'ın bariz iki uygulaması da yanlıştı: her yere çubuk koymak
+                      Çekirdek'i tam da manifestin reddettiği kabuğa sokuyor, Çekirdek'e
+                      hiç koymamak ise bu batch'in kaldırmaya çalıştığı çıkmaz sokağı
+                      yeniden üretiyordu. Tek bileşen, iki ağırlık.
+                      (2) `/core/cockpit`, `/core` ile başlıyor: saf önek eşleşmesi iki
+                      girişi birden işaretliyordu. En uzun eşleşme kazanıyor ve test
+                      işaret SAYISINI doğruluyor.
 ```
 
 ```
@@ -1032,6 +1086,42 @@ TEST_PLAN           : veri kaynağı boş olan ailenin panel doğurmadığı; ro
                       ile aynı sınıf sözlüğünü kullandığı
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED — 27 panelin tamamı ya veri gösteriyor ya gizli
 ROLLBACK_PLAN       : sayfa bazında geri alınır
+KAPANIŞ             : commit PENDING_B24 · CI PENDING · 11/11 DONE
+                      kanıt docs/evidence/b24-pages-and-badges-2026-09-14.json
+                      web: 1807 test PASS (96 dosya; 1730'du), tsc temiz, oxlint 0 hata
+                      API: 9719 PASS / 5 atlanan; ruff temiz; staged-update 89 kontrol PASS
+                      REAL_PROOF birebir karşılandı: quiet-families.test.tsx 27 panelin
+                      HER BİRİNİ ailesi boşken çiziyor ve çıktının boş olduğunu doğruluyor
+                      cihaz süitinde yine aynı TEK test (919/920). Testin kendi mesajı bu kez
+                      sebebi söylüyor: tıklama, kayıt defterinin çözemediği bir ön plan
+                      varken indi (tam ekran/yükseltilmiş pencere). Ölçüldü: sahibin
+                      CarlaUE4 simülatörü tam ekran çalışıyor. Bu batch devices/ altına
+                      dokunmadı — READY_FOR_OWNER
+ÖLÇÜM               : İki kusur, tek kök. Birincisi matrisin kendi ölçümü: 27 panelden
+                      13'ü aynı anda boş — okuyan sahip için ürün "hiçbir şey yapmıyorum"
+                      diyor, hem de on üç ayrı yazıyla. İkincisi, yedi ailenin hiç sayfası
+                      yoktu ve hepsinin MISSING olma sebebi aynı şekildi: KOD VARDI,
+                      ÇAĞIRAN YOKTU. `fetchNotificationHistory` (req 377) hiçbir kanalın
+                      taşımadığı satırları ayrıştırıyor ve tek çağıranı yoktu.
+                      `/v1/alarms/history` B13 req 285'ten beri her alarm GERÇEKLEŞMESİNİ
+                      sunuyor — sahibin alarm hakkında sorduğu tek soru, ve kurulu alarm
+                      satırından yapısal olarak cevaplanamayan soru — hiç sorulmamış.
+                      Güvenlik yetki izi anayasal bir kuralın uygulanışını kaydediyor,
+                      yüzeyi yok. Toplam: çağıranı olmayan on bir uç.
+                      "1 kalıcı 422" ise zaten 715'te kapanmıştı (B03, 9ddf243); bu turda
+                      27 yolun tamamı gerçek uygulama nesnesinin OpenAPI'sinde doğrulandı.
+YOL ÜSTÜNDE         : (1) İlk uygulama React context kullanıyordu (aile sayfasında gizlemeyi
+                      kapatmak için). Dokuz panel testi bileşeni DÜZ FONKSİYON olarak
+                      çağırıyor — orada hook çalışmaz. Prop hem ikisinde de çalışıyor hem
+                      de çağrı yerinde görünüyor.
+                      (2) `researchFocus`'un kendi paneli yok; odak şeridi araştırma
+                      panelinin içinde. Görev listesi boş + odak ucu FAILED olduğunda panel
+                      gizleniyor ve arıza kayboluyordu. Artık iki yarıdan biri konuşuyorsa
+                      panel duruyor.
+                      (3) `test_web_asks_for_routes_that_exist.py` yalnız
+                      `export const X_PATH` yazımını okuyordu — yani ürünün yollarının
+                      12'sini denetliyordu. Bu batch'in eklediği on bir uç satır içinde
+                      yazılıyor ve denetimsiz girecekti. 43'e genişletildi.
 ```
 
 ```
@@ -1049,6 +1139,41 @@ TEST_PLAN           : yetenek listesinin araç kaydından üretildiği (elle lis
                       paletinin her sayfadan açıldığı
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED
 ROLLBACK_PLAN       : bileşen bazında geri alınır
+KAPANIŞ             : commit PENDING_B25 · CI PENDING · 6/6 DONE
+                      kanıt docs/evidence/b25-discoverability-2026-09-14.json
+                      web: 1852 test PASS (99 dosya; 1807'ydi), tsc temiz, oxlint 0 hata
+                      API: 9744 PASS / 5 atlanan (9719'du); ruff temiz; staged-update PASS
+                      TEST_PLAN birebir: test_capability_list.py listeyi İKİ uydurma araçlık
+                      bir kayıttan türetiyor (elle yazılmış cevap bunu izleyemez); palette
+                      testleri paletin layout'ta olduğunu ve her tuşu doğruluyor
+                      cihaz süitinde yine aynı TEK test (919/920) — beşinci tur, aynı ölçülen
+                      sebep: tam ekran/yükseltilmiş pencere ön planı tutuyor (sahibin CarlaUE4
+                      simülatörü). Bu batch devices/ altına dokunmadı — READY_FOR_OWNER
+ÖLÇÜM               : Denetimin bütün üründeki EN DÜŞÜK skoru: keşfedilebilirlik 0.5/5. Tek
+                      kusur değil; sistemin SAHİP OLDUĞU üç şeye sahibin ulaşamaması.
+                      `POST /v1/identity/panic` B05'ten beri her oturumu iptal ediyor ve
+                      matrisin notu üç kelime: "Arayüzde görünmüyor". Araç kaydı 130 araç
+                      açıklaması tutuyor — Türkçe, çoğu sahibin KENDİ cümlelerini tırnak
+                      içinde taşıyor ('beş dakika ertele', 'gözünü kapat') — ve tek okuyucusu
+                      modeldi. Kabukta atlama bağlantısı, odak halkası yoktu; ve bu turda
+                      ÖLÇÜLDÜ: iki Çekirdek sayfasının hiç `<main>`'i ve `<h1>`'i yoktu.
+                      Eksik olan bir şey yoktu. Eksik olan kapıydı.
+YOL ÜSTÜNDE         : (1) Türkçe kesme işareti tırnak değil, EKTİR. Bariz ayıklayıcı
+                      `Active Eye'ı ... 'gözünü kapat'` içinde tırnağı `Eye'` de açıp
+                      `gözünü`den önce kapatıyor: etiketi çıkarıp cümleyi kaybediyor. Elle
+                      bakılan altı aileden üçü bozuktu. Düzeltilen okuyucu iki yanında da
+                      sınır arıyor, iki yanı harf olan kesmeyi sözcüğün parçası sayıyor.
+                      (2) Var olan bekçi yeni aracı yakaladı: `test_every_registered_tool_has
+                      _a_tier` sınıflandırılmamış aracı reddediyor. OPEN verildi — "ne
+                      yapabilirsin" sorusunu kapının arkasına koymak, sahibin başka bir şey
+                      isteyebilmesi için gereken tek cevabı kapatmak olurdu.
+                      (3) B23'ün soluma testi TÜM stil dosyasında `display: none` arıyordu;
+                      bu turda eklenen ekran-okuyucu sınıfının YORUMU yüzünden kırmızıya
+                      döndü. İddia iki kurala dairdi, artık iki kurala soruluyor — ve
+                      okuyucunun onları bulduğu da doğrulanıyor.
+                      (4) Yol bekçisi yalnız `app/lib/**/*.ts` yürüyordu; panik anahtarı
+                      `app/security/PanicControl.tsx`'te. Yokluğu en çok önem taşıyan tek yol,
+                      bekçinin göremediği tek yoldu. 43 → 47.
 ```
 
 ```
@@ -1067,6 +1192,41 @@ TEST_PLAN           : 7 misroute cümlesinin ÖNCE kırmızı kanıtlandığı, 
                       koruduğu
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED — 103 cümlelik ölçüm seti CI'da; misroute sayısı 0
 ROLLBACK_PLAN       : tablo değişiklikleri commit bazında geri alınır
+KAPANIŞ             : commit PENDING_B26 · CI PENDING · 7/7 DONE
+                      kanıt docs/evidence/b26-intent-safety-2026-09-14.json
+                      REAL_PROOF birebir: 107 cümle CI'da, misroute 0 (ölçüm 103'tü)
+                      test_intent_misroutes.py (46) + test_route_telemetry.py (16)
+                      intent + korpus süitleri 2063 PASS; etkilenen aileler 3733 PASS
+                      API 9807 PASS / 5 atlanan (9744'tü); ruff temiz; staged-update PASS
+                      cihaz süitinde yine aynı TEK test (919/920) — altıncı tur, aynı sebep:
+                      operatör laboratuvarı kimsenin kullanmadığı bir masaüstü istiyor ve
+                      tam ekran bir uygulama onu tutuyor. Bu batch devices/ altına hiç
+                      dokunmadı — READY_FOR_OWNER
+ÖLÇÜM               : Yedi cümlenin hepsi, hiçbir şey değiştirilmeden, bu makinede canlı
+                      yönlendiriciye karşı yeniden üretildi. Denetim dördünü adlandırmıştı;
+                      ölçüm diğer üçünü aynı ailelerde buldu — mesele yedi cümle değil DÖRT
+                      KÖK. Ve dört kökün hepsi aynı hata: bir kuralın cümleyi TEK SÖZCÜKLE
+                      kabul etmesi.
+                      `otomatik` tek başına ekran politikası demekti (güncelleme, yedekleme,
+                      otomatik kaydetme hepsi oradan geçti). `gönder` tek başına mail
+                      göndermek demekti — bu ailede geri alınamayan tek eylem. `ekle` tek
+                      başına takvim etkinliği demekti; her şey bir şeye eklenir. Ve `yaz` ön
+                      ek eşleşmesiyle `yazdır`ı da yakalıyordu — Türkçede o, ettirgen:
+                      BASTIR. Taban: 107 vaka / 8 misroute. Sonra: 107 / 0.
+                      Bu batch 59 yönlenmeyen cümleyi yönlendirmiyor — o 726-735, B27'nin.
+                      Yedisi kümede `expected=None` ile duruyor: yalnız YASAK listeleri için,
+                      yani "Sesini kıs." bir gün eyleme ulaşırsa süit yine düşer.
+YOL ÜSTÜNDE         : (1) Sekizinci misroute: `Bu belgeyi gönder.` kritik-fiil çifti olarak
+                      yazılmıştı, bilinen kusur olarak değil — ilk koşuda düştü. Aynı kök.
+                      (2) İlk taslakta külliyatın varsayılan yasak listesi TÜM eylemli
+                      niyetlerdi ve beklenen niyeti de yasaklıyordu: "Gözünü aç." tam olarak
+                      gitmesi gereken yere gittiği için düşüyordu. Kendi beklentisini
+                      yasaklayan vaka doğru yönlendirici için de düşer — külliyatın
+                      okunmayı bırakması böyle başlar.
+                      (3) Telemetri modül düzeyinde tutuluyor (operatör kaydının aynı şekli);
+                      conftest her testten önce ve sonra sıfırlıyor, yoksa bir testin
+                      çözümlemesi diğerinin "dur"uyla eşleşip kimsenin yapmadığı bir
+                      misroute raporlardı.
 ```
 
 ```
@@ -1082,6 +1242,40 @@ OWNER_ACTION        : mail/takvim niyetleri (729, 730, 731) sağlayıcıya bağl
 TEST_PLAN           : her cümle ve en az üç Türkçe eşanlamlısı; kapsanmayan oran eşiğin altında
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED — 103 cümlelik sette kapsanmayan oran %57'den hedefe iner
 ROLLBACK_PLAN       : niyet bazında geri alınır
+KAPANIŞ             : commit PENDING_B27 · CI PENDING · 10/10 DONE
+                      kanıt docs/evidence/b27-daily-intents-2026-09-14.json
+                      REAL_PROOF birebir: günlük küme 49 cümle (on cümle + ≥3 eşanlamlı),
+                      kapsanmayan %65,3 (32/49) → %0 (0/49), tek koşuda; B26'nın 107'lik
+                      kümesinde yönlenmeyen 19 → 12, misroute yine 0
+                      test_intent_daily_coverage.py (82) + test_daily_intent_tools.py (24)
+                      + korpus d.* (98, gerçek röle üzerinden); 5 mutasyon kırmızı
+                      gate 7/7 PASS (ikinci koşu): API 10015 PASS / 5 atlanan (9807'ydi);
+                      ruff temiz; cihaz 920/920 (bu kez önde tam ekran uygulama yoktu);
+                      staged-update 89 PASS; web 1852 PASS, tsc temiz
+ÖLÇÜM               : 726/727/728 zaten yönleniyordu — denetimin "yönlenmiyor" dediği
+                      günden sonra B15 ve B16 kapatmış; B27 ölçtü ve kümeye koydu. Yedisi
+                      hiçbir şeye ulaşmıyordu ve üçünün ARACI da yoktu: araştırma iptali
+                      (REST vardı, sesi yoktu), ses seviyesi (cihaz alarm için yapıyordu,
+                      sahip isteyemiyordu), ekran görüntüsü (ajan `screen.capture`ü M19'dan
+                      beri cevaplıyordu, bulutta çağıran yoktu). Dördüncü, takvim iptali,
+                      politika gereği YOK — araç dürüst red makbuzu döner (spec §1).
+                      Her yeni eşleştirici isim + fiil ister (ADR-0133); her genişletme
+                      komşularıyla aynı koşuda tutuluyor: "Günaydın, bugün ne var?" brifing
+                      kaldı, "Yetenek durumu ne?" M24'ün kaldı, "Bunu yapabilir misin?"
+                      liste değil, "Toplantı notlarını sil." toplantı değil, "iptal etme"
+                      olumsuz.
+YOL ÜSTÜNDE         : (1) "Yeni mail var mı?" TASLAK açıyordu (soru asla yazmaz) — B26'nın
+                      sınıfından bir misroute daha, kapatıldı. (2) İlk taslak "bugün ne
+                      var" ile sabah brifingini, "yetenek" kökü ile M24'ün durum sorusunu
+                      çaldı — SHIELD ilk koşuda yakaladı. (3) research.cancel'ın defter
+                      satırı `research_job_id`'yi str gönderiyordu, sessizce düşüyordu;
+                      birim testi yakaladı (korpus geçerken!). (4) Önceki oturumdan kalan
+                      yarım B27 izleri (tools.py'da çift handler, harness'ta bozuk
+                      bağlam dalı) bulundu ve temizlendi. (5) İlk kapı koşusunda iki
+                      koruma düştü: hata sözlüğü (dört yeni sınıfın Türkçesi yoktu —
+                      ve `: Final` yazılan sabitlerin o korumaya görünmediği çıktı) ve
+                      öz-model indeksi (`operator.screenshot` çıplak isimle kaydedilmişti).
+                      İkisi de düzeltildi, kapı yeniden koştu.
 ```
 
 ```
@@ -1101,6 +1295,32 @@ TEST_PLAN           : FocusGuard ihlalinde gönderimin durduğu ve kısmi gönde
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimden verilen bir komut gerçek pencerede iş yaptı,
                       postcondition doğrulandı, FocusGuard ihlali kaydedilmedi
 ROLLBACK_PLAN       : yetenek bazında bayrak; cihaz tarafı agent sürümüyle geri alınır
+KAPANIŞ             : commit PENDING_B28 · CI PENDING · 12/12 DONE (104 B27'de kapanmıştı)
+                      kanıt docs/evidence/b28-operator-input-2026-09-14.json
+                      REAL_PROOF: PROVEN_REAL (test lab) — bu masaüstünde gerçek Not
+                      Defteri'nde Home tuşu imleci başa aldı ("Xabc"), Ctrl+A + Delete
+                      belgeyi boşalttı, kaydırma imleci ±2 px'te yeniden gözlendi, hepsi
+                      cihazın kendi geri okumasıyla (NotepadLifecycleTests, 5/5). ÜRETİMDEN
+                      verilen komut Karar 0'ın — READY_FOR_OWNER.
+                      test_operator_input.py (33) + korpus op.key/shortcut/scroll (37);
+                      5 mutasyon kırmızı (secret bayrağı, son çare kapısı, retries, kısmi
+                      muhasebe, imleç doğrulaması)
+                      gate 7/7 PASS (ilk koşu): API 10086 PASS / 5 atlanan (10015'ti);
+                      ruff temiz; cihaz 921/921 (yeni laboratuvar testi dahil);
+                      staged-update 89 PASS
+ÖLÇÜM               : Cihaz `keyboard.key/shortcut` ve `pointer.*`'ı M19'dan beri cevaplıyor,
+                      FocusGuard ve `RefuseSecret` cihazda hazırdı; bulutta ÇAĞIRAN yoktu
+                      (92-98 "Çağıran yok"), `secret` bayrağı hiç gönderilmiyordu (109),
+                      makbuz kaç adımın yürüdüğünü söylemiyordu (110) ve koordinat
+                      politikası yalnız tarayıcıda vardı (107). Bu batch dört bulut yarısını
+                      yazdı; cihaz koduna dokunmadı (yalnız laboratuvar testi eklendi).
+YOL ÜSTÜNDE         : (1) Röle testi `key_press` alanının araca hiç ulaşmadığını gösterdi:
+                      oturum, çözümlenen niyeti alan alan kopyalıyor ve liste açık.
+                      B27'nin `capability_family` ve `media_volume_direction` alanları da
+                      eksikti — B27'nin birim testleri tur kaydını elle kurduğu için
+                      görememişti; dördü eklendi, B27'ye röle üzerinden test kondu.
+                      (2) `operator.key`'in "Hangi tuş?" sorusu röle tarafından "başarılı"
+                      sayılıyordu: soru sorabilen araç listesi açık, ikisi eklendi.
 ```
 
 ```
@@ -1119,6 +1339,41 @@ TEST_PLAN           : UIA ile tetiklenen düğmenin sonucunun ağaçtan doğrula
 REAL_PROOF_REQUIRED : PROVEN_REAL — gerçek bir uygulamada UIA ile düğme tetiklendi ve sonuç
                       bağımsız okundu
 ROLLBACK_PLAN       : UIA yolu bayrakla kapatılır, DOM/uygulama yoluna düşülür
+KAPANIŞ             : commit PENDING_B29 · CI PENDING · 8/8 DONE (105 PU: sağlayıcı anahtarı
+                      sahibin — checkpoint, bloklamadı)
+                      kanıt docs/evidence/b29-operator-uia-2026-09-14.json
+                      REAL_PROOF birebir (test lab, bu masaüstü): kaydedilmemiş Not
+                      Defteri kapatılınca çıkan diyalogun "Kaydetme" düğmesi ağaçtan
+                      BULUNDU (ui.inspect), UIA ile TETİKLENDİ (ui.invoke), sonuç bağımsız
+                      okundu: süreç bitti, ne diyalog ne editör pencere listesinde
+                      (NotepadLifecycleTests 6/6). ÜRETİMDEN komut Karar 0'ın.
+                      test_operator_ui.py (37) + korpus op.ui/op.see (34);
+                      6 mutasyon kırmızı (değişmeyen öğe, geri okumasız set_value,
+                      sağlayıcısız cevap, görüntüsüz istek, adaptörsüz uygulama, yalancı
+                      window_gone okuması)
+                      gate (ikinci koşu): API 10159 PASS / 5 atlanan (10086'ydı); ruff temiz;
+                      staged-update 89 PASS; cihaz 921/922 — yine aynı TEK masaüstü testi
+                      (önde tam ekran pencere), B29 işaretçi koduna dokunmadı; tek başına
+                      yeniden koşunca 6/6 (yeni UIA lab testi dahil) — READY_FOR_OWNER
+ÖLÇÜM               : Cihaz `ui.inspect/invoke/set_value/select`'i M19'dan beri cevaplıyor;
+                      bulut yalnız `ui.inspect`'i (type_text'in doğrulaması için) çağırıyordu.
+                      Bu batch üç araç yazdı: `operator.ui` (invoke/set_value/select —
+                      her biri etkinleştir → eylem → BAĞIMSIZ okuma), `operator.inspect`
+                      (ağaç/metin okuma), `operator.see` (görüntü anlamlandırma, sağlayıcı
+                      arayüzü). 111 yapısal olarak: 22 planın son adımı postcondition
+                      taşımak zorunda. 116: Not Defteri + Hesap Makinesi adaptörleri
+                      (ölçülmüş ağaçlardan).
+YOL ÜSTÜNDE         : (1) İlk okuma eşleştiricisi "Belgeyi oku"yu belge ailesinden, "Ne
+                      görüyorsun?"u açıklama ailesinden çaldı — B26 kalkanı yakaladı;
+                      "belge" belge ailesinin, "görüyorsun" gözün. (2) Yapısal test plan
+                      adının IfExp ile kurulmasını reddetti — `PLAN_BY_READ_MODE` tablosu.
+                      (3) Araçlar window.list'i iki kez çağırıyordu (çözümleyici + adaptör
+                      için görüntü); tek okuma (`_once`), çünkü masaüstü iki okuma arasında
+                      değişebilir. (4) İlk window_gone mutasyonu kırmızıya dönmedi: yedek
+                      doğrulama da düşüyordu — mutasyon okumanın kendisine taşındı, kırmızı.
+                      (5) İlk kapı koşusu üçüncü hırsızlığı yakaladı: çıplak "ne yazıyor"
+                      dalı "Üçüncü sayfada ne yazıyor?"u belge ailesinden aldı (6 vaka);
+                      çıplak soru artık gerçekten çıplak — yanına yalnız ekranın sözcükleri.
 ```
 
 ```
@@ -1136,6 +1391,29 @@ TEST_PLAN           : bulut ve cihaz izin listelerinin AYNI dosyadan okunduğu (
                       politika dışı sürecin durdurulamadığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimden pencere taşındı/boyutlandı
 ROLLBACK_PLAN       : izin listesi daraltılır
+KAPANIŞ             : commit PENDING_B30 · CI PENDING · 12/12 DONE (122 gerçek yeniden
+                      başlatma READY_FOR_OWNER: companion yükseltilmemiş, UAC sahibin —
+                      checkpoint, bloklamadı)
+                      kanıt docs/evidence/b30-operator-process-service-2026-09-14.json
+                      İki izin listesi TEK dosya: packages/protocol/operator-allowlists.json
+                      (7 uygulama, 8 terminal deseni, 3 bulut komutu, durdurulabilir imajlar,
+                      yeniden başlatılabilir servisler); bulut import'ta okur, C# testi cihaz
+                      tablolarını aynı dosyaya eşit tutar, Python testi C# kaynağını da okur.
+                      Cihaza 4 yeni yetenek (process.list/stop, service.status/restart;
+                      All 32→36), politika iki tarafta da cihaza sorulmadan reddeder.
+                      REAL_PROOF: window.move/resize gerçek Not Defteri'nde rect yeniden
+                      okunuyor (NotepadLifecycleTests); ÜRETİMDEN komut Karar 0'ın.
+                      Bu masaüstünde gerçek: process.list test sürecini imajla buldu,
+                      process.stop powershell/svchost'u politikayla reddetti, service.status
+                      Spooler'ı SCM'den okudu, service.restart bthserv'i politikayla ve
+                      Spooler'ı UAC cevabıyla reddetti (durum önce/sonra aynı).
+                      Yolda bulunan: lab'ın ilk koşusu sahibin kendi kaydedilmemiş Not
+                      Defteri'ne WM_CLOSE gönderdi (imajla durdurma ürünün vaadi), companion
+                      diyaloğu modal olarak bildirdi ve cevaplamadı; test artık yabancı Not
+                      Defteri varken çalışmayı reddediyor (ADR-0137).
+                      test_operator_allowlists (16) + test_operator_process_service (24) +
+                      korpus 53 vaka + C# 42/42; 6 mutasyon kırmızı; matris 86-88 bayat
+                      satırları düzeltildi (çağıran M19'dan beri vardı).
 ```
 
 ```
@@ -1154,6 +1432,24 @@ TEST_PLAN           : iptal edilen koşunun gerçekten durduğu; duyurulan her t
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde sesle iptal edilen bir araştırma durdu; bir DEEP
                       koşusu tamamlandı
 ROLLBACK_PLAN       : yeni kontroller bayrakla kapatılır
+KAPANIŞ             : commit PENDING_B31 · CI PENDING · 15/15 DONE (172 sınır KORUNDU ve
+                      test altına alındı; sahibin Chrome'unu otonom araştırmaya açmak
+                      mahremiyet kararı — checkpoint, bloklamadı)
+                      kanıt docs/evidence/b31-research-control-browser-2026-09-14.json
+                      Araştırma: duraklat/devam (bayrak, aşama değil; REST + ses + Temporal
+                      sinyali, workflow her aşama sınırında bekler, tutulan süre bütçeden
+                      düşer), DEEP sesten kendi tavanıyla (sahibin sözündeki mod turn'de),
+                      'bir önceki araştırmayı aç', aynı konudaki eski rapora atıf, kalıcı
+                      teknik kayıt (migration 0046), sentez/arama yedeği rapor+olay+defter.
+                      Tarayıcı: sözleşme v1.5 — browser.upload VAR (yalan duyuru testi),
+                      indirme/yükleme tek kapı (HIGH_IMPACT + biçimli authorization_ref)
+                      ve 64 MiB sınır; ADR-0113 sınırı testle tutuluyor.
+                      REAL_PROOF: ÜRETİMDE sesle iptal/DEEP koşusu Karar 0'ın
+                      (READY_FOR_OWNER); yerelde fake Temporal ile sinyaller doğrulandı.
+                      Yolda bulunan: korpus id'leri rutin ailesinin r.pause.* ile çakıştı;
+                      modelin çıkardığı konu 'kapsamlı'yı düşürüyordu (turn taşıyor);
+                      sahte cihazın terminal-ack tekrarı 'yeniden başlatma' testini yanılttı.
+                      6 mutasyon kırmızı (ADR-0138).
 ```
 
 ```
@@ -1171,6 +1467,25 @@ TEST_PLAN           : oracle fikstür deseninin yeni formatlara uygulandığı; 
                       taahhüt edilmiş bir referansla karşılaştırıldığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde bir görselden metin çıkarıldı
 ROLLBACK_PLAN       : format bazında geri alınır
+KAPANIŞ             : commit PENDING_B32 · CI PENDING · 10/10 DONE (OCR motoru: yerel
+                      Windows.Media.Ocr — checkpoint kaydedildi, bloklamadı)
+                      kanıt docs/evidence/b32-documents-ocr-dedup-2026-09-15.json
+                      Cihaz: `image`/`archive` türleri; görsel başlıkları (WPF), OCR
+                      (PowerShell WinRT konağı, sahibin dil paketleri, tr önce; paket
+                      yoksa dependency_unavailable), arşiv merkezi dizini (asla
+                      çıkarılmaz), `file.trash` (Recycle Bin, asla kalıcı; aile 7→8).
+                      Bulut: document.preview / find_text (dizin üstünde tam metin) /
+                      duplicates (sha256 ile teklif) / dedup (yalnız duyulan teklif),
+                      görselde 'şu yazıyor', arşivde 'N öğe'; executive compare hedefleri
+                      kullanıyor; 'doküman' belge adı. Fikstür: metin.png (oracle: OCR
+                      metni taahhütlü), arsiv.zip, yedek/veri-kopya.csv.
+                      REAL_PROOF: bu masaüstünde gerçek — Windows OCR 'Merhaba Dünya 1234'
+                      birebir (tr, ~15 ms), arşiv dizini, lab dosyası Recycle Bin'e gitti;
+                      ÜRETİMDE bir görselden metin Karar 0'ın (READY_FOR_OWNER).
+                      Yolda bulunan: PowerShell çıktısı konsol kod sayfasında 'ü'yü
+                      bozdu (UTF-8 zorlandı); C# 'is not A and B' kalıbı; oracle
+                      'contains' bloğu; FileFetch testi file.fetch'i son sanıyordu.
+                      6 mutasyon kırmızı (ADR-0139).
 ```
 
 ```
@@ -1189,6 +1504,38 @@ TEST_PLAN           : ölü araçların gerçek arka uca bağlandığı; artefak
 REAL_PROOF_REQUIRED : PROVEN_REAL — 26.16'da üretilen uygulama kuruldu, çalıştırıldı, arayüzü
                       UIA ile doğrulandı, kaldırıldı
 ROLLBACK_PLAN       : araç bazında geri alınır; kurulum kaldırma yolu her zaman hazır
+KAPANIŞ             : commit PENDING_B33 · CI PENDING · 12/13 DONE (473 PARTIAL —
+                      READY_FOR_OWNER: sertifika kararı; politika modu tanır, imzasız üretir)
+                      kanıt docs/evidence/b33-native-lifecycle-2026-09-15.json
+                      Cihaz: projects ailesi 5→9 — `project.package` (portable zip /
+                      makeappx MSIX, hep `signed:false`), `project.install` (Başlat menüsü
+                      kısayolu IShellLinkW ile + installed.json), `project.uninstall`
+                      (kısayol+kayıt gider, derleme kalır), `project.artifact` (32 KiB
+                      base64 parça, sha256). Bulut: ölü `native.install/launch/fix`
+                      cihaza bağlandı; yeni `native.verify` (26.15 akışı kod olarak:
+                      aç → NoteInput/AddButton/StatusText → kapat → yeniden aç → sayı →
+                      günlük), `native.log`, `native.uninstall` (CRITICAL, ACTING),
+                      `native.update` (yeni sürüm satırı + kurulum); portable/MSIX artık
+                      cihazda derlenir ve paketlenir; artefakt yolu cihazdan çeker (410
+                      yalnız cihazda da yoksa); `native_signing_mode` politikası (472).
+                      Router: 5 yaşam döngüsü niyeti yerel derleme odağıyla; açma
+                      yerel bir sözcük ister ('masaüstü/Windows uygulamasını aç',
+                      'EXE'yi çalıştır', 'programı başlat'); çıplak 'uygulamayı aç'
+                      her zaman M23'ün.
+                      REAL_PROOF: cihaz laboratuvarı bu masaüstünde gerçek — zip, gerçek
+                      .lnk yazıldı/silindi, parça okuma hash'i tuttu; ÜRETİMDE 26.16
+                      (kur/aç/UIA/kaldır) Karar 0'ın (READY_FOR_OWNER).
+                      Yolda bulunan: WScript.Shell 'Notlarım.lnk'i kaydedemedi (Unicode
+                      IShellLinkW); shell, hedef PE'yi okur — rastgele 'MZ' yer tutucu
+                      E_FAIL verdi (test gerçek exe kopyalar); 'günlüğünü' k→ğ kök;
+                      'uygulam' foreign listesi yaşam döngüsü fiillerini yutuyordu;
+                      ilk kapı: çıplak 'uygulamayı aç' M28 sözleşmesince M23'ün kaldı
+                      (açma yerel sözcük ister), artefakt yolu sahibe istisna metni
+                      veriyordu (log_and_detail), yüklü kapıda tarayıcı işçisinin
+                      sağlıklı YEDEĞİ 3×100 ms ping kaçırdı diye öldürüldü (2 s başlangıç
+                      hoşgörüsü, hiç cevap vermeyen yine ölür) ve ikinci kapıda istek
+                      ölmekte olan işçiye verildi (kill istendiği anda Alive=false).
+                      7 mutasyon kırmızı (ADR-0140).
 ```
 
 ### FAZ C — P2 GENİŞLETME (B34–B52)
@@ -1200,6 +1547,31 @@ B34  Yönetilen dosya mutasyonu           IDs: 153–167, 170, 674          dep:
      GOAL: Sahibin dosyaları geri alma günlüğü ve tur bazlı onayla güvenle değiştirilebilsin.
      PROOF: PROVEN_REAL — bir dosya değiştirildi, hash'i kaydedildi, geri alındı, orijinali döndü.
      ROLLBACK: mutasyon yüzeyi tek bayrakla kapanır; undo journal her zaman ileri uyumlu.
+     KAPANIŞ: commit PENDING_B34 · CI PENDING · 17/17 DONE (kalıcı silme politikasının şekli
+              READY_FOR_OWNER: hiçbir araç kalıcı silmez; silme = Recycle Bin + yedek)
+              kanıt docs/evidence/b34-managed-file-mutation-2026-09-15.json
+              Cihaz: documents ailesi 8→14 — file.write/append/rename/move/copy/restore
+              (+ file.trash {backup}); her mutasyon önce `.pagentos-undo` deposuna yedek
+              (sidecar + sha256), geçici dosya + tek yeniden adlandırma, cevapta önce/sonra
+              kayıt ve hash; yalnız metin türleri yazılır. Bulut: `file_mutations` günlüğü
+              (göç 0047), MutationService (öneri → kapı → uygulama → geri okuma → ters plan),
+              11 sesli araç (write/append/edit/rename/move/copy/delete/apply/discard/undo/
+              versions), risk politikası (yeni dosya/ekleme hemen; düzenleme/ad/kopya hassas;
+              taşıma/silme kritik → 'Uygula.'/'Kaydet.' ya da panel onayı, mail taslağıyla
+              aynı okunma+onay kapısı), tek bayrak `documents_mutation_enabled`, REST
+              /v1/documents/mutations (+pending/confirm/discard/undo), Kokpit Belgeler
+              panelinde bekleyen değişiklikler ve aynı Onayla/Vazgeç çifti (28. aile).
+              REAL_PROOF: cihaz laboratuvarı bu masaüstünde gerçek — dosya atomik yazıldı,
+              yedeği hash'iyle depoya gitti, geri yükleme orijinali (hash eşit) getirdi;
+              ad/taşıma/kopya/çöp kutusu+geri gerçek dosyada. ÜRETİMDE sesle düzenleme +
+              geri alma Karar 0'ın (READY_FOR_OWNER).
+              Yolda bulunan: relay 'text' adlı argümanı reddediyor ('content'); find/replace
+              tur kaydına kopyalanmadan araca ulaşmıyordu; harness tablo listesi; sahte
+              masaüstü katmanı testler arası sızdı; 'Bütçe'/'bütçe'/'butce' eşleşmesi;
+              çıplak adın klasörü; REST onayı bulut cihaz kapısını değil çalışma zamanının
+              canlı kapısını okumalıydı; 28. sessiz aile; ilk kapı: 'yeni dosya aç'ın
+              'aç'ı operatörün ve artefakt ailesinin 'dosyayı aç'ını çalıyordu (oluştur/
+              yarat kaldı). 7 mutasyon kırmızı (ADR-0141).
 
 B35  SelfDev'in bağlanması ve güvenlik    IDs: 581, 583, 585, 589, 598, 600, 601, 603, 608, 609, 615, 618–623, 680
      dep: B02, B10, B24   risk: high   owner: aday onayı (db9ed85 dahil)
@@ -1208,79 +1580,278 @@ B35  SelfDev'in bağlanması ve güvenlik    IDs: 581, 583, 585, 589, 598, 600, 
      PROOF: PROVEN_REAL — ürün yüzeyinden başlatılan bir koşu aday üretti, güvenlik incelemesinden
             geçti, gölgede çalıştı, sahip onayı beklemede kaldı.
      ROLLBACK: çalıştırıcı durdurulur; worktree'ler korunur (silinmez).
+     KAPANIŞ: commit PENDING_B35 · CI PENDING · 18/18 DONE (üretim turu ve db9ed85'in kaderi
+              READY_FOR_OWNER) — kanıt docs/evidence/b35-selfdev-wiring-2026-09-15.json
+              Bulut: `selfdev_defects` kuyruğu (göç 0048; ses/REST/köprü/CI kaynaklı),
+              SelfDevService (intake → claim → start → finish → approve/reject; günlük token,
+              disk tabanı, paralel sınır, claim TTL — her ret adıyla), fırsat→kusur köprüsü
+              (terfi sınıfı taşınır, koşu bitince korunur), zorunlu güvenlik incelemesi
+              (`Grant.SECURITY_REVIEW_CANDIDATE` tüketicisi; gizli anahtar/tehlikeli çağrı/
+              korunan yol/yeni ağ çıkışı/test silme — yol+satır), worktree içinde tam kapı
+              (kırmızı → düzeltme döngüsü), gerçek alt süreç gölge koşu (loopback port,
+              yoklama, canlıyla karşılaştırma), sahibin bayrağıyla CI push, CI kırmızısı →
+              sınırlı tek takip kusuru, REST /v1/selfdev (defects, pending, status, approve/
+              reject, worker/claim, start, finish, ci), `python -m app.selfdev worker`,
+              3 sesli araç (selfdev.defect/feature/status) + 3 intent, /selfdev sayfasında
+              onay bekleyen adaylar paneli (Onayla — kaydet (canlıya almaz) / Vazgeç).
+              624 KORUNDU: onay bir karardır, hiçbir yol canlıya almaz; defter `promoted:false`.
+              Yolda bulunan: motorun `reset`'i `checkout -- .` idi ve diff yamayı stage
+              ediyordu — ikinci deneme regresyonu düzeltilmiş ağaca karşı yargılıyordu
+              (hard reset); "özelliği" k→ğ; ölü evrim koruması kaldırıldı (sıra korur);
+              matris hücresinde '|' satırı bölüyor. 9 mutasyon kırmızı (ADR-0142).
 
 B36  Genesis ön kapısı                    IDs: 561–565, 569–580           dep: B35      risk: medium  owner: onay akışı
      GOAL: Katalog kaydı, talep rotası, güvenlik kapısı ve sahip onayı — 577 yalnız 579'dan sonra.
      PROOF: PROVEN_REAL — üretimde bir yetenek talebi katalogdan adaptöre ve kullanıma ulaştı.
      ROLLBACK: yetenek devre dışı bırakılır (571/572 sürümleme ile).
+     KAPANIŞ: commit PENDING_B36 · CI PENDING · 17/17 DONE (üretim turu READY_FOR_OWNER) —
+              kanıt docs/evidence/b36-genesis-front-door-2026-09-15.json
+              Bulut: `genesis_catalogue` (göç 0049) + CatalogueStore (kayıt → bellek içi
+              katalog anında ve açılışta yeniden kurulur; discover öneri, disable), talep
+              rotası POST /v1/genesis/runs (url kataloğdan), ana makine kuralı sahibin
+              varlık kaydından (loopback kuralları aynen), güvenlik kapısı `_build` ile
+              `_test` arasında ZORUNLU (B35 incelemesi + import/yabancı ana makine/sistem
+              erişimi; `security_refused`), model seam yalnız bayrakla ve yalnız modül
+              dosyası (aynı testler+kapı; provenance), model yazımlı her aday sahibi bekler
+              (kod onayı mutasyon yetkisi değildir), sürümleme (new_version → 0.1.1),
+              rollback, deactivate/activate (registry'nin tek yolu), use; /selfdev'de
+              kayıtlı arayüzler paneli. 575/578 ölçüm düzeltmesi.
+              Yolda bulunan: registry rollback 'zaten güncel' için erken dönüyordu (yeniden
+              etkinleştirme imkânsızdı); rota `str(exc)` ile cevap veriyordu (sahip dili
+              testi yakaladı); matris hücresinde '|'. 8 mutasyon kırmızı (ADR-0143).
 
 B37  Anlamsal bellek ve bellek arayüzü    IDs: 51, 53, 54, 57–60, 149     dep: B18, B24  risk: medium  owner: gömme sağlayıcısı
      GOAL: Gerçek gömme, sağlayıcı seçimi, yeniden indeksleme ve sahibin belleğini yönetebildiği arayüz.
      PROOF: PROVEN_REAL — yeniden indeksleme sonrası anlamsal bir sorgu doğru kaydı getirdi.
      ROLLBACK: deterministic-ngram'a dönüş (52 korunur).
+     KAPANIŞ: commit PENDING_B37 · CI PENDING · 8/8 DONE (gerçek sağlayıcıyla üretim turu
+              READY_FOR_OWNER: anahtar sahibin) — kanıt docs/evidence/b37-semantic-memory-2026-09-15.json
+              Bulut: `OpenAIEmbedder` (aynı Embedder protokolü, indeks genişliği 256,
+              anahtar asla hata metninde), `build_embedder` seçimi (deterministic/openai/auto)
+              + EmbedderReport (sağlık ve /v1/memory/embedding 'semantic' ve düşüş nedeni),
+              `embedding_coverage` + `reindex_missing` (yalnız eksikler; ikinci geçiş 0) +
+              POST /v1/memory/reindex, `unpin_memory` + POST /{id}/unpin, belgelerde
+              `top_k(embedder=)` yeniden sıralama ve GET /v1/documents/search (bileşenli).
+              Web: /memory satırlarında Sabitle/Kaldır, Unut (iki adım), Düzelt (satır içi →
+              supersede); 'Anlamsal indeks' bölümü + iki yeniden indeksleme düğmesi.
+              Yolda bulunan: sayfa sunucuda sahip kapısının arkasında (test kaynağı okur);
+              `ScoredBlock` dondurulmuş (yeniden kurulur). 7 mutasyon kırmızı (ADR-0144).
 
 B38  Genel yürütme planlayıcısı           IDs: 536–538, 544, 546, 549–557 dep: B10, B35  risk: medium  owner: model bütçesi
      GOAL: Üç şablonun ötesinde model destekli planlama; paralel, koşullu ve döngü adımları;
            ön/son koşullar ve gerçek telafi.
      PROOF: PROVEN_REAL — şablonsuz bir istek uçtan uca planlandı ve dürüst durum raporladı.
      ROLLBACK: planlayıcı şablon moduna döner (422 ile dürüst ret korunur).
+     KAPANIŞ: commit PENDING_B38 · CI PENDING · 15/16 DONE, 549 BLOCKED_PROVIDER (B45) —
+              kanıt docs/evidence/b38-executive-planner-2026-09-15.json
+              Bulut: spec'e `step_failed` / `step_verified` / `owner_approval` ön koşulları,
+              `Repeat(max_rounds ≤ 3)`, `Step.rationale`, `TaskGraph.planner` (rule/model/owner),
+              tür başına varsayılan zaman aşımı; doğrulayıcı yeni kontrolleri okur (DAG,
+              min'siz döngü, bilinmeyen planlayıcı); aktivite ön koşullara satırlarla karar
+              verir, adımı `postcondition.min`'e ulaşana dek sınırlı döngüde yeniden çalıştırır,
+              `_mark_awaiting_approval` satıra yazar; iş akışı `owner_approval` adımını park
+              eder (diğer hazır adımlar yürür), `approve_step` sinyali + `approvals_json`;
+              `ModelExecutivePlanner` + `AnthropicPlannerModel` (tool-use, sözlük profillerden)
+              + `CompositeExecutivePlanner` (kural önce, model yalnız bayrakla); POST
+              /v1/executive/runs {graph} sahibin kendi grafı (15/15 tür erişilebilir), GET
+              /runs/{id}/plan gerekçelerle, POST /runs/{id}/approve; araştırma şekli belge ve
+              sunumu paralel kurar; göç 0050 (approvals_json, awaiting_step, repeat_json).
+              Web: Onayla çipi (yalnız bekleyen satırda), `executiveClient.approve`.
+              Yolda bulunan: bilinmeyen adıma referans doğrulayıcıda literal sayılır (tasarım;
+              test gerçek DAG ihlaline çevrildi); wait_condition lambda'sı döngü değişkenini
+              default-arg ile bağlar. 9 mutasyon kırmızı (ADR-0145). Model bütçesi
+              READY_FOR_OWNER (checkpoint 15).
 
 B39  Operatör özerklik döngüsü            IDs: 106, 112–115, 123–130      dep: B29, B38  risk: high    owner: no
      GOAL: GÖZLE→KARAR→UYGULA→DOĞRULA→YENİDEN PLANLA döngüsü Temporal içinde; karma ve çok
            adımlı işler; duraklat/iptal ve "önce göster" modu.
      PROOF: PROVEN_REAL — tarayıcı+masaüstü karma bir iş baştan sona doğrulanarak tamamlandı.
      ROLLBACK: döngü bayrakla kapatılır, sabit planlara dönülür.
+     KAPANIŞ: commit PENDING_B39 · CI PENDING · 13/13 DONE (masaüstü laboratuvar ölçümü ve
+              üretim turu READY_FOR_OWNER) — kanıt docs/evidence/b39-operator-autonomy-2026-09-15.json
+              Bulut: `app/operator/mission.py` (GÖZLE→KARAR→UYGULA→DOĞRULA→YENİDEN PLANLA:
+              her tur taze gözlem, plan karar fonksiyonlarından, eylem aynı cihaz portunda,
+              başarısızlık sınıfı → beyan edilmiş strateji: yeniden dene ≤2 / yeniden gözle ≤2 /
+              görsel basamak / sahibe; tur sınırı 6), `plan_mission` (bağlaçla bölünen cümle →
+              9 adım türü; 'önce göster' = önizleme), `VisionProvider.locate` + `visual_click`,
+              adaptörler WORD/EXCEL/VSCODE, planlar open_settings/explorer_open/ide_open_file/
+              office_type/browser_navigate, `OperatorStep.payload_from` (gözlenen pencere kimliği
+              sonraki adıma), `operator_missions` (göç 0051) + MissionService + Temporal
+              `OperatorMissionWorkflow` (approve/pause/resume/cancel sinyalleri) + REST
+              /v1/operator/missions + sesli `operator.mission` (start/approve/pause/resume/
+              cancel/status) + MISSION_START/APPROVE/PAUSE/RESUME niyetleri (mission_state ile
+              kapılı; 'Dur' ve 'Ne yapıyorsun?' göreve devreder); `settings` uygulaması iki
+              taraflı izin listesinde (C# sözleşme testi 111 yeşil).
+              Yolda bulunan: 'İndirilenler klasöründe … ara' belge ailesinden çalınıyordu (korpus
+              doc.search.5; klasör segmenti yalnız AÇ ister); görev aracı operatörün kendi
+              kaydedicisinden kaydedilir (yetenek kümesi = kayıtlı araçlar testi); UWP penceresi
+              görüntüyle değil başlıkla tanınır. 11 mutasyon kırmızı (ADR-0146).
 
 B40  App Factory genelleştirme            IDs: 422–439                    dep: B03, B35  risk: high    owner: model bütçesi
      GOAL: Model destekli gerçek kod üretimi, planlama, test üretimi, lint ve güvenlik taraması.
      PROOF: PROVEN_REAL — serbest bir istekten çok dosyalı, testleri geçen bir uygulama üretildi.
      ROLLBACK: şablon moduna dönüş (417–421 korunur).
+     KAPANIŞ: commit PENDING_B40 · CI PENDING · 18/18 DONE (model yuvaları ve düzeltme döngüsü
+              sahibin bütçesiyle; laboratuvar READY_FOR_OWNER) — kanıt
+              docs/evidence/b40-appfactory-generalisation-2026-09-15.json
+              Bulut: `requirements.py` (Türkçe cümle → kayıt türleri/alanlar/tipler/giriş/api,
+              okunamayan parça söylenir), `planner.py` (mimari + proje planı, gerekçeli),
+              `composer.py` (bileşik uygulama: schema/store/auth/server/public/tests/oracle/
+              README/manifest - gerçek node altında üretilen testler geçti: 28/28, 14/14,
+              21/21), `lint.py`, `appsecurity.py` (selfdev incelemesiyle ortak), `code_model.py`
+              (CodeModel: Scripted/Anthropic; ModelAssistedGenerator yalnız bayrakla, yalnız
+              yuvalar), `fixloop.py` + `composed_service.run_fix_loop` (teşhis → düzeltme →
+              lint+tarama+doğrulama → cihazda yeni sürüm → test; ≤3, aynı hata → dur, model yok →
+              analizle dur), `AppSpec.template=composed` + `requirements`, doğrulayıcı `node
+              <entry>` (cihazın kuralı), satırda plan/raporlar/oracle/fix/sürüm (göç 0052),
+              POST /v1/apps/plan, POST /v1/apps/{id}/fix, sesli `app.create content=` +
+              `app.fix` + APP_FACTORY_FIX niyeti, `app_request` (sahibin cümlesi araca).
+              Yolda bulunan: gizli-anahtar taraması `password:` anahtarını yakalıyor (tel alanı
+              'parola'); node koşusuna cihaz port geçirmez (sunucu manifest portunu sabitler).
+              11 mutasyon kırmızı (ADR-0147).
 
 B41  App Factory yaşam döngüsü            IDs: 440–452, 480               dep: B40, B33  risk: medium  owner: no
      GOAL: Derleme, paketleme, çalıştırma, arayüz/kalıcılık doğrulaması, geçmiş ve sonradan
            değiştirme.
      PROOF: PROVEN_REAL — üretilen uygulama çalıştırıldı, arayüzü doğrulandı, sonra bir özellik eklendi.
      ROLLBACK: proje bazında; üretilen kod korunur.
+     KAPANIŞ: commit PENDING_B41 · CI PENDING · 13/13 DONE + 480 DEFERRED (cihaz laboratuvarı ve
+              üretim turu READY_FOR_OWNER) — kanıt docs/evidence/b41-appfactory-lifecycle-2026-09-15.json
+              Bulut: `lifecycle.py` (oracle'ı cihazın tarayıcısında oynatan `verify_ui` + gerçek
+              yeniden başlatma ile kalıcılık, `read_log`, `package_release` zip+release.json,
+              `files_from_release` hash doğrulamalı, `build_id_for`, `merge_requirements` /
+              `parse_addition`), `lifecycle_service.py` (verify/log/package/launch/history/
+              resume/modify), satırda `lifecycle_json` (göç 0053), 7 rota, 7 sesli araç
+              (app.verify/log/package/launch/history/resume/modify), `app_project_focused`
+              ile kapılı 7 niyet + odaklı 'Bu bug'ı düzelt' → app.fix.
+              Yolda bulunan: `assert_class` cihazın find'ı sınıf raporlamaz (laboratuvara
+              bırakıldı, kayıtta söylenir). 10 mutasyon kırmızı (ADR-0148).
 
 B42  Artefakt provenans ve yaşam döngüsü  IDs: 393, 394, 398–400, 405–412, 415, 416  dep: B24  risk: low  owner: silme politikası
      GOAL: Dört biçim üretimde kanıtlansın; aktör/kütüphane/manifest provenansı, sürümleme,
            düzenleme, karşılaştırma.
      PROOF: PROVEN_REAL — üretimde xlsx/pptx/csv/json üretildi ve bağımsız doğrulandı.
      ROLLBACK: provenans alanları geriye uyumlu; eski artefaktlar etkilenmez.
+     KAPANIŞ: commit PENDING_B42 · CI PENDING · 16/16 DONE (üretim duman testi ve silme politikası
+              seçimi READY_FOR_OWNER, checkpoint 18) — kanıt docs/evidence/b42-artifact-lifecycle-2026-09-15.json
+              Bulut: `provenance.py` (Actor ×7 tür, `runtime_provenance` kütüphane sürümleri,
+              `source_manifest`), sürüm satırında `provenance_json` (göç 0054) + artık yazılan
+              `source_manifest_json`; `lifecycle.py` (apply_edit/edit_artifact = sonraki sürüm,
+              clone_artifact soyuyla, delete_artifact confirm/deny/free, compare_specs +
+              compare_sentence + diff_specs, register_image_artifact); 6 rota (versions/edit/
+              clone/delete/compare/image), 4 sesli araç (artifact.edit/clone/delete/compare),
+              `artifact_focused` ile kapılı 4 niyet + 'Evet, sil' onayı, `artifact_delete_policy`.
+              Yolda bulunan: uydurma-sayı kuralı ikinci sürümde de geçer (edit'in söylenen
+              sayıları spec'e birleşir); görselin kopyası kendi anahtarında (yaratıcı çıktı
+              silinmez). 12 mutasyon kırmızı (ADR-0149).
 
 B43  Yaratıcı üretim ve teslim            IDs: 489–495, 498, 500, 502, 504, 506–509, 511, 512  dep: B34, B29  risk: medium  owner: görsel sağlayıcı
      GOAL: Görsel üretimi, katman/PSD/SVG, Paint'in gerçekten sürülmesi ve çıktının sahibin diskine
            teslimi.
      PROOF: PROVEN_REAL — üretilen görsel sahibin diskinde açıldı ve piksel düzeyinde doğrulandı.
      ROLLBACK: sağlayıcı devre dışı; Pillow yolu (481–488) korunur.
+     KAPANIŞ: commit PENDING_B43 · CI PENDING · 17/17 DONE (görsel sağlayıcı hesabı, cihaz
+              laboratuvarı ve Adobe lisansı READY_FOR_OWNER, checkpoint 19) — kanıt
+              docs/evidence/b43-creative-generation-delivery-2026-09-15.json
+              Bulut: `imaging.py` (ImageProvider: local Pillow / openai gpt-image-1 / scripted;
+              üretim sağlayıcısız adıyla ret), yeni işlemler generate/object_remove/object_add/
+              style/enhance/upscale/semantic_check, `layers.py` (LayeredDocument, PSD oku,
+              OpenRaster yaz/oku, SVG gerçek vektör yaz/oku) + `layered` aracı, `drivers.py`
+              (Paint/Adobe kısayol sürücüleri), `lifecycle.py` (generate/semantic_check/undo/
+              redo/enhance/deliver/drive), satırda history/semantic/artifact/delivery (göç 0055),
+              6 rota, 6 sesli araç, 5 niyet + `creative_focused`; teslim B42 görsel artefaktı +
+              artefakt açma yolu (`application=mspaint`).
+              Yolda bulunan: artefakt açma yolu görsel türünü tanımıyordu (KIND_FORMATS dışı tür
+              için geçerli render'a düşüş eklendi); `file.fetch`'in `application` alanı bulutta
+              hiç kullanılmıyordu. Geçmiş rotası bilinmeyen kimliği odaktaki
+              çalışmaya düşürüyordu (artık 404); değişmeyen fotoğraf 'düzeltildi' diyordu
+              (artık 'düzeltecek bir şey bulmadım' der). 12 mutasyon kırmızı (ADR-0150).
 
 B44  3B üretim yolu                       IDs: 520–527                    dep: B42      risk: low     owner: no
      GOAL: Üretimden sahne oluşturma, değiştirme, malzeme/ışık/kamera kontrolü, animasyon, dışa aktarma.
      PROOF: PROVEN_REAL — üretimde ilk gerçek sahne oluşturuldu ve render'ı bağımsız doğrulandı.
      ROLLBACK: sahne yolu bayrakla kapatılır; laboratuvar yolu korunur.
+     KAPANIŞ: commit PENDING_B44 · CI PENDING · 8/8 DONE (üretimde ilk gerçek sahne
+              READY_FOR_OWNER) — kanıt docs/evidence/b44-3d-production-path-2026-09-15.json
+              Bu makinede gerçek Blender laboratuvarı PASS (4 nesne, compare checked=22); cihaz laboratuvarı gönderilen sürücüyü gerçek iş
+              nesnesinde çalıştırıp render'ı ve GLB'yi doğruladı.
+              Bulut: POST /v1/scenes + /apply, set_frames/animate/export + ışık rengi + lens
+              (Blender), F-curve okuması, `exports_json` (göç 0056), `scene.animate` /
+              `scene.export` sesli araçları, SCENE_ANIMATE/SCENE_EXPORT niyetleri. Cihaz:
+              `SceneInspection.ReadExports` (yerinde doğrulama, imza, 64 MiB, en çok 2).
+              Yolda bulunan: sürücünün mutlak render yolu ve bulutun yanlış render anahtarı —
+              iki yarım da yeşildi, çünkü sahte cihaz buluta, cihaz laboratuvarı kendi
+              sürücüsüne uyuyordu; laboratuvar betiği de olmayan demo.blend'i arıyordu.
+              12 mutasyon kırmızı (ADR-0151).
 
 B45  Mail canlandırma                     IDs: 278, 335, 336, 338–348, 360, 362, 364  dep: B12, B27  risk: medium  owner: MAIL HESABI
      GOAL: Hesap yapılandırıldığında posta okuma/özetleme/taslak/gönderim onay kapısıyla çalışsın;
            `References` kusuru kapansın.
      PROOF: PROVEN_REAL — gerçek bir hesapta yanıt gönderildi ve alıcının zincirinde göründü.
      ROLLBACK: gönderim varsayılan kapalı kalır; okuma tek başına açılabilir.
+     KAPANIŞ: commit PENDING_B45 · CI PENDING · 8/17 DONE, 9 BLOCKED_PROVIDER (kod tam,
+              gerçek hesap READY_FOR_OWNER) — kanıt docs/evidence/b45-mail-revival-2026-09-15.json
+              References kusuru kapandı (gönderilen yanıt truth.json'un zincirini taşır);
+              gelen kutusu rutin saatte yoklanır; brifingde okunmamış-mail cümlesi;
+              ekler listelenir ve cihaza tek kullanımlık jetonla indirilir (göç 0057).
+              Yolda bulunan: fikstür eklerinin baytı yoktu (boyut iddiası sınanamazdı);
+              liste ile çıkarım ayrı koşullarla sayılsaydı '2. eki kaydet' yanlış dosyayı
+              indirirdi — tek yüklem; cihazın jetonlu GET'i sahip kimliği taşımaz, açık
+              yüzeyler listesine bilinçli eklendi.
+              12/12 mutasyon kırmızı (ADR-0152).
+              PROVEN_REAL (gerçek hesapta yanıt alıcının zincirinde) READY_FOR_OWNER.
 
 B46  Takvim canlandırma                   IDs: 277, 337, 349–359, 361, 363, 365, 366  dep: B45  risk: medium  owner: TAKVİM HESABI
      GOAL: Takvim okuma/yazma, RRULE, VALARM, hatırlatma, indeks ve eşitleme.
      PROOF: PROVEN_REAL — gerçek takvimde tekrarlayan ve hatırlatıcılı bir etkinlik oluşturuldu.
      ROLLBACK: yazma varsayılan kapalı; okuma tek başına açılabilir.
+     KAPANIŞ: commit PENDING_B46 · CI PENDING · 10/17 DONE, 6 BLOCKED_PROVIDER (kod tam, gerçek
+              hesap READY_FOR_OWNER), 355 DEFERRED (RSVP) — kanıt
+              docs/evidence/b46-calendar-revival-2026-09-15.json
+              RRULE ve VALARM yazılır ve aynı ayrıştırıcıyla geri okunur; sahibin tekrar ve
+              hatırlatma sözcükleri yönlendiriciden öneriye taşınır; indeks okumayla ve saatin
+              14 günlük aynasıyla dolar, yukarıda silinen çıkar; hatırlatmalar bir kez,
+              sessiz saate takılmadan; iptal sahip politikasıyla (varsayılan red) (göç 0058).
+              Yolda bulunan: VALARM içindeki SUMMARY etkinliğin başlığının üstüne yazılıyordu;
+              tekrarlayan bir etkinliği ertelemek bütün seriyi tek etkinliğe çevirir ve
+              hatırlatıcısını silerdi; '15 dakika önce hatırlat' 15 dakikalık etkinlik
+              okunuyordu; gece hatırlatması etkinlik başladıktan sonraya ertelenirdi.
+              14/14 mutasyon kırmızı (ADR-0153).
+              PROVEN_REAL (gerçek takvimde tekrarlayan ve hatırlatıcılı etkinlik) READY_FOR_OWNER.
 
 B47  Cihaz tarafı ses                     IDs: 239–244, 250–255           dep: B05, B11  risk: high    owner: MAHREMİYET KARARI
      GOAL: Tarayıcısız dinleme, uyandırma sözcüğü, yerel VAD, gizlilik göstergesi, çevrimdışı
            komut kümesi. Ham ses saklanmaz (249 korunur).
      PROOF: PROVEN_REAL — tarayıcı kapalıyken uyandırma sözcüğüyle bir komut tamamlandı.
      ROLLBACK: cihaz ses servisi durdurulur; tarayıcı yolu korunur.
+     KAPANIŞ: DURDU — SAHİP KARARI (Karar 7, mahremiyet) · kod yazılmadı · 0/12 · commit yok
+              Her satır cihaz tarafı mikrofona (239) bağlı; sürekli açık mikrofon mahremiyet
+              kararı ve fiziksel mikrofon değerlendirmesi ister — ikisi de sahibin. Karar paketi
+              ADR-0154 (ÖNERİLEN, kabul edilmedi): bas-konuş / yerel uyandırma sözcüğü / sürekli
+              dinleme seçenekleri ve her birinin açtığı satırlar. Kanıt:
+              docs/evidence/b47-device-voice-owner-decision-2026-09-15.json (cihaz kaynağında
+              yakalama yolu taraması). Tarayıcı ses yolu (B05/B11) değişmedi. READY_FOR_OWNER.
 
 B48  Varlık derinliği ve kamera           IDs: 300–303, 307, 308, 310, 312, 313, 320, 326, 327, 330–333, 671  dep: B47  risk: medium  owner: KAMERA KARARI
      GOAL: Cihaz tarafı kamera, RESTING/LIKELY_ASLEEP'in erişilebilir olması, "uyurken ekranı
            kapat" politikasının gerçekten tetiklenebilmesi. Ham görüntü saklanmaz (328, 329 korunur).
      PROOF: PROVEN_REAL — duruş sinyali üretildi ve uyku politikası bir kez tetiklendi.
      ROLLBACK: kamera sağlayıcısı kapatılır; girdi tabanlı varlık (311) korunur.
+     KAPANIŞ: commit PENDING_B48 · CI PENDING · 8/18 DONE, 331 PARTIAL, 9 satır Karar 8'de
+              (cihaz kamerası: 300, 307, 308, 326, 327, 333, 671; 320 donanım yargısı) — kanıt
+              docs/evidence/b48-presence-depth-2026-09-15.json
+              Kamerasız yapılabilen yapıldı: gözlem ağırlığı zamanla azalır, uyku eşiği sahibin
+              sessiz saatine bağlı, varlık geçmişi rotası, panelde dört ambient anahtarı, kapanan
+              kamera sekmesi kanıt olarak kaydedilir (rıza değişmez), sekmede kamera kapalıyken
+              açık uyarı. Yolda bulunan: 'uyurken ekranı kapat' politikası LIKELY_ASLEEP'in
+              yanında taze kamera algısı da istiyor - kamera kararı olmadan 333 hiçbir sinyalle
+              tetiklenemez; bu yüzden girdi boşluğundan uyku ÇIKARILMADI. LIKELY_ASLEEP bir okuma
+              sonra RESTING'e geri düşüyordu (eşik yeni durumun saatinden ölçülüyordu) - uyku artık
+              kanıt sürdükçe kalır; '25:00' geçerli saat sayılıyordu; kapanan-sekme rotası ilk
+              testte çöktü (source_ref); mutlak yaşlanma çoğunluk oyunu UNKNOWN'a itiyordu; B45
+              son BROKEN satırını kapatınca rozet tipi derlenmez oldu (web tsc hızlı kapıda yok).
+              13/13 mutasyon kırmızı (ADR-0155). PROVEN_REAL (duruş sinyali + uyku
+              politikası) Karar 8 ile READY_FOR_OWNER.
 
 B49  Android fabrikası ve iOS beyanı      IDs: 474–479                    dep: B41      risk: medium  owner: Android SDK / fiziksel cihaz
      GOAL: Android proje/APK/AAB üretimi ve testi; macOS yokken iOS'un AÇIKÇA desteklenmediğinin
@@ -1368,18 +1939,23 @@ Bunlara **dokunulmaz**; yalnızca çevrelerine bağlantı eklenir:
 | 0 | **Üretim sürümü** — B01'in düzeltilmiş sürüm betiğini canlıya almak | B01 kapanış kanıtı | **Evet, şimdi** — aşağıya bakın |
 | 1 | S3 uyumlu ikinci kova + erişim anahtarı | B09 | **Evet** — felaket kurtarmanın tek eksiği |
 | 2 | Kurtarma denetçisinin üretime kurulumu (Astra `2561f84`) | B08 | **Evet** |
-| 3 | `db9ed85` adayının kaderi | B35 | Hayır (B35'e kadar bekleyebilir) |
+| 3 | `db9ed85` adayının kaderi (B35 sonrası: karantina koşusu, onaylanacak aday yok; dalı silmek/tutmak sahibin) + B35 üretim turu (sesle atanan kusur → worker → gölge → panelde karar) | B35 kapanışı | Hayır — READY_FOR_OWNER |
 | 4 | TTS sağlayıcı kredisi | B15, B21 kanıtı | Kısmi — `PROVEN_PROXY` ile ilerlenebilir |
 | 5 | Mail hesabı (IMAP/SMTP) | B45 | Hayır |
 | 6 | Takvim hesabı (CalDAV) | B46 | Hayır |
 | 7 | Cihaz tarafı ses / sürekli mikrofon (mahremiyet) | B47 | Hayır |
 | 8 | Cihaz tarafı kamera (mahremiyet) | B48 | Hayır |
-| 9 | Gömme sağlayıcısı | B37 | Hayır |
+| 9 | Gömme sağlayıcısı (B37 sonrası: seçim `memory_embedding_provider=auto`, anahtar `PAGENTOS_OPENAI_API_KEY`; anahtarsız deterministic-ngram nedeniyle raporlanır) | B37 kapanışı | Hayır — READY_FOR_OWNER |
 | 10 | Görsel üretim sağlayıcısı | B43 | Hayır |
 | 11 | Android SDK / fiziksel cihaz | B49 | Hayır (P3) |
 | 12 | Unity lisansı | B50 | Hayır (P3) |
 | 13 | Kod imzalama sertifikası | B33 | Hayır |
 | 14 | Kalıcı silme onay politikasının şekli | B05, B34 | Hayır |
+| 15 | Yürütme planlayıcı model bütçesi (B38 sonrası: bayrak `executive_model_planner_enabled=false`, anahtar `PAGENTOS_ANTHROPIC_API_KEY`; bayraksız üç kural şekli hizmet eder, dışı 422 ile dürüst ret) | B38 kapanışı | Hayır — READY_FOR_OWNER |
+| 16 | Operatör görev laboratuvarı (B39 sonrası: Ayarlar sayfa araması, Gezgin adres çubuğu, Word belge kontrolü, VS Code hızlı açma bu masaüstünde ölçülür; sonra karma bir görev üretimde - Karar 0) | B39 kapanışı | Hayır — READY_FOR_OWNER |
+| 17 | App Factory kod modeli bütçesi ve laboratuvarı (B40 sonrası: bayrak `appfactory_model_generation_enabled=false`, anahtar `PAGENTOS_ANTHROPIC_API_KEY`; bayraksız bileşik uygulama deterministik üretilir, düzeltme döngüsü analizde durur; cihazda bileşik bir uygulamanın `project.test` ve tarayıcı oracle'ı) | B40 kapanışı | Hayır — READY_FOR_OWNER |
+| 18 | Artefakt üretim duman testi ve silme politikası (B42 sonrası: üretim VM'de bir xlsx/pptx/csv/json üretilip indirilmesi ve sürümünün `provenance_json`'ının okunması; `artifact_delete_policy` confirm/deny/free seçimi — varsayılan confirm) | B42 kapanışı | Hayır — READY_FOR_OWNER |
+| 19 | Görsel sağlayıcı ve yaratıcı laboratuvar (B43 sonrası: `creative_image_provider=openai` için `voice_openai_api_key` (DPAPI secret-store) — anahtarsız yerel yol; cihazda 'Paint'te göster' ve `creative.drive` kısayol dizisi; Adobe sürücüleri için lisans + allowlist) | B43 kapanışı | Hayır — READY_FOR_OWNER |
 
 **Kural:** owner action gereken satırlar `READY_FOR_OWNER` işaretlenir, **bağımsız iş durmaz**,
 ve soru ancak kritik yola girdiğinde sorulur (Phase 7).

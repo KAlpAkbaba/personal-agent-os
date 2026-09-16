@@ -34,8 +34,9 @@
       "attachments": [
         {
           "filename": "sozlesme-taslak.docx",
-          "size": 37178,
-          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          "size": 177,
+          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "content_b64": "UGFnZW50T1MgZml4dHVyZSBhdHRhY2htZW50CnNvemxlc21lLXRhc2xhay5kb2N4ChD7uJ/bdfCB2QOkjQ7Gz4Nsqg3Bxn3LkXexhlifyGxAEPu4n9t18IHZA6SNDsbPg2yqDcHGfcuRd7GGWJ/IbEAQ+7if23XwgdkDpI0Oxs+DbKoNwcZ9y5F3sYZYn8hsQBD7uJ/bdfCB2QOkjQ7Gz4Nsqg3Bxn3LkXexhlifyGxA"
         }
       ],
       "in_reply_to": null,
@@ -719,8 +720,9 @@
       "attachments": [
         {
           "filename": "proje-plani-v1.docx",
-          "size": 48213,
-          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          "size": 176,
+          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "content_b64": "UGFnZW50T1MgZml4dHVyZSBhdHRhY2htZW50CnByb2plLXBsYW5pLXYxLmRvY3gK6mmjpDUDk1yFJzuwl9MOMtI4jG+iKXX6yp4MX7ScoKvqaaOkNQOTXIUnO7CX0w4y0jiMb6IpdfrKngxftJygq+ppo6Q1A5NchSc7sJfTDjLSOIxvoil1+sqeDF+0nKCr6mmjpDUDk1yFJzuwl9MOMtI4jG+iKXX6yp4MX7ScoKs="
         }
       ],
       "in_reply_to": null,
@@ -780,8 +782,9 @@
       "attachments": [
         {
           "filename": "proje-plani-v2.docx",
-          "size": 50122,
-          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          "size": 176,
+          "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "content_b64": "UGFnZW50T1MgZml4dHVyZSBhdHRhY2htZW50CnByb2plLXBsYW5pLXYyLmRvY3gK0IZTAASFrWxanKNt+VHPtKL89/r73QlbMlr5OZAqUbTQhlMABIWtbFqco235Uc+0ovz3+vvdCVsyWvk5kCpRtNCGUwAEha1sWpyjbflRz7Si/Pf6+90JWzJa+TmQKlG00IZTAASFrWxanKNt+VHPtKL89/r73QlbMlr5OZAqUbQ="
         }
       ],
       "in_reply_to": "<m103@fixture.example>",
@@ -817,8 +820,9 @@
       "attachments": [
         {
           "filename": "fatura-2026-09.pdf",
-          "size": 118004,
-          "content_type": "application/pdf"
+          "size": 175,
+          "content_type": "application/pdf",
+          "content_b64": "UGFnZW50T1MgZml4dHVyZSBhdHRhY2htZW50CmZhdHVyYS0yMDI2LTA5LnBkZgpDMrlW+zsVF/MW+en6oRKA/FTJPIbJwKvUlGVrrAyy/0MyuVb7OxUX8xb56fqhEoD8VMk8hsnAq9SUZWusDLL/QzK5Vvs7FRfzFvnp+qESgPxUyTyGycCr1JRla6wMsv9DMrlW+zsVF/MW+en6oRKA/FTJPIbJwKvUlGVrrAyy/w=="
         }
       ],
       "in_reply_to": null,
@@ -873,8 +877,9 @@
       "attachments": [
         {
           "filename": "sunum-q3.pptx",
-          "size": 33632,
-          "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+          "size": 170,
+          "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "content_b64": "UGFnZW50T1MgZml4dHVyZSBhdHRhY2htZW50CnN1bnVtLXEzLnBwdHgKpjiQ1jdRHT3giUorvOkIab3csj19dp6OpUEJMJZWOQ6mOJDWN1EdPeCJSiu86QhpvdyyPX12no6lQQkwllY5DqY4kNY3UR094IlKK7zpCGm93LI9fXaejqVBCTCWVjkOpjiQ1jdRHT3giUorvOkIab3csj19dp6OpUEJMJZWOQ4="
         }
       ],
       "in_reply_to": null,

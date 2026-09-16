@@ -152,6 +152,30 @@ def reset_heartbeat() -> None:
     _last_published_state = None
 
 
+def _apply_owner_preferences(session: Session, engine: PresenceFusionEngine) -> None:
+    """B48 (req 313): the owner's quiet hours and outside-quiet sleep threshold, read from the
+    ambient policy they already set, become the fusion policy's. Best-effort: an unreadable
+    policy leaves the engine's thresholds as they were."""
+    try:
+        from dataclasses import replace
+
+        from app.ambient import service as ambient_service
+
+        ambient = ambient_service.get_policy(session)
+        window = ambient.quiet_hours if isinstance(ambient.quiet_hours, dict) else None
+        outside = float(getattr(ambient, "asleep_after_outside_quiet_s", 0) or 0)
+        current = engine.policy
+        wanted = replace(
+            current,
+            quiet_hours=dict(window) if window else None,
+            likely_asleep_after_outside_quiet_s=max(outside, current.likely_asleep_after_s),
+        )
+        if wanted != current:
+            engine.set_policy(wanted)
+    except Exception:  # noqa: BLE001 - preferences refine fusion, never block it
+        logger.warning("presence_owner_preferences_unreadable")
+
+
 def ingest_observation(
     session: Session,
     payload: dict[str, Any],
@@ -173,6 +197,7 @@ def ingest_observation(
         )
 
     eng = engine or get_engine()
+    _apply_owner_preferences(session, eng)
     assertion, changed = eng.add_observation(observation, now=now)
     if changed:
         _record_transition(session, assertion)

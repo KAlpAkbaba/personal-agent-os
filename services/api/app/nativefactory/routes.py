@@ -30,10 +30,15 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 
+from app.errors.owner import log_and_detail
 from app.identity.dependencies import require_owner_session
 from app.nativefactory import service as native_service
 from app.nativefactory.models import NativeBuildRow
 from app.nativefactory.stacks import detect
+
+#: B33 req 456: "the file is gone" - here AND on the device (or the device cannot be asked).
+#: A module constant so the owner-language dictionary test sees the class declared.
+ERROR_ARTIFACT_GONE = "artifact_gone"
 
 router = APIRouter(
     prefix="/v1/native", tags=["native"], dependencies=[Depends(require_owner_session)]
@@ -161,15 +166,66 @@ async def get_artifact(build_id: uuid.UUID, request: Request) -> Response:
             detail={"error_class": error_class or "no_artifact", "message": speech},
         )
     path = Path(artifact_path)
-    if not path.exists():
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "error_class": "artifact_gone",
-                "message": "Üretilen dosya artık yerinde değil efendim.",
-            },
-        )
-    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+    if path.exists():
+        return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+
+    # B33 req 456: a device build's artefact lives on the DEVICE (a Windows path a Linux
+    # Cloud Core cannot stat). Until this batch that was a 410 in production, every time.
+    # The bytes are pulled off the device in bounded chunks and hash-verified; 410 is now
+    # only what it says - the device does not have it either.
+    def pull() -> tuple[bytes, str, str] | HTTPException:
+        from app.executive.activities import get_device_action
+        from app.nativefactory.device_lifecycle import ArtifactPullError, pull_artifact
+
+        try:
+            device = get_device_action()
+        except Exception as exc:  # noqa: BLE001 - no device port on this process
+            # The exception goes to the log; the owner reads a sentence (app.errors).
+            no_port = log_and_detail(
+                ERROR_ARTIFACT_GONE,
+                exc,
+                specific="Üretilen dosya burada yok ve cihaza ulaşılamıyor efendim.",
+                details={"reason": "device_port_unavailable"},
+                where="native artifact pull: device port",
+            )
+            return HTTPException(status_code=410, detail=no_port)
+        with artifacts.session() as db:
+            row = native_service.get_build(db, build_id)
+            if row is None:
+                return HTTPException(status_code=404, detail="unknown native build")
+            try:
+                return pull_artifact(device, row)
+            except ArtifactPullError as exc:
+                # Only a read that DID reach the device and came back wrong is a gateway
+                # failure; a device that has no such file, or no device to ask, is "gone".
+                broken = exc.error_class in ("artifact_mismatch", "too_large")
+                not_pulled = log_and_detail(
+                    exc.error_class if broken else ERROR_ARTIFACT_GONE,
+                    exc,
+                    specific=(
+                        "Dosyayı cihazdan çekemedim efendim: gelen parçalar cihazın "
+                        "söylediği özetle uyuşmadı ya da dosya sınırın üstünde."
+                        if broken
+                        else "Üretilen dosya cihazda da yerinde değil efendim."
+                    ),
+                    details={"reason": exc.error_class},
+                    where="native artifact pull",
+                )
+                return HTTPException(status_code=502 if broken else 410, detail=not_pulled)
+
+    pulled = await asyncio.to_thread(pull)
+    if isinstance(pulled, HTTPException):
+        raise pulled
+    blob, name, sha256 = pulled
+    return Response(
+        content=blob,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "X-Artifact-Sha256": sha256,
+            "X-Artifact-Source": "device",
+        },
+    )
 
 
 __all__ = ["MAX_LIST", "router"]

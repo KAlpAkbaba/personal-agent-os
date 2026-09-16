@@ -41,6 +41,16 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
     private const int LivenessMissedPongs = 3;
 
     /// <summary>
+    /// A worker that has never answered a ping is not killed for missed pongs until this
+    /// long after its start: a fresh Chromium under a loaded machine can take longer to
+    /// reach its message loop than three ping intervals (the gate of 2026-09-15 lost a run
+    /// to exactly that - the healthy REPLACEMENT was killed while serving its first
+    /// request). A worker that never answers is still killed once the grace has passed,
+    /// and a worker that has answered once loses the grace for good.
+    /// </summary>
+    private static readonly TimeSpan LivenessStartupGrace = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// After this many consecutive failed starts / unexpected exits an eager host stops
     /// restarting the worker in the background (it still restarts on the next explicit
     /// request). Without a ceiling a worker that dies on every start would be respawned
@@ -909,7 +919,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
                     return;
                 }
 
-                if (worker.OutstandingPings >= LivenessMissedPongs)
+                if (worker.OutstandingPings >= LivenessMissedPongs && worker.PastStartupGrace(LivenessStartupGrace))
                 {
                     _logger.LogError(
                         "browser worker (pid={Pid}) missed {Count} consecutive pings; killing it so the next request gets a fresh one",
@@ -1310,11 +1320,14 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         private readonly TaskCompletionSource<BrowserWorkerHello> _hello = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _exitHandled;
         private int _outstandingPings;
+        private int _everPonged;
+        private int _killRequested;
 
         public WorkerProcess(Process process)
         {
             _process = process;
             Pid = process.Id;
+            StartedUtc = DateTime.UtcNow;
             _stdin = process.StandardInput;
             _stdin.AutoFlush = true;
             // The raw byte stream, not the StreamReader: the host reads it through a
@@ -1324,6 +1337,8 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
         }
 
         public int Pid { get; }
+
+        public DateTime StartedUtc { get; }
 
         public Stream StdoutStream { get; }
 
@@ -1353,10 +1368,22 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
         public int OutstandingPings => Volatile.Read(ref _outstandingPings);
 
+        /// <summary>
+        /// False from the moment a kill was REQUESTED, not from the moment the process
+        /// object notices the exit: between the two (longer under load) EnsureWorkerAsync
+        /// used to hand the dying worker to a request, whose write then failed with
+        /// "stdin is closed; it is being restarted" instead of the request starting the
+        /// replacement (the gate of 2026-09-15, twice).
+        /// </summary>
         public bool Alive
         {
             get
             {
+                if (Volatile.Read(ref _killRequested) == 1)
+                {
+                    return false;
+                }
+
                 try
                 {
                     return !_process.HasExited;
@@ -1374,7 +1401,15 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
         public void PingSent() => Interlocked.Increment(ref _outstandingPings);
 
-        public void PongReceived() => Interlocked.Exchange(ref _outstandingPings, 0);
+        public void PongReceived()
+        {
+            Interlocked.Exchange(ref _outstandingPings, 0);
+            Volatile.Write(ref _everPonged, 1);
+        }
+
+        /// <summary>True once the worker has answered a ping, or once <paramref name="grace"/> has passed since its start.</summary>
+        public bool PastStartupGrace(TimeSpan grace)
+            => Volatile.Read(ref _everPonged) == 1 || DateTime.UtcNow - StartedUtc >= grace;
 
         public bool MarkExitHandled() => Interlocked.Exchange(ref _exitHandled, 1) == 0;
 
@@ -1435,6 +1470,7 @@ public sealed class BrowserWorkerHost : IAsyncDisposable
 
         public void Kill()
         {
+            Volatile.Write(ref _killRequested, 1);
             try
             {
                 if (!_process.HasExited)

@@ -263,6 +263,41 @@ def _translate_error(error_class: str, message: str = "") -> tuple[str, str]:
     return f"Bunu yapamadım efendim{detail}.", error_class or "device_error"
 
 
+def _device_exports(result: Any) -> list[dict[str, Any]]:
+    """B44 (req 527): the exported files the DEVICE verified in place (hash and format
+    signature), as it answered them - the bytes stay on the owner's disk."""
+    payload = getattr(result, "result", None) or {}
+    exports = payload.get("exports") if isinstance(payload, dict) else None
+    if not isinstance(exports, list):
+        return []
+    keep = ("format", "path", "bytes", "sha256", "verified")
+    return [{key: entry.get(key) for key in keep} for entry in exports if isinstance(entry, dict)]
+
+
+def _merge_exports(
+    previous: list[dict[str, Any]] | None, current: list[dict[str, Any]]
+) -> list[dict[str, Any]] | None:
+    """B44 (req 527): the scene's verified exports, one per format - a new run's proof of a
+    format replaces that format's older proof, and a format this run did not touch keeps
+    its own (the GLB exported yesterday is still on the owner's disk after an FBX today)."""
+    merged: dict[str, dict[str, Any]] = {}
+    for entry in [*(previous or []), *current]:
+        fmt = entry.get("format")
+        if isinstance(fmt, str) and fmt:
+            merged.pop(fmt, None)
+            merged[fmt] = entry
+    ordered = [
+        e for e in (previous or []) if e.get("format") in merged and merged[e["format"]] is e
+    ]
+    seen = {e["format"] for e in ordered}
+    ordered += [e for e in merged.values() if e.get("format") not in seen]
+    # A re-proven format keeps its first position.
+    by_format = {e["format"]: e for e in merged.values()}
+    positions = [e.get("format") for e in (previous or []) if e.get("format") in by_format]
+    positions += [f for f in by_format if f not in positions]
+    return [by_format[f] for f in positions] or None
+
+
 class SceneService:
     def __init__(self, object_store: ObjectStore | None = None) -> None:
         self._object_store = object_store
@@ -470,6 +505,20 @@ class SceneService:
             return f"{last.name} kamerası ayarlandı efendim."
         if last.op == "set_light":
             return f"{last.name} ışığı {round(last.energy)} olarak ayarlandı efendim."
+        if last.op == "set_frames":
+            return (
+                f"Animasyon aralığı {last.start}-{last.end}. kare, {last.fps} fps olarak "
+                "ayarlandı efendim."
+            )
+        if last.op == "animate":
+            return f"{last.name} için {len(last.keyframes)} anahtar kare eklendi efendim."
+        if last.op == "export":
+            exported = next(
+                (e for e in inspection.get("exports") or [] if e.get("format") == last.format),
+                None,
+            )
+            where = exported.get("path") if exported else f"scene.{last.format}"
+            return f"Sahne {last.format.upper()} olarak dışa aktarıldı efendim: {where}."
         if last.op == "render":
             render = inspection.get("render") or {}
             width = render.get("width", last.width)
@@ -662,7 +711,13 @@ class SceneService:
             )
         payload = result.result or {}
         inspection = dict(payload.get("inspection") or {})
-        png_b64 = payload.get("render_png_base64")
+        # The DEVICE's shape (DEVICE_PROTOCOL.md 6m, ProjectCapabilities.Inspect): the
+        # render's bytes live under ``render.png_base64``. B44 found this reading a
+        # top-level ``render_png_base64`` only the fake ever sent, so no real render could
+        # reach the Cloud Core; tests/unit/test_creative3d_b44.py reads the device's source
+        # to keep the two halves agreeing.
+        render = payload.get("render")
+        png_b64 = render.get("png_base64") if isinstance(render, dict) else None
         render_bytes = base64.b64decode(png_b64) if isinstance(png_b64, str) and png_b64 else None
         return inspection, render_bytes, result
 
@@ -715,7 +770,11 @@ class SceneService:
                 extra={"scene_id": str(row.id)},
             )
         self._store_render(row, render_bytes)
-        cmp_result: CompareResult = compare(plan, inspection, render_bytes=render_bytes)
+        device_exports = _device_exports(inspect_result)
+        row.exports_json = _merge_exports(row.exports_json, device_exports)
+        cmp_result: CompareResult = compare(
+            plan, inspection, render_bytes=render_bytes, device_exports=device_exports
+        )
         row.plan_json = plan.as_dict()
         row.inspection_json = inspection
         row.compare_json = cmp_result.as_dict()
@@ -1028,6 +1087,7 @@ class SceneService:
                 extra={"scene_id": str(row.id)},
             )
         self._store_render(row, render_bytes)
+        row.exports_json = _merge_exports(row.exports_json, _device_exports(inspect_result))
         row.inspection_json = inspection
         row.updated_at = datetime.now(UTC)
         db.commit()

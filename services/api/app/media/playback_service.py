@@ -94,6 +94,31 @@ ERROR_NO_VIDEO_FOUND: Final = "no_video_found"
 ERROR_PLAYBACK_FAILED: Final = "playback_failed"
 ERROR_PLAYBACK_UNVERIFIED: Final = "playback_unverified"
 ERROR_NOTHING_PLAYING: Final = "nothing_playing"
+#: B27 req 733: the worker's ``media_volume`` answered, and said it did not apply.
+ERROR_VOLUME_FAILED = "volume_failed"
+
+#: B27 req 733. The SAME per-operation names the wake alarm's ramp has used since M18.3
+#: (``app.alarms.sequence``) - nothing here is a new device capability, only a new caller.
+CAPABILITY_MEDIA_VOLUME: Final = "browser.media_volume"
+CAPABILITY_MEDIA_STATUS: Final = "browser.media_status"
+TIMEOUT_MEDIA_VOLUME_S: Final = 15.0
+TIMEOUT_MEDIA_STATUS_S: Final = 10.0
+#: One "kıs" / "aç" on the worker's 0..1 scale (M18.3 spec §3.6): a quarter is audible
+#: without being a jump, and two "biraz aç"s from the default land on full.
+VOLUME_STEP: Final = 0.25
+VOLUME_DIRECTION_DOWN: Final = "down"
+VOLUME_DIRECTION_UP: Final = "up"
+VOLUME_DIRECTION_MUTE: Final = "mute"
+VOLUME_DIRECTIONS: Final[tuple[str, ...]] = (
+    VOLUME_DIRECTION_DOWN,
+    VOLUME_DIRECTION_UP,
+    VOLUME_DIRECTION_MUTE,
+)
+VOLUME_SPEECH: Final[dict[str, str]] = {
+    VOLUME_DIRECTION_DOWN: "Sesi kıstım efendim.",
+    VOLUME_DIRECTION_UP: "Sesi açtım efendim.",
+    VOLUME_DIRECTION_MUTE: "Sesi kapattım efendim.",
+}
 #: The owner DID enrol a browser and that browser is gone -- which is what happens every
 #: time Chrome restarts without the debugging port. Its own class, because the answer is
 #: a specific one-command fix and not "something went wrong": telling them it was never
@@ -116,6 +141,7 @@ SPEECH: Final[dict[str, str]] = {
         "Açtım efendim ama çaldığını doğrulayamadım; ekranda görüyor musunuz?"
     ),
     ERROR_NOTHING_PLAYING: "Şu anda açtığım bir şey yok efendim.",
+    ERROR_VOLUME_FAILED: "Ses seviyesini değiştiremedim efendim.",
 }
 
 #: The device's vocabulary, translated once, here.
@@ -512,9 +538,149 @@ def stop_playback(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class VolumeOutcome:
+    """What the device said about a volume change (B27 req 733)."""
+
+    ok: bool
+    playback_id: str | None
+    direction: str
+    level_from: float | None
+    level_to: float | None
+    speech: str
+    error_class: str | None = None
+    title: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "playback_id": self.playback_id,
+            "direction": self.direction,
+            "level_from": self.level_from,
+            "level_to": self.level_to,
+            "error_class": self.error_class,
+            "title": self.title,
+        }
+
+
+def _clamp_level(value: Any) -> float | None:
+    try:
+        level = float(value)
+    except (TypeError, ValueError):
+        return None
+    if level != level:  # noqa: PLR0124 - NaN
+        return None
+    return min(1.0, max(0.0, level))
+
+
+def _current_level(device_action: DeviceActionPort, target: OwnerMediaPlaybackRow) -> float:
+    """The level the page is at NOW, from the worker's own ``media_status`` (ADR-0112:
+    ``media_status.volume``) - never a number this service remembered, because the owner
+    has a keyboard and the alarm has a ramp, and either may have moved it since."""
+    status = device_action.run(
+        capability=CAPABILITY_MEDIA_STATUS,
+        payload={"session_id": target.session_id},
+        idempotency_key=f"owner-media:{target.id}:media_status:{int(_now().timestamp() * 1000)}",
+        timeout_s=TIMEOUT_MEDIA_STATUS_S,
+    )
+    reported = _clamp_level((status.result or {}).get("volume")) if status.ok else None
+    return DEFAULT_VOLUME if reported is None else reported
+
+
+def set_volume(
+    db: Session,
+    device_action: DeviceActionPort | None,
+    *,
+    direction: str,
+    level: float | None = None,
+) -> VolumeOutcome:
+    """Move the volume of the playback THIS service opened, one step or to ``level``.
+
+    Only that session: the wake alarm's music and a news video have their own owners
+    (``alarm.stop`` / ``news.close``), the same boundary ``stop_playback`` keeps.
+    """
+    if direction not in VOLUME_DIRECTIONS:
+        raise ValueError(f"unknown volume direction: {direction!r}")
+    target = live_playback(db)
+    if target is None:
+        return VolumeOutcome(
+            ok=False,
+            playback_id=None,
+            direction=direction,
+            level_from=None,
+            level_to=None,
+            speech=SPEECH[ERROR_NOTHING_PLAYING],
+            error_class=ERROR_NOTHING_PLAYING,
+        )
+    if device_action is None:
+        return VolumeOutcome(
+            ok=False,
+            playback_id=str(target.id),
+            direction=direction,
+            level_from=None,
+            level_to=None,
+            speech=SPEECH[ERROR_NO_DEVICE],
+            error_class=ERROR_NO_DEVICE,
+            title=target.video_title,
+        )
+    current = _current_level(device_action, target)
+    wanted = _clamp_level(level)
+    if wanted is None:
+        if direction == VOLUME_DIRECTION_MUTE:
+            wanted = 0.0
+        elif direction == VOLUME_DIRECTION_DOWN:
+            wanted = max(0.0, current - VOLUME_STEP)
+        else:
+            wanted = min(1.0, current + VOLUME_STEP)
+    result = device_action.run(
+        capability=CAPABILITY_MEDIA_VOLUME,
+        payload={"session_id": target.session_id, "level": wanted, "ramp_seconds": 0},
+        idempotency_key=f"owner-media:{target.id}:media_volume:{int(_now().timestamp() * 1000)}",
+        timeout_s=TIMEOUT_MEDIA_VOLUME_S,
+    )
+    applied = bool(result.ok and (result.result or {}).get("applied", True))
+    if not applied:
+        error_class = (
+            _translate(result.error_class, ERROR_VOLUME_FAILED)
+            if not result.ok
+            else ERROR_VOLUME_FAILED
+        )
+        return VolumeOutcome(
+            ok=False,
+            playback_id=str(target.id),
+            direction=direction,
+            level_from=current,
+            level_to=None,
+            speech=SPEECH.get(error_class, SPEECH[ERROR_VOLUME_FAILED]),
+            error_class=error_class,
+            title=target.video_title,
+        )
+    reported_to = _clamp_level((result.result or {}).get("level_to"))
+    reported_from = _clamp_level((result.result or {}).get("level_from"))
+    return VolumeOutcome(
+        ok=True,
+        playback_id=str(target.id),
+        direction=direction,
+        level_from=current if reported_from is None else reported_from,
+        level_to=wanted if reported_to is None else reported_to,
+        speech=VOLUME_SPEECH[direction],
+        title=target.video_title,
+    )
+
+
 __all__ = [
     "CAPABILITY_MEDIA_PLAY",
+    "CAPABILITY_MEDIA_STATUS",
     "CAPABILITY_MEDIA_STOP",
+    "CAPABILITY_MEDIA_VOLUME",
+    "ERROR_VOLUME_FAILED",
+    "VOLUME_DIRECTIONS",
+    "VOLUME_DIRECTION_DOWN",
+    "VOLUME_DIRECTION_MUTE",
+    "VOLUME_DIRECTION_UP",
+    "VOLUME_STEP",
+    "VolumeOutcome",
+    "set_volume",
     "CAPABILITY_SEARCH",
     "CAPABILITY_TAB_NEW",
     "CAPABILITY_SESSION_OPEN",

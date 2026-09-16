@@ -471,17 +471,94 @@ async def cancel_research(request: Request, task_id: uuid.UUID) -> dict[str, Any
         logger.warning("research_cancel_failed", task_id=str(task_id), error=str(exc))
 
     def mark() -> None:
+        # B27 req 732: the SAME function the voice tool uses, so a cancellation from the
+        # web and one from the owner's mouth leave identical records.
         with artifacts.session() as session:
-            runs_service.update_run(
-                session,
-                task_id,
-                stage=STAGE_CANCELLED,
-                event={"stage": STAGE_CANCELLED, "detail": "cancelled by owner"},
-            )
+            if not research_service.mark_research_cancelled(
+                session, task_id, detail="cancelled by owner"
+            ):
+                runs_service.update_run(
+                    session,
+                    task_id,
+                    stage=STAGE_CANCELLED,
+                    event={"stage": STAGE_CANCELLED, "detail": "cancelled by owner"},
+                )
 
     await asyncio.to_thread(mark)
     logger.info("research_cancelled", task_id=str(task_id), workflow_id=workflow_id)
     return {"task_id": str(task_id), "status": "cancel_requested"}
+
+
+async def _signal_workflow(
+    request: Request, workflow_id: str, signal: str, task_id: uuid.UUID
+) -> None:
+    """B31 req 203/204: the Temporal half of a pause/resume - a signal the workflow reads
+    at its next stage boundary. A workflow already gone is logged, never a 500: the
+    durable record is the owner's answer either way."""
+    from app.research.browser_workflow import BrowserResearchWorkflow
+
+    client = await _temporal_client(request)
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        await handle.signal(getattr(BrowserResearchWorkflow, signal))
+    except Exception as exc:  # noqa: BLE001 - the workflow may already be gone/terminal
+        logger.warning(
+            "research_signal_failed", signal=signal, task_id=str(task_id), error=str(exc)
+        )
+
+
+async def _workflow_id_or_404(request: Request, task_id: uuid.UUID) -> str:
+    artifacts = _artifacts(request)
+
+    def load_workflow_id() -> str | None:
+        with artifacts.session() as session:
+            task = artifact_service.get_task(session, task_id)
+            return task.workflow_id if task else None
+
+    workflow_id = await asyncio.to_thread(load_workflow_id)
+    if workflow_id is None:
+        raise HTTPException(status_code=404, detail="unknown research task")
+    return workflow_id
+
+
+@router.post("/{task_id}/pause")
+async def pause_research(request: Request, task_id: uuid.UUID) -> dict[str, Any]:
+    """B31 req 203: the run holds at its next stage boundary; the record says paused.
+    The SAME ``mark_research_paused`` the voice tool calls. 409 when there is nothing
+    to pause (terminal, or already paused) - never a success over nothing."""
+    workflow_id = await _workflow_id_or_404(request, task_id)
+    artifacts = _artifacts(request)
+
+    def mark() -> bool:
+        with artifacts.session() as session:
+            return research_service.mark_research_paused(
+                session, task_id, detail="paused by owner"
+            )
+
+    if not await asyncio.to_thread(mark):
+        raise HTTPException(status_code=409, detail="research is not running or already paused")
+    await _signal_workflow(request, workflow_id, "pause", task_id)
+    logger.info("research_paused", task_id=str(task_id), workflow_id=workflow_id)
+    return {"task_id": str(task_id), "status": "paused"}
+
+
+@router.post("/{task_id}/resume")
+async def resume_research(request: Request, task_id: uuid.UUID) -> dict[str, Any]:
+    """B31 req 204: the paused run continues from the boundary it held at."""
+    workflow_id = await _workflow_id_or_404(request, task_id)
+    artifacts = _artifacts(request)
+
+    def mark() -> bool:
+        with artifacts.session() as session:
+            return research_service.mark_research_resumed(
+                session, task_id, detail="resumed by owner"
+            )
+
+    if not await asyncio.to_thread(mark):
+        raise HTTPException(status_code=409, detail="research is not paused")
+    await _signal_workflow(request, workflow_id, "resume", task_id)
+    logger.info("research_resumed", task_id=str(task_id), workflow_id=workflow_id)
+    return {"task_id": str(task_id), "status": "resumed"}
 
 
 __all__ = ["router"]
