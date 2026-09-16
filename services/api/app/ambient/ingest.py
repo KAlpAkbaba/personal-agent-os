@@ -185,8 +185,17 @@ def ingest_status(
             )
             snoozed = tuple(str(a.id) for a in touched)
         except Exception as exc:  # noqa: BLE001 - see module docstring
+            # Enough to tell a malformed report from a real defect: the class, a bounded
+            # message and the entries (alarm ids and instants only - no audio, no words).
             logger.warning(
-                "local_snooze_reconcile_failed", device=str(device_id), error=type(exc).__name__
+                "local_snooze_reconcile_failed",
+                device=str(device_id),
+                error=type(exc).__name__,
+                detail=str(exc)[:200],
+                entries=[
+                    {"alarm_id": alarm_id, "until": until.isoformat()}
+                    for alarm_id, until in change.newly_snoozed_alarms
+                ],
             )
 
     return IngestResult(

@@ -97,7 +97,7 @@ Every row has 15 `|`; no cell contains a pipe.
 | 253 | Offline command subset | alarm.stop, alarm.snooze, time.tell (yalnız bulut erişilemezken), listening.off (her zaman); sözleşme tablosu | Çevrimdışı komutlar | PARTIAL | PA | P2 | 240 | B47 | device-voice.json:offline_commands, OfflineVoiceCommands.cs, DeviceListeningService.cs:ClassifyOfflineCommand | DeviceListeningTests.cs (4), LocalSnoozeTests.cs (7) | tanıma sahibin sesinde ölçülmedi (O3-O5) | yes | Yürütme ve politika tam; Türkçe tanıma kalitesi fiziksel turda. Bir cümle asla iki kez etki etmez |
 | 254 | Voice privacy indicator | Tepsi simgesi: off/muted/listening/wake_word/push_to_talk/sending; menüde anahtar | Dinleme göstergesi | DONE | PA | P2 | 240 | B47 | TrayPrivacyIndicator.cs, DeviceListeningService.cs:UpdateIndicator | DeviceListeningTests.cs (gösterge durumları), DeviceVoiceCapabilityTests.cs (etiket/renk) | sahip turu (V3-V4) | no | "sending" yalnız söz bağlı bir oturuma giderken. Açma yalnız cihazda; uzaktan açma reddedilir |
 | 255 | Hardware mic mute awareness | Uç noktanın susturma bayrağı 500 ms'de okunur; susturulunca yakalama akışı durur; okunamazsa null | Donanım susturması bilinir | PARTIAL | PA | P2 | 239 | B47 | Wasapi/WasapiMuteMonitor.cs, DeviceListeningService.cs:PollMute | DeviceListeningTests.cs (3) | hangi tuşun uç noktaya yazdığı ölçülmedi (V4) | yes | Mantık PA; gerçek WASAPI okuması ve dizüstü tuşu yalnız sahip turunda. 3 s tam sıfır 'digital_silence' olarak raporlanır |
-| 259 | Snooze | Yerel tetikleyici: çevrimdışı "ertele" + tepsi; bulutun koşullarıyla; `local_alarm_snoozed` ile raporlanır, bulut cihazın anını benimser | Tam | DONE | PA | P1 | — | B13, B47 | app/alarms/service.py:reconcile_local_snoozed, app/ambient/ingest.py, AlarmArmController.cs:SnoozeRinging, device-voice.json:local_snooze | test_alarms_local_snooze.py (5), LocalSnoozeTests.cs (7), test_alarms_service.py (51) | üretim turu bekliyor (O1-O6) | no | Sınır (5) cihazda da bulutun sayısıyla. Bayat disarm yerel ertelemeyi SİLEMEZ (bulunan kusur) |
+| 259 | Snooze | Yerel tetikleyici: çevrimdışı "ertele" + tepsi; bulutun koşullarıyla; `local_alarm_snoozed` ile raporlanır, bulut cihazın anını benimser | Tam | DONE | PA | P1 | — | B13, B47 | app/alarms/service.py:reconcile_local_snoozed, app/ambient/ingest.py, AlarmArmController.cs:SnoozeRinging, device-voice.json:local_snooze | test_alarms_local_snooze.py (6), LocalSnoozeTests.cs (7), test_alarms_service.py (51) | üretim turu bekliyor (O1-O6) | no | Sınır (5) cihazda da bulutun sayısıyla. Bayat disarm yerel ertelemeyi SİLEMEZ (bulunan kusur) |
 ```
 
 Test counts in the rows are this worktree's, by file (§5).
@@ -157,7 +157,7 @@ installer does not write them.
 | Agent.Tests | Voice/DeviceVoiceCapabilityTests.cs | 12 |
 | Agent.Tests | Alarms/LocalSnoozeTests.cs | 7 |
 | services/api | tests/unit/test_device_voice_contract.py | 6 |
-| services/api | tests/unit/test_alarms_local_snooze.py | 5 |
+| services/api | tests/unit/test_alarms_local_snooze.py | 6 |
 | services/api | test_contract_falsification.py (device-voice.json registered) | +5 parametrised |
 
 Suite totals after B47 (this machine, Release): Companion.Audio.Tests **185/185** (was 135);
@@ -260,3 +260,10 @@ W4 (≤ 2 false wakes per hour), W5, B1, B2, O1-O6.
 - `SceneUnityTests.The_real_unity_editor_answers_either_the_licence_refusal_or_the_run_and_its_inspection`
   fails on this machine (the real Unity editor exits 1); B47 touches nothing in that area and the
   main checkout is editing that test.
+
+## 9. Independent privacy review (security-reviewer, commit 8445fb3)
+
+No Critical or High findings. Low note 1 applied in the follow-up commit: a failing local-snooze
+reconcile now logs the error class, a bounded message and the entries (alarm ids and instants
+only), with a test. Low note 2 stands as a known limit: V5's "no transcript on disk" is a
+log-grep over the companion log for the spoken probe words.

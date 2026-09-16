@@ -191,3 +191,33 @@ def test_the_heartbeat_path_reconciles_the_ring_first_and_the_snooze_once(sessio
     assert _aware(alarm.scheduled_for) == until
     assert alarm.snooze_count == 1
     assert registry.get(device_id).voice["state"] == "offline"
+
+
+def test_a_failing_snooze_reconcile_never_breaks_the_heartbeat_and_says_what_failed(
+    session, monkeypatch
+):
+    def boom(*_args, **_kwargs):
+        raise ValueError("snooze table unavailable")
+
+    monkeypatch.setattr(alarms_service, "reconcile_local_snoozed", boom)
+    alarm_id = str(uuid.uuid4())
+    until = NOW + timedelta(minutes=5)
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        ingest.logger, "warning", lambda event, **kw: captured.append((event, kw))
+    )
+
+    result = ingest.ingest_status(
+        session,
+        uuid.uuid4(),
+        {"local_alarm_snoozed": [{"alarm_id": alarm_id, "until": until.isoformat()}]},
+        now=NOW,
+        statuses=DeviceStatusRegistry(),
+    )
+
+    assert result.snoozed_alarms == ()
+    event, fields = captured[-1]
+    assert event == "local_snooze_reconcile_failed"
+    assert fields["error"] == "ValueError"
+    assert fields["detail"] == "snooze table unavailable"
+    assert fields["entries"] == [{"alarm_id": alarm_id, "until": until.isoformat()}]
