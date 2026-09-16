@@ -234,9 +234,41 @@ Each mutation file was copied to a backup with its sha256 recorded, then mutated
 | M7 | app/nativefactory/signing.py | signed MSIX always spoken as trusted | `test_what_the_owner_hears_is_the_device_s_answer_…`, `test_packaging_an_msix_on_the_device_speaks_the_signature_…` | 8a5d5a4e…2813ba1b7 |
 | M8 | Projects/NativeLifecycle.cs | post-sign read-back gate never taken (`readBack.VerifyStatus == int.MinValue`) | `A_signature_that_does_not_read_back_is_never_answered_as_signed_and_the_package_is_removed` | 4af77636…25f983f |
 
-In the table above, `\|` inside M3 is a literal C# `|`, not a cell separator. Two earlier M8 attempts (`if (false)`, `readBack is null`) failed to COMPILE (CS0162 / CS8602 as errors). Their test runs used a stale binary and are **not counted**.
+**Security review round (2026-09-17)**
+
+| id | file | mutation | RED tests | restored sha256 |
+|---|---|---|---|---|
+| M9 | Native/OwnerSigningIdentity.cs | the failed-create path no longer removes the certificate from the store | `A_created_certificate_that_does_not_read_back_leaves_nothing_behind` | 965f2b82…e850d25bf |
+| M10 | scripts/lib/NativeSigningTrust.ps1 | export-policy check disabled (`$false -and …`) | PS: `refused: a lookalike in the owner's store whose key is EXPORTABLE` (69/70) | fb0e600a…7eaf31d3 |
+| M11 | scripts/lib/NativeSigningTrust.ps1 | named-thumbprint-must-equal-record check disabled | PS: `a named thumbprint the record does not name is refused, naming the switch` (69/70) | fb0e600a…7eaf31d3 |
+
+M3 was rerun after the cleanup fixes. It is still RED (15 tests), and it now leaves **no** `PagentOSLab-*` store behind. Before the fixes it had leaked stores, which is how the two cleanup bugs were found.
+
+In the tables above, `\|` inside M3 is a literal C# `|`, not a cell separator. Two earlier M8 attempts (`if (false)`, `readBack is null`) failed to COMPILE (CS0162 / CS8602 as errors). Their test runs used a stale binary and are **not counted**.
 
 ---
+
+## 6b. Security review (2026-09-17): what changed
+
+**MEDIUM (fixed).** The elevated trust step now also requires three things of the owner-store certificate's private key:
+- it is a CNG key;
+- its export policy is **None**;
+- its key name starts with `PagentOS-Owner-Test-Signing-`.
+
+Before this, code running as the owner could plant an exportable lookalike, rewrite `identity.json` and the `.cer`, and the owner's next elevated run would trust it. Tests cover an exportable key, a foreign-named key, and a legacy CSP key (.NET Framework hands CSP keys back as `RSACng`, so that case is refused by its GUID key name).
+
+**Residual risk (recorded in the library's header).** Same-user code can still create a NON-exportable CNG key under that name. The owner's account is the trust boundary this step relies on.
+
+**LOW a (done).** `PackageSigner.IsIntact` / `Verify` and both call sites now document that "signed" means intact and possibly untrusted, and that install gates on trust separately.
+
+**LOW b (done).** An explicit `-Thumbprint` must equal the one in `identity.json` unless `-AllowRenewedThumbprint` is passed. This is implemented in `Resolve-NativeSigningThumbprint` and has 7 tests. `-Remove` still accepts any thumbprint, because tidying up an old one is its purpose; it still refuses any certificate whose subject is not the companion's.
+
+**Found while proving it (fixed, each with a regression test):**
+- **Orphan certificate.** When a freshly created certificate did not read back, `OwnerSigningIdentity.Create` deleted the key but left the certificate in the store, with the state file still naming it. In production that is an orphan in the owner's `CurrentUser\My`.
+- **Lab cleanup abort.** `RemoveAllForLab` threw on a certificate whose key was already gone, so lab stores leaked. `SigningLab.Dispose` now also deletes its own registry store key and directory, and the install/packaging test helpers dispose their labs when they throw.
+- **Leftovers removed.** Seven leaked `HKCU\...\SystemCertificates\PagentOSLab-*` stores and their empty fixture directories were deleted. All of them came from this branch's mutation runs and held only lab certificates.
+
+Updated proposed row 473, TEST_REFERENCES column: `NativeSigningIdentityTests (11), NativePackageSigningTests (8), NativeMsixInstallTests (8), NativeSigningTests (+2), native-signing-trust.tests.ps1 (70), mutasyon M1-M11`.
 
 ## 7. Found, not mine, not fixed
 

@@ -215,6 +215,8 @@ public static class NativeLifecycle
             throw new CapabilityException(ErrorClasses.DependencyUnavailable, $"signing_failed: {exception.Message}; the unsigned package was removed", retryable: false);
         }
 
+        // Read-back: `Signed` means INTACT, possibly untrusted; trust is reported separately
+        // (`trusted`) and gated on its own by the msix install (security review 2026-09-17).
         var readBack = PackageSigner.Verify(outPath);
         if (!readBack.Signed || !string.Equals(readBack.SignerThumbprint, facts.Thumbprint, StringComparison.OrdinalIgnoreCase))
         {
@@ -388,6 +390,7 @@ public static class NativeLifecycle
             throw DocumentErrors.NotFound($"{relative} does not exist; package the MSIX first");
         }
 
+        // `Signed` = intact, not trusted: the trust gate below is a separate, required check.
         var readBack = PackageSigner.Verify(package);
         if (!readBack.Signed)
         {

@@ -27,14 +27,23 @@ public sealed class NativePackageSigningTests
     {
         var signing = new SigningLab();
         var lab = new NativeLab(signing: signing.Identity);
-        var folder = lab.ScaffoldNative(ProjectId, Slug, run: new Dictionary<string, string> { ["build"] = NativeLab.DotnetCommand("build") });
-        var exe = Path.Combine(folder, NativeLifecycle.PublishDirName, Slug + ".exe");
-        Directory.CreateDirectory(Path.GetDirectoryName(exe)!);
-        File.Copy(Environment.ProcessPath!, exe, overwrite: true);
-        var staging = Path.Combine(folder, NativeLifecycle.StagingDirName);
-        Directory.CreateDirectory(staging);
-        File.WriteAllText(Path.Combine(staging, "AppxManifest.xml"), Manifest(publisher));
-        return (lab, signing, folder);
+        try
+        {
+            var folder = lab.ScaffoldNative(ProjectId, Slug, run: new Dictionary<string, string> { ["build"] = NativeLab.DotnetCommand("build") });
+            var exe = Path.Combine(folder, NativeLifecycle.PublishDirName, Slug + ".exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(exe)!);
+            File.Copy(Environment.ProcessPath!, exe, overwrite: true);
+            var staging = Path.Combine(folder, NativeLifecycle.StagingDirName);
+            Directory.CreateDirectory(staging);
+            File.WriteAllText(Path.Combine(staging, "AppxManifest.xml"), Manifest(publisher));
+            return (lab, signing, folder);
+        }
+        catch
+        {
+            lab.Dispose();
+            signing.Dispose();
+            throw;
+        }
     }
 
     private static JsonObject PackSigned(NativeLab lab)

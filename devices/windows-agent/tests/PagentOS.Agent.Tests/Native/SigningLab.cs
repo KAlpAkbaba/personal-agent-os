@@ -57,6 +57,15 @@ public sealed class SigningLab : IDisposable
         return [.. store.Certificates];
     }
 
+    /// <summary>The registry key a current-user system store lives under.</summary>
+    public string RegistryPath => @"Software\Microsoft\SystemCertificates\" + StoreName;
+
+    public bool StoreExists()
+    {
+        using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RegistryPath);
+        return key is not null;
+    }
+
     public void Dispose()
     {
         try
@@ -66,6 +75,14 @@ public sealed class SigningLab : IDisposable
         finally
         {
             _ = CertUnregisterSystemStore(StoreName, CertSystemStoreCurrentUser | CertStoreDeleteFlag);
+
+            // Belt and braces (found 2026-09-17: a failed cleanup left three lab stores behind):
+            // whatever happened above, the lab's own store and directory do not outlive it.
+            Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(RegistryPath, throwOnMissingSubKey: false);
+            if (System.IO.Directory.Exists(Directory))
+            {
+                System.IO.Directory.Delete(Directory, recursive: true);
+            }
         }
     }
 

@@ -338,6 +338,7 @@ public sealed class OwnerSigningIdentity
         parameters.Parameters.Add(new CngProperty("Length", BitConverter.GetBytes(RsaKeyBits), CngPropertyOptions.None));
 
         var key = CngKey.Create(CngAlgorithm.Rsa, keyName, parameters);
+        string? added = null;
         try
         {
             string thumbprint;
@@ -357,6 +358,7 @@ public sealed class OwnerSigningIdentity
                 store.Open(OpenFlags.ReadWrite);
                 store.Add(made);
                 thumbprint = made.Thumbprint;
+                added = thumbprint;
             }
 
             WriteState(thumbprint, keyName);
@@ -367,7 +369,19 @@ public sealed class OwnerSigningIdentity
         }
         catch
         {
+            // Nothing half-made is left behind (found 2026-09-17): without this, a certificate
+            // that did not read back stayed in the store with its key deleted - an orphan in
+            // the owner's CurrentUser\My - and the state file still named it.
             TryDelete(key);
+            if (added is not null)
+            {
+                RemoveFromStore(added);
+                if (string.Equals(ReadRecordedThumbprint(), added, StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Delete(StatePath);
+                }
+            }
+
             throw;
         }
         finally
@@ -421,10 +435,40 @@ public sealed class OwnerSigningIdentity
             return;
         }
 
-        using var rsa = certificate.GetRSAPrivateKey();
-        if (rsa is RSACng cng && cng.Key.KeyName is { } name && name.StartsWith(prefix, StringComparison.Ordinal))
+        try
         {
-            TryDelete(cng.Key);
+            using var rsa = certificate.GetRSAPrivateKey();
+            if (rsa is RSACng cng && cng.Key.KeyName is { } name && name.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                TryDelete(cng.Key);
+            }
+        }
+        catch (CryptographicException)
+        {
+            // The certificate still names a key that is already gone (found 2026-09-17: this
+            // aborted the lab's cleanup and left its store behind). The certificate is removed
+            // by the caller either way.
+        }
+    }
+
+    private void RemoveFromStore(string thumbprint)
+    {
+        using var store = new X509Store(Options.StoreName, StoreLocation.CurrentUser);
+        try
+        {
+            store.Open(OpenFlags.ReadWrite | OpenFlags.OpenExistingOnly);
+        }
+        catch (CryptographicException)
+        {
+            return;
+        }
+
+        foreach (var certificate in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, validOnly: false))
+        {
+            using (certificate)
+            {
+                store.Remove(certificate);
+            }
         }
     }
 

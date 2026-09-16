@@ -68,6 +68,13 @@ public static class PackageSigner
     /// ends somewhere this machine does not trust" — the normal state of a self-signed package
     /// before the owner's trust step. Anything else (a bad digest, no signature, an explicit
     /// distrust, an expired certificate) is not a signature this device will call intact.
+    /// <para>
+    /// Intact is NOT trusted. "Signed" in this class (and <c>signed: true</c> on the wire)
+    /// means "a signature is there and every digest verifies", possibly by a signer this
+    /// machine does not trust. Trust is a separate fact (<see cref="PackageSignatureReadBack.ChainTrusted"/>,
+    /// <see cref="OwnerSigningIdentity.IsTrusted"/>) and the install step gates on it on its own,
+    /// before Windows is asked (security review 2026-09-17).
+    /// </para>
     /// </summary>
     public static bool IsIntact(int status) => status is TrustSuccess or CertEUntrustedRoot or CertEChaining or CertEUntrustedCa;
 
@@ -179,7 +186,11 @@ public static class PackageSigner
         }
     }
 
-    /// <summary>Reads the package's signature back without trusting anything the signer said.</summary>
+    /// <summary>
+    /// Reads the package's signature back without trusting anything the signer said.
+    /// <c>Signed</c> in the result means intact (see <see cref="IsIntact"/>), possibly UNTRUSTED;
+    /// a caller that installs must also check <c>ChainTrusted</c> or the machine's trust stores.
+    /// </summary>
     public static PackageSignatureReadBack Verify(string packagePath)
     {
         var status = WinVerifyTrustFile(Path.GetFullPath(packagePath));

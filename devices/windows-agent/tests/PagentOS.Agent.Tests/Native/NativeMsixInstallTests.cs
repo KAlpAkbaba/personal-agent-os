@@ -28,6 +28,21 @@ public sealed class NativeMsixInstallTests(ITestOutputHelper output)
         var signing = new SigningLab();
         var deployer = new RecordingDeployer();
         var lab = new NativeLab(signing: signing.Identity, deployer: real ?? deployer);
+        try
+        {
+            return Pack(lab, signing, deployer, sign);
+        }
+        catch
+        {
+            // A helper that fails leaves nothing behind: the caller's `using` is never reached.
+            lab.Dispose();
+            signing.Dispose();
+            throw;
+        }
+    }
+
+    private static (NativeLab Lab, SigningLab Signing, string Folder, RecordingDeployer Deployer) Pack(NativeLab lab, SigningLab signing, RecordingDeployer deployer, bool sign)
+    {
         var folder = lab.ScaffoldNative(ProjectId, "notlarim", run: new Dictionary<string, string> { ["build"] = NativeLab.DotnetCommand("build") });
         var exe = Path.Combine(folder, NativeLifecycle.PublishDirName, "notlarim.exe");
         Directory.CreateDirectory(Path.GetDirectoryName(exe)!);
@@ -241,15 +256,15 @@ public sealed class NativeMsixInstallTests(ITestOutputHelper output)
     private static (NativeLab Lab, SigningLab Signing, string Folder, RecordingDeployer Deployer) PackedWith(SigningLab signing, RecordingDeployer deployer)
     {
         var lab = new NativeLab(signing: signing.Identity, deployer: deployer);
-        var folder = lab.ScaffoldNative(ProjectId, "notlarim", run: new Dictionary<string, string> { ["build"] = NativeLab.DotnetCommand("build") });
-        var exe = Path.Combine(folder, NativeLifecycle.PublishDirName, "notlarim.exe");
-        Directory.CreateDirectory(Path.GetDirectoryName(exe)!);
-        File.Copy(Environment.ProcessPath!, exe, overwrite: true);
-        var staging = Path.Combine(folder, NativeLifecycle.StagingDirName);
-        Directory.CreateDirectory(staging);
-        File.WriteAllText(Path.Combine(staging, "AppxManifest.xml"), NativePackageSigningTests.Manifest(NativeCapabilityNames.TestSigningSubject));
-        lab.Exec(ProjectCapabilityNames.ProjectPackage, new JsonObject { ["project_id"] = ProjectId, ["kind"] = "msix", ["signing_mode"] = NativeCapabilityNames.SigningModeTestCertificate }, budgetSeconds: 300);
-        return (lab, signing, folder, deployer);
+        try
+        {
+            return Pack(lab, signing, deployer, sign: true);
+        }
+        catch
+        {
+            lab.Dispose();
+            throw;
+        }
     }
 
     /// <summary>A deployer that records what it was asked and registers what it "installed" — used only where trust is simulated.</summary>

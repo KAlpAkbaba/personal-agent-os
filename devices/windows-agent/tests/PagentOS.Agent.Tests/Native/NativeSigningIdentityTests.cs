@@ -227,6 +227,59 @@ public sealed class NativeSigningIdentityTests
     }
 
     [Fact]
+    public void A_created_certificate_that_does_not_read_back_leaves_nothing_behind()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Regression (found 2026-09-17): a validity shorter than the renewal margin makes the
+        // freshly created certificate unusable on read-back. The failure used to delete the key
+        // but leave the certificate in the store (an orphan in the owner's My) and the state
+        // file naming it.
+        using var lab = new SigningLab(validity: TimeSpan.FromDays(10), renewBefore: TimeSpan.FromDays(30));
+
+        var failure = Assert.ThrowsAny<CryptographicException>(() => lab.Identity.Acquire(out _));
+
+        Assert.Contains("does not read back as usable", failure.Message, StringComparison.Ordinal);
+        Assert.Empty(lab.StoreContents());
+        Assert.False(File.Exists(lab.Identity.StatePath));
+        Assert.Null(lab.Identity.Describe());
+    }
+
+    [Fact]
+    public void Lab_cleanup_survives_a_certificate_whose_key_is_already_gone_and_removes_the_store()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Regression (found 2026-09-17): RemoveAllForLab threw on such a certificate, so the lab
+        // store and directory outlived the test.
+        var lab = new SigningLab();
+        try
+        {
+            using (var certificate = lab.Identity.Acquire(out _))
+            {
+                using var rsa = (RSACng)certificate.GetRSAPrivateKey()!;
+                rsa.Key.Delete();
+            }
+
+            lab.Identity.RemoveAllForLab();
+            Assert.Empty(lab.StoreContents());
+            Assert.False(System.IO.Directory.Exists(lab.Directory));
+        }
+        finally
+        {
+            lab.Dispose();
+        }
+
+        Assert.False(lab.StoreExists());
+    }
+
+    [Fact]
     public void A_certificate_of_the_wrong_shape_is_not_usable_for_the_reason_named()
     {
         if (!OperatingSystem.IsWindows())

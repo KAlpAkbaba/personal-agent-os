@@ -11,7 +11,10 @@
     are deleted too. What is proved:
       - every refusal the script promises (private key in the file, wrong thumbprint, wrong
         subject, not self-issued, a CA, a wrong or extra EKU, expired, not in the owner's
-        store, in the owner's store without its key);
+        store, in the owner's store without its key, with an EXPORTABLE key, with a CSP key,
+        with a key not named like the companion's);
+      - an explicitly named thumbprint must equal the recorded one unless
+        -AllowRenewedThumbprint is given;
       - add is idempotent and reads back; remove removes only that thumbprint and refuses a
         certificate of another subject; remove is idempotent;
       - the script refuses to run unelevated before touching anything, fixes its target to
@@ -48,15 +51,35 @@ $targetStore = "PagentOSTrustLabTarget-$runId"
 $subject = "CN=PagentOS Owner Test Signing"
 $codeSigning = "1.3.6.1.5.5.7.3.3"
 
+$cngKeys = New-Object System.Collections.ArrayList
 function New-LabCertificate {
+    <#
+    KeyMode: "ephemeral" (in-memory key, never stored), "cng" (a persisted, NON-exportable
+    CNG key named like the companion's), "cng-exportable" (same name, exportable),
+    "cng-foreign" (non-exportable, a name that is not the companion's).
+    #>
     param(
         [string]$Subject = "CN=PagentOS Owner Test Signing",
         [bool]$Ca = $false,
         [string[]]$Ekus = @("1.3.6.1.5.5.7.3.3"),
         [int]$StartDays = -1,
-        [int]$EndDays = 365
+        [int]$EndDays = 365,
+        [string]$KeyMode = "cng"
     )
-    $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    if ($KeyMode -eq "ephemeral") {
+        $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+    }
+    else {
+        $prefix = if ($KeyMode -eq "cng-foreign") { "SomeoneElse-Signing-" } else { "PagentOS-Owner-Test-Signing-" }
+        $keyName = $prefix + "lab-" + $runId + "-" + $cngKeys.Count
+        $parameters = New-Object System.Security.Cryptography.CngKeyCreationParameters
+        $parameters.ExportPolicy = if ($KeyMode -eq "cng-exportable") { [System.Security.Cryptography.CngExportPolicies]::AllowExport } else { [System.Security.Cryptography.CngExportPolicies]::None }
+        $parameters.Provider = [System.Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider
+        $parameters.Parameters.Add((New-Object System.Security.Cryptography.CngProperty -ArgumentList "Length", ([BitConverter]::GetBytes(2048)), ([System.Security.Cryptography.CngPropertyOptions]::None)))
+        $key = [System.Security.Cryptography.CngKey]::Create([System.Security.Cryptography.CngAlgorithm]::Rsa, $keyName, $parameters)
+        [void]$cngKeys.Add($keyName)
+        $rsa = New-Object System.Security.Cryptography.RSACng -ArgumentList $key
+    }
     $request = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest -ArgumentList $Subject, $rsa, ([System.Security.Cryptography.HashAlgorithmName]::SHA256), ([System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
     $request.CertificateExtensions.Add((New-Object System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension -ArgumentList $Ca, $false, 0, $true))
     $oids = New-Object System.Security.Cryptography.OidCollection
@@ -80,9 +103,18 @@ function Get-KeyFileCount {
     return $count
 }
 
-$persisted = New-Object System.Collections.ArrayList
 function Add-ToOwnerStore {
-    <# Imports the certificate WITH a persisted key into the lab owner store (what the companion's store holds). #>
+    <# The certificate, linked to its persisted CNG key, into the lab owner store (what the companion's store holds). #>
+    param($CertificateWithKey)
+    $store = New-Object System.Security.Cryptography.X509Certificates.X509Store -ArgumentList $ownerStore, $CurrentUser
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $store.Add($CertificateWithKey)
+    $store.Close()
+}
+
+$persisted = New-Object System.Collections.ArrayList
+function Add-CspToOwnerStore {
+    <# Imports the certificate through a PFX, so its key lands in a legacy CSP container (not CNG). #>
     param($CertificateWithKey)
     $password = "lab-" + $runId
     $pfx = $CertificateWithKey.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx, $password)
@@ -136,15 +168,29 @@ try {
     $expired = New-LabCertificate -StartDays -30 -EndDays -1
     Add-ToOwnerStore $expired
     $refusals += @{ Name = "an expired certificate"; Cert = (Get-PublicOnly $expired); Thumb = $expired.Thumbprint; Expect = "not currently valid" }
-    $stranger = New-LabCertificate
+    $stranger = New-LabCertificate -KeyMode ephemeral
     $refusals += @{ Name = "a lookalike that is not in the owner's store"; Cert = (Get-PublicOnly $stranger); Thumb = $stranger.Thumbprint; Expect = "holds no certificate" }
-    $keyless = New-LabCertificate
+    # Security review 2026-09-17 (Medium): the owner-store key must be the companion's kind of key.
+    $exportable = New-LabCertificate -KeyMode cng-exportable
+    Add-ToOwnerStore $exportable
+    $refusals += @{ Name = "a lookalike in the owner's store whose key is EXPORTABLE"; Cert = (Get-PublicOnly $exportable); Thumb = $exportable.Thumbprint; Expect = "is exportable" }
+    $foreignKey = New-LabCertificate -KeyMode cng-foreign
+    Add-ToOwnerStore $foreignKey
+    $refusals += @{ Name = "a lookalike whose non-exportable key is not named like the companion's"; Cert = (Get-PublicOnly $foreignKey); Thumb = $foreignKey.Thumbprint; Expect = "is not named like the companion's" }
+    $cspKey = New-LabCertificate -KeyMode ephemeral
+    Add-CspToOwnerStore $cspKey
+    # .NET Framework hands a legacy CSP key back as an RSACng over the KSP bridge, so the refusal
+    # that fires is the key NAME (a CSP container is a GUID); either reason is a refusal.
+    $refusals += @{ Name = "a lookalike whose key is a legacy CSP key"; Cert = (Get-PublicOnly $cspKey); Thumb = $cspKey.Thumbprint; Expect = "|not a CNG key|is not named like the companion's|" }
+    $keyless = New-LabCertificate -KeyMode ephemeral
     Add-PublicToOwnerStore $keyless
     $refusals += @{ Name = "a lookalike in the owner's store without its key"; Cert = (Get-PublicOnly $keyless); Thumb = $keyless.Thumbprint; Expect = "without its private key" }
 
     foreach ($case in $refusals) {
         $verdict = Test-NativeSigningCertificate -Certificate $case.Cert -ExpectedThumbprint $case.Thumb -OwnerStoreName $ownerStore
-        Assert-True ((-not $verdict.Ok) -and $verdict.Reason.Contains($case.Expect)) "refused: $($case.Name) ($($verdict.Reason))"
+        $expected = if ($case.Expect.StartsWith("|")) { @($case.Expect.Trim("|").Split("|")) } else { @($case.Expect) }
+        $matched = @($expected | Where-Object { $verdict.Reason.Contains($_) }).Count -gt 0
+        Assert-True ((-not $verdict.Ok) -and $matched) "refused: $($case.Name) ($($verdict.Reason))"
     }
 
     $noStore = Test-NativeSigningCertificate -Certificate $goodPublic -ExpectedThumbprint $good.Thumbprint -OwnerStoreName ("PagentOSTrustLabMissing-" + $runId)
@@ -165,6 +211,23 @@ try {
     $threw = $false
     try { [void](Read-NativeSigningCertificate -Path (Join-Path $labDir "missing.cer")) } catch { $threw = $_.Exception.Message.Contains("exports it the first time") }
     Assert-True $threw "a missing certificate file is refused with the reason"
+
+    # ------------------------------------------------------------ which thumbprint (security review, Low b)
+    $rec = $good.Thumbprint
+    $r = Resolve-NativeSigningThumbprint -Requested "" -Recorded $rec
+    Assert-True ($r.Ok -and $r.Thumbprint -eq $rec) "no -Thumbprint: the recorded one is used"
+    $r = Resolve-NativeSigningThumbprint -Requested "" -Recorded ""
+    Assert-True ((-not $r.Ok) -and $r.Reason.Contains("no signing identity is recorded")) "no -Thumbprint and no record: refused"
+    $r = Resolve-NativeSigningThumbprint -Requested $rec.ToLowerInvariant() -Recorded $rec
+    Assert-True ($r.Ok -and $r.Thumbprint -eq $rec) "a named thumbprint equal to the record is accepted (case-blind)"
+    $r = Resolve-NativeSigningThumbprint -Requested ("B" * 40) -Recorded $rec
+    Assert-True ((-not $r.Ok) -and $r.Reason.Contains("-AllowRenewedThumbprint")) "a named thumbprint the record does not name is refused, naming the switch"
+    $r = Resolve-NativeSigningThumbprint -Requested ("B" * 40) -Recorded ""
+    Assert-True (-not $r.Ok) "a named thumbprint with no record to compare is refused"
+    $r = Resolve-NativeSigningThumbprint -Requested ("B" * 40) -Recorded $rec -AllowRenewedThumbprint
+    Assert-True ($r.Ok -and $r.Thumbprint -eq ("B" * 40)) "  ...unless the owner passes -AllowRenewedThumbprint"
+    $r = Resolve-NativeSigningThumbprint -Requested "zz" -Recorded $rec -AllowRenewedThumbprint
+    Assert-True (-not $r.Ok) "a malformed thumbprint is refused even with the switch"
 
     # ------------------------------------------------------------ add / remove (lab target store)
     $first = Add-NativeSigningTrust -Certificate $goodPublic -StoreName $targetStore -StoreLocation $CurrentUser
@@ -209,6 +272,9 @@ try {
     }
     $parameters = (Get-Command $scriptPath).Parameters.Keys
     Assert-True (-not ($parameters -contains "StoreName") -and -not ($parameters -contains "StoreLocation") -and -not ($parameters -contains "TargetStoreName")) "the target store is not a parameter"
+    Assert-True ($parameters -contains "AllowRenewedThumbprint") "the script exposes -AllowRenewedThumbprint"
+    Assert-True ($scriptText.Contains('Resolve-NativeSigningThumbprint -Requested $Thumbprint -Recorded $recorded -AllowRenewedThumbprint:$AllowRenewedThumbprint')) "the script resolves the thumbprint through the tested function before reading the certificate"
+    Assert-True ($libText.Contains('Test-NativeSigningPrivateKey -Certificate $found[0]')) "the certificate check inspects the owner-store key"
 
     $principal = New-Object System.Security.Principal.WindowsPrincipal([System.Security.Principal.WindowsIdentity]::GetCurrent())
     if ($principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -235,10 +301,19 @@ try {
     Assert-True ($identity.Contains('CertificateFileName = "' + $script:NativeSigningCertificateFile + '"')) "the certificate file name equals the companion's export"
     Assert-True ($identity.Contains('StateFileName = "' + $script:NativeSigningStateFile + '"')) "the state file name equals the companion's"
     Assert-True ($identity.Contains('"PagentOS", "signing"')) "the directory is the companion's %LOCALAPPDATA%\PagentOS\signing"
+    Assert-True ($identity.Contains('OwnerKeyNamePrefix = "' + $script:NativeSigningKeyNamePrefix.TrimEnd('-') + '"')) "the key-name prefix equals the companion's OwnerKeyNamePrefix"
+    Assert-True ($identity.Contains('var keyName = $"{Options.KeyNamePrefix}-')) "  ...and the companion names its keys <prefix>-..."
+    Assert-True ($identity.Contains('ExportPolicy = CngExportPolicies.None')) "the companion creates its key non-exportable, which is what this step requires"
     Assert-True ($csharp.Contains('TrustScript = @"scripts\trust-native-signing-cert.ps1"')) "the device names this script as the trust step"
     Assert-True ($python.Contains('TRUST_SCRIPT: Final = "scripts\\trust-native-signing-cert.ps1"')) "the Cloud Core names this script as the trust step"
 }
 finally {
+    foreach ($keyName in $cngKeys) {
+        try {
+            if ([System.Security.Cryptography.CngKey]::Exists($keyName)) { [System.Security.Cryptography.CngKey]::Open($keyName).Delete() }
+        }
+        catch { Write-Host "  (cleanup) cng key: $($_.Exception.Message)" }
+    }
     foreach ($imported in $persisted) {
         try {
             $key = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($imported)

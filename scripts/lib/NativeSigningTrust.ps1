@@ -21,7 +21,16 @@
         signing (1.3.6.1.5.5.7.3.3);
       - currently valid;
       - present, WITH its private key, in the owner's own store - the certificate the
-        companion signs with, not a file that merely looks like it.
+        companion signs with, not a file that merely looks like it;
+      - that private key is a CNG key (not a legacy CSP key), its export policy is None
+        (the companion creates it non-exportable), and its key name carries the companion's
+        prefix (PagentOS-Owner-Test-Signing-). Security review 2026-09-17 (Medium): code
+        running as the owner could otherwise plant a lookalike with an EXPORTABLE key, rewrite
+        identity.json and the .cer, and have the owner's next elevated run trust it.
+        Residual risk, recorded: same-user code can still create a non-exportable CNG key
+        under that name - the owner's account is the trust boundary this step relies on.
+      - an explicitly named -Thumbprint must still equal identity.json's unless the owner
+        passes -AllowRenewedThumbprint (Resolve-NativeSigningThumbprint).
 
     No certificate tool is run. Windows PowerShell 5.1 / .NET Framework only.
 #>
@@ -32,6 +41,80 @@ $script:NativeSigningSubject = "CN=PagentOS Owner Test Signing"
 $script:CodeSigningOid = "1.3.6.1.5.5.7.3.3"
 $script:NativeSigningCertificateFile = "owner-test-signing.cer"
 $script:NativeSigningStateFile = "identity.json"
+# OwnerSigningIdentity.cs: SigningIdentityOptions.OwnerKeyNamePrefix + "-" + <date>-<guid>.
+$script:NativeSigningKeyNamePrefix = "PagentOS-Owner-Test-Signing-"
+
+function Resolve-NativeSigningThumbprint {
+    <#
+    Which thumbprint the trust step may import. Returns @{ Ok; Thumbprint; Reason }.
+    - nothing requested: the recorded one (identity.json), or a refusal when none is recorded;
+    - requested: it must EQUAL the recorded one, unless -AllowRenewedThumbprint is given
+      (the owner deliberately trusting a thumbprint identity.json does not name, e.g. while
+      the companion's record is being repaired). The other checks still all apply.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$Requested,
+        [string]$Recorded,
+        [switch]$AllowRenewedThumbprint
+    )
+    if (-not [string]::IsNullOrWhiteSpace($Requested)) {
+        $normalized = ($Requested -replace '\s', '').ToUpperInvariant()
+        if ($normalized -notmatch '^[0-9A-F]{40}$') {
+            return @{ Ok = $false; Thumbprint = $null; Reason = "'$Requested' is not a certificate thumbprint (40 hex digits)" }
+        }
+        if ($AllowRenewedThumbprint) {
+            return @{ Ok = $true; Thumbprint = $normalized; Reason = "named by the owner with -AllowRenewedThumbprint" }
+        }
+        if ([string]::IsNullOrWhiteSpace($Recorded)) {
+            return @{ Ok = $false; Thumbprint = $null; Reason = "no signing identity is recorded in identity.json to compare $normalized with; pass -AllowRenewedThumbprint to trust it anyway" }
+        }
+        if ($normalized -ne $Recorded.ToUpperInvariant()) {
+            return @{ Ok = $false; Thumbprint = $null; Reason = "$normalized is not the thumbprint the companion recorded ($($Recorded.ToUpperInvariant())); pass -AllowRenewedThumbprint only if you mean to trust it anyway" }
+        }
+        return @{ Ok = $true; Thumbprint = $normalized; Reason = "named and recorded" }
+    }
+    if ([string]::IsNullOrWhiteSpace($Recorded)) {
+        return @{ Ok = $false; Thumbprint = $null; Reason = "no signing identity is recorded; the companion creates it the first time it signs an MSIX" }
+    }
+    return @{ Ok = $true; Thumbprint = $Recorded.ToUpperInvariant(); Reason = "recorded" }
+}
+
+function Test-NativeSigningPrivateKey {
+    <#
+    The owner-store certificate's private key must be the companion's: CNG, export policy
+    None, key name with the companion's prefix. Returns $null when it is, else the reason.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
+        [string]$KeyNamePrefix = $script:NativeSigningKeyNamePrefix
+    )
+    try {
+        $key = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($Certificate)
+    }
+    catch {
+        return "its private key could not be opened ($($_.Exception.Message))"
+    }
+    if ($null -eq $key) { return "it has no RSA private key" }
+    try {
+        if (-not ($key -is [System.Security.Cryptography.RSACng])) {
+            return "its private key is not a CNG key ($($key.GetType().Name)); the companion's key is created in the key storage provider"
+        }
+        $cng = $key.Key
+        if ($cng.ExportPolicy -ne [System.Security.Cryptography.CngExportPolicies]::None) {
+            return "its private key is exportable (export policy $($cng.ExportPolicy)); the companion's key is created non-exportable"
+        }
+        $name = [string]$cng.KeyName
+        if (-not $name.StartsWith($KeyNamePrefix, [System.StringComparison]::Ordinal)) {
+            return "its private key '$name' is not named like the companion's ($KeyNamePrefix...)"
+        }
+        return $null
+    }
+    finally {
+        $key.Dispose()
+    }
+}
 
 function Get-NativeSigningDirectory {
     [CmdletBinding()]
@@ -78,7 +161,8 @@ function Test-NativeSigningCertificate {
         [Parameter(Mandatory = $true)][System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate,
         [Parameter(Mandatory = $true)][string]$ExpectedThumbprint,
         [Parameter(Mandatory = $true)][string]$OwnerStoreName,
-        [datetime]$Now = [datetime]::UtcNow
+        [datetime]$Now = [datetime]::UtcNow,
+        [string]$KeyNamePrefix = $script:NativeSigningKeyNamePrefix
     )
     function Refuse([string]$why) { return @{ Ok = $false; Reason = $why } }
 
@@ -121,6 +205,10 @@ function Test-NativeSigningCertificate {
         }
         if (-not $found[0].HasPrivateKey) {
             return (Refuse "CurrentUser\$OwnerStoreName holds $($Certificate.Thumbprint) without its private key - it is not the identity the companion signs with")
+        }
+        $keyProblem = Test-NativeSigningPrivateKey -Certificate $found[0] -KeyNamePrefix $KeyNamePrefix
+        if ($null -ne $keyProblem) {
+            return (Refuse "CurrentUser\$OwnerStoreName holds $($Certificate.Thumbprint), but $keyProblem - it is not the identity the companion signs with")
         }
     }
     finally {

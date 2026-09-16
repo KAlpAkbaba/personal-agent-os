@@ -29,10 +29,18 @@
     Exit codes: 0 done (or already so), 1 refused, 2 not elevated.
 
 .PARAMETER Thumbprint
-    The certificate to trust. Default: the one the companion recorded in identity.json.
+    The certificate to trust. Default: the one the companion recorded in identity.json. When
+    given, it must EQUAL the recorded one unless -AllowRenewedThumbprint is also given. With
+    -Remove it names the certificate to remove and need not be the recorded one.
 
 .PARAMETER CertificatePath
     The companion's exported public certificate. Default: %LOCALAPPDATA%\PagentOS\signing\owner-test-signing.cer.
+    Whatever file is named, its thumbprint must be the resolved one and every other check applies.
+
+.PARAMETER AllowRenewedThumbprint
+    Trust a -Thumbprint that identity.json does not name. Only for the owner who knows why
+    (for example the record was lost); the certificate must still pass every other check,
+    including being in the owner's CurrentUser\My with the companion's non-exportable key.
 
 .PARAMETER Remove
     Remove the certificate with this thumbprint from LocalMachine\TrustedPeople instead.
@@ -42,6 +50,7 @@
 param(
     [string]$Thumbprint,
     [string]$CertificatePath,
+    [switch]$AllowRenewedThumbprint,
     [switch]$Remove
 )
 
@@ -65,21 +74,18 @@ if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Adm
 }
 
 $directory = Get-NativeSigningDirectory
-if ([string]::IsNullOrWhiteSpace($Thumbprint)) {
-    $Thumbprint = Get-NativeSigningRecordedThumbprint -StateDirectory $directory
-    if ($null -eq $Thumbprint) {
-        Write-Host "REFUSED: no signing identity is recorded in $directory." -ForegroundColor Red
-        Write-Host "The Session Companion creates it the first time it signs an MSIX; package one first, or pass -Thumbprint."
-        exit 1
-    }
-}
-$Thumbprint = ($Thumbprint -replace '\s', '').ToUpperInvariant()
-if ($Thumbprint -notmatch '^[0-9A-F]{40}$') {
-    Write-Host "REFUSED: '$Thumbprint' is not a certificate thumbprint (40 hex digits)." -ForegroundColor Red
-    exit 1
-}
+$recorded = Get-NativeSigningRecordedThumbprint -StateDirectory $directory
 
 if ($Remove) {
+    # Removing is how an OLD thumbprint is tidied up after a renewal, so -Remove does not
+    # require identity.json to name it; Remove-NativeSigningTrust still refuses any
+    # certificate whose subject is not the companion's.
+    $requested = if ([string]::IsNullOrWhiteSpace($Thumbprint)) { $recorded } else { ($Thumbprint -replace '\s', '').ToUpperInvariant() }
+    if ([string]::IsNullOrWhiteSpace($requested) -or $requested -notmatch '^[0-9A-F]{40}$') {
+        Write-Host "REFUSED: name the certificate to remove with -Thumbprint (40 hex digits)." -ForegroundColor Red
+        exit 1
+    }
+    $Thumbprint = $requested
     try {
         $outcome = Remove-NativeSigningTrust -Thumbprint $Thumbprint -StoreName $TargetStoreName -StoreLocation $TargetStoreLocation
     }
@@ -95,6 +101,13 @@ if ($Remove) {
     }
     exit 0
 }
+
+$resolved = Resolve-NativeSigningThumbprint -Requested $Thumbprint -Recorded $recorded -AllowRenewedThumbprint:$AllowRenewedThumbprint
+if (-not $resolved.Ok) {
+    Write-Host "REFUSED: $($resolved.Reason)." -ForegroundColor Red
+    exit 1
+}
+$Thumbprint = $resolved.Thumbprint
 
 if ([string]::IsNullOrWhiteSpace($CertificatePath)) {
     $CertificatePath = Join-Path $directory $script:NativeSigningCertificateFile
