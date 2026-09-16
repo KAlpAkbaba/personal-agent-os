@@ -23,9 +23,11 @@ import { useCallback } from "react";
 import FamilyPage, { Row, Rows } from "../components/FamilyPage";
 import {
   type AmbientToggle,
+  type CameraMode,
   fetchAmbientPolicy,
   fetchDeviceStatus,
   fetchVoiceQualification,
+  updateAmbientCameraMode,
   updateAmbientPolicy,
 } from "../lib/cockpit/api";
 import { fetchPolicy } from "../lib/pages/detail";
@@ -103,6 +105,10 @@ export default function SettingsPage() {
     (field: AmbientToggle, value: boolean) => void updateAmbientPolicy(field, value).then(refreshAmbient),
     [refreshAmbient],
   );
+  const chooseCameraMode = useCallback(
+    (mode: CameraMode) => void updateAmbientCameraMode(mode).then(refreshAmbient),
+    [refreshAmbient],
+  );
 
   return (
     <FamilyPage
@@ -151,7 +157,13 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <AmbientPanel policy={ambient.state} devices={devices.state} onToggle={toggleAmbient} always />
+      <AmbientPanel
+        policy={ambient.state}
+        devices={devices.state}
+        onToggle={toggleAmbient}
+        onCameraMode={chooseCameraMode}
+        always
+      />
       <VoiceQualificationPanel state={qualification.state} now={now} always />
 
       {POLICIES.map((policy) => (

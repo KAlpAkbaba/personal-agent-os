@@ -31,6 +31,7 @@ from app.ledger.vocabulary import (
     ALARM_EVENT_TYPE_BY_STATE,
     EVENT_TYPE_ALARM_CLEANED_UP,
     EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+    EVENT_TYPE_ALARM_LOCAL_SNOOZED,
 )
 
 #: Every ledger event type that is part of an alarm's story. Derived from the state map
@@ -38,6 +39,7 @@ from app.ledger.vocabulary import (
 ALARM_EVENT_TYPES: tuple[str, ...] = (
     *ALARM_EVENT_TYPE_BY_STATE.values(),
     EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+    EVENT_TYPE_ALARM_LOCAL_SNOOZED,
     EVENT_TYPE_ALARM_CLEANED_UP,
 )
 

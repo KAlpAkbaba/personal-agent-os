@@ -40,6 +40,7 @@ from app.ambient.holdoff import (
 )
 from app.ambient.policy import (
     ACTION_DISPLAY_OFF,
+    CAMERA_MODES,
     OWNER_TEST_HOLDOFF_S,
     REASON_OWNER_RETURNED,
     REASON_OWNER_TEST,
@@ -120,6 +121,8 @@ _EDITABLE_FIELDS = (
     "keep_on",
     "asleep_after_outside_quiet_s",
     "camera_unknown_grace_s",
+    # B48
+    "camera_mode",
 )
 
 
@@ -148,6 +151,10 @@ def set_policy(
             # ADR-0079 §8: validated on the way in (ValueError to the caller), and ``{}``
             # clears the window - the loop above treats None as "not named".
             value = validate_quiet_hours(value)
+        if field_name == "camera_mode" and value not in CAMERA_MODES:
+            # B48: refused on the way in, like a malformed quiet window - a mode no device
+            # understands must never be persisted and then silently relayed as "off".
+            raise ValueError(f"camera_mode must be one of {CAMERA_MODES}")
         if getattr(row, field_name) != value:
             setattr(row, field_name, value)
             applied[field_name] = value
@@ -175,6 +182,16 @@ def set_policy(
             )
         except Exception as exc:  # noqa: BLE001 - the ledger is evidence, not a dependency
             logger.warning("ambient_policy_ledger_failed", error=type(exc).__name__)
+
+    if "camera_mode" in applied:
+        # B48: the owner's choice reaches every camera-capable device now, not on the next
+        # mismatch sweep. Best effort - the heartbeat reconcile is the guarantee.
+        try:
+            from app.ambient import camera as ambient_camera
+
+            ambient_camera.push_now(session, now=moment)
+        except Exception as exc:  # noqa: BLE001 - the policy is durable already
+            logger.warning("ambient_camera_push_failed", error=type(exc).__name__)
 
     # The owner just spoke about the display: nothing automatic touches it for a while.
     (holdoffs or get_holdoffs()).start(

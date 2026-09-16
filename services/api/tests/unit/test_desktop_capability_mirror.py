@@ -59,6 +59,9 @@ CANONICAL_DESKTOP = (
     "desktop.play_audio",
     "desktop.display_off",
     "desktop.notify",
+    "desktop.voice_status",
+    # B48 (DEVICE_PROTOCOL.md §6p): the owner's device-camera mode.
+    "desktop.camera_mode",
 )
 
 CANONICAL_BROWSER_MEDIA = (

@@ -25,10 +25,12 @@ public sealed class ActivityStatusReporter(
     IInputActivitySource input,
     IDisplayStateObserver displayObserver,
     Func<string?> ringingAlarmId,
-    AlarmArmController? arms = null)
+    AlarmArmController? arms = null,
+    Func<JsonObject>? voice = null,
+    Camera.CameraPresenceMonitor? camera = null)
 {
     /// <summary>
-    /// Payload: <c>{}</c>. Result: the eight fields of <see cref="HeartbeatStatus.Fields"/>.
+    /// Payload: <c>{}</c>. Result: the fields of <see cref="HeartbeatStatus.Fields"/> (the camera pair only when a camera path is wired).
     /// Never throws for a missing subsystem — an unwired one reports null or zero, which is a
     /// true statement about this device.
     /// </summary>
@@ -51,7 +53,10 @@ public sealed class ActivityStatusReporter(
             fired.Add(id);
         }
 
-        return new JsonObject
+        // B47: drained for the same reason as `fired` - composing a status IS the report.
+        var snoozed = arms?.DrainLocallySnoozed() ?? [];
+
+        var status = new JsonObject
         {
             [HeartbeatStatus.InputIdleSeconds] = idle is null
                 ? null
@@ -71,6 +76,20 @@ public sealed class ActivityStatusReporter(
             // look like a ring on every heartbeat until the process restarted, and the cloud
             // would keep re-reconciling an alarm it had already closed.
             [HeartbeatStatus.LocalAlarmFired] = fired,
+            [HeartbeatStatus.LocalAlarmSnoozed] = snoozed,
+            // B47 rows 250-252: the voice service's compact health. A companion without voice
+            // says "disabled", which is true, rather than leaving the cloud to guess.
+            [HeartbeatStatus.Voice] = voice?.Invoke() ?? VoiceStatus.Disabled().Heartbeat(),
         };
+
+        // B48 (rows 326, 327): the camera's own state and its latest DERIVED observation.
+        // A companion with no camera path sends neither key - "not known", never "absent".
+        if (camera is not null)
+        {
+            status[HeartbeatStatus.Camera] = camera.StatusObject();
+            status[HeartbeatStatus.Presence] = camera.LatestObservation();
+        }
+
+        return status;
     }
 }

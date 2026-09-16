@@ -62,11 +62,41 @@ public static class HeartbeatStatus
     /// </remarks>
     public const string LocalAlarmFired = "local_alarm_fired";
 
+    /// <summary>
+    /// B47 (B13 requirement 259's local trigger): alarms this device snoozed on its own while
+    /// the Cloud Core was unreachable, as <c>{"alarm_id", "until"}</c> objects, drained when
+    /// reported. <c>until</c> is when the device will ring again; the cloud adopts that instant
+    /// (<c>packages/protocol/device-voice.json</c> <c>local_snooze</c>).
+    /// </summary>
+    public const string LocalAlarmSnoozed = "local_alarm_snoozed";
+
+    /// <summary>
+    /// B47 (rows 250-252): the device voice service's compact health - the closed key set of
+    /// <c>device-voice.json</c> <c>heartbeat.keys</c>. States, flags, a counter and an error
+    /// class; never a transcript, a phrase or audio.
+    /// </summary>
+    public const string Voice = "voice";
+
+    /// <summary>
+    /// B48 (row 327): the device camera's own state — <c>{mode, state, interval_s, indicator,
+    /// last_check_at, error}</c>. Absent on a companion without a camera path.
+    /// </summary>
+    public const string Camera = "camera";
+
+    /// <summary>
+    /// B48 (row 326): the device-local presence provider's latest observation — exactly the
+    /// seven fields of M18_HOLOGRAPHIC_CORE_SPEC.md §2 with <c>source: "camera"</c>, or null.
+    /// A derived signal: no frame, no image, no byte of one ever rides here.
+    /// </summary>
+    public const string Presence = "presence";
+
     /// <summary>Every key the <c>status</c> object may carry, in the order the schema lists them.</summary>
     public static readonly IReadOnlyList<string> Fields =
     [
         InputIdleSeconds, DisplayState, DisplayObservedAt,
         AlarmRinging, RingingAlarmId, ArmedAlarms, NextAlarmAt, LocalAlarmFired,
+        LocalAlarmSnoozed, Voice,
+        Camera, Presence,
     ];
 
     /// <summary>
@@ -90,12 +120,76 @@ public static class HeartbeatStatus
         var projected = new JsonObject();
         foreach (var field in Fields)
         {
-            if (raw.TryGetPropertyValue(field, out var value))
+            if (!raw.TryGetPropertyValue(field, out var value))
             {
-                projected[field] = value?.DeepClone();
+                continue;
             }
+
+            projected[field] = field switch
+            {
+                // B48: the two nested objects are closed as well, and hold scalars only. A
+                // companion that put anything else inside them (a frame, a buffer, a nested
+                // object) loses that key here - the Session-0 service is the last place on this
+                // machine that can make "no image leaves the device" true regardless of what
+                // the companion sends.
+                Presence => ProjectScalars(value, PresenceFields),
+                Camera => ProjectScalars(value, CameraFields),
+                _ => value?.DeepClone(),
+            };
         }
 
         return projected.Count == 0 ? null : projected;
+    }
+
+    /// <summary>The seven structured-observation keys (M18_HOLOGRAPHIC_CORE_SPEC.md §2).</summary>
+    public static readonly IReadOnlyList<string> PresenceFields =
+    [
+        "person_present", "presence_confidence", "activity_level", "posture", "awake_state", "observed_at", "source",
+    ];
+
+    /// <summary>The camera state keys.</summary>
+    public static readonly IReadOnlyList<string> CameraFields =
+    [
+        "mode", "state", "interval_s", "indicator", "last_check_at", "error",
+    ];
+
+    /// <summary>The longest string either nested object may carry: every legitimate value is a short token or a timestamp.</summary>
+    public const int MaxNestedStringLength = 64;
+
+    private static JsonNode? ProjectScalars(JsonNode? value, IReadOnlyList<string> keys)
+    {
+        if (value is not JsonObject source)
+        {
+            return null;
+        }
+
+        var result = new JsonObject();
+        foreach (var key in keys)
+        {
+            if (!source.TryGetPropertyValue(key, out var item))
+            {
+                continue;
+            }
+
+            if (item is null)
+            {
+                result[key] = null;
+                continue;
+            }
+
+            if (item is not JsonValue scalar)
+            {
+                return null;
+            }
+
+            if (scalar.TryGetValue<string>(out var text) && text.Length > MaxNestedStringLength)
+            {
+                return null;
+            }
+
+            result[key] = scalar.DeepClone();
+        }
+
+        return result;
     }
 }

@@ -450,7 +450,23 @@ export type AmbientPolicy = {
   asleep_after_s: number | null;
   input_holdoff_s: number | null;
   quiet_hours: string | null;
+  /**
+   * B48 (req 300, 331, 671): the owner's device-camera choice. Absent from a Cloud Core that
+   * predates it; null when the value is not one this renderer knows.
+   */
+  camera_mode?: CameraMode | null;
 };
+
+/** B48: the device camera's modes - the camera opens only after the owner picks one. */
+export type CameraMode = "off" | "periodic" | "continuous";
+
+export const CAMERA_MODES: readonly CameraMode[] = ["off", "periodic", "continuous"];
+
+function cameraMode(value: unknown): CameraMode | null {
+  return typeof value === "string" && (CAMERA_MODES as readonly string[]).includes(value)
+    ? (value as CameraMode)
+    : null;
+}
 
 function flag(o: Record<string, unknown>, key: string): boolean | null {
   const value = o[key];
@@ -470,6 +486,7 @@ export const fetchAmbientPolicy = () =>
       asleep_after_s: num(p, "asleep_after_s"),
       input_holdoff_s: num(p, "input_holdoff_s"),
       quiet_hours: str(p, "quiet_hours"),
+      camera_mode: cameraMode(p.camera_mode),
     };
   });
 
@@ -506,6 +523,37 @@ export async function updateAmbientPolicy(
 }
 
 /**
+ * B48: choose the device camera's mode through the same owner-gated PUT the switches use.
+ * The Cloud Core relays it to every device with a camera path; the camera itself never
+ * opens from this page.
+ */
+export async function updateAmbientCameraMode(mode: CameraMode): Promise<{ ok: boolean; speech: string }> {
+  if (!(CAMERA_MODES as readonly string[]).includes(mode)) {
+    return { ok: false, speech: "Bilinmeyen kamera kipi." };
+  }
+  try {
+    const response = await apiFetch("/v1/ambient/policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera_mode: mode }),
+    });
+    if (!response.ok) return { ok: false, speech: `Kamera kipi değiştirilemedi (HTTP ${response.status}).` };
+    const body = (await response.json()) as { speech?: unknown };
+    return { ok: true, speech: typeof body.speech === "string" ? body.speech : "Kamera kipi güncellendi." };
+  } catch (err) {
+    return { ok: false, speech: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** B48: what a device says its camera is doing (DEVICE_PROTOCOL.md §6p). */
+export type DeviceCamera = {
+  mode: CameraMode | null;
+  state: string | null;
+  indicator: string | null;
+  error: string | null;
+};
+
+/**
  * A device and the status its heartbeat carried (spec §5.3).
  *
  * `status` is optional in the device protocol — a device with no companion
@@ -522,6 +570,8 @@ export type DeviceStatus = {
   display_observed_at: string | null;
   alarm_ringing: boolean | null;
   armed_alarms: number | null;
+  /** B48: the device camera's own report, or null when the device has no camera path. */
+  camera?: DeviceCamera | null;
   /** True when the heartbeat carried a `status` block at all. */
   statusKnown: boolean;
 };
@@ -552,6 +602,9 @@ export function parseDevice(raw: unknown): DeviceStatus {
           : null;
   const online = flag(o, "online") ?? flag(o, "connected");
   const presence = str(o, "presence");
+  const rawCamera = status?.camera;
+  const cameraBlock =
+    rawCamera && typeof rawCamera === "object" ? (rawCamera as Record<string, unknown>) : null;
   return {
     device_id: str(o, "id") ?? str(o, "device_id") ?? "",
     label: str(o, "label") ?? str(o, "name"),
@@ -563,6 +616,14 @@ export function parseDevice(raw: unknown): DeviceStatus {
       str(display, "observed_at") ?? (status ? str(status, "display_observed_at") : null),
     alarm_ringing: status ? flag(status, "alarm_ringing") : null,
     armed_alarms: armedCount,
+    camera: cameraBlock
+      ? {
+          mode: cameraMode(cameraBlock.mode),
+          state: str(cameraBlock, "state"),
+          indicator: str(cameraBlock, "indicator"),
+          error: str(cameraBlock, "error"),
+        }
+      : null,
     statusKnown: status !== null,
   };
 }

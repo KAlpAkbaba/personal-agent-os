@@ -161,7 +161,7 @@ def run_command(tool: str, *, existing_scene: bool) -> str:
             f"-- {PLAN_FILE} {INSPECTION_FILE}"
         )
     return (
-        f"unity -batchmode -nographics -quit -projectPath {ROOT_PLACEHOLDER} "
+        f"unity -batchmode -quit -projectPath {ROOT_PLACEHOLDER} "
         f"-executeMethod {UNITY_DRIVER_METHOD} -planPath {PLAN_FILE} "
         f"-outPath {INSPECTION_FILE} -logFile {UNITY_LOG_FILE}"
     )
@@ -190,6 +190,26 @@ def driver_text(tool: str) -> str:
 
 class DriverPinMismatch(RuntimeError):
     """A driver whose bytes do not match `drivers/manifest.json` is never shipped."""
+
+
+def unity_support_files() -> list[dict[str, str]]:
+    """B50 (ADR-0164): what a Unity project needs beside SceneDriver.cs - its package manifest
+    (the driver reads plans with Newtonsoft.Json, which a bare Unity 6 project does not have)
+    and the three catalogue scripts ``attach_script`` may name. Until 2026-09-16 neither was
+    shipped: the driver could not compile and no catalogued script existed. Pinned like the
+    drivers; a file whose bytes changed is never shipped."""
+    pins = json.loads((_DRIVERS_DIR / "manifest.json").read_text(encoding="utf-8"))
+    files: list[dict[str, str]] = []
+    for relative, expected in sorted((pins.get("unity_support") or {}).get("files", {}).items()):
+        data = (_DRIVERS_DIR / "unity_support" / relative).read_bytes()
+        actual = hashlib.sha256(data).hexdigest()
+        if actual != expected:
+            raise DriverPinMismatch(
+                f"unity support file {relative} does not match its pinned hash "
+                f"(expected {expected[:12]}…, found {actual[:12]}…)"
+            )
+        files.append({"path": relative, "text": data.decode("utf-8")})
+    return files
 
 
 SPEECH_NO_DEVICE = "Bu bilgisayarda sahne oluşturma yetkisi yok efendim."
@@ -575,6 +595,7 @@ class SceneService:
                 "files": [
                     {"path": PLAN_FILE, "text": plan.plan_json()},
                     {"path": DRIVER_PATH_BY_TOOL[plan.tool], "text": driver_source},
+                    *(unity_support_files() if plan.tool == "unity" else []),
                 ],
                 "manifest": {
                     "entry": DRIVER_PATH_BY_TOOL[plan.tool],
@@ -737,6 +758,41 @@ class SceneService:
         row.render_sha256 = hashlib.sha256(render_bytes).hexdigest()
         row.render_bytes = len(render_bytes)
 
+    @staticmethod
+    def _read_back_build(
+        device_action: DeviceActionPort,
+        row: SceneRow,
+        plan: ScenePlan,
+        inspection: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """B50 (req 532): the player the editor says it built, read back by the DEVICE -
+        ``file.inspect`` answers a PE block only when the bytes really are a Windows image.
+        None when no build was asked for or the editor declared none."""
+        if not any(op.op == "build_player" for op in plan.operations):
+            return None
+        declared = inspection.get("build") or {}
+        relative = declared.get("path")
+        if not isinstance(relative, str) or not relative or not row.root_path:
+            return None
+        if ".." in relative.replace("\\", "/").split("/") or ":" in relative:
+            return {"verified": False, "reason": "the build path is not inside the project"}
+        result = device_action.run(
+            capability="file.inspect",
+            payload={"path": row.root_path.rstrip("\\/") + "\\" + relative.replace("/", "\\")},
+            idempotency_key=f"creative3d-build-inspect:{row.id}",
+            timeout_s=30.0,
+        )
+        if not result.ok:
+            return {"verified": False, "reason": result.message}
+        record = (result.result or {}).get("file") or {}
+        pe = (result.result or {}).get("pe")
+        return {
+            "verified": isinstance(pe, dict),
+            "sha256": record.get("sha256"),
+            "bytes": record.get("size"),
+            "pe": pe,
+        }
+
     def _finish(
         self,
         db: Session,
@@ -772,8 +828,13 @@ class SceneService:
         self._store_render(row, render_bytes)
         device_exports = _device_exports(inspect_result)
         row.exports_json = _merge_exports(row.exports_json, device_exports)
+        device_build = self._read_back_build(device_action, row, plan, inspection)
         cmp_result: CompareResult = compare(
-            plan, inspection, render_bytes=render_bytes, device_exports=device_exports
+            plan,
+            inspection,
+            render_bytes=render_bytes,
+            device_exports=device_exports,
+            device_build=device_build,
         )
         row.plan_json = plan.as_dict()
         row.inspection_json = inspection

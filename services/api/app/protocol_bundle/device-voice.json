@@ -1,0 +1,109 @@
+{
+  "contract": "device.voice",
+  "version": 1,
+  "why": [
+    "B47 (owner decision 2026-09-16, ADR-0154 accepted with option 'continuous'): the owner's",
+    "Windows device listens continuously, without the browser. Two halves meet here. The",
+    "Session Companion decides what the microphone may send and reports what it is doing; the",
+    "Cloud Core reads that report from the heartbeat and reconciles an alarm the device",
+    "snoozed on its own while the cloud was unreachable.",
+    "",
+    "Every number and name below is one both halves would otherwise restate: the pre-roll",
+    "bound that makes 'raw audio is never kept' checkable, the indicator states the owner sees",
+    "and the cloud reports, the offline command set and WHEN each may act, and the shape of a",
+    "local snooze. That restating is this repository's most repeated bug shape, and the reason",
+    "packages/protocol/ exists."
+  ],
+  "privacy": {
+    "default_preroll_ms": 300,
+    "max_preroll_ms": 2000,
+    "max_segment_ms": 2000,
+    "raw_audio_persisted": false,
+    "silence_leaves_device": false,
+    "capture_process": "session_companion",
+    "remote_enable_allowed": false,
+    "why": [
+      "The microphone is opened by the owner-session companion only; the Session-0 service",
+      "never loads a capture type. Audio that the local voice-activity detector did not admit",
+      "is kept in a bounded in-memory ring (at most max_preroll_ms) and zeroed when it falls",
+      "out; nothing is ever written to disk or logged. max_segment_ms bounds what the local",
+      "keyword spotter holds for one utterance. Listening can be turned OFF from anywhere and",
+      "ON only at the device: a cloud that could open the owner's microphone would be the one",
+      "surface this design exists not to have."
+    ]
+  },
+  "listening": {
+    "modes": ["continuous", "wake_word", "push_to_talk"],
+    "default_mode": "continuous",
+    "default_enabled": true,
+    "wake_word_phrase_id": "wake",
+    "follow_up_window_ms": 8000,
+    "push_to_talk_min_hold_ms": 150
+  },
+  "indicator_states": ["off", "muted", "listening", "wake_word", "push_to_talk", "sending"],
+  "service_states": ["disabled", "starting", "running", "offline", "backoff", "stopped"],
+  "heartbeat": {
+    "field": "voice",
+    "keys": ["state", "indicator", "mode", "listening", "mic_muted", "cloud_connected", "restarts", "last_error"],
+    "why": [
+      "The compact health of the device voice service, attached to every heartbeat through the",
+      "same companion status object as the alarm fields (DEVICE_PROTOCOL.md 6g). Only states,",
+      "flags, a counter and an error CLASS: never a transcript, a phrase, a device name or audio."
+    ]
+  },
+  "offline_commands": {
+    "engine": "template_dtw",
+    "commands": [
+      {
+        "id": "alarm.stop",
+        "examples_tr": ["alarmı kapat", "alarmı durdur"],
+        "requires": "alarm_ringing",
+        "acts": "offline_only"
+      },
+      {
+        "id": "alarm.snooze",
+        "examples_tr": ["ertele", "alarmı ertele"],
+        "requires": "alarm_ringing",
+        "acts": "offline_only"
+      },
+      {
+        "id": "listening.off",
+        "examples_tr": ["dinlemeyi kapat", "mikrofonu kapat"],
+        "requires": "none",
+        "acts": "always"
+      },
+      {
+        "id": "time.tell",
+        "examples_tr": ["saat kaç"],
+        "requires": "none",
+        "acts": "offline_only"
+      }
+    ],
+    "why": [
+      "Small and safe on purpose: each command stops, defers or reports something, and none",
+      "reaches a file, an account or another machine. 'offline_only' commands act locally only",
+      "while the Cloud Core is unreachable; while it is reachable the same words travel the",
+      "normal voice path and the cloud acts, so one sentence never acts twice. 'always' is",
+      "reserved for turning listening OFF, which is idempotent and only ever takes away.",
+      "The engine matches the owner's own enrolled recordings. It is a keyword matcher, never",
+      "an identity check: nothing here may authorise anything."
+    ]
+  },
+  "local_snooze": {
+    "heartbeat_field": "local_alarm_snoozed",
+    "entry_keys": ["alarm_id", "until"],
+    "max_entries": 32,
+    "payload_keys": ["snooze_minutes", "snoozes_left"],
+    "why": [
+      "B13 requirement 259's local trigger. The device can only snooze an alarm it was told how",
+      "to snooze: the arm and the ring carry snooze_minutes and snoozes_left from the alarm row,",
+      "so the device never keeps its own default or its own limit. It reports WHEN it will ring",
+      "again ('until'), and the cloud adopts that instant rather than re-deriving it from the",
+      "moment the report arrived - one clock for one decision."
+    ]
+  },
+  "read_by": {
+    "cloud": "services/api/app/devices/voice_contract.py",
+    "device": "devices/windows-agent/src/PagentOS.Companion.Audio/Listening/DeviceVoiceContract.cs"
+  }
+}

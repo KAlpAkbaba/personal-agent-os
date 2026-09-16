@@ -12623,3 +12623,148 @@ ended `evaluation_failed`; the quality gate caught it as a one-off test failure.
 `_classify` no longer repeats it. The failure-matrix test also asserts that no skill version,
 workspace or evaluation exists for the refused run; with the refusal moved back after `_test`
 it fails deterministically.
+
+## ADR-0164 — The Unity path, as a licensed editor really runs it (2026-09-16)
+
+**Context.** B50 (reqs 530-533) had been `BLOCKED_PROVIDER` on the Unity licence. The first
+run after the owner's licence became valid found that the production path had never run:
+the Cloud driver `SceneDriver.cs` needs Newtonsoft.Json, which no scaffolded project
+declared; `attach_script` named three catalogue scripts no file held; the device lab drove
+a driver of its own, so neither was visible; and the Unity job's fixed 32-process cap left
+the editor's build backend unable to start a compiler (GetLastError 1816). Build (532) and
+test (533) had no operations at all.
+
+**Decision.**
+1. Every Unity scaffold carries `drivers/unity_support/` - the package manifest and the
+   three catalogue scripts - sha256-pinned in `drivers/manifest.json` like the drivers; a
+   changed file is never shipped (`DriverPinMismatch`).
+2. The Unity job's process cap is derived from the machine: `clamp(4*cores + 64, 128, 512)`
+   (a player build failed at two per core); its CPU-time bound is the wall-clock bound times
+   the cores. Blender keeps its fixed cap.
+3. Two Unity-only plan operations: `run_tests` steps each attached catalogue script through
+   its own `Step(float)` (the method its `Update` calls) for N frames, requires it to have
+   acted, and restores the object; `build_player` builds the saved scene as a Windows player
+   at `Build/<scene>.exe` and declares its hash. The Cloud Core counts the build only after
+   the device's `file.inspect` reads the same bytes back as a PE image, and never asks for a
+   path outside the project.
+4. The Unity command is `unity -batchmode -quit ...` (13 tokens). With `-nographics` the
+   editor has no graphics device and `Camera.Render` produced one flat colour. The device
+   still admits the 14-token `-nographics` form exactly, for a Cloud Core released before
+   this change; the driver reports `render: no graphics device` there and the render check
+   refuses the result.
+5. A Unity camera's aim is judged with Unity's axes (left-handed, +Z forward, Euler Z-X-Y):
+   the Blender formula read a correctly aimed camera as 180 degrees off.
+6. The device lab's `SceneUnityProductionTests` runs the repository's own driver, support
+   files and plan fixture (kept equal to `ScenePlan.plan_json()`) in the real editor; with
+   `PAGENTOS_B50_EVIDENCE_OUT` set it writes the measured run, and
+   `test_creative3d_b50.py` runs the Cloud Core's `compare` over that real output.
+
+**Evidence.** `docs/evidence/b50-unity-production-2026-09-16.json` (Unity 6000.5.0f1,
+28 cores, exit 0, 20 constraints, render stddev 27.0, three script tests passed, 667,648-byte
+x64 player whose device-read hash equals the editor's). RED: the 32- and 88-process caps
+(measured 1816), the `-nographics` render (measured stddev 0), the Blender aim formula
+(measured 180 degrees) and the tr-TR decimal comma (measured "0,5") each failed the same
+tests before their fixes; five Python mutations of the new checks each turn a named test red.
+
+**Consequences.** 530-533 are proven against the real editor with production bytes; the
+live production round needs this Cloud Core release and a device reinstall (the device's
+allowlist and job caps changed). Unreal (534) stays deferred.
+
+### ADR-0158 addendum (B51 closure, 2026-09-16)
+
+No model is needed to close 744-748.
+
+- *Repair readings.* `resolve_intent` reads the words as heard first, exactly as before, and
+  returns any route they reach. Only an utterance that reaches nothing gets repair readings:
+  the polite request read as its imperative, the words with Turkish letters folded on both
+  sides of each comparison, or both. A repair is taken only when all its routed readings
+  agree on one intent, never into the deferred mail/calendar families, is recorded as
+  `route_repair`, and costs 0.1 confidence.
+- *ALL-CAPS text.* An ALL-CAPS transcript whose "I" is ambiguous is the one text read folded
+  first, because its exact casefold is not what was said.
+- *Normalisation.* `turkish_casefold` composes to NFC and drops the combining dot of a
+  non-Turkish lowercase "İ".
+- *"Bunu" is now read.* The document tools pass the turn record's `deictic_reference` for a
+  "current" target. A fresh file or document referent outranks the per-kind focus, and an
+  unread one is extracted or inspected, never replaced by an older document.
+- *Spoken clarification.* The clarification frame names its turn and purpose, and the
+  real-application test proves it is sent once and never again.
+- *What remains.* The dotted-i loss list is gone. The remaining five ALL-CAPS mail/calendar
+  losses are the owner's deferral of B45/B46, not a gap in the router.
+- *Rollback.* Removing the repair loop in `resolve_intent` restores exactly B51's first
+  behaviour.
+
+Found, not fixed (own item): "Chrome'u açıp YouTube'a gir." routes to `media_play`; the "-ıp" converb is not a mission connector (B39/B27 boundary).
+
+| 239 | Device-side microphone provider | Companion WASAPI yakalama + `desktop.voice_status` manifestte (her zaman) | Cihazda mikrofon | DONE | PA | P2 | — | B47 | packages/protocol/device-voice.json, .../Listening/DeviceListeningService.cs, .../Wasapi/WasapiAudioBackend.cs, ProtocolConstants.cs:DesktopVoiceStatus | DeviceListeningTests.cs (26), DeviceVoiceCapabilityTests.cs (12), DeviceVoiceContractTests.cs (6), test_device_voice_contract.py (6) | sahip mikrofon turu bekliyor (qualify-device-voice.ps1 P1-P6) | yes | Karar 7 kabul: SÜREKLİ dinleme (2026-09-16). B47 kanıt dosyasının "yakalama yolu yok" taraması yanlıştı: M12 istemcisi yakalıyordu ve sessizliği de gönderiyordu |
+| 240 | Browser-independent listening | Companion ses servisi tarayıcısız dinler; gerçek zamanlı oturum yalnız cihaz kapısının geçirdiğini görür | Tarayıcısız dinleme | DONE | PA | P2 | 239 | B47 | .../Listening/DeviceVoiceHost.cs, .../Listening/GatedCapture.cs, VoiceCompanionHost.cs | DeviceVoiceHostTests.cs (7) | PROVEN_REAL bekliyor: tarayıcı kapalıyken komut (qualify-device-voice.ps1 B1-B2) | yes | Tüm Chrome/Edge kapalı, windows_desktop oturumu utterance + yanıt kaydetmeli |
+| 241 | Wake word | Çevrimdışı, hesapsız MFCC+DTW şablon motoru; sahibin kaydıyla; uyandırma sözcüğü cihazdan hiç çıkmaz | Uyandırma sözcüğü | PARTIAL | PA | P2 | 240 | B47 | .../Listening/Spotting/*.cs, DeviceListeningService.cs (wake watch) | SpottingTests.cs (11), DeviceListeningTests.cs (wake: 4) | yanlış uyanma/saat ve isabet ölçülmedi (qualify-device-voice.ps1 W1-W5) | yes | Makinede Türkçe tanıyıcı YOK (yalnız en-US SAPI/OneCore). Konuşmacıya bağlı; kimlik doğrulaması DEĞİL. Kalite yalnız sahibin sesiyle ölçülebilir |
+| 242 | Wake-word enable/disable | Mod anahtarı (sürekli / uyandırma / bas-konuş) kalıcı; kayıtsız sözcükle mod reddedilir | Açılıp kapanır | DONE | PA | P2 | 241 | B47 | .../Listening/ListeningSettings.cs, TrayPrivacyIndicator.cs | DeviceListeningTests.cs (mod: 3) | sahip turu (W1, W5) | no | Kayıtlı seçim kayıtsız sözcükle bas-konuş olarak çalışır ve sağlık bunu söyler |
+| 243 | Push-to-talk fallback | Sağ Ctrl ≥150 ms basılıyken mikrofon açık; bırakınca tur biter | Bas-konuş | DONE | PA | P2 | 239 | B47 | DeviceListeningService.cs:HandlePushToTalk, DeviceInputs.cs:Win32PushToTalkKey | DeviceListeningTests.cs (2) | sahip turu bekliyor | no | Tuşlar arasında hiçbir şey yakalanmaz; kanca yok, yalnız GetAsyncKeyState |
+| 244 | Local VAD | Cihaz kapısı: yalnız yerel dedektörün açtığı söz gider; sessizlik ≤2 s halkada sıfırlanır | Cihazda konuşma tespiti | DONE | PA | P2 | 239 | B47 | DeviceListeningService.cs, PreRollBuffer.cs, VoiceSessionOrchestrator.cs:HandleBoundaryAsync | DeviceListeningTests.cs, DeviceVoiceHostTests.cs (uçtan uca: sessizlikte 0 kare) | sahip turu (V1-V2) | no | Bulunan kusur: M12 istemcisi StreamWhileIdle=true ile odadaki sessizliği sağlayıcıya akıtıyordu |
+| 250 | Device-local Voice startup | VoiceEnabled ile companion açılışında başlar; token yoksa cihazda dinlemeyi sürdürür | Açılışta başlar | DONE | PA | P2 | 239 | B47 | Program.cs:RunVoiceAsync, DeviceVoiceHost.cs | DeviceVoiceHostTests.cs, DeviceVoiceCapabilityTests.cs | sahip turu (P3, -EnableVoice) | yes | Kurucu VoiceEnabled yazmıyor; sahip betiği kullanıcı ortamına yazar |
+| 251 | Voice service restart recovery | Oturum hatası/süre dolumu backoff ile yenilenir; servis çökmesi denetçiyle yeniden başlar; kapanışta mikrofon her durumda kapanır | Toparlanır | DONE | PA | P2 | 250 | B47 | Program.cs:SuperviseVoiceAsync, DeviceVoiceHost.cs | DeviceVoiceHostTests.cs, DeviceVoiceCapabilityTests.cs (2), DeviceListeningTests.cs (iptal) | sahip turu bekliyor | no | Önceden tek istisna sesi süreç ömrü boyunca bitiriyordu; token yoksa ses kalıcı kapalıydı |
+| 252 | Voice process health | `desktop.voice_status` + heartbeat `voice` (8 anahtar) + GET /v1/devices heartbeat_status.voice | Sağlık görünür | DONE | PA | P2 | 250 | B47 | DeviceVoiceHealth.cs, HeartbeatStatus.cs, app/devices/status.py, app/devices/voice_contract.py | DeviceVoiceCapabilityTests.cs, test_device_voice_contract.py | sahip turu (P5-P6) | no | Yalnız durum/bayrak/sayaç/hata SINIFI; döküm, ifade, aygıt adı, ses asla |
+| 253 | Offline command subset | alarm.stop, alarm.snooze, time.tell (yalnız bulut erişilemezken), listening.off (her zaman); sözleşme tablosu | Çevrimdışı komutlar | PARTIAL | PA | P2 | 240 | B47 | device-voice.json:offline_commands, OfflineVoiceCommands.cs, DeviceListeningService.cs:ClassifyOfflineCommand | DeviceListeningTests.cs (4), LocalSnoozeTests.cs (7) | tanıma sahibin sesinde ölçülmedi (O3-O5) | yes | Yürütme ve politika tam; Türkçe tanıma kalitesi fiziksel turda. Bir cümle asla iki kez etki etmez |
+| 254 | Voice privacy indicator | Tepsi simgesi: off/muted/listening/wake_word/push_to_talk/sending; menüde anahtar | Dinleme göstergesi | DONE | PA | P2 | 240 | B47 | TrayPrivacyIndicator.cs, DeviceListeningService.cs:UpdateIndicator | DeviceListeningTests.cs (gösterge durumları), DeviceVoiceCapabilityTests.cs (etiket/renk) | sahip turu (V3-V4) | no | "sending" yalnız söz bağlı bir oturuma giderken. Açma yalnız cihazda; uzaktan açma reddedilir |
+| 255 | Hardware mic mute awareness | Uç noktanın susturma bayrağı 500 ms'de okunur; susturulunca yakalama akışı durur; okunamazsa null | Donanım susturması bilinir | PARTIAL | PA | P2 | 239 | B47 | Wasapi/WasapiMuteMonitor.cs, DeviceListeningService.cs:PollMute | DeviceListeningTests.cs (3) | hangi tuşun uç noktaya yazdığı ölçülmedi (V4) | yes | Mantık PA; gerçek WASAPI okuması ve dizüstü tuşu yalnız sahip turunda. 3 s tam sıfır 'digital_silence' olarak raporlanır |
+| 259 | Snooze | Yerel tetikleyici: çevrimdışı "ertele" + tepsi; bulutun koşullarıyla; `local_alarm_snoozed` ile raporlanır, bulut cihazın anını benimser | Tam | DONE | PA | P1 | — | B13, B47 | app/alarms/service.py:reconcile_local_snoozed, app/ambient/ingest.py, AlarmArmController.cs:SnoozeRinging, device-voice.json:local_snooze | test_alarms_local_snooze.py (6), LocalSnoozeTests.cs (7), test_alarms_service.py (51) | üretim turu bekliyor (O1-O6) | no | Sınır (5) cihazda da bulutun sayısıyla. Bayat disarm yerel ertelemeyi SİLEMEZ (bulunan kusur) |
+
+**Owner checkpoint (OWNER_REQUIRED).** `scripts/core/qualify-device-voice.ps1 -EnableVoice -OutFile b47-device-voice-1.json` after the release and device install (about 25 minutes: enroll, privacy, wake, browserless, offline). Independent privacy review of commit 8445fb3: no Critical or High findings; low note 1 applied.
+
+## ADR-0166 — The device camera: periodic or continuous, in the owner's session, and only derived signals leave it (2026-09-16, B48)
+
+**Context.** Owner decision 2026-09-16 (Karar 8 answered): a periodic device-local presence
+check plus an optional continuous mode. ADR-0155 left 300, 307, 308, 326, 327, 333, 671
+waiting on it: the sleep display-off policy requires fresh camera perception, and nothing but
+a camera may say "resting".
+
+**Decision.**
+
+1. **Where.** Capture runs only in the Session Companion. The Session-0 service routes
+   `desktop.camera_mode` and projects the heartbeat; it has no capture code.
+2. **How.** Windows.Media.Capture `MediaFrameReader` (shared read-only first, so an owner's
+   video call keeps the camera) and Windows.Media.FaceAnalysis `FaceDetector` — shipped with
+   Windows, no account, no cloud vision. This needs the WinRT projection, so the companion's
+   target framework carries the Windows SDK version (`net10.0-windows10.0.19041.0`) with its
+   output folder pinned to the old path. B32 chose a PowerShell child for OCR to avoid this
+   change; a camera loop is continuous and latency-bound, so an in-process path is the right
+   trade here.
+3. **In memory only.** A sample is 5 frames; each becomes face boxes plus an 80×60 luma
+   plane, zeroed after the sample. No encoder, sink, file or socket exists in the camera
+   folder (structural test). Only the seven §2 fields and the camera's state leave the device;
+   the Session-0 service drops a nested object holding anything but short scalars; Cloud Core
+   screens the observation with the existing boundary.
+4. **Consent.** Mode `off` after every start; only the owner's `ambient_policy.camera_mode`
+   (relayed while the Active Eye is enabled) opens it; "Kamerayı kapat" closes it; Windows'
+   privacy switches are read before every open and a denial is reported by name; the owner can
+   veto on the device from the tray, which the cloud never argues with; `CameraEnabled=false`
+   is the device-local rollback.
+   *Security review (2026-09-16).* The tray veto is persisted in the owner's profile
+   (`%LOCALAPPDATA%\PagentOS\companion\camera-veto.json`, write-then-move; not Session 0,
+   not the cloud), read before anything else at start, and cleared only by the owner's tray
+   action; an unreadable veto file is a veto. While vetoed the device reports `vetoed` from
+   its first heartbeat and refuses every non-off `desktop.camera_mode` with
+   `permission_denied`; Cloud Core never sends a non-off mode to a device reporting
+   `vetoed`. The permission check fails CLOSED: a permission that cannot be read is
+   `blocked` / `consent_unreadable` ("izin okunamadı") and nothing is opened. The veto
+   store lives outside `Camera/`, whose sources stay forbidden any file API.
+5. **Indicator.** Tray icon whenever a mode is on; "open" face before the device is opened
+   and until after it is closed.
+6. **Rest.** Present + still + 5 min with no input and no sound (render peak meter) → posture
+   `resting`. A dark room is a low-confidence absence (fuses to UNKNOWN). The fusion engine's
+   quiet-hours thresholds (ADR-0155 §3) and the ambient policy's gates then decide sleep and
+   display-off — no new inference path in Cloud Core.
+7. **Relay.** Desired mode vs reported mode is reconciled on the heartbeat, at most once a
+   minute per device, as a durable command row; a mode or eye change pushes at once.
+8. **Monitors (320).** Per-monitor DDC/CI power is READ on request only; writing a VCP code
+   is forbidden by the display family's structural test. Visible darkness stays the owner's
+   judgement.
+
+**Consequences.** Migration 0059 (`ambient_policy.camera_mode`, default `off`). One new
+always-advertised capability (with B47's desktop.voice_status: 13 / 14 / 44 / 104). Companion output +~25 MB. Rows 307,
+308, 326, 333, 671 DONE (PROVEN_AUTOMATED), 300/327 PARTIAL until the owner's physical run,
+320 PARTIAL with a real DDC measurement. Rollback: `camera_mode=off` (cloud) or
+`CameraEnabled=false` (device); input-based presence (311) is untouched.
+
+**Owner checkpoint (READY_FOR_OWNER, no UAC).** `scripts/core/qualify-device-camera.ps1 -DryRun`, then `-IncludePrivacyCheck` (about 10 minutes) and optionally `-SleepTrial`; the evidence holds states and timestamps only. Independent security review: one High (veto lost on companion restart) and one Medium (permission check failed open), both fixed with mutation proofs (10/10).

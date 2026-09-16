@@ -6,7 +6,8 @@
 
 .DESCRIPTION
     Item 28 is one elevated command (`install-device-service.ps1 -DisplayPower -Operator`).
-    It takes the device from 29 advertised capabilities to 85 and is the single thing
+    It takes the device from 29 advertised capabilities to 85 (103 since B47, 104 since B48 - each of whose one
+    added names - desktop.voice_status, desktop.camera_mode - is always advertised) and is the single thing
     standing between six milestones' device halves and PROVEN_REAL. This script is what
     runs afterwards, so the owner does not have to run six qualifications by hand:
 
@@ -1153,9 +1154,10 @@ function Invoke-AmbientSection {
 
         $keys = @()
         if ($null -ne $activity.Result) { $keys = @($activity.Result.PSObject.Properties.Name) }
-        $expected = @("input_idle_s", "display_state", "display_observed_at", "alarm_ringing", "ringing_alarm_id", "armed_alarms", "next_alarm_at")
+        # B13 added local_alarm_fired and B47 local_alarm_snoozed and voice (DEVICE_PROTOCOL.md 6g).
+        $expected = @("input_idle_s", "display_state", "display_observed_at", "alarm_ringing", "ringing_alarm_id", "armed_alarms", "next_alarm_at", "local_alarm_fired", "local_alarm_snoozed", "voice")
         $missing = @($expected | Where-Object { $keys -notcontains $_ })
-        Add-Check -Section $section.name -Name "desktop.activity_status.carries_exactly_the_seven_documented_keys" -Ok ($activity.Ok -and @($missing).Count -eq 0) `
+        Add-Check -Section $section.name -Name "desktop.activity_status.carries_every_documented_key" -Ok ($activity.Ok -and @($missing).Count -eq 0) `
             -Detail "$(@($keys).Count) key(s)$(if (@($missing).Count) { "; MISSING $($missing -join ', ')" })"
         if (-not ($activity.Ok -and @($missing).Count -eq 0)) { $failures++ }
 
@@ -1168,6 +1170,18 @@ function Invoke-AmbientSection {
         Add-Check -Section $section.name -Name "ambient.policy.answers_for_itself" -Ok ($null -ne $policy) `
             -Detail $(if ($null -ne $policy) { (ConvertTo-Json -InputObject $policy -Compress -Depth 3) } else { "GET /v1/ambient/policy did not answer" })
         if ($null -eq $policy) { $failures++ }
+
+        # B48: the device camera's mode is READ (no mode in the payload), which never opens
+        # the camera. Opening it, the tray indicator and the posture signal are the owner's
+        # physical qualification, not this script's.
+        $camera = Invoke-DeviceCapability -Section $section -Capability "desktop.camera_mode" -Payload @{} -AllowFailure
+        $cameraMode = [string](Get-ResultField -Result $camera.Result -Name "mode")
+        Add-Check -Section $section.name -Name "desktop.camera_mode.answers_without_opening_the_camera" -Ok ($camera.Ok -and @("off", "periodic", "continuous") -contains $cameraMode) `
+            -Detail "mode=$cameraMode state=$(Get-ResultField -Result $camera.Result -Name 'state') error=$(Get-ResultField -Result $camera.Result -Name 'error')"
+        if (-not ($camera.Ok -and @("off", "periodic", "continuous") -contains $cameraMode)) { $failures++ }
+        Add-ReadyForOwner -Section $section.name -What "the device camera: a real presence check, the tray indicator, a resting posture and one sleep display-off" `
+            -Why "only the owner can sit in front of the camera, see the tray icon and judge the monitors" `
+            -Harness "scripts\core\qualify-device-camera.ps1"
 
         Add-ReadyForOwner -Section $section.name -What "displays actually going dark, and one keypress waking them" `
             -Why "only a person can see a blank screen and press a key; this script never darkens a display" `

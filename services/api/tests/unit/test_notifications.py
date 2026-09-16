@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import create_engine
@@ -35,10 +36,13 @@ from app.notifications.models import (
     NotificationRow,
 )
 
+#: The owner's wall clock: quiet hours are a local night (req 379).
+IST = ZoneInfo("Europe/Istanbul")
+
 # Mid-afternoon: comfortably outside quiet hours, so a test that is not about quiet hours
 # never accidentally becomes one.
-NOON = datetime(2026, 9, 13, 14, 0, tzinfo=UTC)
-NIGHT = datetime(2026, 9, 13, 23, 30, tzinfo=UTC)
+NOON = datetime(2026, 9, 13, 14, 0, tzinfo=UTC)  # 17:00 in Istanbul
+NIGHT = datetime(2026, 9, 13, 23, 30, tzinfo=IST)
 
 
 @pytest.fixture()
@@ -145,18 +149,38 @@ def test_the_deferred_one_is_delivered_once_the_night_is_over(db) -> None:
 
 def test_quiet_hours_cross_midnight(db) -> None:
     """The normal case for a night, and the one a naive `start <= now < end` gets wrong."""
-    assert notifications.in_quiet_hours(datetime(2026, 9, 13, 23, 30, tzinfo=UTC)) is True
-    assert notifications.in_quiet_hours(datetime(2026, 9, 14, 3, 0, tzinfo=UTC)) is True
-    assert notifications.in_quiet_hours(datetime(2026, 9, 14, 9, 0, tzinfo=UTC)) is False
+    assert notifications.in_quiet_hours(datetime(2026, 9, 13, 23, 30, tzinfo=IST)) is True
+    assert notifications.in_quiet_hours(datetime(2026, 9, 14, 3, 0, tzinfo=IST)) is True
+    assert notifications.in_quiet_hours(datetime(2026, 9, 14, 9, 0, tzinfo=IST)) is False
+
+
+def test_quiet_hours_are_the_owner_s_night_not_utc_s(db) -> None:
+    """2026-09-16: ``record`` passes a UTC time and the window was compared against it, so in
+    Istanbul (UTC+3) the "night" ran 02:00-10:30 - a 23:30 notice rang through and a 09:00
+    one waited."""
+    late_evening = datetime(2026, 9, 13, 20, 30, tzinfo=UTC)  # 23:30 in Istanbul
+    morning = datetime(2026, 9, 14, 6, 0, tzinfo=UTC)  # 09:00 in Istanbul
+    assert notifications.in_quiet_hours(late_evening) is True
+    assert notifications.in_quiet_hours(morning) is False
+
+    row = _record(db, now=late_evening)
+    assert row.deferred_until is not None
+    until = row.deferred_until
+    until = until if until.tzinfo else until.replace(tzinfo=UTC)
+    assert until.astimezone(IST) == datetime(2026, 9, 14, 7, 30, tzinfo=IST)
+    assert _record(db, now=morning).deferred_until is None
 
 
 def test_a_daytime_quiet_window_still_works() -> None:
     """The wrap-around handling must not have broken the ordinary case."""
-    assert notifications.in_quiet_hours(
-        datetime(2026, 9, 13, 14, 0, tzinfo=UTC),
-        start=time(13, 0),
-        end=time(15, 0),
-    ) is True
+    assert (
+        notifications.in_quiet_hours(
+            datetime(2026, 9, 13, 14, 0, tzinfo=IST),
+            start=time(13, 0),
+            end=time(15, 0),
+        )
+        is True
+    )
 
 
 # ----------------------------------------------------------------- grouping (380)
@@ -381,7 +405,7 @@ def test_delivering_twice_does_not_happen(db) -> None:
 
 
 def test_the_history_includes_what_never_reached_anyone(db) -> None:
-    """"We never reached you about this" is the part of a delivery history that matters."""
+    """ "We never reached you about this" is the part of a delivery history that matters."""
     _record(db, body="ulaşılamadı")
     reached = _record(db, body="ulaşıldı")
     notifications.mark_delivered(db, reached, channel=CHANNEL_TOAST, now=NOON)

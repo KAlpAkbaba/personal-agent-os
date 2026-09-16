@@ -17,7 +17,7 @@ gives the owner the ten seconds to take their hand off the keyboard.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -62,6 +62,8 @@ class PolicyIn(BaseModel):
     keep_on: bool | None = None
     asleep_after_outside_quiet_s: int | None = Field(default=None, ge=60, le=24 * 3600)
     camera_unknown_grace_s: int | None = Field(default=None, ge=10, le=3600)
+    #: B48: the device camera's mode (off | periodic | continuous).
+    camera_mode: Literal["off", "periodic", "continuous"] | None = None
     #: {"start": "HH:MM", "end": "HH:MM", "timezone"?: IANA}; validated by the service.
     quiet_hours: dict[str, Any] | None = None
     #: True clears the quiet window (a PATCH cannot say "set this to nothing" otherwise).

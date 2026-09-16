@@ -468,9 +468,20 @@ class FakeCreative3DDevice:
     §1, §6) — the licensing client's own words, never a crash, never "done".
     """
 
-    def __init__(self, *, unity_available: bool = False, render_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        unity_available: bool = False,
+        render_dir: Path | None = None,
+        unity_build: bytes | None = None,
+        unity_tests_pass: bool = True,
+    ) -> None:
         self.unity_available = unity_available
         self._render_dir = render_dir
+        # B50: what the fake editor's build_player writes, and whether its run_tests pass.
+        self.unity_build = minimal_pe() if unity_build is None else unity_build
+        self.unity_tests_pass = unity_tests_pass
+        self._roots: set[str] = set()
         self._plans: dict[str, dict[str, Any]] = {}
         self._bpy_by_project: dict[str, ModuleType] = {}
         self._inspections: dict[str, dict[str, Any]] = {}
@@ -525,6 +536,7 @@ class FakeCreative3DDevice:
             )
 
         self._plans[project_id] = plan
+        self._roots.add(f"{_BASE_ROOT}/{slug}")
         return DeviceRunResult(
             True, result={"root_path": f"{_BASE_ROOT}/{slug}", "files_written": len(files)}
         )
@@ -545,10 +557,37 @@ class FakeCreative3DDevice:
             if not self.unity_available:
                 return DeviceRunResult(False, "dependency_unavailable", UNITY_LICENSE_MESSAGE)
             state = self._unity_state.setdefault(
-                project_id, {"objects": {}, "camera": None, "lights": {}}
+                project_id, {"objects": {}, "camera": None, "lights": {}, "scripts": []}
             )
             _apply_plan_to_unity_state(state, plan)
-            self._inspections[project_id] = _unity_state_to_inspection(state)
+            inspection = _unity_state_to_inspection(state)
+            kinds = {op.get("op") for op in plan.get("operations") or []}
+            if "run_tests" in kinds:
+                inspection["tests"] = [
+                    {
+                        "object": name,
+                        "script": script,
+                        "frames": 30,
+                        "passed": self.unity_tests_pass,
+                        "detail": "stepped (fake editor)",
+                    }
+                    for name, script in state["scripts"]
+                ]
+            if "build_player" in kinds:
+                import hashlib
+
+                relative = f"Build/{plan.get('scene', 'scene')}.exe"
+                exe = Path(self._render_dir or Path.cwd()) / relative
+                exe.parent.mkdir(parents=True, exist_ok=True)
+                exe.write_bytes(self.unity_build)
+                inspection["build"] = {
+                    "target": "windows64",
+                    "result": "Succeeded",
+                    "path": relative,
+                    "sha256": hashlib.sha256(self.unity_build).hexdigest(),
+                    "bytes": len(self.unity_build),
+                }
+            self._inspections[project_id] = inspection
             return DeviceRunResult(True, result={})
 
         fake_bpy = self._bpy_by_project.setdefault(project_id, build_fake_bpy())
@@ -619,6 +658,41 @@ class FakeCreative3DDevice:
             )
         return DeviceRunResult(True, result=result)
 
+    # ----------------------------------------------------------------- file.inspect
+
+    def file_inspect(self, payload: dict[str, Any]) -> DeviceRunResult:
+        """DocumentCapabilities.Inspect, restated for a file under a scaffolded project: the
+        record (size, sha256) and a ``pe`` block ONLY when the bytes really are a PE image
+        (PeImageReader.TryRead). A path under no scaffolded project is refused, as the real
+        device refuses a path outside its roots. Not part of :meth:`capability_results`: the
+        corpus device merges those with the documents and native fakes' own ``file.inspect``,
+        which this must not replace - a test that needs it adds it by name."""
+        import hashlib
+
+        path = str(payload.get("path") or "")
+        root = next((r for r in self._roots if path.startswith(r + "\\")), None)
+        if root is None:
+            return DeviceRunResult(False, "permission_denied", "the path is outside the roots")
+        relative = path[len(root) + 1 :].replace("\\", "/")
+        target = Path(self._render_dir or Path.cwd()) / relative
+        if ".." in Path(relative).parts or not target.exists():
+            return DeviceRunResult(False, "not_found", "no such file")
+        content = target.read_bytes()
+        result: dict[str, Any] = {
+            "file": {
+                "path": path,
+                "name": target.name,
+                "extension": target.suffix,
+                "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            },
+            "kind": "unknown",
+            "is_text": False,
+        }
+        if is_pe(content):
+            result["pe"] = {"machine": "x64", "subsystem": "windows_gui"}
+        return DeviceRunResult(True, result=result)
+
     def capability_results(self) -> dict[str, Any]:
         """``{capability: callable}`` for ``tests.alarms_support.FakeDeviceAction``
         (the same shape ``tests.appfactory_support.appfactory_capability_results``
@@ -640,6 +714,9 @@ def _apply_plan_to_unity_state(state: dict[str, Any], plan: dict[str, Any]) -> N
             state["objects"].clear()
             state["camera"] = None
             state["lights"].clear()
+            state["scripts"].clear()
+        elif kind == "attach_script":
+            state["scripts"].append((op["name"], op["script_id"]))
         elif kind == "add_primitive":
             name = op["name"]
             obj_kind = op["kind"]
@@ -674,6 +751,27 @@ def _apply_plan_to_unity_state(state: dict[str, Any], plan: dict[str, Any]) -> N
                 state["lights"][op["name"]] = float(op["energy"])
 
 
+def minimal_pe() -> bytes:
+    """The smallest byte string PeImageReader's first two checks accept: an MZ header whose
+    e_lfanew points at a PE signature."""
+    import struct
+
+    header = bytearray(0x80)
+    header[0:2] = b"MZ"
+    header[0x3C:0x40] = struct.pack("<I", 0x40)
+    header[0x40:0x44] = b"PE\x00\x00"
+    return bytes(header)
+
+
+def is_pe(content: bytes) -> bool:
+    import struct
+
+    if len(content) < 0x40 or content[:2] != b"MZ":
+        return False
+    offset = struct.unpack("<I", content[0x3C:0x40])[0]
+    return content[offset : offset + 4] == b"PE\x00\x00"
+
+
 def _unity_state_to_inspection(state: dict[str, Any]) -> dict[str, Any]:
     return {
         "objects": list(state["objects"].values()),
@@ -702,4 +800,6 @@ __all__ = [
     "build_fake_bpy",
     "creative3d_capability_results",
     "install_fake_bpy",
+    "is_pe",
+    "minimal_pe",
 ]

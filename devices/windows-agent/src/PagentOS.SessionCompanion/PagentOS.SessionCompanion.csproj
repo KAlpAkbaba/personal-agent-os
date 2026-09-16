@@ -1,7 +1,18 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!--
+      B48 (device camera, ADR proposed in WORKLOG_B48.md): the Windows SDK version in the
+      target framework is what brings the WinRT projection (Windows.Media.Capture,
+      Windows.Media.FaceAnalysis) into this process - on-device, no account, shipped with
+      Windows. The build output stays in bin\<Configuration>\net10.0-windows\ so every script
+      that already names that folder keeps working; only this project and the two test
+      projects that reference it carry the SDK version (a lower-versioned project cannot
+      reference a higher one).
+    -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\net10.0-windows\</OutputPath>
     <OutputType>Exe</OutputType>
     <RootNamespace>PagentOS.SessionCompanion</RootNamespace>
   </PropertyGroup>

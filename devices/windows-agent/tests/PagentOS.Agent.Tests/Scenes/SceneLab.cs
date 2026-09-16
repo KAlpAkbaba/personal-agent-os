@@ -368,7 +368,7 @@ public sealed class SceneLab : IDisposable
 
     /// <summary>The Unity command the allowlist admits.</summary>
     public static string UnityCommand(string plan = PlanFileName, string output = SceneCapabilityNames.InspectionFileName, string log = UnityLogFileName, string method = SceneCapabilityNames.UnityDriverMethod)
-        => $"{SceneCapabilityNames.UnityProgram} -batchmode -nographics -quit -projectPath {ProjectManifest.RootPlaceholder} -executeMethod {method} -planPath {plan} -outPath {output} -logFile {log}";
+        => $"{SceneCapabilityNames.UnityProgram} -batchmode -quit -projectPath {ProjectManifest.RootPlaceholder} -executeMethod {method} -planPath {plan} -outPath {output} -logFile {log}";
 
     // ------------------------------------------------------------------ driving
 

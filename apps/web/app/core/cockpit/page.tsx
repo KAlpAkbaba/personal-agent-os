@@ -27,7 +27,7 @@
  * words until the row was read back to the owner.
  */
 
-import { updateAmbientPolicy } from "../../lib/cockpit/api";
+import { updateAmbientCameraMode, updateAmbientPolicy } from "../../lib/cockpit/api";
 import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
@@ -331,6 +331,7 @@ function Cockpit() {
             policy={data.ambientPolicy}
             devices={data.devices}
             onToggle={(field, value) => void updateAmbientPolicy(field, value).then(refreshPanels)}
+            onCameraMode={(mode) => void updateAmbientCameraMode(mode).then(refreshPanels)}
           />
           {/* ADR-0080: whether the owner's words still route where they say. */}
           <VoiceQualificationPanel state={data.voiceQualification} now={now} />

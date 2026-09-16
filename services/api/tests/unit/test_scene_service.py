@@ -314,15 +314,18 @@ def test_run_command_is_the_argv_the_device_allowlist_requires() -> None:
     assert unity[0:8] == [
         "unity",
         "-batchmode",
-        "-nographics",
         "-quit",
         "-projectPath",
         "<root>",
         "-executeMethod",
         "PagentOS.SceneDriver.Run",
+        "-planPath",
     ]
-    assert unity[8] == "-planPath" and unity[10] == "-outPath" and unity[12] == "-logFile"
-    assert len(unity) == 14
+    # B50: never -nographics - without a graphics device the editor's render is one flat
+    # colour (measured on the first licensed run).
+    assert "-nographics" not in unity
+    assert unity[9] == "-outPath" and unity[11] == "-logFile"
+    assert len(unity) == 13
 
 
 def test_the_scaffold_asks_for_the_3d_root_and_sends_the_real_command(

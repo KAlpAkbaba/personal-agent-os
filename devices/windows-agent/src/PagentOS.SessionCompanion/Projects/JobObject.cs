@@ -113,7 +113,12 @@ public sealed class JobObject : IDisposable
         => runtime switch
         {
             ProjectRuntime.Blender => Create(SceneCapabilityNames.BlenderMemoryLimitBytes, SceneCapabilityNames.BlenderRunLimit, Max3dProcessesPerJob),
-            ProjectRuntime.Unity => Create(SceneCapabilityNames.UnityMemoryLimitBytes, SceneCapabilityNames.UnityRunLimit, Max3dProcessesPerJob),
+            // B50 (ADR-0164): Unity's compilers run a process per core and sum their CPU time,
+            // so both bounds follow this machine's processor count; Blender keeps the fixed 32.
+            ProjectRuntime.Unity => Create(
+                SceneCapabilityNames.UnityMemoryLimitBytes,
+                SceneCapabilityNames.UnityCpuTimeLimitFor(Environment.ProcessorCount),
+                SceneCapabilityNames.UnityProcessesPerJob(Environment.ProcessorCount)),
             // M28: 4 GiB and 64 processes, and a CPU-time bound that is NOT the wall-clock
             // bound. `JOB_OBJECT_LIMIT_JOB_TIME` ends the job when the SUM of its processes'
             // user time passes the limit, and MSBuild compiles in parallel: on an eight-core
