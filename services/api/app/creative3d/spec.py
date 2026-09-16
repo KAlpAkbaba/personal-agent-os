@@ -242,6 +242,30 @@ class ExportScene(_StrictModel):
     format: Literal["glb", "fbx"] = "glb"
 
 
+class BuildPlayer(_StrictModel):
+    """B50 (req 532): the scene built by Unity's own BuildPipeline as a Windows player,
+    written beside the project (``Build/<scene>.exe``). The Cloud Core reads the produced
+    executable back through the device's ``file.inspect`` (its PE block and hash) before it
+    counts the build - an exit code is not a build."""
+
+    op: Literal["build_player"] = "build_player"
+    target: Literal["windows64"] = "windows64"
+
+
+class RunTests(_StrictModel):
+    """B50 (req 533): the catalogue scripts attached in this scene stepped ``frames`` times in
+    the editor and required to have acted (a Spinner turned, a Bouncer moved, a ColorCycler
+    changed colour); every object is restored afterwards, so the saved scene is the plan's."""
+
+    op: Literal["run_tests"] = "run_tests"
+    frames: int = 30
+
+    @model_validator(mode="after")
+    def _bounded_frames(self) -> RunTests:
+        _bounded(self.frames, 1, 600, "run_tests.frames")
+        return self
+
+
 class Inspect(_StrictModel):
     op: Literal["inspect"] = "inspect"
 
@@ -256,6 +280,8 @@ Operation = Annotated[
     | AttachScript
     | Render
     | Inspect
+    | BuildPlayer
+    | RunTests
     | SetFrames
     | Animate
     | ExportScene,
@@ -276,6 +302,10 @@ _NAME_BEARING_OPS: tuple[str, ...] = (
 
 
 # --------------------------------------------------------------------------- the plan
+
+
+#: B50: operations only the Unity driver implements.
+UNITY_ONLY_OPS: frozenset[str] = frozenset({"attach_script", "build_player", "run_tests"})
 
 
 class ScenePlan(_StrictModel):
@@ -374,8 +404,8 @@ class ScenePlan(_StrictModel):
     def _attach_script_unity_only(self) -> ScenePlan:
         if self.tool != TOOL_UNITY:
             for op in self.operations:
-                if op.op == "attach_script":
-                    raise ValueError("attach_script is only valid when tool='unity'")
+                if op.op in UNITY_ONLY_OPS:
+                    raise ValueError(f"{op.op} is only valid when tool='unity'")
         return self
 
     def plan_json(self) -> str:
@@ -405,6 +435,7 @@ __all__ = [
     "SCALE_MAX",
     "SCALE_MIN",
     "SCRIPT_CATALOGUE",
+    "UNITY_ONLY_OPS",
     "TOOLS",
     "TOOL_BLENDER",
     "TOOL_UNITY",

@@ -767,6 +767,25 @@ public static class SceneCapabilityNames
     public const long UnityMemoryLimitBytes = 4L * 1024 * 1024 * 1024;
 
     /// <summary>
+    /// B50 (ADR-0164): the most processes one Unity job may hold, derived from this machine's
+    /// processor count. Unity 6's build backend (Bee) and its shader compilers start a worker
+    /// per core, so the fixed 32 that fits Blender refused the editor's own script compilation
+    /// on a 28-thread machine: bee_backend could not start a process (GetLastError 1816,
+    /// ERROR_NOT_ENOUGH_QUOTA) and the run ended "Scripts have compiler errors" - the first run
+    /// after the owner's licence became valid (2026-09-16). A Windows player build (req 532) failed
+    /// the same way at two per core, so four per core. Still a bounded cap, never a fork bomb.
+    /// </summary>
+    public static int UnityProcessesPerJob(int processorCount) => Math.Clamp((4 * processorCount) + 64, 128, 512);
+
+    /// <summary>
+    /// B50 (ADR-0164): the CPU-time bound of a Unity job, which - like a native build's - is NOT
+    /// the wall-clock bound: the job's user time is the SUM over its parallel compilers, so a
+    /// bound equal to <see cref="UnityRunLimit"/> would end an honest import on a many-core
+    /// machine. The wall clock stays the real bound (the runner ends the job at UnityRunLimit).
+    /// </summary>
+    public static TimeSpan UnityCpuTimeLimitFor(int processorCount) => UnityRunLimit * Math.Clamp(processorCount, 1, 64);
+
+    /// <summary>
     /// The exit code the Unity editor uses for "no licence" — measured on the owner's machine
     /// 2026-09-08 (<c>docs/evidence/m25-tool-detection-2026-09-08.json</c>, and again at
     /// 13:24Z). It is reported as <c>dependency_unavailable</c>, never <c>device_error</c>:

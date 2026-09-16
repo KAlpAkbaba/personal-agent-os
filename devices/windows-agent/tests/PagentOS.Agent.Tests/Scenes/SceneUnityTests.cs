@@ -82,7 +82,16 @@ public sealed class SceneUnityTests
         Assert.NotNull(run);
         Assert.True(run!["batch"]!.GetValue<bool>());
         Assert.Equal("unity", run["runtime"]!.GetValue<string>());
-        Assert.Equal(0, run["exit_code"]!.GetValue<int>());
+        // A licensed editor that still failed must say WHY: the editor log's own error lines
+        // (the compiler's, the licensing client's), not just "1" and a console tail.
+        if (run["exit_code"]!.GetValue<int>() != 0)
+        {
+            var editorLog = Path.Combine(folder, SceneLab.UnityLogFileName);
+            var errors = File.Exists(editorLog)
+                ? string.Join('\n', File.ReadLines(editorLog).Where(l => l.Contains("error", StringComparison.OrdinalIgnoreCase)).Take(40))
+                : "(no editor log)";
+            Assert.Fail($"unity exited {run["exit_code"]}; editor log errors:\n{errors}\nconsole tail: {run["log_tail"]?.GetValue<string>()}");
+        }
 
         var inspected = lab.Exec(SceneCapabilityNames.Inspect, new JsonObject { ["project_id"] = "un-1" });
         Assert.Equal("unity", ((JsonObject)inspected["inspection"]!)["tool"]!.GetValue<string>());
