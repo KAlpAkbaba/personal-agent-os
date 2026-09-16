@@ -60,6 +60,8 @@ public sealed class BrowserDispatchTests : IDisposable
                 "desktop.display_wake", "desktop.display_status", "desktop.activity_status",
                 "desktop.alarm_arm", "desktop.alarm_disarm", "desktop.play_audio",
                 "desktop.notify",
+                // B47: the device microphone provider's status (DEVICE_PROTOCOL.md §6o).
+                "desktop.voice_status",
             },
             AgentCapabilities.Compose(browserEnabled: false));
     }

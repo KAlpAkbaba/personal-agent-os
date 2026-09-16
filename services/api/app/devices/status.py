@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final
 
+from app.devices import voice_contract
+
 DISPLAY_ON: Final = "on"
 DISPLAY_OFF: Final = "off"
 DISPLAY_DIMMED: Final = "dimmed"
@@ -86,6 +88,25 @@ def _armed_count(raw: Any) -> int:
     return 0
 
 
+def _snooze_list(raw: Any) -> tuple[tuple[str, datetime], ...]:
+    """B47 ``local_alarm_snoozed``: ``{"alarm_id", "until"}`` objects, bounded; anything
+    malformed is dropped rather than guessed at."""
+    if not isinstance(raw, list | tuple):
+        return ()
+    out: list[tuple[str, datetime]] = []
+    limit = voice_contract.local_snooze_max_entries()
+    for item in raw:
+        if len(out) >= limit:
+            break
+        if not isinstance(item, dict):
+            continue
+        alarm_id = item.get("alarm_id")
+        until = _parse_dt(item.get("until"))
+        if isinstance(alarm_id, str) and alarm_id.strip() and until is not None:
+            out.append((alarm_id.strip()[:64], until))
+    return tuple(out)
+
+
 def _id_list(raw: Any) -> tuple[str, ...]:
     if not isinstance(raw, list | tuple):
         return ()
@@ -121,6 +142,10 @@ class DeviceStatus:
     holdoff_until: datetime | None = None
     next_alarm_at: datetime | None = None
     monitors: int | None = None
+    #: B47: alarms the device snoozed on its own, with the instant it will ring again.
+    local_alarm_snoozed: tuple[tuple[str, datetime], ...] = ()
+    #: B47 rows 250-252: the device voice service's health, on the contract's key set.
+    voice: dict[str, Any] | None = None
     raw_keys: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -148,6 +173,11 @@ class DeviceStatus:
             "armed_alarms": list(self.armed_alarms),
             "armed_alarm_count": self.armed_alarm_count,
             "local_alarm_fired": list(self.local_alarm_fired),
+            "local_alarm_snoozed": [
+                {"alarm_id": alarm_id, "until": _iso(until)}
+                for alarm_id, until in self.local_alarm_snoozed
+            ],
+            "voice": dict(self.voice) if self.voice is not None else None,
             "holdoff_until": _iso(self.holdoff_until),
             "next_alarm_at": _iso(self.next_alarm_at),
             "monitors": self.monitors,
@@ -169,6 +199,8 @@ class StatusChange:
     input_reset: bool
     should_observe_input: bool
     newly_fired_alarms: tuple[str, ...]
+    #: B47: local snoozes this report carries that the previous one did not.
+    newly_snoozed_alarms: tuple[tuple[str, datetime], ...] = ()
 
     @property
     def display_state(self) -> str:
@@ -228,6 +260,8 @@ def parse_status(
         armed_alarms=_id_list(raw.get("armed_alarms")),
         armed_alarm_count=_armed_count(raw.get("armed_alarms")),
         local_alarm_fired=_id_list(raw.get("local_alarm_fired")),
+        local_alarm_snoozed=_snooze_list(raw.get(voice_contract.local_snooze_field())),
+        voice=voice_contract.normalise_voice(raw.get(voice_contract.heartbeat_field())),
         holdoff_until=_parse_dt(raw.get("holdoff_until")),
         next_alarm_at=_parse_dt(raw.get("next_alarm_at")),
         monitors=(
@@ -295,6 +329,10 @@ class DeviceStatusRegistry:
 
             seen = set(previous.local_alarm_fired) if previous else set()
             newly_fired = tuple(a for a in status.local_alarm_fired if a not in seen)
+            # The device drains its list, so a snooze normally appears once; the diff keeps a
+            # retransmitted report from snoozing the same alarm twice.
+            seen_snoozes = set(previous.local_alarm_snoozed) if previous else set()
+            newly_snoozed = tuple(e for e in status.local_alarm_snoozed if e not in seen_snoozes)
 
         return StatusChange(
             status=status,
@@ -303,6 +341,7 @@ class DeviceStatusRegistry:
             input_reset=input_reset,
             should_observe_input=should_observe,
             newly_fired_alarms=newly_fired,
+            newly_snoozed_alarms=newly_snoozed,
         )
 
     def get(self, device_id: uuid.UUID) -> DeviceStatus | None:

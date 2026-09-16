@@ -5,6 +5,7 @@ using PagentOS.Agent.Core.Audit;
 using PagentOS.Companion.Audio.Audio;
 using PagentOS.Companion.Audio.Audio.Processing;
 using PagentOS.Companion.Audio.Audio.Vad;
+using PagentOS.Companion.Audio.Listening;
 using PagentOS.Companion.Audio.Media;
 using PagentOS.Companion.Audio.Session;
 using PagentOS.Companion.Audio.Sideband;
@@ -124,6 +125,16 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     public IAudioCapture? Capture => _capture;
 
+    /// <summary>
+    /// B47: true when the capture is a device gate's tap (<see cref="IUtteranceBoundarySource"/>).
+    /// Turn boundaries then come from the gate, which has seen the silence this client never
+    /// receives, and only audio inside an open turn is uplinked.
+    /// </summary>
+    public bool DeviceGated => _capture is IUtteranceBoundarySource;
+
+    /// <summary>The loop task once started; completes when the session ends or is stopped.</summary>
+    public Task? Completion => _loop;
+
     public IAudioPlayback? Playback => _playback;
 
     public VoiceEventReporter? Reporter => _reporter;
@@ -139,6 +150,9 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     /// <summary>Times this client re-attached after being superseded, on the owner's next speech.</summary>
     public int ReattachCount { get; private set; }
+
+    /// <summary>True between a lost media leg and its re-attachment: the Cloud Core is not reachable from here.</summary>
+    public bool Reconnecting => _reconnecting;
 
     /// <summary>True while another client holds the leg: no uplink, no playback, until the owner speaks here again.</summary>
     public bool LegSuperseded => _legSuperseded;
@@ -256,6 +270,11 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
         var driverApo = _capture is IReportsDriverProcessing reports && reports.DriverApoActive;
         ProcessingReport = AudioProcessingReport.Describe(driverApo, _renderInfo?.IsHeadsetLike ?? false, _processor);
+        if (_capture is IUtteranceBoundarySource gate)
+        {
+            // The gate processed the audio before admitting it; this client does not again.
+            ProcessingReport = ProcessingReport with { ClientProcessors = gate.UpstreamProcessors };
+        }
         _audit?.Write("voice_session_started", status: "ok", detail: new JsonObject
         {
             ["grant"] = Grant.ToAuditJson(),
@@ -408,12 +427,21 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         if (old is not null)
         {
             old.FrameCaptured -= OnFrameCaptured;
+            if (old is IUtteranceBoundarySource oldGate)
+            {
+                oldGate.Boundary -= OnUtteranceBoundary;
+            }
+
             old.Stop();
             old.Dispose();
         }
 
         var capture = _devices.OpenCapture(change.ToDeviceId, _options.Format);
         capture.FrameCaptured += OnFrameCaptured;
+        if (capture is IUtteranceBoundarySource gate)
+        {
+            gate.Boundary += OnUtteranceBoundary;
+        }
         _capture = capture;
         _captureSelector.MarkActive(change.ToDeviceId);
         _eot?.Reset();
@@ -494,6 +522,8 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
     private void OnFrameCaptured(AudioFrame frame) => _inputs.Writer.TryWrite(new FrameInput(frame));
 
+    private void OnUtteranceBoundary(UtteranceBoundary boundary) => _inputs.Writer.TryWrite(new BoundaryInput(boundary));
+
     private void OnPlaybackDrained() => _inputs.Writer.TryWrite(new PlaybackDrainedInput());
 
     // ---------------------------------------------------------------- media leg
@@ -565,6 +595,9 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                     case FrameInput frame:
                         await HandleFrameAsync(frame.Frame, ct).ConfigureAwait(false);
                         break;
+                    case BoundaryInput boundary:
+                        await HandleBoundaryAsync(boundary.Boundary, ct).ConfigureAwait(false);
+                        break;
                     case ProviderInput provider when ReferenceEquals(provider.Leg, _leg) || provider.Event is DisconnectedEvent:
                         try
                         {
@@ -612,8 +645,37 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
         }
     }
 
+    private async Task HandleBoundaryAsync(UtteranceBoundary boundary, CancellationToken ct)
+    {
+        switch (boundary)
+        {
+            case UtteranceStarted started:
+                await OnOwnerSpeechStartedAsync(started.Timestamp, "device_gate:" + started.Reason, ct).ConfigureAwait(false);
+                break;
+            case UtteranceEnded ended:
+                _eot?.Reset();
+                await OnOwnerSpeechEndedAsync(ended.Turn, ct).ConfigureAwait(false);
+                break;
+        }
+    }
+
     private async Task HandleFrameAsync(AudioFrame frame, CancellationToken ct)
     {
+        if (_capture is IUtteranceBoundarySource)
+        {
+            // B47 privacy rule: the gate admitted this frame, and it is uplinked only inside a
+            // turn the gate opened. StreamWhileIdle does not apply - there is no "idle" audio
+            // here to stream, and an admitted frame outside a turn (a session that attached
+            // mid-utterance) is dropped rather than guessed at.
+            if (_turnOpen)
+            {
+                await SendUplinkAsync(frame, ct).ConfigureAwait(false);
+            }
+
+            CheckToolSilence();
+            return;
+        }
+
         var playback = _playback;
         var context = new AudioProcessingContext(
             PlaybackActive: playback?.IsPlaying ?? false,
@@ -626,8 +688,23 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
             await OnOwnerSpeechStartedAsync(frame.CapturedAt, "vad_onset", ct).ConfigureAwait(false);
         }
 
+        if (_turnOpen || _options.StreamWhileIdle)
+        {
+            await SendUplinkAsync(frame, ct).ConfigureAwait(false);
+        }
+
+        if (turnEvent is { Kind: TurnEventKind.SpeechEnded } ended)
+        {
+            await OnOwnerSpeechEndedAsync(ended, ct).ConfigureAwait(false);
+        }
+
+        CheckToolSilence();
+    }
+
+    private async Task SendUplinkAsync(AudioFrame frame, CancellationToken ct)
+    {
         var leg = _leg;
-        if (leg is { IsOpen: true } && !_legSuperseded && (_turnOpen || _options.StreamWhileIdle))
+        if (leg is { IsOpen: true } && !_legSuperseded)
         {
             try
             {
@@ -642,9 +719,13 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                         turn.FirstUplinkAt = now;
                     }
 
+                    // A gated turn starts with pre-roll captured BEFORE the gate opened; the
+                    // latency being measured is from the gate's decision, not from the oldest
+                    // syllable it kept.
+                    var from = DeviceGated && turn is not null ? Math.Max(frame.CapturedAt, turn.StartedAt) : frame.CapturedAt;
                     await _events!.ReportAsync(VoiceClientEvents.UplinkFirstPacket, new JsonObject
                     {
-                        ["mic_to_uplink_ms"] = Math.Round(_time.ElapsedMs(frame.CapturedAt, now), 3),
+                        ["mic_to_uplink_ms"] = Math.Round(_time.ElapsedMs(from, now), 3),
                         ["frame_ms"] = frame.DurationMs,
                     }, ct).ConfigureAwait(false);
                 }
@@ -654,13 +735,6 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                 _logger?.LogWarning("uplink send failed: {Reason}", ex.Message);
             }
         }
-
-        if (turnEvent is { Kind: TurnEventKind.SpeechEnded } ended)
-        {
-            await OnOwnerSpeechEndedAsync(ended, ct).ConfigureAwait(false);
-        }
-
-        CheckToolSilence();
     }
 
     private async Task OnOwnerSpeechStartedAsync(long startedAt, string reason, CancellationToken ct)
@@ -746,7 +820,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
                 break;
 
             case InputSpeechStartedEvent:
-                if (!_eot!.InSpeech && !_turnOpen)
+                if (!_eot!.InSpeech && !_turnOpen && !DeviceGated)
                 {
                     await OnOwnerSpeechStartedAsync(_time.GetTimestamp(), "server_vad", ct).ConfigureAwait(false);
                 }
@@ -792,6 +866,7 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
 
             case TranscriptDeltaEvent transcript:
                 _eot!.ObserveTranscript(transcript.Text);
+                (_capture as IUtteranceBoundarySource)?.ObserveTranscript(transcript.Text);
                 if (transcript.Final && VoiceClientStateMachine.IsStopWord(transcript.Text)
                     && ((_playback?.IsPlaying ?? false) || Fsm.State is VoiceClientState.AssistantSpeaking or VoiceClientState.ToolRunning))
                 {
@@ -1326,6 +1401,8 @@ public sealed class VoiceSessionOrchestrator : IAsyncDisposable
     private abstract record Input;
 
     private sealed record FrameInput(AudioFrame Frame) : Input;
+
+    private sealed record BoundaryInput(UtteranceBoundary Boundary) : Input;
 
     private sealed record ProviderInput(ProviderEvent Event, IMediaLeg Leg) : Input;
 

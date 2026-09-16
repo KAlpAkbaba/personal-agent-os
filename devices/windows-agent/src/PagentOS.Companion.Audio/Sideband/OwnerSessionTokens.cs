@@ -109,6 +109,11 @@ public static class DpapiSecretStore
         }
     }
 
+    /// <summary>DPAPI (current user) over raw bytes: the B47 keyword templates are stored this way.</summary>
+    public static byte[] ProtectBytes(byte[] data) => Transform(data, protect: true);
+
+    public static byte[] UnprotectBytes(byte[] data) => Transform(data, protect: false);
+
     private static byte[] Protect(byte[] data) => Transform(data, protect: true);
 
     private static byte[] Unprotect(byte[] data) => Transform(data, protect: false);

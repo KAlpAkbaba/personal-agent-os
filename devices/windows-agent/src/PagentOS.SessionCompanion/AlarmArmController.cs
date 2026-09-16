@@ -97,6 +97,9 @@ public sealed class AlarmArmController : IDisposable
     private readonly HashSet<string> _rangLocallyUntold = [];
     private readonly HashSet<string> _reportedRingFailures = new(StringComparer.Ordinal);
 
+    /// <summary>B47: local snoozes not yet carried away by a status report.</summary>
+    private readonly List<LocalSnooze> _locallySnoozed = [];
+
     private CancellationTokenSource? _tickCts;
     private Task? _tickTask;
     private bool _disposed;
@@ -195,6 +198,138 @@ public sealed class AlarmArmController : IDisposable
         }
     }
 
+    /// <summary>B47: why a local snooze did not happen (the alarm keeps ringing in every case).</summary>
+    public const string SnoozeNotRinging = "not_ringing";
+
+    public const string SnoozeTermsUnknown = "snooze_terms_unknown";
+
+    public const string SnoozeLimitReached = "snooze_limit_reached";
+
+    public const string SnoozeNoOutput = "no_alarm_output";
+
+    /// <summary>
+    /// B47 (B13 requirement 259's LOCAL trigger): snoozes the alarm that is ringing on this
+    /// device, without the Cloud Core. The ring stops, the same alarm id is armed again for
+    /// <c>now + snooze_minutes</c> with this device's default grace, and the snooze is queued for
+    /// the next status report as <c>{"alarm_id", "until"}</c> so the cloud adopts the same
+    /// instant (<c>packages/protocol/device-voice.json</c> <c>local_snooze</c>).
+    /// </summary>
+    /// <remarks>
+    /// The terms are the cloud's: <c>snooze_minutes</c> and <c>snoozes_left</c> arrive with the
+    /// arm or the ring. Without them nothing is snoozed and the alarm keeps ringing - a device
+    /// default would be a second clock, and a device-side limit a second counter. With
+    /// <c>snoozes_left</c> at zero the refusal is the cloud's own rule (<c>MAX_SNOOZE_COUNT</c>):
+    /// a wake-up cannot be deferred for ever.
+    /// </remarks>
+    public LocalSnoozeOutcome SnoozeRinging(string source)
+    {
+        if (_alarm is null)
+        {
+            return new LocalSnoozeOutcome(false, SnoozeNoOutput, null, null);
+        }
+
+        var ringing = _alarm.RingingPayload;
+        var alarmId = ringing?["alarm_id"]?.GetValue<string>();
+        if (ringing is null || string.IsNullOrWhiteSpace(alarmId))
+        {
+            return new LocalSnoozeOutcome(false, SnoozeNotRinging, null, null);
+        }
+
+        var minutes = ringing["snooze_minutes"]?.GetValue<int>();
+        var left = ringing["snoozes_left"]?.GetValue<int>();
+        if (minutes is null or < 1 || left is null)
+        {
+            Refused(alarmId, SnoozeTermsUnknown, source);
+            return new LocalSnoozeOutcome(false, SnoozeTermsUnknown, alarmId, null);
+        }
+
+        if (left <= 0)
+        {
+            Refused(alarmId, SnoozeLimitReached, source);
+            return new LocalSnoozeOutcome(false, SnoozeLimitReached, alarmId, null);
+        }
+
+        var now = _time.GetUtcNow();
+        var until = now.AddMinutes(minutes.Value);
+        _alarm.Stop(new JsonObject { ["alarm_id"] = alarmId });
+        var arm = new ArmedAlarm
+        {
+            AlarmId = alarmId,
+            FireAt = until,
+            GraceSeconds = DefaultGraceSeconds,
+            Label = ringing["label"]?.GetValue<string>(),
+            WakeVolume = ringing["wake_volume"] is JsonObject wake ? (JsonObject)wake.DeepClone() : null,
+            MaxDurationSeconds = ringing["max_duration_s"]?.GetValue<int>(),
+            IsTest = ringing["is_test"]?.GetValue<bool>() ?? false,
+            SnoozeMinutes = minutes,
+            SnoozesLeft = left - 1,
+            ArmedAt = now,
+        };
+
+        lock (_sync)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _store.Upsert(arm);
+            _reportedRingFailures.Remove(alarmId);
+            _locallySnoozed.RemoveAll(e => e.AlarmId == alarmId);
+            _locallySnoozed.Add(new LocalSnooze(alarmId, until));
+            if (AutoTick)
+            {
+                StartTickLocked();
+            }
+        }
+
+        _logger.LogInformation(
+            "alarm {AlarmId} snoozed LOCALLY for {Minutes} min (until {Until:O}; {Left} snooze(s) left; source={Source})",
+            alarmId,
+            minutes,
+            until,
+            left - 1,
+            source);
+        _audit?.Write(
+            "alarm_snoozed_locally",
+            capability: AgentCapabilities.DesktopAlarmArm,
+            status: AckStatus.Succeeded,
+            detail: $"alarm_id={alarmId}; until={until:O}; minutes={minutes}; snoozes_left={left - 1}; source={source}");
+        return new LocalSnoozeOutcome(true, "snoozed", alarmId, until);
+    }
+
+    /// <summary>
+    /// Takes the pending local snoozes for a status report, as the contract's
+    /// <c>{"alarm_id", "until"}</c> objects, and clears them - one snooze is reported once.
+    /// </summary>
+    public JsonArray DrainLocallySnoozed()
+    {
+        LocalSnooze[] drained;
+        lock (_sync)
+        {
+            drained = [.. _locallySnoozed];
+            _locallySnoozed.Clear();
+        }
+
+        var result = new JsonArray();
+        foreach (var entry in drained)
+        {
+            result.Add(new JsonObject
+            {
+                ["alarm_id"] = entry.AlarmId,
+                ["until"] = entry.Until.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            });
+        }
+
+        return result;
+    }
+
+    private void Refused(string alarmId, string reason, string source)
+    {
+        _logger.LogWarning("alarm {AlarmId} was NOT snoozed locally ({Reason}); it keeps ringing", alarmId, reason);
+        _audit?.Write(
+            "alarm_snooze_refused_locally",
+            capability: AgentCapabilities.DesktopAlarmArm,
+            status: AckStatus.Failed,
+            detail: $"alarm_id={alarmId}; reason={reason}; source={source}");
+    }
+
     /// <summary>Arms expired for being too far overdue to be a wake-up. Telemetry; asserted by tests.</summary>
     public int Expired { get; private set; }
 
@@ -241,6 +376,10 @@ public sealed class AlarmArmController : IDisposable
             MaxDurationSeconds = ParseOptionalInt(payload["max_duration_s"], "max_duration_s"),
             IsTest = isTest,
             ArmedAt = _time.GetUtcNow(),
+            // B47: the snooze terms, from the alarm row. Absent on an older cloud; then the
+            // device will not snooze this alarm on its own.
+            SnoozeMinutes = ParseSnoozeTerm(payload["snooze_minutes"], "snooze_minutes", minimum: 1),
+            SnoozesLeft = ParseSnoozeTerm(payload["snoozes_left"], "snoozes_left", minimum: 0),
         };
 
         bool replaced;
@@ -303,11 +442,42 @@ public sealed class AlarmArmController : IDisposable
         bool wasArmed;
         bool alreadyFired;
         int count;
+        var keptLocalSnoozes = new List<string>();
         lock (_sync)
         {
-            wasArmed = string.IsNullOrWhiteSpace(alarmId)
-                ? _store.RemoveAll() > 0
-                : _store.Remove(alarmId);
+            // B47: an arm this device created by snoozing an alarm ON ITS OWN, and has not yet
+            // reported, is kept. A disarm that arrives now was issued before the cloud could know
+            // the snooze existed - the cloud queues one when it gives up on an unreachable
+            // device - and obeying it would silently delete the wake-up the owner just deferred.
+            // Once the snooze has been reported, the cloud's disarms apply as always.
+            var protectedIds = _locallySnoozed.Select(e => e.AlarmId).ToHashSet(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(alarmId))
+            {
+                var removed = 0;
+                foreach (var arm in _store.All)
+                {
+                    if (protectedIds.Contains(arm.AlarmId))
+                    {
+                        keptLocalSnoozes.Add(arm.AlarmId);
+                    }
+                    else if (_store.Remove(arm.AlarmId))
+                    {
+                        removed++;
+                    }
+                }
+
+                wasArmed = removed > 0 || keptLocalSnoozes.Count > 0;
+            }
+            else if (protectedIds.Contains(alarmId))
+            {
+                keptLocalSnoozes.Add(alarmId);
+                wasArmed = true;
+            }
+            else
+            {
+                wasArmed = _store.Remove(alarmId);
+            }
+
             // req 283: the answer the cloud needs BEFORE it decides to ring, and the moment it
             // gets it. Taken, not read: the cloud has now been told, and telling it twice would
             // make the second fire of a genuinely new occurrence stand down for no reason.
@@ -333,7 +503,14 @@ public sealed class AlarmArmController : IDisposable
             "alarm_disarm",
             capability: AgentCapabilities.DesktopAlarmDisarm,
             status: AckStatus.Succeeded,
-            detail: $"alarm_id={alarmId ?? "(all)"}; was_armed={wasArmed}; already_fired={alreadyFired}");
+            detail: $"alarm_id={alarmId ?? "(all)"}; was_armed={wasArmed}; already_fired={alreadyFired}; "
+                + $"kept_local_snooze={string.Join(",", keptLocalSnoozes)}");
+        if (keptLocalSnoozes.Count > 0)
+        {
+            _logger.LogWarning(
+                "disarm kept the unreported local snooze of {AlarmIds}: the cloud issued it before it could know",
+                string.Join(",", keptLocalSnoozes));
+        }
 
         return new JsonObject
         {
@@ -344,6 +521,8 @@ public sealed class AlarmArmController : IDisposable
             // "already rang", and the cloud cannot act on an ambiguity. This says which.
             ["already_fired"] = alreadyFired,
             ["armed_count"] = count,
+            // B47: the local snoozes this disarm could not have known about, and so kept.
+            ["kept_local_snooze"] = new JsonArray(keptLocalSnoozes.Select(id => (JsonNode)JsonValue.Create(id)!).ToArray()),
         };
     }
 
@@ -519,6 +698,21 @@ public sealed class AlarmArmController : IDisposable
             payload["max_duration_s"] = arm.MaxDurationSeconds.Value;
         }
 
+        if (arm.IsTest)
+        {
+            payload["is_test"] = true;
+        }
+
+        if (arm.SnoozeMinutes is not null)
+        {
+            payload["snooze_minutes"] = arm.SnoozeMinutes.Value;
+        }
+
+        if (arm.SnoozesLeft is not null)
+        {
+            payload["snoozes_left"] = arm.SnoozesLeft.Value;
+        }
+
         try
         {
             _alarm.Start(payload);
@@ -631,6 +825,24 @@ public sealed class AlarmArmController : IDisposable
         return value.ToUniversalTime();
     }
 
+    private static int? ParseSnoozeTerm(JsonNode? node, string field, int minimum)
+    {
+        if (node is null)
+        {
+            return null;
+        }
+
+        if (node.GetValueKind() != JsonValueKind.Number || !node.AsValue().TryGetValue<int>(out var value) || value < minimum)
+        {
+            throw new CapabilityException(
+                ErrorClasses.ValidationError,
+                $"payload.{field} must be a whole number of at least {minimum}",
+                retryable: false);
+        }
+
+        return value;
+    }
+
     private static int ParseGrace(JsonNode? node)
     {
         var requested = ParseOptionalInt(node, "grace_s") ?? DefaultGraceSeconds;
@@ -658,3 +870,9 @@ public sealed class AlarmArmController : IDisposable
         return (int)value;
     }
 }
+
+/// <summary>What a local snooze did (B47).</summary>
+public sealed record LocalSnoozeOutcome(bool Snoozed, string Detail, string? AlarmId, DateTimeOffset? Until);
+
+/// <summary>One local snooze awaiting its report.</summary>
+public sealed record LocalSnooze(string AlarmId, DateTimeOffset Until);

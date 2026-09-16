@@ -25,7 +25,8 @@ public sealed class ActivityStatusReporter(
     IInputActivitySource input,
     IDisplayStateObserver displayObserver,
     Func<string?> ringingAlarmId,
-    AlarmArmController? arms = null)
+    AlarmArmController? arms = null,
+    Func<JsonObject>? voice = null)
 {
     /// <summary>
     /// Payload: <c>{}</c>. Result: the eight fields of <see cref="HeartbeatStatus.Fields"/>.
@@ -51,6 +52,9 @@ public sealed class ActivityStatusReporter(
             fired.Add(id);
         }
 
+        // B47: drained for the same reason as `fired` - composing a status IS the report.
+        var snoozed = arms?.DrainLocallySnoozed() ?? [];
+
         return new JsonObject
         {
             [HeartbeatStatus.InputIdleSeconds] = idle is null
@@ -71,6 +75,10 @@ public sealed class ActivityStatusReporter(
             // look like a ring on every heartbeat until the process restarted, and the cloud
             // would keep re-reconciling an alarm it had already closed.
             [HeartbeatStatus.LocalAlarmFired] = fired,
+            [HeartbeatStatus.LocalAlarmSnoozed] = snoozed,
+            // B47 rows 250-252: the voice service's compact health. A companion without voice
+            // says "disabled", which is true, rather than leaving the cloud to guess.
+            [HeartbeatStatus.Voice] = voice?.Invoke() ?? VoiceStatus.Disabled().Heartbeat(),
         };
     }
 }

@@ -483,6 +483,10 @@ CAPABILITY_DESKTOP_DISPLAY_WAKE = "desktop.display_wake"
 CAPABILITY_DESKTOP_DISPLAY_OFF = "desktop.display_off"
 CAPABILITY_DESKTOP_DISPLAY_STATUS = "desktop.display_status"
 CAPABILITY_DESKTOP_ACTIVITY_STATUS = "desktop.activity_status"
+#: B47 (DEVICE_PROTOCOL.md §6o): the device microphone provider's state. Read-only; there is
+#: deliberately no capability that turns a device microphone ON (device-voice.json
+#: privacy.remote_enable_allowed).
+CAPABILITY_DESKTOP_VOICE_STATUS = "desktop.voice_status"
 CAPABILITY_DESKTOP_PLAY_AUDIO = "desktop.play_audio"
 #: B11 req 369: the desktop toast. Spelled ONCE, in the module that reads the shared
 #: contract both halves are built from - restating the string here is how a capability
@@ -772,6 +776,7 @@ __all__ = [
     "CAPABILITY_BROWSER_NAVIGATE",
     "CAPABILITY_BROWSER_SESSION_OPEN",
     "CAPABILITY_DESKTOP_ACTIVITY_STATUS",
+    "CAPABILITY_DESKTOP_VOICE_STATUS",
     "CAPABILITY_DESKTOP_ALARM_ARM",
     "CAPABILITY_DESKTOP_ALARM_DISARM",
     "CAPABILITY_DESKTOP_ALARM_START",
