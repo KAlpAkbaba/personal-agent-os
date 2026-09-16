@@ -216,16 +216,16 @@ Current row 372:
 
 Proposed replacement (14 fields / 15 pipes, verified below):
 ```
-| 372 | WebPush | Sunucu: RFC 8030/8291/8292 uygulandı (aes128gcm şifreleme, VAPID imzalama, SSRF izin listesi, webpush_subscriptions göçü); istemci: service worker + push izin UI'ı (apps/web/public/sw.js, /settings); merdivenin push basamağına bağlandı; anahtar yoksa dürüstçe atlanır | Çalışır | DONE | PA | P1 | 367 | B11 | services/api/app/webpush/ (ece.py, vapid.py, provider.py, service.py, routes.py, models.py); services/api/app/notifications/ladder.py:PushRung; services/api/alembic/versions/20260917_0060_webpush_subscriptions.py; apps/web/public/sw.js; apps/web/app/lib/cockpit/webpush.ts; apps/web/app/settings/WebPushSettings.tsx; scripts/cloud/new-vapid-key.ps1 | test_webpush_ece.py (10, RFC 8291 Appendix A vektörü byte-byte), test_webpush_vapid.py (21), test_webpush_provider.py (47, SSRF izin listesi), test_webpush_service.py (20), test_webpush_routes.py (11), test_notification_ladder_push.py (8), test_health_endpoint.py (14, güncellendi), test_migrations.py (5, gerçek PostgreSQL'de), webpush-client.test.ts (26) | READY_FOR_OWNER (VAPID anahtarı üretildi ve PowerShell/Python arası çapraz doğrulandı; gerçek tarayıcıda uçtan uca push henüz ölçülmedi) | VAPID anahtarı üretimi (scripts/cloud/new-vapid-key.ps1, tek komut) + tarayıcıda bildirim izni (bir tık, /settings) | Sunucu ve istemci tamam; kalan iki adım de sahibin — checkpoint değil, birer komut/tık. ADR-XXXX (bu batch) |
+| 372 | WebPush | Sunucu: RFC 8030/8291/8292 uygulandı (aes128gcm şifreleme, VAPID imzalama, SSRF izin listesi — port dahil, webpush_subscriptions göçü, 32 abonelik tavanı, yayıncı yanıt gövdesi hiç okunmuyor); istemci: service worker + push izin UI'ı (apps/web/public/sw.js, /settings); merdivenin push basamağına bağlandı; anahtar yoksa dürüstçe atlanır | Çalışır | DONE | PA | P1 | 367 | B11 | services/api/app/webpush/ (ece.py, vapid.py, provider.py, service.py, routes.py, models.py); services/api/app/notifications/ladder.py:PushRung; services/api/alembic/versions/20260917_0060_webpush_subscriptions.py; apps/web/public/sw.js; apps/web/app/lib/cockpit/webpush.ts; apps/web/app/settings/WebPushSettings.tsx; scripts/cloud/new-vapid-key.ps1 | test_webpush_ece.py (10, RFC 8291 Appendix A vektörü byte-byte), test_webpush_vapid.py (21), test_webpush_provider.py (52, SSRF izin listesi + port reddi + gövde hiç okunmuyor), test_webpush_service.py (23, abonelik tavanı dahil), test_webpush_routes.py (11), test_notification_ladder_push.py (8), test_health_endpoint.py (14, güncellendi), test_migrations.py (5, gerçek PostgreSQL'de), webpush-client.test.ts (26) | READY_FOR_OWNER (VAPID anahtarı üretildi ve PowerShell/Python arası çapraz doğrulandı; güvenlik incelemesinin 3 Low bulgusu düzeltildi; gerçek tarayıcıda uçtan uca push henüz ölçülmedi) | VAPID anahtarı üretimi (scripts/cloud/new-vapid-key.ps1, tek komut) + tarayıcıda bildirim izni (bir tık, /settings) | Sunucu ve istemci tamam; kalan iki adım de sahibin — checkpoint değil, birer komut/tık. ADR-0169 (bu batch) |
 ```
 
-(`ADR-XXXX`: propose **ADR-0168** — this worktree's `main` base is one commit behind
-the tip that minted ADR-0167, per the note at the top of this file; re-check the actual
-next-free number at merge time.)
+(ADR-0168 was taken by the B11 Windows-toast batch that landed on `main` while this
+one was in flight — see §6 below. This batch's ADR is **ADR-0169**; re-check the
+actual next-free number at merge time regardless.)
 
 ## 5. ADR draft (for `docs/DECISIONS.md`, not applied here)
 
-**ADR-0168 — WebPush: RFC 8291/8292 hand-rolled on top of `cryptography`, no
+**ADR-0169 — WebPush: RFC 8291/8292 hand-rolled on top of `cryptography`, no
 `pywebpush`; SSRF allowlist by exact push-service host**
 
 *Context.* B11 req 372 needed Web Push. The obvious shortcut is `pywebpush`, but
@@ -245,10 +245,15 @@ whose test suite we do not control."
    false-negative on it living in a plain `.env` line.
 3. A push subscription's `endpoint` is treated as attacker-influenceable (any page
    script can call `pushManager.subscribe()`); every send and every subscribe goes
-   through an explicit allowlist of the four push-service vendor domains
-   (`app.webpush.provider.ALLOWED_PUSH_HOSTS`) rather than "any https URL", closing an
+   through an explicit allowlist of the four push-service vendor domains AND the
+   default port only (`app.webpush.provider.ALLOWED_PUSH_HOSTS`/
+   `validate_push_endpoint` — the port check was a security-review addendum: none of
+   the four vendors ever serve on a non-default port, so any explicit port, including
+   the correct default, is refused outright) rather than "any https URL", closing an
    SSRF path that a generic implementation would otherwise open behind the owner's own
-   authenticated API.
+   authenticated API. The stored-subscription table is also capped
+   (`MAX_SUBSCRIPTIONS = 32`) so the owner-session-gated subscribe route cannot grow it
+   without bound.
 4. The push rung's `deliver()` returning `True` means "the push service accepted the
    message" (RFC 8030 2xx) and nothing stronger — recorded honestly in both the code
    docstring and the notification's own semantics; unlike `ToastRung`, there is no
@@ -269,3 +274,53 @@ elsewhere. Revisit if a second push-adjacent RFC (e.g. WebSub) makes a shared
 downgrade migration `0060_webpush_subscriptions`. The ladder's `push` rung already
 degrades to "skipped" with no VAPID key configured, so removing the code is the only
 step — there is no data migration to reverse beyond dropping the one table.
+
+## 6. Security review follow-up + merge with `main`
+
+The security review of the first commit (`9b7e3ef`) found no Critical/High/Medium
+issues and three Low ones, all fixed in commit `19afa5d`:
+
+1. `validate_push_endpoint` ignored the port. Fixed: any explicit port (including the
+   correct default, `:443`) is refused; a malformed port (`.port` raising
+   `ValueError`) is refused the same way. Test:
+   `test_validate_push_endpoint_refuses_any_explicit_port` (3 cases).
+2. Nothing capped how many subscriptions could be stored. Fixed: `MAX_SUBSCRIPTIONS =
+   32` in `app.webpush.service`; a new endpoint past the cap is refused through the
+   existing owner error path (`SubscriptionError`, now carrying an `error_class`,
+   mapped to `"resource_budget_exceeded"` for this case). Re-subscribing an endpoint
+   already stored still always works, even at the cap. Tests:
+   `test_subscribe_refuses_past_the_subscription_cap`,
+   `test_resubscribing_an_existing_endpoint_at_the_cap_still_works`.
+3. `HttpPushProvider.send` buffered the full response body via `client.post()` even
+   though only `status_code` and `Retry-After` are read. Fixed: switched to
+   `client.stream(...)`, reading status/headers before any body byte and closing on
+   exit regardless of whether anything was read. Tests:
+   `test_response_body_is_never_read_and_the_response_is_closed` and
+   `...on_an_error_status`, both using a custom `httpx.SyncByteStream` that records
+   whether it was ever iterated — proves the ACCESS pattern, not just a byte count a
+   mock could satisfy either way.
+
+All five `test_webpush_*.py` files green after the fix (297 tests total: ece 10, vapid
+21, provider 52, service 23, routes 11 — routes/vapid/ece unchanged by these fixes).
+
+**Merged `main` (`git merge main`, not a rebase) into this branch** to pick up
+concurrent work: B33 self-signed MSIX signing (`native_signing_mode` default changed
+to `"test_certificate"` — a different setting than anything in this batch),
+and B11 req 369/370 Windows toasts (`ToastRung` gained `note_toast_target`/device-bound
+press acceptance and a `toast_shown` log line, both inside `ToastRung.deliver()`,
+untouched by this batch's `PushRung`/`InboxRung`/`default_rungs` additions right after
+it). **The merge resolved with no manual conflicts** — `app/notifications/ladder.py`,
+`app/config.py` (their `native_signing_mode` change and this batch's `webpush_vapid_*`
+settings sit in different parts of the file) and `app/main.py` (unchanged by `main`
+between this branch's base and its tip) all merged cleanly. Merge commit: `64fb58c`.
+
+Re-ran after the merge: `test_webpush_*.py` (all 5 files), `test_notification_ladder_push.py`,
+`test_notifications.py`, `test_notification_events.py`, `test_notify_toast_actions.py`
+(the new B11-toast tests), `test_owner_error_language.py`, `test_health_endpoint.py` —
+**380 passed**. `tests/integration/test_migrations.py` against real PostgreSQL — **5
+passed** (0060 still chains cleanly after 0059; single alembic head). `ruff check .` —
+clean. Full web vitest suite — **1919 passed** (unaffected; `main`'s changes were
+backend/device-only). `tsc --noEmit` — clean.
+
+ADR-0168 was taken by the merged-in B11 toast batch; this batch's ADR is **ADR-0169**
+(§5 above already reflects this).
