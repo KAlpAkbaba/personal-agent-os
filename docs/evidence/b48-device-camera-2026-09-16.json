@@ -1,0 +1,49 @@
+{
+  "batch": "B48",
+  "name": "Varlık derinliği ve kamera - cihaz kamerası (sahip kararı 2026-09-16)",
+  "requirements": [
+    300,
+    303,
+    307,
+    308,
+    320,
+    326,
+    327,
+    331,
+    333,
+    369,
+    671
+  ],
+  "recorded_at": "2026-09-16",
+  "owner_decision": "periodic device-local presence check + optional continuous mode; capture in the Session Companion only; frames in memory only; derived signals only; visible indicator; owner switches; honest blocked reporting",
+  "tests": {
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/CameraPresenceTests.cs": "29 cases (incl. veto across a restart, unreadable veto store, file store, unreadable permission)",
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/CameraWiringTests.cs": "14 cases (restarted companion with a remembered veto refuses over the pipe; end-to-end service-pipe-companion-heartbeat, schema contract, projection, composition, structural no-frame guard, real FaceDetector on a synthetic bitmap)",
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/MonitorPowerTests.cs": "10 cases (+1 opt-in DDC lab)",
+    "services/api/tests/unit/test_camera_b48.py": "20 cases (restarted vetoed device never sent a non-off mode; wire shape, intake guards, relay, command row, 333 night/afternoon/silent-camera end to end, PUT camera_mode)",
+    "apps/web/tests/eye/b48-camera-web.test.tsx": "7 cases",
+    "scripts/tests/device-camera-qualification.tests.ps1": "22 checks (dry run of the owner harness)"
+  },
+  "runtime_measurements": {
+    "face_detector": "Windows.Media.FaceAnalysis.FaceDetector.IsSupported=true on the owner's machine; the analyzer ran on a synthetic 320x240 bitmap (no camera opened)",
+    "camera_enumeration": "one color source (Logi C615 HD WebCam, VideoRecord) - enumeration only, nothing opened",
+    "consent_store": "webcam and NonPackaged values = Allow (read only)",
+    "ddc_power_read": "2 monitors (2560x1440, 1440x2560 primary), both answered VCP 0xD6 power=on",
+    "manifest": "measured after merging B47: 13 / 14 / 44 / 104 capabilities (none / -DisplayPower / + browser / + -Operator); B48 alone was 12 / 13 / 43 / 103"
+  },
+  "owner_gates": {
+    "script": "scripts/core/qualify-device-camera.ps1",
+    "gates": "G1-G12 (G9 with -IncludePrivacyCheck, G11-G12 with -SleepTrial)"
+  },
+  "found_on_the_way": {
+    "desktop_notify_unwired": "Program.cs never built NotifyCapabilities, so desktop.notify (advertised on every device since B11) answered capability_missing; fixed, regression + mutation C10",
+    "legacy_office_format": "dotnet format --verify-no-changes failed on HEAD in Documents/LegacyOfficeExtractor.cs (B52 whitespace); reformatted, whitespace only",
+    "redundant_film_guard": "the first classifier refused rest for sound twice (still-run reset AND the resting condition); mutation C4b could not turn red because the second was dead code - removed, and the film test now also proves the still run restarts when the sound stops",
+    "unity_lab": "fixed in main by ADR-0164 (job process cap); the merged branch passes the Unity lab"
+  },
+  "security_review": {
+    "high": "veto lost on companion restart - fixed (persisted in the owner's profile, fail closed)",
+    "medium": "consent check failed open - fixed (consent_unreadable -> blocked)",
+    "mutations": "10/10 red"
+  }
+}

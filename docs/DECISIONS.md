@@ -12711,3 +12711,60 @@ Found, not fixed (own item): "Chrome'u açıp YouTube'a gir." routes to `media_p
 | 259 | Snooze | Yerel tetikleyici: çevrimdışı "ertele" + tepsi; bulutun koşullarıyla; `local_alarm_snoozed` ile raporlanır, bulut cihazın anını benimser | Tam | DONE | PA | P1 | — | B13, B47 | app/alarms/service.py:reconcile_local_snoozed, app/ambient/ingest.py, AlarmArmController.cs:SnoozeRinging, device-voice.json:local_snooze | test_alarms_local_snooze.py (6), LocalSnoozeTests.cs (7), test_alarms_service.py (51) | üretim turu bekliyor (O1-O6) | no | Sınır (5) cihazda da bulutun sayısıyla. Bayat disarm yerel ertelemeyi SİLEMEZ (bulunan kusur) |
 
 **Owner checkpoint (OWNER_REQUIRED).** `scripts/core/qualify-device-voice.ps1 -EnableVoice -OutFile b47-device-voice-1.json` after the release and device install (about 25 minutes: enroll, privacy, wake, browserless, offline). Independent privacy review of commit 8445fb3: no Critical or High findings; low note 1 applied.
+
+## ADR-0166 — The device camera: periodic or continuous, in the owner's session, and only derived signals leave it (2026-09-16, B48)
+
+**Context.** Owner decision 2026-09-16 (Karar 8 answered): a periodic device-local presence
+check plus an optional continuous mode. ADR-0155 left 300, 307, 308, 326, 327, 333, 671
+waiting on it: the sleep display-off policy requires fresh camera perception, and nothing but
+a camera may say "resting".
+
+**Decision.**
+
+1. **Where.** Capture runs only in the Session Companion. The Session-0 service routes
+   `desktop.camera_mode` and projects the heartbeat; it has no capture code.
+2. **How.** Windows.Media.Capture `MediaFrameReader` (shared read-only first, so an owner's
+   video call keeps the camera) and Windows.Media.FaceAnalysis `FaceDetector` — shipped with
+   Windows, no account, no cloud vision. This needs the WinRT projection, so the companion's
+   target framework carries the Windows SDK version (`net10.0-windows10.0.19041.0`) with its
+   output folder pinned to the old path. B32 chose a PowerShell child for OCR to avoid this
+   change; a camera loop is continuous and latency-bound, so an in-process path is the right
+   trade here.
+3. **In memory only.** A sample is 5 frames; each becomes face boxes plus an 80×60 luma
+   plane, zeroed after the sample. No encoder, sink, file or socket exists in the camera
+   folder (structural test). Only the seven §2 fields and the camera's state leave the device;
+   the Session-0 service drops a nested object holding anything but short scalars; Cloud Core
+   screens the observation with the existing boundary.
+4. **Consent.** Mode `off` after every start; only the owner's `ambient_policy.camera_mode`
+   (relayed while the Active Eye is enabled) opens it; "Kamerayı kapat" closes it; Windows'
+   privacy switches are read before every open and a denial is reported by name; the owner can
+   veto on the device from the tray, which the cloud never argues with; `CameraEnabled=false`
+   is the device-local rollback.
+   *Security review (2026-09-16).* The tray veto is persisted in the owner's profile
+   (`%LOCALAPPDATA%\PagentOS\companion\camera-veto.json`, write-then-move; not Session 0,
+   not the cloud), read before anything else at start, and cleared only by the owner's tray
+   action; an unreadable veto file is a veto. While vetoed the device reports `vetoed` from
+   its first heartbeat and refuses every non-off `desktop.camera_mode` with
+   `permission_denied`; Cloud Core never sends a non-off mode to a device reporting
+   `vetoed`. The permission check fails CLOSED: a permission that cannot be read is
+   `blocked` / `consent_unreadable` ("izin okunamadı") and nothing is opened. The veto
+   store lives outside `Camera/`, whose sources stay forbidden any file API.
+5. **Indicator.** Tray icon whenever a mode is on; "open" face before the device is opened
+   and until after it is closed.
+6. **Rest.** Present + still + 5 min with no input and no sound (render peak meter) → posture
+   `resting`. A dark room is a low-confidence absence (fuses to UNKNOWN). The fusion engine's
+   quiet-hours thresholds (ADR-0155 §3) and the ambient policy's gates then decide sleep and
+   display-off — no new inference path in Cloud Core.
+7. **Relay.** Desired mode vs reported mode is reconciled on the heartbeat, at most once a
+   minute per device, as a durable command row; a mode or eye change pushes at once.
+8. **Monitors (320).** Per-monitor DDC/CI power is READ on request only; writing a VCP code
+   is forbidden by the display family's structural test. Visible darkness stays the owner's
+   judgement.
+
+**Consequences.** Migration 0059 (`ambient_policy.camera_mode`, default `off`). One new
+always-advertised capability (with B47's desktop.voice_status: 13 / 14 / 44 / 104). Companion output +~25 MB. Rows 307,
+308, 326, 333, 671 DONE (PROVEN_AUTOMATED), 300/327 PARTIAL until the owner's physical run,
+320 PARTIAL with a real DDC measurement. Rollback: `camera_mode=off` (cloud) or
+`CameraEnabled=false` (device); input-based presence (311) is untouched.
+
+**Owner checkpoint (READY_FOR_OWNER, no UAC).** `scripts/core/qualify-device-camera.ps1 -DryRun`, then `-IncludePrivacyCheck` (about 10 minutes) and optionally `-SleepTrial`; the evidence holds states and timestamps only. Independent security review: one High (veto lost on companion restart) and one Medium (permission check failed open), both fixed with mutation proofs (10/10).
