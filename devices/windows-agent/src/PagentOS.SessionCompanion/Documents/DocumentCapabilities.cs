@@ -80,7 +80,7 @@ public sealed class DocumentCapabilities
         Roots = new AuthorisedRoots(options.AuthorisedRoots);
     }
 
-    public static IReadOnlyList<IDocumentExtractor> DefaultExtractors() => [new OpenXmlExtractor(), new PdfPigExtractor(), new TextLikeExtractor(), new ImageExtractor()];
+    public static IReadOnlyList<IDocumentExtractor> DefaultExtractors() => [new OpenXmlExtractor(), new PdfPigExtractor(), new TextLikeExtractor(), new ImageExtractor(), new OpenPackageExtractor(), new RtfExtractor(), new LegacyOfficeExtractor()];
 
     /// <summary>The same gate as the operator (<c>PAGENTOS_AGENT_OperatorEnabled</c>): the companion may touch the owner's files.</summary>
     public bool Enabled => _options.Enabled;

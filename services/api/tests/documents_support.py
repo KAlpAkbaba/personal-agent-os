@@ -318,7 +318,8 @@ def _file_inspect(payload: dict[str, Any]) -> DeviceRunResult:
         result["pages"] = structure.get("pages")
     if expected["kind"] in ("xlsx", "xls"):
         result["sheets"] = [s.get("name") for s in structure.get("sheets") or []]
-    if expected["kind"] in ("docx",):
+    # B52: the converted word-processing kinds carry a title the way DOCX does.
+    if expected["kind"] in ("docx", "odt", "rtf", "epub", "doc"):
         result["title"] = expected.get("title")
     result["is_text"] = expected["kind"] in ("md", "csv", "json", "source", "txt")
     return DeviceRunResult(True, result=result)

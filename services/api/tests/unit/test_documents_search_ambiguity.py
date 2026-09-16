@@ -40,7 +40,9 @@ def test_two_files_sharing_one_name_are_named_by_path_and_nothing_is_focused(db)
     service = DocumentService(index=DocumentIndex())
     device = build_fake_device_action()
 
-    receipt = service.search(db, device, pattern="sozlesme")
+    # Only the two .docx: B52 put sozlesme.odt/.rtf/.epub/.doc beside them, and this test is
+    # about two hits that share ONE name (the mixed case has its own test below).
+    receipt = service.search(db, device, pattern="sozlesme", extensions=[".docx"])
 
     speech = receipt["speech"]
     assert "Aynı isimde birden fazla dosya var" in speech
@@ -50,6 +52,23 @@ def test_two_files_sharing_one_name_are_named_by_path_and_nothing_is_focused(db)
     # Neither hit was guessed into focus: the owner is asked, not second-guessed.
     assert focus_module.current(db, FOCUS_KIND_FILE) is None
     assert focus_module.current(db, FOCUS_KIND_FOLDER) is None
+
+
+def test_a_shared_name_among_different_names_is_still_spoken_by_path(db) -> None:
+    """B52 regression: with sozlesme.odt/.rtf/.epub/.doc beside the two sozlesme.docx, the
+    reply used to list "sozlesme.docx, sozlesme.docx" - two words the owner cannot choose
+    between."""
+    service = DocumentService(index=DocumentIndex())
+    device = build_fake_device_action()
+
+    speech = service.search(db, device, pattern="sozlesme")["speech"]
+
+    assert speech.startswith("Şunları buldum")
+    assert "sozlesmeler/2025/sozlesme.docx" in speech
+    assert "sozlesmeler/2026/sozlesme.docx" in speech
+    assert "sozlesme.docx, sozlesme.docx" not in speech
+    assert "sozlesme.odt" in speech and "hangisini" in speech
+    assert focus_module.current(db, FOCUS_KIND_FILE) is None
 
 
 def test_a_folder_search_with_several_different_names_focuses_the_folder_not_a_file(db) -> None:

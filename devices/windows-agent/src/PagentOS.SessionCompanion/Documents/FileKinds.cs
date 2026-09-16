@@ -24,6 +24,16 @@ public static class FileKinds
     public const string Image = "image";
     /// <summary>B32 req 142: a zip archive — its central directory on inspect, never extracted.</summary>
     public const string Archive = "archive";
+    /// <summary>B52 req 143: an EPUB book - its spine's XHTML chapters, in reading order.</summary>
+    public const string Epub = "epub";
+    /// <summary>B52 req 145: an OpenDocument text - content.xml's headings, paragraphs and tables.</summary>
+    public const string Odt = "odt";
+    /// <summary>B52 req 144: Rich Text Format - a bounded control-word parse.</summary>
+    public const string Rtf = "rtf";
+    /// <summary>B52 req 146: Word / Excel / PowerPoint 97-2003 - OLE compound files.</summary>
+    public const string Doc = "doc";
+    public const string Xls = "xls";
+    public const string Ppt = "ppt";
     public const string Unknown = "unknown";
 
     /// <summary>The extensions of kind <c>image</c>: what WPF's decoders and Windows OCR both read.</summary>
@@ -62,6 +72,12 @@ public static class FileKinds
             ".json" => Json,
             ".txt" or ".log" or ".text" => Txt,
             ".zip" => Archive,
+            ".epub" => Epub,
+            ".odt" => Odt,
+            ".rtf" => Rtf,
+            ".doc" => Doc,
+            ".xls" => Xls,
+            ".ppt" => Ppt,
             _ => Unknown,
         };
     }
@@ -73,10 +89,10 @@ public static class FileKinds
     public static bool IsExtractable(string kind) => kind is not (Unknown or Archive);
 
     /// <summary>The kinds that need a parser (a package or a PDF), never returned raw.</summary>
-    public static bool IsBinaryDocument(string kind) => kind is Docx or Xlsx or Pptx or Pdf;
+    public static bool IsBinaryDocument(string kind) => kind is Docx or Xlsx or Pptx or Pdf or Epub or Odt or Rtf or Doc or Xls or Ppt;
 
     /// <summary>The OOXML kinds — zip containers whose central directory <see cref="ContainerGuard"/> bounds before the SDK opens them.</summary>
-    public static bool IsPackage(string kind) => kind is Docx or Xlsx or Pptx;
+    public static bool IsPackage(string kind) => kind is Docx or Xlsx or Pptx or Epub or Odt;
 
     /// <summary><c>structure.language</c> for a source file, by extension.</summary>
     public static string Language(string extension) => extension.ToLowerInvariant() switch

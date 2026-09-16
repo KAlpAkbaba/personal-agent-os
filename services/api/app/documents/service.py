@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -284,6 +285,10 @@ def _preview_facts(doc: DocRef) -> str:
         return f"{structure['slide_count']} slaytlık sunum"
     if kind in ("docx", "odt", "rtf", "doc"):
         return f"{structure.get('paragraphs') or len(doc.blocks)} paragraflık belge"
+    # B52 (req 143): an e-book counts its chapters.
+    if kind == "epub":
+        return f"{structure.get('chapters') or 1} bölümlük e-kitap"
+    if kind == "image":
         w, h = structure.get("width"), structure.get("height")
         lines = structure.get("lines") or 0
         return f"{w}x{h} görsel, {lines} satır metin okundu"
@@ -536,7 +541,16 @@ class DocumentService:
                 paths = ", ".join(str(f.get("path")) for f in files)
                 speech = f"Aynı isimde birden fazla dosya var: {paths}. Hangisini istersiniz?"
             else:
-                speech = "Şunları buldum: " + ", ".join(str(f.get("name")) for f in files) + "."
+                # A name two hits share cannot tell them apart: those are spoken by path,
+                # the rest by name, and the owner is asked rather than left to guess.
+                counts = Counter(str(f.get("name")) for f in files)
+                spoken = [
+                    str(f.get("path")) if counts[str(f.get("name"))] > 1 else str(f.get("name"))
+                    for f in files
+                ]
+                speech = "Şunları buldum: " + ", ".join(spoken) + "."
+                if len(names) < len(files):
+                    speech += " Aynı isimde olanları yollarıyla söyledim; hangisini istersiniz?"
             if folder:
                 # A folder focus is an identity, not a transcript of what the model
                 # typed (security review, LOW): persist it only from a name this layer

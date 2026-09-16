@@ -1,0 +1,80 @@
+{
+  "batch": "B52",
+  "name": "Belge formatı genişletme",
+  "requirements": [
+    143,
+    144,
+    145,
+    146
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11167 passed, 5 skipped, 17m13s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 975/975 incl. Documents oracle + LegacyFormatBoundsTests and the operator lab, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "after sync: tsc --noEmit clean, vitest features/ pages/ 67 passed"
+  },
+  "measured_first": {
+    "readers": "DocumentCapabilities.DefaultExtractors() = OpenXml, PdfPig, TextLike, Image; FileKinds had no epub/odt/rtf/doc/xls/ppt kind (all 'unknown').",
+    "packages": "PagentOS.SessionCompanion.csproj references DocumentFormat.OpenXml and PdfPig only."
+  },
+  "fixtures": {
+    "producer": "LibreOffice (headless, installed at C:/Program Files/LibreOffice) converting services/api/tests/fixtures/documents/{sozlesmeler/2025/sozlesme.docx, butce-2026.xlsx, sunum-q3.pptx}",
+    "files": [
+      "legacy/sozlesme.odt",
+      "legacy/sozlesme.rtf",
+      "legacy/sozlesme.epub",
+      "legacy/sozlesme.doc",
+      "legacy/butce-2026.xls",
+      "legacy/sunum-q3.ppt"
+    ],
+    "oracle": "derived from the sources' expected extracts (scratchpad b52_fixtures.py; re-derived by test_documents_b52.py)",
+    "prototype": "the four readers compiled in a standalone console project against stubs and compared with the derived expectations before entering the repository: ALL_MATCH for all six files"
+  },
+  "found_on_the_way": {
+    "shared_name_spoken_twice": "the six new fixtures made a search for sozlesme return two sozlesme.docx among four other names, and the reply only named files by path when EVERY hit shared one name - the owner heard sozlesme.docx, sozlesme.docx; a shared name is now spoken by its path in a mixed reply and the owner is asked which (regression: test_a_shared_name_among_different_names_is_still_spoken_by_path).",
+    "fixture_count_pins": "two tests counted sozlesme hits in the fixture tree (the Python ambiguity test and the device's diacritics search test); both were about something else and now filter to the .docx they mean.",
+    "libreoffice_first_run_crash": "the ODT export crashed (0xC0000409) whenever it ran inside a freshly created LibreOffice profile; with the profile an earlier conversion had initialised it succeeded.",
+    "epub_headings": "LibreOffice's EPUB export writes headings as styled <p>; the reader reports them as paragraphs instead of inferring levels from CSS.",
+    "rtf_title": "the RTF's ANSI \\\\title is lossy ('S\\u00f6zle?mesi'); the Unicode alternative lives in {\\\\*\\\\ud}, which a plain \\\\* skip never reads.",
+    "rtf_metadata_leak": "the first prototype printed the \\\\info group's author and comment into the first heading.",
+    "table_rows_shape": "the DOCX scheme carries a table's cell grid in `rows`; the first ODT/RTF/EPUB drafts carried a count.",
+    "xls_formula_text": "the XLSX oracle shows '=B5*0.2'; a BIFF reader that shows the cached 13000 does not answer the same question.",
+    "generator_rerun_hazard": "re-running make-document-fixtures.py would delete B32's untracked fixtures; it was not re-run.",
+    "invisible_characters": "escape sequences in the drafts had become raw control characters on the way to disk; they were rewritten as \\\\uXXXX before the files entered the repository."
+  },
+  "tests": {
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Documents/ExtractionOracleTests.cs": "every legacy fixture through the real dispatcher, block for block against its expected extract",
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Documents/LegacyFormatBoundsTests.cs": "non-OLE and truncated OLE refusals; non-RTF; RTF nesting bomb; RTF metadata and font tables never text; encrypted ODT; XHTML external entity; spine href escape; per-part inflate bound; BIFF formula decompiler",
+    "services/api/tests/unit/test_documents_b52.py": "device kinds/registration and protocol read as source; preview units per kind; truth entries match bytes and name the producer; expected extracts re-derived from the source oracle"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b52_mutate.py; a mutation that does not compile is invalid, not red.",
+    "mutations": [
+      "M1 an RTF's author and comment leak into its first paragraph (144) -> 1 failure(s).",
+      "M2 a password-protected ODT is read as garbage instead of refused by name (145) -> 1 failure(s).",
+      "M3 an EPUB spine href may name an absolute path or a URL scheme (143) -> 1 failure(s).",
+      "M4 a part that inflates past its bound is read to the end (143, 145) -> 1 failure(s).",
+      "M5 an RTF nesting bomb is followed without a depth bound (144) -> 1 failure(s).",
+      "M6 an XLS formula cell shows its cached number instead of its formula (146) -> 1 failure(s).",
+      "M7 an ODT/EPUB table carries a row count where the DOCX scheme carries the grid (143, 145) -> 2 failure(s).",
+      "M8 a PPT slide's title placeholder is not recognised as its title (146) -> 1 failure(s).",
+      "M9 an e-book preview falls back to 'epub dosyası' instead of counting chapters (143) -> 1 failure(s).",
+      "M10 a name two hits share is spoken twice in a mixed reply (B52 regression) -> 1 failure(s)."
+    ],
+    "result": "10/10 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED - oracle fixtures (real files from a real producer) for every format, as the roadmap's PROOF requires."
+  }
+}

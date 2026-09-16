@@ -12491,3 +12491,39 @@ and "bunu" meant nothing.
 
 **Consequences.** No migration. Rollback is the flag: with it off the deterministic table runs
 alone, exactly as before B51.
+
+## ADR-0159 — Four more document formats read on the device, proven against real files from a real producer and an oracle the readers never wrote (2026-09-15, B52)
+
+**Context.** B52 (143-146) is EPUB, RTF, ODT and the 97-2003 Office formats. The companion read
+DOCX/XLSX/PPTX through the OpenXML SDK, PDF through PdfPig and the text kinds natively; nothing
+existed for these four, and no document library beyond those two is installed.
+
+**Decision.**
+
+1. **No new package.** EPUB and ODT are zips of XML, read with `ZipArchive` and `XmlReader`; RTF
+   is a bounded control-word parse; DOC/XLS/PPT sit in OLE compound files, read by a small
+   bounded reader. Each is an `IDocumentExtractor` registered in `DefaultExtractors`.
+2. **One reference scheme per family.** ODT and RTF answer exactly as DOCX does (paragraph and
+   heading refs with levels, tables with their cell grid); EPUB follows DOCX across its spine;
+   XLS follows XLSX (a formula cell's text is its formula, decompiled from BIFF tokens - the
+   cached result only for a token the decompiler does not know); PPT follows PPTX. DOC is
+   paragraphs only: heading levels live in property pages this reader does not parse, and it says
+   so rather than guessing.
+3. **Bounds a hostile file cannot talk past.** EPUB/ODT pass the existing central-directory
+   bound and every part is counted as it inflates (16 MiB); their XML never resolves an external
+   entity (ODF prohibits DTDs; XHTML's DOCTYPE is ignored, never followed); a spine href cannot
+   leave the archive. RTF groups nest at most 256 deep inside the 4 MiB prefix. OLE sector chains
+   are walked with a step bound, streams refused past 64 MiB. A password-protected ODT/DOC/XLS/PPT
+   is refused by name (`encrypted`), never read as noise.
+4. **Real files, and an oracle the readers never wrote.** The six fixtures were produced by the
+   LibreOffice installed on this machine from the committed DOCX/XLSX/PPTX fixtures. Their
+   expected extracts are those sources' own expected files with only the named per-format
+   differences (EPUB headings as paragraphs; DOC paragraphs only; XLS without formula structure),
+   and a Python test re-derives them to prove it. The readers were developed against these files
+   in a standalone prototype before they entered the repository.
+5. **The generator is not re-run.** Re-running `make-document-fixtures.py` would delete B32's
+   untracked fixtures and local truth fields; the new entries are added alongside.
+
+**Consequences.** `.gitattributes` marks the six extensions binary. The protocol document names
+the kinds, the schemes, the bounds and the `encrypted` detail; the Cloud Core's preview speaks
+each kind in its own units.

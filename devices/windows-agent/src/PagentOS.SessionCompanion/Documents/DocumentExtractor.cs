@@ -149,6 +149,9 @@ public static class DocumentErrors
     /// <summary>A PDF with more pages than <see cref="PagentOS.Agent.Core.Protocol.DocumentCapabilityNames.MaxPdfPages"/> asked for without a <c>page_range</c>; no page was read.</summary>
     public const string PageBound = "page_bound";
 
+    /// <summary>B52: a password-protected document (ODT manifest encryption, a Word FIB flag, an Excel FILEPASS, an encrypted PowerPoint) - refused by name, never an empty success.</summary>
+    public const string Encrypted = "encrypted";
+
     public static CapabilityException Unsupported(string message, string detail)
         => new(ErrorClasses.UnsupportedFormat, message + $" [{detail}]", retryable: false, new Dictionary<string, object?> { [DetailKey] = detail });
 

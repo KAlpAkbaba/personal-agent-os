@@ -1,0 +1,136 @@
+{
+  "path": "legacy/butce-2026.xls",
+  "kind": "xls",
+  "match": "equals_normalised",
+  "title": "butce-2026",
+  "structure": {
+    "sheets": [
+      {
+        "name": "Ozet",
+        "rows": 6,
+        "columns": 2
+      },
+      {
+        "name": "Detay",
+        "rows": 13,
+        "columns": 2
+      }
+    ]
+  },
+  "blocks": [
+    {
+      "ref": "sheet:Ozet!A1:B1",
+      "kind": "row",
+      "sheet": "Ozet",
+      "text": "Kalem\tTutar"
+    },
+    {
+      "ref": "sheet:Ozet!A2:B2",
+      "kind": "row",
+      "sheet": "Ozet",
+      "text": "Kira\t12000"
+    },
+    {
+      "ref": "sheet:Ozet!A3:B3",
+      "kind": "row",
+      "sheet": "Ozet",
+      "text": "Maaş\t45000"
+    },
+    {
+      "ref": "sheet:Ozet!A4:B4",
+      "kind": "row",
+      "sheet": "Ozet",
+      "text": "Yazılım\t8000"
+    },
+    {
+      "ref": "sheet:Ozet!A5:B5",
+      "kind": "row",
+      "sheet": "Ozet",
+      "text": "Toplam\t65000"
+    },
+    {
+      "ref": "sheet:Ozet!A6:B6",
+      "kind": "row",
+      "sheet": "Ozet",
+      "text": "KDV\t=B5*0.2"
+    },
+    {
+      "ref": "sheet:Detay!A1:B1",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Ay\tGider"
+    },
+    {
+      "ref": "sheet:Detay!A2:B2",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Ocak\t5000"
+    },
+    {
+      "ref": "sheet:Detay!A3:B3",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Şubat\t5100"
+    },
+    {
+      "ref": "sheet:Detay!A4:B4",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Mart\t5200"
+    },
+    {
+      "ref": "sheet:Detay!A5:B5",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Nisan\t5300"
+    },
+    {
+      "ref": "sheet:Detay!A6:B6",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Mayıs\t5400"
+    },
+    {
+      "ref": "sheet:Detay!A7:B7",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Haziran\t5500"
+    },
+    {
+      "ref": "sheet:Detay!A8:B8",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Temmuz\t5600"
+    },
+    {
+      "ref": "sheet:Detay!A9:B9",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Ağustos\t5700"
+    },
+    {
+      "ref": "sheet:Detay!A10:B10",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Eylül\t5800"
+    },
+    {
+      "ref": "sheet:Detay!A11:B11",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Ekim\t5900"
+    },
+    {
+      "ref": "sheet:Detay!A12:B12",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Kasım\t6000"
+    },
+    {
+      "ref": "sheet:Detay!A13:B13",
+      "kind": "row",
+      "sheet": "Detay",
+      "text": "Aralık\t6100"
+    }
+  ]
+}

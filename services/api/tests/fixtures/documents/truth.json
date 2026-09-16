@@ -131,6 +131,60 @@
       "sha256": "3e3c051c0a6041938f138b9574cd17f59c7df36fd5f79e31a0428baf12a76484",
       "blocks": 11,
       "duplicate_of": "veri.csv"
+    },
+    {
+      "path": "legacy/sozlesme.odt",
+      "kind": "odt",
+      "size": 21845,
+      "sha256": "12bfb4dfbd08a74dadd036203dca80d27c09cb4e1db08a3b34f6e64fd464d5c2",
+      "blocks": 13,
+      "title": "Hizmet Sözleşmesi",
+      "producer": "LibreOffice (headless) from the committed source fixture"
+    },
+    {
+      "path": "legacy/sozlesme.rtf",
+      "kind": "rtf",
+      "size": 21399,
+      "sha256": "4ca7de0e45e6b9e8fc130761557dae72251ecce8eb78181eae4286899d611ef6",
+      "blocks": 13,
+      "title": "Hizmet Sözleşmesi",
+      "producer": "LibreOffice (headless) from the committed source fixture"
+    },
+    {
+      "path": "legacy/sozlesme.epub",
+      "kind": "epub",
+      "size": 2983,
+      "sha256": "5476f7966785e873521b5fd3f2315784fa4b397cc2b6bcfc91ece3222b759d2c",
+      "blocks": 13,
+      "title": "Hizmet Sözleşmesi",
+      "producer": "LibreOffice (headless) from the committed source fixture"
+    },
+    {
+      "path": "legacy/sozlesme.doc",
+      "kind": "doc",
+      "size": 20480,
+      "sha256": "c585b0ce0975fa62ed16c362a0f831f1d974121f36a4b54ea88dd6e3a3a77751",
+      "blocks": 13,
+      "title": "Hizmet Sözleşmesi",
+      "producer": "LibreOffice (headless) from the committed source fixture"
+    },
+    {
+      "path": "legacy/butce-2026.xls",
+      "kind": "xls",
+      "size": 7168,
+      "sha256": "eb62af083b981161ac1208d93c29c6274c23004297aa18df40f16ea6e5abb6d1",
+      "blocks": 19,
+      "title": "butce-2026",
+      "producer": "LibreOffice (headless) from the committed source fixture"
+    },
+    {
+      "path": "legacy/sunum-q3.ppt",
+      "kind": "ppt",
+      "size": 661504,
+      "sha256": "4d9b50d1b66ce882ef50d19fe89cde4c1486a15cb80934ff4861836e52c8e8ab",
+      "blocks": 7,
+      "title": "Q3 Sunumu",
+      "producer": "LibreOffice (headless) from the committed source fixture"
     }
   ],
   "questions": [

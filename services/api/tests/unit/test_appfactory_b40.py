@@ -147,6 +147,8 @@ def _run_under_node(files: ProjectFiles, tmp_path: Path) -> subprocess.Completed
     return subprocess.run(
         [NODE, "tests/run.js"], cwd=tmp_path, capture_output=True, text=True, timeout=180
     )
+
+
 @pytest.mark.skipif(not _node_available(), reason="node is not installed on this machine")
 @pytest.mark.parametrize(
     "sentence",

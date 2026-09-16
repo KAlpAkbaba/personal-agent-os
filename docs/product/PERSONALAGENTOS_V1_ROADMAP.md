@@ -1882,7 +1882,7 @@ B51  Niyet zekâsı                         IDs: 740, 742–748               de
            referans çözümü, ASR gürültüsüne dayanıklılık. **Kritik fiiller deterministik kalır (741).**
      PROOF: PROVEN_AUTOMATED — genişletilmiş külliyatta kapsam artar VE misroute 0 kalır.
      ROLLBACK: model yönlendirici kapatılır, deterministik tablo tek başına çalışır.
-     KAPANIŞ: commit PENDING_B51 · CI PENDING · 740, 742, 743 DONE, 744, 745, 746, 747, 748 PARTIAL — kanıt
+     KAPANIŞ: commit 507dc89 · CI 35094060177 yeşil (7/7) · 740, 742, 743 DONE, 744, 745, 746, 747, 748 PARTIAL — kanıt
               docs/evidence/b51-intent-intelligence-2026-09-15.json
               Deterministik tablo (741) değişmedi; model yönlendirici onun ARKASINDA, bayrakla ve
               yalnızca güvenli adaylar arasından seçer. Güven skoru, belirsizlik sorusu ve 'bunu'
@@ -1896,6 +1896,17 @@ B52  Belge formatı genişletme             IDs: 143–146                    de
      GOAL: EPUB, RTF, ODT ve eski Office formatları okunsun.
      PROOF: PROVEN_AUTOMATED — oracle fikstürleriyle her format.
      ROLLBACK: format bazında geri alınır.
+     KAPANIŞ: commit PENDING_B52 · CI PENDING · 4/4 DONE — kanıt
+              docs/evidence/b52-document-formats-2026-09-15.json
+              EPUB/ODT (zip + XML, paket yok), RTF (sınırlı kontrol sözcüğü), DOC/XLS/PPT (sınırlı OLE +
+              BIFF8 formül çözücü). Fikstürler bu makinedeki LibreOffice'in kaydedilmiş DOCX/XLSX/PPTX
+              fikstürlerinden ürettiği GERÇEK dosyalar; beklenen çıkarımlar kaynak kâhinden türetildi
+              (çıkarıcıdan değil) ve her format farkı adıyla yazıldı.
+              Yolda bulunan: LibreOffice ilk profil kurulumunda ODT dışa aktarırken çöküyordu (hazır
+              profille çalıştı); EPUB dışa aktarımı başlıkları stilli <p> yazıyor; RTF başlığı ANSI
+              kopyada kayıplı, \ud Unicode alternatifi okunmalı; fikstür üretecini yeniden koşmak B32'nin
+              izlenmeyen fikstürlerini silerdi (koşulmadı, yalnız eklendi).
+              10/10 mutasyon kırmızı (ADR-0159).
 ```
 
 ---

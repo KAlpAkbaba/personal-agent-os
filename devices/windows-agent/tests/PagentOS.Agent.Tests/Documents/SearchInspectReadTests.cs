@@ -29,7 +29,9 @@ public sealed class SearchInspectReadTests : IDisposable
     [InlineData("*.docx")]
     public void Search_finds_both_contracts_whatever_the_diacritics(string pattern)
     {
-        var result = _lab.Exec(DocumentCapabilityNames.FileSearch, new JsonObject { ["roots"] = Roots(), ["pattern"] = pattern });
+        // Only the .docx contracts: B52 put sozlesme.odt/.rtf/.epub/.doc in the same tree, and this
+        // test is about diacritics, not about how many formats a contract exists in.
+        var result = _lab.Exec(DocumentCapabilityNames.FileSearch, new JsonObject { ["roots"] = Roots(), ["pattern"] = pattern, ["extensions"] = new JsonArray(".docx") });
         var files = result["files"]!.AsArray().Select(f => (JsonObject)f!).ToList();
         Assert.Equal(2, files.Count);
         Assert.All(files, f => Assert.Equal("sozlesme.docx", f["name"]!.GetValue<string>()));

@@ -1,0 +1,76 @@
+{
+  "path": "legacy/sozlesme.doc",
+  "kind": "doc",
+  "match": "equals_normalised",
+  "title": "Hizmet Sözleşmesi",
+  "structure": {
+    "paragraphs": 13
+  },
+  "blocks": [
+    {
+      "ref": "p1",
+      "kind": "paragraph",
+      "text": "Hizmet Sözleşmesi"
+    },
+    {
+      "ref": "p2",
+      "kind": "paragraph",
+      "text": "Sürüm 1 (2025)."
+    },
+    {
+      "ref": "p3",
+      "kind": "paragraph",
+      "text": "Madde 1 - Taraflar"
+    },
+    {
+      "ref": "p4",
+      "kind": "paragraph",
+      "text": "Bu sözleşme, Alp Akbaba (İşveren) ile Örnek Yazılım A.Ş. (Yüklenici) arasında imzalanmıştır."
+    },
+    {
+      "ref": "p5",
+      "kind": "paragraph",
+      "text": "Madde 2 - Konu"
+    },
+    {
+      "ref": "p6",
+      "kind": "paragraph",
+      "text": "Yüklenici, kişisel ajan işletim sisteminin bakım ve geliştirme hizmetlerini üstlenir."
+    },
+    {
+      "ref": "p7",
+      "kind": "paragraph",
+      "text": "Madde 3 - Ödeme"
+    },
+    {
+      "ref": "p8",
+      "kind": "paragraph",
+      "text": "Fatura tarihinden itibaren ödeme süresi 30 gündür."
+    },
+    {
+      "ref": "p9",
+      "kind": "paragraph",
+      "text": "Madde 4 - Gizlilik"
+    },
+    {
+      "ref": "p10",
+      "kind": "paragraph",
+      "text": "Taraflar, sözleşme kapsamında edindikleri bilgileri üçüncü kişilerle paylaşmaz."
+    },
+    {
+      "ref": "p11",
+      "kind": "paragraph",
+      "text": "Madde 5 - Süre"
+    },
+    {
+      "ref": "p12",
+      "kind": "paragraph",
+      "text": "Sözleşme imza tarihinden itibaren bir yıl geçerlidir ve yazılı bildirimle yenilenir."
+    },
+    {
+      "ref": "p13",
+      "kind": "paragraph",
+      "text": "Taraf İmza İşveren Alp Akbaba Yüklenici Örnek Yazılım A.Ş."
+    }
+  ]
+}

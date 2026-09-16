@@ -1,0 +1,92 @@
+{
+  "path": "legacy/sozlesme.epub",
+  "kind": "epub",
+  "match": "equals_normalised",
+  "title": "Hizmet Sözleşmesi",
+  "structure": {
+    "headings": [],
+    "tables": 1,
+    "chapters": 1
+  },
+  "blocks": [
+    {
+      "ref": "p1",
+      "text": "Hizmet Sözleşmesi",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p2",
+      "text": "Sürüm 1 (2025).",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p3",
+      "text": "Madde 1 - Taraflar",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p4",
+      "text": "Bu sözleşme, Alp Akbaba (İşveren) ile Örnek Yazılım A.Ş. (Yüklenici) arasında imzalanmıştır.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p5",
+      "text": "Madde 2 - Konu",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p6",
+      "text": "Yüklenici, kişisel ajan işletim sisteminin bakım ve geliştirme hizmetlerini üstlenir.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p7",
+      "text": "Madde 3 - Ödeme",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p8",
+      "text": "Fatura tarihinden itibaren ödeme süresi 30 gündür.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p9",
+      "text": "Madde 4 - Gizlilik",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p10",
+      "text": "Taraflar, sözleşme kapsamında edindikleri bilgileri üçüncü kişilerle paylaşmaz.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p11",
+      "text": "Madde 5 - Süre",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "p12",
+      "text": "Sözleşme imza tarihinden itibaren bir yıl geçerlidir ve yazılı bildirimle yenilenir.",
+      "kind": "paragraph"
+    },
+    {
+      "ref": "t1",
+      "kind": "table",
+      "text": "Taraf\tİmza\nİşveren\tAlp Akbaba\nYüklenici\tÖrnek Yazılım A.Ş.",
+      "rows": [
+        [
+          "Taraf",
+          "İmza"
+        ],
+        [
+          "İşveren",
+          "Alp Akbaba"
+        ],
+        [
+          "Yüklenici",
+          "Örnek Yazılım A.Ş."
+        ]
+      ]
+    }
+  ]
+}

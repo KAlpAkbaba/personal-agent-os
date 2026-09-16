@@ -21,3 +21,9 @@
 *.ogg binary
 *.ttf binary
 *.otf binary
+*.doc binary
+*.xls binary
+*.ppt binary
+*.odt binary
+*.epub binary
+*.rtf binary
