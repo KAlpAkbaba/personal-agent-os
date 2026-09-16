@@ -62,6 +62,8 @@ public sealed class BrowserDispatchTests : IDisposable
                 "desktop.notify",
                 // B47: the device microphone provider's status (DEVICE_PROTOCOL.md §6o).
                 "desktop.voice_status",
+                // B48: the device camera's mode (§6p), appended after it.
+                "desktop.camera_mode",
             },
             AgentCapabilities.Compose(browserEnabled: false));
     }

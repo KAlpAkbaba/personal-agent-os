@@ -62,9 +62,18 @@ class IngestResult:
     reconciled_alarms: tuple[str, ...] = field(default_factory=tuple)
     #: B47: alarms whose local snooze this report made the cloud adopt.
     snoozed_alarms: tuple[str, ...] = field(default_factory=tuple)
+    #: B48: the device camera's derived observation entered the presence model.
+    camera_observed: bool = False
+    #: B48: why a camera observation was NOT used, when one arrived and was not.
+    camera_refused: str | None = None
+    #: B48: the camera mode this heartbeat caused to be sent to the device.
+    camera_mode_sent: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "camera_observed": self.camera_observed,
+            "camera_refused": self.camera_refused,
+            "camera_mode_sent": self.camera_mode_sent,
             "observed": self.observed,
             "input_active_recorded": self.input_active_recorded,
             "holdoff_started": self.holdoff_started,
@@ -127,6 +136,10 @@ def ingest_status(
             logger.warning(
                 "input_observation_failed", device=str(device_id), error=type(exc).__name__
             )
+
+    # (a') B48 (rows 326, 327): the device camera's DERIVED observation - never a frame -
+    # through the same presence boundary as every other observation.
+    camera_observed, camera_refused = _ingest_camera(session, device_id, change, now=moment)
 
     # (b) A real input reset: the ledger row AND the holdoff (spec §1.3, §3.6b).
     if change.input_reset:
@@ -197,6 +210,14 @@ def ingest_status(
                     for alarm_id, until in change.newly_snoozed_alarms
                 ],
             )
+    # (f) B48: the device camera follows the owner's mode (app.ambient.camera).
+    camera_mode_sent: str | None = None
+    try:
+        from app.ambient import camera as ambient_camera
+
+        camera_mode_sent = ambient_camera.reconcile(session, device_id, change.status, now=moment)
+    except Exception as exc:  # noqa: BLE001 - see module docstring
+        logger.warning("camera_reconcile_failed", device=str(device_id), error=type(exc).__name__)
 
     return IngestResult(
         observed=observed,
@@ -205,7 +226,56 @@ def ingest_status(
         display_published=display_published,
         reconciled_alarms=reconciled,
         snoozed_alarms=snoozed,
+        camera_observed=camera_observed,
+        camera_refused=camera_refused,
+        camera_mode_sent=camera_mode_sent,
     )
+
+
+#: Why a device camera observation was not used (``IngestResult.camera_refused``).
+CAMERA_REFUSED_NOT_CAMERA = "not_a_camera_observation"
+CAMERA_REFUSED_MODE_OFF = "owner_mode_off"
+CAMERA_REFUSED_EYE_DISABLED = "eye_disabled"
+CAMERA_REFUSED_INVALID = "invalid_observation"
+CAMERA_REFUSED_ERROR = "ingest_failed"
+
+
+def _ingest_camera(
+    session: Session, device_id: uuid.UUID, change: StatusChange, *, now: datetime
+) -> tuple[bool, str | None]:
+    payload = change.new_camera_observation
+    if payload is None:
+        return False, None
+    if payload.get("source") != "camera":
+        # This path carries the camera and nothing else: a device cannot use it to speak for
+        # the keyboard, the voice or a task.
+        return False, CAMERA_REFUSED_NOT_CAMERA
+    try:
+        from app.ambient import camera as ambient_camera
+
+        if ambient_camera.desired_mode(session) == "off":
+            # The owner's "off" (or a disabled eye) outranks a reading that was already on
+            # its way: consent withdrawn is consent withdrawn, even for the last frame.
+            return False, CAMERA_REFUSED_MODE_OFF
+    except Exception:  # noqa: BLE001 - an unreadable mode is "off" (desired_mode says so)
+        return False, CAMERA_REFUSED_MODE_OFF
+    try:
+        from app.presence import service as presence_service
+        from app.presence.observations import ObservationRejected
+
+        try:
+            presence_service.ingest_observation(session, payload, now=now)
+        except presence_service.EyeDisabledError:
+            return False, CAMERA_REFUSED_EYE_DISABLED
+        except ObservationRejected:
+            logger.warning("camera_observation_rejected", device=str(device_id))
+            return False, CAMERA_REFUSED_INVALID
+        return True, None
+    except Exception as exc:  # noqa: BLE001 - a heartbeat must never fail on this
+        logger.warning(
+            "camera_observation_failed", device=str(device_id), error=type(exc).__name__
+        )
+        return False, CAMERA_REFUSED_ERROR
 
 
 def _record_input_active(session: Session, change: StatusChange, *, now: datetime) -> bool:

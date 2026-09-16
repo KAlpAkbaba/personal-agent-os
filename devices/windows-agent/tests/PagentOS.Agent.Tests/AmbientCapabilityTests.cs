@@ -393,6 +393,9 @@ public sealed class AmbientCapabilityTests
             "SendKeys", "KeyboardInput",
             // Rearranging the owner's monitors. M18.3 reports topology; it never sets it.
             "ChangeDisplaySettings", "SetDisplayConfig", "DisplayConfigSetDeviceInfo",
+            // B48 (row 320): the monitors' power is READ over DDC/CI, never written - a VCP
+            // write could power a panel off behind every gate this family has.
+            "SetVCPFeature", "SaveCurrentSettings", "SetMonitor",
         ];
 
         string[] forbiddenAnyCase = ["hibernate", "logoff", "log off"];

@@ -80,6 +80,10 @@ REASON_OWNER_KEEP_ON: Final = "owner_keep_on"
 #: ADR-0079 §3: the camera has not delivered inside the grace - degraded perception.
 REASON_PERCEPTION_STALE: Final = "perception_stale"
 
+#: B48: the device camera's modes, as the owner may choose them.
+CAMERA_MODE_OFF: Final = "off"
+CAMERA_MODES: Final[tuple[str, ...]] = ("off", "periodic", "continuous")
+
 QUIET_HOURS_UNSET: Final = "unset"
 QUIET_HOURS_INSIDE: Final = "inside"
 QUIET_HOURS_OUTSIDE: Final = "outside"
@@ -116,6 +120,10 @@ class AmbientPolicy:
     #: this old for an off decision. Older is ``perception_stale``: a camera that stopped
     #: delivering is a degraded perception, never an owner who left or fell asleep.
     camera_unknown_grace_s: int = 120
+    #: B48: the owner's device-camera mode (``CAMERA_MODES``). Not an input to ``decide``:
+    #: the decision reads what the camera DELIVERED (``perception_age_s``), never what the
+    #: owner asked it to do.
+    camera_mode: str = "off"
 
     @classmethod
     def from_row(cls, row: AmbientPolicyRow) -> AmbientPolicy:
@@ -137,6 +145,7 @@ class AmbientPolicy:
                 getattr(row, "asleep_after_outside_quiet_s", 1800) or 1800
             ),
             camera_unknown_grace_s=int(getattr(row, "camera_unknown_grace_s", 120) or 120),
+            camera_mode=str(getattr(row, "camera_mode", None) or "off"),
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -156,6 +165,7 @@ class AmbientPolicy:
             "keep_on": self.keep_on,
             "asleep_after_outside_quiet_s": self.asleep_after_outside_quiet_s,
             "camera_unknown_grace_s": self.camera_unknown_grace_s,
+            "camera_mode": self.camera_mode,
         }
 
 
@@ -408,6 +418,8 @@ def within(moment: datetime, now: datetime, seconds: int) -> bool:
 
 
 __all__ = [
+    "CAMERA_MODES",
+    "CAMERA_MODE_OFF",
     "ACTION_DISPLAY_OFF",
     "ACTION_NONE",
     "ALARM_ARMED_CONTEXT_S",

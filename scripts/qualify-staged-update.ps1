@@ -490,7 +490,9 @@ try {
         "desktop.alarm_arm", "desktop.alarm_disarm", "desktop.play_audio",
         "desktop.display_off",
         # B47 (DEVICE_PROTOCOL.md 6o): the device microphone provider's status - always advertised.
-        "desktop.voice_status"
+        "desktop.voice_status",
+        # B48 (DEVICE_PROTOCOL.md section 6p): the device camera's mode, always advertised.
+        "desktop.camera_mode"
     )
     $missingDesktop = @($expectedDesktop | Where-Object { $caps -notcontains $_ })
     Assert-True (@($missingDesktop).Count -eq 0) "every desktop name the M18/M18.3 architecture needs is advertised$(if (@($missingDesktop).Count) { ": MISSING $($missingDesktop -join ', ')" })"

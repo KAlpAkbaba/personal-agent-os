@@ -56,7 +56,11 @@ public sealed class CompanionRuntime(
     Projects.ProjectCapabilities? projectCapabilities = null,
     // B47 (§6i): the device voice service's report. Null means voice is not running in this
     // process, and the answer is the truthful `state: "disabled"`, never capability_missing.
-    Func<JsonObject>? voiceStatus = null)
+    Func<JsonObject>? voiceStatus = null,
+    // B48 (rows 300, 326, 327): the device camera's presence provider. Optional like every
+    // capability object here; a companion without it answers desktop.camera_mode with
+    // capability_missing and its heartbeat carries no camera fields.
+    Camera.CameraPresenceMonitor? camera = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -666,6 +670,12 @@ public sealed class CompanionRuntime(
             "this companion reports no activity status",
             retryable: false);
 
+    private Camera.CameraPresenceMonitor RequireCamera()
+        => camera ?? throw new CapabilityException(
+            ErrorClasses.CapabilityMissing,
+            "this companion has no camera path",
+            retryable: false);
+
     private GreetingPlayer RequireGreeting()
         => greeting ?? throw new CapabilityException(
             ErrorClasses.CapabilityMissing,
@@ -785,6 +795,18 @@ public sealed class CompanionRuntime(
                 // B47 (§6i): read-only, and there is no counterpart that turns a microphone on.
                 case AgentCapabilities.DesktopVoiceStatus:
                     result = voiceStatus?.Invoke() ?? VoiceStatus.Disabled().Report();
+                    break;
+
+                // B48 (§6p): the owner's camera mode, relayed by Cloud Core. Never blocks on the
+                // camera itself - the monitor loop applies the change.
+                case AgentCapabilities.DesktopCameraMode:
+                    result = RequireCamera().Configure(request.Payload);
+                    logger.LogInformation(
+                        "executed {Capability}: mode={Mode} state={State} changed={Changed}",
+                        request.Capability,
+                        result["mode"]?.GetValue<string>(),
+                        result["state"]?.GetValue<string>(),
+                        result["changed"]?.GetValue<bool>());
                     break;
 
                 default:

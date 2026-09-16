@@ -44,9 +44,11 @@ public sealed class DeviceVoiceCapabilityTests
         // The full (every gate on) manifest was 102 names before B47 and is 103 with it; the
         // always-on part was 11 and is 12. DEVICE_PROTOCOL.md §6o and the owner scripts carry the
         // same numbers. (The "85" in §8 is the 2026-09-11 deployed count, a historical fact.)
-        Assert.Equal(103, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true).Count);
-        Assert.Equal(12, AgentCapabilities.Compose(browserEnabled: false).Count);
-        Assert.Equal(12 + 1 + 30, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true).Count);
+        // B48 then appended `desktop.camera_mode` (§6p), one more name everywhere: 104 / 13.
+        Assert.Equal(104, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true).Count);
+        Assert.Equal(13, AgentCapabilities.Compose(browserEnabled: false).Count);
+        Assert.Equal(13 + 1 + 30, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true).Count);
+        Assert.Equal(1, AgentCapabilities.Compose(browserEnabled: false).Count(n => n == AgentCapabilities.DesktopVoiceStatus));
     }
 
     [Fact]
@@ -155,7 +157,10 @@ public sealed class DeviceVoiceCapabilityTests
         var first = reporter.Compose();
         var second = reporter.Compose();
 
-        Assert.Equal(HeartbeatStatus.Fields.Order(StringComparer.Ordinal), first.Select(p => p.Key).Order(StringComparer.Ordinal));
+        // B48's camera pair is sent only by a companion with a camera path; this one has none.
+        Assert.Equal(
+            HeartbeatStatus.Fields.Where(f => f is not (HeartbeatStatus.Camera or HeartbeatStatus.Presence)).Order(StringComparer.Ordinal),
+            first.Select(p => p.Key).Order(StringComparer.Ordinal));
         Assert.Equal("offline", first["voice"]!["state"]!.GetValue<string>());
         Assert.Equal("no_owner_token", first["voice"]!["last_error"]!.GetValue<string>());
         var entry = Assert.Single(first["local_alarm_snoozed"]!.AsArray())!;

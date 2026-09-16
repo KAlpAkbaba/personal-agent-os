@@ -391,6 +391,10 @@ def test_an_unusable_status_is_a_clean_no_op(session, statuses, holdoffs):
         "reconciled_alarms": [],
         # B47: a local snooze the cloud adopted from this report.
         "snoozed_alarms": [],
+        # B48: the device camera's intake and relay did nothing either.
+        "camera_observed": False,
+        "camera_refused": None,
+        "camera_mode_sent": None,
     }
 
 

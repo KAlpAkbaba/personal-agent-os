@@ -76,6 +76,77 @@ def _display_state(raw: Any) -> str:
     return DISPLAY_UNKNOWN
 
 
+#: B48 (DEVICE_PROTOCOL.md §6p): the device camera's state, as the companion reports it.
+CAMERA_MODES: Final[tuple[str, ...]] = ("off", "periodic", "continuous")
+CAMERA_STATES: Final[tuple[str, ...]] = (
+    "off",
+    "idle",
+    "capturing",
+    "blocked",
+    "unavailable",
+    "busy",
+    "vetoed",
+    "error",
+)
+CAMERA_INDICATORS: Final[tuple[str, ...]] = ("hidden", "armed", "open")
+#: How far ahead of this server's clock a device's camera reading may be stamped.
+CAMERA_FUTURE_SKEW_S: Final = 300.0
+_TOKEN_MAX = 64
+
+
+def _token(raw: Any, allowed: tuple[str, ...] | None = None) -> str | None:
+    if not isinstance(raw, str) or not raw or len(raw) > _TOKEN_MAX:
+        return None
+    if allowed is not None and raw not in allowed:
+        return None
+    return raw
+
+
+def _camera_block(raw: Any) -> dict[str, Any] | None:
+    """The companion's ``camera`` object, normalised, or None when it sent none (a device
+    with no camera path) or sent something that is not one. An unknown mode or state is
+    None inside the block - "this device did not say anything I understand" - never a
+    guess."""
+    if not isinstance(raw, dict):
+        return None
+    interval = raw.get("interval_s")
+    return {
+        "mode": _token(raw.get("mode"), CAMERA_MODES),
+        "state": _token(raw.get("state"), CAMERA_STATES),
+        "interval_s": interval
+        if isinstance(interval, int) and not isinstance(interval, bool) and 0 <= interval <= 3600
+        else None,
+        "indicator": _token(raw.get("indicator"), CAMERA_INDICATORS),
+        "last_check_at": _iso(_parse_dt(raw.get("last_check_at"))),
+        "error": _token(raw.get("error")),
+    }
+
+
+def _presence_block(raw: Any) -> dict[str, Any] | None:
+    """The companion's derived ``presence`` observation, kept only as a flat object of
+    scalars. It is NOT trusted here: ``app.ambient.ingest`` passes it through the presence
+    boundary (``app.presence.observations.parse_observation``), which refuses anything that
+    is not exactly the seven fields."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    if any(isinstance(v, dict | list | tuple) for v in raw.values()):
+        return None
+    return dict(raw)
+
+
+def _screened_observation(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The device's observation as the presence boundary accepts it, or None: nothing a
+    device sent is repeated to a reader until that boundary has said it is the seven fields."""
+    if raw is None:
+        return None
+    from app.presence.observations import ObservationRejected, parse_observation
+
+    try:
+        return parse_observation(raw).as_dict()
+    except ObservationRejected:
+        return None
+
+
 def _armed_count(raw: Any) -> int:
     """``armed_alarms`` as the companion reports it: a COUNT (§6g), or an id list in the
     spec's original shape. Never negative, never a bool read as one."""
@@ -147,6 +218,10 @@ class DeviceStatus:
     #: B47 rows 250-252: the device voice service's health, on the contract's key set.
     voice: dict[str, Any] | None = None
     raw_keys: tuple[str, ...] = field(default_factory=tuple)
+    #: B48: the device camera's state (``_camera_block``), None for a device without one.
+    camera: dict[str, Any] | None = None
+    #: B48: the device's latest derived camera observation, unscreened (see ``_presence_block``).
+    presence: dict[str, Any] | None = None
 
     @property
     def input_active(self) -> bool:
@@ -181,6 +256,11 @@ class DeviceStatus:
             "holdoff_until": _iso(self.holdoff_until),
             "next_alarm_at": _iso(self.next_alarm_at),
             "monitors": self.monitors,
+            # B48: what the device camera is doing - mode, state, indicator - so the owner's
+            # panel can say "blocked by Windows" rather than go quiet, and the latest DERIVED
+            # observation it produced (the seven fields; never a frame), as the device sent it.
+            "camera": dict(self.camera) if self.camera is not None else None,
+            "camera_observation": _screened_observation(self.presence),
         }
 
 
@@ -201,6 +281,10 @@ class StatusChange:
     newly_fired_alarms: tuple[str, ...]
     #: B47: local snoozes this report carries that the previous one did not.
     newly_snoozed_alarms: tuple[tuple[str, datetime], ...] = ()
+    #: B48: a camera observation this registry has not handed out before (by ``observed_at``,
+    #: per device), or None. A heartbeat repeats the latest observation until a newer one
+    #: exists; only the first sighting is evidence.
+    new_camera_observation: dict[str, Any] | None = None
 
     @property
     def display_state(self) -> str:
@@ -270,6 +354,8 @@ def parse_status(
             else None
         ),
         raw_keys=tuple(sorted(str(k)[:32] for k in raw)),
+        camera=_camera_block(raw.get("camera")),
+        presence=_presence_block(raw.get("presence")),
     )
 
 
@@ -280,6 +366,8 @@ class DeviceStatusRegistry:
         self._max_devices = max_devices
         self._by_device: dict[uuid.UUID, DeviceStatus] = {}
         self._last_input_observation: dict[uuid.UUID, datetime] = {}
+        #: B48: device -> the ``observed_at`` of the newest camera observation handed out.
+        self._last_camera_observed_at: dict[uuid.UUID, datetime] = {}
         #: device -> the broker origin it dialled (insertion order = recency).
         self._dial_origins: dict[uuid.UUID, str] = {}
         self._lock = threading.Lock()
@@ -334,6 +422,19 @@ class DeviceStatusRegistry:
             seen_snoozes = set(previous.local_alarm_snoozed) if previous else set()
             newly_snoozed = tuple(e for e in status.local_alarm_snoozed if e not in seen_snoozes)
 
+            new_camera: dict[str, Any] | None = None
+            if status.presence is not None:
+                observed = _parse_dt(status.presence.get("observed_at"))
+                last = self._last_camera_observed_at.get(device_id)
+                # A reading stamped far in the future is a device clock problem, not evidence -
+                # and recorded as "newest" it would silence every honest reading after it.
+                plausible = observed is not None and (
+                    (observed - moment).total_seconds() <= CAMERA_FUTURE_SKEW_S
+                )
+                if plausible and observed is not None and (last is None or observed > last):
+                    self._last_camera_observed_at[device_id] = observed
+                    new_camera = dict(status.presence)
+
         return StatusChange(
             status=status,
             previous=previous,
@@ -342,6 +443,7 @@ class DeviceStatusRegistry:
             should_observe_input=should_observe,
             newly_fired_alarms=newly_fired,
             newly_snoozed_alarms=newly_snoozed,
+            new_camera_observation=new_camera,
         )
 
     def get(self, device_id: uuid.UUID) -> DeviceStatus | None:
@@ -400,6 +502,7 @@ class DeviceStatusRegistry:
         with self._lock:
             self._by_device.clear()
             self._last_input_observation.clear()
+            self._last_camera_observed_at.clear()
 
 
 #: Process-wide registry, the same shape as ``app.devices.commands``'s broker registry.
@@ -440,6 +543,10 @@ def set_status_registry(registry: DeviceStatusRegistry) -> None:
 
 
 __all__ = [
+    "CAMERA_FUTURE_SKEW_S",
+    "CAMERA_INDICATORS",
+    "CAMERA_MODES",
+    "CAMERA_STATES",
     "DISPLAY_DIMMED",
     "DISPLAY_OFF",
     "DISPLAY_ON",
