@@ -6,7 +6,8 @@
 
 .DESCRIPTION
     Item 28 is one elevated command (`install-device-service.ps1 -DisplayPower -Operator`).
-    It takes the device from 29 advertised capabilities to 85 and is the single thing
+    It takes the device from 29 advertised capabilities to 85 (103 since B47, whose one
+    added name - desktop.voice_status - is always advertised) and is the single thing
     standing between six milestones' device halves and PROVEN_REAL. This script is what
     runs afterwards, so the owner does not have to run six qualifications by hand:
 
@@ -1153,9 +1154,10 @@ function Invoke-AmbientSection {
 
         $keys = @()
         if ($null -ne $activity.Result) { $keys = @($activity.Result.PSObject.Properties.Name) }
-        $expected = @("input_idle_s", "display_state", "display_observed_at", "alarm_ringing", "ringing_alarm_id", "armed_alarms", "next_alarm_at")
+        # B13 added local_alarm_fired and B47 local_alarm_snoozed and voice (DEVICE_PROTOCOL.md 6g).
+        $expected = @("input_idle_s", "display_state", "display_observed_at", "alarm_ringing", "ringing_alarm_id", "armed_alarms", "next_alarm_at", "local_alarm_fired", "local_alarm_snoozed", "voice")
         $missing = @($expected | Where-Object { $keys -notcontains $_ })
-        Add-Check -Section $section.name -Name "desktop.activity_status.carries_exactly_the_seven_documented_keys" -Ok ($activity.Ok -and @($missing).Count -eq 0) `
+        Add-Check -Section $section.name -Name "desktop.activity_status.carries_every_documented_key" -Ok ($activity.Ok -and @($missing).Count -eq 0) `
             -Detail "$(@($keys).Count) key(s)$(if (@($missing).Count) { "; MISSING $($missing -join ', ')" })"
         if (-not ($activity.Ok -and @($missing).Count -eq 0)) { $failures++ }
 

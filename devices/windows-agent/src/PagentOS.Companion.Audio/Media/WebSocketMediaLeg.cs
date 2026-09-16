@@ -22,6 +22,16 @@ public sealed class WebSocketMediaLeg(
 {
     public const string TransportName = "websocket";
 
+    /// <summary>
+    /// B47: how often the leg pings, and how long an unanswered ping may wait before the leg is
+    /// declared dead. Without a timeout a pulled network cable went unnoticed until TCP gave up -
+    /// minutes - and for all that time the device believed the Cloud Core was reachable, so its
+    /// offline commands ("ertele") stayed silent exactly when they were needed.
+    /// </summary>
+    public static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(5);
+
+    public static readonly TimeSpan KeepAliveTimeout = TimeSpan.FromSeconds(10);
+
     private readonly Channel<ProviderEvent> _events = Channel.CreateUnbounded<ProviderEvent>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -48,7 +58,7 @@ public sealed class WebSocketMediaLeg(
             throw new InvalidOperationException("media leg already opened; create a new leg per connection");
         }
 
-        var socket = socketFactory?.Invoke() ?? new ClientWebSocket();
+        var socket = socketFactory?.Invoke() ?? NewSocket();
         foreach (var header in codec.ConnectHeaders(grant))
         {
             socket.Options.SetRequestHeader(header.Key, header.Value);
@@ -65,6 +75,15 @@ public sealed class WebSocketMediaLeg(
         await SendCommandAsync(
             new SessionConfigureCommand(grant.Instructions, grant.Tools, options.EndOfTurn, null),
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The production socket: pings that expect an answer (see <see cref="KeepAliveTimeout"/>).</summary>
+    public static ClientWebSocket NewSocket()
+    {
+        var socket = new ClientWebSocket();
+        socket.Options.KeepAliveInterval = KeepAliveInterval;
+        socket.Options.KeepAliveTimeout = KeepAliveTimeout;
+        return socket;
     }
 
     public ValueTask SendAudioAsync(AudioFrame frame, CancellationToken cancellationToken)

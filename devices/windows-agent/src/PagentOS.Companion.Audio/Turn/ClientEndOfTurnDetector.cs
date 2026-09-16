@@ -50,6 +50,9 @@ public sealed class ClientEndOfTurnDetector(EnergyVad vad, HesitationGuard guard
 
     public HesitationGuard Guard => guard;
 
+    /// <summary>The VAD's verdict on the most recent frame (B47: the device gate keeps per-frame voicing).</summary>
+    public VadDecision LastDecision { get; private set; }
+
     /// <summary>Provider transcription of the current turn so far (delta or final), newest last.</summary>
     public void ObserveTranscript(string text)
     {
@@ -68,6 +71,7 @@ public sealed class ClientEndOfTurnDetector(EnergyVad vad, HesitationGuard guard
     public TurnEvent? Process(AudioFrame frame, in AudioProcessingContext context)
     {
         var decision = vad.Process(frame, in context);
+        LastDecision = decision;
 
         if (!InSpeech)
         {

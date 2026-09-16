@@ -30,6 +30,7 @@ special case for test alarms: the same path, with a shorter ``max_play_seconds``
 from __future__ import annotations
 
 import contextlib
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -79,6 +80,7 @@ from app.ledger.vocabulary import (
     ALARM_EVENT_TYPE_BY_STATE,
     EVENT_TYPE_ALARM_CLEANED_UP,
     EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+    EVENT_TYPE_ALARM_LOCAL_SNOOZED,
     SEVERITY_CRITICAL,
     SEVERITY_INFO,
     SUBSYSTEM_ROUTINE,
@@ -531,11 +533,17 @@ def snooze_alarm(
     minutes: int | None = None,
     sequence: WakeSequence | None = None,
     now: datetime | None = None,
+    resume_at: datetime | None = None,
 ) -> WakeAlarm:
     """Stop the playback, push the alarm forward, arm a fresh one-shot routine (spec §3.5).
 
     Only meaningful while the alarm is physically happening; a snooze on an idle alarm is
     refused rather than silently rescheduling something the owner did not ask about.
+
+    ``resume_at`` (B47) is an instant another party already chose - the device that snoozed
+    the alarm on its own while this cloud was unreachable. It is adopted as the new
+    ``scheduled_for`` instead of being re-derived from ``now``: the report may arrive minutes
+    after the snooze, and the device will ring at ITS instant.
     """
     moment = now or utcnow()
     alarm = require_alarm(session, alarm_id)
@@ -557,7 +565,9 @@ def snooze_alarm(
 
     if sequence is not None:
         sequence.stop_playback(session, alarm, reason="snooze", now=moment)
-    alarm.scheduled_for = moment + timedelta(minutes=span)
+    alarm.scheduled_for = (
+        _aware(resume_at) if resume_at is not None else moment + timedelta(minutes=span)
+    )
     alarm.local_time = _aware(alarm.scheduled_for).astimezone(
         ZoneInfo(alarm.timezone)
     ).strftime("%H:%M")
@@ -926,6 +936,77 @@ def reconcile_local_fired(
     return touched
 
 
+def reconcile_local_snoozed(
+    session: Session,
+    entries: list[tuple[str, datetime]],
+    *,
+    now: datetime | None = None,
+) -> list[WakeAlarm]:
+    """The device snoozed a ringing alarm on its own (B47; B13 requirement 259).
+
+    The owner said "ertele" to the device while this cloud could not be reached; the device
+    stopped the ring, armed the same alarm again and reported ``until``, the instant it will
+    ring. The cloud adopts that instant through the ordinary snooze, so the count, the limit
+    and the ledger are the same as for a snooze the cloud performed itself. An alarm that is
+    no longer active, already at its limit, or unknown is left alone and the fact recorded -
+    the device's own ring at ``until`` still happens, and ``reconcile_local_fired`` records it.
+    """
+    moment = now or utcnow()
+    touched: list[WakeAlarm] = []
+    for raw, until in entries:
+        try:
+            alarm = get_alarm(session, uuid.UUID(str(raw)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        if alarm is None:
+            continue
+        if alarm.state not in ALARM_ACTIVE_STATES:
+            _record_ledger(
+                session,
+                event_type=EVENT_TYPE_ALARM_LOCAL_SNOOZED,
+                alarm=alarm,
+                action="alarm_local_snooze_not_adopted",
+                factual_summary=(
+                    f"Cihaz alarmı kendi erteledi ({_aware(until).isoformat()}); "
+                    f"bulut kaydı {alarm.state.lower()} durumundaydı, benimsenmedi"
+                ),
+                source_ref=f"alarms:{alarm.id}:local_snooze:{int(_aware(until).timestamp())}",
+                detail={"until": _aware(until).isoformat(), "state_at_reconcile": alarm.state},
+            )
+            continue
+        span = max(1, math.ceil((_aware(until) - moment).total_seconds() / 60))
+        try:
+            snooze_alarm(
+                session,
+                alarm.id,
+                minutes=min(span, MAX_SNOOZE_MINUTES),
+                now=moment,
+                resume_at=until,
+            )
+        except InvalidAlarmRequest as exc:
+            _record_ledger(
+                session,
+                event_type=EVENT_TYPE_ALARM_LOCAL_SNOOZED,
+                alarm=alarm,
+                action="alarm_local_snooze_not_adopted",
+                factual_summary=f"Cihazın yerel ertelemesi benimsenmedi: {exc}",
+                source_ref=f"alarms:{alarm.id}:local_snooze:{int(_aware(until).timestamp())}",
+                detail={"until": _aware(until).isoformat(), "reason": str(exc)},
+            )
+            continue
+        _record_ledger(
+            session,
+            event_type=EVENT_TYPE_ALARM_LOCAL_SNOOZED,
+            alarm=alarm,
+            action="alarm_local_snoozed",
+            factual_summary=f"Cihaz alarmı çevrimdışıyken erteledi; yeni saat {alarm.local_time}",
+            source_ref=f"alarms:{alarm.id}:local_snooze:{int(_aware(until).timestamp())}",
+            detail={"until": _aware(until).isoformat(), "snooze_count": alarm.snooze_count},
+        )
+        touched.append(alarm)
+    return touched
+
+
 # -------------------------------------------------------------------- the release
 
 
@@ -1087,6 +1168,7 @@ __all__ = [
     "list_alarms",
     "next_alarm",
     "reconcile_local_fired",
+    "reconcile_local_snoozed",
     "require_alarm",
     "snooze_alarm",
     "status_speech",

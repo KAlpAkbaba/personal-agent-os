@@ -46,6 +46,16 @@ public sealed record ArmedAlarm
     /// </remarks>
     public bool IsTest { get; init; }
 
+    /// <summary>
+    /// B47 (req 259's local trigger): how long a local "ertele" defers this alarm, as the cloud's
+    /// alarm row says. Null when the cloud did not send it - and then the device does not
+    /// snooze on its own, because a default of its own would be a second clock.
+    /// </summary>
+    public int? SnoozeMinutes { get; init; }
+
+    /// <summary>How many more snoozes the alarm row allows (its limit minus its count).</summary>
+    public int? SnoozesLeft { get; init; }
+
     /// <summary>The moment this device rings, if nothing has consumed the arm by then.</summary>
     public DateTimeOffset FireLocalAt => FireAt + TimeSpan.FromSeconds(GraceSeconds);
 
@@ -71,6 +81,16 @@ public sealed record ArmedAlarm
         if (MaxDurationSeconds is not null)
         {
             node["max_duration_s"] = MaxDurationSeconds.Value;
+        }
+
+        if (SnoozeMinutes is not null)
+        {
+            node["snooze_minutes"] = SnoozeMinutes.Value;
+        }
+
+        if (SnoozesLeft is not null)
+        {
+            node["snoozes_left"] = SnoozesLeft.Value;
         }
 
         if (IsTest)
@@ -119,6 +139,8 @@ public sealed record ArmedAlarm
             MaxDurationSeconds = row["max_duration_s"]?.GetValue<int>(),
             ArmedAt = armedAt,
             IsTest = row["is_test"]?.GetValue<bool>() ?? false,
+            SnoozeMinutes = row["snooze_minutes"]?.GetValue<int>(),
+            SnoozesLeft = row["snoozes_left"]?.GetValue<int>(),
         };
     }
 }

@@ -53,7 +53,10 @@ public sealed class CompanionRuntime(
     GreetingPlayer? greeting = null,
     Operator.OperatorCapabilities? operatorCapabilities = null,
     Documents.DocumentCapabilities? documentCapabilities = null,
-    Projects.ProjectCapabilities? projectCapabilities = null)
+    Projects.ProjectCapabilities? projectCapabilities = null,
+    // B47 (§6i): the device voice service's report. Null means voice is not running in this
+    // process, and the answer is the truthful `state: "disabled"`, never capability_missing.
+    Func<JsonObject>? voiceStatus = null)
 {
     private const int ConnectTimeoutMs = 2000;
 
@@ -777,6 +780,11 @@ public sealed class CompanionRuntime(
                 // M18.3 (§6g): the same object the Device Service attaches to its heartbeat.
                 case AgentCapabilities.DesktopActivityStatus:
                     result = RequireActivityStatus().Report(request.Payload);
+                    break;
+
+                // B47 (§6i): read-only, and there is no counterpart that turns a microphone on.
+                case AgentCapabilities.DesktopVoiceStatus:
+                    result = voiceStatus?.Invoke() ?? VoiceStatus.Disabled().Report();
                     break;
 
                 default:

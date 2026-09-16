@@ -62,11 +62,27 @@ public static class HeartbeatStatus
     /// </remarks>
     public const string LocalAlarmFired = "local_alarm_fired";
 
+    /// <summary>
+    /// B47 (B13 requirement 259's local trigger): alarms this device snoozed on its own while
+    /// the Cloud Core was unreachable, as <c>{"alarm_id", "until"}</c> objects, drained when
+    /// reported. <c>until</c> is when the device will ring again; the cloud adopts that instant
+    /// (<c>packages/protocol/device-voice.json</c> <c>local_snooze</c>).
+    /// </summary>
+    public const string LocalAlarmSnoozed = "local_alarm_snoozed";
+
+    /// <summary>
+    /// B47 (rows 250-252): the device voice service's compact health - the closed key set of
+    /// <c>device-voice.json</c> <c>heartbeat.keys</c>. States, flags, a counter and an error
+    /// class; never a transcript, a phrase or audio.
+    /// </summary>
+    public const string Voice = "voice";
+
     /// <summary>Every key the <c>status</c> object may carry, in the order the schema lists them.</summary>
     public static readonly IReadOnlyList<string> Fields =
     [
         InputIdleSeconds, DisplayState, DisplayObservedAt,
         AlarmRinging, RingingAlarmId, ArmedAlarms, NextAlarmAt, LocalAlarmFired,
+        LocalAlarmSnoozed, Voice,
     ];
 
     /// <summary>

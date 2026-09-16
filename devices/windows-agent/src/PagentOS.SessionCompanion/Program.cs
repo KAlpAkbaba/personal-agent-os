@@ -55,6 +55,9 @@ public static class Program
         string? pipeArg = null;
         var devTrust = false;
         var voiceFlag = false;
+        string? enrollPhrases = null;
+        var enroll = false;
+        var enrollTakes = 3;
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] == "--pipe" && i + 1 < args.Length)
@@ -68,6 +71,18 @@ public static class Program
             else if (args[i] == "--voice")
             {
                 voiceFlag = true;
+            }
+            else if (args[i] == "--voice-enroll")
+            {
+                enroll = true;
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    enrollPhrases = args[++i];
+                }
+            }
+            else if (args[i] == "--takes" && i + 1 < args.Length && int.TryParse(args[i + 1], out var takes))
+            {
+                enrollTakes = takes;
             }
         }
 
@@ -117,6 +132,18 @@ public static class Program
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(e => e.StartsWith('.') ? e : "." + e)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (enroll)
+        {
+            // B47: the owner's own, interactive enrollment of the offline phrases. It runs no
+            // pipe, no voice session and no capability - it records, reduces to features, saves.
+            if (!OperatingSystem.IsWindows())
+            {
+                return 1;
+            }
+
+            return await Voice.VoiceEnrollmentCommand.RunAsync(dataDir, enrollPhrases, enrollTakes, configuration["VoiceCaptureDevice"], CancellationToken.None).ConfigureAwait(false);
         }
 
         Directory.CreateDirectory(artifactRoots[0]);
@@ -291,11 +318,39 @@ public static class Program
                 : "display power: disabled (PAGENTOS_AGENT_DisplayPowerEnabled=true enables it); "
                   + "desktop.display_off is not advertised. Waking and reporting stay available.");
 
+        // B11 (requirement 369): desktop.notify is advertised by every companion, so every
+        // companion must be able to answer it. Until B47 nothing here built it, and the shipped
+        // process answered its own advertised name with capability_missing.
+        Notify.ShellToastSink? toastSink = OperatingSystem.IsWindows()
+            ? new Notify.ShellToastSink(loggerFactory.CreateLogger("Notify"))
+            : null;
+        var notify = toastSink is null
+            ? null
+            : new Notify.NotifyCapabilities(toastSink, loggerFactory.CreateLogger("Notify"));
+
+        // B47 (ADR-0154, owner decision 2026-09-16): the device voice service. Its health object
+        // exists whether or not voice runs, so the heartbeat and desktop.voice_status always
+        // answer - "disabled" is a true answer.
+        var voiceOptions = PagentOS.Companion.Audio.VoiceCompanionOptions.Parse(
+            configuration["VoiceEnabled"],
+            configuration["CloudCoreUrl"],
+            configuration["VoiceCaptureDevice"],
+            configuration["VoiceRenderDevice"],
+            configuration["VoiceEndOfTurn"],
+            configuration["DeviceId"],
+            commandLineFlag: voiceFlag);
+        var voiceHealth = new PagentOS.Companion.Audio.Listening.DeviceVoiceHealth();
+        if (voiceOptions.Enabled)
+        {
+            voiceHealth.SetState(PagentOS.Companion.Audio.Listening.DeviceVoiceContract.StateStarting);
+        }
+
         var activityStatus = new ActivityStatusReporter(
             inputActivity,
             displayObserver ?? (IDisplayStateObserver)UnknownDisplayStateObserver.Instance,
             () => alarm?.RingingAlarmId,
-            alarmArms);
+            alarmArms,
+            voice: voiceHealth.Heartbeat);
 
         // M19 (M19_DIGITAL_OPERATOR_SPEC.md §2/§3): the Digital Operator. OFF unless asked for
         // out loud on BOTH halves (this key and the service's), and built only then, so a
@@ -393,7 +448,9 @@ public static class Program
             greeting: greeting,
             operatorCapabilities: operatorCapabilities,
             documentCapabilities: documentCapabilities,
-            projectCapabilities: projectCapabilities);
+            projectCapabilities: projectCapabilities,
+            notify: notify,
+            voiceStatus: voiceHealth.Report);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
 
         if (browserHost is not null && browserOptions.Eager)
@@ -440,17 +497,43 @@ public static class Program
         // M12 track C: the realtime voice client is ADDITIVE and OFF by default. It runs beside
         // the qualified pipe loop, never inside it, and a voice failure can only log — the
         // service/companion path the owner qualified does not depend on it in any way.
-        var voiceOptions = PagentOS.Companion.Audio.VoiceCompanionOptions.Parse(
-            configuration["VoiceEnabled"],
-            configuration["CloudCoreUrl"],
-            configuration["VoiceCaptureDevice"],
-            configuration["VoiceRenderDevice"],
-            configuration["VoiceEndOfTurn"],
-            configuration["DeviceId"],
-            commandLineFlag: voiceFlag);
-        var voiceTask = voiceOptions.Enabled
-            ? RunVoiceAsync(voiceOptions, loggerFactory.CreateLogger("Voice"), audit, sidebandSource, cts.Token)
-            : Task.CompletedTask;
+        // B47: when enabled it is the device voice service - continuous local listening, the
+        // privacy indicator, offline commands - supervised so a crash restarts it (row 251).
+        Voice.TrayPrivacyIndicator? tray = null;
+        var voiceTask = Task.CompletedTask;
+        if (voiceOptions.Enabled && OperatingSystem.IsWindows())
+        {
+            var voiceLogger = loggerFactory.CreateLogger("Voice");
+            PagentOS.Companion.Audio.Listening.DeviceListeningService? listening = null;
+            Voice.OfflineVoiceCommands? offline = null;
+            tray = new Voice.TrayPrivacyIndicator(voiceLogger, new Voice.TrayActions(
+                SetListening: async on =>
+                {
+                    if (listening is not null)
+                    {
+                        await listening.SetEnabledAsync(on, PagentOS.Companion.Audio.Listening.DeviceListeningService.SourceOwnerDevice).ConfigureAwait(false);
+                    }
+                },
+                SetMode: async mode => listening is null ? "ses servisi henüz başlamadı" : await listening.SetModeAsync(mode).ConfigureAwait(false),
+                SnoozeAlarm: () => Task.FromResult(alarmArms.SnoozeRinging("tray").Detail),
+                // The owner at the device may always stop what rings here, cloud or no cloud.
+                StopAlarm: () => Task.FromResult(offline!.Execute(PagentOS.Companion.Audio.Listening.DeviceVoiceContract.CommandAlarmStop).Detail)));
+            offline = new Voice.OfflineVoiceCommands(alarm, alarmArms, toastSink, TimeProvider.System, voiceLogger);
+            var composition = new PagentOS.Companion.Audio.DeviceVoiceComposition(
+                voiceHealth,
+                tray,
+                offline,
+                dataDir,
+                PagentOS.Companion.Audio.Listening.Win32PushToTalkKey.ParseKey(configuration["VoicePushToTalkKey"])
+                    ?? PagentOS.Companion.Audio.Listening.Win32PushToTalkKey.RightControl,
+                OnListening: service =>
+                {
+                    listening = service;
+                    tray.ShowMode(service.Settings.Mode);
+                });
+            voiceTask = RunVoiceAsync(voiceOptions, voiceLogger, audit, sidebandSource, composition, cts.Token);
+        }
+
         if (!voiceOptions.Enabled)
         {
             logger.LogInformation("voice: disabled (PAGENTOS_AGENT_VoiceEnabled=true plus PAGENTOS_AGENT_CloudCoreUrl, or --voice, enables it)");
@@ -477,6 +560,8 @@ public static class Program
             alarmArms.Dispose();
             alarm?.Dispose();
             displayObserver?.Dispose();
+            tray?.Dispose();
+            toastSink?.Dispose();
         }
 
         return 0;
@@ -538,26 +623,77 @@ public static class Program
         return (devices.FirstOrDefault(d => d.IsDefault) ?? devices[0]).Id;
     }
 
-    private static async Task RunVoiceAsync(
+    /// <summary>
+    /// B47 row 251: the device voice service, restarted after a crash. Before B47 one exception
+    /// here ended voice for the life of the process, silently as far as the Cloud Core could
+    /// tell; now each crash is counted in the heartbeat and the service comes back after a
+    /// bounded backoff.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static Task RunVoiceAsync(
         PagentOS.Companion.Audio.VoiceCompanionOptions options,
         ILogger logger,
         AuditLog audit,
         PagentOS.Companion.Audio.Sideband.ISidebandPushSource pushes,
+        PagentOS.Companion.Audio.DeviceVoiceComposition composition,
         CancellationToken cancellationToken)
+        => SuperviseVoiceAsync(
+            ct => PagentOS.Companion.Audio.VoiceCompanionHost.RunAsync(options, logger, audit, pushes, composition, ct),
+            composition.Health,
+            logger,
+            TimeProvider.System,
+            cancellationToken);
+
+    /// <summary>Runs <paramref name="run"/> until cancelled, restarting it after any crash (public for tests).</summary>
+    public static async Task SuperviseVoiceAsync(
+        Func<CancellationToken, Task> run,
+        PagentOS.Companion.Audio.Listening.DeviceVoiceHealth health,
+        ILogger logger,
+        TimeProvider time,
+        CancellationToken cancellationToken,
+        TimeSpan? maxDelay = null)
     {
-        try
+        var crashes = 0;
+        var cap = maxDelay ?? TimeSpan.FromSeconds(60);
+        while (!cancellationToken.IsCancellationRequested)
         {
-            if (OperatingSystem.IsWindows())
+            try
             {
-                await PagentOS.Companion.Audio.VoiceCompanionHost.RunAsync(options, logger, audit, pushes, cancellationToken).ConfigureAwait(false);
+                await run(cancellationToken).ConfigureAwait(false);
+                if (health.State == PagentOS.Companion.Audio.Listening.DeviceVoiceContract.StateDisabled)
+                {
+                    // Voice is configured off: nothing to supervise.
+                    return;
+                }
+
+                crashes = 0;
             }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "voice client stopped: {Reason}", ex.Message);
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                crashes++;
+                health.CountRestart("service:" + ex.GetType().Name);
+                health.SetState(PagentOS.Companion.Audio.Listening.DeviceVoiceContract.StateBackoff);
+                logger.LogError(ex, "voice service crashed ({Count} in a row): {Reason}", crashes, ex.Message);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var delay = TimeSpan.FromSeconds(Math.Min(cap.TotalSeconds, 2 * Math.Pow(2, Math.Min(crashes, 5))));
+            try
+            {
+                await Task.Delay(delay, time, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
         }
     }
 }

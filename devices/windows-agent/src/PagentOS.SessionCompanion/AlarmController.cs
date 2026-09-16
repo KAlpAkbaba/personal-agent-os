@@ -107,6 +107,22 @@ public sealed class AlarmController : IDisposable
     public bool IsRinging => RingingAlarmId is not null;
 
     /// <summary>
+    /// B47: what the ringing alarm was started WITH (id, label, ramp, duration, test flag and the
+    /// snooze terms the cloud sent), detached. The offline "ertele" needs it to re-arm the same
+    /// alarm locally without the cloud; null when nothing rings.
+    /// </summary>
+    public JsonObject? RingingPayload
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _current is null ? null : (JsonObject)_current.Payload.DeepClone();
+            }
+        }
+    }
+
+    /// <summary>
     /// B13 requirement 269: the alarm tone steps back while something else speaks.
     /// </summary>
     /// <remarks>
@@ -230,7 +246,9 @@ public sealed class AlarmController : IDisposable
                     retryable: true);
             }
 
-            _current = new Ringing(alarmId, label, ramp, maxDuration, playback, _time.GetTimestamp());
+            var snapshot = (JsonObject)payload.DeepClone();
+            snapshot["alarm_id"] = alarmId;
+            _current = new Ringing(alarmId, label, ramp, maxDuration, playback, _time.GetTimestamp(), snapshot);
 
             // Prime a couple of chunks so the first sound is immediate rather than one pump
             // interval late, then let the loop keep it fed.
@@ -562,8 +580,11 @@ public sealed class AlarmController : IDisposable
         WakeRamp ramp,
         int maxDurationSeconds,
         IAudioPlayback playback,
-        long startedAt)
+        long startedAt,
+        JsonObject payload)
     {
+        public JsonObject Payload { get; } = payload;
+
         public string AlarmId { get; } = alarmId;
 
         public string? Label { get; } = label;
