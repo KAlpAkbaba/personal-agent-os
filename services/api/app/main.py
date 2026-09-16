@@ -152,6 +152,9 @@ from app.voice.routes import router as voice_router
 from app.voice.runtime import VoiceRuntime
 from app.weather.providers import build_weather_provider
 from app.weather.service import WeatherService
+from app.webpush.provider import HttpPushProvider
+from app.webpush.routes import router as webpush_router
+from app.webpush.vapid import VapidKeyError, load_private_key
 from app.worldmodel.routes import router as world_router
 
 configure_logging()
@@ -169,6 +172,39 @@ class UTF8JSONResponse(JSONResponse):
     """
 
     media_type = "application/json; charset=utf-8"
+
+
+def _build_push_rung(
+    settings: Settings, session_factory: Any
+) -> notification_ladder.PushRung | None:
+    """B11 req 372: the notification ladder's push rung, or honestly none.
+
+    Returns ``None`` (never a rung that will only ever fail) when no VAPID key is
+    configured, an invalid one is configured, or no subject is set - the task brief's
+    "when no key is configured the push rung is skipped honestly ('push unavailable: no
+    VAPID key') and the rest of the ladder is unchanged". ``default_rungs`` below never
+    registers a ``None`` rung, so the ladder simply never offers ``push`` as available
+    (``app.notifications.service.next_channel`` skips a channel not in ``available``),
+    exactly the way it already treats ``sound`` before anything implements it.
+    """
+    if not settings.webpush_vapid_private_key:
+        logger.info("webpush_unavailable", reason="no_vapid_key")
+        return None
+    try:
+        private_key = load_private_key(settings.webpush_vapid_private_key)
+    except VapidKeyError as exc:
+        logger.error("webpush_unavailable", reason="invalid_vapid_key", error=str(exc))
+        return None
+    if not settings.webpush_vapid_subject:
+        logger.info("webpush_unavailable", reason="no_vapid_subject")
+        return None
+    return notification_ladder.PushRung(
+        session_factory=session_factory,
+        provider=HttpPushProvider(default_timeout_s=settings.webpush_request_timeout_s),
+        vapid_private_key=private_key,
+        vapid_subject=settings.webpush_vapid_subject,
+        timeout_s=settings.webpush_request_timeout_s,
+    )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -246,6 +282,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         session_factory=dispatch_session_factory,
         command_client=DeviceCommandClient(dispatch_session_factory),
     )
+    # B11 req 372: the same dedicated session factory as device_action above, for the
+    # same reason - the push rung runs off the routine clock's event loop, not a
+    # request, and must not need the whole ArtifactRuntime just to open a session.
+    push_rung = _build_push_rung(settings, dispatch_session_factory)
     # docs/DECISIONS.md ADR-0078: the alarm/display voice tools read the wake sequence
     # and the device-status registry from ToolContext.live (tools_ambient._sequence,
     # display_status). They are registered HERE, where they are built, on the same
@@ -580,7 +620,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     artifacts.session,
                     lambda db: notification_ladder.sweep(
                         db,
-                        rungs=notification_ladder.default_rungs(device_action=device_action),
+                        rungs=notification_ladder.default_rungs(
+                            device_action=device_action, push_rung=push_rung
+                        ),
                     ),
                 ).values()
             ),
@@ -743,6 +785,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # operator and the documents/mail/calendar families already hold above — one device
     # port, never a second desktop-control path.
     app.state.device_action = device_action
+    # B11 req 372: exposed for tests/diagnostics only - routes never read this directly
+    # (app.webpush.routes reads settings and builds its own key/session per request).
+    app.state.webpush_push_rung = push_rung
     # Scoped CORS: the web shell is a separate origin from the API. Allow only
     # the configured loopback/private web origins (never "*"); M0 review #3.
     app.add_middleware(
@@ -856,6 +901,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # B11 req 368/377: the durable inbox. The old one read the fake push transport's
     # in-memory log, so it was empty in production and lost on every restart.
     app.include_router(notifications_router)
+    # B11 req 372: VAPID public key + subscription management, owner-session-gated.
+    app.include_router(webpush_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
@@ -889,6 +936,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["temporal_worker"] = await asyncio.to_thread(embedded_worker.health_check)
         # M13: synthesis-provider configuration posture (no I/O, no secrets).
         checks["research"] = await asyncio.to_thread(research_health, settings)
+        # B11 req 372: whether the push rung is actually wired - "configured" reflects
+        # push_rung construction (app.main._build_push_rung), which already refuses a
+        # key that fails to parse, so this can never say "configured" for a key that
+        # would not work. No I/O, no secrets - just the flags settings already carries.
+        # status is always "ok": an unconfigured VAPID key is an owner action pending
+        # (same as research/voice_realtime reporting "ok" with no provider configured),
+        # never a degraded PROCESS - app.health.is_degraded would otherwise mark the
+        # whole endpoint degraded every time push is not yet set up, which every
+        # deployment is on day one.
+        checks["webpush"] = {
+            "status": "ok",
+            "latency_ms": 0.0,  # no I/O; keeps the uniform check shape
+            "configured": push_rung is not None,
+            "vapid_key_present": bool(settings.webpush_vapid_private_key),
+            "vapid_subject_present": bool(settings.webpush_vapid_subject),
+        }
         # M18.3 (spec §3.3): the routine clock is owner-visible BECAUSE it is the thing
         # that asks. "skipped" when no clock is registered (every test process); "fail"
         # when one was configured and is not running, which is exactly the state in which

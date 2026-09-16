@@ -35,6 +35,7 @@ import { useLoaded, useNow } from "../lib/pages/useLoaded";
 import { QUALITY_TIERS, TIER_LABEL } from "../lib/uistate/quality";
 import { AmbientPanel, VoiceQualificationPanel } from "../core/panels/CockpitPanels";
 import { useCorePreferences } from "../core/usePreferences";
+import { WebPushSettings } from "./WebPushSettings";
 
 /** Each policy route, and the surface that actually sets what it reports. */
 const POLICIES: { id: string; title: string; path: string; ownedBy: string }[] = [
@@ -156,6 +157,8 @@ export default function SettingsPage() {
           </button>
         </div>
       </section>
+
+      <WebPushSettings />
 
       <AmbientPanel
         policy={ambient.state}

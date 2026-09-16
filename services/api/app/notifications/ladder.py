@@ -12,6 +12,17 @@ tomorrow. What is available is measured at the moment of the attempt, never assu
 
 **A rung that was tried is never tried again for the same notification.** Otherwise the
 ladder is a loop: toast fails, push fails, toast is tried again because it is first.
+
+**Push (B11 req 372).** ``PushRung`` sends Web Push (RFC 8030/8291/8292,
+``app.webpush``) to every browser the owner has enabled. Its ``deliver`` returning
+``True`` means the push SERVICE accepted the message for delivery — RFC 8030's 201/202
+— never that the owner has seen it, or even that the browser has received it yet. That
+is a weaker guarantee than ``ToastRung`` gives (the device companion confirms an actual
+``shown: true``), and it is the most this system can ever know about a Web Push send
+without a second round trip nothing here implements; "a queue is not a delivery"
+applies to what ``delivered_via='push'`` can mean, not to whether the ladder may stop
+trying — it may, the same way ``sound`` will once it exists, because inbox is always
+the floor underneath either way.
 """
 
 from __future__ import annotations
@@ -31,6 +42,7 @@ from app.notifications.models import (
     CHANNEL_TOAST,
     NotificationRow,
 )
+from app.webpush import service as webpush_service
 
 logger = get_logger("app.notifications.ladder")
 
@@ -111,6 +123,81 @@ class ToastRung:
         return shown
 
 
+class PushRung:
+    """B11 req 372: Web Push (``app.webpush``), the third rung. See the module
+    docstring's "Push" section for what ``deliver`` returning ``True`` does and does
+    not mean.
+
+    ``session_factory`` is a plain ``sqlalchemy.orm.sessionmaker`` (mirrors
+    ``app.devices.commands.DeviceCommandClient``'s own constructor) rather than
+    ``ArtifactRuntime.session`` directly, so this rung never needs to import the whole
+    artifact runtime just to open a session.
+    """
+
+    name = CHANNEL_PUSH
+
+    def __init__(
+        self,
+        *,
+        session_factory: Any,
+        provider: Any,
+        vapid_private_key: Any,
+        vapid_subject: str,
+        timeout_s: float = 10.0,
+    ) -> None:
+        self._session_factory = session_factory
+        self._provider = provider
+        self._vapid_private_key = vapid_private_key
+        self._vapid_subject = vapid_subject
+        self._timeout_s = timeout_s
+
+    def available(self) -> bool:
+        # B11 task brief: "when no key is configured the push rung is skipped
+        # honestly". This object is only ever constructed with a key in the first
+        # place (see app.main._build_push_rung) - available() still checks rather
+        # than assuming, the same discipline ToastRung.available() follows for
+        # device_action, so a caller that constructs a PushRung with vapid_private_key
+        # left as None (a test, or a future wiring change) gets the honest skip rather
+        # than an AttributeError three calls deep in app.webpush.vapid.
+        return self._vapid_private_key is not None
+
+    def deliver(self, row: NotificationRow) -> bool:
+        if self._vapid_private_key is None:
+            return False
+        with self._session_factory() as db:
+            outcome = webpush_service.send_to_all(
+                db,
+                provider=self._provider,
+                vapid_private_key=self._vapid_private_key,
+                vapid_subject=self._vapid_subject,
+                notification_id=row.id,
+                title=row.title or row.kind,
+                body=row.body,
+                group_key=row.group_key,
+                priority=row.priority,
+                timeout_s=self._timeout_s,
+            )
+        if outcome.attempted == 0:
+            logger.info("push_not_reached", notification_id=str(row.id), reason="no_subscriptions")
+            return False
+        if outcome.accepted == 0:
+            logger.info(
+                "push_not_reached", notification_id=str(row.id), reason="all_subscriptions_failed"
+            )
+            return False
+        # RFC 8030: 2xx means the push SERVICE accepted the message, not that the owner
+        # (or even the browser) has seen it - the module docstring's "Push" section
+        # names this limit explicitly; this log line names it again at the one point
+        # the ladder actually acts on it.
+        logger.info(
+            "push_accepted_by_service",
+            notification_id=str(row.id),
+            accepted=outcome.accepted,
+            attempted=outcome.attempted,
+        )
+        return True
+
+
 class InboxRung:
     """The floor. It always succeeds, because recording the notification WAS putting it in
     the inbox - this rung exists so the ladder has a truthful end rather than a silence."""
@@ -188,13 +275,21 @@ def sweep(
     return delivered
 
 
-def default_rungs(*, device_action: Any = None) -> dict[str, Rung]:
-    """What this deployment can do. Sound and push are not wired yet and are absent rather
-    than present-and-failing: a rung that is always going to say no is noise in the ladder,
-    and `available()` returning False is how the ladder skips it in one step."""
+def default_rungs(*, device_action: Any = None, push_rung: Rung | None = None) -> dict[str, Rung]:
+    """What this deployment can do. Sound is not wired yet and is absent rather than
+    present-and-failing: a rung that is always going to say no is noise in the ladder,
+    and `available()` returning False is how the ladder skips it in one step.
+
+    ``push_rung`` is built by the caller (``app.main._build_push_rung``) rather than
+    here, because building one needs the VAPID private key loaded from settings and a
+    provider instance - construction concerns this function has never had for
+    ``device_action`` either (``BrokerDeviceAction`` is also built by the caller).
+    """
     rungs: dict[str, Rung] = {}
     if device_action is not None:
         rungs[CHANNEL_TOAST] = ToastRung(device_action=device_action)
+    if push_rung is not None:
+        rungs[CHANNEL_PUSH] = push_rung
     rungs[CHANNEL_INBOX] = InboxRung()
     return rungs
 
@@ -205,6 +300,7 @@ __all__ = [
     "CHANNEL_SOUND",
     "CHANNEL_TOAST",
     "InboxRung",
+    "PushRung",
     "Rung",
     "ToastRung",
     "default_rungs",
