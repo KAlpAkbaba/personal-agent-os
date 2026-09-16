@@ -59,17 +59,33 @@ async def test_accessibility_snapshot_contains_roles_and_names(
     assert 'link "Download sample"' in snapshot
 
 
-async def test_download_saves_file_with_matching_sha256(
-    session: BrowserSession, site_url: str, tmp_path
-) -> None:
-    await session.navigate(f"{site_url}/index.html")
-    result = await session.download(
-        TargetSpec(role="link", name="Download sample"), save_dir=tmp_path
-    )
+async def test_download_saves_file_with_matching_sha256(site_url: str, tmp_path) -> None:
+    # B31 req 180: a named save_dir must lie inside the session's file_io_root, so this
+    # session's root is the folder the download is saved to.
+    root_session = await BrowserSession.launch_dedicated(headless=True, file_io_root=tmp_path)
+    try:
+        await root_session.navigate(f"{site_url}/index.html")
+        result = await root_session.download(
+            TargetSpec(role="link", name="Download sample"), save_dir=tmp_path / "downloads"
+        )
+    finally:
+        await root_session.close()
     assert result.path.exists()
+    assert result.path.resolve().is_relative_to(tmp_path.resolve())
     assert result.suggested_filename == "sample.txt"
     expected = hashlib.sha256(SAMPLE_FILE.read_bytes()).hexdigest()
     assert result.sha256 == expected
+
+
+async def test_download_refuses_a_save_dir_outside_the_file_io_root(
+    session: BrowserSession, site_url: str, tmp_path
+) -> None:
+    # The fixture session's root is the fixture site; tmp_path is elsewhere on the machine.
+    await session.navigate(f"{site_url}/index.html")
+    with pytest.raises(BrowserError) as refused:
+        await session.download(TargetSpec(role="link", name="Download sample"), save_dir=tmp_path)
+    assert refused.value.error_class == ErrorClass.VALIDATION_ERROR
+    assert not any(tmp_path.iterdir())
 
 
 async def test_screenshot_returns_png_bytes(session: BrowserSession, site_url: str) -> None:

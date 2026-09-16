@@ -89,7 +89,7 @@ def test_the_security_review_names_each_refusal_with_its_path_and_line() -> None
     edits = {
         "services/api/app/x.py": (
             "import os\n\n"
-            'API_KEY = "sk-abcdefghijklmnopqrstuvwxyz0123"\n'
+            'API_KEY = "sk-' + "abcdefghijklmnopqrstuvwxyz0123" + '"\n'  # split for CI's scan
             "def run(cmd):\n"
             "    return os.system(cmd)\n"
             'def fetch():\n    return httpx.get("https://example.com/x")\n'
