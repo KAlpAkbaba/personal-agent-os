@@ -462,7 +462,7 @@ export const ROWS: readonly MatrixRow[] = [
   { id: 369, section: "L", feature: "Desktop toast", impl: "DONE", proof: "PA", batch: "B11", owner: true },
   { id: 370, section: "L", feature: "Toast action buttons", impl: "DONE", proof: "PA", batch: "B11", owner: true },
   { id: 371, section: "L", feature: "Device audio notification", impl: "DONE", proof: "PR", batch: "—", owner: false },
-  { id: 372, section: "L", feature: "WebPush", impl: "BLOCKED_OWNER", proof: "BLK", batch: "B11", owner: false },
+  { id: 372, section: "L", feature: "WebPush", impl: "DONE", proof: "PA", batch: "B11", owner: false },
   { id: 373, section: "L", feature: "FCM", impl: "BLOCKED_PROVIDER", proof: "PU", batch: "B12", owner: false },
   { id: 374, section: "L", feature: "APNs", impl: "BLOCKED_PROVIDER", proof: "PU", batch: "B12", owner: false },
   { id: 375, section: "L", feature: "Delivery receipt", impl: "DONE", proof: "PA", batch: "B07", owner: false },

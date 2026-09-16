@@ -12957,3 +12957,74 @@ defect with `re.match` and did not enforce the contract's 32-character id limit.
    only if "Kilit ekranında bildirimleri göster" is on - that is the row-369 PROVEN_REAL step.
 6. Optional machine proof on a popup-showing desktop:
    `$env:PAGENTOS_TOAST_PRESS_LAB='1'; dotnet test tests\PagentOS.Agent.Tests --filter FullyQualifiedName~ToastLabTests`.
+
+## ADR-0169 — WebPush: RFC 8291/8292 hand-rolled on top of `cryptography`, no `pywebpush`; SSRF allowlist by exact push-service host (2026-09-17)
+
+*Context.* B11 req 372 needed Web Push. The obvious shortcut is `pywebpush`, but
+CLAUDE.md/the task brief said no new dependency, and the repo already depends on
+`cryptography` (used elsewhere for device-broker ECDSA and Fernet). RFC 8291's
+aes128gcm content coding and RFC 8292's VAPID JWT are both small, precisely specified
+algorithms — the exact byte layout is normative, so "small and testable against the
+RFC's own worked example" was more attractive than "one more supply-chain dependency
+whose test suite we do not control."
+
+*Decision.*
+1. Implement RFC 8291/8292 directly on `cryptography.hazmat` primitives
+   (`app.webpush.ece`, `app.webpush.vapid`), proven against RFC 8291 Appendix A
+   byte-for-byte rather than merely "decrypts what it encrypted."
+2. VAPID private key stored as a raw 32-byte P-256 scalar, base64url — never PEM, so
+   the secret-hygiene scanner's `-----BEGIN...PRIVATE KEY-----` pattern can never
+   false-negative on it living in a plain `.env` line.
+3. A push subscription's `endpoint` is treated as attacker-influenceable (any page
+   script can call `pushManager.subscribe()`); every send and every subscribe goes
+   through an explicit allowlist of the four push-service vendor domains AND the
+   default port only (`app.webpush.provider.ALLOWED_PUSH_HOSTS`/
+   `validate_push_endpoint` — the port check was a security-review addendum: none of
+   the four vendors ever serve on a non-default port, so any explicit port, including
+   the correct default, is refused outright) rather than "any https URL", closing an
+   SSRF path that a generic implementation would otherwise open behind the owner's own
+   authenticated API. The stored-subscription table is also capped
+   (`MAX_SUBSCRIPTIONS = 32`) so the owner-session-gated subscribe route cannot grow it
+   without bound.
+4. The push rung's `deliver()` returning `True` means "the push service accepted the
+   message" (RFC 8030 2xx) and nothing stronger — recorded honestly in both the code
+   docstring and the notification's own semantics; unlike `ToastRung`, there is no
+   stronger signal this system can obtain from Web Push without a second round trip
+   this batch does not implement.
+5. No new Python dependency. `services/api/pyproject.toml` is unchanged.
+
+*Consequences.* ~700 lines of new, from-scratch crypto/protocol code carries more
+review burden than a vendored library would, offset by: (a) it is small enough to
+review in full, (b) it is proven against the RFC's own numbers rather than trusted by
+reputation, (c) it never becomes a second place `PAGENTOS_*` secret conventions or the
+SSRF allowlist could silently diverge from what this codebase actually enforces
+elsewhere. Revisit if a second push-adjacent RFC (e.g. WebSub) makes a shared
+"tiny w3c crypto RFC" dependency worth vendoring once rather than twice.
+
+*Rollback.* Delete `app/webpush/`, the `push_rung` wiring in
+`app/notifications/ladder.py`/`app/main.py`, the two `webpush_vapid_*` settings, and
+downgrade migration `0060_webpush_subscriptions`. The ladder's `push` rung already
+degrades to "skipped" with no VAPID key configured, so removing the code is the only
+step — there is no data migration to reverse beyond dropping the one table.
+
+**Security review (2026-09-17).** No Critical, High or Medium findings; three Low ones fixed (explicit ports refused, 32-subscription ceiling, the vendor's response body never read).
+
+**Owner checkpoint (READY_FOR_OWNER).** The VAPID subject is the owner's contact (mailto:), which only the owner may choose to publish to push services.
+
+(the only two things left)
+
+```powershell
+# 1. Generate the key pair (once) and store it locally, encrypted, never printed:
+.\scripts\cloud\new-vapid-key.ps1 -Subject mailto:<owner's real contact address>
+
+# 2. Ship both values to the deployed Cloud Core (value travels on stdin only,
+#    never echoed; -ExpectProvider "" because these are not the voice-realtime
+#    provider set-cloud-secret.ps1 otherwise checks for by default):
+.\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_WEBPUSH_VAPID_PRIVATE_KEY -ExpectProvider ""
+.\scripts\cloud\set-cloud-secret.ps1 -Name PAGENTOS_WEBPUSH_VAPID_SUBJECT -ExpectProvider ""
+```
+
+Then, once per browser that should receive push: open the web app's **Settings**
+page, find **"Push bildirimleri"**, click **"Bildirimlere izin ver ve aç"**. That is
+the one browser permission click the task brief names — everything else (encryption,
+signing, storage, the ladder) already runs without it.
