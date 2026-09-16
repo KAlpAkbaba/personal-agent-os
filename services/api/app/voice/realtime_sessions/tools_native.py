@@ -165,9 +165,16 @@ SPEECH_NO_RUNNER = (
     "Derleme bu makinede değil, cihazda çalışıyor efendim; şu an bağlı bir derleyici yok, "
     "o yüzden derledim diyemem."
 )
-SPEECH_ANDROID_NEEDS_JDK = (
-    "Android SDK burada ama Java yok efendim: Gradle da apksigner da Java üstünde çalışır. "
-    "Bir JDK kurulunca aynı hat çalışır (madde 33)."
+SPEECH_ANDROID_NEEDS_DEVICE = (
+    "Android uygulamasını kayıtlı cihazınız derler efendim; şu an bağlı bir cihaz yok, o "
+    "yüzden derledim diyemem."
+)
+SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE = (
+    "Android için ayrı bir paketleme adımı yok efendim: yayın paketi AAB hedefiyle derlenir. "
+    "AAB olarak derlememi isteyebilirsiniz."
+)
+SPEECH_ANDROID_LAUNCH_NOT_WIRED = (
+    "APK'yı telefonda ya da emülatörde açmak bu hatta yok efendim; açtım diyemem."
 )
 SPEECH_INSTALL_NEEDS_DEVICE = (
     "Kurulumu buradan yapamam efendim: paket cihazda, sizin oturumunuzda kurulur. "
@@ -412,8 +419,11 @@ def native_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
 
     facts = _facts(ctx)
     on_device = _builds_on_device(ctx, facts)
+    device_available = ctx.live.get("device_action") is not None
     try:
-        rows = plan_build(db, payload, facts=facts, on_device=on_device)
+        rows = plan_build(
+            db, payload, facts=facts, on_device=on_device, device_available=device_available
+        )
     except NativeFactoryError as exc:
         return _refused(
             ctx,
@@ -426,7 +436,10 @@ def native_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     from app.nativefactory.spec import NativeAppSpec
 
     first = NativeAppSpec.model_validate(rows[0].spec_json)
-    choice = choose_on_device(first) if on_device else choose(first, facts)
+    android_on_device = device_available and bool(set(first.targets) & ANDROID_TARGETS)
+    choice = (
+        choose_on_device(first) if on_device or android_on_device else choose(first, facts)
+    )
     lines = [choice.reason] + [receipt_for(row) for row in rows]
     reachable = [row for row in rows if row.state != STATE_UNAVAILABLE]
     return _receipt(
@@ -443,6 +456,25 @@ def native_create(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
 
 
 # ------------------------------------------------------- native.build / native.rebuild
+
+
+def _android_refused(
+    ctx: ToolContext,
+    *,
+    capability: str,
+    target: str,
+    row: NativeBuildRow | None,
+    speech: str,
+) -> dict[str, Any]:
+    """An Android step this chain does not take, refused in its own sentence (ADR-0161)."""
+    return _refused(
+        ctx,
+        capability=capability,
+        requested_state=target,
+        speech=speech,
+        error_class=ERROR_DEPENDENCY_UNAVAILABLE,
+        extra={"build": _row_summary(row) if row is not None else None},
+    )
 
 
 def _run_lifecycle(
@@ -468,15 +500,19 @@ def _run_lifecycle(
             error_class=row.error_class or ERROR_DEPENDENCY_UNAVAILABLE,
             extra={"build": _row_summary(row)},
         )
-    if row.target in ANDROID_TARGETS and not facts.can_build_android:
-        return _refused(
-            ctx,
-            capability=capability,
-            requested_state=row.target,
-            speech=SPEECH_ANDROID_NEEDS_JDK,
-            error_class=ERROR_DEPENDENCY_UNAVAILABLE,
-            extra={"build": _row_summary(row), "owner_action": "33"},
-        )
+    if row.target in ANDROID_TARGETS:
+        # B49 (ADR-0161): only the enrolled device builds Android - never the local runner,
+        # whose build step is dotnet.
+        device = ctx.live.get("device_action")
+        if device is None:
+            return _android_refused(
+                ctx,
+                capability=capability,
+                target=row.target,
+                row=row,
+                speech=SPEECH_ANDROID_NEEDS_DEVICE,
+            )
+        return _build_on_device(ctx, row, device, capability=capability)
     runner = ctx.live.get("native_runner")
     root = ctx.live.get("native_root")
 
@@ -609,7 +645,13 @@ def native_rebuild(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     payload["version"] = _next_version(str(arguments.get("version") or previous.version))
     facts = _facts(ctx)
     try:
-        rows = plan_build(db, payload, facts=facts, on_device=_builds_on_device(ctx, facts))
+        rows = plan_build(
+            db,
+            payload,
+            facts=facts,
+            on_device=_builds_on_device(ctx, facts),
+            device_available=ctx.live.get("device_action") is not None,
+        )
     except NativeFactoryError as exc:
         return _refused(
             ctx,
@@ -648,13 +690,12 @@ def native_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
     target = _target_word(ctx, arguments) or TARGET_WINDOWS_MSIX
     if row.target in ANDROID_TARGETS or target in ANDROID_TARGETS:
-        return _refused(
+        return _android_refused(
             ctx,
             capability=TOOL_NATIVE_PACKAGE,
-            requested_state=target,
-            speech=SPEECH_ANDROID_NEEDS_JDK,
-            error_class=ERROR_DEPENDENCY_UNAVAILABLE,
-            extra={"build": _row_summary(row), "owner_action": "33"},
+            target=target,
+            row=row,
+            speech=SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE,
         )
     publish_dir = Path(row.artifact_path).parent if row.artifact_path else None
     device = ctx.live.get("device_action")
@@ -837,22 +878,20 @@ def native_install(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
 def native_launch(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Uygulamayı emülatörde aç." (spec §6).
 
-    Two honest refusals, and they are different: Android cannot be reached at all until
-    a JDK exists (owner item 33 - there is no AVD to boot and no APK to install), and
-    Windows can be reached only from the DEVICE, which the Cloud Core is not.
+    Two honest refusals, and they are different: an APK is not opened by this chain at all
+    (installing it on a phone or an emulator is not wired - ADR-0161), and Windows can be
+    reached only from the DEVICE, which the Cloud Core is not.
     """
     db = _require_db(ctx, TOOL_NATIVE_LAUNCH)
     row = _resolve_row(ctx, db, arguments)
-    facts = _facts(ctx)
     target = _target_word(ctx, arguments) or (row.target if row is not None else None)
-    if target in ANDROID_TARGETS and not facts.can_build_android:
-        return _refused(
+    if target in ANDROID_TARGETS:
+        return _android_refused(
             ctx,
             capability=TOOL_NATIVE_LAUNCH,
-            requested_state=str(target),
-            speech=SPEECH_ANDROID_NEEDS_JDK,
-            error_class=ERROR_DEPENDENCY_UNAVAILABLE,
-            extra={"build": _row_summary(row) if row is not None else None, "owner_action": "33"},
+            target=str(target),
+            row=row,
+            speech=SPEECH_ANDROID_LAUNCH_NOT_WIRED,
         )
     if row is None:
         return {"status": "needs_clarification", "speech": SPEECH_NO_BUILD_YET, "candidates": []}
@@ -1494,7 +1533,9 @@ def register_native_tools(reg: ToolRegistry) -> ToolRegistry:
 
 __all__ = [
     "NATIVE_TOOL_NAMES",
-    "SPEECH_ANDROID_NEEDS_JDK",
+    "SPEECH_ANDROID_LAUNCH_NOT_WIRED",
+    "SPEECH_ANDROID_NEEDS_DEVICE",
+    "SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE",
     "SPEECH_FIX_NEEDS_WORKER",
     "SPEECH_INSTALL_NEEDS_DEVICE",
     "SPEECH_LAUNCH_NEEDS_DEVICE",

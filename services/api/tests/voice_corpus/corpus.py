@@ -6315,9 +6315,10 @@ def _native_create_windows_cases() -> list[UtteranceCase]:
 
 
 def _native_create_android_cases() -> list[UtteranceCase]:
-    """Spec §1/§6: the Android head is REFUSED here and the refusal names owner item 33.
-    An `unavailable` ROW is opened all the same (spec §4) - the owner asked, so the
-    answer about it exists where they can see it, rather than being a silence."""
+    """ADR-0161: with an enrolled device (the corpus has one) the Android head is PLANNED
+    for it - the device builds it with the three Gradle shapes - and the owner hears who
+    will build it. (Without a device the row opens `unavailable`; test_voice_native_tools
+    holds that half.)"""
     cases: list[UtteranceCase] = []
     for case_id, text, source in (
         ("nativeapps.create.android.canonical", "Android sürümünü yap.", "canonical"),
@@ -6331,12 +6332,11 @@ def _native_create_android_cases() -> list[UtteranceCase]:
                     utterance=text,
                     expected_intent="native_create_android",
                     expected_tool="native.create",
-                    expected_response=RESPONSE_REFUSED,
+                    expected_response=RESPONSE_OK,
                     expected={
-                        "error_class": "dependency_unavailable",
                         "native_target": "android_apk",
-                        "native_state": "unavailable",
-                        "speech_contains": "33",
+                        "native_state": "planned",
+                        "speech_contains": "cihazınız",
                     },
                     side_effects=SIDE_EFFECTS_NATIVE,
                     context=CTX_NONE,
@@ -6384,9 +6384,8 @@ def _native_build_exe_cases() -> list[UtteranceCase]:
 
 
 def _native_build_apk_cases() -> list[UtteranceCase]:
-    """ "APK üret." on a machine with the Android SDK and no Java: refused, with the two
-    facts stated separately (spec §1), because the SDK being present is exactly what
-    makes this blocker confusing."""
+    """ "APK üret." for a row planned against THIS machine: refused, saying the enrolled
+    device is what builds Android (ADR-0161) - this machine's build step is dotnet."""
     cases: list[UtteranceCase] = []
     for case_id, text, source in (
         ("nativeapps.build.apk.canonical", "APK üret.", "canonical"),
@@ -6404,7 +6403,7 @@ def _native_build_apk_cases() -> list[UtteranceCase]:
                     expected={
                         "error_class": "dependency_unavailable",
                         "native_target": "android_apk",
-                        "speech_contains": "33",
+                        "speech_contains": "cihazınız",
                     },
                     side_effects=SIDE_EFFECTS_NATIVE,
                     context=CTX_NATIVE_ANDROID,
@@ -6469,7 +6468,8 @@ def _native_emulator_cases() -> list[UtteranceCase]:
                     expected_response=RESPONSE_REFUSED,
                     expected={
                         "error_class": "dependency_unavailable",
-                        "speech_contains": "33",
+                        # ADR-0161: opening an APK is not wired; the refusal says so by name.
+                        "speech_contains": "emülatörde açmak bu hatta yok",
                     },
                     side_effects=SIDE_EFFECTS_NATIVE,
                     context=CTX_NATIVE_ANDROID,

@@ -58,7 +58,7 @@ from app.nativefactory.models import (
 )
 from app.nativefactory.models_wire import wire_step
 from app.nativefactory.roots import check_extensions, native_root, resolve_within
-from app.nativefactory.spec import NativeAppSpec, NativeFactoryError, parse_spec
+from app.nativefactory.spec import ANDROID_TARGETS, NativeAppSpec, NativeFactoryError, parse_spec
 from app.nativefactory.stacks import ToolchainFacts, choose, choose_on_device, detect
 from app.uistate import publish as publish_ui_state
 from app.uistate.contract import NATIVE_BUILD_STEPS, UiState
@@ -180,6 +180,7 @@ def plan_build(
     *,
     facts: ToolchainFacts | None = None,
     on_device: bool = False,
+    device_available: bool = False,
 ) -> list[NativeBuildRow]:
     """Validate the request and open one row per target, or refuse before opening any.
 
@@ -191,13 +192,20 @@ def plan_build(
     reachability is the device path's (``choose_on_device``) and THIS machine's toolchain
     is not measured at all - on a Linux Cloud Core it describes a machine that will never
     compile anything (M28 row 26.16).
+
+    ``device_available``: an enrolled device can take the build even though this machine has a
+    runner of its own. Android is only ever built there (ADR-0161), so an Android target is
+    planned for the device whenever one is available.
     """
     spec = parse_spec(payload)
     measured = None if on_device else (facts or detect())
     rows: list[NativeBuildRow] = []
     for target in spec.targets:
         single = spec.model_copy(update={"targets": [target]})
-        choice = choose_on_device(single) if on_device else choose(single, measured)
+        device_planned = on_device or (device_available and target in ANDROID_TARGETS)
+        choice = (
+            choose_on_device(single) if device_planned else choose(single, measured or detect())
+        )
         now = _now()
         row = NativeBuildRow(
             id=uuid.uuid4(),

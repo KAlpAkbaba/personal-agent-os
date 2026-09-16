@@ -614,6 +614,14 @@ public sealed class DocumentCapabilities
             }
         }
 
+        // B49 (ADR-0161): the Android half of the same idea - an APK or a bundle says which build
+        // it is in its own manifest, and the block appears only when that manifest really reads.
+        var android = AndroidPackageReader.TryRead(target.Path);
+        if (android is not null)
+        {
+            result["android"] = android;
+        }
+
         var extractor = ExtractorFor(target.Kind);
         if (target.Kind == FileKinds.Archive)
         {

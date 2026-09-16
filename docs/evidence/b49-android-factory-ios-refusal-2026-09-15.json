@@ -86,5 +86,37 @@
   },
   "runtime_proof": {
     "status": "PROVEN_AUTOMATED for 474 (rendered project parsed and written) and 479 (refusal, catalog, route). The roadmap's PROVEN_REAL (an APK opened in an emulator) is READY_FOR_OWNER."
+  },
+  "runtime_qualification_2026_09_16": {
+    "evidence": "docs/evidence/b49-android-runtime-qualification-2026-09-16.json",
+    "status": "475/476 PARTIAL + PROVEN_REAL (built on the device half; live deploy READY_FOR_OWNER); 477 PARTIAL + PROVEN_REAL (qualification script); 478 BLOCKED_PROVIDER",
+    "found": [
+      "with a JDK present the router called an Android row buildable and native.build handed app/build.gradle.kts to `dotnet build` (ADR-0160)",
+      "device builds were sent with a 30 s expiry, which the device uses as the build's budget, so every build longer than that was ended (ADR-0161)",
+      "a device compile that exited non-zero went on to the test step (ADR-0161)"
+    ],
+    "adr": [
+      "ADR-0160",
+      "ADR-0161"
+    ],
+    "red_first_proof": {
+      "method": "executed mutations restored from sha256-verified copies (never git checkout); scratchpad adr0161_mutate_py.py / adr0161_mutate_cs.py",
+      "cloud_core": [
+        "M1 the judge stops comparing the versionCode -> 1 failure",
+        "M2 a device build expires after 30 s again -> 1 failure",
+        "M3 a compile that exited non-zero goes on to the tests -> 1 failure",
+        "M4 an Android target is planned against this machine even with a device -> 1 failure",
+        "M5 the device receives the dotnet manifest for an Android row -> 1 failure"
+      ],
+      "device": [
+        "C1 any Gradle task is admitted -> 5 failures",
+        "C2 the JVM and Gradle injection variables reach the build -> 1 failure",
+        "C3 a JDK older than 17 is accepted -> 1 failure",
+        "C4 the APK's versionCode is not read -> 1 failure",
+        "C5 last run's JUnit reports are kept and counted -> 1 failure",
+        "C6 the Android and Java signers are not refused by name -> 3 failures"
+      ],
+      "result": "11/11 red; plus ADR-0160's router mutation (2 failures)"
+    }
   }
 }

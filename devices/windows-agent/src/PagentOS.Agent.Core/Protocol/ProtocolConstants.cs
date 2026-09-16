@@ -838,7 +838,27 @@ public static class NativeCapabilityNames
     public static readonly IReadOnlyList<string> ForbiddenPrograms =
     [
         "signtool", "certutil", "certmgr", "makecert", "pvk2pfx", "certreq",
+        // B49 (ADR-0161): the Java and Android signers and the key store tool. The Gradle shapes
+        // never name them; this keeps a widened shape from ever reaching them.
+        "apksigner", "jarsigner", "keytool",
     ];
+
+    /// <summary>
+    /// B49 (ADR-0161): the first token of the three Android shapes. It is a WORD, not a program:
+    /// the device runs the configured JDK's <c>java.exe</c> on the configured Gradle
+    /// distribution's launcher jar (<c>gradle.bat</c> is a batch file, and nothing here runs a
+    /// shell), so no <c>gradle</c>, <c>gradlew</c> or <c>gradle.bat</c> is ever resolved.
+    /// </summary>
+    public const string GradleProgram = "gradle";
+
+    /// <summary>The two flags every Gradle shape carries, in this order: no resident daemon outlives the job, and the log is plain text.</summary>
+    public static readonly IReadOnlyList<string> GradleFlags = ["--no-daemon", "--console=plain"];
+
+    /// <summary>The Gradle task a run command may name: the debug APK (installable, signed by the Android plugin with its own throwaway debug key) and the release bundle (unsigned).</summary>
+    public static readonly IReadOnlyList<string> GradleRunTasks = ["assembleDebug", "bundleRelease"];
+
+    /// <summary>The one Gradle task a test command may name: the project's JVM unit tests.</summary>
+    public const string GradleTestTask = "test";
 
     /// <summary>§5: a native build is ended by its job after this long. It is the Cloud Core's own <c>BUILD_TIMEOUT_S</c>, and a test reads that file.</summary>
     public static readonly TimeSpan RunLimit = TimeSpan.FromMinutes(20);

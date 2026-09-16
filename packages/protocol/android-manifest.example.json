@@ -1,0 +1,15 @@
+{
+  "_comment": "B49 (ADR-0161). The Android manifest BOTH halves read: services/api/tests/unit/test_nativefactory_device_build.py keeps it equal to app.nativefactory.device_build.android_manifest(entry), and devices/windows-agent/tests/PagentOS.Agent.Tests/Native/AndroidBuildTests.cs scaffolds it through the device's real parser. DEVICE_PROTOCOL.md section 6n lists the same three shapes.",
+  "entry": "app/build.gradle.kts",
+  "manifest": {
+    "entry": "app/build.gradle.kts",
+    "port": 0,
+    "run": {
+      "build": "gradle --no-daemon --console=plain assembleDebug",
+      "bundle": "gradle --no-daemon --console=plain bundleRelease"
+    },
+    "test": {
+      "unit": "gradle --no-daemon --console=plain test"
+    }
+  }
+}

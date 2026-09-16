@@ -74,6 +74,14 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
         ),
         held_by=("services/api", "devices/windows-agent"),
     ),
+    "android-manifest.example.json": Contract(
+        guard="The_manifest_the_Cloud_Core_writes_is_one_this_parser_admits",
+        why=(
+            "B49 (ADR-0161): the three Gradle shapes the Cloud Core scaffolds must be the ones the "
+            "device's parser admits token for token; a drift is a refused build at the first step"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+    ),
     "browser-injection-markers.json": Contract(
         guard="test_markers_match_the_shared_protocol_json",
         why="one marker list for the API and the browser agent; two lists is two policies",

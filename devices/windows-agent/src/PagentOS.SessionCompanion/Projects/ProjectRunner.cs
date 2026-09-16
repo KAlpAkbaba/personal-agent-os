@@ -257,7 +257,7 @@ public sealed class ProjectRunner : IDisposable
         {
             ProjectRuntime.Blender => BlenderLimit,
             ProjectRuntime.Unity => UnityLimit,
-            ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx => NativeLimit,
+            ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx or ProjectRuntime.Gradle => NativeLimit,
             _ => TestTimeout,
         };
 
@@ -332,6 +332,28 @@ public sealed class ProjectRunner : IDisposable
     }
 
     /// <summary>Removes every secret-shaped variable from <paramref name="environment"/> (a start info's copy) and returns their names, for the log.</summary>
+    /// <summary>
+    /// B49 (ADR-0161): a Gradle child's environment. Every variable that could load code into
+    /// the JVM or the build without appearing in the command is removed first (agents, JVM
+    /// options, Gradle project and system properties), then the toolchain's own locations are set.
+    /// </summary>
+    public static void ApplyGradleEnvironment(IDictionary<string, string?> environment, IReadOnlyDictionary<string, string> toolchain)
+    {
+        foreach (var key in environment.Keys.ToList())
+        {
+            if (Native.NativeTools.GradleScrubbedVariables.Contains(key, StringComparer.OrdinalIgnoreCase)
+                || Native.NativeTools.GradleScrubbedPrefixes.Any(prefix => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                environment.Remove(key);
+            }
+        }
+
+        foreach (var (key, value) in toolchain)
+        {
+            environment[key] = value;
+        }
+    }
+
     public static IReadOnlyList<string> Scrub(IDictionary<string, string?> environment)
     {
         var removed = environment.Keys.Where(IsSecretVariable).ToList();
@@ -408,6 +430,14 @@ public sealed class ProjectRunner : IDisposable
                 // makeappx, which is never on PATH.
                 return (Native.NativeTools.Require(runtime).Executable, []);
 
+            case ProjectRuntime.Gradle:
+                {
+                    // B49 (ADR-0161): the configured JDK on the distribution's launcher jar - what
+                    // gradle.bat does, without the batch file and the shell it needs.
+                    var launch = Native.NativeTools.RequireGradle();
+                    return (launch.Java.Executable, launch.Prefix);
+                }
+
             default:
                 throw new CapabilityException(ErrorClasses.InternalBug, $"unknown runtime {runtime}", retryable: false);
         }
@@ -446,7 +476,7 @@ public sealed class ProjectRunner : IDisposable
         try
         {
             RequirePortFree(port);
-            var startInfo = BuildStartInfo(executable, [.. prefix, .. command.Materialise(project.Folder)], project.Folder);
+            var startInfo = BuildStartInfo(executable, [.. prefix, .. command.Materialise(project.Folder)], project.Folder, command.Runtime);
             run.Log.Open();
             StartContained(run, startInfo, command.Runtime);
             _logger.LogInformation("project.run {Slug} pid={Pid} port={Port} command={Key} log={Log}", project.Slug, run.Pid, port, command.Key, logPath);
@@ -541,7 +571,7 @@ public sealed class ProjectRunner : IDisposable
         }
     }
 
-    private ProcessStartInfo BuildStartInfo(string executable, IReadOnlyList<string> arguments, string workingDirectory)
+    private ProcessStartInfo BuildStartInfo(string executable, IReadOnlyList<string> arguments, string workingDirectory, ProjectRuntime runtime)
     {
         RequireNoSigner(executable, arguments);
         var startInfo = new ProcessStartInfo(executable)
@@ -566,6 +596,11 @@ public sealed class ProjectRunner : IDisposable
         startInfo.Environment["PYTHONUNBUFFERED"] = "1";
         startInfo.Environment["PYTHONDONTWRITEBYTECODE"] = "1";
         startInfo.Environment["NO_COLOR"] = "1";
+        if (runtime == ProjectRuntime.Gradle)
+        {
+            ApplyGradleEnvironment(startInfo.Environment, Native.NativeTools.RequireGradle().Environment);
+        }
+
         _logger.LogInformation("project child environment: {Removed} secret-shaped variable(s) removed", removed.Count);
         return startInfo;
     }
@@ -756,7 +791,7 @@ public sealed class ProjectRunner : IDisposable
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var startInfo = BuildStartInfo(executable, arguments, project.Folder);
+            var startInfo = BuildStartInfo(executable, arguments, project.Folder, command.Runtime);
             run.Log.Open();
             StartContained(run, startInfo, command.Runtime);
             _logger.LogInformation("project.run (batch {Runtime}) {Slug} pid={Pid} command={Key} log={Log}", command.Runtime, project.Slug, run.Pid, command.Key, logPath);
@@ -1005,13 +1040,20 @@ public sealed class ProjectRunner : IDisposable
         }
 
         var stopwatch = Stopwatch.StartNew();
+        // B49: Gradle prints no counts; its JUnit reports do, and only those written by THIS run count.
+        var startedUtc = DateTime.UtcNow.AddSeconds(-2);
         var logPath = Path.Combine(project.Folder, ProjectRoots.StateFolderName, TestLogName);
         using var log = new BoundedLog(logPath, ProjectCapabilityNames.MaxLogBytes, TailChars);
         using var job = JobObject.CreateBounded(command.Runtime);
         Process? process = null;
         try
         {
-            var startInfo = BuildStartInfo(executable, [.. prefix, .. command.Materialise(project.Folder)], project.Folder);
+            if (command.Runtime == ProjectRuntime.Gradle)
+            {
+                JUnitReports.Clear(project.Folder);
+            }
+
+            var startInfo = BuildStartInfo(executable, [.. prefix, .. command.Materialise(project.Folder)], project.Folder, command.Runtime);
             process = _start(startInfo) ?? throw new CapabilityException(ErrorClasses.DependencyUnavailable, "the runtime could not be started", retryable: true);
             Interlocked.Increment(ref _processesStarted);
             try
@@ -1072,7 +1114,9 @@ public sealed class ProjectRunner : IDisposable
 
             await log.CompleteAsync().ConfigureAwait(false);
             var exitCode = TryExitCode(process) ?? -1;
-            var (passed, failed) = ParseCounts(log.Tail);
+            var (passed, failed) = command.Runtime == ProjectRuntime.Gradle
+                ? JUnitReports.Count(project.Folder, startedUtc)
+                : ParseCounts(log.Tail);
             stopwatch.Stop();
             _logger.LogInformation("project.test {Slug} exit={Exit} passed={Passed} failed={Failed} duration_ms={Ms}", project.Slug, exitCode, passed, failed, stopwatch.ElapsedMilliseconds);
             return new TestOutcome(exitCode, passed, failed, log.Tail, log.Truncated, stopwatch.ElapsedMilliseconds, logPath);

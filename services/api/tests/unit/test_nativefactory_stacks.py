@@ -20,7 +20,16 @@ from app.nativefactory.models import (
     TERMINAL_STATES,
 )
 from app.nativefactory.spec import parse_spec
-from app.nativefactory.stacks import ToolchainFacts, choose, detect, refuse_ios
+from app.nativefactory.stacks import (
+    DEVICE_BUILDABLE_TARGETS,
+    SPEECH_ANDROID_BUILD_NOT_WIRED,
+    SPEECH_DEVICE_ANDROID,
+    ToolchainFacts,
+    choose,
+    choose_on_device,
+    detect,
+    refuse_ios,
+)
 
 FULL = ToolchainFacts(
     dotnet=r"C:\Program Files\dotnet\dotnet.exe",
@@ -56,29 +65,38 @@ def test_windows_is_chosen_with_the_sentence_the_receipt_will_say() -> None:
     assert choice.error_class is None
 
 
-def test_android_names_the_jdk_and_the_owner_item_rather_than_saying_failed() -> None:
-    """The blocker that is confusing precisely because the SDK IS there. The sentence has
-    to say both halves or the owner will go looking for the wrong thing."""
-    choice = choose(parse_spec(ANDROID), THIS_MACHINE)
-    assert not choice.available
-    assert choice.error_class == "dependency_unavailable"
-    assert choice.owner_action == "33"
-    assert "Java yok" in choice.reason
-    assert "SDK burada" in choice.reason
-
-
-def test_android_builds_when_a_jdk_exists_with_no_code_change() -> None:
-    """The same lab, the same router, one more fact about the world."""
-    choice = choose(parse_spec(ANDROID), FULL)
-    assert choice.available
-    assert choice.stack == "android_kotlin"
-
-
-def test_android_without_the_sdk_is_a_different_sentence() -> None:
-    facts = ToolchainFacts(**{**THIS_MACHINE.as_dict(), "android_sdk": None})
+@pytest.mark.parametrize(
+    "facts",
+    [
+        THIS_MACHINE,
+        FULL,
+        ToolchainFacts(**{**THIS_MACHINE.as_dict(), "android_sdk": None}),
+    ],
+    ids=["sdk-no-java", "sdk-and-java", "nothing"],
+)
+def test_this_machine_never_builds_android_whatever_it_has(facts) -> None:
+    """ADR-0160/0161. THIS machine's build step is dotnet, so its SDK and its Java change
+    nothing: with both present the row used to be `planned` and native.build handed
+    app/build.gradle.kts to `dotnet build` (2026-09-16). Android is built on the device."""
     choice = choose(parse_spec(ANDROID), facts)
     assert not choice.available
-    assert "SDK bu makinede yok" in choice.reason
+    assert choice.stack == "android_kotlin"
+    assert choice.error_class == "dependency_unavailable"
+    assert choice.owner_action is None, "installing something HERE is not what would fix this"
+    assert choice.reason == SPEECH_ANDROID_BUILD_NOT_WIRED
+    assert "cihazınız" in choice.reason
+    assert "aynı hat çalışır" not in choice.reason
+
+
+def test_the_device_plans_android_and_leaves_its_toolchain_to_the_device() -> None:
+    """The device builds it (three Gradle shapes); whether it HAS Java and Gradle is the
+    device's own answer, in its own words, at project.run."""
+    for target in ("android_apk", "android_aab"):
+        choice = choose_on_device(parse_spec({**ANDROID, "targets": [target]}))
+        assert choice.available
+        assert choice.stack == "android_kotlin"
+        assert choice.reason == SPEECH_DEVICE_ANDROID
+    assert {"android_apk", "android_aab"} <= DEVICE_BUILDABLE_TARGETS
 
 
 def test_msix_is_refused_when_makeappx_is_absent_but_the_exe_is_not() -> None:

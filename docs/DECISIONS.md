@@ -12527,3 +12527,61 @@ existed for these four, and no document library beyond those two is installed.
 **Consequences.** `.gitattributes` marks the six extensions binary. The protocol document names
 the kinds, the schemes, the bounds and the `encrypted` detail; the Cloud Core's preview speaks
 each kind in its own units.
+
+## ADR-0160 — The rendered Android project is proven to build and run on real tools (2026-09-16, B49)
+
+**Context.** B49 left 475-477 BLOCKED_PROVIDER: no JDK, Gradle, cmdline-tools or AVD. On 2026-09-16
+the owner allowed the downloads (Temurin 17, Gradle 8.7, cmdline-tools 23, all checksum-verified,
+under `E:\AI\toolchains`; nothing machine-wide). The first day a JDK existed, the router
+(`stacks.choose`) called an Android row buildable and `native.build` handed `app/build.gradle.kts` to
+`dotnet build`, because this machine's build step (`service.build_and_test`) is .NET only.
+
+**Decision.** `scripts/qualify-android-factory.ps1` renders counter-mobile with the real `render()`, runs
+`gradle test assembleDebug bundleRelease`, checks the APK badging and the AAB layout, boots an AVD with
+no window under a deadline, installs and launches the APK, taps '+' twice and reads the counter from
+the UI tree, and always stops the emulator. It downloads nothing and sets nothing persistent; a missing
+AVD fails it at `boot`. An Android row planned against THIS machine is refused in one sentence -
+Android is built on the enrolled device - whatever this machine has installed.
+
+**Consequences.** 477 is PARTIAL with PROVEN_REAL. The router regression fails when reverted.
+
+## ADR-0161 — The device builds Android with three fixed Gradle shapes, and signs nothing it can publish (2026-09-16, B49)
+
+**Context.** The owner approved a Gradle build step in the factory (2026-09-16) - a new command form
+on the device, which is a security surface.
+
+**Decision.**
+
+1. **Three shapes, four tokens each**, under the native root only: `gradle --no-daemon
+   --console=plain assembleDebug|bundleRelease` (run) and `... test` (test). No path, property, init
+   script, second task, wrapper or batch file; each section admits only its own tasks.
+2. **No shell, no PATH.** `gradle` is a word: the companion runs the configured JDK's `java.exe`
+   (feature release >= 17, read from its `release` file) with what `gradle.bat` passes, on the
+   distribution's launcher jar. Locations come from `PAGENTOS_AGENT_NativeJavaHome`,
+   `NativeGradleHome`, `NativeAndroidSdk`, `NativeGradleUserHome`, `NativeAndroidUserHome`, else the
+   installers' directories - never PATH, never a `JAVA_HOME` variable.
+3. **A clean environment.** `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`, `JDK_JAVA_OPTIONS`, `JAVA_OPTS`,
+   `GRADLE_OPTS`, `CLASSPATH` and every `ORG_GRADLE_*` are removed; the toolchain's own locations are
+   set, with Gradle's cache and the Android plugin's home in the companion's folders.
+4. **Signing.** A debug APK is signed in process by the Android plugin with a throwaway key it makes
+   in the companion's `ANDROID_USER_HOME` - never the owner's key, never publishable; without it no
+   phone or emulator installs the APK. The release bundle is unsigned. `apksigner`, `jarsigner` and
+   `keytool` are refused by name like the Windows signers.
+5. **Counts and identity from the artefacts.** `gradle test` counts come from the JUnit reports that
+   run wrote (older ones are removed first); `file.inspect` adds an `android` block read from the
+   package's own manifest (binary XML / protobuf), and the Cloud Core's one judge compares package,
+   versionCode and versionName with the spec.
+6. **Found on the way, fixed:** the Cloud Core sent every device build and test with a 30 s / 330 s
+   expiry, and the device uses the time to expiry as the build's budget, so longer builds were ended;
+   both now send the device's own cap (20 min 30 s). A device compile that exited non-zero went on to
+   the test step; it is now a `build_failed` row in the compiler's words.
+7. **Planning.** With an enrolled device, Android targets are planned for it even where this machine
+   has a runner; without one, the build is refused by name. Opening an APK on a phone or emulator is
+   not wired and is refused by name.
+
+**Not done, deliberately.** The new agent is not deployed to the live device (a production
+promotion: owner). No emulator or phone launch shape exists on the device.
+
+**Consequences.** `packages/protocol/android-manifest.example.json` is read by both halves; the
+protocol document lists the shapes. 475/476 are PARTIAL with PROVEN_REAL for the device half.
+11/11 executed mutations turn the suites red (5 Cloud Core, 6 device).

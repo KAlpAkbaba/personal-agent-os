@@ -52,8 +52,11 @@ from app.nativefactory.models import (
     NativeBuildRow,
 )
 from app.nativefactory.roots import check_extensions
-from app.nativefactory.service import _tail, _touch
+from app.nativefactory.service import BUILD_TIMEOUT_S, _tail, _touch
 from app.nativefactory.spec import (
+    ANDROID_TARGETS,
+    TARGET_ANDROID_AAB,
+    TARGET_ANDROID_APK,
     TARGET_WINDOWS_MSIX,
     TARGET_WINDOWS_PORTABLE,
     NativeAppSpec,
@@ -77,14 +80,22 @@ REQUIRED_CAPABILITIES: tuple[str, ...] = (
     "file.inspect",
 )
 
-#: The device caps project.scaffold/run/status at 30 s and project.test at 5 min 30 s
-#: (DEVICE_PROTOCOL.md §6l). A compile is a `project.run`, so it lives inside the 30 s cap —
-#: the command RETURNS when the batch child has finished, and the companion's own job bound is
-#: what limits the build, not this number.
+#: How long a command may take before it EXPIRES. The device runs a command for the time left
+#: until its expiry, clamped to its own cap (InteractiveCapabilityExecutor.ResolveTimeout), so
+#: this number is the build's budget on the device, not only this side's patience. It was 30 s
+#: for a compile and 330 s for a test until 2026-09-16 (ADR-0161), which ended every device
+#: build that took longer than that - a real Gradle build of the Android template takes minutes.
+#: A build or a test now gets the device's own ceiling for a native command: the build bound
+#: plus the 30 s it keeps for the typed answer (§6n, NativeCapabilityNames.CommandTimeoutCap).
 SCAFFOLD_TIMEOUT_S = 30.0
-RUN_TIMEOUT_S = 30.0
-TEST_TIMEOUT_S = 330.0
+RUN_TIMEOUT_S = float(BUILD_TIMEOUT_S + 30)
+TEST_TIMEOUT_S = float(BUILD_TIMEOUT_S + 30)
 INSPECT_TIMEOUT_S = 30.0
+
+#: B49 (ADR-0161): the three Gradle shapes the device admits, token for token (§6n).
+GRADLE = "gradle --no-daemon --console=plain"
+#: Which run command makes which Android target.
+ANDROID_RUN_KEY: dict[str, str] = {TARGET_ANDROID_APK: "build", TARGET_ANDROID_AAB: "bundle"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +134,26 @@ def native_manifest(csproj: str, publish_dir: str) -> dict[str, Any]:
         # first real production build hit, at the first device step (2026-09-12).
         "test": {"unit": f"dotnet test {csproj} -c Release"},
     }
+
+
+def android_manifest(entry: str) -> dict[str, Any]:
+    """The manifest an Android project carries: the three Gradle shapes and nothing else.
+
+    No path and no property reaches the device: the project folder is Gradle's working
+    directory, and the task is the only word that differs. `assembleDebug` makes the APK the
+    device can install (the Android plugin signs debug builds with its own throwaway key),
+    `bundleRelease` makes the unsigned bundle, `test` runs the template's JVM unit tests.
+    """
+    return {
+        "entry": entry,
+        "port": 0,
+        "run": {"build": f"{GRADLE} assembleDebug", "bundle": f"{GRADLE} bundleRelease"},
+        "test": {"unit": f"{GRADLE} test"},
+    }
+
+
+#: The Android manifest for the template's own entry, in the file both halves read.
+ANDROID_MANIFEST_EXAMPLE_ENTRY = "app/build.gradle.kts"
 
 
 #: The manifest above for one canonical project, written where BOTH halves read it: the
@@ -212,8 +243,12 @@ def build_on_device(
         return DeviceBuildOutcome(ok=False, error_class="policy_refused", message=message)
 
     manifest = json.loads(next(f.text for f in project.files if f.path == "manifest.json"))
-    csproj = str(manifest["entry"])
+    is_android = row.target in ANDROID_TARGETS
     publish_dir = "out"
+    if is_android:
+        device_manifest = android_manifest(str(manifest["entry"]))
+    else:
+        device_manifest = native_manifest(str(manifest["entry"]), publish_dir)
     scaffold_files = [{"path": f.path, "text": f.text} for f in project.files]
     if row.target == TARGET_WINDOWS_MSIX:
         # B33 req 457: the device packs what the Cloud Core declares - the manifest is
@@ -233,7 +268,7 @@ def build_on_device(
             "slug": project_slug,
             "root": "native",
             "files": scaffold_files,
-            "manifest": native_manifest(csproj, publish_dir),
+            "manifest": device_manifest,
         },
         idempotency_key=f"nativefactory-scaffold:{row.id}",
         timeout_s=SCAFFOLD_TIMEOUT_S,
@@ -247,12 +282,21 @@ def build_on_device(
     _touch(db, row, STATE_BUILDING)
     built = device.run(
         capability="project.run",
-        payload={"project_id": project_id, "command_key": "build"},
+        payload={
+            "project_id": project_id,
+            "command_key": ANDROID_RUN_KEY[row.target] if is_android else "build",
+        },
         idempotency_key=f"nativefactory-build:{row.id}",
         timeout_s=RUN_TIMEOUT_S,
     )
     if not built.ok:
         return _fail(db, row, built, step="project.run build")
+    if built.result.get("exit_code") not in (0, None):
+        # A batch run answers its exit code rather than failing (§6n): a compile that failed
+        # is a failed row in the compiler's own words, never a step toward "verified".
+        message = _tail(str(built.result.get("log_tail") or ""), 1000)
+        _touch(db, row, STATE_FAILED, error_class="build_failed", error_message=message)
+        return DeviceBuildOutcome(ok=False, error_class="build_failed", message=message)
 
     # ---- test: the project's OWN tests, run by the device -------------------------------
     _touch(db, row, STATE_TESTING)
@@ -296,6 +340,9 @@ def build_on_device(
         )
         _touch(db, row, STATE_FAILED, error_class="tests_unreadable", error_message=message)
         return DeviceBuildOutcome(ok=False, error_class="tests_unreadable", message=message)
+
+    if is_android:
+        return _read_back_android(db, row, device, spec, manifest, root_path)
 
     # ---- publish: the artefact itself ---------------------------------------------------
     published = device.run(
@@ -457,4 +504,98 @@ def build_on_device(
         artifact_path=artifact_path,
         artifact=artifact,
         tests=tests,
+    )
+
+
+def _read_back_android(
+    db: Session,
+    row: NativeBuildRow,
+    device: DeviceActionPort,
+    spec: NativeAppSpec,
+    manifest: dict[str, Any],
+    root_path: str,
+) -> DeviceBuildOutcome:
+    """B49 (ADR-0161): the APK or bundle the build made, read back by the DEVICE.
+
+    The path is the one the template declares (``artifact`` / ``bundle``), under the folder
+    the device said it scaffolded. The device's ``file.inspect`` answers an ``android`` block
+    only when the package's own manifest reads (AndroidPackageReader); without it the row is
+    `unverified` by construction, exactly as a PE with no version block is.
+    """
+    relative = str(manifest["bundle" if row.target == TARGET_ANDROID_AAB else "artifact"])
+    artifact_path = root_path + "\\" + relative.replace("/", "\\")
+    inspected = device.run(
+        capability="file.inspect",
+        payload={"path": artifact_path},
+        idempotency_key=f"nativefactory-inspect:{row.id}",
+        timeout_s=INSPECT_TIMEOUT_S,
+    )
+    if not inspected.ok:
+        return _fail(db, row, inspected, step="file.inspect")
+
+    record = inspected.result.get("file")
+    record = record if isinstance(record, dict) else {}
+    artifact: dict[str, Any] = {
+        "size_bytes": record.get("size"),
+        "sha256": record.get("sha256"),
+        "kind": inspected.result.get("kind"),
+        "read_back_by": "device file.inspect",
+    }
+    tests = row.tests_json or {}
+    android = inspected.result.get("android")
+    android = android if isinstance(android, dict) else None
+
+    if artifact["size_bytes"] is None or not artifact["sha256"] or android is None:
+        row.artifact_path = artifact_path
+        row.artifact_json = artifact
+        row.verdict_json = {
+            "ok": False,
+            "checked_by": "device file.inspect",
+            "not_checked": ["package", "version", "version_code"],
+            "reason": (
+                "the device reported the file, not the package's identity: file.inspect "
+                "returned no android block, so validate_against_spec could not run. An agent "
+                "older than ADR-0161 cannot read an APK's manifest, and a build it read back "
+                "is unverified by construction."
+            ),
+        }
+        row.tests_json = tests
+        row.updated_at = datetime.now(UTC)
+        _touch(db, row, STATE_UNVERIFIED)
+        return DeviceBuildOutcome(
+            ok=True,
+            root_path=root_path,
+            artifact_path=artifact_path,
+            artifact=artifact,
+            tests=tests,
+        )
+
+    version_code = android.get("version_code")
+    facts = ArtifactFacts(
+        path=artifact_path,
+        kind=str(android.get("format") or ("aab" if row.target == TARGET_ANDROID_AAB else "apk")),
+        size_bytes=int(artifact["size_bytes"]),
+        sha256=str(artifact["sha256"]),
+        version=_as_text(android.get("version_name")),
+        identity=_as_text(android.get("package")),
+        detail={
+            "read_back_by": "device file.inspect",
+            "version_code": str(version_code) if isinstance(version_code, int) else "",
+            "min_sdk": str(android.get("min_sdk") or ""),
+            "target_sdk": str(android.get("target_sdk") or ""),
+            "signed": "true" if android.get("signed") is True else "false",
+        },
+    )
+    verdict = validate_against_spec(facts, spec)
+    artifact.update({k: v for k, v in facts.as_dict().items() if k not in artifact})
+    artifact["signed"] = android.get("signed") is True
+
+    row.artifact_path = artifact_path
+    row.artifact_json = artifact
+    row.verdict_json = verdict.as_dict()
+    row.tests_json = tests
+    row.updated_at = datetime.now(UTC)
+    _touch(db, row, STATE_VERIFIED if verdict.ok else STATE_MISMATCH)
+    return DeviceBuildOutcome(
+        ok=True, root_path=root_path, artifact_path=artifact_path, artifact=artifact, tests=tests
     )

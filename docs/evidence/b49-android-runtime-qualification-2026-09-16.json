@@ -1,0 +1,103 @@
+{
+  "batch": "B49",
+  "requirements": [
+    475,
+    476,
+    477
+  ],
+  "kind": "runtime_qualification",
+  "produced_by": "scripts/qualify-android-factory.ps1",
+  "machine": "owner PC (Windows 10 19045, i7-14700KF, WHPX)",
+  "toolchain": {
+    "jdk": "Eclipse Temurin 17.0.20.1+1 (Adoptium, sha256 e53a79c3...cb0 verified)",
+    "gradle": "8.7 (services.gradle.org, sha256 544c35d6...961d verified)",
+    "cmdline_tools": "23.0 (dl.google.com, sha1 57d04f2d...e9d verified)",
+    "android_sdk": "platform 33, build-tools 33.0.0 (+34 fetched by AGP), emulator 31.3.12, system image android-33 google_apis x86_64",
+    "downloads_authorised_by": "owner, 2026-09-16, in chat",
+    "persistent_changes": "none machine-wide: JAVA_HOME/ANDROID_HOME/GRADLE_USER_HOME are set per process"
+  },
+  "negative_control": "the same script with -AvdName no-such-avd fails at the boot gate with exit 1 and passed=false",
+  "device_half": {
+    "test": "devices/windows-agent/tests/PagentOS.Agent.Tests/Native/AndroidBuildTests.cs",
+    "what": "the Cloud Core's counter-mobile template scaffolded under a native root and built by the REAL ProjectCapabilities/ProjectRunner inside its Job Object: assembleDebug exit 0, test twice with counts from JUnit reports, bundleRelease exit 0, APK identity com.pagentos.sayac / 1004003 / 1.4.2 signed with the plugin's debug key kept under the companion's ANDROID_USER_HOME, AAB unsigned",
+    "run_with": "PAGENTOS_TEST_ANDROID_JAVA_HOME, PAGENTOS_TEST_ANDROID_GRADLE_HOME, PAGENTOS_TEST_ANDROID_GRADLE_USER_HOME (skipped by name without them, e.g. on CI)"
+  },
+  "result": {
+    "script": "scripts/qualify-android-factory.ps1",
+    "started_at": "2026-09-16T10:32:49.2347325Z",
+    "requirements": [
+      475,
+      476,
+      477
+    ],
+    "gates": {
+      "render": {
+        "result": "PASS",
+        "detail": "10 files from app.nativefactory.generator.render()"
+      },
+      "build": {
+        "result": "PASS",
+        "detail": "gradle test assembleDebug bundleRelease: exit 0"
+      },
+      "tests": {
+        "result": "PASS",
+        "detail": {
+          "testDebugUnitTest": "2 passed",
+          "testReleaseUnitTest": "2 passed"
+        }
+      },
+      "package": {
+        "result": "PASS",
+        "detail": {
+          "apk": {
+            "sha256": "dea008bddce1d3cc2676ef401ab58b7f94d412abd8a8c7b48f936187d2f9b5ae",
+            "bytes": 800953,
+            "package": "com.pagentos.sayac",
+            "version_code": 1004003,
+            "min_sdk": 23,
+            "target_sdk": 33
+          },
+          "aab": {
+            "sha256": "fdc45c07f5618b30efd1ec16812bd1c4c6945e1da411a47d4d67a62616717462",
+            "bytes": 611288,
+            "signed": false,
+            "note": "the rendered project carries no signing config; a Play upload needs the owner keystore"
+          }
+        }
+      },
+      "boot": {
+        "result": "PASS",
+        "detail": "AVD pagentos-b49, Android 13, 45 s"
+      },
+      "launch": {
+        "result": "PASS",
+        "detail": {
+          "resumed": "com.pagentos.sayac/.MainActivity",
+          "pid": "2125",
+          "screenshot_sha256": "3e7dab432b29cd2154022fa2662ccb8759e951a9578c553b7290ececaeb58a55"
+        }
+      },
+      "operate": {
+        "result": "PASS",
+        "detail": {
+          "taps": 2,
+          "counter_before": "0",
+          "counter_after": "2",
+          "screenshot_sha256": "26884fc32af3931c3218abf2664238250cc9ab3a02938981a2c127a916ba4959"
+        }
+      },
+      "stop": {
+        "result": "PASS",
+        "detail": "emulator pid 11336 stopped"
+      }
+    },
+    "passed": true,
+    "finished_at": "2026-09-16T10:34:26.3939343Z"
+  },
+  "not_proven": {
+    "475_476": "the new device agent is not deployed to the live enrolled device (a production promotion: owner)",
+    "476": "the AAB is unsigned",
+    "477": "the factory does not open an APK itself",
+    "478": "no physical device"
+  }
+}

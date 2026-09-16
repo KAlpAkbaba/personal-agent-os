@@ -301,6 +301,10 @@ public static class Program
         // out loud on BOTH halves (this key and the service's), and built only then, so a
         // companion that was not told to operate the desktop has no object that could.
         var operatorOptions = Operator.OperatorOptions.FromConfiguration(configuration);
+
+        // B49 (ADR-0161): where the Android toolchain is, as configured - read once, before the
+        // native family's startup line says which tools this machine has.
+        Native.NativeTools.Android = Native.NativeTools.AndroidToolchainOptions.FromConfiguration(configuration);
         Operator.OperatorCapabilities? operatorCapabilities = null;
         Documents.DocumentCapabilities? documentCapabilities = null;
         Projects.ProjectCapabilities? projectCapabilities = null;

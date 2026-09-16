@@ -33,16 +33,17 @@ from sqlalchemy import select
 
 from app.nativefactory import service as native_service
 from app.nativefactory.artifacts import ArtifactFacts
-from app.nativefactory.models import NativeBuildRow
-from app.nativefactory.stacks import ToolchainFacts
+from app.nativefactory.models import STATE_UNAVAILABLE, NativeBuildRow
+from app.nativefactory.stacks import SPEECH_ANDROID_BUILD_NOT_WIRED, ToolchainFacts
 from app.routines.dispatch import DeviceRunResult
 from app.voice.realtime_sessions.tools_native import (
-    SPEECH_ANDROID_NEEDS_JDK,
+    SPEECH_ANDROID_LAUNCH_NOT_WIRED,
+    SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE,
     SPEECH_INSTALL_NEEDS_DEVICE,
     SPEECH_NO_RUNNER,
 )
 from tests.voice_corpus.corpus import CTX_NATIVE_ANDROID, CTX_NATIVE_BUILT, CTX_NATIVE_PLANNED
-from tests.voice_corpus.harness import build_harness
+from tests.voice_corpus.harness import NATIVE_TOOLCHAIN, build_harness
 
 
 def _rows(h) -> list[NativeBuildRow]:
@@ -112,11 +113,12 @@ def test_native_create_for_android_opens_an_unavailable_row_rather_than_a_silenc
     they can see - and it must not read as a failure, because nothing failed."""
     h = build_harness()
     sid = h.new_session()
+    h.runtime.register_live(device_action=None)
     h.say(sid, "Android sürümünü yap.")
     call = h.tool(sid, "c-1", "native.create", {"name": "Sayac", "request": "Android sürümünü yap"})
     body = call["result"]
     assert body["execution_status"] == "refused"
-    assert "33" in body["speech"]
+    assert "cihazınız" in body["speech"]
 
     rows = _rows(h)
     assert [row.target for row in rows] == ["android_apk"]
@@ -223,9 +225,10 @@ def test_with_no_local_runner_the_build_goes_to_the_enrolled_device() -> None:
     assert body["build"]["state"] == "verified"
 
 
-def test_an_apk_build_names_the_two_facts_separately_and_the_owner_item() -> None:
-    """Spec §1: the SDK being present is exactly what makes this blocker confusing, so
-    the refusal states both facts rather than "Android is not available"."""
+def test_an_android_row_planned_for_this_machine_says_the_device_builds_it() -> None:
+    """A row opened against THIS machine's facts (the seeded context) is refused in the one
+    sentence that is true whatever this machine has: its build step is dotnet, and Android
+    is built on the enrolled device (ADR-0161)."""
     h = build_harness()
     h.seed(CTX_NATIVE_ANDROID)
     sid = h.new_session()
@@ -233,7 +236,119 @@ def test_an_apk_build_names_the_two_facts_separately_and_the_owner_item() -> Non
     body = h.tool(sid, "c-1", "native.build", {})["result"]
     assert body["execution_status"] == "refused"
     assert body["error_class"] == "dependency_unavailable"
-    assert "SDK" in body["speech"] and "Java" in body["speech"] and "33" in body["speech"]
+    assert body["speech"] == SPEECH_ANDROID_BUILD_NOT_WIRED
+    assert "Java yok" not in body["speech"]
+
+
+class _RunnerThatMustNotRun:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def run(self, argv, cwd, *, timeout_s):  # noqa: ANN001
+        self.calls.append(list(argv))
+        raise AssertionError(f"the local runner is dotnet-only, yet it got {argv}")
+
+
+class _AndroidDevice:
+    """The enrolled device, answering the Android chain the way the real companion does."""
+
+    ROOT = r"C:\Users\o\Documents\PagentOS Projects\native\sayac"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def run(self, *, capability, payload, idempotency_key, timeout_s):  # noqa: ANN001
+        self.calls.append((capability, payload))
+        if capability == "project.scaffold":
+            return DeviceRunResult(True, result={"root_path": self.ROOT})
+        if capability == "project.run":
+            return DeviceRunResult(True, result={"exit_code": 0, "runtime": "gradle"})
+        if capability == "project.test":
+            return DeviceRunResult(
+                True,
+                result={"exit_code": 0, "passed": 2, "failed": 0, "counts_parsed": True},
+            )
+        if capability == "file.inspect":
+            return DeviceRunResult(
+                True,
+                result={
+                    "file": {"size": 800957, "sha256": "b" * 64},
+                    "kind": "unknown",
+                    "android": {
+                        "format": "apk",
+                        "package": "com.pagentos.sayac",
+                        "version_code": 1004003,
+                        "version_name": "1.4.2",
+                        "min_sdk": 23,
+                        "target_sdk": 33,
+                        "signed": True,
+                        "signature_schemes": ["v2+"],
+                    },
+                },
+            )
+        return DeviceRunResult(False, "capability_missing", capability)
+
+
+def test_an_android_app_is_planned_and_built_on_the_device_never_by_the_local_runner() -> None:
+    """ADR-0161. The local runner (dotnet) is registered and a JDK is on this machine - the
+    two facts that, on 2026-09-16, sent app/build.gradle.kts to `dotnet build`. Now the row
+    is planned for the device and built there with the Gradle shapes, and the runner is
+    never called."""
+    h = build_harness()
+    runner = _RunnerThatMustNotRun()
+    device = _AndroidDevice()
+    with_jdk = ToolchainFacts(
+        **{**NATIVE_TOOLCHAIN.as_dict(), "java": r"E:\jdk\bin\java.exe", "java_home": r"E:\jdk"}
+    )
+    h.runtime.register_live(native_runner=runner, native_toolchain=with_jdk, device_action=device)
+    sid = h.new_session()
+    h.say(sid, "Bana sayaç uygulaması yap, APK olsun.")
+    created = h.tool(
+        sid,
+        "c-1",
+        "native.create",
+        {"targets": ["android_apk"], "name": "Sayac", "version": "1.4.2"},
+    )["result"]
+    rows = _rows(h)
+    assert [r.state for r in rows] == ["planned"], created.get("speech")
+    assert "cihazınız" in created["speech"]
+
+    h.say(sid, "APK üret.")
+    built = h.tool(sid, "c-2", "native.build", {})["result"]
+    assert built["execution_status"] == "executed", built.get("speech")
+    assert built["built_on"] == "device"
+    assert built["build"]["state"] == "verified", built.get("speech")
+    assert runner.calls == []
+    scaffold = next(p for c, p in device.calls if c == "project.scaffold")
+    gradle_build = "gradle --no-daemon --console=plain assembleDebug"
+    assert scaffold["manifest"]["run"]["build"] == gradle_build
+    assert [p.get("command_key") for c, p in device.calls if c == "project.run"] == ["build"]
+
+
+def test_without_a_device_an_android_build_is_refused_by_name() -> None:
+    h = build_harness()
+    runner = _RunnerThatMustNotRun()
+    h.runtime.register_live(native_runner=runner, device_action=None)
+    sid = h.new_session()
+    h.say(sid, "Bana sayaç uygulaması yap, APK olsun.")
+    h.tool(sid, "c-1", "native.create", {"targets": ["android_apk"], "name": "Sayac"})
+    rows = _rows(h)
+    assert rows[0].state == STATE_UNAVAILABLE
+    assert rows[0].error_message == SPEECH_ANDROID_BUILD_NOT_WIRED
+    h.say(sid, "APK üret.")
+    built = h.tool(sid, "c-2", "native.build", {})["result"]
+    assert built["execution_status"] == "refused"
+    assert runner.calls == []
+
+
+def test_android_package_says_the_bundle_is_the_package() -> None:
+    h = build_harness()
+    h.seed(CTX_NATIVE_ANDROID)
+    sid = h.new_session()
+    h.say(sid, "Kurulum dosyasını oluştur.")
+    packaged = h.tool(sid, "c-1", "native.package", {})["result"]
+    assert packaged["execution_status"] == "refused"
+    assert packaged["speech"] == SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE
 
 
 # ------------------------------------------------ native.check / fix / rebuild
@@ -449,17 +564,17 @@ def test_log_reads_the_apps_own_log_through_the_device() -> None:
     assert "file.read" in h.device.capabilities_called()
 
 
-def test_launch_on_android_names_the_owner_item_rather_than_the_missing_device() -> None:
-    """Two refusals, and they are different: Android cannot be reached AT ALL until a
-    JDK exists, so that reason wins over "the launcher lives on the device"."""
+def test_launch_on_android_says_opening_an_apk_is_not_wired() -> None:
+    """Two refusals, and they are different: an APK is not opened by this chain at all
+    (ADR-0161), so that reason wins over "the launcher lives on the device"."""
     h = build_harness()
     h.seed(CTX_NATIVE_ANDROID)
     sid = h.new_session()
     h.say(sid, "Uygulamayı emülatörde aç.")
     body = h.tool(sid, "c-1", "native.launch", {})["result"]
     assert body["execution_status"] == "refused"
-    assert body["speech"] == SPEECH_ANDROID_NEEDS_JDK
-    assert body["owner_action"] == "33"
+    assert body["speech"] == SPEECH_ANDROID_LAUNCH_NOT_WIRED
+    assert "owner_action" not in body
 
 
 # -------------------------------------------------------------- no build at all
@@ -580,19 +695,31 @@ def test_a_packaging_target_is_built_on_the_device_and_packaged_there_unsigned()
         assert row.artifact_json["package"]["executable"].endswith(".exe")
 
 
-def test_an_android_target_is_still_refused_by_name_before_the_device_is_asked() -> None:
-    """The device path builds the three Windows targets and nothing else."""
+def test_an_android_target_is_planned_for_the_device_and_asked_in_gradle_shapes() -> None:
+    """ADR-0161: the device path builds Android too. On production's facts the row is
+    planned, the device is asked with the three Gradle shapes, and - because this fake
+    device's read-back carries no android block - the row is never called verified."""
     h = _production_shaped()
+    # An agent older than ADR-0161: it reports the file, not the package's identity.
+    h.device.results["file.inspect"] = DeviceRunResult(
+        True, result={"file": {"size": 800957, "sha256": "d" * 64}, "kind": "unknown"}
+    )
     sid = h.new_session()
     created = h.tool(sid, "c-1", "native.create", {"targets": ["android_apk"], "name": "Notlarim"})[
         "result"
     ]
-    assert [b["state"] for b in created["builds"]] == ["unavailable"]
+    assert [b["state"] for b in created["builds"]] == ["planned"]
     built = h.tool(sid, "c-2", "native.build", {"build_id": created["builds"][0]["build_id"]})[
         "result"
     ]
-    assert built["execution_status"] == "refused"
-    assert "project.scaffold" not in h.device.capabilities_called()
+    assert built.get("built_on") == "device", built
+    manifest = h.device.payload_for("project.scaffold")["manifest"]
+    assert set(manifest["run"].values()) == {
+        "gradle --no-daemon --console=plain assembleDebug",
+        "gradle --no-daemon --console=plain bundleRelease",
+    }
+    assert "dotnet" not in str(manifest)
+    assert built["build"]["state"] != "verified"
 
 
 def test_the_lab_still_plans_against_the_machine_it_runs_on() -> None:

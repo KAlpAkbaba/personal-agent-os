@@ -15,6 +15,7 @@ what makes that run worth attempting.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,7 +24,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.nativefactory.device_build import (
+    ANDROID_MANIFEST_EXAMPLE_ENTRY,
     REQUIRED_CAPABILITIES,
+    android_manifest,
     build_on_device,
     native_manifest,
 )
@@ -498,19 +501,180 @@ def test_the_manifest_forms_are_the_ones_the_protocol_document_admits():
 
 
 def test_a_row_this_path_cannot_honestly_build_is_refused_before_the_device_is_asked(db):
-    """Defence in depth for the planner's rule: whatever opened it, an Android row that
-    reaches this path is refused, because the device has no JDK and this path would publish
-    and read back nothing it could judge. (B33 moved the two Windows packages INTO this
-    path - see the two tests below.)"""
-    apk = plan_build(db, NATIVE_ANDROID_SPEC, facts=FULL)[0]
-    device = _healthy()
+    """Defence in depth for the planner's rule: a target outside DEVICE_BUILDABLE_TARGETS is
+    refused before the device is asked. Every target the spec knows is buildable there now
+    (B33 moved the packages in, ADR-0161 the Android pair), so the set is widened on purpose
+    here to prove the guard itself still stands."""
+    import app.nativefactory.device_build as device_build
 
-    outcome = build_on_device(db, apk, device)
+    apk = plan_build(db, NATIVE_ANDROID_SPEC, facts=FULL, on_device=True)[0]
+    device = _healthy()
+    original = device_build.DEVICE_BUILDABLE_TARGETS
+    device_build.DEVICE_BUILDABLE_TARGETS = frozenset({"windows_exe"})
+    try:
+        outcome = build_on_device(db, apk, device)
+    finally:
+        device_build.DEVICE_BUILDABLE_TARGETS = original
 
     assert not outcome.ok
     assert outcome.error_class == "dependency_unavailable"
     assert apk.state == STATE_UNAVAILABLE
     assert device.calls == []
+
+
+# ------------------------------------------------------------------ Android (ADR-0161)
+
+ANDROID_ROOT = r"C:\Users\alpak\Documents\PagentOS Projects\native\sayac"
+
+
+def _android_device(*, android: dict[str, Any] | None = None, build_exit: int = 0) -> FakeDevice:
+    block = {
+        "format": "apk",
+        "package": "com.pagentos.sayac",
+        "version_code": 1004003,
+        "version_name": "1.4.2",
+        "min_sdk": 23,
+        "target_sdk": 33,
+        "signed": True,
+        "signature_schemes": ["v2+"],
+    }
+    if android is not None:
+        block.update(android)
+    inspect: dict[str, Any] = {"file": {"size": 800957, "sha256": "c" * 64}, "kind": "unknown"}
+    if android != {}:
+        inspect["android"] = block
+    return FakeDevice(
+        project_scaffold=DeviceRunResult(True, result={"root_path": ANDROID_ROOT}),
+        project_run_build=DeviceRunResult(
+            True, result={"exit_code": build_exit, "log_tail": "e: Unresolved reference: Countr"}
+        ),
+        project_run_bundle=DeviceRunResult(True, result={"exit_code": 0}),
+        project_test=DeviceRunResult(
+            True, result={"exit_code": 0, "passed": 2, "failed": 0, "counts_parsed": True}
+        ),
+        file_inspect=DeviceRunResult(True, result=inspect),
+    )
+
+
+def _android_row(db, target: str = "android_apk"):
+    spec = {**NATIVE_ANDROID_SPEC, "targets": [target], "version": "1.4.2", "name": "Sayac"}
+    return plan_build(db, spec, facts=FULL, on_device=True)[0]
+
+
+def test_an_android_row_is_scaffolded_with_the_three_gradle_shapes_and_nothing_else(db):
+    row = _android_row(db)
+    device = _android_device()
+    outcome = build_on_device(db, row, device)
+
+    assert outcome.ok, outcome.message
+    manifest = device.payload_for("project.scaffold")["manifest"]
+    assert manifest == android_manifest("app/build.gradle.kts")
+    assert manifest["run"] == {
+        "build": "gradle --no-daemon --console=plain assembleDebug",
+        "bundle": "gradle --no-daemon --console=plain bundleRelease",
+    }
+    assert manifest["test"] == {"unit": "gradle --no-daemon --console=plain test"}
+    # scaffold, build, test, read back - and no publish: an APK is the build's own output.
+    assert [c for c, _ in device.calls] == [
+        "project.scaffold",
+        "project.run",
+        "project.test",
+        "file.inspect",
+    ]
+    assert device.payload_for("file.inspect")["path"] == (
+        ANDROID_ROOT + "\\app\\build\\outputs\\apk\\debug\\app-debug.apk"
+    )
+
+
+def test_an_apk_the_device_read_back_with_the_right_identity_is_verified(db):
+    row = _android_row(db)
+    build_on_device(db, row, _android_device())
+    assert row.state == STATE_VERIFIED
+    assert row.verdict_json["ok"] is True
+    assert row.artifact_json["identity"] == "com.pagentos.sayac"
+    assert row.artifact_json["signed"] is True
+    assert row.tests_json["counts_parsed"] is True
+
+
+def test_a_bundle_row_runs_bundle_release_and_reads_the_bundle(db):
+    row = _android_row(db, "android_aab")
+    device = _android_device(android={"format": "aab", "signed": False, "signature_schemes": []})
+    build_on_device(db, row, device)
+    assert [p.get("command_key") for c, p in device.calls if c == "project.run"] == ["bundle"]
+    assert device.payload_for("file.inspect")["path"].endswith(
+        "\\app\\build\\outputs\\bundle\\release\\app-release.aab"
+    )
+    assert row.state == STATE_VERIFIED
+    assert row.artifact_json["signed"] is False
+
+
+@pytest.mark.parametrize(
+    ("android", "names"),
+    [
+        ({"version_code": 1004002}, "versionCode"),
+        ({"package": "com.pagentos.other"}, "package"),
+        ({"version_name": "1.4.1"}, "version"),
+    ],
+    ids=["yesterdays-code", "another-app", "another-name"],
+)
+def test_a_package_that_is_another_build_is_a_mismatch_not_a_pass(db, android, names):
+    row = _android_row(db)
+    build_on_device(db, row, _android_device(android=android))
+    assert row.state == STATE_MISMATCH
+    assert any(names in m for m in row.verdict_json["mismatches"]), row.verdict_json
+
+
+def test_an_agent_that_cannot_read_an_apk_leaves_the_build_unverified(db):
+    row = _android_row(db)
+    build_on_device(db, row, _android_device(android={}))
+    assert row.state == STATE_UNVERIFIED
+    assert "android block" in row.verdict_json["reason"]
+
+
+def test_a_compile_that_failed_is_a_failed_row_and_the_tests_never_run(db):
+    row = _android_row(db)
+    device = _android_device(build_exit=1)
+    outcome = build_on_device(db, row, device)
+    assert not outcome.ok
+    assert row.state == STATE_FAILED
+    assert row.error_class == "build_failed"
+    assert "Unresolved reference" in (row.error_message or "")
+    assert "project.test" not in [c for c, _ in device.calls]
+
+
+def test_a_device_build_gets_the_devices_own_ceiling_not_thirty_seconds():
+    """The device runs a command for the time left until it expires (clamped to its cap), so
+    the timeout sent here IS the build's budget there. It was 30 s for a compile until
+    2026-09-16 (ADR-0161), which ended every device build longer than that."""
+    from app.nativefactory import device_build
+    from app.nativefactory.service import BUILD_TIMEOUT_S
+
+    assert device_build.RUN_TIMEOUT_S == BUILD_TIMEOUT_S + 30
+    assert device_build.TEST_TIMEOUT_S == BUILD_TIMEOUT_S + 30
+    # The device's cap for project.run / project.test, spelled in the protocol document.
+    protocol = (
+        Path(__file__).resolve().parents[4] / "packages" / "protocol" / "DEVICE_PROTOCOL.md"
+    ).read_text(encoding="utf-8")
+    assert "capped at 20 min 30 s" in protocol
+
+
+def test_the_android_manifest_the_device_half_reads_is_the_one_this_module_writes():
+    import json
+
+    shared = (
+        Path(__file__).resolve().parents[4]
+        / "packages"
+        / "protocol"
+        / "android-manifest.example.json"
+    )
+    doc = json.loads(shared.read_text(encoding="utf-8"))
+    assert doc["entry"] == ANDROID_MANIFEST_EXAMPLE_ENTRY
+    assert doc["manifest"] == android_manifest(ANDROID_MANIFEST_EXAMPLE_ENTRY)
+    protocol = (
+        Path(__file__).resolve().parents[4] / "packages" / "protocol" / "DEVICE_PROTOCOL.md"
+    ).read_text(encoding="utf-8")
+    for command in (*doc["manifest"]["run"].values(), *doc["manifest"]["test"].values()):
+        assert f"`{command}`" in protocol, command
 
 
 def _packaged(kind: str) -> FakeDevice:

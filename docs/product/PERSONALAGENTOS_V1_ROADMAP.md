@@ -1867,6 +1867,13 @@ B49  Android fabrikası ve iOS beyanı      IDs: 474–479                    de
               Yolda bulunan: `platform_unreachable` hata dili korumasına görünmüyordu (Final
               ek açıklamalı sabit); M28 spesifikasyonu kodda hiç olmayan `ios_project` hedefini
               listeliyordu. 8/8 mutasyon kırmızı (ADR-0156).
+              B49 çalışma zamanı niteliği (2026-09-16, ADR-0160/0161):
+              475/476 PARTIAL + PROVEN_REAL — fabrika APK/AAB'yi kayıtlı cihazda üç sabit
+              Gradle biçimiyle derler; cihaz yarısı bu makinede gerçek derlemeyle kanıtlandı
+              (AndroidBuildTests); canlı cihaza dağıtım READY_FOR_OWNER. 477 PARTIAL + PROVEN_REAL
+              (scripts/qualify-android-factory.ps1, 8 kapı; docs/evidence/b49-android-runtime-qualification-2026-09-16.json). 478 fiziksel cihaz bekler.
+              Yolda bulunan: JDK varken dotnet'e build.gradle.kts gidiyordu; cihaz komutları
+              30 sn sürede kesiliyordu; başarısız derleme teste geçiyordu — üçü düzeltildi.
 
 B50  Unity ve Unreal                      IDs: 530–534                    dep: B44      risk: low     owner: UNITY LİSANSI
      GOAL: Lisans geldiğinde Unity proje/sahne/derleme/test; Unreal isteğe bağlı kalır.
@@ -1896,7 +1903,7 @@ B52  Belge formatı genişletme             IDs: 143–146                    de
      GOAL: EPUB, RTF, ODT ve eski Office formatları okunsun.
      PROOF: PROVEN_AUTOMATED — oracle fikstürleriyle her format.
      ROLLBACK: format bazında geri alınır.
-     KAPANIŞ: commit PENDING_B52 · CI PENDING · 4/4 DONE — kanıt
+     KAPANIŞ: commit c57799c · CI 35098762101 yeşil (7/7) · 4/4 DONE — kanıt
               docs/evidence/b52-document-formats-2026-09-15.json
               EPUB/ODT (zip + XML, paket yok), RTF (sınırlı kontrol sözcüğü), DOC/XLS/PPT (sınırlı OLE +
               BIFF8 formül çözücü). Fikstürler bu makinedeki LibreOffice'in kaydedilmiş DOCX/XLSX/PPTX

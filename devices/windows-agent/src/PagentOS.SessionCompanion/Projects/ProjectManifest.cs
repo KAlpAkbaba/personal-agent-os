@@ -27,6 +27,9 @@ public enum ProjectRuntime
 
     /// <summary>M28: the Windows Kits' <c>makeappx.exe pack</c>, on one directory of the native project. A BATCH runtime.</summary>
     MakeAppx,
+
+    /// <summary>B49: Gradle, as the configured JDK's <c>java.exe</c> on the configured distribution's launcher, running one fixed task of an Android project. A BATCH runtime.</summary>
+    Gradle,
 }
 
 /// <summary>
@@ -66,7 +69,7 @@ public sealed record ProjectCommand(string Key, ProjectRuntime Runtime, IReadOnl
     /// <c>project.run</c> waits for the exit and answers with it. M28's two build tools are
     /// batch runs for the same reason: a compiler binds no port. Nothing else is.
     /// </summary>
-    public bool IsBatch => Runtime is ProjectRuntime.Blender or ProjectRuntime.Unity or ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx;
+    public bool IsBatch => Runtime is ProjectRuntime.Blender or ProjectRuntime.Unity or ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx or ProjectRuntime.Gradle;
 
     public IReadOnlyList<string> Materialise(string projectRoot)
         => [.. Arguments.Select(a => a == ProjectManifest.RootPlaceholder ? projectRoot : a)];
@@ -348,7 +351,7 @@ public sealed class ProjectManifest
         // where a compiler is allowed to run.
         if (scope == ProjectScope.Native && program is "python" or "node" or "npm")
         {
-            throw Refuse(key, text, $"'{program}' runs only under the Projects root; the '{NativeCapabilityNames.RootNativeFolderName}' root admits the four build shapes and nothing else");
+            throw Refuse(key, text, $"'{program}' runs only under the Projects root; the '{NativeCapabilityNames.RootNativeFolderName}' root admits the build shapes and nothing else");
         }
 
         switch (program)
@@ -571,8 +574,49 @@ public sealed class ProjectManifest
             case NativeCapabilityNames.MakeAppxProgram:
                 throw Refuse(key, text, $"the only makeappx form is '{NativeCapabilityNames.MakeAppxProgram} pack /d <dir> /p <package{NativeCapabilityNames.PackageExtension}> /o /nv', both paths relative and inside the project");
 
+            // ------------------------------------------------ B49: the Android build (ADR-0161)
+
+            case NativeCapabilityNames.GradleProgram when scope != ProjectScope.Native:
+                throw Refuse(key, text, $"a compiler runs only under the '{NativeCapabilityNames.RootNativeFolderName}' root, never in a project of the Projects root or the 3D root");
+
+            // gradle --no-daemon --console=plain <task>
+            //    0        1              2          3
+            //
+            // No path, no property, no init script, no second task: the project folder is the
+            // working directory and the task is one of a closed list. `-D`, `-P`, `-I`,
+            // `--init-script`, `-p`, `--offline`, `--scan` and every other option are simply not
+            // a shape. What runs is the configured JDK on the configured distribution's
+            // launcher jar (ProjectRunner), never a gradlew or a gradle.bat.
+            case NativeCapabilityNames.GradleProgram when tokens.Length == 4
+                && tokens[1] == NativeCapabilityNames.GradleFlags[0]
+                && tokens[2] == NativeCapabilityNames.GradleFlags[1]:
+                {
+                    var task = tokens[3];
+                    var isRunTask = NativeCapabilityNames.GradleRunTasks.Contains(task, StringComparer.Ordinal);
+                    var isTestTask = string.Equals(task, NativeCapabilityNames.GradleTestTask, StringComparison.Ordinal);
+                    if (!isRunTask && !isTestTask)
+                    {
+                        throw Refuse(key, text, $"the only Gradle tasks are {string.Join(", ", NativeCapabilityNames.GradleRunTasks)} (run) and {NativeCapabilityNames.GradleTestTask} (test)");
+                    }
+
+                    // The same rule as dotnet: a build is not a test suite, and a test is not a build.
+                    if (isTest != isTestTask)
+                    {
+                        throw Refuse(key, text, $"'{NativeCapabilityNames.GradleProgram} {task}' is a {(isTestTask ? "test" : "run")} command; it is not admitted in the {(isTest ? "test" : "run")} section");
+                    }
+
+                    return new ProjectCommand(
+                        key,
+                        ProjectRuntime.Gradle,
+                        [NativeCapabilityNames.GradleFlags[0], NativeCapabilityNames.GradleFlags[1], task],
+                        $"{NativeCapabilityNames.GradleProgram} {NativeCapabilityNames.GradleFlags[0]} {NativeCapabilityNames.GradleFlags[1]} {task}");
+                }
+
+            case NativeCapabilityNames.GradleProgram:
+                throw Refuse(key, text, $"the only gradle form is '{NativeCapabilityNames.GradleProgram} {string.Join(' ', NativeCapabilityNames.GradleFlags)} <task>' with the task one of {string.Join(", ", NativeCapabilityNames.GradleRunTasks)}, {NativeCapabilityNames.GradleTestTask}");
+
             default:
-                throw Refuse(key, text, $"only python, node, npm, — under the 3D root — blender and unity, and — under the '{NativeCapabilityNames.RootNativeFolderName}' root — dotnet and makeappx run here");
+                throw Refuse(key, text, $"only python, node, npm, — under the 3D root — blender and unity, and — under the '{NativeCapabilityNames.RootNativeFolderName}' root — dotnet, makeappx and gradle run here");
         }
     }
 

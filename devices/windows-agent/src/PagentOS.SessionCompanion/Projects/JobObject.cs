@@ -121,7 +121,9 @@ public sealed class JobObject : IDisposable
             // bound set to the wall bound would kill honest builds and call it a limit. The
             // wall clock is the bound here (ProjectRunner ends the job at NativeLimit); the
             // CPU bound is what that wall clock could legitimately consume on THIS machine.
-            ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx => Create(
+            // B49: Gradle forks a single-use daemon and the Kotlin compiler daemon, inside the
+            // same job and under the same native bounds.
+            ProjectRuntime.Dotnet or ProjectRuntime.MakeAppx or ProjectRuntime.Gradle => Create(
                 NativeCapabilityNames.MemoryLimitBytes,
                 NativeCapabilityNames.CpuTimeLimitFor(Environment.ProcessorCount),
                 NativeCapabilityNames.MaxProcessesPerJob),

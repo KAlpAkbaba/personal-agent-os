@@ -43,6 +43,13 @@ from app.nativefactory.spec import (
 #: instead of failing validation with something unhelpful.
 IOS_WORDS: Final[tuple[str, ...]] = ("ios", "iphone", "ipad", "ipados", "app store")
 
+#: An Android row planned against THIS machine: its build step is .NET only, whatever it has.
+SPEECH_ANDROID_BUILD_NOT_WIRED: Final = (
+    "Android uygulamasını bu makinede derleyemem efendim: buradaki derleme adımı yalnızca "
+    "Windows uygulaması derliyor. Android derlemesini kayıtlı cihazınız, kendi Java ve "
+    "Gradle kurulumuyla yapar."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ToolchainFacts:
@@ -212,31 +219,16 @@ def choose(spec: NativeAppSpec, facts: ToolchainFacts | None = None) -> StackCho
     targets = set(spec.targets)
 
     if stack == STACK_ANDROID_KOTLIN or targets & ANDROID_TARGETS:
-        if not measured.android_sdk:
-            return StackChoice(
-                stack=stack,
-                reason="Android SDK bu makinede yok efendim.",
-                available=False,
-                owner_action="33",
-                error_class="dependency_unavailable",
-            )
-        if not measured.can_build_android:
-            return StackChoice(
-                stack=stack,
-                reason=(
-                    "Android SDK burada — adb, emülatör, build-tools ve sistem "
-                    "görüntüleri var — ama Java yok efendim: Gradle da javac de "
-                    "apksigner da Java üstünde çalışır, o yüzden APK üretilemiyor. "
-                    "Bir JDK kurulursa aynı hat çalışır (madde 33)."
-                ),
-                available=False,
-                owner_action="33",
-                error_class="dependency_unavailable",
-            )
+        # B49 (ADR-0160/0161): an Android app is built on the enrolled device (Gradle under its
+        # native root). THIS machine's build step runs dotnet only, so a JDK or an SDK here
+        # changes nothing: with both present the row used to be `planned` and native.build
+        # handed app/build.gradle.kts to `dotnet build` (found 2026-09-16).
         return StackChoice(
             stack=stack,
-            reason="Kotlin/Gradle seçtim: Android hedefi, kurulu SDK ve JDK.",
-            available=True,
+            reason=SPEECH_ANDROID_BUILD_NOT_WIRED,
+            available=False,
+            owner_action=None,
+            error_class="dependency_unavailable",
         )
 
     if targets & WINDOWS_TARGETS:
@@ -282,17 +274,18 @@ def choose(spec: NativeAppSpec, facts: ToolchainFacts | None = None) -> StackCho
 #: rather than answered with an EXE wearing its label.
 #: B33 req 456/457: the portable zip and the MSIX are packaged BY THE DEVICE after the EXE
 #: is read back (``project.package``), so the three Windows targets are all buildable there.
+#: B49 (ADR-0161): the APK and the bundle are built there too, by the three Gradle shapes.
 DEVICE_BUILDABLE_TARGETS: Final[frozenset[str]] = frozenset(
-    {TARGET_WINDOWS_EXE, TARGET_WINDOWS_PORTABLE, TARGET_WINDOWS_MSIX}
+    {TARGET_WINDOWS_EXE, TARGET_WINDOWS_PORTABLE, TARGET_WINDOWS_MSIX} | ANDROID_TARGETS
 )
 
 SPEECH_DEVICE_PACKAGING_NOT_WIRED: Final = (
-    "Bu hedef kayıtlı cihaz üzerinden üretilmiyor efendim; EXE, taşınabilir paket ve "
-    "MSIX üretilebilir."
+    "Bu hedef kayıtlı cihaz üzerinden üretilmiyor efendim; EXE, taşınabilir paket, "
+    "MSIX, APK ve AAB üretilebilir."
 )
-SPEECH_DEVICE_NO_ANDROID: Final = (
-    "Android derlemesi kayıtlı cihaz yolunda yok efendim; cihaz yalnızca Windows "
-    "uygulaması derliyor."
+SPEECH_DEVICE_ANDROID: Final = (
+    "Kotlin ve Gradle seçtim: Android uygulaması; derlemeyi kayıtlı cihazınız kendi Java ve "
+    "Gradle kurulumuyla yapacak."
 )
 
 
@@ -314,13 +307,10 @@ def choose_on_device(spec: NativeAppSpec) -> StackChoice:
     stack = spec.resolved_stack
     targets = set(spec.targets)
     if stack == STACK_ANDROID_KOTLIN or targets & ANDROID_TARGETS:
-        return StackChoice(
-            stack=stack,
-            reason=SPEECH_DEVICE_NO_ANDROID,
-            available=False,
-            owner_action=None,
-            error_class="dependency_unavailable",
-        )
+        # B49 (ADR-0161): built there. Whether that device HAS a JDK, Gradle and the SDK is
+        # the device's to say - its project.run answers dependency_unavailable naming what is
+        # missing, and that reaches the row in its own words.
+        return StackChoice(stack=stack, reason=SPEECH_DEVICE_ANDROID, available=True)
     if targets & WINDOWS_TARGETS and targets <= DEVICE_BUILDABLE_TARGETS:
         surface = "form arayüzü" if stack == STACK_DOTNET_WPF else "web arayüzü"
         return StackChoice(
@@ -363,7 +353,7 @@ def stack_for_template(template: str) -> str:
 __all__ = [
     "DEVICE_BUILDABLE_TARGETS",
     "IOS_WORDS",
-    "SPEECH_DEVICE_NO_ANDROID",
+    "SPEECH_DEVICE_ANDROID",
     "SPEECH_DEVICE_PACKAGING_NOT_WIRED",
     "StackChoice",
     "ToolchainFacts",

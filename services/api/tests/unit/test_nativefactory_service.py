@@ -125,7 +125,7 @@ def test_an_unreachable_target_opens_an_UNAVAILABLE_row_not_a_silence(db) -> Non
     )
     assert rows[0].state == STATE_UNAVAILABLE
     assert rows[0].error_class == "dependency_unavailable"
-    assert "Java yok" in (rows[0].error_message or "")
+    assert "cihazınız" in (rows[0].error_message or "")
 
 
 def test_one_row_per_target_so_one_can_fail_without_the_other(db) -> None:

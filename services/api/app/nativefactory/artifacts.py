@@ -356,6 +356,21 @@ def validate_against_spec(facts: ArtifactFacts, spec) -> ArtifactVerdict:  # noq
         )
     if facts.kind == "pe" and facts.subsystem == "windows_console":
         mismatches.append("a desktop application was asked for and this is a console image")
+    if facts.kind in ("apk", "aab"):
+        # B49 (ADR-0161): an Android package proves which build it is by THREE things its own
+        # manifest says - the application id and the version code the generator derived from
+        # this spec, and the version name. A package with the right name but another code is
+        # another build (Play refuses a code it has seen); one with another id is another app.
+        from app.nativefactory.generator import android_package, android_version_code
+
+        package = android_package(spec.slug)
+        if facts.identity != package:
+            mismatches.append(f"package is {facts.identity!r}, the spec derives {package!r}")
+        code = str(android_version_code(spec.version))
+        if facts.detail.get("version_code") != code:
+            mismatches.append(
+                f"versionCode is {facts.detail.get('version_code')!r}, the spec derives {code!r}"
+            )
     return ArtifactVerdict(ok=not mismatches, facts=facts, mismatches=tuple(mismatches))
 
 
