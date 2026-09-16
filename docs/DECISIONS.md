@@ -12669,3 +12669,29 @@ tests before their fixes; five Python mutations of the new checks each turn a na
 **Consequences.** 530-533 are proven against the real editor with production bytes; the
 live production round needs this Cloud Core release and a device reinstall (the device's
 allowlist and job caps changed). Unreal (534) stays deferred.
+
+### ADR-0158 addendum (B51 closure, 2026-09-16)
+
+No model is needed to close 744-748.
+
+- *Repair readings.* `resolve_intent` reads the words as heard first, exactly as before, and
+  returns any route they reach. Only an utterance that reaches nothing gets repair readings:
+  the polite request read as its imperative, the words with Turkish letters folded on both
+  sides of each comparison, or both. A repair is taken only when all its routed readings
+  agree on one intent, never into the deferred mail/calendar families, is recorded as
+  `route_repair`, and costs 0.1 confidence.
+- *ALL-CAPS text.* An ALL-CAPS transcript whose "I" is ambiguous is the one text read folded
+  first, because its exact casefold is not what was said.
+- *Normalisation.* `turkish_casefold` composes to NFC and drops the combining dot of a
+  non-Turkish lowercase "İ".
+- *"Bunu" is now read.* The document tools pass the turn record's `deictic_reference` for a
+  "current" target. A fresh file or document referent outranks the per-kind focus, and an
+  unread one is extracted or inspected, never replaced by an older document.
+- *Spoken clarification.* The clarification frame names its turn and purpose, and the
+  real-application test proves it is sent once and never again.
+- *What remains.* The dotted-i loss list is gone. The remaining five ALL-CAPS mail/calendar
+  losses are the owner's deferral of B45/B46, not a gap in the router.
+- *Rollback.* Removing the repair loop in `resolve_intent` restores exactly B51's first
+  behaviour.
+
+Found, not fixed (own item): "Chrome'u açıp YouTube'a gir." routes to `media_play`; the "-ıp" converb is not a mission connector (B39/B27 boundary).
