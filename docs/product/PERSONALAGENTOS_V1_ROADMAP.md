@@ -1882,6 +1882,15 @@ B51  Niyet zekâsı                         IDs: 740, 742–748               de
            referans çözümü, ASR gürültüsüne dayanıklılık. **Kritik fiiller deterministik kalır (741).**
      PROOF: PROVEN_AUTOMATED — genişletilmiş külliyatta kapsam artar VE misroute 0 kalır.
      ROLLBACK: model yönlendirici kapatılır, deterministik tablo tek başına çalışır.
+     KAPANIŞ: commit PENDING_B51 · CI PENDING · 740, 742, 743 DONE, 744, 745, 746, 747, 748 PARTIAL — kanıt
+              docs/evidence/b51-intent-intelligence-2026-09-15.json
+              Deterministik tablo (741) değişmedi; model yönlendirici onun ARKASINDA, bayrakla ve
+              yalnızca güvenli adaylar arasından seçer. Güven skoru, belirsizlik sorusu ve 'bunu'
+              referansı tur kaydına yazılır. 744 sesli soru bayrak arkasında, 745 referansını henüz
+              araç okumuyor. ASR: 150 varyant, 0 yanlış, 6 kayıp.
+              Yolda bulunan: tur kaydında zaten bir `reference` anahtarı vardı (araştırma);
+              yeni alan `deictic_reference` adını aldı. Tur kaydı alanını bir araç okumadıkça
+              kimse görmez — 745 bu yüzden PARTIAL. 9/9 mutasyon kırmızı (ADR-0158).
 
 B52  Belge formatı genişletme             IDs: 143–146                    dep: B32      risk: low     owner: no
      GOAL: EPUB, RTF, ODT ve eski Office formatları okunsun.

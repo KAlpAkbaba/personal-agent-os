@@ -12455,3 +12455,39 @@ the drivers' `manifest.json`) is already wired through the same device job as Bl
 run of project create, scene create, a batch-mode build and a test run on the owner's
 device, each read back the way B44 reads Blender's work - and the refusal test above turning
 into a positive one.
+
+## ADR-0158 — The model routes only what the rules could not, only among safe tools, and only when the owner allows it (2026-09-15, B51)
+
+**Context.** B51 (740, 742-748) is intent intelligence: a model router, registry-driven
+candidates, confidence, a clarification question, reference resolution and robustness to
+paraphrase and ASR noise. Row 741 - the deterministic router, narrowed by four fixes and pinned
+by guard sentences - must stay the safety shield. Measured: routing returned an intent with a
+confidence nobody set, no sentence was ever sent to a model, an unrouted sentence was silent,
+and "bunu" meant nothing.
+
+**Decision.**
+
+1. **Rules first, always.** `CompositeIntentRouter` asks the model only when the rules route
+   nothing. A rule route is never second-guessed - that is how 741 stays deterministic.
+2. **The model chooses, it does not act.** Candidates come from the tool registry (an intent
+   without a registered tool is not offered); acting intents, stop and eye-disable are never
+   offered (156 candidates). The Anthropic call forces exactly one tool over that list; an
+   unknown, unsafe or empty answer is refused; a choice below 0.7 confidence is not taken; no key
+   means no request; any failure is silence.
+3. **Off by default.** `voice_model_router_enabled=False` - the model costs money per turn and
+   the budget is the owner's.
+4. **Confidence and clarification are recorded; speaking the question is a second flag.** The
+   turn record carries `route_source`, `route_confidence` and `clarification_question`.
+   `voice_clarify_aloud_enabled=False` because a sideband sentence can overlap the realtime
+   model's own answer; that overlap has not been heard on a real session.
+5. **"Bunu" is the fresh focus.** Within 30 minutes, not a time word ("bu hafta"), recorded as
+   `deictic_reference` (the research turn already owns `reference`). No tool reads it yet, so
+   745 stays PARTIAL rather than claiming the owner hears a difference.
+6. **ASR variants are derived, not hand-written.** Every routing-set case is rerun without
+   apostrophes, with a leading filler and with dotted i; a new case brings its variants along.
+   None misroutes. The dotted-i variants of six sentences lose their route; ı/i is not folded
+   (row 741's router deliberately tells "ISI" from "isi"), so the six are pinned by name and
+   747/748 stay PARTIAL.
+
+**Consequences.** No migration. Rollback is the flag: with it off the deterministic table runs
+alone, exactly as before B51.

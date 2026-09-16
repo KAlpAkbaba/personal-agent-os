@@ -41,6 +41,7 @@ from app.voice import route_telemetry
 from app.voice import service as voice_service
 from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.intent_router import get_intent_router, resolve_deictic_reference
 from app.voice.intents import Intent, ResolvedIntent, classify_research_shape, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
@@ -1665,6 +1666,12 @@ def record_client_events(
                 artifact_focused=artifact_focused_known,
                 creative_focused=creative_focused_known,
             )
+            # B51 (req 740, 743, 744): how sure the router is; the model only for what
+            # the rules left unrouted and only under the owner's flag; a question
+            # instead of a guess. (745) What a deictic word points at.
+            routed = get_intent_router().route(text, intent)
+            intent = routed.resolved
+            reference = resolve_deictic_reference(db, intent.tokens, now=now)
             ctx["last_intent"] = intent.intent.value
             # B26 req 749/750: what the router decided, recorded without the owner's words,
             # and the one thing a router cannot notice about itself — the owner objecting
@@ -1760,6 +1767,13 @@ def record_client_events(
                 "artifact_title": intent.artifact_title,
                 "artifact_confirm": intent.artifact_confirm,
                 "creative_prompt": intent.creative_prompt,
+                # B51: where the route came from, how sure it is, the question to ask
+                # instead of guessing, and what "bunu" pointed at.
+                "route_source": routed.source,
+                "route_confidence": routed.confidence,
+                "clarification_question": routed.clarification,
+                "deictic_reference": reference,
+                "creative_application": intent.creative_application,
                 "spoken_numbers": intent.spoken_numbers,
                 # M23 (spec §5): the App Factory fields the owner's WORDS carried, for
                 # the same "owner's words win over the model's argument" reason.
@@ -1839,6 +1853,10 @@ def record_client_events(
             resolved.append(
                 {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
             )
+            # B51 (req 744): the question is spoken only under the owner's flag - the
+            # model may already be answering the same utterance.
+            if routed.clarification and get_intent_router().clarify_aloud:
+                sideband_payloads.append((SB_SAY, {"text": routed.clarification}))
             # An utterance resolved to EYE_DISABLE / EYE_ENABLE is resolved and audited
             # here (intent, klass, capability) and NOTHING ELSE: the tool call is the one
             # canonical mutation path (docs/M18_ACTION_CONTRACT.md §5.3). Until 2026-09-06
@@ -1910,9 +1928,7 @@ def record_client_events(
             # nothing about the owner's words moves anywhere to make this possible; the
             # extractor runs where the text already is. `explicit=False` always, so a
             # summary is a candidate at most (M5 review #4).
-            meta.update(
-                _extract_memories(db, ctx, row.transcript_summary, memory_runtime, row=row)
-            )
+            meta.update(_extract_memories(db, ctx, row.transcript_summary, memory_runtime, row=row))
         elif kind == "state":
             state = str(payload.get("state") or "")
             if state in RealtimeState.__members__:
@@ -2168,6 +2184,7 @@ def attach(
         registry=registry,
         prefs=prefs,
         memory_block=_memory_block(db, memory_runtime, now=utcnow()),
+        pronunciation=_pronunciation_rules(db),
     )
     credential = mint_credential(
         provider,
@@ -2205,7 +2222,7 @@ def attach(
     )
     db.commit()
     _ledger(db, "attached", row, trace_id=trace_id, detail={"same_leg": same_leg})
-    payload = _leg_payload(row, credential, registry=registry, config=config)
+    payload = _leg_payload(row, credential, registry=registry, config=config, provider=provider)
     payload["state"] = session_state(db, row)
     payload["pending_sideband"] = pending
     payload["previous_leg"] = previous if not same_leg else None

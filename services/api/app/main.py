@@ -138,6 +138,11 @@ from app.state.routes import router as state_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
+from app.voice.intent_router import (
+    AnthropicIntentModel,
+    CompositeIntentRouter,
+    set_intent_router,
+)
 from app.voice.qualification.routes import router as voice_qualification_router
 from app.voice.realtime_sessions import service as realtime_service
 from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
@@ -174,7 +179,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     memory = MemoryRuntime(settings)
     selfhealing = SelfHealingRuntime(settings)
     evolution = EvolutionRuntime(settings)
-    genesis = GenesisRuntime(evolution)
+    genesis = GenesisRuntime(
+        evolution,
+        model_generation_enabled=lambda: bool(settings.genesis_model_generation_enabled),
+        authorized_hosts_enabled=settings.genesis_authorized_hosts_enabled,
+    )
     # M24 (docs/M24_CAPABILITY_GENESIS_SPEC.md §6): the module-wide registry the ONE
     # router's turn handler reads to decide what a bare "Onaylıyorum."/"Vazgeç." means —
     # the same discipline app.operator.service.register_operator_service follows for the
@@ -814,6 +823,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # B39 (req 128-130): operator missions - the SAME mission service the voice tool
     # (tools_mission) drives; the Temporal worker runs the loop.
     app.include_router(operator_mission_router)
+    # B51 (req 740, 742): rules always; the model only for an unrouted utterance, only
+    # under the owner's flag, only among the registry's non-acting tools.
+    set_intent_router(
+        CompositeIntentRouter(
+            AnthropicIntentModel(
+                model=settings.voice_router_model,
+                api_key=getattr(settings, "anthropic_api_key", None) or None,
+            ),
+            enabled=lambda: bool(settings.voice_model_router_enabled),
+            clarify_aloud=lambda: bool(settings.voice_clarify_aloud_enabled),
+        )
+    )
     # B38 (req 550/551): rules first, the model only under the owner's flag - the ONE
     # planner the REST route and the voice tool both plan through.
     set_executive_planner(

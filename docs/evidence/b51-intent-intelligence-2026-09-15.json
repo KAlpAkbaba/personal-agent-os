@@ -1,0 +1,148 @@
+{
+  "batch": "B51",
+  "name": "Niyet zekâsı",
+  "requirements": [
+    740,
+    742,
+    743,
+    744,
+    745,
+    746,
+    747,
+    748
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "runs": [
+      {
+        "run": 1,
+        "result": "FAIL_ENVIRONMENT_OPERATOR_LAB",
+        "steps": {
+          "required_files": "PASS",
+          "secret_hygiene": "PASS",
+          "api_lint_ruff": "PASS",
+          "other_services_lint": "PASS",
+          "api_unit_tests": "PASS (11156 passed, 5 skipped, 20m37s)",
+          "windows_agent_build_tests": "FAIL (PagentOS.Agent.Tests 958/959, Companion.Audio.Tests 135/135): Operator.NotepadLifecycleTests.A_pointer_click_inside_the_window_lands_and_the_cursor_is_re_observed_there",
+          "staged_update_qualification": "PASS (89 checks)"
+        },
+        "failure_analysis": {
+          "message_gate": "after 3 attempt(s) the click landed while the foreground was Claude [claude.exe]; the operator lab needs a desktop nobody else is using",
+          "message_isolated_rerun": "after 3 attempt(s) the click landed while the foreground was nothing the registry could resolve (a full-screen or elevated window)",
+          "foreground_measured": "CarlaUE4-Win64-Shipping (E:/CARLA_0.9.16), a full-screen simulator the owner is running",
+          "why_not_b51": "B51 changed no device code; the same lab passed in the B45, B46, B48 and B49 gates today; the test refuses to click into someone else's foreground, which is its purpose",
+          "not_done": "the lab was not skipped (PAGENTOS_OPERATOR_LAB=0 would weaken the gate) and the owner's application was not closed",
+          "ready_for_owner": "with the desktop free (CARLA closed or minimised), rerun: dotnet test devices/windows-agent/tests/PagentOS.Agent.Tests -c Release --filter FullyQualifiedName~NotepadLifecycleTests, or the full gate"
+        }
+      },
+      {
+        "run": 2,
+        "result": "PASS",
+        "steps": {
+          "required_files": "PASS",
+          "secret_hygiene": "PASS",
+          "api_lint_ruff": "PASS",
+          "other_services_lint": "PASS",
+          "api_unit_tests": "PASS (11167 passed, 5 skipped, 17m13s)",
+          "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 975/975 incl. Documents oracle + LegacyFormatBoundsTests and the operator lab, Companion.Audio.Tests 135/135)",
+          "staged_update_qualification": "PASS (89 checks)"
+        },
+        "note": "the B52 gate, over the same B51 tree plus B52's documents change (no router or device-operator code touched in between); the operator lab ran and passed once the desktop was free, which closes run 1's READY_FOR_OWNER rerun"
+      }
+    ],
+    "web_gates": "after sync: tsc --noEmit clean, vitest features/ pages/ 67 passed"
+  },
+  "measured": {
+    "routing_set": 107,
+    "routing_set_expected": 91,
+    "routed_by_rules": 91,
+    "asr_variants": 150,
+    "asr_misroutes": 0,
+    "asr_lost_routes": 6,
+    "model_candidates": 156,
+    "never_from_model": [
+      "alarm_cancel",
+      "ambient_policy_set",
+      "app_close",
+      "app_factory_stop",
+      "calendar_cancel",
+      "calendar_commit",
+      "calendar_propose",
+      "deploy",
+      "display_off",
+      "document_append",
+      "document_apply",
+      "document_dedup",
+      "document_delete",
+      "document_move",
+      "document_undo",
+      "document_write",
+      "exec_cancel",
+      "eye_disable",
+      "eye_enable",
+      "mail_send",
+      "memory_forget",
+      "mission_start",
+      "native_uninstall",
+      "none",
+      "process_stop",
+      "release_rollback",
+      "research_cancel",
+      "research_pause",
+      "research_resume",
+      "routine_cancel",
+      "screenshot_capture",
+      "selfdev_feature",
+      "selfdev_fix",
+      "service_restart",
+      "stop",
+      "type_text",
+      "window_close"
+    ]
+  },
+  "closed": {
+    "740": "Kuralların yönlendiremediği cümle, sahip bayrağıyla (`voice_model_router_enabled`, varsayılan kapalı) modele sorulur; model yalnızca aday listesinden tek bir araç seçer, güveni 0.7 altındaysa seçim alınmaz; anahtar yoksa istek hiç gitmez, hata sessizliğe düşer; kuralların yönlendirdiği cümle modele asla gitmez",
+    "742": "Aday listesi araç kaydından türetilir: kayıtlı aracı olmayan niyet aday olamaz; eylemli niyetler, dur ve göz kapatma listeye hiç girmez (156 aday)",
+    "743": "Her yönlendirme bir güven skoru taşır: kural yolu kesin, tek sözcüklü eylem en düşük kural güveni, atılan dolgu sözcükleri biraz düşürür, yönlendirilmeyen 0; skor ve kaynak (rule/model/none) tur kaydına yazılır"
+  },
+  "partial": {
+    "744": "the question is recorded; speaking it is behind voice_clarify_aloud_enabled (off) until an overlap with the realtime answer is ruled out on a real session.",
+    "745": "the reference is resolved and recorded, but no tool reads deictic_reference yet.",
+    "746": "no rule was widened (741 discipline); broad paraphrase coverage is the model router's, which needs the owner's budget.",
+    "747_748": "every lost variant is a dotted i where a dotless one belongs; turkish_casefold keeps them apart on purpose (ISI is not isi) and folding them would change the deterministic router 741 protects, so the losses are pinned by name in KNOWN_DOTTED_I_LOSSES - a new loss or a silent fix both fail the test."
+  },
+  "ready_for_owner": {
+    "740": "a model budget: set the Anthropic key with scripts/secret-store.ps1 and turn voice_model_router_enabled on."
+  },
+  "found_on_the_way": {
+    "turn_record_key_collision": "the turn record already had a research `reference` key; the deictic one would have overwritten it and is named deictic_reference.",
+    "filler_variant_lowercase": "the variant generator lowercased 'İlk' with str.lower, producing i plus a combining dot that no router could match; it uses turkish_casefold, as the router does.",
+    "a_field_nobody_reads": "a turn-record field is invisible unless a tool reads it, so recording the reference is not the same as resolving it for the owner."
+  },
+  "tests": {
+    "services/api/tests/unit/test_intent_router_b51.py": "confidence (rule, none, one word, fillers); clarification (two families, one family, none, rule route, spoken only under flag); candidates (no acting/stop/eye-disable, registered tool required); model router (flag off, rule route first, safe routing, refusals, low confidence, forced single tool, no key no request); deictic reference (fresh, time word, stale, none); ASR variants never misroute and keep their route",
+    "regression suites rerun": "test_intent_misroutes, test_route_telemetry, test_voice_intents, test_voice_realtime_sessions, test_owner_utterance_corpus, test_intent_daily_coverage, test_voice_step_up, test_identity_enforcement, test_selfmodel_indexer, test_owner_error_language: 3103 passed; full suite: see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b51_mutate.py.",
+    "mutations": [
+      "M1 one word that acts on the world is scored as sure as a full sentence (743) -> 1 failure(s).",
+      "M2 the model is offered acting intents to choose from (742) -> 1 failure(s).",
+      "M3 the model is asked with the owner's flag off (740) -> 1 failure(s).",
+      "M4 a low-confidence model choice is taken (740) -> 1 failure(s).",
+      "M5 a sentence the rules routed is sent to the model anyway (740/741) -> 1 failure(s).",
+      "M6 a sentence naming two areas is not asked which one (744) -> 1 failure(s).",
+      "M7 'bu hafta' is taken as a reference to the focused object (745) -> 1 failure(s).",
+      "M8 a focus from hours ago is still 'bunu' (745) -> 1 failure(s).",
+      "M9 the model is called without a key (a request that can only fail) (740) -> 1 failure(s)."
+    ],
+    "result": "9/9 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED with a scripted model and a mock transport. A real model routing a real owner sentence is READY_FOR_OWNER (budget)."
+  }
+}

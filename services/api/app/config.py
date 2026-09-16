@@ -382,6 +382,13 @@ class Settings(BaseSettings):
     # passes the same graph validator as the rule-based plans.
     executive_model_planner_enabled: bool = False
     executive_planner_model: str = "claude-sonnet-5"
+    # B51 (req 740): a model for what the deterministic router leaves unrouted - OFF by
+    # default; never an acting, stop or eye-disable intent (app.voice.intent_router).
+    voice_model_router_enabled: bool = False
+    # B51 (req 744): speak the clarification question (sideband say) - OFF until a live
+    # session shows it does not overlap the model's own answer.
+    voice_clarify_aloud_enabled: bool = False
+    voice_router_model: str = "claude-sonnet-5"
     # B40 (req 425, 435-437): the App Factory's code model - the composed generator's
     # model slots and the fix loop. Off by default: the budget is the owner's.
     appfactory_model_generation_enabled: bool = False
