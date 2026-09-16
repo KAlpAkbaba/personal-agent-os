@@ -159,7 +159,7 @@ public sealed class DeviceVoiceCapabilityTests
 
         // B48's camera pair is sent only by a companion with a camera path; this one has none.
         Assert.Equal(
-            HeartbeatStatus.Fields.Where(f => f is not (HeartbeatStatus.Camera or HeartbeatStatus.Presence)).Order(StringComparer.Ordinal),
+            HeartbeatStatus.Fields.Where(f => f is not (HeartbeatStatus.Camera or HeartbeatStatus.Presence or HeartbeatStatus.NotifyActions)).Order(StringComparer.Ordinal),
             first.Select(p => p.Key).Order(StringComparer.Ordinal));
         Assert.Equal("offline", first["voice"]!["state"]!.GetValue<string>());
         Assert.Equal("no_owner_token", first["voice"]!["last_error"]!.GetValue<string>());

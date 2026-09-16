@@ -367,7 +367,15 @@ public sealed class CameraWiringTests
         var build = source[source.IndexOf("public static Camera.CameraPresenceMonitor BuildCamera(", StringComparison.Ordinal)..];
         build = build[..build.IndexOf("public static Notify.NotifyCapabilities? BuildNotify(", StringComparison.Ordinal)];
         Assert.Equal(2, build.Split("vetoStore: new Camera.FileCameraVetoStore(Camera.FileCameraVetoStore.DefaultPath())").Length - 1);
-        Assert.Contains("voice: voiceHealth.Heartbeat,\n            camera: camera);", source.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Contains("voice: voiceHealth.Heartbeat,\n            camera: camera,\n            notifyActions: notifyActions);", source.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+
+        // B11-toast: the Windows toast sink is what BuildNotify receives, its queue is what the
+        // heartbeat reports, and both sinks are disposed at exit.
+        Assert.Contains("var toastSink = BuildToastSink(balloonSink, notifyActions, loggerFactory, audit);", source, StringComparison.Ordinal);
+        Assert.Contains("var notify = BuildNotify(toastSink, loggerFactory);", source, StringComparison.Ordinal);
+        Assert.Contains("(toastSink as IDisposable)?.Dispose();", source, StringComparison.Ordinal);
+        Assert.Contains("balloonSink?.Dispose();", source, StringComparison.Ordinal);
+        Assert.Contains("new Voice.OfflineVoiceCommands(alarm, alarmArms, toastSink,", source, StringComparison.Ordinal);
 
         // B47 and B48 both wired desktop.notify; exactly one wiring remains.
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(source, "notify: notify"));
@@ -389,6 +397,21 @@ public sealed class CameraWiringTests
         Assert.True(result["shown"]!.GetValue<bool>());
         Assert.Equal(1, sink.Shown);
         Assert.Null(SessionCompanion.Program.BuildNotify(null, NullLoggerFactory.Instance));
+    }
+
+    [Fact]
+    public void The_toast_sink_the_companion_builds_is_the_windows_toast_over_the_balloon()
+    {
+        var balloon = new CountingSink();
+        var sink = SessionCompanion.Program.BuildToastSink(balloon, new NotifyActionQueue(), NullLoggerFactory.Instance, audit: null);
+
+        // This machine and every supported one is Windows 10 2004 or later.
+        var windows = Assert.IsType<WindowsToastSink>(sink);
+        Assert.Equal(AppIdentityShortcut.AppUserModelId, windows.AppId);
+        // Building it writes nothing: the Start Menu shortcut is written by PrepareIdentity at
+        // start, never by a constructor a test can reach.
+        Assert.Equal(0, windows.ShownCount);
+        Assert.IsType<WindowsToastSink>(SessionCompanion.Program.BuildToastSink(null, new NotifyActionQueue(), NullLoggerFactory.Instance, audit: null));
     }
 
     // ================================================================ the structural half of 328/329

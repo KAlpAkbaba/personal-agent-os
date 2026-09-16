@@ -68,9 +68,12 @@ class IngestResult:
     camera_refused: str | None = None
     #: B48: the camera mode this heartbeat caused to be sent to the device.
     camera_mode_sent: str | None = None
+    #: B11-toast: ``notification_id:action_id`` of every toast press this report recorded.
+    notify_actions_recorded: tuple[str, ...] = field(default_factory=tuple)
 
     def as_dict(self) -> dict[str, Any]:
         return {
+            "notify_actions_recorded": list(self.notify_actions_recorded),
             "camera_observed": self.camera_observed,
             "camera_refused": self.camera_refused,
             "camera_mode_sent": self.camera_mode_sent,
@@ -219,6 +222,12 @@ def ingest_status(
     except Exception as exc:  # noqa: BLE001 - see module docstring
         logger.warning("camera_reconcile_failed", device=str(device_id), error=type(exc).__name__)
 
+    # (g) B11-toast (row 370): toast buttons the owner pressed. Recorded on the notification
+    # row, once, and only for an action that row offered; nothing is run because of it.
+    pressed: tuple[str, ...] = ()
+    if change.new_notify_actions:
+        pressed = _record_presses(session, device_id, change, now=moment)
+
     return IngestResult(
         observed=observed,
         input_active_recorded=input_recorded,
@@ -229,7 +238,36 @@ def ingest_status(
         camera_observed=camera_observed,
         camera_refused=camera_refused,
         camera_mode_sent=camera_mode_sent,
+        notify_actions_recorded=pressed,
     )
+
+
+def _record_presses(
+    session: Session, device_id: uuid.UUID, change: StatusChange, *, now: datetime
+) -> tuple[str, ...]:
+    """``notification_id:action_id`` for every press this report newly recorded."""
+    from app.notifications import service as notifications
+
+    recorded: list[str] = []
+    for press in change.new_notify_actions:
+        try:
+            outcome = notifications.record_action(
+                session,
+                press.notification_id,
+                press.action_id,
+                press.pressed_at,
+                device_id=device_id,
+                now=now,
+            )
+        except Exception as exc:  # noqa: BLE001 - see module docstring
+            session.rollback()
+            logger.warning(
+                "notify_action_record_failed", device=str(device_id), error=type(exc).__name__
+            )
+            continue
+        if outcome == notifications.PRESS_RECORDED:
+            recorded.append(f"{press.notification_id}:{press.action_id}")
+    return tuple(recorded)
 
 
 #: Why a device camera observation was not used (``IngestResult.camera_refused``).

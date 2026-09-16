@@ -321,10 +321,39 @@ public static class Program
         // B11 (requirement 369): desktop.notify is advertised by every companion, so every
         // companion must be able to answer it. Until B47 nothing here built it, and the shipped
         // process answered its own advertised name with capability_missing.
-        Notify.ShellToastSink? toastSink = OperatingSystem.IsWindows()
+        // B11-toast (rows 369, 370): a real Windows toast with the Cloud Core's buttons, under
+        // the companion's own AppUserModelID; the balloon is only its fallback. Presses wait in
+        // the action queue for the heartbeat.
+        Notify.ShellToastSink? balloonSink = OperatingSystem.IsWindows()
             ? new Notify.ShellToastSink(loggerFactory.CreateLogger("Notify"))
             : null;
+        var notifyActions = new Notify.NotifyActionQueue();
+        var toastSink = BuildToastSink(balloonSink, notifyActions, loggerFactory, audit);
         var notify = BuildNotify(toastSink, loggerFactory);
+        if (toastSink is Notify.WindowsToastSink windowsToasts)
+        {
+            // Written at start, not at the first toast: Windows needs the shortcut before it
+            // will show anything under the id, and a notice is no time to find that out.
+            var identityProblem = windowsToasts.PrepareIdentity();
+            if (identityProblem is null)
+            {
+                logger.LogInformation(
+                    "desktop toasts: Windows toast surface under AppUserModelID {AppId} (Start Menu shortcut ready); balloon only as fallback",
+                    windowsToasts.AppId);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "desktop toasts: AppUserModelID {AppId} shortcut could not be written ({Problem}); toasts fall back to the balloon until it can",
+                    windowsToasts.AppId,
+                    identityProblem);
+            }
+        }
+        else
+        {
+            logger.LogInformation("desktop toasts: balloon only (the Windows toast surface needs Windows 10 2004 or later)");
+            notifyActions = null;
+        }
 
         // B47 (ADR-0154, owner decision 2026-09-16): the device voice service. Its health object
         // exists whether or not voice runs, so the heartbeat and desktop.voice_status always
@@ -362,7 +391,8 @@ public static class Program
             () => alarm?.RingingAlarmId,
             alarmArms,
             voice: voiceHealth.Heartbeat,
-            camera: camera);
+            camera: camera,
+            notifyActions: notifyActions);
 
         // M19 (M19_DIGITAL_OPERATOR_SPEC.md §2/§3): the Digital Operator. OFF unless asked for
         // out loud on BOTH halves (this key and the service's), and built only then, so a
@@ -588,7 +618,10 @@ public static class Program
             alarm?.Dispose();
             displayObserver?.Dispose();
             tray?.Dispose();
-            toastSink?.Dispose();
+            // Button-bearing toasts leave the screen with the process that would receive
+            // their presses; the balloon's tray icon goes after them.
+            (toastSink as IDisposable)?.Dispose();
+            balloonSink?.Dispose();
         }
 
         return 0;
@@ -629,6 +662,52 @@ public static class Program
             input: input,
             audit: audit,
             vetoStore: new Camera.FileCameraVetoStore(Camera.FileCameraVetoStore.DefaultPath()));
+    }
+
+    /// <summary>
+    /// B11-toast: the Windows toast sink over the balloon, or the balloon alone on a Windows
+    /// older than the WinRT projection this build targets, or nothing off Windows.
+    /// </summary>
+    public static Notify.IToastSink? BuildToastSink(
+        Notify.IToastSink? balloon,
+        Notify.NotifyActionQueue actions,
+        ILoggerFactory loggerFactory,
+        AuditLog? audit)
+    {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+        {
+            return balloon;
+        }
+
+        var notifyLogger = loggerFactory.CreateLogger("Notify");
+        return new Notify.WindowsToastSink(
+            new Notify.WindowsToastPlatform(),
+            ensureIdentity: () => EnsureCompanionIdentity(notifyLogger),
+            fallback: balloon,
+            actions: actions,
+            logger: notifyLogger,
+            audit: audit);
+    }
+
+    /// <summary>
+    /// The companion's AppUserModelID shortcut in the owner's own Start Menu, pointing at this
+    /// process's image. Null on success, otherwise why not.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public static string? EnsureCompanionIdentity(ILogger logger)
+    {
+        var image = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(image))
+        {
+            return "no_process_path";
+        }
+
+        var state = Notify.AppIdentityShortcut.Ensure(
+            Notify.AppIdentityShortcut.DefaultProgramsDirectory(),
+            Notify.AppIdentityShortcut.AppUserModelId,
+            image);
+        logger.LogInformation("AppUserModelID shortcut {State}: {Name} -> {Image}", state, Notify.AppIdentityShortcut.ShortcutFileName, image);
+        return null;
     }
 
     /// <summary>B11 req 369: the toast capability over the given sink, or none when there is no sink.</summary>

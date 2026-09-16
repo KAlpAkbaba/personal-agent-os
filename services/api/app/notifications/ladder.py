@@ -102,11 +102,24 @@ class ToastRung:
             return False
         result = getattr(outcome, "result", None)
         shown = toast_contract.was_shown(result)
+        if shown:
+            # Security review: a press is believed only from the device that showed the
+            # toast (notifications.record_action). Committed with mark_delivered.
+            notifications.note_toast_target(row, getattr(outcome, "device_id", None))
         if not shown:
             logger.info(
                 "toast_not_shown",
                 notification_id=str(row.id),
                 reason=toast_contract.refusal_reason(result),
+            )
+        else:
+            # B11-toast: "shown" means Windows accepted it; WHICH surface is the difference
+            # between a toast with the row's buttons and a balloon without them.
+            logger.info(
+                "toast_shown",
+                notification_id=str(row.id),
+                surface=toast_contract.surface(result) or "unknown",
+                actions_rendered=(result or {}).get("actions_rendered"),
             )
         return shown
 

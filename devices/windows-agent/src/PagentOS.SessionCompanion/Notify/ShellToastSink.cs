@@ -5,22 +5,22 @@ using Microsoft.Extensions.Logging;
 namespace PagentOS.SessionCompanion.Notify;
 
 /// <summary>
-/// The production sink: a shell notification the owner sees with the browser closed.
+/// The FALLBACK sink since B11-toast: a tray balloon, used by <see cref="WindowsToastSink"/>
+/// only when the Windows toast platform cannot be used.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Windows 10 and 11 route a tray balloon through the notification system, so it appears as
-/// a toast and stays in the Action Center afterwards — which is the property that matters
-/// here. The owner does not need to be looking at anything, and the notice is still there
-/// when they come back.
+/// a toast and stays in the Action Center afterwards. The owner does not need to be looking
+/// at anything, and the notice is still there when they come back.
 /// </para>
 /// <para>
 /// <strong>What this sink cannot do, stated rather than implied:</strong> action buttons
-/// (requirement 370). A balloon has no buttons. Those need the WinRT
-/// <c>ToastNotificationManager</c>, which needs a Windows-version-specific target framework
-/// this project does not yet set. The request's actions are therefore parsed, validated and
-/// carried — the contract half is real — and this sink reports that it showed the toast
-/// without them rather than pretending the buttons were there.
+/// (requirement 370). A balloon has no buttons, so it answers <c>surface: "balloon"</c>,
+/// <c>actions_rendered: 0</c> and, when the request had buttons,
+/// <c>detail: "actions_not_rendered"</c>. It is also unable to report failure:
+/// <c>ShowBalloonTip</c> returns nothing, which is why it is the fallback and not the
+/// surface.
 /// </para>
 /// <para>
 /// No interactive session is not a failure to report: it is the honest answer, and it is
@@ -74,10 +74,14 @@ public sealed class ShellToastSink : IToastSink, IDisposable
                     + "a shell balloon has none (requirement 370 needs the WinRT toast surface)",
                     request.NotificationId,
                     request.Actions.Count);
-                return new ToastOutcome(true, null, "actions_not_rendered");
+                return new ToastOutcome(true, null, "actions_not_rendered")
+                {
+                    Surface = ToastSurfaces.Balloon,
+                    ActionsRendered = 0,
+                };
             }
 
-            return ToastOutcome.Ok();
+            return new ToastOutcome(true) { Surface = ToastSurfaces.Balloon, ActionsRendered = 0 };
         }
         catch (Exception ex)
         {
