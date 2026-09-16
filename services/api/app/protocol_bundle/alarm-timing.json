@@ -1,0 +1,61 @@
+{
+  "contract": "alarm.timing",
+  "version": 1,
+  "why": [
+    "An alarm has two independent ways to ring. The Cloud Core fires it over the device",
+    "command path; the device's own armed copy rings locally when the cloud is not there.",
+    "Both must decide the SAME question - 'is this now too late to be a wake-up?' - and",
+    "until this contract they answered it with two different numbers.",
+    "",
+    "The cloud said two hours. The device said five minutes, cut down from two hours after",
+    "2026-09-10, when a 07:30 alarm armed the night before was rung at 08:10 because the PC",
+    "had slept through the alarm time: 39 minutes and 39 seconds late, into a room where the",
+    "owner was already awake. The device learned. The cloud did not, because nothing made",
+    "the two halves read the same number.",
+    "",
+    "That is the failure this file exists to prevent, and it is the same shape as the four",
+    "capabilities that shipped with both suites green and neither half able to talk to the",
+    "other: file.search roots, the app manifest, the native manifest, the device protocol",
+    "schema. One number, one file, both halves read it."
+  ],
+  "late_fire": {
+    "max_late_seconds": 300,
+    "why": [
+      "An alarm is a request to be woken AT a time. A couple of minutes late still serves",
+      "that - a slow resume, a busy boot, the cloud losing a race - so the horizon is not",
+      "zero. Forty minutes late serves nothing: the owner is already awake, or was never",
+      "going to be woken by this, and the only thing the noise does is startle them.",
+      "",
+      "Deliberately the DEVICE's number rather than the cloud's. It is the one that was",
+      "chosen by measurement, on the owner's own machine, after a real late ring."
+    ],
+    "on_exceeded": {
+      "cloud": "the alarm is transitioned to STOPPED with reason `expired_while_down` and released; `fire_alarm` answers `expired`",
+      "device": "the arm is dropped from the store, the `Expired` counter advances, and `alarm_arm_expired` is audited"
+    }
+  },
+  "grace": {
+    "device_default_seconds": 60,
+    "cloud_sends_seconds": 45,
+    "min_seconds": 0,
+    "max_seconds": 3600,
+    "why": [
+      "A DIFFERENT question from lateness, and not to be collapsed into it. Grace is how",
+      "long the device waits after `fire_at` for the cloud to ring first, so the two paths",
+      "do not both fire. Lateness is whether ringing at all still helps the owner.",
+      "",
+      "Two numbers because there are two situations. `device_default_seconds` is what the",
+      "device waits when nothing told it otherwise. `cloud_sends_seconds` is what an arm",
+      "issued BY the cloud carries: shorter, because a cloud that is arming right now is a",
+      "cloud that is up, and the device need not hold the silence as long for it.",
+      "",
+      "Both must stay well under `max_late_seconds`, or the device would still be politely",
+      "waiting for the cloud at the moment the ring stopped being worth making. A test",
+      "asserts that ordering rather than trusting whoever edits this file next."
+    ]
+  },
+  "read_by": {
+    "cloud": "services/api/app/alarms/timing.py",
+    "device": "devices/windows-agent/src/PagentOS.SessionCompanion/AlarmArmController.cs"
+  }
+}

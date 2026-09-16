@@ -20,12 +20,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
 
+from app.protocol_files import protocol_file
+
 CAPABILITY: Final[str] = "desktop.notify"
 ACTION_EVENT: Final[str] = "desktop.notify.action"
 
-_CONTRACT_PATH: Final[Path] = (
-    Path(__file__).resolve().parents[3].parent / "packages" / "protocol" / "desktop-notify.json"
-)
+#: The run-time copy of ``packages/protocol/desktop-notify.json`` (app/protocol_files.py).
+_CONTRACT_PATH: Final[Path] = protocol_file("desktop-notify.json")
 
 _ACTION_ID = re.compile(r"^[a-z0-9_]+$")
 

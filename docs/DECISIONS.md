@@ -12585,3 +12585,41 @@ promotion: owner). No emulator or phone launch shape exists on the device.
 **Consequences.** `packages/protocol/android-manifest.example.json` is read by both halves; the
 protocol document lists the shapes. 475/476 are PARTIAL with PROVEN_REAL for the device half.
 11/11 executed mutations turn the suites red (5 Cloud Core, 6 device).
+
+## ADR-0162 — The shared contract files the Cloud Core reads at run time ship inside the app (2026-09-16)
+
+**Context.** The first Cloud Core release since B13 (8511076) could not start: `app.alarms.timing`
+read `packages/protocol/alarm-timing.json` through a repository-relative path, the image is built
+from `services/api` alone (`COPY app ./app`), and the api died at import with FileNotFoundError.
+`app.notifications.toast`, `app.documents.service` and `app.operator.allowlists` had the same
+shape. Tests and CI run from a checkout, where the path resolves, so nothing caught it. The
+blue-green release rolled back before the switch; api-blue served throughout.
+
+**Decision.** `app/protocol_files.py` names the shared files the app reads at run time and
+returns their copies in `app/protocol_bundle/`, byte-identical to `packages/protocol/`. The app
+reads only the copies - no "repository if present" branch. `scripts/sync-protocol-bundle.py`
+refreshes them. The compose build context and the Dockerfile are unchanged, so the recovery
+supervisor's pinned Compose/nginx inputs stay valid.
+
+**Guard.** `tests/unit/test_protocol_bundle.py`: every copy equals its shared file; no app
+module builds a path into `packages/protocol` (the injection module keeps its documented
+in-code fallback); and the app imports from a tree shaped like the image, with no
+`packages/protocol` above it. With the released `timing.py` restored, that test fails with the
+production error.
+
+**Also found.** `release-cloud-core.ps1` without `-BlueGreen` recreates `pagentos-prod-api` and
+collides with the edge on :8001 on a blue-green host; releases use `-BlueGreen`.
+
+## ADR-0163 — Genesis refuses a borrowed name before it builds or runs anything (2026-09-16)
+
+**Context.** A mutating interface description that calls itself something other than the
+interface the owner registered is refused (M24 security review, ADR-0087 addendum 1). The check
+lived in `_classify`, which runs after `_build`, `_secure` and `_test` - so the adapter for the
+hostile description was generated and its generated tests called the untrusted host before the
+refusal. Under load the release gates failed first (`p95_latency_over_budget`) and the run
+ended `evaluation_failed`; the quality gate caught it as a one-off test failure.
+
+**Decision.** `_refuse_a_borrowed_name` runs right after `_design`, before anything is built;
+`_classify` no longer repeats it. The failure-matrix test also asserts that no skill version,
+workspace or evaluation exists for the refused run; with the refusal moved back after `_test`
+it fails deterministically.

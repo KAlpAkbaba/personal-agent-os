@@ -19,9 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-_CONTRACT: Final[Path] = (
-    Path(__file__).resolve().parents[4] / "packages" / "protocol" / "operator-allowlists.json"
-)
+from app.protocol_files import protocol_file
+
+#: The run-time copy of ``packages/protocol/operator-allowlists.json`` (app/protocol_files.py).
+_CONTRACT: Final[Path] = protocol_file("operator-allowlists.json")
 
 
 @dataclass(frozen=True, slots=True)

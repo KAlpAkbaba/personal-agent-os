@@ -262,6 +262,7 @@ class GenesisService:
         try:
             interface = self._research(run)
             spec = self._design(run, interface)
+            self._refuse_a_borrowed_name(run, spec)
             layout, skill_version_id = self._build(run, spec, started)
             self._secure(run, layout, skill_version_id, spec)
             self._test(run, layout, skill_version_id, spec, started)
@@ -319,6 +320,30 @@ class GenesisService:
             )
         spec = AdapterSpec(interface=interface, operation_id=run.operation_id)
         return spec
+
+    @staticmethod
+    def _refuse_a_borrowed_name(run: GenesisRun, spec: AdapterSpec) -> None:
+        """A mutating description that names itself differently from the interface the owner
+        registered is refused BEFORE anything is generated or run against it.
+
+        The asset reference is the name the OWNER registered - the catalogue entry this run
+        was asked for, carried in the capability id - never the fetched document's own
+        ``name``. An application that calls itself "mailserver" must not inherit the authority
+        the owner granted a real mailserver (M24 security review, 2026-09-08, live PoC). Until
+        2026-09-16 this check sat in ``_classify``, after the adapter had been built and its
+        generated tests had called the untrusted host; under load the release gates failed
+        first and the refusal surfaced as ``evaluation_failed``.
+        """
+        if spec.operation.side_effect == "read":
+            return
+        asset_ref = run.capability_id.rsplit(".", 1)[0]
+        if spec.interface.name != asset_ref:
+            raise EvolutionError(
+                EvolutionErrorClass.VALIDATION_ERROR,
+                "the description names itself differently from the interface the "
+                "owner registered",
+                details={"registered": asset_ref, "self_reported": spec.interface.name},
+            )
 
     def _build(
         self, run: GenesisRun, spec: AdapterSpec, started: datetime
@@ -457,21 +482,10 @@ class GenesisService:
         side_effect_class = "read" if op.side_effect == "read" else "mutate_external"
         mutation_authorized = False
         if side_effect_class == "mutate_external":
-            # The asset reference is the name the OWNER registered — the catalogue entry
-            # this run was asked for, carried in the capability id — never the fetched
-            # document's own ``name`` field. An application that calls itself
-            # "mailserver" must not thereby inherit the authority the owner granted a
-            # real mailserver (M24 security review, 2026-09-08, verified with a live
-            # PoC). A document whose self-reported name disagrees with the registered
-            # one is refused outright rather than quietly resolved either way.
+            # The asset reference is the name the OWNER registered, never the fetched
+            # document's own ``name``; a document that disagrees was already refused by
+            # _refuse_a_borrowed_name, before anything was built or run.
             asset_ref = run.capability_id.rsplit(".", 1)[0]
-            if spec.interface.name != asset_ref:
-                raise EvolutionError(
-                    EvolutionErrorClass.VALIDATION_ERROR,
-                    "the description names itself differently from the interface the "
-                    "owner registered",
-                    details={"registered": asset_ref, "self_reported": spec.interface.name},
-                )
             verified = self.mutation_authorization.verify(asset_ref)
             if verified is not None:
                 # Authorization is what ``covers()`` says it is, never merely "a row

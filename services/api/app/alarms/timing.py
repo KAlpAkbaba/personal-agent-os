@@ -17,9 +17,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
 
-_CONTRACT_PATH: Final[Path] = (
-    Path(__file__).resolve().parents[3].parent / "packages" / "protocol" / "alarm-timing.json"
-)
+from app.protocol_files import protocol_file
+
+#: The run-time copy of ``packages/protocol/alarm-timing.json`` (app/protocol_files.py).
+_CONTRACT_PATH: Final[Path] = protocol_file("alarm-timing.json")
 
 
 @lru_cache(maxsize=1)

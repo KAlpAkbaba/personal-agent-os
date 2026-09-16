@@ -59,6 +59,7 @@ from app.ledger.vocabulary import (
 from app.logging import get_logger
 from app.operator import focus as focus_module
 from app.operator.models import FOCUS_KIND_DOCUMENT, FOCUS_KIND_FILE, FOCUS_KIND_FOLDER
+from app.protocol_files import protocol_file
 from app.routines.dispatch import DeviceActionPort
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
@@ -113,9 +114,8 @@ def _load_bucket_names() -> tuple[str, ...]:
 
 
 #: ``packages/protocol/file-search-roots.json`` - the one place the bucket names are written.
-_FILE_SEARCH_ROOTS: Final[Path] = (
-    Path(__file__).resolve().parents[4] / "packages" / "protocol" / "file-search-roots.json"
-)
+#: Read through its run-time copy (app/protocol_files.py): the image carries no packages/.
+_FILE_SEARCH_ROOTS: Final[Path] = protocol_file("file-search-roots.json")
 
 #: Root names the DEVICE resolves (spec §1's ``AuthorisedRoots``): Cloud Core cannot name the
 #: owner's Documents folder - the owner may have moved it - so it sends the bucket name and

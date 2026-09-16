@@ -1,0 +1,101 @@
+{
+  "contract": "operator allowlists",
+  "version": 1,
+  "why": [
+    "The Cloud Core decides what the owner may ASK for; the device decides what it will DO.",
+    "Until 2026-09-14 each half kept its own list: the Cloud Core's app allowlist had six",
+    "names, the device's had seven (mspaint), and the Cloud Core's terminal vocabulary was two",
+    "commands against the device's eight patterns. Nothing read the other half, so a name the",
+    "owner could say was refused by the device and a command the device would run could not",
+    "be said. This file is the one place both lists are written; a Python test and a C# test",
+    "each hold their own side equal to it (the file-search-roots discipline, B03)."
+  ],
+  "applications": [
+    {
+      "id": "notepad",
+      "name_tr": "Not Defteri",
+      "image": "notepad.exe",
+      "aliases": ["not defteri", "notepad"]
+    },
+    {
+      "id": "calc",
+      "name_tr": "Hesap Makinesi",
+      "image": "calc.exe",
+      "aliases": ["hesap makinesi", "calculator", "calc"]
+    },
+    {
+      "id": "mspaint",
+      "name_tr": "Paint",
+      "image": "mspaint.exe",
+      "aliases": ["paint", "mspaint", "boya"]
+    },
+    {
+      "id": "explorer",
+      "name_tr": "Dosya Gezgini",
+      "image": "explorer.exe",
+      "aliases": ["dosya gezgini", "gezgin", "explorer"]
+    },
+    {
+      "id": "powershell",
+      "name_tr": "PowerShell",
+      "image": "powershell.exe",
+      "aliases": ["powershell"]
+    },
+    {
+      "id": "chrome",
+      "name_tr": "Chrome",
+      "image": "chrome.exe",
+      "aliases": ["google chrome", "tarayıcı", "tarayici", "chrome"]
+    },
+    {
+      "id": "msedge",
+      "name_tr": "Microsoft Edge",
+      "image": "msedge.exe",
+      "aliases": ["microsoft edge", "edge", "msedge"]
+    },
+    {
+      "id": "settings",
+      "name_tr": "Ayarlar",
+      "image": "SystemSettings.exe",
+      "aliases": ["windows ayarları", "windows ayarlari", "ayarlar", "settings"]
+    }
+  ],
+  "terminal": {
+    "patterns": [
+      "hostname",
+      "whoami",
+      "ipconfig",
+      "Get-Date",
+      "Get-ComputerInfo -Property *",
+      "Get-Process -Name *",
+      "Get-ChildItem <path>",
+      "node <project-entry> --help"
+    ],
+    "cloud_commands": {
+      "hostname": "hostname",
+      "ip": "ipconfig",
+      "whoami": "whoami"
+    }
+  },
+  "processes": {
+    "stop_policy": "only an image in `applications` above (never a system process); WM_CLOSE first, terminate only with force",
+    "stoppable_images": [
+      "notepad.exe",
+      "calc.exe",
+      "calculatorapp.exe",
+      "mspaint.exe",
+      "chrome.exe",
+      "msedge.exe"
+    ]
+  },
+  "services": {
+    "inspect": "any service by name, read-only (Win32_Service)",
+    "restart_policy": "only a service named in `restartable`; restarting needs an elevated companion (UAC) and is refused with permission_denied otherwise",
+    "restartable": ["Spooler"]
+  },
+  "read_by": [
+    "services/api/app/operator/allowlists.py (the Cloud Core's aliases, Turkish names and terminal vocabulary)",
+    "devices/windows-agent/src/PagentOS.SessionCompanion/Operator/OperatorCapabilities.cs (DefaultApplications, the process stop policy, the service restart policy)",
+    "devices/windows-agent/src/PagentOS.SessionCompanion/Operator/TerminalRunner.cs (DefaultAllowlist)"
+  ]
+}

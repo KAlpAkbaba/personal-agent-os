@@ -423,6 +423,12 @@ def test_a_description_may_not_rename_itself_into_another_assets_authority(tmp_p
     assert result["state"] == "failed"
     assert result["error_class"] == "validation_error"
     assert stack.registry.resolve("mailserver.increment") is None
+    # Refused BEFORE the adapter existed: nothing was generated, and no generated test ever
+    # called the untrusted host (2026-09-16: it used to be built and evaluated first, and a
+    # slow evaluation then reported the refusal as evaluation_failed).
+    assert result["skill_version_id"] is None
+    assert "workspace_root" not in result["evidence"]
+    assert "evaluation" not in result["evidence"]
 
 
 def test_two_racing_approvals_claim_the_run_once(tmp_path):
