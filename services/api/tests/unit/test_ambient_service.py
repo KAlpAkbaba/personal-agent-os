@@ -395,6 +395,8 @@ def test_an_unusable_status_is_a_clean_no_op(session, statuses, holdoffs):
         "camera_observed": False,
         "camera_refused": None,
         "camera_mode_sent": None,
+        # B11-toast: no toast press was recorded.
+        "notify_actions_recorded": [],
     }
 
 

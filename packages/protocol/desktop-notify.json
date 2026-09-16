@@ -82,6 +82,45 @@
     "notification_id": {
       "form": "uuid",
       "why": "Echoed, so a late answer cannot be attributed to whichever notification is current."
+    },
+    "surface": {
+      "form": "string",
+      "present_when": "shown is true",
+      "values": ["toast", "balloon"],
+      "why": "B11-toast: which surface carried it. 'toast' is a Windows toast under the companion's AppUserModelID, with the request's buttons; 'balloon' is the tray fallback used only when the toast platform cannot be used, and it has no buttons."
+    },
+    "actions_rendered": {
+      "form": "integer",
+      "why": "How many of the request's buttons are on screen. Always 0 on a balloon, so a button the owner cannot press is never counted as offered."
+    },
+    "notifier_setting": {
+      "form": "string",
+      "values": [
+        "enabled",
+        "disabled_for_application",
+        "disabled_for_user",
+        "disabled_by_group_policy",
+        "disabled_by_manifest",
+        "unknown"
+      ],
+      "why": "What Windows' ToastNotifier.Setting said. The three owner/machine choices (for_application, for_user, by_group_policy) answer shown:false with notifications_disabled - a balloon from the same process would route around them. 'unknown' means the platform could not be asked - including an id Windows holds no settings for yet, which is every id before its first toast (measured on Windows 10 19045); the toast is then tried and the history read-back decides."
+    },
+    "user_state": {
+      "form": "string",
+      "values": [
+        "not_present",
+        "busy",
+        "fullscreen_d3d",
+        "presentation",
+        "accepts_notifications",
+        "quiet_time",
+        "fullscreen_app"
+      ],
+      "why": "The shell's SHQueryUserNotificationState when the toast was raised, when it could be read. A hint about whether a popup was likely to appear; Focus Assist is not reported by any public Windows API and is not claimed here."
+    },
+    "detail": {
+      "form": "string",
+      "why": "A short machine-readable note: why a fallback was used (app_identity_unavailable, toast_platform_unavailable, toast_show_failed, toast_not_in_history - Show returned but Windows' own notification history did not hold the toast), or actions_not_rendered on a balloon. Sent with shown true as well."
     }
   },
   "action_event": {
@@ -96,6 +135,22 @@
       "notification_id": "uuid, the notification the toast belonged to",
       "action_id": "the id of the pressed button, verbatim from the request",
       "pressed_at": "ISO-8601 UTC"
+    },
+    "transport": {
+      "why": [
+        "B11-toast: the payload objects ride in the heartbeat's optional status object, as the",
+        "list named by 'field' (DEVICE_PROTOCOL.md §6g, §6q) - the same place this device",
+        "already reports its own local alarm rings and snoozes. No new frame type, so an older",
+        "broker that does not know the field ignores it. A heartbeat is fire-and-forget, so each",
+        "press is carried in 'transmissions' consecutive reports and the Cloud Core records it",
+        "once, keyed on notification_id, action_id and pressed_at. The device accepts a press",
+        "only for a toast it showed and an action id that toast offered; the Cloud Core accepts",
+        "it only for an action its own row offered. A press is data: nothing on either side",
+        "runs, opens or launches anything because of it."
+      ],
+      "field": "notify_actions",
+      "max_entries": 16,
+      "transmissions": 3
     }
   },
   "refused": [

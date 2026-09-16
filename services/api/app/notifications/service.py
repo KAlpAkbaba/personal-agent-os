@@ -274,6 +274,79 @@ def mark_read(
     return row
 
 
+#: B11-toast: how many presses one notification keeps. A toast offers at most three buttons
+#: and is pressed once; more than this is a device repeating itself, not an owner.
+MAX_PRESSES_PER_NOTIFICATION: Final[int] = 8
+
+#: Why a press was not recorded (``record_action``'s answer).
+PRESS_RECORDED: Final[str] = "recorded"
+PRESS_DUPLICATE: Final[str] = "duplicate"
+PRESS_UNKNOWN_NOTIFICATION: Final[str] = "unknown_notification"
+PRESS_NOT_OFFERED: Final[str] = "action_not_offered"
+PRESS_LIMIT: Final[str] = "limit_reached"
+
+
+def record_action(
+    db: Session,
+    notification_id: uuid.UUID,
+    action_id: str,
+    pressed_at: datetime,
+    *,
+    device_id: uuid.UUID | None = None,
+    now: datetime | None = None,
+) -> str:
+    """B11-toast (row 370): the owner pressed a toast button. Written onto the row.
+
+    DATA, and only data. The press is accepted only for an action id THIS row offered (the
+    device's word is not enough: it could be an older build, or not ours), recorded once per
+    ``(action_id, pressed_at)`` however many heartbeats carry it, and appended to
+    ``data_json["actions_pressed"]`` - which the inbox already returns. Nothing is run
+    because of it here; a consumer that wants to act on ``snooze`` or ``open`` reads the row.
+
+    It does not set ``read_at``: the contract keeps "the owner read it" for the inbox.
+    """
+    row = db.get(NotificationRow, notification_id)
+    if row is None:
+        return PRESS_UNKNOWN_NOTIFICATION
+    data = dict(row.data_json or {})
+    offered = {
+        str(action.get("id"))
+        for action in (data.get("actions") or [])
+        if isinstance(action, dict)
+    }
+    if action_id not in offered:
+        logger.warning(
+            "notification_action_not_offered",
+            notification_id=str(notification_id),
+            action_id=action_id[:32],
+        )
+        return PRESS_NOT_OFFERED
+    stamp = _iso(pressed_at)
+    presses = [p for p in (data.get("actions_pressed") or []) if isinstance(p, dict)]
+    if any(p.get("action_id") == action_id and p.get("pressed_at") == stamp for p in presses):
+        return PRESS_DUPLICATE
+    if len(presses) >= MAX_PRESSES_PER_NOTIFICATION:
+        return PRESS_LIMIT
+    presses.append(
+        {
+            "action_id": action_id,
+            "pressed_at": stamp,
+            "received_at": _iso(now or datetime.now(UTC)),
+            "device_id": str(device_id) if device_id is not None else None,
+        }
+    )
+    data["actions_pressed"] = presses
+    # A new dict, so the JSON column is seen as changed.
+    row.data_json = data
+    db.commit()
+    logger.info(
+        "notification_action_recorded",
+        notification_id=str(notification_id),
+        action_id=action_id,
+    )
+    return PRESS_RECORDED
+
+
 def history(db: Session, *, limit: int = 100) -> list[dict[str, Any]]:
     """req 377: what was sent, by which channel, and whether it was read.
 
@@ -299,6 +372,11 @@ def history(db: Session, *, limit: int = 100) -> list[dict[str, Any]]:
             "read_at": _iso(row.read_at),
             "superseded_at": _iso(row.superseded_at),
             "ladder_exhausted": bool(row.ladder_exhausted),
+            "actions_pressed": [
+                p.get("action_id")
+                for p in ((row.data_json or {}).get("actions_pressed") or [])
+                if isinstance(p, dict)
+            ],
         }
         for row in rows
     ]
@@ -327,4 +405,5 @@ __all__ = [
     "next_channel",
     "quiet_hours_end",
     "record",
+    "record_action",
 ]

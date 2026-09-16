@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
@@ -107,8 +109,12 @@ def build(
         for action in actions:
             action_id = str(action.get("id", ""))
             label = str(action.get("label", ""))
-            if not _ACTION_ID.match(action_id):
+            # fullmatch, not match: `$` also matches before a trailing newline, and the device
+            # refuses "open\n" (B11-toast review).
+            if not _ACTION_ID.fullmatch(action_id):
                 raise ToastRefused(f"action id {action_id!r} is not [a-z0-9_]+")
+            if len(action_id) > _action_id_limit():
+                raise ToastRefused(f"action id {action_id!r} is longer than the device accepts")
             if not label.strip():
                 raise ToastRefused(f"action {action_id!r} has no label")
             if len(label) > int(contract()["request"]["actions"]["item"]["label"]["max_chars"]):
@@ -139,12 +145,101 @@ def refusal_reason(result: Any) -> str | None:
     return str(reason) if reason else "unknown"
 
 
+def surface(result: Any) -> str | None:
+    """B11-toast: which surface carried a shown notice (``toast`` or ``balloon``), when the
+    device said so and said something the contract names. Never a guess."""
+    if not isinstance(result, dict) or result.get("shown") is not True:
+        return None
+    value = result.get("surface")
+    allowed = contract()["response"]["surface"]["values"]
+    return value if isinstance(value, str) and value in allowed else None
+
+
+# ------------------------------------------------ the press, on its way back (B11-toast)
+
+
+@dataclass(frozen=True, slots=True)
+class ActionPress:
+    """One toast button the owner pressed, as the device reported it. Data only: an action id
+    from this Cloud Core's own vocabulary, the notification it belongs to, and a time."""
+
+    notification_id: uuid.UUID
+    action_id: str
+    pressed_at: datetime
+
+    def key(self) -> tuple[str, str, str]:
+        return (str(self.notification_id), self.action_id, _iso(self.pressed_at))
+
+
+def action_field() -> str:
+    """The heartbeat ``status`` key the presses ride in - READ from the contract."""
+    return str(contract()["action_event"]["transport"]["field"])
+
+
+def action_max_entries() -> int:
+    return int(contract()["action_event"]["transport"]["max_entries"])
+
+
+def action_transmissions() -> int:
+    return int(contract()["action_event"]["transport"]["transmissions"])
+
+
+def _action_id_limit() -> int:
+    return int(contract()["request"]["actions"]["item"]["id"]["max_chars"])
+
+
+def _iso(moment: datetime) -> str:
+    aware = moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+    return aware.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def parse_action_presses(raw: Any) -> tuple[ActionPress, ...]:
+    """The ``notify_actions`` list of a heartbeat status, strictly.
+
+    Never raises: the heartbeat path must not fail on a device's report. An entry that is not
+    exactly a uuid, an action id of the contract's form and an ISO time is dropped - not
+    repaired - and at most the contract's ``max_entries`` are read.
+    """
+    if not isinstance(raw, list | tuple):
+        return ()
+    out: list[ActionPress] = []
+    for item in raw[: action_max_entries()]:
+        if not isinstance(item, dict):
+            continue
+        notification_id = item.get("notification_id")
+        action_id = item.get("action_id")
+        pressed_at = item.get("pressed_at")
+        if not (
+            isinstance(notification_id, str)
+            and isinstance(action_id, str)
+            and isinstance(pressed_at, str)
+        ):
+            continue
+        if not _ACTION_ID.fullmatch(action_id) or len(action_id) > _action_id_limit():
+            continue
+        try:
+            parsed_id = uuid.UUID(notification_id)
+            moment = datetime.fromisoformat(pressed_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=UTC)
+        out.append(ActionPress(parsed_id, action_id, moment.astimezone(UTC)))
+    return tuple(out)
+
+
 __all__ = [
     "ACTION_EVENT",
     "CAPABILITY",
+    "ActionPress",
     "ToastRefused",
+    "action_field",
+    "action_max_entries",
+    "action_transmissions",
     "build",
     "contract",
+    "parse_action_presses",
     "refusal_reason",
+    "surface",
     "was_shown",
 ]

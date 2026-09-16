@@ -90,6 +90,16 @@ public static class HeartbeatStatus
     /// </summary>
     public const string Presence = "presence";
 
+    /// <summary>
+    /// B11-toast (row 370): toast button presses waiting for the Cloud Core, as
+    /// <c>{"notification_id", "action_id", "pressed_at"}</c> objects
+    /// (<c>packages/protocol/desktop-notify.json</c> <c>action_event</c>). Each press rides in
+    /// a few consecutive reports and the Cloud Core records it once. An id this device was
+    /// handed, an action id from the Cloud Core's own closed vocabulary, and a time - nothing
+    /// the owner typed or saw. Absent on a companion without the toast surface.
+    /// </summary>
+    public const string NotifyActions = "notify_actions";
+
     /// <summary>Every key the <c>status</c> object may carry, in the order the schema lists them.</summary>
     public static readonly IReadOnlyList<string> Fields =
     [
@@ -97,7 +107,14 @@ public static class HeartbeatStatus
         AlarmRinging, RingingAlarmId, ArmedAlarms, NextAlarmAt, LocalAlarmFired,
         LocalAlarmSnoozed, Voice,
         Camera, Presence,
+        NotifyActions,
     ];
+
+    /// <summary>The keys of one <see cref="NotifyActions"/> entry.</summary>
+    public static readonly IReadOnlyList<string> NotifyActionFields = ["notification_id", "action_id", "pressed_at"];
+
+    /// <summary>At most this many <see cref="NotifyActions"/> entries (the schema's <c>maxItems</c>).</summary>
+    public const int MaxNotifyActions = 16;
 
     /// <summary>
     /// How long the Device Service waits for the companion's status before sending the heartbeat
@@ -134,11 +151,61 @@ public static class HeartbeatStatus
                 // the companion sends.
                 Presence => ProjectScalars(value, PresenceFields),
                 Camera => ProjectScalars(value, CameraFields),
+                NotifyActions => ProjectNotifyActions(value),
                 _ => value?.DeepClone(),
             };
+
+            // A list the service refused is left out rather than sent as null: the schema
+            // types it as an array, and a null would fail the whole heartbeat.
+            if (field == NotifyActions && projected[field] is null)
+            {
+                projected.Remove(field);
+            }
         }
 
         return projected.Count == 0 ? null : projected;
+    }
+
+    /// <summary>
+    /// The presses list, closed like the camera objects: at most
+    /// <see cref="MaxNotifyActions"/> entries, each exactly the three string keys, each string
+    /// short. Anything else drops the WHOLE list - a companion that put something else here is
+    /// not one whose presses should be believed.
+    /// </summary>
+    private static JsonArray? ProjectNotifyActions(JsonNode? value)
+    {
+        if (value is not JsonArray source || source.Count > MaxNotifyActions)
+        {
+            return null;
+        }
+
+        var result = new JsonArray();
+        foreach (var item in source)
+        {
+            if (item is not JsonObject entry || entry.Count != NotifyActionFields.Count)
+            {
+                return null;
+            }
+
+            var copy = new JsonObject();
+            foreach (var key in NotifyActionFields)
+            {
+                if (!entry.TryGetPropertyValue(key, out var node)
+                    || node is not JsonValue scalar
+                    || !scalar.TryGetValue<string>(out var text)
+                    || text.Length == 0
+                    || text.Length > MaxNestedStringLength)
+                {
+                    return null;
+                }
+
+                copy[key] = text;
+            }
+
+            result.Add(copy);
+        }
+
+        return result;
     }
 
     /// <summary>The seven structured-observation keys (M18_HOLOGRAPHIC_CORE_SPEC.md §2).</summary>

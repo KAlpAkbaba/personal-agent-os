@@ -108,6 +108,15 @@ class ToastRung:
                 notification_id=str(row.id),
                 reason=toast_contract.refusal_reason(result),
             )
+        else:
+            # B11-toast: "shown" means Windows accepted it; WHICH surface is the difference
+            # between a toast with the row's buttons and a balloon without them.
+            logger.info(
+                "toast_shown",
+                notification_id=str(row.id),
+                surface=toast_contract.surface(result) or "unknown",
+                actions_rendered=(result or {}).get("actions_rendered"),
+            )
         return shown
 
 

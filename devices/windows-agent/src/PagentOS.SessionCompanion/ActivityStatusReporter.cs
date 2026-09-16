@@ -27,7 +27,8 @@ public sealed class ActivityStatusReporter(
     Func<string?> ringingAlarmId,
     AlarmArmController? arms = null,
     Func<JsonObject>? voice = null,
-    Camera.CameraPresenceMonitor? camera = null)
+    Camera.CameraPresenceMonitor? camera = null,
+    Notify.NotifyActionQueue? notifyActions = null)
 {
     /// <summary>
     /// Payload: <c>{}</c>. Result: the fields of <see cref="HeartbeatStatus.Fields"/> (the camera pair only when a camera path is wired).
@@ -88,6 +89,13 @@ public sealed class ActivityStatusReporter(
         {
             status[HeartbeatStatus.Camera] = camera.StatusObject();
             status[HeartbeatStatus.Presence] = camera.LatestObservation();
+        }
+
+        // B11-toast (row 370): toast button presses, each sent in a few consecutive reports
+        // (NotifyActionQueue). A companion without the toast surface sends no key.
+        if (notifyActions is not null)
+        {
+            status[HeartbeatStatus.NotifyActions] = notifyActions.Report();
         }
 
         return status;

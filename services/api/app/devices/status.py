@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from typing import Any, Final
 
 from app.devices import voice_contract
+from app.notifications import toast as toast_contract
 
 DISPLAY_ON: Final = "on"
 DISPLAY_OFF: Final = "off"
@@ -222,6 +223,8 @@ class DeviceStatus:
     camera: dict[str, Any] | None = None
     #: B48: the device's latest derived camera observation, unscreened (see ``_presence_block``).
     presence: dict[str, Any] | None = None
+    #: B11-toast (row 370): toast buttons the owner pressed, as the device reported them.
+    notify_actions: tuple[toast_contract.ActionPress, ...] = ()
 
     @property
     def input_active(self) -> bool:
@@ -285,6 +288,9 @@ class StatusChange:
     #: per device), or None. A heartbeat repeats the latest observation until a newer one
     #: exists; only the first sighting is evidence.
     new_camera_observation: dict[str, Any] | None = None
+    #: B11-toast: presses this report carries that the previous one did not. The device sends
+    #: each press in a few consecutive reports; the notification row is the durable dedupe.
+    new_notify_actions: tuple[toast_contract.ActionPress, ...] = ()
 
     @property
     def display_state(self) -> str:
@@ -356,6 +362,7 @@ def parse_status(
         raw_keys=tuple(sorted(str(k)[:32] for k in raw)),
         camera=_camera_block(raw.get("camera")),
         presence=_presence_block(raw.get("presence")),
+        notify_actions=toast_contract.parse_action_presses(raw.get(toast_contract.action_field())),
     )
 
 
@@ -421,6 +428,8 @@ class DeviceStatusRegistry:
             # retransmitted report from snoozing the same alarm twice.
             seen_snoozes = set(previous.local_alarm_snoozed) if previous else set()
             newly_snoozed = tuple(e for e in status.local_alarm_snoozed if e not in seen_snoozes)
+            seen_presses = {p.key() for p in previous.notify_actions} if previous else set()
+            new_presses = tuple(p for p in status.notify_actions if p.key() not in seen_presses)
 
             new_camera: dict[str, Any] | None = None
             if status.presence is not None:
@@ -444,6 +453,7 @@ class DeviceStatusRegistry:
             newly_fired_alarms=newly_fired,
             newly_snoozed_alarms=newly_snoozed,
             new_camera_observation=new_camera,
+            new_notify_actions=new_presses,
         )
 
     def get(self, device_id: uuid.UUID) -> DeviceStatus | None:
