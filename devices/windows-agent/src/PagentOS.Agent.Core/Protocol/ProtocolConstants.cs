@@ -712,6 +712,20 @@ public static class ProjectCapabilityNames
     /// </summary>
     public static readonly TimeSpan RunCommandTimeoutCap = NativeCapabilityNames.CommandTimeoutCap;
 
+    /// <summary>
+    /// B33: the service's cap for <c>project.package</c>, <c>project.install</c> and
+    /// <c>project.uninstall</c> — the companion's own 5 min bound on <c>makeappx</c> and on a
+    /// per-user MSIX deployment, plus headroom for the typed answer. These three rode the 30 s
+    /// family cap until 2026-09-16, which would have synthesised a timeout for a cold 60 MB
+    /// pack the companion was still finishing (and that the Cloud Core, at 330 s, was still
+    /// waiting for); signing and an MSIX install only lengthen the same step.
+    /// </summary>
+    public static readonly TimeSpan LifecycleCommandTimeoutCap = TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(30);
+
+    /// <summary>The three lifecycle names that may hold the companion for <see cref="LifecycleCommandTimeoutCap"/>.</summary>
+    public static bool IsLongLifecycle(string capability)
+        => capability is ProjectPackage or ProjectInstall or ProjectUninstall;
+
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 }
 
@@ -870,9 +884,12 @@ public static class NativeCapabilityNames
 
     /// <summary>
     /// §9: programs this device never runs, at any point, under any root. Signing is the
-    /// first of them and the reason the list exists: an autonomous build does not reach for
-    /// the owner's certificate store, and a "run-local test certificate" is still a
-    /// certificate this code is not the thing that should be creating. They are refused by
+    /// first of them and the reason the list exists: no manifest command may sign, and no
+    /// certificate tool is ever a child of this companion. B33 (owner decision 2026-09-16,
+    /// "win uygulamada da kendinden imzalı olsun") added signing WITHOUT touching this list:
+    /// the companion signs an MSIX in its own process (<c>Native/PackageSigner.cs</c>) with a
+    /// self-signed identity it creates in the owner's store (<c>Native/OwnerSigningIdentity.cs</c>),
+    /// so the refusal below still holds for every one of these names. They are refused by
     /// NAME at manifest-parse time, before any resolution, so widening a shape can never
     /// widen them in by accident.
     /// </summary>
@@ -928,6 +945,41 @@ public static class NativeCapabilityNames
 
     /// <summary>The service's cap for a command that may carry a build: the bound plus headroom for the typed answer.</summary>
     public static readonly TimeSpan CommandTimeoutCap = RunLimit + TimeSpan.FromSeconds(30);
+
+    // ------------------------------------------------------------------ B33 signing (§6n)
+
+    /// <summary><c>project.package</c>'s <c>signing_mode</c> when absent: nothing is signed (a Cloud Core older than B33 sends no mode).</summary>
+    public const string SigningModeUnsigned = "unsigned";
+
+    /// <summary>The one signing mode this device applies: the companion's own self-signed identity.</summary>
+    public const string SigningModeTestCertificate = "test_certificate";
+
+    /// <summary>Recognised and REFUSED by name: the owner's real code-signing identity is theirs, and this device never reaches for it.</summary>
+    public const string SigningModeOwnerCertificate = "owner_certificate";
+
+    /// <summary>
+    /// The subject of the companion's self-signed signing certificate, and therefore the
+    /// <c>Publisher</c> the Cloud Core scaffolds into every signed <c>AppxManifest.xml</c> — the
+    /// two must be equal byte for byte or the MSIX signer refuses. A test reads
+    /// <c>app/nativefactory/signing.py</c>'s <c>TEST_SIGNING_SUBJECT</c> rather than restating it.
+    /// </summary>
+    public const string TestSigningSubject = "CN=PagentOS Owner Test Signing";
+
+    /// <summary>The code-signing extended key usage, the only EKU the identity carries.</summary>
+    public const string CodeSigningOid = "1.3.6.1.5.5.7.3.3";
+
+    /// <summary>The owner's one elevated step that makes the identity trusted on a machine (repository-relative).</summary>
+    public const string TrustScript = @"scripts\trust-native-signing-cert.ps1";
+
+    /// <summary>
+    /// The first word of a <c>project.install</c> refusal whose package signer is not trusted on
+    /// this machine. The wire error carries class, message and retryable only, so the Cloud
+    /// Core recognises this refusal by this prefix (<c>device_lifecycle.py</c> reads it).
+    /// </summary>
+    public const string UntrustedSignerMarker = "signing_cert_untrusted";
+
+    /// <summary>The first word of a <c>project.install</c> refusal of an MSIX that carries no valid signature.</summary>
+    public const string UnsignedPackageMarker = "package_unsigned";
 
     /// <summary>Whether <paramref name="program"/> is one this device never runs (case-insensitively, with or without <c>.exe</c>).</summary>
     public static bool IsForbiddenProgram(string program)

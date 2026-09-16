@@ -155,7 +155,7 @@ public sealed class AndroidBuildTests
         Assert.True(NativeCapabilityNames.IsForbiddenProgram(program));
         var failure = Assert.Throws<CapabilityException>(() => ProjectManifest.Parse(
             Manifest(new Dictionary<string, string> { ["build"] = $"{program} sign app.apk" }), null, ProjectScope.Native));
-        Assert.Contains("signs nothing", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("runs no signing program", failure.Message, StringComparison.Ordinal);
         Assert.Throws<CapabilityException>(() => ProjectRunner.RequireNoSigner(Path.Combine("C:\\jdk\\bin", program), []));
     }
 

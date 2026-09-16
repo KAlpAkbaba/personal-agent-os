@@ -53,6 +53,8 @@ public sealed class NativeLabFactAttribute : FactAttribute
 /// </summary>
 public sealed class NativeLab : IDisposable
 {
+    private readonly SigningLab? _ownSigning;
+
     /// <summary>The project file every fixture native project carries.</summary>
     public const string ProjectFileName = "app/app.csproj";
 
@@ -72,7 +74,10 @@ public sealed class NativeLab : IDisposable
         bool enabled = true,
         TimeSpan? nativeLimit = null,
         int? maxRunning = null,
-        Func<ProcessStartInfo, Process?>? start = null)
+        Func<ProcessStartInfo, Process?>? start = null,
+        OwnerSigningIdentity? signing = null,
+        IMsixDeployer? deployer = null,
+        Action<string, System.Security.Cryptography.X509Certificates.X509Certificate2>? signMsix = null)
     {
         RunId = Guid.NewGuid().ToString("N")[..12];
         Root = Path.Combine(OperatorOptions.FixtureRoot, "native", RunId);
@@ -84,7 +89,19 @@ public sealed class NativeLab : IDisposable
         // (<Projects root>\native), which is what the owner's machine will use.
         Options = new OperatorOptions(enabled, TerminalRunner.DefaultAllowlist, [Root], Path.Combine(Root, "Downloads"), ProjectsRoot);
         Runner = new ProjectRunner(Log, start, maxRunning: maxRunning, nativeLimit: nativeLimit);
-        Projects = new ProjectCapabilities(Options, Log, runner: Runner);
+        // B33: a lab never signs with the owner's identity. Without an injected one it owns a
+        // throwaway SigningLab (its own current-user store, removed on dispose).
+        if (signing is null)
+        {
+            _ownSigning = new SigningLab();
+            signing = _ownSigning.Identity;
+        }
+
+        Projects = new ProjectCapabilities(
+            Options,
+            Log,
+            runner: Runner,
+            signing: new NativeSigning(signing, deployer ?? new WindowsPackageDeployer(), signMsix));
     }
 
     public string RunId { get; }
@@ -99,6 +116,7 @@ public sealed class NativeLab : IDisposable
     public string ProjectsRootNative => Projects.ProjectsRootNative!;
 
     public ProjectCapabilities Projects { get; }
+
 
     public ProjectRunner Runner { get; }
 
@@ -260,6 +278,7 @@ public sealed class NativeLab : IDisposable
         // MSBuild's node processes give their handles back a moment after the job ends, so the
         // delete is retried for a few seconds.
         Projects.Dispose();
+        _ownSigning?.Dispose();
         var deadline = DateTime.UtcNow.AddSeconds(15);
         while (true)
         {

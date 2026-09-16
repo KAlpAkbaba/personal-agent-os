@@ -1,0 +1,18 @@
+{
+  "batch": "B11",
+  "requirements": [
+    369,
+    370
+  ],
+  "recorded_at": "2026-09-17",
+  "kind": "device_toast_lab",
+  "notes": [
+    "- Machine: owner desktop, Windows 10 19045, tr-TR, single 1920x1080 display at test time,\n  foreground Docker Desktop (not full screen), `SHQueryUserNotificationState` =\n  accepts_notifications.",
+    "`ToastLabTests.Windows_accepts_a_real_toast_with_buttons_and_keeps_it_in_its_history`: PASS.\n  Answer `{\"shown\":true,\"surface\":\"toast\",\"notifier_setting\":\"enabled\",\"actions_rendered\":2,\"user_state\":\"accepts_notifications\"}`;\n  the toast read back from `History.GetHistory(\"PagentOS.Companion.Lab\")` with tag = notification\n  id, group `pagentos`, the escaped Turkish body and `action=lab_snooze;notification=<id>`; a second\n  send with the same id is still one toast; `Remove` takes it out of the history.",
+    "`ToastLabTests.A_fresh_id_has_no_settings_until_its_first_toast_and_that_toast_is_still_shown`:\n  PASS. `ReadSetting` threw `COMException 0x80070490` before the first toast, the sink showed the\n  toast anyway (`surface: toast`), and the setting read `enabled` afterwards.",
+    "Spike (not committed): with and without a Start Menu shortcut, `Show` returned and the toast\n  was in the history; no toast popup window appeared on this desktop for our ids NOR for\n  Windows PowerShell's registered id `{1AC14E77-...}\\WindowsPowerShell\\v1.0\\powershell.exe`\n  (Win32 `EnumWindows`: only the Settings and text-input CoreWindows were present). So popup\n  suppression on this desktop is a Windows-side rule (most likely Focus Assist), not our\n  identity, and the history read-back proves \"Windows holds it\", not \"a popup appeared\".",
+    "Lab clean-up verified: no `PagentOS*` link left in the Programs folder; histories cleared for\n  every lab id; no per-app key appeared under\n  `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings` for the lab ids.",
+    "Not proven here: a visible popup, a press through the real popup (UIA lab exists behind\n  `PAGENTOS_TOAST_PRESS_LAB=1`), a toast over a locked screen."
+  ],
+  "not_proven": "visible popup, a real press through the popup, a toast over a locked screen (owner step)"
+}

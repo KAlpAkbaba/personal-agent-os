@@ -214,14 +214,73 @@ public sealed class DesktopNotifyContractTests
     {
         // A notification is the least important thing this process does; taking the session
         // companion down over one would be the wrong trade every time.
+        // Regression (B11-toast): this test's sink used to RETURN not-shown, so it passed while
+        // Notify had no try/catch at all and a real throw failed the whole command.
         var answer = Capability(new ThrowingSink()).Notify(Payload());
 
         Assert.False(answer["shown"]!.GetValue<bool>());
+        Assert.Equal(NotifyCapabilities.ReasonShellUnavailable, answer["reason"]!.GetValue<string>());
+        Assert.Equal("InvalidOperationException", answer["detail"]!.GetValue<string>());
     }
 
     private sealed class ThrowingSink : IToastSink
     {
         public ToastOutcome Show(ToastRequest request)
-            => ToastOutcome.NotShown(NotifyCapabilities.ReasonShellUnavailable, "InvalidOperationException");
+            => throw new InvalidOperationException("the shell went away");
+    }
+
+    [Fact]
+    public void AShownAnswerStillCarriesItsDetailAndSurface()
+    {
+        // Regression (B11-toast): detail was written only for shown:false, so the balloon's
+        // "actions_not_rendered" - the one thing row 370 needed the Cloud Core to know - never
+        // left the device.
+        var sink = new RecordingSink
+        {
+            Outcome = new ToastOutcome(true, null, "actions_not_rendered") { Surface = ToastSurfaces.Balloon, ActionsRendered = 0 },
+        };
+
+        var answer = Capability(sink).Notify(Payload(actions: new JsonArray(new JsonObject { ["id"] = "open", ["label"] = "Aç" })));
+
+        Assert.True(answer["shown"]!.GetValue<bool>());
+        Assert.Equal("actions_not_rendered", answer["detail"]!.GetValue<string>());
+        Assert.Equal("balloon", answer["surface"]!.GetValue<string>());
+        Assert.Equal(0, answer["actions_rendered"]!.GetValue<int>());
+        Assert.False(answer.ContainsKey("reason"));
+    }
+
+    [Fact]
+    public void AnActionIdWithATrailingNewlineIsRefused()
+    {
+        // Regression (B11-toast): `$` in a .NET regex also matches before a final "\n", so
+        // "open\n" passed the closed vocabulary and would have reached the toast XML.
+        var actions = new JsonArray(new JsonObject { ["id"] = "open\n", ["label"] = "Aç" });
+
+        var answer = Capability(new RecordingSink()).Notify(Payload(actions: actions));
+
+        Assert.False(answer["shown"]!.GetValue<bool>());
+        Assert.Equal(NotifyCapabilities.ReasonInvalidPayload, answer["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void NothingInTheNotifyFolderCanRunOpenOrLaunchWhatAButtonCarries()
+    {
+        // Row 370's safety claim, held by reading the code: a press is an action id queued for
+        // the Cloud Core, never a command line, a URL or a protocol activation.
+        var files = Directory.GetFiles(Path.Combine(Support.CompanionSources.Directory(), "Notify"), "*.cs");
+        Assert.NotEmpty(files);
+        string[] forbidden =
+        [
+            "Process.Start", "ProcessStartInfo", "ShellExecute", "Launcher.", "UseShellExecute",
+            "\"protocol\"", "activationType=\\\"protocol", "Uri(", "CreateProcess", "cmd.exe", "powershell",
+        ];
+        foreach (var file in files)
+        {
+            var text = File.ReadAllText(file);
+            foreach (var name in forbidden)
+            {
+                Assert.False(text.Contains(name, StringComparison.OrdinalIgnoreCase), $"{Path.GetFileName(file)} contains {name}");
+            }
+        }
     }
 }

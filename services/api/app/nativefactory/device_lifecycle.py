@@ -41,8 +41,14 @@ _STATUS_RE: Final = re.compile(r"(\d+)\s+not")
 
 LAUNCH_TIMEOUT_S: Final = 20.0
 UI_TIMEOUT_S: Final = 15.0
+#: B33: the device service's lifecycle ceiling, 5 min 30 s
+#: (``ProjectCapabilityNames.LifecycleCommandTimeoutCap``) - a C# test reads these two lines.
 PACKAGE_TIMEOUT_S: Final = 330.0
+MSIX_INSTALL_TIMEOUT_S: Final = 330.0
 INSTALL_TIMEOUT_S: Final = 20.0
+#: ``project.install``'s two kinds (DEVICE_PROTOCOL.md §6n).
+INSTALL_KIND_SHORTCUT: Final = "shortcut"
+INSTALL_KIND_MSIX: Final = "msix"
 ARTIFACT_CHUNK_BYTES: Final = 32 * 1024
 ARTIFACT_MAX_BYTES: Final = 50 * 1024 * 1024
 LOG_RELATIVE_PATH: Final = "data\\app.log"
@@ -371,11 +377,13 @@ def read_log_on_device(device: DeviceActionPort, row: NativeBuildRow) -> StepOut
 # ------------------------------------------------ package / install / uninstall
 
 
-def package_on_device(device: DeviceActionPort, row: NativeBuildRow, *, kind: str) -> StepOutcome:
+def package_on_device(
+    device: DeviceActionPort, row: NativeBuildRow, *, kind: str, signing_mode: str = "unsigned"
+) -> StepOutcome:
     packed = _run(
         device,
         "project.package",
-        {"project_id": project_id_for(row), "kind": kind},
+        {"project_id": project_id_for(row), "kind": kind, "signing_mode": signing_mode},
         key=f"nativefactory-package:{row.id}:{kind}",
         timeout_s=PACKAGE_TIMEOUT_S,
     )
@@ -393,24 +401,40 @@ def package_on_device(device: DeviceActionPort, row: NativeBuildRow, *, kind: st
     return StepOutcome(ok=True, step="project.package", result=body)
 
 
+def install_kind_for(row: NativeBuildRow) -> str:
+    """An MSIX row installs its signed package (req 473); every other row a shortcut (468)."""
+    from app.nativefactory.spec import TARGET_WINDOWS_MSIX
+
+    target = getattr(row, "target", None)
+    return INSTALL_KIND_MSIX if target == TARGET_WINDOWS_MSIX else INSTALL_KIND_SHORTCUT
+
+
 def install_on_device(device: DeviceActionPort, row: NativeBuildRow) -> StepOutcome:
+    kind = install_kind_for(row)
     installed = _run(
         device,
         "project.install",
-        {"project_id": project_id_for(row), "name": row.display_name},
+        {"project_id": project_id_for(row), "name": row.display_name, "kind": kind},
         key=f"nativefactory-install:{row.id}:{row.attempt}",
-        timeout_s=INSTALL_TIMEOUT_S,
+        timeout_s=MSIX_INSTALL_TIMEOUT_S if kind == INSTALL_KIND_MSIX else INSTALL_TIMEOUT_S,
     )
     if not installed.ok:
         return _fail("project.install", installed)
     body = dict(installed.result or {})
     observed = dict(body.get("observed") or {})
-    if not (body.get("installed") is True and observed.get("shortcut_exists") is True):
+    # What proves the install is what the device READ afterwards: the shortcut on disk, or
+    # the package in Windows' own per-user registration - never the call having returned.
+    proof = "package_registered" if kind == INSTALL_KIND_MSIX else "shortcut_exists"
+    if not (body.get("installed") is True and observed.get(proof) is True):
         return StepOutcome(
             ok=False,
             step="project.install",
             error_class="install_unverified",
-            message="the device did not observe the shortcut it was asked to write",
+            message=(
+                "the device did not observe the package registered for this user"
+                if kind == INSTALL_KIND_MSIX
+                else "the device did not observe the shortcut it was asked to write"
+            ),
             result=body,
         )
     return StepOutcome(ok=True, step="project.install", result=body)
@@ -422,18 +446,22 @@ def uninstall_on_device(device: DeviceActionPort, row: NativeBuildRow) -> StepOu
         "project.uninstall",
         {"project_id": project_id_for(row)},
         key=f"nativefactory-uninstall:{row.id}:{row.attempt}",
-        timeout_s=INSTALL_TIMEOUT_S,
+        timeout_s=(
+            MSIX_INSTALL_TIMEOUT_S
+            if install_kind_for(row) == INSTALL_KIND_MSIX
+            else INSTALL_TIMEOUT_S
+        ),
     )
     if not removed.ok:
         return _fail("project.uninstall", removed)
     body = dict(removed.result or {})
     observed = dict(body.get("observed") or {})
-    if observed.get("shortcut_exists") is True:
+    if observed.get("shortcut_exists") is True or observed.get("package_registered") is True:
         return StepOutcome(
             ok=False,
             step="project.uninstall",
             error_class="uninstall_unverified",
-            message="the shortcut is still there after the removal",
+            message="the shortcut or the package is still there after the removal",
             result=body,
         )
     return StepOutcome(ok=True, step="project.uninstall", result=body)
@@ -517,6 +545,10 @@ __all__ = [
     "StepOutcome",
     "VERIFY_NOTE_TEXT",
     "inspect_window",
+    "INSTALL_KIND_MSIX",
+    "INSTALL_KIND_SHORTCUT",
+    "MSIX_INSTALL_TIMEOUT_S",
+    "install_kind_for",
     "install_on_device",
     "launch_on_device",
     "package_on_device",

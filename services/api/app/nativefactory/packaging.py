@@ -5,12 +5,14 @@ Two targets, one rule: the package is produced by the platform's real tool and t
 by :mod:`app.nativefactory.artifacts`, which did not make it. A packager that validated its
 own output would be checking its own arithmetic.
 
-**Signing is deliberately absent from this module.** An MSIX built here carries no
-signature at all. That is not an omission to fix later: signing needs a certificate, and
-the only certificate this system may ever use is a RUN-LOCAL test one the owner explicitly
-asked for — never the owner's real signing identity, which is theirs and is not something
-an autonomous build gets to reach for. An unsigned MSIX installs only where its publisher
-is trusted, which is the honest state of a package nobody signed, and the receipt says so.
+**This module signs nothing.** The Cloud Core holds no certificate and never will. Since the
+owner's decision of 2026-09-16 (B33 req 473, ``app.nativefactory.signing``) the DEVICE signs
+an MSIX in its own process with its self-signed identity - never the owner's real signing
+identity, which is theirs. What this module contributes is the manifest's ``Publisher``,
+which must equal that identity's subject for the device to sign: :func:`appx_manifest_text`
+names ``signing.TEST_SIGNING_SUBJECT`` when asked for a signed package and
+:data:`UNSIGNED_PUBLISHER` otherwise. The local :func:`make_msix` (the lab path) still
+produces an unsigned package, and its receipt says so.
 
 The manifest is written from a validated spec through XML escaping, never by formatting a
 string with owner text in it. `AppxManifest.xml` is the file that decides what the package
@@ -27,6 +29,7 @@ from pathlib import Path
 from typing import Final
 from xml.sax.saxutils import escape, quoteattr
 
+from app.nativefactory.signing import TEST_SIGNING_PUBLISHER_DISPLAY, TEST_SIGNING_SUBJECT
 from app.nativefactory.spec import NativeAppSpec
 
 #: Windows requires a four-part version and refuses a revision of anything but 0 in the
@@ -88,21 +91,24 @@ class PackageResult:
     note: str
 
 
-def appx_manifest_text(spec: NativeAppSpec) -> str:
+def appx_manifest_text(spec: NativeAppSpec, *, signed: bool = False) -> str:
     """The manifest, escaped by XML's own rules rather than by hoping.
 
     `quoteattr` and `escape` are the standard library's, and they are used because the
     display name is the one field that carries owner-facing text into a file that decides
     what the package claims to be. B33: the same text is scaffolded onto the device
-    (``staging/AppxManifest.xml``) for ``project.package`` to pack.
+    (``staging/AppxManifest.xml``) for ``project.package`` to pack; with ``signed`` the
+    Publisher is the device's signing subject (req 473), which the signer requires exactly.
     """
     identity = f"PagentOS.{spec.slug.replace('-', '')}"
     return _APPX_TEMPLATE.format(
         identity=quoteattr(identity),
         version=quoteattr(spec.assembly_version),
-        publisher=quoteattr(UNSIGNED_PUBLISHER),
+        publisher=quoteattr(TEST_SIGNING_SUBJECT if signed else UNSIGNED_PUBLISHER),
         display_name=escape(spec.display_title),
-        publisher_display=escape(UNSIGNED_PUBLISHER_DISPLAY),
+        publisher_display=escape(
+            TEST_SIGNING_PUBLISHER_DISPLAY if signed else UNSIGNED_PUBLISHER_DISPLAY
+        ),
         executable=quoteattr(f"{spec.slug}.exe"),
         display_attr=quoteattr(spec.display_title),
     )
@@ -187,9 +193,8 @@ def make_msix(
         path=out_path,
         signed=False,
         note=(
-            "MSIX imzasız efendim: imzalamak bir sertifika ister ve sizin gerçek imza "
-            "kimliğinizi kullanmam doğru olmaz. İmzasız paket, yayıncısına güvenilen "
-            "makinelerde kurulur."
+            "MSIX imzasız efendim: bu, Cloud Core'un laboratuvar yolu ve imzalamaz; "
+            "imzayı cihaz kendi kendinden imzalı sertifikasıyla atar."
         ),
     )
 

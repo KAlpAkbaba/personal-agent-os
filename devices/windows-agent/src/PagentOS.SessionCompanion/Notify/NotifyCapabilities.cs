@@ -50,7 +50,12 @@ public sealed class NotifyCapabilities
     public const string ReasonShellUnavailable = "shell_unavailable";
     public const string ReasonInvalidPayload = "invalid_payload";
 
-    private static readonly Regex ActionId = new("^[a-z0-9_]+$", RegexOptions.Compiled);
+    // \z, not $: `$` also matches before a final "\n", which let "open\n" through (B11-toast).
+    private static readonly Regex ActionId = new(@"^[a-z0-9_]+\z", RegexOptions.Compiled);
+
+    /// <summary>Whether <paramref name="value"/> is an action id the contract admits.</summary>
+    internal static bool IsActionId(string? value)
+        => value is not null && value.Length is > 0 and <= MaxActionIdChars && ActionId.IsMatch(value);
 
     private readonly IToastSink _sink;
     private readonly ILogger _logger;
@@ -72,7 +77,21 @@ public sealed class NotifyCapabilities
             return Answer(false, ReasonInvalidPayload, request?.NotificationId, problem);
         }
 
-        var outcome = _sink.Show(request!);
+        ToastOutcome outcome;
+        try
+        {
+            outcome = _sink.Show(request!);
+        }
+        catch (Exception ex)
+        {
+            // B11 review (2026-09-17): the doc comment said "never throws" while nothing here
+            // caught - a sink that threw would have failed the command, and the test named for
+            // this used a sink that could not throw. A notification is the least important
+            // thing this process does.
+            _logger.LogWarning(ex, "desktop.notify sink threw for {NotificationId}", request!.NotificationId);
+            outcome = ToastOutcome.NotShown(ReasonShellUnavailable, ex.GetType().Name);
+        }
+
         if (!outcome.Shown)
         {
             _logger.LogInformation(
@@ -81,24 +100,56 @@ public sealed class NotifyCapabilities
                 request!.NotificationId);
         }
 
-        return Answer(outcome.Shown, outcome.Reason, request!.NotificationId, outcome.Detail);
+        return Answer(outcome, request!.NotificationId);
     }
 
     private static JsonObject Answer(bool shown, string? reason, string? notificationId, string? detail)
+        => Answer(new ToastOutcome(shown, reason, detail), notificationId);
+
+    /// <summary>
+    /// The answer the Cloud Core's ladder reads. <c>shown</c> is the only claim about
+    /// delivery, and it means "Windows accepted the toast", never "the owner saw it"; the
+    /// other keys say which surface carried it and what Windows reported about the owner's
+    /// settings, so the Cloud Core can tell a toast with buttons from a balloon without them.
+    /// </summary>
+    private static JsonObject Answer(ToastOutcome outcome, string? notificationId)
     {
-        var answer = new JsonObject { ["shown"] = shown };
+        var answer = new JsonObject { ["shown"] = outcome.Shown };
         if (notificationId is not null)
         {
             answer["notification_id"] = notificationId;
         }
 
-        if (!shown)
+        if (!outcome.Shown)
         {
-            answer["reason"] = reason ?? ReasonShellUnavailable;
-            if (!string.IsNullOrWhiteSpace(detail))
-            {
-                answer["detail"] = detail;
-            }
+            answer["reason"] = outcome.Reason ?? ReasonShellUnavailable;
+        }
+
+        if (outcome.Surface is not null)
+        {
+            answer["surface"] = outcome.Surface;
+        }
+
+        if (outcome.NotifierSetting is not null)
+        {
+            answer["notifier_setting"] = outcome.NotifierSetting;
+        }
+
+        if (outcome.ActionsRendered is not null)
+        {
+            answer["actions_rendered"] = outcome.ActionsRendered.Value;
+        }
+
+        if (outcome.UserState is not null)
+        {
+            answer["user_state"] = outcome.UserState;
+        }
+
+        // Before B11-toast this was only sent with shown:false, so the balloon's
+        // "actions_not_rendered" never reached the Cloud Core it was written for.
+        if (!string.IsNullOrWhiteSpace(outcome.Detail))
+        {
+            answer["detail"] = outcome.Detail;
         }
 
         return answer;
@@ -215,6 +266,18 @@ public sealed record ToastAction(string Id, string Label);
 /// <summary>What actually happened when a toast was attempted.</summary>
 public sealed record ToastOutcome(bool Shown, string? Reason = null, string? Detail = null)
 {
+    /// <summary>Which surface carried it: <see cref="ToastSurfaces.Toast"/> or <see cref="ToastSurfaces.Balloon"/>; null when nothing did.</summary>
+    public string? Surface { get; init; }
+
+    /// <summary>What Windows' <c>ToastNotifier.Setting</c> said (<see cref="ToastNotifierSettings"/>), or null when it was not asked.</summary>
+    public string? NotifierSetting { get; init; }
+
+    /// <summary>How many of the request's action buttons are on screen: 0 on a balloon.</summary>
+    public int? ActionsRendered { get; init; }
+
+    /// <summary>The shell's <c>SHQueryUserNotificationState</c> as a token, or null when unknown.</summary>
+    public string? UserState { get; init; }
+
     public static ToastOutcome Ok() => new(true);
 
     public static ToastOutcome NotShown(string reason, string? detail = null)

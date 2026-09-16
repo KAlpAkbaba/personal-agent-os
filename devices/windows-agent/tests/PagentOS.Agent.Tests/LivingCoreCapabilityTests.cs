@@ -513,7 +513,7 @@ public sealed class LivingCoreCapabilityTests
 
         // B48: the camera pair is sent only by a companion with a camera path, and this one has none.
         Assert.Equal(
-            HeartbeatStatus.Fields.Where(f => f is not (HeartbeatStatus.Camera or HeartbeatStatus.Presence)).OrderBy(f => f, StringComparer.Ordinal),
+            HeartbeatStatus.Fields.Where(f => f is not (HeartbeatStatus.Camera or HeartbeatStatus.Presence or HeartbeatStatus.NotifyActions)).OrderBy(f => f, StringComparer.Ordinal),
             status.Select(p => p.Key).OrderBy(k => k, StringComparer.Ordinal));
         Assert.Equal(42.4, status["input_idle_s"]!.GetValue<double>(), 3);
         Assert.Equal("on", status["display_state"]!.GetValue<string>());

@@ -71,6 +71,9 @@ public sealed class InteractiveCapabilityExecutor(
     /// <summary>The M25 cap for <c>project.run</c> alone: the longest 3D batch bound (Unity's 10 min) plus headroom. A web run still answers within its 20 s port wait — the cap is a ceiling.</summary>
     public static readonly TimeSpan ProjectRunTimeoutCap = ProjectCapabilityNames.RunCommandTimeoutCap;
 
+    /// <summary>The B33 cap for <c>project.package</c> / <c>project.install</c> / <c>project.uninstall</c>: the companion's 5 min makeappx and MSIX deployment bounds plus headroom.</summary>
+    public static readonly TimeSpan ProjectLifecycleTimeoutCap = ProjectCapabilityNames.LifecycleCommandTimeoutCap;
+
     /// <summary>The M25 cap for the scenes family: reading a bounded file and a bounded PNG is the operator family's 30 s.</summary>
     public static readonly TimeSpan ScenesTimeoutCap = SceneCapabilityNames.CommandTimeoutCap;
 
@@ -136,6 +139,11 @@ public sealed class InteractiveCapabilityExecutor(
         if (string.Equals(capability, ProjectCapabilityNames.ProjectRun, StringComparison.Ordinal))
         {
             return ProjectRunTimeoutCap;
+        }
+
+        if (ProjectCapabilityNames.IsLongLifecycle(capability))
+        {
+            return ProjectLifecycleTimeoutCap;
         }
 
         if (AgentCapabilities.IsProjects(capability) || AgentCapabilities.IsScenes(capability))

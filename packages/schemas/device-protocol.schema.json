@@ -183,6 +183,21 @@
             "source": { "const": "camera" }
           },
           "additionalProperties": false
+        },
+        "notify_actions": {
+          "$comment": "B11-toast (row 370; packages/protocol/desktop-notify.json action_event): toast buttons the owner pressed, each carried in up to 3 consecutive reports and recorded once by the Cloud Core (keyed on notification_id, action_id and pressed_at). action_id is verbatim from the desktop.notify request that raised the toast - the Cloud Core's own closed vocabulary. Absent on a companion without the Windows toast surface.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["notification_id", "action_id", "pressed_at"],
+            "properties": {
+              "notification_id": { "type": "string", "maxLength": 64 },
+              "action_id": { "type": "string", "pattern": "^[a-z0-9_]{1,32}$" },
+              "pressed_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          },
+          "maxItems": 16
         }
       },
       "additionalProperties": false

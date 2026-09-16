@@ -53,6 +53,7 @@ from app.nativefactory.models import (
 )
 from app.nativefactory.roots import check_extensions
 from app.nativefactory.service import BUILD_TIMEOUT_S, _tail, _touch
+from app.nativefactory.signing import SigningPolicy, policy_from_settings
 from app.nativefactory.spec import (
     ANDROID_TARGETS,
     TARGET_ANDROID_AAB,
@@ -198,6 +199,7 @@ def build_on_device(
     device: DeviceActionPort,
     *,
     slug: str | None = None,
+    signing: SigningPolicy | None = None,
 ) -> DeviceBuildOutcome:
     """Render this row's spec, scaffold it onto the device, and build it there.
 
@@ -207,6 +209,10 @@ def build_on_device(
     """
     project_slug = slug or row.slug
     project_id = project_id_for(row)  # B33: ONE rule, shared with device_lifecycle
+    if signing is None:
+        from app.config import get_settings
+
+        signing = policy_from_settings(get_settings())
 
     # ---- only what this path can honestly make -------------------------------------------
     # It publishes and reads back ONE artefact, the EXE. The judge (validate_against_spec)
@@ -253,11 +259,15 @@ def build_on_device(
     if row.target == TARGET_WINDOWS_MSIX:
         # B33 req 457: the device packs what the Cloud Core declares - the manifest is
         # scaffolded beside the sources (never generated on the device), so what the
-        # package claims to be is what this row's spec says.
+        # package claims to be is what this row's spec says. Req 473: under the signing
+        # policy the Publisher is the device's signing subject, which the signer requires.
         from app.nativefactory.packaging import appx_manifest_text
 
         scaffold_files.append(
-            {"path": "staging/AppxManifest.xml", "text": appx_manifest_text(spec)}
+            {
+                "path": "staging/AppxManifest.xml",
+                "text": appx_manifest_text(spec, signed=signing.signs),
+            }
         )
 
     # ---- scaffold: the rendered files, written by the DEVICE under its native root -------
@@ -463,7 +473,7 @@ def build_on_device(
         kind = "msix" if row.target == TARGET_WINDOWS_MSIX else "portable"
         packed = device.run(
             capability="project.package",
-            payload={"project_id": project_id, "kind": kind},
+            payload={"project_id": project_id, "kind": kind, "signing_mode": signing.device_mode},
             idempotency_key=f"nativefactory-package:{row.id}:{kind}",
             timeout_s=PACKAGE_TIMEOUT_S,
         )
@@ -489,7 +499,7 @@ def build_on_device(
                 "path": package["path"],
                 "bytes": package.get("bytes"),
                 "sha256": package["sha256"],
-                "signed": package.get("signed") is True,
+                **signature_facts(package),
                 "executable": artifact_path,
             },
         }
@@ -505,6 +515,26 @@ def build_on_device(
         artifact=artifact,
         tests=tests,
     )
+
+
+def signature_facts(package: dict[str, Any]) -> dict[str, Any]:
+    """B33 req 473: what the DEVICE said about a package's signature, and nothing more.
+
+    ``signed`` is true only when the device said so in as many words; the signer and the
+    trust state are copied only alongside it, so a row can never carry a thumbprint for a
+    package that was not signed.
+    """
+    signed = package.get("signed") is True
+    facts: dict[str, Any] = {
+        "signed": signed,
+        "signing_mode": str(package.get("signing_mode") or "unsigned") if signed else "unsigned",
+    }
+    if signed:
+        facts["signer_thumbprint"] = package.get("signer_thumbprint")
+        facts["signer_subject"] = package.get("signer_subject")
+        facts["signer_not_after"] = package.get("signer_not_after")
+        facts["trusted"] = package.get("trusted") is True
+    return facts
 
 
 def _read_back_android(

@@ -12,7 +12,9 @@ launch, ``project.install`` / ``project.uninstall`` for the shortcut, the 26.15 
 ``verify`` (type a note through UI Automation, add it, close, relaunch, read the count and
 the app's own log), and a regenerate-and-rebuild on the device for ``fix``. Every receipt
 is what the device answered. The signing policy (``app.nativefactory.signing``) is spoken
-with every package: unsigned, and why.
+with every package, from the DEVICE's answer: since the owner's decision of 2026-09-16 an
+MSIX is signed on the device with its self-signed identity, and an MSIX install is refused
+with the owner's one elevated trust step named until the machine trusts that identity.
 
 Thin adapters, and deliberately so: every decision that could be wrong lives in
 ``app.nativefactory`` (the spec's one door ``parse_spec``, the stack rule ``choose``,
@@ -64,7 +66,7 @@ from app.actions.receipt import (
 )
 from app.ledger.vocabulary import SUBSYSTEM_NATIVEFACTORY
 from app.logging import get_logger
-from app.nativefactory.device_build import build_on_device
+from app.nativefactory.device_build import build_on_device, signature_facts
 from app.nativefactory.device_lifecycle import (
     inspect_window,
     install_on_device,
@@ -91,7 +93,18 @@ from app.nativefactory.service import (
     publish_and_validate,
     receipt_for,
 )
-from app.nativefactory.signing import policy_from_settings
+from app.nativefactory.signing import (
+    ERROR_PACKAGE_UNSIGNED,
+    ERROR_SIGNING_CERT_UNTRUSTED,
+    ERROR_SIGNING_MODE_REFUSED,
+    MODE_OWNER_CERTIFICATE,
+    SPEECH_INSTALL_UNSIGNED,
+    SPEECH_INSTALL_UNTRUSTED,
+    TRUST_COMMAND,
+    TRUST_SCRIPT,
+    install_refusal,
+    policy_from_settings,
+)
 from app.nativefactory.spec import (
     ANDROID_TARGETS,
     NATIVE_TARGETS,
@@ -598,7 +611,9 @@ def _build_on_device(
     cannot say `verified` because a device-shaped path was taken; it says it because the
     version the device read out of the artefact is the version the spec asked for.
     """
-    outcome = build_on_device(ctx.db, row, device)
+    outcome = build_on_device(
+        ctx.db, row, device, signing=policy_from_settings(_facts_settings(ctx))
+    )
     if not outcome.ok:
         return _receipt(
             ctx,
@@ -757,7 +772,7 @@ def _package_on_device(
 ) -> dict[str, Any]:
     kind = "msix" if target == TARGET_WINDOWS_MSIX else "portable"
     policy = policy_from_settings(_facts_settings(ctx))
-    outcome = package_on_device(device, row, kind=kind)
+    outcome = package_on_device(device, row, kind=kind, signing_mode=policy.device_mode)
     if not outcome.ok:
         speech = (
             f"{row.display_name} için MSIX yapamadım efendim: cihazda makeappx yok."
@@ -773,10 +788,19 @@ def _package_on_device(
             extra={"build": _row_summary(row), "signing": policy.as_dict()},
         )
     package = outcome.result
-    row.artifact_json = {**dict(row.artifact_json or {}), "package": {**package, "kind": kind}}
+    # Req 473: the signature is what the DEVICE read back - copied only when it said signed.
+    signature = signature_facts(package)
+    stored = {k: v for k, v in package.items() if k not in _SIGNATURE_KEYS}
+    row.artifact_json = {
+        **dict(row.artifact_json or {}),
+        "package": {**stored, **signature, "kind": kind},
+    }
     row.updated_at = datetime.now(UTC)
     _require_db(ctx, TOOL_NATIVE_PACKAGE).commit()
     size_kb = int(package.get("bytes") or 0) // 1024
+    signing_speech = policy.speech_for(
+        kind, signed=signature["signed"], trusted=signature.get("trusted")
+    )
     return _receipt(
         ctx,
         capability=TOOL_NATIVE_PACKAGE,
@@ -785,14 +809,129 @@ def _package_on_device(
         terminal=TERMINAL_VERIFIED,
         speech=(
             f"{row.display_name} cihazda paketlendi efendim: {package.get('name')}, "
-            f"{size_kb} KB. {policy.speech_for(kind)}"
+            f"{size_kb} KB. {signing_speech}"
         ),
-        server={"package": package.get("path"), "sha256": package.get("sha256"), "signed": False},
+        server={
+            "package": package.get("path"),
+            "sha256": package.get("sha256"),
+            **signature,
+        },
         extra={
             "build": _row_summary(row),
             "package_path": package.get("path"),
             "signing": policy.as_dict(),
+            **(
+                {"owner_action": {"script": TRUST_SCRIPT, "command": TRUST_COMMAND}}
+                if signature["signed"] and signature.get("trusted") is not True
+                else {}
+            ),
         },
+    )
+
+
+#: The signature keys a device package answer may carry; they reach the row only through
+#: :func:`signature_facts`, never copied raw.
+_SIGNATURE_KEYS: Final = frozenset(
+    {
+        "signed",
+        "signing_mode",
+        "signer_thumbprint",
+        "signer_subject",
+        "signer_not_after",
+        "trusted",
+        "trust_step",
+    }
+)
+
+
+def _msix_install_refusal(
+    ctx: ToolContext, row: NativeBuildRow, *, capability: str
+) -> dict[str, Any] | None:
+    """Req 472/473: the refusals an MSIX row meets BEFORE the device is asked to install.
+
+    The device decides trust (it may have changed since the package was made); what is
+    decided here is only what the Cloud Core already knows: the policy, and whether the
+    package this row carries was signed at all by the device's own account.
+    """
+    policy = policy_from_settings(_facts_settings(ctx))
+    package = dict((row.artifact_json or {}).get("package") or {})
+    if policy.mode == MODE_OWNER_CERTIFICATE:
+        return _refused(
+            ctx,
+            capability=capability,
+            requested_state=row.target,
+            speech=policy.speech_for("msix"),
+            error_class=ERROR_SIGNING_MODE_REFUSED,
+            extra={"build": _row_summary(row), "signing": policy.as_dict()},
+        )
+    if not policy.signs or package.get("signed") is not True:
+        return _refused(
+            ctx,
+            capability=capability,
+            requested_state=row.target,
+            speech=(
+                policy.speech_for("msix")
+                if not policy.signs
+                else SPEECH_INSTALL_UNSIGNED.format(name=row.display_name)
+            ),
+            error_class=ERROR_PACKAGE_UNSIGNED,
+            extra={"build": _row_summary(row), "signing": policy.as_dict()},
+        )
+    return None
+
+
+def _install_failure(
+    ctx: ToolContext,
+    row: NativeBuildRow,
+    outcome: Any,
+    *,
+    capability: str,
+    requested_state: str,
+    fallback_speech: str,
+) -> dict[str, Any]:
+    """A device install refusal, spoken as what it is. The two signing refusals are
+    recognised by the device's own first word (DEVICE_PROTOCOL.md §6n)."""
+    policy_error = install_refusal(outcome.message)
+    if policy_error == ERROR_SIGNING_CERT_UNTRUSTED:
+        return _refused(
+            ctx,
+            capability=capability,
+            requested_state=requested_state,
+            speech=SPEECH_INSTALL_UNTRUSTED.format(name=row.display_name),
+            error_class=ERROR_SIGNING_CERT_UNTRUSTED,
+            extra={
+                "build": _row_summary(row),
+                "owner_action": {"script": TRUST_SCRIPT, "command": TRUST_COMMAND},
+            },
+        )
+    if policy_error == ERROR_PACKAGE_UNSIGNED:
+        return _refused(
+            ctx,
+            capability=capability,
+            requested_state=requested_state,
+            speech=SPEECH_INSTALL_UNSIGNED.format(name=row.display_name),
+            error_class=ERROR_PACKAGE_UNSIGNED,
+            extra={"build": _row_summary(row)},
+        )
+    return _refused(
+        ctx,
+        capability=capability,
+        requested_state=requested_state,
+        speech=fallback_speech,
+        error_class=outcome.error_class or "device_error",
+        extra={"build": _row_summary(row)},
+    )
+
+
+def _installed_speech(row: NativeBuildRow, result: dict[str, Any]) -> str:
+    if result.get("method") == "msix":
+        return (
+            f"{row.display_name} kuruldu efendim: kendinden imzalı MSIX bu kullanıcı için "
+            f"kayıtlı, Windows paketi listesinde gösteriyor."
+        )
+    return (
+        f"{row.display_name} kuruldu efendim: Başlat menüsünde kısayolu var, "
+        f"cihaz kısayolu ve dosyayı yerinde gördü."
     )
 
 
@@ -834,31 +973,20 @@ def native_install(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
             extra={"build": _row_summary(row)},
         )
     if row.target == TARGET_WINDOWS_MSIX:
-        policy = policy_from_settings(_facts_settings(ctx))
-        if not policy.signs:
-            # An unsigned MSIX cannot be installed on the owner's machine without their
-            # certificate decision (472/473); the portable shortcut install is offered.
-            return _refused(
-                ctx,
-                capability=TOOL_NATIVE_INSTALL,
-                requested_state=row.target,
-                speech=policy.speech_for("msix"),
-                error_class="signing_not_decided",
-                extra={
-                    "build": _row_summary(row),
-                    "signing": policy.as_dict(),
-                    "owner_action": "472",
-                },
-            )
+        # Req 472/473: an MSIX row installs its SIGNED package for the current user; the
+        # device refuses an untrusted signer with the owner's one elevated step named.
+        refusal = _msix_install_refusal(ctx, row, capability=TOOL_NATIVE_INSTALL)
+        if refusal is not None:
+            return refusal
     outcome = install_on_device(device, row)
     if not outcome.ok:
-        return _refused(
+        return _install_failure(
             ctx,
+            row,
+            outcome,
             capability=TOOL_NATIVE_INSTALL,
             requested_state=row.target,
-            speech=f"{row.display_name} kurulamadı efendim: {outcome.message[:160]}",
-            error_class=outcome.error_class or "device_error",
-            extra={"build": _row_summary(row)},
+            fallback_speech=f"{row.display_name} kurulamadı efendim: {outcome.message[:160]}",
         )
     return _receipt(
         ctx,
@@ -866,12 +994,13 @@ def native_install(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         requested_state=row.target,
         execution=EXECUTION_EXECUTED,
         terminal=TERMINAL_VERIFIED,
-        speech=(
-            f"{row.display_name} kuruldu efendim: Başlat menüsünde kısayolu var, "
-            f"cihaz kısayolu ve dosyayı yerinde gördü."
-        ),
+        speech=_installed_speech(row, outcome.result),
         server=outcome.result,
-        extra={"build": _row_summary(row), "shortcut": outcome.result.get("shortcut")},
+        extra={
+            "build": _row_summary(row),
+            "shortcut": outcome.result.get("shortcut"),
+            "package_full_name": outcome.result.get("package_full_name"),
+        },
     )
 
 
@@ -1240,6 +1369,7 @@ def native_uninstall(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             error_class=outcome.error_class or "device_error",
             extra={"build": _row_summary(row)},
         )
+    what_went = "paket kaydı" if outcome.result.get("method") == "msix" else "kısayol"
     return _receipt(
         ctx,
         capability=TOOL_NATIVE_UNINSTALL,
@@ -1247,7 +1377,7 @@ def native_uninstall(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         execution=EXECUTION_EXECUTED,
         terminal=TERMINAL_VERIFIED,
         speech=(
-            f"{row.display_name} kurulumunu kaldırdım efendim; kısayol gitti, "
+            f"{row.display_name} kurulumunu kaldırdım efendim; {what_went} gitti, "
             f"derleme klasörü yerinde."
         ),
         server=outcome.result,
@@ -1284,18 +1414,22 @@ def native_update(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     built = _build_on_device(ctx, new_row, device, capability=TOOL_NATIVE_UPDATE)
     if built.get("execution_status") != EXECUTION_EXECUTED:
         return built
+    if new_row.target == TARGET_WINDOWS_MSIX:
+        refusal = _msix_install_refusal(ctx, new_row, capability=TOOL_NATIVE_UPDATE)
+        if refusal is not None:
+            return refusal
     installed = install_on_device(device, new_row)
     if not installed.ok:
-        return _refused(
+        return _install_failure(
             ctx,
+            new_row,
+            installed,
             capability=TOOL_NATIVE_UPDATE,
             requested_state="updated",
-            speech=(
+            fallback_speech=(
                 f"{new_row.display_name} {new_row.version} derlendi ama kurulamadı "
                 f"efendim: {installed.message[:160]}"
             ),
-            error_class=installed.error_class or "device_error",
-            extra={"build": _row_summary(new_row)},
         )
     return _receipt(
         ctx,
@@ -1305,7 +1439,12 @@ def native_update(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         terminal=TERMINAL_VERIFIED,
         speech=(
             f"{new_row.display_name} {new_row.version} sürümüne güncellendi efendim: "
-            f"cihazda derlendi, {receipt_for(new_row)} Kısayol yeni sürüme bakıyor."
+            f"cihazda derlendi, {receipt_for(new_row)} "
+            + (
+                "Yeni paket bu kullanıcı için kayıtlı."
+                if installed.result.get("method") == "msix"
+                else "Kısayol yeni sürüme bakıyor."
+            )
         ),
         server={"previous_build_id": str(row.id), **installed.result},
         extra={"build": _row_summary(new_row)},

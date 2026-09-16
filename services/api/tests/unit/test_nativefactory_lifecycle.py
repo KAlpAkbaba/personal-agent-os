@@ -22,6 +22,8 @@ import pytest
 from app.nativefactory import device_build
 from app.nativefactory.device_lifecycle import (
     ARTIFACT_CHUNK_BYTES,
+    INSTALL_TIMEOUT_S,
+    MSIX_INSTALL_TIMEOUT_S,
     ArtifactPullError,
     inspect_window,
     install_on_device,
@@ -35,13 +37,23 @@ from app.nativefactory.device_lifecycle import (
     verify_on_device,
 )
 from app.nativefactory.signing import (
+    DEFAULT_MODE,
+    ERROR_PACKAGE_UNSIGNED,
+    ERROR_SIGNING_CERT_UNTRUSTED,
     IMPLEMENTED_MODES,
     MODE_OWNER_CERTIFICATE,
     MODE_TEST_CERTIFICATE,
     MODE_UNSIGNED,
+    SPEECH_OWNER_CERTIFICATE_REFUSED,
+    SPEECH_SIGNED_TRUSTED,
+    SPEECH_SIGNED_UNTRUSTED,
+    SPEECH_SIGNING_NOT_APPLIED,
     SPEECH_UNSIGNED_MSIX,
     SPEECH_UNSIGNED_PORTABLE,
+    TEST_SIGNING_SUBJECT,
+    TRUST_SCRIPT,
     SigningPolicy,
+    install_refusal,
     policy_from_settings,
 )
 from app.routines.dispatch import DeviceRunResult
@@ -70,11 +82,13 @@ class ScriptedDevice:
             k.replace("__", "."): (v if isinstance(v, list) else [v]) for k, v in script.items()
         }
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.timeouts: list[float] = []
 
     def run(
         self, *, capability: str, payload: dict[str, Any], idempotency_key: str, timeout_s: float
     ) -> DeviceRunResult:
         self.calls.append((capability, dict(payload)))
+        self.timeouts.append(timeout_s)
         answers = self._script.get(capability)
         if not answers:
             return DeviceRunResult(False, "capability_missing", f"{capability} not scripted")
@@ -254,7 +268,10 @@ def test_package_returns_what_the_device_observed_and_refuses_an_answer_without_
     )
     good = package_on_device(device, _row(), kind="msix")
     assert good.ok and good.result["sha256"] == "c" * 64
-    assert device.calls[0] == ("project.package", {"project_id": "native-12345678", "kind": "msix"})
+    assert device.calls[0] == (
+        "project.package",
+        {"project_id": "native-12345678", "kind": "msix", "signing_mode": "unsigned"},
+    )
     bad = package_on_device(device, _row(), kind="msix")
     assert not bad.ok and bad.error_class == "package_unreadable"
 
@@ -275,9 +292,49 @@ def test_install_is_verified_only_by_the_shortcut_the_device_observed() -> None:
         ]
     )
     assert install_on_device(device, _row()).ok
-    assert device.calls[0][1] == {"project_id": "native-12345678", "name": "Notlarım"}
+    assert device.calls[0][1] == {
+        "project_id": "native-12345678",
+        "name": "Notlarım",
+        "kind": "shortcut",
+    }
+    assert device.timeouts[0] == INSTALL_TIMEOUT_S
     second = install_on_device(device, _row())
     assert not second.ok and second.error_class == "install_unverified"
+
+
+def test_an_msix_row_installs_its_package_and_only_a_registration_the_device_read_proves_it() -> (
+    None
+):
+    """B33 req 473: an MSIX row asks for kind=msix with the lifecycle ceiling, and a shortcut
+    the device happens to report is NOT proof that a package was registered."""
+    device = ScriptedDevice(
+        project__install=[
+            _ok(installed=True, method="msix", observed={"package_registered": True}),
+            _ok(installed=True, method="msix", observed={"shortcut_exists": True}),
+            _ok(installed=True, method="msix", observed={"package_registered": False}),
+        ]
+    )
+    row = _row(target="windows_msix")
+    assert install_on_device(device, row).ok
+    assert device.calls[0][1]["kind"] == "msix"
+    assert device.timeouts[0] == MSIX_INSTALL_TIMEOUT_S == 330.0
+    for _ in range(2):
+        refused = install_on_device(device, row)
+        assert not refused.ok and refused.error_class == "install_unverified"
+        assert "registered" in refused.message
+
+
+def test_the_device_s_signing_refusals_are_recognised_by_their_first_word_only() -> None:
+    assert (
+        install_refusal("signing_cert_untrusted: the package's signer AB is not trusted")
+        == ERROR_SIGNING_CERT_UNTRUSTED
+    )
+    assert install_refusal("package_unsigned: dist/x.msix carries no signature") == (
+        ERROR_PACKAGE_UNSIGNED
+    )
+    # A message that merely MENTIONS the word is not that refusal.
+    assert install_refusal("msix_install_failed: signing_cert_untrusted maybe") is None
+    assert install_refusal("") is None
 
 
 def test_uninstall_is_unverified_while_the_shortcut_is_still_there() -> None:
@@ -296,6 +353,7 @@ def test_uninstall_is_unverified_while_the_shortcut_is_still_there() -> None:
                 observed={"shortcut_exists": True},
             ),
             DeviceRunResult(False, "not_found", "not installed by this system"),
+            _ok(uninstalled=True, method="msix", observed={"package_registered": True}),
         ]
     )
     assert uninstall_on_device(device, _row()).ok
@@ -303,6 +361,10 @@ def test_uninstall_is_unverified_while_the_shortcut_is_still_there() -> None:
     assert not stuck.ok and stuck.error_class == "uninstall_unverified"
     never = uninstall_on_device(device, _row())
     assert not never.ok and never.error_class == "not_found"
+    # B33 req 473: a package Windows still lists is not uninstalled, whatever else was said.
+    still = uninstall_on_device(device, _row(target="windows_msix"))
+    assert not still.ok and still.error_class == "uninstall_unverified"
+    assert device.timeouts[-1] == MSIX_INSTALL_TIMEOUT_S
 
 
 # ------------------------------------------------------------- artifact pull (456)
@@ -382,21 +444,55 @@ def test_the_project_id_the_build_scaffolds_is_the_one_the_lifecycle_addresses()
 # ------------------------------------------------------------ signing policy (472/473)
 
 
-def test_only_unsigned_is_implemented_and_the_other_modes_are_named_not_faked() -> None:
-    assert IMPLEMENTED_MODES == frozenset({MODE_UNSIGNED})
+def test_the_owner_decided_self_signed_so_test_certificate_is_applied_and_the_default() -> None:
+    """Owner decision 2026-09-16: "win uygulamada da kendinden imzalı olsun"."""
+    assert DEFAULT_MODE == MODE_TEST_CERTIFICATE
+    assert IMPLEMENTED_MODES == frozenset({MODE_UNSIGNED, MODE_TEST_CERTIFICATE})
+    policy = SigningPolicy()
+    assert policy.mode == MODE_TEST_CERTIFICATE
+    assert policy.implemented and policy.signs
+    assert policy.device_mode == MODE_TEST_CERTIFICATE
+    assert policy.publisher == TEST_SIGNING_SUBJECT == "CN=PagentOS Owner Test Signing"
+    facts = policy.as_dict()
+    assert facts["subject"] == TEST_SIGNING_SUBJECT
+    assert facts["trust_script"] == TRUST_SCRIPT
+    assert facts["timestamped"] is False
+    assert facts["device_runs_no_signer"] is True
+    assert facts["owner_decision_required"] is False
+
+
+def test_what_the_owner_hears_is_the_device_s_answer_never_the_policy_s_intention() -> None:
+    policy = SigningPolicy(MODE_TEST_CERTIFICATE)
+    assert policy.speech_for("msix", signed=True, trusted=True) == SPEECH_SIGNED_TRUSTED
+    untrusted = policy.speech_for("msix", signed=True, trusted=False)
+    assert untrusted == SPEECH_SIGNED_UNTRUSTED
+    assert "trust-native-signing-cert.ps1" in untrusted and "yönetici" in untrusted
+    # A device that answered signed:false (or nothing) is not described as signed.
+    assert policy.speech_for("msix", signed=False, trusted=True) == SPEECH_SIGNING_NOT_APPLIED
+    assert policy.speech_for("msix") == SPEECH_SIGNING_NOT_APPLIED
+    # A portable zip is never signed, in any mode.
+    assert policy.speech_for("portable", signed=True, trusted=True) == SPEECH_UNSIGNED_PORTABLE
+
+
+def test_unsigned_is_an_explicit_opt_out_and_owner_certificate_stays_refused_by_name() -> None:
     unsigned = SigningPolicy(MODE_UNSIGNED)
     assert unsigned.implemented and not unsigned.signs
+    assert unsigned.device_mode == MODE_UNSIGNED
+    assert unsigned.publisher == "CN=PagentOS Unsigned Build"
     assert unsigned.speech_for("portable") == SPEECH_UNSIGNED_PORTABLE
-    assert unsigned.speech_for("msix") == SPEECH_UNSIGNED_MSIX
-    for mode in (MODE_TEST_CERTIFICATE, MODE_OWNER_CERTIFICATE):
-        policy = SigningPolicy(mode)
-        assert not policy.implemented and not policy.signs
-        assert mode in policy.speech_for("msix")
-        assert "imzasız" in policy.speech_for("msix")
-        assert policy.as_dict()["implemented"] is False
+    assert unsigned.speech_for("msix", signed=True, trusted=True) == SPEECH_UNSIGNED_MSIX
+
+    owner = SigningPolicy(MODE_OWNER_CERTIFICATE)
+    assert not owner.implemented and not owner.signs
+    # Never forwarded to the device as anything but unsigned.
+    assert owner.device_mode == MODE_UNSIGNED
+    assert owner.speech_for("msix", signed=True, trusted=True) == SPEECH_OWNER_CERTIFICATE_REFUSED
+    assert "owner_certificate" in owner.speech_for("msix")
+    assert owner.as_dict()["implemented"] is False
+    assert owner.as_dict()["owner_decision_required"] is True
 
 
-def test_the_policy_is_read_from_settings_and_an_unknown_mode_falls_back_to_unsigned() -> None:
+def test_the_policy_is_read_from_settings_and_an_unknown_mode_falls_back_to_the_default() -> None:
     assert (
         policy_from_settings(SimpleNamespace(native_signing_mode="unsigned")).mode == MODE_UNSIGNED
     )
@@ -404,5 +500,15 @@ def test_the_policy_is_read_from_settings_and_an_unknown_mode_falls_back_to_unsi
         policy_from_settings(SimpleNamespace(native_signing_mode="test_certificate")).mode
         == MODE_TEST_CERTIFICATE
     )
-    assert policy_from_settings(SimpleNamespace(native_signing_mode="bogus")).mode == MODE_UNSIGNED
-    assert policy_from_settings(SimpleNamespace()).mode == MODE_UNSIGNED
+    assert (
+        policy_from_settings(SimpleNamespace(native_signing_mode="owner_certificate")).mode
+        == MODE_OWNER_CERTIFICATE
+    )
+    assert policy_from_settings(SimpleNamespace(native_signing_mode="bogus")).mode == DEFAULT_MODE
+    assert policy_from_settings(SimpleNamespace()).mode == DEFAULT_MODE
+
+
+def test_the_shipped_setting_is_the_owner_s_decision() -> None:
+    from app.config import Settings
+
+    assert Settings.model_fields["native_signing_mode"].default == MODE_TEST_CERTIFICATE

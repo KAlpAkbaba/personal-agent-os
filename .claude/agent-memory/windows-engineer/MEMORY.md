@@ -17,4 +17,6 @@
 - [M25 scenes / 3D device facts](project_m25_scenes_3d.md) — Blender refuses a missing .blend, Unity resolves -projectPath against the CWD and logs only to -logFile (exit 198 today), the marker round-trip and ResolveFinal traps, two pre-existing flaky tests
 - [Device identity chain](project_device_identity_chain.md) — AgentInfo -> hello -> device row -> installer verifier, the 40/39/29 capability arithmetic, the 2026-09-08 rollback traps, and the closure/[hashtable] PowerShell traps
 - [Item 28 unlock](project_item28_unlock.md) — the one elevated command, and the allowlists, roots, project command list and quiet levers any script driving the unlocked capabilities must respect
+- [B33 MSIX signing facts](project_b33_msix_signing.md) — measured WinVerifyTrust/PackageManager HRESULTs, throwaway cert-store lab, WinRT via vtables, mutation-compile and formatter-drift traps
+- [B11-toast facts](project_b11_toast.md) — Setting throws 0x80070490 until first Show, history read-back is not a popup, this desktop shows no popups, mutation-runner PS traps
 - [B48 device camera](project_b48_device_camera.md) — WinRT via versioned TFM with pinned OutputPath, restore needs network, heartbeat nested projection, desktop.notify was unwired, CS0162 mutation trap

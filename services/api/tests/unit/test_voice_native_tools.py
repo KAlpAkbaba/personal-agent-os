@@ -34,6 +34,16 @@ from sqlalchemy import select
 from app.nativefactory import service as native_service
 from app.nativefactory.artifacts import ArtifactFacts
 from app.nativefactory.models import STATE_UNAVAILABLE, NativeBuildRow
+from app.nativefactory.signing import (
+    SPEECH_OWNER_CERTIFICATE_REFUSED,
+    SPEECH_SIGNED_TRUSTED,
+    SPEECH_SIGNED_UNTRUSTED,
+    SPEECH_SIGNING_NOT_APPLIED,
+    SPEECH_UNSIGNED_MSIX,
+    TEST_SIGNING_SUBJECT,
+    TRUST_COMMAND,
+    TRUST_SCRIPT,
+)
 from app.nativefactory.stacks import SPEECH_ANDROID_BUILD_NOT_WIRED, ToolchainFacts
 from app.routines.dispatch import DeviceRunResult
 from app.voice.realtime_sessions.tools_native import (
@@ -42,6 +52,7 @@ from app.voice.realtime_sessions.tools_native import (
     SPEECH_INSTALL_NEEDS_DEVICE,
     SPEECH_NO_RUNNER,
 )
+from tests.appfactory_support import FAKE_SIGNER_THUMBPRINT, SIGNING_TRUST
 from tests.voice_corpus.corpus import CTX_NATIVE_ANDROID, CTX_NATIVE_BUILT, CTX_NATIVE_PLANNED
 from tests.voice_corpus.harness import NATIVE_TOOLCHAIN, build_harness
 
@@ -661,11 +672,10 @@ def test_production_plans_a_windows_app_for_the_device_and_builds_it_there() -> 
     assert h.device.capabilities_called()[:2] == ["project.scaffold", "project.run"]
 
 
-def test_a_packaging_target_is_built_on_the_device_and_packaged_there_unsigned() -> None:
-    """B33 req 456/457/472: until this batch an MSIX row was refused by name because the
-    device made the EXE and nothing else. Now the device packs it (project.package) after
-    the EXE is read back, the row's artefact is the package, and the owner hears the
-    signing policy - unsigned, and why."""
+def test_a_packaging_target_is_built_on_the_device_and_packaged_there_self_signed() -> None:
+    """B33 req 456/457/473: the device packs the MSIX after the EXE is read back, and - by
+    the owner's decision of 2026-09-16 - signs it with its self-signed identity. The manifest
+    names that identity as Publisher, and the row carries what the DEVICE read back."""
     h = _production_shaped()
     sid = h.new_session()
     created = h.tool(
@@ -685,14 +695,140 @@ def test_a_packaging_target_is_built_on_the_device_and_packaged_there_unsigned()
     called = h.device.capabilities_called()
     assert called[-1] == "project.package"
     assert h.device.payload_for("project.package")["kind"] == "msix"
-    scaffolded = {f["path"] for f in h.device.payload_for("project.scaffold")["files"]}
-    assert "staging/AppxManifest.xml" in scaffolded
+    assert h.device.payload_for("project.package")["signing_mode"] == "test_certificate"
+    scaffolded = {f["path"]: f["text"] for f in h.device.payload_for("project.scaffold")["files"]}
+    assert f'Publisher="{TEST_SIGNING_SUBJECT}"' in scaffolded["staging/AppxManifest.xml"]
     with h.factory() as db:
         row = db.get(NativeBuildRow, uuid.UUID(msix["build_id"]))
         assert row.artifact_path.endswith(".msix")
-        assert row.artifact_json["package"]["kind"] == "msix"
-        assert row.artifact_json["package"]["signed"] is False
-        assert row.artifact_json["package"]["executable"].endswith(".exe")
+        package = row.artifact_json["package"]
+        assert package["kind"] == "msix"
+        assert package["signed"] is True
+        assert package["signer_thumbprint"] == FAKE_SIGNER_THUMBPRINT
+        assert package["trusted"] is False
+        assert package["executable"].endswith(".exe")
+
+
+def _built_msix(h, sid):  # noqa: ANN001, ANN202
+    created = h.tool(
+        sid, "c-1", "native.create", {"targets": ["windows_msix"], "name": "Notlarim"}
+    )["result"]
+    build_id = created["builds"][0]["build_id"]
+    built = h.tool(sid, "c-2", "native.build", {"build_id": build_id})["result"]
+    assert built["build"]["state"] == "verified", built.get("speech")
+    return build_id
+
+
+def test_an_untrusted_signer_refuses_the_msix_install_and_names_the_owner_s_one_step() -> None:
+    """B33 req 473: the machine does not trust the device's certificate until the owner runs
+    the elevated trust script once. The device refuses; the owner hears the script's name and
+    the receipt carries the exact command - and nothing claims an install."""
+    h = _production_shaped()
+    sid = h.new_session()
+    build_id = _built_msix(h, sid)
+
+    body = h.tool(sid, "c-3", "native.install", {"build_id": build_id})["result"]
+
+    assert body["execution_status"] == "refused", body.get("speech")
+    assert body["error_class"] == "signing_cert_untrusted"
+    assert "trust-native-signing-cert.ps1" in body["speech"]
+    assert "yönetici" in body["speech"]
+    assert "kuruldu efendim" not in body["speech"]
+    assert body["owner_action"] == {"script": TRUST_SCRIPT, "command": TRUST_COMMAND}
+    assert h.device.payload_for("project.install")["kind"] == "msix"
+
+
+def test_after_the_trust_step_the_signed_msix_installs_and_uninstalls_as_a_package() -> None:
+    h = _production_shaped()
+    SIGNING_TRUST["trusted"] = True
+    try:
+        sid = h.new_session()
+        build_id = _built_msix(h, sid)
+        package = h.tool(sid, "c-3", "native.package", {"build_id": build_id})["result"]
+        installed = h.tool(sid, "c-4", "native.install", {"build_id": build_id})["result"]
+        removed = h.tool(sid, "c-5", "native.uninstall", {"build_id": build_id})["result"]
+    finally:
+        SIGNING_TRUST["trusted"] = False
+
+    assert package["execution_status"] == "executed", package.get("speech")
+    assert SPEECH_SIGNED_TRUSTED in package["speech"]
+    assert "owner_action" not in package
+
+    assert installed["execution_status"] == "executed", installed.get("speech")
+    server = installed["observed_after"]["server"]
+    assert server["method"] == "msix"
+    assert server["observed"] == {"package_registered": True}
+    assert installed["package_full_name"].startswith("PagentOS.")
+    assert "kendinden imzalı MSIX" in installed["speech"]
+    assert "Başlat menüsünde" not in installed["speech"]
+
+    assert removed["execution_status"] == "executed", removed.get("speech")
+    assert "paket kaydı gitti" in removed["speech"]
+
+
+def test_packaging_an_msix_on_the_device_speaks_the_signature_the_device_read_back() -> None:
+    h = _production_shaped()
+    sid = h.new_session()
+    build_id = _built_msix(h, sid)
+
+    body = h.tool(sid, "c-3", "native.package", {"build_id": build_id})["result"]
+
+    assert body["execution_status"] == "executed", body.get("speech")
+    assert SPEECH_SIGNED_UNTRUSTED in body["speech"]
+    server = body["observed_after"]["server"]
+    assert server["signed"] is True
+    assert server["trusted"] is False
+    assert server["signer_thumbprint"] == FAKE_SIGNER_THUMBPRINT
+    assert body["owner_action"] == {"script": TRUST_SCRIPT, "command": TRUST_COMMAND}
+    assert h.device.payload_for("project.package")["signing_mode"] == "test_certificate"
+
+
+def test_a_device_that_answers_unsigned_is_never_described_as_signed() -> None:
+    """A device older than B33 ignores signing_mode. The owner hears 'imzalanmadı', the row
+    says unsigned, and the install is refused before the device is asked."""
+    h = _production_shaped()
+    unsigned_answer = DeviceRunResult(
+        True,
+        result={
+            "kind": "msix",
+            "path": "C:\\x\\dist\\notlarim.msix",
+            "name": "notlarim.msix",
+            "bytes": 10,
+            "sha256": "e" * 64,
+            "signed": False,
+            "observed": {"exists": True, "bytes": 10},
+        },
+    )
+    h.device.results["project.package"] = unsigned_answer
+    sid = h.new_session()
+    build_id = _built_msix(h, sid)
+    package = h.tool(sid, "c-3", "native.package", {"build_id": build_id})["result"]
+    installed = h.tool(sid, "c-4", "native.install", {"build_id": build_id})["result"]
+
+    assert SPEECH_SIGNING_NOT_APPLIED in package["speech"]
+    assert package["observed_after"]["server"]["signed"] is False
+    assert installed["execution_status"] == "refused"
+    assert installed["error_class"] == "package_unsigned"
+    assert "project.install" not in h.device.capabilities_called()
+
+
+def test_the_unsigned_opt_out_and_the_owner_certificate_refusal_are_spoken_as_themselves() -> None:
+    from types import SimpleNamespace
+
+    for mode, error_class, speech in (
+        ("unsigned", "package_unsigned", SPEECH_UNSIGNED_MSIX),
+        ("owner_certificate", "signing_mode_refused", SPEECH_OWNER_CERTIFICATE_REFUSED),
+    ):
+        h = _production_shaped()
+        h.runtime.register_live(settings=SimpleNamespace(native_signing_mode=mode))
+        sid = h.new_session()
+        build_id = _built_msix(h, sid)
+        assert h.device.payload_for("project.package")["signing_mode"] == "unsigned"
+        body = h.tool(sid, "c-3", "native.install", {"build_id": build_id})["result"]
+        assert body["execution_status"] == "refused", mode
+        assert body["error_class"] == error_class
+        assert body["speech"] == speech
+        assert "project.install" not in h.device.capabilities_called()
 
 
 def test_an_android_target_is_planned_for_the_device_and_asked_in_gradle_shapes() -> None:

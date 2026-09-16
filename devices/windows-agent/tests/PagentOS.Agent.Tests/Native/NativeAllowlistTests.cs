@@ -171,7 +171,7 @@ public sealed class NativeAllowlistTests
                 ProjectCapabilityNames.ProjectScaffold,
                 NativeLab.ScaffoldNativePayload("native-sign", "sign", new Dictionary<string, string> { ["build"] = $"{program} whatever" }));
             Assert.Equal(ErrorClasses.PermissionDenied, failure.ErrorClass);
-            Assert.Contains("signs nothing", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("runs no signing program", failure.Message, StringComparison.Ordinal);
         }
 
         Assert.Equal(0, counter.Calls);

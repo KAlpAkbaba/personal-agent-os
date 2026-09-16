@@ -12768,3 +12768,192 @@ always-advertised capability (with B47's desktop.voice_status: 13 / 14 / 44 / 10
 `CameraEnabled=false` (device); input-based presence (311) is untouched.
 
 **Owner checkpoint (READY_FOR_OWNER, no UAC).** `scripts/core/qualify-device-camera.ps1 -DryRun`, then `-IncludePrivacyCheck` (about 10 minutes) and optionally `-SleepTrial`; the evidence holds states and timestamps only. Independent security review: one High (veto lost on companion restart) and one Medium (permission check failed open), both fixed with mutation proofs (10/10).
+
+## ADR-0167 — The factory's Windows packages are self-signed on the device, and trusting them is one owner step (2026-09-16, B33 req 473)
+
+Status: Accepted. Owner decision 2026-09-16, "win uygulamada da kendinden imzalı olsun". It supersedes the "signs nothing" half of ADR-0095 decision 4 and addendum 2 §5. The "runs no signer" half stands.
+
+**Context.** Until now every MSIX was unsigned, and `test_certificate` was a named-and-refused mode. An unsigned MSIX never installs, so the MSIX target was a file nobody could install.
+
+**Decision 1: the default flips to `test_certificate`.**
+- The owner decided, and the setting still overrides.
+- `unsigned` stays available as an explicit opt-out.
+- `owner_certificate` stays refused by name. The Cloud Core never forwards it as anything but `unsigned`.
+
+**Decision 2: the identity is the Session Companion's, in the owner's profile.**
+- It is a self-signed RSA-3072 code-signing certificate created by `CertificateRequest`. No certificate tool is run.
+- The key is a persisted CNG user key with export policy None; Windows' key storage protects it with DPAPI.
+- The certificate is in `CurrentUser\My`, identified by the thumbprint in `identity.json`.
+- The public DER is exported for the trust step. Nothing else is written, logged or sent.
+- The subject is fixed, because the MSIX signer requires Publisher == subject byte for byte. The Cloud Core scaffolds that Publisher.
+- Validity is 2 years, with renewal 30 days early. The renewal is honest: the new certificate is untrusted, and the answers and the log say so.
+- ECDSA was not tried, so it is not claimed.
+
+**Decision 3: signing is in process and untimestamped.**
+- The signer is `SignerSignEx2` with the package SIP. `ForbiddenPrograms` is unchanged, and no manifest command can sign.
+- There is no timestamp, because that would be a third-party network call on the owner's behalf.
+- Consequence: a package stops verifying when its certificate expires. That is why renewal is early.
+
+**Decision 4: a signature is only what an independent reader found.**
+- Two readers check it: `WinVerifyTrust`, and the package's own CMS block, which names the signer.
+- `signed: true` needs an intact status plus the identity's thumbprint. Otherwise the package is deleted and the answer is `postcondition_failed`.
+- Measured on this machine: intact and untrusted = `0x800B0109`; one byte tampered = `0x80096010`; unsigned = `0x800B0100`. Re-zipping after signing gave `0x800B0003`, so the tamper test flips a byte in place.
+
+**Decision 5: trust is the owner's one elevated step, and the device never elevates.**
+- `trusted` = the verifier said success, or the thumbprint is in `LocalMachine\TrustedPeople` or `Root`. Those stores are opened read-only.
+- `scripts/trust-native-signing-cert.ps1` writes only `LocalMachine\TrustedPeople`, and only the companion's public certificate, after seven checks.
+- Its tests run against throwaway current-user stores.
+
+**Decision 6: an MSIX row installs per user through Windows' own PackageManager ABI.**
+- There is no shell and no cmdlet.
+- The trust gate runs first; Windows' own refusal is the backstop, and a lab test proves it.
+- "Installed" means `GetPackagesByPackageFamily` lists the package.
+- The device's two refusals are recognised by their first word, because the wire error has no detail field.
+
+**Decision 7: the portable zip is not signed.**
+- Its EXE was already read back and hashed, and signing it afterwards would falsify that hash.
+- A self-signed Authenticode signature would not satisfy SmartScreen either.
+
+**Decision 8: no capability name is added.**
+- The manifest counts are unchanged by this decision (13 / 14 / 44 / 104 after B47 and B48).
+- The protocol change is additive in both directions.
+
+**Found on the way (fixed, with a regression test).** The service capped `project.package`, `project.install` and `project.uninstall` at 30 s, while the companion allows 5 min and the Cloud Core waits 330 s. They now have a 5 min 30 s cap, and a C# test reads the Cloud Core's two waits from its source.
+
+**Consequences.** The factory's MSIX is signed, and it is installable after one owner step. Every receipt speaks the device's read-back. The successful trusted-install path is proved only up to Windows' own refusal on this machine; its success needs the owner's step (READY_FOR_OWNER).
+
+**Security review (2026-09-17).** One Medium: the elevated trust gate did not require the owner-store key to be non-exportable, so a same-user process could have had its own key trusted machine-wide. Fixed: the gate now requires a CNG key with export policy None and the companion's key-name prefix, and an explicit `-Thumbprint` must match `identity.json` unless `-AllowRenewedThumbprint` is given. Residual risk: code already running as the owner could create a non-exportable key under that name; that is inside the owner's own account boundary. Also fixed: a failed read-back of a new identity left an orphan certificate in `CurrentUser\My`. Mutations M9-M11 red.
+
+**Owner checkpoint (READY_FOR_OWNER).** After the device agent is deployed and one MSIX is packaged: from an elevated Windows PowerShell in the repo root, `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\trust-native-signing-cert.ps1`; then "Uygulamayı kur" on the MSIX row.
+
+## ADR-0168 — B11-toast: real Windows toasts in the Session Companion; presses ride the heartbeat (2026-09-17)
+
+Status: accepted (2026-09-17).
+
+Context. `desktop.notify` showed a tray balloon: no buttons (row 370 PARTIAL), no failure
+signal (`ShowBalloonTip` returns nothing), and the device's `detail: actions_not_rendered` never
+left the device because the answer wrote `detail` only for `shown: false`. Since B48 the
+companion targets `net10.0-windows10.0.19041.0`, so `Windows.UI.Notifications` is in process.
+The contract named a `desktop.notify.action` device event but no transport existed.
+
+Decisions.
+
+1. **Surface.** WinRT `ToastNotification` under a fixed AppUserModelID `PagentOS.Companion`,
+   made valid for an unpackaged process by a per-user Start Menu shortcut
+   (`PagentOS Companion.lnk`, target = the companion image) carrying `System.AppUserModel.ID`,
+   written with `IShellLinkW` + the link's `IPropertyStore` at companion start and rewritten
+   only when target or id differ. No HKLM, no elevation, no new NuGet package (XML built by hand
+   through `XmlWriter`).
+2. **"Shown" = Windows holds it.** `Show` without error AND the toast found in
+   `ToastNotificationManager.History` (tag + group). Never "seen". Otherwise the balloon, with
+   `detail: toast_not_in_history`.
+3. **The owner's "off" wins.** `DisabledForUser`, `DisabledForApplication`,
+   `DisabledByGroupPolicy` answer `shown: false, notifications_disabled` with no balloon; routing
+   around the owner's Windows setting with a second surface from the same process would defeat
+   it. (The task text suggested a balloon fallback for "notifications disabled by the user"; this
+   ADR deliberately narrows that to platform faults.)
+4. **ERROR_NOT_FOUND is not a fault.** Measured on 19045: `ToastNotifier.Setting` throws
+   `0x80070490` for an id until its first toast is shown, then answers. Treating it as
+   "platform unavailable" would make every fresh install balloon-only for ever. The toast is
+   tried and decision 2 decides.
+5. **Fallback.** The balloon only for: no identity shortcut, any other failure to ask, a
+   `Show` that throws, `DisabledByManifest`, or decision 2. The answer says
+   `surface: "balloon"`, `actions_rendered: 0`, and `detail` names why.
+6. **Priority.** `urgent` → `scenario="reminder"` + a system-handled dismiss button + high
+   notifier priority; never `scenario="alarm"` (looping alarm audio is the alarm subsystem's).
+   `low` → silent. Tag = hash of `group_key` (replacement mirrors the Cloud Core's grouping) or
+   the notification id; group `pagentos`.
+7. **Buttons are data.** `activationType="foreground"`, `arguments="action=<id>;notification=<uuid>"`;
+   parsed back by an exact-form parser; accepted only for a toast this process showed and an
+   action it offered. No protocol activation, no URL, nothing launched (structural test).
+8. **Return path.** Heartbeat `status.notify_actions` (schema: ≤16 entries, three string keys,
+   closed), filled by `NotifyActionQueue`; each press is carried in 3 consecutive reports
+   (heartbeats are fire-and-forget) and the Cloud Core records it once per
+   `(notification_id, action_id, pressed_at)` in `data_json.actions_pressed`, only from a
+   device the toast was sent to (`data_json.notify_targets`, written by the ladder from
+   `DeviceRunResult.device_id` when the device answered `shown: true`; at most 8), only for an
+   action its row offered, without touching `read_at`, running nothing. A press with no device,
+   or for a row with no recorded target, is refused (fail closed). `actions_pressed` is an
+   owner-intent signal bound to the target device; anything that ever acts on it automatically
+   must keep that check. No new frame type: an older
+   broker ignores the key (its status parser is lenient). Chosen over a new `device_event` frame
+   because it reuses the path that already carries the device's own events
+   (`local_alarm_fired`, `local_alarm_snoozed`) and needs no broker frame, ack or schema `oneOf`
+   change.
+9. **Presses need the running companion.** No COM activator (that would need a registered
+   CLSID and a launch path). Button-bearing toasts are removed from the Action Center when the
+   companion exits; plain toasts stay.
+10. **Focus Assist is not claimed.** No public API reports it. The answer carries
+    `SHQueryUserNotificationState` as `user_state` and says nothing more.
+
+Consequences. Capability manifest unchanged (13/14/44/104; no new name). Heartbeat status key
+set grows to 13; the Device Service projects the new list. Contract `desktop-notify.json`
+gains `surface`, `actions_rendered`, `notifier_setting`, `user_state`, `detail` and
+`action_event.transport`; bundle re-synced. Rollback: the previous companion build (balloon)
+still answers the same request shape; an older Cloud Core ignores `notify_actions`.
+
+Bugs found and fixed in this batch (each with a regression test): (a) `NotifyCapabilities`
+dropped `detail` from a shown answer; (b) `Notify` had no try/catch although its doc and a test
+name claimed a throwing sink could not kill the companion - the test's "throwing" sink returned
+instead of throwing; (c) the device's action-id regex `^[a-z0-9_]+$` accepted `"open\n"` (.NET
+`$` matches before a final newline) - now `\z`; (d) the Cloud Core's `build()` had the same
+defect with `re.match` and did not enforce the contract's 32-character id limit.
+
+**Security review (2026-09-17).** Independent security review of the branch: no Critical or High findings. One Medium:
+
+- **MEDIUM - press not bound to the device that showed the toast.** `record_action` checked the
+  row's offered actions but not `device_id`, so a compromised secondary device could attribute
+  a press (guessable ids such as `open`, `snooze`) to a notice only another device showed.
+- **Fix (commit after `ef5f95f`).**
+  - `DeviceRunResult` gained an optional `device_id`, which `BrokerDeviceAction` fills with
+    the device it selected (succeeded, failed or expired).
+  - When the device answers `shown: true`, `ToastRung` calls
+    `notifications.note_toast_target(row, device_id)`, which adds the id to
+    `data_json.notify_targets` (deduplicated, at most 8, only real UUIDs). The row is
+    committed by `mark_delivered`.
+  - `record_action` refuses (`not_a_target_device`, logged as
+    `notification_action_wrong_device`) a press whose device is not in that list, a press
+    with no device, and a press for a row with no recorded target.
+  - The docstring states that `actions_pressed` is an owner-intent signal bound to the target
+    device and must never drive automation without that check. `desktop-notify.json` (bundle
+    re-synced) and `DEVICE_PROTOCOL.md` §6q say the same.
+  - No new column, so no migration: the target list lives in `data_json` beside `actions`
+    and `actions_pressed`.
+- **Tests added** (`test_notify_toast_actions.py`): a press from another device is refused; a
+  press from the target device is accepted; every device the toast was sent to may press and
+  no other; no device / no recorded target is refused; targets are deduplicated and bounded;
+  the heartbeat path refuses another device's press; the ladder records the device that
+  showed the toast; a not-shown toast records no target; `BrokerDeviceAction` reports the
+  device it sent the command to.
+- **Mutation proofs**, restored from sha256-verified backups:
+  - P4 (device check turned into `device_id is None and ...`): 4 tests RED.
+  - P5 (ladder records `None` instead of the device): 1 test RED.
+- **Optional item (InHistory poll).** Kept on the `desktop.notify` path on purpose, because
+  its result is what the command reports as `shown`. It is now bounded by named constants
+  (`HistoryAttempts` = 10, `HistoryPause` = 50 ms, no pause after the last read) and
+  documented. A miss measured 564 ms in the lab, which now asserts a 10 s hang guard.
+  Notify requests are rare, and the Cloud Core ladder's toast timeout is 15 s.
+- **Gates after the fix:**
+  - Python suites touching notifications, the ladder or `DeviceRunResult` (38 files):
+    851 passed.
+  - `test_notify_toast_actions.py` + `test_notifications.py` + `test_protocol_bundle.py`:
+    79 passed.
+  - `ruff check .`: clean.
+  - `dotnet build`: 0 warnings. `dotnet format --verify-no-changes`: clean.
+  - Touched device tests (Notify, CameraWiring, Serialization, LivingCore, DeviceVoice):
+    198 passed, 1 skipped (the opt-in press lab).
+  - Bundle check: clean.
+
+**Owner checkpoint (READY_FOR_OWNER) — live proof after the device agent is reinstalled.**
+1. Reinstall the device agent with the new companion (staged installer as usual). At companion
+   start `companion.log` must say `AppUserModelID shortcut Created|Updated|Unchanged` and
+   `desktop toasts: Windows toast surface under AppUserModelID PagentOS.Companion`.
+2. Turn Focus Assist OFF (Ayarlar > Sistem > Odak yardımı > Kapalı) for the proof, and make
+   sure `Ayarlar > Sistem > Bildirimler` lists "PagentOS Companion" as ON after the first toast.
+3. From the Cockpit (or `POST /v1/devices/{id}/commands`) send `desktop.notify` with two actions;
+   expect `surface: "toast"`, `actions_rendered: 2`; a popup with both buttons appears.
+4. Press one: within ~10 s `GET /v1/notifications` shows `data.actions_pressed[0].action_id`.
+5. Lock the screen (Win+L), send an `urgent` notification: it should appear on the lock screen
+   only if "Kilit ekranında bildirimleri göster" is on - that is the row-369 PROVEN_REAL step.
+6. Optional machine proof on a popup-showing desktop:
+   `$env:PAGENTOS_TOAST_PRESS_LAB='1'; dotnet test tests\PagentOS.Agent.Tests --filter FullyQualifiedName~ToastLabTests`.
