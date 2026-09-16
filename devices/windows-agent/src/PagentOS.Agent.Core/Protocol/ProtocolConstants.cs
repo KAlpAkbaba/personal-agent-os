@@ -256,6 +256,15 @@ public static class AgentCapabilities
     /// <summary>M18.3: play one short greeting the owner's own broker served (§6h).</summary>
     public const string DesktopPlayAudio = "desktop.play_audio";
 
+    /// <summary>
+    /// B48 (rows 300, 326, 327, 671; DEVICE_PROTOCOL.md §6o): set or read the device camera's
+    /// presence mode — <c>off</c> | <c>periodic</c> | <c>continuous</c>. Advertised
+    /// unconditionally in the ambient group: the mode is <c>off</c> after every start, only the
+    /// owner's choice relayed by Cloud Core turns it on, and what leaves the device is the
+    /// seven-field observation, never a frame.
+    /// </summary>
+    public const string DesktopCameraMode = "desktop.camera_mode";
+
     /// <summary>The desktop family — what every device advertises (M1/M3 behaviour, unchanged).</summary>
     public static readonly IReadOnlyList<string> Desktop = [DesktopOpenApplication, DesktopOpenArtifact];
 
@@ -272,6 +281,8 @@ public static class AgentCapabilities
     [
         DesktopDisplayWake, DesktopDisplayStatus, DesktopActivityStatus,
         DesktopAlarmArm, DesktopAlarmDisarm, DesktopPlayAudio, DesktopNotify,
+        // B48: appended, so the manifest diff reads as one addition.
+        DesktopCameraMode,
     ];
 
     /// <summary>Display power (M18). Advertised only behind <c>DisplayPowerEnabled</c>.</summary>

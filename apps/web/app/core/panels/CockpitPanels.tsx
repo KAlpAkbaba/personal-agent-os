@@ -17,7 +17,7 @@
 import {
   type CockpitData,
 } from "../../lib/cockpit/useCockpitData";
-import { ALARM_STATE_LABEL, AMBIENT_TOGGLES, GOAL_STATUS_LABEL, isHealthy, PROMOTION_CLASS_LABEL, TRUTH_KIND_LABEL, type AmbientPolicy, type AmbientToggle, type DeviceStatus, type EvolutionSupervisorStatus, type Goal, type Health, type LedgerEvent, type Lesson, type Loaded, type MemoryAuditEvent, type Opportunity, type PendingBriefing, type ResearchTask, type ShadowReady, type VoiceQualification, type WakeAlarm, type World, VOICE_QUALIFICATION_LABEL } from "../../lib/cockpit/api";
+import { ALARM_STATE_LABEL, AMBIENT_TOGGLES, CAMERA_MODES, GOAL_STATUS_LABEL, isHealthy, PROMOTION_CLASS_LABEL, TRUTH_KIND_LABEL, type AmbientPolicy, type AmbientToggle, type CameraMode, type DeviceCamera, type DeviceStatus, type EvolutionSupervisorStatus, type Goal, type Health, type LedgerEvent, type Lesson, type Loaded, type MemoryAuditEvent, type Opportunity, type PendingBriefing, type ResearchTask, type ShadowReady, type VoiceQualification, type WakeAlarm, type World, VOICE_QUALIFICATION_LABEL } from "../../lib/cockpit/api";
 import {
   type ApprovalGate,
   approvalGate,
@@ -3567,17 +3567,52 @@ export const AMBIENT_TOGGLE_LABEL: Record<AmbientToggle, string> = {
   wake_on_return: "Dönünce aç",
 };
 
+/** B48 (req 300, 331): the panel's words for the device camera's modes. */
+export const CAMERA_MODE_LABEL: Record<CameraMode, string> = {
+  off: "kapalı",
+  periodic: "periyodik kontrol",
+  continuous: "sürekli izleme",
+};
+
+/** B48 (req 303, 671): what a device's camera report means, in the owner's words. */
+export function deviceCameraText(camera: DeviceCamera): string {
+  const mode = camera.mode ? CAMERA_MODE_LABEL[camera.mode] : "kipi bildirilmedi";
+  switch (camera.state) {
+    case "capturing":
+      return `kamera AÇIK (${mode})`;
+    case "idle":
+      return `kamera ${mode}, şu an kapalı`;
+    case "off":
+      return "kamera kapalı";
+    case "blocked":
+      return `kamera engelli (${camera.error ?? "izin yok"}) - açılmadı`;
+    case "unavailable":
+      return `kamera yok (${camera.error ?? "bulunamadı"})`;
+    case "busy":
+      return "kamera başka bir uygulamada";
+    case "vetoed":
+      return "kamera bu cihazda sahibi tarafından kapatıldı";
+    case "error":
+      return `kamera hatası (${camera.error ?? "bilinmiyor"})`;
+    default:
+      return "kamera durumu bildirilmedi";
+  }
+}
+
 export function AmbientPanel({
   policy,
   devices,
   always,
   onToggle,
+  onCameraMode,
 }: {
   policy: CockpitData["ambientPolicy"];
   devices: CockpitData["devices"];
   always?: boolean;
   /** B48: present where the owner may change the policy; absent, the panel stays read-only. */
   onToggle?: (field: AmbientToggle, value: boolean) => void;
+  /** B48: present where the owner may choose the device camera's mode. */
+  onCameraMode?: (mode: CameraMode) => void;
 }) {
   return (
     <Panel<AmbientPolicy>
@@ -3636,6 +3671,35 @@ export function AmbientPanel({
               ))}
             </li>
           )}
+          <li data-ambient-camera={p.camera_mode ?? "unknown"}>
+            <div className="event-row">
+              <span>Cihaz kamerası</span>
+              <span className="event-when">
+                {p.camera_mode ? CAMERA_MODE_LABEL[p.camera_mode] : "bildirilmedi"}
+              </span>
+            </div>
+            <span className="muted">
+              Görüntü cihazda bellekte işlenir; kaydedilmez, gönderilmez. Kamera açıkken sistem
+              tepsisinde işaret görünür.
+            </span>
+            {onCameraMode && p.camera_mode !== undefined && (
+              <span data-camera-modes>
+                {CAMERA_MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className="core-chip"
+                    data-camera-mode={mode}
+                    aria-pressed={p.camera_mode === mode}
+                    disabled={p.camera_mode === null}
+                    onClick={() => onCameraMode(mode)}
+                  >
+                    {CAMERA_MODE_LABEL[mode]}
+                  </button>
+                ))}
+              </span>
+            )}
+          </li>
           <li data-ambient-devices={devices.kind}>
             <DeviceDisplayRows devices={devices} />
           </li>
@@ -3681,7 +3745,9 @@ function DeviceDisplayRows({ devices }: { devices: CockpitData["devices"] }) {
                     : "ekran durumu bildirilmedi"
               }${
                 device.input_idle_s === null ? "" : ` · ${Math.round(device.input_idle_s)} sn boşta`
-              }${device.alarm_ringing ? " · alarm çalıyor" : ""}`
+              }${device.alarm_ringing ? " · alarm çalıyor" : ""}${
+                device.camera ? ` · ${deviceCameraText(device.camera)}` : ""
+              }`
             : "cihaz durumu bildirilmedi (eşlik eden süreç yok veya bu sürüm göndermiyor)"}
         </span>
       ))}

@@ -291,11 +291,31 @@ public static class Program
                 : "display power: disabled (PAGENTOS_AGENT_DisplayPowerEnabled=true enables it); "
                   + "desktop.display_off is not advertised. Waking and reporting stay available.");
 
+        // B48 (rows 300, 326, 327, 671): the device camera's presence provider. Built always,
+        // OPEN never until the owner's mode arrives (it starts "off"); Windows' camera
+        // permission is read before every open, the tray shows whenever a mode is on, and only
+        // the seven derived observation fields leave this process. CameraEnabled=false is the
+        // device-local rollback: the camera is then never opened, whatever the cloud asks.
+        var cameraOptions = Camera.CameraOptions.FromConfiguration(configuration);
+        var camera = BuildCamera(cameraOptions, inputActivity, loggerFactory, audit);
+        logger.LogInformation(
+            "camera: {State} - mode starts off; periodic every {Periodic:F0} s, continuous every {Continuous:F0} s; frames are analysed in memory and never stored or sent",
+            cameraOptions.EnabledOnDevice ? "available" : "DISABLED on this device (PAGENTOS_AGENT_CameraEnabled=false)",
+            cameraOptions.PeriodicInterval.TotalSeconds,
+            cameraOptions.ContinuousInterval.TotalSeconds);
+
         var activityStatus = new ActivityStatusReporter(
             inputActivity,
             displayObserver ?? (IDisplayStateObserver)UnknownDisplayStateObserver.Instance,
             () => alarm?.RingingAlarmId,
-            alarmArms);
+            alarmArms,
+            camera);
+
+        // B11 requirement 369 (found missing in B48): desktop.notify was advertised on every
+        // device while no NotifyCapabilities object was ever handed to the runtime, so every
+        // toast answered capability_missing. Built here, beside the other always-on objects.
+        using var toastSink = OperatingSystem.IsWindows() ? new Notify.ShellToastSink(loggerFactory.CreateLogger("Notify")) : null;
+        var notify = BuildNotify(toastSink, loggerFactory);
 
         // M19 (M19_DIGITAL_OPERATOR_SPEC.md §2/§3): the Digital Operator. OFF unless asked for
         // out loud on BOTH halves (this key and the service's), and built only then, so a
@@ -388,13 +408,16 @@ public static class Program
             browserWorker: browserHost,
             alarm: alarm,
             displayPower: displayPower,
+            notify: notify,
             alarmArms: alarmArms,
             activityStatus: activityStatus,
             greeting: greeting,
             operatorCapabilities: operatorCapabilities,
             documentCapabilities: documentCapabilities,
-            projectCapabilities: projectCapabilities);
+            projectCapabilities: projectCapabilities,
+            camera: camera);
         logger.LogInformation("capabilities advertised to the device service: {Capabilities}", string.Join(",", runtime.AdvertisedCapabilities));
+        var cameraTask = camera.RunAsync(cts.Token);
 
         if (browserHost is not null && browserOptions.Eager)
         {
@@ -463,6 +486,19 @@ public static class Program
         }
         finally
         {
+            // The camera closes before anything else: an exiting companion must not leave it open.
+            await cts.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await cameraTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            camera.Dispose();
+            (camera.Indicator as IDisposable)?.Dispose();
+
             if (browserHost is not null)
             {
                 // "shutdown" on stdin, a bounded wait, then the process tree — Chrome included.
@@ -481,6 +517,44 @@ public static class Program
 
         return 0;
     }
+
+    /// <summary>
+    /// B48: the production camera provider - the WinRT capture and face pass, the tray
+    /// indicator, Windows' permission switches and the render peak meter - or, on a host
+    /// without them, a monitor that answers truthfully that there is no camera.
+    /// </summary>
+    public static Camera.CameraPresenceMonitor BuildCamera(
+        Camera.CameraOptions options,
+        IInputActivitySource input,
+        ILoggerFactory loggerFactory,
+        AuditLog? audit)
+    {
+        var cameraLogger = loggerFactory.CreateLogger("Camera");
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 19041))
+        {
+            return new Camera.CameraPresenceMonitor(
+                new Camera.WindowsCameraFrameSource(),
+                new Camera.TrayCameraIndicator(cameraLogger),
+                cameraLogger,
+                options,
+                new Camera.WindowsCameraConsent(),
+                input,
+                new Camera.RenderPeakMediaProbe(options.MediaPeakThreshold),
+                audit: audit);
+        }
+
+        return new Camera.CameraPresenceMonitor(
+            Camera.NoCameraFrameSource.Instance,
+            new Camera.RecordingCameraIndicator(),
+            cameraLogger,
+            options,
+            input: input,
+            audit: audit);
+    }
+
+    /// <summary>B11 req 369: the toast capability over the given sink, or none when there is no sink.</summary>
+    public static Notify.NotifyCapabilities? BuildNotify(Notify.IToastSink? sink, ILoggerFactory loggerFactory)
+        => sink is null ? null : new Notify.NotifyCapabilities(sink, loggerFactory.CreateLogger("Notify"));
 
     /// <summary>"true"/"1"/"yes" (any case) are true; absent, blank and anything else are false.</summary>
     public static bool ParseFlag(string? raw)

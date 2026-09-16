@@ -162,7 +162,9 @@ public sealed class DisplayPowerController
         var result = new JsonObject();
         AddObservation(result);
         result["input_idle_s"] = IdleSeconds();
-        AddMonitors(result);
+        // B48 (row 320): the monitors' own power readings, only when asked for by name.
+        var probePower = payload["probe_power"] is JsonValue probe && probe.TryGetValue<bool>(out var wanted) && wanted;
+        AddMonitors(result, probePower);
         return result;
     }
 
@@ -287,9 +289,9 @@ public sealed class DisplayPowerController
             : JsonValue.Create(observation.ObservedAt.Value.ToString("O", CultureInfo.InvariantCulture));
     }
 
-    private void AddMonitors(JsonObject result)
+    private void AddMonitors(JsonObject result, bool probePower = false)
     {
-        var monitors = _monitors.List();
+        var monitors = probePower ? _monitors.ListWithPower() : _monitors.List();
         if (monitors.Count == 0)
         {
             // Absent, not empty: "this session could not enumerate its monitors" is a
@@ -309,9 +311,20 @@ public sealed class DisplayPowerController
                 ["width"] = monitor.Width,
                 ["height"] = monitor.Height,
             });
+            if (monitor.Power is not null)
+            {
+                ((JsonObject)array[^1]!)["power"] = monitor.Power;
+            }
         }
 
         result["monitors"] = array;
+        if (probePower)
+        {
+            // What can be measured about "every monitor went dark", without a person looking:
+            // how many answered, and how many of those say they are on.
+            result["monitors_powered_on"] = monitors.Count(m => m.Power == "on");
+            result["monitors_power_unknown"] = monitors.Count(m => m.Power is null or "unsupported");
+        }
     }
 
     private JsonNode? IdleSeconds() => ToSeconds(_input.IdleTime);

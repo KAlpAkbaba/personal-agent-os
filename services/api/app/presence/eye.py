@@ -159,7 +159,20 @@ def _set_eye_state(
         status=action,
         label=reason[:64] if reason else None,
     )
+    _relay_to_device_cameras(session)
     return True
+
+
+def _relay_to_device_cameras(session: Session) -> None:
+    """B48: the eye flag gates the DEVICE camera as well as this server's intake -
+    "Kamerayı kapat" must close the owner's camera, not only stop listening to it. Best
+    effort: the heartbeat reconcile (``app.ambient.camera``) is the guarantee."""
+    try:
+        from app.ambient import camera as ambient_camera
+
+        ambient_camera.push_now(session)
+    except Exception:  # noqa: BLE001 - the flag is durable already
+        logger.warning("presence_eye_camera_relay_failed")
 
 
 def enable_eye(

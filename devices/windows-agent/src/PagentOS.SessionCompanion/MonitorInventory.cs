@@ -4,7 +4,14 @@ using System.Runtime.Versioning;
 namespace PagentOS.SessionCompanion;
 
 /// <summary>One monitor as the session sees it. Read-only geometry; nothing here is settable.</summary>
-public sealed record MonitorGeometry(int Index, bool Primary, int Left, int Top, int Width, int Height);
+/// <remarks>
+/// B48 (row 320): <see cref="Power"/> is the monitor's OWN answer to a DDC/CI read of VCP code
+/// 0xD6 (power mode) - <c>on</c>, <c>standby</c>, <c>suspend</c>, <c>off</c> - or
+/// <c>unsupported</c> when the panel does not answer (most laptop panels, many docks), and
+/// null when nobody asked. It is read only on request: some monitors wake on DDC traffic, so
+/// the status a heartbeat-like caller polls never touches the bus.
+/// </remarks>
+public sealed record MonitorGeometry(int Index, bool Primary, int Left, int Top, int Width, int Height, string? Power = null);
 
 /// <summary>
 /// Reports the monitors attached to the owner's session (DEVICE_PROTOCOL.md §6e, M18.3).
@@ -23,6 +30,9 @@ public interface IMonitorInventory
 {
     /// <summary>The monitors, primary first-indexed as Windows enumerates them. Never throws.</summary>
     IReadOnlyList<MonitorGeometry> List();
+
+    /// <summary>B48 (row 320): the same list with each monitor's own DDC/CI power reading. Never throws.</summary>
+    IReadOnlyList<MonitorGeometry> ListWithPower() => List();
 }
 
 /// <summary>An inventory that knows nothing. Used where no real one is wired.</summary>
@@ -39,7 +49,24 @@ public sealed class Win32MonitorInventory : IMonitorInventory
 {
     private const uint PrimaryMonitorFlag = 0x00000001;
 
-    public IReadOnlyList<MonitorGeometry> List()
+    /// <summary>VCP code 0xD6: the DPM power mode a monitor reports about itself.</summary>
+    public const byte PowerModeVcp = 0xD6;
+
+    public IReadOnlyList<MonitorGeometry> List() => Enumerate(probePower: false);
+
+    public IReadOnlyList<MonitorGeometry> ListWithPower() => Enumerate(probePower: true);
+
+    /// <summary>The DDC/CI power mode value mapped to a word (MCCS 2.2: 1 on, 2 standby, 3 suspend, 4/5 off).</summary>
+    public static string PowerWord(uint value) => value switch
+    {
+        1 => "on",
+        2 => "standby",
+        3 => "suspend",
+        4 or 5 => "off",
+        _ => "unsupported",
+    };
+
+    private IReadOnlyList<MonitorGeometry> Enumerate(bool probePower)
     {
         var found = new List<MonitorGeometry>();
         try
@@ -58,7 +85,8 @@ public sealed class Win32MonitorInventory : IMonitorInventory
                         info.Monitor.Left,
                         info.Monitor.Top,
                         info.Monitor.Right - info.Monitor.Left,
-                        info.Monitor.Bottom - info.Monitor.Top));
+                        info.Monitor.Bottom - info.Monitor.Top,
+                        probePower ? ReadPower(monitor) : null));
                 }
 
                 return true;
@@ -73,6 +101,68 @@ public sealed class Win32MonitorInventory : IMonitorInventory
 
         return found;
     }
+
+    /// <summary>
+    /// A READ of the first physical monitor behind a display handle. There is deliberately no
+    /// write here - the display family never sets a VCP code (the structural test forbids the
+    /// name) - and every handle is released before returning.
+    /// </summary>
+    private static string ReadPower(IntPtr monitor)
+    {
+        try
+        {
+            if (!GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, out var count) || count == 0)
+            {
+                return "unsupported";
+            }
+
+            var physical = new PhysicalMonitor[count];
+            if (!GetPhysicalMonitorsFromHMONITOR(monitor, count, physical))
+            {
+                return "unsupported";
+            }
+
+            try
+            {
+                return GetVCPFeatureAndVCPFeatureReply(physical[0].Handle, PowerModeVcp, IntPtr.Zero, out var current, out _)
+                    ? PowerWord(current)
+                    : "unsupported";
+            }
+            finally
+            {
+                _ = DestroyPhysicalMonitors(count, physical);
+            }
+        }
+        catch (Exception)
+        {
+            return "unsupported";
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct PhysicalMonitor
+    {
+        public IntPtr Handle;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string Description;
+    }
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr monitor, out uint count);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr monitor, uint count, [Out] PhysicalMonitor[] monitors);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DestroyPhysicalMonitors(uint count, PhysicalMonitor[] monitors);
+
+    [DllImport("dxva2.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetVCPFeatureAndVCPFeatureReply(IntPtr monitor, byte code, IntPtr type, out uint current, out uint maximum);
 
     private delegate bool MonitorCallback(IntPtr monitor, IntPtr deviceContext, ref Rectangle area, IntPtr param);
 

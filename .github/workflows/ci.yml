@@ -203,6 +203,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release-bluegreen.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\item28-gate.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\device-camera-qualification.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\utf8-json.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\core-verifier-scope.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\harness-symbols.tests.ps1 && ^

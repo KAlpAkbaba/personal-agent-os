@@ -484,6 +484,8 @@ CAPABILITY_DESKTOP_DISPLAY_OFF = "desktop.display_off"
 CAPABILITY_DESKTOP_DISPLAY_STATUS = "desktop.display_status"
 CAPABILITY_DESKTOP_ACTIVITY_STATUS = "desktop.activity_status"
 CAPABILITY_DESKTOP_PLAY_AUDIO = "desktop.play_audio"
+#: B48 (DEVICE_PROTOCOL.md §6o): the owner's device-camera mode, relayed by ``app.ambient.camera``.
+CAPABILITY_DESKTOP_CAMERA_MODE = "desktop.camera_mode"
 #: B11 req 369: the desktop toast. Spelled ONCE, in the module that reads the shared
 #: contract both halves are built from - restating the string here is how a capability
 #: name comes to exist in two versions, which is the failure

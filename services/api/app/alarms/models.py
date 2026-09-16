@@ -281,6 +281,10 @@ class AmbientPolicyRow(Base):
     )
     #: ADR-0079 §3: the newest camera observation may be at most this old for an off.
     camera_unknown_grace_s: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
+    #: B48 (rows 300, 331, 671): the owner's device-camera choice - "off" | "periodic" |
+    #: "continuous". Off until the owner says otherwise; Cloud Core relays it to every device
+    #: that reports a camera path, and only while the Active Eye is enabled.
+    camera_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="off")
     #: The owner's approved wake song — {"url": ..., "title": ...} — the one item
     #: "seçtiğim müzik" / a remembered title resolves to (spec §3.8). Set only by the owner
     #: (a URL they named); never chosen by the system. None until the owner picks one.

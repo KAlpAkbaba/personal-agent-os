@@ -60,6 +60,8 @@ public sealed class BrowserDispatchTests : IDisposable
                 "desktop.display_wake", "desktop.display_status", "desktop.activity_status",
                 "desktop.alarm_arm", "desktop.alarm_disarm", "desktop.play_audio",
                 "desktop.notify",
+                // B48: the device camera's mode, appended to the ambient group.
+                "desktop.camera_mode",
             },
             AgentCapabilities.Compose(browserEnabled: false));
     }

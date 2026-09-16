@@ -25,10 +25,11 @@ public sealed class ActivityStatusReporter(
     IInputActivitySource input,
     IDisplayStateObserver displayObserver,
     Func<string?> ringingAlarmId,
-    AlarmArmController? arms = null)
+    AlarmArmController? arms = null,
+    Camera.CameraPresenceMonitor? camera = null)
 {
     /// <summary>
-    /// Payload: <c>{}</c>. Result: the eight fields of <see cref="HeartbeatStatus.Fields"/>.
+    /// Payload: <c>{}</c>. Result: the fields of <see cref="HeartbeatStatus.Fields"/> (the camera pair only when a camera path is wired).
     /// Never throws for a missing subsystem — an unwired one reports null or zero, which is a
     /// true statement about this device.
     /// </summary>
@@ -51,7 +52,7 @@ public sealed class ActivityStatusReporter(
             fired.Add(id);
         }
 
-        return new JsonObject
+        var status = new JsonObject
         {
             [HeartbeatStatus.InputIdleSeconds] = idle is null
                 ? null
@@ -72,5 +73,15 @@ public sealed class ActivityStatusReporter(
             // would keep re-reconciling an alarm it had already closed.
             [HeartbeatStatus.LocalAlarmFired] = fired,
         };
+
+        // B48 (rows 326, 327): the camera's own state and its latest DERIVED observation.
+        // A companion with no camera path sends neither key - "not known", never "absent".
+        if (camera is not null)
+        {
+            status[HeartbeatStatus.Camera] = camera.StatusObject();
+            status[HeartbeatStatus.Presence] = camera.LatestObservation();
+        }
+
+        return status;
     }
 }

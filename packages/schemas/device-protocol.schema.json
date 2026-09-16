@@ -125,6 +125,34 @@
           "type": "array",
           "items": { "type": "string", "maxLength": 128 },
           "maxItems": 32
+        },
+        "camera": {
+          "$comment": "B48 (DEVICE_PROTOCOL.md §6o): the device camera's own state. mode is the owner's choice as the device holds it (off after every start); state is what the camera is doing - 'blocked' when Windows' permission or the device-local switch denies it, 'vetoed' when the owner closed it from the tray on this device. error is a short token, never free text. Absent on a companion without a camera path.",
+          "type": "object",
+          "properties": {
+            "mode": { "enum": ["off", "periodic", "continuous"] },
+            "state": { "enum": ["off", "idle", "capturing", "blocked", "unavailable", "busy", "vetoed", "error"] },
+            "interval_s": { "type": "integer", "minimum": 0, "maximum": 3600 },
+            "indicator": { "enum": ["hidden", "armed", "open"] },
+            "last_check_at": { "type": ["string", "null"], "format": "date-time" },
+            "error": { "type": ["string", "null"], "maxLength": 64 }
+          },
+          "additionalProperties": false
+        },
+        "presence": {
+          "$comment": "B48 (DEVICE_PROTOCOL.md §6o): the device-local presence provider's latest observation - exactly the seven structured fields of M18_HOLOGRAPHIC_CORE_SPEC.md §2, source 'camera', or null. A DERIVED signal: the frames it came from were analysed in memory on the device and never stored or sent. Cloud Core screens it with the same boundary as every other observation.",
+          "type": ["object", "null"],
+          "required": ["person_present", "presence_confidence", "activity_level", "posture", "awake_state", "observed_at", "source"],
+          "properties": {
+            "person_present": { "type": "boolean" },
+            "presence_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "activity_level": { "enum": ["none", "low", "medium", "high"] },
+            "posture": { "enum": ["unknown", "upright", "resting"] },
+            "awake_state": { "enum": ["awake", "resting", "uncertain"] },
+            "observed_at": { "type": "string", "format": "date-time" },
+            "source": { "const": "camera" }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

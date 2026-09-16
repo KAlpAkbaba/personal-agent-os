@@ -1169,6 +1169,18 @@ function Invoke-AmbientSection {
             -Detail $(if ($null -ne $policy) { (ConvertTo-Json -InputObject $policy -Compress -Depth 3) } else { "GET /v1/ambient/policy did not answer" })
         if ($null -eq $policy) { $failures++ }
 
+        # B48: the device camera's mode is READ (no mode in the payload), which never opens
+        # the camera. Opening it, the tray indicator and the posture signal are the owner's
+        # physical qualification, not this script's.
+        $camera = Invoke-DeviceCapability -Section $section -Capability "desktop.camera_mode" -Payload @{} -AllowFailure
+        $cameraMode = [string](Get-ResultField -Result $camera.Result -Name "mode")
+        Add-Check -Section $section.name -Name "desktop.camera_mode.answers_without_opening_the_camera" -Ok ($camera.Ok -and @("off", "periodic", "continuous") -contains $cameraMode) `
+            -Detail "mode=$cameraMode state=$(Get-ResultField -Result $camera.Result -Name 'state') error=$(Get-ResultField -Result $camera.Result -Name 'error')"
+        if (-not ($camera.Ok -and @("off", "periodic", "continuous") -contains $cameraMode)) { $failures++ }
+        Add-ReadyForOwner -Section $section.name -What "the device camera: a real presence check, the tray indicator, a resting posture and one sleep display-off" `
+            -Why "only the owner can sit in front of the camera, see the tray icon and judge the monitors" `
+            -Harness "scripts\core\qualify-device-camera.ps1"
+
         Add-ReadyForOwner -Section $section.name -What "displays actually going dark, and one keypress waking them" `
             -Why "only a person can see a blank screen and press a key; this script never darkens a display" `
             -Harness "scripts\core\owner-m18-3-display.ps1 (arms the real receipt through POST /v1/ambient/test-display and warns first)"
