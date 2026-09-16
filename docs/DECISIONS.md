@@ -12438,3 +12438,20 @@ annotated constant was invisible to the error-language guard - and the M28 spec 
 
 **Consequences.** No migration. Row 474's generated project is proven structurally; its first
 compile is the owner's step (item 33).
+
+## ADR-0157 — Unity stays an honest refusal until the owner has a licence (B50 blocked by design) (2026-09-15, B50)
+
+**Context.** B50 (530-534) is Unity project/scene/build/test and an optional Unreal. Its
+roadmap PROOF is itself "BLOCKED": without a Unity licence (owner item 12) no Unity editor
+command can run, and M25 already turns the licensing client's answer into a classified,
+sticky refusal (`dependency_unavailable`, `scene.unity_unavailable`, row 529).
+
+**Decision.** Nothing is built on top of an editor that cannot start. The refusal tests are
+run and recorded as B50's proof; rows 530-533 stay BLOCKED_PROVIDER and 534 DEFERRED. No
+Unity download, installation or account is attempted: those are the owner's.
+
+**When the licence exists.** The Unity driver (`app/creative3d/drivers/SceneDriver.cs`, pinned in
+the drivers' `manifest.json`) is already wired through the same device job as Blender; the steps then are a lab
+run of project create, scene create, a batch-mode build and a test run on the owner's
+device, each read back the way B44 reads Blender's work - and the refusal test above turning
+into a positive one.

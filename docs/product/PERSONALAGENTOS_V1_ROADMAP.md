@@ -1858,7 +1858,7 @@ B49  Android fabrikası ve iOS beyanı      IDs: 474–479                    de
            beyanı (Unity lisans reddi deseni örnek alınır).
      PROOF: PROVEN_REAL (APK emülatörde açıldı) / 479 için PROVEN_AUTOMATED (açık ret testi).
      ROLLBACK: Android yolu bayrakla kapatılır.
-     KAPANIŞ: commit PENDING_B49 · CI PENDING · 474 + 479 DONE, 475-478 BLOCKED_PROVIDER — kanıt
+     KAPANIŞ: commit d5a705d · CI 35084702310 yeşil (7/7) · 474 + 479 DONE, 475-478 BLOCKED_PROVIDER — kanıt
               docs/evidence/b49-android-factory-ios-refusal-2026-09-15.json
               474: `counter-mobile` gerçek Gradle Kotlin projesi üretir (XML olarak ayrıştırılıp
               denetlenir, diske yazılır). 479: iOS adıyla reddedilir, katalogda Türkçe mesajı var,

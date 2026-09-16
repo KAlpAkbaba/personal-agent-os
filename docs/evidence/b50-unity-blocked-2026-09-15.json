@@ -1,0 +1,43 @@
+{
+  "batch": "B50",
+  "name": "Unity ve Unreal",
+  "status": "BLOCKED_BY_DESIGN",
+  "requirements": [
+    530,
+    531,
+    532,
+    533,
+    534
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "NONE (no code)",
+  "ci_run": "NONE",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11129 passed, 5 skipped, 19m09s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 959/959, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "B50 changed no code; the gate ran over the tree carrying its docs together with B49"
+  },
+  "proof": {
+    "command": "pytest tests/unit/test_scene_service.py tests/unit/test_scene_tools.py tests/unit/test_scene_wiring.py -k 'unity or Unity'",
+    "summary": "5 passed, 28 deselected, 1 warning in 3.42s",
+    "tests": [
+      "tests/unit/test_scene_service.py::test_unity_licence_refusal_is_honest_never_a_crash_or_done",
+      "tests/unit/test_scene_service.py::test_unity_available_actually_applies",
+      "tests/unit/test_scene_service.py::test_unity_without_a_licence_publishes_the_settled_unavailable_step",
+      "tests/unit/test_scene_tools.py::test_scene_create_unity_licence_refusal_is_honest",
+      "tests/unit/test_scene_wiring.py::test_unity_licence_refusal_through_the_real_application_object"
+    ]
+  },
+  "owner_gates": {
+    "karar_12": "a Unity licence on the owner's device (and its editor path in the companion's allowlist)."
+  }
+}

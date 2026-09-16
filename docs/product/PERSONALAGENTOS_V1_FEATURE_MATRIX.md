@@ -669,11 +669,11 @@ shape ile uyuşmuyorsa satır `DONE` olmaz. `RUNTIME_PROOF` sütunu boşsa (`—
 | 527 | Export FBX/GLTF | export (glb/fbx) Blender'ın paketli dışa aktarıcılarıyla scene.glb/scene.fbx olarak sahnenin yanına; cihaz dosyayı YERİNDE doğrular (göreli yol, ≤64 MiB, sha256, GLB başlığı/FBX imzası) ve yalnız kanıtı döner (bağlantı çerçevesi 1 MiB); bulut `exports_json`'u tutar, karşılaştırma bildirilen ↔ doğrulanan hash'i denetler; `scene.export` sesli araç (sahibin biçim sözcüğü kazanır); M25'in 'Sahneyi dışa aktar.' olumsuz vakası olumlu regresyona çevrildi | Çalışır | DONE | PA | P2 | 521 | B44 | blender_driver.py:do_export; SceneInspection.cs:ReadExports/SignatureOk; service.py:_device_exports; tools_scene.py:scene_export; intents.py:_scene_export_match | test_creative3d_b44.py (imza; doğrulanmamış/yalan hash; REST; ses) · SceneExportTests (sınırlar, imza, kaçış yolu, gerçek Blender GLB) | — | no | Dosya bayt olarak buluta taşınmaz |
 | 528 | Unity detection | Çalışıyor | Aynı | DONE | PA | P2 | — | — | app/creative3d/ | 3d testleri | — | no | — |
 | 529 | Unity licensing state | Dürüst ve sınıflandırılmış red | Aynı | DONE | PA | P2 | — | — | app/creative3d/ | 3d testleri | — | no | 479 için örnek desen |
-| 530 | Unity project create | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 529 | B50 | app/creative3d/ | — | — | Unity lisansı | v1.0'ı bloklamaz |
-| 531 | Unity scene create | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 530 | B50 | app/creative3d/ | — | — | Unity lisansı | — |
-| 532 | Unity build | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 530 | B50 | app/creative3d/ | — | — | Unity lisansı | — |
-| 533 | Unity test | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 532 | B50 | app/creative3d/ | — | — | Unity lisansı | — |
-| 534 | Unreal later/optional | Yok | İsteğe bağlı | DEFERRED | NYP | P3 | — | B50 | — | — | — | lisans | v1.0 kapsamı dışı |
+| 530 | Unity project create | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 529 | B50 | app/creative3d/ | — | — | Unity lisansı | v1.0'ı bloklamaz; B50: lisans yok — dürüst ret korunur (kanıt docs/evidence/b50-unity-blocked-2026-09-15.json) |
+| 531 | Unity scene create | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 530 | B50 | app/creative3d/ | — | — | Unity lisansı | B50: lisans yok — dürüst ret korunur (kanıt docs/evidence/b50-unity-blocked-2026-09-15.json) |
+| 532 | Unity build | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 530 | B50 | app/creative3d/ | — | — | Unity lisansı | B50: lisans yok — dürüst ret korunur (kanıt docs/evidence/b50-unity-blocked-2026-09-15.json) |
+| 533 | Unity test | Lisans yok | Çalışır | BLOCKED_PROVIDER | PU | P3 | 532 | B50 | app/creative3d/ | — | — | Unity lisansı | B50: lisans yok — dürüst ret korunur (kanıt docs/evidence/b50-unity-blocked-2026-09-15.json) |
+| 534 | Unreal later/optional | Yok | İsteğe bağlı | DEFERRED | NYP | P3 | — | B50 | — | — | — | lisans | v1.0 kapsamı dışı; B50: lisans yok — dürüst ret korunur (kanıt docs/evidence/b50-unity-blocked-2026-09-15.json) |
 
 ## R. EXECUTIVE AUTONOMY (535–560)
 
