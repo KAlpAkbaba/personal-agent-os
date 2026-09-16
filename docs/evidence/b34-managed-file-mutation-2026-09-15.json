@@ -3,8 +3,8 @@
   "name": "Yönetilen dosya mutasyonu",
   "requirements": [153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 170, 674],
   "recorded_at": "2026-09-15T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "5a5d734900c4f326b69048e1c4c1cc885326af7e",
+  "ci_run": "35080550278",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS 7/7 on the third run (the first lost the operator's and the artifact family's 'dosyayı aç' to a create verb and the ADR-0083 delete test to its superseded premise; the second lost B33's native log cases to the new fake file.read answering not_found for a path outside the corpus)",

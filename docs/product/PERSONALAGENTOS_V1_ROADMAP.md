@@ -999,7 +999,7 @@ TEST_PLAN           : bilinen hata sınıflarının sözlüğe eşlendiği; eşl
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED + PROVEN_REAL (üretimdeki 10 başarısız araştırmanın
                       mesajları yeniden üretildiğinde Türkçe)
 ROLLBACK_PLAN       : sözlük katmanı geçirgen moda alınır
-KAPANIŞ             : commit PENDING_B22 · CI PENDING · 8/8 DONE
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 8/8 DONE
                       kanıt docs/evidence/b22-turkish-error-language-2026-09-14.json
                       PROVEN_AUTOMATED; 10 üretim koşusunun yeniden oynatılması Karar 0'da
                       Yerel kapı: API 9583 test PASS, lint PASS, web 1712 test PASS;
@@ -1045,7 +1045,7 @@ OWNER_ACTION        : no
 TEST_PLAN           : her sayfadan her sayfaya yol olduğu; PWA girişinden gezinmenin çalıştığı
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED (gezinme testi CI'da — B02 sayesinde koşar)
 ROLLBACK_PLAN       : layout değişikliği geri alınır
-KAPANIŞ             : commit PENDING_B23 · CI PENDING · 10/10 DONE
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 10/10 DONE
                       kanıt docs/evidence/b23-web-navigation-shell-2026-09-14.json
                       web: 1730 test PASS, tsc temiz, oxlint 0 hata; API 9583 test PASS
                       cihaz süitinde yine aynı tek test (masaüstü ön planı) — B22 kaydına
@@ -1086,7 +1086,7 @@ TEST_PLAN           : veri kaynağı boş olan ailenin panel doğurmadığı; ro
                       ile aynı sınıf sözlüğünü kullandığı
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED — 27 panelin tamamı ya veri gösteriyor ya gizli
 ROLLBACK_PLAN       : sayfa bazında geri alınır
-KAPANIŞ             : commit PENDING_B24 · CI PENDING · 11/11 DONE
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 11/11 DONE
                       kanıt docs/evidence/b24-pages-and-badges-2026-09-14.json
                       web: 1807 test PASS (96 dosya; 1730'du), tsc temiz, oxlint 0 hata
                       API: 9719 PASS / 5 atlanan; ruff temiz; staged-update 89 kontrol PASS
@@ -1139,7 +1139,7 @@ TEST_PLAN           : yetenek listesinin araç kaydından üretildiği (elle lis
                       paletinin her sayfadan açıldığı
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED
 ROLLBACK_PLAN       : bileşen bazında geri alınır
-KAPANIŞ             : commit PENDING_B25 · CI PENDING · 6/6 DONE
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 6/6 DONE
                       kanıt docs/evidence/b25-discoverability-2026-09-14.json
                       web: 1852 test PASS (99 dosya; 1807'ydi), tsc temiz, oxlint 0 hata
                       API: 9744 PASS / 5 atlanan (9719'du); ruff temiz; staged-update PASS
@@ -1192,7 +1192,7 @@ TEST_PLAN           : 7 misroute cümlesinin ÖNCE kırmızı kanıtlandığı, 
                       koruduğu
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED — 103 cümlelik ölçüm seti CI'da; misroute sayısı 0
 ROLLBACK_PLAN       : tablo değişiklikleri commit bazında geri alınır
-KAPANIŞ             : commit PENDING_B26 · CI PENDING · 7/7 DONE
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 7/7 DONE
                       kanıt docs/evidence/b26-intent-safety-2026-09-14.json
                       REAL_PROOF birebir: 107 cümle CI'da, misroute 0 (ölçüm 103'tü)
                       test_intent_misroutes.py (46) + test_route_telemetry.py (16)
@@ -1242,7 +1242,7 @@ OWNER_ACTION        : mail/takvim niyetleri (729, 730, 731) sağlayıcıya bağl
 TEST_PLAN           : her cümle ve en az üç Türkçe eşanlamlısı; kapsanmayan oran eşiğin altında
 REAL_PROOF_REQUIRED : PROVEN_AUTOMATED — 103 cümlelik sette kapsanmayan oran %57'den hedefe iner
 ROLLBACK_PLAN       : niyet bazında geri alınır
-KAPANIŞ             : commit PENDING_B27 · CI PENDING · 10/10 DONE
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 10/10 DONE
                       kanıt docs/evidence/b27-daily-intents-2026-09-14.json
                       REAL_PROOF birebir: günlük küme 49 cümle (on cümle + ≥3 eşanlamlı),
                       kapsanmayan %65,3 (32/49) → %0 (0/49), tek koşuda; B26'nın 107'lik
@@ -1295,7 +1295,7 @@ TEST_PLAN           : FocusGuard ihlalinde gönderimin durduğu ve kısmi gönde
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimden verilen bir komut gerçek pencerede iş yaptı,
                       postcondition doğrulandı, FocusGuard ihlali kaydedilmedi
 ROLLBACK_PLAN       : yetenek bazında bayrak; cihaz tarafı agent sürümüyle geri alınır
-KAPANIŞ             : commit PENDING_B28 · CI PENDING · 12/12 DONE (104 B27'de kapanmıştı)
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 12/12 DONE (104 B27'de kapanmıştı)
                       kanıt docs/evidence/b28-operator-input-2026-09-14.json
                       REAL_PROOF: PROVEN_REAL (test lab) — bu masaüstünde gerçek Not
                       Defteri'nde Home tuşu imleci başa aldı ("Xabc"), Ctrl+A + Delete
@@ -1339,7 +1339,7 @@ TEST_PLAN           : UIA ile tetiklenen düğmenin sonucunun ağaçtan doğrula
 REAL_PROOF_REQUIRED : PROVEN_REAL — gerçek bir uygulamada UIA ile düğme tetiklendi ve sonuç
                       bağımsız okundu
 ROLLBACK_PLAN       : UIA yolu bayrakla kapatılır, DOM/uygulama yoluna düşülür
-KAPANIŞ             : commit PENDING_B29 · CI PENDING · 8/8 DONE (105 PU: sağlayıcı anahtarı
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 8/8 DONE (105 PU: sağlayıcı anahtarı
                       sahibin — checkpoint, bloklamadı)
                       kanıt docs/evidence/b29-operator-uia-2026-09-14.json
                       REAL_PROOF birebir (test lab, bu masaüstü): kaydedilmemiş Not
@@ -1391,7 +1391,7 @@ TEST_PLAN           : bulut ve cihaz izin listelerinin AYNI dosyadan okunduğu (
                       politika dışı sürecin durdurulamadığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimden pencere taşındı/boyutlandı
 ROLLBACK_PLAN       : izin listesi daraltılır
-KAPANIŞ             : commit PENDING_B30 · CI PENDING · 12/12 DONE (122 gerçek yeniden
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 12/12 DONE (122 gerçek yeniden
                       başlatma READY_FOR_OWNER: companion yükseltilmemiş, UAC sahibin —
                       checkpoint, bloklamadı)
                       kanıt docs/evidence/b30-operator-process-service-2026-09-14.json
@@ -1432,7 +1432,7 @@ TEST_PLAN           : iptal edilen koşunun gerçekten durduğu; duyurulan her t
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde sesle iptal edilen bir araştırma durdu; bir DEEP
                       koşusu tamamlandı
 ROLLBACK_PLAN       : yeni kontroller bayrakla kapatılır
-KAPANIŞ             : commit PENDING_B31 · CI PENDING · 15/15 DONE (172 sınır KORUNDU ve
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 15/15 DONE (172 sınır KORUNDU ve
                       test altına alındı; sahibin Chrome'unu otonom araştırmaya açmak
                       mahremiyet kararı — checkpoint, bloklamadı)
                       kanıt docs/evidence/b31-research-control-browser-2026-09-14.json
@@ -1467,7 +1467,7 @@ TEST_PLAN           : oracle fikstür deseninin yeni formatlara uygulandığı; 
                       taahhüt edilmiş bir referansla karşılaştırıldığı
 REAL_PROOF_REQUIRED : PROVEN_REAL — üretimde bir görselden metin çıkarıldı
 ROLLBACK_PLAN       : format bazında geri alınır
-KAPANIŞ             : commit PENDING_B32 · CI PENDING · 10/10 DONE (OCR motoru: yerel
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 10/10 DONE (OCR motoru: yerel
                       Windows.Media.Ocr — checkpoint kaydedildi, bloklamadı)
                       kanıt docs/evidence/b32-documents-ocr-dedup-2026-09-15.json
                       Cihaz: `image`/`archive` türleri; görsel başlıkları (WPF), OCR
@@ -1504,7 +1504,7 @@ TEST_PLAN           : ölü araçların gerçek arka uca bağlandığı; artefak
 REAL_PROOF_REQUIRED : PROVEN_REAL — 26.16'da üretilen uygulama kuruldu, çalıştırıldı, arayüzü
                       UIA ile doğrulandı, kaldırıldı
 ROLLBACK_PLAN       : araç bazında geri alınır; kurulum kaldırma yolu her zaman hazır
-KAPANIŞ             : commit PENDING_B33 · CI PENDING · 12/13 DONE (473 PARTIAL —
+KAPANIŞ             : commit 5a5d734 · CI 35080550278 yeşil (7/7) · 12/13 DONE (473 PARTIAL —
                       READY_FOR_OWNER: sertifika kararı; politika modu tanır, imzasız üretir)
                       kanıt docs/evidence/b33-native-lifecycle-2026-09-15.json
                       Cihaz: projects ailesi 5→9 — `project.package` (portable zip /
@@ -1547,7 +1547,7 @@ B34  Yönetilen dosya mutasyonu           IDs: 153–167, 170, 674          dep:
      GOAL: Sahibin dosyaları geri alma günlüğü ve tur bazlı onayla güvenle değiştirilebilsin.
      PROOF: PROVEN_REAL — bir dosya değiştirildi, hash'i kaydedildi, geri alındı, orijinali döndü.
      ROLLBACK: mutasyon yüzeyi tek bayrakla kapanır; undo journal her zaman ileri uyumlu.
-     KAPANIŞ: commit PENDING_B34 · CI PENDING · 17/17 DONE (kalıcı silme politikasının şekli
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 17/17 DONE (kalıcı silme politikasının şekli
               READY_FOR_OWNER: hiçbir araç kalıcı silmez; silme = Recycle Bin + yedek)
               kanıt docs/evidence/b34-managed-file-mutation-2026-09-15.json
               Cihaz: documents ailesi 8→14 — file.write/append/rename/move/copy/restore
@@ -1580,7 +1580,7 @@ B35  SelfDev'in bağlanması ve güvenlik    IDs: 581, 583, 585, 589, 598, 600, 
      PROOF: PROVEN_REAL — ürün yüzeyinden başlatılan bir koşu aday üretti, güvenlik incelemesinden
             geçti, gölgede çalıştı, sahip onayı beklemede kaldı.
      ROLLBACK: çalıştırıcı durdurulur; worktree'ler korunur (silinmez).
-     KAPANIŞ: commit PENDING_B35 · CI PENDING · 18/18 DONE (üretim turu ve db9ed85'in kaderi
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 18/18 DONE (üretim turu ve db9ed85'in kaderi
               READY_FOR_OWNER) — kanıt docs/evidence/b35-selfdev-wiring-2026-09-15.json
               Bulut: `selfdev_defects` kuyruğu (göç 0048; ses/REST/köprü/CI kaynaklı),
               SelfDevService (intake → claim → start → finish → approve/reject; günlük token,
@@ -1604,7 +1604,7 @@ B36  Genesis ön kapısı                    IDs: 561–565, 569–580          
      GOAL: Katalog kaydı, talep rotası, güvenlik kapısı ve sahip onayı — 577 yalnız 579'dan sonra.
      PROOF: PROVEN_REAL — üretimde bir yetenek talebi katalogdan adaptöre ve kullanıma ulaştı.
      ROLLBACK: yetenek devre dışı bırakılır (571/572 sürümleme ile).
-     KAPANIŞ: commit PENDING_B36 · CI PENDING · 17/17 DONE (üretim turu READY_FOR_OWNER) —
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 17/17 DONE (üretim turu READY_FOR_OWNER) —
               kanıt docs/evidence/b36-genesis-front-door-2026-09-15.json
               Bulut: `genesis_catalogue` (göç 0049) + CatalogueStore (kayıt → bellek içi
               katalog anında ve açılışta yeniden kurulur; discover öneri, disable), talep
@@ -1624,7 +1624,7 @@ B37  Anlamsal bellek ve bellek arayüzü    IDs: 51, 53, 54, 57–60, 149     de
      GOAL: Gerçek gömme, sağlayıcı seçimi, yeniden indeksleme ve sahibin belleğini yönetebildiği arayüz.
      PROOF: PROVEN_REAL — yeniden indeksleme sonrası anlamsal bir sorgu doğru kaydı getirdi.
      ROLLBACK: deterministic-ngram'a dönüş (52 korunur).
-     KAPANIŞ: commit PENDING_B37 · CI PENDING · 8/8 DONE (gerçek sağlayıcıyla üretim turu
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 8/8 DONE (gerçek sağlayıcıyla üretim turu
               READY_FOR_OWNER: anahtar sahibin) — kanıt docs/evidence/b37-semantic-memory-2026-09-15.json
               Bulut: `OpenAIEmbedder` (aynı Embedder protokolü, indeks genişliği 256,
               anahtar asla hata metninde), `build_embedder` seçimi (deterministic/openai/auto)
@@ -1642,7 +1642,7 @@ B38  Genel yürütme planlayıcısı           IDs: 536–538, 544, 546, 549–5
            ön/son koşullar ve gerçek telafi.
      PROOF: PROVEN_REAL — şablonsuz bir istek uçtan uca planlandı ve dürüst durum raporladı.
      ROLLBACK: planlayıcı şablon moduna döner (422 ile dürüst ret korunur).
-     KAPANIŞ: commit PENDING_B38 · CI PENDING · 15/16 DONE, 549 BLOCKED_PROVIDER (B45) —
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 15/16 DONE, 549 BLOCKED_PROVIDER (B45) —
               kanıt docs/evidence/b38-executive-planner-2026-09-15.json
               Bulut: spec'e `step_failed` / `step_verified` / `owner_approval` ön koşulları,
               `Repeat(max_rounds ≤ 3)`, `Step.rationale`, `TaskGraph.planner` (rule/model/owner),
@@ -1667,7 +1667,7 @@ B39  Operatör özerklik döngüsü            IDs: 106, 112–115, 123–130   
            adımlı işler; duraklat/iptal ve "önce göster" modu.
      PROOF: PROVEN_REAL — tarayıcı+masaüstü karma bir iş baştan sona doğrulanarak tamamlandı.
      ROLLBACK: döngü bayrakla kapatılır, sabit planlara dönülür.
-     KAPANIŞ: commit PENDING_B39 · CI PENDING · 13/13 DONE (masaüstü laboratuvar ölçümü ve
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 13/13 DONE (masaüstü laboratuvar ölçümü ve
               üretim turu READY_FOR_OWNER) — kanıt docs/evidence/b39-operator-autonomy-2026-09-15.json
               Bulut: `app/operator/mission.py` (GÖZLE→KARAR→UYGULA→DOĞRULA→YENİDEN PLANLA:
               her tur taze gözlem, plan karar fonksiyonlarından, eylem aynı cihaz portunda,
@@ -1691,7 +1691,7 @@ B40  App Factory genelleştirme            IDs: 422–439                    dep
      GOAL: Model destekli gerçek kod üretimi, planlama, test üretimi, lint ve güvenlik taraması.
      PROOF: PROVEN_REAL — serbest bir istekten çok dosyalı, testleri geçen bir uygulama üretildi.
      ROLLBACK: şablon moduna dönüş (417–421 korunur).
-     KAPANIŞ: commit PENDING_B40 · CI PENDING · 18/18 DONE (model yuvaları ve düzeltme döngüsü
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 18/18 DONE (model yuvaları ve düzeltme döngüsü
               sahibin bütçesiyle; laboratuvar READY_FOR_OWNER) — kanıt
               docs/evidence/b40-appfactory-generalisation-2026-09-15.json
               Bulut: `requirements.py` (Türkçe cümle → kayıt türleri/alanlar/tipler/giriş/api,
@@ -1715,7 +1715,7 @@ B41  App Factory yaşam döngüsü            IDs: 440–452, 480               
            değiştirme.
      PROOF: PROVEN_REAL — üretilen uygulama çalıştırıldı, arayüzü doğrulandı, sonra bir özellik eklendi.
      ROLLBACK: proje bazında; üretilen kod korunur.
-     KAPANIŞ: commit PENDING_B41 · CI PENDING · 13/13 DONE + 480 DEFERRED (cihaz laboratuvarı ve
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 13/13 DONE + 480 DEFERRED (cihaz laboratuvarı ve
               üretim turu READY_FOR_OWNER) — kanıt docs/evidence/b41-appfactory-lifecycle-2026-09-15.json
               Bulut: `lifecycle.py` (oracle'ı cihazın tarayıcısında oynatan `verify_ui` + gerçek
               yeniden başlatma ile kalıcılık, `read_log`, `package_release` zip+release.json,
@@ -1732,7 +1732,7 @@ B42  Artefakt provenans ve yaşam döngüsü  IDs: 393, 394, 398–400, 405–41
            düzenleme, karşılaştırma.
      PROOF: PROVEN_REAL — üretimde xlsx/pptx/csv/json üretildi ve bağımsız doğrulandı.
      ROLLBACK: provenans alanları geriye uyumlu; eski artefaktlar etkilenmez.
-     KAPANIŞ: commit PENDING_B42 · CI PENDING · 16/16 DONE (üretim duman testi ve silme politikası
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 16/16 DONE (üretim duman testi ve silme politikası
               seçimi READY_FOR_OWNER, checkpoint 18) — kanıt docs/evidence/b42-artifact-lifecycle-2026-09-15.json
               Bulut: `provenance.py` (Actor ×7 tür, `runtime_provenance` kütüphane sürümleri,
               `source_manifest`), sürüm satırında `provenance_json` (göç 0054) + artık yazılan
@@ -1750,7 +1750,7 @@ B43  Yaratıcı üretim ve teslim            IDs: 489–495, 498, 500, 502, 504,
            teslimi.
      PROOF: PROVEN_REAL — üretilen görsel sahibin diskinde açıldı ve piksel düzeyinde doğrulandı.
      ROLLBACK: sağlayıcı devre dışı; Pillow yolu (481–488) korunur.
-     KAPANIŞ: commit PENDING_B43 · CI PENDING · 17/17 DONE (görsel sağlayıcı hesabı, cihaz
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 17/17 DONE (görsel sağlayıcı hesabı, cihaz
               laboratuvarı ve Adobe lisansı READY_FOR_OWNER, checkpoint 19) — kanıt
               docs/evidence/b43-creative-generation-delivery-2026-09-15.json
               Bulut: `imaging.py` (ImageProvider: local Pillow / openai gpt-image-1 / scripted;
@@ -1771,7 +1771,7 @@ B44  3B üretim yolu                       IDs: 520–527                    dep
      GOAL: Üretimden sahne oluşturma, değiştirme, malzeme/ışık/kamera kontrolü, animasyon, dışa aktarma.
      PROOF: PROVEN_REAL — üretimde ilk gerçek sahne oluşturuldu ve render'ı bağımsız doğrulandı.
      ROLLBACK: sahne yolu bayrakla kapatılır; laboratuvar yolu korunur.
-     KAPANIŞ: commit PENDING_B44 · CI PENDING · 8/8 DONE (üretimde ilk gerçek sahne
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 8/8 DONE (üretimde ilk gerçek sahne
               READY_FOR_OWNER) — kanıt docs/evidence/b44-3d-production-path-2026-09-15.json
               Bu makinede gerçek Blender laboratuvarı PASS (4 nesne, compare checked=22); cihaz laboratuvarı gönderilen sürücüyü gerçek iş
               nesnesinde çalıştırıp render'ı ve GLB'yi doğruladı.
@@ -1789,7 +1789,7 @@ B45  Mail canlandırma                     IDs: 278, 335, 336, 338–348, 360, 3
            `References` kusuru kapansın.
      PROOF: PROVEN_REAL — gerçek bir hesapta yanıt gönderildi ve alıcının zincirinde göründü.
      ROLLBACK: gönderim varsayılan kapalı kalır; okuma tek başına açılabilir.
-     KAPANIŞ: commit PENDING_B45 · CI PENDING · 8/17 DONE, 9 BLOCKED_PROVIDER (kod tam,
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 8/17 DONE, 9 BLOCKED_PROVIDER (kod tam,
               gerçek hesap READY_FOR_OWNER) — kanıt docs/evidence/b45-mail-revival-2026-09-15.json
               References kusuru kapandı (gönderilen yanıt truth.json'un zincirini taşır);
               gelen kutusu rutin saatte yoklanır; brifingde okunmamış-mail cümlesi;
@@ -1805,7 +1805,7 @@ B46  Takvim canlandırma                   IDs: 277, 337, 349–359, 361, 363, 3
      GOAL: Takvim okuma/yazma, RRULE, VALARM, hatırlatma, indeks ve eşitleme.
      PROOF: PROVEN_REAL — gerçek takvimde tekrarlayan ve hatırlatıcılı bir etkinlik oluşturuldu.
      ROLLBACK: yazma varsayılan kapalı; okuma tek başına açılabilir.
-     KAPANIŞ: commit PENDING_B46 · CI PENDING · 10/17 DONE, 6 BLOCKED_PROVIDER (kod tam, gerçek
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 10/17 DONE, 6 BLOCKED_PROVIDER (kod tam, gerçek
               hesap READY_FOR_OWNER), 355 DEFERRED (RSVP) — kanıt
               docs/evidence/b46-calendar-revival-2026-09-15.json
               RRULE ve VALARM yazılır ve aynı ayrıştırıcıyla geri okunur; sahibin tekrar ve
@@ -1837,7 +1837,7 @@ B48  Varlık derinliği ve kamera           IDs: 300–303, 307, 308, 310, 312, 
            kapat" politikasının gerçekten tetiklenebilmesi. Ham görüntü saklanmaz (328, 329 korunur).
      PROOF: PROVEN_REAL — duruş sinyali üretildi ve uyku politikası bir kez tetiklendi.
      ROLLBACK: kamera sağlayıcısı kapatılır; girdi tabanlı varlık (311) korunur.
-     KAPANIŞ: commit PENDING_B48 · CI PENDING · 8/18 DONE, 331 PARTIAL, 9 satır Karar 8'de
+     KAPANIŞ: commit 5a5d734 · CI 35080550278 yeşil (7/7) · 8/18 DONE, 331 PARTIAL, 9 satır Karar 8'de
               (cihaz kamerası: 300, 307, 308, 326, 327, 333, 671; 320 donanım yargısı) — kanıt
               docs/evidence/b48-presence-depth-2026-09-15.json
               Kamerasız yapılabilen yapıldı: gözlem ağırlığı zamanla azalır, uyku eşiği sahibin
@@ -1858,11 +1858,24 @@ B49  Android fabrikası ve iOS beyanı      IDs: 474–479                    de
            beyanı (Unity lisans reddi deseni örnek alınır).
      PROOF: PROVEN_REAL (APK emülatörde açıldı) / 479 için PROVEN_AUTOMATED (açık ret testi).
      ROLLBACK: Android yolu bayrakla kapatılır.
+     KAPANIŞ: commit PENDING_B49 · CI PENDING · 474 + 479 DONE, 475-478 BLOCKED_PROVIDER — kanıt
+              docs/evidence/b49-android-factory-ios-refusal-2026-09-15.json
+              474: `counter-mobile` gerçek Gradle Kotlin projesi üretir (XML olarak ayrıştırılıp
+              denetlenir, diske yazılır). 479: iOS adıyla reddedilir, katalogda Türkçe mesajı var,
+              rota nedenini söyler. 475-478: bu makinede JDK/Gradle/cmdline-tools/AVD yok (ölçüldü);
+              JDK indirmesi sahip izni ister, fiziksel cihaz sahibin — READY_FOR_OWNER (madde 33).
+              Yolda bulunan: `platform_unreachable` hata dili korumasına görünmüyordu (Final
+              ek açıklamalı sabit); M28 spesifikasyonu kodda hiç olmayan `ios_project` hedefini
+              listeliyordu. 8/8 mutasyon kırmızı (ADR-0156).
 
 B50  Unity ve Unreal                      IDs: 530–534                    dep: B44      risk: low     owner: UNITY LİSANSI
      GOAL: Lisans geldiğinde Unity proje/sahne/derleme/test; Unreal isteğe bağlı kalır.
      PROOF: BLOCKED — lisans yokken dürüst ret (529 deseni) korunur.
      ROLLBACK: yok (salt ekleme).
+     KAPANIŞ: BLOCKED (tasarım gereği, Karar 12: Unity lisansı) · kod yok · commit yok
+              Dürüst ret koşularak kanıtlandı: 5 Unity ret testi, `5 passed, 28 deselected, 1 warning in 3.42s`.
+              530-533 BLOCKED_PROVIDER, 534 DEFERRED kalır; lisans geldiğinde ADR-0157'deki
+              adımlar açılır. READY_FOR_OWNER.
 
 B51  Niyet zekâsı                         IDs: 740, 742–748               dep: B26, B27, B18  risk: medium  owner: model bütçesi
      GOAL: Model tabanlı yönlendirme, araç kaydından çözüm, güven skoru, belirsizlik sorusu,

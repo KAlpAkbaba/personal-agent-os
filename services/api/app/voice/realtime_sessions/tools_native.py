@@ -154,7 +154,8 @@ ERROR_VALIDATION: Final = str(VoiceErrorClass.VALIDATION_ERROR)
 #: Not in the voice taxonomy on purpose: "there is no macOS on this machine" is not a
 #: dependency that could become available, and calling it one would imply an owner
 #: action exists. ``app.nativefactory.stacks.refuse_ios`` uses the same word.
-ERROR_PLATFORM_UNREACHABLE: Final = "platform_unreachable"
+#: B49 (req 479): a plain constant, so the owner error-language guard sees it.
+ERROR_PLATFORM_UNREACHABLE = "platform_unreachable"
 
 #: The sentences the owner hears when a step cannot happen. Spelled here rather than
 #: inline so the unit tests assert the exact wording (the same discipline
@@ -173,8 +174,7 @@ SPEECH_INSTALL_NEEDS_DEVICE = (
     "Bu tarafta kurdum diyemem."
 )
 SPEECH_LAUNCH_NEEDS_DEVICE = (
-    "Uygulamayı buradan açamam efendim: pencereyi açan ve süren taraf cihaz. "
-    "Açtım diyemem."
+    "Uygulamayı buradan açamam efendim: pencereyi açan ve süren taraf cihaz. Açtım diyemem."
 )
 SPEECH_NOTHING_TO_FIX = "Düzeltilecek bir hata görünmüyor efendim"
 SPEECH_MSIX_IS_THE_DEVICES = (

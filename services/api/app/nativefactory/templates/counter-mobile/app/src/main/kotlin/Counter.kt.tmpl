@@ -1,0 +1,21 @@
+package {{ANDROID_PACKAGE}}
+
+/** The app's whole state, free of Android so the JVM unit test can hold it to account. */
+class Counter {
+    var value: Int = 0
+        private set
+
+    fun increment() {
+        if (value < Int.MAX_VALUE) {
+            value += 1
+        }
+    }
+
+    fun reset() {
+        value = 0
+    }
+
+    fun restore(saved: Int) {
+        value = saved.coerceAtLeast(0)
+    }
+}

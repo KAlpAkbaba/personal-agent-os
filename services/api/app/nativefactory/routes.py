@@ -121,6 +121,9 @@ async def toolchain(request: Request) -> dict[str, Any]:
             # rather than a flag someone might try to flip.
             "ios": False,
         },
+        # B49 (req 479): the reason stated beside the fact - an iOS app needs macOS and
+        # Xcode, which this product's machines do not have.
+        "ios_reason": "macos_required",
     }
 
 

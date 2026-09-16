@@ -272,6 +272,11 @@ TR: dict[str, OwnerMessage] = {
         "Tekrarlayan bir etkinliğin tek bir tekrarı buradan değiştirilemez",
         "Takviminizden değiştirebilirsiniz.",
     ),
+    # B49 (req 479): iOS without macOS.
+    "platform_unreachable": _m(
+        "Bu bilgisayarlarda iOS uygulaması derlenemez: macOS ve Xcode gerekir",
+        "Windows ya da Android için yapabilirim.",
+    ),
     "not_awaiting_owner": _m(
         "Bu aday onayınızı beklemiyor", "Ya karar verilmiş ya da koşu henüz bitmemiş."
     ),

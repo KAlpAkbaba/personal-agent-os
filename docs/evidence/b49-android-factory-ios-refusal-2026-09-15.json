@@ -1,0 +1,90 @@
+{
+  "batch": "B49",
+  "name": "Android fabrikası ve iOS beyanı",
+  "requirements": [
+    474,
+    475,
+    476,
+    477,
+    478,
+    479
+  ],
+  "recorded_at": "2026-09-15T00:00:00Z",
+  "commit": "PENDING",
+  "ci_run": "PENDING",
+  "local_gate": {
+    "script": "scripts/quality-gate.ps1 -Fast",
+    "result": "PASS",
+    "steps": {
+      "required_files": "PASS",
+      "secret_hygiene": "PASS",
+      "api_lint_ruff": "PASS",
+      "other_services_lint": "PASS",
+      "api_unit_tests": "PASS (11129 passed, 5 skipped, 19m09s)",
+      "windows_agent_build_tests": "PASS (PagentOS.Agent.Tests 959/959, Companion.Audio.Tests 135/135)",
+      "staged_update_qualification": "PASS (89 checks)"
+    },
+    "web_gates": "no web source changed in B49; after sync: tsc --noEmit clean, vitest features/ pages/ 67 passed"
+  },
+  "measured_first": {
+    "renderer": "app/nativefactory/generator.py RENDERABLE_TEMPLATES = {notes-desktop}; templates/ held only notes-desktop/.",
+    "ios_message": "platform_unreachable had no entry in app/errors/catalog.py; tools_native declared it as ERROR_PLATFORM_UNREACHABLE: Final = ..., which the error-language guard's regex does not see.",
+    "spec_drift": "docs/M28_NATIVE_APP_FACTORY_SPEC.md listed ios_project among the targets.",
+    "this_machine_android": {
+      "sdk_root": "C:\\Users\\alpak\\AppData\\Local\\Android\\Sdk",
+      "platforms": [
+        "android-32",
+        "android-33"
+      ],
+      "build_tools": [
+        "30.0.3",
+        "33.0.0"
+      ],
+      "system_images": [
+        "android-23",
+        "android-33"
+      ],
+      "cmdline_tools": [],
+      "java_on_path": null,
+      "gradle_on_path": null,
+      "avds": []
+    }
+  },
+  "closed": {
+    "474": "templates/counter-mobile (manifest.json, settings.gradle.kts, build.gradle.kts, app/build.gradle.kts, AndroidManifest.xml, strings.xml, MainActivity.kt, Counter.kt, CounterTest.kt, README.md); generator slots ANDROID_PACKAGE / VERSION_CODE / TITLE_RESOURCE; RENDERABLE_TEMPLATES includes counter-mobile.",
+    "479": "catalog platform_unreachable; plain ERROR_PLATFORM_UNREACHABLE; toolchain ios_reason; M28 spec target list."
+  },
+  "ready_for_owner": {
+    "475_476": "install a JDK 17 and Gradle (a download - the owner's permission), then `gradle wrapper` and `./gradlew test assembleDebug bundleRelease` in a generated project.",
+    "477": "create an AVD from the installed system image (cmdline-tools needed) and run the APK.",
+    "478": "a physical Android phone with USB debugging."
+  },
+  "found_on_the_way": {
+    "invisible_error_class": "the iOS refusal's class had no Turkish message because an annotated constant escaped the guard that requires one.",
+    "spec_listed_missing_target": "the M28 spec promised an ios_project target the code never had.",
+    "version_code_collision": "clamping the code to at least 1 gave 0.0.0 and 0.0.1 the same versionCode, so Play would have refused the second upload; the code is offset by one instead (test: version codes grow).",
+    "refusal_started_mid_sentence": "the new platform_unreachable message began with the brand name iOS, lowercase i, which the owner error-language guard reads as a sentence starting mid-way; it now opens with 'Bu bilgisayarlarda iOS uygulaması derlenemez'."
+  },
+  "tests": {
+    "services/api/tests/unit/test_nativefactory_b49.py": "complete Gradle Kotlin tree, no script; same policy as desktop; manifest parsed as XML (launchable, exported, label from resource); Gradle ids and versionCode; package declarations; JVM unit test; title escaping round trip; application id validity (digit, reserved word); version codes grow; slot agreement; generate() writes the project and a JDK-less toolchain is refused; iOS refused by name with an owner message; toolchain reason",
+    "services/api/tests/unit/test_nativefactory_spec.py": "the counter-mobile refusal test became the rendering test",
+    "regression suites rerun": "test_nativefactory_*, test_voice_native_*, test_owner_error_language, voice corpus native cases: see local_gate"
+  },
+  "red_first_proof": {
+    "method": "Executed mutations restored from sha256-verified copies (never git checkout); scratchpad b49_mutate.py.",
+    "mutations": [
+      "M1 a slug starting with a digit yields an invalid application id (474) -> 1 failure(s).",
+      "M2 a reserved word becomes a package segment Kotlin cannot compile (474) -> 1 failure(s).",
+      "M3 a patch release does not raise the versionCode Google Play requires (476) -> 1 failure(s).",
+      "M4 an apostrophe in the title reaches strings.xml unescaped and breaks aapt (474) -> 2 failure(s).",
+      "M5 the Android template is refused again instead of rendered (474) -> 1 failure(s).",
+      "M6 the launcher activity is not exported, so Android never lists the app (474) -> 1 failure(s).",
+      "M7 the iOS refusal has no Turkish owner message again (479) -> 3 failure(s).",
+      "M8 the toolchain says iOS is unavailable without saying why (479) -> 1 failure(s)."
+    ],
+    "result": "8/8 red; every file restored to its sha256 before the mutation."
+  },
+  "runtime_proof": {
+    "status": "PROVEN_AUTOMATED for 474 (rendered project parsed and written) and 479 (refusal, catalog, route). The roadmap's PROVEN_REAL (an APK opened in an emulator) is READY_FOR_OWNER."
+  }
+}

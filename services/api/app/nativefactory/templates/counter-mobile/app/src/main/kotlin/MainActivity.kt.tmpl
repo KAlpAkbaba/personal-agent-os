@@ -1,0 +1,53 @@
+package {{ANDROID_PACKAGE}}
+
+import android.app.Activity
+import android.os.Bundle
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+
+class MainActivity : Activity() {
+    private val counter = Counter()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        counter.restore(savedInstanceState?.getInt(KEY_COUNT) ?: 0)
+        title = getString(R.string.app_name)
+
+        val label = TextView(this)
+        val increment = Button(this).apply { text = "+" }
+        val reset = Button(this).apply { text = "0" }
+
+        fun show() {
+            label.text = counter.value.toString()
+        }
+
+        increment.setOnClickListener {
+            counter.increment()
+            show()
+        }
+        reset.setOnClickListener {
+            counter.reset()
+            show()
+        }
+        show()
+
+        setContentView(
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(label)
+                addView(increment)
+                addView(reset)
+            },
+        )
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(KEY_COUNT, counter.value)
+    }
+
+    private companion object {
+        const val KEY_COUNT = "count"
+    }
+}

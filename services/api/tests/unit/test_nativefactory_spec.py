@@ -156,9 +156,7 @@ def test_a_csharp_file_that_uses_system_io_says_so() -> None:
     for file in render(spec).files:
         if not file.path.endswith(".cs"):
             continue
-        uses_io = any(
-            f"{name}." in file.text for name in ("File", "Directory", "Path")
-        )
+        uses_io = any(f"{name}." in file.text for name in ("File", "Directory", "Path"))
         if uses_io:
             assert "using System.IO;" in file.text, (
                 f"{file.path} uses System.IO types without importing them - "
@@ -167,7 +165,7 @@ def test_a_csharp_file_that_uses_system_io_says_so() -> None:
 
 
 def test_the_ui_carries_automation_ids_so_the_operator_can_drive_it() -> None:
-    """"The operator drove it" is this milestone's own acceptance, and a control nothing
+    """ "The operator drove it" is this milestone's own acceptance, and a control nothing
     can name cannot be driven."""
     xaml = render(parse_spec(NOTES)).get("src/notlarim/MainWindow.xaml")
     assert xaml is not None
@@ -187,9 +185,10 @@ def test_the_manifest_names_files_the_project_actually_carries() -> None:
     assert manifest["tests"] in paths
 
 
-def test_the_android_template_refuses_by_name_rather_than_generating_a_dead_project() -> None:
-    """No JDK on this machine (owner item 33). A template whose build can only fail is
-    worse than an honest refusal - it looks like progress."""
+def test_the_android_template_renders_and_the_jdk_refusal_moved_to_the_build() -> None:
+    """B49 (req 474): rendering needs no JDK, so `counter-mobile` renders a real Gradle
+    Kotlin project (its structure is held to account in test_nativefactory_b49.py); the
+    JDK (owner item 33) is the BUILD's requirement, and the build step refuses by name."""
     spec = parse_spec(
         {
             "name": "Sayac",
@@ -198,7 +197,5 @@ def test_the_android_template_refuses_by_name_rather_than_generating_a_dead_proj
             "features": ["counter"],
         }
     )
-    with pytest.raises(NativeFactoryError) as caught:
-        render(spec)
-    assert caught.value.error_class == "template_unavailable"
-    assert "33" in caught.value.speech
+    paths = render(spec).path_set()
+    assert "app/build.gradle.kts" in paths and "manifest.json" in paths

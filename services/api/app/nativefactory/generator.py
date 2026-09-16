@@ -25,6 +25,7 @@ from typing import Final
 
 from app.appfactory.generator import ProjectFile, ProjectFiles
 from app.nativefactory.spec import (
+    TEMPLATE_COUNTER_MOBILE,
     TEMPLATE_NOTES_DESKTOP,
     NativeAppSpec,
     NativeFactoryError,
@@ -35,11 +36,12 @@ TEMPLATE_SUFFIX: Final = ".tmpl"
 
 _SLOT_RE = re.compile(r"\{\{([A-Z_]+)\}\}")
 
-#: The only stack with a real template today. `counter-mobile` is Android, and Android
-#: cannot build here (no JDK, owner item 33) - so rather than ship a template whose build
-#: can only fail, the Android generator is a named refusal until item 33 lands. The
-#: template's absence is the honest signal, not a stub that looks like progress.
-RENDERABLE_TEMPLATES: Final[frozenset[str]] = frozenset({TEMPLATE_NOTES_DESKTOP})
+#: B49 (req 474): both templates render. `counter-mobile` renders a real Gradle Kotlin
+#: project whose structure is checked by the tests; BUILDING it still needs a JDK (owner
+#: item 33), and the build step - not the renderer - is where that refusal lives now.
+RENDERABLE_TEMPLATES: Final[frozenset[str]] = frozenset(
+    {TEMPLATE_NOTES_DESKTOP, TEMPLATE_COUNTER_MOBILE}
+)
 
 
 def _slots_for(spec: NativeAppSpec) -> dict[str, str]:
@@ -58,7 +60,106 @@ def _slots_for(spec: NativeAppSpec) -> dict[str, str]:
         "TITLE": spec.display_title,
         "VERSION": spec.version,
         "ASSEMBLY_VERSION": spec.assembly_version,
+        # B49 (req 474): the Android identities, derived - never taken from free text.
+        "ANDROID_PACKAGE": android_package(slug),
+        "VERSION_CODE": str(android_version_code(spec.version)),
+        "TITLE_RESOURCE": android_string_resource(spec.display_title),
     }
+
+
+#: Java/Kotlin words a package segment may not be.
+_RESERVED_SEGMENTS: Final[frozenset[str]] = frozenset(
+    {
+        "abstract",
+        "as",
+        "boolean",
+        "break",
+        "byte",
+        "case",
+        "catch",
+        "char",
+        "class",
+        "const",
+        "continue",
+        "default",
+        "do",
+        "double",
+        "else",
+        "enum",
+        "extends",
+        "false",
+        "final",
+        "finally",
+        "float",
+        "for",
+        "fun",
+        "goto",
+        "if",
+        "implements",
+        "import",
+        "in",
+        "instanceof",
+        "int",
+        "interface",
+        "is",
+        "long",
+        "native",
+        "new",
+        "null",
+        "object",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "return",
+        "short",
+        "static",
+        "super",
+        "switch",
+        "synchronized",
+        "this",
+        "throw",
+        "throws",
+        "transient",
+        "true",
+        "try",
+        "typealias",
+        "val",
+        "var",
+        "void",
+        "volatile",
+        "when",
+        "while",
+    }
+)
+
+
+def android_package(slug: str) -> str:
+    """``com.pagentos.<slug without hyphens>``: a valid application id for any slug the
+    spec accepts - never a leading digit, never a reserved word."""
+    segment = "".join(ch for ch in slug.lower() if ch.isascii() and ch.isalnum()) or "app"
+    if segment[0].isdigit():
+        segment = "app" + segment
+    if segment in _RESERVED_SEGMENTS:
+        segment += "app"
+    return f"com.pagentos.{segment}"
+
+
+def android_version_code(version: str) -> int:
+    """A strictly increasing integer for a semver string (major*1e6 + minor*1e3 + patch + 1):
+    Google Play's ``versionCode`` must be at least 1 and grow with every release, and clamping
+    0.0.0 up to 1 would have given 0.0.0 and 0.0.1 the same code."""
+    parts = [int(p) for p in version.split(".")[:3]] + [0, 0, 0]
+    major, minor, patch = parts[0], min(parts[1], 999), min(parts[2], 999)
+    return major * 1_000_000 + minor * 1_000 + patch + 1
+
+
+def android_string_resource(text: str) -> str:
+    """A string escaped for an Android ``strings.xml`` value: XML first, then the resource
+    format's own apostrophe, quote and backslash rules (an unescaped ``'`` breaks aapt)."""
+    escaped = text.replace("\\", "\\\\")
+    escaped = escaped.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return escaped.replace("'", "\\'").replace('"', '\\"')
 
 
 def render(spec: NativeAppSpec) -> ProjectFiles:
@@ -66,14 +167,11 @@ def render(spec: NativeAppSpec) -> ProjectFiles:
     if spec.template not in RENDERABLE_TEMPLATES:
         raise NativeFactoryError(
             "template_unavailable",
-            f"{spec.template} şablonu bu makinede üretilemiyor efendim; "
-            "Android tarafı JDK bekliyor (madde 33).",
+            f"{spec.template} şablonu bu makinede üretilemiyor efendim.",
         )
     root = TEMPLATE_ROOT / spec.template
     if not root.is_dir():
-        raise NativeFactoryError(
-            "template_missing", f"{spec.template} şablonu bulunamadı efendim."
-        )
+        raise NativeFactoryError("template_missing", f"{spec.template} şablonu bulunamadı efendim.")
 
     slots = _slots_for(spec)
     files: list[ProjectFile] = []
@@ -86,9 +184,7 @@ def render(spec: NativeAppSpec) -> ProjectFiles:
         files.append(ProjectFile(path=path, text=text))
 
     if not files:
-        raise NativeFactoryError(
-            "template_empty", f"{spec.template} şablonu boş efendim."
-        )
+        raise NativeFactoryError("template_empty", f"{spec.template} şablonu boş efendim.")
     return ProjectFiles(files=tuple(files))
 
 
@@ -129,6 +225,9 @@ def template_slot_names(template: str) -> frozenset[str]:
 
 __all__ = [
     "RENDERABLE_TEMPLATES",
+    "android_package",
+    "android_string_resource",
+    "android_version_code",
     "TEMPLATE_ROOT",
     "render",
     "template_slot_names",

@@ -16,8 +16,8 @@
     122
   ],
   "recorded_at": "2026-09-14T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "5a5d734900c4f326b69048e1c4c1cc885326af7e",
+  "ci_run": "35080550278",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS 7/7 on the second run (the first run: API 10252 passed / 1 failed - the shared-contract registry refusing the unregistered operator-allowlists.json - and agent 930/931 - NativeBoundsTests still summing the operator family as 32; both registries updated)",

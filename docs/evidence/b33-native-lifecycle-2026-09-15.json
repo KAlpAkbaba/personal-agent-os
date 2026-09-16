@@ -3,8 +3,8 @@
   "name": "Yerel fabrika yaşam döngüsü",
   "requirements": [456, 457, 462, 463, 464, 465, 466, 468, 469, 470, 471, 472, 473],
   "recorded_at": "2026-09-15T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "5a5d734900c4f326b69048e1c4c1cc885326af7e",
+  "ci_run": "35080550278",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS 7/7 on the third run (the first lost three tests to the bare-sentence contract, the owner-language rule and the browser worker race; the second lost the other half of that race)",

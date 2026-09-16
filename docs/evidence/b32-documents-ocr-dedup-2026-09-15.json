@@ -14,8 +14,8 @@
     496
   ],
   "recorded_at": "2026-09-15T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "5a5d734900c4f326b69048e1c4c1cc885326af7e",
+  "ci_run": "35080550278",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS 7/7 on the first run",

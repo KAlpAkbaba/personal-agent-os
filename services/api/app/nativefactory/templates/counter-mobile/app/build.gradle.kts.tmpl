@@ -1,0 +1,31 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "{{ANDROID_PACKAGE}}"
+    // The platform and build tools installed on this machine (android-33, build-tools 33.0.0).
+    compileSdk = 33
+
+    defaultConfig {
+        applicationId = "{{ANDROID_PACKAGE}}"
+        minSdk = 23
+        targetSdk = 33
+        versionCode = {{VERSION_CODE}}
+        versionName = "{{VERSION}}"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}

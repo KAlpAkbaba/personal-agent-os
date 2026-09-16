@@ -12406,3 +12406,35 @@ asleep" additionally requires fresh camera perception. A device camera is the ow
 
 **Consequences.** No migration. The camera rows keep their statuses with notes pointing at
 Karar 8.
+
+## ADR-0156 — The Android project is really rendered, its build waits for a JDK the owner allows, and iOS is refused by name (2026-09-15, B49)
+
+**Context.** B49 (474-479) is Android project/APK/AAB generation and testing, and an explicit
+iOS refusal. Measured: the native factory had an Android template NAME with no files and
+refused to render it ("JDK bekliyor, madde 33"); this machine has the Android SDK's platforms
+32/33, build-tools and system images, but no JDK, Gradle, cmdline-tools or AVD. The iOS request
+was already refused (`platform_unreachable`) but its class had no Turkish owner message - the
+annotated constant was invisible to the error-language guard - and the M28 spec still listed an
+`ios_project` target.
+
+**Decision.**
+
+1. **Rendering needs no JDK, so it happens.** `counter-mobile` is a real Gradle Kotlin DSL
+   project - root settings/build scripts, an `app` module with a launchable `MainActivity`, a
+   string resource, an Android-free `Counter` and its JVM unit test - rendered through the
+   desktop template's slot discipline, extension allowlist and M23 policy. The build step, not
+   the renderer, carries the JDK refusal.
+2. **Identities are derived, never taken.** The application id is `com.pagentos.<slug>` (a
+   leading digit gains `app`, a reserved word gains `app`); `versionCode` is
+   major*1e6 + minor*1e3 + patch + 1 (so 0.0.0 is 1 and 0.0.1 is 2); the title is escaped for `strings.xml` (XML, then the resource
+   format's apostrophe/quote/backslash rules).
+3. **No Gradle wrapper.** A wrapper is a script; the factory renders source, never something a
+   build could be told to run. The README says how to create one on a machine with Gradle.
+4. **APK/AAB/emulator/device wait for the owner.** Installing a JDK is a download, which needs
+   the owner's permission; an AVD and a physical phone are the owner's too. Nothing was
+   downloaded or installed.
+5. **iOS says why.** `platform_unreachable` has its Turkish message; the toolchain route states
+   `ios_reason: macos_required`; the spec no longer lists an iOS target.
+
+**Consequences.** No migration. Row 474's generated project is proven structurally; its first
+compile is the owner's step (item 33).

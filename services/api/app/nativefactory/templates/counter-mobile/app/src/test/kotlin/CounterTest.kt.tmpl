@@ -1,0 +1,25 @@
+package {{ANDROID_PACKAGE}}
+
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class CounterTest {
+    @Test
+    fun incrementsAndResets() {
+        val counter = Counter()
+        counter.increment()
+        counter.increment()
+        assertEquals(2, counter.value)
+        counter.reset()
+        assertEquals(0, counter.value)
+    }
+
+    @Test
+    fun aRestoredCountIsNeverNegative() {
+        val counter = Counter()
+        counter.restore(-5)
+        assertEquals(0, counter.value)
+        counter.restore(7)
+        assertEquals(7, counter.value)
+    }
+}

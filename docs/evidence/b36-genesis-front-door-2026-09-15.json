@@ -21,8 +21,8 @@
     580
   ],
   "recorded_at": "2026-09-15T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "5a5d734900c4f326b69048e1c4c1cc885326af7e",
+  "ci_run": "35080550278",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS 7/7 (the same clean run B35's record cites, over the B35+B36 tree). Before it, the targeted genesis suites caught the wiring path set and a route answering with str(exc); both fixed before the gate.",

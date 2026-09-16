@@ -22,8 +22,8 @@
     680
   ],
   "recorded_at": "2026-09-15T00:00:00Z",
-  "commit": "PENDING",
-  "ci_run": "PENDING",
+  "commit": "5a5d734900c4f326b69048e1c4c1cc885326af7e",
+  "ci_run": "35080550278",
   "local_gate": {
     "script": "scripts/quality-gate.ps1 -Fast",
     "result": "PASS 7/7 on the third run. Run 1 (B35 alone) failed one test: the new selfdev tool family had no Turkish name in app.voice.capabilities (fixed). Run 2 failed one test because B36's migration 0049 landed in the tree while the run was in flight (the release-schema head test read the file tip after alembic had cached 0048) - a self-inflicted contamination, not a B35 defect. Run 3 was the clean run over the B35+B36 tree and is the run this record and B36's record both cite.",

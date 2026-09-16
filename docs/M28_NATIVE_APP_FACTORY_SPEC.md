@@ -28,7 +28,7 @@ shaped code:
 
 ## 2. The application spec (M23's `AppSpec`, extended as data)
 
-`app/nativefactory/spec.py` — `NativeAppSpec`: `name`, `targets[] ⊆ {windows_exe, windows_portable, windows_msix, android_apk, android_aab, ios_project}`, `stack ∈ {dotnet_wpf, dotnet_winforms, tauri, android_kotlin}` (no `dotnet_maui`: the workload is not installed and the assistant installs nothing) (chosen by §3 unless the owner names one), `template ∈ {notes_desktop, counter_mobile, task_tracker_native}` (built-in templates as files with `{{SLOT}}` markers — the M23 discipline: free text never lands in code; names, ids and versions are closed-alphabet; the UI strings are Turkish resources, escaped by the resource format), `version` (semver, bounded), `persistence ∈ {none, local_file}`, `screens[]` (from the template's catalogue), the closed `features[]`.
+`app/nativefactory/spec.py` — `NativeAppSpec`: `name`, `targets[] ⊆ {windows_exe, windows_portable, windows_msix, android_apk, android_aab}` (B49 req 479: no iOS target - without macOS and Xcode an iOS request is refused by name, `platform_unreachable`), `stack ∈ {dotnet_wpf, dotnet_winforms, tauri, android_kotlin}` (no `dotnet_maui`: the workload is not installed and the assistant installs nothing) (chosen by §3 unless the owner names one), `template ∈ {notes_desktop, counter_mobile, task_tracker_native}` (built-in templates as files with `{{SLOT}}` markers — the M23 discipline: free text never lands in code; names, ids and versions are closed-alphabet; the UI strings are Turkish resources, escaped by the resource format), `version` (semver, bounded), `persistence ∈ {none, local_file}`, `screens[]` (from the template's catalogue), the closed `features[]`.
 
 ## 3. Stack selection (a rule, recorded on the row)
 
