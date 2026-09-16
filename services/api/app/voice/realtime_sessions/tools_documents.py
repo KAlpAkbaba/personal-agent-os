@@ -139,6 +139,27 @@ def _target(ctx: ToolContext, arguments: dict[str, Any], *, default: str = "curr
     return str(raw) if isinstance(raw, str) and raw else default
 
 
+#: The focus kinds a document tool can read through a deictic reference.
+_REFERENCE_KINDS: Final[frozenset[str]] = frozenset({"document", "file"})
+
+
+def _reference(ctx: ToolContext, target: str) -> dict[str, Any] | None:
+    """B51 req 745: what the owner's "bunu / şunu / bu dosya" pointed at, from the ONE
+    router's turn record (``deictic_reference``: the freshest focused object, within its
+    freshness window) - only for a "current" target and only when it is a document or a
+    file. Never from the model's arguments: the referent is what the owner's words and the
+    durable focus say, not what the model chose to pass."""
+    if target != "current":
+        return None
+    ref = _turn_record(ctx).get("deictic_reference")
+    if not isinstance(ref, dict) or ref.get("kind") not in _REFERENCE_KINDS:
+        return None
+    object_id = ref.get("object_id")
+    if not isinstance(object_id, str) or not object_id:
+        return None
+    return {"kind": ref["kind"], "object_id": object_id}
+
+
 # --------------------------------------------------------------------- file.search
 
 
@@ -172,8 +193,13 @@ def document_read(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     db = _require_db(ctx, TOOL_DOCUMENT_READ)
     service = _service(ctx, TOOL_DOCUMENT_READ)
     device_action = ctx.live.get("device_action")
+    target = _target(ctx, arguments)
     return service.read(
-        db, device_action, target=_target(ctx, arguments), session_id=str(ctx.session_id)
+        db,
+        device_action,
+        target=target,
+        session_id=str(ctx.session_id),
+        reference=_reference(ctx, target),
     )
 
 
@@ -182,8 +208,13 @@ def document_summarize(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str,
     db = _require_db(ctx, TOOL_DOCUMENT_SUMMARIZE)
     service = _service(ctx, TOOL_DOCUMENT_SUMMARIZE)
     device_action = ctx.live.get("device_action")
+    target = _target(ctx, arguments)
     return service.summarize(
-        db, device_action, target=_target(ctx, arguments), session_id=str(ctx.session_id)
+        db,
+        device_action,
+        target=target,
+        session_id=str(ctx.session_id),
+        reference=_reference(ctx, target),
     )
 
 
@@ -201,12 +232,14 @@ def document_answer(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     if not question:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "document.answer needs a question")
     device_action = ctx.live.get("device_action")
+    target = _target(ctx, arguments)
     return service.answer(
         db,
         device_action,
-        target=_target(ctx, arguments),
+        target=target,
         question=question,
         session_id=str(ctx.session_id),
+        reference=_reference(ctx, target),
     )
 
 
@@ -227,8 +260,13 @@ def document_inspect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     db = _require_db(ctx, TOOL_DOCUMENT_INSPECT)
     service = _service(ctx, TOOL_DOCUMENT_INSPECT)
     device_action = ctx.live.get("device_action")
+    target = _target(ctx, arguments)
     return service.inspect(
-        db, device_action, target=_target(ctx, arguments), session_id=str(ctx.session_id)
+        db,
+        device_action,
+        target=target,
+        session_id=str(ctx.session_id),
+        reference=_reference(ctx, target),
     )
 
 
@@ -269,11 +307,13 @@ def document_preview(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     first words; an archive previews from its directory."""
     db = _require_db(ctx, TOOL_DOCUMENT_PREVIEW)
     service = _service(ctx, TOOL_DOCUMENT_PREVIEW)
+    target = _target(ctx, arguments)
     return service.preview(
         db,
         ctx.live.get("device_action"),
-        target=_target(ctx, arguments),
+        target=target,
         session_id=str(ctx.session_id),
+        reference=_reference(ctx, target),
     )
 
 

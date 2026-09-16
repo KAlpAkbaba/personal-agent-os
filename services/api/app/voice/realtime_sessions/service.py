@@ -1773,6 +1773,9 @@ def record_client_events(
                 "route_confidence": routed.confidence,
                 "clarification_question": routed.clarification,
                 "deictic_reference": reference,
+                # B51 req 746/747: a route the words reached only through a repair
+                # reading (polite request / folded letters) says so.
+                "route_repair": intent.route_repair,
                 "creative_application": intent.creative_application,
                 "spoken_numbers": intent.spoken_numbers,
                 # M23 (spec §5): the App Factory fields the owner's WORDS carried, for
@@ -1856,7 +1859,14 @@ def record_client_events(
             # B51 (req 744): the question is spoken only under the owner's flag - the
             # model may already be answering the same utterance.
             if routed.clarification and get_intent_router().clarify_aloud:
-                sideband_payloads.append((SB_SAY, {"text": routed.clarification}))
+                # Tagged with the turn it answers, so it can never be mistaken for (or
+                # replayed into) a later turn's speech: it rides this response once.
+                sideband_payloads.append(
+                    (
+                        SB_SAY,
+                        {"text": routed.clarification, "turn": turn, "purpose": "clarification"},
+                    )
+                )
             # An utterance resolved to EYE_DISABLE / EYE_ENABLE is resolved and audited
             # here (intent, klass, capability) and NOTHING ELSE: the tool call is the one
             # canonical mutation path (docs/M18_ACTION_CONTRACT.md §5.3). Until 2026-09-06

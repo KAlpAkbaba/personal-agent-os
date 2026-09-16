@@ -18,7 +18,7 @@ side-effect policy the fake device is checked against.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final
 
 CORPUS_VERSION: Final = 1
@@ -7687,6 +7687,142 @@ def _daily_cases() -> list[UtteranceCase]:
     return cases
 
 
+# ------------------------------------------------------------ B51 paraphrases
+
+#: B51 (req 746/748): realistic Turkish re-phrasings of an existing case, each inheriting
+#: that case's WHOLE contract - context, tool, response class, target, extras, forbidden
+#: tools, side-effect policy and preceding turns - so a paraphrase is held to exactly what
+#: the sentence it re-says is held to. (case_id, template case_id, utterance). Every one
+#: runs with its ASR variants (``_with_variants``). The polite question form ("...-ır
+#: mısın?"), the "-sana" imperative, a different noun for the same object and a reordered
+#: sentence are the shapes owners actually use; the deterministic router routes all of
+#: them - no model is involved (the model router stays behind its own flag, row 740).
+_B51_PARAPHRASES: Final[tuple[tuple[str, str, str], ...]] = (
+    # --- clock / weather / daily
+    ("b51.clock.1", "c.now.1", "Şu an saat kaç?"),
+    ("b51.clock.2", "c.now.1", "Saat kaç acaba?"),
+    ("b51.weather.1", "weather.bare.1", "Dışarıda hava nasıl?"),
+    ("b51.weather.2", "weather.bare.1", "Hava durumu nasıl?"),
+    ("b51.caps.1", "d.caps.1", "Neler yapabiliyorsun?"),
+    ("b51.briefing.1", "briefing.morning.2", "Bana sabah özetini verir misin?"),
+    ("b51.routine_list.1", "r.list.1", "Rutinlerimi söyler misin?"),
+    ("b51.routine_cancel.1", "r.cancel.1", "Sabah rutinini iptal eder misin?"),
+    (
+        "b51.routine_create.1",
+        "r.create.1",
+        "Her sabah 08:00'de bana haberleri okuyan bir rutin oluştur.",
+    ),
+    # --- alarms
+    ("b51.alarm_create.1", "a.create.1", "Yarın 7:30'da uyandırır mısın beni?"),
+    ("b51.alarm_create.2", "a.create.1", "Yarın sabah 7:30'a bir alarm kurar mısın?"),
+    ("b51.alarm_test.1", "a.test.1", "90 saniye sonra bir test alarmı ayarla."),
+    ("b51.alarm_test.2", "a.test.1", "90 saniye sonra test alarmı kurar mısın?"),
+    ("b51.alarm_query.1", "a.query.1", "Sabah alarmım saat kaçta?"),
+    ("b51.alarm_cancel.1", "a.cancel.1", "Alarmı iptal eder misin?"),
+    ("b51.alarm_stop.1", "a.stop.1", "Alarmı kapatır mısın?"),
+    ("b51.alarm_snooze.1", "a.snooze.1", "10 dakika erteler misin?"),
+    # --- display / ambient / eye
+    ("b51.display_off.1", "d.off.1", "Ekranları kapatır mısın?"),
+    ("b51.display_off.2", "d.off.1", "Monitörleri kapatsana."),
+    ("b51.display_wake.1", "d.wake.1", "Ekranları açar mısın?"),
+    ("b51.ambient_explain.1", "am.explain.1", "Monitörleri neden kapattın?"),
+    ("b51.ambient_explain.2", "am.explain.1", "Ekranları niye kapattın?"),
+    ("b51.ambient_policy.1", "am.1", "Ben uyurken ekranları kapat."),
+    ("b51.ambient_test.1", "am.test.1", "Ekran uyku otomasyonunu test eder misin?"),
+    ("b51.eye_off.1", "e.off.1", "Kamerayı kapatır mısın?"),
+    ("b51.eye_off.2", "e.off.1", "Gözlerini kapat."),
+    ("b51.eye_on.1", "e.on.1", "Kamerayı açar mısın?"),
+    ("b51.eye_on.2", "e.on.1", "Gözlerini aç."),
+    ("b51.screenshot.1", "d.shot.1", "Ekran görüntüsü alır mısın?"),
+    # --- research
+    ("b51.research_open.1", "r.open.prev", "Önceki araştırmayı aç."),
+    ("b51.research_sources.1", "r.src.1", "Kaynakları söyler misin?"),
+    ("b51.research_cancel.1", "d.research_cancel.1", "Araştırmayı iptal eder misin?"),
+    # --- operator
+    ("b51.app_open.1", "op.app.1", "Not Defteri'ni açar mısın?"),
+    ("b51.op_status.1", "op.status.1", "Şu an ne yapıyorsun?"),
+    ("b51.win_max.1", "op.win.max.1", "Pencereyi büyütür müsün?"),
+    ("b51.win_max.2", "op.win.max.1", "Bu pencereyi büyüt."),
+    ("b51.win_min.1", "op.win.min.1", "Pencereyi küçültür müsün?"),
+    ("b51.win_min.2", "op.win.min.1", "Pencereyi küçült."),
+    ("b51.process_query.1", "op.process.query.1", "Chrome açık mı?"),
+    ("b51.shell_ip.1", "op.shell.ip.1", "IP adresimi söyler misin?"),
+    # --- documents
+    ("b51.file_search.1", "doc.search.2", "Masaüstünde sözleşme dosyasını ara."),
+    ("b51.doc_read.1", "doc.read.1", "Bu dosyayı okur musun?"),
+    ("b51.doc_summ.1", "doc.summ.1", "Bunu özetler misin?"),
+    ("b51.doc_insp.1", "doc.insp.1", "Bu Excel dosyasında ne var?"),
+    ("b51.doc_preview.1", "doc.preview.1", "Bu belgeyi önizler misin?"),
+    ("b51.image_meta.1", "doc.image.meta", "Fotoğrafın bilgilerini göster."),
+    ("b51.image_text.1", "doc.image.text", "Görseldeki yazıyı oku."),
+    ("b51.doc_write.1", "doc.write.new", "gunluk.md adında bir dosya oluşturur musun?"),
+    ("b51.doc_append.1", "doc.append.canonical", "Bu dosyanın sonuna toplantı notu ekler misin?"),
+    ("b51.doc_apply.1", "doc.apply.after_edit", "Tamam, uygula."),
+    ("b51.doc_copy.1", "doc.copy.canonical", "Bu dosyayı kopyalar mısın?"),
+    ("b51.doc_move.1", "doc.move.canonical", "Bu dosyayı Masaüstüne taşır mısın?"),
+    (
+        "b51.doc_rename.1",
+        "doc.rename.canonical",
+        "Bu dosyanın adını gunluk-notlari.md olarak değiştir.",
+    ),
+    ("b51.doc_delete.1", "doc.neg.delete", "Bu dosyayı siler misin?"),
+    ("b51.doc_undo.1", "doc.undo.after_append", "Son değişikliği geri alır mısın?"),
+    ("b51.doc_versions.1", "doc.versions.canonical", "Bu dosyanın sürümlerini göster."),
+    # --- memory
+    ("b51.memory_search.1", "m.recall.1", "Kahve hakkında neler biliyorsun?"),
+    ("b51.memory_pin.1", "m.pin.1", "Bunu sabitler misin?"),
+    ("b51.memory_why.1", "m.why.1", "Bunu niye hatırlıyorsun?"),
+    ("b51.memory_forget.1", "m.forget.1", "Bunu hafızandan sil."),
+    # --- artifacts / creative / media / news
+    ("b51.artifact_open.1", "art.open.this", "Bunu açsana."),
+    ("b51.creative_open.1", "creative.open.paint.canonical", "Paint'te yeni bir tuval aç."),
+    ("b51.creative_undo.1", "creative.undo.canonical", "Geri alır mısın?"),
+    ("b51.creative_redo.1", "creative.redo.canonical", "Yineler misin?"),
+    ("b51.media_play.1", "m.play.4", "Bana bir Tarkan şarkısı çal."),
+    ("b51.media_stop.1", "m.stop.1", "Şarkıyı durdurur musun?"),
+    ("b51.news_open.1", "n.open.1", "Haberleri açar mısın?"),
+    ("b51.news_query.1", "n.query.1", "Son haber ne zaman yüklendi?"),
+    ("b51.news_sum.1", "n.sum.1", "Haberleri özetler misin?"),
+    # --- executive, native, release, self-development
+    ("b51.exec_status.1", "exec.status.1", "Ne durumdasın?"),
+    ("b51.exec_explain.1", "exec.explain.1", "Şu anda tam olarak ne yapıyorsun?"),
+    ("b51.exec_pause.1", "exec.pause.1", "Bu işi duraklat."),
+    ("b51.exec_cancel.1", "exec.cancel.1", "Bu işi iptal et."),
+    ("b51.exec_retry.1", "exec.retry.ordinal", "İkinci adımı bir daha dene."),
+    ("b51.exec_amend.1", "exec.amend.presentation", "Sunumu da ekler misin?"),
+    ("b51.native_check.1", "nativeapps.check.canonical", "Çalışıyor mu bir kontrol et."),
+    (
+        "b51.native_android.1",
+        "nativeapps.create.android.deictic",
+        "Bunun Android sürümünü yapar mısın?",
+    ),
+    ("b51.native_fix.1", "nativeapps.fix.rebuilt_on_device", "Hata varsa düzeltir misin?"),
+    ("b51.native_rebuild.1", "nativeapps.rebuild.canonical", "Yeni sürümü derle."),
+    ("b51.native_update.1", "nativeapps.update.canonical", "Uygulamayı günceller misin?"),
+    ("b51.deploy.1", "dep.2", "Bunu yayına al."),
+    ("b51.selfdev_status.1", "selfdev.status.canonical", "Kendinde neyi düzeltiyorsun?"),
+)
+
+
+def _b51_paraphrase_cases(existing: list[UtteranceCase]) -> list[UtteranceCase]:
+    templates = {c.case_id: c for c in existing}
+    out: list[UtteranceCase] = []
+    for case_id, template_id, utterance in _B51_PARAPHRASES:
+        out.extend(
+            _with_variants(
+                replace(
+                    templates[template_id],
+                    case_id=case_id,
+                    utterance=utterance,
+                    source="paraphrase",
+                    regression_issue_id=None,
+                    notes=f"B51 paraphrase of {template_id}",
+                )
+            )
+        )
+    return out
+
+
 def all_cases() -> list[UtteranceCase]:
     cases = [
         *_clock_cases(),
@@ -7715,6 +7851,7 @@ def all_cases() -> list[UtteranceCase]:
         *_creative_cases(),
         *_nativeapps_cases(),
     ]
+    cases.extend(_b51_paraphrase_cases(cases))
     ids = [c.case_id for c in cases]
     assert len(ids) == len(set(ids)), "duplicate case ids"
     return cases
