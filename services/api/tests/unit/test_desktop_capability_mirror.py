@@ -59,7 +59,8 @@ CANONICAL_DESKTOP = (
     "desktop.play_audio",
     "desktop.display_off",
     "desktop.notify",
-    # B48 (DEVICE_PROTOCOL.md §6o): the owner's device-camera mode.
+    "desktop.voice_status",
+    # B48 (DEVICE_PROTOCOL.md §6p): the owner's device-camera mode.
     "desktop.camera_mode",
 )
 

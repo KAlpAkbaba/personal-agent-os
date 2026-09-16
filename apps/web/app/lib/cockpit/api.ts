@@ -545,7 +545,7 @@ export async function updateAmbientCameraMode(mode: CameraMode): Promise<{ ok: b
   }
 }
 
-/** B48: what a device says its camera is doing (DEVICE_PROTOCOL.md §6o). */
+/** B48: what a device says its camera is doing (DEVICE_PROTOCOL.md §6p). */
 export type DeviceCamera = {
   mode: CameraMode | null;
   state: string | null;

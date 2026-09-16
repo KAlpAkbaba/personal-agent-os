@@ -372,6 +372,10 @@ EVENT_TYPE_ALARM_FAILED = "alarm.failed"
 #: Not a failure of the alarm — the opposite: the fallback did exactly its job, and the
 #: cloud reconciles rather than ringing a second time.
 EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG = "alarm.local_fallback_rang"
+#: B47 (B13 req 259's local trigger): the device snoozed a ringing alarm on its own while the
+#: cloud was unreachable, and reported the instant it will ring again. Written whether the
+#: cloud adopted that snooze or not - the snooze happened either way.
+EVENT_TYPE_ALARM_LOCAL_SNOOZED = "alarm.local_snoozed"
 #: A test alarm released everything it held (spec §8.1): media session closed, device
 #: disarmed, one-shot routine resolved. Written on EVERY terminal state, never only the
 #: happy one.
@@ -603,6 +607,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_ALARM_CANCELLED,
     EVENT_TYPE_ALARM_FAILED,
     EVENT_TYPE_ALARM_LOCAL_FALLBACK_RANG,
+    EVENT_TYPE_ALARM_LOCAL_SNOOZED,
     EVENT_TYPE_ALARM_CLEANED_UP,
     EVENT_TYPE_OWNER_INPUT_ACTIVE,
     EVENT_TYPE_AMBIENT_POLICY_CHANGED,

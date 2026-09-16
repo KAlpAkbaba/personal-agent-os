@@ -12623,3 +12623,75 @@ ended `evaluation_failed`; the quality gate caught it as a one-off test failure.
 `_classify` no longer repeats it. The failure-matrix test also asserts that no skill version,
 workspace or evaluation exists for the refused run; with the refusal moved back after `_test`
 it fails deterministically.
+
+## ADR-0164 — The Unity path, as a licensed editor really runs it (2026-09-16)
+
+**Context.** B50 (reqs 530-533) had been `BLOCKED_PROVIDER` on the Unity licence. The first
+run after the owner's licence became valid found that the production path had never run:
+the Cloud driver `SceneDriver.cs` needs Newtonsoft.Json, which no scaffolded project
+declared; `attach_script` named three catalogue scripts no file held; the device lab drove
+a driver of its own, so neither was visible; and the Unity job's fixed 32-process cap left
+the editor's build backend unable to start a compiler (GetLastError 1816). Build (532) and
+test (533) had no operations at all.
+
+**Decision.**
+1. Every Unity scaffold carries `drivers/unity_support/` - the package manifest and the
+   three catalogue scripts - sha256-pinned in `drivers/manifest.json` like the drivers; a
+   changed file is never shipped (`DriverPinMismatch`).
+2. The Unity job's process cap is derived from the machine: `clamp(4*cores + 64, 128, 512)`
+   (a player build failed at two per core); its CPU-time bound is the wall-clock bound times
+   the cores. Blender keeps its fixed cap.
+3. Two Unity-only plan operations: `run_tests` steps each attached catalogue script through
+   its own `Step(float)` (the method its `Update` calls) for N frames, requires it to have
+   acted, and restores the object; `build_player` builds the saved scene as a Windows player
+   at `Build/<scene>.exe` and declares its hash. The Cloud Core counts the build only after
+   the device's `file.inspect` reads the same bytes back as a PE image, and never asks for a
+   path outside the project.
+4. The Unity command is `unity -batchmode -quit ...` (13 tokens). With `-nographics` the
+   editor has no graphics device and `Camera.Render` produced one flat colour. The device
+   still admits the 14-token `-nographics` form exactly, for a Cloud Core released before
+   this change; the driver reports `render: no graphics device` there and the render check
+   refuses the result.
+5. A Unity camera's aim is judged with Unity's axes (left-handed, +Z forward, Euler Z-X-Y):
+   the Blender formula read a correctly aimed camera as 180 degrees off.
+6. The device lab's `SceneUnityProductionTests` runs the repository's own driver, support
+   files and plan fixture (kept equal to `ScenePlan.plan_json()`) in the real editor; with
+   `PAGENTOS_B50_EVIDENCE_OUT` set it writes the measured run, and
+   `test_creative3d_b50.py` runs the Cloud Core's `compare` over that real output.
+
+**Evidence.** `docs/evidence/b50-unity-production-2026-09-16.json` (Unity 6000.5.0f1,
+28 cores, exit 0, 20 constraints, render stddev 27.0, three script tests passed, 667,648-byte
+x64 player whose device-read hash equals the editor's). RED: the 32- and 88-process caps
+(measured 1816), the `-nographics` render (measured stddev 0), the Blender aim formula
+(measured 180 degrees) and the tr-TR decimal comma (measured "0,5") each failed the same
+tests before their fixes; five Python mutations of the new checks each turn a named test red.
+
+**Consequences.** 530-533 are proven against the real editor with production bytes; the
+live production round needs this Cloud Core release and a device reinstall (the device's
+allowlist and job caps changed). Unreal (534) stays deferred.
+
+### ADR-0158 addendum (B51 closure, 2026-09-16)
+
+No model is needed to close 744-748.
+
+- *Repair readings.* `resolve_intent` reads the words as heard first, exactly as before, and
+  returns any route they reach. Only an utterance that reaches nothing gets repair readings:
+  the polite request read as its imperative, the words with Turkish letters folded on both
+  sides of each comparison, or both. A repair is taken only when all its routed readings
+  agree on one intent, never into the deferred mail/calendar families, is recorded as
+  `route_repair`, and costs 0.1 confidence.
+- *ALL-CAPS text.* An ALL-CAPS transcript whose "I" is ambiguous is the one text read folded
+  first, because its exact casefold is not what was said.
+- *Normalisation.* `turkish_casefold` composes to NFC and drops the combining dot of a
+  non-Turkish lowercase "İ".
+- *"Bunu" is now read.* The document tools pass the turn record's `deictic_reference` for a
+  "current" target. A fresh file or document referent outranks the per-kind focus, and an
+  unread one is extracted or inspected, never replaced by an older document.
+- *Spoken clarification.* The clarification frame names its turn and purpose, and the
+  real-application test proves it is sent once and never again.
+- *What remains.* The dotted-i loss list is gone. The remaining five ALL-CAPS mail/calendar
+  losses are the owner's deferral of B45/B46, not a gap in the router.
+- *Rollback.* Removing the repair loop in `resolve_intent` restores exactly B51's first
+  behaviour.
+
+Found, not fixed (own item): "Chrome'u açıp YouTube'a gir." routes to `media_play`; the "-ıp" converb is not a mission connector (B39/B27 boundary).

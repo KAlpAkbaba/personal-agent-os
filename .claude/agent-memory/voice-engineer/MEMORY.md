@@ -12,3 +12,4 @@
 - [M18 Core voice surface](project_m18_core_voice_surface.md) — ADR-0061 2026-09-06: one VoiceStore per tab, local overlay rules, no query_kind yet, owner /core run pending
 - [ADR-0066 speech lifecycle](project_adr0066_speech_lifecycle.md) — 2026-09-07 M18.2 defect 1: `speaking` persists through `draining`; `audio_done` event; server kind added in parallel; owner re-run pending
 - [TTS loopback proxy](project_tts_loopback_proxy.md) — 2026-09-07 branch voice-loopback: real baseline 38/2/0/0 WER 0.018; marks fixed; -Post needs a Core release
+- [B47 device voice](project_b47_device_voice.md) — 2026-09-16 continuous listening; M12 client streamed silence; no offline Turkish engine, DTW templates

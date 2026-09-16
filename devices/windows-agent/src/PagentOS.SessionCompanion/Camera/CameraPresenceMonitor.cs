@@ -240,7 +240,7 @@ public sealed class CameraPresenceMonitor : IDisposable
         return result;
     }
 
-    /// <summary>The heartbeat's <c>camera</c> object (DEVICE_PROTOCOL.md §6o).</summary>
+    /// <summary>The heartbeat's <c>camera</c> object (DEVICE_PROTOCOL.md §6p).</summary>
     public JsonObject StatusObject()
     {
         lock (_sync)

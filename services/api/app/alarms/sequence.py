@@ -434,6 +434,9 @@ class WakeSequence:
                 # agent's log was indistinguishable from a wake-up that actually happened,
                 # which is exactly the record a test mode exists to keep clean.
                 "is_test": bool(alarm.is_test),
+                # B47 (req 259's local trigger): the device may snooze this alarm on its own
+                # only on the alarm row's terms - never a default or a limit of its own.
+                **_snooze_terms(alarm),
             },
             requested_state="armed",
             idempotency_key=f"alarm-arm:{alarm.id}:{int(_aware(alarm.scheduled_for).timestamp())}",
@@ -731,6 +734,8 @@ class WakeSequence:
             # req 286: same reason as the arm above. A ring is a ring on the device; only
             # the cloud knew whether anybody meant it.
             "is_test": bool(alarm.is_test),
+            # B47: same terms as the arm, so a ring the cloud started can be snoozed locally too.
+            **_snooze_terms(alarm),
         }
         if alarm.label:
             payload["label"] = alarm.label
@@ -1243,6 +1248,20 @@ def _display_only_alarm() -> WakeAlarm:
     # ``wake_alarm`` evidence off a receipt that has no alarm behind it.
     row._display_only = True  # type: ignore[attr-defined]
     return row
+
+
+def _snooze_terms(alarm: WakeAlarm) -> dict[str, int]:
+    """``snooze_minutes`` and ``snoozes_left`` for the device (``device-voice.json``
+    ``local_snooze.payload_keys``): one limit and one span, the alarm row's."""
+    from app.alarms.models import MAX_SNOOZE_COUNT, MAX_SNOOZE_MINUTES
+    from app.devices import voice_contract
+
+    minutes_key, left_key = voice_contract.snooze_payload_keys()
+    minutes = max(1, min(int(alarm.snooze_minutes or 1), MAX_SNOOZE_MINUTES))
+    return {
+        minutes_key: minutes,
+        left_key: max(0, MAX_SNOOZE_COUNT - int(alarm.snooze_count or 0)),
+    }
 
 
 def _volume_policy(alarm: WakeAlarm) -> dict[str, Any]:

@@ -21,7 +21,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.creative3d.spec import ScenePlan
+from app.creative3d.spec import TOOL_UNITY, ScenePlan
 
 #: Tolerances (spec §4). Location/scale/colour tolerances are generous enough to
 #: survive float round-tripping through JSON and Blender's own unit conversions
@@ -140,6 +140,17 @@ def forward_vector(rotation_deg: tuple[float, float, float]) -> tuple[float, flo
     return (x3, y3, z3)
 
 
+def unity_forward_vector(rotation_deg: tuple[float, float, float]) -> tuple[float, float, float]:
+    """B50: the world-space direction a UNITY camera looks, given its ``eulerAngles``
+    (degrees). Unity is left-handed, a camera looks along its local +Z, and the Euler
+    angles apply Z, then X, then Y - so roll never moves the view axis, a positive X pitches
+    it DOWN and a positive Y turns it toward +X. Checking a Unity camera with
+    :func:`forward_vector` (Blender's -Z, right-handed) read a camera aimed exactly at its
+    target as 180 degrees off - measured on the first licensed run."""
+    rx, ry, _ = (math.radians(c) for c in rotation_deg)
+    return (math.cos(rx) * math.sin(ry), -math.sin(rx), math.cos(rx) * math.cos(ry))
+
+
 def _angle_between_deg(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
     dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
     mag_a = math.sqrt(a[0] ** 2 + a[1] ** 2 + a[2] ** 2)
@@ -211,6 +222,7 @@ def compare(
     *,
     render_bytes: bytes | None = None,
     device_exports: list[dict[str, Any]] | None = None,
+    device_build: dict[str, Any] | None = None,
 ) -> CompareResult:
     """Every requested constraint the plan named, checked against the inspection —
     NEVER against the plan's own numbers restated. ``checked`` counts how many
@@ -246,6 +258,9 @@ def compare(
     animations: dict[tuple[str, str], Any] = {}
     frames_op = None
     exports_wanted: list[str] = []
+    # B50 (req 532, 533): a Windows player build and the catalogue scripts' behaviour test.
+    build_wanted = False
+    tests_wanted = False
 
     for index, op in enumerate(plan.operations):
         if op.op == "add_primitive":
@@ -285,6 +300,10 @@ def compare(
             animations[(op.name, op.channel)] = op
         elif op.op == "export" and op.format not in exports_wanted:
             exports_wanted.append(op.format)
+        elif op.op == "build_player":
+            build_wanted = True
+        elif op.op == "run_tests":
+            tests_wanted = True
         if op.op == "set_camera" and op.lens is not None:
             camera_lens[op.name] = op.lens
 
@@ -411,7 +430,8 @@ def compare(
                 )
             )
             continue
-        actual_forward = forward_vector((cam_rot[0], cam_rot[1], cam_rot[2]))
+        aim = unity_forward_vector if plan.tool == TOOL_UNITY else forward_vector
+        actual_forward = aim((cam_rot[0], cam_rot[1], cam_rot[2]))
         wanted = (
             target_loc[0] - cam_loc[0],
             target_loc[1] - cam_loc[1],
@@ -566,6 +586,61 @@ def compare(
                     )
                 )
 
+    if build_wanted:
+        checked += 1
+        declared_build = inspection.get("build") or {}
+        if declared_build.get("result") != "Succeeded" or not declared_build.get("sha256"):
+            mismatches.append(
+                Mismatch(
+                    "scene",
+                    "build",
+                    "Succeeded",
+                    declared_build.get("result"),
+                    "the editor did not report a successful player build",
+                )
+            )
+        elif not (device_build or {}).get("verified"):
+            mismatches.append(
+                Mismatch(
+                    "scene",
+                    "build",
+                    "verified",
+                    None,
+                    "the device did not read the built executable back as a Windows image",
+                )
+            )
+        elif (device_build or {}).get("sha256") != declared_build.get("sha256"):
+            mismatches.append(
+                Mismatch(
+                    "scene",
+                    "build.sha256",
+                    declared_build.get("sha256"),
+                    (device_build or {}).get("sha256"),
+                    "the device's hash is not the editor's",
+                )
+            )
+
+    if tests_wanted:
+        results = inspection.get("tests")
+        checked += 1
+        if not isinstance(results, list) or not results:
+            mismatches.append(
+                Mismatch("scene", "tests", "run", results, "no catalogue script was tested")
+            )
+        else:
+            for result in results:
+                if not isinstance(result, dict) or result.get("passed") is not True:
+                    name = result.get("object") if isinstance(result, dict) else "?"
+                    mismatches.append(
+                        Mismatch(
+                            str(name),
+                            "tests." + str((result or {}).get("script")),
+                            "acted",
+                            (result or {}).get("detail"),
+                            "the script did not act when stepped",
+                        )
+                    )
+
     if last_render_op is not None:
         checked += 1
         render_mismatch = check_render(render_bytes)
@@ -597,4 +672,5 @@ __all__ = [
     "check_render",
     "compare",
     "forward_vector",
+    "unity_forward_vector",
 ]

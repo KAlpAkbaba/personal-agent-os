@@ -126,8 +126,38 @@
           "items": { "type": "string", "maxLength": 128 },
           "maxItems": 32
         },
+        "local_alarm_snoozed": {
+          "$comment": "B47 (B13 requirement 259's local trigger; packages/protocol/device-voice.json local_snooze): alarms this device snoozed on its OWN while the Cloud Core was unreachable, drained when reported. 'until' is the instant the device will ring again; the cloud adopts it rather than re-deriving it from the moment the report arrived. Absent means nothing was snoozed locally.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["alarm_id", "until"],
+            "properties": {
+              "alarm_id": { "type": "string", "maxLength": 128 },
+              "until": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          },
+          "maxItems": 32
+        },
+        "voice": {
+          "$comment": "B47 (rows 250-252; packages/protocol/device-voice.json heartbeat): the device voice service's compact health. States, flags, a counter and an error CLASS - never a transcript, a phrase, a device name or audio. 'disabled' is what a companion without voice reports.",
+          "type": "object",
+          "required": ["state", "indicator", "mode", "listening", "mic_muted", "cloud_connected", "restarts", "last_error"],
+          "properties": {
+            "state": { "enum": ["disabled", "starting", "running", "offline", "backoff", "stopped"] },
+            "indicator": { "enum": ["off", "muted", "listening", "wake_word", "push_to_talk", "sending"] },
+            "mode": { "enum": ["continuous", "wake_word", "push_to_talk"] },
+            "listening": { "type": "boolean" },
+            "mic_muted": { "type": ["boolean", "null"] },
+            "cloud_connected": { "type": "boolean" },
+            "restarts": { "type": "integer", "minimum": 0 },
+            "last_error": { "type": ["string", "null"], "maxLength": 128 }
+            },
+          "additionalProperties": false
+        },
         "camera": {
-          "$comment": "B48 (DEVICE_PROTOCOL.md §6o): the device camera's own state. mode is the owner's choice as the device holds it (off after every start); state is what the camera is doing - 'blocked' when Windows' permission or the device-local switch denies it, 'vetoed' when the owner closed it from the tray on this device. error is a short token, never free text. Absent on a companion without a camera path.",
+          "$comment": "B48 (DEVICE_PROTOCOL.md §6p): the device camera's own state. mode is the owner's choice as the device holds it (off after every start); state is what the camera is doing - 'blocked' when Windows' permission or the device-local switch denies it, 'vetoed' when the owner closed it from the tray on this device. error is a short token, never free text. Absent on a companion without a camera path.",
           "type": "object",
           "properties": {
             "mode": { "enum": ["off", "periodic", "continuous"] },
@@ -140,7 +170,7 @@
           "additionalProperties": false
         },
         "presence": {
-          "$comment": "B48 (DEVICE_PROTOCOL.md §6o): the device-local presence provider's latest observation - exactly the seven structured fields of M18_HOLOGRAPHIC_CORE_SPEC.md §2, source 'camera', or null. A DERIVED signal: the frames it came from were analysed in memory on the device and never stored or sent. Cloud Core screens it with the same boundary as every other observation.",
+          "$comment": "B48 (DEVICE_PROTOCOL.md §6p): the device-local presence provider's latest observation - exactly the seven structured fields of M18_HOLOGRAPHIC_CORE_SPEC.md §2, source 'camera', or null. A DERIVED signal: the frames it came from were analysed in memory on the device and never stored or sent. Cloud Core screens it with the same boundary as every other observation.",
           "type": ["object", "null"],
           "required": ["person_present", "presence_confidence", "activity_level", "posture", "awake_state", "observed_at", "source"],
           "properties": {

@@ -162,6 +162,24 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
         ),
         held_by=("services/api", "devices/windows-agent"),
     ),
+    "device-voice.json": Contract(
+        guard="test_the_voice_heartbeat_keys_are_read_from_the_contract_not_restated",
+        why=(
+            "B47: the device decides what its microphone may send and reports its voice health "
+            "and its offline snoozes on the heartbeat; the cloud normalises that report and "
+            "adopts the snooze. The pre-roll bound, the indicator states, the heartbeat keys, "
+            "the offline command table and the local snooze shape were written as a contract "
+            "before either half existed. Both halves read it (DeviceVoiceContractTests, "
+            "test_device_voice_contract), and the cloud's guard also reads the device's "
+            "DeviceVoiceContract.cs, so a one-sided edit is red in one suite"
+        ),
+        held_by=("services/api", "devices/windows-agent"),
+        unheld=(
+            "the RECOGNITION is not held: which phrases the device's template engine accepts "
+            "depends on the owner's own enrolled recordings and is measured on the owner's "
+            "machine (scripts/core/qualify-device-voice.ps1), not by either suite"
+        ),
+    ),
     "device-protocol.schema.json": Contract(
         guard="test_hello_knows_exactly_the_fields_the_schema_declares",
         why=(

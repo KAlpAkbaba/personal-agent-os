@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Final
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,19 +37,39 @@ logger = get_logger("app.notifications.service")
 #: normal case, so the comparison below handles the wrap rather than assuming start < end.
 QUIET_FROM: Final[time] = time(23, 0)
 QUIET_UNTIL: Final[time] = time(7, 30)
+#: The owner's wall clock (the alarms' and the briefing's zone). Until 2026-09-16 the window
+#: was compared against the UTC time ``record`` passes, so in Istanbul the "night" ran
+#: 02:00-10:30 and a 23:30 notice rang through.
+QUIET_ZONE: Final[ZoneInfo] = ZoneInfo("Europe/Istanbul")
 
 
-def in_quiet_hours(moment: datetime, *, start: time = QUIET_FROM, end: time = QUIET_UNTIL) -> bool:
-    now = moment.timetz().replace(tzinfo=None)
+def _local(moment: datetime, zone: ZoneInfo) -> datetime:
+    return (moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)).astimezone(zone)
+
+
+def in_quiet_hours(
+    moment: datetime,
+    *,
+    start: time = QUIET_FROM,
+    end: time = QUIET_UNTIL,
+    zone: ZoneInfo = QUIET_ZONE,
+) -> bool:
+    now = _local(moment, zone).time()
     if start <= end:
         return start <= now < end
     return now >= start or now < end
 
 
-def quiet_hours_end(moment: datetime, *, end: time = QUIET_UNTIL) -> datetime:
-    """The next moment quiet hours are over. Same day when the end is still ahead."""
-    today = moment.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
-    return today if today > moment else today + timedelta(days=1)
+def quiet_hours_end(
+    moment: datetime, *, end: time = QUIET_UNTIL, zone: ZoneInfo = QUIET_ZONE
+) -> datetime:
+    """The next moment quiet hours are over, on the owner's wall clock, as UTC. Same day
+    when the end is still ahead."""
+    local = _local(moment, zone)
+    today = datetime.combine(local.date(), end, tzinfo=zone)
+    if today <= local:
+        today = datetime.combine(local.date() + timedelta(days=1), end, tzinfo=zone)
+    return today.astimezone(UTC)
 
 
 def record(
@@ -260,9 +281,7 @@ def history(db: Session, *, limit: int = 100) -> list[dict[str, Any]]:
     reached you about this" is the part of a delivery history that matters.
     """
     rows = (
-        db.execute(
-            select(NotificationRow).order_by(NotificationRow.created_at.desc()).limit(limit)
-        )
+        db.execute(select(NotificationRow).order_by(NotificationRow.created_at.desc()).limit(limit))
         .scalars()
         .all()
     )

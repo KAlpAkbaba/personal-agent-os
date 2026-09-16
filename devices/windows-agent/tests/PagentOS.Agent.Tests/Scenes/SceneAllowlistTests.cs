@@ -64,13 +64,22 @@ public sealed class SceneAllowlistTests
         Assert.Equal(ProjectRuntime.Unity, unityCommand.Runtime);
         Assert.True(unityCommand.IsBatch);
         Assert.Equal(
-            ["-batchmode", "-nographics", "-quit", "-projectPath", Root, "-executeMethod", Method, "-planPath", SceneLab.PlanFileName, "-outPath", SceneCapabilityNames.InspectionFileName, "-logFile", SceneLab.UnityLogFileName],
+            ["-batchmode", "-quit", "-projectPath", Root, "-executeMethod", Method, "-planPath", SceneLab.PlanFileName, "-outPath", SceneCapabilityNames.InspectionFileName, "-logFile", SceneLab.UnityLogFileName],
             unityCommand.Arguments);
 
         // The <root> placeholder becomes the project folder at run time and nothing else does.
         var materialised = unityCommand.Materialise(unityFolder);
-        Assert.Equal(unityFolder, materialised[4]);
+        Assert.Equal(unityFolder, materialised[3]);
         Assert.DoesNotContain(materialised, a => a.Contains(Root, StringComparison.Ordinal));
+
+        // B50: the -nographics form a Cloud Core released before the change still sends is
+        // admitted as exactly itself (its blank render is the Cloud Core's to refuse).
+        var legacyFolder = lab.Scaffold3d("scene-unity-legacy", "eski", "unity -batchmode -nographics -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log");
+        var legacy = ProjectManifest.Parse(ProjectRoots.ReadMarker(legacyFolder)!.Manifest, null, ProjectScope.ThreeD).Run["scene"];
+        Assert.Equal(
+            ["-batchmode", "-nographics", "-quit", "-projectPath", Root, "-executeMethod", Method, "-planPath", SceneLab.PlanFileName, "-outPath", SceneCapabilityNames.InspectionFileName, "-logFile", SceneLab.UnityLogFileName],
+            legacy.Arguments);
+        Assert.Equal(legacyFolder, legacy.Materialise(legacyFolder)[4]);
 
         Assert.Equal(0, counter.Calls);
     }
@@ -149,7 +158,9 @@ public sealed class SceneAllowlistTests
 
         // ---- Unity
         { "another -executeMethod", "unity -batchmode -nographics -quit -projectPath <root> -executeMethod System.Diagnostics.Process.Start -planPath plan.json -outPath out.json -logFile unity.log" },
-        { "no -nographics", "unity -batchmode -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log" },
+        { "-nographics out of place", "unity -nographics -batchmode -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log" },
+        { "another flag where -nographics may stand", "unity -batchmode -nolog -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log" },
+        { "no -batchmode (an editor window)", "unity -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log" },
         { "no -quit (an editor that stays)", "unity -batchmode -nographics -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log" },
         { "a project path that is the owner's own project", @"unity -batchmode -nographics -quit -projectPath E:\hologram\HologramVehicleTest -executeMethod PagentOS.SceneDriver.Run -planPath plan.json -outPath out.json -logFile unity.log" },
         { "a unity plan above the project", "unity -batchmode -nographics -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath ../plan.json -outPath out.json -logFile unity.log" },

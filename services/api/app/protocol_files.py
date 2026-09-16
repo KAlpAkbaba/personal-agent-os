@@ -25,6 +25,7 @@ BUNDLE_DIR: Final[Path] = Path(__file__).resolve().parent / "protocol_bundle"
 BUNDLED: Final[tuple[str, ...]] = (
     "alarm-timing.json",
     "desktop-notify.json",
+    "device-voice.json",
     "file-search-roots.json",
     "operator-allowlists.json",
 )

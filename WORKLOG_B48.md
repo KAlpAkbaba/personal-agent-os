@@ -53,7 +53,7 @@ them into `docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md`, `docs/DECISIONS.m
   `monitors_power_unknown`. The display family's structural test now also forbids
   `SetVCPFeature`, `SaveCurrentSettings`, `SetMonitor`.
 - `packages/schemas/device-protocol.schema.json` (`deviceStatus.camera`, `.presence`) and
-  `packages/protocol/DEVICE_PROTOCOL.md` §6o (+ §6e, §6g, §6n, §9 touch-ups).
+  `packages/protocol/DEVICE_PROTOCOL.md` §6p (§6o before the B47 merge; + §6e, §6g, §6n, §9 touch-ups).
 
 ### Cloud Core (services/api)
 
@@ -107,10 +107,20 @@ them into `docs/product/PERSONALAGENTOS_V1_FEATURE_MATRIX.md`, `docs/DECISIONS.m
 | `-DisplayPower` + browser worker | 42 | 43 |
 | + `-Operator` | 102 | 103 |
 
+**After merging `main` (B47 `desktop.voice_status`, B50, B51) on 2026-09-17**, both names are
+kept, voice first: measured from the built binary **13 / 14 / 44 / 104**. The camera section
+is now `DEVICE_PROTOCOL.md` §6p (B47 owns §6o); the heartbeat carries all four new keys
+(`local_alarm_snoozed`, `voice`, `camera`, `presence`); `desktop.notify` is wired exactly once
+(`BuildNotify`, B47's comment and disposal); `ActivityStatusReporter`/`CompanionRuntime` take
+`voice` then `camera`; `ingest.py` runs B47's local-snooze reconcile as (e) and the camera
+relay as (f). Pins updated for the merged counts: `BrowserDispatchTests`, `CANONICAL_DESKTOP`,
+`DeviceVoiceCapabilityTests` (104 / 13 / 44), `qualify-staged-update.ps1`,
+`qualify-item28-unlocked.ps1` (header), `DEVICE_PROTOCOL.md` §6g/§6p/§9.
+
 Places that pin it, all updated: `BrowserDispatchTests` (literal list),
 `test_desktop_capability_mirror.py` (`CANONICAL_DESKTOP`), `qualify-staged-update.ps1`
 (`$expectedDesktop`; the count is a floor + relationships, unchanged),
-`qualify-item28-unlocked.ps1` (floor 40, unchanged), `DEVICE_PROTOCOL.md` §6n/§6o. The
+`qualify-item28-unlocked.ps1` (floor 40, unchanged), `DEVICE_PROTOCOL.md` §6n/§6p. The
 capability fingerprint changes (it is derived). Merge note: if the voice branch also appends
 to `Ambient`, keep both names and update the literal list in `BrowserDispatchTests` and
 `CANONICAL_DESKTOP` with both; every other pin is relational.

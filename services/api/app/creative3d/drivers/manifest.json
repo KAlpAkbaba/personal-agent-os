@@ -8,9 +8,18 @@
       "invocation": "blender.exe --factory-startup -b [scene.blend] --python blender_driver.py -- <plan.json> <out.json>"
     },
     "SceneDriver.cs": {
-      "sha256": "45048d12cd9717a81c65b6e6a7933f49960b5d1145304d321cb019321f290619",
+      "sha256": "118b9c0450c4252f6871d42cd3fd2ad0dc0391e16bf0b2470f205720a1abccdb",
       "runtime": "unity",
       "invocation": "Unity.exe -batchmode -nographics -quit -projectPath <root> -executeMethod PagentOS.SceneDriver.Run -planPath <plan.json> -outPath <out.json> -logFile <log>"
+    }
+  },
+  "unity_support": {
+    "note": "B50 (ADR-0164): files every Unity project is scaffolded with - the package manifest SceneDriver.cs needs (Newtonsoft) and the three catalogue scripts it may attach. Shipped at these project-relative paths, sha256-pinned like the drivers.",
+    "files": {
+      "Assets/PagentOS/Scripts/Bouncer.cs": "ddceebb45cf9c2f804fb9370f97c923bca1f02f1e8109d36f03d78cf320e4c62",
+      "Assets/PagentOS/Scripts/ColorCycler.cs": "328404b3f5867e64e64974e5000d7a9059ca2aabffc7da85f2ac4ef37fb7e925",
+      "Assets/PagentOS/Scripts/Spinner.cs": "751c4e217e12e51747359e8bd02daf1f45e421529bc445de86bf59530bcddef1",
+      "Packages/manifest.json": "bb568bfed3985728f1b94cb0af12e7492140bcef9b4964fe735d3b1599bd4c49"
     }
   }
 }

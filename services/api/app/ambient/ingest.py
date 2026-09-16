@@ -60,6 +60,8 @@ class IngestResult:
     holdoff_started: bool = False
     display_published: str | None = None
     reconciled_alarms: tuple[str, ...] = field(default_factory=tuple)
+    #: B47: alarms whose local snooze this report made the cloud adopt.
+    snoozed_alarms: tuple[str, ...] = field(default_factory=tuple)
     #: B48: the device camera's derived observation entered the presence model.
     camera_observed: bool = False
     #: B48: why a camera observation was NOT used, when one arrived and was not.
@@ -77,6 +79,7 @@ class IngestResult:
             "holdoff_started": self.holdoff_started,
             "display_published": self.display_published,
             "reconciled_alarms": list(self.reconciled_alarms),
+            "snoozed_alarms": list(self.snoozed_alarms),
         }
 
 
@@ -182,7 +185,32 @@ def ingest_status(
                 "local_alarm_reconcile_failed", device=str(device_id), error=type(exc).__name__
             )
 
-    # (e) B48: the device camera follows the owner's mode (app.ambient.camera).
+    # (e) B47 (B13 req 259's local trigger): the device snoozed a ringing alarm on its own while
+    # this cloud was unreachable. AFTER (d): a fallback ring the cloud never saw must first
+    # make the alarm active, or the snooze would be refused as "not ringing".
+    snoozed: tuple[str, ...] = ()
+    if change.newly_snoozed_alarms:
+        try:
+            from app.alarms import service as alarms_service
+
+            touched = alarms_service.reconcile_local_snoozed(
+                session, list(change.newly_snoozed_alarms), now=moment
+            )
+            snoozed = tuple(str(a.id) for a in touched)
+        except Exception as exc:  # noqa: BLE001 - see module docstring
+            # Enough to tell a malformed report from a real defect: the class, a bounded
+            # message and the entries (alarm ids and instants only - no audio, no words).
+            logger.warning(
+                "local_snooze_reconcile_failed",
+                device=str(device_id),
+                error=type(exc).__name__,
+                detail=str(exc)[:200],
+                entries=[
+                    {"alarm_id": alarm_id, "until": until.isoformat()}
+                    for alarm_id, until in change.newly_snoozed_alarms
+                ],
+            )
+    # (f) B48: the device camera follows the owner's mode (app.ambient.camera).
     camera_mode_sent: str | None = None
     try:
         from app.ambient import camera as ambient_camera
@@ -197,6 +225,7 @@ def ingest_status(
         holdoff_started=holdoff_started,
         display_published=display_published,
         reconciled_alarms=reconciled,
+        snoozed_alarms=snoozed,
         camera_observed=camera_observed,
         camera_refused=camera_refused,
         camera_mode_sent=camera_mode_sent,

@@ -2,7 +2,7 @@
 
 The device (``devices/windows-agent/.../Camera``) analyses frames in memory and sends only the
 seven structured observation fields plus its camera's state on the heartbeat
-(DEVICE_PROTOCOL.md §6o). This suite drives that wire shape through the REAL objects:
+(DEVICE_PROTOCOL.md §6p). This suite drives that wire shape through the REAL objects:
 ``DeviceStatusRegistry`` -> ``ingest_status`` -> the presence boundary -> the fusion engine ->
 ``ambient.service.tick`` -> ``WakeSequence.display_off``. The only fake is the device port.
 
@@ -437,7 +437,7 @@ def _night_of_heartbeats(
     db, start: datetime, minutes: int, registry: DeviceStatusRegistry
 ) -> list[PresenceState]:
     """What the device sends when the owner falls asleep in front of it: upright and still
-    for the device's own five minutes, then resting (DEVICE_PROTOCOL.md §6o), one periodic
+    for the device's own five minutes, then resting (DEVICE_PROTOCOL.md §6p), one periodic
     check a minute. Returns the engine's state after every heartbeat."""
     states: list[PresenceState] = []
     for minute in range(minutes + 1):

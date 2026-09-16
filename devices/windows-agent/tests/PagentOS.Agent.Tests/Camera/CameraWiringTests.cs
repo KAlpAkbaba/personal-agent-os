@@ -367,7 +367,10 @@ public sealed class CameraWiringTests
         var build = source[source.IndexOf("public static Camera.CameraPresenceMonitor BuildCamera(", StringComparison.Ordinal)..];
         build = build[..build.IndexOf("public static Notify.NotifyCapabilities? BuildNotify(", StringComparison.Ordinal)];
         Assert.Equal(2, build.Split("vetoStore: new Camera.FileCameraVetoStore(Camera.FileCameraVetoStore.DefaultPath())").Length - 1);
-        Assert.Contains("alarmArms,\n            camera);", source.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Contains("voice: voiceHealth.Heartbeat,\n            camera: camera);", source.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+
+        // B47 and B48 both wired desktop.notify; exactly one wiring remains.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(source, "notify: notify"));
     }
 
     [Fact]

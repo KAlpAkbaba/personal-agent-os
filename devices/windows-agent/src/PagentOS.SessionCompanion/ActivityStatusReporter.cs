@@ -26,6 +26,7 @@ public sealed class ActivityStatusReporter(
     IDisplayStateObserver displayObserver,
     Func<string?> ringingAlarmId,
     AlarmArmController? arms = null,
+    Func<JsonObject>? voice = null,
     Camera.CameraPresenceMonitor? camera = null)
 {
     /// <summary>
@@ -52,6 +53,9 @@ public sealed class ActivityStatusReporter(
             fired.Add(id);
         }
 
+        // B47: drained for the same reason as `fired` - composing a status IS the report.
+        var snoozed = arms?.DrainLocallySnoozed() ?? [];
+
         var status = new JsonObject
         {
             [HeartbeatStatus.InputIdleSeconds] = idle is null
@@ -72,6 +76,10 @@ public sealed class ActivityStatusReporter(
             // look like a ring on every heartbeat until the process restarted, and the cloud
             // would keep re-reconciling an alarm it had already closed.
             [HeartbeatStatus.LocalAlarmFired] = fired,
+            [HeartbeatStatus.LocalAlarmSnoozed] = snoozed,
+            // B47 rows 250-252: the voice service's compact health. A companion without voice
+            // says "disabled", which is true, rather than leaving the cloud to guess.
+            [HeartbeatStatus.Voice] = voice?.Invoke() ?? VoiceStatus.Disabled().Heartbeat(),
         };
 
         // B48 (rows 326, 327): the camera's own state and its latest DERIVED observation.

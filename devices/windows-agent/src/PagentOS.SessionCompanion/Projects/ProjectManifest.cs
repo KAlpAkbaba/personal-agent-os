@@ -19,7 +19,7 @@ public enum ProjectRuntime
     /// <summary>M25: <c>blender.exe --factory-startup -b</c>, headless, from the factory settings, running the shipped Python driver on a plan. A BATCH runtime: it ends by itself and the run waits for it.</summary>
     Blender,
 
-    /// <summary>M25: <c>Unity.exe -batchmode -nographics -quit</c>, running the shipped editor driver. A BATCH runtime.</summary>
+    /// <summary>M25: <c>Unity.exe -batchmode -quit</c> (B50: with a graphics device, so a render draws), running the shipped editor driver. A BATCH runtime.</summary>
     Unity,
 
     /// <summary>M28: <c>dotnet.exe build|test|publish</c> in Release, on one project file of the native project. A BATCH runtime.</summary>
@@ -94,7 +94,7 @@ public sealed record ProjectCommand(string Key, ProjectRuntime Runtime, IReadOnl
 /// <list type="bullet">
 /// <item><c>blender --factory-startup -b [&lt;scene.blend&gt;] --python &lt;driver.py&gt; -- &lt;plan.json&gt;
 /// &lt;out.json&gt;</c> — every path relative and inside the project;</item>
-/// <item><c>unity -batchmode -nographics -quit -projectPath &lt;root&gt; -executeMethod
+/// <item><c>unity -batchmode [-nographics] -quit -projectPath &lt;root&gt; -executeMethod
 /// PagentOS.SceneDriver.Run -planPath &lt;plan.json&gt; -outPath &lt;out.json&gt; -logFile
 /// &lt;log&gt;</c> — the method is the one shipped driver's entry point and nothing else.</item>
 /// </list>
@@ -456,30 +456,26 @@ public sealed class ProjectManifest
             case SceneCapabilityNames.BlenderProgram:
                 throw Refuse(key, text, $"the only blender form is '{SceneCapabilityNames.BlenderProgram} {SceneCapabilityNames.BlenderFactoryStart} -b [<scene{SceneCapabilityNames.BlendExtension}>] --python <driver{SceneCapabilityNames.DriverExtension}> -- <plan{SceneCapabilityNames.JsonExtension}> <out{SceneCapabilityNames.JsonExtension}>', every path relative and inside the project, and the factory settings never optional");
 
-            case SceneCapabilityNames.UnityProgram when tokens.Length == 14
-                && tokens[1] == "-batchmode"
-                && tokens[2] == "-nographics"
-                && tokens[3] == "-quit"
-                && tokens[4] == "-projectPath"
-                && tokens[5] == RootPlaceholder
-                && tokens[6] == "-executeMethod"
-                && tokens[7] == SceneCapabilityNames.UnityDriverMethod
-                && tokens[8] == "-planPath"
-                && tokens[10] == "-outPath"
-                && tokens[12] == "-logFile":
+            // B50 (ADR-0164): two forms, the same but for -nographics. Without a graphics device
+            // Camera.Render draws nothing - the first licensed run's render was one flat colour -
+            // so the Cloud Core now sends the form without it (batch mode still opens no window).
+            // The -nographics form stays admitted for a Cloud Core that predates the change; its
+            // blank render is refused by the Cloud Core's own render check, never counted.
+            case SceneCapabilityNames.UnityProgram when UnityForm(tokens) is { } offset:
                 {
-                    var plan = InsideProject(key, text, tokens[9], SceneCapabilityNames.JsonExtension, "the plan");
-                    var inspection = InsideProject(key, text, tokens[11], SceneCapabilityNames.JsonExtension, "the inspection");
-                    var log = InsideProject(key, text, tokens[13], SceneCapabilityNames.LogExtension, "the editor log");
+                    var plan = InsideProject(key, text, tokens[8 + offset], SceneCapabilityNames.JsonExtension, "the plan");
+                    var inspection = InsideProject(key, text, tokens[10 + offset], SceneCapabilityNames.JsonExtension, "the inspection");
+                    var log = InsideProject(key, text, tokens[12 + offset], SceneCapabilityNames.LogExtension, "the editor log");
+                    string[] head = offset == 1 ? ["-batchmode", "-nographics", "-quit"] : ["-batchmode", "-quit"];
                     return new ProjectCommand(
                         key,
                         ProjectRuntime.Unity,
-                        ["-batchmode", "-nographics", "-quit", "-projectPath", RootPlaceholder, "-executeMethod", SceneCapabilityNames.UnityDriverMethod, "-planPath", plan, "-outPath", inspection, "-logFile", log],
-                        $"{SceneCapabilityNames.UnityProgram} -batchmode -nographics -quit -projectPath {RootPlaceholder} -executeMethod {SceneCapabilityNames.UnityDriverMethod} -planPath {plan} -outPath {inspection} -logFile {log}");
+                        [.. head, "-projectPath", RootPlaceholder, "-executeMethod", SceneCapabilityNames.UnityDriverMethod, "-planPath", plan, "-outPath", inspection, "-logFile", log],
+                        $"{SceneCapabilityNames.UnityProgram} {string.Join(' ', head)} -projectPath {RootPlaceholder} -executeMethod {SceneCapabilityNames.UnityDriverMethod} -planPath {plan} -outPath {inspection} -logFile {log}");
                 }
 
             case SceneCapabilityNames.UnityProgram:
-                throw Refuse(key, text, $"the only unity form is '{SceneCapabilityNames.UnityProgram} -batchmode -nographics -quit -projectPath {RootPlaceholder} -executeMethod {SceneCapabilityNames.UnityDriverMethod} -planPath <plan{SceneCapabilityNames.JsonExtension}> -outPath <out{SceneCapabilityNames.JsonExtension}> -logFile <log{SceneCapabilityNames.LogExtension}>'");
+                throw Refuse(key, text, $"the only unity form is '{SceneCapabilityNames.UnityProgram} -batchmode [-nographics] -quit -projectPath {RootPlaceholder} -executeMethod {SceneCapabilityNames.UnityDriverMethod} -planPath <plan{SceneCapabilityNames.JsonExtension}> -outPath <out{SceneCapabilityNames.JsonExtension}> -logFile <log{SceneCapabilityNames.LogExtension}>'");
 
             // -------------------------------------------------- M28: the native build tools
 
@@ -629,6 +625,36 @@ public sealed class ProjectManifest
     /// own out of reach before any process exists.
     /// </summary>
     /// <param name="extension">The extension the position requires, or null (M28) when the position is a DIRECTORY, which has none.</param>
+    /// <summary>
+    /// The Unity argv shape, token for token: 0 for <c>unity -batchmode -quit ...</c> (13 tokens),
+    /// 1 for the older <c>unity -batchmode -nographics -quit ...</c> (14), null for anything else.
+    /// </summary>
+    private static int? UnityForm(string[] tokens)
+    {
+        var offset = tokens.Length switch
+        {
+            13 => 0,
+            14 when tokens[2] == "-nographics" => 1,
+            _ => -1,
+        };
+        if (offset < 0)
+        {
+            return null;
+        }
+
+        return tokens[1] == "-batchmode"
+            && tokens[2 + offset] == "-quit"
+            && tokens[3 + offset] == "-projectPath"
+            && tokens[4 + offset] == RootPlaceholder
+            && tokens[5 + offset] == "-executeMethod"
+            && tokens[6 + offset] == SceneCapabilityNames.UnityDriverMethod
+            && tokens[7 + offset] == "-planPath"
+            && tokens[9 + offset] == "-outPath"
+            && tokens[11 + offset] == "-logFile"
+            ? offset
+            : null;
+    }
+
     private static string InsideProject(string key, string text, string token, string? extension, string what)
     {
         string path;

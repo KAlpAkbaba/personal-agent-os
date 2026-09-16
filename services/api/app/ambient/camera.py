@@ -1,4 +1,4 @@
-"""The owner's device-camera mode, relayed to the devices (B48, DEVICE_PROTOCOL.md §6o).
+"""The owner's device-camera mode, relayed to the devices (B48, DEVICE_PROTOCOL.md §6p).
 
 The camera runs on the owner's machine, in the owner's session. Cloud Core never sees a
 frame; what it holds is the owner's CHOICE (``ambient_policy.camera_mode``) and what each
