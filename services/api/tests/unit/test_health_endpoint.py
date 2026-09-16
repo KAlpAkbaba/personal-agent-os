@@ -70,6 +70,10 @@ ALL_CHECKS = DEPENDENCY_CHECKS | {
     # B08 req 646/648: the safety net. Skipped where the host's backup root is not mounted
     # into this container, which is every test process.
     "backup",
+    # B11 req 372: whether the push rung is wired (VAPID key present and parses). Always
+    # "ok" - an unconfigured key is an owner action pending, never a degraded process
+    # (app.main._build_push_rung / the "webpush" check's own comment).
+    "webpush",
 }
 # "skipped" (temporal_worker when worker_mode != embedded) is a legitimate
 # non-degraded status alongside "ok" — see app.main's degraded computation.
