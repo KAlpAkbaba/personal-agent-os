@@ -36,6 +36,7 @@ public sealed class CameraPresenceMonitor : IDisposable
     private readonly CameraOptions _options;
     private readonly ILogger _logger;
     private readonly AuditLog? _audit;
+    private readonly ICameraVetoStore _vetoStore;
     private readonly PresenceClassifier _classifier;
     private readonly SemaphoreSlim _checkGate = new(1, 1);
     private readonly object _sync = new();
@@ -60,7 +61,8 @@ public sealed class CameraPresenceMonitor : IDisposable
         IInputActivitySource? input = null,
         IMediaActivityProbe? media = null,
         TimeProvider? time = null,
-        AuditLog? audit = null)
+        AuditLog? audit = null,
+        ICameraVetoStore? vetoStore = null)
     {
         _source = source;
         _indicator = indicator;
@@ -73,11 +75,51 @@ public sealed class CameraPresenceMonitor : IDisposable
         _audit = audit;
         _classifier = new PresenceClassifier(_options);
         _interval = _options.PeriodicInterval;
+        _vetoStore = vetoStore ?? new MemoryCameraVetoStore();
         _indicator.OwnerVeto += OnOwnerVeto;
+
+        // B48 security review (HIGH): the owner's tray veto outlives this process. It is read
+        // BEFORE anything else, so the very first heartbeat already says "vetoed" and no
+        // desktop.camera_mode that arrives before the loop's first pass can open the camera.
+        // A store that cannot be read is a veto (fail closed).
+        bool remembered;
+        try
+        {
+            remembered = _vetoStore.Load();
+        }
+        catch (Exception)
+        {
+            remembered = true;
+        }
+
+        _vetoed = remembered;
+        _indicator.SyncVeto(remembered);
         if (!_options.EnabledOnDevice)
         {
             _state = CameraStates.Blocked;
             _error = "disabled_on_device";
+        }
+        else if (remembered)
+        {
+            _state = CameraStates.Vetoed;
+            _error = OwnerClosedToken;
+            // Shown, so the owner can find the one switch that re-allows it.
+            _indicator.Set(CameraIndicatorState.Armed, CameraModes.Off);
+        }
+    }
+
+    /// <summary>The error token a vetoed camera reports.</summary>
+    public const string OwnerClosedToken = "owner_closed_on_device";
+
+    /// <summary>Whether the owner's device-side veto is in force.</summary>
+    public bool Vetoed
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _vetoed;
+            }
         }
     }
 
@@ -153,6 +195,16 @@ public sealed class CameraPresenceMonitor : IDisposable
         string previous;
         lock (_sync)
         {
+            if (_vetoed && requested is not null && requested != CameraModes.Off)
+            {
+                // The owner closed the camera on this device; only the owner's tray action
+                // re-allows it. A cloud mode is refused, not queued for later.
+                throw new CapabilityException(
+                    ErrorClasses.PermissionDenied,
+                    "the owner closed the camera on this device; only the owner can re-allow it there",
+                    retryable: false);
+            }
+
             previous = _mode;
             if (requested is not null)
             {
@@ -297,19 +349,21 @@ public sealed class CameraPresenceMonitor : IDisposable
                 return false;
             }
 
+            if (vetoed)
+            {
+                // Before the mode: a veto is reported whatever the mode, and the tray icon stays
+                // visible so the owner can find the switch that re-allows the camera.
+                await CloseAsync().ConfigureAwait(false);
+                _indicator.Set(CameraIndicatorState.Armed, mode);
+                SetState(CameraStates.Vetoed, OwnerClosedToken);
+                return false;
+            }
+
             if (mode == CameraModes.Off)
             {
                 await CloseAsync().ConfigureAwait(false);
                 _indicator.Set(CameraIndicatorState.Hidden, mode);
                 SetState(CameraStates.Off, null);
-                return false;
-            }
-
-            if (vetoed)
-            {
-                await CloseAsync().ConfigureAwait(false);
-                _indicator.Set(CameraIndicatorState.Armed, mode);
-                SetState(CameraStates.Vetoed, "owner_closed_on_device");
                 return false;
             }
 
@@ -481,6 +535,23 @@ public sealed class CameraPresenceMonitor : IDisposable
 
     private void OnOwnerVeto(bool vetoed)
     {
+        // Remembered first. A veto that could not be written still applies now (and the
+        // log says it will not survive a restart); a re-allow that could not be written also
+        // applies now, and a restart then fails closed to the remembered veto.
+        try
+        {
+            _vetoStore.Save(vetoed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("camera veto could not be remembered: {Reason}", ex.GetType().Name);
+            _audit?.Write(
+                "camera_veto_not_persisted",
+                capability: AgentCapabilities.DesktopCameraMode,
+                status: AckStatus.Failed,
+                detail: $"vetoed={vetoed}");
+        }
+
         lock (_sync)
         {
             if (_vetoed == vetoed)
@@ -552,7 +623,9 @@ public sealed class CameraPresenceMonitor : IDisposable
         }
         catch (Exception)
         {
-            return null;
+            // B48 security review (MEDIUM): fail CLOSED. A permission this device cannot read
+            // is not a permission it has ("izin okunamadı").
+            return CameraConsentTokens.Unreadable;
         }
     }
 

@@ -353,6 +353,30 @@ def test_the_owners_veto_on_the_device_is_never_argued_with(db) -> None:
     assert ambient_camera.reconcile(db, DEVICE, vetoed_on, now=NIGHT, send=sent) == "off"
 
 
+def test_a_restarted_device_still_vetoed_is_never_sent_a_non_off_mode(db, monkeypatch) -> None:
+    """B48 security review (HIGH): the owner vetoed on the device, the companion restarted
+    and now reports mode off with the remembered veto. Every relay path stays silent."""
+    _policy(db, mode="continuous", at=NIGHT)
+    registry = DeviceStatusRegistry()
+    sent = Sent()
+    monkeypatch.setattr(ambient_camera, "_send_command", sent)
+    restarted = _heartbeat(NIGHT, mode="off", state="vetoed")
+    restarted["camera"]["error"] = "owner_closed_on_device"
+
+    for minute in range(5):
+        at = NIGHT + timedelta(minutes=minute)
+        result = ambient_ingest.ingest_status(
+            db, DEVICE, restarted, statuses=registry, holdoffs=HoldoffRegistry(), now=at
+        )
+        assert result.camera_mode_sent is None
+
+    assert ambient_camera.push_now(db, statuses=registry, now=NIGHT) == {}
+    # The owner changes the policy again: still nothing but "off" may go to a vetoed camera.
+    ambient_service.set_policy(db, {"camera_mode": "periodic"}, holdoffs=HoldoffRegistry())
+    assert ambient_camera.push_now(db, statuses=registry, now=NIGHT) == {}
+    assert sent.calls == []
+
+
 def test_a_device_without_a_camera_path_is_never_asked(db) -> None:
     _policy(db, mode="continuous", at=NIGHT)
     status = parse_status(DEVICE, {"input_idle_s": 3.0})

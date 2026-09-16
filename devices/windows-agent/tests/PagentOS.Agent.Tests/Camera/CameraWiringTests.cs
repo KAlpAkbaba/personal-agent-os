@@ -243,6 +243,68 @@ public sealed class CameraWiringTests
     }
 
     [Fact]
+    public async Task A_restarted_companion_with_a_remembered_veto_refuses_the_mode_over_the_pipe_and_its_first_heartbeat_says_vetoed()
+    {
+        // B48 security review (HIGH), through the production objects: the veto file in the
+        // owner's profile (here a temp copy), a fresh monitor, the real pipe and projection.
+        var dir = Path.Combine(Path.GetTempPath(), "pagentos-veto-" + Guid.NewGuid().ToString("N"));
+        var store = new FileCameraVetoStore(Path.Combine(dir, "camera-veto.json"));
+        store.Save(true);
+        var indicator = new RecordingCameraIndicator();
+        var source = new FakeCameraSource(indicator);
+        using var monitor = new CameraPresenceMonitor(
+            source, indicator, NullLogger.Instance, new CameraOptions { FrameSpacing = TimeSpan.Zero }, vetoStore: store);
+        var reporter = new ActivityStatusReporter(new FakeIdle(null), UnknownDisplayStateObserver.Instance, () => null, camera: monitor);
+
+        var pipeName = IpcTestSupport.NewPipeName();
+        var server = IpcTestSupport.NewServer(pipeName);
+        await server.StartAsync(CancellationToken.None);
+        var companion = new CompanionRuntime(
+            pipeName,
+            new AppLauncher(new Dictionary<string, string>()),
+            new ArtifactOpener([Path.GetTempPath()], new NoopOpener()),
+            NullLogger.Instance,
+            new BackoffPolicy(baseSeconds: 0.05, maxSeconds: 0.2),
+            ServiceAdmissionPolicy.DeveloperMode(IpcTestSupport.CurrentSid()),
+            activityStatus: reporter,
+            camera: monitor);
+        using var cts = new CancellationTokenSource();
+        var companionTask = Task.Run(() => companion.RunAsync(cts.Token));
+        var loop = monitor.RunAsync(cts.Token);
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            while (!server.CompanionConnected)
+            {
+                Assert.True(DateTime.UtcNow < deadline, "companion did not connect in time");
+                await Task.Delay(20);
+            }
+
+            var first = (await new CompanionHeartbeatStatusProvider(server).GetStatusAsync(CancellationToken.None))!;
+            Assert.Equal("vetoed", first["camera"]!["state"]!.GetValue<string>());
+            Assert.Null(first["presence"]);
+
+            var ex = await Assert.ThrowsAsync<CapabilityException>(() => server.ExecuteCapabilityAsync(
+                AgentCapabilities.DesktopCameraMode,
+                new JsonObject { ["mode"] = "continuous", ["reason"] = "owner_policy" },
+                TimeSpan.FromSeconds(10),
+                CancellationToken.None));
+            Assert.Equal(ErrorClasses.PermissionDenied, ex.ErrorClass);
+            Assert.False(ex.Retryable);
+            await Task.Delay(200);
+            Assert.Equal(0, source.Opens);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            try { await companionTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch (Exception) { }
+            try { await loop.WaitAsync(TimeSpan.FromSeconds(5)); } catch (Exception) { }
+            await server.StopAsync(CancellationToken.None);
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task A_companion_built_without_a_camera_answers_capability_missing_and_its_heartbeat_has_no_camera_keys()
     {
         var reporter = new ActivityStatusReporter(new FakeIdle(null), UnknownDisplayStateObserver.Instance, () => null);
@@ -300,6 +362,11 @@ public sealed class CameraWiringTests
         Assert.Contains("activityStatus: activityStatus", call, StringComparison.Ordinal);
         Assert.Contains("camera.RunAsync(cts.Token)", source, StringComparison.Ordinal);
         Assert.Contains("var notify = BuildNotify(", source, StringComparison.Ordinal);
+
+        // B48 security review: both shipped camera monitors remember the owner's veto in the profile.
+        var build = source[source.IndexOf("public static Camera.CameraPresenceMonitor BuildCamera(", StringComparison.Ordinal)..];
+        build = build[..build.IndexOf("public static Notify.NotifyCapabilities? BuildNotify(", StringComparison.Ordinal)];
+        Assert.Equal(2, build.Split("vetoStore: new Camera.FileCameraVetoStore(Camera.FileCameraVetoStore.DefaultPath())").Length - 1);
         Assert.Contains("alarmArms,\n            camera);", source.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
     }
 

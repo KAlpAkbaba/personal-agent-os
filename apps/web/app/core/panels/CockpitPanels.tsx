@@ -3585,7 +3585,9 @@ export function deviceCameraText(camera: DeviceCamera): string {
     case "off":
       return "kamera kapalı";
     case "blocked":
-      return `kamera engelli (${camera.error ?? "izin yok"}) - açılmadı`;
+      return camera.error === "consent_unreadable"
+        ? "kamera engelli (izin okunamadı) - açılmadı"
+        : `kamera engelli (${camera.error ?? "izin yok"}) - açılmadı`;
     case "unavailable":
       return `kamera yok (${camera.error ?? "bulunamadı"})`;
     case "busy":

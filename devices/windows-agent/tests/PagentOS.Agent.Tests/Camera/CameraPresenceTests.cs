@@ -47,7 +47,7 @@ public sealed class CameraPresenceTests : IDisposable
         FakeConsent Consent,
         SteppedClock Clock);
 
-    private Rig NewRig(CameraOptions? options = null, TimeSpan? idle = null, AuditLog? audit = null)
+    private Rig NewRig(CameraOptions? options = null, TimeSpan? idle = null, AuditLog? audit = null, ICameraVetoStore? vetoStore = null)
     {
         var indicator = new RecordingCameraIndicator();
         var source = new FakeCameraSource(indicator);
@@ -56,7 +56,7 @@ public sealed class CameraPresenceTests : IDisposable
         var consent = new FakeConsent(null);
         var clock = new SteppedClock(Start);
         var monitor = new CameraPresenceMonitor(
-            source, indicator, NullLogger.Instance, options ?? Options(), consent, fakeIdle, media, clock, audit);
+            source, indicator, NullLogger.Instance, options ?? Options(), consent, fakeIdle, media, clock, audit, vetoStore);
         return new Rig(monitor, source, indicator, fakeIdle, media, consent, clock);
     }
 
@@ -158,15 +158,119 @@ public sealed class CameraPresenceTests : IDisposable
         Assert.False(rig.Monitor.IsOpen);
         Assert.Equal(0, rig.Source.OpenSessions);
         Assert.Equal(CameraStates.Vetoed, rig.Monitor.State);
-        // The cloud's mode is kept (so Cloud Core does not keep re-sending it) but not obeyed.
+        // The cloud's earlier mode is kept but not obeyed, and a non-off mode is now refused.
         Assert.Equal(CameraModes.Continuous, rig.Monitor.Mode);
-        rig.Monitor.Configure(Mode(CameraModes.Continuous));
+        var refused = Assert.Throws<CapabilityException>(() => rig.Monitor.Configure(Mode(CameraModes.Continuous)));
+        Assert.Equal(ErrorClasses.PermissionDenied, refused.ErrorClass);
         Assert.False(await rig.Monitor.CheckOnceAsync(CancellationToken.None));
         Assert.Equal(1, rig.Source.Opens);
 
         rig.Indicator.RaiseOwnerVeto(false);
         Assert.True(await rig.Monitor.CheckOnceAsync(CancellationToken.None));
         Assert.Equal(2, rig.Source.Opens);
+    }
+
+    [Fact]
+    public async Task The_owners_veto_survives_a_companion_restart_and_refuses_every_non_off_mode()
+    {
+        // B48 security review (HIGH): veto, restart, and the cloud still holds "continuous".
+        var store = new MemoryCameraVetoStore();
+        var first = NewRig(vetoStore: store);
+        first.Monitor.Configure(Mode(CameraModes.Continuous));
+        Assert.True(await first.Monitor.CheckOnceAsync(CancellationToken.None));
+        first.Indicator.RaiseOwnerVeto(true);
+        Assert.True(store.Vetoed);
+        first.Monitor.Dispose();
+
+        // A fresh process: a new monitor over the same remembered veto.
+        var second = NewRig(vetoStore: store);
+
+        // The very first heartbeat, before any loop pass, already says so.
+        var status = second.Monitor.StatusObject();
+        Assert.Equal(CameraStates.Vetoed, status["state"]!.GetValue<string>());
+        Assert.Equal(CameraPresenceMonitor.OwnerClosedToken, status["error"]!.GetValue<string>());
+        Assert.Equal("armed", status["indicator"]!.GetValue<string>());
+        Assert.True(second.Indicator.VetoShown);
+
+        // Cloud Core's relay of the owner's policy is refused, in every non-off mode.
+        foreach (var mode in new[] { CameraModes.Continuous, CameraModes.Periodic })
+        {
+            var ex = Assert.Throws<CapabilityException>(() => second.Monitor.Configure(Mode(mode)));
+            Assert.Equal(ErrorClasses.PermissionDenied, ex.ErrorClass);
+        }
+
+        Assert.Equal(CameraModes.Off, second.Monitor.Mode);
+        Assert.False(await second.Monitor.CheckOnceAsync(CancellationToken.None));
+        Assert.Equal(0, second.Source.Opens);
+        Assert.Null(second.Monitor.LatestObservation());
+        // "off" is always accepted, and the veto still reports.
+        Assert.False(second.Monitor.Configure(Mode(CameraModes.Off))["changed"]!.GetValue<bool>());
+        Assert.Equal(CameraStates.Vetoed, second.Monitor.State);
+
+        // Only the owner's own tray action re-allows - and it is remembered too.
+        second.Indicator.RaiseOwnerVeto(false);
+        Assert.False(store.Vetoed);
+        second.Monitor.Configure(Mode(CameraModes.Periodic));
+        Assert.True(await second.Monitor.CheckOnceAsync(CancellationToken.None));
+        Assert.Equal(1, second.Source.Opens);
+    }
+
+    [Fact]
+    public async Task An_unreadable_veto_store_is_a_veto()
+    {
+        var rig = NewRig(vetoStore: new MemoryCameraVetoStore { FailLoad = true });
+
+        Assert.Equal(CameraStates.Vetoed, rig.Monitor.State);
+        Assert.Throws<CapabilityException>(() => rig.Monitor.Configure(Mode(CameraModes.Periodic)));
+        Assert.False(await rig.Monitor.CheckOnceAsync(CancellationToken.None));
+        Assert.Equal(0, rig.Source.Opens);
+    }
+
+    [Fact]
+    public void The_file_veto_store_round_trips_and_fails_closed_on_a_damaged_file()
+    {
+        Directory.CreateDirectory(_dir);
+        var path = Path.Combine(_dir, "companion", "camera-veto.json");
+        var store = new FileCameraVetoStore(path);
+
+        Assert.False(store.Load());
+        store.Save(true);
+        Assert.True(new FileCameraVetoStore(path).Load());
+        store.Save(false);
+        Assert.False(new FileCameraVetoStore(path).Load());
+
+        File.WriteAllText(path, "{not json");
+        Assert.True(store.Load());
+        File.WriteAllText(path, "{\"vetoed\":\"no\"}");
+        Assert.True(store.Load());
+        Assert.StartsWith(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            FileCameraVetoStore.DefaultPath(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_permission_that_cannot_be_read_keeps_the_camera_closed()
+    {
+        // B48 security review (MEDIUM): fail closed.
+        var indicator = new RecordingCameraIndicator();
+        var source = new FakeCameraSource(indicator);
+        using var monitor = new CameraPresenceMonitor(
+            source, indicator, NullLogger.Instance, Options(), new ThrowingConsent(), vetoStore: new MemoryCameraVetoStore());
+        monitor.Configure(Mode(CameraModes.Continuous));
+
+        Assert.False(await monitor.CheckOnceAsync(CancellationToken.None));
+
+        Assert.Equal(0, source.Opens);
+        var status = monitor.StatusObject();
+        Assert.Equal(CameraStates.Blocked, status["state"]!.GetValue<string>());
+        Assert.Equal(CameraConsentTokens.Unreadable, status["error"]!.GetValue<string>());
+        Assert.Null(monitor.LatestObservation());
+    }
+
+    private sealed class ThrowingConsent : ICameraConsent
+    {
+        public string? DeniedBy() => throw new UnauthorizedAccessException("registry");
     }
 
     // ================================================================ the indicator

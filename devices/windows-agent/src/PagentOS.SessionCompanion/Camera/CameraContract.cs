@@ -155,6 +155,9 @@ public interface ICameraIndicator
 
     void Set(CameraIndicatorState state, string mode);
 
+    /// <summary>Tells the indicator whether the owner's veto is in force (a remembered veto at start).</summary>
+    void SyncVeto(bool vetoed);
+
     /// <summary>Raised when the owner closes (true) or re-allows (false) the camera from the indicator itself.</summary>
     event Action<bool>? OwnerVeto;
 }
@@ -162,8 +165,19 @@ public interface ICameraIndicator
 /// <summary>Windows' own camera permission, read before anything is opened (row 671).</summary>
 public interface ICameraConsent
 {
-    /// <summary>Null when Windows allows it (or does not say); otherwise a short token naming the switch that denies it.</summary>
+    /// <summary>
+    /// Null when Windows allows it (or has no value set); otherwise a short token naming the
+    /// switch that denies it. May THROW when the permission cannot be read - the monitor then
+    /// fails closed and opens nothing.
+    /// </summary>
     string? DeniedBy();
+}
+
+/// <summary>Why a camera was not opened because its permission could not be read.</summary>
+public static class CameraConsentTokens
+{
+    /// <summary>"izin okunamadı": the permission could not be read, so the camera stays closed.</summary>
+    public const string Unreadable = "consent_unreadable";
 }
 
 /// <summary>Whether the machine is playing sound right now - a film is not sleep (ADR-0155 decision 1).</summary>
@@ -201,6 +215,10 @@ public sealed class RecordingCameraIndicator : ICameraIndicator
             _history.Add(state);
         }
     }
+
+    public bool VetoShown { get; private set; }
+
+    public void SyncVeto(bool vetoed) => VetoShown = vetoed;
 
     /// <summary>Simulates the owner using the indicator's own switch.</summary>
     public void RaiseOwnerVeto(bool vetoed) => OwnerVeto?.Invoke(vetoed);

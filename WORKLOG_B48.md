@@ -120,7 +120,7 @@ parallel branch with its own 0059 must be re-pointed (one head).
 
 ## 3. Proposed matrix rows (14 columns, 15 pipes each)
 
-| 300 | Camera open | Cihazda (Session Companion) kamera yalnız sahibin seçtiği kipte açılır: periyodik (60 sn'de bir 5 kare) veya sürekli; kip her başlangıçta kapalı, Göz kapalıyken kapalı; açılmadan önce Windows izni okunur | Cihazda da | PARTIAL | PA | P2 | 327 | B48 | devices/windows-agent/src/PagentOS.SessionCompanion/Camera/; app/ambient/camera.py | CameraPresenceTests (25) · CameraWiringTests (13) · test_camera_b48.py (19) | gerçek kamera açılışı: qualify-device-camera.ps1 G2-G4 | kamera kararı verildi; fiziksel değerlendirme sahibin | B48: kod tam, sahte karelerle kanıtlı; gerçek MediaCapture yolu hiç kamera açmadı - OWNER_REQUIRED |
+| 300 | Camera open | Cihazda (Session Companion) kamera yalnız sahibin seçtiği kipte açılır: periyodik (60 sn'de bir 5 kare) veya sürekli; kip her başlangıçta kapalı, Göz kapalıyken kapalı; açılmadan önce Windows izni okunur | Cihazda da | PARTIAL | PA | P2 | 327 | B48 | devices/windows-agent/src/PagentOS.SessionCompanion/Camera/; app/ambient/camera.py | CameraPresenceTests (29) · CameraWiringTests (14) · test_camera_b48.py (20) | gerçek kamera açılışı: qualify-device-camera.ps1 G2-G4 | kamera kararı verildi; fiziksel değerlendirme sahibin | B48: kod tam, sahte karelerle kanıtlı; gerçek MediaCapture yolu hiç kamera açmadı - OWNER_REQUIRED. Güvenlik incelemesi: sahibin tepsi vetosu sahibin profilinde (camera-veto.json) saklanır, companion yeniden başlayınca ilk kalp atışından itibaren 'vetoed' bildirir ve kapalı dışındaki her kipi permission_denied ile reddeder; Cloud vetolu cihaza kapalı dışında kip göndermez |
 | 303 | Camera privacy state | Tarayıcı sekmesi ile sunucu durumu ayrı gösterilir; B48: her cihazın kamera durumu (açık / kapalı / engelli + anahtar adı / yok / meşgul / sahip kapattı / hata) panelde yazılır | Görünür durum | DONE | PA | P2 | 300 | B48 | apps/web/app/core/EyeControlView.tsx; core/panels/CockpitPanels.tsx:deviceCameraText | b48-web.test.tsx · b48-camera-web.test.tsx | tarayıcıda görsel doğrulama | no | — |
 | 307 | RESTING | Cihaz kamerası hareketsiz ve mevcut sahibi 5 dk girişsiz ve sessiz görünce duruş 'resting' bildirir; füzyon RESTING'e geçer | Erişilebilir | DONE | PA | P2 | 327 | B48 | Camera/PresenceClassifier.cs; app/ambient/ingest.py | CameraPresenceTests (resting eşiği, film, giriş) · test_camera_b48.py (gece kalp atışlarıyla RESTING) | qualify-device-camera.ps1 G11 | no | Girdi boşluğu tek başına asla dinlenme değil (ADR-0155 k1) |
 | 308 | LIKELY_ASLEEP | RESTING sahibin sessiz saatine göre 20 dk (dışında 30 dk) sürünce cihaz sinyalleriyle LIKELY_ASLEEP | Erişilebilir | DONE | PA | P2 | 307 | B48 | app/presence/engine.py; app/ambient/ingest.py | test_camera_b48.py (gece: RESTING sonra LIKELY_ASLEEP; öğleden sonra daha geç) | qualify-device-camera.ps1 G11 | no | — |
@@ -130,7 +130,7 @@ parallel branch with its own 0059 must be re-pointed (one head).
 | 331 | Ambient policy UI | Kokpit ve Ayarlar'da dört anahtar + cihaz kamerası kipi (kapalı / periyodik / sürekli) aynı PUT ile; eşikler ve sessiz saatler hâlâ salt okunur | Tam | PARTIAL | PA | P2 | 685 | B48 | CockpitPanels.tsx:AmbientPanel; lib/cockpit/api.ts:updateAmbientCameraMode | b48-web.test.tsx · b48-camera-web.test.tsx · test_camera_b48.py (PUT camera_mode, 422) | tarayıcıda görsel doğrulama | no | Eşik düzenleme ayrı iş |
 | 333 | "Uyurken ekranı kapat" | Cihaz kamerasının gece sinyalleri RESTING, LIKELY_ASLEEP ve gerçek tick üzerinden owner_likely_asleep nedenli desktop.display_off üretir; öğleden sonra aynı sinyaller karartmaz; kamera susunca karartmaz | Çalışır | DONE | PA | P2 | 308 | B48 | app/ambient/ingest.py; app/ambient/service.py:tick | test_camera_b48.py (gece tetikler; öğleden sonra tetiklemez; kamera susunca tetiklemez) | qualify-device-camera.ps1 G11 | no | PROVEN_REAL sahibin uyku denemesiyle |
 | 369 | Desktop toast | desktop.notify artık companion'a gerçekten bağlı (B48'de bulundu: Program hiç NotifyCapabilities kurmuyordu, her toast capability_missing) | desktop.notify | PARTIAL | PA | P1 | 5 | B11 | Program.cs:BuildNotify | CameraWiringTests (kompozisyon + fabrika) | cihazda kurulum bekliyor | no | Mutasyon C10 kırmızı |
-| 671 | Camera permission | Kip varsayılan kapalı ve yalnız sahip açar; Göz kapalıyken cihaz kamerası da kapanır; Windows kamera anahtarları her açılıştan önce okunur, reddedilen kamera anahtar adıyla 'blocked' bildirilir; CameraEnabled=false cihazda kalıcı kapatma | Tam | DONE | PA | P2 | 327 | B48 | Camera/CameraPresenceMonitor.cs; Camera/WindowsCameraSurroundings.cs:WindowsCameraConsent; app/ambient/camera.py | CameraPresenceTests (izin reddi, cihaz anahtarı, tepsi vetosu) · test_camera_b48.py (Göz kapatma) | qualify-device-camera.ps1 G7-G9 | no | — |
+| 671 | Camera permission | Kip varsayılan kapalı ve yalnız sahip açar; Göz kapalıyken cihaz kamerası da kapanır; Windows kamera anahtarları her açılıştan önce okunur, reddedilen kamera anahtar adıyla 'blocked' bildirilir; izin OKUNAMAZSA kamera açılmaz ('blocked', consent_unreadable = izin okunamadı); sahibin tepsi vetosu yeniden başlatmadan sağ çıkar (okunamayan veto dosyası = veto); CameraEnabled=false cihazda kalıcı kapatma | Tam | DONE | PA | P2 | 327 | B48 | Camera/CameraPresenceMonitor.cs; CameraVetoStore.cs; Camera/WindowsCameraSurroundings.cs:WindowsCameraConsent; app/ambient/camera.py | CameraPresenceTests (izin reddi, okunamayan izin, cihaz anahtarı, tepsi vetosu, yeniden başlatmada veto, bozuk veto dosyası) · CameraWiringTests (yeniden başlayan companion boru üzerinden reddeder) · test_camera_b48.py (Göz kapatma, vetolu cihaza gönderim yok) | qualify-device-camera.ps1 G7-G9 | no | Güvenlik incelemesi 2026-09-16: iki kusur (HIGH veto kalıcılığı, MEDIUM izin açık başarısızlık) giderildi |
 
 Unchanged: 301, 302, 310, 312, 313, 330, 332 (DONE as B48 closed them on 2026-09-15).
 
@@ -164,6 +164,15 @@ a camera may say "resting".
    privacy switches are read before every open and a denial is reported by name; the owner can
    veto on the device from the tray, which the cloud never argues with; `CameraEnabled=false`
    is the device-local rollback.
+   *Security review (2026-09-16).* The tray veto is persisted in the owner's profile
+   (`%LOCALAPPDATA%\PagentOS\companion\camera-veto.json`, write-then-move; not Session 0,
+   not the cloud), read before anything else at start, and cleared only by the owner's tray
+   action; an unreadable veto file is a veto. While vetoed the device reports `vetoed` from
+   its first heartbeat and refuses every non-off `desktop.camera_mode` with
+   `permission_denied`; Cloud Core never sends a non-off mode to a device reporting
+   `vetoed`. The permission check fails CLOSED: a permission that cannot be read is
+   `blocked` / `consent_unreadable` ("izin okunamadı") and nothing is opened. The veto
+   store lives outside `Camera/`, whose sources stay forbidden any file API.
 5. **Indicator.** Tray icon whenever a mode is on; "open" face before the device is opened
    and until after it is closed.
 6. **Rest.** Present + still + 5 min with no input and no sound (render peak meter) → posture
@@ -192,10 +201,10 @@ always-advertised capability (manifest +1 everywhere). Companion output +~25 MB.
   "recorded_at": "2026-09-16",
   "owner_decision": "periodic device-local presence check + optional continuous mode; capture in the Session Companion only; frames in memory only; derived signals only; visible indicator; owner switches; honest blocked reporting",
   "tests": {
-    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/CameraPresenceTests.cs": "25 cases",
-    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/CameraWiringTests.cs": "13 cases (end-to-end service-pipe-companion-heartbeat, schema contract, projection, composition, structural no-frame guard, real FaceDetector on a synthetic bitmap)",
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/CameraPresenceTests.cs": "29 cases (incl. veto across a restart, unreadable veto store, file store, unreadable permission)",
+    "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/CameraWiringTests.cs": "14 cases (restarted companion with a remembered veto refuses over the pipe; end-to-end service-pipe-companion-heartbeat, schema contract, projection, composition, structural no-frame guard, real FaceDetector on a synthetic bitmap)",
     "devices/windows-agent/tests/PagentOS.Agent.Tests/Camera/MonitorPowerTests.cs": "10 cases (+1 opt-in DDC lab)",
-    "services/api/tests/unit/test_camera_b48.py": "19 cases (wire shape, intake guards, relay, command row, 333 night/afternoon/silent-camera end to end, PUT camera_mode)",
+    "services/api/tests/unit/test_camera_b48.py": "20 cases (restarted vetoed device never sent a non-off mode; wire shape, intake guards, relay, command row, 333 night/afternoon/silent-camera end to end, PUT camera_mode)",
     "apps/web/tests/eye/b48-camera-web.test.tsx": "7 cases",
     "scripts/tests/device-camera-qualification.tests.ps1": "22 checks (dry run of the owner harness)"
   },
@@ -249,18 +258,31 @@ Executed mutations, each restored from an in-memory copy whose sha256 was verifi
 - C10 the shipped companion hands the runtime no toast object (the B11 bug) -> red
 - C11 the device-local switch no longer keeps the camera closed -> red
 
+## 5b-2. Security review fixes: red-first proofs (10/10)
+
+- R1 the remembered veto is not loaded at start -> red
+- R2 the tray veto is not written to the owner's profile -> red
+- R3 a non-off mode is accepted while vetoed -> red
+- R4 a remembered veto is not reported before the first loop pass -> red (first aimed at the pipe test, which stayed green because the loop's first pass also reports the veto; re-aimed at the restart unit test, which reads the status before any pass)
+- R5 an unreadable veto store is 'no veto' -> red
+- R6 a damaged veto file reads as 'no veto' -> red
+- R7 the shipped companion builds its monitor without the profile veto store -> red
+- R8 an unreadable permission is 'allowed' -> red
+- R9 the Cloud relay sends a non-off mode to a vetoed device -> red
+- R10 the panel shows an unreadable permission as a raw token -> red
+
 ## 5c. Gates run
 
 - `dotnet build -c Release`: 0 warnings, 0 errors. `dotnet format --verify-no-changes`: clean.
 - `PagentOS.Agent.Tests`: 1051 passed, 1 skipped, 1 failed — the failure is the pre-existing
   real-Unity lab (`SceneUnityTests.The_real_unity_editor...`, a licensed editor exits 1 on
   this machine; the main checkout carries uncommitted work on exactly that test, ADR-0164).
-  Camera folder: 25 + 13 + 10 = 48 passed. `PagentOS.Companion.Audio.Tests`: 135/135.
+  Camera folder: 25 + 13 + 10 = 48 passed; after the security review fixes 29 + 14 + 10 = 53, whole project 1056 passed / 1 skipped / 1 failed (the same Unity lab). `PagentOS.Companion.Audio.Tests`: 135/135.
 - `scripts/qualify-staged-update.ps1`: STAGED UPDATE QUALIFIED, 89 checks, 43 capabilities.
 - PowerShell suites: device-camera-qualification 22/22, agent-update 33/33,
   installer-release 12/12, script-syntax (110 scripts), harness-symbols 143/143,
   item28-gate 46/46, owner-harness 17/17.
-- Cloud Core: `test_camera_b48.py` 19/19; presence/ambient/devices/alarms/broker/migration/
+- Cloud Core: `test_camera_b48.py` 20/20 (after the review fixes; presence/ambient/devices/mirror/camera set 337 passed); presence/ambient/devices/alarms/broker/migration/
   mirror/identity/world/routines-presence set 972 passed; `ruff check app` clean.
 - Web: vitest full suite 1893/1893 (106 files); `tsc --noEmit` clean; oxlint on the changed
   files clean.

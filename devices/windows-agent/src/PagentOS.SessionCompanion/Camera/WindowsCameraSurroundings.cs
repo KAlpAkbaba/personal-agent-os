@@ -10,7 +10,8 @@ namespace PagentOS.SessionCompanion.Camera;
 /// Row 671: Windows' own camera permission, READ before anything is opened. Three switches can
 /// deny a desktop application the camera - the device-wide one (HKLM), the per-user "let apps
 /// use my camera" one, and the per-user "let desktop apps use my camera" one. Any of them set to
-/// <c>Deny</c> is reported by name; nothing here writes the registry.
+/// <c>Deny</c> is reported by name; nothing here writes the registry. A read that fails
+/// THROWS: the monitor turns that into "blocked, consent_unreadable" and opens nothing.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public sealed class WindowsCameraConsent : ICameraConsent
@@ -105,6 +106,34 @@ public sealed class TrayCameraIndicator : ICameraIndicator, IDisposable
 
     public event Action<bool>? OwnerVeto;
 
+    public void SyncVeto(bool vetoed)
+    {
+        var marshal = _marshal;
+        if (marshal is null || !marshal.IsHandleCreated)
+        {
+            _vetoed = vetoed;
+            return;
+        }
+
+        try
+        {
+            marshal.Invoke(() =>
+            {
+                _vetoed = vetoed;
+                if (_toggle is not null)
+                {
+                    _toggle.Text = MenuText(vetoed);
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("camera indicator veto sync failed: {Reason}", ex.GetType().Name);
+        }
+    }
+
+    private static string MenuText(bool vetoed) => vetoed ? "Kameraya yeniden izin ver" : "Kamerayı bu cihazda kapat";
+
     public void Set(CameraIndicatorState state, string mode)
     {
         lock (_sync)
@@ -163,11 +192,11 @@ public sealed class TrayCameraIndicator : ICameraIndicator, IDisposable
         {
             _marshal = new Control();
             _ = _marshal.Handle;
-            _toggle = new ToolStripMenuItem("Kamerayı bu cihazda kapat");
+            _toggle = new ToolStripMenuItem(MenuText(_vetoed));
             _toggle.Click += (_, _) =>
             {
                 _vetoed = !_vetoed;
-                _toggle.Text = _vetoed ? "Kameraya yeniden izin ver" : "Kamerayı bu cihazda kapat";
+                _toggle.Text = MenuText(_vetoed);
                 OwnerVeto?.Invoke(_vetoed);
             };
             var menu = new ContextMenuStrip();

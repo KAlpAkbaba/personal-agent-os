@@ -135,6 +135,9 @@ describe("each device's camera report (303, 671)", () => {
     const states = ["capturing", "idle", "off", "blocked", "unavailable", "busy", "vetoed", "error"];
     const texts = states.map((state) => deviceCameraText({ mode: "continuous", state, indicator: null, error: null }));
     expect(new Set(texts).size).toBe(states.length);
+    expect(
+      deviceCameraText({ mode: "continuous", state: "blocked", indicator: "armed", error: "consent_unreadable" }),
+    ).toBe("kamera engelli (izin okunamadı) - açılmadı");
     expect(deviceCameraText({ mode: "continuous", state: "capturing", indicator: "open", error: null })).toBe(
       "kamera AÇIK (sürekli izleme)",
     );

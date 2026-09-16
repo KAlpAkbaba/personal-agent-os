@@ -540,7 +540,9 @@ public static class Program
                 new Camera.WindowsCameraConsent(),
                 input,
                 new Camera.RenderPeakMediaProbe(options.MediaPeakThreshold),
-                audit: audit);
+                audit: audit,
+                // The owner's tray veto, remembered in the owner's profile across restarts.
+                vetoStore: new Camera.FileCameraVetoStore(Camera.FileCameraVetoStore.DefaultPath()));
         }
 
         return new Camera.CameraPresenceMonitor(
@@ -549,7 +551,8 @@ public static class Program
             cameraLogger,
             options,
             input: input,
-            audit: audit);
+            audit: audit,
+            vetoStore: new Camera.FileCameraVetoStore(Camera.FileCameraVetoStore.DefaultPath()));
     }
 
     /// <summary>B11 req 369: the toast capability over the given sink, or none when there is no sink.</summary>
