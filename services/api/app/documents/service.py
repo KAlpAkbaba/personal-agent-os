@@ -633,12 +633,19 @@ class DocumentService:
         *,
         target: str = "current",
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
             return missing
         row, clar = self._resolve_document(
-            db, device_action, device_id, target, extract_if_needed=True, session_id=session_id
+            db,
+            device_action,
+            device_id,
+            target,
+            extract_if_needed=True,
+            session_id=session_id,
+            reference=reference,
         )
         if clar is not None:
             return clar
@@ -711,9 +718,26 @@ class DocumentService:
         *,
         extract_if_needed: bool,
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> tuple[DocumentIndexRow | None, dict[str, Any] | None]:
-        """(row, clarification_or_error). Deixis (module docstring): current/previous/name."""
+        """(row, clarification_or_error). Deixis (module docstring): current/previous/name.
+
+        B51 req 745: ``reference`` is what the owner's "bunu / şunu" pointed at - the
+        freshest focused object of any kind (``app.voice.intent_router``). For "current" it
+        outranks the per-kind focus: a file the owner just found is "bunu" even while an
+        older document is still the current DOCUMENT focus."""
         target = (target or "current").strip()
+        if target in ("", "current") and reference is not None:
+            referenced = self._resolve_reference(
+                db,
+                device_action,
+                device_id,
+                reference,
+                extract_if_needed=extract_if_needed,
+                session_id=session_id,
+            )
+            if referenced is not None:
+                return referenced
         if target in ("", "current"):
             doc_entry = focus_module.current(db, FOCUS_KIND_DOCUMENT)
             if doc_entry is not None:
@@ -770,6 +794,48 @@ class DocumentService:
             session_id=session_id,
         )
 
+    def _resolve_reference(
+        self,
+        db: Session,
+        device_action: DeviceActionPort | None,
+        device_id: str,
+        reference: dict[str, Any],
+        *,
+        extract_if_needed: bool,
+        session_id: str | None,
+    ) -> tuple[DocumentIndexRow | None, dict[str, Any] | None] | None:
+        """The document a deictic reference names, or None when it names no document or
+        file this index/device can answer for (the caller then resolves as before)."""
+        kind = reference.get("kind")
+        object_id = reference.get("object_id")
+        if not isinstance(object_id, str) or not object_id:
+            return None
+        if kind == FOCUS_KIND_DOCUMENT:
+            row = self._index.get_by_doc_id(db, object_id)
+        elif kind == FOCUS_KIND_FILE:
+            row = self._index.get_by_file_id(db, device_id=device_id, file_id=object_id)
+            if row is None:
+                if not extract_if_needed or device_action is None:
+                    # Not read yet: never fall back to an OLDER document for "bunu".
+                    return None, _clarification(SPEECH_NO_DOCUMENT)
+                return self._extract(
+                    db,
+                    device_action,
+                    file_id=object_id,
+                    device_id=device_id,
+                    session_id=session_id,
+                )
+        else:
+            return None
+        if row is None:
+            return None
+        self._index.touch(db, row)
+        # "bunu" now names this document for the per-kind focus too.
+        focus_module.set_focus(
+            db, FOCUS_KIND_DOCUMENT, row.doc_id, label=row.title or row.name, source="deictic"
+        )
+        return row, None
+
     # ---------------------------------------------------------------- inspect
 
     def _resolve_target_file(
@@ -779,12 +845,22 @@ class DocumentService:
         target: str,
         *,
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> tuple[str | None, str | None, dict[str, Any] | None]:
         """(file_id, path, clarification) for a target, WITHOUT extracting content -
         ``inspect``'s own resolution (spec §3: inspect reads STRUCTURE only, headers-only
         ``file.inspect``, and must never trigger a ``document.extract`` the way
         ``read``/``summarize``/``answer``/``compare`` do for a file not yet indexed)."""
         target = (target or "current").strip()
+        if target in ("", "current") and reference is not None:
+            object_id = reference.get("object_id")
+            if isinstance(object_id, str) and object_id:
+                if reference.get("kind") == FOCUS_KIND_FILE:
+                    return object_id, None, None
+                if reference.get("kind") == FOCUS_KIND_DOCUMENT:
+                    row = self._index.get_by_doc_id(db, object_id)
+                    if row is not None:
+                        return row.file_id, row.path, None
         if target in ("", "current"):
             doc_entry = focus_module.current(db, FOCUS_KIND_DOCUMENT)
             if doc_entry is not None:
@@ -839,6 +915,7 @@ class DocumentService:
         *,
         target: str = "current",
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """B32 req 152: what a document IS, in a breath - its kind, its size in the kind's
         own units (pages / sheets / slides / lines / pixels / entries) and the first words of
@@ -847,12 +924,24 @@ class DocumentService:
         if missing is not None:
             return missing
         row, clar = self._resolve_document(
-            db, device_action, device_id, target, extract_if_needed=True, session_id=session_id
+            db,
+            device_action,
+            device_id,
+            target,
+            extract_if_needed=True,
+            session_id=session_id,
+            reference=reference,
         )
         if clar is not None:
             if clar.get("error_class") == "unsupported_format":
                 # An archive, or a kind the device only inspects: preview its headers.
-                inspected = self.inspect(db, device_action, target=target, session_id=session_id)
+                inspected = self.inspect(
+                    db,
+                    device_action,
+                    target=target,
+                    session_id=session_id,
+                    reference=reference,
+                )
                 inspected["preview"] = {"kind": "headers", "text": inspected.get("speech")}
                 return inspected
             return clar
@@ -1252,6 +1341,7 @@ class DocumentService:
         *,
         target: str = "current",
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
@@ -1271,6 +1361,7 @@ class DocumentService:
                 target,
                 extract_if_needed=False,
                 session_id=session_id,
+                reference=reference,
             )
         if row is not None:
             doc = self._doc_ref(db, row)
@@ -1289,7 +1380,7 @@ class DocumentService:
         # Not indexed yet: resolve just the file identity - never ``document.extract``,
         # only the lightweight ``file.inspect`` (headers only, no text; spec §2).
         file_id, path, resolve_clar = self._resolve_target_file(
-            db, device_action, target, session_id=session_id
+            db, device_action, target, session_id=session_id, reference=reference
         )
         if resolve_clar is not None:
             return resolve_clar
@@ -1341,12 +1432,19 @@ class DocumentService:
         *,
         target: str = "current",
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
             return missing
         row, clar = self._resolve_document(
-            db, device_action, device_id, target, extract_if_needed=True, session_id=session_id
+            db,
+            device_action,
+            device_id,
+            target,
+            extract_if_needed=True,
+            session_id=session_id,
+            reference=reference,
         )
         if clar is not None:
             return clar
@@ -1376,12 +1474,19 @@ class DocumentService:
         target: str = "current",
         question: str,
         session_id: str | None = None,
+        reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         device_id, missing = self._select_device(device_action)
         if missing is not None:
             return missing
         row, clar = self._resolve_document(
-            db, device_action, device_id, target, extract_if_needed=True, session_id=session_id
+            db,
+            device_action,
+            device_id,
+            target,
+            extract_if_needed=True,
+            session_id=session_id,
+            reference=reference,
         )
         if clar is not None:
             return clar

@@ -50,6 +50,7 @@ ROUTE_SOURCE_MODEL: Final = "model"
 ROUTE_SOURCE_NONE: Final = "none"
 MODEL_MATCH_PREFIX: Final = "model:"
 MIN_MODEL_CONFIDENCE: Final = 0.7
+REPAIR_CONFIDENCE_COST: Final = 0.1
 #: The intents a model may never produce, whatever it says: everything that acts on the
 #: world, the stop, the eye-disable, and "nothing" itself.
 NEVER_FROM_MODEL: Final[frozenset[Intent]] = frozenset(
@@ -115,6 +116,10 @@ def score_confidence(resolved: ResolvedIntent) -> float:
         score = 0.7
     if resolved.fillers_removed:
         score -= 0.05
+    if resolved.route_repair:
+        # 746/747: reached only by reading the words as a polite request's imperative or
+        # with their Turkish letters folded - a route, but a less certain one.
+        score -= REPAIR_CONFIDENCE_COST
     return round(max(0.0, min(1.0, score)), 2)
 
 

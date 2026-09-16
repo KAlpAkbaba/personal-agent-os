@@ -23,6 +23,9 @@ so "dur always wins" and the exact-cursor rules are inherited, not duplicated.
 from __future__ import annotations
 
 import re
+import unicodedata
+from collections.abc import Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Final
@@ -1132,6 +1135,11 @@ class ResolvedIntent:
     #: B30 req 121/122: the service the owner NAMED, in the owner's own word ("yazdırma");
     #: the tool maps it to the Windows service name.
     service_name: str | None = None
+    #: B51 req 746/747: how a route that the words as heard did NOT reach was reached -
+    #: ``polite`` (a "-ır mısın" request read as its imperative), ``ascii_fold`` (a
+    #: transcript that lost its Turkish letters matched with them folded) or both joined
+    #: by "+". None for every route the words reached directly.
+    route_repair: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -1188,6 +1196,7 @@ class ResolvedIntent:
             "ui_target": self.ui_target,
             "process_name": self.process_name,
             "service_name": self.service_name,
+            "route_repair": self.route_repair,
         }
 
     @property
@@ -1201,8 +1210,30 @@ class ResolvedIntent:
 
 def turkish_casefold(text: str) -> str:
     """Casefold that keeps Turkish dotted/dotless i distinct (str.lower maps
-    'I' to 'i', which would turn 'ISI' into 'isi' instead of 'ısı')."""
-    return text.replace("İ", "i").replace("I", "ı").lower()
+    'I' to 'i', which would turn 'ISI' into 'isi' instead of 'ısı').
+
+    B51 req 747: the text is composed (NFC) first - a transcript delivered decomposed
+    ("s" + U+0327 for "ş") was cut in two at the combining mark by the punctuation strip -
+    and the combining dot a non-Turkish lowercase leaves on "İ" ("İkinci".lower() is
+    "i" + U+0307, and so is JavaScript's toLowerCase) is dropped, since it split the word
+    the same way."""
+    composed = unicodedata.normalize("NFC", text)
+    return composed.replace("İ", "i").replace("I", "ı").lower().replace("i\u0307", "i")
+
+
+#: B51 req 747: what an ASR that drops Turkish letters does to a word. Used only by the
+#: fold repair pass (:func:`resolve_intent`), never by the first, exact reading.
+_ASR_FOLD_TABLE: Final = str.maketrans(
+    {"ı": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c", "â": "a", "î": "i", "û": "u"}
+)
+#: Set only inside the fold repair pass: ``_has``/``_has_exact`` then compare both sides
+#: folded. A context variable, so a concurrent resolution elsewhere is never affected.
+_FOLD_MATCHING: ContextVar[bool] = ContextVar("pagentos_intent_fold_matching", default=False)
+
+
+def asr_fold(word: str) -> str:
+    """The word as a transcriber without Turkish letters would spell it."""
+    return word.translate(_ASR_FOLD_TABLE)
 
 
 def is_filler(token: str) -> bool:
@@ -1232,6 +1263,12 @@ def normalize_transcript(text: str) -> tuple[str, tuple[str, ...], int]:
 def _has(tokens: tuple[str, ...], *stems: str) -> str | None:
     """First token that starts with one of ``stems`` (Turkish suffixes vary:
     maddeyi / maddeye / maddeden), or None."""
+    if _FOLD_MATCHING.get():
+        folded_stems = tuple(asr_fold(stem) for stem in stems)
+        for tok in tokens:
+            if asr_fold(tok).startswith(folded_stems):
+                return tok
+        return None
     for tok in tokens:
         for stem in stems:
             if tok == stem or tok.startswith(stem):
@@ -1240,6 +1277,12 @@ def _has(tokens: tuple[str, ...], *stems: str) -> str | None:
 
 
 def _has_exact(tokens: tuple[str, ...], *words: str) -> str | None:
+    if _FOLD_MATCHING.get():
+        folded_words = {asr_fold(word) for word in words}
+        for tok in tokens:
+            if asr_fold(tok) in folded_words:
+                return tok
+        return None
     for tok in tokens:
         if tok in words:
             return tok
@@ -1588,6 +1631,8 @@ _SNOOZE_VERB_STEMS: Final[tuple[str, ...]] = ("ertele", "erteler")
 #: Exact ring forms: "çalıştır" (run) belongs to the research re-run, never to an alarm.
 _RING_VERB_FORMS: Final[tuple[str, ...]] = ("çal", "cal", "çalsın", "calsin", "çalsana", "calsana")
 _TEST_WORD_FORMS: Final[tuple[str, ...]] = ("test", "deneme")
+_ALARM_ADJUST_VERB_FORMS: Final[tuple[str, ...]] = ("ayarla", "ayarlasana", "ayarlar")
+_ALARM_SONG_STEMS: Final[tuple[str, ...]] = ("müzi", "muzi", "şarkı", "sarki", "melodi", "zil")
 
 #: Spoken minutes for a snooze: the tr-TR normaliser has already turned "10" into "on",
 #: so these are the words a minute count arrives as (compounds: "on beş", "yirmi").
@@ -1769,7 +1814,15 @@ _ROUTINE_QUESTION_MARKERS: Final[tuple[str, ...]] = (
     "kac",
 )
 #: And the imperatives that ask for the same answer.
-_ROUTINE_LIST_VERB_STEMS: Final[tuple[str, ...]] = ("listele", "say", "göster", "goster")
+_ROUTINE_LIST_VERB_STEMS: Final[tuple[str, ...]] = (
+    "listele",
+    "say",
+    "göster",
+    "goster",
+    # B51 (746): "Rutinlerimi söyle / söyler misin?".
+    "söyle",
+    "soyle",
+)
 
 
 def _routine_noun(tokens: tuple[str, ...]) -> str | None:
@@ -1991,7 +2044,17 @@ def _alarm_match(
     if noun is not None and _has(tokens, *_CANCEL_VERB_STEMS):
         return Intent.ALARM_CANCEL, "alarmı iptal et"
 
-    creating = _has_exact(tokens, *_SET_VERB_FORMS) or bool(wake)
+    creating = (
+        _has_exact(tokens, *_SET_VERB_FORMS)
+        or bool(wake)
+        # B51 (746): "Test alarmı ayarla." - "ayarla" is every family's "set", so it
+        # counts only beside the alarm noun (checked above) and never beside the song
+        # the wake-song sentences name ("Alarm müziğimi ayarla" sets no alarm).
+        or (
+            _has_exact(tokens, *_ALARM_ADJUST_VERB_FORMS)
+            and _has(tokens, *_ALARM_SONG_STEMS) is None
+        )
+    )
     if creating:
         if _has_exact(tokens, *_TEST_WORD_FORMS):
             return Intent.ALARM_TEST_CREATE, "test alarmı kur"
@@ -3260,6 +3323,9 @@ def _document_delete_match(tokens: tuple[str, ...]) -> str | None:
     if (
         _has(tokens, *_TRASH_NOUN_STEMS) is not None
         and _has(tokens, "gönder", "gonder", "at", "taşı", "tasi") is not None
+        # B51 (746): "Kopya dosyaları çöp kutusuna gönder." is B32's duplicate cleanup;
+        # without this it proposed trashing the CURRENT file instead.
+        and _has(tokens, *_DUPLICATE_STEMS) is None
     ):
         return "çöp kutusuna gönder"
     return None
@@ -3860,7 +3926,14 @@ def _location_source_query_match(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
-_GREETING_WORDS: Final[tuple[str, ...]] = ("günaydın", "gunaydin")
+_GREETING_WORDS: Final[tuple[str, ...]] = (
+    "günaydın",
+    "gunaydin",
+    # B51 (747): a transcriber that loses only the dotless i ("Günaydin") - the greeting
+    # must not fall to the calendar's "bugün ne var".
+    "günaydin",
+    "gunaydın",
+)
 _MORNING_STEMS: Final[tuple[str, ...]] = ("sabah",)
 _BRIEFING_NOUN_STEMS: Final[tuple[str, ...]] = ("özet", "ozet")
 
@@ -3875,7 +3948,9 @@ def _morning_briefing_match(tokens: tuple[str, ...]) -> str | None:
     if (
         _has(tokens, *_MORNING_STEMS)
         and _has(tokens, *_BRIEFING_NOUN_STEMS)
-        and _has_exact(tokens, "ver")
+        # B51 (746): "Bana sabah özetini verir misin?" is the same request, and without the
+        # polite forms it fell to the bare SUMMARIZE control.
+        and _has_exact(tokens, "ver", "verir", "versene", "verin", "verebilir")
     ):
         return "sabah özeti ver"
     if _has(tokens, *_MORNING_STEMS) and _has(tokens, "durum") and _has_exact(tokens, "anlat"):
@@ -6612,6 +6687,32 @@ _NEWS_GENERIC_STEMS: Final[frozenset[str]] = frozenset(
         "ne",
         "şimdi",
         "simdi",
+        # B51 (746): a polite request's particle and a past-tense question were read as
+        # a channel name ("Haberleri açar mısın?" -> source "mısın"), and the tool
+        # refused with news_source_not_found instead of opening the default source.
+        "mı",
+        "mi",
+        "mu",
+        "mü",
+        "mısın",
+        "misin",
+        "musun",
+        "müsün",
+        "mısınız",
+        "misiniz",
+        "musunuz",
+        "müsünüz",
+        "acaba",
+        "lütfen",
+        "lutfen",
+        "bana",
+        "bir",
+        "yüklendi",
+        "yuklendi",
+        "yayınlandı",
+        "yayinlandi",
+        "yayınlanan",
+        "yayinlanan",
     }
 )
 
@@ -7693,6 +7794,191 @@ def resolve_intent(
     creative_focused: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
+
+    The words as heard are resolved first (:func:`_resolve_intent_rules`), and whatever
+    they reach is the answer - a routed utterance is never re-read (row 741 stays exactly
+    as it was). Only when they reach NOTHING are two repair readings tried (B51 req
+    746/747), each through the very same rules:
+
+    * ``polite`` - a polite request ("Kamerayı kapatır mısın?", "... kapatabilir misin?")
+      read as the imperative it asks for ("Kamerayı kapat"), whose route row 741 already
+      pins;
+    * ``ascii_fold`` - the same words with every Turkish letter folded on BOTH sides of
+      each comparison, for a transcript that lost them ("hizli", "calistir").
+
+    A repair is taken only when its readings agree on one intent, and never into the mail
+    or calendar families (deferred by the owner; their routes stay exactly as they are).
+
+    The one exception to "the words as heard first" is an ALL-CAPS transcript whose "I"
+    cannot say which i it is (``caps_fold``, :func:`_is_ambiguous_caps`): it is read
+    folded first, because its exact reading is not the words as heard at all.
+    """
+    state: dict[str, Any] = {
+        "session_state": session_state,
+        "narration": narration,
+        "has_completed_research": has_completed_research,
+        "alarm_ringing": alarm_ringing,
+        "operator_running": operator_running,
+        "document_focused": document_focused,
+        "event_focused": event_focused,
+        "draft_pending": draft_pending,
+        "proposal_pending": proposal_pending,
+        "genesis_awaiting_approval": genesis_awaiting_approval,
+        "executive_run_state": executive_run_state,
+        "native_build_focused": native_build_focused,
+        "mutation_pending": mutation_pending,
+        "mission_state": mission_state,
+        "app_project_focused": app_project_focused,
+        "artifact_focused": artifact_focused,
+        "creative_focused": creative_focused,
+    }
+    if _is_ambiguous_caps(text):
+        # An ALL-CAPS transcript with "I" and no "İ" cannot say which i it meant: "RUTININI"
+        # casefolds to "rutınını", lost the routine noun and left "DURDUR" to the bare STOP.
+        # Such text is read with "I" as "i" (so "DEFTERI'NI" and "DAKIKA" are the words
+        # the alias and number tables know) and every comparison folded (so "KAPATIR",
+        # which really had a dotless i, still meets "kapat") - from the start.
+        capped = _repair_reading((text.replace("I", "i"),), state, folded=True)
+        if capped is not None:
+            return replace(capped, route_repair=ROUTE_REPAIR_CAPS_FOLD)
+    first = _resolve_intent_rules(text, **state)
+    if first.intent is not Intent.NONE or not first.tokens:
+        return first
+    polite = polite_imperative_readings(text)
+    for label, readings, folded in (
+        (ROUTE_REPAIR_POLITE, polite, False),
+        (ROUTE_REPAIR_ASCII_FOLD, (text,), True),
+        (f"{ROUTE_REPAIR_POLITE}+{ROUTE_REPAIR_ASCII_FOLD}", polite, True),
+    ):
+        repaired = _repair_reading(readings, state, folded=folded)
+        if repaired is not None:
+            return replace(repaired, route_repair=label)
+    return first
+
+
+ROUTE_REPAIR_POLITE: Final = "polite"
+ROUTE_REPAIR_ASCII_FOLD: Final = "ascii_fold"
+ROUTE_REPAIR_CAPS_FOLD: Final = "caps_fold"
+
+
+def _is_ambiguous_caps(text: str) -> bool:
+    """An all-caps text whose "I" may be either i (no "İ" says the writer cased it the
+    Turkish way)."""
+    return (
+        "I" in text
+        and "İ" not in text
+        and not any(ch.islower() for ch in text)
+        and sum(ch.isalpha() for ch in text) >= 3
+    )
+
+
+#: Families a repair reading never routes into: mail and calendar are deferred by the
+#: owner (B45/B46) and keep exactly the routes they had.
+_REPAIR_NEVER_PREFIXES: Final[tuple[str, ...]] = ("mail_", "calendar_")
+#: Second-person question particles: "... kapatır mısın / kapatır mısınız". A request, not
+#: a yes/no question about state ("açık mı?" carries no person and is never rewritten).
+_POLITE_REQUEST_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?P<verb>[^\W\d_]{3,})(?P<gap>\s+)(?P<particle>m[ıiuüIİUÜ]s[ıiuüIİUÜ]n(?:[ıiuüIİUÜ]z)?)"
+    r"(?![^\W\d_])",
+    re.IGNORECASE,
+)
+#: "-abilir misin": the ability form asks the same thing ("kapatabilir misin").
+_ABILITY_SUFFIXES: Final[tuple[str, ...]] = ("yabilir", "yebilir", "abilir", "ebilir")
+#: Aorist verbs whose request reading is NOT their imperative: "hatırlar mısın?" asks what
+#: I remember, "bilir misin?" what I know.
+_POLITE_NOT_A_REQUEST: Final[frozenset[str]] = frozenset(
+    # "Bunu yapabilir misin?" asks what I can do (the capability question), not for it.
+    {"hatırlar", "hatirlar", "bilir", "anlar", "sever", "ister", "yapabilir"}
+)
+#: Consonant softening the aorist shows and the imperative does not ("eder" -> "et").
+_SOFTENED_STEMS: Final[dict[str, str]] = {"ed": "et", "gid": "git"}
+#: Vowel-final stems whose aorist adds only "r" after a close vowel ("taşır" is "taşı",
+#: not "taş"; "okur" is "oku").
+_CLOSE_VOWEL_STEMS: Final[frozenset[str]] = frozenset(
+    {"taşı", "tasi", "oku", "yürü", "yuru", "uyu", "koru", "tanı", "tani"}
+)
+_VOWELS: Final = "aeıioöuüâîû"
+
+
+def _imperative_stems(verb: str) -> list[str]:
+    """Every imperative the aorist/ability form ``verb`` can be (casefolded), most likely
+    first. Two readings survive where Turkish cannot tell them apart from the letters
+    ("kopyalar" is "kopyala"+r; "açar" is "aç"+ar); the rules decide, and a repair is only
+    taken when all readings that route agree."""
+    word = turkish_casefold(verb)
+    if word in _POLITE_NOT_A_REQUEST:
+        return []
+    for suffix in _ABILITY_SUFFIXES:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 2:
+            return [word[: -len(suffix)]]
+    if len(word) < 3 or not word.endswith("r") or word[-2] not in _VOWELS:
+        return []
+    out: list[str] = []
+    one = word[:-1]
+    if one in _CLOSE_VOWEL_STEMS:
+        return [one]
+    two = word[:-2]
+    if len(two) >= 2 and two[-1] not in _VOWELS:
+        out.append(_SOFTENED_STEMS.get(two, two))
+    if one[-1] in "ae" and len(one) >= 3:
+        out.append(one)
+    return out
+
+
+def polite_imperative_readings(text: str) -> tuple[str, ...]:
+    """The utterance with its first polite request ("X-ır mısın") replaced by each
+    imperative X can be; empty when there is no such request."""
+    match = _POLITE_REQUEST_RE.search(text)
+    if match is None:
+        return ()
+    readings = []
+    for stem in _imperative_stems(match.group("verb")):
+        readings.append(text[: match.start()] + stem + text[match.end() :])
+    return tuple(readings)
+
+
+def _repair_reading(
+    readings: Sequence[str], state: dict[str, Any], *, folded: bool
+) -> ResolvedIntent | None:
+    token = _FOLD_MATCHING.set(folded)
+    try:
+        routed = [
+            r
+            for r in (_resolve_intent_rules(reading, **state) for reading in readings)
+            if r.intent is not Intent.NONE
+        ]
+    finally:
+        _FOLD_MATCHING.reset(token)
+    if not routed or len({r.intent for r in routed}) != 1:
+        return None
+    if routed[0].intent.value.startswith(_REPAIR_NEVER_PREFIXES):
+        return None
+    return routed[0]
+
+
+def _resolve_intent_rules(
+    text: str,
+    *,
+    session_state: RealtimeState | None = None,
+    narration: NarrationState | None = None,
+    has_completed_research: bool = False,
+    alarm_ringing: bool = False,
+    operator_running: bool = False,
+    document_focused: bool = False,
+    event_focused: bool = False,
+    draft_pending: bool = False,
+    proposal_pending: bool = False,
+    genesis_awaiting_approval: bool = False,
+    executive_run_state: str | None = None,
+    native_build_focused: bool = False,
+    mutation_pending: bool = False,
+    mission_state: str | None = None,
+    app_project_focused: bool = False,
+    artifact_focused: bool = False,
+    creative_focused: bool = False,
+) -> ResolvedIntent:
+    """Resolve a transcript into an :class:`Intent` against the live state (the words as
+    heard; :func:`resolve_intent` is the entry point).
 
     ``session_state`` is the M4 control FSM state of the conversation;
     ``narration`` the narration machine state when a narration is attached.
