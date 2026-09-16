@@ -6,15 +6,25 @@ metadata:
 ---
 
 B11 req 372 (WebPush) completed 2026-09-17 on branch `worktree-agent-a4cce9e70a6f6d4db`
-@ commit `9b7e3ef`, in worktree `E:\AI\...\.claude\worktrees\agent-a4cce9e70a6f6d4db`.
-Not merged/pushed. Full server package at `services/api/app/webpush/` (RFC 8030/8291/
-8292, no new dependency, `cryptography.hazmat` only). Migration
-`0060_webpush_subscriptions` chains after `0059_ambient_camera_mode`. Ladder wiring:
-`app.notifications.ladder.PushRung` + `app.main._build_push_rung`. Web:
-`apps/web/public/sw.js` (push+notificationclick only, no fetch handler) +
-`app/lib/cockpit/webpush.ts` + `app/settings/WebPushSettings.tsx`. VAPID key
-generation: `scripts/cloud/new-vapid-key.ps1` (ephemeral CNG key; cross-verified against
-Python `app.webpush.vapid.load_private_key` — public keys matched byte-for-byte).
+@ commit `6333011` (after a security review + `git merge main`; first landed at
+`9b7e3ef`), in worktree `E:\AI\...\.claude\worktrees\agent-a4cce9e70a6f6d4db`. Not
+pushed. Full server package at `services/api/app/webpush/` (RFC 8030/8291/8292, no new
+dependency, `cryptography.hazmat` only). Migration `0060_webpush_subscriptions` chains
+after `0059_ambient_camera_mode`. Ladder wiring: `app.notifications.ladder.PushRung` +
+`app.main._build_push_rung`. Web: `apps/web/public/sw.js` (push+notificationclick
+only, no fetch handler) + `app/lib/cockpit/webpush.ts` + `app/settings/
+WebPushSettings.tsx`. VAPID key generation: `scripts/cloud/new-vapid-key.ps1`
+(ephemeral CNG key; cross-verified against Python `app.webpush.vapid.load_private_key`
+— public keys matched byte-for-byte). ADR draft renumbered to **ADR-0169** (ADR-0168
+was taken by the B11 Windows-toast batch merged in from `main`).
+
+Security review (no Critical/High/Medium; 3 Low, all fixed): endpoint port ignored by
+the SSRF allowlist, no cap on stored subscriptions (now `MAX_SUBSCRIPTIONS=32`), and
+`HttpPushProvider.send` buffering the full response body (now `client.stream(...)`,
+body never read, connection always closed). `git merge main` (not rebase) picked up
+concurrent B33 self-signed-MSIX and B11 Windows-toast work with **zero manual
+conflicts** — different regions of `ladder.py`/`config.py`, `main.py` untouched by
+`main` in that window.
 
 Evidence: 117 new backend unit tests + 26 web vitest tests, all green. Full API unit
 suite 11764 passed/5 skipped/0 failed. Full web vitest 1919 passed. `ruff check .`
