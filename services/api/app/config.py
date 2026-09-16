@@ -269,10 +269,11 @@ class Settings(BaseSettings):
     research_anthropic_timeout_s: float = 30.0
     research_default_synthesis: str = "auto"
     research_default_max_sources: int = 12
-    #: B33 req 472/473: the native factory's signing policy. Only "unsigned" is implemented;
-    #: "test_certificate" and "owner_certificate" are the owner's decision (a certificate is
-    #: a credential) and are refused by name until decided (app.nativefactory.signing).
-    native_signing_mode: str = "unsigned"
+    #: B33 req 472/473: the native factory's signing policy (app.nativefactory.signing).
+    #: Owner decision 2026-09-16 ("win uygulamada da kendinden imzalı olsun"): the default is
+    #: "test_certificate" - the device signs an MSIX with its own self-signed identity.
+    #: "unsigned" is an explicit opt-out; "owner_certificate" is refused by name.
+    native_signing_mode: str = "test_certificate"
     research_max_sources_ceiling: int = 30
     # PRODUCT DECISION (owner, 2026-09-04): DuckDuckGo is the DEFAULT production
     # search provider for Research; Google is not attempted first automatically

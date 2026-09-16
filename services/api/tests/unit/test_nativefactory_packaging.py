@@ -25,10 +25,12 @@ from app.nativefactory.artifacts import read_artifact
 from app.nativefactory.packaging import (
     UNSIGNED_PUBLISHER,
     PackagingError,
+    appx_manifest_text,
     make_msix,
     make_portable_zip,
     write_appx_manifest,
 )
+from app.nativefactory.signing import TEST_SIGNING_SUBJECT
 from app.nativefactory.spec import parse_spec
 
 SPEC = parse_spec(
@@ -89,6 +91,20 @@ def test_an_unsigned_package_does_not_claim_a_publisher_who_could_be_held_to_it(
     text = write_appx_manifest(SPEC, tmp_path).read_text(encoding="utf-8")
     assert UNSIGNED_PUBLISHER in text
     assert "imzasız" in text  # said in the owner's language, in the package itself
+
+
+def test_a_signed_manifest_names_exactly_the_device_s_signing_subject_as_publisher() -> None:
+    """B33 req 473: the MSIX signer refuses a package whose Publisher is not its
+    certificate's subject, byte for byte - so the attribute is parsed, not searched for."""
+    signed = ET.fromstring(appx_manifest_text(SPEC, signed=True))
+    unsigned = ET.fromstring(appx_manifest_text(SPEC))
+    ns = {"m": "http://schemas.microsoft.com/appx/manifest/foundation/windows10"}
+    assert signed.find("m:Identity", ns).get("Publisher") == TEST_SIGNING_SUBJECT
+    assert unsigned.find("m:Identity", ns).get("Publisher") == UNSIGNED_PUBLISHER
+    display = signed.find("m:Properties/m:PublisherDisplayName", ns).text
+    assert display == "PagentOS (kendinden imzalı)"
+    # Everything else about the package is the same claim.
+    assert signed.find("m:Identity", ns).get("Name") == unsigned.find("m:Identity", ns).get("Name")
 
 
 # -------------------------------------------------------------------------- portable

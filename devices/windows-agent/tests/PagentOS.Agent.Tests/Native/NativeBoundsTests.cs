@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Protocol;
 using PagentOS.DeviceService;
+using PagentOS.SessionCompanion.Native;
 using PagentOS.SessionCompanion.Projects;
 using Xunit;
 
@@ -109,6 +110,45 @@ public sealed class NativeBoundsTests
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectScaffold));
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStatus));
         Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectStop));
+        Assert.Equal(TimeSpan.FromSeconds(30), InteractiveCapabilityExecutor.TimeoutCapFor(ProjectCapabilityNames.ProjectArtifact));
+    }
+
+    [Fact]
+    public void The_packaging_and_install_ceiling_covers_the_companion_s_own_five_minute_bounds_and_the_cloud_core_s_wait()
+    {
+        // B33 regression (found 2026-09-16): project.package rode the 30 s family cap while the
+        // companion allows makeappx 5 min and the Cloud Core waits 330 s for the answer — a
+        // cold pack of a 60 MB publish folder would have been answered `timeout` by the service
+        // while it was still being written. Signing and an MSIX install only lengthen the step.
+        var cap = ProjectCapabilityNames.LifecycleCommandTimeoutCap;
+        foreach (var name in new[] { ProjectCapabilityNames.ProjectPackage, ProjectCapabilityNames.ProjectInstall, ProjectCapabilityNames.ProjectUninstall })
+        {
+            Assert.Equal(cap, InteractiveCapabilityExecutor.TimeoutCapFor(name));
+        }
+
+        Assert.True(cap > NativeLifecycle.MakeAppxTimeout, "the ceiling must leave room for the typed answer after makeappx");
+        Assert.True(cap > WindowsPackageDeployer.OperationLimit, "the ceiling must leave room for the typed answer after a deployment");
+
+        // The Cloud Core's own waits, read from its source rather than restated: they must not
+        // give up before the device can answer, and must not wait much longer than it can take.
+        var lifecycle = File.ReadAllText(Path.Combine(RepoRoot(), "services", "api", "app", "nativefactory", "device_lifecycle.py"));
+        foreach (var constant in new[] { "PACKAGE_TIMEOUT_S", "MSIX_INSTALL_TIMEOUT_S" })
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(lifecycle, $@"^{constant}: Final = (\d+(?:\.\d+)?)", System.Text.RegularExpressions.RegexOptions.Multiline);
+            Assert.True(match.Success, $"{constant} is not declared in device_lifecycle.py");
+            Assert.Equal(cap.TotalSeconds, double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        }
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "services", "api", "app")))
+        {
+            dir = dir.Parent;
+        }
+
+        return dir?.FullName ?? throw new DirectoryNotFoundException("the repository root was not found above the test output");
     }
 
     [Fact]

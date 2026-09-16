@@ -553,7 +553,7 @@ public sealed class ProjectRunner : IDisposable
         {
             throw new CapabilityException(
                 ErrorClasses.PermissionDenied,
-                $"'{Path.GetFileName(executable)}' is a signing or certificate tool; this device signs nothing and never starts one",
+                $"'{Path.GetFileName(executable)}' is a signing or certificate tool; this device runs no signing program and never starts one",
                 retryable: false,
                 new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "command_not_allowlisted" });
         }
@@ -564,7 +564,7 @@ public sealed class ProjectRunner : IDisposable
             {
                 throw new CapabilityException(
                     ErrorClasses.PermissionDenied,
-                    $"argument '{argument}' names a signing or certificate tool; this device signs nothing",
+                    $"argument '{argument}' names a signing or certificate tool; this device runs no signing program",
                     retryable: false,
                     new Dictionary<string, object?> { [DocumentErrors.DetailKey] = "command_not_allowlisted" });
             }

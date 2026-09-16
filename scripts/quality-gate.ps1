@@ -459,6 +459,15 @@ if (-not $Fast) {
     Assert-ExitCode "identity restoration tests"
   }
 
+  Invoke-Step "Native signing trust step (PS5.1)" {
+    # B33 req 473: the owner's one elevated step imports ONLY the companion's self-signed
+    # public certificate into LocalMachine\TrustedPeople. Every check and store operation
+    # runs here against throwaway CURRENT-USER stores; no LocalMachine store is written.
+    $script = Join-Path $repoRoot "scripts\tests\native-signing-trust.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "native signing trust tests"
+  }
+
   if ($E2E) {
     Invoke-Step "M1 device E2E (Notepad)" {
       & $powershell5 -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "scripts\e2e-m1-device.ps1") -SkipBuild

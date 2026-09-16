@@ -38,7 +38,14 @@ from app.nativefactory.models import (
     STATE_VERIFIED,
     NativeBuildRow,
 )
+from app.nativefactory.packaging import UNSIGNED_PUBLISHER
 from app.nativefactory.service import plan_build
+from app.nativefactory.signing import (
+    MODE_OWNER_CERTIFICATE,
+    MODE_UNSIGNED,
+    TEST_SIGNING_SUBJECT,
+    SigningPolicy,
+)
 from app.nativefactory.stacks import ToolchainFacts
 from app.routines.dispatch import DeviceRunResult
 from tests.voice_corpus.harness import NATIVE_ANDROID_SPEC
@@ -677,7 +684,7 @@ def test_the_android_manifest_the_device_half_reads_is_the_one_this_module_write
         assert f"`{command}`" in protocol, command
 
 
-def _packaged(kind: str) -> FakeDevice:
+def _packaged(kind: str, **signature: Any) -> FakeDevice:
     device = _healthy()
     device._answers["project_package"] = DeviceRunResult(
         True,
@@ -693,6 +700,7 @@ def _packaged(kind: str) -> FakeDevice:
             "sha256": "b" * 64,
             "signed": False,
             "observed": {"exists": True, "bytes": 90112},
+            **signature,
         },
     )
     return device
@@ -709,19 +717,78 @@ def test_an_msix_row_is_built_then_packaged_by_the_device_and_the_manifest_is_sc
 
     assert outcome.ok, outcome.message
     assert [c for c, _ in device.calls][-1] == "project.package"
+    # B33 req 473: the default policy (the owner's decision) asks the device to sign.
     assert device.payload_for("project.package") == {
         "project_id": f"native-{str(msix.id)[:8]}",
         "kind": "msix",
+        "signing_mode": "test_certificate",
     }
     files = {f["path"]: f["text"] for f in device.payload_for("project.scaffold")["files"]}
     assert "staging/AppxManifest.xml" in files
     assert "<Identity" in files["staging/AppxManifest.xml"]
     assert 'Executable="notlarim.exe"' in files["staging/AppxManifest.xml"]
+    assert f'Publisher="{TEST_SIGNING_SUBJECT}"' in files["staging/AppxManifest.xml"]
     assert msix.state == STATE_VERIFIED
     assert msix.artifact_path.endswith("notlarim.msix")
     assert msix.artifact_json["package"]["sha256"] == "b" * 64
+    # The fake device answered signed:false, so the row says unsigned - never the intention.
     assert msix.artifact_json["package"]["signed"] is False
+    assert msix.artifact_json["package"]["signing_mode"] == "unsigned"
+    assert "signer_thumbprint" not in msix.artifact_json["package"]
     assert msix.artifact_json["package"]["executable"].endswith("notlarim.exe")
+
+
+def test_a_signed_package_carries_the_signer_and_trust_the_device_read_back(db):
+    """B33 req 473: signer and trust are copied from the device's answer, and only when it
+    said signed; a thumbprint beside signed:false never reaches the row."""
+    msix = plan_build(db, {**WINDOWS, "targets": ["windows_msix"]}, facts=FULL)[0]
+    device = _packaged(
+        "msix",
+        signed=True,
+        signing_mode="test_certificate",
+        signer_thumbprint="A" * 40,
+        signer_subject=TEST_SIGNING_SUBJECT,
+        signer_not_after="2028-09-15T00:00:00Z",
+        trusted=False,
+        trust_step="scripts\\trust-native-signing-cert.ps1",
+    )
+
+    assert build_on_device(db, msix, device).ok
+
+    package = msix.artifact_json["package"]
+    assert package["signed"] is True
+    assert package["signing_mode"] == "test_certificate"
+    assert package["signer_thumbprint"] == "A" * 40
+    assert package["signer_subject"] == TEST_SIGNING_SUBJECT
+    assert package["trusted"] is False
+
+    lying = plan_build(
+        db, {**WINDOWS, "targets": ["windows_msix"], "version": "0.1.1"}, facts=FULL
+    )[0]
+    device = _packaged("msix", signed="yes", signer_thumbprint="B" * 40, trusted=True)
+    assert build_on_device(db, lying, device).ok
+    assert lying.artifact_json["package"]["signed"] is False
+    assert "signer_thumbprint" not in lying.artifact_json["package"]
+    assert "trusted" not in lying.artifact_json["package"]
+
+
+def test_an_unsigned_policy_scaffolds_the_unsigned_publisher_and_asks_for_nothing(db):
+    msix = plan_build(db, {**WINDOWS, "targets": ["windows_msix"]}, facts=FULL)[0]
+    device = _packaged("msix")
+
+    assert build_on_device(db, msix, device, signing=SigningPolicy(MODE_UNSIGNED)).ok
+
+    assert device.payload_for("project.package")["signing_mode"] == "unsigned"
+    files = {f["path"]: f["text"] for f in device.payload_for("project.scaffold")["files"]}
+    assert f'Publisher="{UNSIGNED_PUBLISHER}"' in files["staging/AppxManifest.xml"]
+
+    # owner_certificate is never forwarded as anything the device would apply.
+    other = plan_build(
+        db, {**WINDOWS, "targets": ["windows_msix"], "version": "0.2.0"}, facts=FULL
+    )[0]
+    device = _packaged("msix")
+    assert build_on_device(db, other, device, signing=SigningPolicy(MODE_OWNER_CERTIFICATE)).ok
+    assert device.payload_for("project.package")["signing_mode"] == "unsigned"
 
 
 def test_a_portable_row_whose_package_the_device_could_not_make_is_failed_not_verified(db):

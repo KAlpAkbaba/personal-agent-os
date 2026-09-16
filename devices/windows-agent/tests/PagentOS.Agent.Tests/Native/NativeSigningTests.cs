@@ -6,14 +6,16 @@ using Xunit;
 namespace PagentOS.Agent.Tests.Native;
 
 /// <summary>
-/// M28_NATIVE_APP_FACTORY_SPEC.md §9, ADR-0095 decision 4 — the device signs nothing, ever.
+/// M28_NATIVE_APP_FACTORY_SPEC.md §9, ADR-0095 decision 4 — the device RUNS no signer, ever —
+/// and B33 req 473 (owner decision 2026-09-16) — the device SIGNS an MSIX in its own process.
 ///
-/// The Cloud Core produces an UNSIGNED MSIX on purpose and its <c>packaging.py</c> says why:
-/// signing needs a certificate, and the only certificate this system could reach for is the
-/// owner's, which is theirs. The device half has to be the same, and "the same" here is a
-/// STRUCTURAL claim rather than a behavioural one — there is no run to observe, because the
-/// point is that no run exists. So these tests read the companion's own sources: a signer
-/// cannot be invoked by code that does not name one.
+/// Both hold at once, and these tests are what keeps them compatible. The signing tools stay
+/// refused by name; the only signing code is <c>Native/PackageSigner.cs</c> (mssign32's
+/// <c>SignerSignEx2</c>), the identity is <c>Native/OwnerSigningIdentity.cs</c>
+/// (<c>CertificateRequest</c>) and the per-user install is <c>Native/MsixDeployment.cs</c>
+/// (Windows' package manager over its ABI) — and none of them may start a process. These
+/// tests read the companion's own sources: a signer cannot be invoked by code that does not
+/// name one, and signing code cannot spawn what it does not reference.
 ///
 /// The one exception this test permits by construction is a NAME in a refusal list or a
 /// refusal message, which is a mention rather than an invocation, and is exactly what makes
@@ -85,7 +87,7 @@ public sealed class NativeSigningTests
     public void NativeTools_has_no_function_that_returns_a_signer_even_though_it_sits_beside_makeappx()
     {
         // signtool.exe lives in the SAME Windows Kits directory this class walks to find
-        // makeappx.exe. The way to keep "the device signs nothing" true is to have no code that
+        // makeappx.exe. The way to keep "the device runs no signer" true is to have no code that
         // could hand a signer its path, so this asserts the absence of the obvious one.
         var text = CompanionSources.Read(Path.Combine("Native", "NativeTools.cs"));
         Assert.Contains("MakeAppxExecutable = \"makeappx.exe\"", text, StringComparison.Ordinal);
@@ -111,6 +113,56 @@ public sealed class NativeSigningTests
         Assert.False(NativeCapabilityNames.IsForbiddenProgram(NativeCapabilityNames.DotnetProgram));
         Assert.False(NativeCapabilityNames.IsForbiddenProgram(NativeCapabilityNames.MakeAppxProgram));
         Assert.False(NativeCapabilityNames.IsForbiddenProgram("signtoolkit"));
+    }
+
+    /// <summary>The files that sign, hold the identity and deploy — in-process by design.</summary>
+    private static readonly string[] InProcessSigning =
+    [
+        Path.Combine("Native", "PackageSigner.cs"),
+        Path.Combine("Native", "OwnerSigningIdentity.cs"),
+        Path.Combine("Native", "MsixDeployment.cs"),
+        Path.Combine("Native", "NativeSigning.cs"),
+    ];
+
+    [Fact]
+    public void The_in_process_signing_files_start_no_process_and_write_no_machine_store()
+    {
+        foreach (var relative in InProcessSigning)
+        {
+            var text = CompanionSources.Read(relative);
+            Assert.DoesNotContain("System.Diagnostics", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Process.", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("ProcessStartInfo", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("ShellExecute", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("powershell", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("runas", text, StringComparison.OrdinalIgnoreCase);
+            // LocalMachine is READ for trust, never opened for writing.
+            foreach (Match match in Regex.Matches(text, @"StoreLocation\.LocalMachine"))
+            {
+                var after = text[match.Index..Math.Min(text.Length, match.Index + 400)];
+                Assert.Contains("OpenFlags.ReadOnly", after, StringComparison.Ordinal);
+                Assert.DoesNotContain("OpenFlags.ReadWrite", after, StringComparison.Ordinal);
+            }
+        }
+
+        // The signing code signs with SHA-256 and asks for no timestamp (no network, recorded).
+        var signer = CompanionSources.Read(Path.Combine("Native", "PackageSigner.cs"));
+        Assert.Contains("CALG_SHA_256 = 0x0000800c", signer, StringComparison.Ordinal);
+        Assert.DoesNotContain("http", signer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("dwTimestampFlags = ", signer, StringComparison.Ordinal);
+        Assert.DoesNotContain("pwszTimestampURL = ", signer, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_identity_s_key_is_created_non_exportable_and_only_the_public_certificate_is_written()
+    {
+        var text = CompanionSources.Read(Path.Combine("Native", "OwnerSigningIdentity.cs"));
+        Assert.Contains("ExportPolicy = CngExportPolicies.None", text, StringComparison.Ordinal);
+        Assert.Contains("certificate.Export(X509ContentType.Cert)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("X509ContentType.Pfx", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("X509ContentType.Pkcs12", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExportPkcs8PrivateKey", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExportParameters(true", text, StringComparison.Ordinal);
     }
 
     private static string LineAt(string text, int index)

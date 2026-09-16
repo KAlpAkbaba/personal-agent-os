@@ -107,7 +107,7 @@ public sealed class NativeLifecycleTests
     }
 
     [NativeLabFact(NativeCapabilityNames.MakeAppxProgram)]
-    public void Package_msix_packs_the_staged_publish_output_with_makeappx_and_never_signs_it()
+    public void Package_msix_packs_the_staged_publish_output_with_makeappx_and_signs_nothing_it_was_not_asked_to()
     {
         var (lab, folder, _) = Scaffolded();
         using (lab)
@@ -123,6 +123,8 @@ public sealed class NativeLifecycleTests
             Assert.EndsWith(Slug + ".msix", path);
             Assert.True(File.Exists(path));
             Assert.False(result["signed"]!.GetValue<bool>());
+            Assert.Equal(NativeCapabilityNames.SigningModeUnsigned, result["signing_mode"]!.GetValue<string>());
+            Assert.Null(result["trusted"]);
             Assert.Equal(Sha256Hex(File.ReadAllBytes(path)), result["sha256"]!.GetValue<string>());
             // An MSIX is a zip: the executable and the manifest are inside it, no signature block is.
             using var zip = ZipFile.OpenRead(path);
