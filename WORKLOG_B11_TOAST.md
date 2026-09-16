@@ -10,7 +10,7 @@ evidence notes.
 
 ```
 | 369 | Desktop toast | desktop.notify gerçek Windows toast'u (Windows.UI.Notifications) gösteriyor: kendi AppUserModelID'si (PagentOS.Companion, sahibin Başlat menüsündeki kısayol, HKLM yok), elle kurulan ve kaçışlanan XML, urgent = reminder senaryosu + yüksek öncelik, grup anahtarı = etiket (yeni bildirim eskisinin yerini alıyor); 'shown' yalnızca Windows toast'u kendi geçmişinde tutunca; sahip bildirimleri kapattıysa hiçbir şey gösterilmiyor (balonla dolanılmıyor); balon yalnızca platform kullanılamazsa, surface ile söyleniyor | desktop.notify | DONE | PA | P1 | 5 | B11 | Notify/WindowsToastSink.cs, Notify/ToastXml.cs, Notify/ToastPlatform.cs, Notify/AppIdentityShortcut.cs, Projects/ShellLinkInterop.cs, Program.cs:BuildToastSink, packages/protocol/desktop-notify.json | ToastXmlTests, WindowsToastSinkTests, AppIdentityShortcutTests, ToastLabTests (gerçek masaüstü), DesktopNotifyContractTests, CameraWiringTests, test_notify_toast_actions.py | lab 2026-09-17: Windows toast'u kabul etti, geçmişten geri okundu (Türkçe metin ve düğme argümanları dahil), yeni kimlikte ilk toast'tan önce ERROR_NOT_FOUND ölçüldü; cihaz yeniden kurulumu + kilitli ekranda görünürlük kanıtı bekliyor | yes | Bu masaüstü (Focus Assist benzeri kural) açılır pencere göstermedi - PowerShell'in kayıtlı kimliği de göstermedi; Windows bunu hiçbir açık API ile söylemiyor, cevap user_state ile ipucu veriyor. Mutasyonlar M1 M3 M4 M5 M7 kırmızı |
-| 370 | Toast action buttons | Toast'ta en çok 3 düğme (activationType=foreground, argüman yalnızca action=<id>;notification=<uuid>); basış yalnızca bu sürecin gösterdiği toast ve o toast'un sunduğu eylem için kabul ediliyor, kalp atışı status.notify_actions ile 3 raporda taşınıyor, Cloud Core bir kez ve yalnızca satırın sunduğu eylem için data_json.actions_pressed'e yazıyor; hiçbir şey çalıştırılmıyor/açılmıyor | Eylem düğmeleri | DONE | PA | P1 | 369 | B11 | Notify/NotifyActionQueue.cs, Notify/WindowsToastSink.cs:OnActivated, Protocol/HeartbeatStatus.cs:NotifyActions, ActivityStatusReporter.cs, packages/schemas/device-protocol.schema.json, app/notifications/toast.py:parse_action_presses, app/notifications/service.py:record_action, app/ambient/ingest.py (g) | WindowsToastSinkTests, NotifyActionReportingTests, ToastXmlTests, test_notify_toast_actions.py (kalp atışı yolu, yeniden başlatma dahil) | gerçek düğme basışı bu masaüstünde kanıtlanamadı (açılır pencere yok); PAGENTOS_TOAST_PRESS_LAB=1 ile UIA basış labı hazır | yes | Uygulama çalışmıyorken basış gelmez (COM aktivatörü yok) - düğmeli toast'lar çıkışta kaldırılıyor. Mutasyonlar M2 M6 P1 P2 P3 kırmızı |
+| 370 | Toast action buttons | Toast'ta en çok 3 düğme (activationType=foreground, argüman yalnızca action=<id>;notification=<uuid>); basış yalnızca bu sürecin gösterdiği toast ve o toast'un sunduğu eylem için kabul ediliyor, kalp atışı status.notify_actions ile 3 raporda taşınıyor, Cloud Core bir kez, yalnızca toast'un gönderildiği cihazdan (data_json.notify_targets) ve yalnızca satırın sunduğu eylem için data_json.actions_pressed'e yazıyor; hiçbir şey çalıştırılmıyor/açılmıyor | Eylem düğmeleri | DONE | PA | P1 | 369 | B11 | Notify/NotifyActionQueue.cs, Notify/WindowsToastSink.cs:OnActivated, Protocol/HeartbeatStatus.cs:NotifyActions, ActivityStatusReporter.cs, packages/schemas/device-protocol.schema.json, app/notifications/toast.py:parse_action_presses, app/notifications/service.py:record_action, app/ambient/ingest.py (g) | WindowsToastSinkTests, NotifyActionReportingTests, ToastXmlTests, test_notify_toast_actions.py (kalp atışı yolu, yeniden başlatma dahil) | gerçek düğme basışı bu masaüstünde kanıtlanamadı (açılır pencere yok); PAGENTOS_TOAST_PRESS_LAB=1 ile UIA basış labı hazır | yes | Uygulama çalışmıyorken basış gelmez (COM aktivatörü yok) - düğmeli toast'lar çıkışta kaldırılıyor. Güvenlik incelemesi (Medium) giderildi: başka cihazdan gelen basış reddediliyor. Mutasyonlar M2 M6 P1 P2 P3 P4 P5 kırmızı |
 ```
 
 Pipe count check: each row above has exactly 15 `|` characters (verified with a script before
@@ -61,8 +61,13 @@ Decisions.
 8. **Return path.** Heartbeat `status.notify_actions` (schema: ≤16 entries, three string keys,
    closed), filled by `NotifyActionQueue`; each press is carried in 3 consecutive reports
    (heartbeats are fire-and-forget) and the Cloud Core records it once per
-   `(notification_id, action_id, pressed_at)` in `data_json.actions_pressed`, only for an action
-   its row offered, without touching `read_at`, running nothing. No new frame type: an older
+   `(notification_id, action_id, pressed_at)` in `data_json.actions_pressed`, only from a
+   device the toast was sent to (`data_json.notify_targets`, written by the ladder from
+   `DeviceRunResult.device_id` when the device answered `shown: true`; at most 8), only for an
+   action its row offered, without touching `read_at`, running nothing. A press with no device,
+   or for a row with no recorded target, is refused (fail closed). `actions_pressed` is an
+   owner-intent signal bound to the target device; anything that ever acts on it automatically
+   must keep that check. No new frame type: an older
    broker ignores the key (its status parser is lenient). Chosen over a new `device_event` frame
    because it reuses the path that already carries the device's own events
    (`local_alarm_fired`, `local_alarm_snoozed`) and needs no broker frame, ack or schema `oneOf`
@@ -126,7 +131,54 @@ defect with `re.match` and did not enforce the contract's 32-character id limit.
 6. Optional machine proof on a popup-showing desktop:
    `$env:PAGENTOS_TOAST_PRESS_LAB='1'; dotnet test tests\PagentOS.Agent.Tests --filter FullyQualifiedName~ToastLabTests`.
 
-## 5. Gates run
+## 5. Security review and fix (2026-09-17)
+
+Independent security review of the branch: no Critical or High findings. One Medium:
+
+- **MEDIUM - press not bound to the device that showed the toast.** `record_action` checked the
+  row's offered actions but not `device_id`, so a compromised secondary device could attribute
+  a press (guessable ids such as `open`, `snooze`) to a notice only another device showed.
+- **Fix (commit after `ef5f95f`).**
+  - `DeviceRunResult` gained an optional `device_id`, which `BrokerDeviceAction` fills with
+    the device it selected (succeeded, failed or expired).
+  - When the device answers `shown: true`, `ToastRung` calls
+    `notifications.note_toast_target(row, device_id)`, which adds the id to
+    `data_json.notify_targets` (deduplicated, at most 8, only real UUIDs). The row is
+    committed by `mark_delivered`.
+  - `record_action` refuses (`not_a_target_device`, logged as
+    `notification_action_wrong_device`) a press whose device is not in that list, a press
+    with no device, and a press for a row with no recorded target.
+  - The docstring states that `actions_pressed` is an owner-intent signal bound to the target
+    device and must never drive automation without that check. `desktop-notify.json` (bundle
+    re-synced) and `DEVICE_PROTOCOL.md` §6q say the same.
+  - No new column, so no migration: the target list lives in `data_json` beside `actions`
+    and `actions_pressed`.
+- **Tests added** (`test_notify_toast_actions.py`): a press from another device is refused; a
+  press from the target device is accepted; every device the toast was sent to may press and
+  no other; no device / no recorded target is refused; targets are deduplicated and bounded;
+  the heartbeat path refuses another device's press; the ladder records the device that
+  showed the toast; a not-shown toast records no target; `BrokerDeviceAction` reports the
+  device it sent the command to.
+- **Mutation proofs**, restored from sha256-verified backups:
+  - P4 (device check turned into `device_id is None and ...`): 4 tests RED.
+  - P5 (ladder records `None` instead of the device): 1 test RED.
+- **Optional item (InHistory poll).** Kept on the `desktop.notify` path on purpose, because
+  its result is what the command reports as `shown`. It is now bounded by named constants
+  (`HistoryAttempts` = 10, `HistoryPause` = 50 ms, no pause after the last read) and
+  documented. A miss measured 564 ms in the lab, which now asserts a 10 s hang guard.
+  Notify requests are rare, and the Cloud Core ladder's toast timeout is 15 s.
+- **Gates after the fix:**
+  - Python suites touching notifications, the ladder or `DeviceRunResult` (38 files):
+    851 passed.
+  - `test_notify_toast_actions.py` + `test_notifications.py` + `test_protocol_bundle.py`:
+    79 passed.
+  - `ruff check .`: clean.
+  - `dotnet build`: 0 warnings. `dotnet format --verify-no-changes`: clean.
+  - Touched device tests (Notify, CameraWiring, Serialization, LivingCore, DeviceVoice):
+    198 passed, 1 skipped (the opt-in press lab).
+  - Bundle check: clean.
+
+## 6. Gates run
 
 | Gate | Before | After |
 |---|---|---|

@@ -174,7 +174,12 @@ public sealed class ToastLabTests(ITestOutputHelper output) : IDisposable
     [LabFact]
     public void The_history_read_back_does_not_find_a_toast_that_was_never_shown()
     {
+        var clock = Stopwatch.StartNew();
         Assert.False(_platform.InHistory(LabAppId, Guid.NewGuid().ToString(), ToastXml.Group));
+        output.WriteLine($"a miss took {clock.ElapsedMilliseconds} ms (bound {WindowsToastPlatform.HistoryAttempts} x {WindowsToastPlatform.HistoryPause.TotalMilliseconds} ms)");
+
+        // Hang guard only: a miss must not turn into an unbounded wait on the notify thread.
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), "the history read-back is unbounded");
     }
 
     [ToastPressLabFact]

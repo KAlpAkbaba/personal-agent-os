@@ -135,10 +135,25 @@ public sealed class WindowsToastPlatform : IToastPlatform
         }
     }
 
+    /// <summary>How many times the history is read before a toast counts as not kept.</summary>
+    public const int HistoryAttempts = 10;
+
+    /// <summary>The pause between reads: nine pauses, 450 ms of sleeping, for a toast Windows did not keep.</summary>
+    public static readonly TimeSpan HistoryPause = TimeSpan.FromMilliseconds(50);
+
+    /// <remarks>
+    /// Runs on the <c>desktop.notify</c> handling thread ON PURPOSE: its answer is what the
+    /// command reports as <c>shown</c>, so it cannot move after the reply. It is bounded:
+    /// a kept toast is normally found on the first read, and a toast Windows did not keep
+    /// costs <see cref="HistoryAttempts"/> reads with <see cref="HistoryPause"/> between them -
+    /// measured 564 ms on the owner's machine (Windows sleeps overshoot, and each read takes
+    /// time) - well inside the desktop family's 60 s cap and the Cloud Core ladder's 15 s
+    /// toast timeout. Notify requests are rare (a handful an hour), so this never queues.
+    /// </remarks>
     public bool InHistory(string appId, string tag, string group)
     {
         // The history is written as Show is processed; a short bounded wait covers the gap.
-        for (var attempt = 0; attempt < 10; attempt++)
+        for (var attempt = 0; attempt < HistoryAttempts; attempt++)
         {
             foreach (var toast in ToastNotificationManager.History.GetHistory(appId))
             {
@@ -148,7 +163,10 @@ public sealed class WindowsToastPlatform : IToastPlatform
                 }
             }
 
-            Thread.Sleep(50);
+            if (attempt + 1 < HistoryAttempts)
+            {
+                Thread.Sleep(HistoryPause);
+            }
         }
 
         return false;

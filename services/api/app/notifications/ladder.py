@@ -102,6 +102,10 @@ class ToastRung:
             return False
         result = getattr(outcome, "result", None)
         shown = toast_contract.was_shown(result)
+        if shown:
+            # Security review: a press is believed only from the device that showed the
+            # toast (notifications.record_action). Committed with mark_delivered.
+            notifications.note_toast_target(row, getattr(outcome, "device_id", None))
         if not shown:
             logger.info(
                 "toast_not_shown",

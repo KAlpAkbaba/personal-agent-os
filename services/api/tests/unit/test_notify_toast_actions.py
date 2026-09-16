@@ -41,7 +41,15 @@ def session():
         yield s
 
 
-def _row(session, actions=None) -> NotificationRow:
+def _row(session, actions=None, target=DEVICE) -> NotificationRow:
+    row = _plain_row(session, actions)
+    if target is not None:
+        assert notifications.note_toast_target(row, target)
+        session.commit()
+    return row
+
+
+def _plain_row(session, actions=None) -> NotificationRow:
     return notifications.record(
         session,
         kind="task.completed",
@@ -236,7 +244,9 @@ def test_a_press_is_recorded_once_on_the_row(session) -> None:
 def test_a_press_for_an_action_the_row_never_offered_is_refused(session) -> None:
     row = _row(session)
     assert (
-        notifications.record_action(session, row.id, "delete_everything", NOW)
+        notifications.record_action(
+            session, row.id, "delete_everything", NOW, device_id=DEVICE
+        )
         == notifications.PRESS_NOT_OFFERED
     )
     assert "actions_pressed" not in session.get(NotificationRow, row.id).data_json
@@ -244,7 +254,7 @@ def test_a_press_for_an_action_the_row_never_offered_is_refused(session) -> None
 
 def test_a_press_for_an_unknown_notification_is_refused(session) -> None:
     assert (
-        notifications.record_action(session, uuid.uuid4(), "open", NOW)
+        notifications.record_action(session, uuid.uuid4(), "open", NOW, device_id=DEVICE)
         == notifications.PRESS_UNKNOWN_NOTIFICATION
     )
 
@@ -252,7 +262,9 @@ def test_a_press_for_an_unknown_notification_is_refused(session) -> None:
 def test_presses_on_one_row_are_bounded(session) -> None:
     row = _row(session)
     outcomes = [
-        notifications.record_action(session, row.id, "open", NOW + timedelta(seconds=i))
+        notifications.record_action(
+            session, row.id, "open", NOW + timedelta(seconds=i), device_id=DEVICE
+        )
         for i in range(notifications.MAX_PRESSES_PER_NOTIFICATION + 2)
     ]
     assert (
@@ -302,3 +314,146 @@ def test_the_heartbeat_path_ignores_a_press_the_row_did_not_offer(session) -> No
     )
     assert result.notify_actions_recorded == ()
     assert "actions_pressed" not in session.get(NotificationRow, row.id).data_json
+
+
+# --------------------------------------- bound to the device that showed it (security review)
+
+OTHER_DEVICE = uuid.uuid4()
+
+
+def test_a_press_from_another_device_is_refused(session) -> None:
+    """Security review (2026-09-17, Medium): action ids are guessable, so a compromised second
+    device must not be able to press a button on a notice only the target device showed."""
+    row = _row(session)
+    outcome = notifications.record_action(session, row.id, "open", NOW, device_id=OTHER_DEVICE)
+    assert outcome == notifications.PRESS_WRONG_DEVICE
+    assert "actions_pressed" not in session.get(NotificationRow, row.id).data_json
+
+
+def test_a_press_from_the_target_device_is_accepted(session) -> None:
+    row = _row(session)
+    outcome = notifications.record_action(session, row.id, "open", NOW, device_id=DEVICE)
+    assert outcome == notifications.PRESS_RECORDED
+
+
+def test_every_device_the_toast_was_sent_to_may_press_and_no_other(session) -> None:
+    row = _row(session)
+    assert notifications.note_toast_target(row, OTHER_DEVICE)
+    session.commit()
+    third = uuid.uuid4()
+    assert (
+        notifications.record_action(session, row.id, "open", NOW, device_id=OTHER_DEVICE)
+        == notifications.PRESS_RECORDED
+    )
+    assert (
+        notifications.record_action(session, row.id, "snooze", NOW, device_id=third)
+        == notifications.PRESS_WRONG_DEVICE
+    )
+
+
+def test_a_press_with_no_device_or_for_a_row_with_no_target_is_refused(session) -> None:
+    bound = _row(session)
+    unbound = _row(session, target=None)
+    assert (
+        notifications.record_action(session, bound.id, "open", NOW, device_id=None)
+        == notifications.PRESS_WRONG_DEVICE
+    )
+    assert (
+        notifications.record_action(session, unbound.id, "open", NOW, device_id=DEVICE)
+        == notifications.PRESS_WRONG_DEVICE
+    )
+
+
+def test_targets_are_deduplicated_bounded_and_only_real_ids(session) -> None:
+    row = _row(session)
+    assert notifications.note_toast_target(row, DEVICE)
+    assert notifications.note_toast_target(row, None) is False
+    assert notifications.note_toast_target(row, "not-a-device") is False
+    for _ in range(notifications.MAX_TOAST_TARGETS + 3):
+        notifications.note_toast_target(row, uuid.uuid4())
+    targets = row.data_json[notifications.TOAST_TARGETS_KEY]
+    assert len(targets) == notifications.MAX_TOAST_TARGETS
+    assert len(set(targets)) == len(targets)
+
+
+def test_the_heartbeat_path_refuses_a_press_from_a_device_that_did_not_show_it(session) -> None:
+    row = _row(session)
+    status = {toast.action_field(): [_press(row.id, "open")]}
+    result = ambient_ingest.ingest_status(
+        session,
+        OTHER_DEVICE,
+        status,
+        statuses=DeviceStatusRegistry(),
+        holdoffs=HoldoffRegistry(),
+        now=NOW,
+    )
+    assert result.notify_actions_recorded == ()
+    assert "actions_pressed" not in session.get(NotificationRow, row.id).data_json
+
+
+class _Port:
+    def __init__(self, result, device_id) -> None:
+        self._result = result
+        self._device_id = device_id
+
+    def run(self, **_kwargs):
+        from app.routines.dispatch import DeviceRunResult
+
+        return DeviceRunResult(True, result=self._result, device_id=self._device_id)
+
+
+def test_the_ladder_records_the_device_that_showed_the_toast(session) -> None:
+    from app.notifications import ladder
+
+    row = _plain_row(session)
+    rungs = ladder.default_rungs(device_action=_Port({"shown": True}, DEVICE))
+    assert ladder.deliver_one(session, row, rungs=rungs, now=NOW) == "toast"
+
+    session.expire_all()
+    stored = session.get(NotificationRow, row.id)
+    assert stored.data_json[notifications.TOAST_TARGETS_KEY] == [str(DEVICE)]
+    assert (
+        notifications.record_action(session, row.id, "open", NOW, device_id=DEVICE)
+        == notifications.PRESS_RECORDED
+    )
+
+
+def test_a_toast_that_was_not_shown_records_no_target(session) -> None:
+    from app.notifications import ladder
+
+    row = _plain_row(session)
+    rungs = ladder.default_rungs(
+        device_action=_Port({"shown": False, "reason": "notifications_disabled"}, DEVICE)
+    )
+    ladder.deliver_one(session, row, rungs=rungs, now=NOW)
+    session.expire_all()
+    assert notifications.TOAST_TARGETS_KEY not in session.get(NotificationRow, row.id).data_json
+
+
+def test_the_broker_port_says_which_device_it_sent_the_command_to(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.devices.commands import CommandFailed, CommandSucceeded
+    from app.routines import dispatch as dispatch_mod
+
+    target = uuid.uuid4()
+    monkeypatch.setattr(dispatch_mod, "get_broker_runtime", lambda: object())
+    monkeypatch.setattr(dispatch_mod, "list_device_views", lambda session, runtime: [])
+    monkeypatch.setattr(
+        dispatch_mod,
+        "select_device",
+        lambda views, capability: SimpleNamespace(device=SimpleNamespace(id=target)),
+    )
+
+    class _Session:
+        def close(self) -> None:
+            pass
+
+    outcomes = (CommandSucceeded(result={"shown": True}), CommandFailed("timeout", "slow", True))
+    for outcome in outcomes:
+        client = SimpleNamespace(run=lambda _o=outcome, **_k: _o)
+        action = dispatch_mod.BrokerDeviceAction(session_factory=_Session, command_client=client)
+        result = action.run(
+            capability=toast.CAPABILITY, payload={}, idempotency_key="k", timeout_s=1.0
+        )
+        assert result.device_id == target

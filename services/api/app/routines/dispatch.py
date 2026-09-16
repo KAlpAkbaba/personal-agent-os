@@ -121,6 +121,9 @@ class DeviceRunResult:
     error_class: str = ""
     message: str = ""
     result: dict[str, Any] = field(default_factory=dict)
+    #: The device the command was sent to, when one was selected. B11-toast review: a toast
+    #: button press is believed only from the device that showed the toast.
+    device_id: UUID | None = None
 
 
 class DeviceActionPort(Protocol):
@@ -408,12 +411,15 @@ class BrokerDeviceAction:
             timeout_s=timeout_s,
             trace_id=idempotency_key,
         )
+        target = selection.device.id
         if isinstance(outcome, CommandSucceeded):
-            return DeviceRunResult(True, result=dict(outcome.result))
+            return DeviceRunResult(True, result=dict(outcome.result), device_id=target)
         if isinstance(outcome, CommandFailed):
-            return DeviceRunResult(False, outcome.error_class, outcome.message)
+            return DeviceRunResult(False, outcome.error_class, outcome.message, device_id=target)
         if isinstance(outcome, CommandExpired):
-            return DeviceRunResult(False, "timeout", "command expired before completion")
+            return DeviceRunResult(
+                False, "timeout", "command expired before completion", device_id=target
+            )
         # pragma: no cover - every DeviceCommandClient outcome type is handled above
         return DeviceRunResult(False, "internal_bug", f"unexpected outcome: {outcome!r}")
 

@@ -284,6 +284,35 @@ PRESS_DUPLICATE: Final[str] = "duplicate"
 PRESS_UNKNOWN_NOTIFICATION: Final[str] = "unknown_notification"
 PRESS_NOT_OFFERED: Final[str] = "action_not_offered"
 PRESS_LIMIT: Final[str] = "limit_reached"
+PRESS_WRONG_DEVICE: Final[str] = "not_a_target_device"
+
+#: The ``data_json`` key naming every device that showed this notification's toast.
+TOAST_TARGETS_KEY: Final[str] = "notify_targets"
+#: How many target devices one notification remembers (one owner, a handful of machines).
+MAX_TOAST_TARGETS: Final[int] = 8
+
+
+def note_toast_target(row: NotificationRow, device_id: uuid.UUID | str | None) -> bool:
+    """B11-toast security review: remember that ``device_id`` showed this row's toast.
+
+    Does not commit - the ladder commits the row with ``mark_delivered``. Returns whether a
+    device was recorded; ``None`` (a device port that cannot say where the command went)
+    records nothing, and a press for such a row is then refused, never guessed at.
+    """
+    if device_id is None:
+        return False
+    try:
+        target = str(uuid.UUID(str(device_id)))
+    except ValueError:
+        return False
+    data = dict(row.data_json or {})
+    targets = [t for t in (data.get(TOAST_TARGETS_KEY) or []) if isinstance(t, str)]
+    if target in targets:
+        return True
+    targets = [*targets, target][-MAX_TOAST_TARGETS:]
+    data[TOAST_TARGETS_KEY] = targets
+    row.data_json = data
+    return True
 
 
 def record_action(
@@ -304,11 +333,30 @@ def record_action(
     because of it here; a consumer that wants to act on ``snooze`` or ``open`` reads the row.
 
     It does not set ``read_at``: the contract keeps "the owner read it" for the inbox.
+
+    **Bound to the target device (security review, 2026-09-17).** A press is accepted only
+    from a device the toast was actually sent to (``data_json["notify_targets"]``, written by
+    the ladder). Action ids are a small, guessable vocabulary (``open``, ``snooze``), so
+    without this a compromised second device could press a button on a notice only another
+    device showed. A press with no device, or for a row with no recorded target, is refused.
+
+    ``actions_pressed`` is an OWNER-INTENT signal and only as trustworthy as that binding.
+    Anything that ever acts on it automatically must read it through this function's rows
+    (never from a raw heartbeat) and must keep the target-device check.
     """
     row = db.get(NotificationRow, notification_id)
     if row is None:
         return PRESS_UNKNOWN_NOTIFICATION
     data = dict(row.data_json or {})
+    targets = {t for t in (data.get(TOAST_TARGETS_KEY) or []) if isinstance(t, str)}
+    if device_id is None or str(device_id) not in targets:
+        logger.warning(
+            "notification_action_wrong_device",
+            notification_id=str(notification_id),
+            device_id=str(device_id) if device_id is not None else None,
+            action_id=action_id[:32],
+        )
+        return PRESS_WRONG_DEVICE
     offered = {
         str(action.get("id"))
         for action in (data.get("actions") or [])
@@ -403,6 +451,7 @@ __all__ = [
     "mark_delivered",
     "mark_read",
     "next_channel",
+    "note_toast_target",
     "quiet_hours_end",
     "record",
     "record_action",

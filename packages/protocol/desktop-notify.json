@@ -145,8 +145,11 @@
         "press is carried in 'transmissions' consecutive reports and the Cloud Core records it",
         "once, keyed on notification_id, action_id and pressed_at. The device accepts a press",
         "only for a toast it showed and an action id that toast offered; the Cloud Core accepts",
-        "it only for an action its own row offered. A press is data: nothing on either side",
-        "runs, opens or launches anything because of it."
+        "it only from a device the toast was sent to (security review 2026-09-17: action ids",
+        "are guessable, so a second device must not press a button on a notice it never",
+        "showed) and only for an action its own row offered. A press is data: nothing on either",
+        "side runs, opens or launches anything because of it, and anything that ever acts on a",
+        "recorded press must keep the target-device binding."
       ],
       "field": "notify_actions",
       "max_entries": 16,
