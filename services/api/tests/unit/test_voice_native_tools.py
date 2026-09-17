@@ -51,6 +51,7 @@ from app.voice.realtime_sessions.tools_native import (
     SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE,
     SPEECH_INSTALL_NEEDS_DEVICE,
     SPEECH_NO_RUNNER,
+    local_publish_dir,
 )
 from tests.appfactory_support import FAKE_SIGNER_THUMBPRINT, SIGNING_TRUST
 from tests.voice_corpus.corpus import CTX_NATIVE_ANDROID, CTX_NATIVE_BUILT, CTX_NATIVE_PLANNED
@@ -446,6 +447,27 @@ def test_rebuild_opens_a_new_row_at_the_next_version_and_leaves_the_old_verdict_
 
 
 # ---------------------------------------------------- native.package / install
+
+
+def test_a_device_path_is_never_a_local_publish_folder(tmp_path) -> None:
+    """2026-09-17: on the Linux Cloud Core a device's Windows path is ONE relative file
+    name whose parent is ``.`` - and ``.`` was zipped into itself until the runner's disk
+    was full. Only a path that is absolute here, with a folder that exists, is local."""
+    from pathlib import PurePosixPath
+
+    device_path = "C:\\Users\\owner\\publish\\notlarim.exe"
+    # What the Linux Cloud Core sees: not absolute, and its parent is the working directory.
+    assert not PurePosixPath(device_path).is_absolute()
+    assert str(PurePosixPath(device_path).parent) == "."
+    # So the same shape - a bare relative name - is never local, on any platform.
+    assert local_publish_dir("notlarim.exe") is None
+    assert local_publish_dir(PurePosixPath(device_path).name) is None
+    assert local_publish_dir(None) is None
+    assert local_publish_dir(str(tmp_path / "missing" / "notlarim.exe")) is None
+    exe = tmp_path / "publish" / "notlarim.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"MZ")
+    assert local_publish_dir(str(exe)) == exe.parent
 
 
 def test_package_makes_a_real_portable_package_and_says_what_it_did_not_make() -> None:

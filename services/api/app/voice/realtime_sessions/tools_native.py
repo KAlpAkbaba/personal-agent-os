@@ -690,6 +690,22 @@ def _next_version(version: str) -> str:
 # ----------------------------------------------------------------- native.package
 
 
+def local_publish_dir(artifact_path: str | None) -> Path | None:
+    """The publish folder of a build made on THIS machine, or None.
+
+    A device build records the DEVICE's path (a ``C:`` drive path with backslashes). On the
+    Linux Cloud Core that string is not a path at all: it is one relative file name, its
+    ``parent`` is ``.``, and ``.`` is a directory - so the working directory was zipped
+    into itself until the disk was full (measured on CI, 2026-09-17). A local publish
+    folder is therefore only one whose path is absolute HERE and that exists."""
+    if not artifact_path:
+        return None
+    candidate = Path(artifact_path)
+    if not candidate.is_absolute() or not candidate.parent.is_dir():
+        return None
+    return candidate.parent
+
+
 def native_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Kurulum dosyasını oluştur." (spec §6).
 
@@ -712,9 +728,9 @@ def native_package(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
             row=row,
             speech=SPEECH_ANDROID_PACKAGE_IS_THE_BUNDLE,
         )
-    publish_dir = Path(row.artifact_path).parent if row.artifact_path else None
+    publish_dir = local_publish_dir(row.artifact_path)
     device = ctx.live.get("device_action")
-    if publish_dir is not None and not publish_dir.is_dir() and device is not None:
+    if publish_dir is None and row.artifact_path and device is not None:
         # B33 req 456/457: a device build's output is on the DEVICE; project.package makes
         # the zip or the MSIX there and answers the path and the hash it observed.
         return _package_on_device(ctx, row, device, target=target)

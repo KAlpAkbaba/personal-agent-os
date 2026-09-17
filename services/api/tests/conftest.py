@@ -67,6 +67,21 @@ def settings() -> Settings:
 
 
 @pytest.fixture(autouse=True)
+def _ambient_holdoffs_already_restored(monkeypatch):
+    """``app.ambient.service`` rebuilds holdoffs from the ledger once per PROCESS, on the
+    first tick. Left process-wide, the first test to tick in a run inherits that restore:
+    measured 2026-09-17 when CI split the suite, where
+    test_a_recent_input_refusal_starts_the_input_holdoff ran first in its shard, restored
+    the owner-command holdoff its own policy change had just written, and failed - it had
+    only ever passed because an earlier test used the restore up. Every test starts as a
+    process that has already restored; a test about the restore says so with
+    ``reset_holdoff_restore()``."""
+    from app.ambient import service as ambient_service
+
+    monkeypatch.setattr(ambient_service, "_holdoffs_restored", True)
+
+
+@pytest.fixture(autouse=True)
 def _reset_browser_gateway_session_registry():
     """``DeviceBrowserGateway``'s known-open session registry (spec §5a) is
     process-wide by design (M13_RESEARCH_SPEC.md §5a) so it survives across

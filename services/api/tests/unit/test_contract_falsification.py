@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import SHARD_ENV
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PACKAGES = REPO_ROOT / "packages"
 PROTOCOL = PACKAGES / "protocol"
@@ -359,6 +361,9 @@ def test_hiding_a_contract_actually_fails_its_guard(tmp_path: Path) -> None:
             capture_output=True,
             text=True,
             timeout=300,
+            # The guard is ONE named test: a CI shard split inherited from this run would
+            # deselect it and "pass" with nothing run (measured 2026-09-17, exit 5).
+            env={k: v for k, v in os.environ.items() if k != SHARD_ENV},
         )
 
     try:

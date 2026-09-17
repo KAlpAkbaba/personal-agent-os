@@ -169,7 +169,10 @@ async def get_artifact(build_id: uuid.UUID, request: Request) -> Response:
             detail={"error_class": error_class or "no_artifact", "message": speech},
         )
     path = Path(artifact_path)
-    if path.exists():
+    # Local only when absolute HERE: on the Linux Cloud Core a device's Windows path is a
+    # relative name resolved against the working directory (see tools_native's
+    # local_publish_dir, 2026-09-17).
+    if path.is_absolute() and path.is_file():
         return FileResponse(path, media_type="application/octet-stream", filename=path.name)
 
     # B33 req 456: a device build's artefact lives on the DEVICE (a Windows path a Linux

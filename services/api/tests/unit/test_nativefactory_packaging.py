@@ -122,6 +122,25 @@ def test_the_portable_zip_carries_the_publish_folder_and_nothing_else(tmp_path: 
         }
 
 
+@pytest.mark.parametrize("where", ["inside", "nested", "itself"])
+def test_a_zip_inside_the_folder_it_packs_is_refused_before_it_is_written(
+    tmp_path: Path, where: str
+) -> None:
+    """2026-09-17, a Linux CI runner: the package was written into the folder it zipped,
+    was listed, and was copied into itself while it grew - 13.7 GB until the disk was full.
+    Refused, and nothing is created."""
+    publish = _publish(tmp_path)
+    out = {
+        "inside": publish / "notlarim.zip",
+        "nested": publish / "sub" / "notlarim.zip",
+        "itself": publish,
+    }[where]
+    before = sorted(p.name for p in publish.rglob("*"))
+    with pytest.raises(PackagingError, match="inside the folder it packs"):
+        make_portable_zip(publish, out)
+    assert sorted(p.name for p in publish.rglob("*")) == before
+
+
 def test_packaging_a_directory_that_is_not_there_is_an_error_not_an_empty_package(
     tmp_path: Path,
 ) -> None:

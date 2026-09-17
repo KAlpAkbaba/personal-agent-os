@@ -129,11 +129,18 @@ def make_portable_zip(publish_dir: Path, out_path: Path) -> PackageResult:
     """
     if not publish_dir.is_dir():
         raise PackagingError(f"no publish directory at {publish_dir}")
+    source = publish_dir.resolve()
+    target = out_path.resolve()
+    # 2026-09-17: a zip written INSIDE the folder it zips is listed and then copied into
+    # itself while it grows - measured on a Linux CI runner, 13.7 GB until the disk was
+    # full. Refused, and the listing is taken before the zip exists.
+    if target == source or source in target.parents:
+        raise PackagingError(f"the package {out_path} would be inside the folder it packs")
+    files = [file for file in sorted(source.rglob("*")) if file.is_file()]
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        for file in sorted(publish_dir.rglob("*")):
-            if file.is_file():
-                bundle.write(file, file.relative_to(publish_dir).as_posix())
+        for file in files:
+            bundle.write(file, file.relative_to(source).as_posix())
     return PackageResult(
         path=out_path,
         signed=False,
