@@ -1,0 +1,75 @@
+{
+    "kind":  "artifact_production_round",
+    "started_at":  "2026-09-17T03:01:54.0461654Z",
+    "finished_at":  "2026-09-17T03:01:55.4264521Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "fce0a830d2c09993bf9362c995940543f19e6e5e",
+                       "release_after":  "fce0a830d2c09993bf9362c995940543f19e6e5e",
+                       "same_release":  true
+                   },
+    "proven":  [
+                   "393",
+                   "394",
+                   "398",
+                   "399"
+               ],
+    "rows":  {
+                 "393":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "an XLSX made by production, downloaded, hash-matched and read as an OOXML workbook",
+                             "observed":  {
+                                              "artifact_id":  "b7487f23-f882-4c83-85e8-9da0cbec8ac7",
+                                              "format":  "xlsx",
+                                              "state":  "valid",
+                                              "bytes":  5002,
+                                              "declared_hash":  "1f523edf5d8db84d883746da2efbd0754bf38eab6f0b38a90833500d0d54d3a2",
+                                              "downloaded_sha256":  "1f523edf5d8db84d883746da2efbd0754bf38eab6f0b38a90833500d0d54d3a2",
+                                              "shape":  "9 zip parts"
+                                          },
+                             "reason":  null
+                         },
+                 "394":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a PPTX made by production, downloaded, hash-matched and read as an OOXML presentation",
+                             "observed":  {
+                                              "artifact_id":  "0d24fa5a-fc2e-47d0-b98f-4021417536d1",
+                                              "format":  "pptx",
+                                              "state":  "valid",
+                                              "bytes":  30102,
+                                              "declared_hash":  "ef0045836cda4d1d622e296590ca5349a77ab9e46e0ee0456c43a1c615976118",
+                                              "downloaded_sha256":  "ef0045836cda4d1d622e296590ca5349a77ab9e46e0ee0456c43a1c615976118",
+                                              "shape":  "42 zip parts"
+                                          },
+                             "reason":  null
+                         },
+                 "398":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a CSV made by production, downloaded, hash-matched, with its header row",
+                             "observed":  {
+                                              "artifact_id":  "8ecaebeb-5735-4cb3-a145-69317630618d",
+                                              "format":  "csv",
+                                              "state":  "valid",
+                                              "bytes":  73,
+                                              "declared_hash":  "23ca2d1b40212c08208e86e3f6146d363f9865fdfe754ff1c86eb841be5ac227",
+                                              "downloaded_sha256":  "23ca2d1b40212c08208e86e3f6146d363f9865fdfe754ff1c86eb841be5ac227",
+                                              "shape":  "header has 3 columns"
+                                          },
+                             "reason":  null
+                         },
+                 "399":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a JSON render made by production, downloaded, hash-matched and parsed",
+                             "observed":  {
+                                              "artifact_id":  "8ecaebeb-5735-4cb3-a145-69317630618d",
+                                              "format":  "json",
+                                              "state":  "valid",
+                                              "bytes":  243,
+                                              "declared_hash":  "ea3feeb25106729774f3017f609461eaebf2999d9b5b4bb5ff946c24ec25f650",
+                                              "downloaded_sha256":  "ea3feeb25106729774f3017f609461eaebf2999d9b5b4bb5ff946c24ec25f650",
+                                              "shape":  "parses as JSON"
+                                          },
+                             "reason":  null
+                         }
+             }
+}
