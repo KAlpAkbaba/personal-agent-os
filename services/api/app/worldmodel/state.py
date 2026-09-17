@@ -464,11 +464,15 @@ def _collect_tasks(c: _Collector, session: Session, *, now: datetime | None = No
         c.fact(key, "tasks", len(matched), TruthKind.RUNTIME, evidence_refs=_refs(matched))
 
     # A task nobody is moving. Reported rather than swept: the world model says what IS, and
-    # `app.maintenance` is what acts (B06 req 69/11).
+    # `app.maintenance` is what acts (B06 req 69/11). Finished work waiting for the owner is
+    # not stuck - it is counted as awaiting_owner above (2026-09-17, production: 8 of the 9
+    # "stuck" tasks were research results the owner had not opened yet, and the self-model
+    # raised them as a fault).
     stuck = [
         r
         for r in rows
         if r.status not in TASK_TERMINAL_STATUSES
+        and r.status not in TASK_AWAITING_OWNER_STATUSES
         and r.created_at is not None
         and moment - _aware(r.created_at) > STUCK_TASK_AFTER
     ]

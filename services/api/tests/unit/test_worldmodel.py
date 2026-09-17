@@ -182,6 +182,23 @@ def test_a_task_nobody_has_moved_for_a_day_is_counted_as_stuck(session) -> None:
     assert _fact(snapshot, "tasks.running_count").value == 2
 
 
+def test_finished_work_waiting_for_the_owner_is_not_stuck(session) -> None:
+    """2026-09-17, production: tasks.stuck_count was 9 and 8 of them were research results
+    in READY that the owner had not opened - old, not terminal, and not stuck."""
+    from datetime import timedelta
+
+    old = NOW - timedelta(days=3)
+    session.add(Task(intent="araştır", status=TASK_STATUS_READY, created_at=old))
+    session.add(Task(intent="araştır", status=TASK_STATUS_PRESENTING, created_at=old))
+    session.add(Task(intent="araştır", status=TASK_STATUS_RUNNING, created_at=old))
+    session.commit()
+
+    snapshot = assemble_snapshot(session, now=NOW)
+
+    assert _fact(snapshot, "tasks.stuck_count").value == 1
+    assert _fact(snapshot, "tasks.awaiting_owner_count").value == 2
+
+
 def test_dependencies_are_source_truth_without_a_health_probe(session) -> None:
     snapshot = assemble_snapshot(session, now=NOW)
     db_fact = next(f for f in snapshot.facts if f.key == "dependencies.database_url")

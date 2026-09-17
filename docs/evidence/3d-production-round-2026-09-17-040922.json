@@ -1,0 +1,49 @@
+{
+    "kind":  "3d_production_round",
+    "started_at":  "2026-09-17T04:09:17.9848793Z",
+    "finished_at":  "2026-09-17T04:09:22.1847208Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "6fa7dfe3d1efe5f52227a8ba4d8b9a87dec231f0",
+                       "release_after":  "6fa7dfe3d1efe5f52227a8ba4d8b9a87dec231f0",
+                       "same_release":  true
+                   },
+    "proven":  [
+                   "521",
+                   "520"
+               ],
+    "rows":  {
+                 "521":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a Blender scene made through production\u0027s POST /v1/scenes on the device, verified",
+                             "observed":  {
+                                              "http":  201,
+                                              "seconds":  3.4,
+                                              "scene_id":  "dd350f0b-b4c9-4890-a60d-76897ca7e4ae",
+                                              "state":  "verified",
+                                              "checked":  13,
+                                              "mismatches":  {
+
+                                                             }
+                                          },
+                             "reason":  null
+                         },
+                 "520":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the device read back the render and the GLB export it made",
+                             "observed":  {
+                                              "has_render":  true,
+                                              "exports":  [
+                                                              {
+                                                                  "path":  "scene.glb",
+                                                                  "bytes":  2024,
+                                                                  "format":  "glb",
+                                                                  "sha256":  "56bcc3940b8ee463c54bf35596ab5e70331bee839af25821ba71663ecc3f9cac",
+                                                                  "verified":  true
+                                                              }
+                                                          ]
+                                          },
+                             "reason":  null
+                         }
+             }
+}

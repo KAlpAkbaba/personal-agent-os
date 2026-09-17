@@ -227,7 +227,7 @@ try {
         ([ordered]@{ sweeps = $sweepNames; running_count = $runningCount }) "either the sweep is not wired or the world model has no running_count to reconcile against"
     # Row 70 is judged on the ledger itself: no voice-session source_ref may occur twice for
     # the same event type among the recent voice events.
-    $voiceEvents = Get-ArrayProperty -InputObject (Invoke-JsonUtf8 -Uri "$BaseUrl/v1/ledger/events?limit=500" -Headers $headers -TimeoutSec 30) -Name "events"
+    $voiceEvents = Get-ArrayProperty -InputObject (Invoke-JsonUtf8 -Uri "$BaseUrl/v1/ledger/events?limit=200" -Headers $headers -TimeoutSec 30) -Name "events"
     $voiceKeys = @($voiceEvents | Where-Object { ([string](Get-OptionalProperty -InputObject $_ -Name "event_type")).StartsWith("voice.") } |
         ForEach-Object { "{0}|{1}" -f (Get-OptionalProperty -InputObject $_ -Name "event_type"), (Get-OptionalProperty -InputObject $_ -Name "source_ref") } |
         Where-Object { -not $_.EndsWith("|") })
