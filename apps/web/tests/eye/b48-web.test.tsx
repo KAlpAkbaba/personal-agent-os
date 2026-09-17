@@ -57,9 +57,16 @@ const POLICY: AmbientPolicy = {
   off_when_away: true,
   off_when_asleep: false,
   wake_on_return: true,
+  keep_on: false,
   away_after_s: 600,
   asleep_after_s: 1200,
+  asleep_min_confidence: 0.7,
   input_holdoff_s: 120,
+  command_holdoff_s: 900,
+  alarm_holdoff_s: 1800,
+  return_holdoff_s: 600,
+  asleep_after_outside_quiet_s: 1800,
+  camera_unknown_grace_s: 120,
   quiet_hours: null,
 };
 

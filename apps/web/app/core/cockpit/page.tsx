@@ -28,6 +28,7 @@
  */
 
 import { updateAmbientCameraMode, updateAmbientPolicy } from "../../lib/cockpit/api";
+import { useAmbientThresholdsControl } from "../../lib/cockpit/useAmbientThresholds";
 import { useCallback, useMemo, useState } from "react";
 
 import OwnerGate from "../../components/OwnerGate";
@@ -123,6 +124,8 @@ function Cockpit() {
   const { data, refresh: refreshPanels } = useCockpitData();
   const { tier, setTier, force2d, setForce2d } = useCorePreferences();
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  // Row 331: the thresholds/quiet-hours form, seeded from the same policy the switches read.
+  const ambientThresholds = useAmbientThresholdsControl(data.ambientPolicy, refreshPanels);
 
   // "Bunu anlat." has to mean this report; the click is what says which.
   const chooseFocus = useCallback(
@@ -332,6 +335,7 @@ function Cockpit() {
             devices={data.devices}
             onToggle={(field, value) => void updateAmbientPolicy(field, value).then(refreshPanels)}
             onCameraMode={(mode) => void updateAmbientCameraMode(mode).then(refreshPanels)}
+            thresholds={ambientThresholds}
           />
           {/* ADR-0080: whether the owner's words still route where they say. */}
           <VoiceQualificationPanel state={data.voiceQualification} now={now} />

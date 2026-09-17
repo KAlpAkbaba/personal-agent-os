@@ -31,6 +31,7 @@ import {
   updateAmbientPolicy,
 } from "../lib/cockpit/api";
 import { fetchPolicy } from "../lib/pages/detail";
+import { useAmbientThresholdsControl } from "../lib/cockpit/useAmbientThresholds";
 import { useLoaded, useNow } from "../lib/pages/useLoaded";
 import { QUALITY_TIERS, TIER_LABEL } from "../lib/uistate/quality";
 import { AmbientPanel, VoiceQualificationPanel } from "../core/panels/CockpitPanels";
@@ -110,6 +111,8 @@ export default function SettingsPage() {
     (mode: CameraMode) => void updateAmbientCameraMode(mode).then(refreshAmbient),
     [refreshAmbient],
   );
+  // Row 331: the thresholds/quiet-hours form, seeded from the same policy the switches read.
+  const ambientThresholds = useAmbientThresholdsControl(ambient.state, refreshAmbient);
 
   return (
     <FamilyPage
@@ -165,6 +168,7 @@ export default function SettingsPage() {
         devices={devices.state}
         onToggle={toggleAmbient}
         onCameraMode={chooseCameraMode}
+        thresholds={ambientThresholds}
         always
       />
       <VoiceQualificationPanel state={qualification.state} now={now} always />

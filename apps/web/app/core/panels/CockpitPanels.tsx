@@ -17,7 +17,8 @@
 import {
   type CockpitData,
 } from "../../lib/cockpit/useCockpitData";
-import { ALARM_STATE_LABEL, AMBIENT_TOGGLES, CAMERA_MODES, GOAL_STATUS_LABEL, isHealthy, PROMOTION_CLASS_LABEL, TRUTH_KIND_LABEL, type AmbientPolicy, type AmbientToggle, type CameraMode, type DeviceCamera, type DeviceStatus, type EvolutionSupervisorStatus, type Goal, type Health, type LedgerEvent, type Lesson, type Loaded, type MemoryAuditEvent, type Opportunity, type PendingBriefing, type ResearchTask, type ShadowReady, type VoiceQualification, type WakeAlarm, type World, VOICE_QUALIFICATION_LABEL } from "../../lib/cockpit/api";
+import { ALARM_STATE_LABEL, AMBIENT_THRESHOLD_BOUNDS, AMBIENT_THRESHOLD_FIELDS, AMBIENT_THRESHOLD_LABEL, AMBIENT_TOGGLES, CAMERA_MODES, GOAL_STATUS_LABEL, isHealthy, PROMOTION_CLASS_LABEL, TRUTH_KIND_LABEL, type AmbientPolicy, type AmbientToggle, type CameraMode, type DeviceCamera, type DeviceStatus, type EvolutionSupervisorStatus, type Goal, type Health, type LedgerEvent, type Lesson, type Loaded, type MemoryAuditEvent, type Opportunity, type PendingBriefing, type ResearchTask, type ShadowReady, type VoiceQualification, type WakeAlarm, type World, VOICE_QUALIFICATION_LABEL } from "../../lib/cockpit/api";
+import type { AmbientThresholdsControl } from "../../lib/cockpit/useAmbientThresholds";
 import {
   type ApprovalGate,
   approvalGate,
@@ -3607,6 +3608,7 @@ export function AmbientPanel({
   always,
   onToggle,
   onCameraMode,
+  thresholds,
 }: {
   policy: CockpitData["ambientPolicy"];
   devices: CockpitData["devices"];
@@ -3615,6 +3617,9 @@ export function AmbientPanel({
   onToggle?: (field: AmbientToggle, value: boolean) => void;
   /** B48: present where the owner may choose the device camera's mode. */
   onCameraMode?: (mode: CameraMode) => void;
+  /** Row 331: present where the owner may edit the thresholds and quiet hours; absent, the
+   * panel keeps showing them as the read-only line it always has. */
+  thresholds?: AmbientThresholdsControl;
 }) {
   return (
     <Panel<AmbientPolicy>
@@ -3654,8 +3659,104 @@ export function AmbientPanel({
               {p.input_holdoff_s === null
                 ? "giriş beklemesi bildirilmedi"
                 : `giriş beklemesi ${p.input_holdoff_s} sn`}
+              {" · "}
+              {p.quiet_hours === null
+                ? "sessiz saat yok"
+                : `sessiz saatler ${p.quiet_hours.start}–${p.quiet_hours.end} (${p.quiet_hours.timezone})`}
             </span>
           </li>
+          {thresholds && (
+            <li data-ambient-thresholds-form>
+              <p className="panel-subheading">Eşikler ve sessiz saatler</p>
+              {AMBIENT_THRESHOLD_FIELDS.map((field) => {
+                const bounds = AMBIENT_THRESHOLD_BOUNDS[field];
+                return (
+                  <label className="setting-row" key={field} data-ambient-threshold-field={field}>
+                    <span>{AMBIENT_THRESHOLD_LABEL[field]}</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min={bounds.min}
+                      max={bounds.max}
+                      step={bounds.step}
+                      value={thresholds.draft[field]}
+                      placeholder={p[field] === null ? "" : String(p[field])}
+                      data-ambient-threshold-input={field}
+                      onChange={(e) => thresholds.onFieldChange(field, e.target.value)}
+                    />
+                  </label>
+                );
+              })}
+              <div className="setting-row" data-ambient-quiet-hours>
+                <span>Sessiz saatler (başlangıç · bitiş · saat dilimi)</span>
+                <span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="23:30"
+                    maxLength={5}
+                    aria-label="Sessiz saat başlangıcı"
+                    disabled={thresholds.draft.clearQuietHours}
+                    data-ambient-quiet-hours-start
+                    value={thresholds.draft.quietHours.start}
+                    onChange={(e) => thresholds.onQuietHoursChange("start", e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="07:30"
+                    maxLength={5}
+                    aria-label="Sessiz saat bitişi"
+                    disabled={thresholds.draft.clearQuietHours}
+                    data-ambient-quiet-hours-end
+                    value={thresholds.draft.quietHours.end}
+                    onChange={(e) => thresholds.onQuietHoursChange("end", e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Europe/Istanbul"
+                    aria-label="Saat dilimi"
+                    disabled={thresholds.draft.clearQuietHours}
+                    data-ambient-quiet-hours-timezone
+                    value={thresholds.draft.quietHours.timezone}
+                    onChange={(e) => thresholds.onQuietHoursChange("timezone", e.target.value)}
+                  />
+                </span>
+              </div>
+              <label className="setting-row" data-ambient-quiet-hours-clear>
+                <span>Sessiz saatleri kaldır</span>
+                <input
+                  type="checkbox"
+                  checked={thresholds.draft.clearQuietHours}
+                  onChange={(e) => thresholds.onClearQuietHoursChange(e.target.checked)}
+                />
+              </label>
+              <p className="muted">
+                Boş bırakılan bir eşik değişmez. Sessiz saatleri kapatmak için ikisini de boş
+                bırakmak yeterli değildir — yukarıdaki kutuyu işaretleyin.
+              </p>
+              <div className="setting-row">
+                <button
+                  type="button"
+                  className="core-chip"
+                  data-ambient-thresholds-save
+                  disabled={thresholds.saving}
+                  onClick={thresholds.onSave}
+                >
+                  {thresholds.saving ? "kaydediliyor…" : "Kaydet"}
+                </button>
+                {thresholds.message && (
+                  <span
+                    className={thresholds.message.ok ? "muted" : "panel-unknown"}
+                    data-ambient-thresholds-message
+                    data-ambient-thresholds-ok={String(thresholds.message.ok)}
+                  >
+                    {thresholds.message.text}
+                  </span>
+                )}
+              </div>
+            </li>
+          )}
           {onToggle && (
             <li data-ambient-toggles>
               {AMBIENT_TOGGLES.map((field) => (
