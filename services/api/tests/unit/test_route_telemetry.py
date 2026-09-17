@@ -253,3 +253,27 @@ def test_the_service_actually_calls_it() -> None:
     # tokenisation that could disagree with the one that made the decision.
     assert "tokens=intent.tokens" in text
     assert "matched=intent.matched or None" in text
+
+
+def test_a_suspicion_really_lands_in_the_ledger() -> None:
+    """2026-09-17, production: every note was refused by the ledger's vocabulary
+    (``voice.misroute_suspected`` was never registered) and only a warning was logged. The
+    tests above replaced the writer or handed it no database, so none of them could see it.
+    This one writes through the real ledger."""
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.ledger.models import ActivityEventRow
+    from app.voice.route_telemetry import MisrouteCandidate, RouteEvent, note_candidate
+
+    engine = create_engine("sqlite://")
+    ActivityEventRow.__table__.create(engine)
+    db = sessionmaker(bind=engine)()
+    acted = RouteEvent(at=T0, intent=Intent.MAIL_SEND, matched="gönder", routed=True)
+    reaction = RouteEvent(at=at(1), intent=Intent.STOP, matched="dur", routed=True)
+    candidate = MisrouteCandidate(acted=acted, reaction=reaction, seconds=1.0)
+
+    assert note_candidate(db, candidate, now=at(1)) is True
+    rows = db.execute(select(ActivityEventRow)).scalars().all()
+    assert [row.event_type for row in rows] == ["voice.misroute_suspected"]
+    assert rows[0].action == str(Intent.MAIL_SEND)

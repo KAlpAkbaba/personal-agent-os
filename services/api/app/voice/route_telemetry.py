@@ -305,13 +305,14 @@ def note_candidate(db: Any, candidate: MisrouteCandidate, *, now: datetime) -> b
     try:
         from app.ledger import service as ledger_service
         from app.ledger.service import ActivityEvent
+        from app.ledger.vocabulary import EVENT_TYPE_VOICE_MISROUTE_SUSPECTED
     except ImportError:  # pragma: no cover - the ledger is evidence, not a dependency
         return False
     try:
         ledger_service.record(
             db,
             ActivityEvent(
-                event_type="voice.misroute_suspected",
+                event_type=EVENT_TYPE_VOICE_MISROUTE_SUSPECTED,
                 subsystem="voice",
                 status="completed",
                 severity="warning",

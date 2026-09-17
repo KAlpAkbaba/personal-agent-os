@@ -394,6 +394,10 @@ EVENT_TYPE_VOICE_QUALIFICATION = "voice.qualification"
 #: verdict counts, the mean WER, the synthesis statistics, the provider names and the
 #: three marks; never a transcript, never audio. The evidence file holds the texts.
 EVENT_TYPE_VOICE_TTS_LOOPBACK = "voice.tts_loopback"
+#: B26 (req 750): an acting intent the owner objected to within the window - a candidate
+#: misroute, recorded with the router's words (intent, matched token), never the owner's.
+#: Unregistered until 2026-09-17, so every write was refused and only logged.
+EVENT_TYPE_VOICE_MISROUTE_SUSPECTED = "voice.misroute_suspected"
 #: M18.4 (spec §3.4, §16): the owner's pause switch for self-evolution is the latest of
 #: these two rows; and one row per supervisor scan that opened at least one opportunity
 #: (a quiet scan writes nothing - the ledger records facts, not heartbeats).
@@ -613,6 +617,7 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_AMBIENT_POLICY_CHANGED,
     EVENT_TYPE_VOICE_QUALIFICATION,
     EVENT_TYPE_VOICE_TTS_LOOPBACK,
+    EVENT_TYPE_VOICE_MISROUTE_SUSPECTED,
     EVENT_TYPE_EVOLUTION_PAUSED,
     EVENT_TYPE_EVOLUTION_RESUMED,
     EVENT_TYPE_EVOLUTION_SUPERVISOR_SCANNED,
