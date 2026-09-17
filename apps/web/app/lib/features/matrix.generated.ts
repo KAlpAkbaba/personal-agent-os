@@ -421,7 +421,7 @@ export const ROWS: readonly MatrixRow[] = [
   { id: 328, section: "J", feature: "No raw camera archive", impl: "DONE", proof: "PA", batch: "—", owner: false },
   { id: 329, section: "J", feature: "Structured perception only", impl: "DONE", proof: "PA", batch: "—", owner: false },
   { id: 330, section: "J", feature: "Presence history", impl: "DONE", proof: "PA", batch: "B48", owner: false },
-  { id: 331, section: "J", feature: "Ambient policy UI", impl: "PARTIAL", proof: "PA", batch: "B48", owner: false },
+  { id: 331, section: "J", feature: "Ambient policy UI", impl: "DONE", proof: "PA", batch: "B48", owner: false },
   { id: 332, section: "J", feature: "Auto display-off on/off", impl: "DONE", proof: "PA", batch: "B48", owner: false },
   { id: 333, section: "J", feature: "\"Uyurken ekranı kapat\"", impl: "DONE", proof: "PA", batch: "B48", owner: false },
   { id: 334, section: "J", feature: "\"Ben dönünce aç\"", impl: "DONE", proof: "PR", batch: "—", owner: false },

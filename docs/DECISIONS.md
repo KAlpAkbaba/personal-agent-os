@@ -13028,3 +13028,29 @@ Then, once per browser that should receive push: open the web app's **Settings**
 page, find **"Push bildirimleri"**, click **"Bildirimlere izin ver ve aç"**. That is
 the one browser permission click the task brief names — everything else (encryption,
 signing, storage, the ladder) already runs without it.
+
+### ADR-0166 addendum (B48 row 331, 2026-09-17) — the ambient thresholds in the owner's panel
+
+**Ambient thresholds form: explicit clear, not blank-means-clear.**
+
+Clearing the quiet-hours window is a separate, explicit checkbox
+(`clear_quiet_hours`, mapped straight onto the server's own `PolicyIn.clear_quiet_hours`),
+never inferred from both time fields being blank. The alternative — "both blank means
+clear" — cannot be told apart from "the form has not finished loading the server's
+current window yet," and conflating the two risks silently wiping a quiet-hours window
+neither the owner nor the form touched. Every other threshold field keeps the ADR-0079
+"a PUT is a PATCH of the fields named" contract: a blank field is left alone. This is a
+reversible, UI-only decision; nothing about the server contract changed for it.
+
+**the four ambient holdoffs floor at 1 second, not 0.**
+
+`input_holdoff_s`, `command_holdoff_s`, `alarm_holdoff_s`, `return_holdoff_s` in
+`PUT /v1/ambient/policy`'s `PolicyIn` now require `ge=1` (was `ge=0`). A holdoff of zero
+seconds is indistinguishable from no holdoff at all, and the entire point of ADR-0079's
+holdoffs is that the owner's own command, a just-refused keyboard input, or an alarm firing
+buys a pause before anything automatic runs again (`app/ambient/policy.py`'s
+`OWNER_COMMAND_HOLDOFF_S` docstring documents a real 2026-09-09 incident from exactly this
+kind of unguarded zero). This field was reachable only via a raw PUT before; now that the
+web panel offers it as a plain number input, the floor closes that footgun. No default
+changed and no existing caller sets zero (checked across `services/api/app` and
+`services/api/tests`).
