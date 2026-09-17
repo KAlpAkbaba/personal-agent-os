@@ -54,10 +54,14 @@ class PolicyIn(BaseModel):
     away_after_s: int | None = Field(default=None, ge=60, le=24 * 3600)
     asleep_after_s: int | None = Field(default=None, ge=60, le=24 * 3600)
     asleep_min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    input_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
-    command_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
-    alarm_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
-    return_holdoff_s: int | None = Field(default=None, ge=0, le=24 * 3600)
+    # Row 331: floor is 1, never 0 — a zero holdoff is indistinguishable from no holdoff at
+    # all, and the whole point of a holdoff is that the owner's own command or a just-refused
+    # input buys a pause before anything automatic runs again (see `policy.py`'s
+    # ``OWNER_COMMAND_HOLDOFF_S`` docstring for why that guarantee matters in practice).
+    input_holdoff_s: int | None = Field(default=None, ge=1, le=24 * 3600)
+    command_holdoff_s: int | None = Field(default=None, ge=1, le=24 * 3600)
+    alarm_holdoff_s: int | None = Field(default=None, ge=1, le=24 * 3600)
+    return_holdoff_s: int | None = Field(default=None, ge=1, le=24 * 3600)
     # ADR-0079
     keep_on: bool | None = None
     asleep_after_outside_quiet_s: int | None = Field(default=None, ge=60, le=24 * 3600)

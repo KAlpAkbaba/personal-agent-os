@@ -21,6 +21,7 @@
 import { type Failure, classifyFailure, failureFromBody } from "../errors/failure";
 import { type FocusState, parseFocusState } from "../research/focus";
 import { UnauthorizedError, apiFetch } from "../session";
+import { describeErrorDetail } from "../voice/api";
 
 export type Loaded<T> =
   | { kind: "loading" }
@@ -446,16 +447,38 @@ export type AmbientPolicy = {
   off_when_away: boolean | null;
   off_when_asleep: boolean | null;
   wake_on_return: boolean | null;
+  /** ADR-0079 §7: "Ekranı açık tut." Absent from an older Cloud Core. */
+  keep_on: boolean | null;
   away_after_s: number | null;
   asleep_after_s: number | null;
+  /** ADR-0079 §8. Row 331: owner-editable since the thresholds form (B48). */
+  asleep_min_confidence: number | null;
   input_holdoff_s: number | null;
-  quiet_hours: string | null;
+  command_holdoff_s: number | null;
+  alarm_holdoff_s: number | null;
+  return_holdoff_s: number | null;
+  asleep_after_outside_quiet_s: number | null;
+  camera_unknown_grace_s: number | null;
+  /** {"start": "HH:MM", "end": "HH:MM", "timezone": IANA}, or no window set. */
+  quiet_hours: AmbientQuietHours | null;
   /**
    * B48 (req 300, 331, 671): the owner's device-camera choice. Absent from a Cloud Core that
    * predates it; null when the value is not one this renderer knows.
    */
   camera_mode?: CameraMode | null;
 };
+
+/** ADR-0079 §8's one accepted shape, as the server normalises it. */
+export type AmbientQuietHours = { start: string; end: string; timezone: string };
+
+function ambientQuietHours(value: unknown): AmbientQuietHours | null {
+  if (!value || typeof value !== "object") return null;
+  const o = value as Record<string, unknown>;
+  const start = str(o, "start");
+  const end = str(o, "end");
+  const timezone = str(o, "timezone");
+  return start && end && timezone ? { start, end, timezone } : null;
+}
 
 /** B48: the device camera's modes - the camera opens only after the owner picks one. */
 export type CameraMode = "off" | "periodic" | "continuous";
@@ -482,10 +505,17 @@ export const fetchAmbientPolicy = () =>
       off_when_away: flag(p, "off_when_away"),
       off_when_asleep: flag(p, "off_when_asleep"),
       wake_on_return: flag(p, "wake_on_return"),
+      keep_on: flag(p, "keep_on"),
       away_after_s: num(p, "away_after_s"),
       asleep_after_s: num(p, "asleep_after_s"),
+      asleep_min_confidence: num(p, "asleep_min_confidence"),
       input_holdoff_s: num(p, "input_holdoff_s"),
-      quiet_hours: str(p, "quiet_hours"),
+      command_holdoff_s: num(p, "command_holdoff_s"),
+      alarm_holdoff_s: num(p, "alarm_holdoff_s"),
+      return_holdoff_s: num(p, "return_holdoff_s"),
+      asleep_after_outside_quiet_s: num(p, "asleep_after_outside_quiet_s"),
+      camera_unknown_grace_s: num(p, "camera_unknown_grace_s"),
+      quiet_hours: ambientQuietHours(p.quiet_hours),
       camera_mode: cameraMode(p.camera_mode),
     };
   });
@@ -540,6 +570,167 @@ export async function updateAmbientCameraMode(mode: CameraMode): Promise<{ ok: b
     if (!response.ok) return { ok: false, speech: `Kamera kipi değiştirilemedi (HTTP ${response.status}).` };
     const body = (await response.json()) as { speech?: unknown };
     return { ok: true, speech: typeof body.speech === "string" ? body.speech : "Kamera kipi güncellendi." };
+  } catch (err) {
+    return { ok: false, speech: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ------------------------------------------------------- row 331: thresholds & quiet hours
+
+/**
+ * The numeric ambient fields the owner may now edit (row 331, ADR-0079's PUT — previously
+ * reachable only from the API, never from a form). Bounds mirror
+ * `services/api/app/ambient/routes.py`'s `PolicyIn` exactly; a value outside them is refused
+ * here, before a request is ever sent, and refused again by the server either way — the
+ * server's range is the one that is authoritative, this one only saves the owner a round
+ * trip and a Turkish sentence instead of an HTTP status.
+ */
+export type AmbientThresholdField =
+  | "away_after_s"
+  | "asleep_after_s"
+  | "asleep_min_confidence"
+  | "input_holdoff_s"
+  | "command_holdoff_s"
+  | "alarm_holdoff_s"
+  | "return_holdoff_s"
+  | "asleep_after_outside_quiet_s"
+  | "camera_unknown_grace_s";
+
+export const AMBIENT_THRESHOLD_FIELDS: readonly AmbientThresholdField[] = [
+  "away_after_s",
+  "asleep_after_s",
+  "asleep_min_confidence",
+  "input_holdoff_s",
+  "command_holdoff_s",
+  "alarm_holdoff_s",
+  "return_holdoff_s",
+  "asleep_after_outside_quiet_s",
+  "camera_unknown_grace_s",
+];
+
+export type AmbientThresholdBounds = { min: number; max: number; step: number };
+
+/**
+ * Kept in lockstep with `PolicyIn` (`services/api/app/ambient/routes.py`). The four holdoffs
+ * have a floor of 1, never 0: a zero holdoff is indistinguishable from no holdoff at all, and
+ * ADR-0079's whole point was that the owner's own command or a just-refused input buys a
+ * pause before anything automatic runs again.
+ */
+export const AMBIENT_THRESHOLD_BOUNDS: Record<AmbientThresholdField, AmbientThresholdBounds> = {
+  away_after_s: { min: 60, max: 24 * 3600, step: 1 },
+  asleep_after_s: { min: 60, max: 24 * 3600, step: 1 },
+  asleep_min_confidence: { min: 0, max: 1, step: 0.01 },
+  input_holdoff_s: { min: 1, max: 24 * 3600, step: 1 },
+  command_holdoff_s: { min: 1, max: 24 * 3600, step: 1 },
+  alarm_holdoff_s: { min: 1, max: 24 * 3600, step: 1 },
+  return_holdoff_s: { min: 1, max: 24 * 3600, step: 1 },
+  asleep_after_outside_quiet_s: { min: 60, max: 24 * 3600, step: 1 },
+  camera_unknown_grace_s: { min: 10, max: 3600, step: 1 },
+};
+
+export const AMBIENT_THRESHOLD_LABEL: Record<AmbientThresholdField, string> = {
+  away_after_s: "Yokluk eşiği (sn)",
+  asleep_after_s: "Uyku eşiği (sn)",
+  asleep_min_confidence: "Uyku güven eşiği",
+  input_holdoff_s: "Giriş beklemesi (sn)",
+  command_holdoff_s: "Komut beklemesi (sn)",
+  alarm_holdoff_s: "Alarm beklemesi (sn)",
+  return_holdoff_s: "Dönüş beklemesi (sn)",
+  asleep_after_outside_quiet_s: "Sessiz saat dışı uyku eşiği (sn)",
+  camera_unknown_grace_s: "Kamera tazelik payı (sn)",
+};
+
+/** A number outside its bound, or not a number at all, in one Turkish sentence — or `null`. */
+export function validateAmbientThreshold(field: AmbientThresholdField, raw: number): string | null {
+  const bounds = AMBIENT_THRESHOLD_BOUNDS[field];
+  if (!Number.isFinite(raw)) return `${AMBIENT_THRESHOLD_LABEL[field]}: sayı olmalı.`;
+  if (raw < bounds.min || raw > bounds.max) {
+    return `${AMBIENT_THRESHOLD_LABEL[field]}: ${bounds.min} ile ${bounds.max} arasında olmalı.`;
+  }
+  return null;
+}
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** The one shape `validate_quiet_hours` accepts, before this ever reaches the server. */
+export function validateAmbientQuietHours(draft: {
+  start: string;
+  end: string;
+  timezone: string;
+}): string | null {
+  if (!HHMM.test(draft.start) || !HHMM.test(draft.end)) {
+    return "Sessiz saatler SS:DD biçiminde olmalı (ör. 23:30).";
+  }
+  if (draft.start === draft.end) return "Sessiz saatlerin başlangıcı ve bitişi aynı olamaz.";
+  const timezone = draft.timezone.trim();
+  if (!timezone) return "Saat dilimi gerekli.";
+  try {
+    // `Intl` throws RangeError for a timezone it does not recognise — the same check
+    // `zoneinfo.ZoneInfo` makes server-side, run here so a typo is caught before a request.
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+  } catch {
+    return `Bilinmeyen saat dilimi: ${timezone}`;
+  }
+  return null;
+}
+
+/**
+ * What one PUT may carry for the thresholds form: any of the numeric fields, plus the
+ * quiet-hours window. Clearing it is `clear_quiet_hours: true` — the SAME explicit flag the
+ * server's `PolicyIn` already has — rather than inferring "clear" from a blank window, which
+ * would make "the form has not finished loading yet" indistinguishable from "the owner
+ * blanked both times on purpose" and risk wiping a window neither of them touched.
+ */
+export type AmbientThresholdChanges = Partial<Record<AmbientThresholdField, number>> & {
+  quiet_hours?: AmbientQuietHours;
+  clear_quiet_hours?: boolean;
+};
+
+/**
+ * PUTs the thresholds form to `/v1/ambient/policy` — the same owner-gated write the switches
+ * and the voice tool use. Refuses locally first (bounds, HH:MM, a real IANA zone) so a typo
+ * never leaves this tab; the server's `owner_detail` sentence is surfaced verbatim on a
+ * refusal it catches that this client did not (`describeErrorDetail`, ../voice/api.ts) —
+ * never a bare HTTP status, and never a Python exception's own text.
+ */
+export async function updateAmbientThresholds(
+  changes: AmbientThresholdChanges,
+): Promise<{ ok: boolean; speech: string }> {
+  for (const field of AMBIENT_THRESHOLD_FIELDS) {
+    const value = changes[field];
+    if (value === undefined) continue;
+    const problem = validateAmbientThreshold(field, value);
+    if (problem) return { ok: false, speech: problem };
+  }
+  if (changes.quiet_hours) {
+    const problem = validateAmbientQuietHours(changes.quiet_hours);
+    if (problem) return { ok: false, speech: problem };
+  }
+  const body: Record<string, unknown> = { ...changes };
+  try {
+    const response = await apiFetch("/v1/ambient/policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      let detail: unknown = null;
+      try {
+        detail = await response.json();
+      } catch {
+        detail = null;
+      }
+      const lines = detail ? describeErrorDetail(detail) : [];
+      return {
+        ok: false,
+        speech: lines.length ? lines.join(" · ") : `Eşikler güncellenemedi (HTTP ${response.status}).`,
+      };
+    }
+    const responseBody = (await response.json()) as { speech?: unknown };
+    return {
+      ok: true,
+      speech: typeof responseBody.speech === "string" ? responseBody.speech : "Eşikler güncellendi.",
+    };
   } catch (err) {
     return { ok: false, speech: err instanceof Error ? err.message : String(err) };
   }

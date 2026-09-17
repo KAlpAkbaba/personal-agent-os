@@ -260,6 +260,48 @@ def test_the_policy_bounds_are_enforced(client: TestClient) -> None:
     assert client.put("/v1/ambient/policy", json={"unknown_field": True}).status_code == 422
 
 
+@pytest.mark.parametrize(
+    "field", ["input_holdoff_s", "command_holdoff_s", "alarm_holdoff_s", "return_holdoff_s"]
+)
+def test_a_zero_holdoff_is_refused(client: TestClient, field: str) -> None:
+    """Row 331: a zero holdoff is indistinguishable from no holdoff at all — refused, not
+    silently accepted, now that the owner can reach these fields from a form rather than
+    only from a script that presumably knew better."""
+    assert client.put("/v1/ambient/policy", json={field: 0}).status_code == 422
+    assert client.put("/v1/ambient/policy", json={field: 1}).status_code == 200
+
+
+def test_row_331_every_documented_threshold_and_quiet_hours_are_owner_editable(
+    client: TestClient,
+) -> None:
+    """The web panel (row 331) now offers every field this PUT already accepted since
+    ADR-0079 — pinned here in one place so the set the panel offers and the set the route
+    accepts cannot silently drift apart."""
+    response = client.put(
+        "/v1/ambient/policy",
+        json={
+            "asleep_min_confidence": 0.85,
+            "command_holdoff_s": 300,
+            "alarm_holdoff_s": 2400,
+            "return_holdoff_s": 120,
+            "asleep_after_outside_quiet_s": 2100,
+            "camera_unknown_grace_s": 45,
+            "quiet_hours": {"start": "22:00", "end": "06:00", "timezone": "Europe/Istanbul"},
+        },
+    )
+    assert response.status_code == 200
+    changed = response.json()["changed"]
+    assert changed == {
+        "asleep_min_confidence": 0.85,
+        "command_holdoff_s": 300,
+        "alarm_holdoff_s": 2400,
+        "return_holdoff_s": 120,
+        "asleep_after_outside_quiet_s": 2100,
+        "camera_unknown_grace_s": 45,
+        "quiet_hours": {"start": "22:00", "end": "06:00", "timezone": "Europe/Istanbul"},
+    }
+
+
 def test_test_display_arms_a_moment_and_says_what_will_happen(client: TestClient) -> None:
     response = client.post("/v1/ambient/test-display", json={"delay_seconds": 10})
     assert response.status_code == 200

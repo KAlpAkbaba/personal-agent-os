@@ -496,6 +496,37 @@ def test_ambient_set_policy_needs_at_least_one_setting(ctx) -> None:
         tools_ambient.ambient_set_policy(ctx, {})
 
 
+def test_ambient_set_policy_schema_stays_five_switches_row_331_did_not_add_to_it() -> None:
+    """Row 331 gave the OWNER a form for the thresholds and quiet hours (the web PUT), but
+    the voice tool's schema must not grow to match: ADR-0079 §7 derives a threshold change
+    from the owner's recorded WORDS on the turn (``_turn_policy_changes``), never from a
+    number the model guessed, and a duration argument here would give the model a second,
+    unguarded path to the same field. If this ever needs to change, it is a deliberate
+    decision — not a schema drifting because the web form's fields looked reusable."""
+    spec = default_registry().get(tools_ambient.TOOL_AMBIENT_SET_POLICY)
+    assert spec is not None
+    assert set(spec.parameters["properties"]) == {
+        "auto_off",
+        "off_when_asleep",
+        "off_when_away",
+        "wake_on_return",
+        "keep_on",
+    }
+    forbidden = {
+        "away_after_s",
+        "asleep_after_s",
+        "asleep_min_confidence",
+        "input_holdoff_s",
+        "command_holdoff_s",
+        "alarm_holdoff_s",
+        "return_holdoff_s",
+        "asleep_after_outside_quiet_s",
+        "camera_unknown_grace_s",
+        "quiet_hours",
+    }
+    assert not (set(spec.parameters["properties"]) & forbidden)
+
+
 def test_ambient_test_display_arms_a_moment_and_darkens_nothing_yet(ctx, device) -> None:
     result = tools_ambient.ambient_test_display(ctx, {"delay_seconds": 10})
     assert result["speech"] == (
