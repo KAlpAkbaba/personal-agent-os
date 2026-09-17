@@ -130,15 +130,27 @@ try {
     }
 
     Set-Row "367" ($historyRows.Count -gt 0 -and $null -ne $oldest) "notifications are rows in production's table" `
-        ([ordered]@{ history_rows = $historyRows.Count; oldest_created_at = $oldest; probe_row_written = [bool]$probeRow }) "no notification row in production"
+        ([ordered]@{ history_rows = $historyRows.Count; oldest_created_at = $oldest; probe_row_written = [bool]$probeRow; probe_row = $probeRow }) "no notification row in production"
     Set-Row "368" ($null -ne (Get-OptionalProperty -InputObject $inbox -Name "unread")) "the inbox is read from the table (unread count + rows)" `
         ([ordered]@{ inbox_rows = $inboxRows.Count; unread = Get-OptionalProperty -InputObject $inbox -Name "unread" }) "inbox answered without an unread count"
     Set-Row "377" ($historyRows.Count -gt 0) "delivery history lists delivered and unreached notices" `
         ([ordered]@{ delivered = $delivered.Count; not_delivered = $undelivered.Count; delivered_via = $via }) "empty history"
     Set-Row "378" ($priorities.Count -ge 2) "more than one priority level occurs in production" `
         ([ordered]@{ priorities = $priorities }) "only '$($priorities -join ',')' observed"
-    Set-Row "379" ($deferred.Count -gt 0) "a non-urgent notice recorded in quiet hours carries deferred_until" `
-        ([ordered]@{ deferred_rows = $deferred.Count }) "no deferred row in production history yet"
+    # 379 is judged on THIS run's probe notice when the run falls in the owner's quiet hours
+    # (23:00-07:30 Europe/Istanbul): it must carry deferred_until at the next 07:30.
+    $istanbul = [TimeZoneInfo]::FindSystemTimeZoneById("Turkey Standard Time")
+    $localNow = [TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $istanbul)
+    $inQuiet = ($localNow.TimeOfDay -ge [TimeSpan]"23:00:00") -or ($localNow.TimeOfDay -lt [TimeSpan]"07:30:00")
+    $probeDeferred = if ($probeRow) { [string](Get-OptionalProperty -InputObject $probeRow -Name "deferred_until") } else { "" }
+    $probeDeferredLocal = ""
+    if ($probeDeferred) {
+        $probeDeferredLocal = [TimeZoneInfo]::ConvertTimeFromUtc(([DateTimeOffset]::Parse($probeDeferred)).UtcDateTime, $istanbul).ToString("yyyy-MM-dd HH:mm")
+    }
+    $quietProven = $inQuiet -and $probeDeferredLocal.EndsWith("07:30")
+    Set-Row "379" $quietProven "this run's non-urgent notice, recorded in the owner's quiet hours, waits until 07:30 Istanbul" `
+        ([ordered]@{ run_local_time = $localNow.ToString("yyyy-MM-dd HH:mm"); in_quiet_hours = $inQuiet; probe_deferred_until_utc = $probeDeferred; probe_deferred_until_local = $probeDeferredLocal; deferred_rows_in_history = $deferred.Count }) `
+        $(if ($inQuiet) { "the probe notice carries no 07:30 deferral ('$probeDeferredLocal')" } else { "the round ran outside quiet hours; 379 is judged only inside them" })
     Set-Row "380" ($superseded.Count -gt 0) "an older unread sibling in the same group is superseded" `
         ([ordered]@{ superseded_rows = $superseded.Count }) "no superseded row in production history yet"
     Set-Row "389" ($attemptedToast.Count -gt 0 -and $via.Count -gt 0) "the ladder attempted the device toast and recorded where each notice landed" `
