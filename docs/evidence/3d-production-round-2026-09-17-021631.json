@@ -1,0 +1,112 @@
+{
+    "kind":  "3d_production_round",
+    "started_at":  "2026-09-17T02:13:37.7139643Z",
+    "finished_at":  "2026-09-17T02:16:31.9737792Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "fce0a830d2c09993bf9362c995940543f19e6e5e",
+                       "release_after":  "fce0a830d2c09993bf9362c995940543f19e6e5e",
+                       "same_release":  true
+                   },
+    "proven":  [
+                   "530",
+                   "531",
+                   "532",
+                   "533"
+               ],
+    "rows":  {
+                 "521":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a Blender scene made through production\u0027s POST /v1/scenes on the device, verified",
+                             "observed":  {
+                                              "http":  422,
+                                              "seconds":  37.9,
+                                              "scene_id":  "",
+                                              "state":  null,
+                                              "checked":  null,
+                                              "mismatches":  null
+                                          },
+                             "reason":  "the scene was not verified (HTTP 422)"
+                         },
+                 "520":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "the device read back the render and the GLB export it made",
+                             "observed":  {
+                                              "has_render":  null,
+                                              "exports":  [
+
+                                                          ]
+                                          },
+                             "reason":  "no verified render/export read back"
+                         },
+                 "530":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a Unity project scaffolded and run in the licensed editor through production",
+                             "observed":  {
+                                              "http":  201,
+                                              "seconds":  135.6,
+                                              "scene_id":  "367406e2-a86a-42be-a089-0098e84ba735",
+                                              "state":  "verified",
+                                              "checked":  20,
+                                              "mismatches":  {
+
+                                                             }
+                                          },
+                             "reason":  null
+                         },
+                 "531":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the scene, its objects and its render, read back and compared by production",
+                             "observed":  {
+                                              "objects":  5,
+                                              "has_render":  true
+                                          },
+                             "reason":  null
+                         },
+                 "532":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a Windows player built by the editor, read back by the device as a PE with the editor\u0027s hash",
+                             "observed":  {
+                                              "build":  {
+                                                            "path":  "Build/unity-20260917-021337.exe",
+                                                            "bytes":  667648,
+                                                            "result":  "Succeeded",
+                                                            "sha256":  "e113b0d76537e3c1e41aa2623ae145e5869afb9095cf1771c10b43afc0e2918e",
+                                                            "target":  "windows64",
+                                                            "build_errors":  0
+                                                        }
+                                          },
+                             "reason":  null
+                         },
+                 "533":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "every attached catalogue script was stepped and acted",
+                             "observed":  {
+                                              "tests":  [
+                                                            {
+                                                                "detail":  "colour shifted 1.2",
+                                                                "frames":  30,
+                                                                "object":  "Kutu",
+                                                                "passed":  true,
+                                                                "script":  "ColorCycler"
+                                                            },
+                                                            {
+                                                                "detail":  "turned 45 degrees",
+                                                                "frames":  30,
+                                                                "object":  "Top",
+                                                                "passed":  true,
+                                                                "script":  "Spinner"
+                                                            },
+                                                            {
+                                                                "detail":  "moved 0.5",
+                                                                "frames":  30,
+                                                                "object":  "Zemin",
+                                                                "passed":  true,
+                                                                "script":  "Bouncer"
+                                                            }
+                                                        ]
+                                          },
+                             "reason":  null
+                         }
+             }
+}

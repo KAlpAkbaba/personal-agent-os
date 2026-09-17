@@ -181,7 +181,7 @@ else {
     $psi.FileName = $uv
     # --ws-max-size caps device WebSocket frames well above any legal protocol frame
     # (M1 security review #2; uvicorn's default of 16 MiB applies pre-auth).
-    $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $Port --ws-max-size 65536"
+    $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $Port --ws-max-size 1048576"
     $psi.WorkingDirectory = $apiRoot
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true

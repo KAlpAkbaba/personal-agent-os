@@ -6,6 +6,7 @@ Contract between the cloud Device Broker and device agents (first: Windows Devic
 
 - WebSocket, **always initiated outbound by the device agent**. No inbound port is ever opened on the device.
 - JSON text frames, UTF-8, one protocol message per frame.
+- One frame is at most **1 MiB** in either direction (`ProtocolConstants.MaxFrameBytes`; the Cloud Core runs uvicorn with `--ws-max-size 1048576`, and a test reads both). A command result that would not fit is answered `failed` / `postcondition_failed` instead, so the command ends rather than closing every connection it is re-delivered on (2026-09-17: the Cloud side was 64 KiB and a scene render looped the device's reconnects).
 - The transport endpoint is configuration, not code: dev `ws://127.0.0.1:8001/v1/devices/connect`; production later `wss://…` over Tailscale (private overlay) without agent code changes. TLS/mTLS termination is a deployment concern below the protocol layer.
 - The agent treats any socket failure identically: reconnect with exponential backoff 1 s → 60 s (factor 2, full jitter), forever.
 

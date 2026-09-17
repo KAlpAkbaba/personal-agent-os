@@ -175,7 +175,7 @@ function Start-Broker {
   # directory; a 500 seen by the harness is otherwise undiagnosable once cleanup runs.
   $apiLog = Join-Path $OutDir "api.log"
   $psi.FileName = Join-Path $env:SystemRoot "System32\cmd.exe"
-  $psi.Arguments = '/d /c ""' + $uv + '" run uvicorn app.main:app --host 127.0.0.1 --port ' + $ApiPort + ' --ws-max-size 262144 >> "' + $apiLog + '" 2>&1"'
+  $psi.Arguments = '/d /c ""' + $uv + '" run uvicorn app.main:app --host 127.0.0.1 --port ' + $ApiPort + ' --ws-max-size 1048576 >> "' + $apiLog + '" 2>&1"'
   $psi.WorkingDirectory = $apiRoot
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true

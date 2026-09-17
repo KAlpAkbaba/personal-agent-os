@@ -155,7 +155,7 @@ function Start-Broker {
   $psi.FileName = $uv
   # --ws-max-size: cap WS frames well above any legal protocol frame
   # (defense in depth; uvicorn default is 16 MiB).
-  $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $ApiPort --ws-max-size 65536"
+  $psi.Arguments = "run uvicorn app.main:app --host 127.0.0.1 --port $ApiPort --ws-max-size 1048576"
   $psi.WorkingDirectory = $apiRoot
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true

@@ -6,6 +6,38 @@ public static class ProtocolConstants
 
     /// <summary>Maximum length of ErrorObject.message per schema.</summary>
     public const int MaxErrorMessageLength = 2000;
+
+    /// <summary>
+    /// The largest WebSocket frame either side of the broker connection accepts. The Cloud Core
+    /// runs uvicorn with <c>--ws-max-size</c> equal to this (services/api/Dockerfile; a test reads
+    /// both). 2026-09-17: the Cloud side was 64 KiB while this side sent up to 1 MiB - a Blender
+    /// scene.inspect result (a 62 KB render, inline) closed the connection, the reconnect
+    /// re-delivered the command, and the device reconnected about once a second until the
+    /// command expired.
+    /// </summary>
+    public const int MaxFrameBytes = 1024 * 1024;
+
+    /// <summary>
+    /// A command result that would not fit in one frame is answered as this failure instead,
+    /// so the command ends rather than breaking every connection it is re-delivered on.
+    /// </summary>
+    public static CommandAckMessage FitToFrame(CommandAckMessage ack, int serializedBytes)
+    {
+        if (serializedBytes <= MaxFrameBytes)
+        {
+            return ack;
+        }
+
+        return new CommandAckMessage
+        {
+            CommandId = ack.CommandId,
+            Status = AckStatus.Failed,
+            Error = ErrorObjects.Create(
+                ErrorClasses.PostconditionFailed,
+                $"the result is {serializedBytes} bytes; one broker frame carries at most {MaxFrameBytes}",
+                retryable: false),
+        };
+    }
 }
 
 public static class AgentInfo

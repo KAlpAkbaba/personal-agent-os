@@ -34,7 +34,7 @@ public sealed class AgentConnection(
     ISidebandFrameSink? sidebandSink = null,
     IHeartbeatStatusProvider? statusProvider = null)
 {
-    private const int MaxFrameBytes = 1024 * 1024;
+    private const int MaxFrameBytes = ProtocolConstants.MaxFrameBytes;
 
     private delegate Task SendFunc(ProtocolMessage message, CancellationToken cancellationToken);
 
@@ -85,6 +85,14 @@ public sealed class AgentConnection(
         async Task SendAsync(ProtocolMessage message, CancellationToken ct)
         {
             var bytes = Encoding.UTF8.GetBytes(ProtocolJson.Serialize(message));
+            if (bytes.Length > MaxFrameBytes && message is CommandAckMessage ack)
+            {
+                // Over the broker's frame bound the connection would close, the command would be
+                // re-delivered on the next one, and the device would loop; the command ends instead.
+                logger.LogWarning("command {CommandId} result is {Bytes} bytes, over the {Bound} byte frame bound; answering failed", ack.CommandId, bytes.Length, MaxFrameBytes);
+                bytes = Encoding.UTF8.GetBytes(ProtocolJson.Serialize(ProtocolConstants.FitToFrame(ack, bytes.Length)));
+            }
+
             await sendLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {

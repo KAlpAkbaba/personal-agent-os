@@ -38,4 +38,7 @@ EXPOSE 8001
 HEALTHCHECK --interval=10s --timeout=5s --retries=12 --start-period=20s \
     CMD curl -fsS http://127.0.0.1:8001/v1/system/health >/dev/null || exit 1
 
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--ws-max-size", "65536"]
+# --ws-max-size is the device protocol's frame bound (ProtocolConstants.MaxFrameBytes, 1 MiB;
+# tests/unit/test_broker_frame_bound.py reads both). 64 KiB here closed the connection on any
+# larger result - a scene.inspect render - and the device looped on reconnect (2026-09-17).
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--ws-max-size", "1048576"]
