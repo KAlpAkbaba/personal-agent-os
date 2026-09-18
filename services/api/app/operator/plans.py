@@ -1137,6 +1137,93 @@ def browser_navigate(url: str) -> list[OperatorStep]:
     ]
 
 
+#: What Chrome appends to every window title, in the spellings it has used.
+_CHROME_TITLE_SUFFIXES: Final[tuple[str, ...]] = (" - Google Chrome", " – Google Chrome")
+#: A tab that has not gone anywhere yet, in the languages the owner's Chrome may speak.
+_BLANK_TAB_TITLES: Final[frozenset[str]] = frozenset({"yeni sekme", "new tab", ""})
+
+
+def site_word(url: str) -> str:
+    """The word a page's title is expected to carry: "youtube" for www.youtube.com."""
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(url).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host.split(".", 1)[0]
+
+
+def page_title(title: str) -> str:
+    """The page's own title, without Chrome's name after it."""
+    for suffix in _CHROME_TITLE_SUFFIXES:
+        if title.endswith(suffix):
+            return title[: -len(suffix)]
+    return title
+
+
+def keyboard_navigate(window_id: str, url: str) -> list[OperatorStep]:
+    """The owner's OWN Chrome, driven the way the owner drives it (owner decision
+    2026-09-18: "sanki ben klavyeyi ve mouse'u kullanıyormuşum gibi davransın"):
+    the window in front, Ctrl+L to the address bar, the address typed, Enter.
+
+    Verified by the one thing a real page load changes that the keystrokes cannot fake: the
+    window's title, read by a SEPARATE ``window.current`` after Enter, must name the site.
+    Looked at up to three times, two seconds apart - a page takes a moment to load, and
+    three looks in the same instant all see the tab it came from."""
+    wanted = site_word(url)
+    if not wanted:
+        raise ValueError(f"'{url}' names no site")
+
+    def _typed(result: DeviceRunResult) -> bool:
+        typed = result.result.get("typed_chars") if isinstance(result.result, dict) else None
+        return bool(typed)
+
+    def _arrived(result: DeviceRunResult) -> bool:
+        title = page_title(_title_of(result)).strip().lower()
+        return title not in _BLANK_TAB_TITLES and wanted in title.replace(" ", "")
+
+    return [
+        _activate_step(window_id, "keyboard_navigate:activate"),
+        OperatorStep(
+            capability="keyboard.shortcut",
+            payload={"window_id": window_id, "keys": ["ctrl", "l"]},
+            postcondition=lambda r: _landed_in(window_id, r),
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="keyboard_navigate:address_bar",
+        ),
+        OperatorStep(
+            capability="keyboard.type",
+            payload={"window_id": window_id, "text": url, "secret": False},
+            postcondition=_typed,
+            timeout_s=15.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="keyboard_navigate:type",
+        ),
+        OperatorStep(
+            capability="keyboard.key",
+            payload={"window_id": window_id, "key": "enter"},
+            postcondition=lambda r: _landed_in(window_id, r),
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="keyboard_navigate:enter",
+        ),
+        OperatorStep(
+            capability="window.current",
+            payload={},
+            postcondition=_arrived,
+            timeout_s=10.0,
+            retries=2,
+            retry_delay_s=2.0,
+            level=LEVEL_API,
+            name="keyboard_navigate:verify",
+        ),
+    ]
+
+
 def open_settings(page: str, *, existing_window_id: str | None = None) -> list[OperatorStep]:
     """Req 123: the Settings app in front (launched, or the open one activated), and -
     when a page is named - that page reached through the app's own search box and read

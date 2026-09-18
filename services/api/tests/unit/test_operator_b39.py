@@ -538,29 +538,117 @@ def test_word_is_typed_into_and_read_back_from_its_document_control() -> None:
     assert m2.status == MISSION_PAUSED and "Word penceresi göremedim" in m2.escalation["speech"]
 
 
-def test_the_browser_step_verifies_the_host_twice_and_falls_back_to_its_own_profile() -> None:
-    device = _chrome_device(already_open=True, navigate_url="https://www.google.com/")
-    # The fake refuses a profile the REAL agent does not have, exactly as the agent does -
-    # until 2026-09-18 it accepted "media", and this test asserted the mission asked for it.
-    from tests.unit.test_browser_profile_contract import agent_profiles
+def _owners_chrome_desktop(
+    *, lands_on: str = "YouTube - Google Chrome", attach: str = "dependency_unavailable"
+) -> FakeDeviceAction:
+    """The owner's everyday Chrome: open, in front, not started with a debugging endpoint
+    (so it cannot be attached), and driven by the keyboard. The title changes to
+    ``lands_on`` only after Enter - and only on the SECOND look after it, as a real page
+    load does a moment later."""
+    state = {"entered": False, "looks": 0}
 
-    device.results["browser.session_open"] = lambda p: (
-        DeviceRunResult(False, "capability_missing", "no enrollment")
-        if p.get("profile") == "owner"
-        else ok(session_id="s", profile=p.get("profile"))
-        if p.get("profile") in agent_profiles()
-        else DeviceRunResult(False, "validation_error", "profile must be one of ...")
+    def current(payload: dict[str, Any]) -> DeviceRunResult:
+        if state["entered"]:
+            state["looks"] += 1
+        title = lands_on if state["entered"] and state["looks"] >= 2 else CHROME["title"]
+        return ok(window={**CHROME, "title": title})
+
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        if payload.get("key") == "enter":
+            state["entered"] = True
+        return ok(
+            key=payload.get("key"),
+            window_id=payload.get("window_id"),
+            observed=_observed(payload, CHROME),
+        )
+
+    # Every keyboard answer carries the foreground read back AFTER the input, exactly as the
+    # companion's KeyboardType/Key/Shortcut do (observed.window) - the plans refuse an input
+    # whose landing they cannot read.
+    return FakeDeviceAction(
+        results={
+            "window.current": current,
+            "window.list": ok(windows=[dict(CHROME)]),
+            "window.activate": lambda p: ok(
+                window={**CHROME, "window_id": str(p.get("window_id"))}
+            ),
+            "browser.session_open": DeviceRunResult(
+                False, attach, "existing_session_connect: CDP endpoint is not reachable"
+            ),
+            "keyboard.shortcut": lambda p: ok(
+                keys=p.get("keys"), window_id=p.get("window_id"), observed=_observed(p, CHROME)
+            ),
+            "keyboard.type": lambda p: ok(
+                typed_chars=len(str(p.get("text"))),
+                window_id=p.get("window_id"),
+                observed=_observed(p, CHROME),
+            ),
+            "keyboard.key": key,
+        }
     )
-    m = plan_mission("Chrome'u aç ve YouTube'a gir")
+
+
+def test_the_owners_own_chrome_is_driven_by_the_keyboard_when_it_cannot_be_attached(
+    monkeypatch,
+) -> None:
+    """Owner decision 2026-09-18: "kendi Chrome'umu kullansın, sanki ben klavyeyi ve
+    mouse'u kullanıyormuşum gibi". The everyday Chrome has no debugging endpoint, so the
+    mission drives its window: Ctrl+L, the address, Enter, the title read back."""
+    from app.operator import task as task_module
+
+    waits: list[float] = []
+    monkeypatch.setattr(task_module, "_sleep", waits.append)
+    device = _owners_chrome_desktop()
+
+    m = plan_mission("Google Chrome’dan direkt YouTube ana sayfasını aç")
     run_mission(m, MissionPorts(device=device))
-    # The page reports google, not youtube: verification fails, re-observed, then the owner.
-    assert m.status == MISSION_PAUSED and m.steps[1].error_class == "postcondition_failed"
+
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.shortcut")["keys"] == ["ctrl", "l"]
+    assert device.payload_for("keyboard.type")["text"] == "https://www.youtube.com/"
+    assert device.payload_for("keyboard.key")["key"] == "enter"
+    assert m.steps[-1].level == LEVEL_KEYBOARD
+    assert waits, "the title was only looked at again after a pause, as a page load needs"
+    # Never a separate automation window: the only profile ever asked for is the owner's.
     profiles = [
         c["payload"].get("profile")
         for c in device.calls
         if c["capability"] == "browser.session_open"
     ]
-    assert profiles[:2] == ["owner", mission.OWNER_MISSION_PROFILE]
+    assert set(profiles) == {"owner"}
+    assert "browser.navigate" not in device.capabilities_called()
+
+
+def test_a_page_that_never_arrives_is_not_reported_as_arrived(monkeypatch) -> None:
+    """Enter was pressed; the title never named the site. That is a failed step the owner
+    hears about - never "YouTube açıldı" on the strength of the keystrokes alone."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _owners_chrome_desktop(lands_on="Yeni Sekme - Google Chrome")
+
+    m = plan_mission("Chrome’dan YouTube’u aç")
+    run_mission(m, MissionPorts(device=device))
+
+    assert m.status == MISSION_PAUSED
+    assert m.steps[-1].error_class == "postcondition_failed"
+
+
+def test_an_attachable_chrome_is_still_driven_through_its_page() -> None:
+    """When the owner's Chrome DOES answer on its debugging endpoint, the DOM rung - the
+    highest this browser offers - is used, not the keyboard."""
+    device = _chrome_device(already_open=True)
+    m = plan_mission("Chrome’dan YouTube’u aç")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert "browser.navigate" in device.capabilities_called()
+    assert "keyboard.type" not in device.capabilities_called()
+
+
+def test_the_page_title_is_read_without_chromes_own_name() -> None:
+    assert plans.page_title("YouTube - Google Chrome") == "YouTube"
+    assert plans.site_word("https://www.youtube.com/") == "youtube"
+    assert plans.site_word("https://tr.wikipedia.org/wiki/X") == "tr"
 
 
 def test_the_vision_answer_is_parsed_never_guessed() -> None:
@@ -885,13 +973,14 @@ def test_the_browser_brand_is_not_the_destination() -> None:
     first known site in the sentence won, and it was the browser's own first name."""
     m = plan_mission("Google Chrome’dan direkt YouTube ana sayfasını aç")
     assert [(s.kind, s.args) for s in m.steps] == [
-        (KIND_NAVIGATE, {"url": "https://www.youtube.com/"})
+        (KIND_APP_OPEN, {"application": "chrome"}),
+        (KIND_NAVIGATE, {"url": "https://www.youtube.com/"}),
     ]
 
 
 def test_google_on_its_own_is_still_a_destination() -> None:
     m = plan_mission("Google’a git")
-    assert m.steps[0].args == {"url": "https://www.google.com/"}
+    assert m.steps[-1].args == {"url": "https://www.google.com/"}
 
 
 def _paused_mission(db: Any) -> Any:

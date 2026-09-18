@@ -443,12 +443,6 @@ _SETTINGS_PAGE_RE: Final = re.compile(r"^[A-Za-zÇĞİÖŞÜçğıöşü\- ]{1,4
 
 MISSION_SESSION_KIND: Final = "operator_mission"
 OWNER_ATTACHED_PROFILE: Final = "owner"
-#: The dedicated profile a mission falls back to when the owner's own Chrome cannot be
-#: attached. It was "media" - a name the browser agent never had (its profiles: research,
-#: isolated, alarm, news, owner), so EVERY mission navigate step failed with
-#: "profile must be one of ..." (production, 2026-09-18, "Chrome'dan YouTube'u aç").
-#: test_browser_profile_contract.py now reads the agent's own list.
-OWNER_MISSION_PROFILE: Final = "isolated"
 
 
 def _window_id_of(window: dict[str, Any] | None) -> str | None:
@@ -483,54 +477,68 @@ def _decide_app_open(step: MissionStep, obs: Observation, mission_id: uuid.UUID)
 
 
 def _decide_navigate(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
-    """Req 127: the browser half of a mixed plan. The session is opened HERE, in the
-    decision, because which profile answers is a fact the device reports (the owner's
-    attached Chrome first, the dedicated profile when that is not there - ADR-0112's
-    fallback, spoken, never silent) and a fixed plan cannot branch on it."""
-    del obs
+    """Req 127: the browser half of a plan, in the OWNER'S OWN Chrome (owner decision
+    2026-09-18: "kendi Chrome'umu kullansın, sanki ben klavyeyi ve mouse'u kullanıyormuşum
+    gibi"). Attached through its debugging endpoint when that is open - the DOM rung, the
+    highest this browser offers. Otherwise driven the way the owner drives it: its window in
+    front, Ctrl+L, the address typed, Enter, the title read back. There is no fallback to a
+    separate automation profile any more: a window the owner does not use is not "Chrome'dan
+    aç", and it is what made every mission fail on 2026-09-18 (a profile name the agent never
+    had)."""
     url = str(step.args.get("url") or "")
     if not url.startswith(("http://", "https://")):
         raise NeedsOwner("validation_error", "Gidilecek adresi anlayamadım efendim.")
-    profile, note = _open_browser_session(step, mission_id)
-    return Decision("browser_navigate", plans.browser_navigate(url), "dom", note=note)
+    if _attach_owner_chrome(step, mission_id):
+        return Decision(
+            "browser_navigate",
+            plans.browser_navigate(url),
+            "dom",
+            note="sahibin kendi tarayıcısında",
+        )
+    chrome = _owner_chrome_window(obs)
+    if chrome is None:
+        raise NeedsOwner("dependency_unavailable", "Açık bir Chrome penceresi bulamadım efendim.")
+    return Decision(
+        "keyboard_navigate",
+        plans.keyboard_navigate(str(chrome["window_id"]), url),
+        LEVEL_KEYBOARD,
+        note="Chrome'unuzda, klavyeyle",
+    )
 
 
-def _open_browser_session(step: MissionStep, mission_id: uuid.UUID) -> tuple[str, str]:
-    """The port is the loop's; the decision borrows it through the step's observed slot
-    (set by ``run_mission_step`` before deciding). Returns (profile, note)."""
+def _owner_chrome_window(obs: Observation) -> dict[str, Any] | None:
+    """The owner's Chrome window: the one in front when it is Chrome, else any open one."""
+    fg = obs.foreground
+    if fg and _bare_image(str(fg.get("image") or "")) == "chrome.exe" and _window_id_of(fg):
+        return fg
+    window = obs.window_of_image("chrome.exe")
+    return window if window is not None and _window_id_of(window) else None
+
+
+def _attach_owner_chrome(step: MissionStep, mission_id: uuid.UUID) -> bool:
+    """True when the owner's running Chrome answers on its debugging endpoint. The usual
+    answer is no - an everyday Chrome is not started with one - and that is not a failure,
+    only the reason the keyboard rung is used."""
     ports: MissionPorts | None = _PORTS.get(mission_id)
     if ports is None:
         raise NeedsOwner("dependency_unavailable", "Tarayıcıya ulaşamadım efendim.")
-    session_id = f"mission-{mission_id}"
-    payload = {
-        "session_id": session_id,
-        "session_kind": "media",
-        "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
-        "channel": "chrome",
-    }
     attached = ports.device.run(
         capability="browser.session_open",
-        payload={**payload, "profile": OWNER_ATTACHED_PROFILE},
+        payload={
+            "session_id": f"mission-{mission_id}",
+            "session_kind": "media",
+            "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
+            "channel": "chrome",
+            "profile": OWNER_ATTACHED_PROFILE,
+        },
         idempotency_key=f"mission:{mission_id}:{step.id}:session:{step.rounds}",
         timeout_s=20.0,
     )
     if attached.ok:
-        return OWNER_ATTACHED_PROFILE, "sahibin kendi tarayıcısında"
-    if attached.error_class not in ("capability_missing", "dependency_unavailable"):
-        raise NeedsOwner(
-            attached.error_class or "device_error", "Tarayıcı oturumu açılamadı efendim."
-        )
-    fallback = ports.device.run(
-        capability="browser.session_open",
-        payload={**payload, "profile": OWNER_MISSION_PROFILE},
-        idempotency_key=f"mission:{mission_id}:{step.id}:session_fallback:{step.rounds}",
-        timeout_s=20.0,
-    )
-    if not fallback.ok:
-        raise NeedsOwner(
-            fallback.error_class or "device_error", "Tarayıcı oturumu açılamadı efendim."
-        )
-    return OWNER_MISSION_PROFILE, "sahibin tarayıcısına bağlanamadım; kendi tarayıcı profilimde"
+        return True
+    if attached.error_class in ("capability_missing", "dependency_unavailable"):
+        return False
+    raise NeedsOwner(attached.error_class or "device_error", "Tarayıcı oturumu açılamadı efendim.")
 
 
 #: The ports of the missions being run right now, keyed by mission id - so a decision
@@ -1163,11 +1171,37 @@ def plan_mission(text: str) -> Mission:
             raise MissionClarificationNeeded(
                 f"'{segment.strip()}' kısmını nasıl yapacağımı bilmiyorum efendim."
             )
-        step.id = f"m{len(steps) + 1}"
         steps.append(step)
     if not steps:
         raise MissionClarificationNeeded("Ne yapmamı istediğinizi anlayamadım efendim.")
+    steps = _with_browser_in_front(steps)
+    for index, step in enumerate(steps):
+        step.id = f"m{index + 1}"
     return Mission(id=uuid.uuid4(), goal=raw[:300], steps=steps, preview=preview)
+
+
+def _with_browser_in_front(steps: list[MissionStep]) -> list[MissionStep]:
+    """A navigate step drives the owner's Chrome WINDOW (keyboard rung), so the plan must
+    put that window in front first. "Chrome'dan YouTube'u aç" names no separate opening
+    step; it gets one here. It never launches a second Chrome: the app-open decision
+    activates the window that is already there (req 113)."""
+    out: list[MissionStep] = []
+    browser_up = False
+    for step in steps:
+        if step.kind == KIND_APP_OPEN and step.args.get("application") == "chrome":
+            browser_up = True
+        if step.kind == KIND_NAVIGATE and not browser_up:
+            out.append(
+                MissionStep(
+                    id="",
+                    kind=KIND_APP_OPEN,
+                    args={"application": "chrome"},
+                    label_tr=f"{APP_NAMES_TR.get('chrome', 'Chrome')} uygulamasını aç",
+                )
+            )
+            browser_up = True
+        out.append(step)
+    return out
 
 
 __all__ = [

@@ -60,8 +60,9 @@ def test_the_agent_declares_its_profiles() -> None:
 
 
 def test_cloud_core_does_ask_for_profiles() -> None:
-    # Not vacuous: the scan must actually find the senders (eight on 2026-09-18).
-    assert len(cloud_profile_requests()) >= 8
+    # Not vacuous: the scan must actually find the senders - seven on 2026-09-18, after the
+    # operator mission stopped opening a separate automation profile at all.
+    assert len(cloud_profile_requests()) >= 7
 
 
 def test_every_profile_cloud_core_asks_for_exists_in_the_agent() -> None:

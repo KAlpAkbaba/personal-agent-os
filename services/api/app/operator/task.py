@@ -15,6 +15,7 @@ whether it passed or not — the trail is the evidence, not just the happy path.
 
 from __future__ import annotations
 
+import time
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -59,6 +60,11 @@ LEVEL_POINTER = "pointer"
 
 MAX_STEP_TIMEOUT_S: float = 30.0
 MAX_STEP_RETRIES: int = 2
+#: The longest pause between two looks at a postcondition. Bounded so a step can wait for
+#: a page to load but can never park a mission.
+MAX_RETRY_DELAY_S: float = 5.0
+#: Indirection so a test can watch the waits instead of sleeping through them.
+_sleep: Callable[[float], None] = time.sleep
 
 PostconditionFn = Callable[[DeviceRunResult], bool]
 PreconditionFn = Callable[[], bool]
@@ -83,12 +89,19 @@ class OperatorStep:
     #: records the payload that was actually sent. A plan still never re-plans - this
     #: only lets a fixed step name a thing that did not exist when the plan was built.
     payload_from: Callable[[], dict[str, Any]] | None = None
+    #: 2026-09-18: wait this long before looking again when the device answered but the
+    #: postcondition did not hold YET - a page loading after Enter changes the window title
+    #: a second or two later, and three looks in the same instant all see the old one.
+    #: Zero (the default) keeps every existing step exactly as it was.
+    retry_delay_s: float = 0.0
 
     def __post_init__(self) -> None:
         if self.timeout_s <= 0 or self.timeout_s > MAX_STEP_TIMEOUT_S:
             raise ValueError(f"OperatorStep.timeout_s must be in (0, {MAX_STEP_TIMEOUT_S}]")
         if self.retries < 0 or self.retries > MAX_STEP_RETRIES:
             raise ValueError(f"OperatorStep.retries must be in [0, {MAX_STEP_RETRIES}]")
+        if self.retry_delay_s < 0 or self.retry_delay_s > MAX_RETRY_DELAY_S:
+            raise ValueError(f"OperatorStep.retry_delay_s must be in [0, {MAX_RETRY_DELAY_S}]")
 
     @property
     def step_name(self) -> str:
@@ -284,6 +297,8 @@ def run_task(
             if postcondition_ok:
                 ok = True
                 break
+            if step.retry_delay_s and attempt <= step.retries:
+                _sleep(step.retry_delay_s)
             # The device call succeeded but the postcondition did not hold yet; retry
             # while attempts remain (this is the VERIFY -> retry loop the task brief asks
             # for — a step whose postcondition still fails after retries fails the task).
