@@ -13,6 +13,9 @@ INSTALLER = REPO_ROOT / "scripts" / "cloud" / "install-recovery-supervisor.sh"
 UNINSTALLER = REPO_ROOT / "scripts" / "cloud" / "uninstall-recovery-supervisor.sh"
 SERVICE = REPO_ROOT / "infra" / "systemd" / "pagentos-bluegreen-reconcile.service"
 TIMER = REPO_ROOT / "infra" / "systemd" / "pagentos-bluegreen-reconcile.timer"
+#: The template the service's OnFailure= names; the installer ships it too (2026-09-18:
+#: it was in the repository and in no installer, so a failed recovery wrote no marker).
+MARKER = REPO_ROOT / "infra" / "systemd" / "pagentos-failure-marker@.service"
 RECONCILE = REPO_ROOT / "scripts" / "cloud" / "release-cloud-core-bluegreen.sh"
 COMPOSE = REPO_ROOT / "infra" / "docker" / "docker-compose.prod.yml"
 NGINX = REPO_ROOT / "infra" / "docker" / "edge" / "nginx.conf"
@@ -63,6 +66,7 @@ def _seed_app_root(
         app_root / "scripts" / "cloud" / INSTALLER.name: INSTALLER.read_bytes(),
         app_root / "infra" / "systemd" / SERVICE.name: SERVICE.read_bytes(),
         app_root / "infra" / "systemd" / TIMER.name: TIMER.read_bytes(),
+        app_root / "infra" / "systemd" / MARKER.name: MARKER.read_bytes(),
         app_root / "infra" / "docker" / COMPOSE.name: COMPOSE.read_bytes(),
         app_root / "infra" / "docker" / "edge" / NGINX.name: NGINX.read_bytes(),
     }
@@ -232,6 +236,9 @@ def test_installer_proves_recovery_before_enabling_timer(tmp_path: Path) -> None
     )
     assert (systemd_dir / SERVICE.name).read_bytes() == SERVICE.read_bytes()
     assert (systemd_dir / TIMER.name).read_bytes() == TIMER.read_bytes()
+    # The handler the service's OnFailure= names is installed with it; without it systemd
+    # answers "No files found" and a failed recovery is a journal line nobody reads.
+    assert (systemd_dir / MARKER.name).read_bytes() == MARKER.read_bytes()
     assert (recovery_root / "reconcile.sh").read_bytes() == RECONCILE.read_bytes()
     assert (recovery_root / COMPOSE.name).read_bytes() == COMPOSE.read_bytes()
     assert (recovery_root / "nginx.conf").read_bytes() == NGINX.read_bytes()
