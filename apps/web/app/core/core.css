@@ -49,6 +49,18 @@
 .core-shell {
   position: fixed;
   inset: 0;
+  /*
+   * B25 req 724 (2026-09-16) made this element a <main> landmark - right for a screen
+   * reader, and it silently inherited globals.css `main { max-width: 720px; margin: 0 auto;
+   * padding: ... }`. A fixed box with inset:0 still obeys max-width, so the "full-viewport"
+   * Core became a 720px column centred in the window: nav rows on top of the controls,
+   * the ambient strip clipped at both sides (owner report 2026-09-18). Every box property
+   * the global rule sets is undone here; core-shell-resets.test.ts holds the two files to
+   * each other.
+   */
+  max-width: none;
+  margin: 0;
+  padding: 0;
   overflow: hidden;
   background: var(--core-ground);
   display: flex;
