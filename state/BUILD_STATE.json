@@ -620,5 +620,10 @@
       "a command created while a device connection was opening was delivered twice - live dispatch and the opening replay both sent it (found by CI run 35337102502)"
     ],
     "stale_note_corrected": "the release script's unbounded ssh/scp note in `notes` was fixed on 2026-09-06 and had been left open here"
+  },
+  "ci": {
+    "github_actions": "disabled 2026-09-19 (billing-locked account; owner cannot pay)",
+    "proof": "local: quality-gate -Fast + 28 PS suites + recovery-supervisor + full tests/unit + tests/integration on the docker dev stack",
+    "last_full_local_proof": "e0282d7 (2026-09-19): gate PASS, 28/28 suites, rs 87 passed, unit 11940 passed (16 corpus regressions fixed and re-run 2872 passed), integration 105 passed"
   }
 }

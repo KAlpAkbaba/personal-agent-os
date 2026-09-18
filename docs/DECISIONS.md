@@ -13208,3 +13208,13 @@ ara" and "YouTube'u aç" are the owner's Chrome's; "YouTube'dan <şarkı> aç" s
 player's, because opening the site would lose the song and the stop/volume family lives
 there (the owner's corpus records both). No separate automation profile is opened for
 missions any more - it was a window the owner never used, and its name did not exist.
+
+**ADR-0172 addendum (2026-09-19) — GitHub Actions disabled; the local gate is the CI.** A
+billing-locked account starts no jobs even on a self-hosted runner (`startup_failure`, zero
+jobs, measured on e0282d7), and the owner cannot pay ("Ekleyemem maddiyattan çok alıyor").
+Actions is disabled on the repository, the runner deregistered and removed. `ci.yml` is kept
+inert for the day it is re-enabled. From here "CI green" in the development policy means the
+local proof on the owner's PC: `scripts/quality-gate.ps1 -Fast`, the 28 PowerShell suites,
+the recovery-supervisor tests, the FULL unit suite and the integration suite on the docker
+dev stack - the same suites the hosted jobs ran, with one lesson attached: a targeted subset
+missed 16 corpus regressions the same day, so the full unit suite runs before every release.
