@@ -552,6 +552,11 @@ if [ "$mode" = "--reconcile" ]; then
         echo "RECONCILE DEGRADED: api-$canonical ($canonical_sha) stays canonical but reports '$degraded'; no colour was switched - operator attention required" >&2
         exit 84
     fi
+    # A successful run clears its own failure marker, as the backup and the restore drill
+    # do (infra/systemd/pagentos-failure-marker@.service: "the next successful run of the
+    # unit removes its own marker"). Without this a single failed run left the product
+    # degraded for ever, and every later release refused to promote.
+    rm -f "${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/failures/pagentos-bluegreen-reconcile.service.json" 2>/dev/null || true
     echo "RECONCILE OK: api-$canonical is canonical (release ${canonical_sha:-unknown}); markers, upstreams and containers agree"
     exit 0
 fi

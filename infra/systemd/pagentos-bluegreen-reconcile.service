@@ -28,6 +28,11 @@ OnFailure=pagentos-failure-marker@%n.service
 
 [Service]
 Type=oneshot
+# 82 is the reconcile's 'another blue/green operation holds the lock' skip - the normal
+# state during a release, not a failure. Until 2026-09-18 systemd counted it as one, so
+# every release wrote a failure marker, the backup health check read it, the app went
+# degraded and the release refused to promote its own candidate (measured on the host).
+SuccessExitStatus=82
 RemainAfterExit=no
 TimeoutStartSec=600
 Environment=PAGENTOS_BASE=/opt/pagentos

@@ -98,3 +98,41 @@ def test_the_backup_mounts_are_read_only_and_exclude_the_repository() -> None:
     # The encrypted repository and the password are never handed to the application.
     assert "/var/lib/pagentos-backup/restic" not in compose
     assert "backup.password" not in compose
+
+
+# ------------------------------------------- a benign skip is not a failure, and clears
+
+RECONCILE = REPO / "scripts" / "cloud" / "release-cloud-core-bluegreen.sh"
+RECONCILE_UNIT = SYSTEMD / "pagentos-bluegreen-reconcile.service"
+LOCK_HELD_EXIT = 82
+
+
+def test_the_lock_held_skip_is_not_counted_as_a_unit_failure() -> None:
+    """2026-09-18, live: a release holds the blue/green operation lock, so the timer's
+    reconcile exits 82 ("another operation is running") every minute while it runs. systemd
+    counted that as a failure, OnFailure wrote a marker, the backup check read it, the app
+    reported degraded - and the release then refused to promote its own candidate and rolled
+    back. The skip is a skip."""
+    script = RECONCILE.read_text(encoding="utf-8")
+    assert f"exit {LOCK_HELD_EXIT}" in script
+    assert "another blue/green release or recovery operation is running" in script
+    unit = RECONCILE_UNIT.read_text(encoding="utf-8")
+    assert re.search(rf"^SuccessExitStatus=(?:[^\n]*\b){LOCK_HELD_EXIT}\b", unit, re.M), (
+        f"the unit must accept {LOCK_HELD_EXIT} as success"
+    )
+
+
+def test_a_successful_reconcile_clears_its_own_marker() -> None:
+    """Every scheduled unit that writes a marker on failure clears it on its next success -
+    the backup and the restore drill already did; the reconcile did not, so one failed run
+    left the product degraded for ever."""
+    marker = "failures/pagentos-bluegreen-reconcile.service.json"
+    script = RECONCILE.read_text(encoding="utf-8")
+    assert marker in script
+    clearing = [line for line in script.splitlines() if marker in line]
+    assert clearing and all(line.strip().startswith("rm -f") for line in clearing)
+    for peer, own in (
+        ("scripts/cloud/backup-cloud-core.sh", "failures/pagentos-backup.service.json"),
+        ("scripts/cloud/restore-cloud-core.sh", "failures/pagentos-restore-drill.service.json"),
+    ):
+        assert own in (REPO / peer).read_text(encoding="utf-8"), peer

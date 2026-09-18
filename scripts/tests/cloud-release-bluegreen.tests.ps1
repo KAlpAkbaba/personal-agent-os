@@ -430,6 +430,20 @@ try {
         Assert-True ((Test-Path (Join-Path $hostBase "app\OLD_TREE")) -and -not (Test-Path (Join-Path $hostBase "app.prev")) -and (Test-Path (Join-Path $hostBase "app.interrupted\NEW_TREE"))) "...the tree is the canonical release's again; the candidate tree is kept aside as app.interrupted"
         Assert-True (Test-Path (Join-Path $hostBase "LAST_RECONCILE")) "...and the reconcile leaves its timestamp"
 
+        # 2026-09-18, measured on the live host: a failed run wrote a marker the product's
+        # backup health check reads, and nothing ever removed it - the app stayed degraded and
+        # every later release refused to promote its own candidate. A successful run clears its
+        # own marker, exactly as the backup and the restore drill do.
+        $markerDir = Join-Path (Join-Path $hostBase "backup-root") "failures"
+        New-Item -ItemType Directory -Force -Path $markerDir | Out-Null
+        $marker = Join-Path $markerDir "pagentos-bluegreen-reconcile.service.json"
+        [IO.File]::WriteAllText($marker, '{"unit":"pagentos-bluegreen-reconcile.service","exit_status":"82"}')
+        $c1b = Invoke-Release -Mode "--reconcile" -Env @{ PAGENTOS_BACKUP_ROOT = (& $u (Join-Path $hostBase "backup-root")) }
+        Assert-True ($c1b.Exit -eq 0 -and -not (Test-Path $marker)) "a successful reconcile clears its own failure marker (the product stops reporting a failure that is over)"
+        [IO.File]::WriteAllText($marker, '{"unit":"pagentos-bluegreen-reconcile.service","exit_status":"84"}')
+        $c1c = Invoke-Release -Mode "--reconcile" -Env @{ PAGENTOS_BACKUP_ROOT = (& $u (Join-Path $hostBase "backup-root")); FAKE_HEALTH_STATUS = "degraded" }
+        Assert-True ($c1c.Exit -eq 84 -and (Test-Path $marker)) "...but a reconcile that ends DEGRADED leaves the marker where it is"
+
         Reset-Host
         $i2 = Invoke-Release -Env @{ PAGENTOS_INTERRUPT_AT = "after_switch" }
         Assert-True ($i2.Exit -ne 0 -and (Get-Active) -eq "green" -and (Test-UpstreamBoth "green") -and (Test-Up "blue") -and (Test-Up "green") -and (Get-Release) -eq $old -and (Get-Sessions "green") -eq 1) "a crash right after the switch leaves the edge on the candidate, both colours up, the devices on the candidate, RELEASE still the old sha"
