@@ -2278,7 +2278,16 @@ def _mission_start_match(tokens: tuple[str, ...], text: str) -> str | None:
         mission = plan_mission(text)
     except MissionClarificationNeeded:
         return None
-    if len(mission.steps) >= 2 or any(s.kind not in _MISSION_SIMPLE_KINDS for s in mission.steps):
+    # What the OWNER asked for: a step the planner added to prepare another (the browser
+    # brought to front before a page) is not a second request.
+    asked = [s for s in mission.steps if not s.args.get("implicit")]
+    # A search typed into the owner's browser is not something a single operator tool
+    # does (browser in front, the words typed, Enter), so it is a mission on its own.
+    if (
+        len(asked) >= 2
+        or any(s.kind not in _MISSION_SIMPLE_KINDS for s in asked)
+        or any(s.args.get("search") for s in asked)
+    ):
         return mission.steps[0].label_tr
     return None
 

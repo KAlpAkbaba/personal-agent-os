@@ -1324,7 +1324,7 @@ def test_without_a_picture_there_is_no_coordinate_click() -> None:
 def test_a_site_named_with_the_locative_is_searched_on(said: str, url: str) -> None:
     m = plan_mission(said)
     assert [s.kind for s in m.steps] == [KIND_APP_OPEN, KIND_NAVIGATE]
-    assert m.steps[-1].args == {"url": url}
+    assert m.steps[-1].args["url"] == url
 
 
 @pytest.mark.parametrize("said", ["YouTube’u aç", "Chrome’dan YouTube’u aç", "Google’a git"])
@@ -1359,3 +1359,36 @@ def test_a_button_is_never_the_pictures(said: str) -> None:
     except MissionClarificationNeeded:
         return  # the single-step ui.invoke tool answers it, as before
     assert mission.KIND_CLICK_TEXT not in [s.kind for s in m.steps]
+
+
+# ------------- routing: what the router hands to the mission, and what it keeps elsewhere
+
+
+@pytest.mark.parametrize(
+    ("said", "intent"),
+    [
+        # the owner's own sentences of 2026-09-18 - their own Chrome
+        ("Chrome’dan YouTube’u aç", Intent.MISSION_START),
+        ("Google Chrome’dan direkt YouTube ana sayfasını aç", Intent.MISSION_START),
+        ("YouTube’da Barış Manço ara", Intent.MISSION_START),
+        ("Google’da hava durumu ara", Intent.MISSION_START),
+        ("Barış Manço videosunu aç", Intent.MISSION_START),
+        # kept where they were: the news tool, the media player, the app tool
+        ("Haberleri YouTube’dan aç", Intent.NEWS_OPEN),
+        ("Bugünün Show Ana Haber videosunu aç", Intent.NEWS_OPEN),
+        ("YouTube’da Barış Manço aç", Intent.MEDIA_PLAY),
+        ("Not Defteri’ni aç", Intent.APP_OPEN),
+    ],
+)
+def test_the_router_gives_the_mission_what_is_the_missions(said: str, intent: Intent) -> None:
+    assert resolve_intent(said).intent is intent
+
+
+def test_a_step_the_planner_added_is_not_a_second_request() -> None:
+    """ "Haberleri YouTube'dan aç" became a two-step mission the moment the planner started
+    putting the browser in front of every page - the router counted the planner's own
+    preparation as something the owner asked for (CI 2026-09-18)."""
+    m = plan_mission("Haberleri YouTube’dan aç")
+    assert m.steps[0].args.get("implicit") is True
+    named = plan_mission("Chrome’dan YouTube’u aç")
+    assert "implicit" not in named.steps[0].args, "the owner said Chrome; it was asked for"

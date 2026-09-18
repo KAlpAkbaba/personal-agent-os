@@ -71,6 +71,8 @@ SPEECH_PAUSED: Final = "Duraklattım efendim; bu adımdan sonra bekleyeceğim."
 SPEECH_RESUMED: Final = "Devam ediyorum efendim."
 #: What only the owner's own words may do (see ``_control``).
 OWNER_ONLY_ACTIONS: Final[frozenset[str]] = frozenset({"approve", "resume"})
+#: Declared the way test_owner_error_language reads every class (no annotation).
+ERROR_OWNER_WORD_REQUIRED = "owner_word_required"
 SPEECH_WAITING_FOR_OWNER: Final = "Görev sizin cevabınızı bekliyor efendim."
 SPEECH_CANCELLED: Final = "Görevi iptal ettim efendim."
 
@@ -251,7 +253,7 @@ def _control(ctx: ToolContext, action: str) -> dict[str, Any]:
             terminal=TERMINAL_FAILED,
             speech=str(waiting or SPEECH_WAITING_FOR_OWNER),
             server={"mission_id": str(row.id), "status": row.status},
-            error_class="owner_word_required",
+            error_class=ERROR_OWNER_WORD_REQUIRED,
         )
     if action == "status":
         mission = row.mission_json

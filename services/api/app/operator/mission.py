@@ -1132,6 +1132,12 @@ def _readable_query(query: str) -> str:
     return "+".join(cleaned.split())
 
 
+def _says_search(tokens: tuple[str, ...]) -> bool:
+    return any(
+        t in ("ara", "arat", "aratır", "bul", "bulur") or t.startswith("arat") for t in tokens
+    )
+
+
 def _segment_search(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     """ "YouTube'da Barış Manço aç" -> the site's own search results for "Barış Manço"."""
     brand_words = _browser_name_positions(tokens)
@@ -1159,7 +1165,12 @@ def _segment_search(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
         url = SEARCH_URLS[tok].format(q=_readable_query(query))
         site = "YouTube" if tok == "youtube" else "Google"
         return MissionStep(
-            id="", kind=KIND_NAVIGATE, args={"url": url}, label_tr=f"{site}'da '{query}' ara"
+            id="",
+            kind=KIND_NAVIGATE,
+            # Flagged only when the owner said SEARCH ("ara", "arat", "bul"): "YouTube'da X
+            # aç" keeps its existing media-player route; the flag is what the router reads.
+            args={"url": url, **({"search": True} if _says_search(tokens) else {})},
+            label_tr=f"{site}'da '{query}' ara",
         )
     return None
 
@@ -1307,6 +1318,10 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     # picture); claiming it here moved it off that rung (caught by test_operator_ui).
     if any(t.startswith(_BUTTON_WORDS) for t in tokens):
         return None
+    # News is the news tool's ("Bugünün Show Ana Haber videosunu aç" -> news.open, with
+    # the source it names), not a picture search on whatever page is open.
+    if any(t.startswith("haber") for t in tokens):
+        return None
     has_video = any(t.startswith("video") for t in tokens)
     has_click = any(t.startswith(("tıkla", "tikla")) for t in tokens)
     on_screen = any(t in _ON_SCREEN_WORDS for t in tokens)
@@ -1387,13 +1402,18 @@ def plan_mission(text: str) -> Mission:
         steps.append(step)
     if not steps:
         raise MissionClarificationNeeded("Ne yapmamı istediğinizi anlayamadım efendim.")
-    steps = _with_browser_in_front(steps)
+    steps = _with_browser_in_front(steps, named=_names_a_browser(_tokens(cleaned)))
     for index, step in enumerate(steps):
         step.id = f"m{index + 1}"
     return Mission(id=uuid.uuid4(), goal=raw[:300], steps=steps, preview=preview)
 
 
-def _with_browser_in_front(steps: list[MissionStep]) -> list[MissionStep]:
+def _names_a_browser(tokens: tuple[str, ...]) -> bool:
+    """ "Chrome'dan YouTube'u aç": the owner asked for Chrome in so many words."""
+    return any(t.startswith(("chrome", "tarayıcı", "tarayici")) for t in tokens)
+
+
+def _with_browser_in_front(steps: list[MissionStep], *, named: bool = False) -> list[MissionStep]:
     """A navigate step drives the owner's Chrome WINDOW (keyboard rung), so the plan must
     put that window in front first. "Chrome'dan YouTube'u aç" names no separate opening
     step; it gets one here. It never launches a second Chrome: the app-open decision
@@ -1408,7 +1428,11 @@ def _with_browser_in_front(steps: list[MissionStep]) -> list[MissionStep]:
                 MissionStep(
                     id="",
                     kind=KIND_APP_OPEN,
-                    args={"application": "chrome"},
+                    # IMPLICIT: the plan's own preparation, not something the owner asked
+                    # for - the router counts only what the owner asked for when it decides
+                    # whether a sentence is a multi-step mission (else "Haberleri YouTube'dan
+                    # aç" stopped being the news tool's, CI 2026-09-18).
+                    args={"application": "chrome", **({} if named else {"implicit": True})},
                     label_tr=f"{APP_NAMES_TR.get('chrome', 'Chrome')} uygulamasını aç",
                 )
             )
