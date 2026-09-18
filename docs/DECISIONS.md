@@ -13105,3 +13105,71 @@ nothing was silenced. `scripts/tests/cloud-release-bluegreen.tests.ps1` holds th
 half (5 assertions) and `services/api/tests/unit/test_health_failing_checks.py` the
 application half (8 tests). Evidence:
 `docs/evidence/b08-recovery-supervisor-2026-09-18.json`.
+
+## ADR-0171 — Owner decisions on voice authority: confirmation instead of a voiceprint, a voice-editable confirmation policy, and a listen-only mode (2026-09-18, B05)
+
+**Owner decisions, verbatim intent (2026-09-18):**
+
+1. *"Doğrulamayı ses izi ile değil 2 defa onay olarak düşün … onaylıyor musunuz diye sorduğunda
+   evet demem yeterli."* Speaker verification is **not** used to authorise actions. B05's step-up
+   is satisfied by a two-step confirmation: the system restates the action and asks
+   "Onaylıyor musunuz?"; the owner's "evet" performs it.
+2. Scope chosen by the owner: **every SENSITIVE and CRITICAL tool** asks for confirmation.
+3. *"… bundan sonra sadece bunlara onay iste dersem bu da değişebilir olsun."* The set is a
+   persistent, owner-editable policy — by voice and in the web panel — kept in owner-facing
+   categories, not tool names.
+4. *"Yalnızca dinleme modu: ortamdaki tüm sesleri dinler ama sadece benim sesime karşılık
+   verir."* Speaker verification is used here, and only here, as a **response filter**.
+   Owner's stated treatment of other people's speech (corrected the same day): **"anlar ve
+   saklar"** — transcribed and KEPT. **Not yet built, and deliberately left open:** storing
+   third parties' conversations needs its own decision on notice, retention and deletion first
+   (see "Open" below).
+
+**Rules that make those decisions safe (not owner-adjustable):**
+
+* **The owner's word is the floor.** Removing confirmation for a category means "my direct
+  command is enough" — never "anyone may". A sensitive tool call with no owner utterance behind
+  it on the current turn (a model-initiated call, or one steered by a document, web page, mail
+  or another person's speech) is refused whatever the policy says. A tool whose owner intent
+  the deterministic router cannot resolve cannot be moved to "no confirmation"; it keeps asking,
+  and the owner is told why.
+* **Confirmation binds to one action.** Same realtime session, a strictly later turn, within
+  60 s, the same tool and arguments, resolved by the ONE deterministic router from the owner's
+  own utterance — the rules `app/actions/confirmation_gate.py` already enforces for mail and
+  calendar (ADR-0084 addendum 2). Text read from content, or produced by the model, never
+  confirms anything.
+* **Changing the policy always asks for confirmation**, and is written to the Activity Ledger.
+  Otherwise the safety setting itself could be switched off by one sentence, unnoticed.
+* **In listen-only mode, other people's speech is untrusted content**, exactly like a web page:
+  it can inform an answer, it can never issue a command, and it can never confirm one. A guest
+  saying "evet" after a confirmation prompt confirms nothing; only an owner-verified segment
+  can. This is where the voiceprint earns its place — as a filter on who can speak TO the
+  system, never as a key.
+* **Until the open question is decided, nothing of other people's speech is kept.** Their
+  transcripts live only in process memory and are dropped when the mode ends or the process
+  restarts; never written to the database, the persisted session context, the Activity Ledger,
+  episodic memory, the world model or any log line (route telemetry records intent and class,
+  never words — req 749). Raw audio is never stored (req 249) in any case.
+* **Honesty about the provider.** Live transcription sends that audio to the configured STT
+  provider, whose own retention terms apply; this system keeps nothing, and says so rather
+  than claiming more.
+* **The room can see it.** The mode shows a distinct, always-on privacy indicator (req 254),
+  different from normal listening, so the people present can tell that speech is being
+  transcribed.
+* **Invariants unchanged.** VoiceIdentity is augment-only and never a sole root of
+  authentication; microphone capture happens only in the Session Companion, never the Session-0
+  service.
+
+**Open (owner decision, before listen-only storage is built):** keeping other people's
+conversations is recording third parties who have not consented. Under TCK 133 recording
+non-public conversations without the parties' consent can be a criminal offence, and under KVKK
+their transcripts are personal data. The lawful shape needs three answers from the owner:
+(a) **notice** — the people who live in or visit the home know the device transcribes, backed
+by the distinct indicator above; (b) **retention** — how long transcripts are kept before they
+are deleted automatically; (c) **deletion** — "unut" / delete-on-request, including for a
+specific person or time range. The legal responsibility for recording is the owner's; the
+system's job is to make the lawful shape the easy one and to say plainly when it is not.
+
+**Order of work:** (1) two-step confirmation + (2) the editable policy, together, since they
+are one structure; then (3) listen-only mode, which needs owner approval to download a local
+speaker-embedding model, a one-time enrollment (a few sentences), and a physical test.
