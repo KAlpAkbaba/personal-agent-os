@@ -98,6 +98,14 @@ def _failures(root: Path) -> list[dict[str, Any]]:
     return out
 
 
+def failure_markers(backup_root: str | Path) -> list[dict[str, Any]]:
+    """The markers themselves - unit, exit status, when - for a reader that must say WHAT
+    failed and how, not only that something did (the notification sweep). Empty when the
+    backup root is not visible to this process."""
+    root = Path(backup_root)
+    return _failures(root) if root.is_dir() else []
+
+
 def backup_health(backup_root: str | Path, *, now: datetime | None = None) -> dict[str, Any]:
     """The state of the safety net, read off the last real run of each half."""
     moment = now or datetime.now(UTC)
@@ -182,4 +190,5 @@ __all__ = [
     "STALE_BACKUP_AFTER",
     "STALE_DRILL_AFTER",
     "backup_health",
+    "failure_markers",
 ]

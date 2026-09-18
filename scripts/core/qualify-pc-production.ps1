@@ -133,6 +133,25 @@ try {
         ([ordered]@{ history_rows = $historyRows.Count; oldest_created_at = $oldest; probe_row_written = [bool]$probeRow; probe_row = $probeRow }) "no notification row in production"
     Set-Row "368" ($null -ne (Get-OptionalProperty -InputObject $inbox -Name "unread")) "the inbox is read from the table (unread count + rows)" `
         ([ordered]@{ inbox_rows = $inboxRows.Count; unread = Get-OptionalProperty -InputObject $inbox -Name "unread" }) "inbox answered without an unread count"
+
+    # The probe had to be a REAL notification to prove the path, but once proven it is this
+    # round's own noise. Owner report 2026-09-18: three "İş başarısız oldu" rows from these
+    # rounds sat unread in the owner's inbox beside the real ones. Marked read here, after
+    # every assertion above has seen it - never deleted, so the history still shows it.
+    if ($probeRow) {
+        $probeId = [string](Get-OptionalProperty -InputObject $probeRow -Name "id")
+        if ($probeId) {
+            try {
+                $null = Invoke-JsonUtf8 -Method POST -Uri "$BaseUrl/v1/notifications/$probeId/read" -Headers $headers -Body "{}" -TimeoutSec 30
+                $failureProbe.notice_marked_read = $true
+                Write-Host "  failure probe: its notice marked read (the owner's inbox keeps only real ones)"
+            }
+            catch {
+                $failureProbe.notice_marked_read = $false
+                Write-Host "  failure probe: could not mark its notice read ($($_.Exception.Message))"
+            }
+        }
+    }
     Set-Row "377" ($historyRows.Count -gt 0) "delivery history lists delivered and unreached notices" `
         ([ordered]@{ delivered = $delivered.Count; not_delivered = $undelivered.Count; delivered_via = $via }) "empty history"
     Set-Row "378" ($priorities.Count -ge 2) "more than one priority level occurs in production" `

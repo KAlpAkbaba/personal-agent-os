@@ -36,10 +36,18 @@ TASK_FAILED: Final[str] = "task.failed"
 APPROVAL_REQUIRED: Final[str] = "owner.approval_required"
 ROLLBACK_HAPPENED: Final[str] = "release.rolled_back"
 BACKUP_FAILED: Final[str] = "backup.failed"
+#: B08 recovery supervisor (the blue/green reconcile timer) acted or could not. Its own kind,
+#: not BACKUP_FAILED: on 2026-09-18 an automatic fallback to the previous release reached the
+#: owner as an URGENT "Yedek alınamadı" - the right alarm about the wrong thing.
+RECOVERY_ALERT: Final[str] = "recovery.alert"
 ALARM_FAILED: Final[str] = "alarm.failed"
 RESEARCH_FINISHED: Final[str] = "research.finished"
 CANDIDATE_READY: Final[str] = "selfdev.candidate_ready"
 CALENDAR_REMINDER: Final[str] = "calendar.reminder"
+#: The scheduled units that write B08 failure markers (infra/systemd).
+BACKUP_UNIT: Final[str] = "pagentos-backup.service"
+RESTORE_DRILL_UNIT: Final[str] = "pagentos-restore-drill.service"
+RECONCILE_UNIT: Final[str] = "pagentos-bluegreen-reconcile.service"
 #: A quiet window that never contains a moment (start == end): see ``calendar_reminder``.
 _NO_QUIET_HOURS: Final[time] = time(0, 0)
 
@@ -93,6 +101,15 @@ EVENTS: Final[dict[str, EventSpec]] = {
         why=(
             "every hour the safety net is down is an hour of unprotected work, and the "
             "failure is silent by nature - nothing else in the day will remind them"
+        ),
+    ),
+    RECOVERY_ALERT: EventSpec(
+        kind=RECOVERY_ALERT,
+        priority=PRIORITY_URGENT,
+        why=(
+            "every way the recovery supervisor reports failure means production needs the "
+            "owner: it rewound itself to an older release, or nothing is serving, or the "
+            "safety net cannot act, or the live release is unhealthy and was kept"
         ),
     ),
     ALARM_FAILED: EventSpec(
@@ -241,13 +258,75 @@ def backup_failed(
 ) -> NotificationRow:
     """req 385. The safety net going down is silent by nature."""
     tail = f" {detail}" if detail else ""
+    if unit == RESTORE_DRILL_UNIT:
+        # The backup worked; what could not be shown is that it RESTORES.
+        title = "Geri yükleme tatbikatı başarısız"
+        body = (
+            "Haftalık geri yükleme tatbikatı başarısız oldu efendim; yedeklerin geri "
+            f"yüklenebildiği şu an kanıtlanamıyor.{tail}"
+        )
+    else:
+        title = "Yedek alınamadı"
+        body = f"Yedekleme başarısız oldu efendim ({unit}).{tail}"
     return _emit(
         db,
         BACKUP_FAILED,
-        title="Yedek alınamadı",
-        body=f"Yedekleme başarısız oldu efendim ({unit}).{tail}",
+        title=title,
+        body=body,
         group_key=f"backup:{unit}",
         data={"unit": unit},
+        now=now,
+    )
+
+
+#: What the reconcile's exit statuses MEAN, in the owner's words (release-cloud-core-
+#: bluegreen.sh's own header: 80 / 81 / 83 / 84). 82 never reaches here: the unit counts it as
+#: success (SuccessExitStatus=82), because "another operation holds the lock" is a skip.
+_RECOVERY_BY_EXIT: Final[dict[str, tuple[str, str]]] = {
+    "81": (
+        "Önceki sürüme dönüldü",
+        "Cloud Core'un güncel sürümü ayağa kalkmadı; kurtarma sistemi önceki sürüme "
+        "kendiliğinden döndü efendim. Hizmet sürüyor, ama başarısız sürümün incelenmesi gerekiyor.",
+    ),
+    "80": (
+        "Cloud Core yanıt vermiyor",
+        "Hiçbir sürüm ayağa kalkmadı; kurtarma sistemi hiçbir şeyi değiştirmedi ve müdahale "
+        "bekliyor efendim.",
+    ),
+    "83": (
+        "Otomatik kurtarma devre dışı",
+        "Kurtarma paketi çalışan sürümle eşleşmiyor; paket yeniden kurulana kadar otomatik "
+        "kurtarma yapılamaz efendim.",
+    ),
+    "84": (
+        "Cloud Core sağlıksız çalışıyor",
+        "Cloud Core hizmet veriyor ama sağlık kontrolü sorun bildiriyor; sürüm değiştirmek "
+        "bunu çözmeyeceği için mevcut sürümde kalındı efendim.",
+    ),
+}
+
+
+def recovery_alert(
+    db: Session, *, unit: str, exit_status: str = "", now: datetime | None = None
+) -> NotificationRow:
+    """B08 req 654/655: the recovery supervisor's own report, said as what happened."""
+    code = str(exit_status or "").strip()
+    title, body = _RECOVERY_BY_EXIT.get(
+        code,
+        (
+            "Kurtarma denetimi başarısız oldu",
+            f"Kurtarma denetimi beklenmedik biçimde sonlandı (çıkış {code or '?'}) efendim.",
+        ),
+    )
+    return _emit(
+        db,
+        RECOVERY_ALERT,
+        title=title,
+        body=body,
+        # One incident per exit status: a fallback and, later, a stale bundle are two
+        # different things to be told, while the same one every minute is one.
+        group_key=f"recovery:{unit}:{code}",
+        data={"unit": unit, "exit_status": code},
         now=now,
     )
 
@@ -330,6 +409,7 @@ EMITTERS: Final[dict[str, str]] = {
     APPROVAL_REQUIRED: "approval_required",
     ROLLBACK_HAPPENED: "rollback_happened",
     BACKUP_FAILED: "backup_failed",
+    RECOVERY_ALERT: "recovery_alert",
     ALARM_FAILED: "alarm_failed",
     RESEARCH_FINISHED: "research_finished",
     CANDIDATE_READY: "candidate_ready",
@@ -345,6 +425,7 @@ __all__ = [
     "CANDIDATE_READY",
     "EMITTERS",
     "EVENTS",
+    "RECOVERY_ALERT",
     "RESEARCH_FINISHED",
     "ROLLBACK_HAPPENED",
     "TASK_COMPLETED",
@@ -355,6 +436,7 @@ __all__ = [
     "backup_failed",
     "calendar_reminder",
     "candidate_ready",
+    "recovery_alert",
     "research_finished",
     "rollback_happened",
     "sweep_backup_failures",
@@ -380,10 +462,17 @@ def sweep_backup_failures(
     unit that fails every night for a week leaves one unread notification saying so rather
     than seven.
     """
-    from app.backup_health import backup_health
+    from app.backup_health import failure_markers
 
-    health = backup_health(backup_root, now=now)
-    failed = list(health.get("failed_units") or [])
-    for unit in failed:
-        backup_failed(db, unit=unit, detail="", now=now)
+    failed: list[str] = []
+    for marker in failure_markers(backup_root):
+        unit = str(marker.get("unit") or "?")
+        failed.append(unit)
+        # WHICH unit failed decides what the owner is told. Until 2026-09-18 every marker was
+        # announced as "Yedek alınamadı", so the recovery supervisor's fallback to the
+        # previous release reached the owner as an urgent backup failure.
+        if unit == RECONCILE_UNIT:
+            recovery_alert(db, unit=unit, exit_status=str(marker.get("exit_status") or ""), now=now)
+        else:
+            backup_failed(db, unit=unit, detail="", now=now)
     return failed

@@ -59,9 +59,7 @@ def test_every_emitter_is_actually_called_from_somewhere() -> None:
     """The guard this repository keeps needing. A declared event nobody raises is a
     notification the owner will never get, and it looks identical to one that works."""
     sources = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in APP.rglob("*.py")
-        if path.name != "events.py"
+        path.read_text(encoding="utf-8") for path in APP.rglob("*.py") if path.name != "events.py"
     )
     # Who calls whom inside events.py, from its syntax tree rather than from a regex over
     # its text: an emitter may legitimately be raised by a driver in its own module, and
@@ -110,10 +108,19 @@ def test_each_event_says_why_it_is_as_loud_as_it_is() -> None:
 def test_the_things_that_wake_the_owner_are_the_three_that_should() -> None:
     """Named individually, because this list IS the policy: production rewinding itself,
     the safety net being down, and an alarm that did not fire. Everything else waits for
-    morning."""
+    morning.
+
+    RECOVERY_ALERT (2026-09-18) is not a fourth category: it is the first two said by the
+    recovery supervisor itself - production rewound to an older release, or the automatic
+    recovery unable to act. It used to reach the owner mislabelled as BACKUP_FAILED."""
     urgent = {e for e, spec in events.EVENTS.items() if spec.priority == PRIORITY_URGENT}
 
-    assert urgent == {events.ROLLBACK_HAPPENED, events.BACKUP_FAILED, events.ALARM_FAILED}
+    assert urgent == {
+        events.ROLLBACK_HAPPENED,
+        events.BACKUP_FAILED,
+        events.ALARM_FAILED,
+        events.RECOVERY_ALERT,
+    }
 
 
 def test_a_finished_task_does_not_wake_anybody(db) -> None:
@@ -156,7 +163,7 @@ def test_a_failure_carries_the_error_class_and_not_a_traceback(db) -> None:
 
 
 def test_a_rollback_names_both_versions(db) -> None:
-    """"Your system rewound itself" is only useful with what it rewound from and to."""
+    """ "Your system rewound itself" is only useful with what it rewound from and to."""
     row = events.rollback_happened(
         db,
         component="cloud-core",
@@ -264,3 +271,110 @@ def test_every_best_effort_notification_hook_rolls_back() -> None:
         before = text.index(marker)
         window = text[max(0, before - 400) : before]
         assert "rollback()" in window, f"{module} swallows without rolling back"
+
+
+# ------------------------------------- which unit failed decides what is said (2026-09-18)
+
+REPO = Path(__file__).resolve().parents[4]
+
+
+def _marker_root(tmp_path, *markers: dict) -> str:
+    import json
+
+    root = tmp_path / "backup"
+    (root / "failures").mkdir(parents=True)
+    (root / "LAST_BACKUP.json").write_text(
+        json.dumps({"snapshot": "abc", "finished_at": "2026-09-13T05:00:00Z", "offhost": "ok"}),
+        encoding="utf-8",
+    )
+    for marker in markers:
+        (root / "failures" / f"{marker['unit']}.json").write_text(
+            json.dumps(marker), encoding="utf-8"
+        )
+    return str(root)
+
+
+def test_a_recovery_fallback_is_not_announced_as_a_backup_failure(db, tmp_path) -> None:
+    """The production incident itself. The B08 drill made the recovery supervisor fall back
+    to the previous release (exit 81); its marker reached the owner as an URGENT
+    "Yedek alınamadı - Yedekleme başarısız oldu" while every backup was fine. The owner was
+    told the wrong thing loudly."""
+    root = _marker_root(
+        tmp_path,
+        {
+            "unit": "pagentos-bluegreen-reconcile.service",
+            "result": "exit-code",
+            "exit_status": "81",
+        },
+    )
+
+    events.sweep_backup_failures(db, backup_root=root, now=NOON)
+
+    row = notifications.inbox(db)[0]
+    assert row.kind == events.RECOVERY_ALERT
+    assert row.priority == PRIORITY_URGENT
+    assert row.title == "Önceki sürüme dönüldü"
+    assert "Yedek" not in row.title and "Yedekleme" not in row.body
+
+
+@pytest.mark.parametrize(
+    ("exit_status", "title"),
+    [
+        ("80", "Cloud Core yanıt vermiyor"),
+        ("81", "Önceki sürüme dönüldü"),
+        ("83", "Otomatik kurtarma devre dışı"),
+        ("84", "Cloud Core sağlıksız çalışıyor"),
+    ],
+)
+def test_each_recovery_exit_is_said_as_what_it_means(db, exit_status, title) -> None:
+    row = events.recovery_alert(db, unit=events.RECONCILE_UNIT, exit_status=exit_status, now=NOON)
+    assert row.title == title
+
+
+def test_an_unknown_recovery_exit_is_still_told_with_its_code(db) -> None:
+    """Never silence a status the table does not know yet - name the number instead."""
+    row = events.recovery_alert(db, unit=events.RECONCILE_UNIT, exit_status="77", now=NOON)
+    assert row.kind == events.RECOVERY_ALERT
+    assert "77" in row.body
+
+
+def test_every_reconcile_failure_exit_has_a_sentence() -> None:
+    """The script's header is the source of the exit codes; the table must cover every one
+    it documents as a failure. 82 is excluded on purpose: the unit counts it as success."""
+    script = (REPO / "scripts" / "cloud" / "release-cloud-core-bluegreen.sh").read_text(
+        encoding="utf-8"
+    )
+    header = script.split("set -eu", 1)[0]
+    documented = set(re.findall(r"\b(8\d)\b", header.split("--reconcile exits:", 1)[1]))
+    documented.discard("82")
+    assert documented, "the script no longer documents its reconcile exits"
+    missing = documented - set(events._RECOVERY_BY_EXIT)
+    assert not missing, f"reconcile exits with no owner-facing sentence: {sorted(missing)}"
+
+
+def test_a_restore_drill_failure_says_it_is_the_restore_that_is_unproven(db, tmp_path) -> None:
+    root = _marker_root(tmp_path, {"unit": "pagentos-restore-drill.service"})
+
+    events.sweep_backup_failures(db, backup_root=root, now=NOON)
+
+    row = notifications.inbox(db)[0]
+    assert row.kind == events.BACKUP_FAILED
+    assert row.title == "Geri yükleme tatbikatı başarısız"
+
+
+def test_a_backup_failure_is_still_a_backup_failure(db, tmp_path) -> None:
+    root = _marker_root(tmp_path, {"unit": "pagentos-backup.service"})
+
+    events.sweep_backup_failures(db, backup_root=root, now=NOON)
+
+    row = notifications.inbox(db)[0]
+    assert (row.kind, row.title) == (events.BACKUP_FAILED, "Yedek alınamadı")
+
+
+def test_the_named_units_are_the_units_that_write_markers() -> None:
+    """The three names this module branches on are real unit files that declare the marker
+    as their OnFailure - otherwise a branch can never be taken."""
+    systemd = REPO / "infra" / "systemd"
+    for unit in (events.BACKUP_UNIT, events.RESTORE_DRILL_UNIT, events.RECONCILE_UNIT):
+        text = (systemd / unit).read_text(encoding="utf-8")
+        assert "OnFailure=pagentos-failure-marker@" in text, unit
