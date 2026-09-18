@@ -13121,9 +13121,8 @@ application half (8 tests). Evidence:
 4. *"Yalnızca dinleme modu: ortamdaki tüm sesleri dinler ama sadece benim sesime karşılık
    verir."* Speaker verification is used here, and only here, as a **response filter**.
    Owner's stated treatment of other people's speech (corrected the same day): **"anlar ve
-   saklar"** — transcribed and KEPT. **Not yet built, and deliberately left open:** storing
-   third parties' conversations needs its own decision on notice, retention and deletion first
-   (see "Open" below).
+   saklar"** — transcribed and KEPT until the owner says to forget (see "Decided the same
+   day" below).
 
 **Rules that make those decisions safe (not owner-adjustable):**
 
@@ -13145,11 +13144,8 @@ application half (8 tests). Evidence:
   saying "evet" after a confirmation prompt confirms nothing; only an owner-verified segment
   can. This is where the voiceprint earns its place — as a filter on who can speak TO the
   system, never as a key.
-* **Until the open question is decided, nothing of other people's speech is kept.** Their
-  transcripts live only in process memory and are dropped when the mode ends or the process
-  restarts; never written to the database, the persisted session context, the Activity Ledger,
-  episodic memory, the world model or any log line (route telemetry records intent and class,
-  never words — req 749). Raw audio is never stored (req 249) in any case.
+* **Never in log lines.** Route telemetry records intent and class, never words (req 749);
+  that holds for everyone's speech. Raw audio is never stored (req 249) in any case.
 * **Honesty about the provider.** Live transcription sends that audio to the configured STT
   provider, whose own retention terms apply; this system keeps nothing, and says so rather
   than claiming more.
@@ -13160,15 +13156,29 @@ application half (8 tests). Evidence:
   authentication; microphone capture happens only in the Session Companion, never the Session-0
   service.
 
-**Open (owner decision, before listen-only storage is built):** keeping other people's
-conversations is recording third parties who have not consented. Under TCK 133 recording
-non-public conversations without the parties' consent can be a criminal offence, and under KVKK
-their transcripts are personal data. The lawful shape needs three answers from the owner:
-(a) **notice** — the people who live in or visit the home know the device transcribes, backed
-by the distinct indicator above; (b) **retention** — how long transcripts are kept before they
-are deleted automatically; (c) **deletion** — "unut" / delete-on-request, including for a
-specific person or time range. The legal responsibility for recording is the owner's; the
-system's job is to make the lawful shape the easy one and to say plainly when it is not.
+**Decided the same day (owner's answers to the open question):**
+(a) **notice** — "biliyorlar, yazılı ve sözlü söyleniyor": the people who live in and visit
+the home are told, in writing and verbally; (b) **retention** — kept until the owner says to
+forget; (c) **deletion** — "şu kişinin, şu saatin konuşmasını unut". The owner carries the legal
+responsibility for recording (TCK 133, KVKK); the rules below make the lawful shape the default.
+
+* **Who said it.** The system knows the owner's voice. Anyone else is stored as an unidentified
+  speaker unless that person has enrolled their own voice. A voiceprint is biometric data, a
+  KVKK special category that needs that person's own explicit consent, so the system never
+  builds one for a third party on its own. Deleting "şu kişinin" works for enrolled people;
+  for everyone else deletion is by time range, and the owner is told which applies.
+* **"Unut" is a real deletion**: the transcript rows and everything derived from them (search
+  index, embeddings, memory entries, summaries) are removed from the live system. The audit
+  trail records that a deletion happened and its scope — never the deleted words. Encrypted
+  backups still hold the data until they rotate out, and the system says so rather than
+  claiming an instant erasure it cannot perform.
+* **"Unut" vs "unutma".** The deletion command is routed by the deterministic router with the
+  word-boundary discipline recorded after the 2026-09 `unut`/`unutma` incident: "unutma"
+  (= remember) must never reach a deletion.
+* **Stored speech stays untrusted.** Retrieved later as context, other people's words can
+  inform an answer and can never issue or confirm a command.
+* Transcripts only — raw audio is never stored (req 249). Owner-only access, encrypted at rest
+  like the rest of the owner's data, never in log lines.
 
 **Order of work:** (1) two-step confirmation + (2) the editable policy, together, since they
 are one structure; then (3) listen-only mode, which needs owner approval to download a local
