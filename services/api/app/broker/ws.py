@@ -162,6 +162,7 @@ async def deliver_command(
             error=f"{type(exc).__name__}: {exc}",
         )
         return False
+    connection.note_delivered(command.id)
     await asyncio.to_thread(_mark_delivered, runtime, command.id)
     runtime.counters["commands_delivered"] += 1
     logger.info(
@@ -184,7 +185,19 @@ async def _redeliver_pending(runtime: BrokerRuntime, connection: DeviceConnectio
             return service.deliverable_commands(db, connection.device_id)
 
     for command in await asyncio.to_thread(load):
+        if connection.already_sent(command.id):
+            # Live dispatch beat the replay to it; sending it again would hand the device
+            # the same work twice (see DeviceConnection.replay_guard).
+            logger.info(
+                "broker_command_replay_skipped",
+                command_id=str(command.id),
+                device_id=str(connection.device_id),
+                command_trace_id=command.trace_id,
+            )
+            continue
         await deliver_command(runtime, connection, command)
+    # The opening replay is over: from here a duplicate is a genuine redelivery.
+    connection.close_replay_window()
 
 
 async def _handle_command_ack(

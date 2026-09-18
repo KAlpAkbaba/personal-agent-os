@@ -31,6 +31,28 @@ class DeviceConnection:
     session_id: uuid.UUID
     websocket: Any  # starlette WebSocket
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: Command ids already sent on THIS connection during its opening moments.
+    #:
+    #: A connection is registered for live dispatch before it replays the commands that
+    #: were waiting for it, so a command created in that window is delivered twice: once
+    #: by the POST that created it, once by the replay that re-reads the same still-unacked
+    #: row (CI, 2026-09-18: two `broker_command_delivered` for one id, 3 ms apart, the
+    #: second with no trace_id). The protocol tolerates a duplicate - the agent re-acks -
+    #: but a tolerated duplicate is still a second `desktop.open_application` handed to the
+    #: device. The replay consults this set and then drops it: once the opening replay is
+    #: done the window is closed, later duplicates are genuine cross-reconnect redeliveries,
+    #: and nothing grows for the life of a long connection.
+    replay_guard: set[uuid.UUID] | None = field(default_factory=set)
+
+    def note_delivered(self, command_id: uuid.UUID) -> None:
+        if self.replay_guard is not None:
+            self.replay_guard.add(command_id)
+
+    def already_sent(self, command_id: uuid.UUID) -> bool:
+        return self.replay_guard is not None and command_id in self.replay_guard
+
+    def close_replay_window(self) -> None:
+        self.replay_guard = None
 
     async def send_json(self, frame: dict[str, Any]) -> None:
         async with self.send_lock:
