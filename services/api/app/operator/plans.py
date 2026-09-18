@@ -1506,6 +1506,55 @@ def office_type(window_id: str, image: str, text: str) -> list[OperatorStep]:
     return steps
 
 
+def click_and_expect_change(
+    window_id: str, x: int, y: int, *, title_before: str
+) -> list[OperatorStep]:
+    """A left click where the owner's words were seen, proven by what a click on a link or a
+    video does: the window's title is no longer what it was (owner decision 2026-09-18 -
+    "koordinatı mouse'u götürüp sol klik ile açacak"). The pointer's landing is the device's
+    own re-read of the cursor; the change is a separate ``window.current``, looked at up to
+    three times two seconds apart because a page opens a moment after the click."""
+
+    def _landed(result: DeviceRunResult) -> bool:
+        body = result.result if isinstance(result.result, dict) else {}
+        observed = body.get("observed") if isinstance(body.get("observed"), dict) else {}
+        cursor = observed.get("cursor") if isinstance(observed.get("cursor"), dict) else None
+        if cursor is None:
+            return False
+        try:
+            return max(abs(int(cursor["x"]) - x), abs(int(cursor["y"]) - y)) <= 2
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def _changed(result: DeviceRunResult) -> bool:
+        title = _title_of(result)
+        page = page_title(title).strip().lower()
+        return bool(title) and title != title_before and page not in _BLANK_TAB_TITLES
+
+    return [
+        _activate_step(window_id, "screen_click:activate"),
+        OperatorStep(
+            capability="pointer.click",
+            payload={"window_id": window_id, "x": int(x), "y": int(y), "space": "screen"},
+            postcondition=_landed,
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_VISUAL,
+            name="screen_click:click",
+        ),
+        OperatorStep(
+            capability="window.current",
+            payload={},
+            postcondition=_changed,
+            timeout_s=10.0,
+            retries=2,
+            retry_delay_s=2.0,
+            level=LEVEL_API,
+            name="screen_click:verify",
+        ),
+    ]
+
+
 def visual_click(window_id: str, x: int, y: int, *, absent_name: str) -> list[OperatorStep]:
     """Req 106: the visual rung. A click where the vision provider said the element is
     (screen space), verified by the TREE afterwards: the element of that name is gone -

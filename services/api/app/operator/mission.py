@@ -89,6 +89,9 @@ KIND_SETTINGS_OPEN: Final = "settings_open"
 KIND_EXPLORER_OPEN: Final = "explorer_open"
 KIND_IDE_OPEN_FILE: Final = "ide_open_file"
 KIND_OFFICE_TYPE: Final = "office_type"
+#: 2026-09-18 (owner: "ekrandaki söylediğim şeyin yerini bulup mouse'u götürüp sol klik
+#: ile açacak"): a thing the owner can SEE on the screen, clicked where it is.
+KIND_CLICK_TEXT: Final = "click_text"
 STEP_KINDS: Final[tuple[str, ...]] = (
     KIND_APP_OPEN,
     KIND_NAVIGATE,
@@ -651,21 +654,16 @@ def decide(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decisi
 # ------------------------------------------------------------ the visual rung (106)
 
 
-def _decide_visual(
-    step: MissionStep, obs: Observation, ports: MissionPorts, mission_id: uuid.UUID
-) -> Decision:
-    """Req 106: the fifth rung. The tree could not find the element; capture the window,
-    ask the vision provider WHERE the named thing is, and click there - then read the
-    tree again so the click is judged by something the click did not write."""
-    if step.kind not in VISUAL_FALLBACK_KINDS:
-        raise NeedsOwner("vision_unavailable", "Bu adım için görsel bir yedek yolum yok efendim.")
+def _locate_on_screen(
+    ports: MissionPorts, mission_id: uuid.UUID, step: MissionStep, window_id: str, name: str
+) -> tuple[int, int]:
+    """Capture the window, ask the vision provider WHERE ``name`` is, and return the screen
+    point to click - or stop for the owner, saying which of those could not be done."""
     if ports.vision is None or not hasattr(ports.vision, "locate"):
         raise NeedsOwner(
             "vision_unavailable",
             "Ekrandan bakarak bulmam gerekiyordu ama görsel sağlayıcı tanımlı değil efendim.",
         )
-    window_id = _require_foreground(obs, "ekrana bakmak")
-    name = str(step.args.get("name") or "")
     capture = ports.device.run(
         capability="screen.capture",
         payload={"window_id": window_id},
@@ -684,14 +682,56 @@ def _decide_visual(
     if location is None:
         raise NeedsOwner("ui_target_not_found", f"Ekranda '{name}' diye bir şey göremedim efendim.")
     scale = float(body.get("scale") or 1)
-    x = int(round(location.x * scale))
-    y = int(round(location.y * scale))
+    return int(round(location.x * scale)), int(round(location.y * scale))
+
+
+def _decide_visual(
+    step: MissionStep, obs: Observation, ports: MissionPorts, mission_id: uuid.UUID
+) -> Decision:
+    """Req 106: the fifth rung. The tree could not find the element; capture the window,
+    ask the vision provider WHERE the named thing is, and click there - then read the
+    tree again so the click is judged by something the click did not write."""
+    if step.kind not in VISUAL_FALLBACK_KINDS:
+        raise NeedsOwner("vision_unavailable", "Bu adım için görsel bir yedek yolum yok efendim.")
+    window_id = _require_foreground(obs, "ekrana bakmak")
+    name = str(step.args.get("name") or "")
+    x, y = _locate_on_screen(ports, mission_id, step, window_id, name)
     return Decision(
         "pointer_click",
         plans.visual_click(window_id, x, y, absent_name=name),
         LEVEL_VISUAL,
         note=f"görsel yedek: '{name}' ({x},{y})",
     )
+
+
+def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    """Something the owner sees on the screen - a video's title, a link, a label - clicked
+    the way the owner would: the pointer moved there, a left click.
+
+    Why the picture and not the tree first: the thing is inside a WEB PAGE, and the tree the
+    device can read stops at five levels / 200 nodes, far above a page's links; the rung that
+    can actually see it is the screen. And the proof is not the click: the window's title
+    must CHANGE afterwards (a video opened, a page moved on), read by a separate look - the
+    tree-absence check the button rung uses would pass before the click, too, on a page whose
+    links the tree never reaches."""
+    ports: MissionPorts | None = _PORTS.get(mission_id)
+    if ports is None:
+        raise NeedsOwner("dependency_unavailable", "Ekrana ulaşamadım efendim.")
+    name = str(step.args.get("name") or "")
+    if not name:
+        raise NeedsOwner("validation_error", "Neye tıklayacağımı anlayamadım efendim.")
+    window_id = _require_foreground(obs, "tıklamak")
+    title_before = str((obs.foreground or {}).get("title") or "")
+    x, y = _locate_on_screen(ports, mission_id, step, window_id, name)
+    return Decision(
+        "screen_click",
+        plans.click_and_expect_change(window_id, x, y, title_before=title_before),
+        LEVEL_VISUAL,
+        note=f"ekranda '{name}' ({x},{y})",
+    )
+
+
+DECIDERS[KIND_CLICK_TEXT] = _decide_click_text
 
 
 # -------------------------------------------------------------------- the loop
@@ -1044,6 +1084,86 @@ def _browser_name_positions(tokens: tuple[str, ...]) -> set[int]:
     return out
 
 
+#: Where a site's own search lives. "YouTube'da X", "Google'da X ara": the locative is
+#: Turkish for "search on", and the owner's prototype did exactly this - the words typed
+#: into the browser and Enter pressed (owner, 2026-09-18).
+SEARCH_URLS: Final[dict[str, str]] = {
+    "youtube": "https://www.youtube.com/results?search_query={q}",
+    "google": "https://www.google.com/search?q={q}",
+}
+_LOCATIVE_SUFFIXES: Final[frozenset[str]] = frozenset({"da", "de", "ta", "te"})
+#: Words in a search sentence that are the request, not the thing searched for.
+_SEARCH_STOP: Final[frozenset[str]] = frozenset(
+    {
+        "ara",
+        "arat",
+        "bul",
+        "aç",
+        "ac",
+        "oynat",
+        "gir",
+        "git",
+        "göster",
+        "goster",
+        "chrome",
+        "chromedan",
+        "tarayıcıdan",
+        "tarayicidan",
+        "lütfen",
+        "lutfen",
+        "bana",
+        "benim",
+        "için",
+        "icin",
+    }
+)
+
+
+#: Characters that would change what a search address MEANS; they are dropped from the words.
+_URL_SIGNIFICANT: Final = "&#?%/=+"
+
+
+def _readable_query(query: str) -> str:
+    """The words as the owner would see them typed into the address bar - "Barış+Manço",
+    not "Bar%C4%B1%C5%9F+Man%C3%A7o". Chrome takes the Unicode as it is; only the
+    characters that would change the address's meaning are dropped."""
+    # a separator, never glued: "5+3" must not become "53"
+    cleaned = "".join(" " if ch in _URL_SIGNIFICANT else ch for ch in query)
+    return "+".join(cleaned.split())
+
+
+def _segment_search(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "YouTube'da Barış Manço aç" -> the site's own search results for "Barış Manço"."""
+    brand_words = _browser_name_positions(tokens)
+    for index, tok in enumerate(tokens[:-1]):
+        if index in brand_words or tok not in SEARCH_URLS:
+            continue
+        if tokens[index + 1] not in _LOCATIVE_SUFFIXES:
+            continue
+        # The words searched for come from the owner's own sentence, each cut at its
+        # apostrophe: the normaliser splits "Chrome'dan" into "chrome" + "dan", and a token
+        # list would carry that "dan" into the search ("dan sezen aksu", 2026-09-18).
+        rest: list[str] = []
+        for word in raw.split():
+            base = word
+            for mark in _APOSTROPHES:
+                base = base.split(mark, 1)[0]
+            base = base.strip(_WORD_EDGE_PUNCTUATION)
+            head = _head(base)
+            if not head or head in SEARCH_URLS or head in _SEARCH_STOP:
+                continue
+            if head.startswith("video") or head in _BROWSER_BRANDS:
+                continue
+            rest.append(base)
+        query = " ".join(rest)
+        url = SEARCH_URLS[tok].format(q=_readable_query(query))
+        site = "YouTube" if tok == "youtube" else "Google"
+        return MissionStep(
+            id="", kind=KIND_NAVIGATE, args={"url": url}, label_tr=f"{site}'da '{query}' ara"
+        )
+    return None
+
+
 def _segment_navigate(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     if not any(_strip_suffix(t) in _GO_VERBS or t in _GO_VERBS for t in tokens):
         return None
@@ -1131,14 +1251,107 @@ def _quoted_or_before_verb(raw: str, tokens: tuple[str, ...], *, skip: tuple[str
     return " ".join(before).strip()
 
 
+#: The words that make a sentence about something ON THE SCREEN rather than an app or a site.
+_CLICK_VERB_STEMS: Final[tuple[str, ...]] = ("tıkla", "tikla", "oynat", "başlat", "baslat")
+_OPEN_OR_CLICK_WORDS: Final[frozenset[str]] = frozenset({"aç", "ac", "gir", "bas"})
+_ON_SCREEN_WORDS: Final[frozenset[str]] = frozenset(
+    {"ekranda", "ekrandaki", "sayfada", "sayfadaki"}
+)
+_BUTTON_WORDS: Final[tuple[str, ...]] = ("düğme", "dugme", "buton", "button", "tuş", "tus")
+#: Words around a target that are not part of it ("ekranda ŞU ... YAZANA tıkla").
+_TARGET_FILLERS: Final[frozenset[str]] = frozenset(
+    {
+        "ekranda",
+        "ekrandaki",
+        "sayfada",
+        "sayfadaki",
+        "şu",
+        "su",
+        "şuna",
+        "bu",
+        "buna",
+        "yazana",
+        "yazan",
+        "yere",
+        "yazıya",
+        "yaziya",
+        "lütfen",
+        "lutfen",
+    }
+)
+_ORDINAL_WORDS: Final[frozenset[str]] = frozenset(
+    {"ilk", "birinci", "ikinci", "üçüncü", "ucuncu", "dördüncü", "dorduncu", "son", "sonuncu"}
+)
+_APOSTROPHES: Final[tuple[str, ...]] = ("'", "’")
+_WORD_EDGE_PUNCTUATION: Final = ".,!?;:" + chr(34) + "“”"
+
+
+def _head(word: str) -> str:
+    normal = _tokens(word)
+    return normal[0] if normal else ""
+
+
+def _is_trigger(head: str) -> bool:
+    return (
+        head.startswith("video")
+        or head in _OPEN_OR_CLICK_WORDS
+        or head.startswith(_CLICK_VERB_STEMS)
+    )
+
+
+def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "Atatürk belgeseli videosunu aç", "Tarkan'a tıkla", "Ekranda Abone ol yazana tıkla",
+    "İlk videoyu oynat" - something visible, named by the owner. Last in the matcher order
+    so a button ("... düğmesine tıkla"), an application or a site keeps its own reading."""
+    # A BUTTON is the tree's ("İptal butonuna tıkla" -> ui.invoke by name, a rung above the
+    # picture); claiming it here moved it off that rung (caught by test_operator_ui).
+    if any(t.startswith(_BUTTON_WORDS) for t in tokens):
+        return None
+    has_video = any(t.startswith("video") for t in tokens)
+    has_click = any(t.startswith(("tıkla", "tikla")) for t in tokens)
+    on_screen = any(t in _ON_SCREEN_WORDS for t in tokens)
+    has_verb = any(t in _OPEN_OR_CLICK_WORDS or t.startswith(_CLICK_VERB_STEMS) for t in tokens)
+    if not has_verb or not (has_video or has_click or on_screen):
+        return None
+    words: list[str] = []
+    for word in raw.split():
+        head = _head(word)
+        if _is_trigger(head):
+            break
+        if head in _TARGET_FILLERS:
+            continue
+        words.append(word.strip(_WORD_EDGE_PUNCTUATION))
+    if words:
+        last = words[-1]
+        for mark in _APOSTROPHES:
+            last = last.split(mark, 1)[0]
+        words[-1] = last
+    words = [w for w in words if w]
+    if not words:
+        return None
+    target = " ".join(words)
+    if has_video and all(_head(w) in _ORDINAL_WORDS for w in words):
+        target = f"{target} video"
+    return MissionStep(
+        id="",
+        kind=KIND_CLICK_TEXT,
+        args={"name": target},
+        label_tr=f"ekranda '{target}' yazan yere tıkla",
+    )
+
+
 SEGMENT_MATCHERS: Final[tuple[Callable[[tuple[str, ...], str], MissionStep | None], ...]] = (
     _segment_settings,
     _segment_explorer,
     _segment_ide,
     _segment_office,
+    _segment_search,
     _segment_navigate,
     _segment_app_open,
     _segment_ui_invoke,
+    # Before type_text: "Ekranda Abone ol YAZANA tıkla" names a thing to click, and
+    # type_text's "yaz" read it as text to TYPE into the window (2026-09-18).
+    _segment_click_text,
     _segment_type_text,
     _segment_window_close,
 )
@@ -1209,6 +1422,7 @@ __all__ = [
     "DECIDERS",
     "EXPLORER_FOLDERS",
     "KIND_APP_OPEN",
+    "KIND_CLICK_TEXT",
     "KIND_EXPLORER_OPEN",
     "KIND_IDE_OPEN_FILE",
     "KIND_NAVIGATE",

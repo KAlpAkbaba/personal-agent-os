@@ -1160,3 +1160,202 @@ def test_the_model_may_still_stop_or_ask() -> None:
         out = tools_mission.operator_mission(_mission_ctx(db, said=None), {"action": "cancel"})
         assert out.get("error_class") in (None, "")
         assert mission_service.get_mission(db, row.id).status == MISSION_CANCELLED
+
+
+# ------------- 2026-09-18: "ekrandaki söylediğim şeyin yerini bulup mouse'u götürüp sol klik"
+
+
+@pytest.mark.parametrize(
+    ("said", "target"),
+    [
+        ("Atatürk belgeseli videosunu aç", "Atatürk belgeseli"),
+        ("Tarkan’a tıkla", "Tarkan"),
+        ("Ekranda Abone ol yazana tıkla", "Abone ol"),
+        ("İlk videoyu aç", "İlk video"),
+        ("Şımarık videosunu oynat", "Şımarık"),
+    ],
+)
+def test_the_planner_reads_a_thing_on_the_screen(said: str, target: str) -> None:
+    m = plan_mission(said)
+    assert [(s.kind, s.args) for s in m.steps] == [(mission.KIND_CLICK_TEXT, {"name": target})]
+
+
+def test_a_thing_to_click_is_never_typed() -> None:
+    """ "... YAZANA tıkla" was read by the typing matcher as text to type INTO the window."""
+    m = plan_mission("Ekranda Abone ol yazana tıkla")
+    assert KIND_TYPE_TEXT not in [s.kind for s in m.steps]
+
+
+@pytest.mark.parametrize(
+    ("said", "kind"),
+    [
+        ("Tamam düğmesine tıkla", KIND_UI_INVOKE),
+        ("Not Defteri’ni aç", KIND_APP_OPEN),
+        ("Word’e merhaba yaz", KIND_OFFICE_TYPE),
+    ],
+)
+def test_buttons_applications_and_typing_keep_their_own_reading(said: str, kind: str) -> None:
+    assert plan_mission(said).steps[-1].kind == kind
+
+
+def test_a_whole_request_opens_the_site_and_then_the_video() -> None:
+    m = plan_mission("Chrome’dan YouTube’u aç ve Barış Manço videosunu aç")
+    assert [s.kind for s in m.steps] == [KIND_APP_OPEN, KIND_NAVIGATE, mission.KIND_CLICK_TEXT]
+    assert m.steps[-1].args == {"name": "Barış Manço"}
+
+
+YOUTUBE = _window(2, "chrome.exe", "YouTube - Google Chrome")
+
+
+def _youtube_page(*, opens_to: str = "Barış Manço - Dönence - YouTube - Google Chrome") -> Any:
+    """The owner's Chrome on YouTube. A left click changes the title - only on the SECOND
+    look after it, as a video page opens a moment later."""
+    state = {"clicked": False, "looks": 0}
+
+    def current(payload: dict[str, Any]) -> DeviceRunResult:
+        if state["clicked"]:
+            state["looks"] += 1
+        title = opens_to if state["clicked"] and state["looks"] >= 2 else YOUTUBE["title"]
+        return ok(window={**YOUTUBE, "title": title})
+
+    def click(payload: dict[str, Any]) -> DeviceRunResult:
+        state["clicked"] = True
+        x, y = int(payload["x"]), int(payload["y"])
+        return ok(
+            x=x,
+            y=y,
+            space="screen",
+            screen_x=x,
+            screen_y=y,
+            observed={"cursor": {"x": x, "y": y}, "window": dict(YOUTUBE)},
+        )
+
+    return FakeDeviceAction(
+        results={
+            "window.current": current,
+            "window.list": ok(windows=[dict(YOUTUBE)]),
+            "window.activate": lambda p: ok(
+                window={**YOUTUBE, "window_id": str(p.get("window_id"))}
+            ),
+            "screen.capture": ok(width=200, height=100, png_base64=ONE_PIXEL_PNG_B64, scale=1),
+            "pointer.click": click,
+        }
+    )
+
+
+def test_the_video_is_found_on_the_screen_and_clicked_where_it_is(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _youtube_page()
+    vision = FakeVisionProvider(location=(640, 360))
+
+    m = plan_mission("Barış Manço videosunu aç")
+    run_mission(m, MissionPorts(device=device, vision=vision))
+
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert vision.targets == ["Barış Manço"], "the picture was asked for the owner's own words"
+    assert device.payload_for("pointer.click") == {
+        "window_id": YOUTUBE["window_id"],
+        "x": 640,
+        "y": 360,
+        "space": "screen",
+    }
+    assert m.steps[0].level == LEVEL_VISUAL
+
+
+def test_a_click_that_opened_nothing_is_not_reported_as_opened(monkeypatch) -> None:
+    """The click landed; the title never moved. That is a step that did not do what was
+    asked - never "videoyu açtım" on the strength of a click."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _youtube_page(opens_to=YOUTUBE["title"])
+    vision = FakeVisionProvider(location=(640, 360))
+
+    m = plan_mission("Barış Manço videosunu aç")
+    run_mission(m, MissionPorts(device=device, vision=vision))
+
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "postcondition_failed"
+
+
+def test_a_thing_the_picture_cannot_find_is_said_not_guessed() -> None:
+    device = _youtube_page()
+    m = plan_mission("Barış Manço videosunu aç")
+    run_mission(m, MissionPorts(device=device, vision=FakeVisionProvider(location=None)))
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "ui_target_not_found"
+    assert "pointer.click" not in device.capabilities_called()
+
+
+def test_without_a_picture_there_is_no_coordinate_click() -> None:
+    device = _youtube_page()
+    m = plan_mission("Barış Manço videosunu aç")
+    run_mission(m, MissionPorts(device=device, vision=None))
+    assert m.steps[0].error_class == "vision_unavailable"
+    assert "pointer.click" not in device.capabilities_called()
+
+
+# ------------------ "YouTube'da X", "Google'da X ara": the words typed, Enter pressed
+
+
+@pytest.mark.parametrize(
+    ("said", "url"),
+    [
+        ("YouTube’da Barış Manço aç", "https://www.youtube.com/results?search_query=Barış+Manço"),
+        (
+            "YouTube’da Barış Manço videosunu aç",
+            "https://www.youtube.com/results?search_query=Barış+Manço",
+        ),
+        ("Google’da hava durumu ara", "https://www.google.com/search?q=hava+durumu"),
+        # the normaliser splits "Chrome'dan" into "chrome" + "dan"; "dan" is not searched for
+        (
+            "Chrome’dan YouTube’da Sezen Aksu ara",
+            "https://www.youtube.com/results?search_query=Sezen+Aksu",
+        ),
+        (
+            "Google Chrome’da YouTube’da Tarkan ara",
+            "https://www.youtube.com/results?search_query=Tarkan",
+        ),
+        ("Google’da 5+3 kaç ara", "https://www.google.com/search?q=5+3+kaç"),
+    ],
+)
+def test_a_site_named_with_the_locative_is_searched_on(said: str, url: str) -> None:
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == [KIND_APP_OPEN, KIND_NAVIGATE]
+    assert m.steps[-1].args == {"url": url}
+
+
+@pytest.mark.parametrize("said", ["YouTube’u aç", "Chrome’dan YouTube’u aç", "Google’a git"])
+def test_a_site_named_as_a_destination_is_just_opened(said: str) -> None:
+    url = plan_mission(said).steps[-1].args["url"]
+    assert "search" not in url and "results" not in url
+
+
+def test_the_search_is_typed_readably_and_arrives_on_the_site(monkeypatch) -> None:
+    """What the owner watches being typed is the words they said, and the results page is
+    still recognised as the site it belongs to."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _owners_chrome_desktop(lands_on="Barış Manço - YouTube - Google Chrome")
+
+    m = plan_mission("YouTube’da Barış Manço aç")
+    run_mission(m, MissionPorts(device=device))
+
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    typed = device.payload_for("keyboard.type")["text"]
+    assert typed == "https://www.youtube.com/results?search_query=Barış+Manço"
+
+
+@pytest.mark.parametrize(
+    "said", ["İptal butonuna tıkla", "Tamam düğmesine tıkla", "Kaydet tuşuna bas"]
+)
+def test_a_button_is_never_the_pictures(said: str) -> None:
+    """Buttons are named in the accessibility tree - a rung above the screen picture."""
+    try:
+        m = plan_mission(said)
+    except MissionClarificationNeeded:
+        return  # the single-step ui.invoke tool answers it, as before
+    assert mission.KIND_CLICK_TEXT not in [s.kind for s in m.steps]
