@@ -251,18 +251,62 @@ handoff_devices() {
     fi
 }
 
+failing_checks_of() {
+    # failing_checks_of BODY: the REQUIRED checks the colour itself reports as failing
+    # (app/health.py:failing_checks, published as a flat top-level "failing_checks" string
+    # precisely so this line needs no JSON walking). Empty for a colour that is ok - and
+    # also for a release older than the field, which is why the caller treats "unknown" as
+    # "cannot prove it is no worse" rather than as "nothing is wrong".
+    printf '%s' "$1" | sed -nE 's/.*"failing_checks"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -1
+}
+
+no_worse_than() {
+    # no_worse_than CANDIDATE_LIST INCUMBENT_LIST: every check failing on the candidate is
+    # already failing on the colour that serves today. Both lists are comma-separated.
+    local check
+    for check in $(printf '%s' "$1" | tr ',' ' '); do
+        [ -n "$check" ] || continue
+        case ",$2," in
+            *",$check,"*) ;;
+            *) return 1;;
+        esac
+    done
+    return 0
+}
+
 wait_for_colour() {
-    # wait_for_colour COLOUR EXPECTED_SHA: up to ~120 s for exact healthy provenance.
-    # The API deliberately returns HTTP 200 for degraded health, so transport success or
-    # the mere presence of a status field proves neither health nor the running version.
-    local colour=$1 expected_sha=$2 tries=0 body="" status="" actual_sha=""
+    # wait_for_colour COLOUR EXPECTED_SHA [INCUMBENT_FAILING]: up to ~120 s for exact
+    # healthy provenance. The API deliberately returns HTTP 200 for degraded health, so
+    # transport success or the mere presence of a status field proves neither health nor
+    # the running version.
+    #
+    # INCUMBENT_FAILING is the failing-check list of the colour SERVING RIGHT NOW. Given
+    # it, a candidate that is degraded ONLY by checks the incumbent also fails passes the
+    # gate: those are host-shared conditions (2026-09-18, production: a recovery-supervisor
+    # failure marker on the host) that a colour switch cannot repair, and demanding exact
+    # `ok` there meant the alarm blocked its own remedy - the release deadlocked until a
+    # human deleted a file, which is the owner becoming the operator. A candidate failing
+    # ANYTHING the incumbent does not is still refused: that is the build's own regression.
+    # Without the argument, or against a release too old to publish the field, the rule is
+    # the strict one it has always been.
+    local colour=$1 expected_sha=$2 incumbent_failing=${3:-} tries=0
+    local body="" status="" actual_sha="" failing=""
     while [ "$tries" -lt 40 ]; do
         body="$(in_container_health "$colour" 2>/dev/null || true)"
         status="$(top_health_status "$body")"
         actual_sha="$(served_release "$body")"
-        if [ "$status" = "ok" ] && [ "$actual_sha" = "$expected_sha" ]; then
-            printf '%s' "$body"
-            return 0
+        if [ "$actual_sha" = "$expected_sha" ]; then
+            if [ "$status" = "ok" ]; then
+                printf '%s' "$body"
+                return 0
+            fi
+            failing="$(failing_checks_of "$body")"
+            if [ -n "$status" ] && [ -n "$failing" ] && [ -n "${incumbent_failing:-}" ] \
+                && no_worse_than "$failing" "$incumbent_failing"; then
+                echo "api-$colour reports '$status' only for [$failing], which api-incumbent already reports: host-shared, not this build's regression" >&2
+                printf '%s' "$body"
+                return 0
+            fi
         fi
         tries=$((tries + 1))
         sleep "${PAGENTOS_WAIT_STEP_S:-3}"
@@ -611,7 +655,8 @@ if [ "$mode" = "--rollback" ]; then
     leaving_sha="$(cat "$base/RELEASE" 2>/dev/null || true)"
     echo "rolling back: edge -> api-$prev_colour (${target_sha:-sha unknown}; leaving ${leaving_sha:-unknown})"
     compose up -d --no-deps --wait "api-$prev_colour"
-    body="$(wait_for_colour "$prev_colour" "$target_sha")" || { echo "api-$prev_colour did not become healthy at ${target_sha:-unknown}; the edge stays on api-$active" >&2; exit 75; }
+    rollback_incumbent_failing="$(failing_checks_of "$(in_container_health "$active" 2>/dev/null || true)")"
+    body="$(wait_for_colour "$prev_colour" "$target_sha" "$rollback_incumbent_failing")" || { echo "api-$prev_colour did not become healthy at ${target_sha:-unknown}; the edge stays on api-$active" >&2; exit 75; }
     install_edge_config
     # devices first, then HTTP - the same handoff a release does
     handoff_devices "$active" "$prev_colour" || { rc=$?; echo "device handoff to api-$prev_colour failed ($rc); restoring api-$active" >&2; undrain_colour "$active" >/dev/null; write_upstream "$active" "$active"; reload_edge || true; drain_colour "$prev_colour" >/dev/null; compose stop "api-$prev_colour" >/dev/null 2>&1 || true; exit "$rc"; }
@@ -750,7 +795,12 @@ fi
 cd "$base"
 maybe_interrupt after_idle_up
 
-body="$(wait_for_colour "$idle" "$sha")" || { echo "api-$idle never answered healthy at $sha" >&2; exit 75; }
+# What the colour serving RIGHT NOW is already failing. The candidate is judged against
+# this, not against perfection: a condition both colours share is not a reason to refuse
+# the new build (see wait_for_colour).
+incumbent_failing="$(failing_checks_of "$(in_container_health "$active" 2>/dev/null || true)")"
+[ -n "$incumbent_failing" ] && echo "api-$active (serving) already reports failing checks: [$incumbent_failing]"
+body="$(wait_for_colour "$idle" "$sha" "$incumbent_failing")" || { echo "api-$idle never answered healthy at $sha" >&2; exit 75; }
 echo "health ok on api-$idle"
 
 version_file="$cur/services/api/app/voice/realtime_sessions/contract_version.py"
@@ -820,15 +870,30 @@ maybe_interrupt after_switch
 tries=0
 edge_release=""
 edge_status=""
+edge_failing=""
 while [ "$tries" -lt "${PAGENTOS_EDGE_SETTLE_TRIES:-20}" ]; do
     health="$(curl -fsS "$health_url" 2>/dev/null || true)"
     edge_release="$(served_release "$health")"
     edge_status="$(top_health_status "$health")"
-    if [ "$edge_status" = "ok" ] && [ "$edge_release" = "$sha" ]; then break; fi
+    edge_failing="$(failing_checks_of "$health")"
+    if [ "$edge_release" = "$sha" ]; then
+        # The same rule the pre-switch gate uses: ok, or degraded by nothing the colour we
+        # switched away from was not already degraded by. Without it the post-switch probe
+        # re-imposed exact `ok` a few lines after the pre-switch gate had (correctly) let a
+        # host-shared condition through, and rolled the release straight back out again.
+        if [ "$edge_status" = "ok" ]; then break; fi
+        if [ -n "$edge_status" ] && [ -n "$edge_failing" ] && [ -n "${incumbent_failing:-}" ] \
+            && no_worse_than "$edge_failing" "${incumbent_failing:-}"; then
+            echo "through the edge: '$edge_status' for [$edge_failing], already failing before this release"
+            break
+        fi
+    fi
     tries=$((tries + 1))
     sleep "${PAGENTOS_EDGE_SETTLE_STEP_S:-0.5}"
 done
-if [ "$edge_status" != "ok" ] || [ "$edge_release" != "$sha" ]; then
+if [ "$edge_release" != "$sha" ] || { [ "$edge_status" != "ok" ] \
+    && ! { [ -n "$edge_status" ] && [ -n "$edge_failing" ] && [ -n "${incumbent_failing:-}" ] \
+        && no_worse_than "$edge_failing" "${incumbent_failing:-}"; }; }; then
     echo "through the edge health is '${edge_status:-absent}' and release is '${edge_release:-absent}', expected ok / '$sha' (after $tries probes)" >&2
     exit 76
 fi

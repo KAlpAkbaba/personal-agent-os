@@ -105,12 +105,16 @@ $docker = @(
     # B01 req 2: the schema revision a colour serves. Astra: the top-level status a
     # colour reports, per colour, so a reconcile can be shown one degraded side.
     '    st_var="FAKE_HEALTH_STATUS_$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")"; st="${!st_var:-${FAKE_HEALTH_STATUS:-ok}}"',
+    # B08 2026-09-18: WHICH required checks the colour reports failing. A colour degraded
+    # only by what the serving colour also reports is host-shared, not this build's fault.
+    # FAKE_FAILING_CHECKS_<COLOUR>= (set but empty) models a release too old for the field.
+    '    fc_var="FAKE_FAILING_CHECKS_$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")"; fc="${!fc_var-${FAKE_FAILING_CHECKS-}}"',
     '    # The schema check the colour serves. A migration that ran leaves current == head;',
     '    # the knobs let a test serve the state a FAILED migration leaves behind.',
     '    sc_head="${FAKE_SCHEMA_HEAD:-0040_device_build_identity}"',
     '    sc_cur="${FAKE_SCHEMA_CURRENT:-$sc_head}"',
     '    sc_status=ok; [ "$sc_cur" = "$sc_head" ] || sc_status=fail',
-    '    printf "{\"status\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$st" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
+    '    printf "{\"status\":\"%s\",\"failing_checks\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$st" "$fc" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
     '    exit 0;;',
     '  compose*" exec -T edge nginx -t"*) exit 0;;',
     '  compose*" exec -T edge nginx -s reload"*)',
@@ -147,7 +151,8 @@ $curl = @(
     'colour=$(grep -oE "pagentos_api \{ server api-(blue|green)" "$FAKE_STATE/edge-upstream" 2>/dev/null | head -1 | grep -oE "(blue|green)$")',
     'c=$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")',
     'rel=$(grep "^PAGENTOS_RELEASE_$c=" "$FAKE_ENV" 2>/dev/null | head -1 | sed "s/^[^=]*=//")',
-    'printf "{\"status\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"}}" "${FAKE_EDGE_HEALTH_STATUS:-ok}" "${FAKE_EDGE_RELEASE:-$rel}"'
+    'fc_var="FAKE_FAILING_CHECKS_$(printf "%s" "$colour" | tr "[:lower:]" "[:upper:]")"; fc="${!fc_var-${FAKE_FAILING_CHECKS-}}"',
+    'printf "{\"status\":\"%s\",\"failing_checks\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\"}}" "${FAKE_EDGE_HEALTH_STATUS:-${FAKE_HEALTH_STATUS:-ok}}" "$fc" "${FAKE_EDGE_RELEASE:-$rel}"'
 )
 [IO.File]::WriteAllText((Join-Path $fakeBin "docker"), (($docker -join "`n") + "`n"))
 [IO.File]::WriteAllText((Join-Path $fakeBin "curl"), (($curl -join "`n") + "`n"))
@@ -376,6 +381,34 @@ try {
         Reset-Host
         $edgeDegraded = Invoke-Release -Env @{ FAKE_EDGE_HEALTH_STATUS = "degraded" }
         Assert-True ($edgeDegraded.Exit -eq 76 -and $edgeDegraded.Output -match "health is 'degraded'.*expected ok" -and $edgeDegraded.Output -match "ROLLBACK: switching the edge back to api-blue" -and (Test-UpstreamBoth "blue") -and (Get-Active) -eq "blue") "post-cutover edge health must be ok, even when it reports the expected sha"
+
+        # ---- B08 2026-09-18, measured in production: the alarm must not block its own remedy.
+        # The recovery supervisor's loud takeover wrote a failure marker; the backup health
+        # check read it; EVERY colour therefore reported degraded; and this gate, demanding
+        # exact `ok`, refused to promote the release that would end the incident. A human had
+        # to delete a file before production could move again. The marker is HOST state - the
+        # same on both colours, unrepairable by a colour switch - so what a release must ask
+        # is not "is the host perfect?" but "is this candidate WORSE than what is serving?".
+        Reset-Host
+        $shared = Invoke-Release -Env @{ FAKE_HEALTH_STATUS = "degraded"; FAKE_FAILING_CHECKS = "backup" }
+        if ($env:PAGENTOS_BG_VERBOSE) { Write-Host $shared.Output }
+        Assert-True ($shared.Exit -eq 0 -and (Get-Active) -eq "green" -and (Test-UpstreamBoth "green") -and (Get-Release) -eq $sha) "a candidate degraded ONLY by a check the serving colour also fails (a host-shared incident) is promoted: the recovery release is not blocked by the incident it would end"
+        Assert-True ($shared.Output -match "already reports failing checks: \[backup\]" -and $shared.Output -match "host-shared, not this build's regression") "...and it says so, naming the shared check, instead of promoting silently"
+
+        # The other half of the rule, or it would be no rule at all.
+        Reset-Host
+        $worse = Invoke-Release -Env @{ FAKE_HEALTH_STATUS_GREEN = "degraded"; FAKE_FAILING_CHECKS_GREEN = "db"; FAKE_FAILING_CHECKS_BLUE = "" }
+        Assert-True ($worse.Exit -eq 75 -and (Get-Active) -eq "blue" -and (Test-Up "blue") -and (Get-Release) -eq $old) "a candidate failing a check the serving colour does NOT fail is still refused: that is the build's own regression, not the host's"
+
+        Reset-Host
+        $worseToo = Invoke-Release -Env @{ FAKE_HEALTH_STATUS = "degraded"; FAKE_FAILING_CHECKS_BLUE = "backup"; FAKE_FAILING_CHECKS_GREEN = "backup,db" }
+        Assert-True ($worseToo.Exit -eq 75 -and (Get-Active) -eq "blue") "...including when it fails the shared one AND one of its own"
+
+        # A colour too old to publish the field cannot prove it is no worse, so the rule stays
+        # the strict one it has always been rather than guessing on its behalf.
+        Reset-Host
+        $silent = Invoke-Release -Env @{ FAKE_HEALTH_STATUS = "degraded"; FAKE_FAILING_CHECKS = "" }
+        Assert-True ($silent.Exit -eq 75 -and (Get-Active) -eq "blue") "a degraded candidate that names no failing checks (a release older than the field) is refused, not assumed innocent"
 
         Reset-Host -Active "green"
         $rg = Invoke-Release

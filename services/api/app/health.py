@@ -32,14 +32,22 @@ ADVISORY_CHECKS: frozenset[str] = frozenset({"redis"})
 HEALTHY_STATUSES: tuple[str, ...] = ("ok", "skipped")
 
 
-def is_degraded(checks: dict[str, Any]) -> bool:
-    """Whether any REQUIRED check failed - THE rule, for every reader of a health map.
+def failing_checks(checks: dict[str, Any]) -> list[str]:
+    """The names of the REQUIRED checks that are not healthy, in map order.
 
-    /v1/system/health and the voice `state.now` answer both call this: two readers with two
-    rules is how the owner could hear "Cloud Core kismen saglikli" about a process its own
-    endpoint called ok. A value may be a check dict or a bare status string; a check is
-    advisory by name (ADVISORY_CHECKS) or by carrying `required: false`.
+    WHICH checks fail, not merely whether any does, because a release has to answer a
+    different question from the owner's. The owner asks "is everything well?"; a blue/green
+    release asks "is this candidate colour fit to take the traffic?" - and those parted
+    company on 2026-09-18 in production: the recovery supervisor's own failure marker (an
+    incident on the HOST, identical for both colours and unrepairable by a colour switch)
+    made every colour report degraded, so the release gate that demanded exact `ok` refused
+    to promote the very release that would end the incident. The safety net's alarm disabled
+    the recovery. Publishing the names lets the gate ask whether the candidate is WORSE than
+    what is serving, instead of whether the whole host is perfect. A check is advisory by
+    name (ADVISORY_CHECKS) or by carrying `required: false`; a value may be a check dict or
+    a bare status string.
     """
+    out: list[str] = []
     for name, check in checks.items():
         if check is None:
             continue
@@ -48,8 +56,18 @@ def is_degraded(checks: dict[str, Any]) -> bool:
             continue
         if name in ADVISORY_CHECKS or entry.get("required", True) is False:
             continue
-        return True
-    return False
+        out.append(name)
+    return out
+
+
+def is_degraded(checks: dict[str, Any]) -> bool:
+    """Whether any REQUIRED check failed - THE rule, for every reader of a health map.
+
+    /v1/system/health and the voice `state.now` answer both call this: two readers with two
+    rules is how the owner could hear "Cloud Core kismen saglikli" about a process its own
+    endpoint called ok.
+    """
+    return bool(failing_checks(checks))
 
 
 async def _run_check(

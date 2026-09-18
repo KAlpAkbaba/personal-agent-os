@@ -13054,3 +13054,54 @@ kind of unguarded zero). This field was reachable only via a raw PUT before; now
 web panel offers it as a plain number input, the floor closes that footgun. No default
 changed and no existing caller sets zero (checked across `services/api/app` and
 `services/api/tests`).
+
+## ADR-0170 — A release gate asks "is this candidate worse than what is serving?", not "is the host perfect?" (2026-09-18, B08 req 654)
+
+**Context.** The owner-approved B08 production fault drill (2026-09-18) broke the canonical
+colour deliberately: `api-green`'s image was repointed at a build whose entrypoint exits, so
+it came up and never became healthy — the one failure mode no restart and no rebuild repairs.
+The recovery supervisor behaved exactly as specified: it spent its ~120 s patience budget on
+green, then took over **loudly** with the other colour's last known good release
+(`cedb773`), exited 81, left the failed candidate's tree as `app.interrupted`, and refused to
+call it a promotion. Service returned 139.7 s after the fault, with no owner action.
+
+Then the drill found something the tests could not. Exit 81 triggered
+`OnFailure=pagentos-failure-marker@.service`; the marker landed where the `backup` health
+check reads; the check reported `fail`; the application reported `degraded`. And the
+blue/green release's health gate demands exact `ok` — so the release of the *good* sha, the
+one that would end the incident, could not be promoted. Production had to be unblocked by a
+human deleting a file. The same shape appeared a second time within minutes: after the
+takeover restored the previous tree, neither tree matched the recovery bundle pinned from the
+newer sha, so every tick exited 83 and rewrote the marker. **The safety net's alarm disabled
+the recovery it exists to enable**, which is precisely the "owner becomes the operator"
+outcome CLAUDE.md forbids.
+
+**Decision.** The overall health status and a release's fitness question are two different
+questions, and this repository had one answer for both.
+
+1. `app/health.py` gains `failing_checks(checks)` — the required, non-advisory checks that
+   are not healthy, by name. `is_degraded` becomes exactly "that list is non-empty", so the
+   owner's status line and the release gate cannot drift the way the two readers of a health
+   map drifted once before (the Redis case, ADR note 2026-09-11).
+2. `/v1/system/health` publishes `failing_checks` as a **flat top-level string**. Deliberately
+   not nested: `release-cloud-core-bluegreen.sh` reads it from a shell with one `sed`
+   expression, and a nested field would put that script back in the business of parsing JSON
+   with regexes — which is how a nested provider's `"status":"ok"` once masked top-level
+   degraded health.
+3. The release's pre-switch gate and its post-cutover edge probe accept a candidate that is
+   degraded **only** by checks the colour already serving also fails, and still refuse
+   anything worse. A condition both colours report is host-shared and unrepairable by a colour
+   switch; a check the candidate alone fails is that build's own regression.
+
+**Why this is not a loosening.** It is the reasoning the reconcile already applied at exit 84
+("a colour switch cannot repair a dependency both colours share"), applied at the other gate.
+A broken candidate is refused exactly as before — proven by mutation, both halves
+independently. A candidate too old to publish the field cannot prove it is no worse, so it
+meets the strict rule it has always met; the rule never guesses on a colour's behalf.
+
+**Consequences.** A release can now end an incident the supervisor reported, without a human
+deleting a marker. The marker still degrades the product, and the owner still sees it —
+nothing was silenced. `scripts/tests/cloud-release-bluegreen.tests.ps1` holds the release
+half (5 assertions) and `services/api/tests/unit/test_health_failing_checks.py` the
+application half (8 tests). Evidence:
+`docs/evidence/b08-recovery-supervisor-2026-09-18.json`.

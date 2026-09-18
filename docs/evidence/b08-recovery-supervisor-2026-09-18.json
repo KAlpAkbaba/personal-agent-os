@@ -1,0 +1,134 @@
+{
+  "kind": "b08_recovery_supervisor_production_drill",
+  "date": "2026-09-18",
+  "host": "pagentos-core (Hetzner NBG1, tailnet 100.90.158.26)",
+  "owner_approval": "B08 kurulumunu onaylıyorum, Tailscale onayını da verdim + deliberate fault drill: 'Şimdi yap'",
+  "release_under_test": "6683e88701d93ca5d358519aec65e553579e9d0d",
+  "recovery_bundle": {
+    "approved_sha": "6683e88701d93ca5d358519aec65e553579e9d0d",
+    "path": "/opt/pagentos-recovery",
+    "reconcile_sha256": "a834bc410d8b63a8bd00f5c17a10f2b31bb1bc4a976a8553f80b3f60f0c17268",
+    "integrity_verified_every_run": "journal shows sha256sum OK for reconcile.sh, docker-compose.prod.yml, nginx.conf before every run",
+    "timer": "pagentos-bluegreen-reconcile.timer, 60 s, active"
+  },
+
+  "marker_path_live_probe": {
+    "requirement": "647",
+    "method": "wrote one marker into /var/lib/pagentos-backup/failures/, read the product's health, removed it, read again",
+    "with_marker": {
+      "health": "degraded",
+      "backup_check": "fail",
+      "reasons": ["scheduled_unit_failed"],
+      "failed_units": ["pagentos-marker-probe.service"]
+    },
+    "after_removal": {"health": "ok", "backup_check": "ok", "failed_units": []},
+    "left_behind": 0,
+    "note": "the whole 647 chain end to end: a unit's OnFailure writes where the product reads, and a recovered unit stops being reported"
+  },
+
+  "drills": [
+    {
+      "name": "A - the canonical colour is stopped",
+      "requirement": ["653"],
+      "fault": "docker stop pagentos-prod-api-green",
+      "fault_at": "2026-09-18T09:30:36.346Z",
+      "detected_by": "pagentos-bluegreen-reconcile.timer, natural 60 s tick at 09:30:50 (14 s after the fault)",
+      "action": "reconcile: api-green is not running; starting it from its recorded image",
+      "edge_serving_again_at": "2026-09-18T09:31:09.151Z",
+      "outage_seconds": 30.2,
+      "reconcile_exit": 0,
+      "release_after": "6683e88701d93ca5d358519aec65e553579e9d0d",
+      "colour_after": "green"
+    },
+    {
+      "name": "B - the colour's image is deleted",
+      "requirement": ["653"],
+      "fault": "container removed, image tag untagged (verified unresolvable before proceeding)",
+      "fault_at": "2026-09-18T09:32:18.413Z",
+      "detected_by": "natural 60 s tick at 09:33:20 (62 s after the fault)",
+      "action": "compose rebuilt the missing image from the app tree and started the colour",
+      "edge_serving_again_at": "2026-09-18T09:33:33.135Z",
+      "outage_seconds": 72.0,
+      "reconcile_exit": 0,
+      "note": "the first two attempts at a 'broken colour' were repaired by restart and by rebuild - which is the supervisor working, not the takeover claim. Recorded because a drill that reports recovery from a fault that did not exist proves nothing."
+    },
+    {
+      "name": "C - a broken release: the colour comes up and never becomes healthy",
+      "requirement": ["653", "654", "655", "647"],
+      "fault": "green's image tag repointed at an image built FROM the real one whose entrypoint exits 1; container recreated. Survives both restart and rebuild - a bad build, a bad migration, a missing dependency.",
+      "fault_at": "2026-09-18T09:35:27.980Z",
+      "detection": "reconcile started immediately by hand to shorten the production outage; the DECISION is entirely the supervisor's. Detection latency itself is measured by drills A and B (14 s and 62 s, natural timer).",
+      "patience_budget_spent": "09:35:29 (container unhealthy) -> 09:37:36 (gave up on green) = 127 s, the documented ~120 s wait_for_colour budget",
+      "decision": "reconcile: api-green will not come up; api-blue (cedb773...) is the only recorded alternative - taking over LOUDLY (not a completed promotion)",
+      "edge_serving_again_at": "2026-09-18T09:37:47.676Z",
+      "outage_seconds": 139.7,
+      "served_release_after_takeover": "cedb773f7b0b3e69bac21f9467d3d364286a070d",
+      "reconcile_exit": 81,
+      "systemd_result": "exit-code, OnFailure= triggered",
+      "marker_written": {
+        "unit": "pagentos-bluegreen-reconcile.service",
+        "failed_at": "2026-09-18T09:37:49Z",
+        "result": "exit-code",
+        "exit_status": "81"
+      },
+      "product_reported": "degraded at 09:37:50.061Z through the edge - 1.4 s after the takeover, without anyone being told",
+      "provenance_preserved": {
+        "RELEASE_before": "6683e88701d93ca5d358519aec65e553579e9d0d",
+        "RELEASE_after": "cedb773f7b0b3e69bac21f9467d3d364286a070d",
+        "LAST_KNOWN_GOOD": "cedb773f7b0b3e69bac21f9467d3d364286a070d (unchanged)",
+        "RELEASE_json_after": "{\"sha\":\"cedb773...\",\"colour\":\"blue\",\"build_id\":\"b3c7f236656dbd89\",\"schema_revision\":\"0060_webpush_subscriptions\",\"completed_at\":\"2026-09-18T09:37:49Z\"}",
+        "env_file_sha256_before_and_after": "722786e984300f96358067acd1d4cb22503df9ad13501ddc06a4d1a90a7750d3 (identical)",
+        "trees": "app restored from app.prev; the failed candidate kept as app.interrupted, not deleted",
+        "never_claimed_a_promotion": true
+      },
+      "probe_transitions": [
+        "09:35:24.525Z 200 ok 6683e88",
+        "09:35:30.153Z 502",
+        "09:36:08.517Z 502",
+        "09:37:29.350Z 502",
+        "09:37:47.746Z 200 ok cedb773",
+        "09:37:50.061Z 200 degraded cedb773"
+      ]
+    }
+  ],
+
+  "defect_found_by_the_drill": {
+    "summary": "The safety net's alarm disabled the recovery: a failure marker (host state, identical on both colours) made every colour report degraded, and the blue/green release's health gate demanded exact `ok` - so the release that would end the incident could not be promoted. Production had to be unblocked by a human deleting a file, which is the owner becoming the operator (PROJECT_CONSTITUTION / CLAUDE.md).",
+    "observed": "release of 6683e88 exited 75 'api-green never answered healthy' while docker reported the container healthy; the rollback was clean and blue kept serving throughout",
+    "second_instance_same_shape": "after the takeover restored cedb773's tree, neither tree matched the bundle pinned from 6683e88, so every tick exited 83 and rewrote the marker - a self-sustaining block",
+    "fix": [
+      "services/api/app/health.py: failing_checks() names the required checks that fail; is_degraded() is now exactly 'that list is non-empty', so the owner's status line and the release gate can never drift",
+      "services/api/app/main.py: /v1/system/health publishes 'failing_checks' as a flat top-level string (a shell reads it with one sed expression instead of parsing JSON with regexes)",
+      "scripts/cloud/release-cloud-core-bluegreen.sh: the pre-switch gate and the post-cutover edge probe accept a candidate that is degraded ONLY by checks the colour already serving also fails (host-shared, unrepairable by a colour switch) and still refuse anything worse - the same reasoning the reconcile's exit 84 already used"
+    ],
+    "regression_tests": [
+      "services/api/tests/unit/test_health_failing_checks.py (8 tests)",
+      "scripts/tests/cloud-release-bluegreen.tests.ps1 (+5 assertions: promoted when shared, refused when worse, refused when it fails the shared one AND one of its own, refused when a release too old to publish the field cannot prove it is no worse)"
+    ],
+    "measured_red": {
+      "app": "removing the payload field fails 2 of the 8 new tests; app/main.py restored from a sha256-verified copy (24c92647...)",
+      "release_pre_switch_gate": "`if false &&` on the subset branch -> 2 FAIL (74/2)",
+      "release_post_switch_edge_probe": "`false &&` on both edge branches -> 1 FAIL (75/1), proving the two halves independently",
+      "restored_sha256": "9bfda08320f5ed48fb7753534ed30e97b7aad44b4b939287dea1f683afe0b429"
+    }
+  },
+
+  "restoration": {
+    "method": "documented path - scripts/cloud/release-cloud-core.ps1 -BlueGreen (preflight first), never piped through 2>&1",
+    "result": "RELEASE OK: 6683e88 is running as api-green behind the edge; device handoff 1/1 after 1 s; previous cedb773 kept as last known good",
+    "pre_migration_backup": "8d2b9af00ed7c5ddb3f4d6f438a903aa90caf635374b3b17e823d203d63dab88",
+    "supervisor": "timer active; RECONCILE OK: api-green is canonical; markers, upstreams and containers agree",
+    "health_after": "ok, backup ok, failed_units []",
+    "images_restored": "the parked real image re-tagged; the deliberately broken image removed"
+  },
+
+  "requirements": {
+    "614": "PROVEN_REAL - the supervisor survived a broken main application release and restored service without the owner",
+    "647": "PROVEN_REAL - marker written by OnFailure, read by the product, cleared on recovery (live probe + drill C)",
+    "651": "PROVEN_REAL - installed from a pinned, sha256-verified bundle; integrity checked before every run",
+    "652": "PROVEN_REAL - timer active, 60 s, detection measured at 14 s and 62 s",
+    "653": "PROVEN_REAL - healthy to degraded detected and acted on in drills A, B and C",
+    "654": "PROVEN_REAL - automatic fallback to the other colour's last known good release, loudly, in 139.7 s, without claiming a promotion",
+    "655": "PROVEN_REAL - journal, exit code, marker, RELEASE.json and app.interrupted together are the audit trail of the incident"
+  }
+}

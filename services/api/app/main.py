@@ -69,7 +69,7 @@ from app.genesis.routes import router as genesis_router
 from app.genesis.runtime import GenesisRuntime
 from app.genesis.service import register_genesis_service
 from app.goals.routes import router as goals_router
-from app.health import is_degraded, run_health_checks
+from app.health import failing_checks, run_health_checks
 from app.identity.routes import router as identity_router
 from app.identity.runtime import IdentityRuntime
 from app.ledger import service as ledger_service
@@ -978,7 +978,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["audit_retention"] = audit_retention.health_check(
             dry_run=settings.audit_retention_dry_run
         )
-        status = "degraded" if is_degraded(checks) else "ok"
+        failing = failing_checks(checks)
+        status = "degraded" if failing else "ok"
         # B04 req 8: this is the ONE endpoint that answers without an owner session, and it
         # aggregates ~18 independently-written health_check() methods. Each says it carries
         # no secrets; none of them is checked. One pass over the assembled map costs nothing
@@ -991,6 +992,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # and a release qualification read the same facts.
         return {
             "status": status,
+            # B08 (2026-09-18, measured in production): WHICH required checks are failing,
+            # as a flat top-level string. The blue/green release reads it from a shell with
+            # a regex, so it is deliberately not nested - and it lets the release ask "is
+            # this candidate worse than the colour serving now?" instead of "is the whole
+            # host perfect?". The latter let one host-level incident marker block every
+            # release, including the release that would have ended the incident.
+            "failing_checks": ",".join(failing),
             "version": __version__,
             "release": release_model(settings),
             "checks": checks,
