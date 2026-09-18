@@ -1388,8 +1388,10 @@ def test_the_router_gives_the_mission_what_is_the_missions(said: str, intent: In
 def test_a_step_the_planner_added_is_not_a_second_request() -> None:
     """ "Haberleri YouTube'dan aç" became a two-step mission the moment the planner started
     putting the browser in front of every page - the router counted the planner's own
-    preparation as something the owner asked for (CI 2026-09-18)."""
-    m = plan_mission("Haberleri YouTube’dan aç")
+    preparation as something the owner asked for (CI 2026-09-18). The news sentence itself
+    is refused by the router before the planner sees it now; the implicit step is shown on
+    the plain page request."""
+    m = plan_mission("YouTube’u aç")
     assert m.steps[0].args.get("implicit") is True
     named = plan_mission("Chrome’dan YouTube’u aç")
     assert "implicit" not in named.steps[0].args, "the owner said Chrome; it was asked for"
@@ -1719,3 +1721,35 @@ def test_a_video_not_on_this_tab_is_searched_for_then_clicked(monkeypatch) -> No
         "prepared",
         "verified",
     ]
+
+
+# ------ a site plus a TITLE is not "open the site" (full suite 2026-09-18: 16 corpus cases)
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "YouTube’dan Sezen Aksu Gülümse aç.",
+        "YouTube’dan Tarkan Şımarık aç",
+        "Bana YouTube’dan Güldür Güldür aç",
+    ],
+)
+def test_a_site_with_a_title_is_the_media_players_not_a_page(said: str) -> None:
+    """Opening youtube.com would lose the song; the media player (and its stop / volume
+    family) keeps these exactly as the owner's corpus records them."""
+    with pytest.raises(MissionClarificationNeeded):
+        plan_mission(said)
+    assert resolve_intent(said).intent is Intent.MEDIA_PLAY
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "YouTube’u aç",
+        "Google Chrome’dan direkt YouTube ana sayfasını aç",
+        "Chrome’da youtube.com adresini aç",
+        "Lütfen Google’a git",
+    ],
+)
+def test_a_site_alone_is_still_a_page_in_the_owners_chrome(said: str) -> None:
+    assert plan_mission(said).steps[-1].kind == KIND_NAVIGATE

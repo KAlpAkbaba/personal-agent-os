@@ -1279,6 +1279,49 @@ def _segment_search(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     return None
 
 
+#: Words that may keep a site's name company in "open the site" without naming anything
+#: else: the browser, the request itself, and the page/address noun in its forms.
+_NAVIGATE_FILLER_STEMS: Final[tuple[str, ...]] = (
+    "sayfa",
+    "adres",
+    "site",
+    "direkt",
+    "ana",
+    "lütfen",
+    "lutfen",
+    "bana",
+    "hemen",
+    "şimdi",
+    "simdi",
+    "tarayıcı",
+    "tarayici",
+    "chrome",
+    "edge",
+    "firefox",
+)
+
+
+def _names_more_than_the_site(tokens: tuple[str, ...], site_index: int) -> bool:
+    """True when the sentence carries a content word besides the site, the browser, the
+    verb and the page noun - "YouTube'dan Sezen Aksu Gülümse aç" names a SONG, and opening
+    youtube.com would lose it (that sentence is the media player's, corpus m.play)."""
+    brand_words = _browser_name_positions(tokens)
+    for index, tok in enumerate(tokens):
+        if index == site_index or index in brand_words:
+            continue
+        bare = _strip_suffix(tok)
+        if len(bare) <= 3:  # apostrophe suffixes split off by the normaliser: dan, da, u, ı
+            continue
+        if bare in _GO_VERBS or tok in _GO_VERBS:
+            continue
+        if bare.startswith(_NAVIGATE_FILLER_STEMS):
+            continue
+        if _DOMAIN_RE.match(bare):
+            continue
+        return True
+    return False
+
+
 def _segment_navigate(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     if not any(_strip_suffix(t) in _GO_VERBS or t in _GO_VERBS for t in tokens):
         return None
@@ -1288,11 +1331,15 @@ def _segment_navigate(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
             continue
         bare = _strip_suffix(tok)
         if bare in KNOWN_SITES:
+            if _names_more_than_the_site(tokens, index):
+                return None
             url = KNOWN_SITES[bare]
             return MissionStep(
                 id="", kind=KIND_NAVIGATE, args={"url": url}, label_tr=f"{url} adresine git"
             )
         if _DOMAIN_RE.match(bare) and not bare.endswith(".exe"):
+            if _names_more_than_the_site(tokens, index):
+                return None
             url = f"https://{bare}/"
             return MissionStep(
                 id="", kind=KIND_NAVIGATE, args={"url": url}, label_tr=f"{url} adresine git"

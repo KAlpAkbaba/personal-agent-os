@@ -13183,3 +13183,28 @@ responsibility for recording (TCK 133, KVKK); the rules below make the lawful sh
 **Order of work:** (1) two-step confirmation + (2) the editable policy, together, since they
 are one structure; then (3) listen-only mode, which needs owner approval to download a local
 speaker-embedding model, a one-time enrollment (a few sentences), and a physical test.
+
+## ADR-0172 — CI runs on the owner's own PC (self-hosted runner), and the browser is driven as the owner drives it (2026-09-18)
+
+**CI.** GitHub locked the account for billing: nine hosted jobs per push on a private
+repository, a Windows runner at double rate, ~10 pushes a day. The owner chose a self-hosted
+runner over dropping CI. `pagentos-pc` (E:\actions-runner, runner v2.337.0, sha256 verified
+against GitHub's published checksum) is started from the owner's Startup folder - in the
+interactive session on purpose, because the Windows agent's operator lab needs a real
+foreground, which a Session-0 service cannot give. Every job in `ci.yml` now runs
+`[self-hosted, windows, x64]`; the steps were already portable (Git Bash for `bash`, the
+setup actions download their own tools, Playwright installs Chromium without `--with-deps`).
+Docker Desktop must be running for the integration job. A red run can therefore also mean
+"runner offline" or "Docker down"; read the runner's status before reading a failure.
+
+**The browser.** Owner decisions of the same day, recorded with the code that carries them:
+the operator mission drives the owner's OWN Chrome - attached through its debugging endpoint
+when it has one, otherwise by keyboard and mouse ("sanki ben klavyeyi ve mouse'u
+kullanıyormuşum gibi"): the window in front, Ctrl+L, the address typed, Enter, the title read
+back; tabs by Chrome's own chords; a thing named on the screen located in a capture (OpenAI
+vision for now, local Windows OCR later so the screen never leaves the PC) and clicked, proven
+by the title changing; a paused video proven playing by two captures differing. "YouTube'da X
+ara" and "YouTube'u aç" are the owner's Chrome's; "YouTube'dan <şarkı> aç" stays the media
+player's, because opening the site would lose the song and the stop/volume family lives
+there (the owner's corpus records both). No separate automation profile is opened for
+missions any more - it was a window the owner never used, and its name did not exist.
