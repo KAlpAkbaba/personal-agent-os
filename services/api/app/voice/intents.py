@@ -2247,7 +2247,9 @@ _MISSION_SIMPLE_KINDS: Final[tuple[str, ...]] = (
     "type_text",
     "ui_invoke",
     "window_close",
-    "navigate",
+    # "navigate" left this tuple on 2026-09-18: a page is opened in the OWNER'S OWN Chrome
+    # by the mission's keyboard rung (owner decision), which no single tool does - so
+    # "YouTube'u aç" is a mission, not the media player's.
 )
 _MISSION_APPROVE_FORMS: Final[tuple[str, ...]] = (
     "evet",
@@ -2271,6 +2273,10 @@ def _mission_start_match(tokens: tuple[str, ...], text: str) -> str | None:
     called; a single simple step (one the operator's own tools already serve) is not
     a mission, so nothing is stolen from APP_OPEN / TYPE_TEXT / UI_INVOKE / WINDOW_CLOSE."""
     if len(tokens) < 2:
+        return None
+    # "Haberleri YouTube'dan aç" names a site the planner would open; it is the news
+    # tool's (Latest News Mode), checked here so the planner never sees it (2026-09-18).
+    if _news_noun(tokens) is not None:
         return None
     from app.operator.mission import MissionClarificationNeeded, plan_mission
 

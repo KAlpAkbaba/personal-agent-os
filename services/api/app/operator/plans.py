@@ -11,6 +11,7 @@ how a plan still verifies something that spans two of them.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any, Final
 
 from app.operator import allowlists as _allowlists
@@ -1220,6 +1221,182 @@ def keyboard_navigate(window_id: str, url: str) -> list[OperatorStep]:
             retry_delay_s=2.0,
             level=LEVEL_API,
             name="keyboard_navigate:verify",
+        ),
+    ]
+
+
+def _title_moved(window_id: str, title_before: str) -> Callable[[DeviceRunResult], bool]:
+    def _changed(result: DeviceRunResult) -> bool:
+        window = _window_of(result)
+        return bool(window.get("title")) and str(window.get("title")) != title_before
+
+    del window_id
+    return _changed
+
+
+def _chord_step(window_id: str, keys: list[str], name: str) -> OperatorStep:
+    if not valid_shortcut(keys):
+        raise ValueError(f"{keys!r} is not a chord keyboard.shortcut accepts")
+    return OperatorStep(
+        capability="keyboard.shortcut",
+        payload={"window_id": window_id, "keys": list(keys)},
+        postcondition=lambda r: _landed_in(window_id, r),
+        timeout_s=10.0,
+        retries=0,
+        level=LEVEL_KEYBOARD,
+        name=name,
+    )
+
+
+def _title_check_step(postcondition: Callable[[DeviceRunResult], bool], name: str) -> OperatorStep:
+    return OperatorStep(
+        capability="window.current",
+        payload={},
+        postcondition=postcondition,
+        timeout_s=10.0,
+        retries=2,
+        retry_delay_s=1.0,
+        level=LEVEL_API,
+        name=name,
+    )
+
+
+def tab_switch(
+    window_id: str, *, direction: str = "next", index: int | None = None, title_before: str
+) -> list[OperatorStep]:
+    """Chrome's own tab chords - Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+1..8 (Ctrl+9 = the last) -
+    proven by the window title being a different tab's afterwards. The same title after
+    the chord is not a switch, and is reported as one that did not happen."""
+    if index is not None:
+        if not 1 <= index <= 9:
+            raise ValueError("a tab index is 1..9")
+        keys = ["ctrl", str(index)]
+    elif direction == "prev":
+        keys = ["ctrl", "shift", "tab"]
+    else:
+        keys = ["ctrl", "tab"]
+    return [
+        _activate_step(window_id, "tab_switch:activate"),
+        _chord_step(window_id, keys, "tab_switch:chord"),
+        _title_check_step(_title_moved(window_id, title_before), "tab_switch:verify"),
+    ]
+
+
+def tab_close(window_id: str, *, title_before: str) -> list[OperatorStep]:
+    """Ctrl+W; afterwards either another tab's title is in front, or the window is gone
+    (it was the last tab) - both are the tab closed."""
+
+    def _closed(result: DeviceRunResult) -> bool:
+        window = _window_of(result)
+        if not window:
+            return True
+        return str(window.get("title") or "") != title_before
+
+    return [
+        _activate_step(window_id, "tab_close:activate"),
+        _chord_step(window_id, ["ctrl", "w"], "tab_close:chord"),
+        _title_check_step(_closed, "tab_close:verify"),
+    ]
+
+
+def tab_new(window_id: str) -> list[OperatorStep]:
+    """Ctrl+T; the window's title is a blank tab's afterwards."""
+
+    def _blank(result: DeviceRunResult) -> bool:
+        return page_title(_title_of(result)).strip().lower() in _BLANK_TAB_TITLES
+
+    return [
+        _activate_step(window_id, "tab_new:activate"),
+        _chord_step(window_id, ["ctrl", "t"], "tab_new:chord"),
+        _title_check_step(_blank, "tab_new:verify"),
+    ]
+
+
+#: How different two captures must be, on average per pixel, for the picture to have moved.
+MOTION_THRESHOLD: Final = 6.0
+
+
+def frames_differ(
+    before_png: bytes, after_png: bytes, *, threshold: float = MOTION_THRESHOLD
+) -> bool:
+    """A playing video changes its frames; a paused one does not. Compared on the central
+    two thirds of the window, in grey, downscaled - the cursor and a clock in a corner must
+    not count as motion."""
+    from io import BytesIO
+
+    from PIL import Image, ImageChops, ImageStat
+
+    def _load(png: bytes) -> Any:
+        image = Image.open(BytesIO(png)).convert("L")
+        w, h = image.size
+        return image.crop((w // 6, h // 6, w - w // 6, h - h // 6)).resize((96, 54))
+
+    a, b = _load(before_png), _load(after_png)
+    diff = ImageChops.difference(a, b)
+    return float(ImageStat.Stat(diff).mean[0]) > threshold
+
+
+def click_and_expect_motion(window_id: str, x: int, y: int) -> list[OperatorStep]:
+    """A click on the player, proven by MOTION: a capture right after the click and one a
+    moment later must differ where the video is. The click is the device's own cursor
+    read-back; the motion is two independent looks."""
+    import base64
+
+    first: dict[str, bytes] = {}
+
+    def _landed(result: DeviceRunResult) -> bool:
+        body = result.result if isinstance(result.result, dict) else {}
+        observed = body.get("observed") if isinstance(body.get("observed"), dict) else {}
+        cursor = observed.get("cursor") if isinstance(observed.get("cursor"), dict) else None
+        if cursor is None:
+            return False
+        try:
+            return max(abs(int(cursor["x"]) - x), abs(int(cursor["y"]) - y)) <= 2
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    def _png(result: DeviceRunResult) -> bytes:
+        body = result.result if isinstance(result.result, dict) else {}
+        return base64.b64decode(str(body.get("png_base64") or ""))
+
+    def _keep_first(result: DeviceRunResult) -> bool:
+        png = _png(result)
+        first["png"] = png
+        return bool(png)
+
+    def _moved(result: DeviceRunResult) -> bool:
+        png = _png(result)
+        return bool(png) and bool(first.get("png")) and frames_differ(first["png"], png)
+
+    return [
+        _activate_step(window_id, "video_play:activate"),
+        OperatorStep(
+            capability="pointer.click",
+            payload={"window_id": window_id, "x": int(x), "y": int(y), "space": "screen"},
+            postcondition=_landed,
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_VISUAL,
+            name="video_play:click",
+        ),
+        OperatorStep(
+            capability="screen.capture",
+            payload={"window_id": window_id},
+            postcondition=_keep_first,
+            timeout_s=15.0,
+            retries=0,
+            level=LEVEL_API,
+            name="video_play:capture",
+        ),
+        OperatorStep(
+            capability="screen.capture",
+            payload={"window_id": window_id},
+            postcondition=_moved,
+            timeout_s=15.0,
+            retries=2,
+            retry_delay_s=1.5,
+            level=LEVEL_API,
+            name="video_play:verify_motion",
         ),
     ]
 

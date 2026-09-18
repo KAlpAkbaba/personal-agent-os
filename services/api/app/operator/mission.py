@@ -92,6 +92,12 @@ KIND_OFFICE_TYPE: Final = "office_type"
 #: 2026-09-18 (owner: "ekrandaki söylediğim şeyin yerini bulup mouse'u götürüp sol klik
 #: ile açacak"): a thing the owner can SEE on the screen, clicked where it is.
 KIND_CLICK_TEXT: Final = "click_text"
+#: Owner scenario 2026-09-18: the browser as the owner uses it - tabs, and the video that
+#: is already on the screen but not playing.
+KIND_TAB_SWITCH: Final = "tab_switch"
+KIND_TAB_CLOSE: Final = "tab_close"
+KIND_TAB_NEW: Final = "tab_new"
+KIND_VIDEO_PLAY: Final = "video_play"
 STEP_KINDS: Final[tuple[str, ...]] = (
     KIND_APP_OPEN,
     KIND_NAVIGATE,
@@ -377,6 +383,10 @@ class Decision:
     steps: list[OperatorStep]
     level: str
     note: str = ""
+    #: False for a plan that only PREPARES the step (a search typed before the thing can be
+    #: found on the screen): the loop re-observes and decides again instead of marking the
+    #: step done.
+    finishes_step: bool = True
 
 
 #: Req 123: the Settings pages the owner names -> the search words the Settings app
@@ -722,7 +732,24 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
         raise NeedsOwner("validation_error", "Neye tıklayacağımı anlayamadım efendim.")
     window_id = _require_foreground(obs, "tıklamak")
     title_before = str((obs.foreground or {}).get("title") or "")
-    x, y = _locate_on_screen(ports, mission_id, step, window_id, name)
+    try:
+        x, y = _locate_on_screen(ports, mission_id, step, window_id, name)
+    except NeedsOwner as exc:
+        if exc.error_class != "ui_target_not_found" or not step.args.get("search_if_missing"):
+            raise
+        if step.args.get("searched") or "youtube" not in title_before.lower():
+            raise
+        # Owner scenario 2026-09-18: the video is not on this tab - look for it the way
+        # the owner would, in the site's own search, then look at the screen again.
+        step.args["searched"] = True
+        url = SEARCH_URLS["youtube"].format(q=_readable_query(name))
+        return Decision(
+            "search_first",
+            plans.keyboard_navigate(window_id, url),
+            LEVEL_KEYBOARD,
+            note=f"bu sekmede yok; YouTube'da '{name}' aradım",
+            finishes_step=False,
+        )
     return Decision(
         "screen_click",
         plans.click_and_expect_change(window_id, x, y, title_before=title_before),
@@ -731,7 +758,73 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     )
 
 
+def _owner_browser_window(obs: Observation, what: str) -> str:
+    chrome = _owner_chrome_window(obs)
+    if chrome is None:
+        raise NeedsOwner(
+            "dependency_unavailable", f"{what} için açık bir Chrome penceresi bulamadım efendim."
+        )
+    return str(chrome["window_id"])
+
+
+def _decide_tab_switch(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    del mission_id
+    window_id = _owner_browser_window(obs, "sekme değiştirmek")
+    title_before = str((obs.foreground or {}).get("title") or "")
+    index = step.args.get("index")
+    direction = str(step.args.get("direction") or "next")
+    return Decision(
+        "tab_switch",
+        plans.tab_switch(
+            window_id,
+            direction=direction,
+            index=int(index) if isinstance(index, int) else None,
+            title_before=title_before,
+        ),
+        LEVEL_KEYBOARD,
+    )
+
+
+def _decide_tab_close(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    del step, mission_id
+    window_id = _owner_browser_window(obs, "sekmeyi kapatmak")
+    title_before = str((obs.foreground or {}).get("title") or "")
+    return Decision(
+        "tab_close", plans.tab_close(window_id, title_before=title_before), LEVEL_KEYBOARD
+    )
+
+
+def _decide_tab_new(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    del step, mission_id
+    window_id = _owner_browser_window(obs, "yeni sekme açmak")
+    return Decision("tab_new", plans.tab_new(window_id), LEVEL_KEYBOARD)
+
+
+def _decide_video_play(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    """The video on the screen that is not playing (a paused player, the replay circle in the
+    owner's screenshot): find the player, click it, and prove it PLAYS - two captures a
+    moment apart must differ where the picture is. A title cannot tell playing from paused."""
+    ports: MissionPorts | None = _PORTS.get(mission_id)
+    if ports is None:
+        raise NeedsOwner("dependency_unavailable", "Ekrana ulaşamadım efendim.")
+    window_id = _require_foreground(obs, "videoyu oynatmak")
+    x, y = _locate_on_screen(ports, mission_id, step, window_id, VIDEO_PLAYER_TARGET_TR)
+    return Decision(
+        "video_play",
+        plans.click_and_expect_motion(window_id, x, y),
+        LEVEL_VISUAL,
+        note=f"oynatıcı ({x},{y})",
+    )
+
+
+#: What the picture is asked for when the owner says "videoyu oynat" and names nothing.
+VIDEO_PLAYER_TARGET_TR: Final = "sayfadaki büyük video oynatıcısının ortası (oynat düğmesi)"
+
 DECIDERS[KIND_CLICK_TEXT] = _decide_click_text
+DECIDERS[KIND_TAB_SWITCH] = _decide_tab_switch
+DECIDERS[KIND_TAB_CLOSE] = _decide_tab_close
+DECIDERS[KIND_TAB_NEW] = _decide_tab_new
+DECIDERS[KIND_VIDEO_PLAY] = _decide_video_play
 
 
 # -------------------------------------------------------------------- the loop
@@ -812,6 +905,17 @@ def _run_rounds(
         if on_task is not None:
             on_task(mission, step, task)
         step.observed = dict(task.last_observed)
+        if task.status == STATUS_SUCCEEDED and not decision.finishes_step:
+            _trail(
+                mission,
+                step,
+                observed=obs.as_dict(),
+                decided=decision.plan_name,
+                level=decision.level,
+                note=decision.note,
+                outcome="prepared",
+            )
+            continue
         if task.status == STATUS_SUCCEEDED:
             step.status = STEP_DONE
             step.error_class = ""
@@ -1290,6 +1394,23 @@ _TARGET_FILLERS: Final[frozenset[str]] = frozenset(
         "lutfen",
     }
 )
+_POSITION_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "sağdan",
+        "sagdan",
+        "soldan",
+        "üstten",
+        "ustten",
+        "alttan",
+        "sağdaki",
+        "sagdaki",
+        "soldaki",
+        "üstteki",
+        "ustteki",
+        "alttaki",
+        "ortadaki",
+    }
+)
 _ORDINAL_WORDS: Final[frozenset[str]] = frozenset(
     {"ilk", "birinci", "ikinci", "üçüncü", "ucuncu", "dördüncü", "dorduncu", "son", "sonuncu"}
 )
@@ -1345,17 +1466,142 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     if not words:
         return None
     target = " ".join(words)
-    if has_video and all(_head(w) in _ORDINAL_WORDS for w in words):
+    positional = any(_head(w) in _ORDINAL_WORDS or _head(w) in _POSITION_WORDS for w in words)
+    if has_video and positional:
         target = f"{target} video"
+    args: dict[str, Any] = {"name": target}
+    if has_video and not positional:
+        # A video named by the owner may not be on this tab (owner scenario 2026-09-18);
+        # "sağdan üçüncü video" is a place on THIS screen and is never searched for, and
+        # a button or a link ("Abone ol", "Tarkan") is not a video.
+        args["search_if_missing"] = True
     return MissionStep(
         id="",
         kind=KIND_CLICK_TEXT,
-        args={"name": target},
+        args=args,
         label_tr=f"ekranda '{target}' yazan yere tıkla",
     )
 
 
+_TAB_STEMS: Final[tuple[str, ...]] = ("sekme",)
+_NEXT_WORDS: Final[frozenset[str]] = frozenset(
+    {"yan", "yandaki", "sonraki", "sağdaki", "sagdaki", "diğer", "diger", "öteki", "oteki"}
+)
+_PREV_WORDS: Final[frozenset[str]] = frozenset(
+    {"önceki", "onceki", "soldaki", "geri", "bir önceki", "bir onceki"}
+)
+_ORDINALS: Final[dict[str, int]] = {
+    "ilk": 1,
+    "birinci": 1,
+    "ikinci": 2,
+    "üçüncü": 3,
+    "ucuncu": 3,
+    "dördüncü": 4,
+    "dorduncu": 4,
+    "beşinci": 5,
+    "besinci": 5,
+    "altıncı": 6,
+    "altinci": 6,
+    "yedinci": 7,
+    "sekizinci": 8,
+    "son": 9,
+    "sonuncu": 9,
+    # "3. sekmeye geç" reaches the planner as the cardinal ("üç"), so those count too.
+    "bir": 1,
+    "iki": 2,
+    "üç": 3,
+    "uc": 3,
+    "dört": 4,
+    "dort": 4,
+    "beş": 5,
+    "bes": 5,
+    "altı": 6,
+    "alti": 6,
+    "yedi": 7,
+    "sekiz": 8,
+    "dokuz": 9,
+}
+_DIGIT_ORDINAL_RE: Final = re.compile(r"^(\d)(?:\.|inci|nci|üncü|uncu|ıncı|inci)?$")
+
+
+def _ordinal_of(token: str) -> int | None:
+    if token in _ORDINALS:
+        return _ORDINALS[token]
+    match = _DIGIT_ORDINAL_RE.match(token)
+    return int(match.group(1)) if match else None
+
+
+def _segment_tab(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "Yan sekmeye geç", "Önceki sekmeye geç", "Üçüncü sekmeye geç", "Sekmeyi kapat" - the
+    owner's Chrome, by its own keyboard shortcuts. "Yeni sekmede X aç" is _segment_tab_new's."""
+    if not any(t.startswith(_TAB_STEMS) for t in tokens):
+        return None
+    if any(t.startswith("yeni") for t in tokens):
+        return None
+    if any(t.startswith("kapat") for t in tokens):
+        return MissionStep(id="", kind=KIND_TAB_CLOSE, args={}, label_tr="sekmeyi kapat")
+    if not any(t.startswith(("geç", "gec", "git", "atla")) for t in tokens):
+        return None
+    for t in tokens:
+        if t in _PREV_WORDS:
+            return MissionStep(
+                id="",
+                kind=KIND_TAB_SWITCH,
+                args={"direction": "prev"},
+                label_tr="önceki sekmeye geç",
+            )
+    for t in tokens:
+        n = _ordinal_of(t)
+        if n is not None:
+            return MissionStep(
+                id="", kind=KIND_TAB_SWITCH, args={"index": n}, label_tr=f"{n}. sekmeye geç"
+            )
+    return MissionStep(
+        id="", kind=KIND_TAB_SWITCH, args={"direction": "next"}, label_tr="yan sekmeye geç"
+    )
+
+
+def _segment_tab_new(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "Yeni sekmede YouTube aç" - a new tab, then whatever the rest of the sentence opens
+    (the planner appends the navigate step from the same words)."""
+    if not (
+        any(t.startswith("yeni") for t in tokens) and any(t.startswith(_TAB_STEMS) for t in tokens)
+    ):
+        return None
+    return MissionStep(id="", kind=KIND_TAB_NEW, args={}, label_tr="yeni sekme aç")
+
+
+_VIDEO_PLAY_VERBS: Final[tuple[str, ...]] = ("aç", "ac", "oynat", "başlat", "baslat", "devam")
+_VIDEO_NOUNS: Final[frozenset[str]] = frozenset(
+    {"video", "videoyu", "videoya", "videosunu", "film", "filmi"}
+)
+
+
+def _segment_video_play(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "Videoyu aç", "Videoyu oynat", "Oynat" - the video already on the screen, no name."""
+    content = [
+        t
+        for t in tokens
+        if t not in _VIDEO_NOUNS
+        and t not in _TARGET_FILLERS
+        and not t.startswith(_VIDEO_PLAY_VERBS)
+        and t not in ("et", "ettir")
+    ]
+    if content:
+        return None
+    if not any(t in _VIDEO_NOUNS for t in tokens) and not any(
+        t.startswith(("oynat",)) for t in tokens
+    ):
+        return None
+    if not any(t.startswith(_VIDEO_PLAY_VERBS) for t in tokens):
+        return None
+    return MissionStep(id="", kind=KIND_VIDEO_PLAY, args={}, label_tr="ekrandaki videoyu oynat")
+
+
 SEGMENT_MATCHERS: Final[tuple[Callable[[tuple[str, ...], str], MissionStep | None], ...]] = (
+    _segment_tab_new,
+    _segment_tab,
+    _segment_video_play,
     _segment_settings,
     _segment_explorer,
     _segment_ide,
@@ -1395,6 +1641,26 @@ def plan_mission(text: str) -> Mission:
         step = next(
             (m(tokens, segment) for m in SEGMENT_MATCHERS if m(tokens, segment) is not None), None
         )
+        if step is not None and step.kind == KIND_TAB_NEW:
+            steps.append(step)
+            rest = re.sub(r"(?i)yeni\s+sekmede?", " ", segment).strip()
+            rest_tokens = _tokens(rest)
+            step = None
+            if rest_tokens:
+                step = next(
+                    (
+                        m(rest_tokens, rest)
+                        for m in SEGMENT_MATCHERS
+                        if m(rest_tokens, rest) is not None
+                    ),
+                    None,
+                )
+                if step is None:
+                    raise MissionClarificationNeeded(
+                        f"'{rest}' kısmını nasıl yapacağımı bilmiyorum efendim."
+                    )
+            if step is None:
+                continue
         if step is None:
             raise MissionClarificationNeeded(
                 f"'{segment.strip()}' kısmını nasıl yapacağımı bilmiyorum efendim."
@@ -1423,6 +1689,8 @@ def _with_browser_in_front(steps: list[MissionStep], *, named: bool = False) -> 
     for step in steps:
         if step.kind == KIND_APP_OPEN and step.args.get("application") == "chrome":
             browser_up = True
+        if step.kind in (KIND_TAB_NEW, KIND_TAB_SWITCH, KIND_TAB_CLOSE):
+            browser_up = True
         if step.kind == KIND_NAVIGATE and not browser_up:
             out.append(
                 MissionStep(
@@ -1447,6 +1715,10 @@ __all__ = [
     "EXPLORER_FOLDERS",
     "KIND_APP_OPEN",
     "KIND_CLICK_TEXT",
+    "KIND_TAB_CLOSE",
+    "KIND_TAB_NEW",
+    "KIND_TAB_SWITCH",
+    "KIND_VIDEO_PLAY",
     "KIND_EXPLORER_OPEN",
     "KIND_IDE_OPEN_FILE",
     "KIND_NAVIGATE",

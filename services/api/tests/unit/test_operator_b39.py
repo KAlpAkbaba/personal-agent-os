@@ -1177,7 +1177,7 @@ def test_the_model_may_still_stop_or_ask() -> None:
 )
 def test_the_planner_reads_a_thing_on_the_screen(said: str, target: str) -> None:
     m = plan_mission(said)
-    assert [(s.kind, s.args) for s in m.steps] == [(mission.KIND_CLICK_TEXT, {"name": target})]
+    assert [(s.kind, s.args["name"]) for s in m.steps] == [(mission.KIND_CLICK_TEXT, target)]
 
 
 def test_a_thing_to_click_is_never_typed() -> None:
@@ -1201,7 +1201,7 @@ def test_buttons_applications_and_typing_keep_their_own_reading(said: str, kind:
 def test_a_whole_request_opens_the_site_and_then_the_video() -> None:
     m = plan_mission("Chrome’dan YouTube’u aç ve Barış Manço videosunu aç")
     assert [s.kind for s in m.steps] == [KIND_APP_OPEN, KIND_NAVIGATE, mission.KIND_CLICK_TEXT]
-    assert m.steps[-1].args == {"name": "Barış Manço"}
+    assert m.steps[-1].args["name"] == "Barış Manço"
 
 
 YOUTUBE = _window(2, "chrome.exe", "YouTube - Google Chrome")
@@ -1376,7 +1376,8 @@ def test_a_button_is_never_the_pictures(said: str) -> None:
         # kept where they were: the news tool, the media player, the app tool
         ("Haberleri YouTube’dan aç", Intent.NEWS_OPEN),
         ("Bugünün Show Ana Haber videosunu aç", Intent.NEWS_OPEN),
-        ("YouTube’da Barış Manço aç", Intent.MEDIA_PLAY),
+        # owner decision 2026-09-18: YouTube requests go to the owner's own Chrome
+        ("YouTube’da Barış Manço aç", Intent.MISSION_START),
         ("Not Defteri’ni aç", Intent.APP_OPEN),
     ],
 )
@@ -1392,3 +1393,329 @@ def test_a_step_the_planner_added_is_not_a_second_request() -> None:
     assert m.steps[0].args.get("implicit") is True
     named = plan_mission("Chrome’dan YouTube’u aç")
     assert "implicit" not in named.steps[0].args, "the owner said Chrome; it was asked for"
+
+
+# ---------------- owner scenario 2026-09-18: tabs, a paused video, a video not on this tab
+
+
+@pytest.mark.parametrize(
+    ("said", "steps"),
+    [
+        ("Yan sekmeye geç", [(mission.KIND_TAB_SWITCH, {"direction": "next"})]),
+        ("Önceki sekmeye geç", [(mission.KIND_TAB_SWITCH, {"direction": "prev"})]),
+        ("Üçüncü sekmeye geç", [(mission.KIND_TAB_SWITCH, {"index": 3})]),
+        ("3. sekmeye geç", [(mission.KIND_TAB_SWITCH, {"index": 3})]),
+        ("Sekmeyi kapat", [(mission.KIND_TAB_CLOSE, {})]),
+        ("Videoyu aç", [(mission.KIND_VIDEO_PLAY, {})]),
+        ("Videoyu oynat", [(mission.KIND_VIDEO_PLAY, {})]),
+    ],
+)
+def test_the_planner_reads_the_browser_as_the_owner_uses_it(said: str, steps: list) -> None:
+    assert [(s.kind, s.args) for s in plan_mission(said).steps] == steps
+
+
+def test_a_new_tab_carries_the_rest_of_the_sentence() -> None:
+    m = plan_mission("Yeni sekmede YouTube aç")
+    assert [(s.kind, s.args.get("url")) for s in m.steps] == [
+        (mission.KIND_TAB_NEW, None),
+        (KIND_NAVIGATE, "https://www.youtube.com/"),
+    ]
+
+
+def test_a_position_on_the_screen_names_a_video_and_is_never_searched_for() -> None:
+    step = plan_mission("Sağdan üçüncü videoyu aç").steps[0]
+    assert step.kind == mission.KIND_CLICK_TEXT
+    assert step.args["name"] == "Sağdan üçüncü video"
+    assert "search_if_missing" not in step.args
+    named = plan_mission("Barış Manço videosunu aç").steps[0]
+    assert named.args.get("search_if_missing") is True
+
+
+@pytest.mark.parametrize(
+    ("said", "intent"),
+    [
+        ("YouTube’u aç", Intent.MISSION_START),
+        ("Yan sekmeye geç", Intent.MISSION_START),
+        ("Sekmeyi kapat", Intent.MISSION_START),
+        ("Yeni sekmede YouTube aç", Intent.MISSION_START),
+        ("Videoyu oynat", Intent.MISSION_START),
+        ("Haberleri YouTube’dan aç", Intent.NEWS_OPEN),
+    ],
+)
+def test_the_router_sends_the_browser_words_to_the_mission(said: str, intent: Intent) -> None:
+    assert resolve_intent(said).intent is intent
+
+
+def _tabbed_chrome(titles: list[str]) -> Any:
+    """The owner's Chrome with several tabs: a tab chord moves the title to the next
+    entry of ``titles``; Ctrl+W drops the current one; Ctrl+T adds a blank tab."""
+    state = {"i": 0, "tabs": list(titles)}
+
+    def title() -> str:
+        return state["tabs"][state["i"]] if state["tabs"] else ""
+
+    def current(payload: dict[str, Any]) -> DeviceRunResult:
+        if not state["tabs"]:
+            return ok(window=None)
+        return ok(window={**CHROME, "title": title()})
+
+    def shortcut(payload: dict[str, Any]) -> DeviceRunResult:
+        keys = list(payload.get("keys") or [])
+        n = len(state["tabs"])
+        if keys == ["ctrl", "tab"]:
+            state["i"] = (state["i"] + 1) % n
+        elif keys == ["ctrl", "shift", "tab"]:
+            state["i"] = (state["i"] - 1) % n
+        elif keys[0] == "ctrl" and keys[1].isdigit():
+            k = int(keys[1])
+            state["i"] = n - 1 if k == 9 else min(k, n) - 1
+        elif keys == ["ctrl", "w"]:
+            state["tabs"].pop(state["i"])
+            state["i"] = min(state["i"], len(state["tabs"]) - 1)
+        elif keys == ["ctrl", "t"]:
+            state["tabs"].append("Yeni Sekme - Google Chrome")
+            state["i"] = len(state["tabs"]) - 1
+        return ok(
+            keys=keys, window_id=payload.get("window_id"), observed=_observed(payload, CHROME)
+        )
+
+    device = FakeDeviceAction(
+        results={
+            "window.current": current,
+            "window.list": ok(windows=[dict(CHROME)]),
+            "window.activate": lambda p: ok(
+                window={**CHROME, "window_id": str(p.get("window_id"))}
+            ),
+            "keyboard.shortcut": shortcut,
+        }
+    )
+    device.tabs = state  # type: ignore[attr-defined]
+    return device
+
+
+def test_the_next_tab_is_reached_by_chromes_own_chord_and_proven_by_its_title(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _tabbed_chrome(["YouTube - Google Chrome", "Speedrunners - YouTube - Google Chrome"])
+    m = plan_mission("Yan sekmeye geç")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.shortcut")["keys"] == ["ctrl", "tab"]
+    assert device.tabs["i"] == 1
+
+
+def test_a_numbered_tab_uses_ctrl_and_the_number() -> None:
+    device = _tabbed_chrome(["A - Google Chrome", "B - Google Chrome", "C - Google Chrome"])
+    m = plan_mission("Üçüncü sekmeye geç")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.shortcut")["keys"] == ["ctrl", "3"]
+
+
+def test_a_switch_that_changed_nothing_is_not_reported_as_a_switch(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _tabbed_chrome(["Only - Google Chrome"])  # one tab: Ctrl+Tab lands on itself
+    m = plan_mission("Yan sekmeye geç")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "postcondition_failed"
+
+
+def test_closing_the_tab_shows_the_next_one() -> None:
+    device = _tabbed_chrome(["A - Google Chrome", "B - Google Chrome"])
+    m = plan_mission("Sekmeyi kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.shortcut")["keys"] == ["ctrl", "w"]
+    assert device.tabs["tabs"] == ["B - Google Chrome"]
+
+
+def test_a_new_tab_then_the_page_typed_into_it(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _tabbed_chrome(["A - Google Chrome"])
+    typed: list[str] = []
+
+    def type_text(payload: dict[str, Any]) -> DeviceRunResult:
+        typed.append(str(payload.get("text")))
+        return ok(
+            typed_chars=len(str(payload.get("text"))),
+            window_id=payload.get("window_id"),
+            observed=_observed(payload, CHROME),
+        )
+
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        if payload.get("key") == "enter" and typed:
+            device.tabs["tabs"][device.tabs["i"]] = "YouTube - Google Chrome"
+        return ok(
+            key=payload.get("key"),
+            window_id=payload.get("window_id"),
+            observed=_observed(payload, CHROME),
+        )
+
+    device.results["keyboard.type"] = type_text
+    device.results["keyboard.key"] = key
+    device.results["browser.session_open"] = DeviceRunResult(
+        False, "dependency_unavailable", "no CDP"
+    )
+
+    m = plan_mission("Yeni sekmede YouTube aç")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert [
+        c["payload"].get("keys") for c in device.calls if c["capability"] == "keyboard.shortcut"
+    ] == [
+        ["ctrl", "t"],
+        ["ctrl", "l"],
+    ]
+    assert typed == ["https://www.youtube.com/"]
+    assert device.tabs["tabs"] == ["A - Google Chrome", "YouTube - Google Chrome"]
+
+
+# ---- the paused video: proven by motion, never by the click
+
+
+def _png_of(shade: int, *, spot: int | None = None) -> str:
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    image = Image.new("L", (192, 108), shade)
+    if spot is not None:
+        for x in range(60, 130):
+            for y in range(30, 80):
+                image.putpixel((x, y), spot)
+    out = BytesIO()
+    image.save(out, format="PNG")
+    return base64.b64encode(out.getvalue()).decode("ascii")
+
+
+def _paused_player(*, starts_playing: bool) -> Any:
+    captures = {"n": 0}
+
+    def capture(payload: dict[str, Any]) -> DeviceRunResult:
+        captures["n"] += 1
+        # the first capture (for the locate) and the one right after the click look alike;
+        # a PLAYING video shows a different frame on the later look
+        shade = 40 if (starts_playing and captures["n"] >= 3) else 200
+        return ok(width=192, height=108, png_base64=_png_of(200, spot=shade), scale=1)
+
+    def click(payload: dict[str, Any]) -> DeviceRunResult:
+        x, y = int(payload["x"]), int(payload["y"])
+        return ok(
+            x=x,
+            y=y,
+            space="screen",
+            screen_x=x,
+            screen_y=y,
+            observed={"cursor": {"x": x, "y": y}, "window": dict(YOUTUBE)},
+        )
+
+    return FakeDeviceAction(
+        results={
+            "window.current": ok(window=dict(YOUTUBE)),
+            "window.list": ok(windows=[dict(YOUTUBE)]),
+            "window.activate": lambda p: ok(
+                window={**YOUTUBE, "window_id": str(p.get("window_id"))}
+            ),
+            "screen.capture": capture,
+            "pointer.click": click,
+        }
+    )
+
+
+def test_a_paused_video_is_clicked_and_proven_to_move(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=True)
+    vision = FakeVisionProvider(location=(96, 54))
+    m = plan_mission("Videoyu oynat")
+    run_mission(m, MissionPorts(device=device, vision=vision))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("pointer.click")["x"] == 96
+    assert vision.targets == [mission.VIDEO_PLAYER_TARGET_TR]
+
+
+def test_a_video_that_stays_still_after_the_click_is_not_playing(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False)
+    m = plan_mission("Videoyu oynat")
+    run_mission(m, MissionPorts(device=device, vision=FakeVisionProvider(location=(96, 54))))
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "postcondition_failed"
+
+
+def test_frames_differ_ignores_a_corner_and_notices_the_middle() -> None:
+    import base64
+
+    still = base64.b64decode(_png_of(200))
+    moved = base64.b64decode(_png_of(200, spot=20))
+    assert plans.frames_differ(still, moved)
+    assert not plans.frames_differ(still, still)
+
+
+# ---- a video that is not on this tab: searched, then clicked on the results
+
+
+def test_a_video_not_on_this_tab_is_searched_for_then_clicked(monkeypatch) -> None:
+    """The owner's rule: first look at the current tab; if the video is not there, search
+    for it, then open it from the results."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _youtube_page(opens_to="Barış Manço - Dönence - YouTube - Google Chrome")
+    typed: list[str] = []
+    device.results["keyboard.shortcut"] = lambda p: ok(
+        keys=p.get("keys"), window_id=p.get("window_id"), observed=_observed(p, YOUTUBE)
+    )
+    device.results["keyboard.key"] = lambda p: ok(
+        key=p.get("key"), window_id=p.get("window_id"), observed=_observed(p, YOUTUBE)
+    )
+
+    def type_text(payload: dict[str, Any]) -> DeviceRunResult:
+        typed.append(str(payload.get("text")))
+        return ok(
+            typed_chars=len(str(payload.get("text"))),
+            window_id=payload.get("window_id"),
+            observed=_observed(payload, YOUTUBE),
+        )
+
+    device.results["keyboard.type"] = type_text
+
+    class TwoLooks:
+        """Not on the home tab; found on the results page (after the search was typed)."""
+
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.targets: list[str] = []
+
+        def locate(self, png: bytes, *, target: str):
+            from app.operator.vision import VisionLocation
+
+            self.targets.append(target)
+            if not typed:
+                return None
+            return VisionLocation(x=300, y=200, provider="fake", model="fake")
+
+    vision = TwoLooks()
+    m = plan_mission("Barış Manço videosunu aç")
+    run_mission(m, MissionPorts(device=device, vision=vision))
+
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert typed == ["https://www.youtube.com/results?search_query=Barış+Manço"]
+    assert vision.targets == ["Barış Manço", "Barış Manço"], (
+        "looked at THIS tab first, then at the results"
+    )
+    assert [t.get("outcome") for t in m.trail if t.get("step") == "m1"][-2:] == [
+        "prepared",
+        "verified",
+    ]
