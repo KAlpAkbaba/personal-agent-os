@@ -146,6 +146,15 @@ services:
       # image, on the persistent volume, so neither a DB restore nor an image rebuild
       # can mint or destroy owner identity.
       - /mnt/pagentos-data/identity:/srv/pagentos/var/identity
+      # B08 (reqs 646-650, 647): what the `backup` health check and the failure-notice
+      # sweep read, and NOTHING else - the last backup record, the restore drills and the
+      # failure markers, read-only. Until 2026-09-18 none of it was mounted, so production
+      # answered `backup: skipped (backup_root_not_visible)` and a failed backup, drill or
+      # recovery could not reach the owner. The restic repository itself and the repository
+      # password stay off this mount: the API reads the SAFETY NET's state, never its data.
+      - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/LAST_BACKUP.json:/var/lib/pagentos-backup/LAST_BACKUP.json:ro
+      - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/drills:/var/lib/pagentos-backup/drills:ro
+      - ${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/failures:/var/lib/pagentos-backup/failures:ro
     ports:
       # The ONE published socket, and only on the tailnet address. If PAGENTOS_BIND_IP
       # is unset the stack refuses to start rather than defaulting to 0.0.0.0.

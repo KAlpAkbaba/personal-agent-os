@@ -31,6 +31,8 @@ app_root="${PAGENTOS_APP_ROOT:-$base/app}"
 recovery_root="${PAGENTOS_RECOVERY_ROOT:-/opt/pagentos-recovery}"
 service_name="pagentos-bluegreen-reconcile.service"
 timer_name="pagentos-bluegreen-reconcile.timer"
+#: The template $service_name's OnFailure= names; without it a failed recovery writes no marker.
+marker_name="pagentos-failure-marker@.service"
 expected_sha="${1:-${PAGENTOS_RECOVERY_EXPECTED_SHA:-}}"
 
 if [[ $EUID -ne 0 && "${PAGENTOS_ALLOW_NONROOT:-0}" != "1" ]]; then
@@ -49,6 +51,7 @@ fi
 relative_inputs=(
     "infra/systemd/$service_name"
     "infra/systemd/$timer_name"
+    "infra/systemd/$marker_name"
     "scripts/cloud/release-cloud-core-bluegreen.sh"
     "scripts/cloud/install-recovery-supervisor.sh"
     "infra/docker/docker-compose.prod.yml"
@@ -108,6 +111,7 @@ backup_dir="$(mktemp -d)"
 destinations=(
     "$systemd_dir/$service_name"
     "$systemd_dir/$timer_name"
+    "$systemd_dir/$marker_name"
     "$recovery_root/reconcile.sh"
     "$recovery_root/docker-compose.prod.yml"
     "$recovery_root/nginx.conf"
@@ -193,6 +197,7 @@ printf '%s\n' "$expected_sha" > "$recovery_root/APPROVED_SHA"
 chmod 0600 "$recovery_root/APPROVED_SHA"
 install -m 0644 "$app_root/infra/systemd/$service_name" "$systemd_dir/$service_name"
 install -m 0644 "$app_root/infra/systemd/$timer_name" "$systemd_dir/$timer_name"
+install -m 0644 "$app_root/infra/systemd/$marker_name" "$systemd_dir/$marker_name"
 
 # The copy is done; the proof run below is a reconcile, and a reconcile takes this lock.
 exec 9>&-

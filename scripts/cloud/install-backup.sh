@@ -28,7 +28,10 @@ systemctl_bin=${PAGENTOS_SYSTEMCTL:-systemctl}
 apt_bin=${PAGENTOS_APT:-apt-get}
 restic_bin=${PAGENTOS_RESTIC:-restic}
 password_file=${RESTIC_PASSWORD_FILE:-$base/backup.password}
-units=(pagentos-backup.service pagentos-backup.timer pagentos-restore-drill.service pagentos-restore-drill.timer)
+# The marker template every unit's OnFailure= names is installed HERE: until 2026-09-18 it
+# was in the repository and in no installer, so OnFailure= could not fire on any host and
+# a failed backup was still only a journal line (req 647, measured on the live host).
+units=(pagentos-backup.service pagentos-backup.timer pagentos-restore-drill.service pagentos-restore-drill.timer pagentos-failure-marker@.service)
 
 if [[ $EUID -ne 0 && "${PAGENTOS_ALLOW_NONROOT:-0}" != "1" ]]; then
     echo "run as root: this installs a package, a secret and system timers" >&2
