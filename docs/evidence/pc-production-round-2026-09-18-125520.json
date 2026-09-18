@@ -1,0 +1,356 @@
+{
+    "kind":  "pc_v1_production_round",
+    "started_at":  "2026-09-18T12:55:16.4898179Z",
+    "finished_at":  "2026-09-18T12:55:20.8714719Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "44e44482f1170ef0431bc73c5361ba668fdff57b",
+                       "release_after":  "44e44482f1170ef0431bc73c5361ba668fdff57b",
+                       "health_before":  "ok",
+                       "health_after":  "ok",
+                       "same_release":  true
+                   },
+    "failure_probe":  {
+                          "http_status":  409,
+                          "task_id":  "763f8a39-75e3-4b40-ae62-5d0be1a92438",
+                          "error_class":  "no_capable_device"
+                      },
+    "realtime_session_id":  "3677a284-d148-481c-96e1-cd640166d8ef",
+    "proven":  [
+                   "367",
+                   "368",
+                   "377",
+                   "378",
+                   "389",
+                   "382",
+                   "385",
+                   "285",
+                   "267",
+                   "271",
+                   "273",
+                   "272",
+                   "274",
+                   "275",
+                   "280",
+                   "270",
+                   "279"
+               ],
+    "rows":  {
+                 "367":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "notifications are rows in production\u0027s table",
+                             "observed":  {
+                                              "history_rows":  5,
+                                              "oldest_created_at":  "2026-09-16T18:47:02.087066Z",
+                                              "probe_row_written":  true,
+                                              "probe_row":  {
+                                                                "id":  "53dfd1a1-1df3-4408-bfbc-5b16f663512f",
+                                                                "kind":  "task.failed",
+                                                                "priority":  "normal",
+                                                                "group_key":  "task:763f8a39-75e3-4b40-ae62-5d0be1a92438",
+                                                                "created_at":  "2026-09-18T12:55:17.469270Z",
+                                                                "delivered_at":  null,
+                                                                "delivered_via":  null,
+                                                                "attempted":  [
+
+                                                                              ],
+                                                                "deferred_until":  null,
+                                                                "read_at":  null,
+                                                                "superseded_at":  null,
+                                                                "ladder_exhausted":  false,
+                                                                "actions_pressed":  [
+
+                                                                                    ]
+                                                            }
+                                          },
+                             "reason":  null
+                         },
+                 "368":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the inbox is read from the table (unread count + rows)",
+                             "observed":  {
+                                              "inbox_rows":  4,
+                                              "unread":  4
+                                          },
+                             "reason":  null
+                         },
+                 "377":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "delivery history lists delivered and unreached notices",
+                             "observed":  {
+                                              "delivered":  4,
+                                              "not_delivered":  1,
+                                              "delivered_via":  [
+                                                                    "inbox",
+                                                                    "toast"
+                                                                ]
+                                          },
+                             "reason":  null
+                         },
+                 "378":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "more than one priority level occurs in production",
+                             "observed":  {
+                                              "priorities":  [
+                                                                 "normal",
+                                                                 "urgent"
+                                                             ]
+                                          },
+                             "reason":  null
+                         },
+                 "379":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "this run\u0027s non-urgent notice, recorded in the owner\u0027s quiet hours, waits until 07:30 Istanbul",
+                             "observed":  {
+                                              "run_local_time":  "2026-09-18 15:55",
+                                              "in_quiet_hours":  false,
+                                              "probe_deferred_until_utc":  "",
+                                              "probe_deferred_until_local":  "",
+                                              "deferred_rows_in_history":  2
+                                          },
+                             "reason":  "the round ran outside quiet hours; 379 is judged only inside them"
+                         },
+                 "380":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "an older unread sibling in the same group is superseded",
+                             "observed":  {
+                                              "superseded_rows":  0
+                                          },
+                             "reason":  "no superseded row in production history yet"
+                         },
+                 "389":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the ladder attempted the device toast and recorded where each notice landed",
+                             "observed":  {
+                                              "toast_attempted":  4,
+                                              "delivered_via":  [
+                                                                    "inbox",
+                                                                    "toast"
+                                                                ],
+                                              "ladder_last_run":  null
+                                          },
+                             "reason":  null
+                         },
+                 "381":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a \u0027task.completed\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  0,
+                                              "latest":  {
+
+                                                         }
+                                          },
+                             "reason":  "no \u0027task.completed\u0027 notice in production history"
+                         },
+                 "382":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a \u0027task.failed\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  4,
+                                              "latest":  "2026-09-18T12:55:17.469270Z"
+                                          },
+                             "reason":  null
+                         },
+                 "383":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a \u0027owner.approval_required\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  0,
+                                              "latest":  {
+
+                                                         }
+                                          },
+                             "reason":  "no \u0027owner.approval_required\u0027 notice in production history"
+                         },
+                 "384":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a \u0027release.rolled_back\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  0,
+                                              "latest":  {
+
+                                                         }
+                                          },
+                             "reason":  "no \u0027release.rolled_back\u0027 notice in production history"
+                         },
+                 "385":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a \u0027backup.failed\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  1,
+                                              "latest":  "2026-09-18T09:42:46.062663Z"
+                                          },
+                             "reason":  null
+                         },
+                 "386":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a \u0027alarm.failed\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  0,
+                                              "latest":  {
+
+                                                         }
+                                          },
+                             "reason":  "no \u0027alarm.failed\u0027 notice in production history"
+                         },
+                 "387":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a \u0027research.finished\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  0,
+                                              "latest":  {
+
+                                                         }
+                                          },
+                             "reason":  "no \u0027research.finished\u0027 notice in production history"
+                         },
+                 "388":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "a \u0027selfdev.candidate_ready\u0027 notice exists in production",
+                             "observed":  {
+                                              "rows":  0,
+                                              "latest":  {
+
+                                                         }
+                                          },
+                             "reason":  "no \u0027selfdev.candidate_ready\u0027 notice in production history"
+                         },
+                 "285":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "alarm history is served from the ledger",
+                             "observed":  {
+                                              "events":  42,
+                                              "event_types":  [
+                                                                  "alarm.armed",
+                                                                  "alarm.cleaned_up",
+                                                                  "alarm.completed",
+                                                                  "alarm.display_waking",
+                                                                  "alarm.failed",
+                                                                  "alarm.firing",
+                                                                  "alarm.greeting",
+                                                                  "alarm.media_starting",
+                                                                  "alarm.playing",
+                                                                  "alarm.scheduled",
+                                                                  "alarm.stopped"
+                                                              ]
+                                          },
+                             "reason":  null
+                         },
+                 "259":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "an alarm was snoozed in production",
+                             "observed":  {
+                                              "snoozed_alarms":  0,
+                                              "alarms":  5
+                                          },
+                             "reason":  "no snooze recorded yet (needs a ringing alarm: owner-timed)"
+                         },
+                 "267":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "a production alarm recorded its fallback honestly (no_tts_key / tone_fallback)",
+                             "observed":  {
+                                              "fallback_alarms":  1
+                                          },
+                             "reason":  null
+                         },
+                 "271":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "clock.now answers the local time in words",
+                             "observed":  {
+                                              "status":  "succeeded",
+                                              "speech":  "Bugün 18 Eylül 2026, Cuma, saat 15:55."
+                                          },
+                             "reason":  null
+                         },
+                 "273":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the default location is read",
+                             "observed":  {
+                                              "status":  "succeeded",
+                                              "speech":  "Varsayılan hava durumu konumunuz İstanbul efendim."
+                                          },
+                             "reason":  null
+                         },
+                 "272":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "live weather for the default location",
+                             "observed":  {
+                                              "status":  "succeeded",
+                                              "terminal":  "verified",
+                                              "speech":  "İstanbul: çok bulutlu, 23°C. Bugün en yüksek 23°C, en düşük 18°C. Yağış olasılığı yüzde 3."
+                                          },
+                             "reason":  null
+                         },
+                 "274":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "system status from production health",
+                             "observed":  {
+                                              "status":  "succeeded",
+                                              "speech":  "Sistem 44e44482f1170ef0431bc73c5361ba668fdff57b sürümünde, 0.0 saattir çalışıyor. 1 cihazdan durum aldım. Otonom geliştirme açık."
+                                          },
+                             "reason":  null
+                         },
+                 "275":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "overnight work summary",
+                             "observed":  {
+                                              "status":  "succeeded",
+                                              "speech":  "Gece boyunca otonom bir geliştirme etkinliği olmadı."
+                                          },
+                             "reason":  null
+                         },
+                 "280":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the combined morning briefing",
+                             "observed":  {
+                                              "status":  "succeeded",
+                                              "terminal":  "verified",
+                                              "sections":  [
+                                                               "weather",
+                                                               "system_status",
+                                                               "overnight_work",
+                                                               "calendar",
+                                                               "news_summary"
+                                                           ],
+                                              "speech":  "İyi günler efendim. Bugün 18 Eylül 2026, Cuma, saat 15:55. İstanbul: çok bulutlu, 23°C. Bugün en yüksek 23°C, en düşük 18°C. Yağış olasılığı yüzde 3. Sistem 44e44482f1170ef0431bc73c5361ba668fdff57b sürümünde, 0.0 saattir çalışıyor. 1 cihazdan durum aldım. Otonom geliştirme açık. Gece boyunca otonom bir geliştirme etkinliği olmadı. Tanımlı bir takvim yok efendim. Son haber: Show Ana Haber 17 Eylül 2026."
+                                          },
+                             "reason":  null
+                         },
+                 "270":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the briefing opens with a greeting",
+                             "observed":  {
+                                              "opening":  "İyi günler efendim. Bugün 18 Eylül 2026,"
+                                          },
+                             "reason":  null
+                         },
+                 "279":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the briefing carries a news section",
+                             "observed":  {
+                                              "sections":  [
+                                                               "weather",
+                                                               "system_status",
+                                                               "overnight_work",
+                                                               "calendar",
+                                                               "news_summary"
+                                                           ]
+                                          },
+                             "reason":  null
+                         },
+                 "276":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "the briefing summarises research finished in the last 12 h",
+                             "observed":  {
+                                              "sections":  [
+                                                               "weather",
+                                                               "system_status",
+                                                               "overnight_work",
+                                                               "calendar",
+                                                               "news_summary"
+                                                           ]
+                                          },
+                             "reason":  "no research finished in the last 12 h (section is conditional)"
+                         }
+             }
+}

@@ -1,0 +1,680 @@
+{
+    "kind":  "p0_production_round",
+    "started_at":  "2026-09-18T12:54:59.1234908Z",
+    "finished_at":  "2026-09-18T12:55:07.0765648Z",
+    "production":  {
+                       "base_url":  "http://100.90.158.26:8001",
+                       "release_before":  "44e44482f1170ef0431bc73c5361ba668fdff57b",
+                       "release_after":  "44e44482f1170ef0431bc73c5361ba668fdff57b",
+                       "health_before":  "ok",
+                       "health_after":  "ok",
+                       "same_release":  true
+                   },
+    "proven":  [
+                   "8",
+                   "6",
+                   "668",
+                   "9",
+                   "219",
+                   "220",
+                   "10",
+                   "13",
+                   "206",
+                   "67",
+                   "68",
+                   "69",
+                   "11",
+                   "70",
+                   "19",
+                   "14",
+                   "15",
+                   "16",
+                   "17",
+                   "376",
+                   "246",
+                   "663",
+                   "659",
+                   "560",
+                   "559",
+                   "558",
+                   "736",
+                   "737",
+                   "738",
+                   "739",
+                   "741",
+                   "749",
+                   "750",
+                   "7",
+                   "683"
+               ],
+    "rows":  {
+                 "8":  {
+                           "status":  "PROVEN_REAL",
+                           "claim":  "the unauthenticated health surface carries no secret-shaped pattern",
+                           "observed":  {
+                                            "pattern_hits":  0,
+                                            "by_pattern":  {
+
+                                                           },
+                                            "body_chars":  10549
+                                        },
+                           "reason":  null
+                       },
+                 "6":  {
+                           "status":  "PROVEN_REAL",
+                           "claim":  "dependencies.database_url is userinfo-stripped and no secret pattern occurs anywhere in the world snapshot",
+                           "observed":  {
+                                            "database_url_fact":  "postgresql+psycopg://***@postgres:5432/pagentos_prod",
+                                            "pattern_hits_in_world":  0,
+                                            "by_pattern":  {
+
+                                                           }
+                                        },
+                           "reason":  null
+                       },
+                 "668":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "every surface asked (health, world model) carries no secret pattern",
+                             "observed":  {
+                                              "health_hits":  0,
+                                              "world_hits":  0
+                                          },
+                             "reason":  null
+                         },
+                 "9":  {
+                           "status":  "PROVEN_REAL",
+                           "claim":  "the idle-voice-session sweep is wired into the live retention loop",
+                           "observed":  {
+                                            "sweeps":  [
+                                                           "memory",
+                                                           "identity_sessions",
+                                                           "security_assets",
+                                                           "interrupted_tool_calls",
+                                                           "interrupted_native_builds",
+                                                           "idle_voice_sessions",
+                                                           "abandoned_research_runs",
+                                                           "notification_ladder",
+                                                           "backup_failure_notices",
+                                                           "audit_retention"
+                                                       ],
+                                            "last_run_at":  "",
+                                            "idle_voice_sessions_last_result":  null
+                                        },
+                           "reason":  null
+                       },
+                 "219":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "dead voice sessions are swept on a live cadence (same implementation as 9)",
+                             "observed":  {
+                                              "sweeps":  [
+                                                             "memory",
+                                                             "identity_sessions",
+                                                             "security_assets",
+                                                             "interrupted_tool_calls",
+                                                             "interrupted_native_builds",
+                                                             "idle_voice_sessions",
+                                                             "abandoned_research_runs",
+                                                             "notification_ladder",
+                                                             "backup_failure_notices",
+                                                             "audit_retention"
+                                                         ],
+                                              "last_run_at":  ""
+                                          },
+                             "reason":  null
+                         },
+                 "220":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "session TTL (12h idleness, IDLE_SESSION_AFTER) is enforced by the same live sweep",
+                             "observed":  {
+                                              "sweeps":  [
+                                                             "memory",
+                                                             "identity_sessions",
+                                                             "security_assets",
+                                                             "interrupted_tool_calls",
+                                                             "interrupted_native_builds",
+                                                             "idle_voice_sessions",
+                                                             "abandoned_research_runs",
+                                                             "notification_ladder",
+                                                             "backup_failure_notices",
+                                                             "audit_retention"
+                                                         ]
+                                          },
+                             "reason":  null
+                         },
+                 "10":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "the abandoned-research-run sweep is wired into the live retention loop",
+                            "observed":  {
+                                             "sweeps":  [
+                                                            "memory",
+                                                            "identity_sessions",
+                                                            "security_assets",
+                                                            "interrupted_tool_calls",
+                                                            "interrupted_native_builds",
+                                                            "idle_voice_sessions",
+                                                            "abandoned_research_runs",
+                                                            "notification_ladder",
+                                                            "backup_failure_notices",
+                                                            "audit_retention"
+                                                        ],
+                                             "last_run_at":  "",
+                                             "abandoned_research_runs_last_result":  null
+                                         },
+                            "reason":  null
+                        },
+                 "13":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "orphan research rows are cleaned by the same sweep as 10 (single implementation)",
+                            "observed":  {
+                                             "sweeps":  [
+                                                            "memory",
+                                                            "identity_sessions",
+                                                            "security_assets",
+                                                            "interrupted_tool_calls",
+                                                            "interrupted_native_builds",
+                                                            "idle_voice_sessions",
+                                                            "abandoned_research_runs",
+                                                            "notification_ladder",
+                                                            "backup_failure_notices",
+                                                            "audit_retention"
+                                                        ]
+                                         },
+                            "reason":  null
+                        },
+                 "206":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "orphan cleanup (dup of 10/13) is the same live sweep",
+                             "observed":  {
+                                              "sweeps":  [
+                                                             "memory",
+                                                             "identity_sessions",
+                                                             "security_assets",
+                                                             "interrupted_tool_calls",
+                                                             "interrupted_native_builds",
+                                                             "idle_voice_sessions",
+                                                             "abandoned_research_runs",
+                                                             "notification_ladder",
+                                                             "backup_failure_notices",
+                                                             "audit_retention"
+                                                         ]
+                                          },
+                             "reason":  null
+                         },
+                 "67":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "tasks.running_count is served from the four-bucket world model classification",
+                            "observed":  {
+                                             "running_count":  0,
+                                             "awaiting_owner_count":  8,
+                                             "stuck_count":  1
+                                         },
+                            "reason":  null
+                        },
+                 "68":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "READY/awaiting-owner research is a separate bucket from running (awaiting_owner_count exists and is counted apart from running_count)",
+                            "observed":  {
+                                             "awaiting_owner_count":  8,
+                                             "running_count":  0
+                                         },
+                            "reason":  null
+                        },
+                 "69":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "stuck-task detection (STUCK_TASK_AFTER, 24h) is live and counting",
+                            "observed":  {
+                                             "stuck_count":  1
+                                         },
+                            "reason":  null
+                        },
+                 "11":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "stale RUNNING/CREATED reconciliation: the sweep moves the row, the world model counts what the sweep left",
+                            "observed":  {
+                                             "sweeps":  [
+                                                            "memory",
+                                                            "identity_sessions",
+                                                            "security_assets",
+                                                            "interrupted_tool_calls",
+                                                            "interrupted_native_builds",
+                                                            "idle_voice_sessions",
+                                                            "abandoned_research_runs",
+                                                            "notification_ladder",
+                                                            "backup_failure_notices",
+                                                            "audit_retention"
+                                                        ],
+                                             "running_count":  0
+                                         },
+                            "reason":  null
+                        },
+                 "70":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "no voice event is recorded twice for the same source in the live ledger",
+                            "observed":  {
+                                             "voice_events_with_source":  3,
+                                             "duplicated_keys":  0
+                                         },
+                            "reason":  null
+                        },
+                 "19":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "each routine-clock sub-tick ticks and fails independently",
+                            "observed":  {
+                                             "sub_ticks":  {
+                                                               "routines":  11,
+                                                               "alarms":  11,
+                                                               "ambient":  11,
+                                                               "evolution":  11,
+                                                               "executive":  11,
+                                                               "mail":  11,
+                                                               "calendar":  11,
+                                                               "experience":  11
+                                                           },
+                                             "failing_sub_ticks":  [
+
+                                                                   ]
+                                         },
+                            "reason":  null
+                        },
+                 "14":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "the three announcer loops are alive with zero failures on a bounded cadence",
+                            "observed":  {
+                                             "artifact_ready_announcer":  {
+                                                                              "status":  "ok",
+                                                                              "running":  true,
+                                                                              "interval_s":  5.0,
+                                                                              "passes":  22,
+                                                                              "failures":  0,
+                                                                              "last_pass_at":  "2026-09-18T12:54:55.483740Z",
+                                                                              "last_error":  null,
+                                                                              "required":  false
+                                                                          },
+                                             "briefing_announcer":  {
+                                                                        "status":  "ok",
+                                                                        "running":  true,
+                                                                        "interval_s":  20.0,
+                                                                        "passes":  6,
+                                                                        "failures":  0,
+                                                                        "last_pass_at":  "2026-09-18T12:54:50.357207Z",
+                                                                        "last_error":  null,
+                                                                        "required":  false
+                                                                    },
+                                             "research_tool_call_announcer":  {
+                                                                                  "status":  "ok",
+                                                                                  "running":  true,
+                                                                                  "interval_s":  5.0,
+                                                                                  "passes":  22,
+                                                                                  "failures":  0,
+                                                                                  "last_pass_at":  "2026-09-18T12:54:55.484012Z",
+                                                                                  "last_error":  null,
+                                                                                  "required":  false
+                                                                              }
+                                         },
+                            "reason":  null
+                        },
+                 "15":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "push announcer bounded retry: same live loop as 14",
+                            "observed":  {
+                                             "artifact_ready_announcer":  {
+                                                                              "status":  "ok",
+                                                                              "running":  true,
+                                                                              "interval_s":  5.0,
+                                                                              "passes":  22,
+                                                                              "failures":  0,
+                                                                              "last_pass_at":  "2026-09-18T12:54:55.483740Z",
+                                                                              "last_error":  null,
+                                                                              "required":  false
+                                                                          },
+                                             "briefing_announcer":  {
+                                                                        "status":  "ok",
+                                                                        "running":  true,
+                                                                        "interval_s":  20.0,
+                                                                        "passes":  6,
+                                                                        "failures":  0,
+                                                                        "last_pass_at":  "2026-09-18T12:54:50.357207Z",
+                                                                        "last_error":  null,
+                                                                        "required":  false
+                                                                    },
+                                             "research_tool_call_announcer":  {
+                                                                                  "status":  "ok",
+                                                                                  "running":  true,
+                                                                                  "interval_s":  5.0,
+                                                                                  "passes":  22,
+                                                                                  "failures":  0,
+                                                                                  "last_pass_at":  "2026-09-18T12:54:55.484012Z",
+                                                                                  "last_error":  null,
+                                                                                  "required":  false
+                                                                              }
+                                         },
+                            "reason":  null
+                        },
+                 "16":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "briefing announcer queue lock: same live loop as 14",
+                            "observed":  {
+                                             "artifact_ready_announcer":  {
+                                                                              "status":  "ok",
+                                                                              "running":  true,
+                                                                              "interval_s":  5.0,
+                                                                              "passes":  22,
+                                                                              "failures":  0,
+                                                                              "last_pass_at":  "2026-09-18T12:54:55.483740Z",
+                                                                              "last_error":  null,
+                                                                              "required":  false
+                                                                          },
+                                             "briefing_announcer":  {
+                                                                        "status":  "ok",
+                                                                        "running":  true,
+                                                                        "interval_s":  20.0,
+                                                                        "passes":  6,
+                                                                        "failures":  0,
+                                                                        "last_pass_at":  "2026-09-18T12:54:50.357207Z",
+                                                                        "last_error":  null,
+                                                                        "required":  false
+                                                                    },
+                                             "research_tool_call_announcer":  {
+                                                                                  "status":  "ok",
+                                                                                  "running":  true,
+                                                                                  "interval_s":  5.0,
+                                                                                  "passes":  22,
+                                                                                  "failures":  0,
+                                                                                  "last_pass_at":  "2026-09-18T12:54:55.484012Z",
+                                                                                  "last_error":  null,
+                                                                                  "required":  false
+                                                                              }
+                                         },
+                            "reason":  null
+                        },
+                 "17":  {
+                            "status":  "PROVEN_REAL",
+                            "claim":  "research announcer bounded retry: same live loop as 14",
+                            "observed":  {
+                                             "artifact_ready_announcer":  {
+                                                                              "status":  "ok",
+                                                                              "running":  true,
+                                                                              "interval_s":  5.0,
+                                                                              "passes":  22,
+                                                                              "failures":  0,
+                                                                              "last_pass_at":  "2026-09-18T12:54:55.483740Z",
+                                                                              "last_error":  null,
+                                                                              "required":  false
+                                                                          },
+                                             "briefing_announcer":  {
+                                                                        "status":  "ok",
+                                                                        "running":  true,
+                                                                        "interval_s":  20.0,
+                                                                        "passes":  6,
+                                                                        "failures":  0,
+                                                                        "last_pass_at":  "2026-09-18T12:54:50.357207Z",
+                                                                        "last_error":  null,
+                                                                        "required":  false
+                                                                    },
+                                             "research_tool_call_announcer":  {
+                                                                                  "status":  "ok",
+                                                                                  "running":  true,
+                                                                                  "interval_s":  5.0,
+                                                                                  "passes":  22,
+                                                                                  "failures":  0,
+                                                                                  "last_pass_at":  "2026-09-18T12:54:55.484012Z",
+                                                                                  "last_error":  null,
+                                                                                  "required":  false
+                                                                              }
+                                         },
+                            "reason":  null
+                        },
+                 "375":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "delivery receipt: structural proof only (source + test_bounded_delivery.py)",
+                             "observed":  null,
+                             "reason":  "no live mobile push delivery was attempted this round (would need a real device registration)"
+                         },
+                 "376":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "delivery retry bounded plus quarantine: same shared policy as 14",
+                             "observed":  {
+                                              "artifact_ready_announcer":  {
+                                                                               "status":  "ok",
+                                                                               "running":  true,
+                                                                               "interval_s":  5.0,
+                                                                               "passes":  22,
+                                                                               "failures":  0,
+                                                                               "last_pass_at":  "2026-09-18T12:54:55.483740Z",
+                                                                               "last_error":  null,
+                                                                               "required":  false
+                                                                           },
+                                              "briefing_announcer":  {
+                                                                         "status":  "ok",
+                                                                         "running":  true,
+                                                                         "interval_s":  20.0,
+                                                                         "passes":  6,
+                                                                         "failures":  0,
+                                                                         "last_pass_at":  "2026-09-18T12:54:50.357207Z",
+                                                                         "last_error":  null,
+                                                                         "required":  false
+                                                                     },
+                                              "research_tool_call_announcer":  {
+                                                                                   "status":  "ok",
+                                                                                   "running":  true,
+                                                                                   "interval_s":  5.0,
+                                                                                   "passes":  22,
+                                                                                   "failures":  0,
+                                                                                   "last_pass_at":  "2026-09-18T12:54:55.484012Z",
+                                                                                   "last_error":  null,
+                                                                                   "required":  false
+                                                                               }
+                                          },
+                             "reason":  null
+                         },
+                 "390":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "fake provider must never report delivered: structural proof only",
+                             "observed":  null,
+                             "reason":  "proving this live needs a real registered push token, which this round will not create"
+                         },
+                 "246":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "device_trusted sent by the caller is refused (422 extra_forbidden), never silently accepted",
+                             "observed":  {
+                                              "http_status":  422,
+                                              "detail":  "HTTP 422 from http://100.90.158.26:8001/v1/voice/speaker/verify: {\"detail\":[{\"type\":\"extra_forbidden\",\"loc\":[\"body\",\"device_trusted\"],\"msg\":\"Extra inputs are not permitted\",\"input\":true}]}"
+                                          },
+                             "reason":  null
+                         },
+                 "663":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "device trust is derived from the session device binding, never the request body (same probe as 246)",
+                             "observed":  {
+                                              "http_status":  422
+                                          },
+                             "reason":  null
+                         },
+                 "659":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "idle session lifetime is fully enforced by the live sweep",
+                             "observed":  {
+                                              "idle_timeout_events":  153,
+                                              "absolute_lifetime_events":  0
+                                          },
+                             "reason":  null
+                         },
+                 "658":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "absolute session lifetime (90d ceiling) has actually revoked a session in production",
+                             "observed":  {
+                                              "absolute_lifetime_events":  0,
+                                              "config_default_s":  7776000
+                                          },
+                             "reason":  "0 expired events carry reason=absolute_lifetime; the deployment is not yet 90 days old so this ceiling cannot have fired for real yet (mechanism is wired, session_absolute_lifetime_s=90d, source/unit-test proven only)"
+                         },
+                 "660":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "panic revoke is reachable and two-step, and its own 401 counts as success",
+                             "observed":  null,
+                             "reason":  "app/identity/routes.py:panic calls service.revoke_all which revokes EVERY session with no session-scoped variant; this round refuses to call it because it would revoke the owner real live sessions while asleep. Proven only by source plus discoverability.test.tsx (15) plus test_web_asks_for_routes_that_exist.py (47)."
+                         },
+                 "675":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "code promotion permission covers the transition that LEAVES the production side too, not only the one that enters it",
+                             "observed":  {
+                                              "unknown_id_probe_http_status":  404,
+                                              "unknown_id_probe_detail":  "HTTP 404 from http://100.90.158.26:8001/v1/evolution/opportunities/9aa63f86-dd46-4411-87c0-9854c6934328/advance: {\"detail\":{\"error_class\":\"not_found\",\"message\":\"unknown opportunity\"}}",
+                                              "entering_side_evidence_mint_reached_not_found":  true
+                                          },
+                             "reason":  "the EXIT-side half of this claim needs a REAL opportunity already on the production side (one exists, status=live) and advancing it for real is not a reversible probe this round will perform; only the entering-side path and the endpoint validation were exercised live"
+                         },
+                 "560":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "task/run reconciliation runs on the live routine clock cadence (executive sub-tick)",
+                             "observed":  {
+                                              "executive_sub_tick_ticks":  11,
+                                              "last_ok_at":  "2026-09-18T12:54:59.769481Z"
+                                          },
+                             "reason":  null
+                         },
+                 "559":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "no production run claims completed while steps are missing",
+                             "observed":  {
+                                              "runs_observed":  5,
+                                              "falsely_completed":  0,
+                                              "partial_runs":  4
+                                          },
+                             "reason":  null
+                         },
+                 "558":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "final status is read from live production runs and reflects real per-step outcomes",
+                             "observed":  {
+                                              "runs_observed":  5
+                                          },
+                             "reason":  null
+                         },
+                 "539":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "compensation reports what actually happened, never a blanket compensated",
+                             "observed":  {
+                                              "runs_with_failures":  4
+                                          },
+                             "reason":  "the run routes do not surface a compensation-outcome field; proving this live needs a run that reaches a compensating branch, which this round will not create"
+                         },
+                 "548":  {
+                             "status":  "NOT_YET_PROVEN",
+                             "claim":  "folder-compare plan runs on the fixed file.search contract",
+                             "observed":  null,
+                             "reason":  "proving this live needs a new executive run against real files, which this round will not start at this hour"
+                         },
+                 "736":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "this sentence must never resolve to mail_send",
+                             "observed":  {
+                                              "text":  "Dosyayi gonder.",
+                                              "resolved_intent":  "none",
+                                              "klass":  "query"
+                                          },
+                             "reason":  null
+                         },
+                 "737":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "this sentence must never resolve to type_text",
+                             "observed":  {
+                                              "text":  "Bunu yazdir.",
+                                              "resolved_intent":  "none",
+                                              "klass":  "query"
+                                          },
+                             "reason":  null
+                         },
+                 "738":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "this sentence must never resolve to ambient_policy_set or display_off",
+                             "observed":  {
+                                              "text":  "Otomatik guncellemeleri kapat.",
+                                              "resolved_intent":  "none",
+                                              "klass":  "query"
+                                          },
+                             "reason":  null
+                         },
+                 "739":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the wrong-route negative corpus holds live (sampled from the 107-sentence SOURCE_MEASURED set)",
+                             "observed":  {
+                                              "sampled":  [
+                                                              {
+                                                                  "text":  "Dosyayi gonder.",
+                                                                  "intent":  "none",
+                                                                  "forbidden":  "mail_send",
+                                                                  "misrouted":  false
+                                                              },
+                                                              {
+                                                                  "text":  "Bunu yazdir.",
+                                                                  "intent":  "none",
+                                                                  "forbidden":  "type_text",
+                                                                  "misrouted":  false
+                                                              },
+                                                              {
+                                                                  "text":  "Otomatik guncellemeleri kapat.",
+                                                                  "intent":  "none",
+                                                                  "forbidden":  "ambient_policy_set|display_off",
+                                                                  "misrouted":  false
+                                                              }
+                                                          ]
+                                          },
+                             "reason":  null
+                         },
+                 "741":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "the deterministic router is a shield: refuses the negatives above AND still routes the genuine command/preference pair correctly",
+                             "observed":  {
+                                              "shield_ambient":  "ambient_policy_set",
+                                              "shield_display_off":  "display_off",
+                                              "negatives_held":  true
+                                          },
+                             "reason":  null
+                         },
+                 "749":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "route telemetry records the resolution (intent/klass), never the owner\u0027s words",
+                             "observed":  {
+                                              "sample_response_intent":  "display_off",
+                                              "sample_response_klass":  "action",
+                                              "response_echoes_words":  false
+                                          },
+                             "reason":  null
+                         },
+                 "750":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "an acting intent followed within the window by a reaction is written to the Activity Ledger as a candidate misroute",
+                             "observed":  {
+                                              "pair_intents":  [
+                                                                   "type_text",
+                                                                   "stop"
+                                                               ],
+                                              "ledger_events_before":  1,
+                                              "ledger_events_after":  2
+                                          },
+                             "reason":  null
+                         },
+                 "7":  {
+                           "status":  "PROVEN_REAL",
+                           "claim":  "the 13-pattern secret redaction holds across the live log stream",
+                           "observed":  {
+                                            "container":  "pagentos-prod-api-blue",
+                                            "window":  "24h",
+                                            "lines_scanned":  149,
+                                            "pattern_hits":  0
+                                        },
+                           "reason":  null
+                       },
+                 "683":  {
+                             "status":  "PROVEN_REAL",
+                             "claim":  "no secret is logged anywhere (world model plus logs plus health)",
+                             "observed":  {
+                                              "log_pattern_hits":  0,
+                                              "world_pattern_hits":  0,
+                                              "health_pattern_hits":  0
+                                          },
+                             "reason":  null
+                         }
+             }
+}
