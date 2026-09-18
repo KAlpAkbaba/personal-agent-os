@@ -443,7 +443,12 @@ _SETTINGS_PAGE_RE: Final = re.compile(r"^[A-Za-zÇĞİÖŞÜçğıöşü\- ]{1,4
 
 MISSION_SESSION_KIND: Final = "operator_mission"
 OWNER_ATTACHED_PROFILE: Final = "owner"
-OWNER_MISSION_PROFILE: Final = "media"
+#: The dedicated profile a mission falls back to when the owner's own Chrome cannot be
+#: attached. It was "media" - a name the browser agent never had (its profiles: research,
+#: isolated, alarm, news, owner), so EVERY mission navigate step failed with
+#: "profile must be one of ..." (production, 2026-09-18, "Chrome'dan YouTube'u aç").
+#: test_browser_profile_contract.py now reads the agent's own list.
+OWNER_MISSION_PROFILE: Final = "isolated"
 
 
 def _window_id_of(window: dict[str, Any] | None) -> str | None:
@@ -1010,10 +1015,34 @@ def _segment_office(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     )
 
 
+#: Brand words that are part of a BROWSER's name when the next word is that browser - never
+#: a destination. "Google Chrome'dan direkt YouTube ana sayfasını aç" was planned as
+#: "google.com adresine git" (production, 2026-09-18): the first known site in the sentence
+#: won, and it was the browser's own first name.
+_BROWSER_BRANDS: Final[dict[str, tuple[str, ...]]] = {
+    "google": ("chrome",),
+    "microsoft": ("edge",),
+    "mozilla": ("firefox",),
+}
+
+
+def _browser_name_positions(tokens: tuple[str, ...]) -> set[int]:
+    """Indices of tokens that are a browser's brand word ("google" in "Google Chrome")."""
+    out: set[int] = set()
+    for i, tok in enumerate(tokens[:-1]):
+        follow = _BROWSER_BRANDS.get(_strip_suffix(tok))
+        if follow and any(tokens[i + 1].startswith(name) for name in follow):
+            out.add(i)
+    return out
+
+
 def _segment_navigate(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     if not any(_strip_suffix(t) in _GO_VERBS or t in _GO_VERBS for t in tokens):
         return None
-    for tok in tokens:
+    brand_words = _browser_name_positions(tokens)
+    for index, tok in enumerate(tokens):
+        if index in brand_words:
+            continue
         bare = _strip_suffix(tok)
         if bare in KNOWN_SITES:
             url = KNOWN_SITES[bare]

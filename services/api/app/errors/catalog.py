@@ -362,6 +362,10 @@ TR: dict[str, OwnerMessage] = {
         "Aynı anda çalışan iş sayısı sınırda", "Biri bitince sıradakini başlatırım."
     ),
     "unsupported_provider": _m("Bu sağlayıcıyı tanımıyorum", "Tanıdıklarımı sayabilirim."),
+    # 2026-09-18: a mission's approve/resume said by the model, not the owner.
+    "owner_word_required": _m(
+        "Bu kararı sizin vermeniz gerekiyor", '"Devam et" ya da "Evet, başla" demeniz yeterli.'
+    ),
     "workflow_abandoned": _m(
         "Arka plandaki iş yarıda kaldı", "Yarım işi bitmiş gibi göstermiyorum."
     ),

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -130,6 +130,47 @@ def active_mission(db: Session) -> OperatorMissionRow | None:
     )
 
 
+#: How long a row may say "running" or "planned" without being written before nothing can
+#: still be holding it. The workflow writes the row at the end of every step and a step's
+#: activity lives at most STEP_ACTIVITY_TIMEOUT_S (240 s) - past that plus a margin, no
+#: activity and no workflow round is between this row and its next write.
+ORPHANED_AFTER: timedelta = timedelta(seconds=240 + 120)
+#: Only the states a live workflow keeps moving. "paused" and "awaiting_approval" wait on
+#: the OWNER for up to OWNER_WAIT_S and are not orphans for being quiet.
+_ORPHANABLE: frozenset[str] = frozenset({MISSION_RUNNING, MISSION_PLANNED})
+#: The catalogue's existing class for work whose workflow stopped under it.
+ERROR_ORPHANED = "workflow_abandoned"
+
+
+def _orphaned(row: OperatorMissionRow, now: datetime | None = None) -> bool:
+    """A row that says it is moving and has not moved for longer than anything could hold it.
+
+    2026-09-18, production: a resume signal failed the mission workflow and left its row
+    "running" with nothing to run it, and every later mission was refused as
+    "mission_in_flight" - indefinitely, since a cancel on a running row only sets a flag for
+    an activity that would never read it."""
+    if row.status not in _ORPHANABLE:
+        return False
+    updated = row.updated_at
+    if updated is None:
+        return False
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    return (now or _now()) - updated > ORPHANED_AFTER
+
+
+def _close_orphan(db: Session, row: OperatorMissionRow) -> None:
+    mission = load(row)
+    mission.status = MISSION_FAILED
+    mission.error_class = ERROR_ORPHANED
+    mission.message = "görev yarıda kaldı; onu yürüten iş akışı durmuştu"
+    mission.completed_at = _now()
+    _write(row, mission)
+    _finished_event(db, row, mission)
+    db.commit()
+    logger.warning("operator_mission_orphan_closed", mission_id=str(row.id))
+
+
 def start_mission_db(
     db: Session,
     *,
@@ -142,6 +183,9 @@ def start_mission_db(
     when they asked to see the plan first). Refuses a second mission while one is in
     flight - honestly, naming it."""
     running = active_mission(db)
+    if running is not None and _orphaned(running):
+        _close_orphan(db, running)
+        running = active_mission(db)
     if running is not None:
         raise MissionServiceError(
             "mission_in_flight",

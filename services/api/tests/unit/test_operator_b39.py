@@ -540,10 +540,16 @@ def test_word_is_typed_into_and_read_back_from_its_document_control() -> None:
 
 def test_the_browser_step_verifies_the_host_twice_and_falls_back_to_its_own_profile() -> None:
     device = _chrome_device(already_open=True, navigate_url="https://www.google.com/")
+    # The fake refuses a profile the REAL agent does not have, exactly as the agent does -
+    # until 2026-09-18 it accepted "media", and this test asserted the mission asked for it.
+    from tests.unit.test_browser_profile_contract import agent_profiles
+
     device.results["browser.session_open"] = lambda p: (
         DeviceRunResult(False, "capability_missing", "no enrollment")
         if p.get("profile") == "owner"
-        else ok(session_id="s", profile="media")
+        else ok(session_id="s", profile=p.get("profile"))
+        if p.get("profile") in agent_profiles()
+        else DeviceRunResult(False, "validation_error", "profile must be one of ...")
     )
     m = plan_mission("Chrome'u aç ve YouTube'a gir")
     run_mission(m, MissionPorts(device=device))
@@ -554,7 +560,7 @@ def test_the_browser_step_verifies_the_host_twice_and_falls_back_to_its_own_prof
         for c in device.calls
         if c["capability"] == "browser.session_open"
     ]
-    assert profiles[:2] == ["owner", "media"]
+    assert profiles[:2] == ["owner", mission.OWNER_MISSION_PROFILE]
 
 
 def test_the_vision_answer_is_parsed_never_guessed() -> None:
@@ -869,3 +875,199 @@ def test_a_mission_step_and_its_record_round_trip_as_data() -> None:
     assert again.as_dict() == m.as_dict()
     assert isinstance(again.steps[0], MissionStep) and again.id == m.id
     assert isinstance(OperatorStep("window.current").payload_from, type(None))
+
+
+# ------------------ 2026-09-18, production: "Chrome'dan YouTube'u aç" - four faults, one sentence
+
+
+def test_the_browser_brand_is_not_the_destination() -> None:
+    """ "Google Chrome'dan direkt YouTube ana sayfasını aç" was planned as google.com: the
+    first known site in the sentence won, and it was the browser's own first name."""
+    m = plan_mission("Google Chrome’dan direkt YouTube ana sayfasını aç")
+    assert [(s.kind, s.args) for s in m.steps] == [
+        (KIND_NAVIGATE, {"url": "https://www.youtube.com/"})
+    ]
+
+
+def test_google_on_its_own_is_still_a_destination() -> None:
+    m = plan_mission("Google’a git")
+    assert m.steps[0].args == {"url": "https://www.google.com/"}
+
+
+def _paused_mission(db: Any) -> Any:
+    row = mission_service.start_mission_db(db, text="Chrome'u aç ve YouTube'a gir")
+    device = _chrome_device()
+    mission_service.run_step_db(db, row.id, MissionPorts(device=device))
+    mission_service.pause_db(db, row.id)
+    mission_service.run_step_db(db, row.id, MissionPorts(device=device))
+    assert mission_service.get_mission(db, row.id).status == MISSION_PAUSED
+    return row
+
+
+def test_a_resume_the_tool_already_applied_does_not_kill_the_workflow_it_wakes(
+    monkeypatch,
+) -> None:
+    """The voice tool applies the owner's "Devam et" to the row and THEN signals the
+    workflow. The workflow's mark activity applied it a second time, found the row no longer
+    paused, raised "Devam ettirecek duraklatılmış bir görev yok" - and the workflow failed
+    with the row left "running" for ever (operator-mission-a7eb937f)."""
+    from app.operator import mission_activities
+
+    h = build_harness()
+    monkeypatch.setattr(mission_activities, "_factory", lambda: h.factory)
+    with h.factory() as db:
+        row = _paused_mission(db)
+        mission_service.resume_db(db, row.id)  # the tool's half
+
+    out = asyncio.run(mission_activities.mission_mark_activity(str(row.id), "resumed"))
+
+    assert out["status"] == MISSION_RUNNING
+
+
+def test_an_approval_the_tool_already_applied_does_not_kill_the_workflow_either(
+    monkeypatch,
+) -> None:
+    from app.operator import mission_activities
+
+    h = build_harness()
+    monkeypatch.setattr(mission_activities, "_factory", lambda: h.factory)
+    with h.factory() as db:
+        row = mission_service.start_mission_db(db, text="Not Defteri'ni aç", preview=True)
+        mission_service.approve_db(db, row.id)  # the tool's half
+
+    out = asyncio.run(mission_activities.mission_mark_activity(str(row.id), "approved"))
+
+    assert out["status"] == "planned"
+
+
+def test_a_signal_alone_still_applies_the_owners_word(monkeypatch) -> None:
+    """The mark must stay a real write when nothing applied it first."""
+    from app.operator import mission_activities
+
+    h = build_harness()
+    monkeypatch.setattr(mission_activities, "_factory", lambda: h.factory)
+    with h.factory() as db:
+        row = _paused_mission(db)
+
+    out = asyncio.run(mission_activities.mission_mark_activity(str(row.id), "resumed"))
+
+    assert out["status"] == MISSION_RUNNING
+
+
+def _age(db: Any, row_id: Any, *, status: str, seconds: int) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    row = mission_service.get_mission(db, row_id)
+    row.status = status
+    row.updated_at = datetime.now(UTC) - timedelta(seconds=seconds)
+    db.commit()
+
+
+def test_a_running_row_nothing_has_written_for_too_long_is_closed_not_obeyed() -> None:
+    """The stuck row refused every later mission as "mission_in_flight", and cancelling it
+    only set a flag for an activity that would never read it."""
+    h = build_harness()
+    with h.factory() as db:
+        stuck = mission_service.start_mission_db(db, text="Chrome'u aç ve YouTube'a gir")
+        _age(db, stuck.id, status=MISSION_RUNNING, seconds=600)
+
+        fresh = mission_service.start_mission_db(db, text="Not Defteri'ni aç")
+
+        closed = mission_service.get_mission(db, stuck.id)
+        assert closed.status == "failed"
+        assert closed.error_class == "workflow_abandoned"
+        assert mission_service.active_mission(db).id == fresh.id
+
+
+def test_a_quiet_row_that_waits_for_the_owner_is_not_an_orphan() -> None:
+    h = build_harness()
+    with h.factory() as db:
+        waiting = mission_service.start_mission_db(db, text="Chrome'u aç ve YouTube'a gir")
+        _age(db, waiting.id, status=MISSION_PAUSED, seconds=3600)
+        with pytest.raises(mission_service.MissionServiceError, match="başka bir görev"):
+            mission_service.start_mission_db(db, text="Not Defteri'ni aç")
+
+
+def test_a_running_row_inside_one_steps_lifetime_is_left_alone() -> None:
+    h = build_harness()
+    with h.factory() as db:
+        busy = mission_service.start_mission_db(db, text="Chrome'u aç ve YouTube'a gir")
+        _age(db, busy.id, status=MISSION_RUNNING, seconds=200)
+        with pytest.raises(mission_service.MissionServiceError, match="başka bir görev"):
+            mission_service.start_mission_db(db, text="Not Defteri'ni aç")
+
+
+def test_the_orphan_bound_outlives_the_longest_step() -> None:
+    """Two numbers for one fact - the step activity's lifetime and the orphan bound - held
+    to each other, because the bound is only true while it is the longer of the two."""
+    from datetime import timedelta
+
+    from app.operator.mission_workflow import STEP_ACTIVITY_TIMEOUT_S
+
+    assert mission_service.ORPHANED_AFTER > timedelta(seconds=STEP_ACTIVITY_TIMEOUT_S)
+
+
+def _mission_ctx(db: Any, *, said: str | None) -> Any:
+    from datetime import UTC, datetime
+
+    from app.voice.realtime_sessions.tools import ToolContext
+
+    turn = {"turn": 3, "mission_action": said} if said else {"turn": 3}
+    return ToolContext(
+        session_id=uuid.uuid4(),
+        owner_session_id=uuid.uuid4(),
+        device_id=None,
+        client_kind="web",
+        context={"last_utterance": turn},
+        db=db,
+        now=datetime.now(UTC),
+        call_id="call-1",
+        live={},
+    )
+
+
+@pytest.mark.parametrize("action", ["resume", "approve"])
+def test_only_the_owners_word_moves_a_mission_that_waits_for_the_owner(action: str) -> None:
+    """A step escalated at 19:00:30 asking "Nasıl devam edeyim?" and the model resumed it
+    at 19:00:31 - one second, no owner word in between."""
+    from app.voice.realtime_sessions import tools_mission
+
+    h = build_harness()
+    with h.factory() as db:
+        if action == "resume":
+            row = _paused_mission(db)
+        else:
+            row = mission_service.start_mission_db(db, text="Not Defteri'ni aç", preview=True)
+        before = mission_service.get_mission(db, row.id).status
+
+        out = tools_mission.operator_mission(_mission_ctx(db, said=None), {"action": action})
+
+        assert out["error_class"] == "owner_word_required"
+        assert mission_service.get_mission(db, row.id).status == before
+
+
+def test_the_owners_resume_still_resumes() -> None:
+    from app.voice.realtime_sessions import tools_mission
+
+    h = build_harness()
+    with h.factory() as db:
+        row = _paused_mission(db)
+
+        out = tools_mission.operator_mission(_mission_ctx(db, said="resume"), {"action": "resume"})
+
+        assert out.get("error_class") in (None, "")
+        assert mission_service.get_mission(db, row.id).status == MISSION_RUNNING
+
+
+def test_the_model_may_still_stop_or_ask() -> None:
+    """Stopping and asking only ever make the system do less; they stay open to the model."""
+    from app.voice.realtime_sessions import tools_mission
+
+    h = build_harness()
+    with h.factory() as db:
+        row = mission_service.start_mission_db(db, text="Not Defteri'ni aç", preview=True)
+        status = tools_mission.operator_mission(_mission_ctx(db, said=None), {"action": "status"})
+        assert status.get("error_class") in (None, "")
+        out = tools_mission.operator_mission(_mission_ctx(db, said=None), {"action": "cancel"})
+        assert out.get("error_class") in (None, "")
+        assert mission_service.get_mission(db, row.id).status == MISSION_CANCELLED

@@ -69,6 +69,9 @@ SPEECH_STARTED: Final = "Başlıyorum efendim: {plan}."
 SPEECH_APPROVED: Final = "Tamam efendim, başlıyorum."
 SPEECH_PAUSED: Final = "Duraklattım efendim; bu adımdan sonra bekleyeceğim."
 SPEECH_RESUMED: Final = "Devam ediyorum efendim."
+#: What only the owner's own words may do (see ``_control``).
+OWNER_ONLY_ACTIONS: Final[frozenset[str]] = frozenset({"approve", "resume"})
+SPEECH_WAITING_FOR_OWNER: Final = "Görev sizin cevabınızı bekliyor efendim."
 SPEECH_CANCELLED: Final = "Görevi iptal ettim efendim."
 
 
@@ -231,6 +234,24 @@ def _control(ctx: ToolContext, action: str) -> dict[str, Any]:
             terminal=TERMINAL_ALREADY,
             speech=SPEECH_NOTHING_ACTIVE,
             server={"active": False},
+        )
+    if action in OWNER_ONLY_ACTIONS and _turn_record(ctx).get("mission_action") != action:
+        # A plan waiting for approval and an escalation asking "Nasıl devam edeyim?" both
+        # wait for the OWNER. The router resolves their "Evet, başla" / "Devam et" to this
+        # action only when the words were said and the mission is in that state; a model
+        # passing action=resume on its own is not the owner answering. Production,
+        # 2026-09-18: a step escalated at 19:00:30 and the model resumed it at 19:00:31 -
+        # one second, no owner word between. Stopping (pause/cancel) and asking (status)
+        # stay open to the model: those only ever make it do less.
+        waiting = (row.mission_json.get("escalation") or {}).get("speech")
+        return _receipt(
+            ctx,
+            requested_state=action,
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            speech=str(waiting or SPEECH_WAITING_FOR_OWNER),
+            server={"mission_id": str(row.id), "status": row.status},
+            error_class="owner_word_required",
         )
     if action == "status":
         mission = row.mission_json
