@@ -670,3 +670,77 @@ def test_tool_calls_validate_the_utterance(wired) -> None:
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "failed"
         assert r.json()["error"]["error_class"] == "validation_error"
+
+
+# ------------------------------------------- ADR-0173: the local mode has no model
+
+
+def _local_call(client, sid: str, call_id: str, name: str, **arguments) -> dict:
+    """What the LOCAL mode posts: the tool the router named, no ``utterance`` argument."""
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={"call_id": call_id, "name": name, "arguments": arguments},
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_the_local_mode_opens_the_camera_without_a_model_to_write_the_utterance(
+    wired,
+) -> None:
+    """Owner, 2026-09-20: "kamerayı sesli açma kapama yerel modda kapalı". In the local mode
+    (ADR-0173) the router names the tool and the browser posts it with no ``utterance``
+    argument - no model writes one - and the call was refused on that missing argument, so
+    the camera never opened. The owner's own sentence is on the turn record; it is read
+    from there, exactly like every other local-mode tool."""
+    client, runtime, *_ = wired
+    sid = _create(client)["session_id"]
+    _utter(client, sid, "Kamerayı aç.")
+
+    body = _local_call(client, sid, "c-local-eye-1", "eye.enable", observed_after=_local("ACTIVE"))
+
+    assert body["status"] == "succeeded", body
+    assert _eye_enabled(runtime) is True
+    receipt = body["result"]
+    assert receipt["terminal_status"] == "verified", receipt
+    assert receipt["observed_after"]["server"]["eye_enabled"] is True
+
+
+def test_the_local_mode_closes_the_camera_the_same_way(wired) -> None:
+    client, runtime, *_ = wired
+    sid = _create(client)["session_id"]
+    _utter(client, sid, "Kamerayı aç.")
+    _local_call(client, sid, "c-local-eye-2", "eye.enable", observed_after=_local("ACTIVE"))
+    _utter(client, sid, "Kamerayı kapat.", turn=2)
+
+    body = _local_call(
+        client, sid, "c-local-eye-3", "eye.disable", observed_after=_local("DISABLED")
+    )
+
+    assert body["status"] == "succeeded", body
+    assert _eye_enabled(runtime) is False
+
+
+def test_a_camera_call_the_owner_never_asked_for_is_still_refused(wired) -> None:
+    """The fallback reads the TURN, not the tool's name: a call arriving with no utterance
+    argument and no camera sentence behind it has no owner's words to stand on."""
+    client, runtime, *_ = wired
+    sid = _create(client)["session_id"]
+    # The eye starts enabled by default, so the claim is made against a camera that is OFF:
+    # a refused call must not be able to turn it back on.
+    _utter(client, sid, "Kamerayı kapat.")
+    _local_call(client, sid, "c-local-eye-5", "eye.disable", observed_after=_local("DISABLED"))
+    assert _eye_enabled(runtime) is False
+    _utter(client, sid, "Saat kaç?", turn=2)
+
+    r = client.post(
+        f"/v1/voice/realtime/sessions/{sid}/tool-calls",
+        json={
+            "call_id": "c-local-eye-4",
+            "name": "eye.enable",
+            "arguments": {"observed_after": _local("ACTIVE")},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "failed", r.json()
+    assert _eye_enabled(runtime) is False

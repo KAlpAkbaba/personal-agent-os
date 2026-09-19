@@ -13976,3 +13976,42 @@ plain one-tab sentence still closing one tab, and the kept tab surviving a Chrom
 refuses to move it). The fake device grew a real tab strip — Ctrl+W, Ctrl+9,
 Ctrl+Shift+PageUp and Ctrl+1..9 act on a list of titles — so these tests assert which tabs
 SURVIVED, not which chords were sent.
+
+## ADR-0181 — The camera could not be opened or closed by voice in the local mode (2026-09-20)
+
+The owner: *"kamerayı sesli açma kapama yerel modda kapalı, bunu da yerel modda aktif hale
+getirelim"*. The deterministic router was never the problem — "Kamerayı aç" resolves to
+`EYE_ENABLE` and names the tool `eye.enable`. Both halves BELOW the router were missing, and
+each would have been enough on its own to make nothing happen.
+
+**A. The browser never opened its own camera.** `eye.enable` is not a server action: the
+camera is in the tab, so the paid realtime path runs a `LocalActionPort` first
+(`lib/eye/local-actions.ts`, contract §5.1) and relays what it observed as
+`observed_after`, and the Cloud Core builds its receipt from the camera's real state —
+"never tell the Cloud Core perception is on before the camera actually opened". The local
+mode (ADR-0173) posts the router's tool with EMPTY arguments and had no local half at all,
+so the server would have been asked to enable a camera nobody opened, which it correctly
+refuses (`capability_missing`). `LocalModeDeps` now takes the same `localActions` port, the
+browser deps wire the same `eyeLocalActions(getEyeStore)` — the SAME store the eye panel
+uses, so a spoken "kamerayı aç" and the panel can never disagree — and a tool with a local
+half carries `observed_after`; every other tool keeps its empty arguments. A local half that
+throws is logged and the call still goes: a receipt that says the camera did not open is
+worth more than a turn that vanishes.
+
+**B. The server required an `utterance` argument no one writes.** `_eye_action` began with
+`_require_str(arguments, "utterance")` — written for the model path, where the model passes
+the sentence. In the local mode there is no model, and the relay's arguments are empty by
+design (the relay refuses text-shaped keys, and tools read the owner's words from the turn
+record). So the call was refused on a missing argument before anything else could happen.
+`_eye_matched` now falls back to the TURN RECORD: when the router's own reading of the
+sentence the owner just said was `eye_enable`/`eye_disable`, the durable reason is
+`voice:kamerayı aç` / `voice:kamerayı kapat` — the act, never a transcript. A turn that did
+NOT ask for the camera keeps the refusal, so a tool call arriving without an utterance and
+without a camera sentence behind it still cannot touch the flag.
+
+**Tests**: `apps/web/tests/voice/local-mode.test.ts` (+3: the camera opened in this tab and
+what it observed relayed, the same on close, and every other tool's arguments still empty),
+`services/api/tests/unit/test_voice_eye_tools.py` (+3: the local-mode open and close with no
+`utterance` argument, and a camera call the owner never asked for still refused — asserted
+against a camera that is OFF, since the eye's default is on). Gates: the web suite (1996),
+and the eye/realtime/presence/ambient selection (715).

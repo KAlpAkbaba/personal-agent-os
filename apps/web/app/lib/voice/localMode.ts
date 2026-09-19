@@ -30,6 +30,9 @@
 import type { VoiceSessionApi } from "./api";
 import { VoiceApiError } from "./api";
 import type { EventsResponse, SidebandFrame, ToolCallResponse } from "./contract";
+import type { LocalActionPort } from "./ports";
+import { eyeLocalActions } from "../eye/local-actions";
+import { getEyeStore } from "../eye/store";
 
 /** The server's `TRANSPORT_TEXT` (app/voice/providers.py); `test_voice_local_mode.py` reads this line. */
 export const LOCAL_TRANSPORT = "text";
@@ -104,6 +107,16 @@ export type LocalModeDeps = {
   /** The speech hang guard's timer; `setTimeout`/`clearTimeout` by default, a manual one in tests. */
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
+  /**
+   * The capabilities that live in THIS tab rather than on the device or the server - the
+   * camera (`eye.enable` / `eye.disable`), through the same `LocalActionPort` the paid
+   * realtime path uses (`lib/eye/local-actions.ts`). Without it the local mode would post
+   * `eye.enable` to a Cloud Core that can only answer "capability_missing": the server
+   * never sets the durable flag for a camera nobody opened, so nothing would happen and
+   * the owner would be told something did (owner, 2026-09-20: "kamerayı sesli açma kapama
+   * yerel modda kapalı").
+   */
+  localActions?: LocalActionPort;
 };
 
 // --------------------------------------------------------------- snapshot
@@ -483,11 +496,16 @@ export class LocalVoiceMode {
     for (const name of tools) {
       if (!this.active) return;
       let response: ToolCallResponse;
+      const callId = `${LOCAL_CALL_ID_PREFIX}${this.newId()}`;
+      // A capability that lives in this tab runs HERE first, and what it observed travels
+      // with the call: the server builds its receipt from the camera's real state, never
+      // from the fact that a tool was called. Anything else keeps the empty arguments.
+      const observed = await this.runLocally(name, callId, sessionId, text);
       try {
         response = await this.deps.api.toolCall(sessionId, {
-          call_id: `${LOCAL_CALL_ID_PREFIX}${this.newId()}`,
+          call_id: callId,
           name,
-          arguments: {},
+          arguments: observed ? { observed_after: observed } : {},
         });
       } catch (error) {
         this.log(`tool:${name} request.failed ${describe(error)}`);
@@ -498,6 +516,25 @@ export class LocalVoiceMode {
       this.log(`tool:${name} ${response.status}${response.replayed ? " replayed" : ""}`);
       const speech = speechOf(response);
       if (speech) await this.speak(speech);
+    }
+  }
+
+  /** The local half of a tool, or null when this tool has none (or it failed). */
+  private async runLocally(
+    name: string,
+    callId: string,
+    sessionId: string,
+    said: string,
+  ): Promise<Record<string, unknown> | null> {
+    const port = this.deps.localActions;
+    if (!port) return null;
+    try {
+      return await port.run(name, { utterance: said, call_id: callId, session_id: sessionId });
+    } catch (error) {
+      // The call still goes: the server's own read-back decides, and a receipt that says
+      // the camera did not open is worth more than a turn that vanishes.
+      this.log(`local:${name} failed ${describe(error)}`);
+      return null;
     }
   }
 
@@ -581,5 +618,9 @@ export function browserLocalModeDeps(api: VoiceSessionApi): LocalModeDeps {
       };
     },
     utterance: (text) => new SpeechSynthesisUtterance(text) as unknown as UtteranceLike,
+    // The camera is in this browser in the local mode exactly as it is in the paid one,
+    // and it is the SAME port and the same `EyeStore` - one store per tab, so the eye
+    // panel and a spoken "kamerayı aç" can never disagree about what the camera is doing.
+    localActions: eyeLocalActions(getEyeStore),
   };
 }

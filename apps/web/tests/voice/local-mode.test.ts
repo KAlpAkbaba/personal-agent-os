@@ -422,3 +422,89 @@ describe("Yerel mod helpers", () => {
     expect(pickTurkishVoice([])).toBeNull();
   });
 });
+
+/** The eye router entries the deterministic router really returns for these sentences. */
+function eyeRouter(text: string): Array<Record<string, unknown>> {
+  const lower = text.toLowerCase();
+  if (lower.includes("kamerayı aç"))
+    return [{ intent: "eye_enable", klass: "action", capability: "eye.enable", tool: "eye.enable" }];
+  if (lower.includes("kamerayı kapat"))
+    return [{ intent: "eye_disable", klass: "action", capability: "eye.disable", tool: "eye.disable" }];
+  return [{ intent: "none", klass: "query", capability: null, tool: null }];
+}
+
+describe("Yerel mod: the camera is this tab's, so the local action runs before the call", () => {
+  function eyeSetup() {
+    const ran: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const core = new FakeCloudCore({
+      provider: "local-router",
+      transport: LOCAL_TRANSPORT,
+      resolveIntents: eyeRouter,
+      toolResponses: {
+        "eye.enable": { result: { speech: "Kamerayı açtım efendim." } },
+        "eye.disable": { result: { speech: "Kamerayı kapattım efendim." } },
+      },
+    });
+    const recognition = new FakeSpeechRecognition();
+    let ids = 0;
+    const mode = new LocalVoiceMode({
+      api: new VoiceSessionApi(core.fetcher),
+      recognition: () => recognition,
+      synthesis: () => new FakeSpeechSynthesis(),
+      utterance: fakeUtterance,
+      now: () => 1000 + ids,
+      newId: () => `id${(ids += 1)}`,
+      setTimer: (fn, ms) => ({ fn, ms }),
+      clearTimer: () => {},
+      localActions: {
+        async run(name, args) {
+          ran.push({ name, args });
+          if (name === "eye.enable")
+            return { local: { state: "ACTIVE", running: true, camera_label: "Integrated Camera", error_class: null, observed_at: "2026-09-20T00:00:00Z", changed: true, media_track_ready_state: "live", action_trace: ["requested", "active"] } };
+          if (name === "eye.disable")
+            return { local: { state: "DISABLED", running: false, camera_label: null, error_class: null, observed_at: "2026-09-20T00:00:00Z", changed: true, media_track_ready_state: "ended", action_trace: ["requested", "disabled"] } };
+          return null;
+        },
+      },
+    });
+    return { core, recognition, mode, ran };
+  }
+
+  it("opens the camera in this tab and relays what it observed", async () => {
+    const { core, recognition, mode, ran } = eyeSetup();
+    await mode.start();
+    recognition.final("Kamerayı aç");
+    await tick();
+
+    expect(ran.map((r) => r.name)).toEqual(["eye.enable"]);
+    expect(ran[0].args.utterance).toBe("Kamerayı aç");
+    const calls = posts(core, "/tool-calls");
+    expect(calls).toHaveLength(1);
+    const body = calls[0].body as { name: string; arguments: Record<string, unknown> };
+    expect(body.name).toBe("eye.enable");
+    const observed = body.arguments.observed_after as { local: Record<string, unknown> };
+    expect(observed.local.state).toBe("ACTIVE");
+    expect(observed.local.media_track_ready_state).toBe("live");
+  });
+
+  it("closes the camera before the server is told it closed", async () => {
+    const { core, recognition, mode, ran } = eyeSetup();
+    await mode.start();
+    recognition.final("Kamerayı kapat");
+    await tick();
+
+    expect(ran.map((r) => r.name)).toEqual(["eye.disable"]);
+    const body = posts(core, "/tool-calls")[0].body as { arguments: Record<string, unknown> };
+    const observed = body.arguments.observed_after as { local: Record<string, unknown> };
+    expect(observed.local.state).toBe("DISABLED");
+  });
+
+  it("leaves every other tool's arguments empty", async () => {
+    const { core, recognition, mode, ran } = eyeSetup();
+    await mode.start();
+    recognition.final("bir şey");
+    await tick();
+    expect(ran).toEqual([]);
+    expect(posts(core, "/tool-calls")).toHaveLength(0);
+  });
+});

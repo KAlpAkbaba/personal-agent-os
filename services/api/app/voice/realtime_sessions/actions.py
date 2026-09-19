@@ -152,19 +152,51 @@ def local_report(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: What the turn record calls the two camera intents (``ResolvedIntent.intent.value``).
+_EYE_TURN_INTENTS: Final[dict[bool, str]] = {
+    True: Intent.EYE_ENABLE.value,
+    False: Intent.EYE_DISABLE.value,
+}
+#: The phrase recorded as the durable reason when the owner's own sentence is not an
+#: argument of this call. It names the ACT, never a transcript: the relay keeps no text.
+_EYE_MATCHED_TR: Final[dict[bool, str]] = {True: "kamerayı aç", False: "kamerayı kapat"}
+
+
+def _eye_matched(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) -> str:
+    """The owner's words behind this camera action, for the durable reason.
+
+    The model's path passes ``utterance``. The LOCAL mode (ADR-0173) has no model to write
+    one: the deterministic router named the tool from the owner's own sentence and the
+    browser posts it with empty arguments, and this used to be refused on the missing
+    argument - so "kamerayı aç" did nothing at all in the local mode (owner, 2026-09-20).
+
+    With no ``utterance``, the TURN RECORD is the authority: it is the router's own reading
+    of the sentence the owner just said. A turn that did not ask for the camera is not a
+    camera command, whatever tool was called, and the missing-argument refusal stands.
+    """
+    utterance = arguments.get("utterance")
+    if isinstance(utterance, str) and utterance.strip():
+        said = utterance.strip()[:1000]
+        resolved = resolve_intent(said, session_state=ctx.fsm_state)
+        if resolved.intent in (Intent.EYE_ENABLE, Intent.EYE_DISABLE):
+            return resolved.matched
+        return said[:64]
+    turn = dict(ctx.context.get("last_utterance") or {})
+    if str(turn.get("intent") or "") == _EYE_TURN_INTENTS[enable]:
+        return _EYE_MATCHED_TR[enable]
+    raise VoiceError(
+        VoiceErrorClass.VALIDATION_ERROR,
+        "argument 'utterance' must be a non-empty string when this turn did not ask for the camera",
+    )
+
+
 def _eye_action(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) -> dict[str, Any]:
     from app.presence.eye import disable_eye, enable_eye, is_eye_enabled, latest_eye_event
 
     capability = CAPABILITY_EYE_ENABLE if enable else CAPABILITY_EYE_DISABLE
     db = _require_db(ctx, capability)
-    utterance = _require_str(arguments, "utterance", max_len=1000)
     started = ctx.now
-    resolved = resolve_intent(utterance, session_state=ctx.fsm_state)
-    matched = (
-        resolved.matched
-        if resolved.intent in (Intent.EYE_ENABLE, Intent.EYE_DISABLE)
-        else utterance[:64]
-    )
+    matched = _eye_matched(ctx, arguments, enable=enable)
     reason = f"voice:{matched}"
     local = local_report(arguments)
     trace = list(local.pop("action_trace"))
@@ -300,7 +332,7 @@ def _eye_action(ctx: ToolContext, arguments: dict[str, Any], *, enable: bool) ->
         action_trace=trace,
     )
     record_receipt(db, receipt, SUBSYSTEM_PRESENCE)
-    ctx.context["last_intent"] = resolved.intent.value
+    ctx.context["last_intent"] = _EYE_TURN_INTENTS[enable]
     ctx.context["last_action"] = {
         "capability": capability,
         "terminal_status": terminal,
