@@ -1683,8 +1683,23 @@ def office_type(window_id: str, image: str, text: str) -> list[OperatorStep]:
     return steps
 
 
+def go_back(window_id: str, *, title_before: str) -> list[OperatorStep]:
+    """Alt+Left in the owner's browser: the page that should not have opened is left, proven
+    by the title no longer being that page's."""
+
+    def _left(result: DeviceRunResult) -> bool:
+        title = _title_of(result)
+        return bool(title) and title != title_before
+
+    return [
+        _activate_step(window_id, "go_back:activate"),
+        _chord_step(window_id, ["alt", "left"], "go_back:chord"),
+        _title_check_step(_left, "go_back:verify"),
+    ]
+
+
 def click_and_expect_change(
-    window_id: str, x: int, y: int, *, title_before: str
+    window_id: str, x: int, y: int, *, title_before: str, expect_name: str | None = None
 ) -> list[OperatorStep]:
     """A left click where the owner's words were seen, proven by what a click on a link or a
     video does: the window's title is no longer what it was (owner decision 2026-09-18 -
@@ -1706,7 +1721,15 @@ def click_and_expect_change(
     def _changed(result: DeviceRunResult) -> bool:
         title = _title_of(result)
         page = page_title(title).strip().lower()
-        return bool(title) and title != title_before and page not in _BLANK_TAB_TITLES
+        if not title or title == title_before or page in _BLANK_TAB_TITLES:
+            return False
+        if expect_name:
+            # A NAMED video: a changed title is not enough - the neighbour's title changes
+            # it too (2026-09-19 17:38). The page that opened must carry the name.
+            from app.operator.ocr_locate import title_names
+
+            return title_names(page_title(title), expect_name)
+        return True
 
     return [
         _activate_step(window_id, "screen_click:activate"),

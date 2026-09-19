@@ -870,6 +870,49 @@ def _decide_visual(
     )
 
 
+#: A click on a named thing opened something ELSE, and going back once did not help. Declared
+#: as a plain constant so the owner-language dictionary's completeness test can see it.
+ERROR_WRONG_TARGET = "wrong_target"
+
+
+def _wrong_page_opened(step: MissionStep, obs: Observation, name: str) -> Decision | None:
+    """After a click on a NAMED video whose proof failed: if the window now shows some OTHER
+    page, that click opened the wrong thing. Go back once and look again; a second wrong
+    page stops for the owner, said as what it is - never "açtım" on the neighbour's video
+    (production 2026-09-19 17:38)."""
+    clicked_from = step.args.get("clicked_from_title")
+    clicked_window = step.args.get("clicked_window")
+    if not clicked_from or not clicked_window or not step.args.get("search_if_missing"):
+        return None
+    now = next(
+        (
+            w
+            for w in [obs.foreground, *obs.windows]
+            if w and str(w.get("window_id") or "") == clicked_window
+        ),
+        None,
+    )
+    title = str((now or {}).get("title") or "")
+    if not title or title == clicked_from:
+        return None  # nothing opened: an ordinary miss, the loop looks again
+    if ocr_locate.title_names(plans.page_title(title), name):
+        return None
+    if step.args.get("went_back"):
+        raise NeedsOwner(
+            ERROR_WRONG_TARGET,
+            f"'{name}' yerine başka bir sayfa açıldı efendim; doğru videoyu bulamadım.",
+        )
+    step.args["went_back"] = True
+    step.args.pop("clicked_from_title", None)
+    return Decision(
+        "go_back",
+        plans.go_back(str(clicked_window), title_before=title),
+        LEVEL_KEYBOARD,
+        note=f"yanlış sayfa açıldı ('{plans.page_title(title)[:60]}'); geri döndüm",
+        finishes_step=False,
+    )
+
+
 def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
     """Something the owner sees on the screen - a video's title, a link, a label - clicked
     the way the owner would: the pointer moved there, a left click.
@@ -886,6 +929,9 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     name = str(step.args.get("name") or "")
     if not name:
         raise NeedsOwner("validation_error", "Neye tıklayacağımı anlayamadım efendim.")
+    wrong = _wrong_page_opened(step, obs, name)
+    if wrong is not None:
+        return wrong
     windows = _windows_to_look_in(step, obs)
     if not windows:
         raise NeedsOwner("no_current_window", "tıklamak için bir pencere göremedim efendim.")
@@ -926,9 +972,17 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
             finishes_step=False,
         )
     _, x, y = found
+    step.args["clicked_from_title"] = title_before
+    step.args["clicked_window"] = window_id
     return Decision(
         "screen_click",
-        plans.click_and_expect_change(window_id, x, y, title_before=title_before),
+        plans.click_and_expect_change(
+            window_id,
+            x,
+            y,
+            title_before=title_before,
+            expect_name=name if step.args.get("search_if_missing") else None,
+        ),
         LEVEL_VISUAL,
         note=f"ekranda '{name}' ({x},{y})",
     )
@@ -1829,9 +1883,14 @@ def _head(word: str) -> str:
     return normal[0] if normal else ""
 
 
+#: What the owner calls a thing to watch: "videosunu aç", "filmini aç", "klibini aç"
+#: (production 2026-09-19 17:37: "üçkağıtçı Türk filmini aç").
+_VIDEO_NOUN_STEMS: Final[tuple[str, ...]] = ("video", "film", "klip", "klib")
+
+
 def _is_trigger(head: str) -> bool:
     return (
-        head.startswith("video")
+        head.startswith(_VIDEO_NOUN_STEMS)
         or head in _OPEN_OR_CLICK_WORDS
         or head.startswith(_CLICK_VERB_STEMS)
     )
@@ -1849,9 +1908,14 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     # the source it names), not a picture search on whatever page is open.
     if any(t.startswith("haber") for t in tokens):
         return None
-    has_video = any(t.startswith("video") for t in tokens)
     has_click = any(t.startswith(("tıkla", "tikla")) for t in tokens)
     on_screen = any(t in _ON_SCREEN_WORDS for t in tokens)
+    # "video" always names something on the screen. "film"/"klip" do so only when the
+    # sentence PLACES it there ("şu an sekmedeki üçkağıtçı Türk filmini aç", 2026-09-19):
+    # "Esaretin Bedeli filmini aç" alone is the media player's (corpus m.play.film).
+    has_video = any(t.startswith("video") for t in tokens) or (
+        on_screen and any(t.startswith(_VIDEO_NOUN_STEMS) for t in tokens)
+    )
     has_verb = any(t in _OPEN_OR_CLICK_WORDS or t.startswith(_CLICK_VERB_STEMS) for t in tokens)
     if not has_verb or not (has_video or has_click or on_screen):
         return None

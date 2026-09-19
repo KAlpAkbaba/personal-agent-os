@@ -276,3 +276,76 @@ def test_the_provider_is_told_the_pictures_own_type() -> None:
     assert image_mime(bytes((0xFF, 0xD8, 0xFF, 0xE0))) == "image/jpeg"
     assert image_mime(base64.b64decode(ONE_PIXEL_PNG_B64)) == "image/png"
     assert mission_module.MAX_WINDOWS_PER_LOOK >= 2
+
+
+# ------------------------------------------- production 2026-09-19 17:38: the neighbour opened
+
+
+def test_the_page_that_opened_must_carry_the_name() -> None:
+    from app.operator.ocr_locate import title_names
+
+    assert title_names(
+        "Üç Kağıtçı Türk Filmi | 4K ULTRA HD | KEMAL SUNAL - YouTube", "üçkağıtçı Türk filmi"
+    )
+    assert title_names("(954) Tosun Paşa - RESTORASYONLU 4K FULL - YouTube", "tosun paşa")
+    assert not title_names(
+        "(954) 25 Quality Items You Should Own Before 25 - YouTube", "üçkağıtçı Türk filmi"
+    )
+    assert not title_names("", "üç kağıtçı")
+
+
+def test_a_click_that_opens_the_neighbours_video_is_gone_back_from_and_never_called_done() -> None:
+    """Asked for "üçkağıtçı Türk filmi", the click opened "25 Quality Items You Should Own
+    Before 25" and the mission said succeeded - the title had merely CHANGED. Now: the proof
+    fails, the mission goes back once, looks again, and a second wrong page stops for the
+    owner as wrong_target."""
+    home = dict(_chrome(2, "(954) YouTube - Google Chrome", x=1432, y=1129, foreground=True))
+    wrong_title = "(954) 25 Quality Items You Should Own Before 25 - YouTube - Google Chrome"
+    state = {"title": home["title"], "clicks": 0, "backs": 0}
+
+    def window() -> dict[str, Any]:
+        return {**home, "title": state["title"]}
+
+    def click(p: dict[str, Any]) -> DeviceRunResult:
+        state["clicks"] += 1
+        state["title"] = wrong_title
+        x, y = int(p["x"]), int(p["y"])
+        return ok(x=x, y=y, space="screen", observed={"cursor": {"x": x, "y": y}})
+
+    def chord(p: dict[str, Any]) -> DeviceRunResult:
+        if p.get("keys") == ["alt", "left"]:
+            state["backs"] += 1
+            state["title"] = home["title"]
+        return ok(keys=p.get("keys"), window_id=p.get("window_id"), observed={"window": window()})
+
+    device = FakeDeviceAction(
+        results={
+            "window.current": lambda _p: ok(window=window()),
+            "window.list": lambda _p: ok(windows=[window()]),
+            "window.activate": lambda _p: ok(window=window()),
+            "screen.ocr": lambda _p: ok(
+                width=2576, height=1416, scale=1, lines=HOME, observed={"window": window()}
+            ),
+            "pointer.click": click,
+            "keyboard.shortcut": chord,
+        }
+    )
+    m = plan_mission("şu an sekmedeki üçkağıtçı Türk filmini aç")
+    run_mission(m, MissionPorts(device=device, vision=FakeVisionProvider(location=(1, 1))))
+
+    assert m.status == MISSION_PAUSED, m.as_dict()
+    assert m.steps[0].error_class == "wrong_target"
+    assert state["backs"] == 1 and state["clicks"] == 2
+    assert state["title"] == wrong_title  # said as it is; never reported as opened
+
+
+def test_a_film_is_the_screens_only_when_the_sentence_places_it_there() -> None:
+    """ "şu an sekmedeki üçkağıtçı Türk filmini aç" is a thing on this tab; "Esaretin Bedeli
+    filmini aç" alone is the media player's (corpus m.play.film) and is not planned here."""
+    from app.operator.mission import MissionClarificationNeeded
+
+    placed = plan_mission("şu an sekmedeki üçkağıtçı Türk filmini aç")
+    assert placed.steps[0].kind == "click_text"
+    assert placed.steps[0].args == {"name": "üçkağıtçı Türk", "search_if_missing": True}
+    with pytest.raises(MissionClarificationNeeded):
+        plan_mission("Esaretin Bedeli filmini aç")

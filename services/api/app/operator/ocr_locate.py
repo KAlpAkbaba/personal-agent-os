@@ -188,4 +188,32 @@ def find_text(lines: list[dict[str, Any]], name: str, *, image_height: int) -> O
     return hits[0]
 
 
-__all__ = ["MIN_COVERAGE", "TOP_BAND_FRACTION", "OcrHit", "find_text", "fold"]
+#: How much of the spoken name the page that OPENED must carry in its title. Looser than
+#: finding it on a page (a video's title is often longer or shorter than what was said),
+#: strict enough that "25 Quality Items You Should Own" is not "üç kağıtçı".
+MIN_TITLE_COVERAGE = 0.5
+
+
+def title_names(title: str, name: str) -> bool:
+    """True when the page title carries the thing the owner named - the proof that the click
+    opened THAT video and not its neighbour (production 2026-09-19 17:38: asked for "üçkağıtçı
+    Türk filmi", opened "25 Quality Items You Should Own Before 25", reported as done because
+    the title had merely CHANGED)."""
+    folded_title = fold(title)
+    folded_name = fold(name)
+    if not folded_title or not folded_name:
+        return False
+    if folded_name.replace(" ", "") in folded_title.replace(" ", ""):
+        return True
+    return _coverage(folded_name.split(), folded_title.split()) >= MIN_TITLE_COVERAGE
+
+
+__all__ = [
+    "MIN_COVERAGE",
+    "MIN_TITLE_COVERAGE",
+    "TOP_BAND_FRACTION",
+    "OcrHit",
+    "find_text",
+    "fold",
+    "title_names",
+]
