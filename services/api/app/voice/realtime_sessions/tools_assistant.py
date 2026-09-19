@@ -111,8 +111,56 @@ CAPABILITIES_PARAMETERS: dict[str, Any] = {
 }
 
 
+CHAT_TOOL_NAME = "assistant.chat"
+CHAT_DESCRIPTION = (
+    "YEREL MOD içindir: yönlendiricinin anlamadığı serbest bir soruyu ya da sohbeti küçük bir "
+    "metin modeline sorar ve yanıtı döner. Hiçbir eylem yapmaz. Sahibin cümlesi turun "
+    "kaydından okunur; argüman gerekmez. Dönen 'speech' metnini aynen oku."
+)
+CHAT_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": False,
+}
+
+
+def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """ADR-0173 addendum: free conversation in the local mode. The question is the owner's own
+    sentence from THIS turn's record (set only in a local session, only when the router
+    understood nothing) - never an argument a caller wrote. No question on the turn is a
+    no-op, which is what keeps a paid session's model from spending a second model on a
+    question it can answer itself."""
+    del arguments
+    from app import assistant_chat as chat
+
+    turn = dict(ctx.context.get("last_utterance") or {})
+    question = str(turn.get("chat_question") or "").strip()
+    if not question:
+        # A paid session's model reached for it: nothing is said and nothing is spent - the
+        # realtime model answers its own conversation. The note is for that model.
+        return {
+            "speech": "",
+            "answered": False,
+            "error_class": None,
+            "note": "assistant.chat yalnız yerel modda kullanılır; soruyu kendin yanıtla.",
+        }
+    provider = ctx.live.get("chat_provider") or chat.build_chat_provider(ctx.live.get("settings"))
+    session = str(ctx.session_id)
+    now_tr = ctx.now.astimezone().strftime("%d.%m.%Y %H:%M")
+    answer = provider.answer(question, history=chat.MEMORY.history(session), now_tr=now_tr)
+    if answer.ok:
+        chat.MEMORY.remember(session, question, answer.speech)
+    return {
+        "speech": answer.speech,
+        "answered": answer.ok,
+        "error_class": answer.error_class,
+        "model": answer.model,
+        "usage": {"input_tokens": answer.input_tokens, "output_tokens": answer.output_tokens},
+    }
+
+
 def register(registry: ToolRegistry) -> None:
-    """Register the one tool (module docstring: ONE line in ``default_registry``)."""
+    """Register the tools (module docstring: ONE line in ``default_registry``)."""
     from app.voice.realtime_sessions.tools import ToolSpec
 
     registry.register(
@@ -123,10 +171,20 @@ def register(registry: ToolRegistry) -> None:
             handler=assistant_capabilities,
         )
     )
+    registry.register(
+        ToolSpec(
+            name=CHAT_TOOL_NAME,
+            description=CHAT_DESCRIPTION,
+            parameters=CHAT_PARAMETERS,
+            handler=assistant_chat,
+        )
+    )
 
 
 __all__ = [
     "CAPABILITIES_DESCRIPTION",
+    "CHAT_TOOL_NAME",
+    "assistant_chat",
     "CAPABILITIES_PARAMETERS",
     "MAX_FAMILIES_IN_RESULT",
     "TOOL_NAME",

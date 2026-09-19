@@ -13645,3 +13645,16 @@ applying to owner-browser evidence). Eight mutations (disabling the top-band fil
 dedup check, the early-stop check, the agent-window preference, the `finally` tab-close, the
 fallback error-class set, the serial-cap clamp, the setting's own default) were each run RED
 against these suites and restored byte-exact from a sha256-checked backup.
+
+**ADR-0173 addendum 2 (2026-09-19) - free conversation in the local mode is Claude Haiku.**
+Asked which brain should answer what the local mode's router does not understand - the PC's
+own Ollama (free, private, no model downloaded yet) or Claude Haiku - the owner chose
+"Claude Haiku (çok ucuz ama ücretli)". So, in a LOCAL session only, a sentence the router
+resolves to no intent at all is named `assistant.chat`; the tool reads the owner's sentence
+from this turn's record (never from an argument), asks `claude-haiku-4-5` (the alias - a
+dated id was retired under this system the same day) through `app/assistant_chat.py`, and
+the browser speaks the answer. Kept: commands stay the router's; the chat model has no
+tools and is told it cannot act; EXPLAIN questions about the system's own state are not sent
+to it (it cannot see that state); context is a few turns in process memory only, never in
+the database; a paid session's model that calls the tool finds no question and spends
+nothing.

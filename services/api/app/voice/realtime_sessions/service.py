@@ -50,6 +50,7 @@ from app.voice.intents import (
     resolve_intent,
 )
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
+from app.voice.providers_local_router import LOCAL_ROUTER_PROVIDER_NAME
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
     SOURCE_CLIENT,
@@ -1707,6 +1708,17 @@ def record_client_events(
                 # ADR-0173: the topic of a NEW research, from the owner's own sentence - the
                 # one argument research.start needs when no model is there to write it.
                 "research_topic": research_topic_of(text) if text else None,
+                # ADR-0173 addendum: in a LOCAL session a sentence the router understood
+                # nothing of is a question for the chat model - kept for this one turn,
+                # replaced by the next utterance, never kept for a paid session (there the
+                # realtime model answers it itself).
+                "chat_question": (
+                    text[:2000]
+                    if text
+                    and row.provider == LOCAL_ROUTER_PROVIDER_NAME
+                    and intent.intent is Intent.NONE
+                    else None
+                ),
                 # ADR-0079 §7: the policy fields the owner's words set, so the tool
                 # applies what was SAID rather than what the model chose to pass.
                 "policy_changes": intent.policy_changes,
@@ -1877,7 +1889,16 @@ def record_client_events(
                     or tool_for(intent.intent)
                     # A NEW research names no intent of its own (the model used to decide);
                     # the router knows its class and its topic, which is all the tool needs.
-                    or ("research.start" if text and research_topic_of(text) else None),
+                    or ("research.start" if text and research_topic_of(text) else None)
+                    # ...and in a LOCAL session, anything else the router did not understand
+                    # is free conversation (owner decision 2026-09-19).
+                    or (
+                        "assistant.chat"
+                        if text
+                        and row.provider == LOCAL_ROUTER_PROVIDER_NAME
+                        and intent.intent is Intent.NONE
+                        else None
+                    ),
                     "normalized_text": None,
                 }
             )

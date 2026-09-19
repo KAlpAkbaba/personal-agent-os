@@ -276,6 +276,11 @@ class Settings(BaseSettings):
     # a run with 14 fetched pages and 3 verified sources failed at its last step.
     research_anthropic_model: str = "claude-haiku-4-5-20251001"
     research_anthropic_base_url: str = "https://api.anthropic.com"
+    # ADR-0173 addendum (owner 2026-09-19, "Claude Haiku (çok ucuz ama ücretli)"): the model
+    # that answers what the local mode's router does not understand. The alias, never a
+    # dated id - a dated one was retired under this system the same day.
+    assistant_chat_model: str = "claude-haiku-4-5"
+    assistant_chat_timeout_s: float = 20.0
     research_anthropic_timeout_s: float = 30.0
     research_default_synthesis: str = "auto"
     research_default_max_sources: int = 12

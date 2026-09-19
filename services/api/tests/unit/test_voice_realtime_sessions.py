@@ -248,6 +248,7 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "voice.intent",
         # B25 req 701: the assistant's own answer to "Neler yapabilirsin?".
         "assistant.capabilities",
+        "assistant.chat",
         "narration.control",
         "research.start",
         # ADR-0076: follow-ups on a FINISHED research, resolved server-side.

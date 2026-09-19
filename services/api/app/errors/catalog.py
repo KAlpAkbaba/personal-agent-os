@@ -366,6 +366,14 @@ TR: dict[str, OwnerMessage] = {
     "owner_word_required": _m(
         "Bu kararı sizin vermeniz gerekiyor", '"Devam et" ya da "Evet, başla" demeniz yeterli.'
     ),
+    "chat_busy": _m("Sohbet modeli şu an meşgul", "Birazdan tekrar sorabilirsiniz."),
+    "chat_model_retired": _m(
+        "Sohbet modeli artık sunulmuyor", "Model adını güncellemem gerekiyor; komutlar çalışıyor."
+    ),
+    "chat_refused": _m("Bu soruya yanıt verilmedi", "Başka türlü sorabilirsiniz."),
+    "chat_unavailable": _m(
+        "Sohbet yanıtı alınamadı", "Komutlarınız etkilenmez; biraz sonra tekrar deneyin."
+    ),
     "vendor_error": _m(
         "Dış servis yanıt vermedi", "Başka bir sağlayıcıyla ya da eldeki kanıtla devam ediyorum."
     ),
