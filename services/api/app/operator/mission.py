@@ -98,6 +98,10 @@ KIND_TAB_SWITCH: Final = "tab_switch"
 KIND_TAB_CLOSE: Final = "tab_close"
 KIND_TAB_NEW: Final = "tab_new"
 KIND_VIDEO_PLAY: Final = "video_play"
+#: "Arama kısmına Tosun Paşa yaz", "YouTube sekmesinde aramaya X yaz": the site's own search,
+#: on the tab that is open (owner, 2026-09-19 - the sentence had been typed into the address
+#: bar whole, as text, and the model then improvised with Ctrl+K).
+KIND_SITE_SEARCH: Final = "site_search"
 STEP_KINDS: Final[tuple[str, ...]] = (
     KIND_APP_OPEN,
     KIND_NAVIGATE,
@@ -843,7 +847,37 @@ def _decide_video_play(step: MissionStep, obs: Observation, mission_id: uuid.UUI
 #: What the picture is asked for when the owner says "videoyu oynat" and names nothing.
 VIDEO_PLAYER_TARGET_TR: Final = "sayfadaki büyük video oynatıcısının ortası (oynat düğmesi)"
 
+
+def _decide_site_search(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    """The site's search, the way the owner does it: the results page of the site whose tab
+    is in front (YouTube when the title says so, else Google), reached through the address
+    bar of the owner's own browser window and verified by the title that comes back."""
+    del mission_id
+    query = str(step.args.get("query") or "").strip()
+    if not query:
+        raise NeedsOwner("validation_error", "Neyi arayacağımı anlayamadım efendim.")
+    site = str(step.args.get("site") or "")
+    title = str((obs.foreground or {}).get("title") or "").lower()
+    if site not in SEARCH_URLS:
+        site = "youtube" if "youtube" in title else "google"
+    browser = _browser_image_of(step)
+    window = _owner_chrome_window(obs, browser)
+    if window is None:
+        raise NeedsOwner(
+            "dependency_unavailable",
+            f"Aramak için açık bir {BROWSER_NAMES_TR[browser]} penceresi bulamadım efendim.",
+        )
+    url = SEARCH_URLS[site].format(q=_readable_query(query))
+    return Decision(
+        "site_search",
+        plans.keyboard_navigate(str(window["window_id"]), url),
+        LEVEL_KEYBOARD,
+        note=f"{SITE_NAMES_TR[site]}'da '{query}' aradım",
+    )
+
+
 DECIDERS[KIND_CLICK_TEXT] = _decide_click_text
+DECIDERS[KIND_SITE_SEARCH] = _decide_site_search
 DECIDERS[KIND_TAB_SWITCH] = _decide_tab_switch
 DECIDERS[KIND_TAB_CLOSE] = _decide_tab_close
 DECIDERS[KIND_TAB_NEW] = _decide_tab_new
@@ -1268,14 +1302,35 @@ def _says_search(tokens: tuple[str, ...]) -> bool:
     )
 
 
+SITE_NAMES_TR: Final[dict[str, str]] = {"youtube": "YouTube", "google": "Google"}
+
+
+def _site_in_locative(tokens: tuple[str, ...], index: int) -> str | None:
+    """The site of "YouTube'da" at ``index``, whichever apostrophe the transcriber used:
+    the curly one the normaliser cuts into "youtube" + "da", or the straight one it keeps
+    glued as "youtube'da" (what the production ASR writes, 2026-09-19 - every "YouTube'da X
+    ara" had been "none" to the router while the curly test sentences passed)."""
+    tok = tokens[index]
+    stem, _, suffix = tok.partition("'")
+    if stem not in SEARCH_URLS:
+        return None
+    if suffix:
+        return stem if suffix in _LOCATIVE_SUFFIXES else None
+    if index + 1 < len(tokens) and tokens[index + 1] in _LOCATIVE_SUFFIXES:
+        return stem
+    return None
+
+
 def _segment_search(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     """ "YouTube'da Barış Manço aç" -> the site's own search results for "Barış Manço"."""
     brand_words = _browser_name_positions(tokens)
-    for index, tok in enumerate(tokens[:-1]):
-        if index in brand_words or tok not in SEARCH_URLS:
+    for index, tok in enumerate(tokens):
+        if index in brand_words:
             continue
-        if tokens[index + 1] not in _LOCATIVE_SUFFIXES:
+        site = _site_in_locative(tokens, index)
+        if site is None:
             continue
+        tok = site
         # The words searched for come from the owner's own sentence, each cut at its
         # apostrophe: the normaliser splits "Chrome'dan" into "chrome" + "dan", and a token
         # list would carry that "dan" into the search ("dan sezen aksu", 2026-09-18).
@@ -1406,6 +1461,105 @@ def _segment_ui_invoke(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     )
 
 
+#: "arama kısmına", "arama kutusuna", "aramaya": the site's search box, named as a place.
+_SEARCH_BOX_STEMS: Final[tuple[str, ...]] = ("arama", "aramaya", "aramada")
+_SEARCH_BOX_PLACES: Final[frozenset[str]] = frozenset(
+    {
+        "kısmına",
+        "kismina",
+        "kısmında",
+        "kisminda",
+        "kutusuna",
+        "kutusunda",
+        "çubuğuna",
+        "cubuguna",
+        "bölümüne",
+        "bolumune",
+        "yerine",
+        "alanına",
+        "alanina",
+        "barına",
+        "barina",
+    }
+)
+#: Words that place the search box (this tab, the site) and are never part of the query.
+_SEARCH_CONTEXT_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "şu",
+        "su",
+        "anki",
+        "şimdiki",
+        "simdiki",
+        "bu",
+        "geçerli",
+        "gecerli",
+        "açık",
+        "acik",
+        "olan",
+        "mevcut",
+        "sekmede",
+        "sekmedeki",
+        "sekmesinde",
+        "sekmesindeki",
+        "sekmeye",
+        "sayfada",
+        "sayfadaki",
+        "sayfasında",
+        "sitesinde",
+        "lütfen",
+        "lutfen",
+        "bana",
+        "hemen",
+    }
+)
+_SEARCH_BOX_VERBS: Final[tuple[str, ...]] = ("yaz", "ara", "arat", "gir", "bul")
+
+
+def _segment_site_search(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "Arama kısmına Tosun Paşa yaz", "Şu anki YouTube sekmesinde arama kısmına Tosun Paşa
+    yaz", "Aramaya Barış Manço yaz": the site's search box, named as a place - so the words
+    are a QUERY on the open tab, never text typed wherever the caret happens to be
+    (production 2026-09-19 14:46: the whole sentence went into the address bar)."""
+    box_at = next(
+        (i for i, t in enumerate(tokens) if _strip_suffix(t).startswith(_SEARCH_BOX_STEMS)),
+        None,
+    )
+    if box_at is None:
+        return None
+    head = _strip_suffix(tokens[box_at])
+    place_at = (
+        box_at + 1
+        if box_at + 1 < len(tokens) and tokens[box_at + 1] in _SEARCH_BOX_PLACES
+        else None
+    )
+    if head == "arama" and place_at is None:
+        return None  # "arama" alone is a noun in many sentences; the PLACE makes it the box
+    if not any(t.startswith(_SEARCH_BOX_VERBS) for t in tokens):
+        return None
+    site = next((s for s in SEARCH_URLS if any(_strip_suffix(t) == s for t in tokens)), None)
+    words: list[str] = []
+    for word in raw.split():
+        base = word.strip(_WORD_EDGE_PUNCTUATION)
+        for mark in _APOSTROPHES:
+            base = base.split(mark, 1)[0]
+        h = _head(base)
+        if not h or h in _SEARCH_CONTEXT_WORDS or h in SEARCH_URLS or h in _BROWSER_BRANDS:
+            continue
+        if h.startswith(_SEARCH_BOX_STEMS) or h in _SEARCH_BOX_PLACES:
+            continue
+        if h.startswith(_SEARCH_BOX_VERBS) or h in _SEARCH_STOP:
+            continue
+        words.append(base)
+    query = " ".join(words).strip()
+    if not query:
+        return None
+    args: dict[str, Any] = {"query": query}
+    if site:
+        args["site"] = site
+    where = f"{SITE_NAMES_TR[site]}'da" if site else "açık sekmede"
+    return MissionStep(id="", kind=KIND_SITE_SEARCH, args=args, label_tr=f"{where} '{query}' ara")
+
+
 def _segment_type_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     if not any(_strip_suffix(t) in _WRITE_VERBS or t.startswith("yaz") for t in tokens):
         return None
@@ -1443,7 +1597,7 @@ def _quoted_or_before_verb(raw: str, tokens: tuple[str, ...], *, skip: tuple[str
 _CLICK_VERB_STEMS: Final[tuple[str, ...]] = ("tıkla", "tikla", "oynat", "başlat", "baslat")
 _OPEN_OR_CLICK_WORDS: Final[frozenset[str]] = frozenset({"aç", "ac", "gir", "bas"})
 _ON_SCREEN_WORDS: Final[frozenset[str]] = frozenset(
-    {"ekranda", "ekrandaki", "sayfada", "sayfadaki"}
+    {"ekranda", "ekrandaki", "sayfada", "sayfadaki", "sekmede", "sekmedeki", "sekmesinde"}
 )
 _BUTTON_WORDS: Final[tuple[str, ...]] = ("düğme", "dugme", "buton", "button", "tuş", "tus")
 #: Words around a target that are not part of it ("ekranda ŞU ... YAZANA tıkla").
@@ -1465,6 +1619,25 @@ _TARGET_FILLERS: Final[frozenset[str]] = frozenset(
         "yaziya",
         "lütfen",
         "lutfen",
+        # "şu anki YouTube sekmesindeki Tosun Paşa videosunu aç" (owner, 2026-09-19): the tab
+        # and the site place the video; the picture is asked for "Tosun Paşa", nothing else.
+        "anki",
+        "şimdiki",
+        "simdiki",
+        "geçerli",
+        "gecerli",
+        "açık",
+        "acik",
+        "olan",
+        "görünen",
+        "gorunen",
+        "mevcut",
+        "sekmede",
+        "sekmedeki",
+        "sekmesinde",
+        "sekmesindeki",
+        "youtube",
+        "google",
     }
 )
 _POSITION_WORDS: Final[frozenset[str]] = frozenset(
@@ -1524,7 +1697,10 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
         return None
     words: list[str] = []
     for word in raw.split():
-        head = _head(word)
+        bare = word
+        for mark in _APOSTROPHES:
+            bare = bare.split(mark, 1)[0]
+        head = _head(bare)  # "YouTube'da" is the site + a suffix, never a name (2026-09-19)
         if _is_trigger(head):
             break
         if head in _TARGET_FILLERS:
@@ -1679,6 +1855,7 @@ SEGMENT_MATCHERS: Final[tuple[Callable[[tuple[str, ...], str], MissionStep | Non
     _segment_explorer,
     _segment_ide,
     _segment_office,
+    _segment_site_search,
     _segment_search,
     _segment_navigate,
     _segment_app_open,
@@ -1781,7 +1958,7 @@ def _with_browser_in_front(
             browser_image = BROWSER_APP_IMAGES[str(step.args.get("application"))]
         if step.kind in (KIND_TAB_NEW, KIND_TAB_SWITCH, KIND_TAB_CLOSE):
             browser_up = True
-        if step.kind == KIND_NAVIGATE and not browser_up:
+        if step.kind in (KIND_NAVIGATE, KIND_SITE_SEARCH) and not browser_up:
             application = named or "chrome"
             out.append(
                 MissionStep(
@@ -1811,6 +1988,7 @@ __all__ = [
     "KIND_CLICK_TEXT",
     "KIND_TAB_CLOSE",
     "KIND_TAB_NEW",
+    "KIND_SITE_SEARCH",
     "KIND_TAB_SWITCH",
     "KIND_VIDEO_PLAY",
     "KIND_EXPLORER_OPEN",

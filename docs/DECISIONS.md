@@ -13243,3 +13243,27 @@ which: *"Hepsi, mail gönderme hariç"*. So:
 * Untouched, because they are not confirmations: a mission's "önce göster" preview (the
   owner asks for it), an escalated step's "Nasıl devam edeyim?" (a question, answered only
   by the owner's own word), and the operator's refusal of a model-issued approve/resume.
+
+**ADR-0173 (2026-09-19) — a free local voice mode for testing.** The owner, testing the
+browser scenario on the paid realtime path: *"şuanda stt chatgpt'ye bağlı bunu ücretsiz hale
+geçirelim boşuna test amaçlı para harcıyoruz kod tarafı kusursuz olduğunda yine chatgpt'ye
+döneriz"*. Asked which engine and whether the model may go too, the owner chose **Chrome Web
+Speech** for STT ("Chrome Web Speech (Önerilen)") and **router-only** operation ("Evet, komut
+testi yeter"). Decision:
+
+* The web client gains a **"Yerel mod"** (local mode): the browser's `SpeechRecognition`
+  (tr-TR, continuous) turns speech into text; the text is posted to the SAME relay as an
+  `utterance` event; the deterministic router's `resolved_intents` are executed by posting
+  the SAME `/tool-calls` the model would have issued (the tools already prefer the owner's
+  words over model arguments); the tool's `speech` is spoken by the browser's own tr-TR
+  `speechSynthesis`. No WebRTC leg is opened, no OpenAI credential is used, no audio leaves
+  the browser except to Chrome's own recogniser.
+* In local mode there is **no language model**: a sentence the router does not resolve is
+  answered "Anlayamadım efendim" and recorded, never guessed. Free conversation, questions
+  and model-composed content (mail bodies, summaries) are out of scope in this mode.
+* The paid path is untouched and remains the default; local mode is a per-browser switch the
+  owner flips, and flips back "when the code side is flawless". The relay's tool contract,
+  audit and step-up rules apply identically in both modes.
+* Provider boundary kept: Chrome's recogniser is behind the same STT seam
+  (`docs/MODEL_AND_PROVIDER_ROUTING.md` §4); `faster-whisper` stays the documented local
+  fallback for a later, fully on-device mode.

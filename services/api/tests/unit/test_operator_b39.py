@@ -1935,3 +1935,142 @@ def test_a_browser_named_in_the_locative_is_that_browser_not_an_implicit_chrome(
         ("navigate", None, None),
     ], m.as_dict()
     assert m.steps[1].args.get("browser") == "msedge.exe"
+
+
+# ------------------------------------- production 2026-09-19 14:46: "arama kısmına ... yaz"
+
+
+def _tab_in_front(title_before: str, lands_on: str) -> FakeDeviceAction:
+    """The owner's Chrome with ``title_before`` in front; the title becomes ``lands_on`` on
+    the second look after Enter, as a page load does."""
+    chrome = {**CHROME, "title": title_before}
+    state = {"entered": False, "looks": 0}
+
+    def current(payload: dict[str, Any]) -> DeviceRunResult:
+        if state["entered"]:
+            state["looks"] += 1
+        title = lands_on if state["entered"] and state["looks"] >= 2 else title_before
+        return ok(window={**chrome, "title": title})
+
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        if payload.get("key") == "enter":
+            state["entered"] = True
+        return ok(
+            key=payload.get("key"),
+            window_id=payload.get("window_id"),
+            observed=_observed(payload, chrome),
+        )
+
+    return FakeDeviceAction(
+        results={
+            "window.current": current,
+            "window.list": ok(windows=[dict(chrome)]),
+            "window.activate": lambda p: ok(
+                window={**chrome, "window_id": str(p.get("window_id"))}
+            ),
+            "browser.session_open": DeviceRunResult(False, "dependency_unavailable", "no CDP"),
+            "keyboard.shortcut": lambda p: ok(
+                keys=p.get("keys"), window_id=p.get("window_id"), observed=_observed(p, chrome)
+            ),
+            "keyboard.type": lambda p: ok(
+                typed_chars=len(str(p.get("text"))),
+                window_id=p.get("window_id"),
+                observed=_observed(p, chrome),
+            ),
+            "keyboard.key": key,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("said", "expected_args"),
+    [
+        (
+            "Şu anki YouTube sekmesinde arama kısmına Tosun Paşa yaz",
+            {"query": "Tosun Paşa", "site": "youtube"},
+        ),
+        ("Arama kısmına Tosun Paşa'yı yaz", {"query": "Tosun Paşa"}),
+        ("Aramaya Barış Manço yaz", {"query": "Barış Manço"}),
+        ("Arama kutusuna kedi videoları yaz", {"query": "kedi videoları"}),
+    ],
+)
+def test_the_search_box_named_as_a_place_is_a_query_never_typed_text(
+    said: str, expected_args: dict[str, Any]
+) -> None:
+    """Production 2026-09-19 14:46: "şu anki youtube sekmesinde arama kısmına tosun paşa yaz"
+    was TYPE_TEXT - the whole sentence went into the address bar. The search box named as a
+    place makes the words a query on the open tab."""
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == ["app_open", "site_search"], m.as_dict()
+    assert m.steps[0].args.get("implicit") is True
+    assert m.steps[1].args == expected_args
+
+
+def test_a_site_search_lands_on_the_open_tabs_own_search(monkeypatch) -> None:
+    from app.operator import task as task_module
+    from tests.alarms_support import window_id as _wid
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    # A YouTube tab in front: YouTube's own results, reached through the address bar.
+    device = _tab_in_front("(954) YouTube - Google Chrome", "tosun paşa - YouTube - Google Chrome")
+    m = plan_mission("Arama kısmına Tosun Paşa yaz")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.type")["text"] == (
+        "https://www.youtube.com/results?search_query=Tosun+Paşa"
+    )
+    assert device.payload_for("keyboard.shortcut")["window_id"] == _wid(2)
+    # Any other tab: Google.
+    device = _tab_in_front(
+        "Yeni Sekme - Google Chrome", "Tosun Paşa - Google Arama - Google Chrome"
+    )
+    m = plan_mission("Arama kısmına Tosun Paşa yaz")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert (
+        device.payload_for("keyboard.type")["text"] == "https://www.google.com/search?q=Tosun+Paşa"
+    )
+
+
+def test_the_asrs_straight_apostrophe_reads_like_the_curly_one() -> None:
+    """The normaliser cuts the curly apostrophe ("youtube" + "da") and keeps the straight one
+    glued ("youtube'da"); the production ASR writes the straight one. Every "YouTube'da X
+    ara" was "none" to the router while the curly test sentences passed (2026-09-19)."""
+    straight = plan_mission("YouTube'da Tosun Paşa ara")
+    curly = plan_mission("YouTube’da Tosun Paşa ara")
+    assert [(s.kind, s.args) for s in straight.steps] == [(s.kind, s.args) for s in curly.steps]
+    assert straight.steps[-1].kind == "navigate"
+    assert straight.steps[-1].args == {
+        "url": "https://www.youtube.com/results?search_query=Tosun+Paşa",
+        "search": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        "Şu anki YouTube sekmesinde Tosun Paşa videosunu aç",
+        "Şu anki sekmedeki Tosun Paşa videosunu aç",
+        "Bu sekmede görünen Tosun Paşa videosuna tıkla",
+        "YouTube'daki Tosun Paşa videosunu aç",  # the ASR's glued apostrophe on the site
+    ],
+)
+def test_the_tab_and_the_site_place_a_video_and_are_never_its_name(said: str) -> None:
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == ["click_text"], m.as_dict()
+    assert m.steps[0].args["name"] == "Tosun Paşa"
+
+
+def test_the_router_hands_the_search_box_sentence_to_the_planner() -> None:
+    h = build_harness()
+    for said in (
+        "Şu anki YouTube sekmesinde arama kısmına Tosun Paşa yaz.",
+        "Arama kısmına Tosun Paşa yaz.",
+        "YouTube'da Tosun Paşa ara.",
+    ):
+        sid = h.new_session()
+        out = h.say(sid, said)
+        assert out["resolved_intents"][-1]["intent"] == "mission_start", (
+            said,
+            out["resolved_intents"],
+        )
