@@ -102,6 +102,8 @@ KIND_VIDEO_PLAY: Final = "video_play"
 #: on the tab that is open (owner, 2026-09-19 - the sentence had been typed into the address
 #: bar whole, as text, and the model then improvised with Ctrl+K).
 KIND_SITE_SEARCH: Final = "site_search"
+#: "Videoyu durdur", "videoyu başa al": the page's own shortcut, in the window the video is in.
+KIND_VIDEO_CONTROL: Final = "video_control"
 STEP_KINDS: Final[tuple[str, ...]] = (
     KIND_APP_OPEN,
     KIND_NAVIGATE,
@@ -391,6 +393,10 @@ class Decision:
     #: found on the screen): the loop re-observes and decides again instead of marking the
     #: step done.
     finishes_step: bool = True
+    #: Error classes after which THIS decision wants to decide again rather than stop for the
+    #: owner - it has a second way to do the same thing (the named key, when an older agent
+    #: refused the character one as a validation error).
+    replan_on: tuple[str, ...] = ()
 
 
 #: Req 123: the Settings pages the owner names -> the search words the Settings app
@@ -1004,6 +1010,14 @@ def _decide_tab_switch(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     title_before = str((obs.foreground or {}).get("title") or "")
     index = step.args.get("index")
     direction = str(step.args.get("direction") or "next")
+    name = str(step.args.get("name") or "").strip()
+    if name:
+        return Decision(
+            "tab_by_name",
+            plans.tab_by_name(window_id, name),
+            LEVEL_KEYBOARD,
+            note=f"'{name}' sekmesi (sekme araması)",
+        )
     return Decision(
         "tab_switch",
         plans.tab_switch(
@@ -1031,6 +1045,114 @@ def _decide_tab_new(step: MissionStep, obs: Observation, mission_id: uuid.UUID) 
     return Decision("tab_new", plans.tab_new(window_id), LEVEL_KEYBOARD)
 
 
+#: The Agent's own page: never the window a video command is about.
+_AGENT_PAGE_WORDS: Final[tuple[str, ...]] = ("personalagentos", "personal agent os")
+#: The page's own shortcuts, and the named key an agent that predates single-character keys
+#: still accepts (YouTube: k = play/pause, 0 = from the start; Space and Home do the same
+#: while the player has the focus, which it has after a video was clicked open).
+_VIDEO_KEYS: Final[dict[str, tuple[str, str]]] = {
+    "play": ("k", "space"),
+    "pause": ("k", "space"),
+    "restart": ("0", "home"),
+}
+
+
+#: What an agent that predates single-character keys answers to "k" or "0".
+_CHAR_KEY_REFUSED: Final[tuple[str, ...]] = ("validation_error",)
+
+
+def _video_window(step: MissionStep, obs: Observation) -> dict[str, Any]:
+    """The owner's browser window the VIDEO is in. Owner, 2026-09-19: "Videoyu başlat
+    dediğimde 1. ekrandaki videoyu başlatıyorum diyor ama video 2. ekranda" - the window in
+    front was the one the owner speaks to the Agent through. A window on YouTube wins, then
+    any browser window that is not the Agent's own page, then whatever is in front."""
+    browser = _browser_image_of(step)
+    windows = [w for w in _windows_to_look_in(step, obs) if _window_id_of(w)]
+    browsers = [w for w in windows if _bare_image(str(w.get("image") or "")) == browser]
+
+    def _is_agent(w: dict[str, Any]) -> bool:
+        title = str(w.get("title") or "").lower()
+        return any(word in title for word in _AGENT_PAGE_WORDS)
+
+    for pool in (
+        [w for w in browsers if "youtube" in str(w.get("title") or "").lower()],
+        [w for w in browsers if not _is_agent(w)],
+        browsers,
+        windows,
+    ):
+        if pool:
+            return pool[0]
+    raise NeedsOwner("no_current_window", "Videonun olduğu pencereyi göremedim efendim.")
+
+
+def _is_moving(
+    ports: MissionPorts, mission_id: uuid.UUID, step: MissionStep, window_id: str
+) -> bool | None:
+    """Two looks at the window: True when the picture moves, False when it does not, None
+    when it could not be looked at (the decision then presses the key and lets the plan's
+    own proof judge)."""
+    frames: list[bytes] = []
+    for shot in ("a", "b"):
+        capture = ports.device.run(
+            capability="screen.capture",
+            payload={"window_id": window_id},
+            idempotency_key=f"mission:{mission_id}:{step.id}:moving:{step.rounds}:{shot}",
+            timeout_s=15.0,
+        )
+        body = capture.result if capture.ok and isinstance(capture.result, dict) else {}
+        encoded = str(body.get("png_base64") or "")
+        if not encoded:
+            return None
+        frames.append(base64.b64decode(encoded))
+    try:
+        return plans.frames_differ(frames[0], frames[1])
+    except Exception:  # noqa: BLE001 - an unreadable picture is "could not look", not a crash
+        return None
+
+
+def _video_key_for(step: MissionStep, action: str) -> str:
+    """The character key first; the named one once the device has refused the character
+    (an agent older than ADR-0176's follow-up answers validation_error)."""
+    char_key, named_key = _VIDEO_KEYS[action]
+    return named_key if step.error_class == "validation_error" else char_key
+
+
+def _decide_video_control(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
+    ports: MissionPorts | None = _PORTS.get(mission_id)
+    if ports is None:
+        raise NeedsOwner("dependency_unavailable", "Ekrana ulaşamadım efendim.")
+    action = str(step.args.get("action") or "pause")
+    if action not in _VIDEO_KEYS:
+        raise NeedsOwner("validation_error", "Videoyla ne yapacağımı anlayamadım efendim.")
+    window = _video_window(step, obs)
+    window_id = str(window["window_id"])
+    if action == "restart":
+        return Decision(
+            "video_restart",
+            plans.video_key(window_id, _video_key_for(step, action), expect_motion=None),
+            LEVEL_KEYBOARD,
+            note="videoyu başa aldım",
+            replan_on=_CHAR_KEY_REFUSED,
+        )
+    moving = _is_moving(ports, mission_id, step, window_id)
+    wants_motion = action == "play"
+    if moving is wants_motion:
+        # Already so: pressing the toggle would undo it. Bring the window forward, say so.
+        return Decision(
+            "video_already",
+            plans.activate_window(window_id),
+            LEVEL_API,
+            note="video zaten oynuyor" if wants_motion else "video zaten duruyor",
+        )
+    return Decision(
+        "video_toggle",
+        plans.video_key(window_id, _video_key_for(step, action), expect_motion=wants_motion),
+        LEVEL_KEYBOARD,
+        note="oynat" if wants_motion else "duraklat",
+        replan_on=_CHAR_KEY_REFUSED,
+    )
+
+
 def _decide_video_play(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
     """The video on the screen that is not playing (a paused player, the replay circle in the
     owner's screenshot): find the player, click it, and prove it PLAYS - two captures a
@@ -1038,8 +1160,28 @@ def _decide_video_play(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     ports: MissionPorts | None = _PORTS.get(mission_id)
     if ports is None:
         raise NeedsOwner("dependency_unavailable", "Ekrana ulaşamadım efendim.")
-    window_id = _require_foreground(obs, "videoyu oynatmak")
-    window = obs.foreground or {"window_id": window_id}
+    window = _video_window(step, obs)
+    window_id = str(window["window_id"])
+    if step.rounds <= 1 and not step.args.get("clicked_player"):
+        # The keyboard first (free, and it needs no picture of a 2576-wide window): look
+        # whether it already plays, else the page's own play key, proven by motion. The
+        # paid look-and-click below is what is left when the key did not start it.
+        step.args["clicked_player"] = True
+        moving = _is_moving(ports, mission_id, step, window_id)
+        if moving:
+            return Decision(
+                "video_already",
+                plans.activate_window(window_id),
+                LEVEL_API,
+                note="video zaten oynuyor",
+            )
+        return Decision(
+            "video_toggle",
+            plans.video_key(window_id, _video_key_for(step, "play"), expect_motion=True),
+            LEVEL_KEYBOARD,
+            note="oynat (klavye)",
+            replan_on=_CHAR_KEY_REFUSED,
+        )
     x, y = _locate_on_screen(ports, mission_id, step, window, VIDEO_PLAYER_TARGET_TR)
     return Decision(
         "video_play",
@@ -1083,6 +1225,7 @@ def _decide_site_search(step: MissionStep, obs: Observation, mission_id: uuid.UU
 
 DECIDERS[KIND_CLICK_TEXT] = _decide_click_text
 DECIDERS[KIND_SITE_SEARCH] = _decide_site_search
+DECIDERS[KIND_VIDEO_CONTROL] = _decide_video_control
 DECIDERS[KIND_TAB_SWITCH] = _decide_tab_switch
 DECIDERS[KIND_TAB_CLOSE] = _decide_tab_close
 DECIDERS[KIND_TAB_NEW] = _decide_tab_new
@@ -1207,6 +1350,9 @@ def _run_rounds(
         )
         if strategy == STRATEGY_STOP or mission.cancel_requested:
             return _stop(mission, step, MISSION_CANCELLED, ERROR_CANCELLED, "iptal edildi")
+        if step.error_class in decision.replan_on and step.replans < MAX_REPLANS_PER_STEP:
+            step.replans += 1
+            continue
         if strategy == STRATEGY_RETRY and step.retries < MAX_RETRIES_PER_STEP:
             step.retries += 1
             continue
@@ -2039,9 +2185,89 @@ def _segment_tab(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
             return MissionStep(
                 id="", kind=KIND_TAB_SWITCH, args={"index": n}, label_tr=f"{n}. sekmeye geç"
             )
+    named = _tab_name(raw)
+    if named:
+        # "Tosun Paşa sekmesine geç" (owner, 2026-09-19): it used to ignore the name and go
+        # to the NEXT tab - a different tab, reported as done.
+        return MissionStep(
+            id="", kind=KIND_TAB_SWITCH, args={"name": named}, label_tr=f"'{named}' sekmesine geç"
+        )
     return MissionStep(
         id="", kind=KIND_TAB_SWITCH, args={"direction": "next"}, label_tr="yan sekmeye geç"
     )
+
+
+#: Words that say WHICH WAY, or that frame the request - never a tab's name.
+_TAB_NAME_NOISE: Final[frozenset[str]] = frozenset(
+    {
+        "yan",
+        "yandaki",
+        "sonraki",
+        "diğer",
+        "diger",
+        "öbür",
+        "obur",
+        "sağdaki",
+        "sagdaki",
+        "soldaki",
+        "şu",
+        "su",
+        "bu",
+        "o",
+        "açık",
+        "acik",
+        "olan",
+        "lütfen",
+        "lutfen",
+        "bana",
+        "hemen",
+        "şimdi",
+        "simdi",
+        "bir",
+    }
+)
+
+
+def _tab_name(raw: str) -> str:
+    """The words before the tab noun, in the owner's own casing: "Tosun Paşa sekmesine geç"
+    -> "Tosun Paşa". Empty when the sentence only says a direction."""
+    words: list[str] = []
+    for word in raw.split():
+        bare = word
+        for mark in _APOSTROPHES:
+            bare = bare.split(mark, 1)[0]
+        head = _head(bare)
+        if not head:
+            continue
+        if head.startswith(_TAB_STEMS):
+            break
+        if head in _TAB_NAME_NOISE or head in _PREV_WORDS or _ordinal_of(head) is not None:
+            continue
+        words.append(bare.strip(_WORD_EDGE_PUNCTUATION))
+    return " ".join(w for w in words if w).strip()
+
+
+#: "durdur", "duraklat", "beklet": stop the picture. "başa al/sar", "baştan": from the start.
+_VIDEO_PAUSE_STEMS: Final[tuple[str, ...]] = ("durdur", "duraklat", "beklet", "dondur")
+_VIDEO_RESTART_WORDS: Final[frozenset[str]] = frozenset({"başa", "basa", "baştan", "bastan"})
+
+
+def _segment_video_control(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
+    """ "Videoyu durdur", "Videoyu duraklat", "Videoyu başa al", "Videoyu baştan başlat" - the
+    video that is already on a page, by that page's own shortcut. Needs the video noun: a
+    bare "durdur" is the narration's and the alarm's."""
+    del raw
+    if not any(t in _VIDEO_NOUNS or t.startswith("video") for t in tokens):
+        return None
+    if any(t in _VIDEO_RESTART_WORDS for t in tokens):
+        return MissionStep(
+            id="", kind=KIND_VIDEO_CONTROL, args={"action": "restart"}, label_tr="videoyu başa al"
+        )
+    if any(t.startswith(_VIDEO_PAUSE_STEMS) for t in tokens):
+        return MissionStep(
+            id="", kind=KIND_VIDEO_CONTROL, args={"action": "pause"}, label_tr="videoyu duraklat"
+        )
+    return None
 
 
 def _segment_tab_new(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
@@ -2084,6 +2310,7 @@ def _segment_video_play(tokens: tuple[str, ...], raw: str) -> MissionStep | None
 SEGMENT_MATCHERS: Final[tuple[Callable[[tuple[str, ...], str], MissionStep | None], ...]] = (
     _segment_tab_new,
     _segment_tab,
+    _segment_video_control,
     _segment_video_play,
     _segment_settings,
     _segment_explorer,
@@ -2223,6 +2450,7 @@ __all__ = [
     "KIND_TAB_CLOSE",
     "KIND_TAB_NEW",
     "KIND_SITE_SEARCH",
+    "KIND_VIDEO_CONTROL",
     "KIND_TAB_SWITCH",
     "KIND_VIDEO_PLAY",
     "KIND_EXPLORER_OPEN",

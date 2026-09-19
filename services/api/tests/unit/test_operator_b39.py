@@ -1606,17 +1606,30 @@ def _png_of(shade: int, *, spot: int | None = None) -> str:
     return base64.b64encode(out.getvalue()).decode("ascii")
 
 
-def _paused_player(*, starts_playing: bool) -> Any:
-    captures = {"n": 0}
+def _paused_player(
+    *,
+    starts_playing: bool,
+    key_starts: bool = False,
+    playing: bool = False,
+    char_keys: bool = True,
+    windows: list[dict[str, Any]] | None = None,
+) -> Any:
+    """A video page with a STATE, not a capture count: while it plays, two looks a moment
+    apart differ; while it is paused they are the same picture. A click on the player starts
+    it when ``starts_playing``; the page's own key (k, or Space) toggles it when
+    ``key_starts``. ``char_keys=False`` is an agent that predates single-character keys."""
+    state = {"playing": playing, "tick": 0}
+    shown = windows or [dict(YOUTUBE)]
 
     def capture(payload: dict[str, Any]) -> DeviceRunResult:
-        captures["n"] += 1
-        # the first capture (for the locate) and the one right after the click look alike;
-        # a PLAYING video shows a different frame on the later look
-        shade = 40 if (starts_playing and captures["n"] >= 3) else 200
+        if state["playing"]:
+            state["tick"] += 1
+        # a playing video never shows the same frame twice
+        shade = 30 + (state["tick"] * 23) % 140 if state["playing"] else 200
         return ok(width=192, height=108, png_base64=_png_of(200, spot=shade), scale=1)
 
     def click(payload: dict[str, Any]) -> DeviceRunResult:
+        state["playing"] = starts_playing
         x, y = int(payload["x"]), int(payload["y"])
         return ok(
             x=x,
@@ -1627,17 +1640,36 @@ def _paused_player(*, starts_playing: bool) -> Any:
             observed={"cursor": {"x": x, "y": y}, "window": dict(YOUTUBE)},
         )
 
-    return FakeDeviceAction(
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        name = str(payload.get("key"))
+        if len(name) == 1 and not char_keys:
+            return DeviceRunResult(False, "validation_error", f"'{name}' is not a key")
+        if name in ("k", "space") and key_starts:
+            state["playing"] = not state["playing"]
+        target = next(
+            (w for w in shown if w.get("window_id") == payload.get("window_id")), shown[0]
+        )
+        return ok(key=name, window_id=payload.get("window_id"), observed=_observed(payload, target))
+
+    device = FakeDeviceAction(
         results={
-            "window.current": ok(window=dict(YOUTUBE)),
-            "window.list": ok(windows=[dict(YOUTUBE)]),
+            "window.current": ok(window=dict(shown[0])),
+            "window.list": ok(windows=[dict(w) for w in shown]),
             "window.activate": lambda p: ok(
-                window={**YOUTUBE, "window_id": str(p.get("window_id"))}
+                window={
+                    **next(
+                        (w for w in shown if w.get("window_id") == p.get("window_id")), shown[0]
+                    ),
+                    "foreground": True,
+                }
             ),
             "screen.capture": capture,
             "pointer.click": click,
+            "keyboard.key": key,
         }
     )
+    device.video_state = state  # type: ignore[attr-defined]
+    return device
 
 
 def test_a_paused_video_is_clicked_and_proven_to_move(monkeypatch) -> None:
@@ -2100,3 +2132,194 @@ def test_a_title_keeps_its_own_video_word_and_loses_the_recognisers_filler(
     m = plan_mission(said)
     assert [s.kind for s in m.steps] == ["click_text"], m.as_dict()
     assert m.steps[0].args["name"] == name
+
+
+# ------------------------------------ owner 2026-09-19: "videoyu durdur / başlat / başa al"
+
+
+def _keys_pressed(device: Any) -> list[str]:
+    return [str(c["payload"].get("key")) for c in device.calls if c["capability"] == "keyboard.key"]
+
+
+def test_play_is_the_pages_own_key_first_and_costs_no_picture(monkeypatch) -> None:
+    """ "Videoyu başlat": the page's play key, proven by MOTION - no paid look, no click."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False, key_starts=True)
+    vision = FakeVisionProvider(location=(96, 54))
+    m = plan_mission("Videoyu başlat")
+    run_mission(m, MissionPorts(device=device, vision=vision))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert _keys_pressed(device) == ["k"]
+    assert "pointer.click" not in device.capabilities_called()
+    assert vision.targets == []
+    assert device.video_state["playing"] is True
+
+
+def test_a_video_already_playing_is_not_toggled_off_by_play(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False, key_starts=True, playing=True)
+    m = plan_mission("Videoyu başlat")
+    run_mission(m, MissionPorts(device=device, vision=FakeVisionProvider(location=(1, 1))))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert _keys_pressed(device) == [] and device.video_state["playing"] is True
+
+
+def test_pause_stops_the_picture_and_is_proven_by_stillness(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False, key_starts=True, playing=True)
+    m = plan_mission("Videoyu durdur")
+    assert [(s.kind, s.args) for s in m.steps] == [("video_control", {"action": "pause"})]
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert _keys_pressed(device) == ["k"] and device.video_state["playing"] is False
+    # ...and a video that is already still is left alone.
+    still = _paused_player(starts_playing=False, key_starts=True, playing=False)
+    m2 = plan_mission("Videoyu duraklat")
+    run_mission(m2, MissionPorts(device=still))
+    assert m2.status == MISSION_SUCCEEDED and _keys_pressed(still) == []
+
+
+def test_a_pause_that_did_not_stop_the_picture_is_not_reported_as_stopped(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False, key_starts=False, playing=True)
+    m = plan_mission("Videoyu durdur")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "postcondition_failed"
+
+
+def test_from_the_start_is_the_zero_key(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False, playing=True)
+    m = plan_mission("Videoyu başa al")
+    assert [(s.kind, s.args) for s in m.steps] == [("video_control", {"action": "restart"})]
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert _keys_pressed(device) == ["0"]
+
+
+def test_an_agent_that_refuses_character_keys_gets_the_named_key_next(monkeypatch) -> None:
+    """Until the device is updated "k" and "0" are validation errors; Space and Home do the
+    same while the player has the focus."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    device = _paused_player(starts_playing=False, key_starts=True, playing=True, char_keys=False)
+    m = plan_mission("Videoyu durdur")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert _keys_pressed(device) == ["k", "space"]
+
+
+def test_the_video_is_where_youtube_is_not_where_the_owner_speaks_from(monkeypatch) -> None:
+    """Owner, 2026-09-19: "Videoyu başlat dediğimde 1. ekrandaki videoyu başlatıyorum diyor
+    ama video 2. ekranda". The window in front is the Agent's own page; the key goes to the
+    window that is on YouTube."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    agent_page = {
+        **YOUTUBE,
+        "window_id": window_id(11),
+        "title": "PersonalAgentOS Core - Google Chrome",
+        "foreground": True,
+    }
+    video = {**YOUTUBE, "window_id": window_id(12), "foreground": False}
+    device = _paused_player(starts_playing=False, key_starts=True, windows=[agent_page, video])
+    m = plan_mission("Videoyu başlat")
+    run_mission(m, MissionPorts(device=device, vision=FakeVisionProvider(location=(1, 1))))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    sent = [c["payload"] for c in device.calls if c["capability"] == "keyboard.key"]
+    assert [p["window_id"] for p in sent] == [window_id(12)]
+
+
+def test_a_tab_is_reached_by_its_name_through_the_browsers_own_tab_search(monkeypatch) -> None:
+    """ "Tosun Paşa sekmesine geç" used to ignore the name and go to the NEXT tab."""
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    m = plan_mission("Tosun Paşa sekmesine geç")
+    assert [(s.kind, s.args) for s in m.steps] == [("tab_switch", {"name": "Tosun Paşa"})]
+    assert plan_mission("Yan sekmeye geç").steps[0].args == {"direction": "next"}
+    assert plan_mission("Üçüncü sekmeye geç").steps[0].args == {"index": 3}
+
+    state = {"title": CHROME["title"]}
+
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        if payload.get("key") == "enter":
+            state["title"] = "(954) Tosun Paşa - RESTORASYONLU 4K FULL - YouTube - Google Chrome"
+        return ok(key=payload.get("key"), observed=_observed(payload, CHROME))
+
+    device = FakeDeviceAction(
+        results={
+            "window.current": lambda _p: ok(window={**CHROME, "title": state["title"]}),
+            "window.list": ok(windows=[dict(CHROME)]),
+            "window.activate": lambda p: ok(
+                window={**CHROME, "window_id": str(p.get("window_id"))}
+            ),
+            "keyboard.shortcut": lambda p: ok(keys=p.get("keys"), observed=_observed(p, CHROME)),
+            "keyboard.type": lambda p: ok(
+                typed_chars=len(str(p.get("text"))), observed=_observed(p, CHROME)
+            ),
+            "keyboard.key": key,
+        }
+    )
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.shortcut")["keys"] == ["ctrl", "shift", "a"]
+    assert device.payload_for("keyboard.type")["text"] == "Tosun Paşa"
+
+
+def test_between_two_ordinary_windows_the_one_on_youtube_is_the_videos(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    mail = {**YOUTUBE, "window_id": window_id(21), "title": "Gelen Kutusu - Gmail - Google Chrome"}
+    video = {**YOUTUBE, "window_id": window_id(22), "foreground": False}
+    device = _paused_player(starts_playing=False, key_starts=True, windows=[mail, video])
+    m = plan_mission("Videoyu başlat")
+    run_mission(m, MissionPorts(device=device, vision=FakeVisionProvider(location=(1, 1))))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    sent = [c["payload"]["window_id"] for c in device.calls if c["capability"] == "keyboard.key"]
+    assert sent == [window_id(22)]
+
+
+def test_a_tab_search_that_lands_on_another_tab_is_not_reported_as_that_tab(monkeypatch) -> None:
+    from app.operator import task as task_module
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    state = {"title": CHROME["title"]}
+
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        if payload.get("key") == "enter":
+            state["title"] = "Faaliyet Akışı | LinkedIn - Google Chrome"
+        return ok(key=payload.get("key"), observed=_observed(payload, CHROME))
+
+    device = FakeDeviceAction(
+        results={
+            "window.current": lambda _p: ok(window={**CHROME, "title": state["title"]}),
+            "window.list": ok(windows=[dict(CHROME)]),
+            "window.activate": lambda p: ok(
+                window={**CHROME, "window_id": str(p.get("window_id"))}
+            ),
+            "keyboard.shortcut": lambda p: ok(keys=p.get("keys"), observed=_observed(p, CHROME)),
+            "keyboard.type": lambda p: ok(
+                typed_chars=len(str(p.get("text"))), observed=_observed(p, CHROME)
+            ),
+            "keyboard.key": key,
+        }
+    )
+    m = plan_mission("Tosun Paşa sekmesine geç")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "postcondition_failed"

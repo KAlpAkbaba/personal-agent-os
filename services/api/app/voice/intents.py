@@ -2534,6 +2534,26 @@ def _bare(token: str) -> str:
     return token.split("'", 1)[0]
 
 
+#: The digits as the tr-TR normaliser spells them ("0 tuşuna bas" arrives as "sıfır tuşuna bas").
+_DIGIT_KEY_BY_WORD: Final[dict[str, str]] = {
+    "sıfır": "0",
+    "sifir": "0",
+    "bir": "1",
+    "iki": "2",
+    "üç": "3",
+    "uc": "3",
+    "dört": "4",
+    "dort": "4",
+    "beş": "5",
+    "bes": "5",
+    "altı": "6",
+    "alti": "6",
+    "yedi": "7",
+    "sekiz": "8",
+    "dokuz": "9",
+}
+
+
 def _key_press_match(tokens: tuple[str, ...]) -> str | None:
     """ "Enter'a bas." -> "enter"; "Ctrl S'ye bas." -> "ctrl+s"; "Yukarı ok tuşuna bas."
     -> "up". ``None`` when there is no press verb or no key the companion knows: "Düğmeye
@@ -2561,6 +2581,18 @@ def _key_press_match(tokens: tuple[str, ...]) -> str | None:
             if len(word) == 1 and word.isalnum():
                 key = word
                 break
+    if key is None:
+        # "0 tuşuna bas", "k tuşuna bas" (owner, 2026-09-19): a page's own shortcuts are single
+        # characters. Only the word standing right before the key NOUN is read as the key -
+        # "bir tuşa bas" names no key, and the normaliser has already spelled "0" as "sıfır".
+        for index, word in enumerate(bare[:-1]):
+            if not bare[index + 1].startswith(_KEY_NOUN_STEMS):
+                continue
+            if len(word) == 1 and word.isascii() and word.isalnum():
+                key = word
+            elif word in _DIGIT_KEY_BY_WORD and word != "bir":
+                key = _DIGIT_KEY_BY_WORD[word]
+            break
     if key is None:
         return None
     return "+".join([*modifiers, key])

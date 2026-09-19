@@ -75,8 +75,15 @@ POINTER_SPACES: Final[tuple[str, ...]] = ("window", "screen")
 SCROLL_MAX_DELTA: Final = 50
 
 
+def is_char_key(key: str) -> bool:
+    """One ASCII letter or digit: "0", "k". A page's own shortcuts are single characters
+    (YouTube: k = play/pause, 0 = from the start), and "0 tuşuna bas" is a key, not text
+    (owner, 2026-09-19). An agent that predates this refuses it as a validation error."""
+    return len(key) == 1 and key.isascii() and key.isalnum()
+
+
 def valid_key(key: str) -> bool:
-    return key in KEY_NAMES
+    return key in KEY_NAMES or is_char_key(key)
 
 
 def valid_shortcut(keys: list[str]) -> bool:
@@ -1681,6 +1688,105 @@ def office_type(window_id: str, image: str, text: str) -> list[OperatorStep]:
             )
         )
     return steps
+
+
+def video_key(window_id: str, key: str, *, expect_motion: bool | None) -> list[OperatorStep]:
+    """A page's own video shortcut, proven by what it does to the PICTURE: after the key, two
+    looks a moment apart must differ (``expect_motion`` True: it plays), must NOT differ
+    (False: it stopped), or are not taken (None: a seek, which moves either way)."""
+    import base64
+
+    if not valid_key(key):
+        raise ValueError(f"'{key}' is not a key keyboard.key accepts")
+    first: dict[str, bytes] = {}
+
+    def _png(result: DeviceRunResult) -> bytes:
+        body = result.result if isinstance(result.result, dict) else {}
+        return base64.b64decode(str(body.get("png_base64") or ""))
+
+    def _keep_first(result: DeviceRunResult) -> bool:
+        first["png"] = _png(result)
+        return bool(first["png"])
+
+    def _as_expected(result: DeviceRunResult) -> bool:
+        png = _png(result)
+        if not png or not first.get("png"):
+            return False
+        return frames_differ(first["png"], png) is bool(expect_motion)
+
+    steps = [
+        _activate_step(window_id, "video_key:activate"),
+        OperatorStep(
+            capability="keyboard.key",
+            payload={"window_id": window_id, "key": key},
+            postcondition=lambda r: _landed_in(window_id, r),
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="video_key:key",
+        ),
+    ]
+    if expect_motion is None:
+        return steps
+    return [
+        *steps,
+        OperatorStep(
+            capability="screen.capture",
+            payload={"window_id": window_id},
+            postcondition=_keep_first,
+            timeout_s=15.0,
+            retries=0,
+            level=LEVEL_API,
+            name="video_key:capture",
+        ),
+        OperatorStep(
+            capability="screen.capture",
+            payload={"window_id": window_id},
+            postcondition=_as_expected,
+            timeout_s=15.0,
+            retries=2,
+            retry_delay_s=1.5,
+            level=LEVEL_API,
+            name="video_key:verify",
+        ),
+    ]
+
+
+def tab_by_name(window_id: str, name: str) -> list[OperatorStep]:
+    """ "Tosun Paşa sekmesine geç": the browser's own tab search (Ctrl+Shift+A in Chrome and
+    Edge), the name typed, Enter - proven by the title in front carrying that name."""
+    from app.operator.ocr_locate import title_names
+
+    def _typed(result: DeviceRunResult) -> bool:
+        typed = result.result.get("typed_chars") if isinstance(result.result, dict) else None
+        return bool(typed)
+
+    def _there(result: DeviceRunResult) -> bool:
+        return title_names(page_title(_title_of(result)), name)
+
+    return [
+        _activate_step(window_id, "tab_by_name:activate"),
+        _chord_step(window_id, ["ctrl", "shift", "a"], "tab_by_name:search"),
+        OperatorStep(
+            capability="keyboard.type",
+            payload={"window_id": window_id, "text": name, "secret": False},
+            postcondition=_typed,
+            timeout_s=15.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="tab_by_name:type",
+        ),
+        OperatorStep(
+            capability="keyboard.key",
+            payload={"window_id": window_id, "key": "enter"},
+            postcondition=lambda r: _landed_in(window_id, r),
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="tab_by_name:enter",
+        ),
+        _title_check_step(_there, "tab_by_name:verify"),
+    ]
 
 
 def go_back(window_id: str, *, title_before: str) -> list[OperatorStep]:

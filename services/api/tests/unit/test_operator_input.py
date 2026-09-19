@@ -74,7 +74,16 @@ def test_the_key_vocabulary_is_the_companions() -> None:
     assert plans.valid_shortcut(["ctrl", "shift", "escape"])
     assert not plans.valid_shortcut(["s"]), "a chord needs a modifier"
     assert not plans.valid_shortcut(["ctrl", "alt"]), "a chord needs exactly one key"
-    assert not plans.valid_key("s"), "a bare letter is text, not a key (use operator.type)"
+    # 2026-09-19 ("0 tuşuna bas"): ONE ASCII letter or digit is a key on BOTH sides - the page's
+    # own shortcuts are single characters and must arrive as a real keydown. Both halves are
+    # read: the device's validator and its press path allow characters, and so does the plan.
+    assert source.count("TryKey(key, allowCharacters: true, out") >= 3, (
+        "KeyMap.ValidateKey / PressKey no longer accept a single character"
+    )
+    assert "TryKey(key, allowCharacters: false" not in source
+    assert plans.valid_key("s") and plans.valid_key("0") and plans.valid_key("K")
+    for text in ("ab", "ç", "!", " ", "", "merhaba"):
+        assert not plans.valid_key(text), f"{text!r} is text, not a key (use operator.type)"
 
 
 def test_the_secret_flag_travels_and_the_device_reads_the_same_key() -> None:

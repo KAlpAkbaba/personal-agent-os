@@ -160,13 +160,20 @@ public static class KeyMap
         }
     }
 
+    /// <summary>
+    /// A named key, or ONE ASCII letter or digit. A page's own shortcuts are single characters
+    /// (YouTube: k = play/pause, 0 = from the start) and the owner asks for them as keys -
+    /// "0 tuşuna bas" (2026-09-19). Sent as a virtual key, so the page sees a real keydown;
+    /// <c>keyboard.type</c>'s Unicode events would not trigger a shortcut. Anything longer, or
+    /// outside A-Z/0-9, is still text and still refused here.
+    /// </summary>
     public static void ValidateKey(string key)
     {
-        if (!TryKey(key, allowCharacters: false, out _, out _))
+        if (!TryKey(key, allowCharacters: true, out _, out _))
         {
             throw new CapabilityException(
                 ErrorClasses.ValidationError,
-                $"'{key}' is not a key keyboard.key accepts ({string.Join(",", KeyNames)}); use keyboard.type for text",
+                $"'{key}' is not a key keyboard.key accepts ({string.Join(",", KeyNames)}, or one letter or digit); use keyboard.type for text",
                 retryable: false);
         }
     }
@@ -293,7 +300,7 @@ public sealed class Win32InputSynthesizer : IInputSynthesizer
 
     public void PressKey(string key, Func<bool> stillTargeted)
     {
-        if (!KeyMap.TryKey(key, allowCharacters: false, out var vk, out var extended))
+        if (!KeyMap.TryKey(key, allowCharacters: true, out var vk, out var extended))
         {
             throw new CapabilityException(ErrorClasses.ValidationError, $"'{key}' is not a key this device knows", retryable: false);
         }
