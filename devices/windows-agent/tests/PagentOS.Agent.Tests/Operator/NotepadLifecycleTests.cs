@@ -76,6 +76,40 @@ public sealed class NotepadLifecycleTests : IDisposable
         Assert.Equal(1, capture["scale"]!.GetValue<int>());
         Assert.InRange(pngWidth, 800 - OperatorCapabilities.RectTolerance, 800 + OperatorCapabilities.RectTolerance);
 
+        // ADR-0176, through the real operator object: the same window as JPEG ...
+        var jpegCapture = _lab.Exec(OperatorCapabilityNames.ScreenCapture, new JsonObject { ["window_id"] = windowId, ["format"] = "jpeg" });
+        var jpeg = Convert.FromBase64String(jpegCapture["image_base64"]!.GetValue<string>());
+        Assert.Equal((pngWidth, pngHeight), JpegEncoder.ReadHeader(jpeg));
+        Assert.Equal("image/jpeg", jpegCapture["mime"]!.GetValue<string>());
+        Assert.Equal(80, jpegCapture["quality"]!.GetValue<int>());
+        Assert.Null(jpegCapture["png_base64"]);
+        var refused = _lab.ExpectFailure(OperatorCapabilityNames.ScreenCapture, new JsonObject { ["window_id"] = windowId, ["format"] = "webp" });
+        Assert.Equal(ErrorClasses.ValidationError, refused.ErrorClass);
+
+        // ... and read on this machine: the same surface, the same size, lines and boxes only.
+        var engine = new WindowsOcrEngine();
+        if (OperatorCapabilityNames.DefaultOcrLanguages.Any(engine.IsInstalled))
+        {
+            var read = _lab.Exec(OperatorCapabilityNames.ScreenOcr, new JsonObject { ["window_id"] = windowId });
+            Assert.Equal(pngWidth, read["width"]!.GetValue<int>());
+            Assert.Equal(pngHeight, read["height"]!.GetValue<int>());
+            Assert.Equal(1, read["scale"]!.GetValue<int>());
+            Assert.Equal(windowId, read["window_id"]!.GetValue<string>());
+            Assert.Equal(read["lines"]!.AsArray().Count, read["line_count"]!.GetValue<int>());
+            Assert.True(read["line_count"]!.GetValue<int>() > 0, "a Notepad window with a menu bar and typed text has something to read");
+            Assert.Null(read["png_base64"]);
+            Assert.Null(read["image_base64"]);
+        }
+        else
+        {
+            var unavailable = _lab.ExpectFailure(OperatorCapabilityNames.ScreenOcr, new JsonObject { ["window_id"] = windowId });
+            Assert.Equal(ErrorClasses.DependencyUnavailable, unavailable.ErrorClass);
+        }
+
+        var ocrOfNothing = _lab.ExpectFailure(OperatorCapabilityNames.ScreenOcr, new JsonObject { ["window_id"] = "w-does-not-exist" });
+        var captureOfNothing = _lab.ExpectFailure(OperatorCapabilityNames.ScreenCapture, new JsonObject { ["window_id"] = "w-does-not-exist" });
+        Assert.Equal(captureOfNothing.ErrorClass, ocrOfNothing.ErrorClass);
+
         // Close with unsaved text: force, so this test proves "terminated" while
         // ModalDetectionTests proves the polite path. Then verify: gone from the registry,
         // gone as a process.

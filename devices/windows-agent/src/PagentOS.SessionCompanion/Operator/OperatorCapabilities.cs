@@ -64,6 +64,7 @@ public sealed class OperatorCapabilities
     private readonly AuditLog? _audit;
     private readonly IInputSynthesizer _input;
     private readonly IMonitorInventory _monitors;
+    private readonly IScreenOcrEngine _ocr;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<int, Process> _started = new();
     private readonly Dictionary<string, string> _applications;
@@ -75,13 +76,15 @@ public sealed class OperatorCapabilities
         IInputSynthesizer? input = null,
         TerminalRunner? terminal = null,
         IMonitorInventory? monitors = null,
-        IReadOnlyDictionary<string, string>? applications = null)
+        IReadOnlyDictionary<string, string>? applications = null,
+        IScreenOcrEngine? ocr = null)
     {
         _options = options;
         _logger = logger;
         _audit = audit;
         _input = input ?? new Win32InputSynthesizer();
         _monitors = monitors ?? new Win32MonitorInventory();
+        _ocr = ocr ?? new WindowsOcrEngine();
         Registry = new WindowRegistry();
         Guard = new FocusGuard(Registry);
         Inspector = new UiAutomationInspector();
@@ -246,6 +249,7 @@ public sealed class OperatorCapabilities
             OperatorCapabilityNames.UiSelect => UiSelect(payload),
             OperatorCapabilityNames.ScreenCapture => ScreenCaptureAction(payload),
             OperatorCapabilityNames.ScreenInspect => ScreenInspect(),
+            OperatorCapabilityNames.ScreenOcr => ScreenOcrAction(payload),
             OperatorCapabilityNames.FileOpen => FileOpen(payload, cancellationToken),
             OperatorCapabilityNames.FileReveal => FileReveal(payload, cancellationToken),
             OperatorCapabilityNames.TerminalOpen => TerminalOpen(payload, cancellationToken),
@@ -807,26 +811,34 @@ public sealed class OperatorCapabilities
 
     private JsonObject ScreenCaptureAction(JsonObject payload)
     {
-        var format = OptionalString(payload, "format", 8) ?? "png";
-        if (!string.Equals(format, "png", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new CapabilityException(ErrorClasses.ValidationError, "payload.format must be \"png\"", retryable: false);
-        }
-
-        WindowInfo? target = null;
-        RgbImage image;
-        if (payload["window_id"] is not null)
-        {
-            target = Registry.Resolve(payload["window_id"]!.GetValue<string>());
-            image = ScreenCapture.CaptureWindow(target.Handle);
-        }
-        else
-        {
-            image = ScreenCapture.CapturePrimaryScreen();
-        }
+        var format = CaptureFit.ParseFormat(OptionalString(payload, "format", 8));
+        var (image, target) = CaptureSurface(payload);
 
         // The fit is against the FRAME the ack travels in, not a cap of its own (ADR-0175).
-        return CaptureFit.BuildResult(image, target?.WindowId, target is null ? null : Registry.Read(target.Handle)?.ToJson());
+        return CaptureFit.BuildResult(image, target?.WindowId, target is null ? null : Registry.Read(target.Handle)?.ToJson(), format: format);
+    }
+
+    /// <summary>
+    /// ADR-0176: the same surface, resolved the same way and captured by the same path as
+    /// screen.capture, at full size - read here, on this machine. Only lines and boxes leave.
+    /// </summary>
+    private JsonObject ScreenOcrAction(JsonObject payload)
+    {
+        var languages = ScreenOcr.ParseLanguages(payload);
+        var (image, target) = CaptureSurface(payload);
+        return ScreenOcr.Run(image, languages, _ocr, target?.WindowId, target is null ? null : Registry.Read(target.Handle)?.ToJson());
+    }
+
+    /// <summary>One window (<c>payload.window_id</c>) or, without one, the primary screen.</summary>
+    private (RgbImage Image, WindowInfo? Target) CaptureSurface(JsonObject payload)
+    {
+        if (payload["window_id"] is null)
+        {
+            return (ScreenCapture.CapturePrimaryScreen(), null);
+        }
+
+        var target = Registry.Resolve(payload["window_id"]!.GetValue<string>());
+        return (ScreenCapture.CaptureWindow(target.Handle), target);
     }
 
     private JsonObject ScreenInspect()

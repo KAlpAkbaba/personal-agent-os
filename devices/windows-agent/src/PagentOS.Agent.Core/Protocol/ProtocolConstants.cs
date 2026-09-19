@@ -515,6 +515,15 @@ public static class OperatorCapabilityNames
     public const string ServiceStatus = "service.status";
     public const string ServiceRestart = "service.restart";
 
+    /// <summary>
+    /// ADR-0176 (owner decision 2026-09-19): named text on the screen is found by the OCR
+    /// that ships with Windows, on this machine - the picture never leaves it; only the
+    /// recognised lines and their boxes do. Same window resolution and the same capture path
+    /// as <see cref="ScreenCapture"/>, at full resolution. Appended LAST so every earlier
+    /// name keeps its place in the advertised manifest.
+    /// </summary>
+    public const string ScreenOcr = "screen.ocr";
+
     /// <summary>Every operator name, in the order of the specification's table.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -528,6 +537,7 @@ public static class OperatorCapabilityNames
         FileOpen, FileReveal,
         TerminalOpen, TerminalExecute, TerminalStatus,
         ProcessList, ProcessStop, ServiceStatus, ServiceRestart,
+        ScreenOcr,
     ];
 
     /// <summary>The names that synthesise input and therefore run under the focus guard (§1, invariant 2).</summary>
@@ -571,6 +581,18 @@ public static class OperatorCapabilityNames
     /// fits at this scale; one that still does not fit is a typed validation error.
     /// </summary>
     public const int MaxCaptureScale = 32;
+
+    /// <summary><c>screen.ocr</c>: the most lines one result carries; more sets <c>truncated</c>.</summary>
+    public const int MaxOcrLines = 600;
+
+    /// <summary><c>screen.ocr</c>: the longest text of one line or one word, in characters.</summary>
+    public const int MaxOcrTextChars = 300;
+
+    /// <summary><c>screen.ocr</c>: the most words one line carries.</summary>
+    public const int MaxOcrWordsPerLine = 60;
+
+    /// <summary><c>screen.ocr</c>: the languages tried when the request names none, in this order.</summary>
+    public static readonly IReadOnlyList<string> DefaultOcrLanguages = ["tr", "en-US"];
 
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 

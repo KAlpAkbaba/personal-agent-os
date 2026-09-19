@@ -36,7 +36,7 @@ public sealed class SceneAdvertisementTests
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
         Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(1));
         Assert.Equal(AgentCapabilities.Projects, with.SkipLast(1).TakeLast(AgentCapabilities.Projects.Count));
-        Assert.Equal(without.Count + 36 + 14 + 9 + 1, with.Count);
+        Assert.Equal(without.Count + 37 + 14 + 9 + 1, with.Count); // 37: ADR-0176 appended screen.ocr to the operator family
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
 
         // The first agent that advertises the family.

@@ -13466,3 +13466,80 @@ If that costs accuracy, the follow-ups are a better PNG filter/compression level
 chunked/by-reference result (`file.fetch` in reverse) - both larger than this incident.
 Delivery to the owner's PC needs the elevated installer (the install tree is writable by
 SYSTEM and Administrators only, by design - ADR-0028): `READY_FOR_OWNER`, one UAC prompt.
+
+## ADR-0176 — The screen is READ on the device (`screen.ocr`), and when a picture must travel it may be a JPEG (2026-09-19)
+
+ADR-0175 shipped the same day (`0.6.0+67fff03`) and did what it said: the capture fits the
+frame. Production, 17:14:36Z: the owner's maximized Chrome (2576x1416, the YouTube home page -
+photographs) came back at scale 4, 644x354 px, 341 KB; no title on it could be read and the
+vision provider answered "not found" for a video plainly on the screen. A PNG cannot carry a
+photographic 3.6 MP window in ~737 KB - the accuracy cost ADR-0175 named as not done.
+
+The owner, the same evening: *"Bunun yerine local OCR yapsak sorun daha hızlı düzelir mi ve
+maddiyatı düşer mi?"* - yes. Two decisions, one device release.
+
+**1. `screen.ocr` - local OCR is the PRIMARY way to find named text on the screen.** Free,
+fast, and the picture never leaves the PC (constitution: raw frames are not sent); vision
+stays the fallback for positional and non-text targets.
+
+- A new operator name, appended LAST in `OperatorCapabilityNames.All` (every earlier name
+  keeps its place; the full manifest is 105, the ungated counts do not move, the capability
+  fingerprint moves, `SoftwareVersion` stays 0.6.0). Same gate, same `window_id` resolution,
+  same capture path (`ScreenCapture.CaptureWindow` / primary screen) and therefore the same
+  unknown-window error as `screen.capture`. It synthesises no input, so it is not guarded.
+- The capture is taken at FULL resolution - nothing big is sent, so nothing is halved - and
+  recognised by `Windows.Media.Ocr.OcrEngine` (ships with Windows, on-device, no account, no
+  network) once per requested language, default `["tr", "en-US"]`. A language that is not
+  installed is skipped; none installed is `dependency_unavailable`; a recogniser that cannot
+  be created or throws is a typed `dependency_unavailable` - never an empty success, because
+  "read nothing" and "could not read" must not look alike to a planner.
+- Merge: every line of the first language; a line of a later language only when no kept line
+  covers more than half of ITS box. Then reading order (top, then left). Coordinates are the
+  captured picture's pixels; a line's box is the union of its words' `BoundingRect`.
+- Bounded (600 lines, 300 characters, 60 words per line) and then fitted to the same measured
+  frame budget as a capture: `words` go first (the key stays, as `[]`, so a consumer that
+  indexes it does not break), from the bottom line up, then trailing lines; `truncated: true`.
+  A page with a lot of text is never a failure.
+- Everything except the recogniser is pure (`ScreenOcr`: languages, merge, bounds, fit, JSON
+  shape) behind `IScreenOcrEngine`, so it is tested and mutation-proven without WinRT. The
+  recogniser (`WindowsOcrEngine`) is tested once, on a picture the test draws itself through
+  WPF's managed text path ("Üç Kağıtçı" is read, with both words, inside the drawn area); that
+  test is skipped, with the reason, only where no Turkish recogniser is installed.
+
+**2. `screen.capture` takes `format: "jpeg"`.** PNG stays the default and its result is
+byte-for-byte what it was. A JPEG result is `{width, height, image_base64, mime:
+"image/jpeg", bytes, scale, quality, window_id, observed}` - no `png_base64` key. The fit is
+against the same MEASURED bound (ADR-0175), and gives up quality before resolution: 80, 70,
+60, 50 at a scale, and only then a halving and 80 again - resolution is what a vision
+provider reads with. The synthetic photographic 2576x1416 surface that PNG carries at scale
+>= 2 goes out whole, at scale 1.
+
+- Encoder: the WinRT imaging stack (`Windows.Graphics.Imaging.BitmapEncoder`,
+  `JpegEncoderId`, `ImageQuality`) over an `InMemoryRandomAccessStream` - WIC underneath, no
+  `System.Drawing`/GDI+, nothing on disk. It builds and runs in the Session Companion as it
+  is: the companion has carried the versioned TFM (`net10.0-windows10.0.19041.0`) since B48,
+  so no project file changed and WIC-through-COM was not needed.
+- Threading: the WinRT calls need no UI thread or dispatcher. The capability dispatch is
+  synchronous, so each asynchronous chain runs inside `Task.Run` and the caller blocks on
+  that task (`ConfigureAwait(false)` throughout) - never on a continuation that could want
+  the caller's context back.
+- Chroma subsampling is left at the encoder's default (4:2:0): more pixels were judged worth
+  more than crisper colour edges. If red-on-dark text proves unreadable to the vision
+  provider, 4:4:4 is one encoder property away and costs ~30 % of the budget.
+
+Regression: `CaptureJpegTests` (the owner-sized photograph at scale 1 inside a real
+`CommandAckMessage`, SOI marker, header AND a real platform decode to width x height, quality
+before scale, the halving, the typed refusal, the two format names, the PNG shape pinned key
+by key), `ScreenOcrTests`, and the real operator object in `NotepadLifecycleTests` (a JPEG and
+an OCR reading of a live Notepad window; `webp` refused; the unknown-window error equal to
+`screen.capture`'s). Mutations in the completion report, each RED, restored byte-exact from a
+sha256-checked backup and TOUCHED (a restore keeps the backup's timestamp and MSBuild would
+keep the mutated binary - learnt in ADR-0175's run).
+
+**What is explicitly not done.** The cloud half (mission planning that asks `screen.ocr`
+first and falls back to a JPEG for vision) is written separately against this contract.
+`scripts/core/qualify-item28-unlocked.ps1` and the owner scripts that print "104" are outside
+this change's write scope. OCR reads what is PAINTED: text inside a video frame or a
+thumbnail is read too, which is what the owner wants for "find this video", and is also why
+a planner must treat a hit as a location, not as a control. Delivery is unchanged: the
+elevated installer, one UAC prompt, the same command with both switches (`READY_FOR_OWNER`).

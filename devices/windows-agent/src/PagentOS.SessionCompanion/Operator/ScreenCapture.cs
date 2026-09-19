@@ -177,6 +177,13 @@ public static class ScreenCapture
     }
 }
 
+/// <summary><c>screen.capture</c>'s <c>payload.format</c> (ADR-0176).</summary>
+public enum CaptureFormat
+{
+    Png,
+    Jpeg,
+}
+
 /// <summary>
 /// Makes a capture fit ONE broker frame (ADR-0175). The picture is halved until two things
 /// hold: the PNG is within <see cref="OperatorCapabilityNames.MaxCaptureBytes"/> (the budget
@@ -186,6 +193,11 @@ public static class ScreenCapture
 /// of the frame for the ack around it. <c>scale</c> is the true factor between a coordinate
 /// in the returned picture and the same point on the surface: Cloud Core multiplies the
 /// vision provider's answer by it before it clicks.
+/// <para>
+/// ADR-0176: a JPEG capture is fitted against the SAME measured bound, and gives up quality
+/// (80, 70, 60, 50) at a scale before it gives up the scale - a photographic 3.6 MP window
+/// that PNG can only carry at 1/4 goes out whole.
+/// </para>
 /// </summary>
 public static class CaptureFit
 {
@@ -196,37 +208,27 @@ public static class CaptureFit
     /// <param name="windowId">The captured window's id, or null for the primary screen.</param>
     /// <param name="observedWindow">The window's read-back, or null.</param>
     /// <param name="maxScale">The smallest scale tried; a test lowers it to reach the refusal.</param>
-    public static JsonObject BuildResult(RgbImage image, string? windowId, JsonNode? observedWindow, int maxScale = OperatorCapabilityNames.MaxCaptureScale)
+    /// <param name="format">ADR-0176: PNG (the default, lossless) or JPEG (what a photographic surface needs).</param>
+    public static JsonObject BuildResult(
+        RgbImage image,
+        string? windowId,
+        JsonNode? observedWindow,
+        int maxScale = OperatorCapabilityNames.MaxCaptureScale,
+        CaptureFormat format = CaptureFormat.Png)
     {
         var scale = 1;
         while (true)
         {
-            var png = PngEncoder.Encode(image);
-            var serializedBytes = -1;
-            if (png.Length <= OperatorCapabilityNames.MaxCaptureBytes)
+            var (result, measured) = format == CaptureFormat.Jpeg
+                ? TryJpeg(image, scale, windowId, observedWindow)
+                : TryPng(image, scale, windowId, observedWindow);
+            if (result is not null)
             {
-                var result = new JsonObject
-                {
-                    ["width"] = image.Width,
-                    ["height"] = image.Height,
-                    ["png_base64"] = Convert.ToBase64String(png),
-                    ["bytes"] = png.Length,
-                    ["scale"] = scale,
-                    ["window_id"] = windowId,
-                    ["observed"] = new JsonObject { ["window"] = observedWindow?.DeepClone() },
-                };
-                serializedBytes = SerializedBytes(result);
-                if (serializedBytes <= MaxResultBytes)
-                {
-                    return result;
-                }
+                return result;
             }
 
             if (scale >= maxScale || (image.Width == 1 && image.Height == 1))
             {
-                var measured = serializedBytes < 0
-                    ? $"{png.Length} bytes as PNG, over the {OperatorCapabilityNames.MaxCaptureBytes} byte cap"
-                    : $"{serializedBytes} bytes as a result, over the {MaxResultBytes} bytes one broker frame leaves it";
                 throw new CapabilityException(
                     ErrorClasses.ValidationError,
                     $"the capture is {measured}, even at 1/{scale} scale",
@@ -236,6 +238,85 @@ public static class CaptureFit
             image = image.Halve();
             scale *= 2;
         }
+    }
+
+    /// <summary>
+    /// ADR-0176: the JPEG qualities tried at ONE scale, in order, before the picture is halved.
+    /// Resolution is what a vision provider reads titles with; quality is the cheaper thing
+    /// to give up, so it goes first.
+    /// </summary>
+    public static readonly IReadOnlyList<int> JpegQualities = [80, 70, 60, 50];
+
+    public const string JpegMime = "image/jpeg";
+
+    /// <summary><c>payload.format</c>: absent or "png", or "jpeg"; anything else is refused.</summary>
+    public static CaptureFormat ParseFormat(string? format)
+    {
+        if (format is null || string.Equals(format, "png", StringComparison.OrdinalIgnoreCase))
+        {
+            return CaptureFormat.Png;
+        }
+
+        if (string.Equals(format, "jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            return CaptureFormat.Jpeg;
+        }
+
+        throw new CapabilityException(ErrorClasses.ValidationError, "payload.format must be \"png\" or \"jpeg\"", retryable: false);
+    }
+
+    private static (JsonObject? Result, string Measured) TryPng(RgbImage image, int scale, string? windowId, JsonNode? observedWindow)
+    {
+        var png = PngEncoder.Encode(image);
+        if (png.Length > OperatorCapabilityNames.MaxCaptureBytes)
+        {
+            return (null, $"{png.Length} bytes as PNG, over the {OperatorCapabilityNames.MaxCaptureBytes} byte cap");
+        }
+
+        var result = new JsonObject
+        {
+            ["width"] = image.Width,
+            ["height"] = image.Height,
+            ["png_base64"] = Convert.ToBase64String(png),
+            ["bytes"] = png.Length,
+            ["scale"] = scale,
+            ["window_id"] = windowId,
+            ["observed"] = new JsonObject { ["window"] = observedWindow?.DeepClone() },
+        };
+        var serializedBytes = SerializedBytes(result);
+        return serializedBytes <= MaxResultBytes
+            ? (result, string.Empty)
+            : (null, $"{serializedBytes} bytes as a result, over the {MaxResultBytes} bytes one broker frame leaves it");
+    }
+
+    private static (JsonObject? Result, string Measured) TryJpeg(RgbImage image, int scale, string? windowId, JsonNode? observedWindow)
+    {
+        var serializedBytes = 0;
+        var quality = 0;
+        foreach (var candidate in JpegQualities)
+        {
+            quality = candidate;
+            var jpeg = JpegEncoder.Encode(image, quality);
+            var result = new JsonObject
+            {
+                ["width"] = image.Width,
+                ["height"] = image.Height,
+                ["image_base64"] = Convert.ToBase64String(jpeg),
+                ["mime"] = JpegMime,
+                ["bytes"] = jpeg.Length,
+                ["scale"] = scale,
+                ["quality"] = quality,
+                ["window_id"] = windowId,
+                ["observed"] = new JsonObject { ["window"] = observedWindow?.DeepClone() },
+            };
+            serializedBytes = SerializedBytes(result);
+            if (serializedBytes <= MaxResultBytes)
+            {
+                return (result, string.Empty);
+            }
+        }
+
+        return (null, $"{serializedBytes} bytes as a JPEG result at quality {quality}, over the {MaxResultBytes} bytes one broker frame leaves it");
     }
 
     /// <summary>The result's size exactly as the ack will carry it: same options, same encoder.</summary>

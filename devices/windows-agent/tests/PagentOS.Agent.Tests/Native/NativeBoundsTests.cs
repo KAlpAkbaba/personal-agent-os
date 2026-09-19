@@ -88,7 +88,7 @@ public sealed class NativeBoundsTests
         // the process/service four to the operator family).
         var without = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: false);
         var with = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true);
-        Assert.Equal(without.Count + 36 + 14 + 9 + 1, with.Count);
+        Assert.Equal(without.Count + 37 + 14 + 9 + 1, with.Count); // 37: ADR-0176 appended screen.ocr to the operator family
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
         Assert.DoesNotContain("native.build", with, StringComparer.Ordinal);
         Assert.DoesNotContain("native.publish", with, StringComparer.Ordinal);

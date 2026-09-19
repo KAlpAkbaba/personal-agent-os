@@ -40,7 +40,7 @@ public sealed class AdvertisementTests
         Assert.Equal(AgentCapabilities.Projects, with.TakeLast(AgentCapabilities.Projects.Count + AgentCapabilities.Scenes.Count).Take(AgentCapabilities.Projects.Count));
         Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(AgentCapabilities.Scenes.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(36, AgentCapabilities.Operator.Count);
+        Assert.Equal(37, AgentCapabilities.Operator.Count); // 36 + screen.ocr (ADR-0176)
         Assert.Equal(14, AgentCapabilities.Documents.Count);
         Assert.Equal(9, AgentCapabilities.Projects.Count);
         Assert.Single(AgentCapabilities.Scenes);
