@@ -67,6 +67,19 @@ bas", "YouTube hariç tüm sekmeleri kapat", "birinci sekmeye geç", "yanlış y
 
 ## Sıradaki işler
 
+0. **Sahibin 2026-09-20 sabahı soracağı iki iş** (o gece konuşuldu, sıraya alındı):
+   - *Tarifle tıklama.* "Şu kameralı videoyu aç", "Kratos'un olduğu videoyu aç" bugün
+     çalışmaz: `vision.LOCATE_QUESTION_TR` bir ADA göre soruyor ("X adlı düğme ya da öğe
+     nerede?"), tarif değil; üstelik bulunamayınca `search_if_missing` YouTube'da o kelimeyi
+     aratıyor. Yapılacak: planlayıcı ad/tarif ayrımı yapsın, tarif için ayrı bir görsel soru
+     kurulsun, tarif bulunamazsa arama yapılmasın. Yazıyla bulunabilen hedefler yine ücretsiz
+     yerel OCR'da kalsın (ücretli görsel çağrı yalnız tarif için).
+   - *Hafıza.* Üretimde 2219 anı var ama 2208'i epizodik ADAY; kalıcı olan 9 satırın hepsi
+     sahibin açıkça söyledikleri, tercih/proje/yordamsal sınıflarında tek satır yok. Terfi
+     eşikleri (kanıt sayısı + güven) epizodik olaylarda hiç dolmuyor. Ayrıca hafıza bloğu
+     yalnız ücretli oturumun kişilik metnine giriyor: yerel moddaki serbest sohbet
+     (`tools_assistant.assistant_chat`) yalnız oturum içi geçmişi görüyor, sahibi tanımıyor.
+
 1. Sahibin canlı denemelerini kayıtlardan doğrula (yukarıdaki ❌ satırlar). Özellikle
    araştırma: `research_runs.progress_json` / `events_json` — kaç sayfa, hangi tarayıcı,
    kaç kaynak doğrulandı, `research_reports.synthesis_provider`.
