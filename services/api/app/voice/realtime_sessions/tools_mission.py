@@ -74,6 +74,7 @@ OWNER_ONLY_ACTIONS: Final[frozenset[str]] = frozenset({"approve", "resume"})
 #: Declared the way test_owner_error_language reads every class (no annotation).
 ERROR_OWNER_WORD_REQUIRED = "owner_word_required"
 SPEECH_WAITING_FOR_OWNER: Final = "Görev sizin cevabınızı bekliyor efendim."
+SPEECH_ALREADY_MOVING: Final = "Görev zaten yürüyor efendim; onay gerekmiyor."
 SPEECH_CANCELLED: Final = "Görevi iptal ettim efendim."
 
 
@@ -246,6 +247,18 @@ def _control(ctx: ToolContext, action: str) -> dict[str, Any]:
         # one second, no owner word between. Stopping (pause/cancel) and asking (status)
         # stay open to the model: those only ever make it do less.
         waiting = (row.mission_json.get("escalation") or {}).get("speech")
+        if not waiting and row.status not in (MISSION_AWAITING_APPROVAL, MISSION_PAUSED):
+            # Production 2026-09-19 09:40:01: the model "approved" a mission that was already
+            # moving, and the owner heard "Görev sizin cevabınızı bekliyor" - untrue, nothing
+            # waited for them. A yes to a mission that needs none is a no-op, said as one.
+            return _receipt(
+                ctx,
+                requested_state=action,
+                execution=EXECUTION_NOOP,
+                terminal=TERMINAL_ALREADY,
+                speech=SPEECH_ALREADY_MOVING,
+                server={"mission_id": str(row.id), "status": row.status},
+            )
         return _receipt(
             ctx,
             requested_state=action,

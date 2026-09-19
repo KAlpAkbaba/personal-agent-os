@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import (
@@ -450,18 +451,33 @@ def get_mission(db: Session, mission_id: uuid.UUID) -> OperatorMissionRow:
     return _get(db, mission_id)
 
 
-def fail_unstarted(db: Session, mission_id: uuid.UUID, *, detail: str) -> None:
+def fail_db(
+    db: Session,
+    mission_id: uuid.UUID,
+    *,
+    detail: str,
+    error_class: str = "dependency_unavailable",
+    prefix: str = "iş akışı başlatılamadı",
+) -> OperatorMissionRow | None:
+    """The row's FAILED, written by whoever learned the mission cannot go on - the voice
+    tool when the workflow would not start, the workflow itself when a step activity died
+    (production 2026-09-19). A row already finished is left as it is."""
     row = db.get(OperatorMissionRow, mission_id)
     if row is None or row.status in TERMINAL_MISSION_STATUSES:
-        return
+        return row
     mission = load(row)
     mission.status = MISSION_FAILED
-    mission.error_class = "dependency_unavailable"
-    mission.message = f"iş akışı başlatılamadı: {detail[:200]}"
+    mission.error_class = error_class
+    mission.message = f"{prefix}: {detail[:200]}"
     mission.completed_at = _now()
     _write(row, mission)
     db.commit()
     _finished_event(db, row, mission)
+    return row
+
+
+def fail_unstarted(db: Session, mission_id: uuid.UUID, *, detail: str) -> None:
+    fail_db(db, mission_id, detail=detail)
 
 
 # ------------------------------------------------------------- Temporal half
@@ -483,7 +499,19 @@ async def start_mission_workflow(client: Client, mission_id: uuid.UUID, *, task_
 
 async def _signal(client: Client, mission_id: uuid.UUID, signal: Any, *args: Any) -> None:
     handle = client.get_workflow_handle(workflow_id_for(mission_id))
-    await handle.signal(signal, *args)
+    try:
+        await handle.signal(signal, *args)
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+        # The workflow has already finished (or never ran): the ROW is the truth, and the
+        # caller wrote the owner's word on it before signalling. Production 2026-09-19
+        # 09:40:25: a cancel after a failed workflow was logged as an error; it was not one.
+        logger.info(
+            "operator_mission_workflow_already_finished",
+            mission_id=str(mission_id),
+            signal=getattr(signal, "__name__", str(signal)),
+        )
 
 
 async def approve_signal(client: Client, mission_id: uuid.UUID) -> None:

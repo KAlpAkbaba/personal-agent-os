@@ -216,7 +216,40 @@ def test_app_open_never_reaches_the_browser_worker() -> None:
     assert call["status"] == "succeeded", call
     assert "browser.session_open" not in device.capabilities_called()
     assert "browser.navigate" not in device.capabilities_called()
-    assert device.capabilities_called() == ["app.launch", "window.current"]
+    # The desktop is looked at first (no Chrome window there), then launched and observed.
+    assert device.capabilities_called() == ["window.list", "app.launch", "window.current"]
+
+
+def test_app_open_brings_a_chrome_that_is_already_running_forward_instead_of_launching() -> None:
+    """Production 2026-09-19 09:39:34: Chrome was running behind the window the owner was
+    looking at; ``app.launch`` handed the request to it and exited, no window came forward,
+    and the owner heard "Chrome açamadım" with Chrome open. The window that is there is
+    activated - nothing is launched a second time."""
+    from tests.alarms_support import ok, window_id
+
+    client, factory, device, _operator = _wired()
+    device.results["window.list"] = ok(
+        windows=[
+            {
+                "window_id": window_id(3),
+                "pid": 28204,
+                "image": "chrome.exe",
+                "title": "Yeni Sekme - Google Chrome",
+                "foreground": False,
+                "state": "normal",
+            }
+        ]
+    )
+    sid = _create(client)
+    _say(client, sid, "Chrome'u aç.")
+    call = _tool(client, sid, "operator.app_open", {"application": "Chrome"})
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["execution_status"] == "executed", body
+    assert body["terminal_status"] == "verified"
+    assert "Chrome" in body["speech"] and "açamadım" not in body["speech"]
+    assert device.capabilities_called() == ["window.list", "window.activate"]
+    assert device.calls[-1]["payload"]["window_id"] == window_id(3)
 
 
 def test_an_app_outside_the_allowlist_is_refused_naming_it() -> None:
@@ -401,8 +434,12 @@ def test_cancel_with_nothing_running_says_so_and_touches_nothing() -> None:
 def test_cancel_stops_the_running_task() -> None:
     client, factory, device, operator = _wired()
     task = OperatorTask(
-        id=uuid.uuid4(), goal="open notepad", steps=[], plan_name="open_application",
-        status=STATUS_RUNNING, current_step=0,
+        id=uuid.uuid4(),
+        goal="open notepad",
+        steps=[],
+        plan_name="open_application",
+        status=STATUS_RUNNING,
+        current_step=0,
     )
     operator.set_current_task(task)
     sid = _create(client)

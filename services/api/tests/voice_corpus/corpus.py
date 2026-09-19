@@ -216,7 +216,12 @@ SIDE_EFFECTS_ALARM_CANCEL: Final[frozenset[str]] = frozenset({"desktop.alarm_dis
 #: M19 (docs/M19_DIGITAL_OPERATOR_SPEC.md §4): exactly the device capabilities each plan
 #: may reach on the fake device — anything else the harness sees is a forbidden side
 #: effect (the same policy the alarm/display families already use above).
-SIDE_EFFECTS_OPERATOR_APP_OPEN: Final[frozenset[str]] = frozenset({"app.launch", "window.current"})
+#: 2026-09-19: a browser is looked for on the desktop before it is launched ("Chrome'u aç"
+#: with Chrome already running brings its window forward instead of a launch that hands off
+#: and leaves the window behind) - so a ``window.list`` read, and an activate, are its own.
+SIDE_EFFECTS_OPERATOR_APP_OPEN: Final[frozenset[str]] = frozenset(
+    {"app.launch", "window.current", "window.list", "window.activate"}
+)
 #: ``window.list`` appears in every plan that acts on a REMEMBERED window (ADR-0101): the
 #: focus stack records what the operator once observed, and the owner closes windows, so
 #: "current"/"previous" are held against the desktop before anything acts on them. It is a

@@ -17,10 +17,12 @@ from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from app.operator.mission_activities import (
         mission_cancel_activity,
+        mission_fail_activity,
         mission_mark_activity,
         mission_step_activity,
     )
@@ -75,13 +77,23 @@ class OperatorMissionWorkflow:
             if self._cancelled:
                 self._status = await self._cancel(request.mission_id)
                 break
-            outcome = await workflow.execute_activity(
-                mission_step_activity,
-                args=[request.mission_id],
-                start_to_close_timeout=timedelta(seconds=STEP_ACTIVITY_TIMEOUT_S),
-                heartbeat_timeout=timedelta(seconds=90),
-                retry_policy=RetryPolicy(maximum_attempts=1),
-            )
+            try:
+                outcome = await workflow.execute_activity(
+                    mission_step_activity,
+                    args=[request.mission_id],
+                    start_to_close_timeout=timedelta(seconds=STEP_ACTIVITY_TIMEOUT_S),
+                    heartbeat_timeout=timedelta(seconds=90),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+            except ActivityError as exc:
+                # Production 2026-09-19 09:39:58: the step activity raised (a heartbeat
+                # issued off its loop), this workflow failed with it, and the ROW never
+                # learned - it stayed "planned" with nothing running it, refused every later
+                # mission as in flight for six minutes, and the owner was told the mission
+                # was waiting for THEM. A step that cannot run is a mission that FAILED:
+                # written on the row, with its reason, and told.
+                self._status = await self._fail(request.mission_id, _reason_of(exc))
+                break
             self._status = dict(outcome)
             status = str(outcome.get("status"))
             if status in ("succeeded", "failed", "cancelled"):
@@ -127,6 +139,15 @@ class OperatorMissionWorkflow:
         except TimeoutError:
             self._cancelled = True
 
+    async def _fail(self, mission_id: str, reason: str) -> dict[str, Any]:
+        result = await workflow.execute_activity(
+            mission_fail_activity,
+            args=[mission_id, reason],
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=2),
+        )
+        return dict(result)
+
     async def _cancel(self, mission_id: str) -> dict[str, Any]:
         result = await workflow.execute_activity(
             mission_cancel_activity,
@@ -135,6 +156,15 @@ class OperatorMissionWorkflow:
             retry_policy=RetryPolicy(maximum_attempts=2),
         )
         return dict(result)
+
+
+def _reason_of(exc: ActivityError) -> str:
+    """The failed activity's own error, as the row will carry it ("RuntimeError: no
+    running event loop"), never the wrapper's generic "Activity task failed"."""
+    cause = exc.cause
+    if isinstance(cause, ApplicationError):
+        return f"{cause.type or 'error'}: {cause.message}"
+    return str(cause or exc)
 
 
 __all__ = ["MissionRequest", "OperatorMissionWorkflow", "STEP_ACTIVITY_TIMEOUT_S"]

@@ -384,6 +384,36 @@ def _speech_ambiguous_window(matched: list[tuple[str, str]]) -> str:
     return f"Hangisi efendim: {titles}?"
 
 
+#: Applications whose ``app.launch`` hands the request to a running instance and exits at
+#: once, without bringing that instance forward (``plans.open_application`` measured the pid
+#: mismatch; 2026-09-19 measured the window staying behind). For these, a window already on
+#: the desktop is the thing to activate, never something to launch again.
+_HANDOFF_APPS: Final[frozenset[str]] = frozenset({"chrome", "msedge"})
+
+
+def _window_already_open(ctx: ToolContext, canonical: str) -> str | None:
+    """The id of a window ``canonical`` already has on the desktop, for the hand-off
+    applications only; ``None`` when there is none (or no device to ask)."""
+    if canonical not in _HANDOFF_APPS:
+        return None
+    lister = _window_lister(ctx)
+    image = app_allowlists.APP_IMAGES.get(canonical, "").strip().lower()
+    if lister is None or not image:
+        return None
+    for window in lister():
+        if not isinstance(window, dict):
+            continue
+        seen = str(window.get("image") or "").strip().lower()
+        window_id = window.get("window_id")
+        if (
+            (seen == image or seen.endswith("/" + image))
+            and isinstance(window_id, str)
+            and window_id
+        ):
+            return window_id
+    return None
+
+
 def _window_lister(ctx: ToolContext) -> Callable[[], list[dict[str, Any]]] | None:
     """A closure that asks the DEVICE for its open windows, or ``None`` when there is no
     device to ask. Called at most once per resolution, and only when a spoken name matched
@@ -717,6 +747,18 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
         if isinstance(raw, str) and raw.strip():
             _, tokens, _ = normalize_transcript(raw)
             canonical = resolve_app_alias(tokens)
+    if (
+        canonical not in APP_ALLOWLIST
+        and turn.get("intent") == "mission_start"
+        and isinstance(turn.get("mission_request"), str)
+    ):
+        # Production 2026-09-19 09:39:15: "YouTube'u aç" - the router had already resolved
+        # the owner's sentence to a MISSION (a site is not an application), and the model
+        # still reached for app_open("YouTube"). The owner's words win over the model's tool
+        # choice: the mission the router planned is started, not a refusal read out.
+        from app.voice.realtime_sessions.tools_mission import operator_mission
+
+        return operator_mission(ctx, {"action": "start", "content": turn["mission_request"]})
     if canonical not in APP_ALLOWLIST:
         return _receipt(
             ctx,
@@ -732,9 +774,20 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     if device_action is None:
         return _capability_missing(ctx, capability=TOOL_APP_OPEN, requested_state="opened")
     operator = _require_operator(ctx, TOOL_APP_OPEN)
-    plan = Plan(
-        name=PLAN_OPEN_APPLICATION, goal=f"open {canonical}", steps=open_application(canonical)
-    )
+    already = _window_already_open(ctx, canonical)
+    if already is not None:
+        # Production 2026-09-19 09:39:34: "Chrome'u aç" with Chrome already running behind
+        # the window the owner was looking at - ``app.launch`` handed the request to that
+        # Chrome and exited, no window came forward, and the owner heard "Chrome açamadım"
+        # with Chrome open. What the mission planner already does (req 113): the window that
+        # is there is brought forward; nothing is launched a second time.
+        plan = Plan(
+            name=PLAN_OPEN_APPLICATION, goal=f"open {canonical}", steps=activate_window(already)
+        )
+    else:
+        plan = Plan(
+            name=PLAN_OPEN_APPLICATION, goal=f"open {canonical}", steps=open_application(canonical)
+        )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
     name_tr = _APP_TR_NAMES.get(canonical, canonical)
     if task.status == STATUS_SUCCEEDED:

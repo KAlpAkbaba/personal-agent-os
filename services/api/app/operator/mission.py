@@ -456,6 +456,23 @@ _SETTINGS_PAGE_RE: Final = re.compile(r"^[A-Za-zÇĞİÖŞÜçğıöşü\- ]{1,4
 
 MISSION_SESSION_KIND: Final = "operator_mission"
 OWNER_ATTACHED_PROFILE: Final = "owner"
+#: The browsers a mission drives by keyboard - the app id a plan opens -> its image. The
+#: owner's Chrome is the default (decision 2026-09-18); a browser the owner NAMED ("Microsoft
+#: Edge'i aç ve YouTube'a git", production 2026-09-19 09:39) is the one the steps after it use.
+CHROME_IMAGE: Final = "chrome.exe"
+BROWSER_APP_IMAGES: Final[dict[str, str]] = {"chrome": CHROME_IMAGE, "msedge": "msedge.exe"}
+BROWSER_NAMES_TR: Final[dict[str, str]] = {CHROME_IMAGE: "Chrome", "msedge.exe": "Edge"}
+_IN_YOUR_BROWSER_TR: Final[dict[str, str]] = {
+    CHROME_IMAGE: "Chrome'unuzda",
+    "msedge.exe": "Edge'inizde",
+}
+
+
+def _browser_image_of(step: MissionStep) -> str:
+    """The browser this step drives: the one the plan opened before it, when that was not
+    Chrome (``_with_browser_in_front`` stamps it), else the owner's Chrome."""
+    image = str(step.args.get("browser") or "")
+    return image if image in BROWSER_NAMES_TR else CHROME_IMAGE
 
 
 def _window_id_of(window: dict[str, Any] | None) -> str | None:
@@ -501,30 +518,35 @@ def _decide_navigate(step: MissionStep, obs: Observation, mission_id: uuid.UUID)
     url = str(step.args.get("url") or "")
     if not url.startswith(("http://", "https://")):
         raise NeedsOwner("validation_error", "Gidilecek adresi anlayamadım efendim.")
-    if _attach_owner_chrome(step, mission_id):
+    browser = _browser_image_of(step)
+    if browser == CHROME_IMAGE and _attach_owner_chrome(step, mission_id):
         return Decision(
             "browser_navigate",
             plans.browser_navigate(url),
             "dom",
             note="sahibin kendi tarayıcısında",
         )
-    chrome = _owner_chrome_window(obs)
-    if chrome is None:
-        raise NeedsOwner("dependency_unavailable", "Açık bir Chrome penceresi bulamadım efendim.")
+    window = _owner_chrome_window(obs, browser)
+    if window is None:
+        raise NeedsOwner(
+            "dependency_unavailable",
+            f"Açık bir {BROWSER_NAMES_TR[browser]} penceresi bulamadım efendim.",
+        )
     return Decision(
         "keyboard_navigate",
-        plans.keyboard_navigate(str(chrome["window_id"]), url),
+        plans.keyboard_navigate(str(window["window_id"]), url),
         LEVEL_KEYBOARD,
-        note="Chrome'unuzda, klavyeyle",
+        note=f"{_IN_YOUR_BROWSER_TR[browser]}, klavyeyle",
     )
 
 
-def _owner_chrome_window(obs: Observation) -> dict[str, Any] | None:
-    """The owner's Chrome window: the one in front when it is Chrome, else any open one."""
+def _owner_chrome_window(obs: Observation, image: str = CHROME_IMAGE) -> dict[str, Any] | None:
+    """The owner's browser window (Chrome unless the plan named another): the one in front
+    when it is that browser, else any open one."""
     fg = obs.foreground
-    if fg and _bare_image(str(fg.get("image") or "")) == "chrome.exe" and _window_id_of(fg):
+    if fg and _bare_image(str(fg.get("image") or "")) == image and _window_id_of(fg):
         return fg
-    window = obs.window_of_image("chrome.exe")
+    window = obs.window_of_image(image)
     return window if window is not None and _window_id_of(window) else None
 
 
@@ -758,18 +780,19 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     )
 
 
-def _owner_browser_window(obs: Observation, what: str) -> str:
-    chrome = _owner_chrome_window(obs)
-    if chrome is None:
+def _owner_browser_window(obs: Observation, what: str, *, image: str = CHROME_IMAGE) -> str:
+    window = _owner_chrome_window(obs, image)
+    if window is None:
         raise NeedsOwner(
-            "dependency_unavailable", f"{what} için açık bir Chrome penceresi bulamadım efendim."
+            "dependency_unavailable",
+            f"{what} için açık bir {BROWSER_NAMES_TR[image]} penceresi bulamadım efendim.",
         )
-    return str(chrome["window_id"])
+    return str(window["window_id"])
 
 
 def _decide_tab_switch(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
     del mission_id
-    window_id = _owner_browser_window(obs, "sekme değiştirmek")
+    window_id = _owner_browser_window(obs, "sekme değiştirmek", image=_browser_image_of(step))
     title_before = str((obs.foreground or {}).get("title") or "")
     index = step.args.get("index")
     direction = str(step.args.get("direction") or "next")
@@ -786,8 +809,8 @@ def _decide_tab_switch(step: MissionStep, obs: Observation, mission_id: uuid.UUI
 
 
 def _decide_tab_close(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
-    del step, mission_id
-    window_id = _owner_browser_window(obs, "sekmeyi kapatmak")
+    del mission_id
+    window_id = _owner_browser_window(obs, "sekmeyi kapatmak", image=_browser_image_of(step))
     title_before = str((obs.foreground or {}).get("title") or "")
     return Decision(
         "tab_close", plans.tab_close(window_id, title_before=title_before), LEVEL_KEYBOARD
@@ -795,8 +818,8 @@ def _decide_tab_close(step: MissionStep, obs: Observation, mission_id: uuid.UUID
 
 
 def _decide_tab_new(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
-    del step, mission_id
-    window_id = _owner_browser_window(obs, "yeni sekme açmak")
+    del mission_id
+    window_id = _owner_browser_window(obs, "yeni sekme açmak", image=_browser_image_of(step))
     return Decision("tab_new", plans.tab_new(window_id), LEVEL_KEYBOARD)
 
 
@@ -1213,6 +1236,9 @@ _SEARCH_STOP: Final[frozenset[str]] = frozenset(
         "chromedan",
         "tarayıcıdan",
         "tarayicidan",
+        "edge",
+        "edgeden",
+        "edgede",
         "lütfen",
         "lutfen",
         "bana",
@@ -1721,24 +1747,42 @@ def plan_mission(text: str) -> Mission:
     return Mission(id=uuid.uuid4(), goal=raw[:300], steps=steps, preview=preview)
 
 
-def _names_a_browser(tokens: tuple[str, ...]) -> bool:
-    """ "Chrome'dan YouTube'u aç": the owner asked for Chrome in so many words."""
-    return any(t.startswith(("chrome", "tarayıcı", "tarayici")) for t in tokens)
+def _names_a_browser(tokens: tuple[str, ...]) -> str | None:
+    """The app id of the browser the owner asked for in so many words - "Chrome'dan
+    YouTube'u aç", "tarayıcıdan", "Edge'de YouTube'u aç" - or ``None`` when the sentence
+    names no browser and the owner's Chrome is meant (decision 2026-09-18). Production
+    2026-09-19 09:39: "Edge'de" was not a browser to this function, and Edge sentences got
+    an implicit Chrome."""
+    for t in tokens:
+        if t.startswith(("chrome", "tarayıcı", "tarayici")):
+            return "chrome"
+        if t.startswith("edge"):
+            return "msedge"
+    return None
 
 
-def _with_browser_in_front(steps: list[MissionStep], *, named: bool = False) -> list[MissionStep]:
-    """A navigate step drives the owner's Chrome WINDOW (keyboard rung), so the plan must
+def _with_browser_in_front(
+    steps: list[MissionStep], *, named: str | None = None
+) -> list[MissionStep]:
+    """A navigate step drives the owner's browser WINDOW (keyboard rung), so the plan must
     put that window in front first. "Chrome'dan YouTube'u aç" names no separate opening
-    step; it gets one here. It never launches a second Chrome: the app-open decision
-    activates the window that is already there (req 113)."""
+    step; it gets one here - for the browser the owner NAMED, else Chrome, marked implicit.
+    It never launches a second browser: the app-open decision activates the window that is
+    already there (req 113). Every step after a browser other than Chrome is stamped with
+    that browser's image, so the deciders drive Edge's window when Edge was asked for
+    (production 2026-09-19 09:39:58: Edge, then an implicit Chrome, then a navigate that
+    only knew Chrome)."""
     out: list[MissionStep] = []
     browser_up = False
+    browser_image = ""
     for step in steps:
-        if step.kind == KIND_APP_OPEN and step.args.get("application") == "chrome":
+        if step.kind == KIND_APP_OPEN and step.args.get("application") in BROWSER_APP_IMAGES:
             browser_up = True
+            browser_image = BROWSER_APP_IMAGES[str(step.args.get("application"))]
         if step.kind in (KIND_TAB_NEW, KIND_TAB_SWITCH, KIND_TAB_CLOSE):
             browser_up = True
         if step.kind == KIND_NAVIGATE and not browser_up:
+            application = named or "chrome"
             out.append(
                 MissionStep(
                     id="",
@@ -1747,11 +1791,14 @@ def _with_browser_in_front(steps: list[MissionStep], *, named: bool = False) -> 
                     # for - the router counts only what the owner asked for when it decides
                     # whether a sentence is a multi-step mission (else "Haberleri YouTube'dan
                     # aç" stopped being the news tool's, CI 2026-09-18).
-                    args={"application": "chrome", **({} if named else {"implicit": True})},
-                    label_tr=f"{APP_NAMES_TR.get('chrome', 'Chrome')} uygulamasını aç",
+                    args={"application": application, **({} if named else {"implicit": True})},
+                    label_tr=f"{APP_NAMES_TR.get(application, 'Chrome')} uygulamasını aç",
                 )
             )
             browser_up = True
+            browser_image = BROWSER_APP_IMAGES[application]
+        if step.kind != KIND_APP_OPEN and browser_image and browser_image != CHROME_IMAGE:
+            step.args["browser"] = browser_image
         out.append(step)
     return out
 

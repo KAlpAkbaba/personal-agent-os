@@ -8,6 +8,7 @@ builds it - a worker with no key has no fifth rung, and the loop says so.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from temporalio import activity
@@ -29,18 +30,60 @@ def _factory():
     return factory
 
 
+def _heartbeat_from_the_round() -> Callable[..., None]:
+    """A heartbeat the round may fire from the WORKER THREAD it runs on.
+
+    This is an async activity: ``activity.heartbeat`` schedules a task on the activity's
+    event loop, so it must be issued on that loop's thread. Issued from inside
+    ``asyncio.to_thread`` it raised ``RuntimeError: no running event loop`` and took the
+    activity - and with it every mission - down after the first task of the first step
+    (production 2026-09-19 09:39:58, operator-mission-2bbf055f; the two 08:16 missions the
+    same way). The round therefore hands the beat back to the loop, in the activity's own
+    context, and never touches Temporal from its thread."""
+    import asyncio
+    import contextvars
+
+    loop = asyncio.get_running_loop()
+    context = contextvars.copy_context()
+
+    def _beat(*_args: Any) -> None:
+        if activity.in_activity():
+            loop.call_soon_threadsafe(context.run, activity.heartbeat, "round")
+
+    return _beat
+
+
 @activity.defn(name="operator_mission_step")
 async def mission_step_activity(mission_id: str) -> dict[str, Any]:
     import asyncio
 
+    heartbeat = _heartbeat_from_the_round()
+
     def _run() -> dict[str, Any]:
         with _factory()() as db:
             return mission_service.run_step_db(
-                db,
-                uuid.UUID(mission_id),
-                _ports(),
-                on_task=lambda *_a: activity.heartbeat("round") if activity.in_activity() else None,
+                db, uuid.UUID(mission_id), _ports(), on_task=heartbeat
             )
+
+    return await asyncio.to_thread(_run)
+
+
+@activity.defn(name="operator_mission_fail")
+async def mission_fail_activity(mission_id: str, reason: str) -> dict[str, Any]:
+    """The workflow's last word when a step activity itself failed: the row says FAILED,
+    with the reason, and the owner is told - never a row left "planned" with nothing
+    running it (production 2026-09-19: six minutes of "mission_in_flight" refusals)."""
+    import asyncio
+
+    def _run() -> dict[str, Any]:
+        mid = uuid.UUID(mission_id)
+        with _factory()() as db:
+            row = mission_service.fail_db(
+                db, mid, detail=reason, error_class="internal_error", prefix="adım yürütülemedi"
+            )
+            if row is None:
+                return {"status": "failed", "current_step": 0}
+            return {"status": row.status, "current_step": row.current_step}
 
     return await asyncio.to_thread(_run)
 
@@ -94,7 +137,12 @@ async def mission_cancel_activity(mission_id: str) -> dict[str, Any]:
     return await asyncio.to_thread(_run)
 
 
-MISSION_ACTIVITIES = (mission_step_activity, mission_mark_activity, mission_cancel_activity)
+MISSION_ACTIVITIES = (
+    mission_step_activity,
+    mission_mark_activity,
+    mission_cancel_activity,
+    mission_fail_activity,
+)
 
 __all__ = [
     "MISSION_ACTIVITIES",

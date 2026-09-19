@@ -755,7 +755,16 @@ _SCRIPT: list[dict[str, Any]] = []
 @activity.defn(name="operator_mission_step")
 async def fake_step(mission_id: str) -> dict[str, Any]:
     _STEPS.append(mission_id)
-    return _SCRIPT.pop(0) if _SCRIPT else {"status": "succeeded", "current_step": 2}
+    entry = _SCRIPT.pop(0) if _SCRIPT else {"status": "succeeded", "current_step": 2}
+    if "raise" in entry:
+        raise RuntimeError(str(entry["raise"]))
+    return entry
+
+
+@activity.defn(name="operator_mission_fail")
+async def fake_fail(mission_id: str, reason: str) -> dict[str, Any]:
+    _MARKS.append(f"failed:{reason}")
+    return {"status": "failed", "current_step": 0}
 
 
 @activity.defn(name="operator_mission_mark")
@@ -1753,3 +1762,176 @@ def test_a_site_with_a_title_is_the_media_players_not_a_page(said: str) -> None:
 )
 def test_a_site_alone_is_still_a_page_in_the_owners_chrome(said: str) -> None:
     assert plan_mission(said).steps[-1].kind == KIND_NAVIGATE
+
+
+# ------------------------------------------ production 2026-09-19: "YouTube'u aç" did nothing
+
+
+@pytest.mark.asyncio
+async def test_a_dead_step_activity_fails_the_row_instead_of_leaving_it_planned() -> None:
+    """Production 2026-09-19 09:39:58 (and both 08:16 missions): the step activity raised
+    ``RuntimeError: no running event loop``, the workflow failed with it, and the ROW stayed
+    "planned" - nothing running it, every later mission refused as in flight for six
+    minutes, the owner told the mission was waiting for them. The workflow's answer to a
+    step that cannot run is the row's FAILED, with the activity's own reason on it."""
+    _STEPS.clear()
+    _MARKS.clear()
+    _SCRIPT[:] = [{"raise": "no running event loop"}]
+    env = await WorkflowEnvironment.start_time_skipping()
+    worker = Worker(
+        env.client,
+        task_queue=TASK_QUEUE,
+        workflows=[OperatorMissionWorkflow],
+        activities=[fake_step, fake_mark, fake_cancel, fake_fail],
+    )
+    async with env, worker:
+        handle = await env.client.start_workflow(
+            OperatorMissionWorkflow.run,
+            MissionRequest(mission_id="m-dead"),
+            id="operator-mission-m-dead",
+            task_queue=TASK_QUEUE,
+        )
+        result = await asyncio.wait_for(handle.result(), timeout=30)
+    assert result["status"] == "failed", result
+    assert _STEPS == ["m-dead"]
+    assert _MARKS == ["failed:RuntimeError: no running event loop"]
+
+
+@pytest.mark.asyncio
+async def test_a_signal_to_a_workflow_that_already_finished_is_not_an_error() -> None:
+    """Production 2026-09-19 09:40:25: the owner's cancel reached a workflow that had already
+    failed; the row was cancelled (the tool writes it first), and the signal's NOT_FOUND was
+    logged as an error. It is the expected shape after a finished workflow - any OTHER
+    RPC failure still raises."""
+    from temporalio.service import RPCError, RPCStatusCode
+
+    client, handle = _fake_temporal_client()
+    handle.signal = AsyncMock(
+        side_effect=RPCError("workflow execution already completed", RPCStatusCode.NOT_FOUND, b"")
+    )
+    await mission_service.cancel_signal(client, uuid.uuid4())  # no raise
+    handle.signal = AsyncMock(side_effect=RPCError("unavailable", RPCStatusCode.UNAVAILABLE, b""))
+    with pytest.raises(RPCError):
+        await mission_service.cancel_signal(client, uuid.uuid4())
+
+
+def _owners_edge_desktop(
+    *, lands_on: str = "YouTube - Kişisel - Microsoft Edge"
+) -> FakeDeviceAction:
+    """The owner's Edge, open and in front, driven by the keyboard like Chrome is."""
+    from tests.alarms_support import window_id as _wid
+
+    edge = {**CHROME, "image": "msedge.exe", "title": "Yeni sekme - Kişisel - Microsoft Edge"}
+    edge["window_id"] = _wid(7)
+    state = {"entered": False, "looks": 0}
+
+    def current(payload: dict[str, Any]) -> DeviceRunResult:
+        if state["entered"]:
+            state["looks"] += 1
+        title = lands_on if state["entered"] and state["looks"] >= 2 else edge["title"]
+        return ok(window={**edge, "title": title})
+
+    def key(payload: dict[str, Any]) -> DeviceRunResult:
+        if payload.get("key") == "enter":
+            state["entered"] = True
+        return ok(
+            key=payload.get("key"),
+            window_id=payload.get("window_id"),
+            observed=_observed(payload, edge),
+        )
+
+    return FakeDeviceAction(
+        results={
+            "window.current": current,
+            "window.list": ok(windows=[dict(edge)]),
+            "window.activate": lambda p: ok(window={**edge, "window_id": str(p.get("window_id"))}),
+            "keyboard.shortcut": lambda p: ok(
+                keys=p.get("keys"), window_id=p.get("window_id"), observed=_observed(p, edge)
+            ),
+            "keyboard.type": lambda p: ok(
+                typed_chars=len(str(p.get("text"))),
+                window_id=p.get("window_id"),
+                observed=_observed(p, edge),
+            ),
+            "keyboard.key": key,
+        }
+    )
+
+
+def test_a_browser_the_owner_named_is_the_one_the_plan_drives(monkeypatch) -> None:
+    """Production 2026-09-19 09:39:58: "Microsoft Edge'i aç ve YouTube'a git" was planned as
+    Edge, then an IMPLICIT Chrome, then a navigate that only knew Chrome. The browser the
+    owner named is the browser: no second one is opened, and the address is typed into
+    Edge's own window."""
+    from app.operator import task as task_module
+    from tests.alarms_support import window_id as _wid
+
+    monkeypatch.setattr(task_module, "_sleep", lambda _s: None)
+    m = plan_mission("Microsoft Edge'i aç ve YouTube'a git")
+    assert [s.kind for s in m.steps] == ["app_open", "navigate"], m.as_dict()
+    assert m.steps[0].args.get("application") == "msedge"
+    assert m.steps[1].args.get("browser") == "msedge.exe"
+
+    device = _owners_edge_desktop()
+    run_mission(m, MissionPorts(device=device))
+
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert device.payload_for("keyboard.type")["text"] == "https://www.youtube.com/"
+    assert device.payload_for("keyboard.shortcut")["window_id"] == _wid(7)
+    assert "browser.session_open" not in device.capabilities_called()  # attach is Chrome's
+    assert "app.launch" not in device.capabilities_called()  # Edge was there: activated
+
+
+def test_chrome_alone_still_gets_no_browser_stamp_and_the_owners_chrome() -> None:
+    m = plan_mission("Chrome’dan YouTube’u aç")
+    assert all("browser" not in s.args for s in m.steps), m.as_dict()
+
+
+def test_app_open_for_a_site_the_router_planned_as_a_mission_starts_that_mission() -> None:
+    """Production 2026-09-19 09:39:15: "YouTube'u aç" - the router resolved a MISSION (a
+    site is not an application); the model called app_open("YouTube") and the owner heard
+    the allowlist read out. The owner's words win: the mission is started."""
+    h = build_harness()
+    sid = h.new_session()
+    said = h.say(sid, "YouTube'u aç.")
+    assert said["resolved_intents"][-1]["intent"] == "mission_start"
+    call = h.tool(sid, "c-1", "operator.app_open", {"application": "YouTube"})
+    assert call["status"] == "succeeded", call
+    body = call["result"]
+    assert body["capability"] == "operator.mission", body
+    assert body["execution_status"] == "executed" and body.get("error_class") is None
+    assert "Başlıyorum" in body["speech"] and "youtube.com" in body["speech"]
+    with h.factory() as db:
+        rows = list(db.scalars(select(OperatorMissionRow)))
+        assert len(rows) == 1 and rows[0].goal == "YouTube'u aç."
+
+
+def test_a_yes_to_a_mission_that_is_already_moving_is_a_calm_no_op() -> None:
+    """Production 2026-09-19 09:40:01: the model "approved" a mission already moving; the
+    owner heard "Görev sizin cevabınızı bekliyor" - untrue. Nothing waited; nothing changes."""
+    from app.voice.realtime_sessions import tools_mission
+
+    h = build_harness()
+    with h.factory() as db:
+        row = mission_service.start_mission_db(db, text="Not Defteri'ni aç ve merhaba yaz")
+        before = mission_service.get_mission(db, row.id).status
+        assert before == "planned"
+
+        out = tools_mission.operator_mission(_mission_ctx(db, said=None), {"action": "approve"})
+
+        assert out["execution_status"] == "noop", out
+        assert out.get("error_class") is None
+        assert "zaten yürüyor" in out["speech"]
+        assert mission_service.get_mission(db, row.id).status == before
+
+
+def test_a_browser_named_in_the_locative_is_that_browser_not_an_implicit_chrome() -> None:
+    """ "Edge'de YouTube'u aç" (production 2026-09-19): the owner named Edge the way they
+    name Chrome in "Chrome'da YouTube'u aç" - so Edge is opened (not implicitly Chrome), and
+    its window is what the navigate drives."""
+    m = plan_mission("Edge'de YouTube'u aç")
+    assert [(s.kind, s.args.get("application"), s.args.get("implicit")) for s in m.steps] == [
+        ("app_open", "msedge", None),
+        ("navigate", None, None),
+    ], m.as_dict()
+    assert m.steps[1].args.get("browser") == "msedge.exe"
