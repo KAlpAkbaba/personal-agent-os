@@ -7263,6 +7263,55 @@ def classify_research_interaction(
     return shape
 
 
+#: Words that frame a research request and are never its topic.
+_RESEARCH_TOPIC_TAIL: Final[tuple[str, ...]] = (
+    "hakkında",
+    "hakkinda",
+    "konusunda",
+    "konusunu",
+    "üzerine",
+    "uzerine",
+    "ilgili",
+    "ile",
+)
+_RESEARCH_TOPIC_NOISE: Final[tuple[str, ...]] = (
+    "lütfen",
+    "lutfen",
+    "bana",
+    "benim",
+    "için",
+    "icin",
+)
+
+
+def research_topic_of(text: str) -> str | None:
+    """The TOPIC of a new research request, in the owner's own words: "yapay zeka ile ilgili
+    son haberleri araştır" -> "yapay zeka ile ilgili son haberleri"; "Yapay zeka hakkında
+    araştırma yap" -> "Yapay zeka". None when the sentence is not a NEW research request.
+
+    Why it exists (2026-09-19, ADR-0173): on the paid path the MODEL decides to call
+    ``research.start`` and writes the topic itself. The free local mode has no model - the
+    router is the only reader of the sentence - so a research asked for aloud started
+    nothing. The router already knew the sentence was a new research
+    (:func:`classify_research_shape`); this gives the tool the one argument it needs."""
+    _, tokens, _ = normalize_transcript(text)
+    if classify_research_shape(tokens) != RESEARCH_CLASS_NEW:
+        return None
+    kept: list[str] = []
+    for word in text.split():
+        _, word_tokens, _ = normalize_transcript(word)
+        head = word_tokens[0] if word_tokens else ""
+        if not head or head in _RESEARCH_TOPIC_NOISE or head in _RUN_VERB_FORMS:
+            continue
+        if head.startswith(_RESEARCH_STEMS):
+            continue
+        kept.append(word.strip(".,!?;:"))
+    while kept and normalize_transcript(kept[-1])[0] in _RESEARCH_TOPIC_TAIL:
+        kept.pop()
+    topic = " ".join(w for w in kept if w).strip()
+    return topic[:500] or None
+
+
 def classify_research_shape(
     tokens: tuple[str, ...], *, query_kind: str | None = None
 ) -> str | None:
@@ -9924,6 +9973,7 @@ __all__ = [
     "classify_research_reference",
     "classify_research_shape",
     "research_class_for",
+    "research_topic_of",
     "research_reference_for",
     "resolve_intent",
     "speech_budget",

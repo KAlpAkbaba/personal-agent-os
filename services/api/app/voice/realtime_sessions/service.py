@@ -42,7 +42,13 @@ from app.voice import service as voice_service
 from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intent_router import get_intent_router, resolve_deictic_reference, tool_for
-from app.voice.intents import Intent, ResolvedIntent, classify_research_shape, resolve_intent
+from app.voice.intents import (
+    Intent,
+    ResolvedIntent,
+    classify_research_shape,
+    research_topic_of,
+    resolve_intent,
+)
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
 from app.voice.realtime_bench import (
@@ -1698,6 +1704,9 @@ def record_client_events(
                 "klass": intent.klass,
                 "query_kind": intent.query_kind,
                 "research_class": intent.research_class,
+                # ADR-0173: the topic of a NEW research, from the owner's own sentence - the
+                # one argument research.start needs when no model is there to write it.
+                "research_topic": research_topic_of(text) if text else None,
                 # ADR-0079 §7: the policy fields the owner's words set, so the tool
                 # applies what was SAID rather than what the model chose to pass.
                 "policy_changes": intent.policy_changes,
@@ -1864,7 +1873,11 @@ def record_client_events(
                     # (EXPLAIN, NONE). `capability` alone covers actions; the local mode
                     # has no model and issues exactly this call, or says it did not
                     # understand.
-                    "tool": intent.capability or tool_for(intent.intent),
+                    "tool": intent.capability
+                    or tool_for(intent.intent)
+                    # A NEW research names no intent of its own (the model used to decide);
+                    # the router knows its class and its topic, which is all the tool needs.
+                    or ("research.start" if text and research_topic_of(text) else None),
                     "normalized_text": None,
                 }
             )

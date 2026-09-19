@@ -2074,3 +2074,29 @@ def test_the_router_hands_the_search_box_sentence_to_the_planner() -> None:
             said,
             out["resolved_intents"],
         )
+
+
+@pytest.mark.parametrize(
+    ("said", "name"),
+    [
+        # Production 2026-09-19 16:48, as Chrome's recogniser wrote them ("şu an", not "şu anki"):
+        (
+            "şu an sekmedeki Pakistan video Olimpiyatları videosunu aç",
+            "Pakistan video Olimpiyatları",
+        ),
+        (
+            "şu an sekmedeki rastgele ürünler toplu paket açılışı videosunu aç",
+            "rastgele ürünler toplu paket açılışı",
+        ),
+        ("şuan ekrandaki Tosun Paşa videosuna tıkla", "Tosun Paşa"),
+    ],
+)
+def test_a_title_keeps_its_own_video_word_and_loses_the_recognisers_filler(
+    said: str, name: str
+) -> None:
+    """The picture was asked for "an Pakistan": "an" is how Chrome writes "şu anki", and the
+    name was cut at the title's OWN "video" instead of at the sentence's closing "videosunu
+    aç"."""
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == ["click_text"], m.as_dict()
+    assert m.steps[0].args["name"] == name

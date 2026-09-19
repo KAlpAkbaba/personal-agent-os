@@ -284,6 +284,13 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     device is an immediate, truthful failure raised from HERE — never a "running"
     the pipeline will never make good on.
     """
+    if not str(arguments.get("topic") or "").strip():
+        # ADR-0173: a router-only client sends no arguments; the topic is the one the
+        # router read from the owner's own sentence on THIS turn. A model's topic, when
+        # there is a model, is still used as it always was.
+        spoken_topic = (_turn_record(ctx) or {}).get("research_topic")
+        if isinstance(spoken_topic, str) and spoken_topic.strip():
+            arguments = {**arguments, "topic": spoken_topic.strip()}
     topic = _require_str(arguments, "topic", max_len=500)
     scope = str(arguments.get("scope") or "genel")[:500]
     if ctx.db is None:

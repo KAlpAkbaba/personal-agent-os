@@ -1622,6 +1622,15 @@ _TARGET_FILLERS: Final[frozenset[str]] = frozenset(
         # "şu anki YouTube sekmesindeki Tosun Paşa videosunu aç" (owner, 2026-09-19): the tab
         # and the site place the video; the picture is asked for "Tosun Paşa", nothing else.
         "anki",
+        # Chrome's recogniser writes "şu an sekmedeki", "şuan", "şu anda" (2026-09-19): the
+        # picture was asked for "an Pakistan".
+        "an",
+        "anda",
+        "şuan",
+        "suan",
+        "şuanki",
+        "şimdi",
+        "simdi",
         "şimdiki",
         "simdiki",
         "geçerli",
@@ -1695,14 +1704,22 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     has_verb = any(t in _OPEN_OR_CLICK_WORDS or t.startswith(_CLICK_VERB_STEMS) for t in tokens)
     if not has_verb or not (has_video or has_click or on_screen):
         return None
-    words: list[str] = []
+    heads: list[tuple[str, str]] = []
     for word in raw.split():
         bare = word
         for mark in _APOSTROPHES:
             bare = bare.split(mark, 1)[0]
-        head = _head(bare)  # "YouTube'da" is the site + a suffix, never a name (2026-09-19)
-        if _is_trigger(head):
-            break
+        # "YouTube'da" is the site + a suffix, never a name (2026-09-19)
+        heads.append((word, _head(bare)))
+    # The name ends where the sentence's CLOSING run of trigger words begins ("... videosunu
+    # aç"), not at the first trigger-looking word: a title may carry one itself. Production
+    # 2026-09-19 16:48: "Pakistan video Olimpiyatları videosunu aç" was cut at its own
+    # "video" and the picture was asked for "Pakistan".
+    cut = len(heads)
+    while cut > 0 and (_is_trigger(heads[cut - 1][1]) or not heads[cut - 1][1]):
+        cut -= 1
+    words: list[str] = []
+    for word, head in heads[:cut]:
         if head in _TARGET_FILLERS:
             continue
         words.append(word.strip(_WORD_EDGE_PUNCTUATION))
