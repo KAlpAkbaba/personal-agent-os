@@ -303,7 +303,7 @@ def _evidence(count: int) -> list[EvidenceRecord]:
 
 
 def _thin_report_json(count: int) -> dict:
-    result, reasons = synthesize_thin(
+    result, reasons, _provider_name = synthesize_thin(
         TOPIC,
         _evidence(count),
         recency_label=RECENCY_LABEL,
@@ -328,7 +328,7 @@ def test_both_failed_runs_now_end_ready_and_thin_instead_of_failing(evidence_cou
     owner as "yeterli doğrulanmış kaynak bulamadım" although real, defensible findings
     existed. Both now produce a report, and the report says how thin it is."""
     assert evidence_count < MIN_REPORT_FINDINGS  # still short of a FULL report
-    result, reasons = synthesize_thin(
+    result, reasons, _provider_name = synthesize_thin(
         TOPIC, _evidence(evidence_count), recency_label=RECENCY_LABEL, mode=MODE_QUICK
     )
     assert len(result.findings) == evidence_count

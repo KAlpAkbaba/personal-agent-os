@@ -218,6 +218,101 @@ class EvidenceRecord:
         )
 
 
+# --------------------------------------------------------------- content_text
+#
+# 2026-09-19 incident (docs/DECISIONS.md ADR addendum after ADR-0173): the owner asked
+# for research and only ever heard source TITLES. Root cause chain: the device excerpt
+# was capped at 1200 chars (raised elsewhere, see DEFAULT_EXCERPT_CHARS in
+# app.research.browser_gateway) and that whole budget was routinely spent on page chrome
+# a real browser renders before the article - a Hacker News page's nav bar
+# ("Hacker Newsnew | past | comments | ask | show | jobs | submit"), a byline breadcrumb
+# ("Gaming Industry / Features / By Wes Fenlon / Published ...") - because innerText
+# extraction reads top-to-bottom and truncates from the start. Nothing downstream ever
+# separated "the chrome the page front-loads" from "the article a person would call the
+# content", so topic relevance, the synthesis prompt and even the deterministic
+# provider's quoted excerpt all scored/echoed chrome text instead of the story.
+#
+# This is deliberately simple and language-neutral (tr/en) rather than a real
+# boilerplate-removal model: a real device-side main-content extraction (e.g. reading
+# `<article>`/`<main>` specifically) is the honest long-term fix and is out of scope
+# here (a device release, not a Cloud-Core-only change) - see the ADR addendum.
+
+_CHROME_SEPARATOR_RE = re.compile(r"\s*(?:\||/|»|›|>)\s*")
+_SENTENCE_PUNCT_RE = re.compile(r"[.!?…]")
+_BYLINE_RE = re.compile(
+    r"^(by\s+\S|published\b|updated\b|güncellendi\b|yayın(lanma)?\s*tarih"
+    r"|son güncelleme|yazar\s*:)",
+    re.IGNORECASE,
+)
+
+#: A nav-bar/breadcrumb line splits into several short, punctuation-free segments
+#: ("Hacker Newsnew", "past", "comments", "ask", ...) — real prose practically never
+#: does, even when it happens to contain a "/" or "|" character.
+_CHROME_MAX_SEGMENT_CHARS = 30
+_CHROME_MIN_SEGMENTS = 3
+
+#: Below this many characters, a line with no sentence-ending punctuation reads as a
+#: fragment (a nav label, a byline, a "128 points | hide | past | favorite" score line)
+#: rather than a sentence — a real sentence this short would be unusually terse, and the
+#: cost of dropping one such genuine one-liner is far lower than the cost of keeping a
+#: whole page's worth of chrome lines this rule is actually aimed at.
+_SHORT_LINE_CHARS = 80
+
+#: `content_text` falls back to the raw excerpt when filtering would leave less than
+#: this many characters — either a genuinely all-chrome page (nothing to prefer over the
+#: raw text) or a single-line excerpt with no newlines to filter on at all.
+_CONTENT_TEXT_MIN_SURVIVING_CHARS = 40
+
+
+def _is_nav_bar_line(stripped: str) -> bool:
+    segments = [s for s in _CHROME_SEPARATOR_RE.split(stripped) if s]
+    if len(segments) < _CHROME_MIN_SEGMENTS:
+        return False
+    return all(
+        len(s) <= _CHROME_MAX_SEGMENT_CHARS and not _SENTENCE_PUNCT_RE.search(s) for s in segments
+    )
+
+
+def _is_chrome_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if _is_nav_bar_line(stripped):
+        return True
+    if _BYLINE_RE.match(stripped):
+        return True
+    return len(stripped) < _SHORT_LINE_CHARS and not _SENTENCE_PUNCT_RE.search(stripped)
+
+
+def content_text(excerpt: str) -> str:
+    """Best-effort page-chrome removal: drop nav bars, breadcrumbs, bylines and other
+    short, punctuation-free lines a page front-loads before its real prose, keeping only
+    the paragraphs a person would call "the article".
+
+    Deterministic and tr/en neutral: a line is chrome when it is blank, reads as a
+    nav-bar/breadcrumb (several short segments split on "|"/"/"/"»"/"›"/">"), matches a
+    byline pattern ("By ...", "Published ...", "Yayın tarihi ...", ...), or is simply
+    short with no sentence-ending punctuation at all. Falls back to the raw excerpt when
+    filtering would leave (almost) nothing — a page that is genuinely all chrome, or an
+    excerpt with no line breaks to filter on, still has to be scored/summarized on
+    SOMETHING rather than an empty string.
+
+    Used wherever page CONTENT (not provenance, not raw storage) is needed: topic
+    relevance (:func:`app.research.eligibility.topic_relevance`), the synthesis prompt's
+    per-source excerpt, and the deterministic provider's quoted ``source_fact`` text. The
+    STORED evidence excerpt (``EvidenceRecord.excerpt``) is never replaced by this — it
+    stays the raw device excerpt for provenance/audit.
+    """
+    if not excerpt or not excerpt.strip():
+        return excerpt
+    lines = excerpt.split("\n")
+    kept = [line.strip() for line in lines if not _is_chrome_line(line)]
+    survivor = "\n".join(kept).strip()
+    if len(survivor) < _CONTENT_TEXT_MIN_SURVIVING_CHARS:
+        return excerpt
+    return survivor
+
+
 def validate_label(label: str) -> str:
     if label not in STATEMENT_LABELS:
         raise ValueError(f"unknown statement label {label!r}; must be one of {STATEMENT_LABELS}")
@@ -402,6 +497,7 @@ __all__ = [
     "TITLE_DEDUP_JACCARD_THRESHOLD",
     "EvidenceRecord",
     "LabelledStatement",
+    "content_text",
     "dedup_and_rank",
     "validate_label",
 ]

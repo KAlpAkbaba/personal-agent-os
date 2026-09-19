@@ -53,7 +53,11 @@ from app.memory.service import remember_explicit
 from app.memory.types import MemoryClass
 from app.research import challenge as challenge_policy
 from app.research import discovery, eligibility, runs_service, sources
-from app.research.browser_gateway import BrowserDispatchError, DeviceBrowserGateway
+from app.research.browser_gateway import (
+    DEFAULT_EXCERPT_CHARS,
+    BrowserDispatchError,
+    DeviceBrowserGateway,
+)
 from app.research.contracts import (
     ERROR_INSUFFICIENT_VALID_EVIDENCE,
     ERROR_INSUFFICIENT_VALID_FINDINGS,
@@ -93,7 +97,11 @@ from app.research.report import (
     render_research_markdown,
     run_provenance_gate,
 )
-from app.research.synthesis import resolve_synthesis_provider, synthesize_thin
+from app.research.synthesis import (
+    DeterministicSynthesisProvider,
+    resolve_synthesis_provider,
+    synthesize_thin,
+)
 from app.uistate import UiState
 from app.uistate import publish as publish_ui
 
@@ -447,6 +455,7 @@ def discover_activity(
                 _command_client(),
                 device_id=uuid.UUID(device_id),
                 task_id=task_id,
+                excerpt_chars=DEFAULT_EXCERPT_CHARS,
                 search_provider=search_provider or get_settings().research_search_provider,
             )
             try:
@@ -975,6 +984,7 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
         device_id=uuid.UUID(device_id),
         task_id=task_id,
         timeout_s=policy.per_page_timeout_s,
+        excerpt_chars=DEFAULT_EXCERPT_CHARS,
     )
     try:
         # tab="new" (spec §5a): fetch in a separate tab so the job's persistent
@@ -1079,7 +1089,10 @@ def await_verification_activity(
     if heartbeat_fn is not None:
         heartbeat_fn()
     gateway = DeviceBrowserGateway(
-        _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+        _command_client(),
+        device_id=uuid.UUID(device_id),
+        task_id=task_id,
+        excerpt_chars=DEFAULT_EXCERPT_CHARS,
     )
     try:
         result = gateway.await_verification(
@@ -1513,14 +1526,28 @@ def synthesize_activity(
         synthesis_attempts: list[dict[str, Any]] = []
         requested_provider: str | None = None
         if thin:
-            provider = resolve_synthesis_provider("deterministic", settings)
-            result, thin_reasons = synthesize_thin(
+            # R4 (2026-09-19 incident): resolve the SAME candidate the owner/settings
+            # actually asked for (synthesis_name), not a hardcoded "deterministic" -
+            # synthesize_thin only uses it when it is a configured, non-deterministic
+            # provider, and truthfully reports back which one actually answered
+            # (never claims a model spoke when it silently fell back). This also lets
+            # the existing requested-vs-used fallback recording below (originally
+            # built for the non-thin branch) apply here for free.
+            candidate_provider = resolve_synthesis_provider(synthesis_name, settings)
+            requested_provider = candidate_provider.name
+            result, thin_reasons, used_provider_name = synthesize_thin(
                 topic,
                 primary_only,
                 recency_label=window_json["label"],
                 mode=str(stats_in.get("mode") or policy.mode),
                 cooled_domains=len(progress.get("cooled_domains") or []),
                 rejected_by_reason=rejected_by_reason,
+                provider=candidate_provider,
+            )
+            provider = (
+                candidate_provider
+                if used_provider_name == candidate_provider.name
+                else DeterministicSynthesisProvider()
             )
             runs_service.update_run(
                 session,
@@ -1925,7 +1952,10 @@ def remember_activity(task_id: str, topic: str) -> str | None:
 def close_session_activity(task_id: str, device_id: str) -> bool:
     task_id_var.set(task_id)
     gateway = DeviceBrowserGateway(
-        _command_client(), device_id=uuid.UUID(device_id), task_id=task_id
+        _command_client(),
+        device_id=uuid.UUID(device_id),
+        task_id=task_id,
+        excerpt_chars=DEFAULT_EXCERPT_CHARS,
     )
     gateway._session_opened = True  # best-effort close regardless of local tracking
     try:

@@ -8,6 +8,7 @@ from app.research.evidence import (
     STATEMENT_LABELS,
     EvidenceRecord,
     LabelledStatement,
+    content_text,
     dedup_and_rank,
 )
 
@@ -251,3 +252,77 @@ def test_a_number_in_a_stored_text_field_is_a_named_violation() -> None:
     with pytest.raises(ContractViolation) as excinfo:
         EvidenceRecord.from_dict(_stored(title=5))
     assert excinfo.value.as_dict()["reason"] == "number_is_not_text"
+
+
+# ---------------------------------------------------------------------------
+# content_text (2026-09-19 incident, docs/DECISIONS.md ADR addendum after ADR-0173)
+#
+# Production run 817c558a: every evidence excerpt was exactly 1200 chars and started
+# with page chrome ("Hacker Newsnew | past | comments | ask ...", "Gaming Industry /
+# Features / By Wes Fenlon / Published ...") because innerText extraction reads
+# top-to-bottom and the fetch cap was spent entirely on nav/byline text before any
+# real prose. These two fixtures are shaped exactly like those two pages.
+# ---------------------------------------------------------------------------
+
+_HN_REAL_SENTENCE = (
+    "OpenAI duyurdu: yeni ajan çerçevesi büyük dil modellerini araç çağırma "
+    "protokolüyle birleştiriyor. Şirket, geliştiricilerin otonom görev planlaması "
+    "yapabilen ajanlar inşa etmesini kolaylaştırdığını belirtti. Kurumsal erişimin "
+    "önümüzdeki hafta başlayacağı açıklandı."
+)
+
+_HN_SHAPED_EXCERPT = (
+    "Hacker Newsnew | past | comments | ask | show | jobs | submit\n"
+    "login\n"
+    "OpenAI announces new agent framework\n"
+    "128 points by someone 3 hours ago | hide | past | favorite | 42 comments\n"
+    f"{_HN_REAL_SENTENCE}"
+)
+
+_PCGAMER_REAL_PARAGRAPH = (
+    "AI vibe coding is reshaping how indie developers ship games faster than ever, "
+    "according to several studio founders interviewed this week. The tools let a "
+    "coding agent iteratively write and test small changes while a human reviews the "
+    "diff, cutting weeks of engineering time down to days for some prototypes."
+)
+
+_PCGAMER_SHAPED_EXCERPT = (
+    f"Gaming Industry / Features / By Wes Fenlon / Published 2 hours ago\n{_PCGAMER_REAL_PARAGRAPH}"
+)
+
+
+def test_content_text_drops_hacker_news_chrome_and_keeps_the_real_sentence() -> None:
+    survivor = content_text(_HN_SHAPED_EXCERPT)
+    assert _HN_REAL_SENTENCE in survivor
+    assert "Hacker Newsnew" not in survivor
+    assert "login" not in survivor.splitlines()
+    assert "128 points" not in survivor
+
+
+def test_content_text_drops_pcgamer_breadcrumb_byline_and_keeps_the_paragraph() -> None:
+    survivor = content_text(_PCGAMER_SHAPED_EXCERPT)
+    assert _PCGAMER_REAL_PARAGRAPH in survivor
+    assert "Gaming Industry" not in survivor
+    assert "By Wes Fenlon" not in survivor
+    assert "Published" not in survivor
+
+
+def test_content_text_falls_back_to_raw_excerpt_when_nothing_survives() -> None:
+    all_chrome = "Home | Reviews | Deals\nBy Someone\nPublished today"
+    assert content_text(all_chrome) == all_chrome
+
+
+def test_content_text_is_a_noop_on_a_plain_single_line_excerpt() -> None:
+    """A single-line excerpt with no newlines to filter on (e.g. the offline test
+    gateway's synthetic pages) survives unchanged rather than being misclassified
+    as one giant chrome line."""
+    plain = (
+        "Yapay zeka ajanları konusunda haber kaynağında yer alan gelişme duyuruldu ve "
+        "ilk kullanıcılara açıldı, kurumsal erişimin bu hafta başlayacağı belirtildi."
+    )
+    assert content_text(plain) == plain
+
+
+def test_content_text_handles_empty_and_blank_input() -> None:
+    assert content_text("") == ""
+    assert content_text("   ") == "   "

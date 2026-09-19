@@ -639,3 +639,111 @@ def test_evaluate_candidate_reason_is_always_from_rejection_vocabulary() -> None
         topic=TOPIC,
     )
     assert verdict.reason in REJECTION_REASONS
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-19 incident: cross-language topic relevance + chrome-diluted scoring
+#
+# Production run 817c558a, topic "Yapay zeka ile ilgili son haberler" ("news about
+# AI", not the AI-agent-specific TOPIC used above): an English article about AI
+# coding tools scored topic_relevance 0.0 and a second one 0.2167, both rejected
+# off_topic, although both were plainly about the topic. Root causes fixed here:
+# (1) the topic's own Turkish words never matched an English page at all — no
+# cross-language signal existed; (2) "haberler" (news) had no Turkish stopword
+# entry even though its English counterpart did, quietly counting a filler word
+# as topic-specific and diluting the real signal; (3) a page's own nav-bar/byline
+# chrome was scored right alongside its real content.
+# ---------------------------------------------------------------------------
+
+PRODUCTION_TOPIC = "Yapay zeka ile ilgili son haberler"
+
+
+def test_english_ai_coding_article_clears_the_relevance_floor_for_a_turkish_ai_topic() -> None:
+    """The production incident's own example: an English article that is plainly
+    about AI (not agents specifically) must clear MIN_TOPIC_RELEVANCE against the
+    Turkish topic "Yapay zeka ile ilgili son haberler" -- cross-language token
+    overlap (via the same tr->en term map discovery already uses) is what makes
+    the owner's own topic words findable in an English-only page.
+    """
+    score = topic_relevance(
+        topic=PRODUCTION_TOPIC,
+        title="AI coding tools are changing how indie game studios ship faster",
+        excerpt=(
+            "AI coding tools are reshaping how indie developers ship games faster "
+            "than ever, according to several studio founders interviewed this week. "
+            "These artificial intelligence powered assistants let a developer "
+            "describe a feature in plain English while the tool writes and iterates "
+            "on the implementation, cutting weeks of engineering time down to days. "
+            "Several studios said the approach works best for prototyping systems "
+            "that would otherwise take months to hand code, though founders "
+            "cautioned that AI generated code still needs careful review before "
+            "shipping."
+        ),
+    )
+    assert score >= 0.35
+
+
+def test_unrelated_english_article_still_scores_off_topic_for_the_same_turkish_topic() -> None:
+    """The fix above must not turn every English page on-topic: an article with
+    no AI content at all stays below the floor."""
+    score = topic_relevance(
+        topic=PRODUCTION_TOPIC,
+        title="Best Budget Gaming Mice of 2026",
+        excerpt=(
+            "We tested a dozen budget gaming mice this month to find which ones "
+            "offer the best value for competitive play. Sensor accuracy, click "
+            "latency and build quality were our top priorities during testing. The "
+            "winner combines a lightweight shell with a reliable optical sensor at "
+            "a price point most players can afford."
+        ),
+    )
+    assert score < 0.35
+
+
+def test_evaluate_candidate_admits_the_english_ai_article_end_to_end() -> None:
+    """The same page through the full gate (page validity + recency + the fix
+    above), not just the scoring function in isolation."""
+    verdict = evaluate_candidate(
+        title="AI coding tools are changing how indie game studios ship faster",
+        excerpt=(
+            "AI coding tools are reshaping how indie developers ship games faster "
+            "than ever, according to several studio founders interviewed this week. "
+            "These artificial intelligence powered assistants let a developer "
+            "describe a feature in plain English while the tool writes and iterates "
+            "on the implementation, cutting weeks of engineering time down to days. "
+            "Several studios said the approach works best for prototyping systems "
+            "that would otherwise take months to hand code, though founders "
+            "cautioned that AI generated code still needs careful review before "
+            "shipping."
+        ),
+        topic=PRODUCTION_TOPIC,
+        published_at="2026-09-17T10:00:00Z",
+        window_start="2026-09-15T00:00:00Z",
+        window_end="2026-09-18T23:59:59Z",
+    )
+    assert verdict.eligible is True
+    assert verdict.reason is None
+
+
+def test_topic_relevance_scores_page_content_not_its_own_nav_bar() -> None:
+    """A page's nav bar/breadcrumb chrome must not itself decide relevance: a nav
+    bar that happens to mention "Artificial Intelligence"/"AI" as a site category
+    must not make an unrelated article (about gaming mice, not AI) score higher
+    than the same article without that chrome — topic_relevance scores
+    :func:`app.research.evidence.content_text`, not the raw excerpt."""
+    real_content = (
+        "We tested a dozen budget gaming mice this month to find which ones offer "
+        "the best value for competitive play. Sensor accuracy, click latency and "
+        "build quality were our top priorities during testing. The winner combines "
+        "a lightweight shell with a reliable optical sensor at a price point most "
+        "players can afford."
+    )
+    plain_score = topic_relevance(
+        topic=PRODUCTION_TOPIC, title="Best Budget Gaming Mice of 2026", excerpt=real_content
+    )
+    nav_polluted_score = topic_relevance(
+        topic=PRODUCTION_TOPIC,
+        title="Best Budget Gaming Mice of 2026",
+        excerpt="Home | Artificial Intelligence | AI | Reviews | Guides | Deals\n" + real_content,
+    )
+    assert nav_polluted_score == plain_score

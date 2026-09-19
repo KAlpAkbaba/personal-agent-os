@@ -37,6 +37,9 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.research.evidence import content_text
+from app.research.plan import english_core_query
+
 # ---------------------------------------------------------------------------
 # Diacritic folding (Turkish-aware)
 # ---------------------------------------------------------------------------
@@ -364,8 +367,48 @@ _STOPWORDS: frozenset[str] = frozenset(
         "gelismeler",
         "gelisme",
         "ilgili",
+        # "news" (above) had no Turkish counterpart here (2026-09-19 incident):
+        # "haberler"/"haber" was still scored as a topic-specific token, quietly
+        # diluting the token-overlap signal for the owner's routine "... ile ilgili
+        # son haberler" phrasing (a filler word counted as if it were meaningful).
+        "haberler",
+        "haber",
     }
 )
+
+
+def _cross_language_topic_tokens(topic: str) -> frozenset[str]:
+    """Cross-language augmentation for the token-overlap signal below (2026-09-19
+    incident, docs/DECISIONS.md ADR addendum after ADR-0173).
+
+    The owner phrases the topic in Turkish; a real, on-topic candidate is very often an
+    English-language page that never uses the Turkish wording at all
+    (topic "Yapay zeka ile ilgili son haberler" / an English article about AI coding
+    tools). ``app.research.plan.english_core_query`` already carries a deterministic
+    Turkish -> English term map built for exactly this gap (discovery's own English
+    query expansion) — reusing it here, instead of maintaining a second translation
+    table, is the least invasive fix: it means "yapay zeka" contributes the token "ai"
+    to the overlap check without duplicating the map that already turns "yapay zeka"
+    into "AI" for discovery.
+
+    The general token filter below drops anything <= 2 characters (noise-word
+    suppression); a short acronym ``english_core_query`` rendered in upper case (e.g.
+    "AI") is trusted to be exactly that — a high-signal term, not noise — and is kept
+    regardless of length. ``news``-type filler words are still dropped via the same
+    ``_STOPWORDS`` set the Turkish tokens are filtered through.
+    """
+    translated = english_core_query(topic)
+    if not translated:
+        return frozenset()
+    tokens: set[str] = set()
+    for word in translated.split():
+        is_acronym = word.isupper() and word.isalpha()
+        cleaned = re.sub(r"[^a-z0-9]", "", _fold(word))
+        if not cleaned or cleaned in _STOPWORDS:
+            continue
+        if len(cleaned) > 2 or is_acronym:
+            tokens.add(cleaned)
+    return frozenset(tokens)
 
 
 def topic_relevance(
@@ -389,12 +432,19 @@ def topic_relevance(
        spoken topic phrase doesn't literally contain every way an article
        might phrase "AI agent".
     2. Topic-token overlap -- non-stopword tokens shared between the `topic`
-       string itself and the title+excerpt, so a query about a narrower
-       sub-topic still gets credit for matching its own specific wording.
+       string itself (PLUS its cross-language augmentation, see
+       :func:`_cross_language_topic_tokens`) and the title+excerpt, so a query
+       about a narrower sub-topic still gets credit for matching its own
+       specific wording, in either language.
 
     Title matches count double: a candidate whose TITLE is on-topic is much
     more likely to actually be about the topic than one where a keyword
-    shows up once in a long excerpt.
+    shows up once in a long excerpt. ``excerpt`` is reduced to its own
+    :func:`app.research.evidence.content_text` before scoring -- a page's nav
+    bar/byline chrome must not itself decide relevance (2026-09-19 incident: a
+    stray "AI" in a site's own navigation menu must not make an unrelated page
+    score as on-topic, and real article prose must not be diluted by chrome
+    sharing none of the topic's words).
 
     The two signals are combined as ``0.65 * lexicon_score + 0.35 *
     token_overlap_score``, each independently capped at 1.0 before blending,
@@ -407,8 +457,9 @@ def topic_relevance(
     if not isinstance(title, str) or not isinstance(excerpt, str) or not isinstance(topic, str):
         return 0.0
 
+    content_excerpt = content_text(excerpt)
     title_folded = _fold(title)
-    excerpt_folded = _fold(excerpt)
+    excerpt_folded = _fold(content_excerpt)
     combined = f"{title_folded} {excerpt_folded}"
 
     lexicon_hits_title = _concept_weight(title_folded)
@@ -426,9 +477,10 @@ def topic_relevance(
     lexicon_score = min(1.0, lexicon_raw / 3.0)
 
     topic_tokens = {tok for tok in _tokens(topic) if tok not in _STOPWORDS and len(tok) > 2}
+    topic_tokens |= _cross_language_topic_tokens(topic)
     if topic_tokens:
         title_tokens = set(_tokens(title))
-        body_tokens = set(_tokens(excerpt))
+        body_tokens = set(_tokens(content_excerpt))
         title_overlap = len(topic_tokens & title_tokens)
         body_overlap = len(topic_tokens & body_tokens)
         overlap_raw = (2 * title_overlap) + body_overlap

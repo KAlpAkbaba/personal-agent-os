@@ -52,6 +52,19 @@ from app.research.forbidden_keys import find_forbidden_keys
 # no-wall-clock discipline, M3).
 _EPOCH = datetime(2026, 1, 1, tzinfo=UTC)
 
+#: How many characters of page text ``browser.fetch_evidence`` is asked for (2026-09-19
+#: incident, docs/DECISIONS.md ADR addendum after ADR-0173: production run 817c558a's
+#: excerpts were all exactly 1200 chars and started with page chrome — the old default
+#: — so the whole budget was routinely spent before the article's own text began).
+#: Bounded by the device result envelope's own cap, ``MAX_RESULT_BYTES = 48 KiB``
+#: (services/browser/browser_agent/worker.py, a device-side constant this module does
+#: not import — the two processes agree on the wire shape, not on Python objects, same
+#: as the rest of this module's boundary discipline). Worst-case UTF-8 is 4 bytes/char,
+#: so 48 KiB could in principle hold as few as ~12 KB of characters once other envelope
+#: fields (title/url/metadata/etc.) are accounted for; 8000 chars leaves comfortable
+#: headroom under that worst case while still being ~6.7x the old 1200-char default.
+DEFAULT_EXCERPT_CHARS = 8000
+
 
 logger = get_logger("app.research.browser_gateway")
 
@@ -431,7 +444,7 @@ class DeviceBrowserGateway:
         task_id: str,
         trace_id: str = "",
         timeout_s: float = 60.0,
-        excerpt_chars: int = 1200,
+        excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
         search_provider: str = "duckduckgo",
     ) -> None:
         self._client = command_client
@@ -728,6 +741,7 @@ def _parse_optional_dt(value: Any) -> datetime | None:
 
 
 __all__ = [
+    "DEFAULT_EXCERPT_CHARS",
     "SearchEvidence",
     "BrowserDispatchError",
     "BrowserGateway",

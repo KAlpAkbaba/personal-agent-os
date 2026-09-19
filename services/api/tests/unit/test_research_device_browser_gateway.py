@@ -9,6 +9,7 @@ import pytest
 from app.devices.commands import CommandExpired, CommandFailed, CommandSucceeded
 from app.research import destination
 from app.research.browser_gateway import (
+    DEFAULT_EXCERPT_CHARS,
     BrowserDispatchError,
     DeviceBrowserGateway,
     FetchQuery,
@@ -143,6 +144,43 @@ def test_fetch_url_payload_and_idempotency_key() -> None:
     assert record.injection_suspected is False
     assert record.device_id == str(DEVICE_ID)
     assert record.command_id  # populated from the command outcome (spec §3/§5)
+
+
+def test_fetch_url_requests_the_default_excerpt_size() -> None:
+    """2026-09-19 incident (docs/DECISIONS.md ADR addendum after ADR-0173): the
+    default excerpt request grew from 1200 chars (which production run 817c558a
+    showed was routinely spent entirely on page chrome) to DEFAULT_EXCERPT_CHARS."""
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "url": "https://a",
+                "excerpt": "x",
+                "fetched_at": "2026-09-03T09:00:00Z",
+                "extraction_method": "dom_text",
+            }
+        )
+    )
+    _gateway(client).fetch_url("https://a")
+    call = next(c for c in client.calls if c.capability == "browser.fetch_evidence")
+    assert call.payload["excerpt_chars"] == DEFAULT_EXCERPT_CHARS
+    assert DEFAULT_EXCERPT_CHARS > 1200
+
+
+def test_fetch_url_excerpt_chars_override_is_honoured() -> None:
+    client = FakeDeviceCommandClient(
+        default_outcome=CommandSucceeded(
+            {
+                "url": "https://a",
+                "excerpt": "x",
+                "fetched_at": "2026-09-03T09:00:00Z",
+                "extraction_method": "dom_text",
+            }
+        )
+    )
+    gw = DeviceBrowserGateway(client, device_id=DEVICE_ID, task_id=TASK_ID, excerpt_chars=500)
+    gw.fetch_url("https://a")
+    call = next(c for c in client.calls if c.capability == "browser.fetch_evidence")
+    assert call.payload["excerpt_chars"] == 500
 
 
 def test_fetch_url_flags_injection_markers() -> None:
