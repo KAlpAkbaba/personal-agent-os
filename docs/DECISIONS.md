@@ -13658,3 +13658,202 @@ tools and is told it cannot act; EXPLAIN questions about the system's own state 
 to it (it cannot see that state); context is a few turns in process memory only, never in
 the database; a paid session's model that calls the tool finds no question and spends
 nothing.
+
+## ADR-0178 — An OCR-read article was scored on its nav bar, an "AI" the OCR misread as "Al" was invisible, the topic's own subject wasn't enough to find an English page about it, discovery had no Turkish source of its own, and a failed run's own words were a stack trace (2026-09-19)
+
+The owner: *"Araştırma başarısız oldu dedi, bir de araştırma hep yabancı kaynaklara
+gidiyor"* ("it said the research failed, and also research always goes to foreign
+sources"). Diagnosed against production run `6f96cd51` (topic "yapay zeka ile ilgili
+haberleri", quick mode, `research_browser=owner`): the owner-Chrome/OCR fetch path from
+ADR-0177 worked — 11 pages read, excerpts 2.4k–10k chars — but the plan's queries included
+the doubled `"yapay zeka ile ilgili haberleri haberleri"` and `"AI news news"`; every one of
+the 11 fetched pages was English (huggingface.co, newleftreview.org, arxiv.org,
+independent.co.uk, blog.google, bloomberglaw, …); the quality gate kept only 3, all `off_topic`
+at 0.2167 / 0.0437 / 0.2604 against the 0.35 floor; and the run ended
+`insufficient_valid_evidence: 0 contract-valid item(s), 3 required` — text the owner heard
+verbatim as "araştırma başarısız oldu", with no idea 11 pages had in fact been read.
+
+Five independent gaps, all in `services/api/app/research/**`:
+
+**A. `content_text` (`app/research/evidence.py`) was written for a real browser's
+`innerText`, where one line break already is a paragraph boundary — a genuine nav-bar/byline
+line there really is short and punctuation-free, and real prose lines are whole sentences. An
+`owner_browser_ocr` excerpt (ADR-0177) has neither property: one "line" is one screen ROW the
+device's OCR recognised text on, so a wrapped sentence is many consecutive short rows, none
+carrying closing punctuation until the last one. Run directly through the old per-line filter,
+that shape loses nearly the whole article and leaves relevance to be scored on whatever
+happened to end in a period within 80 characters — measured directly:
+`tests/unit/test_research_evidence.py::test_content_text_without_ocr_extraction_method_drops_the_same_lines_wholesale`.
+Fix: `content_text` takes a new `extraction_method: str = ""` keyword (threaded through
+`app.research.eligibility.topic_relevance`/`evaluate_candidate`,
+`app.research.synthesis._detail_statement`/`_evidence_payload` — every existing caller of
+either now passes `EvidenceRecord.extraction_method`, and every one of them is unaffected when
+omitted). For `owner_browser_ocr` specifically, a new `_reflow_ocr_lines` pass runs BEFORE the
+ordinary chrome filter: a genuine nav-bar row (multi-segment on its own), a byline row, a bare
+date row ("18 SEPTEMBER 2026"), and a new `_is_ocr_menu_label_line` shape (a short, 1–3-word,
+ALL-CAPS-ish row with no sentence punctuation — "HOME", "PRİNT", a byline NAME in caps) are
+each dropped individually and never merged; a genuinely blank row ends the current paragraph;
+everything else is joined with a single space into one running paragraph, which the existing
+short-line filter then judges as a WHOLE (a heading immediately followed by body text lands in
+the same paragraph as that body text, and survives). `EXTRACTION_METHOD_OWNER_BROWSER_OCR` is
+now defined in `evidence.py` (not `owner_browser_gateway.py`, to avoid a cycle — that module's
+own `EXTRACTION_METHOD` name is re-exported from it unchanged).
+
+**B. A small, deliberately narrow OCR-confusable fold.** "Al" (capital A + lowercase L) and
+"AI" (capital A + capital I) are visually identical in many display fonts a screen-OCR pass
+reads from a live window — production shape: "THE Al DAILY BRIEF" for "THE AI DAILY BRIEF".
+`app.research.eligibility._fold_ocr_confusables` corrects exactly this ONE confusion (a
+`(?<![A-Za-z0-9])Al(?![A-Za-z0-9])` token match), applied to the title and content ONLY when
+`extraction_method == "owner_browser_ocr"` — never to a real browser's `dom_text`, where "Al"
+is far more likely a genuine name ("Al Gore"). Deliberately does not attempt "NEVİS" ->
+"NEWS" or similar: per the incident's own framing, "not recoverable, do not over-reach".
+
+**C. The topic's own subject didn't carry the score.** `topic_relevance` already had a
+cross-language token-overlap signal (ADR-0174) mapping "yapay zeka" -> the bare token "ai" via
+`app.research.plan.english_core_query`. That is not enough for a page that discusses OpenAI,
+Anthropic or LLM benchmarks without ever spelling out "AI" as its own word. First attempt —
+folding a hand-picked AI entity/vocabulary set (`openai`, `anthropic`, `llm`, `gemini`, …)
+directly into that SAME token set — regressed an existing, already-passing test
+(`test_english_ai_coding_article_clears_the_relevance_floor_for_a_turkish_ai_topic`): those
+extra tokens also grow the token-overlap score's own normalization denominator
+(`2 * len(topic_tokens)`), so a typical single-topic article that names only one or two of
+them scored WORSE, not better. Fix (kept in `eligibility.py`, see
+`test_ai_subject_bonus_does_not_dilute_the_existing_cross_language_token_score` guarding the
+regression directly): `_cross_language_topic_tokens` is unchanged from ADR-0174; a NEW,
+separate, small, capped, ADDITIVE `_ai_subject_bonus` (`0.05` per distinct hit, capped at
+`0.15`) fires only when that cross-language mapping already produced the bare "ai" token (the
+topic's own subject is generically AI) and the page names one of `_AI_SUBJECT_SYNONYMS`. Small
+enough that it can never by itself carry an unrelated page across `MIN_TOPIC_RELEVANCE`
+(`test_ai_subject_bonus_does_not_inflate_an_unrelated_pages_score_above_the_floor`); the floor
+itself (0.35) is untouched, per instruction — "do not just lower the floor".
+
+Before/after on representative reconstructions of the production run's own shape (topic
+"yapay zeka ile ilgili haberleri", OCR-shaped excerpts, A+B+C combined —
+`tests/unit/test_research_eligibility.py::test_production_shaped_ocr_ai_page_clears_the_floor_after_the_fix`
+/ `test_production_shaped_unrelated_ocr_page_stays_off_topic_after_the_fix`):
+
+| candidate (OCR-shaped) | before | after |
+|---|---|---|
+| blog.google-shaped Gemini announcement | 0.0 | **0.4042** (clears the 0.35 floor) |
+| independent.co.uk-shaped AI-industry lawsuit story | 0.0 | 0.3021 (real, measured improvement — stays below the floor; a labour-practices lawsuit that only tangentially involves AI companies is legitimately weaker AI-topic signal than a product announcement, and this fix does not manufacture false positives to compensate) |
+| arxiv.org-shaped LLM-agent benchmark abstract | 0.65 | 0.65 (already well above the floor via the existing agent/agentic lexicon) |
+| unrelated Turkish headphones review, OCR-shaped | — | 0.0 (stays firmly off-topic) |
+
+The exact production run's own three reject scores (0.2167/0.0437/0.2604) cannot be
+reproduced exactly without the production pages' own text, which was not retained; the table
+above is the closest honest reconstruction from the incident report's own description of each
+page, run through the actual fixed code.
+
+**D. Discovery had no Turkish source of its own, and the plan sent doubled queries.**
+
+1. *Doubled queries* (`app/research/plan.py`, `expand_queries`). A topic already ending in
+   "haberleri" got `"{topic} haberleri"` appended anyway — `"... haberleri haberleri"` — and
+   `english_core_query` mapping "haberleri" -> "news" meant the English core query already
+   ended in "news" before `"{core} news"` doubled it again — `"AI news news"`, the literal
+   query a live QUICK run (`discovery_queries_max = 2`) spent one of its two discovery slots
+   on. Fixed by three guards (skip appending "haberleri"/"son gelişmeler"/"news" when the text
+   already ends with, or for "gelişme" already contains, that exact word) plus a new
+   `_bare_subject` (repeatedly strips ONE trailing filler phrase — "ile ilgili", "hakkında",
+   "haberleri", "son gelişmeler", … — never touching the front, where a relative-date phrase
+   belongs to `app.research.dates` instead) that adds the owner's own desired shape
+   ("yapay zeka haberleri", "yapay zeka son gelişmeler") as two ADDITIONAL queries whenever the
+   reduction removes something — the original, full-phrasing queries are never deleted.
+2. *Turkish search region.* `DeviceBrowserGateway.search` (`browser_gateway.py`) now sends
+   `region: "tr-tr"` on the `browser.search` payload for a Turkish-worded query (a new,
+   dependency-free `app.research.plan.looks_turkish` heuristic: Turkish-specific letters, or,
+   for an ASCII-typed Turkish sentence, a handful of common Turkish function words) — an
+   ADDITIVE field only. **Not done**: the device/worker side actually honouring `region` is a
+   separate, device-side change; this ADR only establishes that Cloud Core asks for it.
+3. *A Turkish source registry.* `app.research.sources.TURKISH_NEWS_REGISTRY` — Webrazzi,
+   ShiftDelete.Net, DonanımHaber, Webtekno, NTV Teknoloji, Evrim Ağacı, BBC Türkçe — each
+   `feed_url` probed live on 2026-09-19 (`curl -sL -A "Mozilla/5.0" <url>`, HTTP 200/301 and a
+   parseable RSS/Atom body):
+   - `https://webrazzi.com/feed` → 200, `application/rss+xml`
+   - `https://www.shiftdelete.net/feed` → 301 → 200, `application/rss+xml`
+   - `https://www.donanimhaber.com/rss/tum/` → 200, `text/xml`
+   - `https://www.webtekno.com/rss.xml` → 200, `application/rss+xml`
+   - `https://www.ntv.com.tr/teknoloji.rss` → 200, `application/xml` (Atom body)
+   - `https://evrimagaci.org/rss.xml` → 200, `text/xml`
+   - `https://www.bbc.com/turkce/index.xml` → 200, `text/xml`, RSS body (`<title>BBC Turkish</title>`)
+
+   Tried and DROPPED (a feed you cannot verify is not added): TRT Haber's bilim-teknoloji
+   -specific paths (`/rss/bilim_ve_teknoloji.xml`, `/webservis/rss/haber/kategori/bilim-teknoloji.rss`
+   — both 404; TRT's general `manset_articles.rss` DOES answer but is out of scope, a
+   bilim/teknoloji-specific feed was what was wanted) and Anadolu Ajansı's `aa.com.tr/tr/rss/*`
+   endpoints (curl exit 28 / HTTP 000 — did not answer at all from this network). A new
+   `discover_activity` step (`browser_activities._turkish_news_candidates`) fetches this
+   registry, in ADDITION TO (never instead of) the browser-search candidates, for a
+   Turkish-worded "news" query — once per run (the first query, `"news:0"`; the registry
+   itself doesn't change with query wording, and candidate rows dedupe by URL regardless).
+4. *HN/arXiv discovery narrowed for a plain Turkish news topic.* `build_plan`'s default source
+   classes (news/official/technical/academic/community — never a caller's own explicit
+   override) drop `technical`/`academic` when the topic is Turkish-worded and names no
+   technical/academic/agent marker (`_wants_academic_and_technical`, reusing the same
+   `_AGENT_DOMAIN_MARKERS` the entity sub-queries already use, plus a short
+   arxiv/paper/framework/github/protocol list) — the production run spent two of its five
+   source-class × query discovery passes on HN Algolia and arXiv, which answered nothing
+   usable for a general AI-news request. An English-worded topic is unaffected (this heuristic
+   never makes an English request MORE restrictive), and an agent/technical topic keeps the
+   full default set even in Turkish.
+
+**E. A run with zero valid evidence had no Turkish sentence at all — its own stack trace WAS
+the sentence.** `app.voice.realtime_sessions.research_announcer` (out of scope, `app/voice/**`)
+answers a STAGE_FAILED run's completed tool call with `{"error_class": "research_failed",
+"message": run.error}` WITHOUT ever reading the report — so `ResearchRunRow.error`, set by
+`fail_run_activity` to the raw `str(InsufficientValidEvidence)`
+("`ranking: 0 contract-valid item(s), 3 required; 0 quarantined`"), was literally the only
+thing the owner could ever hear for this failure shape, and `app.research.result.spoken_result`
+(the module that DOES compose an honest, count-free Turkish sentence) was never reached at
+all. Fixed entirely within `app/research/**`, since the announcer's own dispatch logic is not:
+a new `app.research.result.insufficient_run_narration(*, fetched, rejected_by_reason)` composes
+an honest, Turkish sentence from the run's own counts — `ResearchRunRow.progress_json
+["fetch_done"]` (written by `fetch_activity`) and `["rejected_by_reason"]` (written by
+`rank_activity`'s quality gate, `app.research.eligibility`) — naming the single most common
+rejection reason ("hiçbiri konuyla yeterince ilgili bulunmadı" for `off_topic`,
+"tarihlerini doğrulayamadım" for `date_uncertain`/`outside_recency_window`, etc.), or "bu
+konuda okunabilecek bir sayfa bulamadım" when nothing was fetched at all. Unlike
+`spoken_result` (which must NEVER mention a count — the M18.2 DEFECT 2 / ADR-0067 invariant,
+protecting the ROUTINE completion narration), this function is deliberately count-aware
+("N sayfa okudum") — that is exactly what the owner asked for, and it exists for a
+structurally different situation: a run that never produced a report at all, not one narrating
+a completed one.
+`app.research.browser_activities.fail_run_activity` now calls this — through a new
+`_owner_facing_failure_message` — for exactly the two "we read pages and rejected them" error
+classes (`ERROR_INSUFFICIENT_VALID_EVIDENCE`, `ERROR_INSUFFICIENT_VALID_FINDINGS`) and stores
+its result as `ResearchRunRow.error`; every other failure class (device/dependency/security,
+`no_capable_device`, …) keeps its own raw `detail` unchanged — those are not a
+rejected-evidence shape, and inventing a fetched-page-count sentence for one would be
+dishonest. The technical detail is still recorded verbatim in the run's own event trail and
+the ledger event, for the record — only what the owner actually hears changed.
+**Not done, reported rather than fixed**: `research_announcer.py`'s STAGE_FAILED branch
+bypassing the report entirely is itself a design gap (a run that DID produce a `thin` report
+before failing some LATER step would still hit this same bypass) — fixing that dispatch logic
+is a `app/voice/**` change and out of this task's allowed paths.
+
+**Tests**: `tests/unit/test_research_evidence.py` (+4: OCR reflow keeps the real paragraph,
+drops nav/byline/date/menu-label rows even one-word-per-row, the pre-fix behaviour reproduced
+directly, non-OCR extraction methods byte-for-byte unchanged),
+`tests/unit/test_research_eligibility.py` (+8: the "Al"->"AI" fold gated on
+`owner_browser_ocr` and never touching a real "Al Gore", the AI-subject bonus and its three
+guardrails — gated on the topic's own subject, never inflating an unrelated page over the
+floor, never diluting the pre-existing passing scenario — plus the production-shaped
+before/after pair), `tests/unit/test_research_plan.py` (+10: no doubled word ever survives
+`expand_queries`, the bare-subject queries ARE present, `_bare_subject` reduces correctly and
+never touches a leading date phrase or returns empty, `looks_turkish`, the source-class
+narrowing and its three guardrails — an agent topic, an English topic, an explicit override),
+`tests/unit/test_research_device_browser_gateway.py` (+2: `region` sent for a Turkish query,
+absent for an English one), `tests/unit/test_research_sources.py` (+6: the Turkish registry's
+shape, its verified publishers, the two DROPPED ones staying dropped, `for_topics`-parity
+matching/fallback, disjoint from the official registry), `tests/unit/test_research_browser_activities.py`
+(+8: the Turkish RSS supplement firing only for a Turkish "news" query at index 0 and never for
+English/non-first-index/technical-class calls, the Turkish-domain ranking bias and its
+non-Turkish-topic neutrality, the `fail_run_activity` narration wired for the insufficiency
+classes and untouched for every other class), `tests/unit/test_research_result.py` (+5:
+`insufficient_run_narration`'s zero-pages/dominant-reason/no-reasons shapes, and that it stays
+free of the pipeline's own rejection-reason codes and English/crawler vocabulary while
+deliberately keeping the page count `spoken_result` must never carry). Full research suite
+(`tests/unit/test_research_*.py`, 727 cases) green. Ten mutations — the OCR reflow branch, the
+"Al"->"AI" fold, the AI-subject bonus term, both anti-doubling guards together, the D4
+source-class narrowing, the search-region assignment, the Turkish-RSS discovery supplement,
+the Turkish-domain ranking bias, and the `fail_run_activity` narration gate — were each run RED
+against these suites and restored byte-exact from a sha256-checked backup.

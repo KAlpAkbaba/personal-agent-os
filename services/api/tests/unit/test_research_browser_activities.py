@@ -504,6 +504,121 @@ def test_search_snippets_never_become_persisted_candidate_data(
     engine.dispose()
 
 
+# --------------------------------------------------------------------------- #
+# ADR-0178 item D3: a Turkish-worded "news" query is supplemented with candidates
+# from the verified Turkish RSS registry, IN ADDITION TO the browser search.
+# --------------------------------------------------------------------------- #
+
+
+def _one_result_search_factory(*, capability, payload, **_kwargs):
+    if capability == "browser.session_open":
+        return CommandSucceeded({"created": True})
+    if capability == "browser.search":
+        return CommandSucceeded(
+            {
+                "schema_version": 2,
+                "requested_provider": "duckduckgo",
+                "provider": "duckduckgo",
+                "fallback": False,
+                "state": "ok",
+                "results": [{"url": "https://en.example.com/story", "title": "A"}],
+                "result_count": 1,
+            }
+        )
+    raise AssertionError(capability)  # pragma: no cover
+
+
+def _fake_turkish_rss(monkeypatch) -> None:
+    from app.research import discovery
+
+    def fake_fetch_rss(feed_url, *, publisher, query_id, timeout_s=10.0, transport=None):
+        return [
+            discovery.DiscoveredCandidate(
+                url=f"https://tr.example.com/{publisher}",
+                title="tr başlık",
+                publisher=publisher,
+                discovered_by="rss",
+                query_id=query_id,
+            )
+        ]
+
+    monkeypatch.setattr(discovery, "fetch_rss", fake_fetch_rss)
+
+
+def test_discover_activity_supplements_a_turkish_news_query_with_turkish_rss(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    _fake_turkish_rss(monkeypatch)
+    fake = FakeDeviceCommandClient(factory=_one_result_search_factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:0", "yapay zeka ile ilgili haberleri", "news",
+        NOW.isoformat(),
+    )
+
+    # 1 from the browser search + >=1 per Turkish registry entry.
+    assert result["candidates"] > 1
+    from sqlalchemy import create_engine as _ce
+    from sqlalchemy.orm import sessionmaker
+
+    engine = _ce(db_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        urls = {c.url for c in runs_service.list_candidates(session, uuid.UUID(task_id))}
+    engine.dispose()
+    assert "https://en.example.com/story" in urls  # the browser search result stayed
+    assert any(u.startswith("https://tr.example.com/") for u in urls)  # RSS was added
+
+
+def test_discover_activity_does_not_add_turkish_rss_for_an_english_query(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    _fake_turkish_rss(monkeypatch)
+    fake = FakeDeviceCommandClient(factory=_one_result_search_factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:0", "AI news", "news", NOW.isoformat()
+    )
+    assert result["candidates"] == 1  # only the browser search result
+
+
+def test_discover_activity_does_not_add_turkish_rss_for_a_non_first_query_index(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """Once per run (the first "news" query, index 0) — a registry that doesn't
+    change with the query wording is not worth re-fetching for every diversified
+    query."""
+    _fake_turkish_rss(monkeypatch)
+    fake = FakeDeviceCommandClient(factory=_one_result_search_factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "news:1", "yapay zeka ile ilgili haberleri", "news",
+        NOW.isoformat(),
+    )
+    assert result["candidates"] == 1
+
+
+def test_discover_activity_does_not_add_turkish_rss_for_a_technical_class_query(
+    monkeypatch, db_url, task_id: str
+) -> None:
+    """The supplement is "news"-only — HN/arXiv discovery is untouched by it."""
+    _fake_turkish_rss(monkeypatch)
+    from app.research import discovery
+
+    monkeypatch.setattr(
+        discovery,
+        "fetch_hn",
+        lambda query, *, window_start, max_results=10, timeout_s=10.0: [],
+    )
+    result = ba.discover_activity(
+        task_id, str(uuid.uuid4()), "technical:0", "yapay zeka ile ilgili haberleri", "technical",
+        NOW.isoformat(),
+    )
+    assert result["candidates"] == 0
+
+
 def test_discover_activity_dedups_identical_query_before_searching(
     monkeypatch, db_url, task_id: str
 ) -> None:
@@ -1731,6 +1846,63 @@ def test_fail_run_activity_records_a_visible_terminal_state(task_id: str) -> Non
     assert ba.fail_run_activity(task_id, "research_failed", "again") is False
 
 
+def test_fail_run_activity_narrates_insufficient_evidence_instead_of_the_raw_exception(
+    task_id: str,
+) -> None:
+    """ADR-0178 item E (owner incident 2026-09-19): a STAGE_FAILED run's ``error``
+    field is read back VERBATIM as the tool error message
+    (``app.voice.realtime_sessions.research_announcer``, which never even looks at
+    the report for this stage) — the raw exception text
+    ("ranking: 0 contract-valid item(s), 3 required; 0 quarantined") must never be
+    what the owner hears. The run's own counts (fetch_done, rejected_by_reason from
+    the ranking stage) are what the narration is built from instead."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.research.contracts import ERROR_INSUFFICIENT_VALID_EVIDENCE
+
+    ba.plan_activity(task_id, "yapay zeka ajanları", None, 12)
+    engine = create_engine(ba.get_settings().database_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        runs_service.update_run(
+            session,
+            uuid.UUID(task_id),
+            progress={"fetch_done": 11, "rejected_by_reason": {"off_topic": 3}},
+        )
+    raw_exception_text = "ranking: 0 contract-valid item(s), 3 required; 0 quarantined"
+    assert (
+        ba.fail_run_activity(task_id, ERROR_INSUFFICIENT_VALID_EVIDENCE, raw_exception_text)
+        is True
+    )
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        run = runs_service.get_run(session, uuid.UUID(task_id))
+    engine.dispose()
+    assert run is not None
+    assert run.error != raw_exception_text
+    assert "contract-valid" not in run.error
+    assert "11 sayfa okudum" in run.error
+    assert "konuyla yeterince ilgili bulunmadı" in run.error
+    # The technical detail is still recorded for the record — just not as what the
+    # owner hears.
+    assert raw_exception_text[:300] in (run.events_json or [])[-1]["detail"]
+
+
+def test_fail_run_activity_keeps_the_raw_detail_for_a_non_insufficiency_error_class(
+    task_id: str,
+) -> None:
+    """The narration only replaces the two "we read pages and rejected them" error
+    classes — a device/dependency failure keeps its own detail unchanged (there is
+    no fetched-page-count story to tell honestly for those)."""
+    from sqlalchemy.orm import sessionmaker
+
+    ba.plan_activity(task_id, "yapay zeka ajanları", None, 12)
+    assert ba.fail_run_activity(task_id, "dependency_unavailable", "device offline") is True
+    engine = create_engine(ba.get_settings().database_url)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        run = runs_service.get_run(session, uuid.UUID(task_id))
+    engine.dispose()
+    assert run is not None and run.error == "device offline"
+
+
 # ------------------------------------------- shortlist refill (ADR-0074 decision 1)
 
 
@@ -1798,6 +1970,43 @@ def test_shortlist_is_deterministic() -> None:
     first = ba.build_fetch_shortlist(pool, limit=12, per_domain_max=2, topic=TOPIC)
     second = ba.build_fetch_shortlist(pool, limit=12, per_domain_max=2, topic=TOPIC)
     assert [c.url for c in first] == [c.url for c in second]
+
+
+# --------------------------------------------- ADR-0178 item D2: Turkish-first ranking
+
+
+def test_shortlist_prefers_turkish_domains_for_a_turkish_topic_but_keeps_some_english() -> None:
+    """"rank Turkish-language candidates ahead of English ones, keeping a minority
+    of English sources rather than none" — a Turkish (.tr) domain and an English
+    domain, otherwise identical, both fit in the shortlist; the Turkish one leads."""
+    turkish = [_candidate(f"https://haber{i}.com.tr/{i}") for i in range(3)]
+    english = [_candidate(f"https://en{i}.example.com/{i}") for i in range(3)]
+    shortlist = ba.build_fetch_shortlist(
+        turkish + english, limit=4, per_domain_max=1, topic=TOPIC
+    )
+    hosts = [c.url.split("/")[2] for c in shortlist]
+    assert hosts[0].endswith(".com.tr")
+    # A minority of English sources still made it in — never "none".
+    assert any(not h.endswith(".com.tr") for h in hosts)
+
+
+def test_prefetch_preference_language_rank_is_neutral_for_a_non_turkish_topic() -> None:
+    """The language bias (tuple slot 1) must contribute NOTHING for a topic that is
+    not itself Turkish — a Turkish and an otherwise-identical English domain get the
+    SAME language rank, so ordering is unaffected by this fix for an English topic."""
+    turkish = _candidate("https://haber.com.tr/a")
+    english = _candidate("https://en.example.com/a")
+    turkish_rank = ba._prefetch_preference(turkish, "AI agents announcement")
+    english_rank = ba._prefetch_preference(english, "AI agents announcement")
+    assert turkish_rank[1] == english_rank[1]
+
+
+def test_prefetch_preference_ranks_a_turkish_domain_ahead_for_a_turkish_topic() -> None:
+    turkish = _candidate("https://haber.com.tr/a")
+    english = _candidate("https://en.example.com/a")
+    turkish_rank = ba._prefetch_preference(turkish, TOPIC)
+    english_rank = ba._prefetch_preference(english, TOPIC)
+    assert turkish_rank[1] < english_rank[1]
 
 
 def test_fetch_targets_refills_a_wave_a_quota_spent_domain_would_have_emptied(

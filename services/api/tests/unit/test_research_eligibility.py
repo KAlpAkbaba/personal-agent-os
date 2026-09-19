@@ -747,3 +747,190 @@ def test_topic_relevance_scores_page_content_not_its_own_nav_bar() -> None:
         excerpt="Home | Artificial Intelligence | AI | Reviews | Guides | Deals\n" + real_content,
     )
     assert nav_polluted_score == plain_score
+
+
+# ---------------------------------------------------------------------------
+# ADR-0178 (owner incident 2026-09-19, production run 6f96cd51): "araştırma hep
+# yabancı kaynaklara gidiyor" — items A/B/C. Production topic "yapay zeka ile ilgili
+# haberleri", research_browser=owner (owner_browser_ocr excerpts), 3 genuinely
+# on-topic English AI pages rejected off_topic at 0.2167 / 0.0437 / 0.2604 against
+# the 0.35 floor.
+# ---------------------------------------------------------------------------
+
+PRODUCTION_TOPIC_2 = "yapay zeka ile ilgili haberleri"
+
+
+# --------------------------------------------------- B: OCR "Al"/"AI" confusable
+
+def test_ocr_al_confusable_is_folded_to_ai_only_for_owner_browser_ocr() -> None:
+    """"Al" (capital A + lowercase L) is a common OCR misread of "AI" — production
+    example: "THE Al DAILY BRIEF" for "THE AI DAILY BRIEF". Corrected ONLY on
+    owner_browser_ocr text, since on a real browser's dom_text "Al" is far more
+    likely to be a genuine name (e.g. "Al Gore")."""
+    title = "THE Al DAILY BRIEF"
+    excerpt = (
+        "Al news roundup: OpenAI and Anthropic both published new large language "
+        "model research this week, covering agent tool use and safety evaluations."
+    )
+    ocr_score = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title=title,
+        excerpt=excerpt,
+        extraction_method="owner_browser_ocr",
+    )
+    dom_text_score = topic_relevance(
+        topic=PRODUCTION_TOPIC_2, title=title, excerpt=excerpt, extraction_method="dom_text"
+    )
+    assert ocr_score > dom_text_score
+
+
+def test_ocr_al_confusable_never_touches_a_genuine_name_outside_ocr() -> None:
+    """"Al Gore" on a real browser's dom_text must never become "AI Gore" — the
+    fold is gated on extraction_method == owner_browser_ocr specifically."""
+    score_with_al_gore = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title="Al Gore speaks at climate summit",
+        excerpt="Former Vice President Al Gore addressed delegates on climate policy today.",
+        extraction_method="dom_text",
+    )
+    assert score_with_al_gore < 0.1  # nothing here is about AI at all
+
+
+# --------------------------------------------------------- C: the AI subject bonus
+
+def test_english_ai_entity_page_gets_a_bonus_the_turkish_topic_alone_would_not_earn() -> None:
+    """A page naming known AI companies/vocabulary (OpenAI, Anthropic, LLM) but never
+    spelling out "yapay zeka"/"artificial intelligence" verbatim must score higher
+    than the same page with those entity words removed, against a bare-AI Turkish
+    topic ("yapay zeka ile ilgili haberleri")."""
+    with_entities = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title="OpenAI and Anthropic publish new LLM safety research",
+        excerpt=(
+            "The two companies released technical reports this week describing how "
+            "their systems were evaluated before release, including new benchmarks "
+            "for long-horizon planning tasks."
+        ),
+    )
+    without_entities = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title="Two companies publish new safety research",
+        excerpt=(
+            "The two companies released technical reports this week describing how "
+            "their systems were evaluated before release, including new benchmarks "
+            "for long-horizon planning tasks."
+        ),
+    )
+    assert with_entities > without_entities
+
+
+def test_ai_subject_bonus_does_not_fire_for_a_topic_with_no_ai_subject() -> None:
+    """The bonus is gated on the topic's OWN subject reducing to "AI"
+    (english_core_query mapping it there) — an unrelated Turkish topic must never
+    receive it just because the page happens to name a tech company."""
+    score = topic_relevance(
+        topic="İstanbul'daki trafik sıkışıklığı ile ilgili haberler",
+        title="OpenAI and Anthropic publish new LLM safety research",
+        excerpt="The two companies released technical reports this week.",
+    )
+    assert score < 0.1
+
+
+def test_ai_subject_bonus_does_not_inflate_an_unrelated_pages_score_above_the_floor() -> None:
+    """The bonus is small and additive: it must never, by itself, carry a page with
+    otherwise-zero signal across MIN_TOPIC_RELEVANCE."""
+    from app.research.eligibility import MIN_TOPIC_RELEVANCE
+
+    score = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title="Best budget wireless headphones of 2026",
+        excerpt=(
+            "We tested a dozen wireless headphones this year and ranked them by "
+            "battery life, sound quality and price. OpenAI was not involved."
+        ),
+    )
+    assert score < MIN_TOPIC_RELEVANCE
+
+
+def test_ai_subject_bonus_does_not_dilute_the_existing_cross_language_token_score() -> None:
+    """Regression guard for the FIRST (wrong) version of this fix: folding the AI
+    entity vocabulary directly into the cross-language TOKEN SET (rather than a
+    separate additive bonus) inflated the token-overlap normalization denominator
+    and made this exact, already-passing scenario score WORSE. This must stay >= the
+    floor."""
+    score = topic_relevance(
+        topic=PRODUCTION_TOPIC,
+        title="AI coding tools are changing how indie game studios ship faster",
+        excerpt=(
+            "AI coding tools are reshaping how indie developers ship games faster "
+            "than ever, according to several studio founders interviewed this week. "
+            "These artificial intelligence powered assistants let a developer "
+            "describe a feature in plain English while the tool writes and iterates "
+            "on the implementation, cutting weeks of engineering time down to days. "
+            "Several studios said the approach works best for prototyping systems "
+            "that would otherwise take months to hand code, though founders "
+            "cautioned that AI generated code still needs careful review before "
+            "shipping."
+        ),
+    )
+    assert score >= 0.35
+
+
+def test_production_shaped_ocr_ai_page_clears_the_floor_after_the_fix() -> None:
+    """A representative reconstruction of one of the production run's rejects
+    (blog.google-shaped: an on-device Gemini announcement, OCR-read) — before this
+    fix it scored 0.0 (no lexicon hit, no token overlap at all); after A+B+C it
+    clears the floor."""
+    title = "Building our next generation of Al models"
+    excerpt = "\n".join(
+        [
+            "Google",
+            "AI Modu",
+            "Haberler",
+            "Videolar",
+            "By The Google Team",
+            "We are announcing a new",
+            "generation of Gemini models",
+            "built for on-device use, with",
+            "improvements to reasoning and",
+            "tool calling that developers can",
+            "access through the Gemini API",
+            "starting this week. Early testers",
+            "say the smaller model matches",
+            "much larger systems on coding",
+            "and multi-step planning tasks.",
+        ]
+    )
+    score = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title=title,
+        excerpt=excerpt,
+        extraction_method="owner_browser_ocr",
+    )
+    assert score >= 0.35
+
+
+def test_production_shaped_unrelated_ocr_page_stays_off_topic_after_the_fix() -> None:
+    """The fix must never turn an unrelated OCR-read page on-topic."""
+    title = "En İyi Bütçe Dostu Kablosuz Kulaklıklar 2026"
+    excerpt = "\n".join(
+        [
+            "TEKNOLOJİ",
+            "İncelemeler",
+            "Fırsatlar",
+            "Bu yıl piyasaya çıkan kablosuz",
+            "kulaklıkları test ettik ve pil",
+            "ömrü, ses kalitesi ile fiyat",
+            "performans oranına göre",
+            "sıraladık. Bütçenize uygun en",
+            "iyi seçenekleri aşağıda",
+            "bulabilirsiniz.",
+        ]
+    )
+    score = topic_relevance(
+        topic=PRODUCTION_TOPIC_2,
+        title=title,
+        excerpt=excerpt,
+        extraction_method="owner_browser_ocr",
+    )
+    assert score < 0.35

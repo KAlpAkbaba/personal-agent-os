@@ -170,7 +170,7 @@ def _detail_statement(e: EvidenceRecord) -> Statement:
     (:func:`app.research.evidence.content_text`), never its raw stored excerpt (a
     page's nav bar/byline chrome is not "what the source says", 2026-09-19 incident),
     and never Finding.summary (CRITICAL-1a stays about the finding, not this quote)."""
-    content = content_text(e.excerpt)
+    content = content_text(e.excerpt, extraction_method=e.extraction_method)
     if content.strip():
         return Statement(text=content, label=STATEMENT_LABEL_SOURCE_FACT, evidence_ids=(e.id,))
     return Statement(
@@ -325,7 +325,9 @@ def _evidence_payload(evidence: list[EvidenceRecord]) -> list[dict[str, Any]]:
             "url": e.url,
             "publisher": e.publisher or e.source_class,
             "published_at": e.published_at.isoformat() if e.published_at else None,
-            "excerpt": content_text(e.excerpt)[:PROMPT_EXCERPT_MAX_CHARS],
+            "excerpt": content_text(e.excerpt, extraction_method=e.extraction_method)[
+                :PROMPT_EXCERPT_MAX_CHARS
+            ],
         }
         for e in evidence
     ]

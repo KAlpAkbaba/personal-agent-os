@@ -99,3 +99,110 @@ def test_plan_without_a_mappable_term_stays_turkish_only() -> None:
     assert english_core_query("Kadıköy'de iyi bir fırın") is None
     plan = build_plan("Kadıköy'de iyi bir fırın")
     assert all("announcement" not in q for q in plan.queries)
+
+
+# ---------------------------------------------------------------------------
+# ADR-0178 (owner incident 2026-09-19, item D1): "araştırma başarısız oldu" traced to
+# a production plan whose queries included the doubled "yapay zeka ile ilgili
+# haberleri haberleri" and "AI news news" — a live QUICK run (discovery_queries_max=2)
+# spent one of its two discovery-query slots on a near-duplicate of another.
+# ---------------------------------------------------------------------------
+
+OWNER_UTTERANCE = "yapay zeka ile ilgili haberleri"
+
+
+def test_expand_queries_never_doubles_a_word_the_topic_already_ends_with() -> None:
+    from app.research.plan import expand_queries
+
+    queries = expand_queries(OWNER_UTTERANCE)
+    for q in queries:
+        words = q.lower().split()
+        assert all(a != b for a, b in zip(words, words[1:], strict=False)), q
+    assert "yapay zeka ile ilgili haberleri haberleri" not in queries
+    assert "AI news news" not in queries
+    # The exact production query IS still one of the expansions (query 0, the
+    # owner's own phrasing) — nothing here removes it, only what got APPENDED to it.
+    assert OWNER_UTTERANCE in queries
+
+
+def test_expand_queries_still_doubles_normally_when_the_topic_does_not_already_end_that_way() -> (
+    None
+):
+    """The anti-doubling guard is specific to "the topic already ends with the exact
+    word being appended" — an ordinary topic still gets both templates."""
+    from app.research.plan import expand_queries
+
+    queries = expand_queries("yapay zeka ajanları")
+    assert "yapay zeka ajanları haberleri" in queries
+    assert "yapay zeka ajanları son gelişmeler" in queries
+
+
+def test_expand_queries_adds_the_bare_subject_shape_the_owner_asked_for() -> None:
+    """docs/DECISIONS.md ADR-0178: the owner's own desired shape — the topic reduced
+    to its bare subject, "haberleri"/"son gelişmeler" appended exactly once."""
+    from app.research.plan import expand_queries
+
+    queries = expand_queries(OWNER_UTTERANCE)
+    assert "yapay zeka haberleri" in queries
+    assert "yapay zeka son gelişmeler" in queries
+
+
+def test_bare_subject_reduces_the_owners_utterance() -> None:
+    from app.research.plan import _bare_subject
+
+    assert _bare_subject("yapay zeka ile ilgili haberleri") == "yapay zeka"
+    assert _bare_subject("yapay zeka ajanları hakkında") == "yapay zeka ajanları"
+
+
+def test_bare_subject_never_returns_empty_or_touches_the_front() -> None:
+    from app.research.plan import _bare_subject
+
+    # A leading relative-date phrase ("son üç günde") is dates.py's job, not this
+    # one's — it must survive untouched even though "son" also appears in the
+    # trailing-filler vocabulary.
+    subject = _bare_subject("son üç günde yapay zeka haberleri")
+    assert subject.startswith("son üç günde")
+    assert subject == "son üç günde yapay zeka"
+    assert _bare_subject("haberleri") == "haberleri"  # entirely filler: unchanged
+
+
+def test_looks_turkish_detects_ascii_typed_turkish_and_lets_english_through() -> None:
+    from app.research.plan import looks_turkish
+
+    assert looks_turkish("yapay zeka ile ilgili haberleri") is True
+    assert looks_turkish("yapay zekâ ajanları") is True  # has a Turkish-specific letter
+    assert looks_turkish("AI agents announcement") is False
+    assert looks_turkish("") is False
+
+
+def test_build_plan_narrows_source_classes_for_a_plain_turkish_news_topic() -> None:
+    """D4: HN/arXiv discovery is skipped by default for a general Turkish news
+    request with no technical/academic/agent marker — the production run spent two
+    of its five source-class x query discovery passes on APIs that answered nothing
+    usable for exactly this shape of request."""
+    plan = build_plan(OWNER_UTTERANCE, now=NOW)
+    assert "technical" not in plan.source_classes
+    assert "academic" not in plan.source_classes
+    assert "news" in plan.source_classes
+    assert "official" in plan.source_classes
+
+
+def test_build_plan_keeps_technical_and_academic_for_an_agent_topic_even_in_turkish() -> None:
+    plan = build_plan("yapay zeka ajanlarıyla ilgili haberler", now=NOW)
+    assert "technical" in plan.source_classes
+    assert "academic" in plan.source_classes
+
+
+def test_build_plan_keeps_technical_and_academic_for_an_english_topic() -> None:
+    """The narrowing never applies to an English-worded topic — nothing about this
+    heuristic should make an English request MORE restrictive than before."""
+    plan = build_plan("AI news this week", now=NOW)
+    assert "technical" in plan.source_classes
+    assert "academic" in plan.source_classes
+
+
+def test_build_plan_respects_an_explicit_source_classes_override() -> None:
+    """D4's narrowing only ever applies to the DEFAULT — a caller naming explicit
+    classes (e.g. REST's discovery_source_classes) always gets exactly that."""
+    plan = build_plan(OWNER_UTTERANCE, now=NOW, source_classes=("news", "technical"))
+    assert plan.source_classes == ("news", "technical")

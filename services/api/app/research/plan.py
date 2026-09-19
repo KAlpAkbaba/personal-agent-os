@@ -8,6 +8,7 @@ browser, the network or a database.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -23,15 +24,6 @@ DEFAULT_SOURCE_CLASSES: tuple[str, ...] = (
     "community",
 )
 DEFAULT_MAX_SOURCES_PER_QUERY = 3
-
-# Query expansion templates. `{topic}` is substituted with the trimmed topic;
-# duplicates after substitution are removed (keeps a bare short topic from
-# producing three identical queries).
-_QUERY_TEMPLATES: tuple[str, ...] = (
-    "{topic}",
-    "{topic} haberleri",
-    "{topic} son gelişmeler",
-)
 
 # The owner phrases the topic in Turkish; the primary sources for most technology topics
 # publish in English, and the first live run showed that Turkish-only queries fill the
@@ -82,6 +74,112 @@ _AGENT_ENTITY_QUERIES: tuple[str, ...] = (
     "AI agents paper",
 )
 
+# --------------------------------------------------------------------------- #
+# ADR-0178 (owner incident 2026-09-19): "araştırma başarısız oldu ... hep yabancı
+# kaynaklara gidiyor" — a Turkish-worded query heuristic shared by the query
+# builder below (which topics get the narrower discovery source-class set) and
+# by app.research.browser_gateway (which search calls get a Turkish region
+# hint). Both ask literally the same question — "is this text Turkish?" — so,
+# unlike the deliberately-duplicated Turkish-fold tables elsewhere in this
+# package (see app.research.evidence's own note on why the dedup/rank formula
+# is hand-copied from a DIFFERENT process's codebase), this one lives in one
+# place and is imported.
+# --------------------------------------------------------------------------- #
+
+_TURKISH_CHARS = frozenset("çğıöşüÇĞİÖŞÜ")
+#: A handful of extremely common Turkish function/domain words — checked only when the
+#: text carries no Turkish-specific LETTER at all (an ASCII-typed "yapay zeka ile
+#: ilgili haberleri" carries none of the letters above).
+_TURKISH_HINT_WORDS = frozenset(
+    {
+        "ve", "ile", "icin", "için", "ilgili", "haberleri", "haberler",
+        "gelismeler", "gelişmeler", "son", "hakkinda", "hakkında",
+        "yapay", "zeka", "zekâ", "konusunda", "nedir",
+    }
+)
+
+
+def looks_turkish(text: str) -> bool:
+    """Best-effort, dependency-free language guess for one piece of research text.
+
+    Just enough to decide whether a search call should ask for the Turkish region, or
+    whether a topic's default discovery source classes should skip HN/arXiv (both:
+    ADR-0178) — never a real language-detection library, and a wrong guess costs
+    nothing worse than the OLD, unbiased default. Turkish-specific letters are the
+    strongest signal; failing that (an ASCII-typed Turkish sentence carries none), a
+    handful of very common Turkish function words.
+    """
+    if not text:
+        return False
+    if any(ch in _TURKISH_CHARS for ch in text):
+        return True
+    words = set(re.findall(r"[a-zçğıöşü]+", text.lower()))
+    return bool(words & _TURKISH_HINT_WORDS)
+
+
+#: Fold table used ONLY by :func:`_bare_subject`'s trailing-filler match: a 1:1
+#: character translation (never NFKD/combining-mark removal) so the folded string is
+#: always exactly as long as the original, which is what lets the caller strip the
+#: same number of characters from the UNFOLDED text it actually keeps.
+_LENGTH_PRESERVING_FOLD = str.maketrans(
+    {
+        "ı": "i", "İ": "i", "I": "i", "ş": "s", "Ş": "s", "ğ": "g", "Ğ": "g",
+        "ö": "o", "Ö": "o", "ü": "u", "Ü": "u", "ç": "c", "Ç": "c",
+        "â": "a", "Â": "a", "î": "i", "Î": "i", "û": "u", "Û": "u",
+    }
+)
+
+
+def _fold_for_subject(text: str) -> str:
+    return text.translate(_LENGTH_PRESERVING_FOLD).lower()
+
+
+#: Trailing filler stripped, longest phrase first, so a compound ("ile ilgili
+#: haberleri") strips as ONE unit rather than leaving a stray "ile" behind once only
+#: its neighbour word is removed.
+_SUBJECT_TRAILING_FILLERS: tuple[str, ...] = tuple(
+    sorted(
+        (
+            "ile ilgili son haberleri", "ile ilgili son haberler",
+            "ile ilgili haberleri", "ile ilgili haberler",
+            "hakkındaki son haberler", "hakkında son haberler",
+            "ile ilgili son gelişmeler", "ile ilgili son gelişmeleri",
+            "ile ilgili gelişmeler", "ile ilgili gelişmeleri",
+            "ile ilgili", "hakkındaki", "hakkında", "konusundaki", "konusunda",
+            "son gelişmeler", "son gelişmeleri", "gelişmeler", "gelişmeleri", "gelişme",
+            "son haberler", "son haberleri", "haberleri", "haberler",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+
+def _bare_subject(topic: str) -> str:
+    """The topic reduced to its SUBJECT — repeatedly strips one TRAILING filler
+    phrase at a time (never touching the front: a leading relative-date phrase like
+    "son üç günde" is the recency window, :mod:`app.research.dates`'s job, not this
+    one) so "yapay zeka ile ilgili haberleri" reduces to "yapay zeka", the exact shape
+    the owner's own words already take (ADR-0178, owner incident 2026-09-19: the
+    UN-reduced topic fed straight back into the query templates below is what doubled
+    every one of these words — "... haberleri haberleri", "AI news news").
+
+    Never returns an empty string: a topic that is entirely filler (degenerate) is
+    returned unchanged rather than reduced to nothing a search engine could use.
+    """
+    working = topic.strip()
+    changed = True
+    while changed:
+        changed = False
+        folded = _fold_for_subject(working)
+        for filler in _SUBJECT_TRAILING_FILLERS:
+            folded_filler = _fold_for_subject(filler)
+            if len(folded) > len(folded_filler) and folded.endswith(folded_filler):
+                working = working[: len(working) - len(filler)].rstrip()
+                changed = True
+                break
+    return working or topic.strip()
+
 
 def english_core_query(topic: str) -> str | None:
     """A compact English query for ``topic``, or ``None`` when no known term maps."""
@@ -109,14 +207,39 @@ def english_core_query(topic: str) -> str | None:
 
 
 def expand_queries(topic: str) -> tuple[str, ...]:
-    """Base Turkish templates + English core query + domain entity sub-queries."""
-    base = [template.format(topic=topic).strip() for template in _QUERY_TEMPLATES]
-    core = english_core_query(topic)
+    """Base Turkish templates + English core query + domain entity sub-queries.
+
+    ADR-0178 (owner incident 2026-09-19): a topic that already ends in "haberleri" (the
+    owner's own "... ile ilgili haberleri" phrasing) used to get "{topic} haberleri"
+    appended anyway — "... haberleri haberleri" — and an English core query that
+    already ends in "news" (``english_core_query`` maps "haberleri" -> "news" itself)
+    got "{core} news" appended the same way — "AI news news", the exact doubled query
+    a live QUICK run spent one of its two discovery-query slots on. Each of the three
+    appended variants below is skipped when the text it would extend already ends with
+    (or, for "gelişme", already contains) the word it would add. Two further queries —
+    the topic reduced to its bare SUBJECT (:func:`_bare_subject`) plus "haberleri" /
+    "son gelişmeler" exactly once — are appended whenever that reduction actually
+    removed something, giving the owner's own desired shape ("yapay zeka haberleri",
+    "yapay zeka son gelişmeler") a slot without deleting any existing query.
+    """
+    trimmed = topic.strip()
+    base = [trimmed]
+    folded_topic = _fold_for_subject(trimmed)
+    if not any(folded_topic.endswith(_fold_for_subject(s)) for s in ("haberleri", "haberler")):
+        base.append(f"{trimmed} haberleri")
+    if "gelisme" not in folded_topic:
+        base.append(f"{trimmed} son gelişmeler")
+    core = english_core_query(trimmed)
     if core:
         base.append(core)
-        base.append(f"{core} news")
-    if any(marker in topic.lower() for marker in _AGENT_DOMAIN_MARKERS):
+        if not core.lower().endswith("news"):
+            base.append(f"{core} news")
+    if any(marker in trimmed.lower() for marker in _AGENT_DOMAIN_MARKERS):
         base.extend(_AGENT_ENTITY_QUERIES)
+    subject = _bare_subject(trimmed)
+    if subject and subject != trimmed:
+        base.append(f"{subject} haberleri")
+        base.append(f"{subject} son gelişmeler")
     return tuple(dict.fromkeys(q for q in base if q))
 
 
@@ -170,6 +293,39 @@ def diversify_queries(queries: Sequence[str], limit: int) -> tuple[str, ...]:
                 best_score, best_index = score, index
         picked.append(remaining.pop(best_index))
     return tuple(picked)
+
+
+#: ADR-0178 (owner incident 2026-09-19, item D4): markers that make HN Algolia
+#: ("technical") and arXiv ("academic") discovery worth running at all. The AI-agent
+#: domain markers already used for the entity sub-queries above count too — an
+#: agent/framework topic is exactly HN/arXiv's home turf regardless of the language it
+#: was asked in.
+_ACADEMIC_TECHNICAL_MARKERS = (
+    "arxiv", "paper", "research paper", "makale", "bilimsel", "akademik",
+    "framework", "open-source", "open source", "github", "sdk", "kütüphane",
+    "protokol", "protocol",
+)
+
+
+def _wants_academic_and_technical(topic: str) -> bool:
+    """Whether HN/arXiv discovery is worth running for ``topic`` AT ALL, when the
+    caller did not name explicit source classes.
+
+    HN Algolia and arXiv are excellent for a technical/academic-English request
+    ("open-source AI agent framework", an arXiv paper hunt) and close to useless for a
+    general Turkish news request ("yapay zeka ile ilgili haberleri") — the production
+    run behind ADR-0178 spent two of its five source-class x query discovery passes on
+    APIs that read zero pages worth keeping. An English-worded topic keeps the old,
+    broader default (nothing about this heuristic should narrow an English request);
+    a Turkish-worded one needs an explicit technical/academic/agent marker to earn
+    HN/arXiv discovery.
+    """
+    lowered = topic.lower()
+    if any(marker in lowered for marker in _AGENT_DOMAIN_MARKERS):
+        return True
+    if any(marker in lowered for marker in _ACADEMIC_TECHNICAL_MARKERS):
+        return True
+    return not looks_turkish(topic)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,11 +389,21 @@ def build_plan(
     if not source_classes:
         raise ValueError("source_classes must be non-empty")
 
+    resolved_source_classes = tuple(source_classes)
+    # ADR-0178 item D4: only narrow the DEFAULT (a caller naming explicit classes,
+    # e.g. REST's `discovery_source_classes`, always gets exactly what it asked for).
+    if resolved_source_classes == DEFAULT_SOURCE_CLASSES and not _wants_academic_and_technical(
+        clean_topic
+    ):
+        resolved_source_classes = tuple(
+            c for c in resolved_source_classes if c not in ("technical", "academic")
+        )
+
     return ResearchPlan(
         topic=clean_topic,
         recency=window,
         queries=queries,
-        source_classes=tuple(source_classes),
+        source_classes=resolved_source_classes,
         max_sources_per_query=max_sources_per_query,
     )
 
@@ -246,6 +412,7 @@ __all__ = [
     "diversify_queries",
     "english_core_query",
     "expand_queries",
+    "looks_turkish",
     "DEFAULT_MAX_SOURCES_PER_QUERY",
     "DEFAULT_RECENCY_DAYS",
     "DEFAULT_SOURCE_CLASSES",

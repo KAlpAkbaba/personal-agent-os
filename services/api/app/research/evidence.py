@@ -263,6 +263,41 @@ _SHORT_LINE_CHARS = 80
 #: raw text) or a single-line excerpt with no newlines to filter on at all.
 _CONTENT_TEXT_MIN_SURVIVING_CHARS = 40
 
+#: ADR-0178 (owner incident 2026-09-19): the extraction method
+#: ``app.research.owner_browser_gateway`` stamps on every record it produces — defined
+#: HERE (not imported from that module) to avoid a cycle, since
+#: ``owner_browser_gateway`` already imports ``EvidenceRecord`` from this module. That
+#: module imports this constant back rather than keeping its own duplicate literal.
+EXTRACTION_METHOD_OWNER_BROWSER_OCR = "owner_browser_ocr"
+
+#: Extraction methods whose excerpt is a screen-by-screen OCR read rather than a real
+#: browser's ``innerText``: one OCR "line" is one row of pixels the device recognised
+#: text on, NOT one paragraph boundary — a wrapped sentence is many consecutive short
+#: lines, none carrying sentence-ending punctuation until the very last one. See
+#: :func:`_reflow_ocr_lines` for why that means these excerpts need a reflow pass
+#: :func:`content_text`'s ordinary per-line chrome filter does not.
+_OCR_EXTRACTION_METHODS = frozenset({EXTRACTION_METHOD_OWNER_BROWSER_OCR})
+
+#: A single OCR screen-row consisting of a short, ALL-CAPS-ish run of 1-3 words with no
+#: sentence punctuation reads as a nav item, social button or section label a real site
+#: draws as its own row ("HOME", "PRİNT", "TWIHER", "FREDERIC LORDON") rather than
+#: prose — even though, unlike :data:`_is_nav_bar_line`, it carries no "/"/"|" separator
+#: of its own to detect it by (the whole MENU was one screen row there; here each MENU
+#: ITEM is its own row). Never merged into a reflowed OCR paragraph.
+_OCR_MENU_LABEL_MAX_CHARS = 24
+_OCR_MENU_LABEL_MAX_WORDS = 3
+
+#: A bare date byline row an OCR read often shows on its own line ("18 SEPTEMBER 2026",
+#: "18 Eylül 2026") once the surrounding "Published"/"Yayın tarihi" wording (already
+#: caught by :data:`_BYLINE_RE`) has scrolled out of the same screen row.
+_OCR_DATE_LINE_RE = re.compile(
+    r"^\d{1,2}\s+(ocak|şubat|subat|mart|nisan|mayıs|mayis|haziran|temmuz|ağustos|agustos"
+    r"|eylül|eylul|ekim|kasım|kasim|aralık|aralik"
+    r"|january|february|march|april|may|june|july|august|september|october|november"
+    r"|december)\s+\d{4}$",
+    re.IGNORECASE,
+)
+
 
 def _is_nav_bar_line(stripped: str) -> bool:
     segments = [s for s in _CHROME_SEPARATOR_RE.split(stripped) if s]
@@ -271,6 +306,18 @@ def _is_nav_bar_line(stripped: str) -> bool:
     return all(
         len(s) <= _CHROME_MAX_SEGMENT_CHARS and not _SENTENCE_PUNCT_RE.search(s) for s in segments
     )
+
+
+def _is_ocr_menu_label_line(stripped: str) -> bool:
+    if not stripped or _SENTENCE_PUNCT_RE.search(stripped):
+        return False
+    words = stripped.split()
+    if not words or len(words) > _OCR_MENU_LABEL_MAX_WORDS:
+        return False
+    if len(stripped) > _OCR_MENU_LABEL_MAX_CHARS:
+        return False
+    letters = "".join(ch for ch in stripped if ch.isalpha())
+    return bool(letters) and letters == letters.upper()
 
 
 def _is_chrome_line(line: str) -> bool:
@@ -284,7 +331,63 @@ def _is_chrome_line(line: str) -> bool:
     return len(stripped) < _SHORT_LINE_CHARS and not _SENTENCE_PUNCT_RE.search(stripped)
 
 
-def content_text(excerpt: str) -> str:
+def _reflow_ocr_lines(lines: list[str]) -> list[str]:
+    """Join consecutive OCR screen-rows into paragraphs BEFORE the generic per-line
+    chrome filter (:func:`_is_chrome_line`) runs on them (ADR-0178, owner incident
+    2026-09-19: "araştırma hep yabancı kaynaklara gidiyor" traced back to an
+    ``owner_browser_ocr`` excerpt scoring almost no topic relevance because nearly the
+    whole article had been silently dropped as "chrome").
+
+    ``content_text``'s per-line filter was written for a real browser's ``innerText``,
+    where one line break already IS a paragraph boundary a person drew — a genuine nav
+    bar or byline line there really is short and really does lack sentence punctuation,
+    while real prose lines are whole sentences. An OCR read has no such guarantee: one
+    "line" is one row of pixels the device recognised text on, so a single sentence
+    wraps across many consecutive short rows, none of which carries closing punctuation
+    until the very last one. Running the ordinary filter directly on OCR rows (measured
+    on the production run's own OCR shape) drops essentially the entire article and
+    leaves relevance to be scored on the handful of rows that happened to end in a
+    period within :data:`_SHORT_LINE_CHARS`.
+
+    So for OCR text this runs FIRST: a genuine nav-bar row (:func:`_is_nav_bar_line`,
+    still multi-segment within one row when a menu is drawn as one line), a byline row,
+    a bare date row (:data:`_OCR_DATE_LINE_RE`) and a menu-label row
+    (:func:`_is_ocr_menu_label_line` — "HOME", "PRİNT", a lone byline NAME in caps) are
+    each dropped on their own, individually, and never merged into a paragraph; a
+    genuinely blank OCR row ends the current paragraph (a real visual gap); everything
+    else is joined with a single space into one running paragraph. A heading
+    immediately followed by body text (no blank row between them, the common case)
+    lands in the SAME paragraph as that body text, which is what keeps it — the
+    generic short-line filter that runs on the OUTPUT of this function then judges
+    each merged paragraph, not each individual screen row.
+    """
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+
+    def _flush() -> None:
+        if buffer:
+            paragraphs.append(" ".join(buffer))
+            buffer.clear()
+
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            _flush()
+            continue
+        if (
+            _is_nav_bar_line(stripped)
+            or _BYLINE_RE.match(stripped)
+            or _OCR_DATE_LINE_RE.match(stripped)
+            or _is_ocr_menu_label_line(stripped)
+        ):
+            _flush()
+            continue
+        buffer.append(stripped)
+    _flush()
+    return paragraphs
+
+
+def content_text(excerpt: str, *, extraction_method: str = "") -> str:
     """Best-effort page-chrome removal: drop nav bars, breadcrumbs, bylines and other
     short, punctuation-free lines a page front-loads before its real prose, keeping only
     the paragraphs a person would call "the article".
@@ -297,6 +400,14 @@ def content_text(excerpt: str) -> str:
     excerpt with no line breaks to filter on, still has to be scored/summarized on
     SOMETHING rather than an empty string.
 
+    ``extraction_method`` (ADR-0178): when it is one of :data:`_OCR_EXTRACTION_METHODS`
+    (today, only ``owner_browser_ocr`` — a page read screen-by-screen through the PC's
+    own OCR, see :mod:`app.research.owner_browser_gateway`), the lines are first
+    reflowed into paragraphs (:func:`_reflow_ocr_lines`) before the ordinary chrome
+    filter runs on the RESULT — see that function's docstring for why an OCR excerpt
+    needs this and a real browser's ``innerText`` excerpt does not. Omitted (the
+    default), behaviour is byte-for-byte the same as before this parameter existed.
+
     Used wherever page CONTENT (not provenance, not raw storage) is needed: topic
     relevance (:func:`app.research.eligibility.topic_relevance`), the synthesis prompt's
     per-source excerpt, and the deterministic provider's quoted ``source_fact`` text. The
@@ -306,7 +417,11 @@ def content_text(excerpt: str) -> str:
     if not excerpt or not excerpt.strip():
         return excerpt
     lines = excerpt.split("\n")
-    kept = [line.strip() for line in lines if not _is_chrome_line(line)]
+    if extraction_method in _OCR_EXTRACTION_METHODS:
+        candidates = _reflow_ocr_lines(lines)
+    else:
+        candidates = [line.strip() for line in lines]
+    kept = [line for line in candidates if not _is_chrome_line(line)]
     survivor = "\n".join(kept).strip()
     if len(survivor) < _CONTENT_TEXT_MIN_SURVIVING_CHARS:
         return excerpt
@@ -481,6 +596,7 @@ def dedup_and_rank(
 
 
 __all__ = [
+    "EXTRACTION_METHOD_OWNER_BROWSER_OCR",
     "PAGE_KINDS",
     "PAGE_KIND_AUTH_WALL",
     "PAGE_KIND_BLOCKED",

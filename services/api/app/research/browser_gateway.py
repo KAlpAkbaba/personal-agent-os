@@ -46,6 +46,14 @@ from app.research.contracts import (
 from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.evidence import EvidenceRecord
 from app.research.forbidden_keys import find_forbidden_keys
+from app.research.plan import looks_turkish
+
+#: ADR-0178 (owner incident 2026-09-19, item D2): the DuckDuckGo region code sent on a
+#: ``browser.search`` call for a Turkish-worded query (DuckDuckGo's own ``kl=tr-tr``
+#: region parameter). Sent as an ADDITIVE payload field only — the device/worker side
+#: honoring it is a separate change (this module only dispatches the command; see
+#: docs/DECISIONS.md ADR-0178 for what remains open there).
+SEARCH_REGION_TURKISH = "tr-tr"
 
 # Fixed fallback "now" so FakeBrowserGateway is deterministic even when the
 # caller does not pass `now` explicitly (mirrors DeterministicResearchProvider's
@@ -562,18 +570,28 @@ class DeviceBrowserGateway:
         recorded on ``self.last_search_evidence`` after every call.
         ``engine`` overrides the gateway's configured ``search_provider`` for
         this one call when given; otherwise the configured provider (default
-        "duckduckgo", PRODUCT DECISION 2026-09-04) is sent."""
+        "duckduckgo", PRODUCT DECISION 2026-09-04) is sent.
+
+        ADR-0178 item D2: a Turkish-worded ``query`` also sends ``region`` =
+        :data:`SEARCH_REGION_TURKISH` — the owner's own words asking for it is a
+        stronger, per-call signal than sending it for every search of a Turkish
+        topic's whole plan regardless of which of that plan's queries (some
+        deliberately English, see ``app.research.plan.expand_queries``) this call is.
+        """
         digest = hashlib.sha256(f"{query}:{source_class}".encode()).hexdigest()[:16]
+        payload: dict[str, Any] = {
+            "session_id": self._session_id,
+            "query": query,
+            "engine": engine if engine is not None else self._search_provider,
+            "max_results": max_results,
+            "recency_days": 3,
+            "interstitial": interstitial,
+        }
+        if looks_turkish(query):
+            payload["region"] = SEARCH_REGION_TURKISH
         result, _command_id = self._run(
             "browser.search",
-            {
-                "session_id": self._session_id,
-                "query": query,
-                "engine": engine if engine is not None else self._search_provider,
-                "max_results": max_results,
-                "recency_days": 3,
-                "interstitial": interstitial,
-            },
+            payload,
             f"{self._session_id}:search:{digest}",
         )
         self.last_search_evidence = SearchEvidence.from_result(query, result)
@@ -742,6 +760,7 @@ def _parse_optional_dt(value: Any) -> datetime | None:
 
 __all__ = [
     "DEFAULT_EXCERPT_CHARS",
+    "SEARCH_REGION_TURKISH",
     "SearchEvidence",
     "BrowserDispatchError",
     "BrowserGateway",

@@ -429,6 +429,63 @@ def build_insufficient_terminal_payload(
     }
 
 
+# --------------------------------------------------------------- E: a failed run's own words
+#
+# ADR-0178 (owner incident 2026-09-19, item E): "araştırma başarısız oldu dedi" was ALL
+# the owner ever heard from a run that read 11 pages perfectly well and rejected all of
+# them for a specific, nameable reason (in the production run behind this incident:
+# every rejection was off_topic). The run's own terminal ``error`` string — what
+# ``app.research.browser_activities.fail_run_activity`` stores on
+# ``ResearchRunRow.error`` when the quality gate or synthesis floor could not be met —
+# used to be the raw exception text
+# ("insufficient_valid_evidence: ranking: 0 contract-valid item(s), 3 required; 0
+# quarantined"): English, crawler vocabulary, and silent about the one fact the owner
+# actually needs (why). :func:`insufficient_run_narration` is what
+# ``fail_run_activity`` composes that string from instead, for the two error classes
+# this applies to (:data:`REASON_INSUFFICIENT_EVIDENCE` / a synthesis-floor miss) —
+# see that activity for the wiring; this function itself is pure and owns no I/O.
+
+
+def insufficient_run_narration(
+    *, fetched: int, rejected_by_reason: dict[str, int] | None = None
+) -> str:
+    """The honest, Turkish, count-aware, crawler-vocabulary-free explanation for a run
+    that ended with no defensible answer.
+
+    ``fetched`` is how many pages the run actually READ (``ResearchRunRow.progress_json
+    ["fetch_done"]``) — the fact that makes "0 kaynak buldum" (nothing was even read)
+    and "11 sayfa okudum ama hiçbiri uygun değildi" (plenty was read, none of it
+    qualified) two different, both true, both ownable sentences instead of one bare
+    "failed". ``rejected_by_reason`` (``ResearchRunRow.progress_json
+    ["rejected_by_reason"]``, written by the ranking stage's quality gate — see
+    :mod:`app.research.eligibility`) picks which of those it was: the single MOST
+    common rejection reason names the sentence, since a mixed bag of reasons still has
+    a most-common one and naming it is more honest than naming none.
+    """
+    reasons = {k: v for k, v in (rejected_by_reason or {}).items() if v}
+    if fetched <= 0:
+        return "Efendim, bu konuda okunabilecek bir sayfa bulamadım."
+    dominant = max(reasons, key=lambda k: reasons[k]) if reasons else None
+    if dominant == "off_topic":
+        return (
+            f"Efendim, {fetched} sayfa okudum, ancak hiçbiri konuyla yeterince ilgili bulunmadı."
+        )
+    if dominant in ("date_uncertain", "outside_recency_window"):
+        return f"Efendim, {fetched} sayfa okudum, ancak tarihlerini doğrulayamadım."
+    if dominant == "interstitial":
+        return (
+            f"Efendim, {fetched} sayfa okudum, ancak çoğu erişim engeli ya da "
+            "doğrulama sayfasıyla karşılaştı."
+        )
+    if dominant == "insufficient_content":
+        return f"Efendim, {fetched} sayfa okudum, ancak içerikleri yetersizdi."
+    if dominant == "duplicate_event":
+        return f"Efendim, {fetched} sayfa okudum, ancak hepsi aynı haberi anlatıyordu."
+    return (
+        f"Efendim, {fetched} sayfa okudum, ancak hiçbirinden savunulabilir bir bulgu çıkaramadım."
+    )
+
+
 __all__ = [
     "BROADER_RUN_OFFER_TR",
     "MAX_SPOKEN_FINDINGS",
@@ -440,5 +497,6 @@ __all__ = [
     "ResearchSourceRef",
     "build_insufficient_terminal_payload",
     "build_tool_terminal_payload",
+    "insufficient_run_narration",
     "spoken_result",
 ]

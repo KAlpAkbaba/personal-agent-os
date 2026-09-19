@@ -227,6 +227,80 @@ def test_insufficient_with_unknown_reason_still_answers_honestly() -> None:
     assert speech == "Bu konuda yeterli doğrulanmış kaynak bulamadım."
 
 
+# ---------------------------------------------------------------------------
+# ADR-0178 item E (owner incident 2026-09-19): "araştırma başarısız oldu" was ALL the
+# owner ever heard from a run that read 11 pages perfectly well and rejected all of
+# them off_topic. insufficient_run_narration is what a STAGE_FAILED run's OWN error
+# message is composed from instead (see app.research.browser_activities.fail_run_activity),
+# since that path never reaches ResearchResult/spoken_result at all.
+# ---------------------------------------------------------------------------
+
+
+def test_insufficient_run_narration_zero_pages_read() -> None:
+    from app.research.result import insufficient_run_narration
+
+    speech = insufficient_run_narration(fetched=0, rejected_by_reason={})
+    assert speech == "Efendim, bu konuda okunabilecek bir sayfa bulamadım."
+
+
+def test_insufficient_run_narration_names_the_page_count_and_dominant_reason() -> None:
+    from app.research.result import insufficient_run_narration
+
+    speech = insufficient_run_narration(
+        fetched=11, rejected_by_reason={"off_topic": 3, "date_uncertain": 1}
+    )
+    assert "11 sayfa okudum" in speech
+    assert "konuyla yeterince ilgili bulunmadı" in speech
+
+
+def test_insufficient_run_narration_names_date_uncertainty() -> None:
+    from app.research.result import insufficient_run_narration
+
+    speech = insufficient_run_narration(
+        fetched=5, rejected_by_reason={"date_uncertain": 4, "off_topic": 1}
+    )
+    assert "5 sayfa okudum" in speech
+    assert "tarihlerini doğrulayamadım" in speech
+
+
+def test_insufficient_run_narration_never_uses_crawler_vocabulary() -> None:
+    """Unlike ``spoken_result`` (which must never mention a count at all, per
+    ADR-0067/M18.2 DEFECT 2), ``insufficient_run_narration`` is DELIBERATELY
+    count-aware ("N sayfa okudum") — that is exactly what the owner asked for
+    (ADR-0178 item E) for this specific "we read pages and rejected all of them"
+    shape of failure. What it must still never do is leak the pipeline's own
+    rejection-reason CODE or any English/crawler vocabulary — only plain Turkish."""
+    from app.research.result import insufficient_run_narration
+
+    for reasons in (
+        {"off_topic": 3},
+        {"date_uncertain": 2},
+        {"outside_recency_window": 2},
+        {"interstitial": 2},
+        {"insufficient_content": 2},
+        {"duplicate_event": 2},
+        {},
+    ):
+        speech = insufficient_run_narration(fetched=7, rejected_by_reason=reasons)
+        lowered = speech.lower()
+        for word in FORBIDDEN_WORDS:
+            assert word not in lowered, f"{word!r} leaked into {speech!r}"
+        assert "insufficient_valid" not in speech
+        assert "contract-valid" not in speech
+        assert "off_topic" not in speech
+        assert "outside_recency_window" not in speech
+        assert speech.startswith("Efendim,")
+
+
+def test_insufficient_run_narration_with_no_rejection_reasons_still_answers_honestly() -> None:
+    from app.research.result import insufficient_run_narration
+
+    speech = insufficient_run_narration(fetched=4, rejected_by_reason=None)
+    assert speech == (
+        "Efendim, 4 sayfa okudum, ancak hiçbirinden savunulabilir bir bulgu çıkaramadım."
+    )
+
+
 # ------------------------------------------------------------------ ResearchDiagnostics
 
 

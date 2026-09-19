@@ -87,7 +87,7 @@ from app.research.owner_browser_gateway import (
     OWNER_BROWSER_FALLBACK_ERROR_CLASSES,
     OwnerBrowserGateway,
 )
-from app.research.plan import build_plan
+from app.research.plan import build_plan, looks_turkish
 from app.research.policy import SHORTLIST_DOMAIN_SHARE, ResearchPolicy, resolve_policy
 from app.research.report import (
     DetailSection,
@@ -101,6 +101,7 @@ from app.research.report import (
     render_research_markdown,
     run_provenance_gate,
 )
+from app.research.result import insufficient_run_narration
 from app.research.synthesis import (
     DeterministicSynthesisProvider,
     SynthesisNotConfiguredError,
@@ -403,6 +404,29 @@ def _official_candidates(query_text: str, query_id: str) -> list[discovery.Disco
     return out
 
 
+def _turkish_news_candidates(query_text: str, query_id: str) -> list[discovery.DiscoveredCandidate]:
+    """ADR-0178 item D3: a Turkish-worded "news" query is ALSO answered from
+    :data:`app.research.sources.TURKISH_NEWS_REGISTRY`'s verified RSS feeds, in
+    addition to (never instead of) whatever the browser search for the same query
+    finds — this is what puts at least a handful of Turkish-language candidates into
+    a run that would otherwise draw entirely on whichever language the search engine
+    chose to answer in. One feed failing never fails discovery for the whole run
+    (same discipline as :func:`_official_candidates`)."""
+    out: list[discovery.DiscoveredCandidate] = []
+    for entry in sources.turkish_news_for_topics(tuple(query_text.split())):
+        if not entry.feed_url:
+            continue
+        try:
+            out.extend(
+                discovery.fetch_rss(entry.feed_url, publisher=entry.publisher, query_id=query_id)
+            )
+        except discovery.DiscoveryError as exc:
+            logger.warning(
+                "browser_research_turkish_feed_failed", publisher=entry.publisher, error=str(exc)
+            )
+    return out
+
+
 def _retag(candidates: list, query_id: str) -> list:
     """API discovery (Hacker News, arXiv) labels candidates with the query TEXT; the
     workflow's ``<source_class>:<i>`` id is what carries the class into fetch ordering
@@ -577,6 +601,14 @@ def discover_activity(
         logger.warning("browser_research_discovery_failed", task_id=task_id, error=str(exc))
         candidates = []
 
+    # ADR-0178 item D3: supplement (never replace) a Turkish-worded "news" query's
+    # browser-search results with the verified Turkish RSS registry — once per run
+    # (the FIRST "news" query, ":0") rather than once per diversified query, since the
+    # registry itself doesn't change with the query wording and candidate rows dedupe
+    # by URL anyway (app.research.runs_service.insert_candidates).
+    if source_class == "news" and query_id.endswith(":0") and looks_turkish(query_text):
+        candidates = list(candidates) + _turkish_news_candidates(query_text, query_id)
+
     factory = _session_factory()
     with factory() as session:
         inserted = runs_service.insert_candidates(session, tid, candidates)
@@ -636,9 +668,31 @@ def _looks_like_listing(url: str) -> bool:
     return query.startswith("q=") or "&q=" in query or "search=" in query
 
 
+#: ADR-0178 item D2: a candidate URL is treated as Turkish-language when its host
+#: carries the ".tr" TLD, or is one of the small set of known Turkish publishers whose
+#: domain does not (evrimagaci.org), or is BBC's own Turkish-language section (a
+#: bbc.com URL is otherwise English). Domain-only on purpose — at THIS stage nothing
+#: has been fetched yet (see :func:`_prefetch_preference`'s own docstring), so there is
+#: no title/excerpt language to read.
+_TURKISH_KNOWN_DOMAINS = frozenset({"evrimagaci.org"})
+
+
+def _looks_turkish_source(url: str) -> bool:
+    from urllib.parse import urlsplit
+
+    host = urlsplit(url).netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host.endswith(".tr"):
+        return True
+    if host in _TURKISH_KNOWN_DOMAINS:
+        return True
+    return host in {"bbc.com", "bbc.co.uk"} and "/turkce/" in url.lower()
+
+
 def _prefetch_preference(
     candidate: Any, topic: str, *, challenged_domains: frozenset[str] = frozenset()
-) -> tuple[int, int, float]:
+) -> tuple[int, int, int, float]:
     """How promising a candidate looks BEFORE it is fetched, from what discovery stored.
 
     Only the URL and the provider's date hint exist at this point (no title, no body), so this
@@ -653,8 +707,17 @@ def _prefetch_preference(
     behind every candidate whose host has not — still attempted (cooldown, not
     exclusion, needs a SECOND challenge, app.research.challenge), just last in
     line within its own source-class bucket.
+
+    ADR-0178 item D2 ("araştırma hep yabancı kaynaklara gidiyor"): for a
+    Turkish-worded ``topic``, a Turkish-language candidate (:func:`_looks_turkish_source`)
+    sorts ahead of an otherwise-equal English one — a PREFERENCE, not a filter, so the
+    round-robin domain refill in :func:`build_fetch_shortlist` still gives English
+    sources their turn ("keeping a minority of English sources rather than none").
+    For a non-Turkish topic this contributes the SAME value for every candidate
+    (neutral — no bias at all, byte-for-byte the old ordering).
     """
     from app.research.challenge import domain_of
+    from app.research.plan import looks_turkish
 
     hint = (getattr(candidate, "published_hint", "") or "").lower()
     recent_hint = any(
@@ -676,12 +739,13 @@ def _prefetch_preference(
             "bugün",
         )
     )
-    relevance = eligibility.topic_relevance(
-        topic=topic, title="", excerpt="", url=str(getattr(candidate, "url", ""))
-    )
-    candidate_domain = domain_of(str(getattr(candidate, "url", "")))
+    candidate_url = str(getattr(candidate, "url", ""))
+    relevance = eligibility.topic_relevance(topic=topic, title="", excerpt="", url=candidate_url)
+    candidate_domain = domain_of(candidate_url)
     already_challenged = 1 if candidate_domain in challenged_domains else 0
-    return (already_challenged, 0 if recent_hint else 1, -relevance)
+    turkish_topic = looks_turkish(topic) if topic else False
+    language_rank = 0 if (not turkish_topic or _looks_turkish_source(candidate_url)) else 1
+    return (already_challenged, language_rank, 0 if recent_hint else 1, -relevance)
 
 
 def select_fetch_order(
@@ -1340,6 +1404,7 @@ def _apply_quality_gate(
             window_end=window_end,
             publisher=record.publisher,
             existing_event_keys=tuple(seen_event_keys),
+            extraction_method=record.extraction_method,
         )
         if verdict.eligible:
             kept.append(record)
@@ -2124,6 +2189,37 @@ def close_session_activity(task_id: str, device_id: str) -> bool:
     return True
 
 
+#: ADR-0178 item E: error classes meaning "the pipeline read pages and could not build
+#: a defensible answer from them" — the two classes :func:`_owner_facing_failure_message`
+#: replaces the raw exception text for. Every OTHER failure class (device/dependency/
+#: security errors, "no_capable_device", ...) keeps its own `detail` unchanged: those
+#: are not a rejected-evidence shape, and inventing a fetched-page-count sentence for
+#: one (e.g. "no device was ever selected") would be dishonest.
+_INSUFFICIENT_ERROR_CLASSES = frozenset(
+    {ERROR_INSUFFICIENT_VALID_EVIDENCE, ERROR_INSUFFICIENT_VALID_FINDINGS}
+)
+
+
+def _owner_facing_failure_message(run: Any, error_class: str, detail: str) -> str:
+    """The text that becomes ``ResearchRunRow.error`` — what
+    ``app.voice.realtime_sessions.research_announcer`` reads back VERBATIM as the tool
+    error message for a run that ends STAGE_FAILED (owner incident 2026-09-19: that
+    path never even looks at the report, so the raw exception text — English, "0
+    contract-valid item(s), 3 required" — was literally the only thing standing between
+    the owner and an honest answer). See :func:`app.research.result.insufficient_run_narration`
+    for the actual composition; this only reads back the counts it needs from the run's
+    own ``progress_json`` (``fetch_done`` from the fetch stage, ``rejected_by_reason``
+    from the ranking stage's quality gate).
+    """
+    if error_class not in _INSUFFICIENT_ERROR_CLASSES:
+        return detail
+    progress = (run.progress_json if run is not None else None) or {}
+    fetched = int(progress.get("fetch_done") or 0)
+    rejected_by_reason = progress.get("rejected_by_reason")
+    rejected_by_reason = rejected_by_reason if isinstance(rejected_by_reason, dict) else {}
+    return insufficient_run_narration(fetched=fetched, rejected_by_reason=rejected_by_reason)
+
+
 @activity.defn(name="browser_research_fail_run")
 def fail_run_activity(task_id: str, error_class: str, detail: str) -> bool:
     """Record a terminal failure of the run (stage failed, task FAILED, one event).
@@ -2149,11 +2245,12 @@ def fail_run_activity(task_id: str, error_class: str, detail: str) -> bool:
                 )
             except Exception:  # noqa: BLE001 - an illegal transition must not mask the failure
                 pass
+        owner_facing_error = _owner_facing_failure_message(run, error_class, detail)
         runs_service.update_run(
             session,
             tid,
             stage=STAGE_FAILED,
-            error=detail[:2000],
+            error=owner_facing_error[:2000],
             event={"stage": STAGE_FAILED, "detail": f"{error_class}: {detail[:300]}"},
         )
         session.commit()

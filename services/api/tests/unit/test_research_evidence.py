@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.research.evidence import (
+    EXTRACTION_METHOD_OWNER_BROWSER_OCR,
     STATEMENT_LABELS,
     EvidenceRecord,
     LabelledStatement,
@@ -326,3 +327,76 @@ def test_content_text_is_a_noop_on_a_plain_single_line_excerpt() -> None:
 def test_content_text_handles_empty_and_blank_input() -> None:
     assert content_text("") == ""
     assert content_text("   ") == "   "
+
+
+# --------------------------------------------------------------------------- #
+# ADR-0178 (owner incident 2026-09-19, item A): "araştırma başarısız oldu" traced to
+# an owner_browser_ocr excerpt (one OCR screen-row per line, no sentence punctuation
+# at line ends -- a wrapped sentence, unlike a real browser's innerText, is NOT one
+# line per paragraph) losing almost its entire article to the ordinary per-line
+# chrome filter. These fixtures are shaped exactly like the production run's OCR read.
+# --------------------------------------------------------------------------- #
+
+_OCR_REAL_SENTENCE = (
+    "The lawsuit accuses Anthropic and OpenAI of pushing engineers to train large "
+    "language models around the clock without proper rest, raising new questions "
+    "about safety practices across the industry."
+)
+
+# One screen row per line -- the real bug shape: none of these lines (other than the
+# very last) ends in sentence punctuation, and every one of them is well under 80
+# chars, which is exactly what app.research.evidence._is_chrome_line's plain per-line
+# filter treats as chrome.
+_OCR_SHAPED_EXCERPT = "\n".join(
+    [
+        "INDEPENDENT",
+        "UK Edition",
+        "Login",
+        "News",
+        "Voices",
+        "18 SEPTEMBER 2026",
+        "The lawsuit accuses",
+        "Anthropic and OpenAI of",
+        "pushing engineers to train",
+        "large language models",
+        "around the clock without",
+        "proper rest, raising new",
+        "questions about safety",
+        "practices across the",
+        "industry.",
+    ]
+)
+
+
+def test_content_text_reflows_ocr_lines_into_a_paragraph_and_keeps_it() -> None:
+    survivor = content_text(
+        _OCR_SHAPED_EXCERPT, extraction_method=EXTRACTION_METHOD_OWNER_BROWSER_OCR
+    )
+    assert _OCR_REAL_SENTENCE in survivor
+
+
+def test_content_text_drops_ocr_nav_and_byline_rows_even_when_one_word_per_row() -> None:
+    survivor = content_text(
+        _OCR_SHAPED_EXCERPT, extraction_method=EXTRACTION_METHOD_OWNER_BROWSER_OCR
+    )
+    for chrome_word in ("INDEPENDENT", "UK Edition", "Login", "Voices"):
+        assert chrome_word not in survivor
+    assert "18 SEPTEMBER 2026" not in survivor
+
+
+def test_content_text_without_ocr_extraction_method_drops_the_same_lines_wholesale() -> None:
+    """The regression this fix closes: WITHOUT extraction_method awareness, the plain
+    per-line filter (correctly tuned for a real browser's innerText) drops nearly the
+    whole OCR-shaped article too, because each wrapped line is short and
+    punctuation-free on its own."""
+    survivor = content_text(_OCR_SHAPED_EXCERPT)
+    assert _OCR_REAL_SENTENCE not in survivor
+
+
+def test_content_text_ocr_path_is_unaffected_by_a_plain_dom_text_excerpt() -> None:
+    """extraction_method="" (the default, and every extraction method other than
+    owner_browser_ocr) is byte-for-byte the old behaviour."""
+    survivor_default = content_text(_HN_SHAPED_EXCERPT)
+    survivor_dom_text = content_text(_HN_SHAPED_EXCERPT, extraction_method="dom_text")
+    assert survivor_default == survivor_dom_text
+    assert _HN_REAL_SENTENCE in survivor_default

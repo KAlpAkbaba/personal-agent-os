@@ -99,4 +99,97 @@ def feeds_only() -> list[SourceRegistryEntry]:
     return [e for e in REGISTRY if e.feed_url]
 
 
-__all__ = ["REGISTRY", "SourceRegistryEntry", "feeds_only", "for_topics"]
+# --------------------------------------------------------------------------- #
+# ADR-0178 (owner incident 2026-09-19, item D3): "araştırma hep yabancı
+# kaynaklara gidiyor" — the owner's default "news" discovery had no Turkish
+# source of its own at all; every candidate came from browser search (whichever
+# language DuckDuckGo/Google chose to answer in) or the "official" registry's
+# English-language company blogs above. This is a small registry of reputable
+# Turkish-language publishers covering the topics the rest of this registry
+# already covers (technology/AI, science, general/world news), used by the
+# "news" discovery branch (see app.research.browser_activities) IN ADDITION TO
+# — never instead of — the existing browser-search discovery.
+#
+# Every ``feed_url`` below was verified reachable (HTTP 200/301 and a parseable
+# RSS/Atom body — ``app.research.discovery.parse_rss_or_atom``) on 2026-09-19;
+# see the ADR-0178 entry in docs/DECISIONS.md for the exact command and
+# response snippet for each one. A feed considered but that did NOT answer
+# (TRT Haber's bilim/teknoloji-specific feed path, Anadolu Ajansı's rss
+# endpoints) was dropped rather than guessed at — "a feed you cannot verify is
+# not added".
+# --------------------------------------------------------------------------- #
+
+TURKISH_NEWS_REGISTRY: tuple[SourceRegistryEntry, ...] = (
+    SourceRegistryEntry(
+        publisher="Webrazzi",
+        source_class="news",
+        index_url="https://webrazzi.com/",
+        feed_url="https://webrazzi.com/feed",
+        topics=("ai", "yapay zeka", "teknoloji", "girişim", "startup", "genel"),
+    ),
+    SourceRegistryEntry(
+        publisher="ShiftDelete.Net",
+        source_class="news",
+        index_url="https://www.shiftdelete.net/",
+        feed_url="https://www.shiftdelete.net/feed",
+        topics=("ai", "yapay zeka", "teknoloji", "genel"),
+    ),
+    SourceRegistryEntry(
+        publisher="DonanımHaber",
+        source_class="news",
+        index_url="https://www.donanimhaber.com/",
+        feed_url="https://www.donanimhaber.com/rss/tum/",
+        topics=("ai", "yapay zeka", "teknoloji", "genel"),
+    ),
+    SourceRegistryEntry(
+        publisher="Webtekno",
+        source_class="news",
+        index_url="https://www.webtekno.com/",
+        feed_url="https://www.webtekno.com/rss.xml",
+        topics=("ai", "yapay zeka", "teknoloji", "genel"),
+    ),
+    SourceRegistryEntry(
+        publisher="NTV Teknoloji",
+        source_class="news",
+        index_url="https://www.ntv.com.tr/teknoloji",
+        feed_url="https://www.ntv.com.tr/teknoloji.rss",
+        topics=("ai", "yapay zeka", "teknoloji", "genel"),
+    ),
+    SourceRegistryEntry(
+        publisher="Evrim Ağacı",
+        source_class="news",
+        index_url="https://evrimagaci.org/",
+        feed_url="https://evrimagaci.org/rss.xml",
+        topics=("ai", "yapay zeka", "bilim", "science", "genel"),
+    ),
+    SourceRegistryEntry(
+        publisher="BBC Türkçe",
+        source_class="news",
+        index_url="https://www.bbc.com/turkce",
+        feed_url="https://www.bbc.com/turkce/index.xml",
+        topics=("ai", "yapay zeka", "teknoloji", "dünya", "genel"),
+    ),
+)
+
+
+def turkish_news_for_topics(
+    topics: tuple[str, ...] | list[str],
+) -> list[SourceRegistryEntry]:
+    """:func:`for_topics`, over :data:`TURKISH_NEWS_REGISTRY` — never an empty set
+    for a genuine query (falls back to the whole, small registry, same rule as
+    ``for_topics``)."""
+    wanted = {t.lower() for t in topics}
+    if not wanted:
+        return list(TURKISH_NEWS_REGISTRY)
+    matched = [e for e in TURKISH_NEWS_REGISTRY if wanted & {t.lower() for t in e.topics}]
+    return matched or list(TURKISH_NEWS_REGISTRY)
+
+
+__all__ = [
+    "REGISTRY",
+    "TURKISH_NEWS_REGISTRY",
+    "SourceRegistryEntry",
+    "feeds_only",
+    "for_topics",
+    "turkish_news_for_topics",
+]

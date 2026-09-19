@@ -10,6 +10,7 @@ from app.devices.commands import CommandExpired, CommandFailed, CommandSucceeded
 from app.research import destination
 from app.research.browser_gateway import (
     DEFAULT_EXCERPT_CHARS,
+    SEARCH_REGION_TURKISH,
     BrowserDispatchError,
     DeviceBrowserGateway,
     FetchQuery,
@@ -83,6 +84,28 @@ def test_search_payload_matches_contract() -> None:
     assert len(hits) == 1
     assert hits[0].url == "https://a"
     assert hits[0].published_hint == "2 gün önce"
+
+
+# --------------------------------------------------------------------------- #
+# ADR-0178 item D2: a Turkish-worded search query also asks the provider for the
+# Turkish region.
+# --------------------------------------------------------------------------- #
+
+
+def test_search_sends_turkish_region_for_a_turkish_query() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    gw = _gateway(client)
+    gw.search("yapay zeka ile ilgili haberleri")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert call.payload["region"] == SEARCH_REGION_TURKISH
+
+
+def test_search_omits_region_for_an_english_query() -> None:
+    client = FakeDeviceCommandClient(default_outcome=CommandSucceeded({"results": []}))
+    gw = _gateway(client)
+    gw.search("AI agents announcement")
+    call = next(c for c in client.calls if c.capability == "browser.search")
+    assert "region" not in call.payload
 
 
 def test_search_sends_duckduckgo_engine_by_default() -> None:

@@ -71,6 +71,7 @@ from app.research.dates import parse_recency_window
 from app.research.destination import DestinationPolicyError, validate_fetch_target
 from app.research.eligibility import classify_page_validity
 from app.research.evidence import (
+    EXTRACTION_METHOD_OWNER_BROWSER_OCR,
     PAGE_KIND_AUTH_WALL,
     PAGE_KIND_BLOCKED,
     PAGE_KIND_CAPTCHA,
@@ -84,8 +85,12 @@ from app.research.forbidden_keys import find_forbidden_keys
 logger = get_logger("app.research.owner_browser_gateway")
 
 #: The extraction_method this gateway stamps every record with (spec: distinguishes an
-#: owner-Chrome/OCR read from the worker's own ``dom_text`` extraction).
-EXTRACTION_METHOD = "owner_browser_ocr"
+#: owner-Chrome/OCR read from the worker's own ``dom_text`` extraction). Defined in
+#: :mod:`app.research.evidence` (ADR-0178: ``content_text`` needs to recognise this
+#: value too, to reflow OCR lines into paragraphs before its chrome filter runs) and
+#: re-exported here under its original name so every existing caller of
+#: ``owner_browser_gateway.EXTRACTION_METHOD`` is unaffected.
+EXTRACTION_METHOD = EXTRACTION_METHOD_OWNER_BROWSER_OCR
 
 #: The Windows executable image the owner's browser runs under. Same identity
 #: ``app.operator.mission.CHROME_IMAGE`` uses, duplicated (see module docstring).

@@ -37,7 +37,7 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.research.evidence import content_text
+from app.research.evidence import EXTRACTION_METHOD_OWNER_BROWSER_OCR, content_text
 from app.research.plan import english_core_query
 
 # ---------------------------------------------------------------------------
@@ -396,6 +396,13 @@ def _cross_language_topic_tokens(topic: str) -> frozenset[str]:
     "AI") is trusted to be exactly that — a high-signal term, not noise — and is kept
     regardless of length. ``news``-type filler words are still dropped via the same
     ``_STOPWORDS`` set the Turkish tokens are filtered through.
+
+    Deliberately returns ONLY what the term map itself produces (never widened with a
+    hand-picked vocabulary): every token returned here also grows the token-overlap
+    normalization denominator below, so padding this set with many extra words would
+    make an article that mentions only ONE of them score WORSE, not better (measured
+    while building :data:`_AI_SUBJECT_SYNONYMS` — see :func:`_ai_subject_bonus` for
+    where that broader vocabulary is actually used instead).
     """
     translated = english_core_query(topic)
     if not translated:
@@ -411,6 +418,84 @@ def _cross_language_topic_tokens(topic: str) -> frozenset[str]:
     return frozenset(tokens)
 
 
+#: ADR-0178 (owner incident 2026-09-19, item C): company/product names the pipeline's
+#: OWN query planner already treats as part of the AI domain (mirrors
+#: ``app.research.plan._AGENT_ENTITY_QUERIES``'s entity list) plus a small generic-AI
+#: vocabulary. Used by :func:`_ai_subject_bonus`, ONLY when the topic's own subject
+#: already reduced to bare "AI" (:func:`english_core_query` mapped it there) — that is
+#: what lets a genuinely on-topic English page naming "OpenAI", "Anthropic" or "LLM
+#: benchmarks", but never spelling out "yapay zeka"/"artificial intelligence" verbatim,
+#: still pick up SOME credit. A small, capped, ADDITIVE bonus rather than more
+#: token-overlap tokens on purpose: those tokens also grow the overlap score's own
+#: normalization denominator (:func:`_cross_language_topic_tokens`'s own docstring),
+#: so a large vocabulary added there would make a typical single-topic article score
+#: WORSE by diluting the overlap fraction, not better — confirmed while building this
+#: fix: the existing (passing) test
+#: ``test_english_ai_coding_article_clears_the_relevance_floor_for_a_turkish_ai_topic``
+#: regressed the moment this vocabulary was folded into the token set instead of kept
+#: as its own bonus term.
+_AI_SUBJECT_SYNONYMS: frozenset[str] = frozenset(
+    {
+        "ai",
+        "artificial",
+        "intelligence",
+        "llm",
+        "llms",
+        "genai",
+        "openai",
+        "anthropic",
+        "google",
+        "gemini",
+        "microsoft",
+        "copilot",
+        "meta",
+        "llama",
+        "chatgpt",
+        "gpt",
+    }
+)
+
+#: Per-hit and total cap for :func:`_ai_subject_bonus` — small enough that it can never
+#: by itself carry an unrelated page across :data:`MIN_TOPIC_RELEVANCE` (it only adds
+#: to a candidate that has ALREADY cleared page-validity/content checks and picked up
+#: some base signal), large enough to matter for a genuinely AI-focused page that named
+#: only one or two of these terms.
+_AI_SUBJECT_BONUS_PER_HIT = 0.05
+_AI_SUBJECT_BONUS_MAX = 0.15
+
+
+def _ai_subject_bonus(
+    *, cross_language_tokens: frozenset[str], title_tokens: set[str], body_tokens: set[str]
+) -> float:
+    """Additive credit for naming a known AI entity/vocabulary word, gated on the
+    topic's own subject already being generic "AI" (see :data:`_AI_SUBJECT_SYNONYMS`).
+    """
+    if "ai" not in cross_language_tokens:
+        return 0.0
+    hits = (title_tokens | body_tokens) & _AI_SUBJECT_SYNONYMS
+    if not hits:
+        return 0.0
+    return min(_AI_SUBJECT_BONUS_MAX, _AI_SUBJECT_BONUS_PER_HIT * len(hits))
+
+
+#: ADR-0178 (owner incident 2026-09-19, item B): a single, narrow OCR misreading
+#: table. "Al" (capital A + lowercase L) and "AI" (capital A + capital I) are visually
+#: identical in many display fonts a screen-OCR pass has to read from a live browser
+#: window — production example: "THE Al DAILY BRIEF" for "THE AI DAILY BRIEF". Applied
+#: ONLY to ``owner_browser_ocr`` text (never to a real browser's ``innerText``, where
+#: "Al" is far more likely to be a genuine name, e.g. "Al Gore") and deliberately
+#: narrow: it does not attempt to recover garbage with no single likely reading (e.g.
+#: "NEVİS" for "NEWS" — not corrected, per the incident report: "not recoverable, do
+#: not over-reach").
+_OCR_AL_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9])Al(?![A-Za-z0-9])")
+
+
+def _fold_ocr_confusables(text: str, *, extraction_method: str = "") -> str:
+    if extraction_method != EXTRACTION_METHOD_OWNER_BROWSER_OCR:
+        return text
+    return _OCR_AL_TOKEN_RE.sub("AI", text)
+
+
 def topic_relevance(
     *,
     topic: str,
@@ -418,6 +503,7 @@ def topic_relevance(
     excerpt: str,
     url: str = "",
     entities: tuple[str, ...] = (),
+    extraction_method: str = "",
 ) -> float:
     """Score how relevant a candidate is to the topic, 0.0 (unrelated) .. 1.0.
 
@@ -446,6 +532,12 @@ def topic_relevance(
     score as on-topic, and real article prose must not be diluted by chrome
     sharing none of the topic's words).
 
+    ``extraction_method`` (ADR-0178, ``EvidenceRecord.extraction_method``) is passed
+    straight through to :func:`app.research.evidence.content_text` (an
+    ``owner_browser_ocr`` excerpt gets its OCR-aware paragraph reflow, see that
+    function) and gates a small, narrow OCR-misreading fold
+    (:func:`_fold_ocr_confusables`) applied to the title and content before matching.
+
     The two signals are combined as ``0.65 * lexicon_score + 0.35 *
     token_overlap_score``, each independently capped at 1.0 before blending,
     and the AI-agent lexicon is always included in scoring (not just when
@@ -457,9 +549,11 @@ def topic_relevance(
     if not isinstance(title, str) or not isinstance(excerpt, str) or not isinstance(topic, str):
         return 0.0
 
-    content_excerpt = content_text(excerpt)
-    title_folded = _fold(title)
-    excerpt_folded = _fold(content_excerpt)
+    content_excerpt = content_text(excerpt, extraction_method=extraction_method)
+    title_corrected = _fold_ocr_confusables(title, extraction_method=extraction_method)
+    content_corrected = _fold_ocr_confusables(content_excerpt, extraction_method=extraction_method)
+    title_folded = _fold(title_corrected)
+    excerpt_folded = _fold(content_corrected)
     combined = f"{title_folded} {excerpt_folded}"
 
     lexicon_hits_title = _concept_weight(title_folded)
@@ -476,11 +570,12 @@ def topic_relevance(
     # has to be able to carry a page on its own.
     lexicon_score = min(1.0, lexicon_raw / 3.0)
 
+    cross_language_tokens = _cross_language_topic_tokens(topic)
     topic_tokens = {tok for tok in _tokens(topic) if tok not in _STOPWORDS and len(tok) > 2}
-    topic_tokens |= _cross_language_topic_tokens(topic)
+    topic_tokens |= cross_language_tokens
+    title_tokens = set(_tokens(title_corrected))
+    body_tokens = set(_tokens(content_corrected))
     if topic_tokens:
-        title_tokens = set(_tokens(title))
-        body_tokens = set(_tokens(content_excerpt))
         title_overlap = len(topic_tokens & title_tokens)
         body_overlap = len(topic_tokens & body_tokens)
         overlap_raw = (2 * title_overlap) + body_overlap
@@ -494,7 +589,13 @@ def topic_relevance(
         if entity_folded & set(_tokens(combined)):
             entity_bonus = 0.05
 
-    score = (0.65 * lexicon_score) + (0.35 * token_score) + entity_bonus
+    ai_subject_bonus = _ai_subject_bonus(
+        cross_language_tokens=cross_language_tokens,
+        title_tokens=title_tokens,
+        body_tokens=body_tokens,
+    )
+
+    score = (0.65 * lexicon_score) + (0.35 * token_score) + entity_bonus + ai_subject_bonus
     return round(min(1.0, max(0.0, score)), 4)
 
 
@@ -831,6 +932,7 @@ def evaluate_candidate(
     entities: tuple[str, ...] = (),
     min_topic_relevance: float = MIN_TOPIC_RELEVANCE,
     existing_event_keys: tuple[str, ...] = (),
+    extraction_method: str = "",
 ) -> EligibilityVerdict:
     """Run a candidate through the full eligibility gate and explain the result.
 
@@ -893,7 +995,12 @@ def evaluate_candidate(
         )
 
     relevance = topic_relevance(
-        topic=topic, title=title, excerpt=excerpt, url=url, entities=entities
+        topic=topic,
+        title=title,
+        excerpt=excerpt,
+        url=url,
+        entities=entities,
+        extraction_method=extraction_method,
     )
 
     confidence, publication_date = publication_date_confidence(
