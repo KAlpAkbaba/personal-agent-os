@@ -278,3 +278,48 @@ async def test_start_and_stop_are_idempotent(session_factory) -> None:
     await announcer.stop()
     await announcer.stop()
     assert not announcer.running
+
+
+def test_a_run_that_failed_after_writing_its_report_still_reads_the_report(session_factory) -> None:
+    """ADR-0178 E, reported not fixed: the failed branch never looked for a report, so a run
+    that HAD found and written findings before a later step failed spoke its own stack trace
+    ("ranking: 0 contract-valid item(s)") instead of what it found."""
+    task_id = uuid.uuid4()
+    session_id = _seed_session(session_factory)
+    _seed_call(session_factory, session_id, call_id="r9", task_id=str(task_id))
+    _seed_run(
+        session_factory,
+        task_id,
+        stage=STAGE_FAILED,
+        error="artifact_persist_failed: S3 PutObject timed out",
+    )
+    _seed_report(session_factory, task_id)
+    announcer = ResearchToolCallAnnouncer(session_factory, RecordingSideband(deliver=True))
+
+    assert announcer.sweep_once() == 1
+
+    call = _get_call(session_factory, "r9")
+    assert call.status == TOOL_STATUS_SUCCEEDED, call.result_json
+    assert "Bulgu Bir" in call.result_json["spoken_result"]
+    assert "S3" not in call.result_json["spoken_result"]
+
+
+def test_a_failure_with_an_empty_report_row_is_still_a_failure(session_factory) -> None:
+    """An empty report is not a report: the run's own owner-facing message stays."""
+    task_id = uuid.uuid4()
+    session_id = _seed_session(session_factory)
+    _seed_call(session_factory, session_id, call_id="r10", task_id=str(task_id))
+    _seed_run(session_factory, task_id, stage=STAGE_FAILED, error="12 sayfa okudum efendim.")
+    with session_factory() as session:
+        session.add(
+            ResearchReportRow(task_id=task_id, report_json={}, synthesis_provider="deterministic")
+        )
+        session.commit()
+    announcer = ResearchToolCallAnnouncer(session_factory, RecordingSideband(deliver=True))
+
+    assert announcer.sweep_once() == 1
+
+    call = _get_call(session_factory, "r10")
+    assert call.status == TOOL_STATUS_FAILED
+    assert call.error_class == "research_failed"
+    assert "12 sayfa okudum" in (call.result_json or {}).get("message", "")

@@ -13857,3 +13857,56 @@ deliberately keeping the page count `spoken_result` must never carry). Full rese
 source-class narrowing, the search-region assignment, the Turkish-RSS discovery supplement,
 the Turkish-domain ranking bias, and the `fail_run_activity` narration gate — were each run RED
 against these suites and restored byte-exact from a sha256-checked backup.
+
+## ADR-0179 — A remark about a click became a click, a failed run with a report never read it, and the search region was sent but never honoured (2026-09-19)
+
+Three open items from the 2026-09-19 handoff, each the second half of something already
+decided; nothing new is chosen here, so this records what the halves are.
+
+**A. "Yanlış yere tıkladım" started a mission.** `app.operator.mission._segment_click_text`
+matched the stem `tıkla` anywhere in a token, so the past tense `tıkladım` ("I clicked")
+was read as the imperative `tıkla` ("click") and the screen was searched for "Yanlış yere".
+This is the `yaz`/`yazdır` shape from the measured seven (ADR-0044) in a new place: Turkish
+builds meaning with suffixes, so a stem match alone cannot tell a request from a remark.
+`_is_verb_command(token, stems)` asks what FOLLOWS the stem — past (`-dı`/`-tı`), perfect
+(`-mış`), progressive (`-ıyor`) and negative (`-ma`) are the owner talking about the act;
+an obligation (`tıklamalısın`) is still a request and stays one. Used by the click-text and
+video-play segments, the two that read a bare stem. **Found on the way** (same function):
+"Tarkan'a tıklar mısın" asked the screen for the whole sentence — the question particle
+(`mı/mi/mu/mü` and its personal forms) was not part of the closing trigger run the name is
+cut at. "Yanlış yere tıkladım." is now a `MEASURED_MISROUTES` case, forbidden
+`MISSION_START`, so the router half is pinned too.
+
+**B. A failed run's report was never read.** ADR-0178 E named this and left it: the
+announcer's `STAGE_FAILED` branch returned the run's error message without ever asking for
+a report, so a run that HAD written findings before a later step failed (artifact persist,
+a notification) spoke its failure detail instead of what it found. `_terminal_payload` now
+looks for the report FIRST, whatever the stage: a report that exists is what the owner
+asked for and is what they hear; with no report, a failed run's own message (Turkish and
+count-aware since ADR-0178 E for the rejected-evidence classes) is all there is. The
+failure itself stays in the run's event trail and the ledger — only what is spoken changed.
+
+**C. The search region was additive on one side only.** ADR-0178 D2 put `region: "tr-tr"`
+on the `browser.search` payload for a Turkish-worded query and left the honouring open, so
+every Turkish search was still answered from the default region while both halves' tests
+stayed green: Cloud Core asserted the field was SENT, and the worker had no test for a key
+it did not know. `browser_agent.worker._op_search` now takes `region` (validated as a
+string, ignored when it is not a `xx-yy` code) and passes it through `run_search` to
+`build_search_url`, where a new `region_params` maps it to each engine's own parameter:
+DuckDuckGo's `kl` takes the whole code, Google's `gl` takes the country (and `hl` the
+language, unless a locale was asked for by name, which wins). Bing and Brave are left
+alone — neither has a parameter this product has verified, and guessing one would change a
+search nobody measured. The device forwards the payload verbatim (`BrowserWorkerHost` is a
+transport, allowlisting the capability NAME only), so no device change was needed.
+`services/api/tests/unit/test_browser_search_region_contract.py` reads both sources so a
+rename on either side fails there, and the URL behaviour is proved in the browser package's
+own suite.
+
+**Tests**: `services/api/tests/unit/test_operator_b39.py` (+9 remark forms across planner and
+router, +5 ways of asking for a click), `tests/voice_corpus/routing.py` (+1 measured),
+`services/api/tests/unit/test_research_announcer.py` (+2: the failed run that reads its
+report, and the empty report row that is still a failure),
+`services/browser/tests/unit/test_search_engines.py` (+6),
+`services/api/tests/unit/test_browser_search_region_contract.py` (new, 4). Gates: the 1191
+planner/router unit tests, the 382 including the new measured case, research + realtime
+(back-to-back green), and the browser package's 441 unit tests.

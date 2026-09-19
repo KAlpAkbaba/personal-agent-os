@@ -254,15 +254,49 @@ def locale_params(locale: str | None) -> dict[str, str]:
     return params
 
 
+def region_params(engine: str, region: str | None) -> dict[str, str]:
+    """The engine's own way of saying "answer this from THIS country" for a region code
+    such as ``tr-tr`` (ADR-0178 D2: the API sends one for a Turkish-worded query).
+
+    DuckDuckGo names it ``kl`` and takes the whole code; Google names the country ``gl``
+    and, when no interface language was asked for separately, takes ``hl`` from the same
+    code. Bing and Brave are left alone: neither has a parameter this product has verified,
+    and guessing one would change a search nobody measured.
+    """
+    if not region:
+        return {}
+    parts = region.replace("_", "-").split("-")
+    if len(parts) != 2 or not all(len(p) == 2 and p.isalpha() for p in parts):
+        return {}
+    language, country = parts[0].lower(), parts[1].lower()
+    if engine == "duckduckgo":
+        return {"kl": f"{language}-{country}"}
+    if engine == "google":
+        return {"hl": language, "gl": country}
+    return {}
+
+
 def build_search_url(
-    engine: str, query: str, *, recency_days: int | None = None, locale: str | None = None
+    engine: str,
+    query: str,
+    *,
+    recency_days: int | None = None,
+    locale: str | None = None,
+    region: str | None = None,
 ) -> str:
     """The engine's search-results URL for ``query`` (contract §3 base URLs)."""
     params = {"q": query, **recency_param(engine, recency_days)}
     if engine == "google":
+        # The region names the COUNTRY, the locale the INTERFACE LANGUAGE: an explicit
+        # locale wins on ``hl`` (it was asked for by name), the region keeps ``gl``.
+        google_region = region_params(engine, region)
+        params.update(google_region)
         params.update(locale_params(locale))
+        if "gl" in google_region:
+            params["gl"] = google_region["gl"]
         params["num"] = "10"
         return f"https://www.google.com/search?{urlencode(params)}"
+    params.update(region_params(engine, region))
     if engine == "duckduckgo":
         return f"https://html.duckduckgo.com/html/?{urlencode(params)}"
     if engine == "bing":
@@ -533,6 +567,7 @@ async def run_search(
     max_results: int = 10,
     recency_days: int | None = None,
     locale: str | None = None,
+    region: str | None = None,
 ) -> SearchOutcome:
     """Run a search through the provider abstraction.
 
@@ -572,7 +607,9 @@ async def run_search(
     # the route the eventual fallback outcome took (contract §3a).
     fallback_path_hint: str | None = None
     for provider in order:
-        url = build_search_url(provider, query, recency_days=recency_days, locale=locale)
+        url = build_search_url(
+            provider, query, recency_days=recency_days, locale=locale, region=region
+        )
         try:
             fetched = await fetch(provider, url)
         except GoogleHandoffPending as handoff:

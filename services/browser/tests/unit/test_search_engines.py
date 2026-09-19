@@ -246,3 +246,38 @@ class TestRealRedirectShapes:
         assert resolve_result_url(bad, "duckduckgo") is None
         assert resolve_result_url("mailto:a@b", "bing") is None
         assert resolve_result_url("https://example.com/x", "brave") == "https://example.com/x"
+
+
+class TestSearchRegion:
+    """ADR-0178 D2 left open: the API sends ``region`` on a Turkish-worded query and the
+    worker ignored it, so a Turkish search was answered from the default (US) region."""
+
+    def test_duckduckgo_carries_the_region_as_its_own_kl_param(self) -> None:
+        assert "kl=tr-tr" in build_search_url("duckduckgo", "yapay zeka", region="tr-tr")
+
+    def test_google_carries_the_region_as_gl_and_hl(self) -> None:
+        url = build_search_url("google", "yapay zeka", region="tr-tr")
+        assert "gl=tr" in url and "hl=tr" in url
+
+    def test_an_explicit_locale_still_names_the_interface_language(self) -> None:
+        url = build_search_url("google", "yapay zeka", locale="en-US", region="tr-tr")
+        assert "hl=en" in url and "gl=tr" in url
+
+    def test_no_region_leaves_every_engine_exactly_as_it_was(self) -> None:
+        for engine in ("duckduckgo", "google", "bing", "brave"):
+            assert build_search_url(engine, "x") == build_search_url(engine, "x", region=None)
+
+    def test_a_region_that_is_not_a_region_is_ignored_not_sent(self) -> None:
+        assert "kl=" not in build_search_url("duckduckgo", "x", region="türkiye")
+        assert "kl=" not in build_search_url("duckduckgo", "x", region="")
+
+    @pytest.mark.asyncio
+    async def test_run_search_hands_the_region_to_the_url_it_fetches(self) -> None:
+        seen: list[str] = []
+
+        async def fetch(_engine: str, url: str) -> tuple[str, str, int]:
+            seen.append(url)
+            return "<html></html>", "ok", 200
+
+        await run_search("yapay zeka", "duckduckgo", fetch=fetch, region="tr-tr")
+        assert seen and "kl=tr-tr" in seen[0]

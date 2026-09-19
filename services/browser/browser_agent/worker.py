@@ -2165,6 +2165,15 @@ class Worker:
                 "search: locale must be a string or null",
                 retryable=False,
             )
+        # ADR-0178 D2: the API sends a region code (DuckDuckGo's own ``kl``) for a
+        # Turkish-worded query; an engine that has no verified parameter for it ignores it.
+        region = payload.get("region")
+        if region is not None and not isinstance(region, str):
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                "search: region must be a string or null",
+                retryable=False,
+            )
         browser_session = state.browser_session
 
         async def fetch(_engine: str, url: str) -> tuple[str, str, int | None, str, str | None]:
@@ -2201,6 +2210,7 @@ class Worker:
             max_results=max_results,
             recency_days=recency_days,
             locale=locale,
+            region=region,
         )
         logger.info(
             "browser.search_provider",

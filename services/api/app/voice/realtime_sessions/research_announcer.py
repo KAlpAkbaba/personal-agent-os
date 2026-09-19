@@ -179,11 +179,16 @@ class ResearchToolCallAnnouncer:
     def _terminal_payload(
         session: Session, task_id: uuid.UUID, stage: str, error: str | None
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        if stage == STAGE_FAILED:
-            return None, {"error_class": "research_failed", "message": (error or "")[:2000]}
         report_row = runs_service.get_report(session, task_id)
         report_json = dict(report_row.report_json) if report_row is not None else None
+        # A FAILED run may still have written a report before the step that failed it
+        # (ADR-0178 E named this bypass: the branch never looked, so a run that HAD found
+        # something spoke its own failure detail instead of what it found). What the owner
+        # asked for exists, so it is what they hear; the failure stays in the run's event
+        # trail and the ledger. With no report, the run's own message is all there is.
         if not report_json:
+            if stage == STAGE_FAILED:
+                return None, {"error_class": "research_failed", "message": (error or "")[:2000]}
             return build_insufficient_terminal_payload(), None
         return build_tool_terminal_payload(report_json), None
 
