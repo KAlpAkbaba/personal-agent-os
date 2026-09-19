@@ -1,0 +1,54 @@
+{
+  "work_item": "operator mission: 'YouTube'u aç' did nothing on production (owner report 2026-09-19 ~09:41Z)",
+  "status": "CLOSED - fix 42ce5a9 released 2026-09-19 11:05Z; owner physical re-test READY_FOR_OWNER",
+  "production_records_read": {
+    "session": "b7aae949-4c10-4377-a7f8-fc42deaaea0c",
+    "tool_calls": [
+      "09:39:15 operator.app_open {application: YouTube} -> refused unknown_application (router had resolved mission_start)",
+      "09:39:34 operator.app_open {application: chrome} -> postcondition_failed 'Chrome açamadım' (Chrome pid 28204 already running behind claude.exe; app.launch pid 26812 process_alive=false window_appeared=false)",
+      "09:39:58 operator.mission start 'Microsoft Edge'i aç ve YouTube'a git' -> planned, 3 steps (msedge app_open, IMPLICIT chrome app_open, navigate)",
+      "09:40:01 operator.mission approve (model) -> owner_word_required 'Görev sizin cevabınızı bekliyor'",
+      "09:40:12 operator.mission approve 'Onayla' -> owner_word_required",
+      "09:40:25 operator.mission cancel -> cancelled; voice_mission_signal_failed (workflow execution already completed)"
+    ],
+    "missions": [
+      "2bbf055f 09:39:58 planned -> cancelled 09:40:25, started_at null, steps all pending",
+      "95aa636d 08:16:54 'Youtube aç.' planned -> workflow_abandoned 09:39:58 (orphan sweep), started_at null",
+      "a07056b4 08:16:05 'Chrome'da YouTube'u aç' planned -> cancelled 08:16:41, started_at null"
+    ],
+    "api_green_log": "09:40:0x Traceback ... mission_activities.py:42 <lambda> -> temporalio/worker/_activity.py:234 _heartbeat -> asyncio.create_task -> RuntimeError: no running event loop"
+  },
+  "root_cause": "mission_step_activity (async) ran the round in asyncio.to_thread and called activity.heartbeat from that thread; an async activity's heartbeat schedules a task on the activity's loop. The activity failed (RetryPolicy maximum_attempts=1), the workflow failed, the row never learned (planned, started_at null) and blocked later missions as mission_in_flight until the 360 s orphan sweep.",
+  "fixes": [
+    "mission_activities: heartbeat handed to the loop via call_soon_threadsafe in the activity's contextvars context; new operator_mission_fail activity",
+    "mission_workflow: ActivityError on the step activity -> row FAILED with the activity's reason (internal_error), workflow completes",
+    "mission_service: fail_db; signal NOT_FOUND on a finished workflow is logged info, not error",
+    "tools_operator.operator_app_open: unknown application while the turn resolved mission_start -> starts that mission; chrome/msedge already on the desktop -> window.activate instead of app.launch",
+    "mission planner: the browser the owner named (Chrome / tarayıcı / Edge, nominative or locative) is the one the steps drive; steps after a non-Chrome browser carry browser=<image>; no implicit Chrome when Edge was named",
+    "tools_mission: a model approve/resume on a mission already moving -> noop 'Görev zaten yürüyor efendim; onay gerekmiyor'"
+  ],
+  "tests": {
+    "unit_new": [
+      "tests/unit/test_operator_mission_activity_heartbeat.py (real activity under temporalio.testing.ActivityEnvironment; asserts the heartbeat's thread ident == loop thread)",
+      "test_operator_b39: dead step activity fails the row (real WorkflowEnvironment), NOT_FOUND signal, Edge named/locative plans, app_open->mission delegation, approve no-op, chrome-only plans unstamped",
+      "test_operator_tools: running Chrome activated (window.list, window.activate), launch path now looks first"
+    ],
+    "integration_new": "tests/integration/test_operator_mission_worker.py - a mission through the registered activities under a real Worker on the dev stack Temporal (2 s); RED under the original heartbeat bug",
+    "mutations_red": ["W1 heartbeat on worker thread", "W2 ActivityError not caught", "W3 NOT_FOUND raises", "W4 Edge forgotten in _with_browser_in_front", "W5 app_open ignores mission_start", "W6 handoff apps launched again", "W7 approve refused on a moving mission", "W8 locative Edge forgotten"],
+    "corpus": "tests/unit/test_owner_utterance_corpus.py 2680 passed (SIDE_EFFECTS_OPERATOR_APP_OPEN admits window.list/window.activate)"
+  },
+  "local_proof_42ce5a9": {
+    "quality_gate_fast": "PASS",
+    "powershell_suites": "28/28",
+    "recovery_supervisor": "87 passed, 4 skipped",
+    "unit": "11973 passed, 2 failed (test_contract_falsification: collision with the concurrently running gate - the test unlinks packages/protocol/realtime-session-contract.json for a moment; 46/46 alone; follow-up task spawned to isolate it)",
+    "integration": "106 passed on the docker dev stack"
+  },
+  "release": {
+    "preflight": "OK (active green, idle blue)",
+    "release": "42ce5a9dc493789699577d1e75a36aa2364b5baf running as api-blue behind the edge since 2026-09-19T11:05:03Z; previous e0282d7 kept as last known good; device handoff 1/1 after 1 s; api-green drained 60 s and stopped",
+    "recovery_bundle": "install-recovery-supervisor.sh 42ce5a9 -> APPROVED_SHA=42ce5a9..., pagentos-bluegreen-reconcile.timer active",
+    "health_after": "status ok, version 42ce5a9..., last_known_good e0282d7..., failing_checks '' , no failure markers"
+  },
+  "ready_for_owner": "Physical test at localhost:3000/core: 'YouTube'u aç', 'Chrome'u aç' (with Chrome already open), 'Microsoft Edge'i aç ve YouTube'a git', 'Şu cyberpunk videosunu aç', 'Yan sekmeye geç', 'Videoyu oynat', 'Sekmeyi kapat', 'Yeni sekmede Google'ı aç' - production records (operator_missions, device_commands, realtime_tool_calls) to be read after."
+}

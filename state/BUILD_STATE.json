@@ -624,6 +624,7 @@
   "ci": {
     "github_actions": "disabled 2026-09-19 (billing-locked account; owner cannot pay)",
     "proof": "local: quality-gate -Fast + 28 PS suites + recovery-supervisor + full tests/unit + tests/integration on the docker dev stack",
-    "last_full_local_proof": "e0282d7 (2026-09-19): gate PASS, 28/28 suites, rs 87 passed, unit 11940 passed (16 corpus regressions fixed and re-run 2872 passed), integration 105 passed"
+    "last_full_local_proof": "42ce5a9 (2026-09-19): gate PASS, 28/28 suites, rs 87 passed, unit 11973 passed (2 test_contract_falsification failures were a collision with the concurrently running gate; 46/46 alone), integration 106 passed",
+    "last_release": "42ce5a9 released 2026-09-19 11:05Z as api-blue (blue/green), previous e0282d7 kept as last known good, recovery bundle pinned to 42ce5a9, health ok, failing_checks empty - fix for the operator mission heartbeat incident (docs/evidence/operator-mission-heartbeat-2026-09-19.json)"
   }
 }
