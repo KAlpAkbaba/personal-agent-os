@@ -1104,7 +1104,7 @@ def _decide_tab_close_others(
             note="son sekmeye geçildi",
             finishes_step=False,
         )
-    if title == keep_title:
+    if plans.titles_name_the_same_tab(title, keep_title):
         # The last tab IS the kept one: nothing else is open. The step ends on a READ, so
         # what is claimed was seen (and a mission that had nothing to close says so).
         closed = int(step.args.get("closed") or 0)

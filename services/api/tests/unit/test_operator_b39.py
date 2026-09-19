@@ -2582,3 +2582,26 @@ def test_the_kept_tab_survives_even_when_chrome_refuses_to_move_it() -> None:
     run_mission(m, MissionPorts(device=device))
     assert "İntikam Vakti" in state["tabs"], state
     assert state["tabs"][-1] == "İntikam Vakti", state
+
+
+def test_a_notification_arriving_on_the_kept_tab_does_not_lose_it() -> None:
+    """YouTube writes its unread count in front of the title ("(954) İntikam Vakti"). It
+    changes while the tab sits there, and the tab that stops being RECOGNISED is the tab
+    that gets closed - so the loop compares the page's identity, not the raw title."""
+    device, state = _tab_strip(["(954) İntikam Vakti", "Bir", "İki"], active=0)
+    original = device.results["keyboard.shortcut"]
+    bumped = {"n": 954}
+
+    def with_a_new_notification(payload: dict[str, Any]) -> DeviceRunResult:
+        bumped["n"] += 1
+        state["tabs"] = [
+            f"({bumped['n']}) İntikam Vakti" if t.endswith("İntikam Vakti") else t
+            for t in state["tabs"]
+        ]
+        return original(payload)
+
+    device.results["keyboard.shortcut"] = with_a_new_notification
+    m = plan_mission("Diğer sekmeleri kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert [t.split(") ", 1)[-1] for t in state["tabs"]] == ["İntikam Vakti"], state

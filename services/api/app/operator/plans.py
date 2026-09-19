@@ -1490,14 +1490,32 @@ def window_read(window_id: str) -> list[OperatorStep]:
     return [_title_check_step(lambda r: bool(_title_of(r)), "window_read:current")]
 
 
+#: A page's own live counter in front of its title - YouTube's unread badge, a mail tab's
+#: unread count. It changes WHILE the tab sits there, so it is never part of its identity.
+_TITLE_COUNTER_RE: Final = re.compile(r"^\s*\(\d+\)\s*")
+
+
+def tab_identity(title: str) -> str:
+    """What makes a tab the same tab from one look to the next: its page title, without
+    Chrome's own suffix and without the live counter a page keeps in front of it.
+
+    Closing every tab but one compares this, not the raw window title: a notification
+    arriving on the kept tab ("(954)" -> "(955)") must not make it unrecognisable, because
+    the tab that is not recognised is the tab that gets closed.
+    """
+    return turkish_casefold(_TITLE_COUNTER_RE.sub("", page_title(title))).strip()
+
+
 def titles_name_the_same_tab(window_title: str, tab_name: str) -> bool:
     """Is ``tab_name`` what this window's front tab is called? The owner says a piece of a
     tab's name ("İntikam Vakti"); the window title is the whole page title plus Chrome's
-    own suffix. Empty ``tab_name`` never matches - it means "the tab in front", which the
-    caller resolves to a title before comparing anything."""
+    own suffix. A previously recorded TITLE is passed here too, so the comparison is made
+    on :func:`tab_identity` at both ends. Empty ``tab_name`` never matches - it means "the
+    tab in front", which the caller resolves to a title before comparing anything."""
     if not tab_name.strip():
         return False
-    return turkish_casefold(tab_name).strip() in turkish_casefold(window_title)
+    wanted = tab_identity(tab_name)
+    return bool(wanted) and wanted in tab_identity(window_title)
 
 
 #: How different two captures must be, on average per pixel, for the picture to have moved.
