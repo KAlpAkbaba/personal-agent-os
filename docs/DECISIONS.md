@@ -13409,3 +13409,60 @@ rule bounds how badly it can fail. The memory-boundary rule (CRITICAL-1a) is pre
 only `DeterministicSynthesisProvider`'s `Finding.summary` is provenance-only by contract; an
 LLM-authored summary (thin-mode content path, or the existing full-report path) was already,
 and remains, real synthesized content, not raw page text.
+
+## ADR-0175 — A screen capture is fitted to the frame that carries it, not to a cap of its own (2026-09-19)
+
+Production, 2026-09-19 16:48:30Z and 16:49:53Z, device `MAIL`, agent `0.6.0+6fa7dfe`:
+`screen.capture {"window_id": …}` of the owner's maximized Chrome (2576x1416) failed with
+`postcondition_failed`, *"the result is 1805360 bytes; one broker frame carries at most
+1048576"*. Every "find this on the screen and click it" mission died with "Ekranı
+yakalayamadım efendim" before the vision provider saw a pixel.
+
+Two halves of one contract that never read each other. `ScreenCaptureAction` halved the
+picture only while the PNG was over `OperatorCapabilityNames.MaxCaptureBytes` - a
+free-standing **2 MiB of PNG** - and stopped at 1/4. The ack that carries the picture is
+bounded by `ProtocolConstants.MaxFrameBytes` - **1 MiB of JSON** - and the agent's own
+oversize-ack guard (`FitToFrame`, 2026-09-17) refuses anything larger. So every capture
+between ~0.7 MB and 2 MiB of PNG passed the first bound and could never pass the second. A
+second expansion sat underneath and was found while fixing the first: the protocol
+serializer uses the default JSON encoder, which writes every base64 `+` as `+` - six
+bytes - so a PNG's JSON is ~7.8 % larger than the 4/3 arithmetic says, for noisy pictures.
+
+Decisions (all in `devices/windows-agent`, no capability name added, `SoftwareVersion` stays
+0.6.0 and the build id tells the candidate apart):
+
+1. **The capture budget is derived.** `MaxCaptureBytes = (MaxFrameBytes -
+   CaptureEnvelopeBytes) / 4 * 3`, with `CaptureEnvelopeBytes` = 64 KiB kept back for the
+   ack wrapper and the result's other fields (the window's read-back, title included; a few
+   hundred bytes in practice). Moving the frame bound moves the capture budget with it.
+2. **The fit is measured, not estimated.** `CaptureFit.BuildResult` (pure managed, no screen,
+   in `Operator/ScreenCapture.cs`) halves until BOTH hold: the PNG is within the derived
+   budget, and the result *as the ack will serialize it* (`ProtocolJson.Options`, the same
+   encoder) is within `MaxFrameBytes - CaptureEnvelopeBytes`. The arithmetic is the contract
+   a test can read; the measurement is what makes "fits one frame" true for any picture and
+   any encoder.
+3. **More halvings.** The floor moves from 1/4 to `MaxCaptureScale` = 1/32: the largest
+   surface `ScreenCapture` accepts (8192 px a side), incompressible, fits at that scale. A
+   capture that still does not fit stays a typed, non-retryable `validation_error` that names
+   the measured size and the scale reached.
+4. **`scale` stays the true factor.** Cloud Core multiplies the vision provider's coordinate
+   by it (`services/api/app/operator/mission.py::_locate_on_screen`, unchanged), so it is the
+   number of source pixels per returned pixel on each axis, whatever the number of halvings.
+5. The encoder is NOT changed to the relaxed one to win back the 7.8 %: it is the encoder of
+   every protocol frame, and that is a wire-format decision of its own.
+
+Regression: `tests/PagentOS.Agent.Tests/Operator/CaptureFrameFitTests.cs` - the contract
+read from both constants by reflection; a synthetic picture of the owner's window size whose
+full-size PNG is ~1.4 MB comes back at scale 2 inside one real `CommandAckMessage`; an
+all-noise square that passes the PNG budget but not the frame (the `+` expansion); a small
+picture at scale 1; a 5152x2832 noise surface that needs more than 1/4; the typed refusal.
+Seven mutations, each RED, each restored byte-exact from a sha256-checked backup.
+
+**What is explicitly not done.** `packages/protocol/DEVICE_PROTOCOL.md` §6i still says "over
+2 MiB it is halved (scale 2, then 4)" - outside this change's write scope; it should read
+"halved until the result fits one broker frame (scale 2…32)". A halved 2576x1416 capture is
+1288x708: small text is softer for the vision provider than the full picture was meant to be.
+If that costs accuracy, the follow-ups are a better PNG filter/compression level or a
+chunked/by-reference result (`file.fetch` in reverse) - both larger than this incident.
+Delivery to the owner's PC needs the elevated installer (the install tree is writable by
+SYSTEM and Administrators only, by design - ADR-0028): `READY_FOR_OWNER`, one UAC prompt.

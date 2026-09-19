@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text.Json.Nodes;
 using PagentOS.Agent.Core.Commands;
 using PagentOS.Agent.Core.Protocol;
 
@@ -174,6 +175,72 @@ public static class ScreenCapture
             OperatorNative.ReleaseDC(IntPtr.Zero, screenDc);
         }
     }
+}
+
+/// <summary>
+/// Makes a capture fit ONE broker frame (ADR-0175). The picture is halved until two things
+/// hold: the PNG is within <see cref="OperatorCapabilityNames.MaxCaptureBytes"/> (the budget
+/// derived from the frame bound), and the result AS IT WILL BE SERIALIZED - measured, not
+/// estimated, through the protocol's own serializer options, whose encoder writes every
+/// base64 <c>+</c> as six bytes - leaves <see cref="OperatorCapabilityNames.CaptureEnvelopeBytes"/>
+/// of the frame for the ack around it. <c>scale</c> is the true factor between a coordinate
+/// in the returned picture and the same point on the surface: Cloud Core multiplies the
+/// vision provider's answer by it before it clicks.
+/// </summary>
+public static class CaptureFit
+{
+    /// <summary>The most a serialized <c>screen.capture</c> result may be, in UTF-8 bytes.</summary>
+    public const int MaxResultBytes = ProtocolConstants.MaxFrameBytes - OperatorCapabilityNames.CaptureEnvelopeBytes;
+
+    /// <param name="image">The surface as captured, at full size.</param>
+    /// <param name="windowId">The captured window's id, or null for the primary screen.</param>
+    /// <param name="observedWindow">The window's read-back, or null.</param>
+    /// <param name="maxScale">The smallest scale tried; a test lowers it to reach the refusal.</param>
+    public static JsonObject BuildResult(RgbImage image, string? windowId, JsonNode? observedWindow, int maxScale = OperatorCapabilityNames.MaxCaptureScale)
+    {
+        var scale = 1;
+        while (true)
+        {
+            var png = PngEncoder.Encode(image);
+            var serializedBytes = -1;
+            if (png.Length <= OperatorCapabilityNames.MaxCaptureBytes)
+            {
+                var result = new JsonObject
+                {
+                    ["width"] = image.Width,
+                    ["height"] = image.Height,
+                    ["png_base64"] = Convert.ToBase64String(png),
+                    ["bytes"] = png.Length,
+                    ["scale"] = scale,
+                    ["window_id"] = windowId,
+                    ["observed"] = new JsonObject { ["window"] = observedWindow?.DeepClone() },
+                };
+                serializedBytes = SerializedBytes(result);
+                if (serializedBytes <= MaxResultBytes)
+                {
+                    return result;
+                }
+            }
+
+            if (scale >= maxScale || (image.Width == 1 && image.Height == 1))
+            {
+                var measured = serializedBytes < 0
+                    ? $"{png.Length} bytes as PNG, over the {OperatorCapabilityNames.MaxCaptureBytes} byte cap"
+                    : $"{serializedBytes} bytes as a result, over the {MaxResultBytes} bytes one broker frame leaves it";
+                throw new CapabilityException(
+                    ErrorClasses.ValidationError,
+                    $"the capture is {measured}, even at 1/{scale} scale",
+                    retryable: false);
+            }
+
+            image = image.Halve();
+            scale *= 2;
+        }
+    }
+
+    /// <summary>The result's size exactly as the ack will carry it: same options, same encoder.</summary>
+    public static int SerializedBytes(JsonObject result)
+        => System.Text.Encoding.UTF8.GetByteCount(result.ToJsonString(ProtocolJson.Options));
 }
 
 /// <summary>

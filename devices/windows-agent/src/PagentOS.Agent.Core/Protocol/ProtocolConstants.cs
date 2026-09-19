@@ -546,8 +546,31 @@ public static class OperatorCapabilityNames
     /// <summary>§2: the longest text one <c>keyboard.type</c> may carry.</summary>
     public const int MaxTypedChars = 4096;
 
-    /// <summary>§2: the largest <c>screen.capture</c> result, PNG bytes before base64.</summary>
-    public const int MaxCaptureBytes = 2 * 1024 * 1024;
+    /// <summary>
+    /// What one frame keeps back from a <c>screen.capture</c> for everything that is not the
+    /// picture: the ack wrapper (type, command id, status) and the result's other fields (the
+    /// window's description, title included). Generous on purpose - those are a few hundred
+    /// bytes in practice.
+    /// </summary>
+    public const int CaptureEnvelopeBytes = 64 * 1024;
+
+    /// <summary>
+    /// §2: the largest <c>screen.capture</c> result, PNG bytes before base64. DERIVED from
+    /// <see cref="ProtocolConstants.MaxFrameBytes"/> (ADR-0175): base64 makes 4 characters of
+    /// every 3 bytes, so this is three quarters of what the frame has left after
+    /// <see cref="CaptureEnvelopeBytes"/>. 2026-09-19, production: this was a free-standing
+    /// 2 MiB while the frame carried 1 MiB, so a 1.3 MB capture of a maximized Chrome passed
+    /// this cap and was then refused by the agent's own oversize-ack guard - every
+    /// find-it-on-screen mission died before the vision provider saw a pixel.
+    /// </summary>
+    public const int MaxCaptureBytes = (ProtocolConstants.MaxFrameBytes - CaptureEnvelopeBytes) / 4 * 3;
+
+    /// <summary>
+    /// The smallest a capture is made to fit: 1/32 of each side. A capture of the largest
+    /// surface <c>ScreenCapture</c> accepts (8192 px on a side) that does not compress at all
+    /// fits at this scale; one that still does not fit is a typed validation error.
+    /// </summary>
+    public const int MaxCaptureScale = 32;
 
     public static bool IsMember(string capability) => All.Contains(capability, StringComparer.Ordinal);
 

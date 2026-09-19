@@ -825,33 +825,8 @@ public sealed class OperatorCapabilities
             image = ScreenCapture.CapturePrimaryScreen();
         }
 
-        var scale = 1;
-        var png = PngEncoder.Encode(image);
-        while (png.Length > OperatorCapabilityNames.MaxCaptureBytes && scale < 4)
-        {
-            image = image.Halve();
-            scale *= 2;
-            png = PngEncoder.Encode(image);
-        }
-
-        if (png.Length > OperatorCapabilityNames.MaxCaptureBytes)
-        {
-            throw new CapabilityException(
-                ErrorClasses.ValidationError,
-                $"the capture is {png.Length} bytes as PNG even at 1/{scale} scale, over the {OperatorCapabilityNames.MaxCaptureBytes} byte cap",
-                retryable: false);
-        }
-
-        return new JsonObject
-        {
-            ["width"] = image.Width,
-            ["height"] = image.Height,
-            ["png_base64"] = Convert.ToBase64String(png),
-            ["bytes"] = png.Length,
-            ["scale"] = scale,
-            ["window_id"] = target?.WindowId,
-            ["observed"] = new JsonObject { ["window"] = target is null ? null : Registry.Read(target.Handle)?.ToJson() },
-        };
+        // The fit is against the FRAME the ack travels in, not a cap of its own (ADR-0175).
+        return CaptureFit.BuildResult(image, target?.WindowId, target is null ? null : Registry.Read(target.Handle)?.ToJson());
     }
 
     private JsonObject ScreenInspect()
