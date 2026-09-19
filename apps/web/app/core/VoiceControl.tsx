@@ -17,6 +17,7 @@ import { useLocalVoiceMode } from "../lib/voice/useLocalVoiceMode";
 import { useVoiceSession } from "../lib/voice/useVoiceSession";
 import { useCorePreferences } from "./usePreferences";
 import VoiceControlView from "./VoiceControlView";
+import { toggleLocalVoice } from "../lib/voice/localToggle";
 
 export default function VoiceControl() {
   const { voice, actions } = useVoiceSession();
@@ -39,11 +40,14 @@ export default function VoiceControl() {
       local={{
         enabled: localVoice,
         snapshot: local,
-        onToggle: (on) => {
-          setLocalVoice(on);
-          // Switching back to the paid path ends the local session; nothing else changes.
-          if (!on) void stop();
-        },
+        // A hand-over, never two live channels (security review 2026-09-19): the channel
+        // being left is ended first - see lib/voice/localToggle.ts.
+        onToggle: (on) =>
+          void toggleLocalVoice(on, {
+            setLocalVoice,
+            stopLocal: () => stop(),
+            disconnectPaid: () => actions.disconnect(),
+          }),
         onStart: () => void start(),
         onStop: () => void stop(),
       }}
