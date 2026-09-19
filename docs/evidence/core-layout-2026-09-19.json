@@ -1,0 +1,51 @@
+{
+  "work_item": "/core layout: owner screenshot 2026-09-19 18:29 (3840px-wide window) - 'Şu anda ekrandaki bozukluğu da düzelt'",
+  "method": "Static probe pages built from the REAL stylesheets (apps/web/app/globals.css + apps/web/app/core/core.css, before = git HEAD 961952f, after = working tree), the real quiet-nav DOM copied from the running app, and the ambient cells' real Turkish sentences; served by the running Next dev server, measured with getBoundingClientRect / scrollHeight in a real Chromium. The authenticated /core itself cannot be opened by the engineer (owner login).",
+  "before": {
+    "viewport": "2000x1000",
+    "root_font": "16px",
+    "connection_dot_intersects_nav_links": ["Kokpit", "Ses"],
+    "ambient_cells": [
+      {"title": "Kamera durumu bildirilmedi", "width_px": 187, "clipped_px": 0},
+      {"title": "Sahip burada", "width_px": 187, "clipped_px": 15},
+      {"title": "Ekran durumu bildirilmedi", "width_px": 187, "clipped_px": 0},
+      {"title": "Bildirilen bir alarm yok", "width_px": 187, "clipped_px": 0},
+      {"title": "Süren bir yayın yok", "width_px": 187, "clipped_px": 32}
+    ],
+    "note": "Reproduces the screenshot exactly: '● canlı' drawn through 'Kokpit'/'Ses'; 'Algı kimlik doğrulaması' and 'Bu ekran yalnızca gösteric' cut."
+  },
+  "after": [
+    {
+      "viewport": "2000x1000",
+      "root_font": "18px",
+      "connection_dot": {"left": 18, "top": 16},
+      "connection_dot_intersects_nav_links": [],
+      "ambient_cells_width_px": 261,
+      "ambient_cells_clipped_px": [0, 0, 0, 0, 0],
+      "strip_rows": 1,
+      "caption_bottom": 857,
+      "strip_top": 868,
+      "strip_bottom": 989,
+      "caption_intersects_strip": false
+    },
+    {
+      "viewport": "3840x2000",
+      "root_font": "24px",
+      "nav_link_font": "19.2px",
+      "ambient_cell_font": "16.8px",
+      "connection_dot_intersects_nav_links": [],
+      "ambient_cells_width_px": 348,
+      "ambient_cells_clipped_px": [0, 0, 0, 0, 0],
+      "strip_bottom": 1986,
+      "caption_intersects_strip": false
+    }
+  ],
+  "not_measured": "A phone-width measurement: the probe page carries no viewport meta, so the 390px emulation laid out at 980px (no intersection, no clipping there either). The real page's narrow layout is unchanged except that the caption no longer has a typed-in bottom offset.",
+  "changes": [
+    "core.css .core-connection-dot: top-left corner instead of top centre (the quiet nav centres its rows at the same top edge)",
+    "core.css + page.tsx: .core-bottom flex column holds the caption above the ambient strip (no typed-in bottom offsets)",
+    "core.css .core-strip .ambient-cell: no max-height / overflow hidden; .core-strip .ambient-band width 100%",
+    "core.css html:has(.core-shell): fluid root font clamp(100%, 0.45vw + 9px, 150%) on the Core page only"
+  ],
+  "tests": "apps/web/tests/core/core-layout-contract.test.ts - 5 of 6 assertions RED before the fix, all GREEN after; tests/core + minimal-mode + control-render 53 passed"
+}

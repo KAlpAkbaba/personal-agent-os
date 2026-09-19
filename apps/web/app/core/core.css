@@ -46,6 +46,14 @@
  * measured; the `min()` below is only what is drawn before that first
  * measurement, and is written to land in the same place.
  */
+/* The Core is read from a chair, often on a large display at 100% scale, where a 0.7rem
+ * label is a smudge (owner report 2026-09-19, a 3840px-wide window). Everything here is
+ * sized in rem, so the ROOT grows with the window on this page only: 16px up to ~1550px,
+ * 18px at 2000px, capped at 24px. `:has` keeps every other page exactly as it was. */
+html:has(.core-shell) {
+  font-size: clamp(100%, 0.45vw + 9px, 150%);
+}
+
 .core-shell {
   position: fixed;
   inset: 0;
@@ -82,22 +90,27 @@
   height: 100%;
 }
 
-/* The connection dot: top centre, small, and never fading - it is the only
-   thing on screen that can tell a calm Core from a lost one. */
+/* The connection dot: small, and never fading - it is the only thing on screen that can
+   tell a calm Core from a lost one.
+ *
+ * Top LEFT, not top centre (owner report 2026-09-19, with a screenshot): the quiet site nav
+ * is fixed at the top and centres its two rows of links (globals.css `.site-nav-quiet
+ * .site-nav-list { justify-content: center }`), so a dot centred at `top: 1rem` was drawn
+ * through "Kokpit" and "Ses". The control cluster owns the top right; the top left is the
+ * one corner nothing else uses. core-layout-contract.test.ts holds the two files to this. */
 .core-connection-dot {
   position: absolute;
-  top: 1rem;
-  left: 50%;
-  transform: translateX(-50%);
+  top: 0.9rem;
+  left: 1rem;
   display: flex;
   align-items: center;
   gap: 0.45rem;
   flex-wrap: wrap;
-  justify-content: center;
-  max-width: min(40rem, 92vw);
+  justify-content: flex-start;
+  max-width: min(22rem, 30vw);
   font-size: 0.72rem;
   color: var(--muted);
-  text-align: center;
+  text-align: left;
 }
 
 .core-dot {
@@ -155,11 +168,24 @@
 }
 
 /* The caption: one short semantic line over the Core's lower edge. */
-.core-caption {
+/* The bottom column: the caption above the ambient strip, both anchored to the lower edge
+ * and laid out by FLOW. They used to be two absolutely positioned siblings with typed-in
+ * offsets (`bottom: 6.2rem` over `bottom: 0.6rem`), which only held while the strip was
+ * exactly one clipped row tall (owner report 2026-09-19). */
+.core-bottom {
   position: absolute;
   left: 50%;
-  bottom: 6.2rem;
+  bottom: 0.6rem;
   transform: translateX(-50%);
+  width: min(74rem, 96vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: none;
+}
+
+.core-caption {
   max-width: min(34rem, 92vw);
   pointer-events: none;
   text-align: center;
@@ -179,16 +205,16 @@
 
 /* The ambient strip: presence, the camera, the screens, the alarm, releases. */
 .core-strip {
-  position: absolute;
-  left: 50%;
-  bottom: 0.6rem;
-  transform: translateX(-50%);
-  width: min(74rem, 96vw);
+  width: 100%;
+  pointer-events: auto;
   transition: opacity 400ms ease;
 }
 
+/* The band fills the strip: inside its own 60rem cap five cells came to ~190px each, their
+ * sentences wrapped to six lines and the cell clipped them. */
 .core-strip .ambient-band {
   gap: 0.4rem;
+  width: 100%;
 }
 
 .core-strip .ambient-cell {
@@ -199,8 +225,10 @@
   font-size: 0.7rem;
   background: color-mix(in srgb, var(--core-ground) 70%, transparent);
   backdrop-filter: blur(4px);
-  max-height: 5.6rem;
-  overflow: hidden;
+  /* Never clipped: these cells carry the camera and presence assurances ("Bu 'kapalı' demek
+   * değil.", "Algı kimlik doğrulaması değildir."), and a sentence cut in half is not one
+   * (owner report 2026-09-19: `max-height: 5.6rem; overflow: hidden` cut every cell). The
+   * column above grows with them instead. */
 }
 
 .core-strip .ambient-title {
@@ -219,9 +247,6 @@
 }
 
 @media (max-width: 720px) {
-  .core-caption {
-    bottom: 9.5rem;
-  }
   .core-strip .ambient-cell {
     flex-basis: 8rem;
     min-width: 7.5rem;
@@ -1229,6 +1254,32 @@
   color: var(--accent);
   text-decoration: none;
   font-size: 0.78rem;
+}
+
+/* ADR-0173: the free local mode. The switch is the one setting this cell owns;
+   the indicator is the product's mandatory "microphone is open" signal, and the
+   cell's border says the same thing while the local recogniser listens. */
+.voice-local-switch {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.voice-local-indicator {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.82rem;
+}
+
+.voice-local-indicator[data-local-listening="yes"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.voice-cell[data-voice-local="on"]:has(.voice-local-indicator[data-local-listening="yes"]) {
+  border-color: var(--accent);
 }
 
 .core-label[data-caption="yes"] {

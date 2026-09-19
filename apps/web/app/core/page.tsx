@@ -165,6 +165,9 @@ function MinimalCore() {
         onFullscreen={fullscreen.toggle}
       />
 
+      {/* The bottom column: the caption above the ambient strip, laid out by flow so a
+          taller strip pushes the caption up instead of growing through it. */}
+      <div className="core-bottom" data-core-bottom>
       {/* The caption: one short semantic line over the Core's lower edge. */}
       <div className="core-caption" data-core-caption>
         <StateReadout intent={intent} compact />
@@ -182,6 +185,7 @@ function MinimalCore() {
           display={display}
           alarm={alarm}
         />
+      </div>
       </div>
     </main>
   );
