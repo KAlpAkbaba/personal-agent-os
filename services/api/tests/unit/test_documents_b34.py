@@ -61,6 +61,16 @@ def _rows(h) -> list[FileMutationRow]:
         )
 
 
+@pytest.fixture(autouse=True)
+def _proposal_path(monkeypatch):
+    """Owner decision 2026-09-19: a file change is applied on the owner's first word. These
+    tests cover the PROPOSAL machinery - the state the Cockpit's Approve, the stale-file
+    refusal and the other-session refusal live in - which still exists for callers that ask
+    for a proposal; so they run with the first-word policy off. The policy itself is tested
+    at the bottom of this module with the flag as shipped."""
+    monkeypatch.setattr(mutations_module, "OWNER_APPLIES_ON_FIRST_WORD", False)
+
+
 def _harness():
     h = build_harness()
     h.seed(CTX_NONE)
@@ -592,3 +602,40 @@ def test_a_device_answer_without_a_hashed_record_is_never_a_verified_mutation() 
     )
     assert verify("delete", True, {"trashed": True, "observed": {"exists": False}})[0] is True
     assert verify("delete", True, {"trashed": True, "observed": {"exists": True}})[0] is False
+
+
+# ---------------------- owner decision 2026-09-19: the first word applies (flag as shipped)
+
+
+def test_as_shipped_an_edit_applies_on_the_owners_word_with_a_backup_and_undo(monkeypatch) -> None:
+    """ "Tüm 2. ses onaylarını kaldır" (mail excepted): no "Uygulayayım mı?" between the
+    sentence and the change. The backup and "son değişikliği geri al" stay exactly as they
+    were - what the second word protected is protected by the undo instead."""
+    monkeypatch.setattr(mutations_module, "OWNER_APPLIES_ON_FIRST_WORD", True)
+    assert mutations_module.OWNER_APPLIES_ON_FIRST_WORD is True
+    h = _harness()
+    sid = h.new_session()
+    _focus(h, sid, "notlar")
+    h.say(sid, "Bu dosyada Bütçe yerine Tahmin yaz.", turn=2)
+    edited = h.tool(sid, "c-1", "document.edit", {})["result"]
+    assert edited["execution_status"] == "executed", edited
+    assert edited["state"] == "applied", edited
+    assert "file.write" in h.device.capabilities_called()
+    assert "Uygulayayım mı?" not in edited["speech"]
+    rows = _rows(h)
+    assert (
+        rows[-1].state == "applied"
+        and rows[-1].confirmed_by == mutations_module.CONFIRMED_BY_OWNER_POLICY
+    )
+    assert rows[-1].undo_json, "the backup that makes the first word safe"
+    undone = h.tool(sid, "c-2", "document.undo", {})["result"]
+    assert undone["execution_status"] == "executed", undone
+
+
+def test_the_shipped_policy_is_the_owners_first_word() -> None:
+    import importlib
+
+    import app.documents.mutations as shipped
+
+    importlib.reload(shipped)
+    assert shipped.OWNER_APPLIES_ON_FIRST_WORD is True

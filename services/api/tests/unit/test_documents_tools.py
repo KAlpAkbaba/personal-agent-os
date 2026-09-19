@@ -111,9 +111,7 @@ def test_document_answer_with_no_document_focused_is_a_clarification() -> None:
     assert h.device.calls == []
 
 
-def test_document_answer_publishes_document_analysis_with_refs_and_no_excerpt_on_the_bus() -> (
-    None
-):
+def test_document_answer_publishes_document_analysis_with_refs_and_no_excerpt_on_the_bus() -> None:
     """The functional gap fix: ``refs`` is defined end to end (model -> contract v5 ->
     the web's ``parseDocumentRefs``) but ``DocumentService._publish`` used to send only
     ``{file, part}`` and the publisher dropped every list/dict outright. An answer must
@@ -202,12 +200,12 @@ def test_document_summarize_with_no_focus_asks_which_document_and_touches_nothin
 # ------------------------------------------------------------------- the "sil" negative
 
 
-def test_delete_is_a_proposal_and_moves_nothing_on_the_first_word() -> None:
-    """ADR-0083 decision 7 (no delete tool at all) is superseded by B34 / ADR-0141: "Bu
-    dosyayı sil." now resolves to the managed delete - a PROPOSAL. What the old test
-    protected still holds where it matters: the sentence itself reaches the device for
-    nothing, and the tool only LOCATES the file; nothing goes to the Recycle Bin until the
-    owner's "Uygula." (test_documents_b34 has that half)."""
+def test_delete_goes_to_the_recycle_bin_on_the_first_word_and_undo_brings_it_back() -> None:
+    """ADR-0083 decision 7 (no delete tool) was superseded by B34 / ADR-0141 (a proposal),
+    and that by the owner's decision of 2026-09-19 ("Tüm 2. ses onaylarını kaldır"): "Bu
+    dosyayı sil." moves the file to the Recycle Bin at once - with the backup and the undo
+    that made the proposal unnecessary. The sentence itself still reaches the device for
+    nothing (the router resolves it; only the tool acts)."""
     h = build_harness()
     h.seed(CTX_FILE_FOCUSED)
     sid = h.new_session()
@@ -216,10 +214,13 @@ def test_delete_is_a_proposal_and_moves_nothing_on_the_first_word() -> None:
     resolved = said["resolved_intents"][0]
     assert resolved.get("intent") == "document_delete"
     assert h.device.calls == []
-    proposal = h.tool(sid, "c-1", "document.delete", {})["result"]
-    assert proposal["state"] == "proposed", proposal
-    assert h.device.capabilities_called() == ["file.locate"]
-    assert "Uygulayayım mı?" in proposal["speech"]
+    applied = h.tool(sid, "c-1", "document.delete", {})["result"]
+    assert applied["state"] == "applied", applied
+    assert "Uygulayayım mı?" not in applied["speech"]
+    assert h.device.capabilities_called()[0] == "file.locate"
+    assert len(h.device.capabilities_called()) > 1, "the delete itself reached the device"
+    undone = h.tool(sid, "c-2", "document.undo", {})["result"]
+    assert undone["execution_status"] == "executed", undone
 
 
 # ------------------------------------------------------------------- secret refusal

@@ -2424,7 +2424,9 @@ def _document_b34_cases() -> list[UtteranceCase]:
             source="canonical",
         )
     )
-    # 153/167: an edit is a proposal - nothing written on the first sentence.
+    # 153/167: an edit was a proposal until the owner's decision of 2026-09-19 ("Tüm 2.
+    # ses onaylarını kaldır", mail excepted): it is applied on the first sentence now, with
+    # the backup and the undo that the second word used to stand in front of.
     for case_id, text, source in (
         ("doc.edit.canonical", "Bu dosyada Bütçe yerine Tahmin yaz.", "canonical"),
         ("doc.edit.asr", "bu dosyada butce yerine tahmin yaz", "asr_noise"),
@@ -2436,14 +2438,14 @@ def _document_b34_cases() -> list[UtteranceCase]:
                 expected_intent="document_edit",
                 expected_tool="document.edit",
                 preceding_turns=focus_notes,
-                expected={"speech_contains": "Uygulayayım mı?"},
-                side_effects=frozenset({"file.search", "file.locate", "file.read"}),
+                expected={"speech_contains": "değiştirdim"},
+                side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
                 context=CTX_NONE,
                 category="documents",
                 source=source,
             )
         )
-    # 170: "güncelle ve kaydet" is the same proposal shape with the model's new content.
+    # 170: "güncelle ve kaydet" is the same shape with the model's new content - applied.
     cases.append(
         UtteranceCase(
             case_id="doc.edit.update_save",
@@ -2452,31 +2454,16 @@ def _document_b34_cases() -> list[UtteranceCase]:
             expected_tool="document.edit",
             tool_arguments={"content": "# Yeni\n"},
             preceding_turns=focus_notes,
-            expected={"speech_contains": "Uygulayayım mı?"},
-            side_effects=frozenset({"file.search", "file.locate"}),
+            expected={"speech_contains": "değiştirdim"},
+            side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
             context=CTX_NONE,
             category="documents",
             source="paraphrase",
         )
     )
-    # 166: "Uygula." applies the proposal this session heard - and only then.
-    cases.append(
-        UtteranceCase(
-            case_id="doc.apply.after_edit",
-            utterance="Uygula.",
-            expected_intent="document_apply",
-            expected_tool="document.apply",
-            preceding_turns=(
-                *focus_notes,
-                ("Bu dosyada Bütçe yerine Tahmin yaz.", "document.edit"),
-            ),
-            expected={"speech_contains": "eski hâli yedekte"},
-            side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
-            context=CTX_NONE,
-            category="documents",
-            source="canonical",
-        )
-    )
+    # 166: "Uygula." applied the proposal this session heard. Since 2026-09-19 nothing is
+    # pending after an edit (it was applied on the first word), so the bare "uygula" is the
+    # refusal below in every case - and "Vazgeç." has nothing of the document's to discard.
     cases.append(
         UtteranceCase(
             case_id="doc.apply.nothing_pending",
@@ -2494,35 +2481,37 @@ def _document_b34_cases() -> list[UtteranceCase]:
             ),
         )
     )
-    # "Vazgeç." with a file change pending discards IT (not a mail draft).
-    cases.append(
-        UtteranceCase(
-            case_id="doc.discard.after_edit",
-            utterance="Vazgeç.",
-            expected_intent="discard",
-            expected_tool="document.discard",
-            preceding_turns=(
-                *focus_notes,
-                ("Bu dosyada Bütçe yerine Tahmin yaz.", "document.edit"),
-            ),
-            expected={"speech_contains": "dokunmadım"},
-            side_effects=frozenset({"file.search", "file.locate", "file.read"}),
-            context=CTX_NONE,
-            category="documents",
-            source="canonical",
-        )
-    )
-    # 156-158: rename / move / copy are proposals.
-    for case_id, text, intent, tool in (
+    # 156-158: rename / move / copy were proposals; since 2026-09-19 they are done on the
+    # owner's word, each read back as done and each undoable.
+    for case_id, text, intent, tool, done in (
         (
             "doc.rename.canonical",
             "Bu dosyanın adını gunluk-notlari.md yap.",
             "document_rename",
             "document.rename",
+            "adını",
         ),
-        ("doc.move.canonical", "Bu dosyayı Masaüstüne taşı.", "document_move", "document.move"),
-        ("doc.copy.canonical", "Bu dosyayı kopyala.", "document_copy", "document.copy"),
-        ("doc.copy.named", "Bu dosyayı yedek.md adıyla kopyala.", "document_copy", "document.copy"),
+        (
+            "doc.move.canonical",
+            "Bu dosyayı Masaüstüne taşı.",
+            "document_move",
+            "document.move",
+            "taşıdım",
+        ),
+        (
+            "doc.copy.canonical",
+            "Bu dosyayı kopyala.",
+            "document_copy",
+            "document.copy",
+            "kopyaladım",
+        ),
+        (
+            "doc.copy.named",
+            "Bu dosyayı yedek.md adıyla kopyala.",
+            "document_copy",
+            "document.copy",
+            "kopyaladım",
+        ),
     ):
         cases.append(
             UtteranceCase(
@@ -2531,8 +2520,8 @@ def _document_b34_cases() -> list[UtteranceCase]:
                 expected_intent=intent,
                 expected_tool=tool,
                 preceding_turns=focus_notes,
-                expected={"speech_contains": "Uygulayayım mı?"},
-                side_effects=frozenset({"file.search", "file.locate"}),
+                expected={"speech_contains": done},
+                side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
                 context=CTX_NONE,
                 category="documents",
                 source="canonical",
@@ -2745,24 +2734,26 @@ def _document_negative_cases() -> list[UtteranceCase]:
             )
         )
     )
-    # "Bu dosyayı sil." reached no tool at all until B34 (ADR-0083 decision 7). It is a
-    # PROPOSAL now (B34 req 159/166): the Recycle Bin with a backup, after the owner's
-    # word - and still NOT an act on the first sentence: nothing on the device moves.
+    # "Bu dosyayı sil." reached no tool at all until B34 (ADR-0083 decision 7), was a
+    # PROPOSAL from B34 (ADR-0141), and since the owner's decision of 2026-09-19 is the
+    # Recycle Bin on the first word - with the backup, and "geri al" bringing it back. Never
+    # the dedup tool, and never a permanent delete.
     cases.extend(
         _with_variants(
             UtteranceCase(
-                case_id="doc.neg.delete",
+                case_id="doc.delete.first_word",
                 utterance="Bu dosyayı sil.",
                 expected_intent="document_delete",
                 expected_tool="document.delete",
-                expected={"speech_contains": "Uygulayayım mı?"},
+                expected={"speech_contains": "çöp kutusuna gönderdim"},
                 forbidden_tools=("document.dedup",),
-                side_effects=frozenset({"file.locate"}),
+                side_effects=SIDE_EFFECTS_DOCUMENTS_MUTATION,
                 context=CTX_FILE_FOCUSED,
                 category="documents",
                 source="canonical",
                 regression_issue_id=(
-                    "ADR-0083 decision 7 -> B34 (ADR-0141): a proposal, never an act"
+                    "ADR-0083 decision 7 -> B34 (ADR-0141) -> owner 2026-09-19: the bin, "
+                    "with a backup, on the first word"
                 ),
             )
         )
@@ -7757,7 +7748,7 @@ _B51_PARAPHRASES: Final[tuple[tuple[str, str, str], ...]] = (
     ("b51.image_text.1", "doc.image.text", "Görseldeki yazıyı oku."),
     ("b51.doc_write.1", "doc.write.new", "gunluk.md adında bir dosya oluşturur musun?"),
     ("b51.doc_append.1", "doc.append.canonical", "Bu dosyanın sonuna toplantı notu ekler misin?"),
-    ("b51.doc_apply.1", "doc.apply.after_edit", "Tamam, uygula."),
+    ("b51.doc_apply.1", "doc.apply.nothing_pending", "Tamam, uygula."),
     ("b51.doc_copy.1", "doc.copy.canonical", "Bu dosyayı kopyalar mısın?"),
     ("b51.doc_move.1", "doc.move.canonical", "Bu dosyayı Masaüstüne taşır mısın?"),
     (
@@ -7765,7 +7756,7 @@ _B51_PARAPHRASES: Final[tuple[tuple[str, str, str], ...]] = (
         "doc.rename.canonical",
         "Bu dosyanın adını gunluk-notlari.md olarak değiştir.",
     ),
-    ("b51.doc_delete.1", "doc.neg.delete", "Bu dosyayı siler misin?"),
+    ("b51.doc_delete.1", "doc.delete.first_word", "Bu dosyayı siler misin?"),
     ("b51.doc_undo.1", "doc.undo.after_append", "Son değişikliği geri alır mısın?"),
     ("b51.doc_versions.1", "doc.versions.canonical", "Bu dosyanın sürümlerini göster."),
     # --- memory

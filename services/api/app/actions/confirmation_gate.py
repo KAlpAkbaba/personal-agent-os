@@ -77,7 +77,19 @@ CONFIRM_SOURCE_REST = "rest"
 #: session's read-back and a LATER turn the router itself resolved to the expected intent.
 CONFIRM_SOURCE_VOICE = "voice"
 
-CONFIRM_SOURCES: tuple[str, ...] = (CONFIRM_SOURCE_REST, CONFIRM_SOURCE_VOICE)
+#: Owner decision 2026-09-19 ("Tüm 2. ses onaylarını kaldır, mail hariç"): for a CALENDAR
+#: proposal the owner's standing decision replaces the second spoken word - the proposal is
+#: committed in the same turn it was made. The gate still requires the row to be read back
+#: (the proposal speech IS the read-back), the account to exist and the host flag to be on.
+#: Mail never uses this source: a sent mail cannot be taken back, and the owner kept its
+#: second word on purpose.
+CONFIRM_SOURCE_OWNER_POLICY = "owner_policy"
+
+CONFIRM_SOURCES: tuple[str, ...] = (
+    CONFIRM_SOURCE_REST,
+    CONFIRM_SOURCE_VOICE,
+    CONFIRM_SOURCE_OWNER_POLICY,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +155,14 @@ def check_gate(
         return GateResult(False, GATE_NO_CONFIRMATION)
     if confirmation.source == CONFIRM_SOURCE_REST:
         pass  # the owner-authenticated REST act IS the confirmation (module docstring).
+    elif confirmation.source == CONFIRM_SOURCE_OWNER_POLICY:
+        # The owner's standing decision (2026-09-19): the same session that just heard the
+        # proposal commits it at once. Still the owner's own utterance, resolved by the ONE
+        # router, that produced the proposal - never a model's initiative.
+        if confirmation.session_id != read_back_session_id:
+            return GateResult(False, GATE_NOT_READ_BACK)
+        if not confirmation.owner_intent_ok:
+            return GateResult(False, GATE_CONFIRMATION_NOT_OWNER)
     elif confirmation.source == CONFIRM_SOURCE_VOICE:
         if confirmation.session_id != read_back_session_id:
             # Never read back TO THIS session - the honest answer is the same one a draft
@@ -163,6 +183,7 @@ def check_gate(
 
 
 __all__ = [
+    "CONFIRM_SOURCE_OWNER_POLICY",
     "CONFIRM_SOURCE_REST",
     "CONFIRM_SOURCE_VOICE",
     "CONFIRM_SOURCES",

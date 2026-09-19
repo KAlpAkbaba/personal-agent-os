@@ -111,8 +111,33 @@ def test_mail_send_with_nothing_prepared_clarifies_and_never_touches_the_sender(
 # --------------------------------------------------------------------------- calendar
 
 
-def test_propose_read_commit_is_exactly_one_fake_create() -> None:
+def test_a_proposal_is_committed_in_the_same_turn_and_exactly_once() -> None:
+    """Owner decision 2026-09-19 ("Tüm 2. ses onaylarını kaldır, mail hariç"): "Perşembe
+    15'e diş hekimi ekle." is on the calendar when the sentence ends. The gate was walked,
+    not skipped: read back on this session and turn, then committed under the owner's
+    standing decision - one fake create, and a later "Onayla." finds nothing pending."""
     h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Perşembe 15'e diş hekimi ekle.")
+    done = h.tool(
+        sid, "c-1", "calendar.propose", {"when_spoken": "Perşembe 15'e", "summary": "Diş hekimi"}
+    )
+    assert done["status"] == "succeeded", done
+    assert done["result"]["execution_status"] == "executed", done["result"]
+    assert done["result"]["capability"] == "calendar.commit"
+    assert len(h.calendar._writer.created) == 1  # type: ignore[attr-defined]
+
+    h.say(sid, "Onayla.", turn=2)
+    again = h.tool(sid, "c-2", "calendar.commit", {})
+    assert again["result"].get("execution_status") != "executed", again
+    assert len(h.calendar._writer.created) == 1  # type: ignore[attr-defined]
+
+
+def test_without_an_account_the_proposal_stands_and_is_spoken_as_before() -> None:
+    """B46 is deferred - no calendar account. The first-word commit cannot happen, so the
+    proposal is kept and read back exactly as it always was; nothing is lost."""
+    h = build_harness()
+    h.calendar._account_configured = False  # type: ignore[attr-defined]
     sid = h.new_session()
     h.say(sid, "Perşembe 15'e diş hekimi ekle.")
     proposed = h.tool(
@@ -120,21 +145,25 @@ def test_propose_read_commit_is_exactly_one_fake_create() -> None:
     )
     assert proposed["status"] == "succeeded", proposed
     assert proposed["result"]["proposal"]["summary"] == "Diş hekimi"
+    assert h.calendar._writer.created == []  # type: ignore[attr-defined]
 
-    # H1 (ADR-0084 addendum 2): PREPARE never counts as read back on its own any more -
-    # the real read-back act, in THIS session, is what the confirmation below binds to.
-    read_back = h.tool(sid, "c-1b", "calendar.read_proposal", {})
-    assert read_back["status"] == "succeeded", read_back
 
-    h.say(sid, "Onayla.", turn=2)
-    committed = h.tool(sid, "c-2", "calendar.commit", {})
-    assert committed["status"] == "succeeded", committed
-    assert committed["result"]["execution_status"] == "executed"
-    assert len(h.calendar._writer.created) == 1  # type: ignore[attr-defined]
-
-    again = h.tool(sid, "c-3", "calendar.commit", {})
-    assert again["result"]["execution_status"] == "refused"
-    assert len(h.calendar._writer.created) == 1  # type: ignore[attr-defined]
+def test_a_model_issued_propose_with_no_owner_sentence_does_not_commit() -> None:
+    """The standing decision replaces the owner's SECOND word, never the first: a
+    calendar.propose the model calls on its own (no CALENDAR_PROPOSE turn behind it) is
+    still a proposal, and reaches the writer zero times."""
+    h = build_harness()
+    sid = h.new_session()
+    h.say(sid, "Bugün hava nasıl?")
+    proposed = h.tool(
+        sid, "c-1", "calendar.propose", {"when_spoken": "Perşembe 15'e", "summary": "Diş hekimi"}
+    )
+    assert proposed["status"] == "succeeded", proposed
+    assert (
+        proposed["result"].get("execution_status") != "executed"
+        or proposed["result"].get("capability") != "calendar.commit"
+    )
+    assert h.calendar._writer.created == []  # type: ignore[attr-defined]
 
 
 def test_reschedule_proposal_names_the_focused_event() -> None:

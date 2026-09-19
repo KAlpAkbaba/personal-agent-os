@@ -225,7 +225,8 @@ class Settings(BaseSettings):
     artifact_download_origin: str = ""
     # B42 (req 412): the owner's delete policy for artifacts - confirm (the default:
     # an explicit yes in the same call), deny, or free. Checkpoint 14 is the owner's.
-    artifact_delete_policy: str = "confirm"
+    # Owner decision 2026-09-19 (row 412): no second word before a delete - "free".
+    artifact_delete_policy: str = "free"
     # B43 (req 492): the image provider - local (Pillow, deterministic; generation
     # refused by name) or openai (gpt-image-1 over the owner's voice_openai_api_key).
     creative_image_provider: str = "local"

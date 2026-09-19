@@ -13218,3 +13218,28 @@ local proof on the owner's PC: `scripts/quality-gate.ps1 -Fast`, the 28 PowerShe
 the recovery-supervisor tests, the FULL unit suite and the integration suite on the docker
 dev stack - the same suites the hosted jobs ran, with one lesson attached: a targeted subset
 missed 16 corpus regressions the same day, so the full unit suite runs before every release.
+
+**ADR-0171 addendum (2026-09-19) — no second spoken word, except for mail.** The owner,
+after using the browser scenario: *"Tüm 2. ses onaylarını kaldır lütfen"*, and when asked
+which: *"Hepsi, mail gönderme hariç"*. So:
+
+* The two-step confirmation planned on 2026-09-18 ("Onaylıyor musunuz?" before every
+  sensitive tool) is **not built**; the B05 step-up stays in shadow mode for good and its
+  enforcement rows are DEFERRED by owner decision. VoiceIdentity remains augment-only.
+* File changes (edit, rename, move, copy, delete-to-Recycle-Bin) are **applied on the owner's
+  sentence** (`app/documents/mutations.py`, `OWNER_APPLIES_ON_FIRST_WORD`). What the second
+  word protected is protected by what was always underneath it: the backup taken before every
+  change and "son değişikliği geri al". The proposal path still exists for the Cockpit's
+  Approve and for callers that ask for a proposal.
+* An artifact is deleted on the first ask (row 412 decided: `artifact_delete_policy` defaults
+  to `free`; `confirm` and `deny` remain available settings).
+* A calendar proposal is **committed in the same turn** it is made
+  (`CONFIRM_SOURCE_OWNER_POLICY` in `app/actions/confirmation_gate.py`): the owner's standing
+  decision stands in for "Onayla", while the gate still requires the read-back, the account
+  and the host flag. When the account is not there (B46 deferred) the proposal stands and is
+  spoken as before, so nothing is lost the day it is.
+* **Mail send keeps its second word** ("Gönder." after the read-back). A sent mail cannot be
+  taken back; the owner kept this one on purpose.
+* Untouched, because they are not confirmations: a mission's "önce göster" preview (the
+  owner asks for it), an escalated step's "Nasıl devam edeyim?" (a question, answered only
+  by the owner's own word), and the operator's refusal of a model-issued approve/resume.

@@ -524,13 +524,12 @@ def test_rest_clone_delete_and_compare(client: TestClient) -> None:
     none = client.get(f"/v1/artifacts/{cid}/compare")
     assert none.status_code == 422
     assert none.json()["detail"]["code"] == "no_previous_version"
-    # Delete under the default (confirm) policy: asked first, then done.
-    asked = client.post(f"/v1/artifacts/{cid}/delete", json={"confirm": False})
-    assert asked.status_code == 200
-    assert asked.json()["status"] == "needs_confirmation"
-    assert asked.json()["policy"] == "confirm"
-    done = client.post(f"/v1/artifacts/{cid}/delete", json={"confirm": True})
+    # Delete under the default policy - "free" since the owner's decision of 2026-09-19
+    # (row 412, "Tüm 2. ses onaylarını kaldır"): done on the first ask.
+    done = client.post(f"/v1/artifacts/{cid}/delete", json={"confirm": False})
+    assert done.status_code == 200
     assert done.json()["status"] == "deleted"
+    assert done.json()["policy"] == "free"
     assert done.json()["renders_removed"] >= 1
     assert client.get(f"/v1/artifacts/{cid}/versions").json()["versions"]
 
@@ -726,32 +725,34 @@ def test_voice_clone_makes_a_copy_and_focuses_it() -> None:
     assert "artifact.clone" in _ledger_actions(h)
 
 
-def test_voice_delete_asks_first_then_deletes_on_the_owners_yes() -> None:
+def test_voice_delete_deletes_on_the_first_word_under_the_shipped_policy() -> None:
+    """Owner decision 2026-09-19: no "Evet, sil" after "Bunu sil." (row 412 -> "free")."""
     h = build_harness()
     h.seed(CTX_DOCUMENT_ARTIFACT_FOCUSED)
     sid = h.new_session()
     routed = h.say(sid, "Bunu sil.")
     assert routed["resolved_intents"][-1]["intent"] == "artifact_delete", routed
-    asked = h.tool(sid, "c-1", "artifact.delete", {})
-    assert asked["status"] == "succeeded", asked
-    assert asked["result"]["status"] == "needs_confirmation"
-    assert "artifact.delete" not in _ledger_actions(h)
-    with h.factory() as db:
-        assert (
-            service.get_artifact(db, uuid.UUID(h.ids["artifact:current"])).state
-            != ARTIFACT_STATE_ARCHIVED
-        )
-    yes = h.say(sid, "Evet, sil.", turn=2)
-    assert yes["resolved_intents"][-1]["intent"] == "artifact_delete", yes
-    done = h.tool(sid, "c-2", "artifact.delete", {})
-    assert done["result"]["execution_status"] == "executed", done
-    assert done["result"]["renders_removed"] >= 1
+    done = h.tool(sid, "c-1", "artifact.delete", {})
+    assert done["status"] == "succeeded", done
+    assert done["result"].get("status") != "needs_confirmation"
+    assert "artifact.delete" in _ledger_actions(h)
     with h.factory() as db:
         assert (
             service.get_artifact(db, uuid.UUID(h.ids["artifact:current"])).state
             == ARTIFACT_STATE_ARCHIVED
         )
-    assert "artifact.delete" in _ledger_actions(h)
+
+
+def test_voice_delete_still_asks_first_when_the_owner_sets_confirm() -> None:
+    """The confirm policy is not gone - it is no longer the default."""
+    h = build_harness()
+    h.seed(CTX_DOCUMENT_ARTIFACT_FOCUSED)
+    h.runtime.artifacts.settings.artifact_delete_policy = "confirm"
+    sid = h.new_session()
+    h.say(sid, "Bunu sil.")
+    asked = h.tool(sid, "c-1", "artifact.delete", {})
+    assert asked["result"]["status"] == "needs_confirmation"
+    assert "artifact.delete" not in _ledger_actions(h)
 
 
 def test_voice_delete_the_models_own_confirm_flag_cannot_stand_in_for_the_owners_yes() -> None:

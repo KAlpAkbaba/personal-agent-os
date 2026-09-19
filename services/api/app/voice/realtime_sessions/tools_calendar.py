@@ -16,7 +16,14 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 from zoneinfo import ZoneInfo
 
-from app.actions.confirmation_gate import CONFIRM_SOURCE_VOICE, Confirmation
+from app.actions.confirmation_gate import (
+    CONFIRM_SOURCE_OWNER_POLICY,
+    CONFIRM_SOURCE_VOICE,
+    GATE_ACCOUNT_MISSING,
+    GATE_SEND_DISABLED,
+    Confirmation,
+)
+from app.actions.receipt import EXECUTION_EXECUTED
 from app.calendar import tr_time
 from app.calendar.service import CalendarService
 from app.voice.errors import VoiceError, VoiceErrorClass
@@ -171,7 +178,10 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     when_spoken = str(arguments.get("when_spoken") or "")
     if turn.get("calendar_ref") == "current":
         minutes = tr_time.extract_duration_minutes(when_spoken) or tr_time.DEFAULT_EVENT_MINUTES
-        return service.propose_reschedule(db, minutes_delta=minutes, session_id=str(ctx.session_id))
+        proposed = service.propose_reschedule(
+            db, minutes_delta=minutes, session_id=str(ctx.session_id)
+        )
+        return _commit_on_first_word(ctx, service, proposed)
     if not when_spoken:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "calendar.propose needs when_spoken")
     summary = str(arguments.get("summary") or "")
@@ -205,7 +215,7 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     model_reminder = arguments.get("reminder_minutes")
     if reminder is None and isinstance(model_reminder, int) and 0 <= model_reminder <= 10080:
         reminder = model_reminder
-    return service.propose(
+    proposed = service.propose(
         db,
         summary=summary,
         start=start,
@@ -214,6 +224,48 @@ def calendar_propose(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         reminder_minutes=reminder,
         session_id=str(ctx.session_id),
     )
+    return _commit_on_first_word(ctx, service, proposed)
+
+
+def _commit_on_first_word(
+    ctx: ToolContext, service: Any, proposed: dict[str, Any]
+) -> dict[str, Any]:
+    """Owner decision 2026-09-19 ("Tüm 2. ses onaylarını kaldır, mail hariç"): the proposal
+    the owner just made is committed in the same turn, on the owner's own sentence, with no
+    "Onayla" in between.
+
+    The gate is not bypassed - it is walked, in order: the proposal's speech is its read-back
+    (H1's explicit act, recorded on THIS session and turn by ``read_proposal``), then the
+    commit under the owner's standing decision. The account and the host flag are still
+    required; when the gate refuses for a reason the owner cannot answer right now (no
+    account, writing disabled - B46 is deferred) the proposal STANDS and is spoken as before,
+    so "Onayla" still works the day the account is there and nothing is lost."""
+    if ctx.db is None or not isinstance(proposed.get("proposal"), dict):
+        return proposed
+    turn = _turn_record(ctx)
+    turn_no = turn.get("turn") if isinstance(turn.get("turn"), int) else None
+    read = service.read_proposal(ctx.db, session_id=str(ctx.session_id), turn=turn_no)
+    if read.get("status") == "needs_clarification":
+        return proposed
+    settings = ctx.live.get("settings")
+    host_flag = bool(getattr(settings, "calendar_write_enabled", False))
+    confirmation = Confirmation(
+        source=CONFIRM_SOURCE_OWNER_POLICY,
+        session_id=str(ctx.session_id),
+        turn=turn_no,
+        owner_intent_ok=turn.get("intent") == Intent.CALENDAR_PROPOSE,
+    )
+    committed = service.commit(
+        ctx.db,
+        host_flag_enabled=host_flag,
+        session_id=str(ctx.session_id),
+        confirmation=confirmation,
+    )
+    if committed.get("execution_status") == EXECUTION_EXECUTED:
+        return committed
+    if committed.get("error_class") in (GATE_ACCOUNT_MISSING, GATE_SEND_DISABLED):
+        return proposed
+    return committed
 
 
 def calendar_read_proposal(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:

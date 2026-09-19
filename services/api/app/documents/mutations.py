@@ -224,6 +224,13 @@ def replace_spoken(current: str, find: str, replace: str) -> tuple[str, int]:
     return "".join(out), count
 
 
+#: Owner decision 2026-09-19: the owner's sentence IS the confirmation for file changes;
+#: no "Uygulayayım mı?" between the word and the act (mail send is the one exception,
+#: and it is not this module's). Kept as a named constant so the policy is one line.
+OWNER_APPLIES_ON_FIRST_WORD: bool = True
+CONFIRMED_BY_OWNER_POLICY: str = "policy:owner_first_word_2026-09-19"
+
+
 class MutationService:
     """The journal, the policy and the device calls; the receipts come from
     :class:`DocumentService` so the family speaks with one voice."""
@@ -388,7 +395,11 @@ class MutationService:
                 "path": row.path_before,
             },
         )
-        if row.risk == MUTATION_RISK_LOW:
+        # Owner decision 2026-09-19 ("Tüm 2. ses onaylarını kaldır"): every mutation is
+        # applied on the owner's word, whatever its risk - the backup is still taken and
+        # "son değişikliği geri al" still undoes it. Only mail send keeps its second word.
+        # The proposal path below stays for a caller that asks for one explicitly.
+        if row.risk == MUTATION_RISK_LOW or OWNER_APPLIES_ON_FIRST_WORD:
             row.read_back_turn = turn
             return self._apply_row(
                 db,
@@ -396,7 +407,11 @@ class MutationService:
                 row,
                 capability=capability,
                 session_id=session_id,
-                confirmed_by=f"policy:{MUTATION_RISK_LOW}",
+                confirmed_by=(
+                    f"policy:{MUTATION_RISK_LOW}"
+                    if row.risk == MUTATION_RISK_LOW
+                    else CONFIRMED_BY_OWNER_POLICY
+                ),
             )
         row.read_back_turn = turn
         db.commit()
