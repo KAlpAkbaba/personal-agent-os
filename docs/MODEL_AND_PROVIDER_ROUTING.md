@@ -44,6 +44,14 @@ stt_clean: provider-C
 stt_local_fallback: faster-whisper
 ```
 
+**Local test mode (ADR-0173).** A per-browser switch ("Yerel mod") replaces the realtime
+provider with the browser's own engines for command testing at no cost: STT = Chrome Web
+Speech (`SpeechRecognition`, tr-TR), TTS = the browser's `speechSynthesis`, dialogue = none
+(the deterministic router only). Server-side it is the `local-router` realtime provider on
+the `text` transport - selected only when the client asks for that transport, never by
+default - so the relay, the tool contract, the audit and the step-up rules are the same
+ones the paid path uses. `faster-whisper` remains the fallback for a fully on-device mode.
+
 ## 5. Fallback
 
 Provider errors should map to typed failure and allow fallback where semantics remain safe. Avoid silently changing a high-quality narration voice mid-paragraph; switch at a segment boundary.

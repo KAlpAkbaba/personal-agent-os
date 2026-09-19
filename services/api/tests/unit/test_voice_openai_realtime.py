@@ -70,6 +70,7 @@ from app.voice.providers_openai_realtime import (
     tool_result_commands,
 )
 from app.voice.realtime_sessions.runtime import (
+    LOCAL_ROUTER_PROVIDER_NAME,
     REJECT_SIMULATED_OUTSIDE_DEV,
     RealtimeVoiceRuntime,
     default_providers,
@@ -610,11 +611,14 @@ def test_dev_without_key_registers_only_the_simulator() -> None:
     settings = Settings(_env_file=None, environment="dev")
     assert simulator_allowed(settings)
     providers = default_providers(settings)
-    assert set(providers) == {SIMULATOR_PROVIDER_NAME}
+    # ADR-0173: the local router is always registered (no key, no environment) and never
+    # the default - it is rejected below by capability, not by name.
+    assert set(providers) == {SIMULATOR_PROVIDER_NAME, LOCAL_ROUTER_PROVIDER_NAME}
     assert OPENAI_REALTIME_PROVIDER_NAME in inactive_candidates(settings)
     rt = _runtime(settings)
     chosen, result = rt.select()
     assert chosen.name == SIMULATOR_PROVIDER_NAME
+    assert "speech_to_speech" in result.rejected[LOCAL_ROUTER_PROVIDER_NAME]
     health = rt.health_check()
     assert health["status"] == "ok"
     assert "provider_auth_missing" in health["inactive"][OPENAI_REALTIME_PROVIDER_NAME]
@@ -624,7 +628,11 @@ def test_dev_without_key_registers_only_the_simulator() -> None:
 def test_dev_with_key_ranks_the_real_adapter_above_the_simulator() -> None:
     settings = Settings(_env_file=None, environment="dev", voice_openai_api_key=KEY)
     providers = default_providers(settings)
-    assert set(providers) == {OPENAI_REALTIME_PROVIDER_NAME, SIMULATOR_PROVIDER_NAME}
+    assert set(providers) == {
+        OPENAI_REALTIME_PROVIDER_NAME,
+        SIMULATOR_PROVIDER_NAME,
+        LOCAL_ROUTER_PROVIDER_NAME,
+    }
     rt = _runtime(settings)
     chosen, result = rt.select()
     assert chosen.name == OPENAI_REALTIME_PROVIDER_NAME
@@ -638,7 +646,9 @@ def test_dev_with_key_ranks_the_real_adapter_above_the_simulator() -> None:
 def test_prod_without_key_has_no_provider_and_says_why() -> None:
     settings = Settings(_env_file=None, environment="prod")
     assert not simulator_allowed(settings)
-    assert default_providers(settings) == {}
+    # ADR-0173: the local router is registered even here - it is the mode the owner
+    # reaches for when there is no vendor - and it still cannot be the default.
+    assert set(default_providers(settings)) == {LOCAL_ROUTER_PROVIDER_NAME}
     inactive = inactive_candidates(settings)
     assert set(inactive) == {OPENAI_REALTIME_PROVIDER_NAME, SIMULATOR_PROVIDER_NAME}
     rt = _runtime(settings)
@@ -648,14 +658,14 @@ def test_prod_without_key_has_no_provider_and_says_why() -> None:
     assert set(exc.value.details["inactive"]) == set(inactive)
     health = rt.health_check()
     assert health["status"] == "fail"
-    assert health["providers"] == []
+    assert health["providers"] == [LOCAL_ROUTER_PROVIDER_NAME]
     assert health["environment"] == "prod"
 
 
 def test_prod_with_key_registers_only_the_real_adapter() -> None:
     settings = Settings(_env_file=None, environment="prod", voice_openai_api_key=KEY)
     rt = _runtime(settings)
-    assert set(rt.providers) == {OPENAI_REALTIME_PROVIDER_NAME}
+    assert set(rt.providers) == {OPENAI_REALTIME_PROVIDER_NAME, LOCAL_ROUTER_PROVIDER_NAME}
     chosen, result = rt.select()
     assert chosen.name == OPENAI_REALTIME_PROVIDER_NAME
     assert result.ranked == (OPENAI_REALTIME_PROVIDER_NAME,)

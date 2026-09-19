@@ -13267,3 +13267,145 @@ testi yeter"). Decision:
 * Provider boundary kept: Chrome's recogniser is behind the same STT seam
   (`docs/MODEL_AND_PROVIDER_ROUTING.md` §4); `faster-whisper` stays the documented local
   fallback for a later, fully on-device mode.
+
+**ADR-0173 addendum (2026-09-19) — how it was built, and what the building found.**
+
+* **Selection: `transport="text"`, not a `provider` field.** The create request already
+  had `transport`; a fourth value (`TRANSPORT_TEXT`, `app/voice/providers.py`) is the
+  client's explicit ask and changes no request schema, so the committed wire contract
+  (`packages/protocol/realtime-session-contract.json`) and its version are untouched. A
+  `provider` field would have let a client name a vendor, which selection-by-capability
+  exists to forbid. `RealtimeVoiceRuntime.select(transport="text")` is the one door; every
+  other value, and none, runs the default selection unchanged.
+* **The `local-router` provider** (`app/voice/providers_local_router.py`) declares what it
+  is - not speech-to-speech, not full duplex, no barge-in, no ephemeral credentials, tool
+  calling yes, transport `text` only - so the default selection rejects it by capability,
+  with the reasons, even when the preference list names it first. It is always registered
+  (no key, no environment): the mode must exist on the deployment whose vendor key is
+  missing. Its credential is inert: `secret=""`, and `EphemeralCredential.to_client_dict`
+  now omits an empty secret, so the create response of a local session carries none. The
+  web `SessionCredential.secret` became optional and the WebRTC exchange refuses to run
+  without one rather than send `Bearer undefined`.
+* **Found while building: `capability` names actions only.** The brief assumed every
+  routed sentence carries `capability`. A QUERY ("Saat kaç?", "Neler yapabilirsin?",
+  "Alarmım kaçta?") carries `capability: null` by design - that word is what makes an
+  intent an action - while the server already owns the whole table
+  (`intent_router.tool_for`: `CAPABILITY_BY_INTENT` + `QUERY_TOOL_BY_INTENT`). A local mode
+  reading `capability` alone would have answered "Anlayamadım efendim" to every question
+  the router understands. `resolved_intents[]` now also carries **`tool`**: the one tool the
+  deterministic router names, or null when only a model could choose. The web half reads
+  `tool`, then `capability`. Additive; nothing else reads it.
+* **What the mode cannot do, said plainly.** An `EXPLAIN` question ("Göz açık mı?") reaches
+  `state.now` only because the MODEL picks it (the corpus harness exempts it for that
+  reason), so `tool` is null and the local mode says it did not understand. A tool that
+  needs a model-composed argument (`state.now`'s `question`, `memory.remember`'s
+  `statement`) or the browser's own half of an action (`eye.*` needs the camera's
+  `observed_after`, which lives in the paid controller) fails with its validation message
+  when called on empty arguments; the web half speaks "Komut yürütülemedi efendim." and
+  logs the tool and status. Tools that read the owner's words from the turn record
+  (`operator.mission`, `media.*`, `alarm.*`, `assistant.capabilities`, the operator family)
+  are the ones this mode is for - which is the browser scenario the owner is testing.
+* **Web** (`apps/web/app/lib/voice/localMode.ts`, its own module; `controller.ts`
+  untouched): injectable `SpeechRecognition` / `speechSynthesis`; interim results ignored;
+  the recogniser is stopped while the browser speaks and restarted when the utterance
+  ends (no echo); a final transcript arriving mid-speech cancels it (barge-in); Chrome
+  ending a continuous session by itself restarts it; the log carries kinds and ids, never
+  words. The switch is `pagentos.core.localVoice` in `localStorage` (try/catch both ways).
+  While it is on, the voice cell draws the local start/stop INSTEAD of the paid connect,
+  so two sessions cannot be opened from one cell, and a `role="status"` indicator says
+  "● Dinliyor (mikrofon açık)" whenever the recogniser runs.
+* **Contract halves read each other:** `test_voice_local_mode.py` reads `localMode.ts` for
+  the transport constant, the call-id prefix and the create body (no wire `voice`: the
+  local router vets none and the route would 422).
+
+## ADR-0174 — Research only told the owner source titles; it now reads the content (2026-09-19)
+
+The owner: *"araştırmada sadece başlıkları alıp bana anlatıyor, konu içeriğini çekmiyor; site
+içerisindeki konu içeriği olarak çekmemiz gerekiyor"* ("research only tells me titles, it
+doesn't pull the page's own content"). Diagnosed against production run `817c558a` (topic
+"Yapay zeka ile ilgili son haberler"): every stored evidence excerpt was exactly 1200 chars
+and started with page chrome — a Hacker News nav bar
+("Hacker Newsnew | past | comments | ask | show | jobs | submit"), a PC Gamer byline
+breadcrumb ("Gaming Industry / Features / By Wes Fenlon / Published ...") — because the device
+worker reads `innerText` top-to-bottom and truncates from the start, and the 1200-char request
+was routinely spent entirely before the article began. The run's only verified source went
+through `synthesize_thin` -> `DeterministicSynthesisProvider`, whose `Finding.summary` is
+deliberately just `"Kaynak: <publisher> — <title> (<date>)"` (memory-boundary review
+CRITICAL-1a: `remember_activity` copies finding summaries into episodic memory, so that
+provider's summary must never carry raw/untrusted page text) — and `app.research.result`
+resolves a spoken finding's claim as `title or summary`, so with a provenance-only summary the
+owner heard the title, twice.
+
+Five changes, all Cloud-Core-only (no device release):
+
+1. **Ask the device for more.** `DeviceBrowserGateway`'s `excerpt_chars` default rose from
+   1200 to `DEFAULT_EXCERPT_CHARS = 8000` (`app/research/browser_gateway.py`), a named
+   constant every construction site in `browser_activities.py` now passes explicitly. Bound
+   by the device's own `MAX_RESULT_BYTES = 48 KiB` result cap
+   (`services/browser/browser_agent/worker.py`, read-only — a device change is out of scope):
+   worst-case UTF-8 is 4 bytes/char, so 8000 chars leaves comfortable headroom under that cap
+   once the rest of the result envelope is counted.
+2. **`content_text` (`app/research/evidence.py`).** A small, deterministic, tr/en-neutral
+   filter: a line is chrome when it is blank, reads as a nav-bar/breadcrumb (several short
+   segments split on `|`/`/`/`»`/`›`/`>`), matches a byline pattern ("By …", "Published …",
+   "Yayın tarihi …"), or is simply short with no sentence-ending punctuation at all. Falls
+   back to the raw excerpt when filtering would leave almost nothing (an all-chrome page, or
+   an excerpt with no line breaks to filter on). This is deliberately a heuristic, not a real
+   boilerplate-removal model — device-side main-content extraction (reading `<article>`/
+   `<main>` specifically) is the honest long-term fix and is explicitly **not done here** (a
+   device release). `content_text` is used for: (a) `topic_relevance`'s scoring input, (b) the
+   synthesis prompt's per-source excerpt (`PROMPT_EXCERPT_MAX_CHARS = 4000`, so ten sources
+   stay well inside a model's context even at the new 8000-char device request size), (c) the
+   deterministic provider's quoted Details-section `source_fact` text. The STORED
+   `EvidenceRecord.excerpt` is never replaced — it stays the raw device excerpt for
+   provenance/audit, exactly as before.
+3. **Cross-language topic relevance (`app/research/eligibility.py`).** The production
+   topic's own words ("yapay zeka") never appeared in an English-only candidate at all, so an
+   on-topic English article about AI coding tools scored 0.0 and a second one 0.2167 —
+   correctly computed, from an incomplete signal. `topic_relevance`'s token-overlap signal now
+   also scores against `app.research.plan.english_core_query(topic)` — the SAME
+   deterministic Turkish→English term map discovery already uses to build its own English
+   query — rather than maintaining a second translation table; a short acronym it renders in
+   upper case (e.g. "AI") is trusted as a high-signal term and kept despite the general
+   token filter's `len > 2` noise floor. Separately, `"haberler"`/`"haber"` (news) had no
+   Turkish stopword entry even though the English "news" did — a real asymmetry that was
+   quietly counting a filler word as topic-specific and diluting the signal — now closed.
+   `MIN_TOPIC_RELEVANCE` (0.35) is untouched; proven against the production example directly
+   (an on-topic English AI-coding article now clears the floor at 0.3917, an unrelated
+   article — even with a nav bar mentioning "AI" as a site category, filtered by
+   `content_text` per point 2 — stays at 0.0).
+4. **Thin results get content (`app/research/synthesis.py`).** `synthesize_thin` still
+   builds its structure (executive summary stating the thinness, why_it_matters, watch_next,
+   details, uncertainty) from `DeterministicSynthesisProvider` exactly as before. New: when
+   the caller passes a configured, non-deterministic `SynthesisProvider`, its
+   `synthesize_thin_content(...)` is tried — a new prompt (`build_thin_prompt`) asking for
+   EXACTLY one finding per verified source, each summarising ONLY that source's own content
+   in Turkish, each citing exactly that source's evidence id — structurally enforced by
+   `_parse_thin_findings` (wrong count, an unknown/duplicate/missing evidence id, or a finding
+   that fails its own field contract all reject the response), never by trusting the model to
+   count correctly. On `SynthesisNotConfiguredError`, `SynthesisVendorError`,
+   `ContractViolation` or `ValueError` from that path, the deterministic findings already
+   computed are kept unchanged — CRITICAL-1a's rule is honoured exactly as before:
+   `DeterministicSynthesisProvider`'s own summary NEVER carries raw page text, and remains the
+   answer on every failure path. `synthesize_thin` now returns
+   `(result, reason_codes, provider_name)` — the provider name actually used, not just the one
+   requested, so `browser_activities.synthesize_activity` can report `synthesis_provider`
+   truthfully (a thin run that asked for `openai` but silently fell back is recorded via the
+   SAME requested-vs-used fallback mechanism the non-thin path already had).
+5. **The spoken claim (`app/research/result.py`) was checked, not changed.** The owner-facing
+   `_finding_sentence` already reads `result.executive_summary` (the thinness sentence) THEN
+   each finding's own text via `executive_speech` — the fix needed was upstream, in what
+   `Finding.summary` actually contains (points 2 and 4). `ResearchResult.from_report_json`'s
+   `claim = raw.get("title") or raw.get("summary")` — title before summary — was left as-is
+   for this incident (a finding's `summary` is always populated by both providers, deterministic
+   or LLM, so `title or summary` never actually reaches the `summary` fallback for either path;
+   changing that precedence is a separate, broader decision this incident does not require).
+
+**What is explicitly not done.** Real device-side main-content extraction (point 2) needs a
+device release and is a follow-up, not a Cloud-Core change. `content_text` is a heuristic
+line-classifier, not a boilerplate-removal model — it will occasionally keep a short genuine
+sentence's worth of chrome or drop an unusually short real sentence; the fallback-to-raw-excerpt
+rule bounds how badly it can fail. The memory-boundary rule (CRITICAL-1a) is preserved exactly:
+only `DeterministicSynthesisProvider`'s `Finding.summary` is provenance-only by contract; an
+LLM-authored summary (thin-mode content path, or the existing full-report path) was already,
+and remains, real synthesized content, not raw page text.

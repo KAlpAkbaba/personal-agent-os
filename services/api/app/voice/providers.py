@@ -137,7 +137,11 @@ END_OF_TURN_MODES = (END_OF_TURN_SILENCE, END_OF_TURN_SERVER_VAD, END_OF_TURN_SE
 TRANSPORT_WEBRTC = "webrtc"
 TRANSPORT_WEBSOCKET = "websocket"
 TRANSPORT_SIMULATED = "simulated"  # in-process, deterministic; the simulator only
-TRANSPORTS = (TRANSPORT_WEBRTC, TRANSPORT_WEBSOCKET, TRANSPORT_SIMULATED)
+#: ADR-0173: no media leg at all. The client transcribes and speaks with the browser's own
+#: engines and posts TEXT to the relay; the provider behind it is the deterministic router.
+#: Never chosen by default (it is not speech-to-speech), only when a client asks for it.
+TRANSPORT_TEXT = "text"
+TRANSPORTS = (TRANSPORT_WEBRTC, TRANSPORT_WEBSOCKET, TRANSPORT_SIMULATED, TRANSPORT_TEXT)
 
 INTERRUPT_LATENCY_FAST = "fast"  # provider cancels an in-flight response well under 150 ms
 INTERRUPT_LATENCY_MEDIUM = "medium"
@@ -397,11 +401,15 @@ class EphemeralCredential:
     def to_client_dict(self) -> dict[str, Any]:
         out = {
             "provider": self.provider,
-            "secret": self.secret,
             "expires_at": self.expires_at.isoformat().replace("+00:00", "Z"),
             "transport": self.transport,
             "session_ref": self.session_ref,
         }
+        # ADR-0173: a provider with no media leg (local-router) mints NO secret, and a key
+        # named "secret" holding nothing would read as one to every scrubber and reviewer
+        # that greps for it. Absent means absent.
+        if self.secret:
+            out["secret"] = self.secret
         if self.transport_descriptor:
             out["transport_descriptor"] = dict(self.transport_descriptor)
         return out

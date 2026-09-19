@@ -246,7 +246,10 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
     owner = _owner(request)
     trace_id = trace_id_var.get()
     try:
-        provider, selection = runtime.select(language=body.language)
+        # ADR-0173: `transport="text"` is the client's explicit ask for the local router
+        # (no media leg, no vendor credential); anything else leaves the default
+        # selection exactly as it was.
+        provider, selection = runtime.select(language=body.language, transport=body.transport)
     except VoiceError as exc:
         _raise_http(exc)
     transport = body.transport or selection.transport

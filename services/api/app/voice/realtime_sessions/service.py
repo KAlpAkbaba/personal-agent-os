@@ -41,7 +41,7 @@ from app.voice import route_telemetry
 from app.voice import service as voice_service
 from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intent_router import get_intent_router, resolve_deictic_reference
+from app.voice.intent_router import get_intent_router, resolve_deictic_reference, tool_for
 from app.voice.intents import Intent, ResolvedIntent, classify_research_shape, resolve_intent
 from app.voice.providers import EphemeralCredential, RealtimeProvider, RealtimeSessionConfig
 from app.voice.realtime import RealtimeState
@@ -1854,7 +1854,19 @@ def record_client_events(
                 "mission_action": intent.mission_action,
             }
             resolved.append(
-                {"t_ms": t_ms, "turn": turn, **intent.to_dict(), "normalized_text": None}
+                {
+                    "t_ms": t_ms,
+                    "turn": turn,
+                    **intent.to_dict(),
+                    # ADR-0173: the ONE tool the deterministic router names for this
+                    # sentence - an action's capability, or a query's tool
+                    # (QUERY_TOOL_BY_INTENT) - and null when only a model could choose
+                    # (EXPLAIN, NONE). `capability` alone covers actions; the local mode
+                    # has no model and issues exactly this call, or says it did not
+                    # understand.
+                    "tool": intent.capability or tool_for(intent.intent),
+                    "normalized_text": None,
+                }
             )
             # B51 (req 744): the question is spoken only under the owner's flag - the
             # model may already be answering the same utterance.

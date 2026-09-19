@@ -25,8 +25,17 @@ from app.actions.receipt import ACTION_CONTRACT_VERSION
 from app.config import Settings
 from app.db import build_engine, build_session_factory
 from app.logging import get_logger
-from app.voice.errors import VoiceError
-from app.voice.providers import TRANSPORT_SIMULATED, ProviderCapabilities, RealtimeProvider
+from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.providers import (
+    TRANSPORT_SIMULATED,
+    TRANSPORT_TEXT,
+    ProviderCapabilities,
+    RealtimeProvider,
+)
+from app.voice.providers_local_router import (
+    LOCAL_ROUTER_PROVIDER_NAME,
+    LocalRouterRealtimeProvider,
+)
 from app.voice.providers_openai_realtime import (
     OPENAI_REALTIME_PROVIDER_NAME,
     OpenAIRealtimeProvider,
@@ -60,6 +69,11 @@ def default_providers(settings: Settings) -> dict[str, RealtimeProvider]:
     if simulator_allowed(settings):
         sim = SimulatedRealtimeProvider(credential_ttl_s=settings.voice_realtime_credential_ttl_s)
         providers[sim.name] = sim
+    # ADR-0173: always a candidate - it needs no key and no environment, and it must be
+    # there precisely on the deployment where the paid provider is not. It cannot win the
+    # default selection (not speech-to-speech); `select(transport="text")` is its one door.
+    local = LocalRouterRealtimeProvider()
+    providers[local.name] = local
     return providers
 
 
@@ -205,13 +219,24 @@ class RealtimeVoiceRuntime:
     def inactive(self) -> dict[str, str]:
         return dict(self._inactive)
 
-    def select(self, *, language: str = "tr-TR") -> tuple[RealtimeProvider, SelectionResult]:
+    def select(
+        self, *, language: str = "tr-TR", transport: str | None = None
+    ) -> tuple[RealtimeProvider, SelectionResult]:
         """Capability-driven choice among the registered candidates (spec §2).
 
         Defence in depth for ADR-0038: even if a simulated-only provider was
         registered explicitly, it is barred outside dev and reported as
         rejected with the reason, so a real adapter is never outranked by —
-        or silently replaced with — the gate in production."""
+        or silently replaced with — the gate in production.
+
+        ``transport="text"`` (ADR-0173) is the ONE explicit door to the local router:
+        the client asked for a session with no media leg, so the conversation
+        requirement (speech-to-speech, full duplex, barge-in) does not apply - the
+        browser meets it - and the candidate is whichever registered provider offers
+        the text transport for the language. Every other value, and no value, runs the
+        default selection unchanged, so the paid path stays the default."""
+        if transport == TRANSPORT_TEXT:
+            return self._select_text(language=language)
         allow_sim = simulator_allowed(self.settings)
         candidates: list[ProviderCapabilities] = []
         barred: dict[str, tuple[str, ...]] = {}
@@ -237,6 +262,58 @@ class RealtimeVoiceRuntime:
         if barred:
             result = dataclasses.replace(result, rejected={**result.rejected, **barred})
         return self._providers[result.selected.name], result
+
+    def _select_text(self, *, language: str) -> tuple[RealtimeProvider, SelectionResult]:
+        """ADR-0173: the provider for a session with no media leg (see ``select``).
+
+        Deterministic: the configured preference order first, then the name. Rejects, by
+        the same missing-requirement vocabulary the default selection uses, every
+        candidate that does not offer ``transport=text`` or the language - so the
+        health surface can say why a text session was refused."""
+        eligible: list[ProviderCapabilities] = []
+        rejected: dict[str, tuple[str, ...]] = {}
+        for provider in self._providers.values():
+            caps = provider.capabilities()
+            missing: list[str] = []
+            if caps.kind != "realtime":
+                missing.append("kind=realtime")
+            if TRANSPORT_TEXT not in caps.transports:
+                missing.append(f"transport={TRANSPORT_TEXT}")
+            if not caps.tool_calling:
+                missing.append("tool_calling")
+            if not caps.supports_language(language):
+                missing.append("language")
+            if missing:
+                rejected[caps.name] = tuple(missing)
+            else:
+                eligible.append(caps)
+        if not eligible:
+            raise VoiceError(
+                VoiceErrorClass.CAPABILITY_MISSING,
+                f"no provider offers transport {TRANSPORT_TEXT!r} for {language} (ADR-0173)",
+                details={
+                    "rejected": {k: list(v) for k, v in rejected.items()},
+                    "inactive": dict(self._inactive),
+                },
+            )
+        preference = list(self.settings.voice_realtime_provider_preference)
+
+        def order(caps: ProviderCapabilities) -> tuple[int, str]:
+            try:
+                return (preference.index(caps.name), caps.name)
+            except ValueError:
+                return (len(preference), caps.name)
+
+        eligible.sort(key=order)
+        winner = eligible[0]
+        result = SelectionResult(
+            selected=winner,
+            ranked=tuple(c.name for c in eligible),
+            rejected=rejected,
+            reasons=(f"client requested transport={TRANSPORT_TEXT} (ADR-0173 local mode)",),
+            transport=TRANSPORT_TEXT,
+        )
+        return self._providers[winner.name], result
 
     def provider(self, name: str) -> RealtimeProvider | None:
         return self._providers.get(name)
@@ -274,4 +351,4 @@ class RealtimeVoiceRuntime:
         }
 
 
-__all__ = ["RealtimeVoiceRuntime", "default_providers"]
+__all__ = ["LOCAL_ROUTER_PROVIDER_NAME", "RealtimeVoiceRuntime", "default_providers"]

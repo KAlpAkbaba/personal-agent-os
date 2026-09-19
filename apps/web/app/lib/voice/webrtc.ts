@@ -187,7 +187,10 @@ export class WebRtcTransport implements RealtimeTransport {
     const fetchImpl = this.options.fetchImpl ?? fetch;
     const headers = new Headers(descriptor.headers ?? {});
     // The per-session credential is the only secret the browser holds; it
-    // travels as a bearer to the exchange endpoint the server named.
+    // travels as a bearer to the exchange endpoint the server named. A credential
+    // without one (ADR-0173's text transport) can never open a media leg: say so
+    // rather than send "Bearer undefined".
+    if (!credential.secret) throw new Error(`provider ${credential.provider} minted no media credential`);
     headers.set("Authorization", `Bearer ${credential.secret}`);
     let body: BodyInit;
     if (descriptor.sdp_content_type === "multipart/form-data") {

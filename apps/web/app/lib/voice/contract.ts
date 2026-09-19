@@ -24,7 +24,8 @@ export type ToolManifestEntry = {
  */
 export type SessionCredential = {
   provider: string;
-  secret: string;
+  /** Absent for a provider with no media leg (ADR-0173 `local-router`): nothing to authenticate against. */
+  secret?: string;
   expires_at: string;
   transport: string;
   session_ref: string;

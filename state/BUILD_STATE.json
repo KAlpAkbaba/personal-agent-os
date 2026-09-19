@@ -626,5 +626,17 @@
     "proof": "local: quality-gate -Fast + 28 PS suites + recovery-supervisor + full tests/unit + tests/integration on the docker dev stack",
     "last_full_local_proof": "42ce5a9 (2026-09-19): gate PASS, 28/28 suites, rs 87 passed, unit 11973 passed (2 test_contract_falsification failures were a collision with the concurrently running gate; 46/46 alone), integration 106 passed",
     "last_release": "42ce5a9 released 2026-09-19 11:05Z as api-blue (blue/green), previous e0282d7 kept as last known good, recovery bundle pinned to 42ce5a9, health ok, failing_checks empty - fix for the operator mission heartbeat incident (docs/evidence/operator-mission-heartbeat-2026-09-19.json)"
+  },
+  "adr_0173_local_voice_mode": {
+    "status": "IMPLEMENTED_NOT_COMMITTED / NOT_YET_PROVEN (owner audio run pending)",
+    "date": "2026-09-19",
+    "objective": "free per-browser voice mode for command testing: Chrome Web Speech STT + deterministic router + browser speechSynthesis; no WebRTC, no OpenAI credential, no model",
+    "selection": "CreateSessionRequest.transport='text' -> local-router provider; default selection unchanged (rejected by capability); wire contract version unchanged",
+    "server_addition": "resolved_intents[].tool = capability or QUERY_TOOL_BY_INTENT (queries carry capability null)",
+    "tests": "api tests/unit/test_voice_local_mode.py 9; web local-mode.test.ts + voice-control-local-render.test.tsx 31; 22 mutations RED, restored byte-exact",
+    "local_proof": "full tests/unit 11996 passed 5 skipped; web vitest 112 files 1989 passed; tsc 0; oxlint 0 errors; ruff clean",
+    "limits": "EXPLAIN questions (state.now) and tools needing model-composed arguments or the browser eye half are out of scope in this mode",
+    "owner_action": "READY_FOR_OWNER (audio): flip 'Yerel mod' on /core/cockpit in Chrome after the next Cloud Core + web release and speak a command",
+    "deployment": "not deployed; needs a Cloud Core release (server must know transport=text) before the web switch works against production"
   }
 }

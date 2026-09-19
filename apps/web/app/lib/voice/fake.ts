@@ -11,6 +11,14 @@
  */
 
 import type { Fetcher } from "./api";
+import type {
+  RecognitionEventLike,
+  RecognitionResultLike,
+  SpeechRecognitionLike,
+  SpeechSynthesisLike,
+  UtteranceLike,
+  VoiceLike,
+} from "./localMode";
 import {
   type ClientEvent,
   type EventsResponse,
@@ -604,6 +612,12 @@ export type FakeCloudCoreOptions = {
   legacyCreate?: boolean;
   /** B20 req 223: the provider's media-leg ceiling in seconds; omitted from the payload when 0. */
   legMaxSeconds?: number;
+  /**
+   * ADR-0173: what the deterministic router answers for an `utterance` event's text —
+   * the `resolved_intents` entries (each with `tool` when the router named one). The
+   * default resolves nothing, which is what every pre-existing test expects.
+   */
+  resolveIntents?: (text: string) => Array<Record<string, unknown>>;
 };
 
 type ForcedFailure = { status: number; detail: unknown };
@@ -822,9 +836,16 @@ export class FakeCloudCore {
       this.events.push(...batch);
       const pending = this.pendingSideband;
       this.pendingSideband = [];
+      const resolve = this.options.resolveIntents;
+      const resolved: Array<Record<string, unknown>> = [];
+      if (resolve) {
+        for (const event of batch) {
+          if (event.kind === "utterance") resolved.push(...resolve(event.text ?? ""));
+        }
+      }
       const response: EventsResponse = {
         accepted: batch.length,
-        resolved_intents: [],
+        resolved_intents: resolved,
         pending_sideband: pending,
         state: this.state(),
       };
@@ -841,4 +862,110 @@ export class FakeCloudCore {
   kinds(): string[] {
     return this.events.map((e) => e.kind);
   }
+}
+
+// ------------------------------------------------------- ADR-0173 local mode
+
+/**
+ * A scripted `SpeechRecognition`: the test emits finals with `final(text)` and interims
+ * with `interim(text)`, and reads `starts` / `stops` / `aborts` to prove the recogniser
+ * was paused while the assistant spoke.
+ */
+export class FakeSpeechRecognition implements SpeechRecognitionLike {
+  lang = "";
+  continuous = false;
+  interimResults = true;
+  onresult: ((event: RecognitionEventLike) => void) | null = null;
+  onend: (() => void) | null = null;
+  onerror: ((event: { error?: string }) => void) | null = null;
+  starts = 0;
+  stops = 0;
+  aborts = 0;
+  running = false;
+
+  start(): void {
+    if (this.running) throw new DOMException("already started", "InvalidStateError");
+    this.running = true;
+    this.starts += 1;
+  }
+
+  stop(): void {
+    this.stops += 1;
+    if (!this.running) return;
+    this.running = false;
+    this.onend?.();
+  }
+
+  abort(): void {
+    this.aborts += 1;
+    if (!this.running) return;
+    this.running = false;
+    this.onend?.();
+  }
+
+  private emit(text: string, isFinal: boolean): void {
+    if (!this.running) return;
+    const result: RecognitionResultLike = { isFinal, 0: { transcript: text }, length: 1 };
+    this.onresult?.({ resultIndex: 0, results: [result] });
+  }
+
+  /** The browser delivered a FINAL transcript. Ignored while not running (Chrome never does either). */
+  final(text: string): void {
+    this.emit(text, true);
+  }
+
+  interim(text: string): void {
+    this.emit(text, false);
+  }
+
+  /** Chrome ended the continuous session by itself (silence / the minute cap). */
+  endOnItsOwn(): void {
+    if (!this.running) return;
+    this.running = false;
+    this.onend?.();
+  }
+
+  fail(error: string): void {
+    this.onerror?.({ error });
+  }
+}
+
+/** A scripted `speechSynthesis`: records what was spoken; the test ends an utterance with `finish()`. */
+export class FakeSpeechSynthesis implements SpeechSynthesisLike {
+  readonly spoken: UtteranceLike[] = [];
+  cancels = 0;
+  current: UtteranceLike | null = null;
+
+  constructor(private readonly voices: VoiceLike[] = [{ lang: "tr-TR", name: "Türkçe (Fake)" }]) {}
+
+  speak(utterance: UtteranceLike): void {
+    this.spoken.push(utterance);
+    this.current = utterance;
+  }
+
+  cancel(): void {
+    this.cancels += 1;
+    const current = this.current;
+    this.current = null;
+    current?.onerror?.({ error: "interrupted" });
+  }
+
+  getVoices(): VoiceLike[] {
+    return this.voices;
+  }
+
+  /** The browser finished speaking the current utterance. */
+  finish(): void {
+    const current = this.current;
+    this.current = null;
+    current?.onend?.();
+  }
+
+  texts(): string[] {
+    return this.spoken.map((u) => u.text);
+  }
+}
+
+export function fakeUtterance(text: string): UtteranceLike {
+  return { text, lang: "", voice: null, onend: null, onerror: null };
 }
