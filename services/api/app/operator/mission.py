@@ -96,6 +96,7 @@ KIND_CLICK_TEXT: Final = "click_text"
 #: is already on the screen but not playing.
 KIND_TAB_SWITCH: Final = "tab_switch"
 KIND_TAB_CLOSE: Final = "tab_close"
+KIND_TAB_CLOSE_OTHERS: Final = "tab_close_others"
 KIND_TAB_NEW: Final = "tab_new"
 KIND_VIDEO_PLAY: Final = "video_play"
 #: "Arama kısmına Tosun Paşa yaz", "YouTube sekmesinde aramaya X yaz": the site's own search,
@@ -155,6 +156,10 @@ STRATEGY_DEFAULT: Final = STRATEGY_OWNER
 MAX_RETRIES_PER_STEP: Final = 2
 MAX_REPLANS_PER_STEP: Final = 2
 MAX_ROUNDS_PER_STEP: Final = 6
+#: Steps whose rounds are WORK, not retries: closing every tab but one closes exactly one
+#: tab per round (one observation before each, which is the whole safety of it), so its
+#: budget is a tab count, not a patience limit.
+ROUNDS_BY_KIND: Final[dict[str, int]] = {"tab_close_others": 30}
 MAX_MISSION_STEPS: Final = 6
 
 #: Spec §2's ladder, top rung first. ``escalate`` moves one rung DOWN this tuple from the
@@ -175,10 +180,17 @@ VISUAL_FALLBACK_KINDS: Final = frozenset({KIND_UI_INVOKE})
 
 
 class MissionClarificationNeeded(Exception):
-    """The sentence the owner hears when their words made no mission."""
+    """The sentence the owner hears when their words made no mission.
 
-    def __init__(self, speech: str) -> None:
+    ``label`` is set when the planner DID recognise the shape of the request and is only
+    missing one detail ("kaçıncı sekme?"): the router then still routes the sentence to the
+    mission tool, which answers with ``speech`` — without it the question is composed and
+    never asked, because an unrouted sentence reaches no tool at all.
+    """
+
+    def __init__(self, speech: str, *, label: str = "") -> None:
         self.speech = speech
+        self.label = label
         super().__init__(speech)
 
 
@@ -1044,6 +1056,74 @@ def _decide_tab_close(step: MissionStep, obs: Observation, mission_id: uuid.UUID
     )
 
 
+def _decide_tab_close_others(
+    step: MissionStep, obs: Observation, mission_id: uuid.UUID
+) -> Decision:
+    """ "X hariç tüm sekmeleri kapat" / "Diğer sekmeleri kapat", one tab per round.
+
+    Owner, 2026-09-20: these sentences used to be ``tab_close`` - Ctrl+W on the tab in
+    FRONT, which with "YouTube hariç" is the one tab that had to survive, reported as done.
+
+    The rounds: reach the kept tab (it is usually already in front), move it to the first
+    position, then close the LAST tab until the last tab is the kept one. Every round
+    re-observes, so the decision to close is taken against the tab strip as it is now, and
+    the kept tab is the stopping condition rather than a count of anything.
+    """
+    del mission_id
+    window_id = _owner_browser_window(obs, "sekmeleri kapatmak", image=_browser_image_of(step))
+    title = str((obs.foreground or {}).get("title") or "")
+    keep_name = str(step.args.get("keep_name") or "")
+    keep_title = str(step.args.get("keep_title") or "")
+    # Round 1 with a NAME that is not in front: Chrome's own tab search finds it. Once the
+    # kept tab's own title is known the name is never used again - by then the loop is on
+    # OTHER tabs on purpose, and asking "is this the named one?" would send it back.
+    if keep_name and not keep_title and not plans.titles_name_the_same_tab(title, keep_name):
+        return Decision(
+            "tab_switch",
+            plans.tab_by_name(window_id, keep_name),
+            LEVEL_KEYBOARD,
+            note=f"'{keep_name}' sekmesine geç",
+            finishes_step=False,
+        )
+    if not keep_title:
+        step.args["keep_title"] = title
+        # The kept tab first, so "the last tab" can never be it until it is the only one.
+        return Decision(
+            "tab_move_to_front",
+            plans.tab_move_to_front(window_id),
+            LEVEL_KEYBOARD,
+            note="korunacak sekme başa alındı",
+            finishes_step=False,
+        )
+    if not step.args.get("selected_last"):
+        step.args["selected_last"] = True
+        return Decision(
+            "tab_select_last",
+            plans.tab_select_last(window_id),
+            LEVEL_KEYBOARD,
+            note="son sekmeye geçildi",
+            finishes_step=False,
+        )
+    if title == keep_title:
+        # The last tab IS the kept one: nothing else is open. The step ends on a READ, so
+        # what is claimed was seen (and a mission that had nothing to close says so).
+        closed = int(step.args.get("closed") or 0)
+        return Decision(
+            "tab_close_others_done",
+            plans.window_read(window_id),
+            LEVEL_KEYBOARD,
+            note=f"{closed} sekme kapatıldı" if closed else "kapatılacak başka sekme yoktu",
+        )
+    step.args["closed"] = int(step.args.get("closed") or 0) + 1
+    return Decision(
+        "tab_close_last",
+        plans.tab_close_last(window_id, keep_title=keep_title, title_before=title),
+        LEVEL_KEYBOARD,
+        note=f"'{plans.page_title(title)}' kapatıldı",
+        finishes_step=False,
+    )
+
+
 def _decide_tab_new(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
     del mission_id
     window_id = _owner_browser_window(obs, "yeni sekme açmak", image=_browser_image_of(step))
@@ -1233,6 +1313,7 @@ DECIDERS[KIND_SITE_SEARCH] = _decide_site_search
 DECIDERS[KIND_VIDEO_CONTROL] = _decide_video_control
 DECIDERS[KIND_TAB_SWITCH] = _decide_tab_switch
 DECIDERS[KIND_TAB_CLOSE] = _decide_tab_close
+DECIDERS[KIND_TAB_CLOSE_OTHERS] = _decide_tab_close_others
 DECIDERS[KIND_TAB_NEW] = _decide_tab_new
 DECIDERS[KIND_VIDEO_PLAY] = _decide_video_play
 
@@ -1294,7 +1375,8 @@ def _run_rounds(
     level_override: str | None,
     on_task: Callable[[Mission, MissionStep, OperatorTask], None] | None,
 ) -> Mission:
-    while step.rounds < MAX_ROUNDS_PER_STEP:
+    budget = ROUNDS_BY_KIND.get(step.kind, MAX_ROUNDS_PER_STEP)
+    while step.rounds < budget:
         if mission.cancel_requested:
             return _stop(mission, step, MISSION_CANCELLED, ERROR_CANCELLED, "iptal edildi")
         step.rounds += 1
@@ -2182,6 +2264,11 @@ _ORDINALS: Final[dict[str, int]] = {
     "dokuz": 9,
 }
 _DIGIT_ORDINAL_RE: Final = re.compile(r"^(\d)(?:\.|inci|nci|üncü|uncu|ıncı|inci)?$")
+#: An ordinal's SUFFIX standing alone, which is what is left when the recogniser drops the
+#: number in front of it ("birinci" -> "inci", "üçüncü" -> "üncü"). Never a tab's name.
+_ORDINAL_FRAGMENTS: Final[frozenset[str]] = frozenset(
+    {"inci", "ıncı", "uncu", "üncü", "ncı", "nci", "ncu", "ncü"}
+)
 
 
 def _ordinal_of(token: str) -> int | None:
@@ -2189,6 +2276,52 @@ def _ordinal_of(token: str) -> int | None:
         return _ORDINALS[token]
     match = _DIGIT_ORDINAL_RE.match(token)
     return int(match.group(1)) if match else None
+
+
+#: "YouTube HARİÇ", "YouTube DIŞINDAKİ", "bu sekme DIŞINDAKİLERİ": what comes before the
+#: word is the tab that stays.
+_EXCEPT_WORDS: Final[tuple[str, ...]] = ("hariç", "haric", "dışında", "disinda")
+#: "DİĞER sekmeleri kapat", "ÖTEKİ sekmeleri kapat": every tab but the one in front.
+_OTHERS_WORDS: Final[frozenset[str]] = frozenset(
+    {"diğer", "diger", "diğerlerini", "digerlerini", "öteki", "oteki", "ötekileri", "otekileri"}
+)
+#: "TÜM sekmeleri kapat": how many, not which - it needs one of the two above to mean
+#: anything that leaves a tab open.
+_ALL_WORDS: Final[frozenset[str]] = frozenset(
+    {"tüm", "tum", "bütün", "butun", "hepsi", "hepsini", "tamamını", "tamamini"}
+)
+
+
+def _tab_close_step(tokens: tuple[str, ...], raw: str) -> MissionStep:
+    """ "Sekmeyi kapat" is one tab. "X hariç tüm sekmeleri kapat" / "Diğer sekmeleri kapat"
+    are every tab BUT one - and used to be read as the first (owner, 2026-09-20: with
+    "YouTube hariç" that closed the one tab that had to survive)."""
+    except_index = next(
+        (i for i, t in enumerate(tokens) if any(t.startswith(w) for w in _EXCEPT_WORDS)), None
+    )
+    if except_index is not None:
+        # "bu sekme dışındakileri" names no tab: what stays is the one in front.
+        keep = "" if except_index == 0 else _tab_name(" ".join(raw.split()[:except_index]))
+        label = f"'{keep}' hariç tüm sekmeleri kapat" if keep else "diğer sekmeleri kapat"
+        return MissionStep(
+            id="", kind=KIND_TAB_CLOSE_OTHERS, args={"keep_name": keep}, label_tr=label
+        )
+    if any(t in _OTHERS_WORDS for t in tokens):
+        return MissionStep(
+            id="",
+            kind=KIND_TAB_CLOSE_OTHERS,
+            args={"keep_name": ""},
+            label_tr="diğer sekmeleri kapat",
+        )
+    if any(t in _ALL_WORDS for t in tokens):
+        # "Tüm sekmeleri kapat" is the browser window, or every tab but this one - the two
+        # differ by the owner's own tab, so it is asked rather than chosen for them.
+        raise MissionClarificationNeeded(
+            "Hepsini mi kapatayım efendim, yoksa açık olan sekme kalsın mı? "
+            "'Diğer sekmeleri kapat' derseniz öndekini bırakırım.",
+            label="tüm sekmeler",
+        )
+    return MissionStep(id="", kind=KIND_TAB_CLOSE, args={}, label_tr="sekmeyi kapat")
 
 
 def _segment_tab(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
@@ -2199,7 +2332,7 @@ def _segment_tab(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
     if any(t.startswith("yeni") for t in tokens):
         return None
     if any(t.startswith("kapat") for t in tokens):
-        return MissionStep(id="", kind=KIND_TAB_CLOSE, args={}, label_tr="sekmeyi kapat")
+        return _tab_close_step(tokens, raw)
     if not any(t.startswith(("geç", "gec", "git", "atla")) for t in tokens):
         return None
     for t in tokens:
@@ -2215,6 +2348,17 @@ def _segment_tab(tokens: tuple[str, ...], raw: str) -> MissionStep | None:
         if n is not None:
             return MissionStep(
                 id="", kind=KIND_TAB_SWITCH, args={"index": n}, label_tr=f"{n}. sekmeye geç"
+            )
+    for t in tokens:
+        if t in _ORDINAL_FRAGMENTS:
+            # Production 2026-09-19 20:00: the owner said an ordinal and Chrome's recogniser
+            # wrote only its SUFFIX ("birinci" -> "İnci"). A fragment is not a name: it was
+            # typed into Chrome's tab search three times and failed with focus_mismatch. Which
+            # ordinal it was cannot be guessed - "inci" ends birinci AND ikinci - and guessing
+            # switches the owner to the wrong tab, so the mission asks.
+            raise MissionClarificationNeeded(
+                "Kaçıncı sekme efendim? 'Üçüncü sekmeye geç' gibi söyleyebilirsiniz.",
+                label="kaçıncı sekme",
             )
     named = _tab_name(raw)
     if named:

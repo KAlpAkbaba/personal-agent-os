@@ -363,3 +363,38 @@ def test_every_operator_action_leaves_exactly_one_receipt(tmp_path) -> None:
     for row in rows:
         server = row.detail_json["observed_after"]["server"]
         assert {"steps_completed", "step_count", "interaction_level"} <= set(server)
+
+
+@pytest.mark.parametrize(
+    ("said", "key"),
+    [
+        # Owner, 2026-09-20: "sağ tuşuna bas komutu çalışmıyor" - and it reached nothing at
+        # all, because the arrow branch needed the word "ok" the owner does not say.
+        ("Sağ tuşuna bas", "right"),
+        ("Sol tuşuna bas", "left"),
+        ("Yukarı tuşuna bas", "up"),
+        ("Aşağı tuşuna bas", "down"),
+        ("Sağ tuşa bas", "right"),
+        ("Sol tuşuna bassana", "left"),
+        # What already worked, kept working:
+        ("Sağ ok tuşuna bas", "right"),
+        ("Yukarı oka bas", "up"),
+    ],
+)
+def test_a_direction_before_the_key_noun_is_the_arrow_key(said: str, key: str) -> None:
+    resolved = resolve_intent(said)
+    assert resolved.intent is Intent.OPERATOR_KEY, (said, resolved.intent)
+    assert resolved.key_press == key
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # The MOUSE's right button is not a key, and "tıkla" is the pointer's own word.
+        "Sağ tıkla",
+        "Farenin sağ tuşuna bas",
+        "Sağ fare tuşuna bas",
+    ],
+)
+def test_the_mouse_button_is_never_read_as_an_arrow_key(said: str) -> None:
+    assert resolve_intent(said).key_press is None, said

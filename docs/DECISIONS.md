@@ -13910,3 +13910,69 @@ report, and the empty report row that is still a failure),
 `services/api/tests/unit/test_browser_search_region_contract.py` (new, 4). Gates: the 1191
 planner/router unit tests, the 382 including the new measured case, research + realtime
 (back-to-back green), and the browser package's 441 unit tests.
+
+## ADR-0180 — "Sağ tuşuna bas" reached nothing, an ordinal the recogniser cut in half became a tab's name, and "X hariç tüm sekmeleri kapat" closed X (2026-09-20)
+
+Three owner-reported defects from the live device, all in the same family: the words the
+owner actually says versus the words the router was written for.
+
+**A. The arrow keys.** The owner: *"sağ ve sol ok tuşlarının da bas komutları çalışmıyor"* —
+and the device ledger agreed in the strongest way: no `keyboard.key` command with an arrow
+was ever sent. `_key_press_match` read an arrow only when the sentence contained the bare
+word `ok` ("yukarı OK tuşuna bas"). The owner says "sağ tuşuna bas", which matched nothing
+at all, so the sentence reached no intent, no tool and no device. A direction word standing
+immediately before the key noun (`tuş…`) is now the arrow key. The mouse keeps its own
+button: a sentence naming `fare`/`mouse` is not an arrow, and "sağ tıkla" was never this
+matcher's. Measured after the fix on the same five sentences, and the ledger's own evidence
+that the tool itself was never the problem is that `operator.key` succeeded twice on
+2026-09-19 for the sentences that DID route ("f tuşuna bas").
+
+**B. The ordinal the recogniser cut in half.** Production 2026-09-19 20:00: the owner asked
+for a numbered tab and Chrome's recogniser wrote only the ordinal's SUFFIX — "İnci". The
+planner has no reading for a bare suffix, so it fell through to "a tab NAMED İnci", opened
+Chrome's tab search and typed it three times; all three `keyboard.type` commands failed
+`focus_mismatch` and the mission was cancelled. "inci" ends *birinci* AND *ikinci*, so which
+one it was cannot be recovered — and guessing switches the owner to the wrong tab. A bare
+ordinal fragment now asks: "Kaçıncı sekme efendim?". A real name that merely begins the same
+way ("İncil sekmesine geç") is untouched.
+
+`MissionClarificationNeeded` gained a `label`: a clarification the planner raises because it
+RECOGNISED the request and is missing one detail keeps the route to the mission tool, which
+speaks the question. Without it the question would be composed and never asked — the router
+drops an unrouted sentence, and in the local mode (ADR-0173) there is no model behind it to
+ask anything.
+
+**C. "X hariç tüm sekmeleri kapat" closed X.** The owner asked what would happen; the answer
+was the worst one. Every one of "YouTube hariç tüm sekmeleri kapat", "diğer sekmeleri kapat",
+"bu sekme dışındakileri kapat" and "tüm sekmeleri kapat" was read as the plain `tab_close`:
+Ctrl+W on the tab in FRONT — with "YouTube hariç" said while YouTube is in front, exactly the
+one tab that had to survive — reported as done.
+
+*Why not the browser worker's own `tab_list`/`tab_close`:* those need profile `owner`, which
+attaches to a CDP endpoint the owner's Chrome only exposes when it was started through
+`scripts/browser/enroll-owner-chrome.ps1`. The owner's live Chrome is not enrolled, and
+enrolling means restarting it under them. *Why not the tab context menu:* the device's
+`ui.inspect` is bounded at depth 5 and Chrome's tree, measured on the owner's own window
+today, ends at `BrowserView` — the tab strip is deeper, and the context menu is a window of
+its own. So: Chrome's own keyboard semantics, which need no enrollment and no new device
+build.
+
+New step kind `tab_close_others`, one tab per round: reach the kept tab (usually already in
+front; a named one through Chrome's tab search), move it to the FIRST position
+(Ctrl+Shift+PageUp, a no-op once it is there), then close the LAST tab (Ctrl+9, Ctrl+W)
+until the last tab IS the kept one. The kept tab first is what makes the loop terminate on a
+fact rather than a count; `tab_close_last`'s guard step — a `window.current` read whose
+postcondition is "this is not the kept tab", taken from the device immediately before Ctrl+W
+— is what makes it safe, and is tested with the move deliberately disabled. The rounds are
+work rather than retries, so this kind gets its own budget (30) instead of
+`MAX_ROUNDS_PER_STEP`. "Tüm sekmeleri kapat" with no exception is ASKED, never guessed: it
+means the window or every tab but this one, and the difference is the owner's own tab.
+
+**Tests**: `tests/unit/test_operator_input.py` (+11: eight ways of asking for an arrow, three
+that must not be one), `tests/unit/test_operator_b39.py` (+4 ordinal fragment / real name,
++12 tab closing: the sentences, the named tab surviving four tabs, the front tab surviving
+when nothing is named, a single tab left alone with no Ctrl+W at all, the clarification, the
+plain one-tab sentence still closing one tab, and the kept tab surviving a Chrome that
+refuses to move it). The fake device grew a real tab strip — Ctrl+W, Ctrl+9,
+Ctrl+Shift+PageUp and Ctrl+1..9 act on a list of titles — so these tests assert which tabs
+SURVIVED, not which chords were sent.

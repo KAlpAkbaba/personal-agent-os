@@ -2419,3 +2419,166 @@ def test_every_way_of_asking_for_a_click_still_clicks(said: str, name: str) -> N
     m = plan_mission(said)
     assert [s.kind for s in m.steps] == ["click_text"], m.as_dict()
     assert m.steps[0].args["name"] == name
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # Production 2026-09-19 20:00: the owner said an ordinal and Chrome's recogniser
+        # wrote only its SUFFIX. "İnci" became a tab NAME, which was typed into Chrome's
+        # tab search three times and failed with focus_mismatch each time.
+        "İnci sekmeye geç",
+        "inci sekmeye geç",
+        "İnci sekmesine geç",
+        "üncü sekmeye geç",
+    ],
+)
+def test_an_ordinal_the_recogniser_cut_in_half_is_asked_about_never_typed(said: str) -> None:
+    with pytest.raises(MissionClarificationNeeded) as excinfo:
+        plan_mission(said)
+    assert "sekme" in excinfo.value.speech.lower()
+
+
+@pytest.mark.parametrize(
+    ("said", "name"),
+    [
+        ("Tosun Paşa sekmesine geç", "Tosun Paşa"),
+        ("İncil sekmesine geç", "İncil"),  # a real name that merely starts the same way
+    ],
+)
+def test_a_named_tab_is_still_a_named_tab(said: str, name: str) -> None:
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == ["tab_switch"], m.as_dict()
+    assert m.steps[0].args["name"] == name
+
+
+# ----------------------------------------------------- "X hariç tüm sekmeleri kapat"
+
+
+def _tab_strip(titles: list[str], *, active: int = 0) -> tuple[FakeDeviceAction, dict[str, Any]]:
+    """A Chrome whose TAB STRIP behaves like the real one: Ctrl+W closes the tab in front,
+    Ctrl+9 selects the last, Ctrl+Shift+PageUp moves the tab in front one place left, and
+    the window title is always the tab in front's. The state is returned so a test can say
+    which tabs survived - the claim the owner cares about."""
+    state: dict[str, Any] = {"tabs": list(titles), "active": active}
+
+    def window() -> dict[str, Any]:
+        title = f"{state['tabs'][state['active']]} - Google Chrome" if state["tabs"] else ""
+        return {**CHROME, "title": title, "foreground": True}
+
+    def chord(payload: dict[str, Any]) -> DeviceRunResult:
+        keys = [str(k).lower() for k in (payload.get("keys") or [])]
+        tabs, active = state["tabs"], state["active"]
+        if keys == ["ctrl", "w"] and tabs:
+            tabs.pop(active)
+            state["active"] = min(active, max(0, len(tabs) - 1))
+        elif keys == ["ctrl", "9"] and tabs:
+            state["active"] = len(tabs) - 1
+        elif keys == ["ctrl", "shift", "pageup"] and active > 0:
+            tabs[active - 1], tabs[active] = tabs[active], tabs[active - 1]
+            state["active"] = active - 1
+        elif len(keys) == 2 and keys[0] == "ctrl" and keys[1].isdigit():
+            index = int(keys[1])
+            if 1 <= index <= len(tabs):
+                state["active"] = index - 1
+        return ok(keys=list(payload.get("keys") or []), observed={"window": window()})
+
+    device = FakeDeviceAction(
+        results={
+            "window.current": lambda _p: ok(window=window()),
+            "window.list": lambda _p: ok(windows=[window()]),
+            "window.activate": lambda _p: ok(window=window()),
+            "keyboard.shortcut": chord,
+        }
+    )
+    return device, state
+
+
+@pytest.mark.parametrize(
+    ("said", "keep"),
+    [
+        ("YouTube hariç tüm sekmeleri kapat", "YouTube"),
+        ("İntikam Vakti hariç tüm sekmeleri kapat", "İntikam Vakti"),
+        ("YouTube dışındaki sekmeleri kapat", "YouTube"),
+        ("Diğer sekmeleri kapat", ""),
+        ("Bu sekme dışındakileri kapat", ""),
+        ("Öteki sekmeleri kapat", ""),
+    ],
+)
+def test_closing_every_tab_but_one_is_its_own_step(said: str, keep: str) -> None:
+    """Owner, 2026-09-20: all of these closed the tab in FRONT and reported success - which
+    with "YouTube hariç" is exactly the one tab that had to survive."""
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == ["tab_close_others"], m.as_dict()
+    assert m.steps[0].args.get("keep_name", "") == keep
+
+
+def test_the_named_tab_is_the_one_that_survives() -> None:
+    device, state = _tab_strip(
+        ["Python Chrome Otomasyonu", "TRAFİKTE EN ÇOK", "İntikam Vakti", "Enayi Skeçleri"],
+        active=2,
+    )
+    m = plan_mission("İntikam Vakti hariç tüm sekmeleri kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert state["tabs"] == ["İntikam Vakti"], state
+
+
+def test_the_tab_in_front_is_the_one_that_survives_when_no_name_is_said() -> None:
+    device, state = _tab_strip(["Bir", "İki", "Üç", "Dört"], active=1)
+    m = plan_mission("Diğer sekmeleri kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert state["tabs"] == ["İki"], state
+
+
+def test_a_single_tab_is_left_alone_and_said_so() -> None:
+    device, state = _tab_strip(["Tek Sekme"])
+    m = plan_mission("Diğer sekmeleri kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert state["tabs"] == ["Tek Sekme"]
+    closes = [
+        c
+        for c in device.calls
+        if c["capability"] == "keyboard.shortcut"
+        and [str(k).lower() for k in c["payload"].get("keys") or []] == ["ctrl", "w"]
+    ]
+    assert closes == []
+
+
+def test_close_them_all_asks_instead_of_guessing() -> None:
+    """ "Tüm sekmeleri kapat" with no exception could mean the window: it is asked, never
+    taken to mean the one tab in front (which is what it used to do)."""
+    with pytest.raises(MissionClarificationNeeded) as excinfo:
+        plan_mission("Tüm sekmeleri kapat")
+    assert "sekme" in excinfo.value.speech.lower()
+
+
+def test_one_tab_is_still_closed_by_the_plain_sentence() -> None:
+    device, state = _tab_strip(["Bir", "İki"], active=1)
+    m = plan_mission("Sekmeyi kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    assert state["tabs"] == ["Bir"], state
+
+
+def test_the_kept_tab_survives_even_when_chrome_refuses_to_move_it() -> None:
+    """The move to the front is what makes the loop terminate cleanly - but it is not what
+    makes it SAFE. With the move ignored (a Chrome that does not take the chord), the kept
+    tab must still never be the one closed: the plan re-reads the title from the device
+    immediately before Ctrl+W."""
+    device, state = _tab_strip(["Bir", "İki", "İntikam Vakti", "Dört"], active=2)
+    original = device.results["keyboard.shortcut"]
+
+    def no_move(payload: dict[str, Any]) -> DeviceRunResult:
+        keys = [str(k).lower() for k in (payload.get("keys") or [])]
+        if keys == ["ctrl", "shift", "pageup"]:
+            return ok(keys=list(payload.get("keys") or []))
+        return original(payload)
+
+    device.results["keyboard.shortcut"] = no_move
+    m = plan_mission("İntikam Vakti hariç tüm sekmeleri kapat")
+    run_mission(m, MissionPorts(device=device))
+    assert "İntikam Vakti" in state["tabs"], state
+    assert state["tabs"][-1] == "İntikam Vakti", state

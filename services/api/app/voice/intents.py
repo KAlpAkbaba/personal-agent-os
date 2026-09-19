@@ -2282,8 +2282,10 @@ def _mission_start_match(tokens: tuple[str, ...], text: str) -> str | None:
 
     try:
         mission = plan_mission(text)
-    except MissionClarificationNeeded:
-        return None
+    except MissionClarificationNeeded as exc:
+        # A planner that recognised the request and is missing one detail keeps the route:
+        # the mission tool asks its question. Anything else is not this router's sentence.
+        return exc.label or None
     # What the OWNER asked for: a step the planner added to prepare another (the browser
     # brought to front before a page) is not a second request.
     asked = [s for s in mission.steps if not s.args.get("implicit")]
@@ -2573,6 +2575,16 @@ def _key_press_match(tokens: tuple[str, ...]) -> str | None:
     if key is None and _has_exact(tokens, "ok", "oka", "ok'a"):
         for word in bare:
             if word in _ARROW_BY_WORD:
+                key = _ARROW_BY_WORD[word]
+                break
+    if key is None and not _has(tokens, "fare", "mouse"):
+        # "Sağ tuşuna bas" (owner, 2026-09-20): the owner names the DIRECTION and the key
+        # noun, not the word "ok" - and the sentence reached no intent at all, so nothing
+        # was ever sent. The direction has to stand right before the key noun: "sağ" on its
+        # own is a place ("sağdaki pencere"), and the mouse's own right button ("farenin sağ
+        # tuşu") is the pointer's, never an arrow key.
+        for index, word in enumerate(bare[:-1]):
+            if word in _ARROW_BY_WORD and bare[index + 1].startswith(_KEY_NOUN_STEMS):
                 key = _ARROW_BY_WORD[word]
                 break
     if key is None and modifiers:

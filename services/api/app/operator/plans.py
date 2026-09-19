@@ -14,6 +14,7 @@ import re
 from collections.abc import Callable
 from typing import Any, Final
 
+from app.alarms.tr_time import turkish_casefold
 from app.operator import allowlists as _allowlists
 from app.operator.task import (
     LEVEL_API,
@@ -1414,6 +1415,89 @@ def tab_new(window_id: str) -> list[OperatorStep]:
         _chord_step(window_id, ["ctrl", "t"], "tab_new:chord"),
         _title_check_step(_blank, "tab_new:verify"),
     ]
+
+
+#: How far a tab may be from the front of the strip and still be moved there by
+#: ``tab_move_to_front``. Chrome's own Ctrl+Shift+PageUp moves ONE place and does nothing
+#: at the first position, so pressing it this many times either lands the tab first or
+#: leaves the strip exactly as it was - never wraps, never moves anything else.
+MAX_TAB_MOVES: Final = 12
+
+
+def tab_move_to_front(window_id: str) -> list[OperatorStep]:
+    """The tab in front moved to the FIRST position (Ctrl+Shift+PageUp, repeatedly).
+
+    This is what makes "close every tab but this one" safe to do from the keyboard: with
+    the kept tab first, "close the LAST tab until the last tab is the kept one" closes
+    every other tab and cannot reach the kept one - the loop stops when it becomes last,
+    which only happens when it is the only tab left.
+    """
+    return [
+        _activate_step(window_id, "tab_move_to_front:activate"),
+        *(
+            _chord_step(window_id, ["ctrl", "shift", "pageup"], f"tab_move_to_front:{n}")
+            for n in range(MAX_TAB_MOVES)
+        ),
+    ]
+
+
+def tab_select_last(window_id: str) -> list[OperatorStep]:
+    """Ctrl+9: Chrome's own "last tab". Unlike :func:`tab_switch` this does NOT require the
+    title to change — the last tab may already be the one in front, and that is not a
+    failure, it is the answer."""
+    return [
+        _activate_step(window_id, "tab_select_last:activate"),
+        _chord_step(window_id, ["ctrl", "9"], "tab_select_last:chord"),
+        _title_check_step(lambda r: bool(_title_of(r)), "tab_select_last:verify"),
+    ]
+
+
+def tab_close_last(window_id: str, *, keep_title: str, title_before: str) -> list[OperatorStep]:
+    """One round of "close every tab but the kept one": the tab in front (the LAST tab,
+    :func:`tab_select_last` put it there) is closed and the new last tab selected, so the
+    next round's observation is again the last tab.
+
+    The guard step runs BEFORE Ctrl+W and reads the title from the device itself: if what
+    is in front is the tab the owner asked to keep, the plan fails there and nothing is
+    closed. The caller already decided this round from its own observation; this is the
+    second reading, taken from the machine at the moment of the act, because the cost of
+    being wrong here is the owner's tab.
+    """
+
+    def _not_the_kept_tab(result: DeviceRunResult) -> bool:
+        title = _title_of(result)
+        return bool(title) and not titles_name_the_same_tab(title, keep_title)
+
+    def _closed(result: DeviceRunResult) -> bool:
+        window = _window_of(result)
+        if not window:
+            return True
+        return str(window.get("title") or "") != title_before
+
+    return [
+        _activate_step(window_id, "tab_close_last:activate"),
+        _title_check_step(_not_the_kept_tab, "tab_close_last:guard"),
+        _chord_step(window_id, ["ctrl", "w"], "tab_close_last:chord"),
+        _chord_step(window_id, ["ctrl", "9"], "tab_close_last:select_last"),
+        _title_check_step(_closed, "tab_close_last:verify"),
+    ]
+
+
+def window_read(window_id: str) -> list[OperatorStep]:
+    """One ``window.current``: the step that ENDS a loop whose work is already done, so what
+    the mission reports was read from the device and not assumed."""
+    del window_id
+    return [_title_check_step(lambda r: bool(_title_of(r)), "window_read:current")]
+
+
+def titles_name_the_same_tab(window_title: str, tab_name: str) -> bool:
+    """Is ``tab_name`` what this window's front tab is called? The owner says a piece of a
+    tab's name ("İntikam Vakti"); the window title is the whole page title plus Chrome's
+    own suffix. Empty ``tab_name`` never matches - it means "the tab in front", which the
+    caller resolves to a title before comparing anything."""
+    if not tab_name.strip():
+        return False
+    return turkish_casefold(tab_name).strip() in turkish_casefold(window_title)
 
 
 #: How different two captures must be, on average per pixel, for the picture to have moved.
