@@ -50,9 +50,10 @@ from app.research.plan import looks_turkish
 
 #: ADR-0178 (owner incident 2026-09-19, item D2): the DuckDuckGo region code sent on a
 #: ``browser.search`` call for a Turkish-worded query (DuckDuckGo's own ``kl=tr-tr``
-#: region parameter). Sent as an ADDITIVE payload field only — the device/worker side
-#: honoring it is a separate change (this module only dispatches the command; see
-#: docs/DECISIONS.md ADR-0178 for what remains open there).
+#: region parameter). The worker honours it since ADR-0179 C — ``browser_agent.worker``
+#: takes ``region`` off the payload and ``search_engines.region_params`` maps it to each
+#: engine's own parameter; ``tests/unit/test_browser_search_region_contract.py`` holds the
+#: two halves to the same key.
 SEARCH_REGION_TURKISH = "tr-tr"
 
 # Fixed fallback "now" so FakeBrowserGateway is deterministic even when the

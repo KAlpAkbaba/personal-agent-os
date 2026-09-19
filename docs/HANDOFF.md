@@ -59,10 +59,9 @@ dosya, sonra gerektikçe `docs/DECISIONS.md` sonundaki ADR-0170…0178. Sahibe T
    araştırma: `research_runs.progress_json` / `events_json` — kaç sayfa, hangi tarayıcı,
    kaç kaynak doğrulandı, `research_reports.synthesis_provider`.
 2. Cihaz kurulumunu sahipten iste (tek karakter tuşlar için), sonra "0 tuşuna bas" dene.
-3. "Yanlış yere tıkladım" gibi sahibin yorum cümleleri görev sanılıp ekranda aranıyor —
-   `app/voice/intents.py` `_mission_start_match` / `mission.py` `_segment_click_text`.
-4. Araştırma arama bölgesi (`region: tr`) cihaz tarafında uygulanmıyor (ADR-0178 not).
-5. `research_announcer.py` başarısız aşamada rapor yerine `run.error` okuyor (ADR-0178 not).
+3. ~~"Yanlış yere tıkladım" görev sanılıyor~~ — 2026-09-19, `42eb997` (ADR-0179 A).
+4. ~~Arama bölgesi cihaz/işçi tarafında uygulanmıyor~~ — `c71fc46` (ADR-0179 C).
+5. ~~Duyurucu başarısız aşamada raporu okumuyor~~ — `c71fc46` (ADR-0179 B).
 6. `scripts/verify-device-service.ps1` 6b.4: DateTime taşması (ayrı iş çipi açıldı).
 7. Test defteri (claude.ai artefaktı) eski hesaba ait; kaynağı
    `scripts/…` değil, oturumun scratchpad'inde idi — gerekirse `default_registry()`'den
