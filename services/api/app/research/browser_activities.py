@@ -99,6 +99,8 @@ from app.research.report import (
 )
 from app.research.synthesis import (
     DeterministicSynthesisProvider,
+    SynthesisNotConfiguredError,
+    SynthesisVendorError,
     resolve_synthesis_provider,
     synthesize_thin,
 )
@@ -1401,6 +1403,26 @@ def _require_enough_findings(result: Any, provider_name: str) -> None:
     )
 
 
+def _alternate_llm_providers(provider: Any, settings: Any) -> list[Any]:
+    """The OTHER configured model providers, in ``auto``'s own order - asked only when the
+    first one's vendor failed. The deterministic provider is not listed: it is the floor
+    ``_synthesize_with_fallback`` always ends on."""
+    out: list[Any] = []
+    for name in ("anthropic", "openai"):
+        if (
+            name == getattr(provider, "name", None)
+            or getattr(provider, "name", "") == "deterministic"
+        ):
+            continue
+        try:
+            candidate = resolve_synthesis_provider(name, settings)
+        except Exception:  # noqa: BLE001 - a provider that cannot even be built is not an alternate
+            continue
+        if getattr(candidate, "configured", False):
+            out.append(candidate)
+    return out
+
+
 def _synthesize_with_fallback(
     provider: Any, topic: str, evidence: list[EvidenceRecord], *, recency_label: str, settings: Any
 ) -> tuple[Any, Any, list[dict[str, Any]]]:
@@ -1414,23 +1436,53 @@ def _synthesize_with_fallback(
     produces the report instead. The substitution is recorded, never silent.
     """
     attempts: list[dict[str, Any]] = []
-    # 1. the configured provider
-    for attempt in (1, 2):
-        try:
-            result = provider.synthesize(topic, evidence, recency_label=recency_label)
-            _require_enough_findings(result, provider.name)
-            if attempt > 1:
-                logger.info("research_synthesis_retry_succeeded", provider=provider.name)
-            return result, provider, attempts
-        except (ContractViolation, InsufficientValidFindings, InsufficientValidEvidence) as exc:
-            detail = exc.as_dict()
-            attempts.append({"provider": provider.name, "attempt": attempt, **detail})
-            logger.warning("research_synthesis_attempt_rejected", attempt=attempt, **detail)
-            # 2. retry ONCE with the same validated evidence: the model is nondeterministic and
-            #    the prompt states the schema, so a second pass often answers correctly.
-            if attempt == 1 and provider.name != "deterministic":
-                continue
-            break
+    # 1. the configured provider, then - when the VENDOR failed - the other configured one.
+    #    Production 2026-09-19 17:56: the Anthropic model id had been retired, the Messages
+    #    API answered 404, SynthesisVendorError was caught by nobody, and a run that had
+    #    fetched 14 pages and verified 3 sources was reported to the owner as failed. A vendor
+    #    being down is not a reason to throw that work away.
+    for candidate in [provider, *_alternate_llm_providers(provider, settings)]:
+        vendor_failed = False
+        for attempt in (1, 2):
+            try:
+                result = candidate.synthesize(topic, evidence, recency_label=recency_label)
+                _require_enough_findings(result, candidate.name)
+                if attempt > 1:
+                    logger.info("research_synthesis_retry_succeeded", provider=candidate.name)
+                if candidate is not provider:
+                    logger.warning(
+                        "research_synthesis_vendor_fell_over",
+                        provider=provider.name,
+                        fallback=candidate.name,
+                    )
+                return result, candidate, attempts
+            except (SynthesisVendorError, SynthesisNotConfiguredError) as exc:
+                attempts.append(
+                    {
+                        "provider": candidate.name,
+                        "attempt": attempt,
+                        "error_class": "vendor_error",
+                        "detail": str(exc)[:200],
+                    }
+                )
+                logger.warning(
+                    "research_synthesis_vendor_failed",
+                    provider=candidate.name,
+                    detail=str(exc)[:200],
+                )
+                vendor_failed = True
+                break  # the same request to the same vendor is not retried; the next one is
+            except (ContractViolation, InsufficientValidFindings, InsufficientValidEvidence) as exc:
+                detail = exc.as_dict()
+                attempts.append({"provider": candidate.name, "attempt": attempt, **detail})
+                logger.warning("research_synthesis_attempt_rejected", attempt=attempt, **detail)
+                # 2. retry ONCE with the same validated evidence: the model is nondeterministic
+                #    and the prompt states the schema, so a second pass often answers correctly.
+                if attempt == 1 and candidate.name != "deterministic":
+                    continue
+                break
+        if not vendor_failed:
+            break  # its OUTPUT was rejected: another model is not asked, the evidence speaks
 
     # 3. deterministic, evidence-backed synthesis from the validated evidence only
     fallback_provider = resolve_synthesis_provider("deterministic", settings)

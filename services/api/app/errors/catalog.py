@@ -366,6 +366,13 @@ TR: dict[str, OwnerMessage] = {
     "owner_word_required": _m(
         "Bu kararı sizin vermeniz gerekiyor", '"Devam et" ya da "Evet, başla" demeniz yeterli.'
     ),
+    "vendor_error": _m(
+        "Dış servis yanıt vermedi", "Başka bir sağlayıcıyla ya da eldeki kanıtla devam ediyorum."
+    ),
+    "wrong_target": _m(
+        "İstediğiniz yerine başka bir şey açıldı",
+        "Geri döndüm; doğrusunu bulamadım, bitti demiyorum.",
+    ),
     "workflow_abandoned": _m(
         "Arka plandaki iş yarıda kaldı", "Yarım işi bitmiş gibi göstermiyorum."
     ),

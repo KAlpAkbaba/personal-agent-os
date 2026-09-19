@@ -265,7 +265,9 @@ class Settings(BaseSettings):
     research_openai_base_url: str = "https://api.openai.com/v1"
     research_openai_timeout_s: float = 30.0
     anthropic_api_key: str = ""
-    research_anthropic_model: str = "claude-3-5-haiku-20241022"
+    # 2026-09-19: "claude-3-5-haiku-20241022" was retired - the Messages API answered 404 and
+    # a run with 14 fetched pages and 3 verified sources failed at its last step.
+    research_anthropic_model: str = "claude-haiku-4-5-20251001"
     research_anthropic_base_url: str = "https://api.anthropic.com"
     research_anthropic_timeout_s: float = 30.0
     research_default_synthesis: str = "auto"
