@@ -2323,3 +2323,55 @@ def test_a_tab_search_that_lands_on_another_tab_is_not_reported_as_that_tab(monk
     run_mission(m, MissionPorts(device=device))
     assert m.status == MISSION_PAUSED
     assert m.steps[0].error_class == "postcondition_failed"
+
+
+# ------------------------------- 2026-09-19: typing into a web page, verified where it shows
+
+
+def _typing_page(*, before: list[str], after: list[str]) -> Any:
+    state = {"typed": False}
+
+    def read(payload: dict[str, Any]) -> DeviceRunResult:
+        texts = after if state["typed"] else before
+        lines = [
+            {"text": s, "x": 10, "y": 200 + 30 * i, "width": 300, "height": 22, "words": []}
+            for i, s in enumerate(texts)
+        ]
+        return ok(width=1294, height=1407, scale=1, lines=lines, observed={"window": dict(CHROME)})
+
+    def typed(payload: dict[str, Any]) -> DeviceRunResult:
+        state["typed"] = True
+        return ok(typed_chars=len(str(payload.get("text"))), observed=_observed(payload, CHROME))
+
+    return FakeDeviceAction(
+        results={
+            "window.current": ok(window={**CHROME, "foreground": True}),
+            "window.list": ok(windows=[dict(CHROME)]),
+            "window.activate": lambda p: ok(
+                window={**CHROME, "window_id": str(p.get("window_id")), "foreground": True}
+            ),
+            "screen.ocr": read,
+            "keyboard.type": typed,
+        }
+    )
+
+
+def test_typing_into_chrome_is_verified_by_ocr_not_by_a_tree_that_cannot_see_the_page() -> None:
+    device = _typing_page(before=["YouTube", "Ara"], after=["YouTube", "Tosun Paşa"])
+    m = plan_mission("Buraya Tosun Paşa yaz")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_SUCCEEDED, m.as_dict()
+    called = device.capabilities_called()
+    assert "ui.inspect" not in called
+    assert called.count("screen.ocr") == 2 and called.index("screen.ocr") < called.index(
+        "keyboard.type"
+    )
+
+
+def test_text_that_was_already_on_the_page_does_not_prove_the_typing() -> None:
+    """A results page already shows the query; the count must GROW, not merely be there."""
+    device = _typing_page(before=["tosun paşa - YouTube"], after=["tosun paşa - YouTube"])
+    m = plan_mission("Buraya Tosun Paşa yaz")
+    run_mission(m, MissionPorts(device=device))
+    assert m.status == MISSION_PAUSED
+    assert m.steps[0].error_class == "postcondition_failed"

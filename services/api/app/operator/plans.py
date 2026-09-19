@@ -949,7 +949,102 @@ def tree_text(root: Any) -> str:
     return ", ".join(names[:8])
 
 
-def type_text(window_id: str, text: str) -> list[OperatorStep]:
+#: Browsers: what is typed goes into a WEB PAGE, which the UI Automation tree the device reads
+#: (5 levels, 200 nodes) never reaches - every "YouTube'da arama kutusuna yaz" was reported
+#: "Yazamadım; metni doğrulayamadım" with the text on the owner's screen (2026-09-19).
+BROWSER_IMAGES: Final[frozenset[str]] = frozenset({"chrome.exe", "msedge.exe", "firefox.exe"})
+
+
+def is_browser_image(image: str | None) -> bool:
+    bare = str(image or "").replace(chr(92), "/").rsplit("/", 1)[-1].strip().lower()
+    return bare in BROWSER_IMAGES
+
+
+def _ocr_count(result: DeviceRunResult, text: str) -> int | None:
+    """How many times ``text`` is printed in an OCR reading, spaces and case ignored."""
+    from app.operator.ocr_locate import fold
+
+    body = result.result if isinstance(result.result, dict) else {}
+    lines = body.get("lines")
+    if not isinstance(lines, list):
+        return None
+    needle = fold(text).replace(" ", "")
+    if not needle:
+        return None
+    page = "".join(
+        fold(str(line.get("text") or "")).replace(" ", "")
+        for line in lines
+        if isinstance(line, dict)
+    )
+    return page.count(needle)
+
+
+def _type_text_in_browser(window_id: str, text: str, secret: bool) -> list[OperatorStep]:
+    """The same claim for a web page, read where it can be read: the PC's own OCR counts the
+    words on the window before and after, and the count must GROW. A text that was already
+    on the page (a results page showing the query) cannot prove the typing by being there."""
+    seen: dict[str, int] = {}
+
+    def _activated(result: DeviceRunResult) -> bool:
+        return bool(_window_of(result).get("foreground"))
+
+    def _before(result: DeviceRunResult) -> bool:
+        count = _ocr_count(result, text)
+        if count is None:
+            return False
+        seen["before"] = count
+        return True
+
+    def _typed(result: DeviceRunResult) -> bool:
+        typed = result.result.get("typed_chars") if isinstance(result.result, dict) else None
+        return bool(typed)
+
+    def _grew(result: DeviceRunResult) -> bool:
+        count = _ocr_count(result, text)
+        return count is not None and count > seen.get("before", 0)
+
+    return [
+        OperatorStep(
+            capability="window.activate",
+            payload={"window_id": window_id},
+            postcondition=_activated,
+            timeout_s=10.0,
+            retries=1,
+            level=LEVEL_API,
+            name="type_text:activate",
+        ),
+        OperatorStep(
+            capability="screen.ocr",
+            payload={"window_id": window_id},
+            postcondition=_before,
+            timeout_s=15.0,
+            retries=1,
+            level=LEVEL_API,
+            name="type_text:read_before",
+        ),
+        OperatorStep(
+            capability="keyboard.type",
+            payload={"window_id": window_id, "text": text, "secret": secret},
+            postcondition=_typed,
+            timeout_s=15.0,
+            retries=0,
+            level=LEVEL_KEYBOARD,
+            name="type_text:type",
+        ),
+        OperatorStep(
+            capability="screen.ocr",
+            payload={"window_id": window_id},
+            postcondition=_grew,
+            timeout_s=15.0,
+            retries=2,
+            retry_delay_s=0.8,
+            level=LEVEL_API,
+            name="type_text:verify",
+        ),
+    ]
+
+
+def type_text(window_id: str, text: str, *, browser: bool = False) -> list[OperatorStep]:
     """``window.activate`` -> ``keyboard.type`` -> ``ui.inspect`` (spec §4): postcondition,
     the focused control's value ends with ``text``. Interaction level ``ui_automation``.
 
@@ -961,6 +1056,8 @@ def type_text(window_id: str, text: str) -> list[OperatorStep]:
     from app.voice.intents import contains_secret_reference
 
     secret = bool(contains_secret_reference(text))
+    if browser:
+        return _type_text_in_browser(window_id, text, secret)
 
     def _activated(result: DeviceRunResult) -> bool:
         return bool(_window_of(result).get("foreground"))

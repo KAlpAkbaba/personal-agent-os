@@ -86,6 +86,7 @@ from app.operator.plans import (
     activate_window,
     close_app,
     close_window,
+    is_browser_image,
     maximize_window,
     minimize_window,
     move_window,
@@ -908,11 +909,13 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         return _clarification(SPEECH_NO_TEXT)
     db = _require_db(ctx, TOOL_TYPE)
     window_ref = turn.get("window_ref") or arguments.get("target") or "current"
+    # ONE device listing for the resolver and the browser check below (``_once``).
+    lister = _once(_window_lister(ctx))
     window_id, refusal = _resolve_window_id(
         db,
         action="activate",
         window_ref=str(window_ref),
-        list_windows=_window_lister(ctx),
+        list_windows=lister,
     )
     if window_id is None:
         return _clarification(refusal or SPEECH_NO_WINDOW)
@@ -920,10 +923,13 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     if device_action is None:
         return _capability_missing(ctx, capability=TOOL_TYPE, requested_state="typed")
     operator = _require_operator(ctx, TOOL_TYPE)
+    target = next((w for w in (lister() if lister else []) if w.get("window_id") == window_id), {})
     plan = Plan(
         name=PLAN_TYPE_TEXT,
         goal=f"type into {window_id}",
-        steps=build_type_text_steps(window_id, text),
+        steps=build_type_text_steps(
+            window_id, text, browser=is_browser_image(str(target.get("image") or ""))
+        ),
     )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
     return {**(task.action_receipt or {}), "speech": _type_speech(task)}

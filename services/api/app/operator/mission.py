@@ -597,7 +597,12 @@ def _decide_type_text(step: MissionStep, obs: Observation, mission_id: uuid.UUID
     if not text:
         raise NeedsOwner("validation_error", "Ne yazacağımı anlayamadım efendim.")
     window_id = _require_foreground(obs, "yazmak")
-    return Decision("type_text", plans.type_text(window_id, text), LEVEL_UI_AUTOMATION)
+    browser = plans.is_browser_image(str((obs.foreground or {}).get("image") or ""))
+    return Decision(
+        "type_text",
+        plans.type_text(window_id, text, browser=browser),
+        LEVEL_KEYBOARD if browser else LEVEL_UI_AUTOMATION,
+    )
 
 
 def _decide_ui_invoke(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decision:
