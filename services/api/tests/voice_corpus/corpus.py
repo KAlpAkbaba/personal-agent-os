@@ -3118,6 +3118,9 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
                 category="mail_calendar",
                 source="canonical",
                 tool_arguments={"when_spoken": "Perşembe 15'e", "summary": "Diş hekimi"},
+                # Owner 2026-09-19: the proposal is committed in the same turn (the fake
+                # writer is configured here), so the commit is this case's own side effect.
+                side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
             )
         )
     )
@@ -3155,6 +3158,7 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
                     category="mail_calendar",
                     source=source,
                     tool_arguments={"when_spoken": when, "summary": summary},
+                    side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
                 )
             )
         )
@@ -3169,6 +3173,7 @@ def _mail_calendar_cases() -> list[UtteranceCase]:
                 category="mail_calendar",
                 source="canonical",
                 tool_arguments={"when_spoken": "bir saat"},
+                side_effects=SIDE_EFFECTS_CALENDAR_COMMIT,
             )
         )
     )
