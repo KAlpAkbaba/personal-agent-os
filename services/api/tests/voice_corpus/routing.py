@@ -168,6 +168,15 @@ MEASURED_MISROUTES: Final[tuple[RouteCase, ...]] = (
         "appointment, and the owner's month-long intention became a dated entry.",
         source=SOURCE_MEASURED,
     ),
+    RouteCase(
+        "Yanlış yere tıkladım.",
+        expected=None,
+        forbidden=(Intent.MISSION_START,),
+        why="Owner, 2026-09-19: a remark about the last click became a new mission that "
+        "searched the screen for 'Yanlış yere'. The planner matched the stem `tıkla` inside "
+        "the past tense `tıkladım`.",
+        source=SOURCE_MEASURED,
+    ),
 )
 
 

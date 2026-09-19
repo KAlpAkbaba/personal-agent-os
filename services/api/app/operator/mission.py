@@ -1951,6 +1951,29 @@ def _quoted_or_before_verb(raw: str, tokens: tuple[str, ...], *, skip: tuple[str
 
 #: The words that make a sentence about something ON THE SCREEN rather than an app or a site.
 _CLICK_VERB_STEMS: Final[tuple[str, ...]] = ("tıkla", "tikla", "oynat", "başlat", "baslat")
+#: What follows a verb stem when the owner is TALKING ABOUT the act, not asking for it:
+#: past ("tıkladım", "başlattın"), perfect ("tıklamışsın"), progressive ("oynatıyor") and
+#: negative ("tıklama"). A stem match alone sent "Yanlış yere tıkladım" to the screen to
+#: click "Yanlış yere" (handoff 2026-09-19 #3). "tıklamalısın" is an obligation - a request.
+_REMARK_SUFFIX_STARTS: Final[tuple[str, ...]] = ("d", "t", "m", "ıyor", "iyor", "uyor", "üyor")
+_OBLIGATION_STARTS: Final[tuple[str, ...]] = ("malı", "mali", "meli")
+#: "tıklar MISIN", "tıklayabilir MİSİN": the question particle closes a request.
+_QUESTION_PARTICLES: Final[frozenset[str]] = frozenset(
+    {"mı", "mi", "mu", "mü", "mısın", "misin", "musun", "müsün", "mısınız", "misiniz"}
+)
+
+
+def _is_verb_command(token: str, stems: tuple[str, ...]) -> bool:
+    """``token`` is one of ``stems`` in a form that ASKS for the act."""
+    for stem in stems:
+        if token.startswith(stem):
+            rest = token[len(stem) :]
+            if rest.startswith(_OBLIGATION_STARTS):
+                return True
+            return not rest.startswith(_REMARK_SUFFIX_STARTS)
+    return False
+
+
 _OPEN_OR_CLICK_WORDS: Final[frozenset[str]] = frozenset({"aç", "ac", "gir", "bas"})
 _ON_SCREEN_WORDS: Final[frozenset[str]] = frozenset(
     {"ekranda", "ekrandaki", "sayfada", "sayfadaki", "sekmede", "sekmedeki", "sekmesinde"}
@@ -2043,7 +2066,8 @@ def _is_trigger(head: str) -> bool:
     return (
         head.startswith(_VIDEO_NOUN_STEMS)
         or head in _OPEN_OR_CLICK_WORDS
-        or head.startswith(_CLICK_VERB_STEMS)
+        or head in _QUESTION_PARTICLES
+        or _is_verb_command(head, _CLICK_VERB_STEMS)
     )
 
 
@@ -2059,7 +2083,7 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     # the source it names), not a picture search on whatever page is open.
     if any(t.startswith("haber") for t in tokens):
         return None
-    has_click = any(t.startswith(("tıkla", "tikla")) for t in tokens)
+    has_click = any(_is_verb_command(t, ("tıkla", "tikla")) for t in tokens)
     on_screen = any(t in _ON_SCREEN_WORDS for t in tokens)
     # "video" always names something on the screen. "film"/"klip" do so only when the
     # sentence PLACES it there ("şu an sekmedeki üçkağıtçı Türk filmini aç", 2026-09-19):
@@ -2067,7 +2091,9 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     has_video = any(t.startswith("video") for t in tokens) or (
         on_screen and any(t.startswith(_VIDEO_NOUN_STEMS) for t in tokens)
     )
-    has_verb = any(t in _OPEN_OR_CLICK_WORDS or t.startswith(_CLICK_VERB_STEMS) for t in tokens)
+    has_verb = any(
+        t in _OPEN_OR_CLICK_WORDS or _is_verb_command(t, _CLICK_VERB_STEMS) for t in tokens
+    )
     if not has_verb or not (has_video or has_click or on_screen):
         return None
     heads: list[tuple[str, str]] = []
@@ -2307,7 +2333,7 @@ def _segment_video_play(tokens: tuple[str, ...], raw: str) -> MissionStep | None
         t.startswith(("oynat",)) for t in tokens
     ):
         return None
-    if not any(t.startswith(_VIDEO_PLAY_VERBS) for t in tokens):
+    if not any(_is_verb_command(t, _VIDEO_PLAY_VERBS) for t in tokens):
         return None
     return MissionStep(id="", kind=KIND_VIDEO_PLAY, args={}, label_tr="ekrandaki videoyu oynat")
 

@@ -2375,3 +2375,47 @@ def test_text_that_was_already_on_the_page_does_not_prove_the_typing() -> None:
     run_mission(m, MissionPorts(device=device))
     assert m.status == MISSION_PAUSED
     assert m.steps[0].error_class == "postcondition_failed"
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # The owner talking ABOUT a click, not asking for one (handoff 2026-09-19 #3):
+        "Yanlış yere tıkladım",
+        "Yanlış yere tıkladın",
+        "Sen yanlış videoya tıklamışsın",
+        "Videoyu ben başlattım",
+        "Video kendi kendine oynatıyor",
+        "Oraya tıklama",
+        "Videoyu açtın ama yanlış video",
+        "Videoyu başlattın",
+        "Videoyu oynattın",
+    ],
+)
+def test_a_remark_about_a_click_is_never_a_click_on_the_screen(said: str) -> None:
+    """A stem match on "tıkla" read "tıkladım" as a command and searched the screen for
+    "Yanlış yere". Past, progressive, perfect and negative forms are the owner remarking."""
+    try:
+        m = plan_mission(said)
+    except MissionClarificationNeeded:
+        return
+    assert not any(s.kind in ("click_text", "video_play") for s in m.steps), m.as_dict()
+    h = build_harness()
+    out = h.say(h.new_session(), said)
+    assert out["resolved_intents"][-1]["intent"] != "mission_start", (said, out)
+
+
+@pytest.mark.parametrize(
+    ("said", "name"),
+    [
+        ("Tarkan'a tıkla", "Tarkan"),
+        ("Tarkan'a tıklar mısın", "Tarkan"),
+        ("Tarkan'a tıklayabilir misin", "Tarkan"),
+        ("Tarkan'a tıklasana", "Tarkan"),
+        ("Ekranda Abone ol yazana tıklayın", "Abone ol"),
+    ],
+)
+def test_every_way_of_asking_for_a_click_still_clicks(said: str, name: str) -> None:
+    m = plan_mission(said)
+    assert [s.kind for s in m.steps] == ["click_text"], m.as_dict()
+    assert m.steps[0].args["name"] == name
