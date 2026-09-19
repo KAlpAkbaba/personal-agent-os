@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Final
 
-from app.operator import plans
+from app.operator import ocr_locate, plans
 from app.operator.adapters import adapter_for, button_query
 from app.operator.allowlists import APP_IMAGES, APP_NAMES_TR
 from app.operator.task import (
@@ -690,35 +690,164 @@ def decide(step: MissionStep, obs: Observation, mission_id: uuid.UUID) -> Decisi
 # ------------------------------------------------------------ the visual rung (106)
 
 
+def _capture_window(
+    ports: MissionPorts, mission_id: uuid.UUID, step: MissionStep, window_id: str, tag: str
+) -> dict[str, Any]:
+    """One window's picture. JPEG is asked for first: a photographic 2576x1416 page is ~500 KB
+    as JPEG at full size, and as PNG it only fits one broker frame at 1/4 scale - 644x354,
+    where no title can be read (production 2026-09-19 17:14, "göremedim" for a video plainly
+    on screen). A device that predates the format refuses it as a validation error and is
+    asked again for the PNG it knows."""
+    last: Any = None
+    for fmt in ("jpeg", "png"):
+        capture = ports.device.run(
+            capability="screen.capture",
+            payload={"window_id": window_id, "format": fmt},
+            idempotency_key=f"mission:{mission_id}:{step.id}:capture:{step.rounds}:{tag}:{fmt}",
+            timeout_s=15.0,
+        )
+        last = capture
+        body = capture.result if capture.ok and isinstance(capture.result, dict) else {}
+        encoded = str(body.get("image_base64") or body.get("png_base64") or "")
+        if capture.ok and encoded:
+            return {**body, "_encoded": encoded}
+        if capture.error_class != "validation_error":
+            break
+    raise NeedsOwner(
+        getattr(last, "error_class", None) or "device_error", "Ekranı yakalayamadım efendim."
+    )
+
+
+def _read_window_text(
+    ports: MissionPorts,
+    mission_id: uuid.UUID,
+    step: MissionStep,
+    window: dict[str, Any],
+    name: str,
+    tag: str,
+) -> tuple[int, int] | None:
+    """The screen point of ``name`` as the PC's own OCR read it, or None when OCR cannot
+    answer (the device has no ``screen.ocr``, it failed, or the target is a position).
+
+    A NAMED VIDEO that OCR read the window for and did not find is NOT handed to the paid
+    picture rung: the words are not on this window, which is exactly what the search
+    fallback is for - so that case raises ``ui_target_not_found`` here, for free."""
+    if step.args.get("positional") or step.kind == KIND_VIDEO_PLAY:
+        return None  # a place, or the player itself: not printed words
+    window_id = str(window.get("window_id") or "")
+    read = ports.device.run(
+        capability="screen.ocr",
+        payload={"window_id": window_id},
+        idempotency_key=f"mission:{mission_id}:{step.id}:ocr:{step.rounds}:{tag}",
+        timeout_s=15.0,
+    )
+    body = read.result if read.ok and isinstance(read.result, dict) else None
+    if body is None or not isinstance(body.get("lines"), list):
+        return None
+    hit = ocr_locate.find_text(body["lines"], name, image_height=int(body.get("height") or 0))
+    if hit is None:
+        if step.args.get("search_if_missing"):
+            raise NeedsOwner(
+                "ui_target_not_found", f"Ekranda '{name}' diye bir şey göremedim efendim."
+            )
+        return None
+    scale = float(body.get("scale") or 1)
+    seen = (
+        (body.get("observed") or {}).get("window")
+        if isinstance(body.get("observed"), dict)
+        else None
+    )
+    source = seen if isinstance(seen, dict) else window
+    rect = source.get("rect") if isinstance(source.get("rect"), dict) else {}
+    step.args["located_by"] = "ocr"
+    return (
+        int(rect.get("x") or 0) + int(round(hit.x * scale)),
+        int(rect.get("y") or 0) + int(round(hit.y * scale)),
+    )
+
+
 def _locate_on_screen(
-    ports: MissionPorts, mission_id: uuid.UUID, step: MissionStep, window_id: str, name: str
+    ports: MissionPorts,
+    mission_id: uuid.UUID,
+    step: MissionStep,
+    window: dict[str, Any],
+    name: str,
+    *,
+    tag: str = "0",
 ) -> tuple[int, int]:
-    """Capture the window, ask the vision provider WHERE ``name`` is, and return the screen
-    point to click - or stop for the owner, saying which of those could not be done."""
+    """Capture ``window``, ask the vision provider WHERE ``name`` is in it, and return the
+    SCREEN point to click - or stop for the owner, saying which of those could not be done.
+
+    The picture is of the WINDOW, so a point in it is a screen point only after the window's
+    own position is added. It was not (found reading the code on 2026-09-19): on a desktop
+    whose Chrome sits at (1432, 1129) every click would have landed on another monitor.
+
+    The PC's own OCR is asked first (ADR-0176, owner decision 2026-09-19): free, fast, at full
+    resolution, and the picture never leaves the machine. The paid picture rung is the
+    fallback for what OCR cannot answer - a device without it, or a target that is a PLACE
+    ("sağdan üçüncü video") and not printed words."""
+    window_id = str(window.get("window_id") or "")
+    read = _read_window_text(ports, mission_id, step, window, name, tag)
+    if read is not None:
+        return read
     if ports.vision is None or not hasattr(ports.vision, "locate"):
         raise NeedsOwner(
             "vision_unavailable",
             "Ekrandan bakarak bulmam gerekiyordu ama görsel sağlayıcı tanımlı değil efendim.",
         )
-    capture = ports.device.run(
-        capability="screen.capture",
-        payload={"window_id": window_id},
-        idempotency_key=f"mission:{mission_id}:{step.id}:capture:{step.rounds}",
-        timeout_s=15.0,
-    )
-    body = capture.result if capture.ok and isinstance(capture.result, dict) else {}
-    encoded = str(body.get("png_base64") or "")
-    if not capture.ok or not encoded:
-        raise NeedsOwner(capture.error_class or "device_error", "Ekranı yakalayamadım efendim.")
+    body = _capture_window(ports, mission_id, step, window_id, tag)
     try:
-        png = base64.b64decode(encoded)
-        location = ports.vision.locate(png, target=name)
+        image = base64.b64decode(body["_encoded"])
+        location = ports.vision.locate(image, target=name)
     except (VisionError, ValueError) as exc:
         raise NeedsOwner("vision_unavailable", "Görsel sağlayıcı cevap veremedi efendim.") from exc
     if location is None:
         raise NeedsOwner("ui_target_not_found", f"Ekranda '{name}' diye bir şey göremedim efendim.")
     scale = float(body.get("scale") or 1)
-    return int(round(location.x * scale)), int(round(location.y * scale))
+    seen = (
+        (body.get("observed") or {}).get("window")
+        if isinstance(body.get("observed"), dict)
+        else None
+    )
+    rect = (seen or window).get("rect") if isinstance((seen or window).get("rect"), dict) else {}
+    origin_x, origin_y = int(rect.get("x") or 0), int(rect.get("y") or 0)
+    return (
+        origin_x + int(round(location.x * scale)),
+        origin_y + int(round(location.y * scale)),
+    )
+
+
+#: How many windows one look may photograph: the one in front, then the owner's other
+#: browser windows (owner, 2026-09-19: "birden fazla pencere varsa 2 pencereye de baksın").
+MAX_WINDOWS_PER_LOOK: Final = 3
+
+
+def _windows_to_look_in(step: MissionStep, obs: Observation) -> list[dict[str, Any]]:
+    """The window in front first, then every other window of the owner's browser - so a
+    video on the OTHER Chrome window is found, and so is one on Chrome while another
+    application happens to be in front (production 2026-09-19 17:15: the Claude window was
+    photographed and "Üç Kağıtçı" was, truthfully, not in it)."""
+    browser = _browser_image_of(step)
+    out: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    def _add(window: dict[str, Any] | None) -> None:
+        window_id = _window_id_of(window)
+        if window is None or window_id is None or window_id in seen_ids:
+            return
+        seen_ids.add(window_id)
+        out.append(window)
+
+    fg = obs.foreground
+    fg_is_browser = bool(fg) and _bare_image(str((fg or {}).get("image") or "")) == browser
+    others = [w for w in obs.windows if _bare_image(str(w.get("image") or "")) == browser]
+    if fg_is_browser or not others:
+        _add(fg)
+    for window in others:
+        _add(window)
+    if not fg_is_browser:
+        _add(fg)
+    return out[:MAX_WINDOWS_PER_LOOK]
 
 
 def _decide_visual(
@@ -731,7 +860,8 @@ def _decide_visual(
         raise NeedsOwner("vision_unavailable", "Bu adım için görsel bir yedek yolum yok efendim.")
     window_id = _require_foreground(obs, "ekrana bakmak")
     name = str(step.args.get("name") or "")
-    x, y = _locate_on_screen(ports, mission_id, step, window_id, name)
+    window = obs.foreground or {"window_id": window_id}
+    x, y = _locate_on_screen(ports, mission_id, step, window, name)
     return Decision(
         "pointer_click",
         plans.visual_click(window_id, x, y, absent_name=name),
@@ -756,15 +886,34 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     name = str(step.args.get("name") or "")
     if not name:
         raise NeedsOwner("validation_error", "Neye tıklayacağımı anlayamadım efendim.")
-    window_id = _require_foreground(obs, "tıklamak")
-    title_before = str((obs.foreground or {}).get("title") or "")
-    try:
-        x, y = _locate_on_screen(ports, mission_id, step, window_id, name)
-    except NeedsOwner as exc:
-        if exc.error_class != "ui_target_not_found" or not step.args.get("search_if_missing"):
-            raise
+    windows = _windows_to_look_in(step, obs)
+    if not windows:
+        raise NeedsOwner("no_current_window", "tıklamak için bir pencere göremedim efendim.")
+    found: tuple[dict[str, Any], int, int] | None = None
+    missing: NeedsOwner | None = None
+    for index, candidate in enumerate(windows):
+        try:
+            x, y = _locate_on_screen(ports, mission_id, step, candidate, name, tag=str(index))
+        except NeedsOwner as exc:
+            if exc.error_class != "ui_target_not_found":
+                raise
+            missing = exc
+            continue
+        found = (candidate, x, y)
+        break
+    # Nothing found: the search goes to the window that IS on YouTube, when one of them is.
+    on_youtube = next(
+        (w for w in windows if "youtube" in str(w.get("title") or "").lower()), windows[0]
+    )
+    window = found[0] if found else on_youtube
+    window_id = str(window["window_id"])
+    title_before = str(window.get("title") or "")
+    if found is None:
+        assert missing is not None
+        if not step.args.get("search_if_missing"):
+            raise missing
         if step.args.get("searched") or "youtube" not in title_before.lower():
-            raise
+            raise missing
         # Owner scenario 2026-09-18: the video is not on this tab - look for it the way
         # the owner would, in the site's own search, then look at the screen again.
         step.args["searched"] = True
@@ -776,6 +925,7 @@ def _decide_click_text(step: MissionStep, obs: Observation, mission_id: uuid.UUI
             note=f"bu sekmede yok; YouTube'da '{name}' aradım",
             finishes_step=False,
         )
+    _, x, y = found
     return Decision(
         "screen_click",
         plans.click_and_expect_change(window_id, x, y, title_before=title_before),
@@ -835,7 +985,8 @@ def _decide_video_play(step: MissionStep, obs: Observation, mission_id: uuid.UUI
     if ports is None:
         raise NeedsOwner("dependency_unavailable", "Ekrana ulaşamadım efendim.")
     window_id = _require_foreground(obs, "videoyu oynatmak")
-    x, y = _locate_on_screen(ports, mission_id, step, window_id, VIDEO_PLAYER_TARGET_TR)
+    window = obs.foreground or {"window_id": window_id}
+    x, y = _locate_on_screen(ports, mission_id, step, window, VIDEO_PLAYER_TARGET_TR)
     return Decision(
         "video_play",
         plans.click_and_expect_motion(window_id, x, y),
@@ -1736,6 +1887,8 @@ def _segment_click_text(tokens: tuple[str, ...], raw: str) -> MissionStep | None
     if has_video and positional:
         target = f"{target} video"
     args: dict[str, Any] = {"name": target}
+    if positional:
+        args["positional"] = True  # a PLACE on the screen: the picture's question, not OCR's
     if has_video and not positional:
         # A video named by the owner may not be on this tab (owner scenario 2026-09-18);
         # "sağdan üçüncü video" is a place on THIS screen and is never searched for, and

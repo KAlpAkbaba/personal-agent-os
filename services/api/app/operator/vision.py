@@ -165,7 +165,7 @@ class OpenAIVisionProvider:
                         {"type": "text", "text": question[:MAX_QUESTION_CHARS]},
                         {
                             "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                            "image_url": {"url": f"data:{image_mime(png)};base64,{encoded}"},
                         },
                     ],
                 }
@@ -233,6 +233,15 @@ def parse_location(text: str, *, provider: str, model: str) -> VisionLocation | 
     return VisionLocation(x=x, y=y, provider=provider, model=model)
 
 
+def image_mime(image: bytes) -> str:
+    """The picture's own type, read from its first bytes. The device sends JPEG for a large
+    window (ADR-0176: a photographic 2576x1416 page cannot be a legible PNG inside one broker
+    frame) and PNG otherwise; the provider is told which, never assumed."""
+    if image[:2] == bytes((0xFF, 0xD8)):
+        return "image/jpeg"
+    return "image/png"
+
+
 def build_vision_provider(settings: Any) -> VisionProvider | None:
     """``OpenAIVisionProvider`` when a key is configured (or asked for by name), else
     ``None`` - and ``None`` is spoken as "no provider", never as a blank answer."""
@@ -255,6 +264,7 @@ def build_vision_provider(settings: Any) -> VisionProvider | None:
 
 __all__ = [
     "DEFAULT_QUESTION_TR",
+    "image_mime",
     "ERROR_IMAGE_TOO_LARGE",
     "ERROR_VISION_FAILED",
     "MAX_IMAGE_BYTES",
