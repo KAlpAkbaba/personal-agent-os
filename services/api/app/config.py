@@ -22,6 +22,13 @@ _API_ROOT = Path(__file__).resolve().parents[1]
 #: provider order decide.
 _RESEARCH_SEARCH_PROVIDERS = ("duckduckgo", "google", "auto")
 
+#: ADR-0177 (owner, 2026-09-19): "Her şeyi kendi Chrome'umda, gözümün önünde yapsın" —
+#: page FETCHING (not discovery/search, which is unchanged) reads through the owner's own,
+#: already-open Chrome window by default ("owner"); "worker" is the pre-ADR-0177 background
+#: browser worker (app.research.browser_gateway.DeviceBrowserGateway), kept fully selectable
+#: as a fallback path and for environments with no interactive owner desktop.
+_RESEARCH_BROWSERS = ("owner", "worker")
+
 #: ADR-0091. Mirrors app.weather.providers.WEATHER_PROVIDERS as a literal (not an
 #: import) — the same reason _RESEARCH_SEARCH_PROVIDERS above is a literal rather than
 #: importing app.research.*: this settings module must not gain a heavier import chain
@@ -291,6 +298,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PAGENTOS_RESEARCH_SEARCH_PROVIDER must be one of "
                 f"{_RESEARCH_SEARCH_PROVIDERS}, got {v!r}"
+            )
+        return v
+
+    #: ADR-0177: which browser reads a research page. "owner" (default) drives the owner's
+    #: own Chrome window (app.research.owner_browser_gateway.OwnerBrowserGateway), serially;
+    #: "worker" is the pre-ADR-0177 background browser worker.
+    research_browser: str = "owner"
+
+    @field_validator("research_browser")
+    @classmethod
+    def _validate_research_browser(cls, v: str) -> str:
+        if v not in _RESEARCH_BROWSERS:
+            raise ValueError(
+                f"PAGENTOS_RESEARCH_BROWSER must be one of {_RESEARCH_BROWSERS}, got {v!r}"
             )
         return v
 

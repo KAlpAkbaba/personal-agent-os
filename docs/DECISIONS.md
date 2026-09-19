@@ -13543,3 +13543,105 @@ this change's write scope. OCR reads what is PAINTED: text inside a video frame 
 thumbnail is read too, which is what the owner wants for "find this video", and is also why
 a planner must treat a hit as a location, not as a control. Delivery is unchanged: the
 elevated installer, one UAC prompt, the same command with both switches (`READY_FOR_OWNER`).
+
+## ADR-0177 — Research page FETCHING reads through the owner's own Chrome, not a background browser (2026-09-19)
+
+Earlier the same day, on the operator side: *"araştırma yaparken de YouTube'da nasıl benim
+browser'ımı kullanıyorsa aynı şekilde benim browser'ımı kullansın"*. Asked directly where
+research should open the pages it reads — the pre-existing background browser worker
+(`app.research.browser_gateway.DeviceBrowserGateway`, a separate, invisible Chrome profile
+on the device) versus a Chrome-extension bridge versus the owner's own, already-open Chrome
+— the owner chose the third: *"Her şeyi kendi Chrome'umda, gözümün önünde yapsın."* They were
+told, and accepted, the cost: fetching becomes serial (one owner window, one tab at a time,
+never the worker's up-to-4-concurrent fetches), 2-4 minutes of their own screen and keyboard
+per research run, and OCR text quality on a long page (a screenful at a time, imperfect on
+dense or unusually laid-out pages).
+
+**Scope: only page FETCHING moves.** Discovery — running a search, reading a known
+directory/index page's result links — still runs through the device/worker browser exactly
+as before (`discover_activity`, unchanged). The owner's own Chrome has no notion of "search
+and gather many result URLs" in this design; it is asked to open ONE named URL at a time,
+the same shape `fetch_activity` already had for the worker path.
+
+**`app.research.owner_browser_gateway.OwnerBrowserGateway`** — same `fetch_url(...)` ->
+`EvidenceRecord` contract as `DeviceBrowserGateway.fetch_url`, dispatched over the SAME
+`DeviceCommandClientProtocol`, so `fetch_activity` can hand a URL to either gateway without
+the rest of the pipeline caring which one answered:
+
+1. `window.list`, then the owner's Chrome window: the foreground one when it is Chrome and
+   not showing the Agent's own page (a folded `"personalagentos"` substring in the title),
+   else another open Chrome window not showing it, else whichever Chrome window there is. No
+   Chrome window at all is a typed, non-retryable `BrowserDispatchError("dependency_unavailable",
+   ...)` — never a wait, never a guess.
+2. `window.activate`, `keyboard.shortcut` Ctrl+T (a fresh tab, address bar already focused),
+   `keyboard.type` the URL, `keyboard.key` "enter".
+3. `window.current`, polled (bounded by the gateway's own `timeout_s`, the run's
+   `per_page_timeout_s`) until the title stops being a blank tab's ("Yeni Sekme" / "New Tab").
+4. The page is READ by the device's own OCR (ADR-0176's `screen.ocr`) — a screen, PageDown, a
+   screen, PageDown, ... up to 4 screens or until the excerpt budget
+   (`browser_gateway.DEFAULT_EXCERPT_CHARS`) is met or a screen adds nothing new (normalised
+   text equality against every line already kept). The window's own tab strip / address bar
+   band (the first ~12% of the first screen's height) is never read as content — it does not
+   scroll away, so it would otherwise poison every screen with the address bar's own text.
+5. The tab this fetch opened is closed (`keyboard.shortcut` Ctrl+W) in a `finally` — a page
+   that failed to read still leaves no tab behind — and is best-effort (a close failure is
+   logged, never raised over whatever the read itself produced or raised).
+6. `page_kind` (the `EvidenceRecord` field the worker path fills from the device's own
+   classification) has no device-side equivalent here, so it is filled from
+   `eligibility.classify_page_validity` run on the OCR'd title/text, mapped onto the
+   `PAGE_KIND_*` vocabulary (interstitial/consent -> `blocked`, captcha -> `captcha`,
+   login_required/access_denied -> `auth_wall`, empty -> `empty`, malformed -> `error_page`,
+   else `ok`). Injection checks (`is_injection_suspected`) are unaffected — `fetch_activity`
+   already runs them on `record.excerpt` after ANY gateway returns, gateway-agnostic.
+7. **Dates — the smallest honest support, not an invention.** There is no HTML metadata on
+   this path (no `<meta property="article:published_time">` to read), so `published_at` is
+   filled only from the two point-in-time phrases `app.research.dates.parse_recency_window`
+   already resolves to one exact calendar day — "bugün" and "dün" — found anywhere in the
+   OCR'd text. "son N gün/hafta/ay" is a WINDOW, not a publication date, and is deliberately
+   never turned into one; a phrasing the parser does not already recognise (e.g. "3 gün
+   önce") is left unset. This is imprecise (the words could appear in an unrelated sentence)
+   but it is the same parser the pipeline already trusts, applied honestly to a narrower
+   claim than "the page's publication date" would otherwise imply.
+
+**Selection: `Settings.research_browser`** (`PAGENTOS_RESEARCH_BROWSER`), `"owner"` (new
+default) | `"worker"`. In `"owner"` mode `plan_activity` clamps the stored policy's
+`concurrent_fetches` to 1 — the owner has one window and one tab, never up to 4 fetches in
+flight at once — read once into `plan_json["policy"]` exactly like every other policy number,
+so a replayed activity sees the SAME cap the run started with; `"worker"` mode is untouched.
+`fetch_activity` tries the owner gateway first and falls back to the device/worker gateway
+for THAT ONE url when the owner path answers with a typed "cannot do this right now" error
+(`dependency_unavailable` — no owner Chrome window open; `capability_missing` — the device
+does not offer/answer `screen.ocr`), recording the fallback as a run event
+(`{"browser_fallback": {"from": "owner_browser", "to": "device", "reason": ..., "url": ...}}`,
+never silent) before retrying via `DeviceBrowserGateway`. A REFUSED url (destination policy,
+a forbidden-key hit) is never retried on the other browser — the URL itself is the problem,
+not which browser reads it. Every fetched evidence row and every fetch event in the run's
+trail now carries `browser: "owner_browser" | "device"`, so which browser actually read a
+given page is part of the run's own record, not just an implementation detail.
+
+**What is explicitly not done.** The owner-Chrome path has no analogue of the worker's
+persistent "Google results tab stays loaded between searches" optimisation — it always opens
+and closes its own tab, because discovery does not run through it at all. OCR text quality on
+a long, densely-laid-out article (multi-column, heavy inline ads) is unverified against a
+real page — the gate is `screen.ocr`'s own line/word boxes, proven for the operator's video
+-finding use in ADR-0176, not yet measured for full-article extraction. No change was made to
+`app.operator.*` or `app.voice.*` — this module imports one pure helper
+(`app.operator.ocr_locate.fold`) read-only and otherwise duplicates the small, stable pieces
+of vocabulary it needs (blank-tab titles, the Chrome title suffix), the same discipline
+`app.research.evidence` already documents for its own deliberately-duplicated ranking
+formula.
+
+Regression: `tests/unit/test_research_owner_browser_gateway.py` (the exact capability
+sequence including Ctrl+T/Ctrl+W, overlapping-screen merge, the top-chrome-band drop, early
+stop on a screen that adds nothing, max-screens without a trailing PageDown, the tab closed
+when OCR fails mid-read, no-Chrome-window's typed error, preferring a window not showing the
+Agent's own page, the destination-policy and forbidden-key refusals, `page_kind` from a
+detected interstitial/captcha) and `tests/unit/test_research_browser_selection.py` (the
+setting's default and validation, the serial cap applied in "owner" mode and absent in
+"worker" mode, `fetch_activity` using the owner browser by default and recording it, the
+worker-mode path never touching an owner-only capability, the owner->device fallback and its
+recorded event, a destination-policy refusal never falling back, injection detection still
+applying to owner-browser evidence). Eight mutations (disabling the top-band filter, the
+dedup check, the early-stop check, the agent-window preference, the `finally` tab-close, the
+fallback error-class set, the serial-cap clamp, the setting's own default) were each run RED
+against these suites and restored byte-exact from a sha256-checked backup.

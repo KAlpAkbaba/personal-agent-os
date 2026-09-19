@@ -83,6 +83,10 @@ from app.research.models import (
     STAGE_SYNTHESIZING,
     STAGE_WAITING_FOR_OWNER_VERIFICATION,
 )
+from app.research.owner_browser_gateway import (
+    OWNER_BROWSER_FALLBACK_ERROR_CLASSES,
+    OwnerBrowserGateway,
+)
 from app.research.plan import build_plan
 from app.research.policy import SHORTLIST_DOMAIN_SHARE, ResearchPolicy, resolve_policy
 from app.research.report import (
@@ -295,6 +299,14 @@ def plan_activity(
                 max_sources=effective_max_sources,
                 wave_size=min(resolved_policy.wave_size, effective_max_sources),
             )
+        # ADR-0177: the owner's own Chrome is ONE window, ONE tab at a time — a run in
+        # "owner" browser mode can never fetch more than one page concurrently, whatever
+        # the mode's own concurrent_fetches says. Stored into the plan's policy (not
+        # re-derived per fetch call) for the same reason every other policy number is
+        # resolved once here: a replayed/resumed activity must read the SAME policy the
+        # run started with. "worker" mode is untouched.
+        if get_settings().research_browser == "owner" and resolved_policy.concurrent_fetches != 1:
+            resolved_policy = dataclasses.replace(resolved_policy, concurrent_fetches=1)
         plan_dict["mode"] = mode
         plan_dict["policy"] = resolved_policy.as_dict()
         _transition_task(session, tid, TASK_STATUS_PLANNED)
@@ -957,6 +969,91 @@ def _class_for_query(query_id: str) -> str:
 # ----------------------------------------------------------------- fetch(url)
 
 
+def _record_browser_fallback_event(
+    session: Any, tid: uuid.UUID, *, url: str, error_class: str
+) -> None:
+    runs_service.update_run(
+        session,
+        tid,
+        stage=STAGE_FETCHING,
+        event={
+            "stage": STAGE_FETCHING,
+            "detail": (
+                f"owner browser unavailable ({error_class}) for {url}: "
+                "falling back to device browser"
+            ),
+            "browser_fallback": {
+                "from": "owner_browser",
+                "to": "device",
+                "reason": error_class,
+                "url": url,
+            },
+        },
+    )
+
+
+def _fetch_evidence_record(
+    *,
+    settings: Any,
+    device_id: uuid.UUID,
+    task_id: str,
+    tid: uuid.UUID,
+    url: str,
+    query: str,
+    source_class: str,
+    attempt: int,
+    policy: ResearchPolicy,
+) -> tuple[EvidenceRecord, str]:
+    """Which browser reads this page (ADR-0177): the owner's own Chrome by default,
+    falling back to the device/worker browser for THIS url alone when the owner path
+    cannot do it right now (no owner Chrome window open, or the device does not
+    offer/answer ``screen.ocr``) — recorded in the run's events either way, never
+    silently. ``settings.research_browser == "worker"`` skips the owner path entirely
+    (pre-ADR-0177 behaviour, unchanged). Returns the record and which browser actually
+    answered ("owner_browser" | "device"), for the run's own event trail.
+    """
+    if settings.research_browser != "owner":
+        gateway = DeviceBrowserGateway(
+            _command_client(),
+            device_id=device_id,
+            task_id=task_id,
+            timeout_s=policy.per_page_timeout_s,
+            excerpt_chars=DEFAULT_EXCERPT_CHARS,
+        )
+        record = gateway.fetch_url(
+            url, query=query, source_class=source_class, attempt=attempt, tab="new"
+        )
+        return record, "device"
+
+    owner_gateway = OwnerBrowserGateway(
+        _command_client(),
+        device_id=device_id,
+        task_id=task_id,
+        timeout_s=policy.per_page_timeout_s,
+    )
+    try:
+        record = owner_gateway.fetch_url(
+            url, query=query, source_class=source_class, attempt=attempt
+        )
+        return record, "owner_browser"
+    except BrowserDispatchError as exc:
+        if exc.error_class not in OWNER_BROWSER_FALLBACK_ERROR_CLASSES:
+            raise
+        with _session_factory()() as session:
+            _record_browser_fallback_event(session, tid, url=url, error_class=exc.error_class)
+        device_gateway = DeviceBrowserGateway(
+            _command_client(),
+            device_id=device_id,
+            task_id=task_id,
+            timeout_s=policy.per_page_timeout_s,
+            excerpt_chars=DEFAULT_EXCERPT_CHARS,
+        )
+        record = device_gateway.fetch_url(
+            url, query=query, source_class=source_class, attempt=attempt, tab="new"
+        )
+        return record, "device"
+
+
 @activity.defn(name="browser_research_fetch")
 def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_class: str) -> str:
     """Returns ``"fetched" | "duplicate"``; a website-level failure
@@ -980,19 +1077,23 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
     factory = _session_factory()
     with factory() as session:
         policy = _run_policy(session, tid)
+    settings = get_settings()
 
-    gateway = DeviceBrowserGateway(
-        _command_client(),
-        device_id=uuid.UUID(device_id),
-        task_id=task_id,
-        timeout_s=policy.per_page_timeout_s,
-        excerpt_chars=DEFAULT_EXCERPT_CHARS,
-    )
     try:
-        # tab="new" (spec §5a): fetch in a separate tab so the job's persistent
-        # Google results tab stays loaded for the next discover_activity call.
-        record = gateway.fetch_url(
-            url, query=query, source_class=source_class, attempt=attempt, tab="new"
+        # tab="new" (spec §5a) for the device/worker path: fetch in a separate tab so
+        # the job's persistent Google results tab stays loaded for the next
+        # discover_activity call. The owner-browser path always opens/closes its own
+        # tab regardless (ADR-0177).
+        record, browser_used = _fetch_evidence_record(
+            settings=settings,
+            device_id=uuid.UUID(device_id),
+            task_id=task_id,
+            tid=tid,
+            url=url,
+            query=query,
+            source_class=source_class,
+            attempt=attempt,
+            policy=policy,
         )
     except BrowserDispatchError as exc:
         factory = _session_factory()
@@ -1017,6 +1118,9 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
     )
     challenged = challenge_policy.is_challenge(page_validity, record.page_kind)
     evidence_json = record.as_dict()
+    # ADR-0177: which browser actually read this page — recorded on the row itself so
+    # the run's own evidence (not just its event trail) says so.
+    evidence_json["browser"] = browser_used
     if challenged:
         # Marked on the row itself (never a reason to mutate the captured page):
         # the same discipline app.research.runs_service.record_evidence_gate
@@ -1036,7 +1140,7 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
         )
         fetch_done = len(runs_service.list_evidence(session, tid))
         progress_update: dict[str, Any] = {"fetch_done": fetch_done}
-        event_detail = f"fetched {url}"
+        event_detail = f"fetched {url} (browser={browser_used})"
         if created and challenged:
             run = runs_service.get_run(session, tid)
             domain = challenge_policy.domain_of(url)
@@ -1050,7 +1154,9 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
                     "challenged_pages": update.challenged_pages,
                 }
             )
-            event_detail = f"challenge detected ({page_validity}) on {domain}"
+            event_detail = (
+                f"challenge detected ({page_validity}) on {domain} (browser={browser_used})"
+            )
             if update.newly_cooled:
                 event_detail += " - domain cooled, remaining candidates skipped"
         runs_service.update_run(
@@ -1058,7 +1164,7 @@ def fetch_activity(task_id: str, device_id: str, url: str, query: str, source_cl
             tid,
             stage=STAGE_FETCHING,
             progress=progress_update,
-            event={"stage": STAGE_FETCHING, "detail": event_detail},
+            event={"stage": STAGE_FETCHING, "detail": event_detail, "browser": browser_used},
         )
     if created:
         publish_ui(

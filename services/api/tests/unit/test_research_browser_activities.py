@@ -103,7 +103,13 @@ def db_url(tmp_path, monkeypatch) -> str:
         table.create(bootstrap)
     bootstrap.dispose()
 
-    settings = Settings(_env_file=None, database_url=url)
+    # ADR-0177 changed the DEFAULT fetch browser to "owner"; this whole file's fakes are
+    # shaped for the pre-ADR-0177 device/worker capability vocabulary
+    # (browser.session_open/browser.fetch_evidence), so it pins "worker" explicitly.
+    # The owner-browser gateway and the settings-driven selection/fallback/serial-cap
+    # behaviour are covered in tests/unit/test_research_owner_browser_gateway.py and
+    # tests/unit/test_research_browser_selection.py.
+    settings = Settings(_env_file=None, database_url=url, research_browser="worker")
     monkeypatch.setattr(ba, "get_settings", lambda: settings)
     return url
 
