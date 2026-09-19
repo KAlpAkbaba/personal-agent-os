@@ -1,15 +1,16 @@
-# Devir notu — 2026-09-19 akşamı
+# Devir notu — 2026-09-20 gecesi (2026-09-19 akşamından devam)
 
 Yeni bir Claude oturumu (başka hesap dahil) buradan devam eder. Önce `CLAUDE.md`, sonra bu
 dosya, sonra gerektikçe `docs/DECISIONS.md` sonundaki ADR-0170…0178. Sahibe Türkçe yaz.
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `2336300` (api-blue), last-known-good `85b5432`, recovery bundle
-  `2336300`'e pinli, `pagentos-bluegreen-reconcile.timer` aktif, sağlık `ok`.
-  Realtime sağlayıcıları: `local-router`, `openai-realtime`.
-- **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0+b4f8ff9`, 105 yetenek (`screen.ocr` dahil).
-  `f53527e`'deki tek karakter tuş desteği (InputSynthesizer) **henüz kurulu değil**.
+- **Üretim:** Cloud Core `d040659` (api-green), last-known-good `2336300`, recovery bundle
+  `d040659`'a pinli, `pagentos-bluegreen-reconcile.timer` aktif, sağlık `ok`.
+  Realtime sağlayıcıları: `local-router`, `openai-realtime`. Geçişte cihaz oturumu (1/1)
+  yeni renge taşındı.
+- **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`, kaynak sürümü `0d03d9e`, 105 yetenek
+  (`screen.ocr` dahil). Tek karakter tuş desteği **kurulu** (2026-09-20 kurulumu).
 - **Çalışma ağacı temiz**, her şey `origin/main`'de. Arka planda iş yok.
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da
   "her seferinde tüm testleri koşma" dedi → dokunulan paketler + hedefli korpus yeter.
@@ -52,6 +53,17 @@ dosya, sonra gerektikçe `docs/DECISIONS.md` sonundaki ADR-0170…0178. Sahibe T
 - Ekranda bulma: önce yerel OCR (ücretsiz), görsel sağlayıcı yalnız konum/oynatıcı için.
 - İkinci sesli onay yok (mail gönderme hariç) — ADR-0171 ek.
 - "Birden fazla pencere varsa ikisine de baksın."
+
+## 2026-09-20 gecesi yayınlananlar (sahip henüz CANLI denemedi)
+
+`42eb997` yorum cümlesi tıklama sanılmıyor · `c71fc46` başarısız araştırma raporunu okuyor +
+arama bölgesi işçide uygulanıyor (ADR-0179) · `4553004` ok tuşları, yarım kalan sıra sayısı,
+"X hariç tüm sekmeleri kapat" (ADR-0180) · `9989f57` bildirim sayacı korunan sekmeyi
+kaybettirmiyor · `d040659` yerel modda sesle kamera (ADR-0181).
+
+Doğrulanacak cümleler: "kamerayı aç/kapat" (yerel mod, Chrome izin soracak), "sağ/sol tuşuna
+bas", "YouTube hariç tüm sekmeleri kapat", "birinci sekmeye geç", "yanlış yere tıkladım"
+(görev başlatmamalı), "yapay zeka haberlerini araştır".
 
 ## Sıradaki işler
 
