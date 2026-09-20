@@ -13,7 +13,7 @@ from __future__ import annotations
 import dataclasses
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -55,6 +55,9 @@ from app.research import challenge as challenge_policy
 from app.research import discovery, eligibility, runs_service, sources
 from app.research.browser_gateway import (
     DEFAULT_EXCERPT_CHARS,
+    PROFILE_OWNER,
+    PROFILE_RESEARCH,
+    SEARCH_PROVIDER_GOOGLE,
     BrowserDispatchError,
     DeviceBrowserGateway,
 )
@@ -489,12 +492,22 @@ def discover_activity(
                     "verification_url": None,
                 }
 
+            settings = get_settings()
+            attached = str(getattr(settings, "research_browser", "")) == "owner_chrome"
             gateway = DeviceBrowserGateway(
                 _command_client(),
                 device_id=uuid.UUID(device_id),
                 task_id=task_id,
                 excerpt_chars=DEFAULT_EXCERPT_CHARS,
-                search_provider=search_provider or get_settings().research_search_provider,
+                # ADR-0183: attached, the search is typed into the owner's OWN Chrome, and
+                # on Google - the browser and the engine the owner asked for. The device's
+                # own browser keeps its configured provider.
+                search_provider=(
+                    SEARCH_PROVIDER_GOOGLE
+                    if attached
+                    else (search_provider or settings.research_search_provider)
+                ),
+                profile=PROFILE_OWNER if attached else PROFILE_RESEARCH,
             )
             try:
                 hits = gateway.search(
@@ -504,9 +517,37 @@ def discover_activity(
                     interstitial=interstitial,
                 )
             except BrowserDispatchError as exc:
-                if exc.retryable:
+                if attached and exc.error_class in OWNER_CHROME_FALLBACK_ERROR_CLASSES:
+                    # The owner has not authorised the attach (or the installed worker
+                    # predates it): the run continues on the device's own browser, and the
+                    # trail says which search was answered by which browser.
+                    with _session_factory()() as session:
+                        _record_browser_fallback_event(
+                            session,
+                            tid,
+                            url=f"search:{query_text}",
+                            error_class=exc.error_class,
+                            from_browser="owner_chrome",
+                            to_browser="device",
+                        )
+                    gateway = DeviceBrowserGateway(
+                        _command_client(),
+                        device_id=uuid.UUID(device_id),
+                        task_id=task_id,
+                        excerpt_chars=DEFAULT_EXCERPT_CHARS,
+                        search_provider=search_provider or settings.research_search_provider,
+                        profile=PROFILE_RESEARCH,
+                    )
+                    hits = gateway.search(
+                        query_text,
+                        source_class=source_class,
+                        max_results=10,
+                        interstitial=interstitial,
+                    )
+                elif exc.retryable:
                     raise _retryable(exc.error_class, exc.message) from exc
-                raise _non_retryable(exc.error_class, exc.message) from exc
+                else:
+                    raise _non_retryable(exc.error_class, exc.message) from exc
             evidence = gateway.last_search_evidence
             provider = evidence.provider if evidence else "unknown"
             path = evidence.path if evidence else None
@@ -1034,7 +1075,13 @@ def _class_for_query(query_id: str) -> str:
 
 
 def _record_browser_fallback_event(
-    session: Any, tid: uuid.UUID, *, url: str, error_class: str
+    session: Any,
+    tid: uuid.UUID,
+    *,
+    url: str,
+    error_class: str,
+    from_browser: str = "owner_browser",
+    to_browser: str = "device",
 ) -> None:
     runs_service.update_run(
         session,
@@ -1043,17 +1090,37 @@ def _record_browser_fallback_event(
         event={
             "stage": STAGE_FETCHING,
             "detail": (
-                f"owner browser unavailable ({error_class}) for {url}: "
-                "falling back to device browser"
+                f"{from_browser} unavailable ({error_class}) for {url}: "
+                f"falling back to {to_browser}"
             ),
             "browser_fallback": {
-                "from": "owner_browser",
-                "to": "device",
+                "from": from_browser,
+                "to": to_browser,
                 "reason": error_class,
                 "url": url,
             },
         },
     )
+
+
+#: ADR-0183: the refusals that mean "this machine cannot ATTACH to the owner's Chrome right
+#: now" - no enrollment record (the owner never authorised it), or the installed worker
+#: predates the profile. Each one is a reason to read the page another way, never to fail
+#: the run; anything else (a real navigation error, a destination refusal) is not.
+OWNER_CHROME_FALLBACK_ERROR_CLASSES: Final[frozenset[str]] = frozenset(
+    {
+        "capability_missing",  # no enrollment record at all
+        "validation_error",  # an installed worker that predates the profile
+        "dependency_unavailable",  # the endpoint is recorded but nothing answers on it
+        # The owner enrolled their Chrome but did NOT grant autonomous research use of it
+        # (the enrollment record's own research grant, refused by the worker as a scope
+        # decision). The device decides that; the cloud only asks, and takes no for an
+        # answer by reading the page another way. This module deliberately never names the
+        # grant's field: `test_browser_transfer_contract` scans for it to prove the cloud
+        # cannot write, read or reason about it.
+        "security_scope_error",
+    }
+)
 
 
 def _fetch_evidence_record(
@@ -1076,7 +1143,38 @@ def _fetch_evidence_record(
     (pre-ADR-0177 behaviour, unchanged). Returns the record and which browser actually
     answered ("owner_browser" | "device"), for the run's own event trail.
     """
-    if settings.research_browser != "owner":
+    mode = str(getattr(settings, "research_browser", "owner_chrome"))
+    if mode == "owner_chrome":
+        # ADR-0183: the owner's OWN Chrome, ATTACHED - the page is opened as a tab they can
+        # see and read from the DOM, which is the highest rung of CLAUDE.md's browser ladder
+        # and needs no screenshot at all. Refused when the owner has not authorised the
+        # attach, and then this falls to the keyboard/OCR path below rather than failing.
+        attached = DeviceBrowserGateway(
+            _command_client(),
+            device_id=device_id,
+            task_id=task_id,
+            timeout_s=policy.per_page_timeout_s,
+            excerpt_chars=DEFAULT_EXCERPT_CHARS,
+            profile=PROFILE_OWNER,
+        )
+        try:
+            record = attached.fetch_url(
+                url, query=query, source_class=source_class, attempt=attempt, tab="new"
+            )
+            return record, "owner_chrome"
+        except BrowserDispatchError as exc:
+            if exc.error_class not in OWNER_CHROME_FALLBACK_ERROR_CLASSES:
+                raise
+            with _session_factory()() as session:
+                _record_browser_fallback_event(
+                    session,
+                    tid,
+                    url=url,
+                    error_class=exc.error_class,
+                    from_browser="owner_chrome",
+                    to_browser="owner_browser",
+                )
+    elif mode != "owner":
         gateway = DeviceBrowserGateway(
             _command_client(),
             device_id=device_id,

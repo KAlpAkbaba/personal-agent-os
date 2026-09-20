@@ -37,14 +37,33 @@ def agent_profiles() -> frozenset[str]:
 def cloud_profile_requests() -> list[tuple[str, str]]:
     """(file, profile) for every ``"profile": X`` in Cloud Core, X resolved to its literal."""
     out: list[tuple[str, str]] = []
+    # One table for the whole package: a constant is often defined in the module that owns
+    # the payload shape and IMPORTED by the module that chooses the value (ADR-0183:
+    # ``PROFILE_OWNER`` lives in browser_gateway and is passed in from browser_activities).
+    shared: dict[str, str] = {}
+    for path in sorted(CLOUD_APP.rglob("*.py")):
+        shared.update(
+            re.findall(
+                r'^([A-Z_]+)\s*(?::\s*Final(?:\[str\])?)?\s*=\s*"([^"]*)"',
+                path.read_text("utf-8"),
+                re.M,
+            )
+        )
     for path in sorted(CLOUD_APP.rglob("*.py")):
         src = path.read_text(encoding="utf-8")
-        if '"profile":' not in src:
+        if '"profile":' not in src and "profile=" not in src:
             continue
-        constants = dict(
+        constants = dict(shared)
+        constants.update(
             re.findall(r'^([A-Z_]+)\s*(?::\s*Final(?:\[str\])?)?\s*=\s*"([^"]*)"', src, re.M)
         )
-        for value in re.findall(r'"profile":\s*([A-Z_]+|"[^"]*")', src):
+        # ``"profile": X`` in a payload, and ``profile=X`` passed to a gateway that puts it
+        # in one (ADR-0183 made the research gateway's profile a parameter, so the name it
+        # sends is chosen at the call site - which is exactly where this test must look).
+        sent = re.findall(r'"profile":\s*([A-Z_]+|"[^"]*")', src) + re.findall(
+            r'\bprofile=([A-Z_]+|"[^"]*")', src
+        )
+        for value in sent:
             literal = value.strip('"') if value.startswith('"') else constants.get(value)
             assert literal is not None, (
                 f"{path.relative_to(REPO)} sends profile {value}, which this test cannot "

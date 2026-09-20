@@ -27,7 +27,7 @@ _RESEARCH_SEARCH_PROVIDERS = ("duckduckgo", "google", "auto")
 #: already-open Chrome window by default ("owner"); "worker" is the pre-ADR-0177 background
 #: browser worker (app.research.browser_gateway.DeviceBrowserGateway), kept fully selectable
 #: as a fallback path and for environments with no interactive owner desktop.
-_RESEARCH_BROWSERS = ("owner", "worker")
+_RESEARCH_BROWSERS = ("owner_chrome", "owner", "worker")
 
 #: ADR-0091. Mirrors app.weather.providers.WEATHER_PROVIDERS as a literal (not an
 #: import) — the same reason _RESEARCH_SEARCH_PROVIDERS above is a literal rather than
@@ -306,10 +306,17 @@ class Settings(BaseSettings):
             )
         return v
 
-    #: ADR-0177: which browser reads a research page. "owner" (default) drives the owner's
-    #: own Chrome window (app.research.owner_browser_gateway.OwnerBrowserGateway), serially;
-    #: "worker" is the pre-ADR-0177 background browser worker.
-    research_browser: str = "owner"
+    #: Which browser does the research, and how (ADR-0177, ADR-0183).
+    #:
+    #: * "owner_chrome" (default, ADR-0183): the owner's OWN Chrome, ATTACHED - the search
+    #:   is run there too, on their own Google, and every page is opened as a tab they can
+    #:   see. Needs the one-time authorization `scripts/browser/enroll-owner-chrome.ps1`
+    #:   writes; without it the worker refuses the profile and the run falls back to
+    #:   "owner" for that command, recorded in the run's events.
+    #: * "owner": the owner's Chrome driven by KEYBOARD and read by OCR (ADR-0177) - no
+    #:   authorization needed, but the search still runs on the device's own browser.
+    #: * "worker": the background browser worker alone (pre-ADR-0177).
+    research_browser: str = "owner_chrome"
 
     @field_validator("research_browser")
     @classmethod

@@ -56,6 +56,15 @@ from app.research.plan import looks_turkish
 #: two halves to the same key.
 SEARCH_REGION_TURKISH = "tr-tr"
 
+#: The worker's own dedicated research profile, and the owner's real Chrome
+#: (``browser_agent.media.RESEARCH_PROFILE`` / ``OWNER_PROFILE``, ADR-0113).
+PROFILE_RESEARCH = "research"
+PROFILE_OWNER = "owner"
+
+#: The engine an ATTACHED session searches with: the owner's own Google, in the browser
+#: they are signed into, which is what they asked for (ADR-0183).
+SEARCH_PROVIDER_GOOGLE = "google"
+
 # Fixed fallback "now" so FakeBrowserGateway is deterministic even when the
 # caller does not pass `now` explicitly (mirrors DeterministicResearchProvider's
 # no-wall-clock discipline, M3).
@@ -455,6 +464,7 @@ class DeviceBrowserGateway:
         timeout_s: float = 60.0,
         excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
         search_provider: str = "duckduckgo",
+        profile: str = PROFILE_RESEARCH,
     ) -> None:
         self._client = command_client
         self._device_id = device_id
@@ -467,6 +477,12 @@ class DeviceBrowserGateway:
         #: stays fully selectable (via this arg or the per-call `engine`
         #: override on `search()`), including its CAPTCHA/owner-handoff path.
         self._search_provider = search_provider
+        #: Which browser this session runs in (ADR-0183). ``research`` is the worker's own
+        #: dedicated profile; ``owner`` ATTACHES to the owner's already-running Chrome and
+        #: is refused by the worker unless the owner authorised it
+        #: (``scripts/browser/enroll-owner-chrome.ps1``) - so a caller that asks for it must
+        #: be ready for ``capability_missing`` and have somewhere else to go.
+        self._profile = profile
         self._session_opened = False
         self._session_open_attempt = 0
 
@@ -480,7 +496,7 @@ class DeviceBrowserGateway:
             capability="browser.session_open",
             payload={
                 "session_id": self._session_id,
-                "profile": "research",
+                "profile": self._profile,
                 "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
                 "channel": "chrome",
             },

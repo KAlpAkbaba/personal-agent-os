@@ -55,6 +55,12 @@ param(
     # plus the shortcut written below means a restart through that shortcut keeps the
     # enrollment valid.
     [int]$Port = 19222,
+    # ADR-0183 (owner, 2026-09-20: "direkt benim browser'ımda"): also let an AUTONOMOUS
+    # research run drive this browser - the search typed into their own Google, each page
+    # opened as a tab they can see. It is a SECOND grant on top of the attach, and it is
+    # off unless it is asked for by name: a research run is unattended, and unattended is
+    # exactly the difference between "the agent acts when I ask" and "the agent acts".
+    [switch]$AuthorizeResearch,
     [switch]$Revoke,
     [switch]$Force
 )
@@ -170,7 +176,7 @@ $record = [ordered]@{
             endpoint                       = $endpoint
             capability_overrides           = @{}
             created_at                     = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.ffffffZ")
-            owner_authorized_for_research  = $false
+            owner_authorized_for_research  = [bool]$AuthorizeResearch
         }
     )
 }

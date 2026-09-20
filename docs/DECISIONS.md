@@ -14062,3 +14062,53 @@ date is now evidence, and a two-week-old hint is still outside the window),
 `tests/unit/test_research_plan.py` (+8: the suffixed terms, the guardrails that keep "sonuç"
 and "ajanda" intact, and the plan with no doubled news query). Gate: the research selection,
 939 tests.
+
+## ADR-0183 — The research happens in the owner's own Chrome: their Google, their tabs, their DOM (2026-09-20)
+
+The owner, watching a run: *"önce Chromium'da açılıyor, DuckDuckGo'da bakıp sonra sadece
+benim browser'ımda linklere gidip bakıyor... bunun yerine direkt benim browser'ımda 'yapay
+zeka haberler' diye arama başlatıp linkleri sekmelerde açıp okumasını isterdim"*, then
+*"doğrudan yeni akışa geçelim"*.
+
+They had described the architecture exactly: ADR-0177 moved only the FETCH into their Chrome
+(by keyboard, read by OCR); DISCOVERY still ran on the device's own headless browser, on
+DuckDuckGo. Two browsers, two search engines, and the half they could see was the slow half.
+
+**What this changes.** `research_browser` gains a third value, now the default:
+`owner_chrome`. In that mode both halves run in the owner's REAL Chrome, ATTACHED over the
+loopback CDP endpoint ADR-0113 established: the search is typed into their own Google
+(`SEARCH_PROVIDER_GOOGLE`), each page is opened as a tab they can watch, and its text comes
+from the DOM. No screenshot, no OCR, no second browser window. This is CLAUDE.md's browser
+ladder taken at its top rung — the one the product has always said to prefer — and it is the
+first time research has been able to use it.
+
+`DeviceBrowserGateway` takes the profile as a parameter instead of hard-coding `research`;
+`app.research.browser_activities` chooses `owner` for both the discovery search and the page
+fetch when the mode is `owner_chrome`.
+
+**Who decides stays where it was.** The attach itself, and separately the right of an
+UNATTENDED research run to use it, are the device's to grant, recorded in an enrollment file
+only the owner's own script writes. The worker refuses a research session on that profile
+without the grant (`security_scope_error`, a scope decision, never a fallback it takes by
+itself). So `scripts/browser/enroll-owner-chrome.ps1` gained `-AuthorizeResearch`, off unless
+asked for by name — a research run is unattended, and unattended is the whole difference
+between "the agent acts when I ask" and "the agent acts". The Cloud Core never writes, reads
+or names that field; `test_browser_transfer_contract` scans for it to keep that true, and now
+also pins that the cloud treats a refusal as a reason to read the page another way.
+
+**Nothing fails because the owner has not granted it.** Every refusal that means "cannot
+attach right now" — no enrollment, an older worker, a dead endpoint, or the research grant
+withheld — falls back per command: the fetch to ADR-0177's keyboard/OCR path, the search to
+the device's own browser and its configured provider. Each fallback is an event on the run
+with its reason, so a run that quietly used the old path can be told from one that did not.
+
+**Tests**: `tests/unit/test_research_browser_selection.py` (+6: the page read in the owner's
+attached Chrome with no `screen.ocr` anywhere, the search typed into their own Google, the
+default value, and both fallbacks with their event trail), `test_browser_profile_contract.py`
+(the scanner now resolves a profile chosen at the CALL site, and resolves constants across
+the package — a gateway whose profile is a parameter was invisible to it),
+`test_browser_transfer_contract.py` (rewritten around who grants what).
+
+**Owner action, once**: `scripts\browser\enroll-owner-chrome.ps1 -AuthorizeResearch`. It
+closes Chrome and reopens it on their own profile with the loopback port (tabs come back),
+and records the grant. Until then every run works exactly as it did yesterday.

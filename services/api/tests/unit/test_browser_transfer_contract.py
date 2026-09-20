@@ -87,8 +87,17 @@ def test_the_contract_and_the_worker_agree_on_the_cap_and_the_reference_shape() 
 # ------------------------------------------------------------------------- 172
 
 
-def test_the_owners_chrome_stays_closed_to_autonomous_research() -> None:
-    assert "owner_authorized_for_research  = $false" in ENROLL.read_text("utf-8")
+def test_the_owners_chrome_is_the_devices_grant_to_give_not_the_clouds() -> None:
+    """ADR-0183 (owner, 2026-09-20: "direkt benim browser'ımda") lets research ASK for the
+    owner's own Chrome. What must not move is WHO DECIDES: the grant lives on the device, in
+    a record only the owner's own script writes, and the worker refuses the profile for a
+    research session without it. The cloud asks and takes no for an answer.
+    """
+    enroll = ENROLL.read_text("utf-8")
+    assert "owner_authorized_for_research  = [bool]$AuthorizeResearch" in enroll, (
+        "the enrollment record's research grant must come from an explicit switch"
+    )
+    assert "[switch]$AuthorizeResearch" in enroll, "and that switch must exist, off by default"
     api = REPO / "services/api/app"
     offenders = [
         str(p.relative_to(REPO))
@@ -96,11 +105,12 @@ def test_the_owners_chrome_stays_closed_to_autonomous_research() -> None:
         if "owner_authorized_for_research" in p.read_text("utf-8", errors="ignore")
     ]
     assert not offenders, f"the cloud must never touch the research grant: {offenders}"
-    gateway = (REPO / "services/api/app/research/browser_gateway.py").read_text("utf-8")
-    assert '"profile": "research"' in gateway
-    assert '"owner"' not in gateway, "autonomous research never asks for the owner profile"
     worker = WORKER.read_text("utf-8")
     assert "require_research_authorization(" in worker, "the worker's own gate is still there"
+    activities = (REPO / "services/api/app/research/browser_activities.py").read_text("utf-8")
+    assert '"security_scope_error"' in activities, (
+        "a refused grant must be a reason to read the page another way, never a failed run"
+    )
 
 
 # ------------------------------------------------------------------------- 173
