@@ -541,3 +541,25 @@ def test_a_search_that_cannot_answer_leaves_its_reason_on_the_run(
     assert failed, events
     assert failed[0]["search_failed"]["error_class"] == "provider_rate_limited"
     assert "yapay zeka son gelişmeler" in failed[0]["detail"]
+
+
+# ------------------------------------------------ ADR-0188: the owner's browser is slower
+
+
+def test_a_run_in_the_owners_chrome_gets_a_real_page_budget(task_id_owner_chrome: str) -> None:
+    """Production 3d259b31: openai.com, sozcu.com.tr and evrimagaci.org each timed out at
+    ~9 s and then succeeded on the retry. The owner's own Chrome carries their extensions,
+    their cookie banners and their ad blockers; 10 s was measured against a clean headless
+    browser. A first attempt that always fails costs a whole fetch round."""
+    plan = ba.plan_activity(task_id_owner_chrome, "konu", None, 12)
+    assert plan["policy"]["per_page_timeout_s"] >= 25.0
+    # ...and an attached session is still ONE browser: the ADR-0177 serial cap applies to
+    # it too, which the `== "owner"` test in plan_activity stopped doing when owner_chrome
+    # became the default.
+    assert plan["policy"]["concurrent_fetches"] == 1
+
+
+def test_the_worker_mode_keeps_its_own_budget(task_id_worker: str) -> None:
+    plan = ba.plan_activity(task_id_worker, "konu", None, 12)
+    assert plan["policy"]["per_page_timeout_s"] == POLICIES[MODE_QUICK].per_page_timeout_s
+    assert plan["policy"]["concurrent_fetches"] > 1

@@ -17,6 +17,7 @@ telemetry (``ResearchDiagnostics``), and crawler vocabulary never leaks upward.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.narration.numbers import cardinal
@@ -99,6 +100,58 @@ def _source_names(report_json: dict[str, Any]) -> list[str]:
     return names
 
 
+#: How much of a source's own text one finding is read out with. Long enough to be the
+#: NEWS and not the headline, short enough to stay a spoken answer (ADR-0188).
+SAID_MAX_CHARS = 420
+#: A line that is only a date/time stamp: the first line of most Turkish news pages, and
+#: not what happened.
+_TIMESTAMP_LINE_RE = re.compile(r"^\s*\d{1,2}[./]\d{1,2}[./]\d{2,4}(\s+\d{1,2}[:.]\d{2})?\s*$")
+
+
+def _what_the_source_said(report_json: dict[str, Any], evidence_ids: tuple[str, ...]) -> str:
+    """The page's OWN words for this finding, from the report's Details section.
+
+    The articles were always there — ``synthesis._detail_statement`` quotes each page's
+    content into ``details`` — and no spoken level ever read them, so a research was
+    answered with its headlines and their provenance (owner, 2026-09-20: "söyledikleri
+    sadece başlık ... detayı alamıyorum").
+
+    It is the SOURCE speaking, not this system: the text is quoted, attributed by the
+    caller, bounded, stripped of line breaks, and never read as an instruction to anyone.
+    """
+    wanted = {str(e) for e in evidence_ids if e}
+    for section in report_json.get("details") or ():
+        if not isinstance(section, dict):
+            continue
+        for statement in section.get("statements") or ():
+            if not isinstance(statement, dict):
+                continue
+            ids = {str(e) for e in (statement.get("evidence_ids") or ())}
+            if wanted and not (ids & wanted):
+                continue
+            lines = [
+                line.strip()
+                for line in str(statement.get("text") or "").splitlines()
+                if line.strip() and not _TIMESTAMP_LINE_RE.match(line)
+            ]
+            said = " ".join(lines).strip()
+            if said:
+                return _capped_sentences(said, SAID_MAX_CHARS)
+    return ""
+
+
+def _capped_sentences(text: str, limit: int) -> str:
+    """``text`` cut at a sentence end at or before ``limit`` — never mid-word."""
+    if len(text) <= limit:
+        return text
+    window = text[: limit + 1]
+    cut = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+    if cut > 0:
+        return window[: cut + 1]
+    space = window.rfind(" ")
+    return (window[:space] if space > 0 else window[:limit]).rstrip(" ,;:") + "..."
+
+
 def _finding_sentence(ordinal: str, finding: Any) -> str:
     claim = finding.finding.strip().rstrip(".")
     sentence = f"{ordinal}, {claim}."
@@ -137,11 +190,7 @@ def detail_speech(report_json: dict[str, Any], *, topic: str = "") -> str:
     result = ResearchResult.from_report_json(report_json, topic=topic)
     if result.insufficient or not result.findings:
         return spoken_result(result)
-    by_id = {
-        str(s.get("id")): s
-        for s in (report_json.get("sources") or ())
-        if isinstance(s, dict)
-    }
+    by_id = {str(s.get("id")): s for s in (report_json.get("sources") or ()) if isinstance(s, dict)}
     parts = [f"{PREFIX_TR} bulguları ayrıntısıyla anlatıyorum."]
     for ordinal, finding in zip(_ORDINALS_TR, result.findings[:MAX_DETAIL_FINDINGS], strict=False):
         sentence = _finding_sentence(ordinal, finding)
@@ -152,6 +201,10 @@ def detail_speech(report_json: dict[str, Any], *, topic: str = "") -> str:
         ]
         if names:
             sentence += f" Kaynak: {_tr_list(names)}."
+        said = _what_the_source_said(report_json, tuple(finding.sources))
+        if said:
+            # Attributed on purpose: what follows is the page talking, not this system.
+            sentence += f" Kaynağın kendi sözleriyle: {said}"
         parts.append(sentence)
     if len(result.findings) > MAX_DETAIL_FINDINGS:
         parts.append("Kalanı raporda duruyor efendim.")
@@ -173,13 +226,9 @@ def technical_speech(report_json: dict[str, Any]) -> str:
         ]
         parts.append(f"Elenme nedenleri: {_tr_list(reasons)}.")
     if diag.quarantined_pages:
-        parts.append(
-            f"{cardinal(diag.quarantined_pages)} öğe kalite kapısında karantinaya alındı."
-        )
+        parts.append(f"{cardinal(diag.quarantined_pages)} öğe kalite kapısında karantinaya alındı.")
     if diag.refused_pages:
-        parts.append(
-            f"{cardinal(diag.refused_pages)} ifade şüpheli içerik nedeniyle reddedildi."
-        )
+        parts.append(f"{cardinal(diag.refused_pages)} ifade şüpheli içerik nedeniyle reddedildi.")
     if diag.mode:
         mode_bits = [f"araştırma modu {diag.mode}"]
         if diag.waves:
@@ -204,7 +253,7 @@ def technical_speech(report_json: dict[str, Any]) -> str:
 
 
 def sources_speech(report_json: dict[str, Any]) -> str:
-    """"Bunun kaynaklarını söyle." — publishers, not addresses (the owner's preference:
+    """ "Bunun kaynaklarını söyle." — publishers, not addresses (the owner's preference:
     link addresses are not read unless asked for)."""
     names = _source_names(report_json)
     if not names:
@@ -224,11 +273,7 @@ def finding_detail_speech(report_json: dict[str, Any], index: int) -> str:
             f"{cardinal(index)} numaralı bulgu yok."
         )
     finding = result.findings[index - 1]
-    by_id = {
-        str(s.get("id")): s
-        for s in (report_json.get("sources") or ())
-        if isinstance(s, dict)
-    }
+    by_id = {str(s.get("id")): s for s in (report_json.get("sources") or ()) if isinstance(s, dict)}
     ordinal = _ORDINALS_TR[index - 1] if index <= len(_ORDINALS_TR) else f"{index}."
     parts = [_finding_sentence(ordinal, finding)]
     names = [

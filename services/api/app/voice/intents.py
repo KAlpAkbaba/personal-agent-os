@@ -2888,6 +2888,9 @@ _RESEARCH_READ_VERB_FORMS: Final[tuple[str, ...]] = (
 )
 #: The report is the research's own noun in the owner's mouth: "raporu oku".
 _RESEARCH_REPORT_NOUN_STEMS: Final[tuple[str, ...]] = ("rapor",)
+#: app.research.answers.LEVEL_DETAIL, spelled here so this module keeps importing nothing
+#: from the research package (the same discipline the rest of this file follows).
+_LEVEL_DETAIL_ANSWER = "detail"
 #: ...but a report with a subject in front of it belongs to that subject, not to a
 #: research: "durum raporunu oku", "hata raporunu oku", "sağlık raporunu oku".
 _RESEARCH_REPORT_QUALIFIERS: Final[tuple[str, ...]] = (
@@ -8626,6 +8629,13 @@ def _resolve_intent_rules(
                 latest=True,
                 matched="son",
             )
+        if research_open_matched == "araştırmayı oku" and not _has_exact(
+            tokens, "özetle", "ozetle", "özetler", "ozetler"
+        ):
+            # ADR-0188: reading a research out loud means its CONTENT - the sources' own
+            # words, which only the detail level speaks. "Özetle" asks for the short one
+            # by name, and "araştırmayı aç" was never this.
+            open_base["answer_level"] = _LEVEL_DETAIL_ANSWER
         return ResolvedIntent(
             Intent.RESEARCH_OPEN,
             scope=SCOPE_CONVERSATION,

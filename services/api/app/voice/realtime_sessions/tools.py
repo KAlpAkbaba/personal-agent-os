@@ -688,8 +688,13 @@ def research_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         return _needs_clarification(resolution)
     topic = resolution.entry.topic if resolution.entry is not None else ""
     report_json = _report_for(ctx, resolution.research_job_id)
+    # ADR-0188: "araştırmayı OKU" asks to hear the research, and the owner meant the news
+    # in it ("söyledikleri sadece başlık ... detayı alamıyorum"). The router sets the level
+    # from the verb the owner used; opening one ("aç") stays the short answer it was.
+    turn = dict(ctx.context.get("last_utterance") or {})
+    level = str(turn.get("answer_level") or "") or LEVEL_EXECUTIVE
     summary = (
-        speech_for_level(report_json, level=LEVEL_EXECUTIVE, topic=topic)
+        speech_for_level(report_json, level=level, topic=topic)
         if report_json is not None
         else RESEARCH_NO_REPORT_TR
     )

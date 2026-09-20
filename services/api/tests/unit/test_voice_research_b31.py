@@ -293,3 +293,16 @@ def test_someone_elses_report_is_not_the_research_report(said: str) -> None:
 )
 def test_asking_HOW_to_tell_it_is_not_asking_to_be_told(said: str) -> None:
     assert resolve_intent(said).intent is not Intent.RESEARCH_OPEN, said
+
+
+@pytest.mark.parametrize("said", ["Araştırmayı oku", "Raporu oku", "Son araştırmayı anlat"])
+def test_reading_a_research_out_loud_asks_for_the_detail_level(said: str) -> None:
+    """ADR-0188: the owner said "araştırmayı oku", heard five headlines and their
+    provenance, and asked where the news was. Reading it out means its CONTENT, which is
+    the level that speaks the sources' own words."""
+    assert resolve_intent(said).answer_level == "detail", said
+
+
+@pytest.mark.parametrize("said", ["Araştırmayı özetle", "Son araştırmayı aç"])
+def test_asking_for_the_short_one_still_gets_the_short_one(said: str) -> None:
+    assert resolve_intent(said).answer_level in (None, "", "executive"), said

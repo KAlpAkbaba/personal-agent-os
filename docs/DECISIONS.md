@@ -14266,3 +14266,45 @@ is launched in any of them. Gate: the browser package's 450 unit tests.
 **Deploy note**: this is device-side code (`services/browser` runs on the owner's machine as
 the companion's browser worker), so it ships with a device install, not with a Cloud Core
 release.
+
+## ADR-0188 — The research read out its headlines and kept the news to itself (2026-09-20)
+
+The first research that worked end to end was read aloud, and the owner: *"söyledikleri
+sadece başlık, haberi merak ettim ama detayı alamıyorum"*. They were right, and the reason
+is almost funny: **the articles were in the report the whole time.**
+
+`synthesis._detail_statement` quotes each page's own content into the report's Details
+section — production report `3d259b31` carries NTV's four paragraphs about the competition
+lawsuit verbatim. What the owner heard was composed from `Finding.summary`, which is
+provenance ONLY by design ("Kaynak: NTV.com.tr — <title> (tarih)") because
+`remember_activity` copies that field toward episodic memory and raw page text must never
+cross that boundary (CRITICAL-1a). Correct rule; the mistake was that no SPOKEN level ever
+read the Details section either, so the rule that protects memory also silenced the answer.
+
+**A. The detail level now says what the source said.** `_what_the_source_said` finds the
+Details statement whose evidence ids match the finding, drops the timestamp line most Turkish
+news pages open with, folds the line breaks away and cuts it at a sentence end within 420
+characters. The caller attributes it out loud — "Kaynağın kendi sözleriyle: ..." — because
+what follows is the page talking, not this system: quoted, attributed, bounded, and never an
+instruction to anyone. Nothing about `Finding.summary` or the memory boundary changes.
+
+**B. "Oku" asks for that level.** The router sets `answer_level="detail"` for the read verbs
+(ADR-0184) and leaves "özetle" and "araştırmayı aç" on the short answer they were. The tool
+reads the level off the turn instead of hard-coding EXECUTIVE.
+
+**C. The owner's own browser is slower than a clean one, and the budget did not know.**
+Production `3d259b31`: openai.com (twice), sozcu.com.tr and evrimagaci.org each timed out at
+~9 s and then succeeded on the retry — a whole wasted fetch round per page. The mode's
+`per_page_timeout_s` was measured against a headless browser with no extensions, no cookie
+banners and no ad blocker. In an owner-browser mode it now has a floor of 25 s.
+
+**Found on the way**: the ADR-0177 serial-fetch clamp read `research_browser == "owner"`, so
+it stopped applying the moment `owner_chrome` became the default (ADR-0183) — an attached
+session is still ONE browser, and it could have been asked for several pages at once. Both
+owner modes now share the clamp.
+
+**Tests**: `tests/unit/test_research_detail_speech.py` (new, 6: the answer carries the
+source's own sentences, attributed, bounded, no line breaks, no timestamp line, and a report
+with no Details answers exactly as before), `tests/unit/test_voice_research_b31.py` (+5: the
+read verbs ask for detail, "özetle"/"aç" do not), `tests/unit/test_research_browser_selection.py`
+(+2: the page budget and the serial clamp in owner_chrome mode, worker mode untouched).

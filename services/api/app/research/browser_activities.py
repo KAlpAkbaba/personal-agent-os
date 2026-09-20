@@ -309,8 +309,21 @@ def plan_activity(
         # re-derived per fetch call) for the same reason every other policy number is
         # resolved once here: a replayed/resumed activity must read the SAME policy the
         # run started with. "worker" mode is untouched.
-        if get_settings().research_browser == "owner" and resolved_policy.concurrent_fetches != 1:
-            resolved_policy = dataclasses.replace(resolved_policy, concurrent_fetches=1)
+        # ADR-0183 added a second owner mode and this read `== "owner"`, so the clamp
+        # stopped applying the moment `owner_chrome` became the default - an attached
+        # session is still ONE browser.
+        if str(get_settings().research_browser).startswith("owner"):
+            if resolved_policy.concurrent_fetches != 1:
+                resolved_policy = dataclasses.replace(resolved_policy, concurrent_fetches=1)
+            # ADR-0188: and it is the owner's OWN browser - their extensions, their cookie
+            # banners, their ad blockers. The mode's page budget was measured against a
+            # clean headless one; production 3d259b31 timed out on openai.com, sozcu.com.tr
+            # and evrimagaci.org at ~9 s and then fetched each of them on the retry, which
+            # is a whole wasted round per page.
+            if resolved_policy.per_page_timeout_s < OWNER_BROWSER_PAGE_TIMEOUT_FLOOR_S:
+                resolved_policy = dataclasses.replace(
+                    resolved_policy, per_page_timeout_s=OWNER_BROWSER_PAGE_TIMEOUT_FLOOR_S
+                )
         plan_dict["mode"] = mode
         plan_dict["policy"] = resolved_policy.as_dict()
         _transition_task(session, tid, TASK_STATUS_PLANNED)
@@ -1131,6 +1144,9 @@ def _record_browser_fallback_event(
 #: now" - no enrollment record (the owner never authorised it), or the installed worker
 #: predates the profile. Each one is a reason to read the page another way, never to fail
 #: the run; anything else (a real navigation error, a destination refusal) is not.
+#: ADR-0188: the least a page gets in the owner's OWN browser, whatever the mode says.
+OWNER_BROWSER_PAGE_TIMEOUT_FLOOR_S: Final = 25.0
+
 OWNER_CHROME_FALLBACK_ERROR_CLASSES: Final[frozenset[str]] = frozenset(
     {
         "capability_missing",  # no enrollment record at all
