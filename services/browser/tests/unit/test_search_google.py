@@ -349,3 +349,46 @@ class TestPathValues:
 
         outcome = await run_search("q", "duckduckgo", fetch=fetch)
         assert outcome.path == "fallback"
+
+
+class TestARealResultsPageIsNeverAnInterstitial:
+    """Production 2026-09-20: every `browser.search` in the owner's own signed-in Chrome
+    came back `provider_rate_limited` - "every provider (google) ended in captcha for this
+    query" - while the owner watched the results page load, with results on it. The consent
+    rule fired on any page that merely REFERENCES consent.google.com and contains a form,
+    and a real Google page does both: the consent link is in its own footer/scripts and the
+    search box is a form."""
+
+    def test_a_results_page_that_links_to_consent_is_still_a_results_page(self) -> None:
+        page = _read("google.html").replace(
+            "</body>",
+            '<div><a href="https://consent.google.com/ml?continue=x">Gizlilik</a></div>'
+            '<form action="/search"><input name="q"></form></body>',
+        )
+        assert parse_google_html(page), "the fixture must still have results to be a test"
+        assert detect_google_interstitial(page, "https://www.google.com/search?q=x") is None
+
+    def test_the_real_consent_page_is_still_consent(self) -> None:
+        assert detect_google_interstitial(_read("google-consent.html"), None) == "consent"
+
+    def test_the_real_sorry_page_is_still_a_captcha(self) -> None:
+        assert detect_google_interstitial(_read("google-sorry.html"), None) == "captcha"
+
+    def test_the_url_still_wins_over_the_page(self) -> None:
+        """A page served FROM the consent host is consent even if it carries results-like
+        markup: the host is the fact, the markup is a guess."""
+        page = _read("google.html")
+        assert detect_google_interstitial(page, "https://consent.google.com/m?c=x") == "consent"
+
+    @pytest.mark.asyncio
+    async def test_a_search_whose_page_has_results_never_reports_rate_limited(self) -> None:
+        page = _read("google.html").replace(
+            "</body>", '<a href="https://consent.google.com/ml">x</a><form></form></body>'
+        )
+
+        async def fetch(_engine: str, _url: str) -> tuple[str, str, int, str]:
+            return page, "ok", 200, "https://www.google.com/search?q=yapay+zeka"
+
+        outcome = await run_search("yapay zeka son gelişmeler", "google", fetch=fetch)
+        assert outcome.results, outcome.as_dict()
+        assert outcome.page_kind == "ok"

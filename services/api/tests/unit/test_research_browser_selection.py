@@ -497,3 +497,47 @@ def test_a_search_that_cannot_attach_falls_back_to_the_device_and_says_so(
         events = list(run.events_json or [])
     engine.dispose()
     assert [e for e in events if "browser_fallback" in e], events
+
+
+def test_a_search_that_cannot_answer_leaves_its_reason_on_the_run(
+    monkeypatch, db_url_owner_chrome, task_id_owner_chrome: str
+) -> None:
+    """Production 2026-09-20: every search came back `provider_rate_limited`, the workflow
+    let each query fail without failing the run (by design), and NOTHING was recorded - so
+    the owner got a finished research whose pages all came from the vendor feeds, with no
+    way to see that the search had never contributed anything."""
+    from app.devices.commands import CommandFailed
+
+    def factory(*, capability, payload, **_kwargs):
+        if capability == "browser.session_open":
+            return CommandSucceeded({"session_id": payload.get("session_id")})
+        if capability == "browser.search":
+            return CommandFailed(
+                "provider_rate_limited",
+                "browser.search: every provider (google) ended in captcha for this query",
+                retryable=True,
+            )
+        raise AssertionError(f"unexpected capability {capability!r}")
+
+    fake = FakeDeviceCommandClient(factory=factory)
+    monkeypatch.setattr(ba, "_command_client", lambda: fake)
+
+    with pytest.raises(Exception):  # noqa: B017 - the activity must still fail loudly
+        ba.discover_activity(
+            task_id_owner_chrome,
+            str(uuid.uuid4()),
+            "q1",
+            "yapay zeka son gelişmeler",
+            "news",
+            NOW.isoformat(),
+        )
+
+    engine = create_engine(db_url_owner_chrome)
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        run = runs_service.get_run(session, uuid.UUID(task_id_owner_chrome))
+        events = list(run.events_json or [])
+    engine.dispose()
+    failed = [e for e in events if "search_failed" in e]
+    assert failed, events
+    assert failed[0]["search_failed"]["error_class"] == "provider_rate_limited"
+    assert "yapay zeka son gelişmeler" in failed[0]["detail"]

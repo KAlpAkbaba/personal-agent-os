@@ -544,9 +544,33 @@ def discover_activity(
                         max_results=10,
                         interstitial=interstitial,
                     )
-                elif exc.retryable:
-                    raise _retryable(exc.error_class, exc.message) from exc
                 else:
+                    # A search that cannot answer leaves the run with nothing from THIS
+                    # query, and the workflow deliberately lets one query fail without
+                    # failing the run - so without this line the owner sees a finished
+                    # research whose pages all came from somewhere else and no reason why
+                    # (production 2026-09-20: three `provider_rate_limited` retries, zero
+                    # events, and eight English vendor-feed pages in the report).
+                    with _session_factory()() as session:
+                        runs_service.update_run(
+                            session,
+                            tid,
+                            stage=STAGE_DISCOVERING,
+                            event={
+                                "stage": STAGE_DISCOVERING,
+                                "detail": (
+                                    f"{query_id}: search failed ({exc.error_class}): "
+                                    f"no candidates from '{query_text}'"
+                                ),
+                                "search_failed": {
+                                    "query_id": query_id,
+                                    "query": query_text,
+                                    "error_class": exc.error_class,
+                                },
+                            },
+                        )
+                    if exc.retryable:
+                        raise _retryable(exc.error_class, exc.message) from exc
                     raise _non_retryable(exc.error_class, exc.message) from exc
             evidence = gateway.last_search_evidence
             provider = evidence.provider if evidence else "unknown"

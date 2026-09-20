@@ -486,6 +486,15 @@ def detect_google_interstitial(html: str, final_url: str | None = None) -> str |
         return "captcha"
     if lowered_url.startswith(("https://consent.google.", "http://consent.google.")):
         return "consent"
+    # A page with ORGANIC RESULTS on it is a results page, whatever else it references.
+    # Production 2026-09-20: every search in the owner's own signed-in Chrome came back
+    # "every provider (google) ended in captcha for this query" while the owner watched the
+    # results load. The consent rule below fires on any page that mentions
+    # consent.google.com and has a form - and a real Google page has the consent link in
+    # its own footer and the search box is a form. The URL checks above still win: a page
+    # served FROM the consent host is consent, because that is a fact and not a guess.
+    if parse_google_html(html, max_results=1):
+        return None
     lowered = html.lower()
     if any(marker in lowered for marker in _GOOGLE_SORRY_MARKERS):
         return "captcha"

@@ -14191,3 +14191,44 @@ English. Only its place in a two-slot budget changed.
 Turkish, the English query still appears when there is room, an English topic diversifies
 exactly as before, and the two Turkish picks are still different from each other — the thing
 diversification exists for). Gate: every research test, 968.
+
+## ADR-0186 — Every search in the owner's own Chrome was called a CAPTCHA, and nobody was told (2026-09-20)
+
+The owner, after ADR-0185: *"şimdi evet böyle yazdı ama gittiği sayfalar 2. görselde"* — the
+Turkish query went out correctly, and the pages the run then read were blog.google,
+openai.com, huggingface.co and github.com. Their own browser history was the evidence.
+
+Production run `cd9cb37a` says why, and it is not what ADR-0185 fixed. Its whole discovery
+trail is two lines: `official:0: +80 candidates`, `official:1: +0 candidates`. **The search
+contributed nothing at all.** Every `browser.search` came back
+`provider_rate_limited: every provider (google) ended in captcha for this query` — three
+Temporal retries, twice, while the owner watched the results page load with results on it.
+
+**A. A results page was being read as a consent page.**
+`detect_google_interstitial` declared "consent" for any HTML that mentions
+`consent.google.com` AND contains `<form`. A real Google results page does both: the consent
+link sits in its own footer and the search box IS a form. On the device's old dedicated
+profile the page had neither, which is why this never fired before ADR-0183 moved the search
+into the owner's signed-in Chrome. Fix: a page with ORGANIC RESULTS on it is a results page,
+whatever it references — `parse_google_html(html, max_results=1)` runs first and wins. The
+URL checks keep their precedence above it: a page served FROM the consent host or `/sorry/`
+is an interstitial, because that is a fact and not a guess.
+
+**B. The run said "ready" and never mentioned that the search had failed.** The workflow
+deliberately lets one query's discovery fail without failing the run (spec §5a) — right in
+itself — but it swallowed the reason: `except ActivityError: return`, with nothing written
+to the run. So the owner met a finished research whose pages all came from the English
+vendor feeds, with no way to see that the Google half had contributed zero. `discover_activity`
+now records a `search_failed` event (query, query id, error class) before it raises, so a run
+whose search never answered says so in its own trail.
+
+That one flaw explains the whole complaint. The English pages were not a ranking preference
+or a source-class bug: they were all that was left when the search half of discovery was
+being thrown away.
+
+**Tests**: `services/browser/tests/unit/test_search_google.py` (+5: a results page that links
+to consent is still a results page, the real consent and sorry pages still are what they are,
+the URL still wins over the page, and a search whose page has results never reports rate
+-limited), `services/api/tests/unit/test_research_browser_selection.py` (+1: the failed
+search leaves its reason on the run). Gates: the browser package's 446 unit tests, every
+research test in Cloud Core (969).
