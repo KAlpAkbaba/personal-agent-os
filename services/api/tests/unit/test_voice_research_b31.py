@@ -279,3 +279,17 @@ def test_someone_elses_report_is_not_the_research_report(said: str) -> None:
     that subject's. `test_voice_intents` pins "Durum raporunu oku" as reaching no intent at
     all, and it caught this the first time the report noun was added."""
     assert resolve_intent(said).intent is not Intent.RESEARCH_OPEN, said
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # Corpus r.tech.5 and its paraphrases: naming a REGISTER is the technical family's,
+        # not a plain request to hear the report.
+        "Seçtiğim araştırmayı teknik anlat",
+        "Araştırmayı ayrıntılı anlat",
+        "Araştırmayı kısaca anlat",
+    ],
+)
+def test_asking_HOW_to_tell_it_is_not_asking_to_be_told(said: str) -> None:
+    assert resolve_intent(said).intent is not Intent.RESEARCH_OPEN, said

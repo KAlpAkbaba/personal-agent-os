@@ -14152,6 +14152,15 @@ fails for any registered tool that is missing from the table, and it had not bee
 commit's gate. It answers and does nothing else, so it joins the other answer-only tools at
 `TIER_OPEN`.
 
+**Found by the corpus, in the same task**: the first version of the read verbs swallowed
+corpus case `r.tech.5` — "Seçtiğim araştırmayı TEKNİK anlat", which is the technical
+-explanation family's, not a plain request to hear the report. A register word is only the
+sentence's own when it stands next to the verb as a separate token: "teknik anlat" names HOW
+to tell it, while "özetle" carries "özet" inside the verb itself and is the plain request.
+`_asks_for_a_register` draws exactly that line.
+
 **Tests**: `tests/unit/test_voice_research_b31.py` (+8 ways of asking for the report aloud,
 +4 that they resolve to the LAST research, +4 that another subject's report is not this one,
-the new-research sentence still untouched, and the chat prompt's new rule).
++3 that naming a register is not this intent, the new-research sentence still untouched, and
+the chat prompt's new rule). Gates: the voice/intent/research/step-up selection (2176) and
+the full owner-utterance corpus (2714).

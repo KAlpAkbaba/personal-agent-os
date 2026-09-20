@@ -2908,6 +2908,22 @@ _RESEARCH_REPORT_QUALIFIERS: Final[tuple[str, ...]] = (
 )
 
 
+def _asks_for_a_register(tokens: tuple[str, ...], read_verb: str) -> bool:
+    """Does this sentence name HOW to tell it rather than ask to be told?
+
+    "Seçtiğim araştırmayı TEKNİK anlat" is the technical-explanation family's (corpus case
+    r.tech.5, which caught this the first time the read verbs were added): the register word
+    stands next to the verb as its own token. "Araştırmayı ÖZETLE" is not - there the
+    register word is only inside the verb itself, and the sentence is the plain request to
+    hear the report.
+    """
+    others = tuple(t for t in tokens if t != read_verb)
+    return any(
+        _has_exact(others, *words) or _has(others, *words)
+        for words, _level in _ANSWER_MODE_LEVEL_WORDS
+    )
+
+
 def _research_open_match(tokens: tuple[str, ...]) -> str | None:
     """ "Bir önceki araştırmayı aç." / "Son araştırmayı aç." / "İkinci araştırmayı aç."
     (B31 req 201) - a research POINTED AT with the open verb. Without a pointer ("yeni bir
@@ -2929,7 +2945,8 @@ def _research_open_match(tokens: tuple[str, ...]) -> str | None:
         return None
     if _has_exact(tokens, "yeni"):
         return None
-    if _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS) is not None:
+    read_verb = _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS)
+    if read_verb is not None and not _asks_for_a_register(tokens, read_verb):
         return "araştırmayı oku"
     if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
         return None
