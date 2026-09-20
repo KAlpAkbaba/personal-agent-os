@@ -2862,16 +2862,76 @@ def _research_resume_match(tokens: tuple[str, ...]) -> str | None:
     return None
 
 
+#: Asking for the report OUT LOUD, which is what the owner does with a finished research:
+#: "araştırmayı oku", "raporu oku", "araştırma sonucunu söyle", "araştırmayı özetle".
+#: ADR-0184 (owner, 2026-09-20, with a ready report in the database): none of these reached
+#: an intent, so in the local mode they fell through to the free chat model - which has no
+#: research and answered "daha hiç araştırma yapmadım".
+_RESEARCH_READ_VERB_FORMS: Final[tuple[str, ...]] = (
+    "oku",
+    "okur",
+    "okusana",
+    "okuyun",
+    "anlat",
+    "anlatsana",
+    "anlatır",
+    "anlatir",
+    "söyle",
+    "soyle",
+    "söylesene",
+    "soylesene",
+    "özetle",
+    "ozetle",
+    "özetler",
+    "ozetler",
+    "aktar",
+)
+#: The report is the research's own noun in the owner's mouth: "raporu oku".
+_RESEARCH_REPORT_NOUN_STEMS: Final[tuple[str, ...]] = ("rapor",)
+#: ...but a report with a subject in front of it belongs to that subject, not to a
+#: research: "durum raporunu oku", "hata raporunu oku", "sağlık raporunu oku".
+_RESEARCH_REPORT_QUALIFIERS: Final[tuple[str, ...]] = (
+    "durum",
+    "durumu",
+    "sistem",
+    "sistemi",
+    "hata",
+    "hatalar",
+    "sağlık",
+    "saglik",
+    "gider",
+    "gelir",
+    "satış",
+    "satis",
+    "kan",
+    "tahlil",
+)
+
+
 def _research_open_match(tokens: tuple[str, ...]) -> str | None:
     """ "Bir önceki araştırmayı aç." / "Son araştırmayı aç." / "İkinci araştırmayı aç."
     (B31 req 201) - a research POINTED AT with the open verb. Without a pointer ("yeni bir
     araştırma aç") this is not an open, and the artifact family's "bunu aç" without the
-    research noun is not this either."""
-    if _has(tokens, *_RESEARCH_NOUN_STEMS) is None:
-        return None
-    if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
+    research noun is not this either.
+
+    ADR-0184: the same intent also serves "araştırmayı OKU" - a read verb needs no pointer,
+    because a request to hear the report means the one that just finished. (An open verb
+    still does: "araştırmayı aç" with no pointer is the artifact family's.)
+    """
+    noun = _has(tokens, *_RESEARCH_NOUN_STEMS)
+    if noun is None and _has(tokens, *_RESEARCH_REPORT_NOUN_STEMS) is not None:
+        # A bare "raporu oku" is this research's report. A report with a SUBJECT in front of
+        # it is that subject's: "durum raporunu oku" is the status report and reaches no
+        # intent here (test_voice_intents pins exactly that sentence).
+        if not _has_exact(tokens, *_RESEARCH_REPORT_QUALIFIERS):
+            noun = "rapor"
+    if noun is None:
         return None
     if _has_exact(tokens, "yeni"):
+        return None
+    if _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS) is not None:
+        return "araştırmayı oku"
+    if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
         return None
     if _has_exact(tokens, *_RESEARCH_OPEN_REFERENCE_WORDS) is None:
         return None
@@ -8528,11 +8588,32 @@ def _resolve_intent_rules(
             **base,
         )
     if research_open_matched := _research_open_match(tokens):
+        open_base = dict(base)
+        reference = open_base.get("reference")
+        if (
+            research_open_matched == "araştırmayı oku"
+            and isinstance(reference, ResearchReference)
+            and reference.kind in (RESEARCH_REFERENCE_TOPIC, RESEARCH_REFERENCE_NONE)
+        ):
+            # ADR-0184: "Araştırmayı oku" points at nothing, and what the owner means is the
+            # one that just finished. Left as a TOPIC reference it is looked up as a
+            # research ABOUT the word "araştırma" and answered with a question rather than
+            # the report. A sentence that DOES point ("ikinci araştırmayı oku") keeps its
+            # own reference.
+            open_base["reference"] = ResearchReference(
+                kind=RESEARCH_REFERENCE_CURRENT,
+                ordinal=None,
+                content_words=(),
+                clock=reference.clock,
+                day=reference.day,
+                latest=True,
+                matched="son",
+            )
         return ResolvedIntent(
             Intent.RESEARCH_OPEN,
             scope=SCOPE_CONVERSATION,
             matched=research_open_matched,
-            **base,
+            **open_base,
         )
     if answer_mode_matched := _answer_mode_match(tokens):
         answer_level, answer_mode_text = answer_mode_matched

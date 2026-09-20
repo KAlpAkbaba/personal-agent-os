@@ -275,6 +275,11 @@ _TIERS: Final[dict[str, str]] = {
     # no provider. Gating the question "what can you do" behind a step-up would be gating
     # the one answer an owner needs before they can ask for anything else.
     "assistant.capabilities": TIER_OPEN,
+    # ADR-0173 addendum: free conversation in the local mode. It answers and does NOTHING
+    # else - no tools, no device, no durable write - so it sits with the other answer-only
+    # tools. It shipped on 2026-09-19 without a tier at all, which
+    # `test_voice_step_up::test_every_registered_tool_has_a_tier` caught here.
+    "assistant.chat": TIER_OPEN,
     "alarm.status": TIER_OPEN,
     "ambient.explain": TIER_OPEN,
     "app.list": TIER_OPEN,

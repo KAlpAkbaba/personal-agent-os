@@ -14112,3 +14112,46 @@ the package — a gateway whose profile is a parameter was invisible to it),
 **Owner action, once**: `scripts\browser\enroll-owner-chrome.ps1 -AuthorizeResearch`. It
 closes Chrome and reopens it on their own profile with the loopback port (tabs come back),
 and records the grant. Until then every run works exactly as it did yesterday.
+
+## ADR-0184 — The first research that worked could not be read out, and the chat model answered for it (2026-09-20)
+
+Minutes after ADR-0183 shipped, the owner ran a research in their own Chrome and it
+SUCCEEDED — production run `c630fe71`, stage `ready`, a 25 KB report written at 13:09, the
+first one ever. Then: *"araştırmayı okutamıyorum, bununla birlikte daha hiç araştırma
+yapmadım diyor"*.
+
+Both halves of that sentence are one defect. "Araştırmayı oku", "raporu oku", "araştırma
+sonucunu söyle", "son araştırmayı anlat" all reached **no intent at all**: `RESEARCH_OPEN`
+wanted an OPEN verb ("aç") and a pointer ("son", "ikinci"), and a read verb is neither. In
+the local mode (ADR-0173) a sentence the router does not understand goes to the free chat
+model — which has no tools, no memory and no sight of the system's records — and it answered
+the only way it could: it had done no research. The report was sitting in the database the
+whole time.
+
+**A. The intent.** `_research_open_match` now also accepts the READ verbs (oku / anlat /
+söyle / özetle / aktar and their polite forms), and a read verb needs no pointer: asking to
+hear the report means the one that just finished. An OPEN verb still requires one, so
+"araştırmayı aç" stays the artifact family's. `rapor` counts as the research's own noun —
+but only bare: a report with a subject in front of it ("durum raporunu oku") is that
+subject's, which `test_voice_intents` had already pinned as reaching no intent, and which
+caught the first version of this change.
+
+**B. The reference.** A bare "araştırmayı oku" classifies as a TOPIC reference whose topic is
+the word "araştırma", which the resolver would look up as a research ABOUT that word and
+answer with a question. The router now replaces a topic/none reference with `current` for the
+read form only; a sentence that points ("ikinci araştırmayı oku") keeps its own.
+
+**C. The chat model must not answer for the system.** Its prompt already forbade claiming to
+have DONE things; it said nothing about claiming to KNOW things. It now says it cannot see
+the system's records (researches, alarms, tasks, history), must not answer "yok" / "yapmadım"
+about them, and should name the sentence that does reach them.
+
+**Found on the way** (kept in this task, as the policy requires): `assistant.chat` shipped on
+2026-09-19 with no step-up tier at all — `test_voice_step_up::test_every_registered_tool_has_a_tier`
+fails for any registered tool that is missing from the table, and it had not been run in that
+commit's gate. It answers and does nothing else, so it joins the other answer-only tools at
+`TIER_OPEN`.
+
+**Tests**: `tests/unit/test_voice_research_b31.py` (+8 ways of asking for the report aloud,
++4 that they resolve to the LAST research, +4 that another subject's report is not this one,
+the new-research sentence still untouched, and the chat prompt's new rule).

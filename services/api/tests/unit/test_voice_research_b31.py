@@ -11,6 +11,8 @@
 # ruff: noqa: F811 - the fixtures are imported from the suite that owns them
 from __future__ import annotations
 
+import pytest
+
 from app.research import focus as focus_module
 from app.research.answers import technical_speech
 from app.research.policy import MODE_DEEP, MODE_QUICK, resolve_policy
@@ -200,3 +202,80 @@ def test_a_synthesis_substitution_is_spoken_as_one() -> None:
     assert "bir arama sorgusu yedek sağlayıcıyla cevaplandı" in speech
     plain = technical_speech({**REPORT_JSON, "synthesis_provider": "anthropic"})
     assert "yedeğe" not in plain and "Sentez sağlayıcısı anthropic." in plain
+
+
+# ------------------------------------------------- ADR-0184: reading the report aloud
+
+
+@pytest.mark.parametrize(
+    "said",
+    [
+        # Owner, 2026-09-20, with a READY report sitting in the database: "araştırmayı
+        # okutamıyorum ... daha hiç araştırma yapmadım diyor". None of these reached an
+        # intent, so in the local mode they fell through to the free chat model - which has
+        # no research, no memory and no idea, and said so.
+        "Araştırmayı oku",
+        "Araştırmayı okur musun",
+        "Raporu oku",
+        "Araştırma raporunu oku",
+        "Araştırma sonucunu söyle",
+        "Son araştırmayı anlat",
+        "Araştırmayı özetle",
+        "Araştırma sonuçlarını anlat",
+    ],
+)
+def test_asking_for_the_report_out_loud_opens_the_research(said: str) -> None:
+    resolved = resolve_intent(said)
+    assert resolved.intent is Intent.RESEARCH_OPEN, (said, resolved.intent, resolved.matched)
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["Araştırmayı oku", "Raporu oku", "Araştırma sonucunu söyle", "Araştırmayı özetle"],
+)
+def test_a_report_asked_for_with_no_pointer_is_the_last_one(said: str) -> None:
+    """"Araştırmayı oku" names no research, and the owner means the one that just finished.
+    Read as a TOPIC reference it would be looked up as a research ABOUT "araştırma" and
+    answered with a question instead of the report."""
+    assert resolve_intent(said).research_reference == "current"
+
+
+def test_asking_for_a_NEW_research_is_never_a_request_to_read_the_old_one() -> None:
+    """A new research is not an intent at all - it is a research CLASS the local mode turns
+    into research.start - so the read matcher must not swallow the sentence on its way."""
+    resolved = resolve_intent("Yapay zeka haberlerini araştır")
+    assert resolved.intent is not Intent.RESEARCH_OPEN
+    assert resolved.research_class == "new_research"
+
+
+@pytest.mark.parametrize(
+    ("said", "intent"),
+    [
+        ("Son araştırmayı aç", Intent.RESEARCH_OPEN),
+        ("Araştırmayı durdur", Intent.RESEARCH_CANCEL),
+        ("Araştırmayı duraklat", Intent.RESEARCH_PAUSE),
+    ],
+)
+def test_the_neighbouring_research_sentences_are_untouched(said: str, intent) -> None:
+    assert resolve_intent(said).intent is intent, said
+
+
+def test_the_chat_model_is_told_it_cannot_see_the_systems_records() -> None:
+    """It answered "daha hiç araştırma yapmadım" about a research that HAD run: a claim
+    about records it has no access to. The prompt now forbids that shape and names the
+    sentence that does reach the records."""
+    from app.assistant_chat import SYSTEM_PROMPT_TR
+
+    assert "kayıtlarını" in SYSTEM_PROMPT_TR and "GÖREMEZSİN" in SYSTEM_PROMPT_TR
+    assert "araştırmayı oku" in SYSTEM_PROMPT_TR
+
+
+@pytest.mark.parametrize(
+    "said",
+    ["Durum raporunu oku", "Hata raporunu oku", "Sağlık raporunu anlat", "Satış raporunu oku"],
+)
+def test_someone_elses_report_is_not_the_research_report(said: str) -> None:
+    """ "Raporu oku" is this research's report; a report with a SUBJECT in front of it is
+    that subject's. `test_voice_intents` pins "Durum raporunu oku" as reaching no intent at
+    all, and it caught this the first time the report noun was added."""
+    assert resolve_intent(said).intent is not Intent.RESEARCH_OPEN, said
