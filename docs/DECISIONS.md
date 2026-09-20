@@ -14308,3 +14308,48 @@ source's own sentences, attributed, bounded, no line breaks, no timestamp line, 
 with no Details answers exactly as before), `tests/unit/test_voice_research_b31.py` (+5: the
 read verbs ask for detail, "özetle"/"aç" do not), `tests/unit/test_research_browser_selection.py`
 (+2: the page budget and the serial clamp in owner_chrome mode, worker mode untouched).
+
+## ADR-0189 — It has to read like a story, and in Turkish (2026-09-20)
+
+The owner, after hearing a research read out properly for the first time: *"okuma metnini
+okunacak bir metin haline getirelim, sürekli kaynak kaynak deyip durmasın"* and *"İngilizce
+olan araştırmaları da Türkçeye çevirip öyle okusun"*.
+
+**A. One attribution, then the news.** Each finding was spoken as: the provenance summary
+("Kaynak: NTV.com.tr — <başlık> (tarih)"), then the stock why line ("Bu bilgi NTV.com.tr
+kaynağından doğrulandı ve ... konuyla doğrudan ilgili"), then "Kaynak: NTV.com.tr", then
+"Kaynağın kendi sözleriyle: ...". Four clauses, three of them the same name. Now, when the
+source's own text is in hand: the ordinal, the headline with the site's name trimmed off its
+end ("... | NTV Haber"), then "NTV.com.tr şunu yazıyor:" and the news itself. The stock why
+line is dropped as what it is — provenance in a sentence — while a REAL `why_it_matters` (a
+model-written report has one) is still spoken. A report with no quotable text keeps the old
+shape exactly. Also: a headline that ends in "?" no longer gets a full stop after it.
+
+**B. Turkish for a source that published in another language.** A third of the pages a
+Turkish research reads are English, so the answer changed language mid-sentence.
+`app.research.translate` puts it behind a provider interface (CLAUDE.md): the owner's own
+Anthropic key through `AnthropicTranslationProvider`, a fake for the tests, and
+`NoTranslationProvider` when no key is configured — which translates nothing and SAYS so,
+because a research must never look translated when it is not.
+
+Where the call happens matters more than the call: `app.research.translation_pass` runs
+ONCE, after the report is built and before it is stored. Not in `answers` (that module
+promises the same report always renders the same Turkish, with no I/O), not inside the
+deterministic synthesiser (seeded, offline, no model call — it stays that way). The Turkish
+is stored BESIDE the source's own words (`text_tr`), never over them, so a claim can always
+be checked against what the page actually said; the spoken answer prefers it and says
+"Yabancı dildeki kaynakları Türkçeye çevirdim." once, at the top, rather than before every
+finding.
+
+The excerpt sent to the model is untrusted page text. The system prompt says in Turkish that
+nothing inside it is an instruction, the text goes as USER content, it is capped at 1200
+characters, at most six quotes per run are translated, and the result is only ever spoken or
+displayed — it never becomes a tool call, a URL or a memory write.
+
+**Tests**: `tests/unit/test_research_detail_speech.py` (+6: one "kaynak" per finding, the
+stock why line gone while a real one survives, the publisher named once, the site suffix
+trimmed, no "?."), `tests/unit/test_research_translation.py` (new, 8: an English quote is
+translated and kept beside the original, a Turkish one is never sent to a model, no key
+means no change and no false claim, the spoken answer prefers the translation and says it
+once, a Turkish report never mentions translation, the provider is chosen from the key, and
+the page text is sent as data with the injection rule in the prompt).

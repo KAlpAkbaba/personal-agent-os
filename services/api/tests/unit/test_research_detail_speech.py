@@ -89,3 +89,57 @@ def test_the_level_router_still_routes_detail_here() -> None:
     assert speech_for_level(REPORT, level=LEVEL_DETAIL, topic="x") == detail_speech(
         REPORT, topic="x"
     )
+
+
+# ---------------------------------------------- ADR-0189: it has to read like a story
+
+
+def test_the_answer_does_not_say_kaynak_twice_for_one_finding() -> None:
+    """Owner, 2026-09-20: "sürekli kaynak kaynak deyip durmasın". One finding used to carry
+    the provenance line, then "Kaynak: NTV", then "Kaynağın kendi sözleriyle" - three
+    attributions for one piece of news."""
+    spoken = detail_speech(REPORT, topic="yapay zeka haberleri")
+    assert spoken.lower().count("kaynak") <= 1, spoken
+
+
+def test_the_formulaic_why_line_is_not_read_when_the_news_itself_is() -> None:
+    """ "Bu bilgi X kaynağından doğrulandı ve konuyla doğrudan ilgili" is the deterministic
+    synthesiser's filler; with the article in hand it is noise."""
+    spoken = detail_speech(REPORT, topic="yapay zeka haberleri")
+    assert "kaynağından doğrulandı" not in spoken, spoken
+
+
+def test_a_real_why_it_matters_is_still_spoken() -> None:
+    """A model-written report says something worth hearing there; only the filler goes."""
+    report = dict(REPORT)
+    report["findings"] = [
+        {
+            **REPORT["findings"][0],
+            "why_it_matters": "Dava, modellerin gelişim hızını mahkemeye taşıyan ilk örnek.",
+        }
+    ]
+    spoken = detail_speech(report, topic="yapay zeka haberleri")
+    assert "ilk örnek" in spoken
+
+
+def test_the_publisher_is_named_once_as_the_one_speaking() -> None:
+    spoken = detail_speech(REPORT, topic="yapay zeka haberleri")
+    assert spoken.count("NTV.com.tr") == 1, spoken
+    assert "NTV.com.tr şunu yazıyor" in spoken or "NTV.com.tr'ye göre" in spoken, spoken
+
+
+def test_the_site_name_is_trimmed_from_the_headline() -> None:
+    """Page titles carry the site again at the end - "... | NTV Haber", "... - Sözcü" -
+    which is the third time the owner hears the same name in one sentence."""
+    spoken = detail_speech(REPORT, topic="yapay zeka haberleri")
+    assert "| NTV Haber" not in spoken, spoken
+
+
+def test_a_question_headline_does_not_get_a_second_full_stop() -> None:
+    """Production 3d259b31 read "...nasıl durdurabiliriz?." out loud."""
+    report = dict(REPORT)
+    report["findings"] = [
+        {**REPORT["findings"][0], "title": "Yapay zeka insanlığı yok edebilir mi?"}
+    ]
+    spoken = detail_speech(report, topic="yapay zeka haberleri")
+    assert "?." not in spoken and "!." not in spoken, spoken

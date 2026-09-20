@@ -129,15 +129,23 @@ def _what_the_source_said(report_json: dict[str, Any], evidence_ids: tuple[str, 
             ids = {str(e) for e in (statement.get("evidence_ids") or ())}
             if wanted and not (ids & wanted):
                 continue
+            # ADR-0189: a Turkish rendering, when the report carries one, is what the
+            # owner hears; the source's own words stay in the report beside it.
+            raw = str(statement.get("text_tr") or statement.get("text") or "")
             lines = [
                 line.strip()
-                for line in str(statement.get("text") or "").splitlines()
+                for line in raw.splitlines()
                 if line.strip() and not _TIMESTAMP_LINE_RE.match(line)
             ]
             said = " ".join(lines).strip()
             if said:
                 return _capped_sentences(said, SAID_MAX_CHARS)
     return ""
+
+
+def _translated_anything(report_json: dict[str, Any]) -> bool:
+    note = report_json.get("translation")
+    return bool(isinstance(note, dict) and int(note.get("statements") or 0) > 0)
 
 
 def _capped_sentences(text: str, limit: int) -> str:
@@ -150,6 +158,34 @@ def _capped_sentences(text: str, limit: int) -> str:
         return window[: cut + 1]
     space = window.rfind(" ")
     return (window[:space] if space > 0 else window[:limit]).rstrip(" ,;:") + "..."
+
+
+#: What a page title repeats at its end: the site, again ("... | NTV Haber", "... - Sözcü").
+_TITLE_SITE_SUFFIX_RE = re.compile(r"\s*[|–—-]\s*[^|–—-]{1,40}$")
+#: The deterministic synthesiser's stock "why": provenance in a sentence, and nothing the
+#: owner does not already know once the source has been named and quoted.
+_FORMULAIC_WHY_MARKERS = ("kaynağından doğrulandı", "kaynagindan dogrulandi")
+
+
+def _headline(title: str, names: list[str]) -> str:
+    """The finding's own headline, without the site name tacked on the end of it."""
+    headline = _clean(title, max_len=160).strip().rstrip(".")
+    trimmed = _TITLE_SITE_SUFFIX_RE.sub("", headline).strip()
+    if trimmed and (len(trimmed) >= 12 or not headline.startswith(trimmed)):
+        headline = trimmed
+    for name in names:
+        if name and headline.lower().endswith(name.lower()):
+            headline = headline[: -len(name)].strip(" -|–—")
+    return headline
+
+
+def _worth_saying(why: str) -> str:
+    """``why_it_matters`` unless it is the stock provenance line."""
+    text = _clean(why, max_len=240).strip().rstrip(".")
+    lowered = text.lower()
+    if any(marker in lowered for marker in _FORMULAIC_WHY_MARKERS):
+        return ""
+    return text
 
 
 def _finding_sentence(ordinal: str, finding: Any) -> str:
@@ -192,19 +228,34 @@ def detail_speech(report_json: dict[str, Any], *, topic: str = "") -> str:
         return spoken_result(result)
     by_id = {str(s.get("id")): s for s in (report_json.get("sources") or ()) if isinstance(s, dict)}
     parts = [f"{PREFIX_TR} bulguları ayrıntısıyla anlatıyorum."]
+    if _translated_anything(report_json):
+        # Said ONCE, at the top: the owner should know which sentences are a translation,
+        # and hearing it before every finding is the noise they asked me to stop making.
+        parts.append("Yabancı dildeki kaynakları Türkçeye çevirdim.")
     for ordinal, finding in zip(_ORDINALS_TR, result.findings[:MAX_DETAIL_FINDINGS], strict=False):
-        sentence = _finding_sentence(ordinal, finding)
         names = [
             _clean(by_id[ref].get("publisher") or by_id[ref].get("title"), max_len=80)
             for ref in finding.sources
             if ref in by_id
         ]
-        if names:
-            sentence += f" Kaynak: {_tr_list(names)}."
         said = _what_the_source_said(report_json, tuple(finding.sources))
         if said:
-            # Attributed on purpose: what follows is the page talking, not this system.
-            sentence += f" Kaynağın kendi sözleriyle: {said}"
+            # ADR-0189: ONE attribution, then the news. The old shape said the publisher
+            # three times for one item - in the provenance summary, again as "Kaynak: X",
+            # and again as "Kaynağın kendi sözleriyle" (owner: "sürekli kaynak kaynak deyip
+            # durmasın"). What follows the colon is still the page talking, not this system.
+            headline = _headline(finding.finding, names)
+            speaker = names[0] if names else ""
+            stop = "" if headline.endswith(("?", "!", ".", "…")) else "."
+            opener = f"{ordinal}, {headline}{stop}" if headline else f"{ordinal},"
+            sentence = f"{opener} {speaker} şunu yazıyor: {said}" if speaker else f"{opener} {said}"
+            why = _worth_saying(finding.why_it_matters)
+            if why:
+                sentence += f" Bu önemli çünkü {why}."
+        else:
+            sentence = _finding_sentence(ordinal, finding)
+            if names:
+                sentence += f" Kaynak: {_tr_list(names)}."
         parts.append(sentence)
     if len(result.findings) > MAX_DETAIL_FINDINGS:
         parts.append("Kalanı raporda duruyor efendim.")

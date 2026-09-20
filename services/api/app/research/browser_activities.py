@@ -112,6 +112,8 @@ from app.research.synthesis import (
     resolve_synthesis_provider,
     synthesize_thin,
 )
+from app.research.translate import build_translation_provider
+from app.research.translation_pass import translate_report_details
 from app.uistate import UiState
 from app.uistate import publish as publish_ui
 
@@ -2016,6 +2018,10 @@ def synthesize_activity(
         )
         report = run_provenance_gate(report, evidence_by_id)
         report_json = report.as_dict()
+        # ADR-0189: the owner is read to in Turkish. Done ONCE, here, so the spoken answer
+        # stays a pure function of the stored report and the owner can ask for it again
+        # without paying for it again. With no key it changes nothing and says so.
+        translate_report_details(report_json, provider=build_translation_provider(settings))
 
         # B31 req 207: a substitution is a fact of the run, written where the owner and
         # the web can read it - the report itself, the run's events and the ledger - never
