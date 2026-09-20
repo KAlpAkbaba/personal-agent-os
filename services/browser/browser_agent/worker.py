@@ -440,6 +440,13 @@ class SessionState:
     # owner's research is using.
     session_kind: str = media.RESEARCH_SESSION_KIND
     max_tabs: int = DEFAULT_MAX_TABS
+    #: ADR-0187: how many tabs THIS SESSION has open right now. On the worker's own
+    #: profile that is every tab in the browser, so the two numbers agree. On the owner's
+    #: ATTACHED Chrome (ADR-0183) they do not: the tabs already there are the owner's, and
+    #: counting them spent the whole budget before the first page was read (production
+    #: 2026-09-20: 236 candidates discovered, every fetch refused
+    #: "open tab count 7 exceeds max_tabs=6").
+    own_tabs: int = 0
     popups_closed: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Set when a browser.search (interstitial="handoff") returns
@@ -836,6 +843,19 @@ class Worker:
         except Exception:
             return 0
 
+    @staticmethod
+    def _is_attached(state: SessionState) -> bool:
+        """Is this session driving the OWNER's own browser (ADR-0113/0183)?"""
+        return state.profile == media.OWNER_PROFILE
+
+    def _budgeted_tabs(self, state: SessionState, total: int) -> int:
+        """The tab count the lifecycle budget applies to: ours.
+
+        The budget exists so this worker cannot leak tabs. In the owner's own browser the
+        tabs that were already open are not ours to count - and not ours to close either.
+        """
+        return state.own_tabs if self._is_attached(state) else total
+
     async def _close_popup(self, session_id: str, page: Page) -> None:
         """``ManagedBackend.on_popup`` callback (M13 lifecycle, owner-machine
         incident 2026-09-03): a page the loaded page opened on its own is
@@ -1052,7 +1072,9 @@ class Worker:
             # that slipped past that pre-check (e.g. a popup racing its
             # auto-close) — discovered here, on ANY op, as a violation.
             tab_count = await self._current_tab_count(state)
-            lifecycle.check_tab_count_within_budget(tab_count, state.max_tabs, op=capability)
+            lifecycle.check_tab_count_within_budget(
+                self._budgeted_tabs(state, tab_count), state.max_tabs, op=capability
+            )
             result["lifecycle"] = self._lifecycle_info(state, tab_count=tab_count, reused=True)
             if state.profile == "research" and capability in (
                 "browser.tab_new",
@@ -1514,8 +1536,11 @@ class Worker:
         # opening anything when the new tab would cross max_tabs — the tab
         # count is therefore unchanged by a refused call.
         current = await self._current_tab_count(state)
-        lifecycle.check_tab_budget(current, state.max_tabs, op="tab_new")
+        lifecycle.check_tab_budget(
+            self._budgeted_tabs(state, current), state.max_tabs, op="tab_new"
+        )
         index = await state.browser_session.new_tab(url)
+        state.own_tabs += 1
         return {"index": index}
 
     async def _op_tab_close(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1527,6 +1552,7 @@ class Worker:
                 retryable=False,
             )
         await state.browser_session.close_tab(index)
+        state.own_tabs = max(0, state.own_tabs - 1)
         return {"closed": True}
 
     async def _op_tab_select(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2294,9 +2320,14 @@ class Worker:
                 # M13 lifecycle (owner-machine incident 2026-09-03): refuse
                 # BEFORE opening anything when this would cross max_tabs —
                 # the tab count is therefore unchanged by a refused call.
-                lifecycle.check_tab_budget(len(tabs_before), state.max_tabs, op="fetch_evidence")
+                lifecycle.check_tab_budget(
+                    self._budgeted_tabs(state, len(tabs_before)),
+                    state.max_tabs,
+                    op="fetch_evidence",
+                )
                 previous_tab_index = next((t.index for t in tabs_before if t.is_current), 0)
                 new_tab_index = await browser_session.new_tab(None)
+                state.own_tabs += 1
 
             response = await browser_session.navigate(url, timeout_ms=timeout_ms)
             page = browser_session.backend.current_page
@@ -2342,6 +2373,7 @@ class Worker:
             if new_tab_index is not None:
                 with suppress(Exception):
                     await browser_session.close_tab(new_tab_index)
+                state.own_tabs = max(0, state.own_tabs - 1)
                 if previous_tab_index is not None:
                     with suppress(Exception):
                         await browser_session.select_tab(previous_tab_index)

@@ -14232,3 +14232,37 @@ the URL still wins over the page, and a search whose page has results never repo
 -limited), `services/api/tests/unit/test_research_browser_selection.py` (+1: the failed
 search leaves its reason on the run). Gates: the browser package's 446 unit tests, every
 research test in Cloud Core (969).
+
+## ADR-0187 — The owner's own tabs were being counted as the agent's tab budget (2026-09-20)
+
+The run right after ADR-0186 is the one that shows both the progress and the next wall.
+Production `5519ae6f`: the search WORKED — `news:0: search ... provider=google result_count=8
+path=google_url`, **236 candidates** against the previous 80, with Turkish sources
+(12punto.com.tr, bbc.com/turkce) among them for the first time. Then every single fetch
+failed: `browser_lifecycle_violation — fetch_evidence: open tab count N exceeds max_tabs=6`,
+and the run ended `insufficient_valid_evidence` with nothing read at all. The owner got
+"Yapay Zeka haberlerini tamamlanamadı efendim".
+
+The tabs it counted were the OWNER'S. The lifecycle budget was written for a worker that
+launches its own empty Chrome, where every open tab really is its own and a tab left behind
+is a leak. ADR-0183 attached the research session to the browser the owner is working in —
+where the tabs already open are theirs, and this worker has no business counting them (or
+closing them). With four or five of their own tabs open, the budget was spent before the
+first page was read.
+
+The budget is not removed: it counts **our** tabs. `SessionState.own_tabs` goes up when this
+session opens one (a fetch's own tab, or `browser.tab_new`) and down when it gives it back —
+and a fetch always gives it back in its `finally`. For a session on the worker's own profile
+the two numbers are the same, so nothing about that path changes; for an attached session the
+guard now means what it was written to mean. Both pre-checks and the post-op backstop read
+the same helper, so they cannot drift apart.
+
+**Tests**: `services/browser/tests/unit/test_owner_tab_budget.py` (new, 4: nine owner tabs do
+not stop a fetch and our one tab is opened and closed again; the worker's own profile still
+refuses at the same count and a refused fetch opens nothing; an attached session that holds
+`max_tabs` of its OWN still refuses; `tab_new`/`tab_close` keep the same books). No browser
+is launched in any of them. Gate: the browser package's 450 unit tests.
+
+**Deploy note**: this is device-side code (`services/browser` runs on the owner's machine as
+the companion's browser worker), so it ships with a device install, not with a Cloud Core
+release.
