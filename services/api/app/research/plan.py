@@ -308,17 +308,37 @@ def diversify_queries(queries: Sequence[str], limit: int) -> tuple[str, ...]:
         return ()
     if len(ordered) <= limit:
         return tuple(ordered)
+    # ADR-0185: a question asked in Turkish is searched in Turkish first. The greedy pick
+    # below chose the ENGLISH core query for the second of a QUICK run's two slots by
+    # design - it IS the most different query, and back when the search ran on the device's
+    # own DuckDuckGo with a default region that was the only way to reach past one
+    # language's coverage. Since ADR-0183 the search is typed into the owner's own Turkish
+    # Google, signed in, and the owner watched it go out as "AI news". So the Turkish
+    # queries take the slots first, and the English one takes what is left over - it is
+    # still there, still expanded, just no longer ahead of the owner's own words.
+    # Reordering alone would not do it: the greedy ranks by DIFFERENCE, and the English
+    # query is the most different query there is. The Turkish ones are its whole candidate
+    # pool until they run out.
+    pools: list[list[str]] = [ordered]
+    if looks_turkish(ordered[0]):
+        turkish = [q for q in ordered if looks_turkish(q)]
+        rest = [q for q in ordered if not looks_turkish(q)]
+        if turkish and rest:
+            pools = [turkish, rest]
     tokens = {q: _query_tokens(q) for q in ordered}
-    picked = [ordered[0]]
-    remaining = ordered[1:]
-    while len(picked) < limit and remaining:
-        best_index = 0
-        best_score = None
-        for index, candidate in enumerate(remaining):
-            score = max(_similarity(tokens[candidate], tokens[p]) for p in picked)
-            if best_score is None or score < best_score:
-                best_score, best_index = score, index
-        picked.append(remaining.pop(best_index))
+    picked = [pools[0][0]]
+    for pool in pools:
+        remaining = [q for q in pool if q not in picked]
+        while len(picked) < limit and remaining:
+            best_index = 0
+            best_score = None
+            for index, candidate in enumerate(remaining):
+                score = max(_similarity(tokens[candidate], tokens[p]) for p in picked)
+                if best_score is None or score < best_score:
+                    best_score, best_index = score, index
+            picked.append(remaining.pop(best_index))
+        if len(picked) >= limit:
+            break
     return tuple(picked)
 
 

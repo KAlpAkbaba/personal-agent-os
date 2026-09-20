@@ -14164,3 +14164,30 @@ to tell it, while "özetle" carries "özet" inside the verb itself and is the pl
 +3 that naming a register is not this intent, the new-research sentence still untouched, and
 the chat prompt's new rule). Gates: the voice/intent/research/step-up selection (2176) and
 the full owner-utterance corpus (2714).
+
+## ADR-0185 — A question asked in Turkish is searched in Turkish (2026-09-20)
+
+The owner, watching the new flow run in their own browser: *"araştırmada yine Türkçe arama
+yapsa da AI news olarak gidiyor"* — and the screenshot shows their own Google, signed in,
+with `q=AI+news`.
+
+It was deliberate, and it was right at the time. `diversify_queries` fills a run's discovery
+slots with the most DIFFERENT queries, and for a Turkish topic the English core query is by
+construction the most different one — which is how a QUICK run's two slots became one Turkish
+query and one English. That reached past a single language's coverage back when the search
+ran on the device's own browser against DuckDuckGo with a default region (ADR-0074 decision
+4). Since ADR-0183 the search is typed into the owner's OWN Turkish Google, and the second
+slot spent their own browser on a query they did not ask for.
+
+Now: when the owner's own phrasing is Turkish, the Turkish queries are the pool the slots are
+filled from, and the English core query takes what is left over. Reordering alone would not
+have done it — the greedy ranks by difference and the English query is the most different
+thing in the list — so the pools are explicit: Turkish first, everything else after, each
+diversified within itself. Nothing is deleted: a run with more slots (deep mode) still issues
+the English query, because primary sources for most technology topics really do publish in
+English. Only its place in a two-slot budget changed.
+
+**Tests**: `tests/unit/test_research_plan.py` (+4: a Turkish topic's two slots are both
+Turkish, the English query still appears when there is room, an English topic diversifies
+exactly as before, and the two Turkish picks are still different from each other — the thing
+diversification exists for). Gate: every research test, 968.

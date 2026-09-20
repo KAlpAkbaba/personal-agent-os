@@ -7,8 +7,10 @@ import pytest
 from app.research.plan import (
     DEFAULT_RECENCY_DAYS,
     build_plan,
+    diversify_queries,
     english_core_query,
     expand_queries,
+    looks_turkish,
 )
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
@@ -252,3 +254,43 @@ def test_the_suffixed_news_word_does_not_earn_a_second_news_query() -> None:
         assert "haberlerini haberleri" not in lowered, queries
         assert "news ni" not in lowered, queries
         assert lowered.count("news") <= 1, queries
+
+
+# ------------------------------- ADR-0185: a Turkish question searches in Turkish first
+
+
+def test_a_turkish_topic_spends_its_discovery_slots_on_turkish_queries() -> None:
+    """Owner, 2026-09-20, watching the search run in their OWN Google: "araştırmada yine
+    Türkçe arama yapsa da AI news olarak gidiyor". Diversification used to pick the English
+    core query for the second of a QUICK run's two slots - deliberately, back when the
+    search ran on the device's own DuckDuckGo with a default region. Now it is typed into
+    the owner's Turkish Google, and the owner asked in Turkish."""
+    queries = expand_queries("Yapay Zeka haberlerini")
+    picked = diversify_queries(queries, 2)
+    assert len(picked) == 2
+    for query in picked:
+        assert looks_turkish(query), picked
+
+
+def test_the_english_query_is_not_deleted_it_is_only_later() -> None:
+    """A run with room for more queries still gets the English one: primary sources for
+    most technology topics publish in English, and that was never wrong - only its place
+    in a two-slot budget was."""
+    queries = expand_queries("Yapay Zeka haberlerini")
+    picked = diversify_queries(queries, len(queries))
+    assert any(not looks_turkish(q) for q in picked), picked
+
+
+def test_an_english_topic_is_diversified_exactly_as_before() -> None:
+    queries = expand_queries("AI agents security")
+    assert diversify_queries(queries, 2) == diversify_queries(tuple(queries), 2)
+    assert len(diversify_queries(queries, 2)) == 2
+
+
+def test_the_turkish_queries_are_still_different_from_each_other() -> None:
+    """Turkish-first must not mean "the same question twice": the slots still go to the
+    most different Turkish queries, which is what the diversification was for."""
+    picked = diversify_queries(expand_queries("Yapay Zeka haberlerini"), 2)
+    assert picked[0] != picked[1]
+    first, second = (set(q.lower().split()) for q in picked)
+    assert first != second
