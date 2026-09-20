@@ -14015,3 +14015,50 @@ what it observed relayed, the same on close, and every other tool's arguments st
 `utterance` argument, and a camera call the owner never asked for still refused — asserted
 against a camera that is OFF, since the eye's default is on). Gates: the web suite (1996),
 and the eye/realtime/presence/ambient selection (715).
+
+## ADR-0182 — A live research read eight pages, three of them on topic, and threw all three away because it could not read a clock (2026-09-20)
+
+Production run `59bdf846` (owner, 2026-09-20 12:12, "yapay zeka haberlerini araştır"). The
+ADR-0178 work held — the owner heard an honest Turkish sentence ("8 sayfa okudum, ancak
+hiçbiri konuyla yeterince ilgili bulunmadı") instead of a stack trace, the pages were read in
+the owner's own Chrome — but the run still failed, and the run's own record says why.
+
+**A. The date gate rejected pages that were on topic and fresh.** Three of the eight scored
+0.4479, 0.4833 and 0.70 against a 0.35 floor and were rejected `date_uncertain`. An
+OCR-read page (ADR-0177) carries no meta date, so the only date signal is the search
+result's own hint — and `search_engines._PUBLISHED_HINT_RE` writes hints in seconds,
+minutes, hours, days, weeks, months and years, while `eligibility._RELATIVE_HINT_RE`
+understood DAYS, "dün" and "bugün" alone. "17 saat önce" therefore graded as no date at all.
+Worse, even a hint it DID understand only graded confidence and returned no date, and
+`recency_verdict` needs a date: a relative hint could never produce `in_window` at all. Both
+halves fixed together — the units table is now shared shape with the extractor's, and
+`resolve_relative_hint(hint, retrieved_at)` turns the phrase into a date against the moment
+the page was fetched (still `medium` confidence: a human-readable phrase, not metadata).
+Two sides of one claim, so the tests assert both: every unit the search side writes is
+understood here, and a hint that puts a page two weeks back is still `outside_recency_window`.
+
+**B. The topic kept its accusative suffix and the term map ate around it.** The owner says
+"haberlerini"; the map matched the substring "haberleri" and left the orphan "ni", so the
+plan's English queries were literally `AI news ni` and `AI news ni news`. The same substring
+matching turned "sonuç" into "latestuç" and "ajanda" into "agentda" (both measured). Terms
+now match as a WORD plus an optional Turkish case suffix (`_CASE_SUFFIXES`), so the suffix is
+eaten with the word and a word that merely begins the same way is left alone. The
+anti-doubling guard from ADR-0178 read the phrase's ENDING, which "haberlerini" also defeated
+("Yapay Zeka haberlerini haberleri" was a real query in this run); it now reads the last
+word's stem. `_bare_subject` learned the suffixed fillers, so the plan gains the shape the
+owner actually wants — "Yapay Zeka haberleri".
+
+**Still open, reported not fixed** (the owner asked for a different shape and it is its own
+change): discovery still runs on the DEVICE's headless browser against DuckDuckGo and only
+the FETCH happens in the owner's Chrome — the owner watched Chromium open first and asked for
+the whole thing, search included, to happen in their own Chrome on Google, with the results
+opened as tabs. Also: half this run's fetch budget went to Turkish RSS items about penguins
+and electrons (0.0 relevance) — the ADR-0178 D Turkish-RSS supplement adds a feed's latest
+items without looking at the topic, and each wasted fetch costs a full page open plus OCR.
+
+**Tests**: `tests/unit/test_research_eligibility.py` (+15: every hint unit resolved against
+the fetch time, no fetch time means no date, the production page that was rejected for its
+date is now evidence, and a two-week-old hint is still outside the window),
+`tests/unit/test_research_plan.py` (+8: the suffixed terms, the guardrails that keep "sonuç"
+and "ajanda" intact, and the plan with no doubled news query). Gate: the research selection,
+939 tests.

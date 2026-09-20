@@ -12,6 +12,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Final
 
 from app.research.dates import RecencyWindow, default_window, parse_recency_window
 
@@ -55,6 +56,20 @@ _TERM_MAP: tuple[tuple[str, str], ...] = (
     ("önemli", "important"),
     ("son", "latest"),
 )
+
+#: A Turkish case suffix, optional, glued to a term before the word ends. The map used to
+#: match a term as a bare SUBSTRING, which cut two ways: "haberleri" inside "haberlerini"
+#: left the orphan "ni" in the query ("AI news ni", production 2026-09-20), and "son"
+#: inside "sonuç" turned it into "latestuç". Matching the term as a WORD plus one of these
+#: suffixes eats the suffix with the word and leaves anything else alone - "sonra" and
+#: "ajanda" end in letters no case suffix has.
+_CASE_SUFFIXES: Final[tuple[str, ...]] = (
+    "nden", "ndan", "nin", "nın", "nun", "nün", "den", "dan", "ten", "tan",
+    "nde", "nda", "yle", "yla", "in", "ın", "un", "ün", "yi", "yı", "yu", "yü",
+    "ni", "nı", "nu", "nü", "ye", "ya", "de", "da", "te", "ta", "ne", "na",
+    "i", "ı", "u", "ü", "e", "a",
+)  # fmt: skip
+_CASE_SUFFIX_RE: Final = "(?:" + "|".join(sorted(_CASE_SUFFIXES, key=len, reverse=True)) + ")?"
 
 # Words that carry no search value once the date phrase and verb are removed.
 _DROP_WORDS = frozenset({
@@ -148,6 +163,11 @@ _SUBJECT_TRAILING_FILLERS: tuple[str, ...] = tuple(
             "ile ilgili", "hakkındaki", "hakkında", "konusundaki", "konusunda",
             "son gelişmeler", "son gelişmeleri", "gelişmeler", "gelişmeleri", "gelişme",
             "son haberler", "son haberleri", "haberleri", "haberler",
+            # The owner says "... haberlerini araştır": the accusative rides along and the
+            # stripper did not know it, so the subject kept the whole news phrase and every
+            # template doubled it (production 2026-09-20).
+            "ile ilgili haberlerini", "son haberlerini", "haberlerini", "haberlerinden",
+            "gelişmelerini", "son gelişmelerini", "ile ilgili gelişmelerini",
         ),
         key=len,
         reverse=True,
@@ -186,8 +206,10 @@ def english_core_query(topic: str) -> str | None:
     lowered = " ".join(topic.lower().replace("’", "'").split())
     mapped = False
     for turkish, english in sorted(_TERM_MAP, key=lambda pair: -len(pair[0])):
-        if turkish in lowered:
-            lowered = lowered.replace(turkish, f" {english} ")
+        pattern = re.compile(rf"\b{re.escape(turkish)}{_CASE_SUFFIX_RE}\b")
+        replaced, count = pattern.subn(f" {english} ", lowered)
+        if count:
+            lowered = replaced
             mapped = True
     if not mapped:
         return None
@@ -225,7 +247,12 @@ def expand_queries(topic: str) -> tuple[str, ...]:
     trimmed = topic.strip()
     base = [trimmed]
     folded_topic = _fold_for_subject(trimmed)
-    if not any(folded_topic.endswith(_fold_for_subject(s)) for s in ("haberleri", "haberler")):
+    # The guard used to read the phrase's ENDING, so "haberlerini" (the same word with a
+    # case suffix) was not recognised and the plan spent a slot on "... haberlerini
+    # haberleri" (production 2026-09-20). The last word's STEM is what makes it a news
+    # phrase, whatever suffix rides on it.
+    last_word = folded_topic.split()[-1] if folded_topic.split() else ""
+    if not last_word.startswith("haber"):
         base.append(f"{trimmed} haberleri")
     if "gelisme" not in folded_topic:
         base.append(f"{trimmed} son gelişmeler")

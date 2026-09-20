@@ -4,7 +4,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.research.plan import DEFAULT_RECENCY_DAYS, build_plan
+from app.research.plan import (
+    DEFAULT_RECENCY_DAYS,
+    build_plan,
+    english_core_query,
+    expand_queries,
+)
 
 NOW = datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
 TOPIC = "Son üç gündeki yapay zekâ ajanlarıyla ilgili önemli gelişmeler"
@@ -206,3 +211,44 @@ def test_build_plan_respects_an_explicit_source_classes_override() -> None:
     classes (e.g. REST's discovery_source_classes) always gets exactly that."""
     plan = build_plan(OWNER_UTTERANCE, now=NOW, source_classes=("news", "technical"))
     assert plan.source_classes == ("news", "technical")
+
+
+# ---------------------------------------------- ADR-0182: the suffix the map ate around
+
+
+@pytest.mark.parametrize(
+    ("topic", "expected"),
+    [
+        # Production plan 59bdf846 (2026-09-20): the owner said "yapay zeka haberlerini
+        # araştır", the topic kept the accusative suffix, and the term map replaced the
+        # "haberleri" INSIDE "haberlerini" - leaving the orphan "ni" in a query that was
+        # then sent to a search engine: "AI news ni", and "AI news ni news" after it.
+        ("Yapay Zeka haberlerini", "AI news"),
+        ("yapay zeka haberleri", "AI news"),
+        ("yapay zeka ajanlarını", "AI agents"),
+        ("yapay zekâ gelişmelerini", "AI developments"),
+    ],
+)
+def test_a_turkish_suffix_is_eaten_with_the_word_not_left_behind(topic: str, expected: str) -> None:
+    assert english_core_query(topic) == expected
+
+
+@pytest.mark.parametrize("topic", ["sonuç raporu", "sonra gelen yapay zeka", "ajanda yapay zeka"])
+def test_a_word_that_merely_begins_like_a_term_is_left_alone(topic: str) -> None:
+    """The map's shortest entries ("son", "ajan") must not eat the start of another word:
+    a query with "latestuç" or "agentda" in it is worse than no English query at all."""
+    core = english_core_query(topic) or ""
+    for mangled in ("latestuc", "latestuç", "agentda", "agentda", " ni", "news ni"):
+        assert mangled not in core.lower(), (topic, core)
+
+
+def test_the_suffixed_news_word_does_not_earn_a_second_news_query() -> None:
+    """ "... haberlerini" is "... haberleri" with a suffix: the anti-doubling guard read the
+    ENDING and so did not recognise it, and the plan spent a slot on
+    "Yapay Zeka haberlerini haberleri" (production 2026-09-20)."""
+    queries = expand_queries("Yapay Zeka haberlerini")
+    for query in queries:
+        lowered = query.lower()
+        assert "haberlerini haberleri" not in lowered, queries
+        assert "news ni" not in lowered, queries
+        assert lowered.count("news") <= 1, queries

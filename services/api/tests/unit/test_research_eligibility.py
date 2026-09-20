@@ -13,6 +13,8 @@ with no date at all (which must never be silently treated as in-window).
 
 from __future__ import annotations
 
+import pytest
+
 from app.research.eligibility import (
     REJECTION_REASONS,
     EligibilityVerdict,
@@ -232,15 +234,56 @@ def test_explicit_iso_datetime_is_high_confidence() -> None:
     assert date == "2026-08-25"
 
 
-def test_turkish_relative_hint_is_medium_confidence() -> None:
+def test_turkish_relative_hint_is_medium_confidence_and_resolves_against_the_fetch() -> None:
+    """The hint used to grade confidence and return NO date, which made it useless: the
+    recency window needs a date, so every page whose only date signal was "3 gün önce" came
+    back date_uncertain and was rejected. The fetch time is known, so the date is computed.
+    """
     confidence, date = publication_date_confidence(
         published_at=None,
         published_hint="3 gün önce",
         retrieved_at="2026-09-04T09:00:00Z",
     )
     assert confidence == "medium"
-    # A relative hint alone doesn't carry an absolute date.
+    assert date == "2026-09-01"
+
+
+def test_a_relative_hint_with_no_fetch_time_still_has_no_date() -> None:
+    confidence, date = publication_date_confidence(
+        published_at=None,
+        published_hint="3 gün önce",
+        retrieved_at=None,
+    )
+    assert confidence == "medium"
     assert date is None
+
+
+@pytest.mark.parametrize(
+    ("hint", "expected"),
+    [
+        # Production 2026-09-20: the search results said "17 saat önce" / "39 dakika önce"
+        # and the hint pattern only understood DAYS, so a page published today was judged
+        # undated. The extractor on the other side (search_engines) always produced these.
+        ("17 saat önce", "2026-09-20"),
+        ("39 dakika önce", "2026-09-20"),
+        ("45 saniye önce", "2026-09-20"),
+        ("3 saat once", "2026-09-20"),
+        ("2 hours ago", "2026-09-20"),
+        ("30 minutes ago", "2026-09-20"),
+        ("1 hafta önce", "2026-09-13"),
+        ("2 weeks ago", "2026-09-06"),
+        ("dün", "2026-09-19"),
+        ("yesterday", "2026-09-19"),
+        ("bugün", "2026-09-20"),
+    ],
+)
+def test_every_unit_the_search_side_writes_is_understood(hint: str, expected: str) -> None:
+    confidence, date = publication_date_confidence(
+        published_at=None,
+        published_hint=hint,
+        retrieved_at="2026-09-20T12:12:00Z",
+    )
+    assert (confidence, date) == ("medium", expected), hint
 
 
 def test_english_relative_hint_is_medium_confidence() -> None:
@@ -934,3 +977,51 @@ def test_production_shaped_unrelated_ocr_page_stays_off_topic_after_the_fix() ->
         extraction_method="owner_browser_ocr",
     )
     assert score < 0.35
+
+
+def test_the_page_production_rejected_for_its_date_is_now_evidence() -> None:
+    """Production run 59bdf846 (2026-09-20, "yapay zeka haberleri"): eight pages were read
+    in the owner's own Chrome and every one was rejected. Three of them were ON TOPIC -
+    relevance 0.45, 0.48 and 0.70, all well over the 0.35 floor - and were thrown away as
+    `date_uncertain`, because an OCR-read page carries no meta date and the only date signal,
+    the search result's own "17 saat önce", was a unit the gate did not understand."""
+    verdict = evaluate_candidate(
+        title="Yapay zeka haberleri: yeni bir dil modeli duyuruldu",
+        excerpt=(
+            "Yapay zeka haberleri arasında öne çıkan gelişme: yeni bir yapay zeka dil "
+            "modeli duyuruldu. Haberlere göre model, yapay zeka ölçütlerinde daha küçük "
+            "boyutuna rağmen güçlü sonuçlar veriyor ve yapay zeka topluluğuna açıldı. "
+        )
+        * 3,
+        topic="yapay zeka haberleri",
+        url="https://huggingface.co/blog/LiquidAI/lfm25-dspark",
+        published_at=None,
+        published_hint="17 saat önce",
+        retrieved_at="2026-09-20T12:12:00Z",
+        window_start="2026-09-17T12:12:00Z",
+        window_end="2026-09-20T12:12:00Z",
+    )
+    assert verdict.recency == "in_window", verdict
+    assert verdict.date_confidence == "medium"
+    assert verdict.publication_date == "2026-09-20"
+    assert verdict.eligible is True, verdict
+
+
+def test_a_page_the_hint_puts_outside_the_window_is_still_rejected() -> None:
+    """The resolver must not make everything fresh: two weeks old is two weeks old."""
+    verdict = evaluate_candidate(
+        title="Yapay zeka haberleri: yeni bir dil modeli duyuruldu",
+        excerpt=(
+            "Yapay zeka haberleri arasında öne çıkan gelişme: yeni bir yapay zeka dil "
+            "modeli duyuruldu. Haberlere göre model güçlü sonuçlar veriyor. "
+        )
+        * 5,
+        topic="yapay zeka haberleri",
+        url="https://huggingface.co/blog/LiquidAI/lfm25-dspark",
+        published_hint="2 hafta önce",
+        retrieved_at="2026-09-20T12:12:00Z",
+        window_start="2026-09-17T12:12:00Z",
+        window_end="2026-09-20T12:12:00Z",
+    )
+    assert verdict.eligible is False
+    assert verdict.reason == "outside_recency_window", verdict

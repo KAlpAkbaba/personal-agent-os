@@ -35,7 +35,8 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Final
 
 from app.research.evidence import EXTRACTION_METHOD_OWNER_BROWSER_OCR, content_text
 from app.research.plan import english_core_query
@@ -612,12 +613,73 @@ _YEAR_ONLY_RE = re.compile(r"^\d{4}$")
 # byline reading "3 gün önce") -- this is a "medium" confidence signal
 # because it's owner/human-readable but not machine-precise (no exact time
 # of day, and "gün önce" is relative to an unstated retrieval moment).
+#: Every unit the SEARCH side writes into a hint (``search_engines._PUBLISHED_HINT_RE``),
+#: in days. The two sides used to disagree: the extractor produced "17 saat önce" and this
+#: pattern understood only DAYS, so a page published today was judged undated and rejected
+#: (production 2026-09-20: three on-topic pages, relevance 0.45-0.70, all `date_uncertain`).
+_HINT_UNITS_IN_DAYS: Final[dict[str, float]] = {
+    "saniye": 0.0,
+    "second": 0.0,
+    "seconds": 0.0,
+    "dakika": 0.0,
+    "minute": 0.0,
+    "minutes": 0.0,
+    "saat": 0.0,
+    "hour": 0.0,
+    "hours": 0.0,
+    "gun": 1.0,
+    "gün": 1.0,
+    "day": 1.0,
+    "days": 1.0,
+    "hafta": 7.0,
+    "week": 7.0,
+    "weeks": 7.0,
+    "ay": 30.0,
+    "month": 30.0,
+    "months": 30.0,
+    "yil": 365.0,
+    "yıl": 365.0,
+    "year": 365.0,
+    "years": 365.0,
+}
 _RELATIVE_HINT_RE = re.compile(
-    r"\b(\d+)\s*(gun|gün|day|days)\s*(once|önce|ago)\b"
-    r"|\b(dun|dün|yesterday)\b"
-    r"|\b(bugun|bugün|today)\b",
+    r"\b(?P<count>\d+)\s*(?P<unit>"
+    + "|".join(sorted(_HINT_UNITS_IN_DAYS, key=len, reverse=True))
+    + r")\s*(once|önce|ago)\b"
+    r"|\b(?P<yesterday>dun|dün|yesterday)\b"
+    r"|\b(?P<today>bugun|bugün|today)\b",
     re.IGNORECASE,
 )
+
+
+def resolve_relative_hint(hint: str, retrieved_at: str | None) -> str | None:
+    """ "17 saat önce" read at a known moment -> that moment's date, as ISO.
+
+    A hint used to grade confidence and return NO date, which made it useless: the recency
+    window needs a date, so a page whose only date signal was a relative phrase came back
+    ``date_uncertain`` and was rejected however on-topic it was. The fetch time IS known, so
+    the date is computed from it - still ``medium`` confidence, because the phrase is
+    human-readable and not machine-precise. Sub-day units ("saat", "dakika") land on the
+    retrieval date itself, which is what they mean.
+    """
+    match = _RELATIVE_HINT_RE.search(hint or "")
+    if match is None:
+        return None
+    moment = _parse_iso(retrieved_at or "")
+    if moment is None:
+        return None
+    if match.group("today"):
+        days = 0.0
+    elif match.group("yesterday"):
+        days = 1.0
+    else:
+        unit = (match.group("unit") or "").lower()
+        try:
+            count = int(match.group("count") or 0)
+        except ValueError:
+            return None
+        days = count * _HINT_UNITS_IN_DAYS.get(unit, 0.0)
+    return (moment.date() - timedelta(days=round(days))).isoformat()
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -669,11 +731,10 @@ def publication_date_confidence(
             return "low", published_at.strip()
 
     if published_hint and _RELATIVE_HINT_RE.search(published_hint):
-        # Relative hints don't carry an absolute date on their own -- the
-        # caller (or a higher-level resolver with access to `now`) is
-        # responsible for turning "3 gün önce" + retrieval time into a
-        # concrete date if one is needed. Here we only grade confidence.
-        return "medium", None
+        # The hint is resolved against the moment the page was FETCHED (which is the moment
+        # the phrase was written for). Without a retrieval time there is nothing to resolve
+        # it against, and the hint grades confidence only, as it always did.
+        return "medium", resolve_relative_hint(published_hint, retrieved_at)
 
     parsed_body_dates = [d.date() for raw in body_dates if (d := _parse_iso(raw)) is not None]
     if parsed_body_dates:
