@@ -66,7 +66,12 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_BRIEFING_QUEUED,
     EVENT_TYPE_EXPERIENCE_INGESTED,
     EVENT_TYPE_LEDGER_BACKFILL,
+    EVENT_TYPE_OWNER_INPUT_ACTIVE,
+    EVENT_TYPE_PRESENCE_STATE_CHANGED,
     EVENT_TYPE_RESEARCH_COMPLETED,
+    EVENT_TYPE_VOICE_SESSION_ATTACHED,
+    EVENT_TYPE_VOICE_SESSION_CLOSED,
+    EVENT_TYPE_VOICE_SESSION_CREATED,
     STATUS_COMPLETED,
     STATUS_FAILED,
 )
@@ -87,11 +92,28 @@ EPISODIC_KEY_PREFIX = "experience.episodic"
 SEMANTIC_KEY_PREFIX = "experience.semantic"
 
 #: ledger bookkeeping about itself — not "experience" worth remembering.
+#: ADR-0190: the machine's own heartbeat. Every one of these is a true and useful LEDGER
+#: event, and not one of them is a memory: that a voice session opened at 14:02 tells
+#: nobody anything about the owner, and there were 216 of them in sixteen days. Measured in
+#: production on 2026-09-20, these five were 765 of the 2316 episodic memories in the store
+#: — and they are what retrieval returned when the assistant reached for what it knows
+#: about its owner. The ledger keeps every one of them either way.
+TELEMETRY_EVENT_TYPES = frozenset(
+    {
+        EVENT_TYPE_PRESENCE_STATE_CHANGED,
+        EVENT_TYPE_VOICE_SESSION_CREATED,
+        EVENT_TYPE_VOICE_SESSION_ATTACHED,
+        EVENT_TYPE_VOICE_SESSION_CLOSED,
+        EVENT_TYPE_OWNER_INPUT_ACTIVE,
+    }
+)
+
 EXCLUDED_EVENT_TYPES = frozenset(
     {
         EVENT_TYPE_LEDGER_BACKFILL,
         EVENT_TYPE_BRIEFING_QUEUED,
         EVENT_TYPE_BRIEFING_DELIVERED,
+        *TELEMETRY_EVENT_TYPES,
         # B18 req 71: this engine's OWN pass receipt. Without it every pass would write a
         # row saying it ran and the next pass would remember that it ran - a system
         # learning from the record of its own learning, corroborating itself for ever.

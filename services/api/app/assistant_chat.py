@@ -51,6 +51,8 @@ RETRY_DELAY_S: Final = 1.5
 
 ERROR_CHAT_UNAVAILABLE = "chat_unavailable"
 ERROR_CHAT_MODEL_RETIRED = "chat_model_retired"
+#: ADR-0190: how much of the owner-memory block the system prompt carries.
+MAX_ABOUT_OWNER_CHARS: Final = 1200
 ERROR_CHAT_BUSY = "chat_busy"
 ERROR_CHAT_REFUSED = "chat_refused"
 
@@ -101,7 +103,12 @@ class ChatProvider(Protocol):
     def configured(self) -> bool: ...
 
     def answer(
-        self, question: str, *, history: list[dict[str, str]], now_tr: str
+        self,
+        question: str,
+        *,
+        history: list[dict[str, str]],
+        now_tr: str,
+        about_owner: str = "",
     ) -> ChatAnswer: ...
 
 
@@ -142,17 +149,38 @@ class AnthropicChatProvider:
     def configured(self) -> bool:
         return bool(self._api_key)
 
-    def request(self, question: str, *, history: list[dict[str, str]], now_tr: str):
+    def request(
+        self,
+        question: str,
+        *,
+        history: list[dict[str, str]],
+        now_tr: str,
+        about_owner: str = "",
+    ):
         messages = [
             *({"role": m["role"], "content": m["content"]} for m in history),
             # The clock rides with the question, not in the system prompt: a prompt that
             # changed every minute could never be cached, should it ever grow long enough.
             {"role": "user", "content": f"[Şu an: {now_tr}]\n{question}"},
         ]
+        # ADR-0190: what this system knows about its owner rides in the SYSTEM prompt, not
+        # in the question - it is context, never something the owner said, and the model
+        # must not be able to read it back as their words.
+        system = SYSTEM_PROMPT_TR
+        if about_owner.strip():
+            known = about_owner.strip()[:MAX_ABOUT_OWNER_CHARS]
+            system = "\n\n".join(
+                (
+                    SYSTEM_PROMPT_TR,
+                    "Sahibin hakkında bildiklerin (kendi kayıtlarından; "
+                    "sahibin bu turda söylediği değil):",
+                    known,
+                )
+            )
         body = {
             "model": self._model,
             "max_tokens": MAX_TOKENS,
-            "system": SYSTEM_PROMPT_TR,
+            "system": system,
             "messages": messages,
         }
         headers = {
@@ -162,10 +190,19 @@ class AnthropicChatProvider:
         }
         return f"{self._base_url}/v1/messages", headers, body
 
-    def answer(self, question: str, *, history: list[dict[str, str]], now_tr: str) -> ChatAnswer:
+    def answer(
+        self,
+        question: str,
+        *,
+        history: list[dict[str, str]],
+        now_tr: str,
+        about_owner: str = "",
+    ) -> ChatAnswer:
         if not self.configured:
             return ChatAnswer(SPEECH_NOT_CONFIGURED, False, ERROR_CHAT_UNAVAILABLE)
-        url, headers, body = self.request(question, history=history, now_tr=now_tr)
+        url, headers, body = self.request(
+            question, history=history, now_tr=now_tr, about_owner=about_owner
+        )
         status, payload = 0, {}
         for attempt in (1, 2):
             try:

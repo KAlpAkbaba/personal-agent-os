@@ -122,11 +122,20 @@ class _FakeChat:
 
     def __init__(self) -> None:
         self.asked: list[tuple[str, list[dict[str, str]]]] = []
+        #: ADR-0190: what the caller told it about the owner, so a test can see whether
+        #: the memory block travelled.
+        self.about_owner: list[str] = []
 
     def answer(
-        self, question: str, *, history: list[dict[str, str]], now_tr: str
+        self,
+        question: str,
+        *,
+        history: list[dict[str, str]],
+        now_tr: str,
+        about_owner: str = "",
     ) -> chat.ChatAnswer:
         self.asked.append((question, history))
+        self.about_owner.append(about_owner)
         return chat.ChatAnswer(f"Yanıt: {question}", True, None, "fake")
 
 

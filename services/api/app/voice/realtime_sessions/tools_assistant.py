@@ -20,10 +20,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from app.logging import get_logger
 from app.voice import capabilities as caps
 
 if TYPE_CHECKING:  # pragma: no cover - types only
     from app.voice.realtime_sessions.tools import ToolContext, ToolRegistry
+
+logger = get_logger("app.voice.realtime_sessions.tools_assistant")
 
 TOOL_NAME = "assistant.capabilities"
 
@@ -124,6 +127,27 @@ CHAT_PARAMETERS: dict[str, Any] = {
 }
 
 
+def _owner_memory_block(ctx: ToolContext) -> str:
+    """What this system knows about its owner, as the persona block already renders it.
+
+    Best-effort and never raising, for the same reason the realtime path's own builder is
+    (``app.voice.realtime_sessions.service._memory_block``): an owner whose conversation
+    stopped working because a preference could not be retrieved would rightly think the
+    memory feature had made things worse.
+    """
+    db = getattr(ctx, "db", None)
+    runtime = ctx.live.get("memory_runtime") if isinstance(ctx.live, dict) else None
+    if db is None or runtime is None:
+        return ""
+    try:
+        from app.memory.injection import select_for_instruction
+
+        return select_for_instruction(db, runtime.embedder, now=ctx.now).as_block()
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("assistant_chat_memory_failed", error=f"{type(exc).__name__}: {exc}")
+        return ""
+
+
 def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ADR-0173 addendum: free conversation in the local mode. The question is the owner's own
     sentence from THIS turn's record (set only in a local session, only when the router
@@ -147,7 +171,14 @@ def assistant_chat(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     provider = ctx.live.get("chat_provider") or chat.build_chat_provider(ctx.live.get("settings"))
     session = str(ctx.session_id)
     now_tr = ctx.now.astimezone().strftime("%d.%m.%Y %H:%M")
-    answer = provider.answer(question, history=chat.MEMORY.history(session), now_tr=now_tr)
+    answer = provider.answer(
+        question,
+        history=chat.MEMORY.history(session),
+        now_tr=now_tr,
+        # ADR-0190: the owner-memory block reached the PAID model's persona and nothing
+        # else, so the local mode's own conversation did not know who it was talking to.
+        about_owner=_owner_memory_block(ctx),
+    )
     if answer.ok:
         chat.MEMORY.remember(session, question, answer.speech)
     return {

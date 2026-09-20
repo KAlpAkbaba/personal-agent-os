@@ -14353,3 +14353,46 @@ translated and kept beside the original, a Turkish one is never sent to a model,
 means no change and no false claim, the spoken answer prefers the translation and says it
 once, a Turkish report never mentions translation, the provider is chosen from the key, and
 the page text is sent as data with the injection rule in the prompt).
+
+## ADR-0190 — The memory was a log, and the conversation could not read it (2026-09-20)
+
+Measured in production after sixteen days of use, when the owner asked to look at memory:
+**2316 episodic memories**, of which 216 were "Sesli oturum oluşturuldu.", 387 "owner
+presence changed to …", 172 "Sahip klavye/fare kullandı", 136 "Sesli oturum kapandı." —
+765 rows of machine heartbeat. And **13 durable rows**, every one of them "Araştırma
+tamamlandı: <konu>". Not one fact about the owner: no preference, no project, no procedure.
+
+**A. Memory is what the owner would want recalled; a heartbeat is not.** The Experience
+Engine turns EVERY ledger event into an episodic memory except four named types, so a
+subsystem that logs well fills memory fastest. Five event types are now named as telemetry
+and skipped (`TELEMETRY_EVENT_TYPES`): presence state changes, the three voice-session
+lifecycle events, and owner-input-active. Each of them is a true and useful LEDGER event and
+the ledger keeps them all; none of them tells anyone anything about the owner, and they are
+what retrieval returned when the assistant reached for what it knows about them. What the
+owner DID — an action receipt, a finished research, a mail sent — is untouched, and the four
+older exclusions stay.
+
+**B. The conversation could not read the memory.** The owner-memory block was built in one
+place only: while minting a realtime credential, for the PAID model's persona. The local
+mode (ADR-0173) has no persona and no model instruction — a sentence the router cannot place
+goes to `assistant.chat`, which received the question and the last few turns of that session
+and nothing else. It did not know the owner's name, their preferences, or anything the system
+had ever recorded. `assistant_chat` now builds the same block through the same
+`select_for_instruction`, best-effort and never raising (the realtime path's own rule: a
+preference that cannot be retrieved must not cost the conversation), and the provider carries
+it in the SYSTEM prompt — context, never something the owner said, so the model can never
+read it back as their words. Bounded at 1200 characters.
+
+**Still open, and the reason this is only half the work**: what fills memory now is what the
+system DID, not what it learned. Preference/project/procedural rows are still empty, and the
+candidate→durable ladder needs evidence on the SAME key, which one-off episodic events never
+produce. That is the next piece: extraction (a repeated behaviour is a preference) and a
+merge on meaning rather than a new row per event. The telemetry already in the store is left
+where it is for now; the ledger holds the originals, and deleting 765 rows from the owner's
+own memory is a decision to take with them, not while they are asleep.
+
+**Tests**: `tests/unit/test_experience_memory_is_not_a_log.py` (new, 9: the five measured
+telemetry types are excluded, what the owner did is not, the four older exclusions stay),
+`tests/unit/test_local_chat_knows_the_owner.py` (new, 3: the block reaches the chat, an empty
+block changes nothing, and it rides in the system prompt rather than the question). Gate: the
+chat/memory/experience/voice selection, 1321 tests.
