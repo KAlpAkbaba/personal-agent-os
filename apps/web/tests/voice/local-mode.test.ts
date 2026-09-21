@@ -284,6 +284,81 @@ describe("ADR-0198: dispatchGesture — same tool plumbing as an utterance, but 
   });
 });
 
+describe("ADR-0199: beginPointerSession/endPointerSession — the pinch-mouse's own tool, no words, never spoken", () => {
+  it("beginPointerSession posts operator.pointer_session {action:'begin'} with NO events call first, and returns the tool's status/stream_token", async () => {
+    const { core, synthesis, mode } = setup({
+      toolResponses: {
+        "operator.pointer_session": {
+          result: { status: "open", stream_token: "tok-xyz", expires_at: "2026-09-22T00:05:00Z", speech: "Fare akışını açtım efendim." },
+        },
+      },
+    });
+    await mode.start();
+    const result = await mode.beginPointerSession();
+    expect(posts(core, "/events")).toHaveLength(0); // no utterance, no words to read
+    const calls = posts(core, "/tool-calls");
+    expect(calls).toHaveLength(1);
+    const body = calls[0].body as { call_id: string; name: string; arguments: Record<string, unknown> };
+    expect(body.name).toBe("operator.pointer_session");
+    expect(body.arguments).toEqual({ action: "begin" });
+    expect(body.call_id.startsWith(LOCAL_CALL_ID_PREFIX)).toBe(true);
+    expect(result).toEqual({ status: "open", stream_token: "tok-xyz" });
+    // The whole point: never narrated aloud, even though the tool's result carries speech.
+    expect(synthesis.texts()).toEqual([]);
+    expect(mode.getSnapshot().state).not.toBe("speaking");
+  });
+
+  it("beginPointerSession returns null with no active session (silent no-op)", async () => {
+    const { core, mode } = setup();
+    const result = await mode.beginPointerSession();
+    expect(result).toBeNull();
+    expect(posts(core, "/tool-calls")).toHaveLength(0);
+  });
+
+  it("beginPointerSession returns null and logs on a failed tool-calls request, never throws", async () => {
+    const { core, mode } = setup();
+    await mode.start();
+    core.failNext("/tool-calls", 500);
+    const result = await mode.beginPointerSession();
+    expect(result).toBeNull();
+    expect(mode.getSnapshot().log.some((line) => line.includes("operator.pointer_session begin.failed"))).toBe(true);
+  });
+
+  it("beginPointerSession returns null when the tool refuses (status is not 'open')", async () => {
+    const { mode } = setup({
+      toolResponses: { "operator.pointer_session": { result: { status: "refused" } } },
+    });
+    await mode.start();
+    const result = await mode.beginPointerSession();
+    expect(result).toEqual({ status: "refused", stream_token: undefined });
+  });
+
+  it("endPointerSession posts operator.pointer_session {action:'end'}, never spoken, and is a no-op with no active session", async () => {
+    const { core, synthesis, mode } = setup({
+      toolResponses: { "operator.pointer_session": { result: { speech: "Fare akışını kapattım efendim." } } },
+    });
+    await mode.endPointerSession(); // no session yet: silent no-op
+    expect(posts(core, "/tool-calls")).toHaveLength(0);
+
+    await mode.start();
+    await mode.endPointerSession();
+    const calls = posts(core, "/tool-calls");
+    expect(calls).toHaveLength(1);
+    const body = calls[0].body as { name: string; arguments: Record<string, unknown> };
+    expect(body.name).toBe("operator.pointer_session");
+    expect(body.arguments).toEqual({ action: "end" });
+    expect(synthesis.texts()).toEqual([]);
+  });
+
+  it("endPointerSession never throws even when the request fails", async () => {
+    const { core, mode } = setup();
+    await mode.start();
+    core.failNext("/tool-calls", 500);
+    await expect(mode.endPointerSession()).resolves.toBeUndefined();
+    expect(mode.getSnapshot().log.some((line) => line.includes("operator.pointer_session end.failed"))).toBe(true);
+  });
+});
+
 describe("Yerel mod: listening, speaking and barging in", () => {
   it("stops the recogniser while the assistant speaks and restarts it when the speech ends", async () => {
     const { synthesis, recognition, mode } = setup({

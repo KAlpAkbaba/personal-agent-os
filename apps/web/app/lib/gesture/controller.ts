@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * El hareketi kumandası (ADR-0198, Stage 1): owns the owner's "El kumandası" toggle (a
- * per-browser preference, default OFF, remembered in `localStorage`) and the gate that
- * decides whether the tracker should actually be running right now — ALL THREE of:
+ * El hareketi kumandası (ADR-0198, Stage 1; ADR-0199, Stage 2): owns the owner's "El
+ * kumandası" toggle (a per-browser preference, default OFF, remembered in `localStorage`)
+ * and the gate that decides whether the tracker should actually be running right now —
+ * ALL THREE of:
  *   1. the eye is ACTIVE (the owner already turned the camera on for its own reason);
  *   2. the toggle is on;
  *   3. a local-mode voice session exists (a gesture has no session of its own to post
@@ -15,13 +16,15 @@
  * in the core UI, which calls it from a `useEffect` on the eye/voice snapshots it already
  * subscribes to — no separate subscription machinery duplicated here).
  *
- * Deliberately NOT itself a React hook or component: `GestureController` is plain,
- * synchronous-except-for-`start()` state, testable the same way `EyeStore`/`LocalVoiceMode`
- * are (`useSyncExternalStore` over `subscribe`/`getSnapshot` in the real UI).
+ * Stage 2's pointer events (`mouse_*`, `drag_*`, `left_click`, `right_click`,
+ * `types.ts`'s `isPointerGestureName`) are routed to `deps.pointerClient` instead of
+ * `deps.dispatchGesture` — they are never posted to the server as a `gesture` client
+ * event (see `types.ts`'s module docstring); `pointer.ts`'s `PointerStreamClient` speaks
+ * the pointer WebSocket directly.
  */
 
+import { isPointerGestureName, type GestureEvent, type GestureName } from "./types";
 import type { FrameMeasure } from "./recognizer";
-import type { GestureEvent, GestureName } from "./types";
 import type { GestureTracker } from "./tracker";
 
 const STORAGE_KEY = "pagentos.gesture.enabled";
@@ -55,6 +58,11 @@ export function browserGestureToggleStorage(): GestureToggleStorage {
   };
 }
 
+/** The Stage 2 pointer-event sink — `pointer.ts`'s `PointerStreamClient` in production, a
+ * recording fake in tests. Not `PointerStreamClient` itself (a narrower type) so a test
+ * fake never has to stub the class's storage/socket/timer machinery. */
+export type PointerEventSink = { handleEvent: (event: GestureEvent) => void };
+
 export type GestureControllerDeps = {
   /** `PerceptionSession#attachVideoConsumer` — the ONLY source of a video element; this
    * controller never opens a camera of its own. */
@@ -63,8 +71,11 @@ export type GestureControllerDeps = {
   isEyeActive: () => boolean;
   /** True while a local-mode session exists (has a `sessionId`) right now. */
   hasLocalSession: () => boolean;
-  /** Issues the gesture's tool the same way a spoken command would, silently. */
+  /** Issues the gesture's tool the same way a spoken command would, silently. Stage 1
+   * gestures only — Stage 2's pointer events never reach this (see `pointerClient`). */
   dispatchGesture: (gesture: string) => Promise<void>;
+  /** ADR-0199 Stage 2: where `mouse_*`/`drag_*`/`*_click` events go instead. */
+  pointerClient: PointerEventSink;
   /** Builds a tracker bound to `onGesture`/`onStats`/`onError`; injectable for tests. */
   createTracker: (handlers: {
     onGesture: (event: GestureEvent) => void;
@@ -196,6 +207,11 @@ export class GestureController {
 
   private onGesture(event: GestureEvent): void {
     this.patch({ lastGesture: event.name, lastGestureAtMs: this.now() });
+    if (isPointerGestureName(event.name)) {
+      // ADR-0199 Stage 2: never the `gesture` relay — the pointer WebSocket instead.
+      this.deps.pointerClient.handleEvent(event);
+      return;
+    }
     void this.deps.dispatchGesture(event.name);
   }
 

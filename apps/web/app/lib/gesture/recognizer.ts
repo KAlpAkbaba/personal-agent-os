@@ -47,6 +47,40 @@
  * `recognizer.test.ts` pins both conventions with synthetic sequences whose RAW (pre-mirror)
  * coordinates move the "wrong" way on purpose, so a future edit that drops the mirror step
  * fails loudly rather than silently reversing every left/right and every cw/ccw gesture.
+ *
+ * ## Stage 2 (ADR-0199): the pinch-mouse and the fist-drag
+ *
+ * `updatePointerState()` (near the bottom) adds the pinch-mouse and the fist-drag on top of
+ * everything above, per hand, independent of the swipe/rotate/spread machinery. Both ride
+ * hysteresis this file already computes:
+ * - MOUSE MODE rides the exact same "ring" pinch `pinch_start`/`pinch_release` already
+ *   detects (thumb-index `pinchRatio()` <= `tightPinchOnRatio` with `openness()` >=
+ *   `pinchMinOpenness`) — held continuously for `mouseStartHoldMs` → `mouse_start`; the
+ *   palm's frame-to-frame displacement (dead-zoned) → `mouse_move`; the ring opening back to
+ *   `tightPinchOffRatio` → `mouse_end`.
+ * - A CLICK is a NESTED, deeper pinch inside mouse mode: the ratio dropping to
+ *   `tightPinchOnRatio * clickPinchRatioFrac` ("tips pressed") and back up is a `left_click`
+ *   when released within `leftClickMaxMs`, a `right_click` when held at least
+ *   `rightClickMinMs` before releasing (a release between the two is ambiguous and
+ *   swallowed on purpose — an owner's brief, uncertain wobble should not fire either
+ *   button). Resolved BEFORE `mouse_end` on the same frame, so a fast full-open that skips
+ *   past both thresholds in one frame still counts as a click, not a dropped one (owner,
+ *   second trial: "hızlı yaptığımda da algılasın").
+ * - DRAG rides the same openness `fistMaxOpenness` fist detection: continuously fist for
+ *   `dragStartHoldMs` → `drag_start`; palm displacement (dead-zoned) → `drag_move`; opening
+ *   past `fistMaxOpenness` → `drag_end`. Mouse mode and drag can never both be active on one
+ *   hand — `pinchMinOpenness` (0.35) sits ABOVE `fistMaxOpenness` (0.34) on purpose (see the
+ *   options' own comment), so a fist never also reads as a ring pinch.
+ *
+ * Stage 2's events are gated by the SAME engagement gate (`isArmed`) as everything else —
+ * and, per the task brief, mouse/drag mode EXTENDS it on every start/move/click/end, so a
+ * held pinch or fist never has to fight the gate's 4 s window mid-gesture — but are
+ * deliberately NOT run through `emit()`'s shared `cooldownMs`/`returnSuppressMs`, for the
+ * same reason `pinch_start`/`pinch_release` already are not (see `RecognizerOptions`
+ * docstring): they are edge-triggered continuous state, not one-shot discrete commands, and
+ * the owner's own click timing (350 ms / 600 ms) is far tighter than the swipe family's
+ * shared 450 ms cooldown would allow — a `left_click` following a `mouse_start` by 200 ms
+ * must never be swallowed by the OTHER family's cooldown timer.
  */
 
 import { type GestureEvent, type GestureName, type HandednessLabel, type Point, type TrackedFrame } from "./types";
@@ -165,7 +199,10 @@ export type RecognizerOptions = {
   looseIndexPinchMinRatio: number;
   looseIndexPinchMaxRatio: number;
   rotateMinOpenness: number;
-  /** A TIGHT pinch needs the other fingers more open than a fist (0.42 vs 0.29 measured). */
+  /** A TIGHT pinch needs the other fingers more open than a fist (0.42 vs 0.29 measured).
+   * Deliberately ABOVE `fistMaxOpenness` (0.35 > 0.34): the one knob that keeps mouse mode
+   * (Stage 2, rides this same threshold) and drag (rides `fistMaxOpenness`) from ever both
+   * reading true on the same hand at once. */
   pinchMinOpenness: number;
   /** A fist (stage 2: the left button held) is a hand this closed. */
   fistMaxOpenness: number;
@@ -196,15 +233,18 @@ export type RecognizerOptions = {
   /** The merge rule: two hands last seen closer than this that become ONE hand for
    * `gatherHoldMs` are a gather (MediaPipe merges touching hands). */
   gatherMergeFrac: number;
-  /** thumb-index ratio at/under which a TIGHT pinch begins (`pinch_start`). */
+  /** thumb-index ratio at/under which a TIGHT pinch begins (`pinch_start`); also the
+   * "ring" pose Stage 2's mouse mode arms on (see the module docstring). */
   tightPinchOnRatio: number;
   /** thumb-index ratio at/over which a TIGHT pinch ends (`pinch_release`); hysteresis band
-   * above `tightPinchOnRatio` so a ratio hovering near one threshold cannot flicker. */
+   * above `tightPinchOnRatio` so a ratio hovering near one threshold cannot flicker. Also
+   * mouse mode's own `mouse_end` threshold — the ring opening all the way. */
   tightPinchOffRatio: number;
   /** Shared cooldown after any swipe/rotate/spread emission — the task brief's "one gesture
-   * at a time" rule. Pinch start/release are edge-triggered hysteresis, not debounced
-   * discrete actions, and are deliberately NOT subject to this cooldown: Stage 2's
-   * pinch-mouse needs the pinch state itself, not a throttled pulse of it. */
+   * at a time" rule. Pinch start/release, and Stage 2's mouse/drag events, are edge-triggered
+   * hysteresis, not debounced discrete actions, and are deliberately NOT subject to this
+   * cooldown: Stage 2's pinch-mouse needs the pinch state itself, not a throttled pulse of
+   * it, and the click family's own timing is tighter than this window. */
   cooldownMs: number;
   /**
    * After a swipe or a rotate, the OPPOSITE gesture within this window is the hand
@@ -215,6 +255,35 @@ export type RecognizerOptions = {
   returnSuppressMs: number;
   /** How far back frame history is kept, for all windows above; must exceed every *MaxMs. */
   historyMs: number;
+
+  // ------------------------------------------------------------- ADR-0199, Stage 2
+
+  /** The "ring" pinch (mouse mode's arming pose, `tightPinchOnRatio`/`pinchMinOpenness`)
+   * held continuously this long → `mouse_start`. Owner's brief: "after 150 ms mouse_start". */
+  mouseStartHoldMs: number;
+  /** `mouse_move`'s dead zone, in the same FRAME units as `swipeMinDistanceFrac` (frame
+   * width/height = 1.0) — a palm displacement smaller than this between sends is jitter,
+   * not an intended move, and is folded into the NEXT frame's delta rather than dropped
+   * (a slow drift still eventually crosses the zone and moves the cursor). Owner's brief:
+   * "dead zone 0.005". */
+  mouseMoveDeadZone: number;
+  /** The click's nested, deeper pinch: `pinchRatio() <= tightPinchOnRatio * clickPinchRatioFrac`
+   * ("tips pressed", owner's brief: "≤ 0.25 of the ring's own ratio"). A fraction of
+   * `tightPinchOnRatio` rather than a fixed ratio so it retunes itself if the ring
+   * threshold ever does. */
+  clickPinchRatioFrac: number;
+  /** The click released within this long after pressing → `left_click`. */
+  leftClickMaxMs: number;
+  /** The click held at least this long before releasing → `right_click`. A release between
+   * `leftClickMaxMs` and `rightClickMinMs` is ambiguous on purpose and fires neither. */
+  rightClickMinMs: number;
+  /** A FIST (`openness() <= fistMaxOpenness`) held continuously this long → `drag_start`.
+   * Owner's brief: "held 150 ms → drag_start" (same figure as `mouseStartHoldMs` — one
+   * "how long is a deliberate hold" knob for both poses, not two to retune separately). */
+  dragStartHoldMs: number;
+  /** `drag_move`'s dead zone — see `mouseMoveDeadZone`; the same figure by default (no
+   * reason in the brief to tune the drag differently from the mouse). */
+  dragMoveDeadZone: number;
 };
 
 /**
@@ -260,6 +329,14 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   cooldownMs: 450,
   returnSuppressMs: 1_500,
   historyMs: 1_500,
+  // ADR-0199, Stage 2 — see RecognizerOptions' own comments for the reasoning per knob.
+  mouseStartHoldMs: 150,
+  mouseMoveDeadZone: 0.005,
+  clickPinchRatioFrac: 0.25,
+  leftClickMaxMs: 350,
+  rightClickMinMs: 600,
+  dragStartHoldMs: 150,
+  dragMoveDeadZone: 0.005,
 };
 
 /** The gesture a hand makes on its way BACK from `name`, or null for the rest. */
@@ -291,6 +368,7 @@ export function oppositeOf(name: GestureName): GestureName | null {
 type Sample = { t_ms: number; m: Point[]; palm: Point; open: boolean; loosePinch: boolean; angle: number };
 
 type PinchState = "idle" | "pinched";
+type ClickState = "idle" | "pressed";
 
 type HandTrack = {
   buffer: Sample[];
@@ -303,10 +381,44 @@ type HandTrack = {
   pinchState: PinchState;
   /** `t_ms` since this hand has been open, upright and still - the arming pose - or null. */
   stillSince: number | null;
+
+  // ------------------------------------------------------------- ADR-0199, Stage 2
+  /** `t_ms` since `pinchState` last became (and has stayed) `"pinched"`, or `null` — the
+   * mouse mode hold-timer's anchor. */
+  mouseRingSince: number | null;
+  /** `true` once `mouse_start` has fired for this hand's current ring pinch. */
+  mouseActive: boolean;
+  /** The mirrored palm position `mouse_move`'s next delta is measured from. */
+  mouseLastPalm: Point | null;
+  /** The click's own nested hysteresis, live only while `mouseActive`. */
+  clickState: ClickState;
+  clickStartT: number | null;
+  /** `t_ms` since this hand became continuously a fist (`openness() <= fistMaxOpenness`),
+   * or `null` — the drag hold-timer's anchor. */
+  fistSince: number | null;
+  /** `true` once `drag_start` has fired for this hand's current fist. */
+  dragActive: boolean;
+  /** The mirrored palm position `drag_move`'s next delta is measured from. */
+  dragLastPalm: Point | null;
 };
 
 function emptyTrack(): HandTrack {
-  return { buffer: [], openSince: null, looseSince: null, rotationDeg: 0, pinchState: "idle", stillSince: null };
+  return {
+    buffer: [],
+    openSince: null,
+    looseSince: null,
+    rotationDeg: 0,
+    pinchState: "idle",
+    stillSince: null,
+    mouseRingSince: null,
+    mouseActive: false,
+    mouseLastPalm: null,
+    clickState: "idle",
+    clickStartT: null,
+    fistSince: null,
+    dragActive: false,
+    dragLastPalm: null,
+  };
 }
 
 // -------------------------------------------------------------- recognizer
@@ -336,7 +448,8 @@ export class GestureRecognizer {
   }
 
   /** Feed one tracker tick; returns the gesture events (usually 0 or 1 non-pinch event, plus
-   * at most one pinch_start/pinch_release per hand) this tick produced. */
+   * at most one pinch_start/pinch_release per hand, plus Stage 2's pointer events) this tick
+   * produced. */
   ingest(frame: TrackedFrame): GestureEvent[] {
     const events: GestureEvent[] = [];
     const seen = new Set<HandednessLabel>();
@@ -375,6 +488,15 @@ export class GestureRecognizer {
     }
     // A hand that left the frame stops accumulating (its track simply is not updated again);
     // Stage 1 does not need to synthesize a pinch_release for a hand that vanished mid-pinch.
+
+    // ADR-0199, Stage 2: the pinch-mouse and the fist-drag, per hand, independent of the
+    // one-hand/two-hand branch below (like the pinch hysteresis above) - see the module
+    // docstring's "Stage 2" section for the full state machine.
+    for (const hand of frame.hands) {
+      const track = this.tracks.get(hand.handedness);
+      if (!track) continue;
+      this.updatePointerState(track, frame.t_ms, events);
+    }
 
     // "One gesture at a time": at most one non-pinch (swipe/rotate/spread) event per tick,
     // spread checked first (it needs both hands and is the most specific precondition).
@@ -449,6 +571,16 @@ export class GestureRecognizer {
     this.lastEmit = { name, t_ms: now };
     this.extendArmed(now);
     return { name, t_ms: now };
+  }
+
+  /** Like `emit()`, but for Stage 2's pointer events: armed-gated only, never
+   * cooldown/return-suppressed (module docstring). Still extends the engagement gate on
+   * every call - "mouse/drag mode keeps the gate armed while active" (task brief) - so a
+   * long drag or a slow mouse move never has to fight the gate's own timeout. */
+  private emitPointer(name: GestureName, now: number, dx?: number, dy?: number): GestureEvent | null {
+    if (!this.isArmed(now)) return null;
+    this.extendArmed(now);
+    return dx === undefined || dy === undefined ? { name, t_ms: now } : { name, t_ms: now, dx, dy };
   }
 
   private updateTrack(track: HandTrack, raw: readonly Point[], t_ms: number): void {
@@ -585,6 +717,108 @@ export class GestureRecognizer {
     }
     this.closeSince = null;
     return null;
+  }
+
+  /**
+   * ADR-0199, Stage 2: the pinch-mouse and the fist-drag for ONE hand, for the current
+   * frame. See the module docstring's "Stage 2" section for the full state machine; this
+   * method is the code for it. Click resolution runs BEFORE the ring-open check so a fast
+   * full release still resolves as a click on the same frame it ends mouse mode.
+   */
+  private updatePointerState(track: HandTrack, now: number, events: GestureEvent[]): void {
+    const current = track.buffer.at(-1);
+    if (!current) return;
+
+    // ---- the ring pinch -> mouse mode (rides pinch_start/pinch_release's own hysteresis).
+    if (track.pinchState === "pinched") {
+      track.mouseRingSince ??= now;
+    } else {
+      track.mouseRingSince = null;
+    }
+
+    if (track.mouseActive) {
+      // The nested, deeper pinch: a click.
+      const ratio = pinchRatio(current.m);
+      const pressed = ratio <= this.opts.tightPinchOnRatio * this.opts.clickPinchRatioFrac;
+      if (track.clickState === "idle" && pressed) {
+        track.clickState = "pressed";
+        track.clickStartT = now;
+      } else if (track.clickState === "pressed" && !pressed) {
+        const heldMs = now - (track.clickStartT ?? now);
+        track.clickState = "idle";
+        track.clickStartT = null;
+        if (heldMs < this.opts.leftClickMaxMs) {
+          const e = this.emitPointer("left_click", now);
+          if (e) events.push(e);
+        } else if (heldMs >= this.opts.rightClickMinMs) {
+          const e = this.emitPointer("right_click", now);
+          if (e) events.push(e);
+        }
+        // Between the two windows: ambiguous, deliberately neither (see the module docstring).
+      }
+
+      if (track.mouseLastPalm) {
+        const dx = current.palm.x - track.mouseLastPalm.x;
+        const dy = current.palm.y - track.mouseLastPalm.y;
+        if (Math.hypot(dx, dy) >= this.opts.mouseMoveDeadZone) {
+          const e = this.emitPointer("mouse_move", now, dx, dy);
+          if (e) {
+            events.push(e);
+            track.mouseLastPalm = current.palm;
+          }
+        }
+      }
+
+      if (track.mouseRingSince === null) {
+        // The ring opened all the way: mouse mode ends.
+        track.mouseActive = false;
+        track.mouseLastPalm = null;
+        track.clickState = "idle";
+        track.clickStartT = null;
+        const e = this.emitPointer("mouse_end", now);
+        if (e) events.push(e);
+      }
+    } else if (track.mouseRingSince !== null && now - track.mouseRingSince >= this.opts.mouseStartHoldMs) {
+      const e = this.emitPointer("mouse_start", now);
+      if (e) {
+        events.push(e);
+        track.mouseActive = true;
+        track.mouseLastPalm = current.palm;
+      }
+    }
+
+    // ---- the fist -> drag.
+    const openNow = openness(current.m);
+    const isFist = openNow <= this.opts.fistMaxOpenness;
+    if (isFist) track.fistSince ??= now;
+    else track.fistSince = null;
+
+    if (track.dragActive) {
+      if (track.dragLastPalm) {
+        const dx = current.palm.x - track.dragLastPalm.x;
+        const dy = current.palm.y - track.dragLastPalm.y;
+        if (Math.hypot(dx, dy) >= this.opts.dragMoveDeadZone) {
+          const e = this.emitPointer("drag_move", now, dx, dy);
+          if (e) {
+            events.push(e);
+            track.dragLastPalm = current.palm;
+          }
+        }
+      }
+      if (track.fistSince === null) {
+        track.dragActive = false;
+        track.dragLastPalm = null;
+        const e = this.emitPointer("drag_end", now);
+        if (e) events.push(e);
+      }
+    } else if (track.fistSince !== null && now - track.fistSince >= this.opts.dragStartHoldMs) {
+      const e = this.emitPointer("drag_start", now);
+      if (e) {
+        events.push(e);
+        track.dragActive = true;
+        track.dragLastPalm = current.palm;
+      }
+    }
   }
 
   /** `measure()` plus this recogniser's own gate state, for the HUD. */

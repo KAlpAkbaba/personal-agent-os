@@ -3,13 +3,20 @@
  * `GestureControl.tsx` the same way `EyeControlView`/`EyeControl` are split (see that file's
  * own docstring for why): this half renders with `react-dom/server` and is asserted on
  * directly, without touching the eye store, the local voice mode, or a camera.
+ *
+ * ADR-0199 Stage 2: also shows the pinch-mouse/fist-drag's own state — the active mode
+ * ("Fare"/"Sürükleme"), the owner's gain setting (with a ± control), the stream's
+ * connection state, and the last socket close reason.
  */
 
 import type { GestureControllerSnapshot } from "../lib/gesture/controller";
+import type { PointerStreamSnapshot } from "../lib/gesture/pointer";
 
 export type GestureControlViewProps = {
   gesture: GestureControllerSnapshot;
+  pointer: PointerStreamSnapshot;
   onToggle: (on: boolean) => void;
+  onGainChange: (value: number) => void;
 };
 
 /** Owner-facing Turkish names for the closed gesture vocabulary (HUD only — never spoken). */
@@ -24,9 +31,33 @@ export const GESTURE_LABEL_TR: Record<string, string> = {
   gather: "iki eli birleştirme",
   pinch_start: "tutma",
   pinch_release: "bırakma",
+  // ADR-0199 Stage 2.
+  mouse_start: "fare modu başladı",
+  mouse_move: "fare hareketi",
+  mouse_end: "fare modu bitti",
+  left_click: "sol tık",
+  right_click: "sağ tık",
+  drag_start: "sürükleme başladı",
+  drag_move: "sürükleme hareketi",
+  drag_end: "sürükleme bitti",
 };
 
-export default function GestureControlView({ gesture, onToggle }: GestureControlViewProps) {
+/** ADR-0199 Stage 2: the pointer mode's own HUD label. */
+export const POINTER_MODE_LABEL_TR: Record<"mouse" | "drag", string> = {
+  mouse: "Fare",
+  drag: "Sürükleme",
+};
+
+/** ADR-0199 Stage 2: the stream's connection state, HUD-worded. */
+export const POINTER_STATE_LABEL_TR: Record<PointerStreamSnapshot["state"], string> = {
+  idle: "kapalı",
+  opening: "açılıyor",
+  open: "bağlı",
+};
+
+const GAIN_STEP = 0.5;
+
+export default function GestureControlView({ gesture, pointer, onToggle, onGainChange }: GestureControlViewProps) {
   return (
     <div className="ambient-cell" data-gesture-enabled={gesture.enabled ? "yes" : "no"} data-gesture-running={gesture.running ? "yes" : "no"}>
       <span className="ambient-title">El kumandası</span>
@@ -74,6 +105,41 @@ export default function GestureControlView({ gesture, onToggle }: GestureControl
           {gesture.lastError}
         </span>
       )}
+
+      {/* ADR-0199 Stage 2: the pinch-mouse / fist-drag's own state. */}
+      {pointer.mode && (
+        <span className="muted" data-pointer-mode={pointer.mode} data-pointer-state={pointer.state}>
+          {POINTER_MODE_LABEL_TR[pointer.mode]} · akış {POINTER_STATE_LABEL_TR[pointer.state]}
+        </span>
+      )}
+
+      {pointer.lastCloseReason && (
+        <span className="muted" data-pointer-close-reason="yes">
+          {pointer.lastCloseReason}
+        </span>
+      )}
+
+      <span className="muted" data-pointer-gain={pointer.gain}>
+        Fare kazancı: {pointer.gain.toFixed(1)}
+        <button
+          type="button"
+          className="core-chip"
+          data-pointer-gain-down="yes"
+          aria-label="Fare kazancını azalt"
+          onClick={() => onGainChange(Math.round((pointer.gain - GAIN_STEP) * 10) / 10)}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="core-chip"
+          data-pointer-gain-up="yes"
+          aria-label="Fare kazancını artır"
+          onClick={() => onGainChange(Math.round((pointer.gain + GAIN_STEP) * 10) / 10)}
+        >
+          +
+        </button>
+      </span>
     </div>
   );
 }

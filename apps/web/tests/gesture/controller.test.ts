@@ -77,6 +77,7 @@ function setup(overrides: Partial<{ eyeActive: boolean; hasSession: boolean; sto
   let hasSession = overrides.hasSession ?? true;
   const trackers: FakeTracker[] = [];
   const dispatched: string[] = [];
+  const pointerEvents: GestureEvent[] = [];
   const deps: GestureControllerDeps = {
     attachVideoConsumer: bus.attach,
     isEyeActive: () => eyeActive,
@@ -84,6 +85,7 @@ function setup(overrides: Partial<{ eyeActive: boolean; hasSession: boolean; sto
     dispatchGesture: async (gesture) => {
       dispatched.push(gesture);
     },
+    pointerClient: { handleEvent: (event) => pointerEvents.push(event) },
     createTracker: (handlers) => {
       const t = new FakeTracker(handlers);
       trackers.push(t);
@@ -99,6 +101,7 @@ function setup(overrides: Partial<{ eyeActive: boolean; hasSession: boolean; sto
     storage,
     trackers,
     dispatched,
+    pointerEvents,
     setEyeActive: (v: boolean) => {
       eyeActive = v;
     },
@@ -237,6 +240,45 @@ describe("GestureController: gesture events reach dispatchGesture and the HUD", 
     trackers[0].fireError("El takibi dosyaları yok; pnpm run fetch:mediapipe");
     expect(controller.getSnapshot().lastError).toBe("El takibi dosyaları yok; pnpm run fetch:mediapipe");
     expect(controller.getSnapshot().running).toBe(false);
+  });
+});
+
+describe("GestureController: ADR-0199 Stage 2 — pointer events route to pointerClient, not dispatchGesture", () => {
+  it("a mouse/drag event reaches pointerClient.handleEvent and never dispatchGesture", () => {
+    const { controller, bus, trackers, dispatched, pointerEvents } = setup();
+    controller.setEnabled(true);
+    bus.emit(video);
+    trackers[0].fireGesture({ name: "mouse_start", t_ms: 10 });
+    trackers[0].fireGesture({ name: "mouse_move", t_ms: 20, dx: 0.01, dy: -0.02 });
+    trackers[0].fireGesture({ name: "left_click", t_ms: 30 });
+    trackers[0].fireGesture({ name: "drag_start", t_ms: 40 });
+    trackers[0].fireGesture({ name: "drag_move", t_ms: 50, dx: 0.03, dy: 0.0 });
+    trackers[0].fireGesture({ name: "right_click", t_ms: 60 });
+    trackers[0].fireGesture({ name: "drag_end", t_ms: 70 });
+    trackers[0].fireGesture({ name: "mouse_end", t_ms: 80 });
+    expect(pointerEvents.map((e) => e.name)).toEqual([
+      "mouse_start",
+      "mouse_move",
+      "left_click",
+      "drag_start",
+      "drag_move",
+      "right_click",
+      "drag_end",
+      "mouse_end",
+    ]);
+    expect(dispatched).toEqual([]);
+    // The HUD still tracks the last pointer event, same as any other gesture.
+    expect(controller.getSnapshot().lastGesture).toBe("mouse_end");
+  });
+
+  it("a Stage 1 gesture still reaches dispatchGesture and never pointerClient", () => {
+    const { controller, bus, trackers, dispatched, pointerEvents } = setup();
+    controller.setEnabled(true);
+    bus.emit(video);
+    trackers[0].fireGesture({ name: "swipe_left", t_ms: 10 });
+    trackers[0].fireGesture({ name: "pinch_start", t_ms: 20 });
+    expect(dispatched).toEqual(["swipe_left", "pinch_start"]);
+    expect(pointerEvents).toEqual([]);
   });
 });
 

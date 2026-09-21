@@ -164,8 +164,12 @@ export const STATE_EVENT_KINDS = [
  * ADR-0198 (el hareketi kumandası, Stage 1): a browser-recognised discrete hand gesture,
  * resolved server-side through `app/voice/gestures.py`'s small table — WITHOUT the text
  * router, a gesture carries no words. See `ClientEvent.gesture` below for the wire field;
- * the closed set of names itself lives in `lib/gesture/types.ts`'s `GESTURE_NAMES` (the
- * single source of truth on this side — an unknown name is a 422 on the server).
+ * the closed set of names itself lives in `lib/gesture/types.ts`'s `SERVER_GESTURE_NAMES`
+ * (the single source of truth on this side — an unknown name is a 422 on the server).
+ * ADR-0199 Stage 2's pointer events (`lib/gesture/types.ts`'s `POINTER_GESTURE_NAMES`) are
+ * NEVER a `kind: "gesture"` event — `GestureController` routes those to the pointer
+ * WebSocket instead (`lib/gesture/pointer.ts`), so `gesture` below only ever carries a
+ * `SERVER_GESTURE_NAMES` member in practice.
  */
 export const GESTURE_EVENT_KINDS = ["gesture"] as const;
 
@@ -194,9 +198,10 @@ export type ClientEvent = {
   turn: number;
   payload?: Record<string, unknown>;
   text?: string;
-  /** ADR-0198: present only on a `kind: "gesture"` event — one of `GESTURE_NAMES`
-   * (`lib/gesture/types.ts`), a TOP-LEVEL field (never nested in `payload`, and never a
-   * `text`: a gesture name is not a transcript). */
+  /** ADR-0198: present only on a `kind: "gesture"` event — one of `SERVER_GESTURE_NAMES`
+   * (`lib/gesture/types.ts`; never a Stage 2 `POINTER_GESTURE_NAMES` member — see
+   * `GESTURE_EVENT_KINDS`'s own docstring), a TOP-LEVEL field (never nested in `payload`,
+   * and never a `text`: a gesture name is not a transcript). */
   gesture?: string;
 };
 

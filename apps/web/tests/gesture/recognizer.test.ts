@@ -102,6 +102,17 @@ function tightPinchHand(wrist: Point): Point[] {
   return m;
 }
 
+/** ADR-0199 Stage 2: the owner's "tips pressed" click pose — thumb and index tip
+ * COINCIDENT (ratio 0), well past `tightPinchOnRatio * clickPinchRatioFrac`
+ * (0.45 * 0.25 = 0.1125) — `tightPinchHand`'s own ratio (~0.118) sits just above that
+ * line on purpose (a plain ring hold must never itself read as a click). */
+function clickPinchHand(wrist: Point): Point[] {
+  const m = halfOpenHand(wrist);
+  m[THUMB_TIP] = { x: wrist.x + 0.012, y: wrist.y - 0.0825 };
+  m[INDEX_TIP] = { x: wrist.x + 0.012, y: wrist.y - 0.0825 };
+  return m;
+}
+
 /** An OPEN hand with thumb/index kept far apart (so `pinchRatio` never confuses it with a
  * pinch) — used wherever a plain open swiping hand must never register pinch_start. */
 function openHandNoPinch(wrist: Point): Point[] {
@@ -207,6 +218,40 @@ describe("GestureRecognizer: the closed set, once each", () => {
     for (const e of rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]]))) emitted.add(e.name);
     t += 100;
     for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]]))) emitted.add(e.name);
+    t += GAP;
+
+    // ADR-0199 Stage 2: the pinch-mouse — the ring held past mouseStartHoldMs, a palm
+    // move, a quick click (left) and a long click (right), then the ring opening all
+    // the way (mouse_end).
+    const ring = { x: 0.5, y: 0.5 };
+    for (const e of rec.ingest(frame(t, [["Right", tightPinchHand(ring)]]))) emitted.add(e.name); // ring closes
+    t += 200; // past mouseStartHoldMs (150ms)
+    for (const e of rec.ingest(frame(t, [["Right", tightPinchHand(ring)]]))) emitted.add(e.name); // mouse_start
+    t += 50;
+    const moved = { x: 0.6, y: 0.5 };
+    for (const e of rec.ingest(frame(t, [["Right", tightPinchHand(moved)]]))) emitted.add(e.name); // mouse_move
+    t += 50;
+    for (const e of rec.ingest(frame(t, [["Right", clickPinchHand(moved)]]))) emitted.add(e.name); // tips press
+    t += 100; // released well inside leftClickMaxMs (350ms)
+    for (const e of rec.ingest(frame(t, [["Right", tightPinchHand(moved)]]))) emitted.add(e.name); // left_click
+    t += 50;
+    for (const e of rec.ingest(frame(t, [["Right", clickPinchHand(moved)]]))) emitted.add(e.name); // tips press
+    t += 650; // held past rightClickMinMs (600ms)
+    for (const e of rec.ingest(frame(t, [["Right", tightPinchHand(moved)]]))) emitted.add(e.name); // right_click
+    t += 50;
+    for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch(moved)]]))) emitted.add(e.name); // mouse_end
+    t += GAP;
+
+    // ADR-0199 Stage 2: the fist-drag — a fist held past dragStartHoldMs, a palm move,
+    // then opening the hand (drag_end).
+    const fistAt = { x: 0.3, y: 0.5 };
+    for (const e of rec.ingest(frame(t, [["Right", fistHand(fistAt)]]))) emitted.add(e.name);
+    t += 200; // past dragStartHoldMs (150ms)
+    for (const e of rec.ingest(frame(t, [["Right", fistHand(fistAt)]]))) emitted.add(e.name); // drag_start
+    t += 50;
+    for (const e of rec.ingest(frame(t, [["Right", fistHand({ x: 0.4, y: 0.5 })]]))) emitted.add(e.name); // drag_move
+    t += 50;
+    for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.4, y: 0.5 })]]))) emitted.add(e.name); // drag_end
 
     for (const gestureName of GESTURE_NAMES) expect(emitted.has(gestureName), gestureName).toBe(true);
     expect(emitted.size).toBe(GESTURE_NAMES.length);
@@ -338,7 +383,7 @@ describe("GestureRecognizer: what must NOT be a swipe", () => {
     expect(events.some((n) => n.startsWith("swipe"))).toBe(false);
   });
 
-  it("a closed fist translating the same distance as a swipe produces nothing (not OPEN)", () => {
+  it("a closed fist translating the same distance as a swipe produces no SWIPE (not OPEN) — Stage 2 gives it a drag instead", () => {
     const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
@@ -346,7 +391,10 @@ describe("GestureRecognizer: what must NOT be a swipe", () => {
       events.push(...names(rec.ingest(frame(t, [["Right", fistHand({ x, y: 0.5 })]]))));
       t += 100;
     }
-    expect(events).toEqual([]);
+    expect(events.some((n) => n.startsWith("swipe"))).toBe(false);
+    // 300ms of continuous fist crosses dragStartHoldMs (150ms); the last step's 0.1-frame
+    // translation crosses dragMoveDeadZone (0.005) — one drag_start, one drag_move.
+    expect(events).toEqual(["drag_start", "drag_move"]);
   });
 });
 
@@ -550,9 +598,11 @@ describe("GestureRecognizer: a swipe is judged where it STARTS", () => {
 });
 
 describe("GestureRecognizer: a fist is neither a pinch nor a rotate (calibrated 2026-09-21)", () => {
-  it("a fist held, moved and turned emits nothing but what a fist is for (stage 2)", () => {
+  it("a fist held, moved and turned emits nothing but what a fist is for (stage 2: a drag)", () => {
     // On the owner's camera a fist measures pinch ratio 0.44 / openness 0.29 - inside the
-    // pinch's ratio band. The openness floors are what keep it from being a pinch or a C pose.
+    // pinch's ratio band. The openness floors are what keep it from being a pinch or a C
+    // pose — and, since Stage 2, a fist IS a gesture: the drag. Never pinch_start, never
+    // rotate_cw/ccw, never a swipe — only drag_start/drag_move.
     const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
@@ -560,7 +610,9 @@ describe("GestureRecognizer: a fist is neither a pinch nor a rotate (calibrated 
       events.push(...names(rec.ingest(frame(t, [["Right", fistHand({ x: 0.5 + i * 0.03, y: 0.5 })]]))));
       t += 100;
     }
-    expect(events).toEqual([]);
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((n) => n === "drag_start" || n === "drag_move" || n === "drag_end")).toBe(true);
+    expect(events[0]).toBe("drag_start");
   });
 });
 
@@ -682,5 +734,157 @@ describe("GestureRecognizer: the engagement gate (ADR-0199)", () => {
     t += DEFAULT_RECOGNIZER_OPTIONS.armedForMs + 500;
     expect(rec.isArmed(t)).toBe(false);
     expect(names(rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]])))).toEqual(["pinch_release"]);
+  });
+});
+
+describe("GestureRecognizer: Stage 2 mouse mode (ADR-0199)", () => {
+  const ring = { x: 0.5, y: 0.5 };
+
+  it("the ring held under mouseStartHoldMs produces no mouse_start yet; past it, exactly one", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    // 100ms held: under the 150ms hold.
+    const early = [
+      ...names(rec.ingest(frame(0, [["Right", tightPinchHand(ring)]]))),
+      ...names(rec.ingest(frame(100, [["Right", tightPinchHand(ring)]]))),
+    ];
+    expect(early).not.toContain("mouse_start");
+    // past 150ms: exactly one mouse_start, not re-fired while still held.
+    const started = names(rec.ingest(frame(200, [["Right", tightPinchHand(ring)]])));
+    expect(started).toEqual(["mouse_start"]);
+    const stillHeld = names(rec.ingest(frame(250, [["Right", tightPinchHand(ring)]])));
+    expect(stillHeld).not.toContain("mouse_start");
+  });
+
+  it("mouse_move is dead-zoned: a sub-threshold wobble is dropped, a real move fires with mirrored dx/dy", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    rec.ingest(frame(0, [["Right", tightPinchHand(ring)]]));
+    rec.ingest(frame(200, [["Right", tightPinchHand(ring)]])); // mouse_start
+    // A tiny wobble (RAW +0.001) is under mouseMoveDeadZone (0.005): dropped.
+    const wobble = names(rec.ingest(frame(250, [["Right", tightPinchHand({ x: 0.501, y: 0.5 })]])));
+    expect(wobble).not.toContain("mouse_move");
+    // RAW x decreasing = mirrored x increasing = the owner's hand moving to THEIR right
+    // (the same sign convention `swipe_right` uses — see the module docstring).
+    const moved = rec.ingest(frame(300, [["Right", tightPinchHand({ x: 0.4, y: 0.5 })]]));
+    const move = moved.find((e) => e.name === "mouse_move");
+    expect(move).toBeDefined();
+    expect(move!.dx).toBeGreaterThan(0);
+  });
+
+  it("a quick release (< leftClickMaxMs) is left_click; a long hold (>= rightClickMinMs) is right_click; the gap between is neither", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    rec.ingest(frame(0, [["Right", tightPinchHand(ring)]]));
+    rec.ingest(frame(200, [["Right", tightPinchHand(ring)]])); // mouse_start
+    rec.ingest(frame(250, [["Right", clickPinchHand(ring)]])); // tips press
+    // released after 50ms — well inside leftClickMaxMs.
+    const left = names(rec.ingest(frame(300, [["Right", tightPinchHand(ring)]])));
+    expect(left).toEqual(["left_click"]);
+
+    rec.ingest(frame(350, [["Right", clickPinchHand(ring)]])); // tips press again
+    // released after 650ms — past rightClickMinMs.
+    const right = names(rec.ingest(frame(350 + 650, [["Right", tightPinchHand(ring)]])));
+    expect(right).toEqual(["right_click"]);
+
+    const t0 = 350 + 650 + 50;
+    rec.ingest(frame(t0, [["Right", clickPinchHand(ring)]])); // tips press a third time
+    // released after 450ms — between leftClickMaxMs (350) and rightClickMinMs (600): neither.
+    const ambiguous = names(rec.ingest(frame(t0 + 450, [["Right", tightPinchHand(ring)]])));
+    expect(ambiguous).not.toContain("left_click");
+    expect(ambiguous).not.toContain("right_click");
+  });
+
+  it("opening the ring all the way ends mouse mode (mouse_end); re-forming it starts a fresh episode", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    rec.ingest(frame(0, [["Right", tightPinchHand(ring)]]));
+    rec.ingest(frame(200, [["Right", tightPinchHand(ring)]])); // mouse_start
+    const ended = names(rec.ingest(frame(250, [["Right", openHandNoPinch(ring)]])));
+    expect(ended).toContain("mouse_end");
+    expect(ended).toContain("pinch_release");
+
+    rec.ingest(frame(260, [["Right", tightPinchHand(ring)]]));
+    const restarted = names(rec.ingest(frame(460, [["Right", tightPinchHand(ring)]])));
+    expect(restarted).toEqual(["mouse_start"]);
+  });
+
+  it("a fast full release mid-click still resolves the click before mouse_end (owner: detect it even when done fast)", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    rec.ingest(frame(0, [["Right", tightPinchHand(ring)]]));
+    rec.ingest(frame(200, [["Right", tightPinchHand(ring)]])); // mouse_start
+    rec.ingest(frame(250, [["Right", clickPinchHand(ring)]])); // tips press
+    // Straight from "tips pressed" to fully open in one frame, well inside leftClickMaxMs.
+    const events = names(rec.ingest(frame(300, [["Right", openHandNoPinch(ring)]])));
+    expect(events.indexOf("left_click")).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf("mouse_end")).toBeGreaterThan(events.indexOf("left_click"));
+  });
+});
+
+describe("GestureRecognizer: Stage 2 fist-drag (ADR-0199)", () => {
+  const fistAt = { x: 0.5, y: 0.5 };
+
+  it("a fist held under dragStartHoldMs produces no drag_start yet; past it, exactly one", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    const early = [
+      ...names(rec.ingest(frame(0, [["Right", fistHand(fistAt)]]))),
+      ...names(rec.ingest(frame(100, [["Right", fistHand(fistAt)]]))),
+    ];
+    expect(early).not.toContain("drag_start");
+    const started = names(rec.ingest(frame(200, [["Right", fistHand(fistAt)]])));
+    expect(started).toEqual(["drag_start"]);
+    const stillHeld = names(rec.ingest(frame(250, [["Right", fistHand(fistAt)]])));
+    expect(stillHeld).not.toContain("drag_start");
+  });
+
+  it("drag_move is dead-zoned and mirrored; opening the fist ends the drag (drag_end)", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    rec.ingest(frame(0, [["Right", fistHand(fistAt)]]));
+    rec.ingest(frame(200, [["Right", fistHand(fistAt)]])); // drag_start
+    const wobble = names(rec.ingest(frame(250, [["Right", fistHand({ x: 0.501, y: 0.5 })]])));
+    expect(wobble).not.toContain("drag_move");
+    const moved = rec.ingest(frame(300, [["Right", fistHand({ x: 0.4, y: 0.5 })]])); // RAW decrease = mirrored increase
+    const move = moved.find((e) => e.name === "drag_move");
+    expect(move).toBeDefined();
+    expect(move!.dx).toBeGreaterThan(0);
+    const ended = names(rec.ingest(frame(350, [["Right", openHandNoPinch({ x: 0.4, y: 0.5 })]])));
+    expect(ended).toEqual(["drag_end"]);
+  });
+
+  it("mouse mode and drag never both read true on the same hand (the openness floors keep them apart)", () => {
+    const rec = new GestureRecognizer(UNGATED);
+    rec.ingest(frame(0, [["Right", fistHand(fistAt)]]));
+    rec.ingest(frame(200, [["Right", fistHand(fistAt)]])); // drag_start
+    // A fist never satisfies pinchMinOpenness, so it can never also be "the ring".
+    const whileDragging = names(rec.ingest(frame(300, [["Right", fistHand(fistAt)]])));
+    expect(whileDragging).not.toContain("mouse_start");
+    expect(whileDragging).not.toContain("pinch_start");
+  });
+});
+
+describe("GestureRecognizer: Stage 2 pointer events respect and extend the engagement gate", () => {
+  it("the ring held before the owner arms never starts mouse mode", () => {
+    const rec = new GestureRecognizer(); // engagementGate: true (default)
+    expect(rec.isArmed(0)).toBe(false);
+    rec.ingest(frame(0, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]]));
+    const stillNothing = names(rec.ingest(frame(200, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]])));
+    expect(stillNothing).toEqual([]);
+  });
+
+  it("an active mouse mode keeps the gate armed well past armedForMs without a fresh arming pose", () => {
+    const rec = new GestureRecognizer();
+    let t = 0;
+    // Arm the gate the normal way: an open, still hand for armHoldMs.
+    for (let i = 0; i < 6; i += 1) {
+      rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]]));
+      t += 100;
+    }
+    expect(rec.isArmed(t)).toBe(true);
+    rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]]));
+    t += 200;
+    rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]])); // mouse_start, extends the gate
+    // Keep moving well past the original armedForMs window from the LAST arming pose.
+    for (let i = 0; i < 5; i += 1) {
+      t += 500;
+      rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5 - i * 0.02, y: 0.5 })]]));
+      // each move keeps re-extending the gate — never lapses mid-gesture.
+      expect(rec.isArmed(t)).toBe(true);
+    }
   });
 });

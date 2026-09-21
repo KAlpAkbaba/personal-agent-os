@@ -545,6 +545,61 @@ export class LocalVoiceMode {
     }
   }
 
+  // ------------------------------------------------------- ADR-0199 pointer session
+
+  /**
+   * `operator.pointer_session {"action":"begin"}` — through the SAME tool-call plumbing
+   * `runGesture` uses (an events POST is not needed: this tool reads no words — see the
+   * server's own `operator_pointer_session' docstring), but unlike every gesture tool
+   * this one is never spoken (`pointer.ts`'s own HUD shows the stream state instead).
+   * Returns the tool's result (`status`, `stream_token`) for `PointerStreamClient` to
+   * read, or `null` when there is no active session or the call failed/was refused.
+   */
+  async beginPointerSession(): Promise<{ status: string; stream_token?: string } | null> {
+    const sessionId = this.sessionId;
+    if (!this.active || !sessionId) return null;
+    const callId = `${LOCAL_CALL_ID_PREFIX}${this.newId()}`;
+    let response: ToolCallResponse;
+    try {
+      response = await this.deps.api.toolCall(sessionId, {
+        call_id: callId,
+        name: "operator.pointer_session",
+        arguments: { action: "begin" },
+      });
+    } catch (error) {
+      this.log(`tool:operator.pointer_session begin.failed ${describe(error)}`);
+      return null;
+    }
+    this.log(`tool:operator.pointer_session begin ${response.status}`);
+    const result = response.result;
+    if (!result) return null;
+    const status = typeof result.status === "string" ? result.status : "";
+    const streamToken = typeof result.stream_token === "string" ? result.stream_token : undefined;
+    return { status, stream_token: streamToken };
+  }
+
+  /**
+   * `operator.pointer_session {"action":"end"}` — best effort, called by `pointer.ts`
+   * alongside the socket's own `{"t":"end"}` frame (belt and braces: the server's own
+   * ending is idempotent when nothing is open — `SPEECH_NOTHING_OPEN`, never an error).
+   * Never throws; a silent no-op once the session/mode is already gone.
+   */
+  async endPointerSession(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!this.active || !sessionId) return;
+    const callId = `${LOCAL_CALL_ID_PREFIX}${this.newId()}`;
+    try {
+      const response = await this.deps.api.toolCall(sessionId, {
+        call_id: callId,
+        name: "operator.pointer_session",
+        arguments: { action: "end" },
+      });
+      this.log(`tool:operator.pointer_session end ${response.status}`);
+    } catch (error) {
+      this.log(`tool:operator.pointer_session end.failed ${describe(error)}`);
+    }
+  }
+
   // -------------------------------------------------------------- a turn
 
   private async handle(text: string): Promise<void> {
