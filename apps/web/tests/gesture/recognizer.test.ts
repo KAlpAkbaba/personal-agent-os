@@ -443,6 +443,30 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
     expect(events).toEqual(["spread", "gather"]);
   });
 
+  it("two hands close together that become ONE hand (MediaPipe merging them) is a gather", () => {
+    // Owner, third trial: the hands overlap in front of the face and the second hand vanishes.
+    const rec = new GestureRecognizer(UNGATED);
+    const events: GestureName[] = [];
+    let t = 0;
+    const two = (lx: number, rx: number) =>
+      frame(t, [["Left", openHandNoPinch({ x: lx, y: 0.5 })], ["Right", openHandNoPinch({ x: rx, y: 0.5 })]]);
+    for (let i = 0; i < 4; i += 1) {
+      events.push(...names(rec.ingest(two(0.15, 0.85)))); // apart: arms the gather
+      t += 100;
+    }
+    t += DEFAULT_RECOGNIZER_OPTIONS.returnSuppressMs;
+    for (let i = 0; i < 3; i += 1) {
+      events.push(...names(rec.ingest(two(0.33, 0.67)))); // closing in: 0.34 apart, not yet 'close'
+      t += 100;
+    }
+    for (let i = 0; i < 5; i += 1) {
+      // merged: one hand, where the right hand was (a merged detection does not jump)
+      events.push(...names(rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.64, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events.filter((e) => e === "gather")).toEqual(["gather"]);
+  });
+
   it("two FISTS held wide apart are not a spread", () => {
     const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];

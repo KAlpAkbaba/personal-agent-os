@@ -193,6 +193,9 @@ export type RecognizerOptions = {
   gatherCloseFrac: number;
   /** ...held for at least this long, after having been apart (>= spreadRearmFrac). */
   gatherHoldMs: number;
+  /** The merge rule: two hands last seen closer than this that become ONE hand for
+   * `gatherHoldMs` are a gather (MediaPipe merges touching hands). */
+  gatherMergeFrac: number;
   /** thumb-index ratio at/under which a TIGHT pinch begins (`pinch_start`). */
   tightPinchOnRatio: number;
   /** thumb-index ratio at/over which a TIGHT pinch ends (`pinch_release`); hysteresis band
@@ -234,7 +237,9 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   looseIndexPinchMinRatio: 0,
   looseIndexPinchMaxRatio: 0.8,
   rotateMinOpenness: 0,
-  pinchMinOpenness: 0,
+  // ...and the pinch's openness floor is the same knob: on this camera a fist measures
+  // 0.44 / 0.29, inside the ratio band - only the openness tells the two apart.
+  pinchMinOpenness: 0.35,
   fistMaxOpenness: 0.34,
   engagementGate: true,
   armHoldMs: 400,
@@ -247,8 +252,11 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   spreadRearmFrac: 0.3,
   gatherCloseFrac: 0.28,
   gatherHoldMs: 300,
-  tightPinchOnRatio: 0.2,
-  tightPinchOffRatio: 0.32,
+  gatherMergeFrac: 0.4,
+  // The ONE knob changed after the restore, with the owner watching: the touching-tips
+  // pinch measures 0.40 on their camera (the landmarks sit at the nails), 0.20 never fired.
+  tightPinchOnRatio: 0.45,
+  tightPinchOffRatio: 0.55,
   cooldownMs: 450,
   returnSuppressMs: 1_500,
   historyMs: 1_500,
@@ -320,6 +328,8 @@ export class GestureRecognizer {
   /** The last frame that showed two hands (a brief one-hand frame while two hands overlap
    * must not reset the two-hand state - MediaPipe merges touching hands). */
   private twoHandsLastSeen: number | null = null;
+  /** The last wrist distance measured with two hands in view (for the merge rule). */
+  private lastTwoHandDistance: number | null = null;
 
   constructor(options: Partial<RecognizerOptions> = {}) {
     this.opts = { ...DEFAULT_RECOGNIZER_OPTIONS, ...options };
@@ -385,13 +395,31 @@ export class GestureRecognizer {
     if (nonPinch) events.push(nonPinch);
 
     if (frame.hands.length >= 2) this.twoHandsLastSeen = frame.t_ms;
-    else if (this.twoHandsLastSeen === null || frame.t_ms - this.twoHandsLastSeen > TWO_HANDS_GRACE_MS) {
+    else if (
+      frame.hands.length === 1 &&
+      this.twoHandsLastSeen !== null &&
+      this.gatherArmed &&
+      this.lastTwoHandDistance !== null &&
+      this.lastTwoHandDistance <= this.opts.gatherMergeFrac &&
+      frame.t_ms - this.twoHandsLastSeen >= this.opts.gatherHoldMs
+    ) {
+      // The merge rule (owner, third trial: "tam ekran küçültme algılanmıyor"): two hands
+      // brought together in front of the face become ONE hand to MediaPipe. Two hands that
+      // were close a moment ago and are now one hand, held, IS the gather.
+      this.gatherArmed = false;
+      this.closeSince = null;
+      this.twoHandsLastSeen = null;
+      this.lastTwoHandDistance = null;
+      const merged = this.emit("gather", frame.t_ms);
+      if (merged) events.push(merged);
+    } else if (this.twoHandsLastSeen === null || frame.t_ms - this.twoHandsLastSeen > TWO_HANDS_GRACE_MS) {
       // Gone for real (not a one-frame merge of two touching hands): reset the two-hand state.
       this.wideSince = null;
       this.closeSince = null;
       this.spreadArmed = true;
       this.gatherArmed = false;
       this.twoHandsLastSeen = null;
+      this.lastTwoHandDistance = null;
     }
     return events;
   }
@@ -523,6 +551,7 @@ export class GestureRecognizer {
     const mb = mirror(b.landmarks);
     const now = frame.t_ms;
     const distance = dist(ma[WRIST], mb[WRIST]);
+    this.lastTwoHandDistance = distance;
     const bothOpen = openness(ma) >= this.opts.openHandMinRatio && openness(mb) >= this.opts.openHandMinRatio;
     if (distance < this.opts.spreadRearmFrac) this.spreadArmed = true;
     if (distance >= this.opts.spreadRearmFrac) this.gatherArmed = true;

@@ -45,6 +45,10 @@ export const TOOL_FAILED_TR = "Komut yürütülemedi efendim.";
 export const UNSUPPORTED_TR = "Bu tarayıcıda konuşma tanıma yok; Chrome gerekir.";
 
 const MAX_LOG = 40;
+/** How many repeats of one gesture one coalesced tool call may carry. */
+export const GESTURE_COALESCE_MAX = 5;
+/** The tools that take ADR-0195's `count`. */
+const GESTURE_COUNT_TOOLS = new Set(["operator.key", "operator.pointer"]);
 
 /**
  * Chrome does not always fire `onend` for an utterance (a long one is cut off around
@@ -468,7 +472,43 @@ export class LocalVoiceMode {
    * (a gesture has no session of its own) — this method still checks, defensively, and is a
    * silent no-op when there is none, the same as `onFinal` is for a stopped mode.
    */
+  /**
+   * Gestures are coalesced, never queued without bound (owner, third trial: "belli bir süre
+   * sonra komutlar bilgisayara geç geliyor" - each gesture is an events POST, a tool call and
+   * a device round trip, ~1 s, and the tracker can emit two a second). While one is in
+   * flight, the NEXT is held: the same gesture again raises its count (the tool presses the
+   * key that many times in ONE call, ADR-0195's `count`), a different gesture replaces it.
+   * So the owner is never more than one round trip behind their hand.
+   */
   async dispatchGesture(gesture: string): Promise<void> {
+    if (!this.active || !this.sessionId) return;
+    if (this.gestureInFlight) {
+      if (this.pendingGesture && this.pendingGesture.gesture === gesture) {
+        this.pendingGesture.count = Math.min(this.pendingGesture.count + 1, GESTURE_COALESCE_MAX);
+      } else {
+        this.pendingGesture = { gesture, count: 1 };
+      }
+      this.log(`gesture:${gesture} held`);
+      return;
+    }
+    this.gestureInFlight = true;
+    try {
+      await this.runGesture(gesture, 1);
+      // Drain what accumulated meanwhile, one coalesced call at a time.
+      while (this.pendingGesture && this.active) {
+        const next = this.pendingGesture;
+        this.pendingGesture = null;
+        await this.runGesture(next.gesture, next.count);
+      }
+    } finally {
+      this.gestureInFlight = false;
+    }
+  }
+
+  private gestureInFlight = false;
+  private pendingGesture: { gesture: string; count: number } | null = null;
+
+  private async runGesture(gesture: string, count: number): Promise<void> {
     const sessionId = this.sessionId;
     if (!this.active || !sessionId) return;
     this.turn += 1;
@@ -482,7 +522,7 @@ export class LocalVoiceMode {
       this.log(`gesture.failed turn=${turn} ${describe(error)}`);
       return;
     }
-    this.log(`gesture:${gesture} turn=${turn}`);
+    this.log(`gesture:${gesture} turn=${turn}${count > 1 ? ` x${count}` : ""}`);
     const tools: string[] = [];
     for (const intent of answer.resolved_intents ?? []) {
       const tool = toolOf(intent);
@@ -491,9 +531,11 @@ export class LocalVoiceMode {
     for (const name of tools) {
       if (!this.active) return;
       const callId = `${LOCAL_CALL_ID_PREFIX}${this.newId()}`;
+      // Only the input tools take a count (operator.key / operator.pointer, ADR-0195).
+      const args: Record<string, unknown> = count > 1 && GESTURE_COUNT_TOOLS.has(name) ? { count } : {};
       let response: ToolCallResponse;
       try {
-        response = await this.deps.api.toolCall(sessionId, { call_id: callId, name, arguments: {} });
+        response = await this.deps.api.toolCall(sessionId, { call_id: callId, name, arguments: args });
       } catch (error) {
         this.log(`tool:${name} request.failed ${describe(error)}`);
         continue;

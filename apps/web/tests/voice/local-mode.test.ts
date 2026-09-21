@@ -234,6 +234,41 @@ describe("ADR-0198: dispatchGesture — same tool plumbing as an utterance, but 
     expect(mode.getSnapshot().log).toEqual([]);
   });
 
+  it("gestures arriving while one is in flight are coalesced: the same gesture again is ONE call with a count, never a growing queue", async () => {
+    // Owner, third trial: "belli bir süre sonra komutlar bilgisayara geç geliyor".
+    const { core, mode } = setup({
+      resolveGesture: (gesture) => [{ intent: "operator_key", klass: "action", capability: "operator.key", tool: "operator.key", gesture }],
+      toolResponses: { "operator.key": { result: { speech: "x" } } },
+    });
+    await mode.start();
+    const first = mode.dispatchGesture("swipe_right");
+    const second = mode.dispatchGesture("swipe_right");
+    const third = mode.dispatchGesture("swipe_right");
+    const fourth = mode.dispatchGesture("swipe_right");
+    await Promise.all([first, second, third, fourth]);
+    const events = posts(core, "/events");
+    const calls = posts(core, "/tool-calls");
+    // One in flight, the three behind it folded into ONE follow-up call with count 3.
+    expect(events).toHaveLength(2);
+    expect(calls).toHaveLength(2);
+    expect((calls[0].body as { arguments: Record<string, unknown> }).arguments).toEqual({});
+    expect((calls[1].body as { arguments: Record<string, unknown> }).arguments).toEqual({ count: 3 });
+  });
+
+  it("a DIFFERENT gesture arriving while one is in flight replaces the held one (the latest hand wins)", async () => {
+    const { core, mode } = setup({
+      resolveGesture: (gesture) => [{ intent: "operator_key", klass: "action", capability: "operator.key", tool: "operator.key", gesture }],
+      toolResponses: { "operator.key": { result: { speech: "x" } } },
+    });
+    await mode.start();
+    const a = mode.dispatchGesture("swipe_right");
+    const b = mode.dispatchGesture("swipe_right");
+    const c = mode.dispatchGesture("swipe_left");
+    await Promise.all([a, b, c]);
+    const events = posts(core, "/events").map((p) => (p.body as { events: Array<{ gesture: string }> }).events[0].gesture);
+    expect(events).toEqual(["swipe_right", "swipe_left"]);
+  });
+
   it("each dispatchGesture call advances the turn counter independently of spoken utterances", async () => {
     const { core, recognition, mode } = setup({
       resolveIntents: () => [{ intent: "none", klass: "query", capability: null, tool: null }],
