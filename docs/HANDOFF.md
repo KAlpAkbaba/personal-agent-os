@@ -65,6 +65,19 @@ Doğrulanacak cümleler: "kamerayı aç/kapat" (yerel mod, Chrome izin soracak),
 bas", "YouTube hariç tüm sekmeleri kapat", "birinci sekmeye geç", "yanlış yere tıkladım"
 (görev başlatmamalı), "yapay zeka haberlerini araştır".
 
+## 2026-09-20/21: araştırma ve hafıza (ADR-0183…0193)
+
+- Araştırma sahibin kendi Chrome'unda, Google'da, sekmelerde, DOM'dan okunarak çalışıyor
+  (enroll-owner-chrome.ps1 -AuthorizeResearch yapıldı). "araştırmayı oku" haberin kendisini
+  okuyor; yabancı kaynaklar Türkçeye çevriliyor.
+- Hafıza: 955 nabız satırı sahibin onayıyla silindi (ADR-0190). Makine kayıtları artık
+  hafızaya yazılmıyor (ADR-0193). İlk öğrenilmiş tercih üretimde durable:
+  "Sahip 'yapay zeka' konusunu düzenli olarak araştırıyor". "bunu hatırla" ve
+  "… hakkında ne biliyorsun" yerel modda da çalışıyor (ADR-0192).
+- AÇIK: ADR-0193 kapsamındaki eski makine-kaydı satırları (~1000) henüz silinmedi —
+  sahip onayı bekleniyor. Komut: `docker exec -i pagentos-prod-api-<renk> uv run python
+  scripts/forget_telemetry_memories.py` (önce kuru koşu, sonra --apply).
+
 ## Sıradaki işler
 
 0. **Sahibin 2026-09-20 sabahı soracağı iki iş** (o gece konuşuldu, sıraya alındı):
