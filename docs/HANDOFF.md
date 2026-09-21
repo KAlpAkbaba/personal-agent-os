@@ -61,6 +61,24 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
    kaydırma = ok tuşları, baş+işaret çevirme = ses, iki el açma = "f" (tam ekran), sunucuda
    `gesture` istemci olayı → aynı araçlar; pinç olayları yalnız üretilir. 2. aşama (pinç-fare)
    akış kanalı ister; 1. aşama sahibin elinde ölçüldükten sonra tasarlanacak.
+   Sahip: "ajan bitince birleştir, önce ayrı test edelim" → **dal `feat/hand-gestures-stage1`
+   (`5b4e771c`, origin'de; worktree `.claude/worktrees/agent-ac27be8adddc2920d`) AYRI
+   DENEME İÇİN ÜRETİMDE** (api-blue, kontrat v3, 2026-09-21 18:37; son iyi bilinen
+   `dad462ac`). Gate: API 268 (worktree'den), web 2049+ (vitest), tsc/oxlint temiz.
+   Sahip web kabuğunu worktree'den başlatır: `…\agent-ac27be8adddc2920d\scripts\voice\
+   start-web-voice.ps1` → /core/cockpit → Yerel mod → kamera aç → "El kumandası" aç.
+   Sonuç iyiyse: `git merge feat/hand-gestures-stage1` main'e, ADR-0198'e kanıt satırı,
+   yayın, recovery pin (bundle 5b4e771c ile STALE; birleşme yayınından sonra pinlenmeli).
+   Kötüyse: `release-cloud-core.ps1 -BlueGreen` main'den geri yayın (dad462ac LKG).
+5. *Türkiye trafik kameraları God's Eye'a (sahip 2026-09-21: "tüm Türkiye'deki
+   mobeseleri ekleyemez miyiz, paylaşılan").* Kapsam kararı: EGM MOBESE akışları herkese
+   açık DEĞİL (eklenemez); belediyelerin paylaştığı trafik kameraları (İBB `application.
+   ibb.gov.tr/IBB/tk.htm` ~700+, diğer büyükşehirler) eklenebilir. God's Eye kamera
+   katmanı `config/cctv_sources.<şehir>.json` (id, ad, lat/lon, feedType image|hls, url,
+   provider, license) + proxy allowlist ile çalışıyor. Yapılacak: İBB liste + akış deseni
+   keşfi (site 21.09 akşam 503 verdi), JSON üretimi, Dockerfile overlay ile konteynere
+   kopya, `cctv.js`'nin dosyayı otomatik yükleyip yüklemediğinin doğrulanması. BEKLİYOR
+   (4/1. aşama birleşince).
 
 ## Şu anki durum
 
