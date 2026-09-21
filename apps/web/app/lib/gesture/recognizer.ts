@@ -226,7 +226,9 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   // below 0.6 mid-motion, which reset the swipe anchor every few frames - "sağa sola
   // kaydırmada çok zor algılıyor". The hand must be open where the swipe STARTS; what it
   // looks like at the end is not held against it.
-  openHandMinRatio: 0.45,
+  // Owner's camera: a full open palm measures 0.84, the C pose 0.66, a pinch 0.42, a fist
+  // 0.29. OPEN (a swipe's start, the arming pose, a spread/gather hand) is the palm, not the C.
+  openHandMinRatio: 0.75,
   swipeMinDistanceFrac: 0.16,
   swipeMaxMs: 900,
   // Calibrated on the owner's camera (HUD readout, 2026-09-21): C pose 0.66/0.66,
