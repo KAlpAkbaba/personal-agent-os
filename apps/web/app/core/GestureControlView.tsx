@@ -48,8 +48,9 @@ export default function GestureControlView({ gesture, onToggle }: GestureControl
       )}
 
       {gesture.running && (
-        <span className="muted" data-gesture-tracking="yes">
-          İzleniyor{gesture.trackingFps !== null ? ` · ${gesture.trackingFps.toFixed(0)} kare/sn` : ""}
+        <span className="muted" data-gesture-tracking="yes" data-gesture-armed={gesture.measure?.armed ? "yes" : "no"}>
+          {gesture.measure?.armed ? "HAZIR" : "İzleniyor"}{gesture.trackingFps !== null ? ` · ${gesture.trackingFps.toFixed(0)} kare/sn` : ""}
+          {gesture.measure && !gesture.measure.armed ? " · açık avucu 0,4 sn sabit tutun" : ""}
         </span>
       )}
 

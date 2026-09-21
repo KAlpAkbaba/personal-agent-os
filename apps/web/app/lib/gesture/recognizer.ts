@@ -60,7 +60,13 @@ export type FrameMeasure = {
   pinch: number[];
   /** Wrist-to-wrist distance in frame widths with two hands, else null. */
   wristDistance: number | null;
+  /** The engagement gate's state at this frame (`measureNow`); false from the static `measure`). */
+  armed: boolean;
 };
+
+/** How long two hands may drop to one (MediaPipe merging two touching hands) without the
+ * two-hand state resetting. */
+export const TWO_HANDS_GRACE_MS = 700;
 
 // --------------------------------------------------------------- landmarks
 
@@ -152,6 +158,16 @@ export type RecognizerOptions = {
   swipeMaxMs: number;
   /** thumb-index distance / hand size at/under which a rotate's "loose pinch" precondition holds. */
   looseIndexPinchMaxRatio: number;
+  /**
+   * The engagement gate (ADR-0199): nothing is a gesture until the owner ARMS the
+   * recogniser - one open hand, fingers up, held still (`armStillFrac` of the frame per
+   * sample) for `armHoldMs`. Armed lasts `armedForMs`, extended by every gesture; a hand
+   * at the chin, a cigarette or a cup does nothing while disarmed. `false` only in tests.
+   */
+  engagementGate: boolean;
+  armHoldMs: number;
+  armStillFrac: number;
+  armedForMs: number;
   /** Total accumulated rotation (degrees) needed for rotate_cw/rotate_ccw. */
   rotateMinDegrees: number;
   /** ...within this many ms of the loose-pinch anchor. */
@@ -202,16 +218,24 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   openHandMinRatio: 0.45,
   swipeMinDistanceFrac: 0.16,
   swipeMaxMs: 900,
-  looseIndexPinchMaxRatio: 0.55,
+  // The owner's "C" pose for a rotate keeps thumb and index a good half a hand apart
+  // (photo, 2026-09-21); 0.55 was borderline. An open hand is 1.0+, so 0.8 still tells them apart.
+  looseIndexPinchMaxRatio: 0.8,
+  engagementGate: true,
+  armHoldMs: 400,
+  armStillFrac: 0.02,
+  armedForMs: 4_000,
   rotateMinDegrees: 40,
   rotateMaxMs: 1_000,
   // Second live trial: "iki elimi yana açtığımda tam ekran yapmıyor" - MediaPipe sees two
   // hands only once they are already apart, so "growing apart by half a frame" rarely
   // had a start to measure from. Now: two open hands HELD wide.
-  spreadWideFrac: 0.5,
+  // The owner's own poses (photos, 2026-09-21): apart = wrists ~0.45 of the frame, together
+  // = ~0.2 with the hands overlapping in front of the face.
+  spreadWideFrac: 0.4,
   spreadHoldMs: 250,
-  spreadRearmFrac: 0.4,
-  gatherCloseFrac: 0.22,
+  spreadRearmFrac: 0.3,
+  gatherCloseFrac: 0.28,
   gatherHoldMs: 300,
   tightPinchOnRatio: 0.2,
   tightPinchOffRatio: 0.32,
@@ -259,10 +283,12 @@ type HandTrack = {
   /** Cumulative signed rotation (degrees) accumulated since `looseSince`. */
   rotationDeg: number;
   pinchState: PinchState;
+  /** `t_ms` since this hand has been open, upright and still - the arming pose - or null. */
+  stillSince: number | null;
 };
 
 function emptyTrack(): HandTrack {
-  return { buffer: [], openSince: null, looseSince: null, rotationDeg: 0, pinchState: "idle" };
+  return { buffer: [], openSince: null, looseSince: null, rotationDeg: 0, pinchState: "idle", stillSince: null };
 }
 
 // -------------------------------------------------------------- recognizer
@@ -279,6 +305,11 @@ export class GestureRecognizer {
   /** A gather needs the hands to have been APART first (>= spreadRearmFrac). */
   private gatherArmed = false;
   private lastEmit: { name: GestureName; t_ms: number } | null = null;
+  /** The engagement gate: `t_ms` until which gestures count, or null while disarmed. */
+  private armedUntil: number | null = null;
+  /** The last frame that showed two hands (a brief one-hand frame while two hands overlap
+   * must not reset the two-hand state - MediaPipe merges touching hands). */
+  private twoHandsLastSeen: number | null = null;
 
   constructor(options: Partial<RecognizerOptions> = {}) {
     this.opts = { ...DEFAULT_RECOGNIZER_OPTIONS, ...options };
@@ -296,10 +327,24 @@ export class GestureRecognizer {
       this.tracks.set(hand.handedness, track);
       this.updateTrack(track, hand.landmarks, frame.t_ms);
 
-      // Pinch hysteresis: independent of the cooldown, one edge per tick at most.
+      // The arming pose held long enough arms (or re-arms) the gate.
+      if (track.stillSince !== null && frame.t_ms - track.stillSince >= this.opts.armHoldMs) {
+        this.armedUntil = frame.t_ms + this.opts.armedForMs;
+      }
+    }
+    if (this.armedUntil !== null && frame.t_ms > this.armedUntil) this.armedUntil = null;
+    if (frame.hands.length === 0) this.armedUntil = null;
+
+    for (const hand of frame.hands) {
+      const track = this.tracks.get(hand.handedness);
+      if (!track) continue;
+      // Pinch hysteresis: independent of the cooldown, one edge per tick at most. A
+      // pinch STARTS only while armed; a started pinch always RELEASES (stage 2 holds a
+      // mouse button on it - a release must never be gated away).
       const ratio = pinchRatio(mirror(hand.landmarks));
-      if (track.pinchState === "idle" && ratio <= this.opts.tightPinchOnRatio) {
+      if (track.pinchState === "idle" && ratio <= this.opts.tightPinchOnRatio && this.isArmed(frame.t_ms)) {
         track.pinchState = "pinched";
+        this.extendArmed(frame.t_ms);
         events.push({ name: "pinch_start", t_ms: frame.t_ms });
       } else if (track.pinchState === "pinched" && ratio >= this.opts.tightPinchOffRatio) {
         track.pinchState = "idle";
@@ -327,11 +372,14 @@ export class GestureRecognizer {
     }
     if (nonPinch) events.push(nonPinch);
 
-    if (seen.size < 2) {
+    if (frame.hands.length >= 2) this.twoHandsLastSeen = frame.t_ms;
+    else if (this.twoHandsLastSeen === null || frame.t_ms - this.twoHandsLastSeen > TWO_HANDS_GRACE_MS) {
+      // Gone for real (not a one-frame merge of two touching hands): reset the two-hand state.
       this.wideSince = null;
       this.closeSince = null;
       this.spreadArmed = true;
       this.gatherArmed = false;
+      this.twoHandsLastSeen = null;
     }
     return events;
   }
@@ -341,13 +389,25 @@ export class GestureRecognizer {
    * and the return-suppression window (`returnSuppressMs`) for the OPPOSITE of the last
    * gesture. Returns the event to emit, or null when it is swallowed.
    */
+  /** Whether gestures count right now (the engagement gate; always true when the gate is off). */
+  isArmed(now: number): boolean {
+    if (!this.opts.engagementGate) return true;
+    return this.armedUntil !== null && now <= this.armedUntil;
+  }
+
+  private extendArmed(now: number): void {
+    if (this.opts.engagementGate) this.armedUntil = now + this.opts.armedForMs;
+  }
+
   private emit(name: GestureName, now: number): GestureEvent | null {
+    if (!this.isArmed(now)) return null;
     const last = this.lastEmit;
     if (last !== null) {
       if (now - last.t_ms < this.opts.cooldownMs) return null;
       if (oppositeOf(last.name) === name && now - last.t_ms < this.opts.returnSuppressMs) return null;
     }
     this.lastEmit = { name, t_ms: now };
+    this.extendArmed(now);
     return { name, t_ms: now };
   }
 
@@ -359,6 +419,15 @@ export class GestureRecognizer {
 
     if (isOpen) track.openSince ??= t_ms;
     else track.openSince = null;
+
+    // The arming pose: open, fingers UP (the index and middle tips above the wrist by
+    // half a hand), and still against the previous sample.
+    const prevSample = track.buffer.at(-1);
+    const palm = palmCenter(m);
+    const upright = m[WRIST].y - Math.max(m[INDEX_TIP].y, m[MIDDLE_TIP].y) >= handSize(m) * 0.5;
+    const still = prevSample !== undefined && dist(palm, prevSample.palm) <= this.opts.armStillFrac;
+    if (isOpen && upright && still) track.stillSince ??= prevSample?.t_ms ?? t_ms;
+    else track.stillSince = null;
 
     if (loose) {
       if (track.looseSince === null) {
@@ -373,7 +442,7 @@ export class GestureRecognizer {
       track.rotationDeg = 0;
     }
 
-    track.buffer.push({ t_ms, m, palm: palmCenter(m), open: isOpen, loosePinch: loose, angle });
+    track.buffer.push({ t_ms, m, palm, open: isOpen, loosePinch: loose, angle });
     const cutoff = t_ms - this.opts.historyMs;
     while (track.buffer.length > 1 && track.buffer[0].t_ms < cutoff) track.buffer.shift();
   }
@@ -472,6 +541,11 @@ export class GestureRecognizer {
     return null;
   }
 
+  /** `measure()` plus this recogniser's own gate state, for the HUD. */
+  measureNow(frame: TrackedFrame): FrameMeasure {
+    return { ...GestureRecognizer.measure(frame), armed: this.isArmed(frame.t_ms) };
+  }
+
   /** Live measurements for the calibration readout - what THIS frame looks like to the
    * rules above, in the same mirrored units the thresholds use. Pure; emits nothing. */
   static measure(frame: TrackedFrame): FrameMeasure {
@@ -481,6 +555,7 @@ export class GestureRecognizer {
       openness: hands.map((m) => Math.round(openness(m) * 100) / 100),
       pinch: hands.map((m) => Math.round(pinchRatio(m) * 100) / 100),
       wristDistance: hands.length >= 2 ? Math.round(dist(hands[0][WRIST], hands[1][WRIST]) * 100) / 100 : null,
+      armed: false,
     };
   }
 

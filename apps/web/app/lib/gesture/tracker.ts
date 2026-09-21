@@ -211,7 +211,7 @@ export class GestureTracker {
     }
     if (t_ms - this.lastStatsAtMs >= 200) {
       this.lastStatsAtMs = t_ms;
-      this.options.onStats?.({ fps: this.lastFps, measure: GestureRecognizer.measure(frame) });
+      this.options.onStats?.({ fps: this.lastFps, measure: this.recognizer.measureNow(frame) });
     }
 
     this.loop();

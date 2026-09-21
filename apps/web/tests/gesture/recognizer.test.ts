@@ -107,9 +107,12 @@ function names(events: Array<{ name: GestureName }>): GestureName[] {
 
 // ------------------------------------------------------------------- tests
 
+/** Every rule below is tested on its own; the engagement gate has its own describe. */
+const UNGATED: Partial<RecognizerOptions> = { engagementGate: false };
+
 describe("GestureRecognizer: the closed set, once each", () => {
   it("every GESTURE_NAMES member is producible (and nothing else is emitted)", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const emitted = new Set<GestureName>();
     const GAP = DEFAULT_RECOGNIZER_OPTIONS.returnSuppressMs + 100;
 
@@ -199,7 +202,7 @@ describe("GestureRecognizer: the closed set, once each", () => {
 
 describe("GestureRecognizer: the mirroring sign convention", () => {
   it("RAW x decreasing (toward the camera's left) is swipe_right, as the owner sees their own hand", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events = [0.7, 0.6, 0.5, 0.4].flatMap((x, i) =>
       names(rec.ingest(frame(i * 100, [["Right", openHandNoPinch({ x, y: 0.5 })]]))),
     );
@@ -207,7 +210,7 @@ describe("GestureRecognizer: the mirroring sign convention", () => {
   });
 
   it("RAW x increasing (toward the camera's right) is swipe_left", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events = [0.3, 0.4, 0.5, 0.6].flatMap((x, i) =>
       names(rec.ingest(frame(i * 100, [["Right", openHandNoPinch({ x, y: 0.5 })]]))),
     );
@@ -225,7 +228,7 @@ describe("GestureRecognizer: the mirroring sign convention", () => {
   });
 
   it("a RAW angle sweep DEcreasing is rotate_cw (mirrored) — the owner's 'sağa çevir' for volume up", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const thetasDeg = [100, 75, 50, 25, 0];
     const events = thetasDeg.flatMap((deg, i) =>
       names(rec.ingest(frame(i * 100, [["Right", loosePinchHand({ x: 0.5, y: 0.5 }, (deg * Math.PI) / 180)]]))),
@@ -234,7 +237,7 @@ describe("GestureRecognizer: the mirroring sign convention", () => {
   });
 
   it("a RAW angle sweep INcreasing is rotate_ccw (mirrored) — 'sola çevir' for volume down", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const thetasDeg = [0, 25, 50, 75, 100];
     const events = thetasDeg.flatMap((deg, i) =>
       names(rec.ingest(frame(i * 100, [["Right", loosePinchHand({ x: 0.5, y: 0.5 }, (deg * Math.PI) / 180)]]))),
@@ -245,7 +248,7 @@ describe("GestureRecognizer: the mirroring sign convention", () => {
 
 describe("GestureRecognizer: the cooldown and 'one gesture at a time'", () => {
   it("a second qualifying swipe inside the cooldown is suppressed", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     let t = 0;
     const first = names(
       [0.7, 0.6, 0.5, 0.4].flatMap((x) => {
@@ -281,7 +284,7 @@ describe("GestureRecognizer: the cooldown and 'one gesture at a time'", () => {
   });
 
   it("pinch_start/pinch_release are NOT held back by the swipe/rotate/spread cooldown", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     let t = 0;
     // Burn the cooldown with a swipe.
     for (const x of [0.7, 0.6, 0.5, 0.4]) {
@@ -296,7 +299,7 @@ describe("GestureRecognizer: the cooldown and 'one gesture at a time'", () => {
 
 describe("GestureRecognizer: what must NOT be a swipe", () => {
   it("a slow drift covering the same total distance over ~2s never crosses the per-window threshold", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     // 0.7 -> 0.4 (0.3 total, well past swipeMinDistanceFrac) but spread over 2000ms, sampled
     // every 100ms: within ANY 600ms sub-window the displacement is ~0.09, under threshold.
@@ -309,7 +312,7 @@ describe("GestureRecognizer: what must NOT be a swipe", () => {
   });
 
   it("a rotate (loose-pinch, curled fingers) is never read as a swipe, even while the wrist itself drifts", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     const thetasDeg = [100, 75, 50, 25, 0];
     for (let i = 0; i < thetasDeg.length; i += 1) {
@@ -323,7 +326,7 @@ describe("GestureRecognizer: what must NOT be a swipe", () => {
   });
 
   it("a closed fist translating the same distance as a swipe produces nothing (not OPEN)", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (const x of [0.7, 0.6, 0.5, 0.4]) {
@@ -336,7 +339,7 @@ describe("GestureRecognizer: what must NOT be a swipe", () => {
 
 describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
   it("one hand alone, however far it moves, never produces spread", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (const x of [0.2, 0.4, 0.6, 0.8]) {
@@ -349,7 +352,7 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
   it("two open hands wider than spreadWideFrac for spreadHoldMs is spread - once, until they come back", () => {
     // Second live trial (2026-09-21): MediaPipe sees two hands only once they are already
     // apart, so "growing apart" rarely had a start to measure; the pose itself is the gesture.
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (let i = 0; i < 6; i += 1) {
@@ -377,7 +380,7 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
   });
 
   it("two hands apart but only briefly, or not wide enough, never reach spread", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (let i = 0; i <= 10; i += 1) {
@@ -393,7 +396,7 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
   });
 
   it("two open hands brought together after being apart is gather - once, and never right after a spread", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     // Together first, never apart: no gather (nothing to close).
@@ -428,7 +431,7 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
   });
 
   it("two FISTS held wide apart are not a spread", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (let i = 0; i < 6; i += 1) {
@@ -442,7 +445,7 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
 describe("GestureRecognizer: the way back is not a gesture (returnSuppressMs)", () => {
   it("a rotate followed by turning the hand back is ONE rotate; the same direction again is a second", () => {
     // Second live trial: "sağ döndürüyorum, elimi eski pozisyona getirirken sol algılıyor".
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     const turn = (degs: readonly number[]) => {
@@ -465,7 +468,7 @@ describe("GestureRecognizer: the way back is not a gesture (returnSuppressMs)", 
   });
 
   it("a swipe followed by the hand coming back is ONE swipe", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (const x of [0.7, 0.6, 0.5, 0.4]) {
@@ -486,7 +489,7 @@ describe("GestureRecognizer: a swipe is judged where it STARTS", () => {
   it("a hand that is open at the start and tilts (reads closed) by the end still swipes", () => {
     // Second live trial: a swiping hand tilts toward the camera and its 2D openness drops
     // mid-motion - "sağa sola kaydırmada çok zor algılıyor".
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     const hands = [openHandNoPinch({ x: 0.7, y: 0.5 }), openHandNoPinch({ x: 0.6, y: 0.5 }), fistHand({ x: 0.5, y: 0.5 }), fistHand({ x: 0.4, y: 0.5 })];
@@ -498,7 +501,7 @@ describe("GestureRecognizer: a swipe is judged where it STARTS", () => {
   });
 
   it("a fist moving across the frame is never a swipe", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const events: GestureName[] = [];
     let t = 0;
     for (const x of [0.7, 0.6, 0.5, 0.4, 0.3]) {
@@ -511,7 +514,7 @@ describe("GestureRecognizer: a swipe is judged where it STARTS", () => {
 
 describe("GestureRecognizer: pinch hysteresis", () => {
   it("thumb/index closing past tightPinchOnRatio emits pinch_start once, reopening past tightPinchOffRatio emits pinch_release once", () => {
-    const rec = new GestureRecognizer();
+    const rec = new GestureRecognizer(UNGATED);
     const wrist = { x: 0.5, y: 0.5 };
     const start = names(rec.ingest(frame(0, [["Right", tightPinchHand(wrist)]])));
     expect(start).toEqual(["pinch_start"]);
@@ -548,5 +551,84 @@ describe("GestureRecognizer: threshold sensitivity (documents what each bound gu
       names(rec.ingest(frame(i * 100, [["Right", loosePinchHand({ x: 0.5, y: 0.5 }, (deg * Math.PI) / 180)]]))),
     );
     expect(events).toEqual([]);
+  });
+});
+
+describe("GestureRecognizer: the engagement gate (ADR-0199)", () => {
+  const swipeRight = (rec: GestureRecognizer, t0: number) =>
+    // From where the arming pose left the hand (0.5): a swipe continues, it does not teleport.
+    [0.5, 0.4, 0.3, 0.2].flatMap((x, i) => names(rec.ingest(frame(t0 + i * 100, [["Right", openHandNoPinch({ x, y: 0.5 })]]))));
+
+  it("nothing counts before the owner arms: a hand going to the chin, a cigarette, a swipe", () => {
+    const rec = new GestureRecognizer();
+    expect(rec.isArmed(0)).toBe(false);
+    expect(swipeRight(rec, 0)).toEqual([]);
+    let t = 1000;
+    for (const thetaDeg of [110, 80, 50, 20, 0]) {
+      expect(names(rec.ingest(frame(t, [["Right", loosePinchHand({ x: 0.5, y: 0.5 }, (thetaDeg * Math.PI) / 180)]])))).toEqual([]);
+      t += 100;
+    }
+    expect(names(rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]])))).toEqual([]);
+  });
+
+  it("an open, upright, still hand held 400 ms arms; then a swipe counts and the arming is extended", () => {
+    const rec = new GestureRecognizer();
+    let t = 0;
+    for (let i = 0; i < 6; i += 1) {
+      expect(names(rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]])))).toEqual([]);
+      t += 100;
+    }
+    expect(rec.isArmed(t)).toBe(true);
+    expect(swipeRight(rec, t)).toEqual(["swipe_right"]);
+    t += 400;
+    // Extended by the gesture: still armed well past the original 4 s window's start.
+    expect(rec.isArmed(t + 3_500)).toBe(true);
+  });
+
+  it("arming lapses after armedForMs without a gesture, and the moment the hand leaves the frame", () => {
+    const rec = new GestureRecognizer();
+    let t = 0;
+    for (let i = 0; i < 6; i += 1) {
+      rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]]));
+      t += 100;
+    }
+    expect(rec.isArmed(t)).toBe(true);
+    expect(rec.isArmed(t + DEFAULT_RECOGNIZER_OPTIONS.armedForMs + 1)).toBe(false);
+    // Re-arm, then an empty frame disarms at once.
+    for (let i = 0; i < 6; i += 1) {
+      rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]]));
+      t += 100;
+    }
+    expect(rec.isArmed(t)).toBe(true);
+    rec.ingest(frame(t, []));
+    expect(rec.isArmed(t)).toBe(false);
+  });
+
+  it("a moving open hand does not arm (it must be STILL), and a fist held still does not arm", () => {
+    const rec = new GestureRecognizer();
+    let t = 0;
+    for (let i = 0; i < 8; i += 1) {
+      rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.3 + i * 0.05, y: 0.5 })]]));
+      t += 100;
+    }
+    expect(rec.isArmed(t)).toBe(false);
+    for (let i = 0; i < 8; i += 1) {
+      rec.ingest(frame(t, [["Right", fistHand({ x: 0.5, y: 0.5 })]]));
+      t += 100;
+    }
+    expect(rec.isArmed(t)).toBe(false);
+  });
+
+  it("a pinch started while armed still releases after the arming lapsed (a held button must let go)", () => {
+    const rec = new GestureRecognizer();
+    let t = 0;
+    for (let i = 0; i < 6; i += 1) {
+      rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]]));
+      t += 100;
+    }
+    expect(names(rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]])))).toEqual(["pinch_start"]);
+    t += DEFAULT_RECOGNIZER_OPTIONS.armedForMs + 500;
+    expect(rec.isArmed(t)).toBe(false);
+    expect(names(rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y: 0.5 })]])))).toEqual(["pinch_release"]);
   });
 });
