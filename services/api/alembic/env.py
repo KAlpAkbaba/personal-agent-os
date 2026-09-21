@@ -14,6 +14,7 @@ import app.artifacts.models  # noqa: F401 - register artifact/task tables on Bas
 import app.broker.models  # noqa: F401 - register broker tables on Base.metadata
 import app.evolution.models  # noqa: F401 - register evolution tables on Base.metadata
 import app.identity.models  # noqa: F401 - register identity tables on Base.metadata
+import app.macros.models  # noqa: F401 - register ADR-0196 voice_macros on Base.metadata
 import app.media.models  # noqa: F401 - register ADR-0112 owner_media_playbacks
 import app.memory.models  # noqa: F401 - register memory tables on Base.metadata
 import app.mobile.models  # noqa: F401 - register push_registrations on Base.metadata

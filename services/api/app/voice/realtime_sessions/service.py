@@ -863,6 +863,7 @@ def handle_tool_call(
         return _tool_row_payload(winner, replayed=True)
 
     ctx = dict(row.context_json or {})
+    device_trusted = device_is_trusted(db, owner)
     tool_ctx = ToolContext(
         session_id=row.id,
         owner_session_id=owner.session_id,
@@ -872,7 +873,15 @@ def handle_tool_call(
         db=db,
         now=now,
         call_id=call_id,
-        live=dict(live or {}),
+        live={
+            **dict(live or {}),
+            # ADR-0196: macro.run replays recorded calls through the SAME handlers and
+            # the SAME step-up gate as a call arriving here would meet - so it needs the
+            # registry and the device-trust fact this relay derived, never a copy of
+            # either taken from the call.
+            "tool_registry": registry,
+            "device_trusted": device_trusted,
+        },
         followups=followups if followups is not None else [],
     )
     started = utcnow()
@@ -890,7 +899,7 @@ def handle_tool_call(
         db,
         tool=name,
         owner_session_id=owner.session_id,
-        device_trusted=device_is_trusted(db, owner),
+        device_trusted=device_trusted,
         now=now,
     )
     step_up_policy.record(step_up, owner_session_id=owner.session_id)
@@ -1006,6 +1015,30 @@ def handle_tool_call(
                 )
                 call.completed_at = utcnow()
     duration_ms = int((utcnow() - started).total_seconds() * 1000)
+    # ADR-0196: while a macro is being recorded, every call that was made AND did
+    # something is kept on the recording - as it was made (tool, arguments, the turn
+    # record it read), so the replay makes the same call. A clarification ("Hangi
+    # tuş?") and a failed call are not steps: they did nothing the owner would want
+    # done again.
+    # A long-running tool (a research, a build) is a job the relay gates per turn, not a
+    # desktop habit; it is never a step.
+    if (
+        call.status in (TOOL_STATUS_SUCCEEDED, TOOL_STATUS_RUNNING)
+        and not (spec is not None and spec.long_running)
+        and not (
+            isinstance(call.result_json, dict)
+            and call.result_json.get("status") == "needs_clarification"
+        )
+    ):
+        from app.macros import service as macros_service
+
+        macros_service.capture_step(
+            ctx,
+            tool=name,
+            arguments=dict(arguments),
+            turn=ctx.get("last_utterance") if isinstance(ctx.get("last_utterance"), dict) else None,
+            now=now,
+        )
     for event, payload in tool_ctx.pushes:
         _deliver(db, row, ctx, sideband, event, payload, trace_id=trace_id)
     _set_context(row, ctx)
@@ -1655,8 +1688,21 @@ def record_client_events(
                 )
             except Exception:  # noqa: BLE001 - a deployment without the journal table
                 mutation_pending_known = False
+            # ADR-0196: the two macro facts - whether the last thing said to the owner
+            # was "bu harekete ne ad vereyim?" (then this sentence IS the name), and the
+            # stored names a sentence may be. Read per utterance: a name saved on the
+            # previous turn must be runnable on this one.
+            from app.macros import service as macros_service
+
+            macro_awaiting_name_known = macros_service.is_awaiting_name(ctx)
+            try:
+                macro_names_known = macros_service.name_keys(db)
+            except Exception:  # noqa: BLE001 - a deployment without the macros table
+                macro_names_known = ()
             intent: ResolvedIntent = resolve_intent(
                 text,
+                macro_names=macro_names_known,
+                macro_awaiting_name=macro_awaiting_name_known,
                 session_state=RealtimeState(fsm) if fsm else None,
                 narration=narration_state,
                 has_completed_research=research_context_known,
@@ -1781,6 +1827,10 @@ def record_client_events(
                 # SAID, for the same "owner's words win over the model's argument" reason.
                 "key_press": intent.key_press,
                 "scroll_direction": intent.scroll_direction,
+                # ADR-0195: how many times the owner SAID ("beş kere"); ADR-0196: the
+                # macro the owner NAMED. Both for the same reason as every line here.
+                "repeat_count": intent.repeat_count,
+                "macro_name": intent.macro_name,
                 # B29 req 100/102: the button or control the owner NAMED.
                 "ui_target": intent.ui_target,
                 # B30 req 119-122: the process and the service the owner NAMED.

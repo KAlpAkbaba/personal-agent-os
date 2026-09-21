@@ -1658,9 +1658,18 @@ def _operator_input_cases() -> list[UtteranceCase]:
         ("op.key.2", "Escape'e bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
         ("op.key.3", "Tab tuşuna bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
         ("op.key.4", "Yukarı ok tuşuna bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
+        # ADR-0195 (owner note 1, 2026-09-21): the count the owner SAID, applied.
+        ("op.key.repeat.1", "Yukarı tuşuna 5 kere bas.", "canonical", SIDE_EFFECTS_OPERATOR_KEY),
+        ("op.key.repeat.2", "Enter'a üç defa bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_KEY),
         ("op.shortcut.1", "Ctrl S'ye bas.", "canonical", SIDE_EFFECTS_OPERATOR_SHORTCUT),
         ("op.shortcut.2", "Kontrol Z'ye bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_SHORTCUT),
         ("op.shortcut.3", "Alt F4'e bas.", "paraphrase", SIDE_EFFECTS_OPERATOR_SHORTCUT),
+        (
+            "op.shortcut.repeat.1",
+            "Kontrol Z'ye iki kere bas.",
+            "paraphrase",
+            SIDE_EFFECTS_OPERATOR_SHORTCUT,
+        ),
     ):
         cases.extend(
             _with_variants(
@@ -1681,6 +1690,7 @@ def _operator_input_cases() -> list[UtteranceCase]:
         ("op.scroll.1", "Aşağı kaydır.", "canonical"),
         ("op.scroll.2", "Yukarı kaydır.", "paraphrase"),
         ("op.scroll.3", "Biraz aşağıya kaydır.", "paraphrase"),
+        ("op.scroll.repeat.1", "Üç kere aşağı kaydır.", "paraphrase"),
     ):
         cases.extend(
             _with_variants(
@@ -7126,6 +7136,101 @@ def _nativeapps_cases() -> list[UtteranceCase]:
     ]
 
 
+def _macro_cases() -> list[UtteranceCase]:
+    """ADR-0196 (owner note 2, 2026-09-21): a recorded sequence of spoken actions, the
+    owner's "hareket". The control words on their own, and the whole conversation as one
+    multi-turn case: start, a key press, end, the name, and the name alone replaying the
+    press against the fake device (the harness's ``preceding_turns``)."""
+    cases: list[UtteranceCase] = []
+    for case_id, text, intent, tool, source in (
+        (
+            "macro.start.1",
+            "Yeni hareket oluştur.",
+            "macro_record_start",
+            "macro.record_start",
+            "canonical",
+        ),
+        (
+            "macro.start.2",
+            "Yeni bir hareket başlat.",
+            "macro_record_start",
+            "macro.record_start",
+            "paraphrase",
+        ),
+        (
+            "macro.start.3",
+            "Hareket kaydet.",
+            "macro_record_start",
+            "macro.record_start",
+            "paraphrase",
+        ),
+        # With nothing recording, the end word answers so (a succeeded call, not a question).
+        ("macro.end.1", "Hareketi bitir.", "macro_record_end", "macro.record_end", "canonical"),
+        ("macro.end.2", "Hareketi tamamla.", "macro_record_end", "macro.record_end", "paraphrase"),
+        (
+            "macro.cancel.1",
+            "Hareketi iptal et.",
+            "macro_record_cancel",
+            "macro.cancel",
+            "canonical",
+        ),
+        ("macro.list.1", "Hangi hareketlerim var?", "macro_list", "macro.list", "canonical"),
+        ("macro.list.2", "Hareketleri listele.", "macro_list", "macro.list", "paraphrase"),
+    ):
+        cases.extend(
+            _with_variants(
+                UtteranceCase(
+                    case_id=case_id,
+                    utterance=text,
+                    expected_intent=intent,
+                    expected_tool=tool,
+                    category="macro",
+                    source=source,
+                )
+            )
+        )
+    # The conversation: the name alone replays the recorded key press - the fake device
+    # receives the same keyboard.key it received while the owner was teaching.
+    cases.append(
+        UtteranceCase(
+            case_id="macro.run.1",
+            utterance="Yeni mail sekmesi aç.",
+            expected_intent="macro_run",
+            expected_tool="macro.run",
+            side_effects=SIDE_EFFECTS_OPERATOR_KEY,
+            context=CTX_WINDOW_FOCUSED,
+            category="macro",
+            source="canonical",
+            preceding_turns=(
+                ("Yeni hareket oluştur.", "macro.record_start"),
+                ("Enter'a bas.", "operator.key"),
+                ("Hareketi bitir.", "macro.record_end"),
+                ("Yeni mail sekmesi.", "macro.name"),
+            ),
+        )
+    )
+    # And the name is a plain sentence again once the macro is deleted.
+    cases.append(
+        UtteranceCase(
+            case_id="macro.delete.1",
+            utterance="Yeni mail sekmesi hareketini sil.",
+            expected_intent="macro_delete",
+            expected_tool="macro.delete",
+            side_effects=SIDE_EFFECTS_OPERATOR_KEY,
+            context=CTX_WINDOW_FOCUSED,
+            category="macro",
+            source="canonical",
+            preceding_turns=(
+                ("Yeni hareket oluştur.", "macro.record_start"),
+                ("Enter'a bas.", "operator.key"),
+                ("Hareketi bitir.", "macro.record_end"),
+                ("Yeni mail sekmesi.", "macro.name"),
+            ),
+        )
+    )
+    return cases
+
+
 def _routine_cases() -> list[UtteranceCase]:
     """B14 req 296-299: the owner's own routines, in their own words.
 
@@ -7828,6 +7933,7 @@ def all_cases() -> list[UtteranceCase]:
     cases = [
         *_clock_cases(),
         *_routine_cases(),
+        *_macro_cases(),
         *_memory_cases(),
         *_daily_cases(),
         *_research_cases(),

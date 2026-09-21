@@ -77,6 +77,11 @@ from app.voice.realtime_sessions.tools_genesis import (
     CAPABILITY_TOOL_NAMES,
     register_genesis_tools,
 )
+
+# No ROUTINE_CLARIFYING_TOOLS beside its siblings: a routine tool never answers "Hangi
+# rutin?" - it takes an id and refuses a bad one by name. Importing the name tuple here
+# just to have it would be a constant nothing reads.
+from app.voice.realtime_sessions.tools_macros import MACRO_TOOL_NAMES, register_macro_tools
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_media import register_media_tools
 from app.voice.realtime_sessions.tools_memory import register_memory_tools
@@ -89,10 +94,6 @@ from app.voice.realtime_sessions.tools_operator import register_operator_tools
 from app.voice.realtime_sessions.tools_pronunciation import (
     register_pronunciation_tools,
 )
-
-# No ROUTINE_CLARIFYING_TOOLS beside its siblings: a routine tool never answers "Hangi
-# rutin?" - it takes an id and refuses a bad one by name. Importing the name tuple here
-# just to have it would be a constant nothing reads.
 from app.voice.realtime_sessions.tools_routines import register_routine_tools
 from app.voice.realtime_sessions.tools_scene import SCENE_TOOL_NAMES, register_scene_tools
 from app.voice.realtime_sessions.tools_selfdev import register_selfdev_tools
@@ -1000,6 +1001,10 @@ CREATIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(CREATIVE_TOOL_NAMES)
 #: that answered a question with a receipt would be claiming something was built.
 NATIVE_CLARIFYING_TOOLS: frozenset[str] = frozenset(NATIVE_TOOL_NAMES)
 
+#: ADR-0196: "Bu harekete ne ad vereyim?" (a name that was not heard) and "Hangi hareket
+#: efendim?" (a run or delete that named none) are questions, not receipts.
+MACRO_CLARIFYING_TOOLS: frozenset[str] = frozenset(MACRO_TOOL_NAMES)
+
 
 def result_is_research_bound(tool_name: str, result: Any) -> bool:
     """Whether a handler's result falls under the research result contract (ADR-0077)."""
@@ -1049,6 +1054,7 @@ def terminal_status_for(tool_name: str, result: Any) -> tuple[str, str | None]:
             | WEATHER_CLARIFYING_TOOLS
             | CREATIVE_CLARIFYING_TOOLS
             | NATIVE_CLARIFYING_TOOLS
+            | MACRO_CLARIFYING_TOOLS
             and isinstance(result, dict)
             and result.get("status") == RESULT_NEEDS_CLARIFICATION
             and str(result.get("speech") or "").strip()
@@ -2538,6 +2544,8 @@ def default_registry() -> ToolRegistry:
     # complete since M18 and the owner could not reach any of it by speaking - every one of
     # the seven routines in production was created by the alarm subsystem on their behalf.
     register_routine_tools(reg)
+    # ADR-0196: the owner's recorded, named sequences of spoken actions.
+    register_macro_tools(reg)
     # B16 req 31-38/61-62: the owner's voice over their own MEMORY. `app.memory` has
     # been complete since M5 - policy, evidence, versions, audit, retrieval, REST - and
     # nothing under app/voice/ imported one line of it, so nothing the owner SAID could

@@ -27,6 +27,7 @@ from app.config import Settings
 from app.identity.root import InMemoryCredentialRoot
 from app.identity.runtime import IdentityRuntime
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
+from app.macros.models import VoiceMacroRow
 from app.main import create_app
 from app.narration.models import NarrationSession, PronunciationEntry
 from app.operator import focus as operator_focus
@@ -64,6 +65,8 @@ TABLES = (
     DeviceCommand.__table__,
     EnrollmentToken.__table__,
     ObjectFocusRow.__table__,
+    # ADR-0196: the router reads the stored macro names on EVERY utterance.
+    VoiceMacroRow.__table__,
 )
 
 

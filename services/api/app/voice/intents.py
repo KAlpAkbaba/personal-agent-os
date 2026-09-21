@@ -31,6 +31,8 @@ from enum import StrEnum
 from typing import Any, Final
 
 from app.calendar import tr_time as calendar_tr_time
+from app.macros.naming import match_stored_name
+from app.macros.naming import spoken_name as macro_spoken_name
 from app.narration import commands
 from app.narration.commands import Command, NarrationState, ParsedCommand, State
 from app.narration.engine import PARAGRAPH_HEADING, PARAGRAPH_LIST, Cursor, NarrationPlan
@@ -94,6 +96,17 @@ class Intent(StrEnum):
     UI_INVOKE = "ui_invoke"
     UI_READ = "ui_read"
     SCREEN_DESCRIBE = "screen_describe"
+    # Owner note 2 (2026-09-21, ADR-0196): a recorded sequence of spoken actions the owner
+    # calls a "hareket". "Yeni hareket oluştur" starts recording (what follows is DONE and
+    # kept), "hareketi bitir" ends it and asks for a name, the next sentence IS the name,
+    # and from then on "<ad> aç" replays the steps without the owner describing them.
+    MACRO_RECORD_START = "macro_record_start"  # yeni hareket oluştur / başlat / kaydet
+    MACRO_RECORD_END = "macro_record_end"  # hareketi bitir / tamamla
+    MACRO_RECORD_CANCEL = "macro_record_cancel"  # hareketi iptal et (while recording)
+    MACRO_NAME = "macro_name"  # the sentence answering "bu harekete ne ad vereyim?"
+    MACRO_RUN = "macro_run"  # <ad> aç / <ad> hareketini çalıştır
+    MACRO_LIST = "macro_list"  # hangi hareketlerim var
+    MACRO_DELETE = "macro_delete"  # <ad> hareketini sil
     # B30 req 82/119-122: an application closed by name, processes and services asked
     # about by name, and the two policy-gated actions on them.
     APP_CLOSE = "app_close"  # Not Defteri'ni kapat / Chrome'u kapat
@@ -611,6 +624,15 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.APP_CLOSE: "operator.app_close",
     Intent.PROCESS_STOP: "operator.process",
     Intent.SERVICE_RESTART: "operator.service",
+    # ADR-0196: every macro word but the listing changes durable or session state - the
+    # recording on the session, the row in ``voice_macros``, or the desktop when one runs.
+    # ``macro.list`` is a QUERY and lives in the other table.
+    Intent.MACRO_RECORD_START: "macro.record_start",
+    Intent.MACRO_RECORD_END: "macro.record_end",
+    Intent.MACRO_RECORD_CANCEL: "macro.cancel",
+    Intent.MACRO_NAME: "macro.name",
+    Intent.MACRO_RUN: "macro.run",
+    Intent.MACRO_DELETE: "macro.delete",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -622,6 +644,8 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.CLOCK_QUERY: "clock.now",
     # B14 req 288. Reading back what the owner already set up mutates nothing.
     Intent.ROUTINE_LIST: "routine.list",
+    # ADR-0196. The same: the recorded macros read back, nothing changed.
+    Intent.MACRO_LIST: "macro.list",
     # B16 req 32/61. Both read and neither mutates.
     Intent.MEMORY_SEARCH: "memory.search",
     Intent.MEMORY_WHY: "memory.why",
@@ -1116,6 +1140,15 @@ class ResolvedIntent:
     key_press: str | None = None
     #: B28 req 98: "down" | "up" for a spoken scroll.
     scroll_direction: str | None = None
+    #: Owner note 1 (2026-09-21, ADR-0195): how many times the owner SAID to do it
+    #: ("yukarı tuşuna beş kere bas" -> 5, ``spoken_repeat``); None when no count was
+    #: spoken and the action happens once. Carried on the turn so the tool applies what
+    #: was said, never a count the model chose.
+    repeat_count: int | None = None
+    #: ADR-0196: the macro the owner NAMED - the name a MACRO_NAME sentence gives, the
+    #: stored name a MACRO_RUN / MACRO_DELETE sentence points at (``naming.name_key``
+    #: form for a stored one, the owner's own words for a new one).
+    macro_name: str | None = None
     #: B31 req 209: the standing answer register the owner asked for
     #: (executive | detail | technical | full).
     answer_level: str | None = None
@@ -1190,6 +1223,8 @@ class ResolvedIntent:
             "media_volume_direction": self.media_volume_direction,
             "key_press": self.key_press,
             "scroll_direction": self.scroll_direction,
+            "repeat_count": self.repeat_count,
+            "macro_name": self.macro_name,
             "answer_level": self.answer_level,
             "research_mode": self.research_mode,
             "text_query": self.text_query,
@@ -2608,6 +2643,177 @@ def _key_press_match(tokens: tuple[str, ...]) -> str | None:
     if key is None:
         return None
     return "+".join([*modifiers, key])
+
+
+#: Owner note 1 (2026-09-21, ADR-0195): "beş kere", "5 defa", "on beş kez", "üç sefer" -
+#: the count noun and the number standing right before it.
+_REPEAT_NOUN_FORMS: Final[tuple[str, ...]] = ("kere", "kez", "defa", "sefer")
+#: The most an input is repeated from one sentence. A hang guard for the plan, not a
+#: product limit: thirty guarded key presses is already a long plan; more is a job.
+MAX_SPOKEN_REPEAT: Final = 30
+
+
+def spoken_repeat(tokens: tuple[str, ...]) -> int | None:
+    """The repeat count the owner SAID ("yukarı tuşuna beş kere bas" -> 5), or None.
+
+    Read the way ``spoken_minutes`` reads a minute count: the number right before the
+    count noun, a round ten joined to a unit ("on beş kere" -> 15). "bir kere" is 1 -
+    once, said out loud, and the tool does exactly that. Any value the words carry is
+    returned, over :data:`MAX_SPOKEN_REPEAT` too: the tool refuses a hundred presses in
+    its own words rather than this matcher silently reading it as none and pressing once.
+    """
+    for n, tok in enumerate(tokens):
+        if tok not in _REPEAT_NOUN_FORMS:
+            continue
+        if n == 0:
+            return None
+        last = _minute_value(tokens[n - 1])
+        if last is None:
+            return None
+        value = last
+        if last < 10 and n >= 2:
+            tens = _minute_value(tokens[n - 2])
+            if tens is not None and tens >= 10 and tens % 10 == 0:
+                value = tens + last
+        return value if value >= 1 else None
+    return None
+
+
+# ------------------------------------------------------------ macros (ADR-0196)
+
+#: The owner's noun for a recorded sequence: "hareket", "hareketi", "hareketini",
+#: "hareketler(im)". "hareketlendir" (M27: animate a picture) is not it.
+_MACRO_NOUN_STEM: Final = "hareket"
+_MACRO_NOUN_NOT: Final[tuple[str, ...]] = ("hareketlen", "hareketli")
+_MACRO_START_VERB_STEMS: Final[tuple[str, ...]] = (
+    "oluştur",
+    "olustur",
+    "başlat",
+    "baslat",
+    "kaydet",
+    "tanımla",
+    "tanimla",
+    "yap",
+    "ekle",
+)
+#: "hareket kaydı başlat", "hareket kaydet": the recording noun beside the macro noun.
+_MACRO_KEEP_STEMS: Final[tuple[str, ...]] = ("kayd", "kayıt", "kayit")
+_MACRO_END_VERB_STEMS: Final[tuple[str, ...]] = (
+    "bitir",
+    "bitti",
+    "tamamla",
+    "tamam",
+    "sonlandır",
+    "sonlandir",
+    # NOT "durdur": it is a STOP_TOKEN, and "hareketi durdur" while an operator task
+    # runs is the owner stopping THAT (test-engineer review, 2026-09-21). The owner's
+    # own end words are "bitir" / "tamamla".
+)
+_MACRO_CANCEL_WORDS: Final[tuple[str, ...]] = ("iptal", "vazgeç", "vazgec")
+_MACRO_LIST_WORDS: Final[tuple[str, ...]] = (
+    "hangi",
+    "listele",
+    "say",
+    "neler",
+    "nelerdir",
+    "var",
+    "oku",
+    "söyle",
+    "soyle",
+    "göster",
+    "goster",
+    "sırala",
+    "sirala",
+)
+_MACRO_DELETE_VERB_STEMS: Final[tuple[str, ...]] = ("sil", "kaldır", "kaldir")
+#: "unut" only as the EXACT imperative: a prefix would catch "unutma" (= don't forget,
+#: i.e. remember) - the repo's own "unut"/"unutma" lesson, found again here by review.
+_MACRO_FORGET_EXACT: Final[tuple[str, ...]] = ("unut", "unutsun", "unutalım", "unutalim")
+_MACRO_RUN_VERB_STEMS: Final[tuple[str, ...]] = (
+    "çalıştır",
+    "calistir",
+    "yap",
+    "başlat",
+    "baslat",
+    "oynat",
+    "tekrarla",
+    "uygula",
+    "yürüt",
+    "yurut",
+    "aç",
+    "ac",
+)
+#: Words that may stand before the noun WITHOUT naming a macro: "yeni bir hareket
+#: oluştur", "şu hareketi bitir".
+_MACRO_LEAD_WORDS: Final[frozenset[str]] = frozenset(
+    {"yeni", "bir", "şimdi", "simdi", "hadi", "lütfen", "lutfen", "bu", "şu", "su", "o", "hemen"}
+)
+
+
+def _macro_noun_index(tokens: tuple[str, ...]) -> int | None:
+    for index, tok in enumerate(tokens):
+        if tok.startswith(_MACRO_NOUN_STEM) and not tok.startswith(_MACRO_NOUN_NOT):
+            return index
+    return None
+
+
+def _macro_control_match(tokens: tuple[str, ...]) -> tuple[Intent, str, str | None] | None:
+    """(intent, matched, macro_name) for a sentence built on the macro NOUN, or None.
+
+    The words BEFORE the noun decide whether a macro is being named ("yeni mail sekmesi
+    hareketini sil") or the current recording is meant ("hareketi bitir", "yeni bir
+    hareket oluştur"): with a name there, the sentence is about a stored macro (run,
+    delete); without one it is about the recording (start, end, cancel) or the list.
+    """
+    index = _macro_noun_index(tokens)
+    if index is None:
+        return None
+    noun = tokens[index]
+    before = tokens[:index]
+    # A name is whatever stands before the noun once it is not ONLY lead words: "yeni
+    # bir hareket" names nothing, "yeni mail sekmesi hareketini" names one - and keeps
+    # its "yeni", which is the name's first word there, not a lead word.
+    name = " ".join(before) if any(tok not in _MACRO_LEAD_WORDS for tok in before) else None
+    has_delete = (
+        _has(tokens, *_MACRO_DELETE_VERB_STEMS) is not None
+        or _has_exact(tokens, *_MACRO_FORGET_EXACT) is not None
+    )
+    has_cancel = _has_exact(tokens, *_MACRO_CANCEL_WORDS) is not None
+    if noun.startswith("hareketler"):
+        # The plural is the list - and "bütün hareketleri sil" is deliberately nothing:
+        # deleting every macro is not one sentence's worth of authority.
+        return None if has_delete else (Intent.MACRO_LIST, noun, None)
+    if name is not None:
+        if has_delete or has_cancel:
+            return (Intent.MACRO_DELETE, "hareketi sil", name)
+        # A named macro RUNS only on a run verb ("… hareketini yap / çalıştır") or with
+        # nothing after the noun ("… hareketini."): "… hareketini unutma" is neither
+        # (review, 2026-09-21) and reaches nothing here.
+        after = tokens[index + 1 :]
+        if not after or _has(after, *_MACRO_RUN_VERB_STEMS) is not None:
+            return (Intent.MACRO_RUN, "hareketi çalıştır", name)
+        return None
+    if has_delete:
+        # "Hareketi sil." names nothing: the tool asks which one.
+        return (Intent.MACRO_DELETE, "hareketi sil", None)
+    if has_cancel:
+        return (Intent.MACRO_RECORD_CANCEL, "hareketi iptal et", None)
+    if _has_exact(tokens, *_MACRO_LIST_WORDS) is not None and noun == "hareketler":
+        return (Intent.MACRO_LIST, noun, None)
+    if _has_exact(tokens, "yeni") is not None:
+        return (Intent.MACRO_RECORD_START, "yeni hareket", None)
+    if noun == "hareket" and (
+        _has(tokens, *_MACRO_KEEP_STEMS) is not None
+        or _has(tokens, *_MACRO_START_VERB_STEMS) is not None
+    ):
+        return (Intent.MACRO_RECORD_START, "hareket kaydet", None)
+    if _has(tokens, *_MACRO_END_VERB_STEMS) is not None or (
+        noun == "hareketi" and _has(tokens, "kaydet") is not None
+    ):
+        return (Intent.MACRO_RECORD_END, "hareketi bitir", None)
+    if _has_exact(tokens, *_MACRO_LIST_WORDS) is not None:
+        return (Intent.MACRO_LIST, noun, None)
+    return None
 
 
 #: B29 req 100. "X düğmesine tıkla/bas" - the button NOUN plus a click/press verb; the
@@ -8021,6 +8227,8 @@ def resolve_intent(
     app_project_focused: bool = False,
     artifact_focused: bool = False,
     creative_focused: bool = False,
+    macro_names: tuple[str, ...] = (),
+    macro_awaiting_name: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state.
 
@@ -8060,6 +8268,8 @@ def resolve_intent(
         "app_project_focused": app_project_focused,
         "artifact_focused": artifact_focused,
         "creative_focused": creative_focused,
+        "macro_names": macro_names,
+        "macro_awaiting_name": macro_awaiting_name,
     }
     if _is_ambiguous_caps(text):
         # An ALL-CAPS transcript with "I" and no "İ" cannot say which i it meant: "RUTININI"
@@ -8205,9 +8415,17 @@ def _resolve_intent_rules(
     app_project_focused: bool = False,
     artifact_focused: bool = False,
     creative_focused: bool = False,
+    macro_names: tuple[str, ...] = (),
+    macro_awaiting_name: bool = False,
 ) -> ResolvedIntent:
     """Resolve a transcript into an :class:`Intent` against the live state (the words as
     heard; :func:`resolve_intent` is the entry point).
+
+    ``macro_names`` and ``macro_awaiting_name`` are ADR-0196's two facts, established by
+    the caller from the ``voice_macros`` rows and the session's recording state: the
+    stored name keys a sentence may BE ("yeni mail sekmesi aç" runs that macro), and
+    whether the last thing said to the owner was "bu harekete ne ad vereyim?" - in which
+    case the next sentence is the name, whatever else its words could have meant.
 
     ``session_state`` is the M4 control FSM state of the conversation;
     ``narration`` the narration machine state when a narration is attached.
@@ -8301,11 +8519,52 @@ def _resolve_intent_rules(
         return ResolvedIntent(
             Intent.EYE_DISABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
         )
+    # 0a. ADR-0196: the owner was just asked "bu harekete ne ad vereyim?" - the next
+    #     sentence IS the name (or a "vazgeç"), before any other reading of its words:
+    #     a macro named "yeni mail sekmesi" must not open anything while being named.
+    #     Only the privacy stop above outranks it.
+    if macro_awaiting_name:
+        if _has_exact(tokens, *_MACRO_CANCEL_WORDS):
+            return ResolvedIntent(
+                Intent.MACRO_RECORD_CANCEL, scope=SCOPE_CONVERSATION, matched="vazgeç", **base
+            )
+        if spoken := macro_spoken_name(text):
+            return ResolvedIntent(
+                Intent.MACRO_NAME,
+                scope=SCOPE_CONVERSATION,
+                matched="hareket adı",
+                macro_name=spoken,
+                **base,
+            )
     # 0b. The enable path (contract §2). Same place, same primitives, evaluated second so
     #     the disable direction wins whenever both could read.
     if eye_matched := _eye_enable_match(tokens):
         return ResolvedIntent(
             Intent.EYE_ENABLE, scope=SCOPE_CONVERSATION, matched=eye_matched, **base
+        )
+    # 0b-macro. ADR-0196: the macro's own control words ("yeni hareket oluştur",
+    #     "hareketi bitir", "<ad> hareketini sil") and then a sentence that IS a stored
+    #     name plus a run word ("yeni mail sekmesi aç"). Before everything below because
+    #     a stored name is the owner's own vocabulary and may contain any word the rules
+    #     further down would claim ("... aç" is APP_OPEN's, "... sil" is a delete's); the
+    #     whole sentence has to be the name for the second match to fire, so a name
+    #     buried in a longer sentence steals nothing (``naming.match_stored_name``).
+    if macro_control := _macro_control_match(tokens):
+        macro_intent, macro_matched, macro_named = macro_control
+        return ResolvedIntent(
+            macro_intent,
+            scope=SCOPE_CONVERSATION,
+            matched=macro_matched,
+            macro_name=macro_named,
+            **base,
+        )
+    if macro_names and (stored := match_stored_name(tokens, macro_names)):
+        return ResolvedIntent(
+            Intent.MACRO_RUN,
+            scope=SCOPE_CONVERSATION,
+            matched="hareket adı",
+            macro_name=stored,
+            **base,
         )
 
     # 0b'. M18.4 (spec §4): the owner's voice over self-evolution. Before the alarm and
@@ -8964,6 +9223,8 @@ def _resolve_intent_rules(
             matched="tuşa bas",
             key_press=key_matched,
             window_ref="current",
+            # ADR-0195: "yukarı tuşuna beş kere bas" - the count the owner said.
+            repeat_count=spoken_repeat(tokens),
             **base,
         )
     if scroll_matched := _scroll_match(tokens):
@@ -8973,6 +9234,7 @@ def _resolve_intent_rules(
             matched="kaydır",
             scroll_direction=scroll_matched,
             window_ref="current",
+            repeat_count=spoken_repeat(tokens),
             **base,
         )
     if app_matched := _app_open_match(tokens):

@@ -15,8 +15,33 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok — son iş (iki hesap geçişi düzeni) tamamlandı. Sahip sırada "2 not + 2 yeni ekleme"
-verecek; gelince buraya yaz.
+**Sahibin 2 notu (2026-09-21, sesle verildi):**
+
+1. *Tekrar sayısı.* "Yukarı tuşuna 5 kere bas" / "5 defa yap" kabul edilmiyor; sahip her
+   basışı ayrı söylemek zorunda. Yapılan: `intents.py`'de `spoken_repeat()` ("N kere/defa/
+   kez/sefer", sözcük ya da rakam), `ResolvedIntent.repeat_count`, tur kaydına kopya;
+   `plans.press_key/press_shortcut/pointer` N adımlı plan (tek activate); `operator.key` ve
+   `operator.pointer` (kaydırma) sayıyı uygular ve konuşmada söyler. ADR-0195.
+2. *Hareket kaydı ("makro").* "Yeni hareket oluştur/başlat" → sonraki komutlar hem yapılır
+   hem kaydedilir → "hareketi bitir/tamamla" → ad sorulur → ad söylenir → kaydedilir;
+   sonra "<ad> aç" o adımları tarifsiz tekrarlar. Yapılan: `app/macros/` paketi
+   (`voice_macros` tablosu, alembic 0061, ad eşleme), `tools_macros.py`
+   (macro.record_start / record_end / cancel / name / run / list / delete), yönlendiricide
+   MACRO_* niyetleri (kayıtlı adlar ve "ad bekleniyor" durumu oturumdan enjekte edilir),
+   `handle_tool_call` içinde adım yakalama, `macro.run` sunucu tarafında sıralı yeniden
+   oynatma (adım başına step-up denetimi). ADR-0196.
+
+**Durum (2026-09-21 akşam):** kod + testler yeşil (yeni 3 dosya 91 test; korpus `macro.*` +
+`*.repeat.*` 45; dokunulan paketlerde 772; migrasyon 74; ruff temiz). Bağımsız güvenlik ve
+test incelemesi alındı, commit atıldı. Kalan: bulut yayını (`release-cloud-core.ps1
+-BlueGreen`, alembic 0061 yayın içinde koşar) + sahibin canlı denemesi.
+
+**Sahibin deneyeceği cümleler (yerel mod, bir pencere odaktayken):** "Yukarı tuşuna 5 kere
+bas" · "Üç kere aşağı kaydır" · "Kontrol Z'ye iki kere bas" · "Yeni hareket oluştur" →
+birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yeni mail sekmesi aç"
+· "Hangi hareketlerim var" · "Yeni mail sekmesi hareketini sil".
+
+Sahip bu 2 nottan sonra "2 yeni ekleme" daha verecek; gelince buraya ekle.
 
 ## Şu anki durum
 

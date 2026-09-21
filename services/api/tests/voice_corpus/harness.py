@@ -97,6 +97,7 @@ from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow, PendingBriefingRow
 from app.location.models import LocationContextRow
 from app.location.service import LocationService
+from app.macros.models import VoiceMacroRow
 from app.mail.models import MailDraftRow, MailIndexRow
 from app.mail.providers import FakeMailSender
 from app.mail.service import MailService
@@ -314,6 +315,8 @@ TABLES = (
     RealtimeToolCall.__table__,
     AuditEvent.__table__,
     VoiceProfile.__table__,
+    # ADR-0196: the router reads the stored macro names on EVERY utterance.
+    VoiceMacroRow.__table__,
     NarrationSession.__table__,
     PronunciationEntry.__table__,
     Artifact.__table__,

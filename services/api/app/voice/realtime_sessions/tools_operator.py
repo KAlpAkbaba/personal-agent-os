@@ -79,6 +79,7 @@ from app.operator.capabilities import (
 from app.operator.models import FOCUS_KIND_WINDOW
 from app.operator.plans import (
     APP_ALLOWLIST,
+    MAX_REPEAT,
     POINTER_ACTIONS,
     POINTER_SPACES,
     UI_ACTIONS,
@@ -200,8 +201,10 @@ SPEECH_COORDINATE_POLICY: Final = (
 #: (``FocusGuard``, spec §1 invariant 2). Named here so the sentence can say it.
 ERROR_FOCUS_MISMATCH: Final = "focus_mismatch"
 SPEECH_FOCUS_LOST: Final = "Pencere önden çekildi efendim; gönderimi durdurdum."
-SPEECH_KEY_SUCCESS_TR: Final = "{key} tuşuna bastım efendim."
-SPEECH_SHORTCUT_SUCCESS_TR: Final = "{keys} kısayolunu gönderdim efendim."
+SPEECH_KEY_SUCCESS_TR: Final = "{key} tuşuna {times}bastım efendim."
+SPEECH_SHORTCUT_SUCCESS_TR: Final = "{keys} kısayolunu {times}gönderdim efendim."
+#: ADR-0195: a count past the plan's bound, refused in words rather than done once.
+SPEECH_TOO_MANY_REPEATS_TR: Final = "Bir cümlede en fazla {max} kere yapabilirim efendim."
 SPEECH_KEY_FAILURE: Final = "Tuşa basamadım efendim."
 SPEECH_NO_KEY: Final = "Hangi tuş?"
 SPEECH_POINTER_SUCCESS_TR: Final = {
@@ -212,6 +215,7 @@ SPEECH_POINTER_SUCCESS_TR: Final = {
     "scroll": "Kaydırdım efendim.",
 }
 SPEECH_POINTER_FAILURE: Final = "İşaretçi eylemini yapamadım efendim."
+SPEECH_SCROLL_REPEATED_TR: Final = "{count} kere kaydırdım efendim."
 #: Turkish for the key names, for the sentence ("Enter tuşuna bastım").
 KEY_TR: Final[dict[str, str]] = {
     "enter": "Enter",
@@ -1316,6 +1320,25 @@ def _spoken_key(turn: dict[str, Any], arguments: dict[str, Any]) -> tuple[str | 
     return None, []
 
 
+def _spoken_repeat(turn: dict[str, Any], arguments: dict[str, Any]) -> int:
+    """How many times (ADR-0195): the owner's own count first (``repeat_count`` on the
+    turn, "beş kere"), the model's ``count`` argument only when the router read none,
+    and 1 when neither said anything. Not bounded here: the caller refuses an oversized
+    count in its own words rather than quietly doing it once."""
+    spoken = turn.get("repeat_count")
+    if isinstance(spoken, int) and not isinstance(spoken, bool) and spoken >= 1:
+        return spoken
+    raw = arguments.get("count")
+    if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+        return raw
+    return 1
+
+
+def _times_tr(count: int) -> str:
+    """ "5 kere " for a spoken receipt, nothing for once."""
+    return f"{count} kere " if count > 1 else ""
+
+
 def operator_key(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Enter'a bas." / "Ctrl S'ye bas." (B28 req 92/93) — one key or one chord into the
     focused window, through the companion's focus guard, re-observed after.
@@ -1324,11 +1347,18 @@ def operator_key(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     input step: a chord that was sent and not read back is not sent twice (Ctrl+Z twice is
     two undos). The device's ``focus_mismatch`` mid-plan ends the task with that class and
     the receipt counts the steps that ran before it (req 110).
+
+    ADR-0195 (owner, 2026-09-21): "Yukarı tuşuna beş kere bas." is five guarded key steps
+    after the one activate, and the receipt says "5 kere" - the owner no longer says the
+    sentence five times. More than :data:`MAX_REPEAT` in one sentence is refused aloud.
     """
     turn = _turn_record(ctx)
     key, chord = _spoken_key(turn, arguments)
     if key is None and not chord:
         return _clarification(SPEECH_NO_KEY)
+    count = _spoken_repeat(turn, arguments)
+    if count > MAX_REPEAT:
+        return _clarification(SPEECH_TOO_MANY_REPEATS_TR.format(max=MAX_REPEAT))
     if key is not None and not valid_key(key):
         raise VoiceError(
             VoiceErrorClass.VALIDATION_ERROR, f"'{key}' is not a key keyboard.key accepts"
@@ -1349,23 +1379,27 @@ def operator_key(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     if device_action is None:
         return _capability_missing(ctx, capability=TOOL_KEY, requested_state="pressed")
     operator = _require_operator(ctx, TOOL_KEY)
+    times = _times_tr(count)
     if key is not None:
         plan = Plan(
-            name=PLAN_PRESS_KEY, goal=f"press {key} in {window_id}", steps=press_key(window_id, key)
+            name=PLAN_PRESS_KEY,
+            goal=f"press {key} x{count} in {window_id}",
+            steps=press_key(window_id, key, count=count),
         )
-        success = SPEECH_KEY_SUCCESS_TR.format(key=KEY_TR.get(key, key.upper()))
+        success = SPEECH_KEY_SUCCESS_TR.format(key=KEY_TR.get(key, key.upper()), times=times)
     else:
         plan = Plan(
             name=PLAN_PRESS_SHORTCUT,
-            goal=f"press {'+'.join(chord)} in {window_id}",
-            steps=press_shortcut(window_id, chord),
+            goal=f"press {'+'.join(chord)} x{count} in {window_id}",
+            steps=press_shortcut(window_id, chord, count=count),
         )
         success = SPEECH_SHORTCUT_SUCCESS_TR.format(
-            keys="+".join(KEY_TR.get(k, k.upper()) for k in chord)
+            keys="+".join(KEY_TR.get(k, k.upper()) for k in chord), times=times
         )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
     return {
         **(task.action_receipt or {}),
+        "repeat_count": count,
         "speech": _input_speech(task, success=success, failure=SPEECH_KEY_FAILURE),
     }
 
@@ -1452,22 +1486,31 @@ def operator_pointer(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         x, y = _window_centre(_live_windows(lister), window_id)
     else:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, "operator.pointer needs 'x' and 'y'")
+    # ADR-0195: "üç kere aşağı kaydır" - the spoken count repeats the scroll step; a
+    # click is the model's own last resort and is never repeated from words.
+    count = _spoken_repeat(turn, arguments) if action == "scroll" else 1
+    if count > MAX_REPEAT:
+        return _clarification(SPEECH_TOO_MANY_REPEATS_TR.format(max=MAX_REPEAT))
     try:
-        steps = build_pointer_steps(window_id, action, x=x, y=y, space=space, delta=delta)
+        steps = build_pointer_steps(
+            window_id, action, x=x, y=y, space=space, delta=delta, count=count
+        )
     except ValueError as exc:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, str(exc)) from exc
     operator = _require_operator(ctx, TOOL_POINTER)
     plan = Plan(
         name=PLAN_BY_POINTER_ACTION[action],
-        goal=f"pointer {action} at ({x},{y}) {space} in {window_id}",
+        goal=f"pointer {action} x{count} at ({x},{y}) {space} in {window_id}",
         steps=steps,
     )
     task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    success = SPEECH_POINTER_SUCCESS_TR[action]
+    if count > 1:
+        success = SPEECH_SCROLL_REPEATED_TR.format(count=count)
     out = {
         **(task.action_receipt or {}),
-        "speech": _input_speech(
-            task, success=SPEECH_POINTER_SUCCESS_TR[action], failure=SPEECH_POINTER_FAILURE
-        ),
+        "repeat_count": count,
+        "speech": _input_speech(task, success=success, failure=SPEECH_POINTER_FAILURE),
     }
     if last_resort:
         # The justification travels with the receipt (req 107): a reader of the ledger
@@ -2004,6 +2047,8 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
                         "maxItems": 4,
                     },
                     "window": {"type": "string", "maxLength": 100},
+                    # ADR-0195: how many times; the owner's spoken count wins over this.
+                    "count": {"type": "integer", "minimum": 1, "maximum": MAX_REPEAT},
                 },
                 "additionalProperties": False,
             },
@@ -2029,6 +2074,8 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
                     "y": {"type": "integer", "minimum": -20000, "maximum": 20000},
                     "space": {"type": "string", "enum": list(POINTER_SPACES)},
                     "delta": {"type": "integer", "minimum": -50, "maximum": 50},
+                    # ADR-0195: scroll repeats only; the owner's spoken count wins.
+                    "count": {"type": "integer", "minimum": 1, "maximum": MAX_REPEAT},
                     "last_resort": {"type": "boolean"},
                     "reason": {"type": "string", "maxLength": 200},
                     "window": {"type": "string", "maxLength": 100},

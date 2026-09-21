@@ -283,3 +283,18 @@ unique (kind, name); edges unique (src, dst, relation).
 - integrity_hash optional
 
 Audit should avoid secret payloads.
+
+## Voice macros (ADR-0196)
+
+### voice_macros
+
+- macro_id
+- name (as the owner said it)
+- name_key (unique; `app.macros.naming.name_key` — the spelling a sentence is matched on)
+- steps_json (`[{tool, arguments, turn, recorded_at}]` — the tool calls as they were made,
+  never the owner's sentences)
+- step_count, run_count, last_run_at
+- created_at, updated_at, source, detail_json
+
+Singleton owner: no owner column. The recording in progress is not a row; it lives on the
+realtime session's `context_json["macro_recording"]` until it is named.

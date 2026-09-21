@@ -14544,3 +14544,116 @@ Decision:
 
 Verified by running the hook exactly as the settings invoke it: exit 0, 56 lines, Turkish
 intact, dirty-tree warning shown.
+
+
+## ADR-0195 — "Yukarı tuşuna beş kere bas": the count the owner said is applied (2026-09-21)
+
+Owner note 1 (2026-09-21, by voice): "however much I try, I have to say every action one
+by one — if I need the up key five times I say it five times; 'beş defa' or 'beş kere yap'
+is not accepted." Measured: `_key_press_match` read the key and nothing else; "5 kere" was
+tokens the router ignored, so "yukarı tuşuna 5 kere bas" pressed once and said "bastım".
+
+Decision:
+- `intents.spoken_repeat(tokens)` reads "N kere / kez / defa / sefer" the way
+  `spoken_minutes` reads a minute count (the number right before the noun, a round ten
+  joined to a unit: "on beş kere" = 15; the normaliser has already spelled "5" as "beş").
+  It is carried as `ResolvedIntent.repeat_count` on OPERATOR_KEY and OPERATOR_SCROLL and
+  copied onto the turn record in `record_client_events` — the same "owner's words win over
+  the model's argument" rule every field there follows. The tools also accept a `count`
+  argument for the paid path's model, used only when no count was said.
+- `plans.press_key / press_shortcut / pointer` take `count`: ONE `window.activate`, then
+  `count` guarded input steps, each `retries=0`, each read back. A chord said twice is two
+  chords on purpose (two undos). Step names stay `press_key:key` for once and become
+  `press_key:key:N` for several, so every receipt and test that read the single name keeps
+  reading it; the receipt's `steps_completed` / `step_count` / `stopped_at` make "3 of 5,
+  stopped at the third" a fact. A scroll repeats the spoken notch count N times rather
+  than sending one N-fold delta the companion may clip.
+- Bound: `MAX_SPOKEN_REPEAT == plans.MAX_REPEAT == 30`. The router returns any count the
+  words carry; the TOOL refuses one past the bound aloud ("Bir cümlede en fazla 30 kere
+  yapabilirim efendim") — never silently doing it once. A clicked BUTTON (`operator.ui`)
+  is deliberately not repeated from words: its plan verifies the element after the click,
+  and a button that disappeared after the first click is not a button to click again;
+  "iki kere tıkla" is a double click, a different primitive, and stays the model's.
+- Speech: "Yukarı ok tuşuna 5 kere bastım efendim." / "3 kere kaydırdım efendim."
+
+Proof: `tests/unit/test_operator_repeat.py` (words, plan shapes and bounds, the relay:
+five guarded presses on the fake device, the focus guard stopping at the third with the
+receipt counting 3 of 6 steps, the bound refused aloud, the owner's count winning over
+the model's), corpus cases `op.key.repeat.*`, `op.shortcut.repeat.1`, `op.scroll.repeat.1`.
+
+
+## ADR-0196 — Voice macros: a recorded "hareket", named, replayed by its name (2026-09-21)
+
+Owner note 2 (2026-09-21, by voice): to open a new mail the owner has to say "click where
+it says Gmail", then "click where it says Oluştur" — every time. Wanted: "yeni hareket
+oluştur / başlat", then the three to five things they do, then "hareketi bitir /
+tamamla"; the system asks for a name; they say "yeni mail sekmesi"; from then on "yeni
+mail sekmesi aç" repeats those steps without them describing anything.
+
+Decision — a macro is the CALLS that were made, not the sentences, and not a plan:
+- **Recording** lives on the realtime session's `context_json["macro_recording"]`
+  (`app.macros.service`): `macro.record_start` opens it; the relay
+  (`service.handle_tool_call`) appends every tool call that follows and did something
+  (succeeded/running, not a clarification, not a failed call, never `macro.*` /
+  `assistant.chat` / `voice.intent`) as `{tool, arguments, turn}` — the turn record the
+  tool READ, so a replay hands the handler the same words. The calls still happen: the
+  owner is doing the thing while teaching it. Thirty steps at most; `macro.record_end`
+  says how many were kept and how many did not fit, then asks for the name; a recording
+  with no steps is closed and says so.
+- **The name** is the next sentence. `record_client_events` reads the session's
+  `awaiting_name` state and passes `macro_awaiting_name` to the router, which returns
+  MACRO_NAME with the owner's words (frame words at the edges dropped: "adı X olsun",
+  "X hareketi") before any other reading of them — only the Active Eye privacy stop
+  outranks it. `macro.name` writes the `voice_macros` row (alembic `0061`, one row per
+  `naming.name_key`; the same name again REPLACES the steps rather than doubling).
+- **Running.** The router receives every stored `name_key` (`macro_names`, read per
+  utterance so a name saved on the previous turn runs on this one) and, after the eye
+  words and the macro control words, asks `naming.match_stored_name`: the WHOLE sentence
+  must be the name plus run fillers ("aç", "çalıştır", "hareketini yap", "lütfen"); the
+  name's last word may carry a listed Turkish case ending ("sekmesini"); nothing else is
+  prefix-matched (the "unut"/"unutma" lesson). A name buried in a longer sentence runs
+  nothing, and a macro called "sağ tuş" cannot steal "sağ tuşuna bas". `macro.run`
+  replays the steps in order through the SAME handlers from `ToolContext.live
+  ["tool_registry"]`, and every step meets `step_up.evaluate` AGAIN on its own tool name
+  with the device-trust fact the relay derived (`live["device_trusted"]`) — a macro is
+  never a way around the gate. It stops at the first step that did not succeed (a refused
+  or failed receipt, a clarification, a step-up refusal, an unknown tool) and says which:
+  "'X' hareketinin 2. adımında durdu efendim: …". The owner's own last utterance is
+  restored afterwards so a follow-up never binds to a replayed step. Running while a
+  recording is open is refused aloud.
+- Control words (`_macro_control_match`): the noun "hareket*" ("hareketlendir" excluded)
+  with what stands before it deciding: only lead words ("yeni bir …") → the recording
+  (start / end / cancel / list by verb); a name → that stored macro (run / delete).
+  Deleting every macro in one sentence ("bütün hareketleri sil") is deliberately nothing.
+- Tiers: every `macro.*` but `list` is SENSITIVE (`step_up._TIERS`).
+- After the independent security review (same day): a stop or control word ("dur",
+  "kes", "sus", "yeter", "devam", "vazgeç", …) is never a name — `naming.RESERVED_NAME_KEYS`;
+  `spoken_name` returns nothing for it so the router reads the word as what it is even
+  while a name is awaited, and `match_stored_name` skips such a key whatever a row says.
+  `research.start` and every `long_running` tool are never steps (the relay gates a crawl
+  per turn; a replay would start it past that gate). A step whose text names a secret
+  (`contains_secret_reference`, the same keyword guard `operator.type` applies) is not
+  kept and is counted in what "did not fit". **Known limitation:** a secret VALUE typed
+  without such a word around it cannot be told from any other text and, like any other
+  typed text, would be kept in `voice_macros` and retyped on replay — the owner records
+  desktop habits, not logins. A stored name shadows the sentence it equals for as long as
+  the macro exists; names are the owner's and nothing warns of a collision yet.
+- After the independent test review (same day, two real router defects, both pinned):
+  "durdur" is not a macro end word — it is a STOP_TOKEN, and "hareketi durdur" while an
+  operator task runs is OPERATOR_CANCEL; "unut" deletes only as the exact imperative
+  ("… hareketini unut"), never by prefix ("unutma" = remember — the repo's own lesson,
+  found again in a new subsystem); and a named macro RUNS only on a run verb or with
+  nothing after the noun, so "… hareketini unutma" reaches no macro word at all.
+
+Found on the way: an in-place append to a nested list inside the session's
+`context_json` is never written — SQLAlchemy's plain JSON column compares the new value
+to the loaded one and a shallow copy shares the nested object, so old == new. The first
+version lost every captured step that way; `app.macros.service` now replaces the nested
+dict on every write and the relay test re-reads the row.
+
+Proof: `tests/unit/test_macro_naming.py` (keys, matching, the recording state machine),
+`tests/unit/test_voice_macros.py` (the whole conversation through the real relay: record →
+name → the name alone replays the same device calls in order; stop at the first failed
+step; step-up evaluated per step by name; a clarification and a macro word are not steps;
+replace on the same name; delete makes the name a plain sentence; run while recording
+refused), corpus `macro.*` cases including the multi-turn `macro.run.1`.

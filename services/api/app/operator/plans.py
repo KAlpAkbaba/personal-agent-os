@@ -597,11 +597,35 @@ def _landed_in(window_id: str, result: DeviceRunResult) -> bool:
     return window.get("window_id") == window_id
 
 
-def press_key(window_id: str, key: str) -> list[OperatorStep]:
+#: ADR-0195: the most one spoken sentence repeats an input. The same bound the router's
+#: ``MAX_SPOKEN_REPEAT`` states; a plan longer than this is a job, not a key press.
+MAX_REPEAT: Final = 30
+
+
+def _repeat_count(count: int) -> int:
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_REPEAT:
+        raise ValueError(f"count must be an int in 1..{MAX_REPEAT}, got {count!r}")
+    return count
+
+
+def _step_name(base: str, index: int, count: int) -> str:
+    """ "press_key:key" once; "press_key:key:2" for the second of several - the single
+    case keeps the name every receipt and test already reads."""
+    return base if count == 1 else f"{base}:{index}"
+
+
+def press_key(window_id: str, key: str, *, count: int = 1) -> list[OperatorStep]:
     """B28 req 92: ``window.activate`` -> ``keyboard.key`` (level ``keyboard``);
-    postcondition, the device echoes the key and the foreground is still the target."""
+    postcondition, the device echoes the key and the foreground is still the target.
+
+    ADR-0195: ``count`` > 1 ("yukarı tuşuna beş kere bas") is ONE activate and ``count``
+    guarded key steps, each read back, each ``retries=0`` - a press that was sent and not
+    echoed is not sent again, and the focus guard stops the rest the moment the window
+    moves. The receipt counts the steps that ran, so "3 of 5" is a fact, not a guess.
+    """
     if not valid_key(key):
         raise ValueError(f"'{key}' is not a key keyboard.key accepts")
+    count = _repeat_count(count)
 
     def _pressed(result: DeviceRunResult) -> bool:
         payload = result.result if isinstance(result.result, dict) else {}
@@ -609,26 +633,32 @@ def press_key(window_id: str, key: str) -> list[OperatorStep]:
 
     return [
         _activate_step(window_id, "press_key:activate"),
-        OperatorStep(
-            capability="keyboard.key",
-            payload={"window_id": window_id, "key": key},
-            postcondition=_pressed,
-            timeout_s=10.0,
-            retries=0,
-            level=LEVEL_KEYBOARD,
-            name="press_key:key",
+        *(
+            OperatorStep(
+                capability="keyboard.key",
+                payload={"window_id": window_id, "key": key},
+                postcondition=_pressed,
+                timeout_s=10.0,
+                retries=0,
+                level=LEVEL_KEYBOARD,
+                name=_step_name("press_key:key", index, count),
+            )
+            for index in range(1, count + 1)
         ),
     ]
 
 
-def press_shortcut(window_id: str, keys: list[str]) -> list[OperatorStep]:
+def press_shortcut(window_id: str, keys: list[str], *, count: int = 1) -> list[OperatorStep]:
     """B28 req 93: ``window.activate`` -> ``keyboard.shortcut`` (level ``keyboard``).
 
     ``retries=0`` on the input step, like ``press_key``: a chord that was sent and not
     read back is not sent again - Ctrl+S twice is one save, Ctrl+Z twice is two undos.
+    ``count`` (ADR-0195) is the owner SAYING twice: "kontrol Z'ye iki kere bas" is two
+    undos on purpose, two steps, each read back.
     """
     if not valid_shortcut(keys):
         raise ValueError(f"{keys!r} is not a chord keyboard.shortcut accepts")
+    count = _repeat_count(count)
 
     def _pressed(result: DeviceRunResult) -> bool:
         payload = result.result if isinstance(result.result, dict) else {}
@@ -636,14 +666,17 @@ def press_shortcut(window_id: str, keys: list[str]) -> list[OperatorStep]:
 
     return [
         _activate_step(window_id, "press_shortcut:activate"),
-        OperatorStep(
-            capability="keyboard.shortcut",
-            payload={"window_id": window_id, "keys": list(keys)},
-            postcondition=_pressed,
-            timeout_s=10.0,
-            retries=0,
-            level=LEVEL_KEYBOARD,
-            name="press_shortcut:shortcut",
+        *(
+            OperatorStep(
+                capability="keyboard.shortcut",
+                payload={"window_id": window_id, "keys": list(keys)},
+                postcondition=_pressed,
+                timeout_s=10.0,
+                retries=0,
+                level=LEVEL_KEYBOARD,
+                name=_step_name("press_shortcut:shortcut", index, count),
+            )
+            for index in range(1, count + 1)
         ),
     ]
 
@@ -656,10 +689,16 @@ def pointer(
     y: int,
     space: str = "window",
     delta: int | None = None,
+    count: int = 1,
 ) -> list[OperatorStep]:
     """B28 req 94-98: ``window.activate`` -> ``pointer.<action>`` (level ``pointer``);
     postcondition, the device's re-observed cursor is within two pixels of where it was
-    asked to go (the lab's own tolerance) and the foreground is still the target."""
+    asked to go (the lab's own tolerance) and the foreground is still the target.
+
+    ``count`` (ADR-0195, "üç kere aşağı kaydır") repeats the pointer step after the one
+    activate, the way ``press_key`` does - three scrolls of the spoken notch count, read
+    back each, rather than one scroll of a tripled delta the companion may clip.
+    """
     if action not in POINTER_ACTIONS:
         raise ValueError(f"'{action}' is not a pointer action")
     if space not in POINTER_SPACES:
@@ -667,6 +706,7 @@ def pointer(
     if action == "scroll":
         if delta is None or delta == 0 or abs(delta) > SCROLL_MAX_DELTA:
             raise ValueError("pointer.scroll needs a non-zero delta within ±50")
+    count = _repeat_count(count)
     payload: dict[str, Any] = {"window_id": window_id, "x": int(x), "y": int(y), "space": space}
     if action == "scroll":
         payload["delta"] = int(delta or 0)
@@ -688,14 +728,17 @@ def pointer(
 
     return [
         _activate_step(window_id, f"pointer_{action}:activate"),
-        OperatorStep(
-            capability=f"pointer.{action}",
-            payload=payload,
-            postcondition=_landed,
-            timeout_s=10.0,
-            retries=0,
-            level=LEVEL_POINTER,
-            name=f"pointer_{action}:{action}",
+        *(
+            OperatorStep(
+                capability=f"pointer.{action}",
+                payload=dict(payload),
+                postcondition=_landed,
+                timeout_s=10.0,
+                retries=0,
+                level=LEVEL_POINTER,
+                name=_step_name(f"pointer_{action}:{action}", index, count),
+            )
+            for index in range(1, count + 1)
         ),
     ]
 

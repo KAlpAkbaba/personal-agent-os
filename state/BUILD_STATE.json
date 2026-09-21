@@ -4,7 +4,7 @@
   "current_milestone": "M28_DONE_2026_09_12 (row 26.16 PROVEN_REAL); M29 NOT STARTED",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
   "last_completed_milestone": "M28_NATIVE_APP_FACTORY",
-  "last_updated": "2026-09-12T15:26:16Z",
+  "last_updated": "2026-09-21T17:10:00Z",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -638,5 +638,40 @@
     "limits": "EXPLAIN questions (state.now) and tools needing model-composed arguments or the browser eye half are out of scope in this mode",
     "owner_action": "READY_FOR_OWNER (audio): flip 'Yerel mod' on /core/cockpit in Chrome after the next Cloud Core + web release and speak a command",
     "deployment": "not deployed; needs a Cloud Core release (server must know transport=text) before the web switch works against production"
+  },
+  "owner_notes_2026_09_21_repeat_and_macros": {
+    "status": "IMPLEMENTED_AND_TESTED_2026-09-21; not yet heard by the owner on the real device",
+    "adr": [
+      "ADR-0195",
+      "ADR-0196"
+    ],
+    "note_1_repeat_count": {
+      "what": "'Yukari tusuna bes kere bas' presses five times (key, chord, scroll); the count the owner said wins over a model argument; bound 30 refused aloud",
+      "code": [
+        "app/voice/intents.py:spoken_repeat",
+        "app/operator/plans.py:press_key/press_shortcut/pointer(count)",
+        "app/voice/realtime_sessions/tools_operator.py:_spoken_repeat"
+      ],
+      "tests": [
+        "tests/unit/test_operator_repeat.py",
+        "corpus op.key.repeat.*, op.shortcut.repeat.1, op.scroll.repeat.1"
+      ]
+    },
+    "note_2_voice_macros": {
+      "what": "'Yeni hareket olustur' records the tool calls that follow; 'hareketi bitir' asks for a name; the next sentence is the name; '<ad> ac' replays the calls through the same handlers and the same step-up gate per step",
+      "code": [
+        "app/macros/",
+        "app/voice/realtime_sessions/tools_macros.py",
+        "app/voice/realtime_sessions/service.py (capture, macro facts to the router)",
+        "alembic 0061_voice_macros"
+      ],
+      "tests": [
+        "tests/unit/test_macro_naming.py",
+        "tests/unit/test_voice_macros.py",
+        "corpus macro.* incl. multi-turn macro.run.1"
+      ],
+      "found_on_the_way": "in-place append inside the session's JSON context is never written (old == new); every nested write now replaces the dict"
+    },
+    "deployment": "pending: alembic 0061 expand-only; cloud blue-green release after the local gate"
   }
 }

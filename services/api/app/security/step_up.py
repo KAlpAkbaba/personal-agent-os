@@ -258,6 +258,18 @@ _TIERS: Final[dict[str, str]] = {
     "routine.create": TIER_SENSITIVE,
     "routine.pause": TIER_SENSITIVE,
     "routine.resume": TIER_SENSITIVE,
+    # ADR-0196. Starting/ending/naming/cancelling a recording changes only what the
+    # session keeps and a row the owner may delete again; the calls a recording keeps
+    # each met this gate when they were made. RUN replays desktop actions and is
+    # SENSITIVE like them - and every replayed step meets the gate AGAIN on its own
+    # name (tools_macros.macro_run), so a macro is never a way around it. DELETE is
+    # SENSITIVE the way routine.cancel is: it removes something the owner set up.
+    "macro.record_start": TIER_SENSITIVE,
+    "macro.record_end": TIER_SENSITIVE,
+    "macro.name": TIER_SENSITIVE,
+    "macro.cancel": TIER_SENSITIVE,
+    "macro.run": TIER_SENSITIVE,
+    "macro.delete": TIER_SENSITIVE,
     "scene.add": TIER_SENSITIVE,
     "scene.camera": TIER_SENSITIVE,
     "scene.create": TIER_SENSITIVE,
@@ -326,6 +338,7 @@ _TIERS: Final[dict[str, str]] = {
     # is: refusing to say what is scheduled protects nothing and teaches the owner that the
     # gate is noise.
     "routine.list": TIER_OPEN,
+    "macro.list": TIER_OPEN,
     "research.finding_detail": TIER_OPEN,
     "research.sources": TIER_OPEN,
     "scene.inspect": TIER_OPEN,
