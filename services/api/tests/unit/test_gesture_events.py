@@ -113,6 +113,18 @@ def test_swipe_up_presses_the_up_arrow_key() -> None:
 # --------------------------------------------------------------------------- spread
 
 
+def test_gather_presses_escape_to_leave_fullscreen() -> None:
+    """Owner, second live trial: "iki elle kapatmayı da ekle, tam ekranı küçültecek"."""
+    client, factory, device, _operator = _wired()
+    _focus_window(factory, device=device)
+    sid = _create(client)
+    events = _gesture(client, sid, "gather")
+    assert events["resolved_intents"][0]["tool"] == "operator.key"
+    call = _tool(client, sid, "operator.key", {})
+    assert call["status"] == "succeeded", call
+    assert device.payload_for("keyboard.key")["key"] == "escape"
+
+
 def test_spread_presses_f_for_fullscreen() -> None:
     client, factory, device, _operator = _wired()
     _focus_window(factory, device=device)

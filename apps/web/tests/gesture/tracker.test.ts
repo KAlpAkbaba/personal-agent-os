@@ -138,7 +138,7 @@ describe("GestureTracker: wiring a fake landmarker into the recognizer", () => {
     expect(calls).toBe(2);
   });
 
-  it("reports a rolling fps to onStats after each ~1s window", async () => {
+  it("reports the rolling fps to onStats once a ~1s window has been measured (stats tick every ~200ms for the calibration readout)", async () => {
     const landmarker = new FakeLandmarker();
     const scheduler = manualScheduler();
     const stats: number[] = [];
@@ -157,8 +157,12 @@ describe("GestureTracker: wiring a fake landmarker into the recognizer", () => {
       clock = i * 100;
       scheduler.tick(clock);
     }
-    expect(stats).toHaveLength(1);
-    expect(stats[0]).toBeCloseTo(10, 0);
+    // Before the first full second the readout carries fps 0 with the live measurement;
+    // the 1000ms mark measures 10 fps and every readout after it carries that.
+    const measured = stats.filter((fps) => fps > 0);
+    expect(measured.length).toBeGreaterThanOrEqual(1);
+    expect(measured[0]).toBeCloseTo(10, 0);
+    expect(stats.length).toBeGreaterThan(measured.length); // the 200ms readouts before it
   });
 
   it("a landmarker that fails to load reports the Turkish assets-missing message and never schedules a frame", async () => {

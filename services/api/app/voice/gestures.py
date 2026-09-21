@@ -15,6 +15,8 @@ The closed set (fixed, owner-decided) and its mapping:
   volume keys; never media.volume - see resolve_gesture).
 * spread -> OPERATOR_KEY, key_press "f" (fullscreen; YouTube and most web players
   honour the "f" key).
+* gather (two open hands brought together) -> OPERATOR_KEY, key_press "escape" (leaves
+  fullscreen in YouTube and in the browser's own fullscreen; owner, second trial).
 * pinch_start / pinch_release -> recorded (matched, gesture) but Intent.NONE, so
   ``.capability`` is None and no tool is ever named - Stage 2 (pinch-mouse) acts on
   these later. This is intentional: no tool is wired for a pinch yet.
@@ -31,6 +33,7 @@ GESTURE_SWIPE_DOWN = "swipe_down"
 GESTURE_ROTATE_CW = "rotate_cw"
 GESTURE_ROTATE_CCW = "rotate_ccw"
 GESTURE_SPREAD = "spread"
+GESTURE_GATHER = "gather"
 GESTURE_PINCH_START = "pinch_start"
 GESTURE_PINCH_RELEASE = "pinch_release"
 
@@ -46,6 +49,7 @@ GESTURE_NAMES: tuple[str, ...] = (
     GESTURE_ROTATE_CW,
     GESTURE_ROTATE_CCW,
     GESTURE_SPREAD,
+    GESTURE_GATHER,
     GESTURE_PINCH_START,
     GESTURE_PINCH_RELEASE,
 )
@@ -126,6 +130,14 @@ def resolve_gesture(gesture: str) -> ResolvedIntent:
             matched=MATCHED_GESTURE,
             gesture=gesture,
             key_press="f",
+            window_ref=WINDOW_REF_MEDIA,
+        )
+    if gesture == GESTURE_GATHER:
+        return ResolvedIntent(
+            intent=Intent.OPERATOR_KEY,
+            matched=MATCHED_GESTURE,
+            gesture=gesture,
+            key_press="escape",
             window_ref=WINDOW_REF_MEDIA,
         )
     if gesture in _UNWIRED_GESTURES:

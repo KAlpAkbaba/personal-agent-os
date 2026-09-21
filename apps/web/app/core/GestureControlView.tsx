@@ -21,6 +21,7 @@ export const GESTURE_LABEL_TR: Record<string, string> = {
   rotate_cw: "sağa çevirme",
   rotate_ccw: "sola çevirme",
   spread: "iki eli açma",
+  gather: "iki eli birleştirme",
   pinch_start: "tutma",
   pinch_release: "bırakma",
 };
@@ -49,6 +50,15 @@ export default function GestureControlView({ gesture, onToggle }: GestureControl
       {gesture.running && (
         <span className="muted" data-gesture-tracking="yes">
           İzleniyor{gesture.trackingFps !== null ? ` · ${gesture.trackingFps.toFixed(0)} kare/sn` : ""}
+        </span>
+      )}
+
+      {gesture.running && gesture.measure && (
+        <span className="muted" data-gesture-measure="yes">
+          Kalibrasyon: el {gesture.measure.hands}
+          {gesture.measure.openness.length > 0 ? ` · açıklık ${gesture.measure.openness.map((o) => o.toFixed(2)).join(" / ")}` : ""}
+          {gesture.measure.pinch.length > 0 ? ` · pinç ${gesture.measure.pinch.map((p) => p.toFixed(2)).join(" / ")}` : ""}
+          {gesture.measure.wristDistance !== null ? ` · eller arası ${gesture.measure.wristDistance.toFixed(2)}` : ""}
         </span>
       )}
 

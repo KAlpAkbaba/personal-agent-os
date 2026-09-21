@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { GestureController, type GestureControllerDeps, type GestureToggleStorage } from "../../app/lib/gesture/controller";
+import type { FrameMeasure } from "../../app/lib/gesture/recognizer";
 import type { GestureEvent } from "../../app/lib/gesture/types";
 
 function memoryStorage(initial = false): GestureToggleStorage {
@@ -46,7 +47,7 @@ class FakeVideoBus {
 class FakeTracker {
   starts: HTMLVideoElement[] = [];
   stops = 0;
-  constructor(private readonly handlers: { onGesture: (e: GestureEvent) => void; onStats: (s: { fps: number }) => void; onError: (m: string) => void }) {}
+  constructor(private readonly handlers: { onGesture: (e: GestureEvent) => void; onStats: (s: { fps: number; measure: FrameMeasure | null }) => void; onError: (m: string) => void }) {}
 
   async start(video: HTMLVideoElement): Promise<void> {
     this.starts.push(video);
@@ -61,7 +62,7 @@ class FakeTracker {
   }
 
   fireStats(fps: number): void {
-    this.handlers.onStats({ fps });
+    this.handlers.onStats({ fps, measure: null });
   }
 
   fireError(message: string): void {

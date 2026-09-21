@@ -20,6 +20,7 @@
  * are (`useSyncExternalStore` over `subscribe`/`getSnapshot` in the real UI).
  */
 
+import type { FrameMeasure } from "./recognizer";
 import type { GestureEvent, GestureName } from "./types";
 import type { GestureTracker } from "./tracker";
 
@@ -67,7 +68,7 @@ export type GestureControllerDeps = {
   /** Builds a tracker bound to `onGesture`/`onStats`/`onError`; injectable for tests. */
   createTracker: (handlers: {
     onGesture: (event: GestureEvent) => void;
-    onStats: (stats: { fps: number }) => void;
+    onStats: (stats: { fps: number; measure: FrameMeasure | null }) => void;
     onError: (message: string) => void;
   }) => Pick<GestureTracker, "start" | "stop">;
   storage?: GestureToggleStorage;
@@ -82,6 +83,8 @@ export type GestureControllerSnapshot = {
   lastGesture: GestureName | null;
   lastGestureAtMs: number | null;
   trackingFps: number | null;
+  /** The live calibration readout (ADR-0198): what the last frame measured as. */
+  measure: FrameMeasure | null;
   lastError: string | null;
 };
 
@@ -91,6 +94,7 @@ const INITIAL: GestureControllerSnapshot = {
   lastGesture: null,
   lastGestureAtMs: null,
   trackingFps: null,
+  measure: null,
   lastError: null,
 };
 
@@ -154,7 +158,7 @@ export class GestureController {
     this.starting = true;
     this.tracker = this.deps.createTracker({
       onGesture: (event) => this.onGesture(event),
-      onStats: (stats) => this.patch({ trackingFps: stats.fps }),
+      onStats: (stats) => this.patch({ trackingFps: stats.fps, measure: stats.measure }),
       onError: (message) => this.patch({ lastError: message, running: false }),
     });
     this.detachVideo = this.deps.attachVideoConsumer((video) => this.onVideo(video));
@@ -187,7 +191,7 @@ export class GestureController {
     this.detachVideo?.();
     this.detachVideo = null;
     this.currentVideo = null;
-    if (this.snapshot.running) this.patch({ running: false, trackingFps: null });
+    if (this.snapshot.running) this.patch({ running: false, trackingFps: null, measure: null });
   }
 
   private onGesture(event: GestureEvent): void {

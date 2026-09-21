@@ -179,6 +179,14 @@ describe("GestureRecognizer: the closed set, once each", () => {
     }
     t += GAP;
 
+    // gather: the two hands, apart a moment ago, held together (the return-suppression
+    // window after the spread has passed - GAP above).
+    for (let i = 0; i < 5; i += 1) {
+      for (const e of rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.46, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.54, y: 0.5 })]]))) emitted.add(e.name);
+      t += 100;
+    }
+    t += GAP;
+
     // pinch_start then pinch_release.
     for (const e of rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]]))) emitted.add(e.name);
     t += 100;
@@ -382,6 +390,41 @@ describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
     // Wide for one frame only.
     events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.15, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.85, y: 0.5 })]]))));
     expect(events).not.toContain("spread");
+  });
+
+  it("two open hands brought together after being apart is gather - once, and never right after a spread", () => {
+    const rec = new GestureRecognizer();
+    const events: GestureName[] = [];
+    let t = 0;
+    // Together first, never apart: no gather (nothing to close).
+    for (let i = 0; i < 5; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.46, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.54, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual([]);
+    // Apart (wide): spread.
+    for (let i = 0; i < 4; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.15, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.85, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["spread"]);
+    // Straight back together: the hands returning after the spread, swallowed.
+    for (let i = 0; i < 5; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.46, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.54, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["spread"]);
+    // Apart again, then - past the return window - together and HELD: gather.
+    for (let i = 0; i < 3; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.25, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.75, y: 0.5 })]]))));
+      t += 100;
+    }
+    t += DEFAULT_RECOGNIZER_OPTIONS.returnSuppressMs;
+    for (let i = 0; i < 5; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.46, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.54, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["spread", "gather"]);
   });
 
   it("two FISTS held wide apart are not a spread", () => {

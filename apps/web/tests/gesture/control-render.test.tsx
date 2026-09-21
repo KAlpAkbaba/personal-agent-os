@@ -18,6 +18,7 @@ const OFF: GestureControllerSnapshot = {
   lastGesture: null,
   lastGestureAtMs: null,
   trackingFps: null,
+  measure: null,
   lastError: null,
 };
 

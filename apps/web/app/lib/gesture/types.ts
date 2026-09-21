@@ -21,6 +21,7 @@ export const GESTURE_NAMES = [
   "rotate_cw",
   "rotate_ccw",
   "spread",
+  "gather",
   "pinch_start",
   "pinch_release",
 ] as const;

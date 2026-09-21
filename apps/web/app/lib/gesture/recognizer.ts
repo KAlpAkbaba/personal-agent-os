@@ -51,6 +51,17 @@
 
 import { type GestureEvent, type GestureName, type HandednessLabel, type Point, type TrackedFrame } from "./types";
 
+/** What one frame measures as, for the owner's calibration readout (`GestureRecognizer.measure`). */
+export type FrameMeasure = {
+  hands: number;
+  /** Per hand, `openness()` (>= openHandMinRatio counts as open). */
+  openness: number[];
+  /** Per hand, the thumb-index `pinchRatio()` (<= tightPinchOnRatio is a pinch). */
+  pinch: number[];
+  /** Wrist-to-wrist distance in frame widths with two hands, else null. */
+  wristDistance: number | null;
+};
+
 // --------------------------------------------------------------- landmarks
 
 // MediaPipe HandLandmarker's 21-point topology (indices verbatim from the model's own spec).
@@ -151,6 +162,10 @@ export type RecognizerOptions = {
   spreadHoldMs: number;
   /** ...and it re-arms only once they come back closer than this (or a hand is lost). */
   spreadRearmFrac: number;
+  /** gather = two OPEN hands brought together, wrists closer than this... */
+  gatherCloseFrac: number;
+  /** ...held for at least this long, after having been apart (>= spreadRearmFrac). */
+  gatherHoldMs: number;
   /** thumb-index ratio at/under which a TIGHT pinch begins (`pinch_start`). */
   tightPinchOnRatio: number;
   /** thumb-index ratio at/over which a TIGHT pinch ends (`pinch_release`); hysteresis band
@@ -193,9 +208,11 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   // Second live trial: "iki elimi yana açtığımda tam ekran yapmıyor" - MediaPipe sees two
   // hands only once they are already apart, so "growing apart by half a frame" rarely
   // had a start to measure from. Now: two open hands HELD wide.
-  spreadWideFrac: 0.55,
+  spreadWideFrac: 0.5,
   spreadHoldMs: 250,
   spreadRearmFrac: 0.4,
+  gatherCloseFrac: 0.22,
+  gatherHoldMs: 300,
   tightPinchOnRatio: 0.2,
   tightPinchOffRatio: 0.32,
   cooldownMs: 450,
@@ -218,6 +235,10 @@ export function oppositeOf(name: GestureName): GestureName | null {
       return "rotate_ccw";
     case "rotate_ccw":
       return "rotate_cw";
+    case "spread":
+      return "gather";
+    case "gather":
+      return "spread";
     default:
       return null;
   }
@@ -253,6 +274,10 @@ export class GestureRecognizer {
   private wideSince: number | null = null;
   /** The last spread fired and the hands have not come back since: no second spread. */
   private spreadArmed = true;
+  /** Since when two OPEN hands have been held close together; null once they part. */
+  private closeSince: number | null = null;
+  /** A gather needs the hands to have been APART first (>= spreadRearmFrac). */
+  private gatherArmed = false;
   private lastEmit: { name: GestureName; t_ms: number } | null = null;
 
   constructor(options: Partial<RecognizerOptions> = {}) {
@@ -304,7 +329,9 @@ export class GestureRecognizer {
 
     if (seen.size < 2) {
       this.wideSince = null;
+      this.closeSince = null;
       this.spreadArmed = true;
+      this.gatherArmed = false;
     }
     return events;
   }
@@ -412,14 +439,49 @@ export class GestureRecognizer {
     const distance = dist(ma[WRIST], mb[WRIST]);
     const bothOpen = openness(ma) >= this.opts.openHandMinRatio && openness(mb) >= this.opts.openHandMinRatio;
     if (distance < this.opts.spreadRearmFrac) this.spreadArmed = true;
-    if (!bothOpen || distance < this.opts.spreadWideFrac) {
+    if (distance >= this.opts.spreadRearmFrac) this.gatherArmed = true;
+    if (!bothOpen) {
       this.wideSince = null;
+      this.closeSince = null;
       return null;
     }
-    this.wideSince ??= now;
-    if (!this.spreadArmed || now - this.wideSince < this.opts.spreadHoldMs) return null;
-    this.spreadArmed = false;
+    // spread: held wide.
+    if (distance >= this.opts.spreadWideFrac) {
+      this.closeSince = null;
+      this.wideSince ??= now;
+      if (this.spreadArmed && now - this.wideSince >= this.opts.spreadHoldMs) {
+        this.spreadArmed = false;
+        this.wideSince = null;
+        return this.emit("spread", now);
+      }
+      return null;
+    }
     this.wideSince = null;
-    return this.emit("spread", now);
+    // gather: held together, after having been apart (owner, second trial: "iki elle
+    // kapatma da ekle, tam ekranı küçültecek").
+    if (distance <= this.opts.gatherCloseFrac) {
+      this.closeSince ??= now;
+      if (this.gatherArmed && now - this.closeSince >= this.opts.gatherHoldMs) {
+        this.gatherArmed = false;
+        this.closeSince = null;
+        return this.emit("gather", now);
+      }
+      return null;
+    }
+    this.closeSince = null;
+    return null;
   }
+
+  /** Live measurements for the calibration readout - what THIS frame looks like to the
+   * rules above, in the same mirrored units the thresholds use. Pure; emits nothing. */
+  static measure(frame: TrackedFrame): FrameMeasure {
+    const hands = frame.hands.map((h) => mirror(h.landmarks));
+    return {
+      hands: hands.length,
+      openness: hands.map((m) => Math.round(openness(m) * 100) / 100),
+      pinch: hands.map((m) => Math.round(pinchRatio(m) * 100) / 100),
+      wristDistance: hands.length >= 2 ? Math.round(dist(hands[0][WRIST], hands[1][WRIST]) * 100) / 100 : null,
+    };
+  }
+
 }

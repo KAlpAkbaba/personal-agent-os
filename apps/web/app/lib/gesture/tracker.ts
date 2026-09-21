@@ -26,7 +26,7 @@
  * which the product's privacy invariant (module docstring, `perception.ts`) rules out.
  */
 
-import { GestureRecognizer } from "./recognizer";
+import { type FrameMeasure, GestureRecognizer } from "./recognizer";
 import type { GestureEvent, HandednessLabel, TrackedFrame } from "./types";
 
 export const MEDIAPIPE_WASM_PATH = "/mediapipe/wasm";
@@ -87,7 +87,7 @@ export function browserHandLandmarkerFactory(): HandLandmarkerFactory {
   };
 }
 
-export type TrackerStats = { fps: number };
+export type TrackerStats = { fps: number; measure: FrameMeasure | null };
 
 export type GestureTrackerOptions = {
   onGesture: (event: GestureEvent) => void;
@@ -134,6 +134,8 @@ export class GestureTracker {
   private stopped = true;
   private video: HTMLVideoElement | null = null;
   private detectionsInWindow = 0;
+  private lastFps = 0;
+  private lastStatsAtMs = 0;
   private windowStartMs = 0;
 
   constructor(private readonly options: GestureTrackerOptions) {
@@ -195,14 +197,21 @@ export class GestureTracker {
       // A single frame's detection failing (e.g. the video paused mid-frame) is not fatal;
       // the loop just tries again next frame.
     }
-    for (const event of this.recognizer.ingest({ t_ms, hands })) this.options.onGesture(event);
+    const frame: TrackedFrame = { t_ms, hands };
+    for (const event of this.recognizer.ingest(frame)) this.options.onGesture(event);
 
     this.detectionsInWindow += 1;
     const elapsed = t_ms - this.windowStartMs;
+    // The calibration readout wants the live numbers a few times a second, the fps once a
+    // second: one stats callback every ~200 ms carries both (fps as last measured).
     if (elapsed >= 1_000) {
-      this.options.onStats?.({ fps: (this.detectionsInWindow * 1000) / elapsed });
+      this.lastFps = (this.detectionsInWindow * 1000) / elapsed;
       this.detectionsInWindow = 0;
       this.windowStartMs = t_ms;
+    }
+    if (t_ms - this.lastStatsAtMs >= 200) {
+      this.lastStatsAtMs = t_ms;
+      this.options.onStats?.({ fps: this.lastFps, measure: GestureRecognizer.measure(frame) });
     }
 
     this.loop();
