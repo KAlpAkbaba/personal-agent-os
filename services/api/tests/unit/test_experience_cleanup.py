@@ -146,3 +146,27 @@ def test_the_key_names_the_event_it_came_from(session) -> None:
 
     assert event_id_of(memory) == str(event.event_id)
     assert event_id_of(_memory(session, key="x", text="y")) == ""
+
+
+def test_a_machine_record_row_is_selected_but_a_mission_outcome_is_not(session) -> None:
+    """ADR-0193: "operator.key -> succeeded: executed, verified" goes; the mission's own
+    outcome - which carries the owner's words - stays."""
+    from app.ledger.vocabulary import (
+        EVENT_TYPE_ACTION_RECEIPT,
+        EVENT_TYPE_OPERATOR_MISSION_FINISHED,
+        SUBSYSTEM_OPERATOR,
+    )
+
+    receipt = _event(
+        session, EVENT_TYPE_ACTION_RECEIPT, SUBSYSTEM_OPERATOR, "operator.key -> succeeded"
+    )
+    finished = _event(
+        session,
+        EVENT_TYPE_OPERATOR_MISSION_FINISHED,
+        SUBSYSTEM_OPERATOR,
+        "operator.mission -> succeeded: 10 sekmeye geç",
+    )
+    _memory(session, key=f"{EPISODIC_KEY_PREFIX}:{receipt.event_id}", text="operator.key")
+    _memory(session, key=f"{EPISODIC_KEY_PREFIX}:{finished.event_id}", text="10 sekmeye geç")
+
+    assert [m.text for m in select_telemetry_memories(session)] == ["operator.key"]

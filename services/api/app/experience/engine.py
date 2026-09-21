@@ -62,16 +62,28 @@ from app.experience.signals import publish_progress
 from app.ledger import service as ledger_service
 from app.ledger.models import ActivityEventRow
 from app.ledger.vocabulary import (
+    EVENT_TYPE_ACTION_RECEIPT,
     EVENT_TYPE_BRIEFING_DELIVERED,
     EVENT_TYPE_BRIEFING_QUEUED,
+    EVENT_TYPE_DEPLOYMENT_CLOUD_CORE_RELEASED,
+    EVENT_TYPE_EVOLUTION_IDEA_CREATED,
     EVENT_TYPE_EXPERIENCE_INGESTED,
+    EVENT_TYPE_EYE_DISABLED,
+    EVENT_TYPE_EYE_ENABLED,
     EVENT_TYPE_LEDGER_BACKFILL,
+    EVENT_TYPE_OPERATOR_MISSION_STARTED,
+    EVENT_TYPE_OPERATOR_TASK_COMPLETED,
+    EVENT_TYPE_OPERATOR_TASK_FAILED,
+    EVENT_TYPE_OPERATOR_TASK_STARTED,
     EVENT_TYPE_OWNER_INPUT_ACTIVE,
     EVENT_TYPE_PRESENCE_STATE_CHANGED,
     EVENT_TYPE_RESEARCH_COMPLETED,
+    EVENT_TYPE_RESEARCH_QUALITY_GATE,
+    EVENT_TYPE_VOICE_EXPLAINED,
     EVENT_TYPE_VOICE_SESSION_ATTACHED,
     EVENT_TYPE_VOICE_SESSION_CLOSED,
     EVENT_TYPE_VOICE_SESSION_CREATED,
+    EVENT_TYPE_WEATHER_QUERIED,
     STATUS_COMPLETED,
     STATUS_FAILED,
 )
@@ -116,12 +128,42 @@ TELEMETRY_EVENT_TYPES = frozenset(
     }
 )
 
+#: ADR-0193: the machine's own RECORDS - true, useful ledger events written in the
+#: machine's vocabulary about the machine's steps. Measured in production after the
+#: heartbeat was gone: 432 rows of "operator.key -> succeeded: executed, verified", 77 of
+#: "Kalite kapısı 10 sayfayı eledi.", 78 of "operator.activate_window -> planned" - and
+#: ADR-0192 had just let "benim hakkımda ne biliyorsun" answer from this store in every
+#: mode. What the OWNER did keeps its row: a mission's outcome (it carries their own words,
+#: "10 sekmeye geç"), an escalation back to them, a research, a mail; the pattern behind
+#: repeated actions is the preference pass's job, not a hundred copies of the action.
+MACHINE_RECORD_EVENT_TYPES = frozenset(
+    {
+        EVENT_TYPE_ACTION_RECEIPT,
+        EVENT_TYPE_OPERATOR_TASK_STARTED,
+        EVENT_TYPE_OPERATOR_TASK_COMPLETED,
+        EVENT_TYPE_OPERATOR_TASK_FAILED,
+        # The same request its `.finished` row states with the outcome.
+        EVENT_TYPE_OPERATOR_MISSION_STARTED,
+        EVENT_TYPE_RESEARCH_QUALITY_GATE,
+        EVENT_TYPE_VOICE_EXPLAINED,
+        EVENT_TYPE_DEPLOYMENT_CLOUD_CORE_RELEASED,
+        EVENT_TYPE_EVOLUTION_IDEA_CREATED,
+        # "weather.current -> İstanbul (owner_default)": a lookup of a setting the owner
+        # already has, twenty times.
+        EVENT_TYPE_WEATHER_QUERIED,
+        # A toggle, 45 times in five days; the live state is the ledger's and the UI's.
+        EVENT_TYPE_EYE_ENABLED,
+        EVENT_TYPE_EYE_DISABLED,
+    }
+)
+
 EXCLUDED_EVENT_TYPES = frozenset(
     {
         EVENT_TYPE_LEDGER_BACKFILL,
         EVENT_TYPE_BRIEFING_QUEUED,
         EVENT_TYPE_BRIEFING_DELIVERED,
         *TELEMETRY_EVENT_TYPES,
+        *MACHINE_RECORD_EVENT_TYPES,
         # B18 req 71: this engine's OWN pass receipt. Without it every pass would write a
         # row saying it ran and the next pass would remember that it ran - a system
         # learning from the record of its own learning, corroborating itself for ever.

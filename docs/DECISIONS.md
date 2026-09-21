@@ -14483,3 +14483,36 @@ was run against a mutant that renames the turn-record field: both tests fail.
 arguments, a remember the turn did not ask for still refused, four ways of saying the fact,
 three shapes of the question), `tests/unit/test_local_mode_memory_relay.py` (new, 2: remember
 then recall through the relay). Gate: memory/voice/intent/experience/chat, 1615.
+
+## ADR-0193 — A machine's record of its own steps is not the owner's memory either (2026-09-21)
+
+ADR-0190 removed the heartbeat. Measured again afterwards, grouped by the ledger event each
+remaining episodic row came from: 432 `action.receipt` ("operator.key -> succeeded:
+executed, verified"), 89 `operator.mission.started`, 78 + 53 + 25 `operator.task.*`
+("operator.activate_window -> planned"), 77 `research.quality_gate` ("Kalite kapısı 10
+sayfayı eledi."), 69 `voice.explained`, 26 `deployment.cloud_core.released`, 21
+`evolution.idea_created`, 20 `weather.query` ("weather.current -> İstanbul (owner_default)"),
+45 `eye.enabled/disabled` toggles. ADR-0192 had just made "benim hakkımda ne biliyorsun"
+answer from this store in every mode — so this is what the owner would have heard.
+
+A receipt carries no owner's words (its fields are capability, requested state and statuses),
+so there is no honest sentence to turn one into; the ledger keeps every one of them for "son
+yaptıklarını anlat", which is answered from the ledger and not from memory. These twelve types
+are now `MACHINE_RECORD_EVENT_TYPES` and are not written as episodic memories. What the OWNER
+did keeps its row: a mission's OUTCOME (`operator.mission.finished` carries their own words,
+"10 sekmeye geç" — `.started` is the same request again and goes), an escalation back to them,
+a research, a mail, a pause of self-development. The pattern behind repeated actions is the
+preference pass's job (ADR-0191), not a hundred copies of the action.
+
+**This reverses one line of ADR-0190**, which listed `action.receipt` among what the owner did
+and should keep. It was wrong for the reason above, and the test that pinned it now pins the
+opposite, with this measurement in its docstring.
+
+The cleanup selection (`app.experience.cleanup`) now covers both sets
+(`FORGETTABLE_EVENT_TYPES`), still by provenance and never by text, still never an explicit
+or pinned row. It has NOT been run against the store: the first cleanup was authorised for
+the heartbeat rows the owner had seen, and this is a second batch they have not.
+
+**Tests**: `tests/unit/test_experience_memory_is_not_a_log.py` (+12 machine records excluded,
+mission outcome and escalation kept), `tests/unit/test_experience_cleanup.py` (+1: a receipt
+row is selected, a mission outcome is not). Gate: 2612.

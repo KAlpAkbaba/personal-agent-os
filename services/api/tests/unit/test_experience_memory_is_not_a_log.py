@@ -20,16 +20,33 @@ from __future__ import annotations
 
 import pytest
 
-from app.experience.engine import EXCLUDED_EVENT_TYPES, TELEMETRY_EVENT_TYPES
+from app.experience.engine import (
+    EXCLUDED_EVENT_TYPES,
+    MACHINE_RECORD_EVENT_TYPES,
+    TELEMETRY_EVENT_TYPES,
+)
 from app.ledger.vocabulary import (
     EVENT_TYPE_ACTION_RECEIPT,
+    EVENT_TYPE_DEPLOYMENT_CLOUD_CORE_RELEASED,
+    EVENT_TYPE_EVOLUTION_IDEA_CREATED,
+    EVENT_TYPE_EYE_DISABLED,
+    EVENT_TYPE_EYE_ENABLED,
     EVENT_TYPE_MAIL_SENT,
+    EVENT_TYPE_OPERATOR_MISSION_ESCALATED,
+    EVENT_TYPE_OPERATOR_MISSION_FINISHED,
+    EVENT_TYPE_OPERATOR_MISSION_STARTED,
+    EVENT_TYPE_OPERATOR_TASK_COMPLETED,
+    EVENT_TYPE_OPERATOR_TASK_FAILED,
+    EVENT_TYPE_OPERATOR_TASK_STARTED,
     EVENT_TYPE_OWNER_INPUT_ACTIVE,
     EVENT_TYPE_PRESENCE_STATE_CHANGED,
     EVENT_TYPE_RESEARCH_COMPLETED,
+    EVENT_TYPE_RESEARCH_QUALITY_GATE,
+    EVENT_TYPE_VOICE_EXPLAINED,
     EVENT_TYPE_VOICE_SESSION_ATTACHED,
     EVENT_TYPE_VOICE_SESSION_CLOSED,
     EVENT_TYPE_VOICE_SESSION_CREATED,
+    EVENT_TYPE_WEATHER_QUERIED,
 )
 
 
@@ -55,11 +72,38 @@ def test_machine_telemetry_is_not_written_to_memory(event_type: str) -> None:
         # What a person would actually want recalled - none of these may be swept up:
         EVENT_TYPE_RESEARCH_COMPLETED,
         EVENT_TYPE_MAIL_SENT,
-        EVENT_TYPE_ACTION_RECEIPT,
+        EVENT_TYPE_OPERATOR_MISSION_FINISHED,
+        EVENT_TYPE_OPERATOR_MISSION_ESCALATED,
     ],
 )
 def test_what_the_owner_did_is_still_remembered(event_type: str) -> None:
     assert event_type not in EXCLUDED_EVENT_TYPES
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        # ADR-0193, measured in production after the heartbeat was gone: 432 of the 1381
+        # remaining rows read "operator.key -> succeeded: executed, verified". A receipt is
+        # a machine record in a machine's vocabulary - and ADR-0192 had just let
+        # "benim hakkımda ne biliyorsun" answer from this store in every mode.
+        EVENT_TYPE_ACTION_RECEIPT,
+        EVENT_TYPE_OPERATOR_TASK_STARTED,
+        EVENT_TYPE_OPERATOR_TASK_COMPLETED,
+        EVENT_TYPE_OPERATOR_TASK_FAILED,
+        EVENT_TYPE_OPERATOR_MISSION_STARTED,
+        EVENT_TYPE_RESEARCH_QUALITY_GATE,
+        EVENT_TYPE_VOICE_EXPLAINED,
+        EVENT_TYPE_DEPLOYMENT_CLOUD_CORE_RELEASED,
+        EVENT_TYPE_EVOLUTION_IDEA_CREATED,
+        EVENT_TYPE_WEATHER_QUERIED,
+        EVENT_TYPE_EYE_ENABLED,
+        EVENT_TYPE_EYE_DISABLED,
+    ],
+)
+def test_a_machine_record_is_not_a_memory(event_type: str) -> None:
+    assert event_type in MACHINE_RECORD_EVENT_TYPES
+    assert event_type in EXCLUDED_EVENT_TYPES
 
 
 def test_the_exclusion_list_is_the_old_one_plus_the_telemetry() -> None:

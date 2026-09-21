@@ -19,16 +19,25 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.experience.engine import EPISODIC_KEY_PREFIX, TELEMETRY_EVENT_TYPES
+from app.experience.engine import (
+    EPISODIC_KEY_PREFIX,
+    MACHINE_RECORD_EVENT_TYPES,
+    TELEMETRY_EVENT_TYPES,
+)
 from app.ledger.models import ActivityEventRow
 from app.memory.models import Memory
 
+#: ADR-0190 + ADR-0193: everything the engine no longer writes as an episodic memory.
+FORGETTABLE_EVENT_TYPES = TELEMETRY_EVENT_TYPES | MACHINE_RECORD_EVENT_TYPES
 
-def telemetry_event_ids(session: Session) -> set[str]:
+
+def telemetry_event_ids(
+    session: Session, event_types: frozenset[str] = FORGETTABLE_EVENT_TYPES
+) -> set[str]:
     """Ledger event ids whose type this product no longer remembers."""
     rows = session.execute(
         select(ActivityEventRow.event_id).where(
-            ActivityEventRow.event_type.in_(sorted(TELEMETRY_EVENT_TYPES))
+            ActivityEventRow.event_type.in_(sorted(event_types))
         )
     )
     return {str(row[0]) for row in rows}
@@ -41,9 +50,12 @@ def event_id_of(memory: Memory) -> str:
     return key[len(prefix) :] if key.startswith(prefix) else ""
 
 
-def select_telemetry_memories(session: Session) -> list[Memory]:
-    """Every memory that is a heartbeat, oldest first. Never an explicit or pinned row."""
-    ids = telemetry_event_ids(session)
+def select_telemetry_memories(
+    session: Session, event_types: frozenset[str] = FORGETTABLE_EVENT_TYPES
+) -> list[Memory]:
+    """Every memory the engine would no longer write, oldest first. Never an explicit or
+    pinned row."""
+    ids = telemetry_event_ids(session, event_types)
     if not ids:
         return []
     memories = (
@@ -62,4 +74,9 @@ def select_telemetry_memories(session: Session) -> list[Memory]:
     ]
 
 
-__all__ = ["event_id_of", "select_telemetry_memories", "telemetry_event_ids"]
+__all__ = [
+    "FORGETTABLE_EVENT_TYPES",
+    "event_id_of",
+    "select_telemetry_memories",
+    "telemetry_event_ids",
+]
