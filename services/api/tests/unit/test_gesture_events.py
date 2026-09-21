@@ -132,43 +132,19 @@ def test_spread_presses_f_for_fullscreen() -> None:
 # --------------------------------------------------------------------------- rotate
 
 
-def test_rotate_cw_raises_the_volume() -> None:
-    client, factory, device, _operator = _wired()
-    _seed_live_playback(factory)
-    sid = _create(client)
-
-    events = _gesture(client, sid, "rotate_cw")
-    assert events["resolved_intents"][0]["tool"] == "media.volume"
-
-    call = _tool(client, sid, "media.volume", {"direction": "down"})
-    assert call["status"] == "succeeded", call
-    assert call["result"]["requested_state"] == "up", "the gesture said up; the model said down"
-
-
-def test_rotate_ccw_lowers_the_volume() -> None:
-    client, factory, device, _operator = _wired()
-    _seed_live_playback(factory)
-    sid = _create(client)
-
-    _gesture(client, sid, "rotate_ccw")
-    call = _tool(client, sid, "media.volume", {"direction": "up"})
-    assert call["status"] == "succeeded", call
-    assert call["result"]["requested_state"] == "down", "the gesture said down; the model said up"
-
-
 @pytest.mark.parametrize(("gesture", "key"), [("rotate_cw", "up"), ("rotate_ccw", "down")])
-def test_a_rotate_with_no_owner_media_session_is_the_players_own_volume_key(
+def test_a_rotate_is_the_focused_players_own_volume_key_even_with_a_live_media_row(
     gesture: str, key: str
 ) -> None:
-    """First live trial (2026-09-21): the owner turned the cap at a video they had opened
-    by hand and every rotate was refused "volume_failed" - media.volume only knows the
-    session THIS service opened. With none live, a rotate is the focused player's own
-    volume key (YouTube and most web players: the arrows), never a refusal."""
+    """First live trial (2026-09-21): every rotate went to media.volume and was refused
+    "volume_failed" - that tool knows only the session THIS service opened, and a stale
+    "playing" row from the day before kept it on that path while the owner turned the cap
+    at a video opened by hand. A rotate is the focused player's own volume key (YouTube
+    and most web players: the arrows), whatever the playback table says."""
     from tests.unit.test_operator_tools import _focus_window
 
     client, factory, device, _operator = _wired()
-    with factory() as db:
-        OwnerMediaPlaybackRow.__table__.create(db.get_bind(), checkfirst=True)  # exists, empty
+    _seed_live_playback(factory)  # a live row exists and must NOT pull the rotate onto it
     _focus_window(factory, device=device)
     sid = _create(client)
     events = _gesture(client, sid, gesture)
@@ -178,7 +154,7 @@ def test_a_rotate_with_no_owner_media_session_is_the_players_own_volume_key(
     assert call["status"] == "succeeded", call
     assert call["result"]["execution_status"] == "executed"
     assert device.payload_for("keyboard.key")["key"] == key
-    assert "media.volume" not in [c["capability"] for c in device.calls]
+    assert "browser.media_volume" not in [c["capability"] for c in device.calls]
 
 
 # ---------------------------------------------------------------------------- pinch

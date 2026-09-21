@@ -11,7 +11,8 @@ The closed set (fixed, owner-decided) and its mapping:
 
 * swipe_left / swipe_right / swipe_up / swipe_down -> OPERATOR_KEY, key_press
   "left"/"right"/"up"/"down".
-* rotate_cw / rotate_ccw -> MEDIA_VOLUME, media_volume_direction "up"/"down".
+* rotate_cw / rotate_ccw -> OPERATOR_KEY, key_press "up"/"down" (the focused player's own
+  volume keys; never media.volume - see resolve_gesture).
 * spread -> OPERATOR_KEY, key_press "f" (fullscreen; YouTube and most web players
   honour the "f" key).
 * pinch_start / pinch_release -> recorded (matched, gesture) but Intent.NONE, so
@@ -63,11 +64,6 @@ _ARROW_KEY_BY_SWIPE: dict[str, str] = {
     GESTURE_SWIPE_DOWN: "down",
 }
 
-#: rotation direction -> the volume direction MEDIA_VOLUME applies.
-_VOLUME_DIRECTION_BY_ROTATE: dict[str, str] = {
-    GESTURE_ROTATE_CW: "up",
-    GESTURE_ROTATE_CCW: "down",
-}
 
 #: Recorded but not (yet) wired to a tool - Stage 2 (pinch-mouse) gives these meaning.
 _UNWIRED_GESTURES: frozenset[str] = frozenset({GESTURE_PINCH_START, GESTURE_PINCH_RELEASE})
@@ -84,7 +80,7 @@ _PLAYER_VOLUME_KEY_BY_ROTATE: dict[str, str] = {
 }
 
 
-def resolve_gesture(gesture: str, *, media_playing: bool = True) -> ResolvedIntent:
+def resolve_gesture(gesture: str) -> ResolvedIntent:
     """The one fixed, total mapping from a gesture NAME to a ``ResolvedIntent``.
 
     Pure and total on its own, and does not trust its caller: a gesture outside the
@@ -93,10 +89,11 @@ def resolve_gesture(gesture: str, *, media_playing: bool = True) -> ResolvedInte
     validator already accepted against :data:`GESTURE_NAMES` - defence in depth, the
     same discipline every pure table in ``app.voice.intents`` follows.
 
-    ``media_playing`` is the one live fact the table takes (the caller reads it from
-    ``app.media.playback_service.live_playback``): a rotate is the owner's OWN media
-    session's volume when one is live, and the focused player's own volume keys
-    otherwise - never a refusal for turning the cap at a video they opened by hand.
+    A rotate is the FOCUSED PLAYER's own volume keys, never ``media.volume``: that tool
+    knows only the media session this service opened, and on the first live trial
+    (2026-09-21) a stale "playing" row from the day before kept every rotate on it and
+    refused - while the owner was turning the cap at a video opened by hand. The owner
+    watches in a browser window either way, and the arrows are that player's volume.
     """
     if gesture in _ARROW_KEY_BY_SWIPE:
         return ResolvedIntent(
@@ -104,21 +101,15 @@ def resolve_gesture(gesture: str, *, media_playing: bool = True) -> ResolvedInte
             matched=MATCHED_GESTURE,
             gesture=gesture,
             key_press=_ARROW_KEY_BY_SWIPE[gesture],
+            window_ref="current",
         )
-    if gesture in _VOLUME_DIRECTION_BY_ROTATE:
-        if not media_playing:
-            return ResolvedIntent(
-                intent=Intent.OPERATOR_KEY,
-                matched=MATCHED_GESTURE,
-                gesture=gesture,
-                key_press=_PLAYER_VOLUME_KEY_BY_ROTATE[gesture],
-                window_ref="current",
-            )
+    if gesture in _PLAYER_VOLUME_KEY_BY_ROTATE:
         return ResolvedIntent(
-            intent=Intent.MEDIA_VOLUME,
+            intent=Intent.OPERATOR_KEY,
             matched=MATCHED_GESTURE,
             gesture=gesture,
-            media_volume_direction=_VOLUME_DIRECTION_BY_ROTATE[gesture],
+            key_press=_PLAYER_VOLUME_KEY_BY_ROTATE[gesture],
+            window_ref="current",
         )
     if gesture == GESTURE_SPREAD:
         return ResolvedIntent(

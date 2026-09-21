@@ -2068,16 +2068,7 @@ def record_client_events(
                 continue
             recent_ms.append(now_ms)
             ctx["gesture_recent_ms"] = recent_ms
-            # The one live fact the gesture table takes: whether an owner media session
-            # is playing right now (then a rotate is its volume; otherwise the focused
-            # player's own volume keys - first live trial, 2026-09-21).
-            try:
-                from app.media.playback_service import live_playback
-
-                media_playing_known = live_playback(db) is not None
-            except Exception:  # noqa: BLE001 - a deployment without the playback table
-                media_playing_known = False
-            intent = resolve_gesture(gesture_name, media_playing=media_playing_known)
+            intent = resolve_gesture(gesture_name)
             # The same turn record an utterance leaves (ctx["last_utterance"]), narrowed
             # to the fields the two tools a gesture can name actually read
             # (tools_operator.operator_key: key_press/window_ref/repeat_count;
