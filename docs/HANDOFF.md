@@ -61,6 +61,35 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
    kaydırma = ok tuşları, baş+işaret çevirme = ses, iki el açma = "f" (tam ekran), sunucuda
    `gesture` istemci olayı → aynı araçlar; pinç olayları yalnız üretilir. 2. aşama (pinç-fare)
    akış kanalı ister; 1. aşama sahibin elinde ölçüldükten sonra tasarlanacak.
+   Sahip: "ajan bitince birleştir, önce ayrı test edelim" → **dal `feat/hand-gestures-stage1`
+   (`9e15476f`, origin'de; worktree `.claude/worktrees/agent-ac27be8adddc2920d`) AYRI
+   DENEME İÇİN ÜRETİMDE** (api-green, kontrat v3, 2026-09-21 19:01; son iyi bilinen
+   `5b4e771c`, ondan önce `dad462ac`). Gate: API 268+87 (worktree'den), web 2049+ (vitest),
+   tsc/oxlint temiz. İlk canlı denemede bulunan ve dalda düzeltilen 2 hata: (a) `EyeStore`
+   sayaçlı kaynak sarmalayıcısı `videoElement()`'ı iletmiyordu → el kumandası sonsuza dek
+   "Bekleniyor" (`72000f3f`, regresyon testi KIRMIZI kanıtlı); (b) çevirme her zaman
+   `media.volume`'a gidip "volume_failed" ile reddediliyordu (sahip videoyu elle açmıştı)
+   → canlı medya oturumu yoksa odaktaki oynatıcının ok tuşları (`9e15476f`). Sonraki
+   ekleme adayı: cihaz ajanına sistem ses tuşları (`volume_up/down/mute`), ajan yayını ister.
+   Canlıda görülen: izleme 18 kare/sn, pinç "tutma" algılanıyor; kaydırma henüz raporlanmadı.
+   Sahip web kabuğunu worktree'den başlatır: `…\agent-ac27be8adddc2920d\scripts\voice\
+   start-web-voice.ps1` → /core/cockpit → Yerel mod → kamera aç → "El kumandası" aç.
+   **SAHİP KARARI (2026-09-22): dal, sahip "birleştir" demeden main'e BİRLEŞTİRİLMEZ**
+   (deneme yayınları dalı Cloud Core'a çıkarmaya devam edebilir; main'in son yayını
+   `dad462ac` son iyi bilinen olarak durur). "Birleştir" gelince: `git merge
+   feat/hand-gestures-stage1` main'e, ADR-0198/0199'a kanıt satırı, yayın, recovery pin.
+   Kötüyse: `release-cloud-core.ps1 -BlueGreen` main'den geri yayın (dad462ac LKG).
+   2. aşama (ADR-0199): sunucu yarısı dalda (`e73c1be`), tarayıcı yarısı ajanda (aynı
+   worktree), cihaz yarısı ajanda (worktree `agent-a137003064a5cc0a5`); cihaz kurulumu UAC.
+5. *Türkiye trafik kameraları God's Eye'a (sahip 2026-09-21: "tüm Türkiye'deki
+   mobeseleri ekleyemez miyiz, paylaşılan").* Kapsam kararı: EGM MOBESE akışları herkese
+   açık DEĞİL (eklenemez); belediyelerin paylaştığı trafik kameraları (İBB `application.
+   ibb.gov.tr/IBB/tk.htm` ~700+, diğer büyükşehirler) eklenebilir. God's Eye kamera
+   katmanı `config/cctv_sources.<şehir>.json` (id, ad, lat/lon, feedType image|hls, url,
+   provider, license) + proxy allowlist ile çalışıyor. Yapılacak: İBB liste + akış deseni
+   keşfi (site 21.09 akşam 503 verdi), JSON üretimi, Dockerfile overlay ile konteynere
+   kopya, `cctv.js`'nin dosyayı otomatik yükleyip yüklemediğinin doğrulanması. BEKLİYOR
+   (4/1. aşama birleşince).
 
 ## Şu anki durum
 
