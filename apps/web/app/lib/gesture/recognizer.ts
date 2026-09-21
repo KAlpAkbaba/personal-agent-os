@@ -228,7 +228,10 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   // looks like at the end is not held against it.
   // Owner's camera: a full open palm measures 0.84, the C pose 0.66, a pinch 0.42, a fist
   // 0.29. OPEN (a swipe's start, the arming pose, a spread/gather hand) is the palm, not the C.
-  openHandMinRatio: 0.75,
+  // ...but a raised palm reads anywhere between ~0.6 and 0.84 as it tilts, and 0.75 made
+  // arming a lottery (owner: "tam tersi oldu"). 0.55 keeps a fist (0.29) and a pinch (0.42) out;
+  // the C pose (0.66) may count as open - a rotate does not translate, so nothing is lost.
+  openHandMinRatio: 0.55,
   swipeMinDistanceFrac: 0.16,
   swipeMaxMs: 900,
   // Calibrated on the owner's camera (HUD readout, 2026-09-21): C pose 0.66/0.66,
