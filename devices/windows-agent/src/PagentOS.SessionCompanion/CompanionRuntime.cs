@@ -60,9 +60,26 @@ public sealed class CompanionRuntime(
     // B48 (rows 300, 326, 327): the device camera's presence provider. Optional like every
     // capability object here; a companion without it answers desktop.camera_mode with
     // capability_missing and its heartbeat carries no camera fields.
-    Camera.CameraPresenceMonitor? camera = null)
+    Camera.CameraPresenceMonitor? camera = null,
+    // ADR-0199: where a one-way pointer.stream batch goes. Null means the operator's own
+    // controller (the shipped wiring); a test injects a recorder to prove the batch crossed
+    // the pipe exactly once and was never answered.
+    Operator.IPointerStreamApplier? pointerStream = null)
 {
     private const int ConnectTimeoutMs = 2000;
+
+    private int _pointerStreamAccepted;
+    private int _pointerStreamUnapplied;
+
+    /// <summary>One-way <c>pointer.stream</c> requests accepted (fresh on this connection) and handed to the applier (ADR-0199).</summary>
+    public int PointerStreamAccepted => _pointerStreamAccepted;
+
+    /// <summary>One-way requests that had nowhere to go: no operator on this companion, or the operator disabled, or a one-way name that is not <c>pointer.stream</c>.</summary>
+    public int PointerStreamUnapplied => _pointerStreamUnapplied;
+
+    /// <summary>The applier in force: the injected one, else the operator's controller when the operator is enabled.</summary>
+    private Operator.IPointerStreamApplier? PointerApplier
+        => pointerStream ?? (operatorCapabilities?.Enabled == true ? operatorCapabilities.PointerStream : null);
 
     /// <summary>
     /// Headroom the companion keeps under the service's own wait on a browser request, so
@@ -334,6 +351,17 @@ public sealed class CompanionRuntime(
         }
         finally
         {
+            // ADR-0199: the pipe that fed the mouse session is gone; whatever stream is open
+            // ends now and a held button is released, rather than in 60 s by the idle rule.
+            try
+            {
+                PointerApplier?.EndAll("pipe_closed");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("pointer stream could not be ended on disconnect: {Reason}", ex.Message);
+            }
+
             // The pipe is gone (or we are stopping): every browser request still running is
             // cancelled — the host forwards the cancel to the worker — and given a moment to
             // settle before the writer they would answer on is disposed.
@@ -409,6 +437,36 @@ public sealed class CompanionRuntime(
                 // here is the difference between "at most once per request" and "as often as
                 // anyone can echo the bytes back".
                 RecordRefusal(verdict, $"request_id={request.RequestId} capability={request.Capability}");
+                continue;
+            }
+
+            if (request.OneWay)
+            {
+                // ADR-0199: a fire-and-forget batch. Applied inline — a batch is at most 64
+                // frames of SendInput, microseconds each, and inline keeps the hand's frames
+                // in order — and NEVER answered: nothing waits on the other side, no response
+                // consumes a sequence number, no audit row is written. Only pointer.stream may
+                // be one-way; any other name so marked is counted and ignored, because a
+                // request the service cannot see the answer to must not do anything else.
+                if (string.Equals(request.Capability, OperatorCapabilityNames.PointerStream, StringComparison.Ordinal)
+                    && PointerApplier is { } applier)
+                {
+                    Interlocked.Increment(ref _pointerStreamAccepted);
+                    try
+                    {
+                        applier.Apply(request.Payload);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning("pointer.stream batch failed: {Reason}", ex.Message);
+                    }
+                }
+                else
+                {
+                    Interlocked.Increment(ref _pointerStreamUnapplied);
+                    logger.LogDebug("one-way request for {Capability} ignored (no applier, or not pointer.stream)", request.Capability);
+                }
+
                 continue;
             }
 

@@ -279,6 +279,51 @@
         "at": { "type": "string", "format": "date-time" }
       },
       "additionalProperties": false
+    },
+    "pointer_stream": {
+      "$comment": "ADR-0199 (stage 2 of the hand control): broker -> agent, additive, BEST EFFORT. A batch of relative pointer moves / button edges for a pointer session the companion opened with pointer.stream_begin. Never acknowledged, never re-delivered, never a command row; the Device Service forwards it over the local IPC as a one-way pointer.stream capability. A batch for a session the companion does not know is dropped and counted. Bounds: |dx|,|dy| <= 200, <= 64 frames per batch.",
+      "type": "object",
+      "required": ["type", "session", "frames"],
+      "properties": {
+        "type": { "const": "pointer_stream" },
+        "session": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "frames": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["t", "dx", "dy"],
+                "properties": {
+                  "t": { "const": "move" },
+                  "dx": { "type": "integer", "minimum": -200, "maximum": 200 },
+                  "dy": { "type": "integer", "minimum": -200, "maximum": 200 },
+                  "seq": { "type": "integer", "minimum": 0 }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["t", "button", "action"],
+                "properties": {
+                  "t": { "const": "button" },
+                  "button": { "enum": ["left", "right"] },
+                  "action": { "enum": ["down", "up", "click"] }
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["t"],
+                "properties": { "t": { "const": "end" } },
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

@@ -19,6 +19,7 @@ namespace PagentOS.Agent.Core.Protocol;
 [JsonDerivedType(typeof(CancelMessage), "cancel")]
 [JsonDerivedType(typeof(ErrorMessage), "error")]
 [JsonDerivedType(typeof(VoiceSidebandMessage), VoiceSideband.FrameType)]
+[JsonDerivedType(typeof(PointerStreamMessage), PointerStream.FrameType)]
 public abstract record ProtocolMessage;
 
 public sealed record HelloMessage : ProtocolMessage

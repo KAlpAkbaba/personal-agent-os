@@ -524,6 +524,22 @@ public static class OperatorCapabilityNames
     /// </summary>
     public const string ScreenOcr = "screen.ocr";
 
+    /// <summary>
+    /// ADR-0199 (stage 2 of the hand control): the pointer stream — the owner's hand as the
+    /// mouse. <c>pointer.stream_begin</c> (<c>{session, window_id}</c>) opens a mouse session
+    /// on the companion and <c>pointer.stream_end</c> (<c>{session}</c>) closes it with the
+    /// counts <c>{moves, buttons, dropped, duration_ms}</c>; both travel as ordinary
+    /// commands. <c>pointer.stream</c> (<c>{session, frames}</c>) is the batch itself: it
+    /// normally arrives as the device-protocol <c>pointer_stream</c> frame and crosses the
+    /// pipe one-way, never answered, never audited per frame; it is advertised so Cloud Core
+    /// can see the trio on the device and so a batch sent as a command still applies and
+    /// answers. Not focus-guarded (the owner's hand may go anywhere but the shell); appended
+    /// LAST so every earlier name keeps its place in the advertised manifest.
+    /// </summary>
+    public const string PointerStreamBegin = "pointer.stream_begin";
+    public const string PointerStream = "pointer.stream";
+    public const string PointerStreamEnd = "pointer.stream_end";
+
     /// <summary>Every operator name, in the order of the specification's table.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -538,7 +554,13 @@ public static class OperatorCapabilityNames
         TerminalOpen, TerminalExecute, TerminalStatus,
         ProcessList, ProcessStop, ServiceStatus, ServiceRestart,
         ScreenOcr,
+        PointerStreamBegin, PointerStream, PointerStreamEnd,
     ];
+
+    /// <summary>The pointer-stream trio (ADR-0199): begin, the batch, end.</summary>
+    public static readonly IReadOnlyList<string> PointerStreamFamily = [PointerStreamBegin, PointerStream, PointerStreamEnd];
+
+    public static bool IsPointerStream(string capability) => PointerStreamFamily.Contains(capability, StringComparer.Ordinal);
 
     /// <summary>The names that synthesise input and therefore run under the focus guard (§1, invariant 2).</summary>
     public static readonly IReadOnlyList<string> Guarded =

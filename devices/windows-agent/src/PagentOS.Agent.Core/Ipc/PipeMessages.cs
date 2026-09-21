@@ -101,6 +101,19 @@ public sealed record ExecRequest : PipeMessage
     [JsonPropertyName("deadline_utc_ms")]
     public long DeadlineUtcMs { get; init; }
 
+    /// <summary>
+    /// ADR-0199: a fire-and-forget request. The service registers no pending answer for it
+    /// and the companion writes none — the <c>pointer.stream</c> batch is applied or dropped
+    /// and that is the end of it, so a 30 Hz hand never queues a response per frame on the
+    /// pipe or a row in anyone's table. Optional and additive: an older companion ignores
+    /// the field and answers as usual, and the service ignores an answer nobody waits for;
+    /// an older service never sets it. Every other frame rule (connection id, sequence,
+    /// the peer's identity) applies unchanged.
+    /// </summary>
+    [JsonPropertyName("one_way")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool OneWay { get; init; }
+
     [JsonPropertyName("conn_id")]
     public string? ConnectionId { get; init; }
 

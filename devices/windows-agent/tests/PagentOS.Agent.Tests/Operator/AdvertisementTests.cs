@@ -40,7 +40,16 @@ public sealed class AdvertisementTests
         Assert.Equal(AgentCapabilities.Projects, with.TakeLast(AgentCapabilities.Projects.Count + AgentCapabilities.Scenes.Count).Take(AgentCapabilities.Projects.Count));
         Assert.Equal(AgentCapabilities.Scenes, with.TakeLast(AgentCapabilities.Scenes.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(37, AgentCapabilities.Operator.Count); // 36 + screen.ocr (ADR-0176)
+        Assert.Equal(40, AgentCapabilities.Operator.Count); // 36 + screen.ocr (ADR-0176) + the pointer-stream trio (ADR-0199)
+        // ADR-0199: the trio is appended LAST, in begin/batch/end order, and none of it is
+        // focus-guarded - the stream has its own refusal rules (no stream, locked, shell in front).
+        Assert.Equal(
+            new[] { OperatorCapabilityNames.PointerStreamBegin, OperatorCapabilityNames.PointerStream, OperatorCapabilityNames.PointerStreamEnd },
+            AgentCapabilities.Operator.TakeLast(3));
+        Assert.Equal(new[] { "pointer.stream_begin", "pointer.stream", "pointer.stream_end" }, OperatorCapabilityNames.PointerStreamFamily);
+        Assert.All(OperatorCapabilityNames.PointerStreamFamily, name => Assert.False(OperatorCapabilityNames.IsGuarded(name), name));
+        Assert.All(OperatorCapabilityNames.PointerStreamFamily, name => Assert.True(OperatorCapabilityNames.IsPointerStream(name) && AgentCapabilities.IsOperator(name), name));
+        Assert.False(OperatorCapabilityNames.IsPointerStream(OperatorCapabilityNames.PointerMove));
         Assert.Equal(14, AgentCapabilities.Documents.Count);
         Assert.Equal(9, AgentCapabilities.Projects.Count);
         Assert.Single(AgentCapabilities.Scenes);

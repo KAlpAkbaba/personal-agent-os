@@ -221,6 +221,22 @@ public sealed class BrokerSession(WebSocket ws, HelloMessage hello)
 
     public bool AutoHeartbeatAck { get; set; } = true;
 
+    /// <summary>
+    /// Every frame the agent sent on this session, in order, kept alongside the consuming
+    /// channel — so a test can prove a NEGATIVE by ordering ("no error frame arrived before
+    /// this ack") instead of by waiting for something not to happen.
+    /// </summary>
+    public List<ProtocolMessage> Seen { get; } = new();
+
+    /// <summary>A snapshot of <see cref="Seen"/>.</summary>
+    public IReadOnlyList<ProtocolMessage> SeenSoFar()
+    {
+        lock (Seen)
+        {
+            return Seen.ToArray();
+        }
+    }
+
     internal async Task PumpAsync(CancellationToken cancellationToken)
     {
         try
@@ -232,6 +248,11 @@ public sealed class BrokerSession(WebSocket ws, HelloMessage hello)
                 if (message is HeartbeatMessage heartbeat && AutoHeartbeatAck)
                 {
                     await SendAsync(new HeartbeatAckMessage { Seq = heartbeat.Seq }, cancellationToken);
+                }
+
+                lock (Seen)
+                {
+                    Seen.Add(message);
                 }
 
                 _received.Writer.TryWrite(message);

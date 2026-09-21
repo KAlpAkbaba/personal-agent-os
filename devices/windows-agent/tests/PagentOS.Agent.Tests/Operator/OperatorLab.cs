@@ -51,11 +51,11 @@ public sealed class OperatorLab : IDisposable
     private readonly List<string> _windowsToClose = new();
     private readonly HashSet<int> _ownPids = new();
 
-    public OperatorLab(IInputSynthesizer? input = null, bool enabled = true, IReadOnlyList<string>? roots = null, IReadOnlyDictionary<string, string>? applications = null)
+    public OperatorLab(IInputSynthesizer? input = null, bool enabled = true, IReadOnlyList<string>? roots = null, IReadOnlyDictionary<string, string>? applications = null, IPointerStreamInput? pointerStreamInput = null)
     {
         Log = new ListLogger();
         Options = new OperatorOptions(enabled, TestAllowlist, roots ?? [Path.GetTempPath(), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)]);
-        Operator = new OperatorCapabilities(Options, Log, input: input, applications: applications);
+        Operator = new OperatorCapabilities(Options, Log, input: input, applications: applications, pointerStreamInput: pointerStreamInput);
     }
 
     public OperatorCapabilities Operator { get; }
@@ -270,6 +270,10 @@ public sealed class OperatorLab : IDisposable
 
     public void Dispose()
     {
+        // ADR-0199: a pointer stream a test left open ends here, its held button released -
+        // the lab never leaves a button down on the owner's desk.
+        Operator.Dispose();
+
         // Windows the lab opened in someone else's process (Explorer): a close request, never a
         // kill — the process is the shell's.
         foreach (var windowId in _windowsToClose)

@@ -185,7 +185,7 @@ def test_socket_forwards_a_move_as_one_pointer_stream_frame_to_the_device() -> N
 
     assert fake_socket.sent == [
         {
-            "kind": "pointer_stream",
+            "type": "pointer_stream",
             "session": pointer_session_id,
             "frames": [{"t": "move", "dx": 5, "dy": -3}],
         }
@@ -219,7 +219,7 @@ def test_socket_forwards_button_events_in_order_alongside_a_move() -> None:
     # test's claim is ORDER, not batching (the coalescing test above owns batching,
     # under a gate that makes it deterministic). Every ``kind``/``session`` matches, and
     # flattening every batch's frames back to one sequence must read in the order sent.
-    assert all(f["kind"] == "pointer_stream" for f in fake_socket.sent)
+    assert all(f["type"] == "pointer_stream" for f in fake_socket.sent)
     assert all(f["session"] == pointer_session_id for f in fake_socket.sent)
     flattened = [item for f in fake_socket.sent for item in f["frames"]]
     assert flattened == [

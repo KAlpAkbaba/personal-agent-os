@@ -32,11 +32,25 @@ public sealed class AgentConnection(
     ILogger<AgentConnection> logger,
     Random? jitterRandom = null,
     ISidebandFrameSink? sidebandSink = null,
-    IHeartbeatStatusProvider? statusProvider = null)
+    IHeartbeatStatusProvider? statusProvider = null,
+    IPointerStreamFrameSink? pointerSink = null)
 {
     private const int MaxFrameBytes = ProtocolConstants.MaxFrameBytes;
 
     private delegate Task SendFunc(ProtocolMessage message, CancellationToken cancellationToken);
+
+    private int _pointerStreamMalformed;
+    private int _pointerStreamDropped;
+
+    /// <summary>
+    /// ADR-0199: <c>pointer_stream</c> frames that did not parse or failed validation, counted
+    /// and dropped — never answered with an error frame and never a reason to disconnect.
+    /// Telemetry, and what the tests assert.
+    /// </summary>
+    public int PointerStreamMalformed => _pointerStreamMalformed;
+
+    /// <summary>Well-formed <c>pointer_stream</c> frames the sink refused, or that arrived with no sink.</summary>
+    public int PointerStreamDropped => _pointerStreamDropped;
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -170,6 +184,17 @@ public sealed class AgentConnection(
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or ProtocolValidationException or FormatException)
         {
+            if (IsPointerStreamFrame(raw))
+            {
+                // ADR-0199: best effort in both directions. A pointer batch that does not
+                // parse is dropped and counted; it is not answered, because a hand at 30 Hz
+                // would turn one bad field into a stream of error frames, and it is not a
+                // disconnect, because a shaking hand must not cost the owner the session.
+                Interlocked.Increment(ref _pointerStreamMalformed);
+                logger.LogDebug("malformed pointer_stream frame dropped: {Reason}", ex.Message);
+                return;
+            }
+
             logger.LogWarning("malformed frame received: {Reason}", ex.Message);
             await send(
                 new ErrorMessage
@@ -197,9 +222,58 @@ public sealed class AgentConnection(
             case VoiceSidebandMessage sideband:
                 await ForwardSidebandAsync(sideband, cancellationToken).ConfigureAwait(false);
                 break;
+            case PointerStreamMessage pointer:
+                await ForwardPointerStreamAsync(pointer, cancellationToken).ConfigureAwait(false);
+                break;
             default:
                 logger.LogWarning("unexpected frame type {Type} ignored", message.GetType().Name);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// ADR-0199: the same opaque hand-off as the sideband — never a reply to the broker,
+    /// never an exception into the receive loop, never a command row. A dropped batch is
+    /// simply a batch the owner's hand will replace with the next one.
+    /// </summary>
+    private async Task ForwardPointerStreamAsync(PointerStreamMessage pointer, CancellationToken cancellationToken)
+    {
+        if (pointerSink is null)
+        {
+            Interlocked.Increment(ref _pointerStreamDropped);
+            logger.LogDebug("pointer_stream for session {Session} dropped: no pointer sink", pointer.Session);
+            return;
+        }
+
+        try
+        {
+            var forwarded = await pointerSink.ForwardAsync(pointer, cancellationToken).ConfigureAwait(false);
+            if (!forwarded)
+            {
+                Interlocked.Increment(ref _pointerStreamDropped);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _pointerStreamDropped);
+            logger.LogWarning("pointer_stream forward failed: {Reason}", ex.Message);
+        }
+    }
+
+    /// <summary>Whether a raw frame names itself a <c>pointer_stream</c>, read without trusting anything else in it.</summary>
+    private static bool IsPointerStreamFrame(string raw)
+    {
+        try
+        {
+            return JsonNode.Parse(raw)?["type"]?.GetValue<string>() == PointerStream.FrameType;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 

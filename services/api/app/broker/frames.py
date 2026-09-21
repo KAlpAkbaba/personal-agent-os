@@ -160,8 +160,7 @@ class HelloFrame(_Frame):
         if isinstance(data, dict):
             unknown = sorted(str(key) for key in data if key not in cls.model_fields)
             frame._ignored_fields = tuple(
-                key[:MAX_IGNORED_HELLO_FIELD_CHARS]
-                for key in unknown[:MAX_IGNORED_HELLO_FIELDS]
+                key[:MAX_IGNORED_HELLO_FIELD_CHARS] for key in unknown[:MAX_IGNORED_HELLO_FIELDS]
             )
         return frame
 
@@ -329,7 +328,12 @@ def command_frame(
 #: nothing from the command path (ack, idempotency, expiry, audit) applies.
 VOICE_SIDEBAND_FRAME_TYPE = "voice_sideband"
 VOICE_SIDEBAND_EVENTS = (
-    "plan_changed", "tool_progress", "tool_completed", "narration_cursor", "say", "leg_closed",
+    "plan_changed",
+    "tool_progress",
+    "tool_completed",
+    "narration_cursor",
+    "say",
+    "leg_closed",
 )
 #: Serialized bound the Device Service enforces before forwarding over the pipe.
 MAX_VOICE_SIDEBAND_FRAME_BYTES = 16 * 1024
@@ -378,11 +382,13 @@ class PointerStreamFrame(_Frame):
     """Outbound-only, like :class:`VoiceSidebandFrame` — kept as a model so a test can
     prove what the pointer WebSocket route sends is exactly this shape."""
 
-    kind: Literal["pointer_stream"]
+    # The device connection's discriminator is ``type`` on every frame (ADR-0199 wrote
+    # "kind"; the Windows agent reads ``type`` - both halves now say ``type``).
+    type: Literal["pointer_stream"]
     session: str = Field(min_length=1, max_length=64)
     frames: list[dict[str, Any]] = Field(max_length=MAX_POINTER_STREAM_BATCH)
 
 
 def pointer_stream_frame(*, session: str, frames: list[dict[str, Any]]) -> dict[str, Any]:
-    built = PointerStreamFrame(kind="pointer_stream", session=session, frames=list(frames))
+    built = PointerStreamFrame(type="pointer_stream", session=session, frames=list(frames))
     return built.model_dump()

@@ -30,7 +30,7 @@ public sealed class DocumentAdvertisementTests
     {
         Assert.Equal(["file.search", "file.locate", "file.inspect", "file.read", "file.compare", "document.extract", "file.fetch", "file.trash", "file.write", "file.append", "file.rename", "file.move", "file.copy", "file.restore"], AgentCapabilities.Documents);
         Assert.Equal(14, AgentCapabilities.Documents.Count);
-        Assert.Equal(37, AgentCapabilities.Operator.Count); // 36 + screen.ocr (ADR-0176)
+        Assert.Equal(40, AgentCapabilities.Operator.Count); // 36 + screen.ocr (ADR-0176) + the pointer-stream trio (ADR-0199)
 
         var without = AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: false);
         Assert.DoesNotContain(without, AgentCapabilities.IsDocuments);
@@ -44,7 +44,7 @@ public sealed class DocumentAdvertisementTests
         Assert.Equal(AgentCapabilities.Documents, with.SkipLast(tail).TakeLast(AgentCapabilities.Documents.Count));
         Assert.Equal(AgentCapabilities.Operator, with.SkipLast(AgentCapabilities.Documents.Count + tail).TakeLast(AgentCapabilities.Operator.Count));
         Assert.Equal(with.Count, with.Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(without.Count + 37 + 14 + 9 + 1, with.Count);
+        Assert.Equal(without.Count + 40 + 14 + 9 + 1, with.Count);
 
         // The deployed 0.1.0 / 0.2.0 baseline — no operator — is untouched by M20, M22 and M23.
         Assert.Equal(AgentCapabilities.Compose(browserEnabled: false), AgentCapabilities.Compose(browserEnabled: false, displayPowerEnabled: false, operatorEnabled: false));

@@ -14839,3 +14839,56 @@ name → the name alone replays the same device calls in order; stop at the firs
 step; step-up evaluated per step by name; a clarification and a macro word are not steps;
 replace on the same name; delete makes the name a plain sentence; run while recording
 refused), corpus `macro.*` cases including the multi-turn `macro.run.1`.
+
+### ADR-0199 addendum 1 — the device half, as built (2026-09-22, windows engineer)
+
+The wire contract above is implemented verbatim (`packages/protocol/DEVICE_PROTOCOL.md`
+§5b/§6r). Decisions taken on the way, all reversible:
+
+1. **A move is realised as `SetCursorPos` + a zero-delta `MOUSEEVENTF_MOVE`, not a raw
+   relative `MOUSEEVENTF_MOVE`.** Relative mouse input is subject to Windows pointer speed and
+   acceleration ("Enhance pointer precision"): a `dx=50` frame would land 30 or 110 px away by
+   control-panel setting, and the browser's gain would mean something different on every
+   machine. The wire stays relative; the companion applies it pixel-exact (the lab reads the
+   cursor back within 2 px).
+2. **The batch crosses the pipe as an `exec_request` with a new additive `one_way: true`
+   field**, capability `pointer.stream`, no pending entry on the service, no response from
+   the companion (an older companion ignores the field and answers; the answer is ignored).
+   The trio `pointer.stream_begin` / `pointer.stream` / `pointer.stream_end` is advertised
+   (operator family, appended last: 37 → 40 names) so Cloud Core sees it; `pointer.stream` as
+   an ordinary command applies by the same rules and answers, so the name has no dead arm.
+3. **The service keeps the set of open mouse sessions from the answers that pass through it**
+   (a succeeded begin opens, an end closes, a disconnect clears) and ignores a batch for any
+   other session before the pipe. **The batch is queued, not written, from the receive
+   loop**: the pipe's zero-byte buffers make a write complete only when the companion reads
+   (measured: the first cut hung the caller when the peer was not reading), so a
+   per-connection outbox of two, drop-oldest, drained by one writer that takes the sequence
+   number under the write lock, keeps a stalled companion from stalling the device's
+   WebSocket. The sideband forward still writes inline (pre-existing, unchanged).
+4. **One stream at a time; a begin replaces** (the old one ended, its button released, named
+   in `replaced`); `window_id` is optional at begin, resolved when given
+   (`ui_target_not_found`), recorded for the receipt and never enforced as a target — the
+   owner's hand may go anywhere but the shell. **A refused batch releases a held button**
+   (locked, no foreground, shell in front): a drag cannot continue into a place the stream
+   may not act on. A null foreground is refused like a locked session.
+5. **`pointer.stream_end` is idempotent**: a stream that already ended answers its numbers
+   with `already_ended`; an unknown session answers zeros with `ended: false` — never an
+   error, because the receipt wants counts, not a refusal, and the stream may have ended by
+   the idle rule a moment earlier. The last 8 closed summaries are kept for that, nothing
+   else is stored.
+6. **The lock probe is `OpenInputDesktop` for read**: it fails on the Winlogon secure desktop
+   (lock screen, UAC) for an owner-session process, which is exactly "the session is locked"
+   without a hook or a session-notification window.
+7. `AgentInfo.SoftwareVersion` stays 0.6.0 (the staged updater compares `build_id`; the last
+   capability addition, `screen.ocr`, did not bump either). `packages/schemas/device-protocol.schema.json`
+   was NOT given a `pointer_stream` `$def` here — the schema is shared with the Cloud Core
+   half built in parallel; the integrator adds it once (the C# side has no test comparing frame
+   kinds to the schema's `oneOf`).
+
+Proof: `PointerStreamControllerTests` (clamp, rate, the three refusals, the release on end /
+timeout / replace / pipe-closed / dispose, idempotent end, the parser), `PointerStreamLabTests`
+(the real pointer: a relative move within 2 px, the button's async state after down/up and
+released at end, the shell in front moves nothing), `PointerStreamForwardingTests` (the frame
+round trip, never an ack/command/audit/idempotency row, malformed counted without an error
+frame, one batch = one one-way request only for an opened session, the stalled-reader outbox,
+the companion never answering a one-way request and ending the stream on pipe close).

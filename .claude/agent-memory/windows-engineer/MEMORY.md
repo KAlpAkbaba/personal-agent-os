@@ -20,3 +20,4 @@
 - [B33 MSIX signing facts](project_b33_msix_signing.md) — measured WinVerifyTrust/PackageManager HRESULTs, throwaway cert-store lab, WinRT via vtables, mutation-compile and formatter-drift traps
 - [B11-toast facts](project_b11_toast.md) — Setting throws 0x80070490 until first Show, history read-back is not a popup, this desktop shows no popups, mutation-runner PS traps
 - [B48 device camera](project_b48_device_camera.md) — WinRT via versioned TFM with pinned OutputPath, restore needs network, heartbeat nested projection, desktop.notify was unwired, CS0162 mutation trap
+- [Pointer stream facts](project_pointer_stream_facts.md) — zero-byte pipe write blocks until the companion reads (queue, never forward inline), backup-restore mtime makes MSBuild rerun the mutated DLL, a mutated release rule left the owner's real mouse button down, relative SendInput is rescaled by acceleration, blame-hang Sequence.xml names a hung test

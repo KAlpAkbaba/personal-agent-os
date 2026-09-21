@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using System.Threading.Channels;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -175,7 +176,8 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
             }
 
             var guard = IpcChannelGuard.Create();
-            var connection = new CompanionConnection(server, guard, peer!);
+            var connection = new CompanionConnection(server, guard, peer!, onPointerBatchDropped: () => Interlocked.Increment(ref _pointerStreamDropped));
+            Task? pointerDrain = null;
             try
             {
                 if (!await HandshakeAsync(connection, stoppingToken).ConfigureAwait(false))
@@ -190,6 +192,7 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
                     "ipc_companion_admitted",
                     status: "ok",
                     detail: $"sid={peer!.Sid} session={peer.SessionId} pid={peer.ProcessId} conn={guard.ConnectionId[..16]}");
+                pointerDrain = Task.Run(() => DrainPointerOutboxAsync(connection, stoppingToken), CancellationToken.None);
                 await ReadLoopAsync(connection, stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -203,8 +206,27 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
             finally
             {
                 _connection = null;
+                // ADR-0199: whatever mouse session the companion held died with its pipe (the
+                // companion releases any held button on its side); a batch that arrives before
+                // the next begin is for a session nobody has, and whatever sat in the outbox
+                // goes with the connection.
+                _openPointerSessions.Clear();
+                connection.PointerOutbox.Writer.TryComplete();
                 FailAllPending("session companion disconnected");
                 await connection.DisposeAsync().ConfigureAwait(false);
+                if (pointerDrain is not null)
+                {
+                    try
+                    {
+                        await pointerDrain.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // The drain's write fails with the disposed pipe and the task ends; a
+                        // slow exit is not worth holding the accept loop for.
+                    }
+                }
+
                 _logger.LogInformation("session companion disconnected");
             }
         }
@@ -270,6 +292,7 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
                 throw new CapabilityException(error.Class, error.Message, error.Retryable ?? false);
             }
 
+            NotePointerSession(capability, payload, response.Result);
             return response.Result;
         }
         finally
@@ -277,6 +300,175 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
             _pending.TryRemove(requestId, out _);
         }
     }
+
+    // ------------------------------------------------------------ pointer stream (ADR-0199)
+
+    private readonly ConcurrentDictionary<string, byte> _openPointerSessions = new(StringComparer.Ordinal);
+    private int _pointerStreamForwarded;
+    private int _pointerStreamDropped;
+    private int _pointerStreamIgnored;
+
+    /// <summary>The mouse sessions the companion has opened (a succeeded <c>pointer.stream_begin</c>) and not yet ended, as this service saw them pass.</summary>
+    public IReadOnlyCollection<string> OpenPointerSessions => _openPointerSessions.Keys.ToArray();
+
+    /// <summary>How many <c>pointer_stream</c> batches were written to the companion since start (telemetry; asserted by tests).</summary>
+    public int PointerStreamForwarded => _pointerStreamForwarded;
+
+    /// <summary>How many were dropped before the pipe: no companion, oversize, or a write that failed.</summary>
+    public int PointerStreamDropped => _pointerStreamDropped;
+
+    /// <summary>How many named a session the companion did not open through this service — ignored, never forwarded.</summary>
+    public int PointerStreamIgnored => _pointerStreamIgnored;
+
+    /// <summary>
+    /// The service's own record of which mouse sessions exist, kept from the answers that
+    /// pass through it: a succeeded <c>pointer.stream_begin</c> opens one, a
+    /// <c>pointer.stream_end</c> closes it (whatever its answer said — the companion has
+    /// nothing left to apply to), and a disconnect closes all. This is what lets
+    /// <see cref="ForwardPointerStreamAsync"/> refuse a batch for a session nobody opened
+    /// BEFORE it crosses the pipe, rather than after the companion has already parsed it.
+    /// </summary>
+    private void NotePointerSession(string capability, JsonObject payload, JsonObject? result)
+    {
+        if (string.Equals(capability, OperatorCapabilityNames.PointerStreamBegin, StringComparison.Ordinal))
+        {
+            var session = result?["session"]?.GetValue<string>() ?? payload["session"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(session))
+            {
+                // One mouse session at a time on the device (the companion replaces an open
+                // one on begin), so the set mirrors that: the new session is the only one.
+                _openPointerSessions.Clear();
+                _openPointerSessions[session] = 1;
+            }
+        }
+        else if (string.Equals(capability, OperatorCapabilityNames.PointerStreamEnd, StringComparison.Ordinal))
+        {
+            var session = payload["session"]?.GetValue<string>();
+            if (!string.IsNullOrEmpty(session))
+            {
+                _openPointerSessions.TryRemove(session, out _);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Forwards a <c>pointer_stream</c> batch to the connected companion as a fire-and-forget
+    /// <c>pointer.stream</c> request (ADR-0199): one <see cref="ExecRequest"/> with
+    /// <see cref="ExecRequest.OneWay"/> set, the batch as its payload, NO entry in the pending
+    /// table and no wait for an answer. The same connection id and outbound sequence as every
+    /// other pipe frame, so the companion's freshness rule applies to it; the same peer
+    /// admission, because it is written on the one connection that passed it. Returns false —
+    /// never throws — when there is no companion, when the session is not one the companion
+    /// opened, or when the frame exceeds the bound; a dropped batch is replaced by the next one
+    /// from the owner's hand.
+    ///
+    /// <para>Accepted here means QUEUED, not written. The pipe is created with zero-byte
+    /// buffers, so a write completes only when the companion reads it — measured on
+    /// 2026-09-21 as a hang of the caller when the peer was not reading — and this method is
+    /// called from the device connection's receive loop. A companion that stalls must cost
+    /// the owner pointer batches, not the device's WebSocket, so the batch goes into a
+    /// per-connection outbox of <see cref="PointerOutboxCapacity"/> that one writer task
+    /// drains; when it is full the OLDEST batch is dropped and counted (the hand is live:
+    /// the newest frames are the ones that matter), and the sequence number is taken under
+    /// the write lock at the moment of writing so the companion's strictly-increasing rule
+    /// holds against ordinary requests written meanwhile.</para>
+    /// </summary>
+    public Task<bool> ForwardPointerStreamAsync(PointerStreamMessage frame, CancellationToken cancellationToken)
+    {
+        var connection = _connection;
+        if (connection is null)
+        {
+            Interlocked.Increment(ref _pointerStreamDropped);
+            return Task.FromResult(false);
+        }
+
+        if (!_openPointerSessions.ContainsKey(frame.Session))
+        {
+            // Ignored, counted, and nothing crosses the pipe: a batch for a session this
+            // device never opened is either stale (its stream already ended) or not ours.
+            Interlocked.Increment(ref _pointerStreamIgnored);
+            return Task.FromResult(false);
+        }
+
+        var frameBytes = frame.SerializedBytes();
+        if (frameBytes > PointerStream.MaxFrameBytes)
+        {
+            Interlocked.Increment(ref _pointerStreamDropped);
+            _logger.LogWarning("pointer_stream batch refused: {Bytes} bytes exceeds the {Limit}-byte bound", frameBytes, PointerStream.MaxFrameBytes);
+            return Task.FromResult(false);
+        }
+
+        if (!connection.PointerOutbox.Writer.TryWrite(frame.ToPayload()))
+        {
+            // The outbox is completed: the connection is going away under us.
+            Interlocked.Increment(ref _pointerStreamDropped);
+            return Task.FromResult(false);
+        }
+
+        return Task.FromResult(true);
+    }
+
+    /// <summary>
+    /// The one writer of one-way <c>pointer.stream</c> requests for a connection: takes each
+    /// queued batch, stamps the request with the NEXT outbound sequence under the write lock
+    /// and writes it. A write that fails ends the drain — the connection is gone and its
+    /// outbox with it. Never answers, never records, never throws out of the task.
+    /// </summary>
+    private async Task DrainPointerOutboxAsync(CompanionConnection connection, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var payload in connection.PointerOutbox.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var request = new ExecRequest
+                {
+                    RequestId = Guid.NewGuid().ToString(),
+                    Capability = OperatorCapabilityNames.PointerStream,
+                    Payload = payload,
+                    TimeoutMs = (int)PointerStreamRequestTimeout.TotalMilliseconds,
+                    DeadlineUtcMs = DateTimeOffset.UtcNow.Add(PointerStreamRequestTimeout).ToUnixTimeMilliseconds(),
+                    OneWay = true,
+                    ConnectionId = connection.Guard.ConnectionId,
+                };
+
+                try
+                {
+                    await connection.WriteSequencedAsync(seq => PipeJson.Serialize(request with { Seq = seq }), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Interlocked.Increment(ref _pointerStreamDropped);
+                    _logger.LogWarning("pointer_stream forward failed: {Reason}", ex.Message);
+                    return;
+                }
+
+                Interlocked.Increment(ref _pointerStreamForwarded);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("pointer_stream drain ended: {Reason}", ex.Message);
+        }
+    }
+
+    /// <summary>The nominal budget stamped on a one-way batch; nothing waits on it, but the request shape carries one.</summary>
+    public static readonly TimeSpan PointerStreamRequestTimeout = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Batches waiting for the writer, per connection: one being written plus one behind it.
+    /// The browser sends at most 30 batches a second and Cloud Core already coalesces; a
+    /// companion that cannot take two in a row is stalled, and the newest batch is the one
+    /// the owner's hand is making now.
+    /// </summary>
+    public const int PointerOutboxCapacity = 2;
 
     /// <summary>How many voice_sideband frames were written to the companion since start (telemetry; asserted by tests).</summary>
     public int SidebandForwarded => _sidebandForwarded;
@@ -584,13 +776,21 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
         private readonly StreamWriter _writer;
         private readonly SemaphoreSlim _writeLock = new(1, 1);
 
-        public CompanionConnection(NamedPipeServerStream stream, IpcChannelGuard guard, PipePeer peer)
+        public CompanionConnection(NamedPipeServerStream stream, IpcChannelGuard guard, PipePeer peer, Action? onPointerBatchDropped = null)
         {
             _stream = stream;
             Guard = guard;
             Peer = peer;
             Reader = new StreamReader(stream, new UTF8Encoding(false), detectEncodingFromByteOrderMarks: false, leaveOpen: true);
             _writer = new StreamWriter(stream, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+            PointerOutbox = Channel.CreateBounded<JsonObject>(
+                new BoundedChannelOptions(PointerOutboxCapacity)
+                {
+                    FullMode = BoundedChannelFullMode.DropOldest,
+                    SingleReader = true,
+                    SingleWriter = false,
+                },
+                _ => onPointerBatchDropped?.Invoke());
         }
 
         public StreamReader Reader { get; }
@@ -601,11 +801,29 @@ public sealed class CompanionPipeServer : BackgroundService, ICompanionCapabilit
 
         public IReadOnlyList<string>? Capabilities { get; set; }
 
+        /// <summary>ADR-0199: the one-way <c>pointer.stream</c> batches waiting for this connection's writer (see <see cref="ForwardPointerStreamAsync"/>).</summary>
+        public Channel<JsonObject> PointerOutbox { get; }
+
         public async Task WriteLineAsync(string line, CancellationToken cancellationToken)
         {
             await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                await _writer.WriteLineAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
+        }
+
+        /// <summary>Takes the next outbound sequence UNDER the write lock and writes the line built from it, so no later-numbered frame can be written before an earlier one.</summary>
+        public async Task WriteSequencedAsync(Func<long, string> build, CancellationToken cancellationToken)
+        {
+            await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var line = build(Guard.NextOutboundSeq());
                 await _writer.WriteLineAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
             }
             finally

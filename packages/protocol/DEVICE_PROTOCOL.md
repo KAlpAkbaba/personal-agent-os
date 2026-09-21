@@ -97,6 +97,34 @@ Rules:
   `validation_error` error frame (§5, malformed frames); the broker logs that and the
   session continues. Newer agents with no companion connected simply drop it.
 
+## 5b. Streaming push: `pointer_stream` (ADR-0199, stage 2 of the hand control)
+
+Cloud Core → device, beside `command` / `heartbeat` / `voice_sideband`, for the mouse session
+the browser drives from the owner's hand:
+
+```json
+{"type":"pointer_stream","session":"<realtime session id>","frames":[
+  {"t":"move","dx":12,"dy":-7,"seq":42},
+  {"t":"button","button":"left","action":"down"},
+  {"t":"end"}
+]}
+```
+
+(`kind` in Cloud Core's own frame model is `type` on this connection, like every other frame.)
+`session` is `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`; `frames` carries at most 64 entries; the
+serialized frame is at most 16 KiB. A frame is `move` (`dx`/`dy` integers, relative pixels,
+optional `seq`), `button` (`left`|`right`, `down`|`up`|`click`) or `end`.
+
+Best effort in every direction: never acknowledged, never re-delivered, never a
+`device_commands` row, never an audit row. A `pointer_stream` that does not parse or fails the
+envelope rules is counted and dropped by the device — no `error` frame, no disconnect. A batch
+whose `session` the companion did not open (through `pointer.stream_begin`, §6r) is ignored
+and counted before it reaches the pipe. The Device Service never applies a frame itself; it
+forwards the batch over the authenticated pipe as a one-way `pointer.stream` request
+(`exec_request` with `"one_way": true`, no answer written or awaited) through a
+per-connection outbox of two — a companion that stops reading costs batches, never the
+device's WebSocket.
+
 ## 6. Capability: `desktop.open_application` (M1)
 
 Payload: `{"application":"<name>","args":[…]?}`. The agent maintains a local **allowlist** (default: `notepad`, `calc`, and since 2026-09-09 `mspaint`, so M27's export check can open an image the device itself produced — ADR-0096); anything else fails with `capability_missing`. This route passes `args` to the process unfiltered; `app.launch` (§6i) is the governed spelling of the same act and confines them per application. Nothing in this repository sends `args` here. The application must start in the **interactive owner session** (executed by the session companion, not the background service). Result: `{"pid":<int>,"executable":"<path>"}`.
@@ -665,6 +693,30 @@ Result: `{"shown":<bool>,"notification_id":"…","reason":"…"?,"surface":"toas
 - **The owner's "off" is respected.** `ToastNotifier.Setting` = `disabled_for_user`, `disabled_for_application` or `disabled_by_group_policy` → `shown: false`, `reason: notifications_disabled`, and NO balloon. `ERROR_NOT_FOUND` (Windows holds no settings for an id before its first toast) → the toast is tried. Any other failure to ask, `disabled_by_manifest`, a `Show` that throws, or no identity shortcut → the tray **balloon** (`surface: "balloon"`, `actions_rendered: 0`, `detail` naming why). No interactive session → `no_interactive_session`.
 - **A press.** Only while the companion runs (an unpackaged app without a COM activator receives activations in the process that holds the toast; button-bearing toasts are therefore removed from the Action Center when the companion exits). A press is accepted only for a toast this process showed (by tag and notification id) and an action id that toast offered, then queued and carried as `notify_actions` in the next 3 heartbeat statuses (§6g). Cloud Core accepts it only from a device the toast was sent to (the ladder records each device that showed it in `data_json.notify_targets`; a press from any other device, or with no device, is refused and logged) and only for an action its own row offered, records it once in `data_json.actions_pressed` (returned by the inbox and the delivery history; `read_at` is not touched), and runs nothing because of it. Audit row: `notify_action` (notification and action id).
 - **The lab** (`tests/.../Notify/ToastLabTests.cs`, operator-lab collection) uses its own ids (`PagentOS.Companion.Lab`, a fresh random one) and its own shortcut, reads the toast back from Windows' history, proves the `ERROR_NOT_FOUND`-before-first-toast behaviour, and removes its toasts and shortcut. The UI Automation button-press test runs only with `PAGENTOS_TOAST_PRESS_LAB=1` on a desktop that shows popups.
+
+## 6r. Capability trio: `pointer.stream_begin` / `pointer.stream` / `pointer.stream_end` (ADR-0199)
+
+Operator family (advertised behind `OperatorEnabled`, appended last; not focus-guarded — the
+stream has its own refusals). One mouse session at a time on a device.
+
+| Capability | Payload | Result |
+|---|---|---|
+| `pointer.stream_begin` | `{session, window_id?}` — `window_id` (the MEDIA window Cloud Core activated first) must be one the companion's registry knows (`ui_target_not_found` otherwise); it is recorded, not enforced as a target | `{session, window_id, opened_at, replaced?}` — an already-open stream is ended first (its held button released) and named in `replaced` |
+| `pointer.stream` | `{session, frames}` (the batch of §5b) — normally the one-way request behind a `pointer_stream` frame; as an ordinary command it applies by the same rules and answers | `{session, applied, dropped, reason?}` |
+| `pointer.stream_end` | `{session}` | `{session, ended, ended_by, moves, buttons, dropped, duration_ms, window_id, released[]}`; a stream that already ended on its own answers its numbers with `already_ended: true`; an unknown session answers zeros with `ended: false, reason: "unknown_session"` (idempotent, never an error) |
+
+Companion rules: a `move` is clamped to ±200 per axis per frame and applied pixel-exact
+(`SetCursorPos` + a zero-delta `MOUSEEVENTF_MOVE`, not a raw relative move, which Windows
+pointer acceleration would rescale); at most 60 frames per second are applied, the rest of
+that second dropped and counted; a batch is refused whole — nothing sent, every frame counted
+as dropped, any held button RELEASED — when no stream is open or the batch names another
+session, when the session is locked (the input desktop cannot be opened), when there is no
+foreground window, or when the foreground window's title carries `PersonalAgentOS` or
+`PagentOS` (the shell; the same rule Cloud Core's media-window resolution uses). A stream ends
+by `pointer.stream_end`, by an `end` frame, after 60 s without frames, by a replacing begin,
+when the pipe closes and when the companion shuts down — and in every case a button the
+stream pressed and did not release is released (`left up` / `right up`). Nothing is typed,
+nothing scrolls, nothing is stored beyond the counts.
 
 ## 7. Audit
 

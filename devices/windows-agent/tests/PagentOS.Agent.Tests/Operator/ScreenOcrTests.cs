@@ -57,7 +57,10 @@ public sealed class ScreenOcrTests
     public void Screen_ocr_is_an_operator_name_appended_last_and_not_an_input()
     {
         Assert.Equal("screen.ocr", OperatorCapabilityNames.ScreenOcr);
-        Assert.Equal(OperatorCapabilityNames.ScreenOcr, OperatorCapabilityNames.All[^1]);
+        // Appended last in ADR-0176; ADR-0199 then appended the pointer-stream trio behind it,
+        // so screen.ocr keeps its place immediately before those three.
+        Assert.Equal(OperatorCapabilityNames.ScreenOcr, OperatorCapabilityNames.All[^4]);
+        Assert.Equal(OperatorCapabilityNames.PointerStreamFamily, OperatorCapabilityNames.All.TakeLast(3));
         Assert.Single(OperatorCapabilityNames.All, n => n == OperatorCapabilityNames.ScreenOcr);
         Assert.True(OperatorCapabilityNames.IsMember("screen.ocr"));
         Assert.True(AgentCapabilities.IsInteractive("screen.ocr"));

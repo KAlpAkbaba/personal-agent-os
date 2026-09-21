@@ -609,6 +609,9 @@ public static class Program
                 await browserHost.StopAsync().ConfigureAwait(false);
             }
 
+            // ADR-0199: a held mouse button must not outlive the process that pressed it.
+            operatorCapabilities?.Dispose();
+
             // M23: every project job this process holds is ended — its own children only.
             projectCapabilities?.Dispose();
 

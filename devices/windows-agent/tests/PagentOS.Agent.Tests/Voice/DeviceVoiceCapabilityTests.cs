@@ -46,7 +46,8 @@ public sealed class DeviceVoiceCapabilityTests
         // same numbers. (The "85" in §8 is the 2026-09-11 deployed count, a historical fact.)
         // B48 then appended `desktop.camera_mode` (§6p), one more name everywhere: 104 / 13.
         // ADR-0176 then appended `screen.ocr` to the operator family (gated): 105; the ungated counts stay.
-        Assert.Equal(105, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true).Count);
+        // ADR-0199 then appended the pointer-stream trio to the operator family (gated): 108; the ungated counts stay.
+        Assert.Equal(108, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true, operatorEnabled: true).Count);
         Assert.Equal(13, AgentCapabilities.Compose(browserEnabled: false).Count);
         Assert.Equal(13 + 1 + 30, AgentCapabilities.Compose(browserEnabled: true, displayPowerEnabled: true).Count);
         Assert.Equal(1, AgentCapabilities.Compose(browserEnabled: false).Count(n => n == AgentCapabilities.DesktopVoiceStatus));

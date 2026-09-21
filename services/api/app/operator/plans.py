@@ -758,7 +758,11 @@ def pointer_session_begin(window_id: str, session: str) -> list[OperatorStep]:
 
     def _opened(result: DeviceRunResult) -> bool:
         payload = result.result if isinstance(result.result, dict) else {}
-        return payload.get("session") == session and bool(payload.get("started"))
+        # The companion (PointerStreamController.Begin) answers {session, window_id,
+        # opened_at, replaced}: the same id and an opening time is "started".
+        return payload.get("session") == session and bool(
+            payload.get("opened_at") or payload.get("started")
+        )
 
     return [
         _activate_step(window_id, "pointer_session_begin:activate"),

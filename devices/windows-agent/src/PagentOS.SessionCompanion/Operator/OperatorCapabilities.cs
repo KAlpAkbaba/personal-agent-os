@@ -29,7 +29,7 @@ namespace PagentOS.SessionCompanion.Operator;
 /// the same forbidden-key scan the browser results pass before it leaves the companion.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class OperatorCapabilities
+public sealed class OperatorCapabilities : IDisposable
 {
     public const string AuditRequestEvent = "operator_request";
 
@@ -77,7 +77,9 @@ public sealed class OperatorCapabilities
         TerminalRunner? terminal = null,
         IMonitorInventory? monitors = null,
         IReadOnlyDictionary<string, string>? applications = null,
-        IScreenOcrEngine? ocr = null)
+        IScreenOcrEngine? ocr = null,
+        IPointerStreamInput? pointerStreamInput = null,
+        TimeProvider? time = null)
     {
         _options = options;
         _logger = logger;
@@ -88,6 +90,16 @@ public sealed class OperatorCapabilities
         Registry = new WindowRegistry();
         Guard = new FocusGuard(Registry);
         Inspector = new UiAutomationInspector();
+        // ADR-0199: the pointer stream — the owner's hand as the mouse — with its own rules
+        // (no focus guard; the shell rule, the lock rule, the clamp, the rate) and its own
+        // input path. It reads the same registry's foreground, so "what is in front" means
+        // the same thing here as for every guarded action.
+        PointerStream = new PointerStreamController(
+            pointerStreamInput ?? new Win32PointerStreamInput(),
+            () => Registry.Foreground(),
+            OperatorNative.IsSessionLocked,
+            time,
+            logger);
         // M23: the terminal's one project-scoped entry asks the Projects root whether a path is
         // a scaffolded project's own entry file (marker + manifest), on top of the roots check.
         Terminal = terminal ?? new TerminalRunner(options.TerminalAllowlist, options.AuthorisedRoots, logger, isProjectEntry: new Projects.ProjectRoots(options).IsEntry);
@@ -104,7 +116,13 @@ public sealed class OperatorCapabilities
 
     public TerminalRunner Terminal { get; }
 
+    /// <summary>ADR-0199: the mouse-session state machine; <see cref="CompanionRuntime"/> hands one-way <c>pointer.stream</c> batches straight to it.</summary>
+    public PointerStreamController PointerStream { get; }
+
     public IReadOnlyList<string> AuthorisedRoots => _options.AuthorisedRoots;
+
+    /// <summary>Ends any open pointer stream (releasing a held button) — the companion is going away.</summary>
+    public void Dispose() => PointerStream.Dispose();
 
     /// <summary>Processes this operator started (app.launch, terminal.open, file.open with an application), for terminal.status and for a test's cleanup.</summary>
     public IReadOnlyList<int> StartedPids
@@ -259,8 +277,50 @@ public sealed class OperatorCapabilities
             OperatorCapabilityNames.ProcessStop => ProcessStop(payload, cancellationToken),
             OperatorCapabilityNames.ServiceStatus => ServiceStatus(payload),
             OperatorCapabilityNames.ServiceRestart => ServiceRestart(payload, cancellationToken),
+            OperatorCapabilityNames.PointerStreamBegin => PointerStreamBegin(payload),
+            OperatorCapabilityNames.PointerStream => PointerStreamApply(payload),
+            OperatorCapabilityNames.PointerStreamEnd => PointerStreamEnd(payload),
             _ => throw new CapabilityException(ErrorClasses.CapabilityMissing, $"'{capability}' has no dispatch entry", retryable: false),
         };
+
+    // ================================================================== pointer.stream_* (ADR-0199)
+
+    /// <summary>
+    /// Opens the mouse session. <c>window_id</c> is the MEDIA window Cloud Core activated
+    /// first; when given it must be a window this registry knows (<c>ui_target_not_found</c>
+    /// otherwise), and it is recorded for the receipt — it is NOT a focus guard: the owner's
+    /// hand may take the pointer anywhere on the desktop except into the shell.
+    /// </summary>
+    private JsonObject PointerStreamBegin(JsonObject payload)
+    {
+        var session = RequireString(payload, "session", Agent.Core.Protocol.PointerStream.MaxSessionLength);
+        var windowId = OptionalString(payload, "window_id", 64);
+        var target = windowId is null ? null : Registry.Resolve(windowId);
+        return PointerStream.Begin(session, target);
+    }
+
+    /// <summary>
+    /// The batch through the ordinary command path (a caller that sent <c>pointer.stream</c> as
+    /// a command rather than the streaming frame): applied by the same rules, answered with
+    /// the counts. The streaming path never comes through here — <see cref="CompanionRuntime"/>
+    /// hands a one-way request to <see cref="PointerStream"/> directly, with no audit row.
+    /// </summary>
+    private JsonObject PointerStreamApply(JsonObject payload)
+    {
+        var session = RequireString(payload, "session", Agent.Core.Protocol.PointerStream.MaxSessionLength);
+        if (payload["frames"] is not JsonArray)
+        {
+            throw new CapabilityException(ErrorClasses.ValidationError, "payload.frames must be an array of pointer frames", retryable: false);
+        }
+
+        return PointerStream.Apply(payload).ToJson(session);
+    }
+
+    private JsonObject PointerStreamEnd(JsonObject payload)
+    {
+        var session = RequireString(payload, "session", Agent.Core.Protocol.PointerStream.MaxSessionLength);
+        return PointerStream.End(session);
+    }
 
     // ================================================================== app.*
 

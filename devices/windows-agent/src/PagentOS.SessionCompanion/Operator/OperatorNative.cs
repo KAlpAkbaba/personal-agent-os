@@ -437,6 +437,43 @@ internal static class OperatorNative
         }
     }
 
+    // ------------------------------------------------------------------ session lock (ADR-0199)
+
+    public const uint DesktopReadObjects = 0x0001;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint desiredAccess);
+
+    [DllImport("user32.dll")]
+    public static extern bool CloseDesktop(IntPtr desktop);
+
+    /// <summary>
+    /// Whether the session is locked (or otherwise on a desktop this process may not act on):
+    /// the input desktop is the Winlogon secure desktop then, and an ordinary owner-session
+    /// process cannot open it. Measured by opening it for read and closing it again — the one
+    /// probe that answers "locked" without a hook or a session notification window. A false
+    /// here says only that the default desktop is the input desktop; the foreground check
+    /// still decides what is in front on it.
+    /// </summary>
+    public static bool IsSessionLocked()
+    {
+        try
+        {
+            var desktop = OpenInputDesktop(0, false, DesktopReadObjects);
+            if (desktop == IntPtr.Zero)
+            {
+                return true;
+            }
+
+            CloseDesktop(desktop);
+            return false;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
     public static string WindowText(IntPtr hwnd)
     {
         var length = GetWindowTextLengthW(hwnd);

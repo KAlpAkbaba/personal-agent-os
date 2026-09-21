@@ -142,7 +142,7 @@ def ok(**result: Any) -> DeviceRunResult:
 
 #: A valid 1x1 PNG (67 bytes), base64 - what a device's ``screen.capture`` returns in
 #: ``png_base64``, at the smallest size that is still an image a decoder accepts.
-ONE_PIXEL_PNG_B64 = (
+ONE_PIXEL_PNG_B64 = (  # noqa: E501 - one image, one line
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 )
 
@@ -341,11 +341,28 @@ def _pointer_stream_begin_result(payload: dict[str, Any]) -> DeviceRunResult:
     """ADR-0199 stage 2: echoes the session id it was asked to open and says it
     started - the plan's own postcondition (``plans.pointer_session_begin``) reads
     both back, so a stale/foreign echo does not read as success."""
-    return ok(session=payload.get("session"), window_id=payload.get("window_id"), started=True)
+    # The companion's OWN answer shape (PointerStreamController.Begin / .End, ADR-0199
+    # addendum 1): no "started" flag - the opening time is the fact.
+    return ok(
+        session=payload.get("session"),
+        window_id=payload.get("window_id"),
+        opened_at="2026-09-22T00:00:00Z",
+        replaced=False,
+    )
 
 
 def _pointer_stream_end_result(payload: dict[str, Any]) -> DeviceRunResult:
-    return ok(session=payload.get("session"), stopped=True)
+    return ok(
+        session=payload.get("session"),
+        ended=True,
+        ended_by="cloud",
+        moves=0,
+        buttons=0,
+        dropped=0,
+        duration_ms=0,
+        window_id=None,
+        released=[],
+    )
 
 
 def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:

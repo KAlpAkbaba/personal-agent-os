@@ -34,6 +34,42 @@ export const MEDIAPIPE_MODEL_PATH = "/mediapipe/hand_landmarker.task";
 
 export const ASSETS_MISSING_TR = "El takibi dosyaları yok; pnpm run fetch:mediapipe";
 
+/**
+ * MediaPipe's WASM runtime prints its start-up notices ("INFO: Created TensorFlow Lite
+ * XNNPACK delegate for CPU.") through `console.error`, and Next's dev overlay shows every
+ * `console.error` as a red error (owner, 2026-09-22: "şu kod hatasına bak"). While a
+ * tracker runs, an error message that is a MediaPipe INFO/WARNING line goes to
+ * `console.info` instead; everything else reaches the real `console.error` untouched, and
+ * `stop()` restores it. Idempotent across trackers (one hook, reference-counted).
+ */
+const MEDIAPIPE_NOTICE_RE = /^(INFO|WARNING|W\d{4}|I\d{4}):?\s/;
+let originalConsoleError: typeof console.error | null = null;
+let quietRefs = 0;
+
+function quietMediaPipeInfo(): void {
+  quietRefs += 1;
+  if (originalConsoleError || typeof console === "undefined") return;
+  const real = console.error.bind(console);
+  originalConsoleError = real;
+  console.error = (...args: unknown[]) => {
+    const head = typeof args[0] === "string" ? args[0] : "";
+    if (MEDIAPIPE_NOTICE_RE.test(head)) {
+      // The notice still reaches the console, at its true level.
+      // eslint-disable-next-line no-console
+      console.info(...args);
+      return;
+    }
+    real(...args);
+  };
+}
+
+function restoreConsoleError(): void {
+  quietRefs = Math.max(0, quietRefs - 1);
+  if (quietRefs > 0 || !originalConsoleError) return;
+  console.error = originalConsoleError;
+  originalConsoleError = null;
+}
+
 export class GestureTrackerAssetsMissingError extends Error {
   override readonly name = "GestureTrackerAssetsMissingError";
   constructor() {
@@ -152,6 +188,7 @@ export class GestureTracker {
   async start(video: HTMLVideoElement): Promise<void> {
     this.stopped = false;
     this.video = video;
+    quietMediaPipeInfo();
     if (!this.landmarker) {
       try {
         this.landmarker = await this.createLandmarker();
@@ -169,6 +206,7 @@ export class GestureTracker {
 
   stop(): void {
     this.stopped = true;
+    restoreConsoleError();
     if (this.frameHandle !== null) {
       this.cancelFrame(this.frameHandle);
       this.frameHandle = null;

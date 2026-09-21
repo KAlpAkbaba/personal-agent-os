@@ -410,7 +410,10 @@ public static class Program
             sidebandSink: new PipeSidebandForwarder(provider.GetRequiredService<CompanionPipeServer>()),
             // M18.3 (§6g): each heartbeat carries what the companion currently sees, when it can
             // say so within 1.5 s. It never delays or fails the heartbeat itself.
-            statusProvider: new CompanionHeartbeatStatusProvider(provider.GetRequiredService<CompanionPipeServer>())));
+            statusProvider: new CompanionHeartbeatStatusProvider(provider.GetRequiredService<CompanionPipeServer>()),
+            // ADR-0199: pointer_stream batches go to the companion one-way, for the mouse
+            // session it opened; the service never touches the pointer.
+            pointerSink: new PipePointerStreamForwarder(provider.GetRequiredService<CompanionPipeServer>())));
 
         builder.Services.AddHostedService(provider => provider.GetRequiredService<CompanionPipeServer>());
         builder.Services.AddHostedService(provider => new AgentWorker(

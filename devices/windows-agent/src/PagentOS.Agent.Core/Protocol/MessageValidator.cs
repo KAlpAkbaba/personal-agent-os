@@ -42,6 +42,9 @@ public static partial class MessageValidator
             case VoiceSidebandMessage sideband:
                 ValidateVoiceSideband(sideband);
                 break;
+            case PointerStreamMessage pointer:
+                ValidatePointerStream(pointer);
+                break;
             default:
                 // hello/auth/command_ack are agent->broker; nothing extra to validate inbound.
                 break;
@@ -101,6 +104,36 @@ public static partial class MessageValidator
                 $"voice_sideband frame is {bytes} bytes; the bound is {VoiceSideband.MaxFrameBytes}");
         }
     }
+
+    /// <summary>
+    /// Envelope and size only (ADR-0199), like the sideband: the session id by shape (it is
+    /// Cloud Core's realtime session id, an opaque token here), the batch length and the byte
+    /// bound. The frames themselves are NOT read here — a bad frame inside a good batch is the
+    /// companion's to drop and count, so one shaky frame never costs the whole batch.
+    /// </summary>
+    public static void ValidatePointerStream(PointerStreamMessage pointer)
+    {
+        if (!PointerSessionRegex().IsMatch(pointer.Session))
+        {
+            throw new ProtocolValidationException("pointer_stream.session does not match required pattern");
+        }
+
+        if (pointer.Frames.Count > PointerStream.MaxFramesPerBatch)
+        {
+            throw new ProtocolValidationException(
+                $"pointer_stream carries {pointer.Frames.Count} frames; the bound is {PointerStream.MaxFramesPerBatch}");
+        }
+
+        var bytes = pointer.SerializedBytes();
+        if (bytes > PointerStream.MaxFrameBytes)
+        {
+            throw new ProtocolValidationException(
+                $"pointer_stream frame is {bytes} bytes; the bound is {PointerStream.MaxFrameBytes}");
+        }
+    }
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")]
+    private static partial Regex PointerSessionRegex();
 
     private static void ValidateChallenge(ChallengeMessage challenge)
     {

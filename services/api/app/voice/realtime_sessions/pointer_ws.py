@@ -32,7 +32,7 @@ second credential.
 - Cloud Core -> device (``app.broker.frames.pointer_stream_frame``, over the SAME
   ``BrokerRuntime.send_frame`` best-effort path a heartbeat/voice-sideband frame would
   use - never a ``device_commands`` row, never re-delivered):
-  ``{"kind":"pointer_stream","session":"<id>","frames":[...]}``.
+  ``{"type":"pointer_stream","session":"<id>","frames":[...]}``.
 
 Ending: the client's own ``{"t":"end"}``, the socket closing, or 60s of silence all reach
 the SAME :func:`app.voice.realtime_sessions.pointer_session.end_receipt` the tool's
