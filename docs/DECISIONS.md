@@ -14447,3 +14447,39 @@ owner's past researches count too.
 applications opened, the answer register asked for, the local mode — and turning action
 receipts ("operator.mission -> started: executed, unverified") into sentences about what the
 owner asked for rather than what the machine did.
+
+## ADR-0192 — "Bunu hatırla" kept nothing in the local mode (2026-09-21)
+
+The owner: *"memory kısmını tüm modlara entegre et"*. Measured first, and the answer was
+half yes: the owner-memory BLOCK already reached every conversational mode — the paid
+realtime persona since B17, the local mode's free conversation since ADR-0190, and web and
+mobile ride the same realtime sessions. The new preference rows (confidence 0.95) clear the
+block's 0.45 floor, so what the system learns about the owner reaches all of them.
+
+The memory TOOLS did not. `memory.remember` required a `statement` argument and
+`memory.search` read its subject from a `query` argument — both written by the MODEL on the
+paid path. In the local mode (ADR-0173) the router names the tool and the browser posts it
+with EMPTY arguments, so "Bunu hatırla: kahveyi şekersiz içiyorum" was refused and kept
+nothing, and "kahve hakkında ne biliyorsun" searched for everything. The same shape ADR-0173
+fixed for a research topic and ADR-0181 for the camera. (`memory.forget` was fine: it
+resolves "bunu" from what `memory.search` just read out, never from the sentence, which is
+the right design for a hard delete.)
+
+`memory_statement_of` takes the command off the owner's sentence — in front ("bunu hatırla:",
+"aklında tut,") or behind ("... hatırla") — and `memory_query_of` takes the question and the
+owner themself off a recall ("benim hakkımda" is who, not what: an empty subject is the whole
+"what do you know about me" answer, which is what was asked). Both land on the turn record
+for the matching intent only, and the tools fall back to them when no model wrote the
+argument — and only when the turn really was that request: an empty remember with no
+remember sentence behind it still refuses, because writing nothing is the honest answer.
+
+The unit tests for the tools build the turn record by hand, which `service`'s own comment
+warns cannot prove a field travels. So `tests/unit/test_local_mode_memory_relay.py` goes
+utterance event → turn record → an EMPTY-argument tool call through the real relay, with the
+memory runtime handed over through `register_live` exactly as `create_app` does it — and it
+was run against a mutant that renames the turn-record field: both tests fail.
+
+**Tests**: `tests/unit/test_memory_voice_tools.py` (+10: remember and search with no
+arguments, a remember the turn did not ask for still refused, four ways of saying the fact,
+three shapes of the question), `tests/unit/test_local_mode_memory_relay.py` (new, 2: remember
+then recall through the relay). Gate: memory/voice/intent/experience/chat, 1615.

@@ -46,6 +46,8 @@ from app.voice.intents import (
     Intent,
     ResolvedIntent,
     classify_research_shape,
+    memory_query_of,
+    memory_statement_of,
     research_topic_of,
     resolve_intent,
 )
@@ -1708,6 +1710,19 @@ def record_client_events(
                 # ADR-0173: the topic of a NEW research, from the owner's own sentence - the
                 # one argument research.start needs when no model is there to write it.
                 "research_topic": research_topic_of(text) if text else None,
+                # ADR-0192: the fact a "bunu hatırla" sentence carries and the subject a
+                # "... hakkında ne biliyorsun" asks about - the arguments memory.remember and
+                # memory.search need when no model is there to write them (the local mode).
+                "memory_statement": (
+                    memory_statement_of(text)
+                    if text and intent.intent is Intent.MEMORY_REMEMBER
+                    else None
+                ),
+                "memory_query": (
+                    memory_query_of(text)
+                    if text and intent.intent is Intent.MEMORY_SEARCH
+                    else None
+                ),
                 # ADR-0173 addendum: in a LOCAL session a sentence the router understood
                 # nothing of is a question for the chat model - kept for this one turn,
                 # replaced by the next utterance, never kept for a paid session (there the

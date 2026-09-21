@@ -102,9 +102,7 @@ class _Ctx:
 
 def _ledger(db: Session, event_type: str) -> list[ActivityEventRow]:
     return list(
-        db.execute(
-            select(ActivityEventRow).where(ActivityEventRow.event_type == event_type)
-        )
+        db.execute(select(ActivityEventRow).where(ActivityEventRow.event_type == event_type))
         .scalars()
         .all()
     )
@@ -284,9 +282,7 @@ def test_a_correction_versions_the_row_rather_than_replacing_it(db):
     assert fixed["version"] == 2
     versions = (
         db.execute(
-            select(MemoryVersion).where(
-                MemoryVersion.memory_id == uuid.UUID(answer["memory_id"])
-            )
+            select(MemoryVersion).where(MemoryVersion.memory_id == uuid.UUID(answer["memory_id"]))
         )
         .scalars()
         .all()
@@ -582,9 +578,7 @@ def test_a_memory_taught_while_a_project_is_open_carries_it(db):
     ctx = _Ctx(db)
     _session_started(db, ctx, at=NOW - timedelta(minutes=10))
     project_id = uuid.uuid4()
-    focus_module.set_focus(
-        db, FOCUS_KIND_PROJECT, str(project_id), label="Görev takibi", now=NOW
-    )
+    focus_module.set_focus(db, FOCUS_KIND_PROJECT, str(project_id), label="Görev takibi", now=NOW)
 
     answer = _remember(ctx, "Bu projede testleri önce yazıyoruz.")
 
@@ -600,9 +594,7 @@ def test_a_project_opened_before_this_conversation_is_not_stamped_on_it(db):
     from app.operator import focus as focus_module
     from app.operator.models import FOCUS_KIND_PROJECT
 
-    focus_module.set_focus(
-        db, FOCUS_KIND_PROJECT, str(uuid.uuid4()), now=NOW - timedelta(days=90)
-    )
+    focus_module.set_focus(db, FOCUS_KIND_PROJECT, str(uuid.uuid4()), now=NOW - timedelta(days=90))
     ctx = _Ctx(db)
     _session_started(db, ctx, at=NOW)
 
@@ -635,3 +627,76 @@ def test_no_project_open_is_no_link_rather_than_a_guess(db):
     answer = _remember(_Ctx(db), "Kahveyi sade severim.")
 
     assert db.get(Memory, uuid.UUID(answer["memory_id"])).project_id is None
+
+
+# ------------------------------------------- ADR-0192: the local mode has no model either
+
+
+def test_the_local_mode_remembers_what_the_owner_said_with_no_statement_argument(db):
+    """Owner, 2026-09-21: "memory kısmını tüm modlara entegre et". In the local mode
+    (ADR-0173) the router names `memory.remember` and the browser posts it with EMPTY
+    arguments - no model writes a `statement` - and the tool refused on that, so "bunu
+    hatırla: kahveyi şekersiz içiyorum" saved nothing at all. The owner's own sentence is on
+    the turn record; the fact is read from there."""
+    ctx = _Ctx(db)
+    ctx.context["last_utterance"] = {
+        "intent": "memory_remember",
+        "memory_statement": "Kahveyi şekersiz içiyorum.",
+    }
+
+    answer = memory_remember(ctx, {})
+
+    memory = db.get(Memory, uuid.UUID(answer["memory_id"]))
+    assert memory is not None and memory.text == "Kahveyi şekersiz içiyorum."
+
+
+def test_the_local_mode_searches_the_subject_the_owner_named(db):
+    ctx = _Ctx(db)
+    _remember(ctx, "Kahveyi sade severim.")
+    _remember(ctx, "Pazartesi sabahları toplantım var.")
+    ctx.context["last_utterance"] = {"intent": "memory_search", "memory_query": "kahve"}
+
+    answer = memory_search(ctx, {})
+
+    assert "Kahve" in answer["speech"] or "kahve" in answer["speech"], answer["speech"]
+
+
+def test_a_remember_the_turn_did_not_ask_for_is_still_refused(db):
+    """The fallback reads the TURN: an empty call with no remember sentence behind it has
+    no owner's words to write, and writing nothing is the honest answer."""
+    ctx = _Ctx(db)
+    ctx.context["last_utterance"] = {"intent": "clock_query"}
+
+    with pytest.raises(VoiceError):
+        memory_remember(ctx, {})
+
+
+@pytest.mark.parametrize(
+    ("said", "fact"),
+    [
+        ("Bunu hatırla: kahveyi şekersiz içiyorum", "kahveyi şekersiz içiyorum"),
+        ("Şunu hatırla, pazartesi toplantım var", "pazartesi toplantım var"),
+        ("Kahveyi şekersiz içtiğimi hatırla", "Kahveyi şekersiz içtiğimi"),
+        ("Aklında tut: annemin doğum günü 3 Mart", "annemin doğum günü 3 Mart"),
+    ],
+)
+def test_the_fact_is_the_sentence_without_the_command(said: str, fact: str) -> None:
+    from app.voice.intents import memory_statement_of
+
+    assert memory_statement_of(said) == fact
+
+
+@pytest.mark.parametrize(
+    ("said", "query"),
+    [
+        ("Kahve hakkında ne biliyorsun", "Kahve"),
+        ("Benim hakkımda ne biliyorsun", ""),
+        ("Neyi hatırlıyorsun", ""),
+    ],
+)
+def test_the_search_subject_is_what_is_left_of_the_question(said: str, query: str) -> None:
+    """ "Benim hakkımda" is the owner, not a subject - an empty query is the structured
+    "everything you know about me" answer, which is exactly what was asked."""
+    from app.voice.intents import memory_query_of
+
+    assert memory_query_of(said) == query

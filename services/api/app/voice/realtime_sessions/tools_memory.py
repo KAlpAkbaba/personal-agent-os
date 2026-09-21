@@ -160,8 +160,21 @@ def _focused_memory(ctx: ToolContext) -> uuid.UUID | None:
         return None
 
 
-def _statement(arguments: dict[str, Any], tool: str) -> str:
+def _turn(ctx: ToolContext) -> dict[str, Any]:
+    context = getattr(ctx, "context", None)
+    return dict(context.get("last_utterance") or {}) if isinstance(context, dict) else {}
+
+
+def _statement(arguments: dict[str, Any], tool: str, ctx: ToolContext | None = None) -> str:
     text = str(arguments.get("statement") or "").strip()
+    if not text and ctx is not None:
+        # ADR-0192: the local mode has no model to write the statement; the owner's own
+        # sentence, with the command taken off, is on the turn record - but only when the
+        # turn really was a "remember". An empty call with no such sentence behind it has
+        # nothing of the owner's to write, and writing nothing is the honest answer.
+        turn = _turn(ctx)
+        if str(turn.get("intent") or "") == "memory_remember":
+            text = str(turn.get("memory_statement") or "").strip()
     if not text:
         raise VoiceError(VoiceErrorClass.VALIDATION_ERROR, f"{tool} needs a statement")
     if len(text) > MAX_STATEMENT_CHARS:
@@ -321,7 +334,7 @@ def memory_remember(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, An
     """
     db = _require_db(ctx, TOOL_MEMORY_REMEMBER)
     embedder = _embedder(ctx, TOOL_MEMORY_REMEMBER)
-    statement = _statement(arguments, TOOL_MEMORY_REMEMBER)
+    statement = _statement(arguments, TOOL_MEMORY_REMEMBER, ctx)
     memory_class = _memory_class(arguments)
     key = str(arguments.get("key") or "").strip() or None
 
@@ -379,6 +392,12 @@ def memory_search(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     db = _require_db(ctx, TOOL_MEMORY_SEARCH)
     embedder = _embedder(ctx, TOOL_MEMORY_SEARCH)
     query = str(arguments.get("query") or "").strip()
+    if not query and "query" not in arguments:
+        # ADR-0192: the subject the owner named, off the turn record, when no model wrote
+        # one. "" is a real answer ("benim hakkımda ne biliyorsun" asks about everything).
+        turn = _turn(ctx)
+        if str(turn.get("intent") or "") == "memory_search":
+            query = str(turn.get("memory_query") or "").strip()
     limit = max(1, min(int(arguments.get("limit") or SPOKEN_SEARCH_MAX), 20))
     requested = arguments.get("memory_class")
     filters = RetrievalFilters(memory_class=_memory_class(arguments).value if requested else None)

@@ -7408,6 +7408,47 @@ _RESEARCH_TOPIC_NOISE: Final[tuple[str, ...]] = (
 )
 
 
+#: ADR-0192: the command around a fact the owner wants kept - in FRONT of it ("bunu
+#: hatırla: ...", "aklında tut, ...") or BEHIND it ("... hatırla"). What is left is the fact.
+_REMEMBER_LEAD_RE: Final = re.compile(
+    r"^\s*(?:(?:bunu|şunu|sunu|şu|su)\s+)?(?:hatırla|hatirla|aklında\s+tut|aklinda\s+tut|"
+    r"unutma|not\s+al|kaydet)\w*\s*[:,\-–—]?\s*",
+    re.IGNORECASE,
+)
+_REMEMBER_TAIL_RE: Final = re.compile(
+    r"\s*(?:hatırla|hatirla|unutma|aklında\s+tut|aklinda\s+tut)\w*\s*[.!]?\s*$", re.IGNORECASE
+)
+#: ...and around a subject the owner wants recalled: the question, and the owner themself
+#: ("benim hakkımda" is who, not what - an empty subject is the whole "what do you know
+#: about me" answer, which is exactly what was asked).
+_MEMORY_QUERY_NOISE_RE: Final = re.compile(
+    r"\b(?:benim\s+hakkımda|benim\s+hakkimda|hakkımda|hakkimda|bana\s+dair|benimle\s+ilgili|"
+    r"hakkında|hakkinda|ile\s+ilgili|konusunda|neler|neyi|ne|biliyor\s*musun|biliyorsun|"
+    r"hatırlıyor\s*musun|hatirliyor\s*musun|hatırlıyorsun|hatirliyorsun|söyle|soyle|"
+    r"anlat)\b",
+    re.IGNORECASE,
+)
+
+
+def memory_statement_of(text: str) -> str | None:
+    """The FACT in "bunu hatırla: kahveyi şekersiz içiyorum" - the owner's own words with the
+    command taken off, or None when nothing is left.
+
+    ADR-0192: in the local mode no model writes `memory.remember`'s `statement`, so the
+    tool refused and "bunu hatırla" kept nothing at all - the same shape ADR-0173 fixed for
+    a research topic and ADR-0181 for the camera."""
+    fact = _REMEMBER_LEAD_RE.sub("", text or "", count=1)
+    fact = _REMEMBER_TAIL_RE.sub("", fact).strip().strip(".,;:!").strip()
+    return fact[:1000] or None
+
+
+def memory_query_of(text: str) -> str:
+    """The SUBJECT in "kahve hakkında ne biliyorsun" - "" when the owner asked about
+    themself or about everything, which the search answers with what it knows overall."""
+    rest = _MEMORY_QUERY_NOISE_RE.sub(" ", text or "")
+    return " ".join(rest.replace("?", " ").split()).strip(" .,;:!")
+
+
 def research_topic_of(text: str) -> str | None:
     """The TOPIC of a new research request, in the owner's own words: "yapay zeka ile ilgili
     son haberleri araştır" -> "yapay zeka ile ilgili son haberleri"; "Yapay zeka hakkında
