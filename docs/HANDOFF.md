@@ -79,8 +79,16 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
    `dad462ac` son iyi bilinen olarak durur). "Birleştir" gelince: `git merge
    feat/hand-gestures-stage1` main'e, ADR-0198/0199'a kanıt satırı, yayın, recovery pin.
    Kötüyse: `release-cloud-core.ps1 -BlueGreen` main'den geri yayın (dad462ac LKG).
-   2. aşama (ADR-0199): sunucu yarısı dalda (`e73c1be`), tarayıcı yarısı ajanda (aynı
-   worktree), cihaz yarısı ajanda (worktree `agent-a137003064a5cc0a5`); cihaz kurulumu UAC.
+   2. aşama (ADR-0199) ÜÇ YARISI DA DALDA: `2dcf434a` — sunucu (`operator.pointer_session`
+   + `/pointer` WebSocket, `pointer_stream` çerçevesi `type` ayrıştırıcısıyla), tarayıcı
+   (pinç-fare / tık / uzun tık / yumruk sürükleme, `PointerStreamClient`, HUD), cihaz
+   (`PointerStreamController`, `pointer.stream_begin/end`, tek yönlü pipe akışı). Gate:
+   API 303, web 2115, cihaz 60 (+3 lab), Release derleme, qualify 89 ✓. **Yayın:**
+   `2dcf434a` Cloud Core'da (api-green, 2026-09-21 21:33; LKG `999ccee9`). **Cihaz
+   kurulumu sahipte (UAC):** worktree'den
+   `…\.claude\worktreesgent-ac27be8adddc2920d\scripts\install-device-service.ps1 -DisplayPower -Operator`
+   (yükseltilmiş PowerShell). Sağlık "degraded [backup]" bu dizinin ÖNCESİNDEN geliyor;
+   ayrı bakılacak. MediaPipe INFO satırları artık console.error'a düşmüyor.
 5. *Türkiye trafik kameraları God's Eye'a (sahip 2026-09-21: "tüm Türkiye'deki
    mobeseleri ekleyemez miyiz, paylaşılan").* Kapsam kararı: EGM MOBESE akışları herkese
    açık DEĞİL (eklenemez); belediyelerin paylaştığı trafik kameraları (İBB `application.
