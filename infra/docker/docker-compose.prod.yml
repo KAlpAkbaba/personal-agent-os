@@ -235,5 +235,7 @@ services:
       GEV_RATELIMIT_GOOGLE_PER_MIN: ${GODSEYE_RATELIMIT_GOOGLE_PER_MIN:-60}
     ports:
       - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:4173:4173"
-    mem_limit: 1536m
+    # Measured at first start 2026-09-21: 1.03 GiB resident (the Vite dev server holds
+    # Cesium's bundle); 2 GiB leaves it room on the 7.7 GiB host without starving the api.
+    mem_limit: 2048m
     restart: unless-stopped
