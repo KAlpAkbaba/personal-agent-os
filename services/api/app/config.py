@@ -87,6 +87,11 @@ class Settings(BaseSettings):
         "http://localhost:3100",
     )
 
+    # ADR-0197: where God's Eye View is served for the owner (the Cloud Core's aux
+    # workload on the tailnet). Opened in the owner's own browser by voice; empty means
+    # "not deployed" and the voice tool says so instead of opening nothing.
+    gods_eye_url: str = "http://pagentos-core:4173/"
+
     # Voice providers (M4). Keys are an OWNER ACTION: empty by default so the
     # real adapters stay inert (PROVIDER_AUTH_MISSING) and never call out in
     # tests. Set e.g. PAGENTOS_VOICE_ELEVENLABS_API_KEY in the environment to

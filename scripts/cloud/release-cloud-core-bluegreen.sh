@@ -159,7 +159,24 @@ write_upstream() {
 
 compose() {
     local input_tree="${recovery_input_tree:-$cur}"
-    docker compose --profile bluegreen -f "$input_tree/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"
+    # `aux` (ADR-0197): the owner-facing side workloads (God's Eye View) that ride the same
+    # compose file; never part of the api's own transaction (see aux_up below).
+    docker compose --profile bluegreen --profile aux -f "$input_tree/infra/docker/docker-compose.prod.yml" --env-file "$envf" "$@"
+}
+
+aux_up() {
+    # ADR-0197: bring the aux workloads to the released tree, BEST EFFORT and after the
+    # api's own transaction has succeeded - a failed image build or a slow npm ci here
+    # must never fail, roll back or delay the api release. Nothing is proven by this
+    # beyond "compose was asked"; the owner-facing check is the page itself.
+    local out rc=0
+    out="$(compose up -d --no-deps --build godseye 2>&1)" || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "aux: godseye up ($(compose ps --status running --services 2>/dev/null | grep -cx godseye || true) running)"
+    else
+        echo "aux: godseye NOT up (rc=$rc); the api release stands. Last lines:" >&2
+        printf '%s\n' "$out" | tail -5 >&2
+    fi
 }
 
 in_container_health() {
@@ -940,3 +957,5 @@ if [ -f "$recovery_root/docker-compose.prod.yml" ]; then
     fi
 fi
 echo "RELEASE OK: $sha is running as api-$idle behind the edge (previous ${previous_sha:-none} kept as last known good)"
+# ADR-0197: after the transaction, never inside it.
+aux_up || true

@@ -209,3 +209,31 @@ services:
       - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:8001:8001"
       - "127.0.0.1:8001:8001"
     restart: unless-stopped
+
+  # ------------------------------------------------------------------ ADR-0197: aux
+  # God's Eye View (MIT, pinned in infra/docker/godseye/Dockerfile): an owner-facing
+  # third-party UI the owner asked to reach "whenever I want". Its own image, its own
+  # socket on the SAME tailnet address and nowhere else (its dev server brokers whatever
+  # provider keys it is given to anyone who can reach it - the tailnet is the boundary,
+  # and the per-IP throttles are set as its SECURITY.md asks). No key is required; the
+  # optional ones live in a separate root-only env file so they never enter the tree, the
+  # image or this file. Under the `aux` profile: never part of the api's release
+  # transaction (release-cloud-core-bluegreen.sh brings it up best-effort afterwards).
+  godseye:
+    build:
+      context: ../../infra/docker/godseye
+    image: pagentos/godseye:local
+    container_name: pagentos-prod-godseye
+    profiles: ["aux"]
+    env_file:
+      - path: ${GODSEYE_ENV_FILE:-/opt/pagentos/godseye.env}
+        required: false
+    environment:
+      HOST: 0.0.0.0
+      PORT: "4173"
+      GEV_RATELIMIT_OPENAI_PER_MIN: ${GODSEYE_RATELIMIT_OPENAI_PER_MIN:-20}
+      GEV_RATELIMIT_GOOGLE_PER_MIN: ${GODSEYE_RATELIMIT_GOOGLE_PER_MIN:-60}
+    ports:
+      - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:4173:4173"
+    mem_limit: 1536m
+    restart: unless-stopped

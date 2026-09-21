@@ -96,6 +96,41 @@ Upgrade rule: bump the pin, run `tests/unit/test_artifact_renderers.py` and
 `tests/unit/test_artifact_validation.py` (every fixture spec × format, the lying-
 renderer catches, the resource-bound cases) before shipping.
 
+## God's Eye View (owner addition 3, 2026-09-21, ADR-0197)
+
+Role: an owner-facing third-party UI (a photorealistic 3D globe with live aircraft, ships,
+satellites, earthquakes, cameras) the owner asked to reach whenever they want. Runs as the
+Cloud Core's `aux` compose workload (`infra/docker/godseye/Dockerfile`), never inside the
+api image.
+
+- `gods-eye-view` (MIT; Bilawal Sidhu, https://github.com/bilawalsidhu/gods-eye-view),
+  pinned to commit `0dbde1e36c0177b7664b47702d77ba50f11ddadc` (2026-09-21) in the
+  Dockerfile's `GEV_COMMIT`. Its own dependencies are locked by its `package-lock.json`
+  (`npm ci`); Puppeteer's Chromium download is skipped (tests only). Runs the upstream's
+  one documented mode - the Vite dev server that also hosts its key broker - bound to the
+  container and published only on the host's Tailscale address (`:4173`).
+- Keys: none required. The optional provider keys (Cesium ion, Google Maps, OpenAI,
+  AISStream, FIRMS, TomTom) are the owner's, go in the root-only `/opt/pagentos/godseye.env`
+  on the host, and never in the tree, the image or the compose file. The per-IP throttles
+  its SECURITY.md asks for are set (`GODSEYE_RATELIMIT_*`).
+
+Upgrade rule: bump `GEV_COMMIT` to a commit you have read the diff of, rebuild with the
+next release (`aux_up` in `release-cloud-core-bluegreen.sh`), open the page.
+
+## MediaPipe Tasks Vision in the web shell (owner addition 4, 2026-09-21, ADR-0198)
+
+Role: in-browser hand-landmark detection for the hand-gesture control. Runs only in the
+owner's browser tab; frames never leave it, and only gesture NAMES reach the Cloud Core.
+
+- `@mediapipe/tasks-vision` (Apache-2.0; Google, https://github.com/google-ai-edge/mediapipe)
+  pinned in `apps/web/package.json`; its WASM runtime and the `hand_landmarker.task` model
+  (float16) are fetched into `apps/web/public/mediapipe/` by
+  `apps/web/scripts/fetch-mediapipe-assets.mjs` from pinned URLs with sha256 checks, and
+  are gitignored. Nothing is loaded from a CDN at run time.
+
+Upgrade rule: bump the pin, re-pin the asset URLs/hashes, run the gesture recogniser
+tests and the eye/perception tests, then a real camera run.
+
 ## Document parsers in the Windows agent (M20, ADR-0083)
 
 Role: the per-format providers behind `PagentOS.SessionCompanion/Documents/` (`IDocumentExtractor`); they run on the owner's machine only, inside the authorised roots, and never in Cloud Core. Both are pinned in `PagentOS.SessionCompanion.csproj`.

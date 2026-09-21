@@ -14645,6 +14645,103 @@ Decision — a macro is the CALLS that were made, not the sentences, and not a p
   found again in a new subsystem); and a named macro RUNS only on a run verb or with
   nothing after the noun, so "… hareketini unutma" reaches no macro word at all.
 
+
+## ADR-0197 — God's Eye View as an aux workload of the Cloud Core (2026-09-21)
+
+Owner addition 3 (2026-09-21, by voice): "bu github kütüphanesini sisteme ekle, UI olarak
+istediğim zaman erişmek istiyorum — https://github.com/bilawalsidhu/gods-eye-view".
+
+What it is (read before deciding): a vanilla-JS + Vite app on CesiumJS — live aircraft,
+ships, satellites, earthquakes, public cameras on a photorealistic globe — MIT, 40k stars,
+Node 24/26. It ships no Dockerfile and documents ONE way to run: the Vite dev server,
+which also hosts its key-brokering backend; no key is required to start; the optional
+provider keys (Cesium ion, Google, OpenAI, AISStream, FIRMS, TomTom) are env-only when the
+server is not on localhost, and its SECURITY.md warns that a LAN-visible server brokers
+those keys to anyone who can reach it.
+
+Where to run it: the web shell itself runs on the owner's PC (`next dev`, the API reached
+over the tailnet), so a local process would have been consistent — but "whenever I want"
+means from any device, on, without the PC. So:
+
+- **A Cloud Core `aux` compose workload** (`infra/docker/godseye/Dockerfile`, service
+  `godseye` in `docker-compose.prod.yml` under the new `aux` profile): the upstream at a
+  pinned commit (`GEV_COMMIT`, bumped deliberately, never "main"), `npm ci` with
+  Puppeteer's Chromium skipped, run as its own user, published ONLY on the host's
+  Tailscale address (`${PAGENTOS_BIND_IP}:4173`) — the tailnet is the boundary its
+  SECURITY.md asks for. Its per-IP throttles are set. The optional keys live in the
+  root-only `/opt/pagentos/godseye.env` (compose `env_file`, `required: false`), never in
+  the tree, the image or the compose file. Memory limit 1.5 GB on the 7.7 GB host.
+- **Brought up by the release, never inside it**: `release-cloud-core-bluegreen.sh`
+  gains `--profile aux` in its compose helper and an `aux_up` step that runs AFTER the
+  api's transaction succeeded, best effort: a failed image build or a slow `npm ci` can
+  never fail, roll back or delay the api release. Changing the compose file makes the
+  recovery bundle stale until the owner re-pins it (the existing rule).
+- **The shell's door**: a family page `/gods-eye` ("Dünya Gözü") with the globe inline and
+  a new-tab link, from `NEXT_PUBLIC_GODS_EYE_URL` (set to `http://<broker host>:4173/` by
+  `start-web-voice.ps1`). Nothing of the owner's passes through the iframe.
+- **By voice**: "Dünya gözünü aç" / "God's eye view'ı aç" / "Tanrının gözünü aç" →
+  `GODS_EYE_OPEN` → tool `godseye.open`: `browser.session_open` on the owner-attached
+  profile with the media player's narrow READ+NAVIGATE policy, a NEW tab (never the tab
+  the owner works in), `browser.navigate` to `Settings.gods_eye_url`, session closed —
+  the tab stays. No browser enrolled is said aloud with the enrol command; an empty URL is
+  "henüz kurulu değil", never a blank page. Tier SENSITIVE like `media.play`.
+
+Recorded in `docs/THIRD_PARTY_COMPONENTS.md` with the upgrade rule. Proof:
+`tests/unit/test_godseye.py` (the names; the relay: session → tab → navigate → close on
+the fake device, the payload's profile and policy; no browser said, not worked around; a
+failed navigation still closes; unconfigured said aloud), `site-nav.test.tsx` (the page
+exists on disk under its href, no dead end).
+
+
+## ADR-0198 — Hand-gesture control from the eye, in two stages (2026-09-21)
+
+Owner addition 4 (2026-09-21, by voice): "sürekli 'yukarı bas, aşağı bas' demek yoruyor;
+kamera açıkken elimle yöneteyim" — swipes = arrow keys; thumb+index turned like a bottle
+cap = volume up (right) / down (left); two hands spread while watching = the media player
+fullscreen; two fingers pinched and held = the hand is the mouse (quick close = left click,
+close and hold = right click, hand movement = cursor). "İstersen ayrı yapalım, sonra
+birleştiririz."
+
+Decision — staged, and the stages are separate deliverables:
+
+- **Where the hand is seen: in the owner's browser tab, never on a server.** The eye's
+  camera pipeline (`lib/eye/perception.ts`) has one invariant — a frame never leaves the
+  tab — and the gesture tracker keeps it: `@mediapipe/tasks-vision` HandLandmarker runs
+  on the eye's already-open video element (no second `getUserMedia`; WASM and the model
+  served from the shell's own `public/mediapipe/`, fetched by a pinned script, never a
+  CDN), and only gesture NAMES from a closed set leave the tab, to our own API. Landmarks
+  are never posted, never stored. ON only when the eye is on AND the owner switched "El
+  kumandası" on in this browser AND a local voice session exists; eye off = tracking off.
+- **What a gesture is, on the wire: the owner's input, audited like a sentence.** A new
+  client event kind `gesture` on the realtime session resolves — by table, not by the
+  text router — to the same `ResolvedIntent` the words would have given (`swipe_* →
+  OPERATOR_KEY left/right/up/down`, `rotate_cw/ccw → media volume up/down`, `spread →
+  OPERATOR_KEY "f"`, the key YouTube and most web players honour), lands on the turn
+  record with `matched="el hareketi"` and the gesture name, and the browser issues the
+  returned tool exactly as the local mode does for speech — so the operator's focus
+  guard, the receipt and the step-up gate all apply unchanged, and "owner's words win"
+  now includes the owner's hands. Bounded to ~5 gestures/s per session. The tool's
+  speech is NOT spoken for a gesture (a HUD chip instead): a swipe that answers "Yukarı
+  ok tuşuna bastım efendim" every time is the fatigue the owner is escaping.
+- **Stage 1 (this batch, delegated to the browser engineer in a worktree):** the
+  recogniser (pure, tested on synthetic landmark sequences: swipe needs an OPEN hand
+  moving ≥ ~¼ frame within 600 ms, rotate needs a loose thumb-index pinch turning ≥ ~60°
+  within 800 ms, spread needs two wrists parting ≥ ~½ frame within 800 ms; cooldown;
+  mirrored camera so "sağa" is right as the OWNER sees it), the tracker, the controller,
+  the toggle and HUD, the server's `gesture` event and its table, the relay tests.
+  `pinch_start/pinch_release` are EMITTED and recorded but act on nothing.
+- **Stage 2 (next): the pinch-mouse.** A cursor cannot ride the tool-call relay (an HTTP
+  call, a device command row and a device round trip per move); it needs a streaming
+  path — a `pointer.stream` frame family over the device's existing WebSocket, browser →
+  Cloud Core → companion, relative moves at ≤ 30 Hz, clicks as the pinch events above,
+  the focus guard still deciding, and the whole stream inside one receipted "mouse
+  session" that the owner opens by holding the pinch and ends by releasing it. Designed
+  after stage 1 is in the owner's hands, because the swipe thresholds and the pinch
+  hysteresis stage 1 measures on the real camera are its inputs.
+
+MediaPipe is recorded in `docs/THIRD_PARTY_COMPONENTS.md`. Proof for stage 1 is stated
+in its own commit when the worktree's patch is integrated.
+
 Found on the way: an in-place append to a nested list inside the session's
 `context_json` is never written — SQLAlchemy's plain JSON column compares the new value
 to the loaded one and a shallow copy shares the nested object, so old == new. The first

@@ -54,6 +54,7 @@ const FAMILY = [
   "/security",
   "/selfdev",
   "/settings",
+  "/gods-eye",
   "/availability",
 ];
 
