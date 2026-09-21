@@ -156,8 +156,19 @@ export type RecognizerOptions = {
   swipeMinDistanceFrac: number;
   /** ...within this many ms of the open-hand anchor. */
   swipeMaxMs: number;
-  /** thumb-index distance / hand size at/under which a rotate's "loose pinch" precondition holds. */
+  /**
+   * The rotate's "C" pose: thumb-index distance / hand size BETWEEN these two, with the
+   * other fingers at least half open (`rotateMinOpenness`). Measured on the owner's own
+   * camera (2026-09-21): C pose 0.66 / openness 0.66; a pinch 0.40 / 0.42; a fist 0.44 / 0.29
+   * - so the ratio alone cannot tell a rotating hand from a fist; the openness can.
+   */
+  looseIndexPinchMinRatio: number;
   looseIndexPinchMaxRatio: number;
+  rotateMinOpenness: number;
+  /** A TIGHT pinch needs the other fingers more open than a fist (0.42 vs 0.29 measured). */
+  pinchMinOpenness: number;
+  /** A fist (stage 2: the left button held) is a hand this closed. */
+  fistMaxOpenness: number;
   /**
    * The engagement gate (ADR-0199): nothing is a gesture until the owner ARMS the
    * recogniser - one open hand, fingers up, held still (`armStillFrac` of the frame per
@@ -218,9 +229,13 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   openHandMinRatio: 0.45,
   swipeMinDistanceFrac: 0.16,
   swipeMaxMs: 900,
-  // The owner's "C" pose for a rotate keeps thumb and index a good half a hand apart
-  // (photo, 2026-09-21); 0.55 was borderline. An open hand is 1.0+, so 0.8 still tells them apart.
-  looseIndexPinchMaxRatio: 0.8,
+  // Calibrated on the owner's camera (HUD readout, 2026-09-21): C pose 0.66/0.66,
+  // pinch 0.40/0.42, fist 0.44/0.29 (pinch ratio / openness).
+  looseIndexPinchMinRatio: 0.5,
+  looseIndexPinchMaxRatio: 0.85,
+  rotateMinOpenness: 0.5,
+  pinchMinOpenness: 0.35,
+  fistMaxOpenness: 0.34,
   engagementGate: true,
   armHoldMs: 400,
   armStillFrac: 0.02,
@@ -237,8 +252,10 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   spreadRearmFrac: 0.3,
   gatherCloseFrac: 0.28,
   gatherHoldMs: 300,
-  tightPinchOnRatio: 0.2,
-  tightPinchOffRatio: 0.32,
+  // The owner's touching-tips pinch measures 0.40 on this camera (the landmarks sit at
+  // the nails, not the pads); 0.20 never fired.
+  tightPinchOnRatio: 0.45,
+  tightPinchOffRatio: 0.55,
   cooldownMs: 450,
   returnSuppressMs: 1_500,
   historyMs: 1_500,
@@ -341,8 +358,10 @@ export class GestureRecognizer {
       // Pinch hysteresis: independent of the cooldown, one edge per tick at most. A
       // pinch STARTS only while armed; a started pinch always RELEASES (stage 2 holds a
       // mouse button on it - a release must never be gated away).
-      const ratio = pinchRatio(mirror(hand.landmarks));
-      if (track.pinchState === "idle" && ratio <= this.opts.tightPinchOnRatio && this.isArmed(frame.t_ms)) {
+      const mirrored = mirror(hand.landmarks);
+      const ratio = pinchRatio(mirrored);
+      const pinchOpen = openness(mirrored) >= this.opts.pinchMinOpenness;
+      if (track.pinchState === "idle" && ratio <= this.opts.tightPinchOnRatio && pinchOpen && this.isArmed(frame.t_ms)) {
         track.pinchState = "pinched";
         this.extendArmed(frame.t_ms);
         events.push({ name: "pinch_start", t_ms: frame.t_ms });
@@ -413,8 +432,13 @@ export class GestureRecognizer {
 
   private updateTrack(track: HandTrack, raw: readonly Point[], t_ms: number): void {
     const m = mirror(raw);
-    const isOpen = openness(m) >= this.opts.openHandMinRatio;
-    const loose = pinchRatio(m) <= this.opts.looseIndexPinchMaxRatio;
+    const open = openness(m);
+    const isOpen = open >= this.opts.openHandMinRatio;
+    const ratio = pinchRatio(m);
+    const loose =
+      ratio >= this.opts.looseIndexPinchMinRatio &&
+      ratio <= this.opts.looseIndexPinchMaxRatio &&
+      open >= this.opts.rotateMinOpenness;
     const angle = thumbIndexAngle(m);
 
     if (isOpen) track.openSince ??= t_ms;

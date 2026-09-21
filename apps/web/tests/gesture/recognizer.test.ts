@@ -67,8 +67,10 @@ function fistHand(wrist: Point): Point[] {
 /** A fist whose thumb+index tips sit close together at angle `thetaRad` around the palm —
  * the "loose pinch" bottle-cap-turning pose `rotate_cw`/`rotate_ccw` needs. Not open (the
  * other three fingers stay curled); `gap` controls the thumb/index tip separation itself. */
-function loosePinchHand(wrist: Point, thetaRad: number, gap = 0.015): Point[] {
-  const m = fistHand(wrist);
+function loosePinchHand(wrist: Point, thetaRad: number, gap = 0.04): Point[] {
+  // The owner's "C" pose (calibrated 2026-09-21): the other fingers half open, the thumb and
+  // index tips a good half a hand apart - never a fist, never a pinch.
+  const m = halfOpenHand(wrist);
   const cx = wrist.x + 0.01;
   const cy = wrist.y - 0.06;
   const radius = 0.03;
@@ -81,9 +83,20 @@ function loosePinchHand(wrist: Point, thetaRad: number, gap = 0.015): Point[] {
   return m;
 }
 
+/** The owner's pinch pose (calibrated 2026-09-21): the ring of thumb and index, the other
+ * three fingers curled but NOT fist-tight (openness ~0.42 on the owner's camera vs 0.29). */
+function halfOpenHand(wrist: Point): Point[] {
+  const m = baseHand(wrist);
+  m[INDEX_TIP] = { x: wrist.x + 0.025, y: wrist.y - 0.09 };
+  m[MIDDLE_TIP] = { x: wrist.x + 0.0, y: wrist.y - 0.1 };
+  m[RING_TIP] = { x: wrist.x - 0.02, y: wrist.y - 0.09 };
+  m[PINKY_TIP] = { x: wrist.x - 0.04, y: wrist.y - 0.08 };
+  return m;
+}
+
 /** A TIGHT pinch (thumb tip and index tip touching) at `wrist`. */
 function tightPinchHand(wrist: Point): Point[] {
-  const m = fistHand(wrist);
+  const m = halfOpenHand(wrist);
   m[THUMB_TIP] = { x: wrist.x + 0.01, y: wrist.y - 0.08 };
   m[INDEX_TIP] = { x: wrist.x + 0.015, y: wrist.y - 0.085 };
   return m;
@@ -509,6 +522,21 @@ describe("GestureRecognizer: a swipe is judged where it STARTS", () => {
       t += 100;
     }
     expect(events.filter((e) => e.startsWith("swipe"))).toEqual([]);
+  });
+});
+
+describe("GestureRecognizer: a fist is neither a pinch nor a rotate (calibrated 2026-09-21)", () => {
+  it("a fist held, moved and turned emits nothing but what a fist is for (stage 2)", () => {
+    // On the owner's camera a fist measures pinch ratio 0.44 / openness 0.29 - inside the
+    // pinch's ratio band. The openness floors are what keep it from being a pinch or a C pose.
+    const rec = new GestureRecognizer(UNGATED);
+    const events: GestureName[] = [];
+    let t = 0;
+    for (let i = 0; i < 8; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Right", fistHand({ x: 0.5 + i * 0.03, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual([]);
   });
 });
 
