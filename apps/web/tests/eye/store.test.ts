@@ -52,6 +52,12 @@ class Camera implements FrameSource {
   auto = true;
   private pending: { resolve: () => void; reject: (err: unknown) => void } | null = null;
   private readonly pixels = flatFrame(4, 4, 100);
+  /** ADR-0198: the element a same-tab consumer (the gesture tracker) is handed while open. */
+  readonly video = { tagName: "VIDEO", videoWidth: 4, videoHeight: 4 } as unknown as HTMLVideoElement;
+
+  videoElement(): HTMLVideoElement | null {
+    return this.open ? this.video : null;
+  }
 
   start(): Promise<void> {
     this.starts += 1;
@@ -409,6 +415,25 @@ describe("generation-owned transitions (the owner's 2026-09-06 run, session 9df4
 });
 
 describe("idempotency and join-in-flight", () => {
+  it("hands the live video element through the store's counted frame source (ADR-0198)", async () => {
+    // Found live on 2026-09-21: the store wraps the frame source to count camera opens, and
+    // the wrapper did not forward `videoElement()`, so the gesture tracker - which reaches
+    // the camera ONLY through `peekSession().attachVideoConsumer` - got null for ever while
+    // the eye was plainly open. This test reads the seam the way the tracker does.
+    const t = harness();
+    await t.store.enable("owner_start");
+    await t.flush();
+    const session = t.store.peekSession();
+    expect(session).not.toBeNull();
+    expect(session!.videoElement()).toBe(t.camera.video);
+    const seen: Array<HTMLVideoElement | null> = [];
+    const detach = session!.attachVideoConsumer((video) => seen.push(video));
+    expect(seen).toEqual([t.camera.video]);
+    detach();
+    await t.store.disable("owner_stop");
+    await t.flush();
+  });
+
   it("enable while ACTIVE answers changed:false and opens nothing; disable while DISABLED likewise", async () => {
     const t = harness();
     const first = await t.store.enable("owner_start");

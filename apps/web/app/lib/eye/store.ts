@@ -398,6 +398,11 @@ export class EyeStore {
       label: () => source.label(),
       trackReadyState: () => source.trackReadyState?.() ?? null,
       trackShortId: () => source.trackShortId?.() ?? null,
+      // ADR-0198: the gesture tracker reaches the live <video> only through the session,
+      // and the session only through THIS wrapper. Found live on 2026-09-21: without this
+      // line `videoElement?.()` was undefined here, every consumer got null, and "El
+      // kumandası" waited for ever behind a gate that had in fact opened.
+      videoElement: () => source.videoElement?.() ?? null,
     };
     eyeInstances.bump("sessions");
     const session = new PerceptionSession({
