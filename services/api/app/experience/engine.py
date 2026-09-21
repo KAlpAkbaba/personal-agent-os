@@ -90,6 +90,14 @@ logger = get_logger("app.experience.engine")
 EPISODIC_KEY_PREFIX = "experience.episodic"
 #: semantic Memory.key namespace for corroborated stable facts.
 SEMANTIC_KEY_PREFIX = "experience.semantic"
+#: ADR-0191: a PREFERENCE is "the same subject, again". Its key IS the subject, so the
+#: third research about it is evidence on the same row rather than a third row — which is
+#: the only way the promotion ladder (``PROMOTE_MIN_EVIDENCE``) can ever fire for a
+#: behaviour. Thirteen one-off "Araştırma tamamlandı" rows never promoted anything.
+PREFERENCE_KEY_PREFIX = "experience.preference"
+#: Two is a coincidence. Deliberately the ladder's own threshold: a preference that became
+#: durable the moment it was noticed would be a guess in a confident voice.
+PREFERENCE_MIN_OCCURRENCES = 3
 
 #: ledger bookkeeping about itself — not "experience" worth remembering.
 #: ADR-0190: the machine's own heartbeat. Every one of these is a true and useful LEDGER
@@ -369,6 +377,77 @@ def _derive_semantic_facts(
                 report.semantic_created += 1
 
 
+def _derive_preferences(
+    session: Session, embedder: Embedder, rows: list[ActivityEventRow], report: IngestReport
+) -> None:
+    """The subjects the owner keeps coming back to (ADR-0191).
+
+    Measured on 2026-09-20: thirteen durable memories, every one of them a one-off
+    "Araştırma tamamlandı: <konu>", and an empty preference class — after sixteen days in
+    which the owner asked about the same thing again and again. Nothing could ever be
+    promoted, because promotion needs evidence on ONE key and every event had its own.
+
+    The subject is the key. ``app.research.plan.bare_subject`` decides what a subject is —
+    imported, never re-implemented: a second copy of a Turkish suffix table drifting from
+    the first is a defect this repository has already paid for twice.
+    """
+    from app.research.plan import bare_subject
+
+    groups: dict[str, list[ActivityEventRow]] = defaultdict(list)
+    for row in rows:
+        if row.event_type != EVENT_TYPE_RESEARCH_COMPLETED:
+            continue
+        topic = str((row.detail_json or {}).get("topic") or "").strip()
+        if not topic:
+            continue
+        subject = bare_subject(topic).strip()
+        if len(subject) < 3:
+            continue
+        groups[subject.casefold()].append(row)
+
+    for subject, members in sorted(groups.items()):
+        if len(members) < PREFERENCE_MIN_OCCURRENCES:
+            continue
+        key = f"{PREFERENCE_KEY_PREFIX}:research.subject:{subject}"
+        new_members = _new_corroborating_rows(session, MemoryClass.PREFERENCE.value, key, members)
+        if not new_members:
+            report.semantic_skipped_no_new_evidence += 1
+            continue
+        display = bare_subject(str((members[0].detail_json or {}).get("topic") or subject)).strip()
+        text = (
+            f"Sahip '{display}' konusunu düzenli olarak araştırıyor "
+            f"({len(members)} kez sordu)."
+        )
+        for row in new_members:
+            obs = Observation(
+                text=text,
+                memory_class=MemoryClass.PREFERENCE,
+                key=key,
+                value={"subject": display, "kind": "inference", "occurrences": len(members)},
+                explicit=False,
+                confidence_hint=SINGLE_OBSERVATION_MAX_CONFIDENCE,
+                source={
+                    "kind": "inference",
+                    "origin": "experience_engine",
+                    "derived_from": "research.completed:topic",
+                    "event_id": str(row.event_id),
+                },
+            )
+            try:
+                result = memory_service.record_observation(
+                    session, embedder, obs, MemoryLinks(occurred_at=row.occurred_at)
+                )
+            except MemorySubsystemError as exc:
+                if exc.error_class is MemoryErrorClass.SECRET_REJECTED:
+                    report.semantic_refused_secret += 1
+                    continue
+                raise
+            if result.action == "corroborated":
+                report.semantic_corroborated += 1
+            elif result.action not in ("ignored",):
+                report.semantic_created += 1
+
+
 def ingest(
     session: Session,
     *,
@@ -422,6 +501,12 @@ def ingest(
     except Exception as exc:  # noqa: BLE001 - semantic derivation is best-effort
         report.errors.append(f"semantic: {type(exc).__name__}")
         logger.warning("experience_engine_semantic_failed", reason=type(exc).__name__)
+
+    try:
+        _derive_preferences(session, embedder, rows, report)
+    except Exception as exc:  # noqa: BLE001 - same discipline as the pass above
+        report.errors.append(f"preference: {type(exc).__name__}")
+        logger.warning("experience_engine_preference_failed", reason=type(exc).__name__)
 
     publish_progress(phase="ingest_completed", **report.as_dict())
     return report

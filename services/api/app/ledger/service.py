@@ -323,6 +323,13 @@ def build_research_completed_event(
     findings_n = len(report_json.get("findings") or [])
     sources_n = len(report_json.get("sources") or [])
     detail = {**stats, "findings": findings_n, "sources": sources_n}
+    # ADR-0191: WHAT the owner asked about, in their own words. The event carried counts
+    # and no subject, so nothing downstream could learn what they keep coming back to -
+    # and a preference is exactly "the same subject, again". The topic is the owner's own
+    # sentence, which the report already stores and the artifact already shows.
+    topic = str(report_json.get("topic") or "").strip()
+    if topic:
+        detail["topic"] = topic[:300]
     evidence_refs: list[dict[str, Any]] = [{"kind": "research_report", "ref": str(task_id)}]
     if artifact_id is not None:
         evidence_refs.append({"kind": "artifact", "ref": str(artifact_id)})

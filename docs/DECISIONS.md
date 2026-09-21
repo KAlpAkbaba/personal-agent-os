@@ -14396,3 +14396,42 @@ telemetry types are excluded, what the owner did is not, the four older exclusio
 `tests/unit/test_local_chat_knows_the_owner.py` (new, 3: the block reaches the chat, an empty
 block changes nothing, and it rides in the system prompt rather than the question). Gate: the
 chat/memory/experience/voice selection, 1321 tests.
+
+## ADR-0191 — A repeated behaviour is a preference, and the ladder can finally fire (2026-09-21)
+
+After ADR-0190 removed the heartbeat rows, production held 1381 memories: thirteen durable,
+every one of them a one-off "Araştırma tamamlandı: <konu>", and empty preference, project
+and procedural classes — after sixteen days in which the owner asked about the same subject
+again and again.
+
+The reason nothing was ever learned is structural. Promotion from candidate to durable needs
+`PROMOTE_MIN_EVIDENCE` (3) pieces of evidence on the SAME key, and every episodic memory has
+its own key (`experience.episodic:<event id>`). A behaviour that repeats a hundred times is,
+to that ladder, a hundred unrelated facts.
+
+**A. The subject is on the ledger.** `research.completed` carried counts and no subject, so
+nothing downstream could know WHAT the owner keeps asking about. The event's detail now
+carries the topic — the owner's own sentence, which the report already stores and the
+artifact already shows.
+
+**B. The subject is the key.** A new Experience Engine pass, `_derive_preferences`, groups
+completed researches by their SUBJECT and, at three or more, writes one PREFERENCE memory
+keyed `experience.preference:research.subject:<subject>` — "Sahip 'yapay zeka' konusunu
+düzenli olarak araştırıyor (N kez sordu)." Each research is a piece of evidence on that one
+row, so the ladder promotes it the way it was always meant to. "Yapay zeka haberleri",
+"yapay zeka haberlerini" and "yapay zeka ile ilgili haberler" are one subject: what a subject
+is comes from `app.research.plan.bare_subject` — made public for this, imported rather than
+re-implemented, because a second copy of a Turkish suffix table drifting from the first is a
+defect this repository has already paid for. Two is a coincidence (the ladder's own
+threshold), different subjects never merge, and a second pass over the same events adds
+nothing. Inference-tagged and capped below 1.0 confidence, like every inferred write.
+
+**Tests**: `tests/unit/test_experience_preferences.py` (new, 7: the topic is on the event,
+three phrasings of one subject become one preference with three pieces of evidence, it
+reaches durable, two do not, different subjects stay apart, the text is Turkish, and the pass
+is idempotent). Gate: experience/memory/ledger/research, 1402.
+
+**Next, not done**: the same shape for the other behaviours the ledger already records —
+applications opened, the answer register asked for, the local mode — and turning action
+receipts ("operator.mission -> started: executed, unverified") into sentences about what the
+owner asked for rather than what the machine did.

@@ -175,7 +175,7 @@ _SUBJECT_TRAILING_FILLERS: tuple[str, ...] = tuple(
 )
 
 
-def _bare_subject(topic: str) -> str:
+def bare_subject(topic: str) -> str:
     """The topic reduced to its SUBJECT — repeatedly strips one TRAILING filler
     phrase at a time (never touching the front: a leading relative-date phrase like
     "son üç günde" is the recency window, :mod:`app.research.dates`'s job, not this
@@ -263,7 +263,7 @@ def expand_queries(topic: str) -> tuple[str, ...]:
             base.append(f"{core} news")
     if any(marker in trimmed.lower() for marker in _AGENT_DOMAIN_MARKERS):
         base.extend(_AGENT_ENTITY_QUERIES)
-    subject = _bare_subject(trimmed)
+    subject = bare_subject(trimmed)
     if subject and subject != trimmed:
         base.append(f"{subject} haberleri")
         base.append(f"{subject} son gelişmeler")
@@ -455,7 +455,14 @@ def build_plan(
     )
 
 
+#: ADR-0191: the experience engine groups a research by its SUBJECT, and the definition of
+#: "subject" is this one - duplicating the Turkish suffix table would be the drift this
+#: repository has been bitten by before.
+#: The name this module used before ADR-0191 made it public; its tests still say it.
+_bare_subject = bare_subject
+
 __all__ = [
+    "bare_subject",
     "diversify_queries",
     "english_core_query",
     "expand_queries",
