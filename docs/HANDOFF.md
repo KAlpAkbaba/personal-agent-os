@@ -86,7 +86,7 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
    API 303, web 2115, cihaz 60 (+3 lab), Release derleme, qualify 89 ✓. **Yayın:**
    `2dcf434a` Cloud Core'da (api-green, 2026-09-21 21:33; LKG `999ccee9`). **Cihaz
    kurulumu sahipte (UAC):** worktree'den
-   `…\.claude\worktreesgent-ac27be8adddc2920d\scripts\install-device-service.ps1 -DisplayPower -Operator`
+   `E:\AI\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\.claude\worktrees\agent-ac27be8adddc2920d\scripts\install-device-service.ps1 -DisplayPower -Operator`
    (yükseltilmiş PowerShell). Sağlık "degraded [backup]" bu dizinin ÖNCESİNDEN geliyor;
    ayrı bakılacak. MediaPipe INFO satırları artık console.error'a düşmüyor.
 5. *Türkiye trafik kameraları God's Eye'a (sahip 2026-09-21: "tüm Türkiye'deki
