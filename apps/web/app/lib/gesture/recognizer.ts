@@ -222,24 +222,19 @@ export type RecognizerOptions = {
  * 900 ms with most fingers out; a rotate is 40 deg; the cooldown is 450 ms.
  */
 export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
-  // Second live trial: a swiping hand tilts toward the camera and its 2D "openness" drops
-  // below 0.6 mid-motion, which reset the swipe anchor every few frames - "sağa sola
-  // kaydırmada çok zor algılıyor". The hand must be open where the swipe STARTS; what it
-  // looks like at the end is not held against it.
-  // Owner's camera: a full open palm measures 0.84, the C pose 0.66, a pinch 0.42, a fist
-  // 0.29. OPEN (a swipe's start, the arming pose, a spread/gather hand) is the palm, not the C.
-  // ...but a raised palm reads anywhere between ~0.6 and 0.84 as it tilts, and 0.75 made
-  // arming a lottery (owner: "tam tersi oldu"). 0.55 keeps a fist (0.29) and a pinch (0.42) out;
-  // the C pose (0.66) may count as open - a rotate does not translate, so nothing is lost.
-  openHandMinRatio: 0.55,
+  // Owner, 2026-09-21 evening: "ilk haline getir" - the values of the first working trial
+  // (commit 6dcbb73). The camera-calibrated set (pinch 0.45 with an openness floor, fist
+  // 0.34, C pose 0.5-0.85, open 0.75) read "tam tersi" to the owner and is kept ONLY as the
+  // recorded measurements below, not as defaults: palm 0.84, C pose 0.66/0.66, pinch
+  // 0.40/0.42, fist 0.44/0.29 (pinch ratio / openness). Retune from these one knob at a
+  // time, with the owner watching the HUD, never all at once again.
+  openHandMinRatio: 0.45,
   swipeMinDistanceFrac: 0.16,
   swipeMaxMs: 900,
-  // Calibrated on the owner's camera (HUD readout, 2026-09-21): C pose 0.66/0.66,
-  // pinch 0.40/0.42, fist 0.44/0.29 (pinch ratio / openness).
-  looseIndexPinchMinRatio: 0.5,
-  looseIndexPinchMaxRatio: 0.85,
-  rotateMinOpenness: 0.5,
-  pinchMinOpenness: 0.35,
+  looseIndexPinchMinRatio: 0,
+  looseIndexPinchMaxRatio: 0.8,
+  rotateMinOpenness: 0,
+  pinchMinOpenness: 0,
   fistMaxOpenness: 0.34,
   engagementGate: true,
   armHoldMs: 400,
@@ -247,20 +242,13 @@ export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
   armedForMs: 4_000,
   rotateMinDegrees: 40,
   rotateMaxMs: 1_000,
-  // Second live trial: "iki elimi yana açtığımda tam ekran yapmıyor" - MediaPipe sees two
-  // hands only once they are already apart, so "growing apart by half a frame" rarely
-  // had a start to measure from. Now: two open hands HELD wide.
-  // The owner's own poses (photos, 2026-09-21): apart = wrists ~0.45 of the frame, together
-  // = ~0.2 with the hands overlapping in front of the face.
   spreadWideFrac: 0.4,
   spreadHoldMs: 250,
   spreadRearmFrac: 0.3,
   gatherCloseFrac: 0.28,
   gatherHoldMs: 300,
-  // The owner's touching-tips pinch measures 0.40 on this camera (the landmarks sit at
-  // the nails, not the pads); 0.20 never fired.
-  tightPinchOnRatio: 0.45,
-  tightPinchOffRatio: 0.55,
+  tightPinchOnRatio: 0.2,
+  tightPinchOffRatio: 0.32,
   cooldownMs: 450,
   returnSuppressMs: 1_500,
   historyMs: 1_500,
