@@ -138,7 +138,14 @@ describe("the palette searches the lists the product already keeps (req 702)", (
   });
 
   it("an empty query offers everything rather than nothing", () => {
-    expect(search(paletteItems(CAPS), "  ").length).toBeGreaterThan(NAV.length);
+    // Every kind, each up to its section cap - not "more items than pages", which held
+    // only while the page list was shorter than three capped sections (ADR-0197 added
+    // the fifteenth page and the old inequality became 15 > 15).
+    const results = search(paletteItems(CAPS), "  ");
+    expect(results.length).toBeGreaterThan(0);
+    expect(new Set(results.map((item) => item.kind))).toEqual(new Set(["page", "panel", "say"]));
+    expect(results.filter((item) => item.kind === "page").length).toBeGreaterThan(0);
+    expect(NAV.length).toBeGreaterThan(0);
   });
 
   it("a word nothing matches finds nothing, rather than everything", () => {

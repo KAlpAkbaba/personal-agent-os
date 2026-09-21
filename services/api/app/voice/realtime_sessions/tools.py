@@ -81,6 +81,7 @@ from app.voice.realtime_sessions.tools_genesis import (
 # No ROUTINE_CLARIFYING_TOOLS beside its siblings: a routine tool never answers "Hangi
 # rutin?" - it takes an id and refuses a bad one by name. Importing the name tuple here
 # just to have it would be a constant nothing reads.
+from app.voice.realtime_sessions.tools_godseye import register_godseye_tools
 from app.voice.realtime_sessions.tools_macros import MACRO_TOOL_NAMES, register_macro_tools
 from app.voice.realtime_sessions.tools_mail import MAIL_TOOL_NAMES, register_mail_tools
 from app.voice.realtime_sessions.tools_media import register_media_tools
@@ -2546,6 +2547,8 @@ def default_registry() -> ToolRegistry:
     register_routine_tools(reg)
     # ADR-0196: the owner's recorded, named sequences of spoken actions.
     register_macro_tools(reg)
+    # ADR-0197: God's Eye View in the owner's browser.
+    register_godseye_tools(reg)
     # B16 req 31-38/61-62: the owner's voice over their own MEMORY. `app.memory` has
     # been complete since M5 - policy, evidence, versions, audit, retrieval, REST - and
     # nothing under app/voice/ imported one line of it, so nothing the owner SAID could

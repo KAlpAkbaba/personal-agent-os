@@ -56,6 +56,8 @@ export const NAV: readonly NavItem[] = [
   { href: "/security", label: "Güvenlik", hint: "Yetkili varlıklar, bulgular, retler", group: "family" },
   { href: "/selfdev", label: "Gelişim", hint: "Kendini geliştirme boru hattı", group: "family" },
   { href: "/settings", label: "Ayarlar", hint: "Bu cihaz ve çalışan kurallar", group: "family" },
+  // ADR-0197: an owner-facing third-party UI, reached from the shell like any family page.
+  { href: "/gods-eye", label: "Dünya Gözü", hint: "Canlı 3B dünya: uçaklar, gemiler, uydular", group: "family" },
   { href: "/availability", label: "Özellik durumu", hint: "Ne var, ne çalışıyor, nasıl kanıtlandı", group: "family" },
 ];
 

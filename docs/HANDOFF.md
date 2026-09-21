@@ -42,14 +42,33 @@ bas" · "Üç kere aşağı kaydır" · "Kontrol Z'ye iki kere bas" · "Yeni har
 birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yeni mail sekmesi aç"
 · "Hangi hareketlerim var" · "Yeni mail sekmesi hareketini sil".
 
-Sahip bu 2 nottan sonra "2 yeni ekleme" daha verecek; gelince buraya ekle.
+**Sahibin 2 yeni eklemesi (2026-09-21 akşam, sesle; sahip "testi sonra yapacağım" dedi):**
+
+3. *God's Eye View (ADR-0197).* MIT, Vite dev sunucusu (anahtar aracısı içinde), anahtar
+   şart değil. Yapılan: Cloud Core'da `aux` profilli `godseye` compose servisi
+   (`infra/docker/godseye/Dockerfile`, üst kaynak commit `0dbde1e3` pinli, yalnız tailnet
+   IP'sinde `:4173`, isteğe bağlı anahtarlar `/opt/pagentos/godseye.env`), yayın betiği
+   `aux_up` (api işleminden SONRA, en iyi çaba); web kabuğunda `/gods-eye` "Dünya Gözü"
+   sayfası (iframe + yeni sekme); sesle "Dünya gözünü aç" → `godseye.open` (sahibin
+   Chrome'unda yeni sekme). **YAYINDA** (`dad462ac`, api-green, 2026-09-21 18:08):
+   `http://pagentos-core:4173/` tailnet'ten HTTP 200 "God's Eye View", konteyner
+   healthy, bellek 1.03/1.5 GiB (sınır bir sonraki yayında 2 GiB'a çıkarıldı). Sahibin
+   kalanı: canlı deneme ("Dünya gözünü aç" + web kabuğunda "Dünya Gözü") ve recovery
+   pinini yenilemek (compose değişti):
+   `bash /opt/pagentos/app/scripts/cloud/install-recovery-supervisor.sh dad462ac5a56b8130f23bdbf6ce14f3860176b59`
+4. *El hareketiyle kumanda (ADR-0198, iki aşama).* 1. aşama tarayıcı mühendisi ajanında
+   (worktree `agent-ac27be8adddc2920d`): MediaPipe el takibi gözün açık kamerasında,
+   kaydırma = ok tuşları, baş+işaret çevirme = ses, iki el açma = "f" (tam ekran), sunucuda
+   `gesture` istemci olayı → aynı araçlar; pinç olayları yalnız üretilir. 2. aşama (pinç-fare)
+   akış kanalı ister; 1. aşama sahibin elinde ölçüldükten sonra tasarlanacak.
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `6de7ab3` (api-blue, 2026-09-21 17:20; önceki `6d9681a` son iyi
-  bilinen), `pagentos-bluegreen-reconcile.timer` aktif. Recovery supervisor pini
-  `6de7ab39…` — sahip 2026-09-21'de yaptı ("RECOVERY SUPERVISOR INSTALLED", timer enabled/
-  active). Sonraki her yayında pin yine sahibin işi (okuma serbest, uzak yazma değil).
+- **Üretim:** Cloud Core `dad462a` (api-green, 2026-09-21 18:08; önceki `6de7ab3` son iyi
+  bilinen) + `godseye` aux servisi (`:4173`, yalnız tailnet), `pagentos-bluegreen-
+  reconcile.timer` aktif. Recovery supervisor pini `6de7ab39` (sahip yaptı); `dad462ac`
+  compose'u değiştirdiği için bundle STALE — yeniden pin sahibin işi (okuma serbest, uzak
+  yazma değil).
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
   Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.

@@ -4,7 +4,7 @@
   "current_milestone": "M28_DONE_2026_09_12 (row 26.16 PROVEN_REAL); M29 NOT STARTED",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
   "last_completed_milestone": "M28_NATIVE_APP_FACTORY",
-  "last_updated": "2026-09-21T17:25:00Z",
+  "last_updated": "2026-09-21T18:12:00Z",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -674,5 +674,33 @@
     },
     "deployment": "blue-green release 6de7ab39e2e1c5d99c800ec768e8e7716ed03467 at 2026-09-21T17:20Z; alembic 0061 applied on production; voice_macros present (0 rows); recovery supervisor pinned to this sha by the owner (timer enabled/active)",
     "review": "security-reviewer: 1 high (stop word as macro name) + 2 medium fixed before commit; test-engineer: 3 mutation probes RED, full corpus 2723 green, 2 router defects (hareketi durdur, unutma) fixed before commit"
+  },
+  "owner_additions_2026_09_21_godseye_and_gestures": {
+    "status": "addition 3 DEPLOYED_2026-09-21 (dad462ac, api-green; godseye healthy on the tailnet :4173, HTTP 200 from the owner's PC); addition 4 stage 1 in progress (browser-engineer worktree), stage 2 designed only",
+    "adr": [
+      "ADR-0197",
+      "ADR-0198"
+    ],
+    "addition_3_gods_eye_view": {
+      "what": "bilawalsidhu/gods-eye-view (MIT) as the Cloud Core's aux compose workload on the tailnet (:4173); shell page /gods-eye; voice 'Dunya gozunu ac' -> godseye.open in the owner's Chrome",
+      "code": [
+        "infra/docker/godseye/Dockerfile",
+        "infra/docker/docker-compose.prod.yml:godseye",
+        "scripts/cloud/release-cloud-core-bluegreen.sh:aux_up",
+        "apps/web/app/gods-eye/page.tsx",
+        "app/voice/realtime_sessions/tools_godseye.py",
+        "app/voice/intents.py:GODS_EYE_OPEN"
+      ],
+      "tests": [
+        "tests/unit/test_godseye.py",
+        "apps/web/tests/uistate/site-nav.test.tsx"
+      ],
+      "owner_action": "optional provider keys in /opt/pagentos/godseye.env; re-pin the recovery bundle after the release (compose changed)",
+      "deployment": "release dad462ac5a56b8130f23bdbf6ce14f3860176b59 at 2026-09-21T18:08Z; aux_up built and started pagentos-prod-godseye (healthy, 1.03 GiB); recovery bundle STALE until the owner re-pins dad462ac"
+    },
+    "addition_4_hand_gestures": {
+      "stage_1": "in-browser MediaPipe hand landmarks on the eye's camera; swipes -> arrow keys, thumb+index rotate -> volume, two hands spread -> 'f'; server 'gesture' client event -> same tools; pinch events emitted only",
+      "stage_2": "pinch-mouse needs a pointer.stream over the device WebSocket; designed after stage 1 is measured on the real camera"
+    }
   }
 }

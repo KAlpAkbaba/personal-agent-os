@@ -270,6 +270,8 @@ _TIERS: Final[dict[str, str]] = {
     "macro.cancel": TIER_SENSITIVE,
     "macro.run": TIER_SENSITIVE,
     "macro.delete": TIER_SENSITIVE,
+    # ADR-0197: a tab in the owner's own browser, like media.play.
+    "godseye.open": TIER_SENSITIVE,
     "scene.add": TIER_SENSITIVE,
     "scene.camera": TIER_SENSITIVE,
     "scene.create": TIER_SENSITIVE,

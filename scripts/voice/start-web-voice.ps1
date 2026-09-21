@@ -47,6 +47,8 @@ if (-not $NoPreflight) {
 
 $env:PAGENTOS_API_UPSTREAM = $upstream
 $env:NEXT_PUBLIC_API_BASE = "/api"
+# ADR-0197: God's Eye View lives on the Cloud Core's aux socket, on the same tailnet host.
+if (-not $env:NEXT_PUBLIC_GODS_EYE_URL) { $env:NEXT_PUBLIC_GODS_EYE_URL = "http://${BrokerHost}:4173/" }
 $env:PORT = "$WebPort"
 Write-Host "starting the web shell: http://localhost:$WebPort/voice  (API -> $upstream via same-origin /api rewrite)"
 Write-Host "sign in once with the cloud Owner Credential; then allow the microphone. Ctrl+C stops the server."

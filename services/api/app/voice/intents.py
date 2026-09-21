@@ -107,6 +107,8 @@ class Intent(StrEnum):
     MACRO_RUN = "macro_run"  # <ad> aç / <ad> hareketini çalıştır
     MACRO_LIST = "macro_list"  # hangi hareketlerim var
     MACRO_DELETE = "macro_delete"  # <ad> hareketini sil
+    # Owner addition 3 (2026-09-21, ADR-0197): God's Eye View, opened in the owner's browser.
+    GODS_EYE_OPEN = "gods_eye_open"  # dünya gözünü aç / god's eye view'ı aç
     # B30 req 82/119-122: an application closed by name, processes and services asked
     # about by name, and the two policy-gated actions on them.
     APP_CLOSE = "app_close"  # Not Defteri'ni kapat / Chrome'u kapat
@@ -633,6 +635,8 @@ CAPABILITY_BY_INTENT: dict[Intent, str] = {
     Intent.MACRO_NAME: "macro.name",
     Intent.MACRO_RUN: "macro.run",
     Intent.MACRO_DELETE: "macro.delete",
+    # ADR-0197: a tab opens in the owner's browser.
+    Intent.GODS_EYE_OPEN: "godseye.open",
 }
 
 #: QUERY intents that name a tool rather than being answered conversationally (contract §2:
@@ -1465,6 +1469,35 @@ def _eye_disable_match(tokens: tuple[str, ...]) -> str | None:
 #: the QUERY "kamera açık mı?" and must not become an action; "açar mısın" is a request
 #: and is honoured as one.
 _OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar", "ac", "acsana", "acar")
+#: ADR-0197: the owner's names for God's Eye View - the English name as the ASR renders
+#: it ("god's eye", "gods eye", "godseye") and the Turkish ones ("dünya gözü", "tanrı
+#: gözü", "tanrının gözü"); the word after the noun carries the case ending ("gözünü").
+_GODS_EYE_FIRST_WORDS: Final[tuple[str, ...]] = (
+    "god's",
+    "gods",
+    "god",
+    "dünya",
+    "dunya",
+    "tanrı",
+    "tanri",
+    "tanrının",
+    "tanrinin",
+)
+_GODS_EYE_SECOND_STEMS: Final[tuple[str, ...]] = ("eye", "göz", "goz")
+
+
+def _gods_eye_open_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Dünya gözünü aç." / "God's eye view'ı aç." -> the page's own name, or None."""
+    if _has_exact(tokens, *_OPEN_VERB_FORMS) is None:
+        return None
+    if _has_exact(tokens, "godseye", "godseye'ı", "godseye'i") is not None:
+        return "god's eye"
+    for index, tok in enumerate(tokens[:-1]):
+        if tok in _GODS_EYE_FIRST_WORDS and tokens[index + 1].startswith(_GODS_EYE_SECOND_STEMS):
+            return f"{tok} {tokens[index + 1]}"
+    return None
+
+
 #: "Active Eye'ı aç" — the product name, as the ASR renders it (the apostrophe survives
 #: normalisation, so the stem match on "eye" is the honest way to catch "eye'ı"/"eye'i").
 _ACTIVE_EYE_FORMS: Final[tuple[str, ...]] = ("active", "aktif")
@@ -8536,6 +8569,13 @@ def _resolve_intent_rules(
                 macro_name=spoken,
                 **base,
             )
+    # 0a-bis. ADR-0197: "Dünya gözünü aç" / "God's Eye View'ı aç" names a PAGE, and
+    #     "gözünü aç" inside it is not the Active Eye's enable phrase (0b would take it).
+    #     After the privacy stop, before the enable path; the page's own name decides.
+    if gods_eye_matched := _gods_eye_open_match(tokens):
+        return ResolvedIntent(
+            Intent.GODS_EYE_OPEN, scope=SCOPE_CONVERSATION, matched=gods_eye_matched, **base
+        )
     # 0b. The enable path (contract §2). Same place, same primitives, evaluated second so
     #     the disable direction wins whenever both could read.
     if eye_matched := _eye_enable_match(tokens):
