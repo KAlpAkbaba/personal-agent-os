@@ -73,7 +73,18 @@ _VOLUME_DIRECTION_BY_ROTATE: dict[str, str] = {
 _UNWIRED_GESTURES: frozenset[str] = frozenset({GESTURE_PINCH_START, GESTURE_PINCH_RELEASE})
 
 
-def resolve_gesture(gesture: str) -> ResolvedIntent:
+#: The player's OWN volume keys, for a rotate when no owner media session is live:
+#: YouTube and most web players raise/lower their volume on the arrow keys, and that is
+#: what the owner is watching when they turn the cap (found on the first live trial,
+#: 2026-09-21: every rotate reached media.volume and was refused "volume_failed" because
+#: the video had been opened by hand, not by "YouTube'u aç").
+_PLAYER_VOLUME_KEY_BY_ROTATE: dict[str, str] = {
+    GESTURE_ROTATE_CW: "up",
+    GESTURE_ROTATE_CCW: "down",
+}
+
+
+def resolve_gesture(gesture: str, *, media_playing: bool = True) -> ResolvedIntent:
     """The one fixed, total mapping from a gesture NAME to a ``ResolvedIntent``.
 
     Pure and total on its own, and does not trust its caller: a gesture outside the
@@ -81,6 +92,11 @@ def resolve_gesture(gesture: str) -> ResolvedIntent:
     (``app.voice.realtime_sessions.service``) can only reach a name the route's own
     validator already accepted against :data:`GESTURE_NAMES` - defence in depth, the
     same discipline every pure table in ``app.voice.intents`` follows.
+
+    ``media_playing`` is the one live fact the table takes (the caller reads it from
+    ``app.media.playback_service.live_playback``): a rotate is the owner's OWN media
+    session's volume when one is live, and the focused player's own volume keys
+    otherwise - never a refusal for turning the cap at a video they opened by hand.
     """
     if gesture in _ARROW_KEY_BY_SWIPE:
         return ResolvedIntent(
@@ -90,6 +106,14 @@ def resolve_gesture(gesture: str) -> ResolvedIntent:
             key_press=_ARROW_KEY_BY_SWIPE[gesture],
         )
     if gesture in _VOLUME_DIRECTION_BY_ROTATE:
+        if not media_playing:
+            return ResolvedIntent(
+                intent=Intent.OPERATOR_KEY,
+                matched=MATCHED_GESTURE,
+                gesture=gesture,
+                key_press=_PLAYER_VOLUME_KEY_BY_ROTATE[gesture],
+                window_ref="current",
+            )
         return ResolvedIntent(
             intent=Intent.MEDIA_VOLUME,
             matched=MATCHED_GESTURE,

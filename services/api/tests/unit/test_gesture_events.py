@@ -156,6 +156,31 @@ def test_rotate_ccw_lowers_the_volume() -> None:
     assert call["result"]["requested_state"] == "down", "the gesture said down; the model said up"
 
 
+@pytest.mark.parametrize(("gesture", "key"), [("rotate_cw", "up"), ("rotate_ccw", "down")])
+def test_a_rotate_with_no_owner_media_session_is_the_players_own_volume_key(
+    gesture: str, key: str
+) -> None:
+    """First live trial (2026-09-21): the owner turned the cap at a video they had opened
+    by hand and every rotate was refused "volume_failed" - media.volume only knows the
+    session THIS service opened. With none live, a rotate is the focused player's own
+    volume key (YouTube and most web players: the arrows), never a refusal."""
+    from tests.unit.test_operator_tools import _focus_window
+
+    client, factory, device, _operator = _wired()
+    with factory() as db:
+        OwnerMediaPlaybackRow.__table__.create(db.get_bind(), checkfirst=True)  # exists, empty
+    _focus_window(factory, device=device)
+    sid = _create(client)
+    events = _gesture(client, sid, gesture)
+    resolved = events["resolved_intents"][0]
+    assert resolved["tool"] == "operator.key" and resolved["gesture"] == gesture
+    call = _tool(client, sid, "operator.key", {})
+    assert call["status"] == "succeeded", call
+    assert call["result"]["execution_status"] == "executed"
+    assert device.payload_for("keyboard.key")["key"] == key
+    assert "media.volume" not in [c["capability"] for c in device.calls]
+
+
 # ---------------------------------------------------------------------------- pinch
 
 
