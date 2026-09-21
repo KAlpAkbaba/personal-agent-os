@@ -74,9 +74,13 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
    Canlıda görülen: izleme 18 kare/sn, pinç "tutma" algılanıyor; kaydırma henüz raporlanmadı.
    Sahip web kabuğunu worktree'den başlatır: `…\agent-ac27be8adddc2920d\scripts\voice\
    start-web-voice.ps1` → /core/cockpit → Yerel mod → kamera aç → "El kumandası" aç.
-   Sonuç iyiyse: `git merge feat/hand-gestures-stage1` main'e, ADR-0198'e kanıt satırı,
-   yayın, recovery pin (bundle 5b4e771c ile STALE; birleşme yayınından sonra pinlenmeli).
+   **SAHİP KARARI (2026-09-22): dal, sahip "birleştir" demeden main'e BİRLEŞTİRİLMEZ**
+   (deneme yayınları dalı Cloud Core'a çıkarmaya devam edebilir; main'in son yayını
+   `dad462ac` son iyi bilinen olarak durur). "Birleştir" gelince: `git merge
+   feat/hand-gestures-stage1` main'e, ADR-0198/0199'a kanıt satırı, yayın, recovery pin.
    Kötüyse: `release-cloud-core.ps1 -BlueGreen` main'den geri yayın (dad462ac LKG).
+   2. aşama (ADR-0199): sunucu yarısı dalda (`e73c1be`), tarayıcı yarısı ajanda (aynı
+   worktree), cihaz yarısı ajanda (worktree `agent-a137003064a5cc0a5`); cihaz kurulumu UAC.
 5. *Türkiye trafik kameraları God's Eye'a (sahip 2026-09-21: "tüm Türkiye'deki
    mobeseleri ekleyemez miyiz, paylaşılan").* Kapsam kararı: EGM MOBESE akışları herkese
    açık DEĞİL (eklenemez); belediyelerin paylaştığı trafik kameraları (İBB `application.
