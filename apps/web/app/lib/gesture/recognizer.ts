@@ -163,19 +163,26 @@ export type RecognizerOptions = {
   historyMs: number;
 };
 
+/**
+ * Retuned on the owner's first live trial (2026-09-21, Logi C615 at ~45 fps): the first
+ * values (swipe >= 1/4 of the frame within 600 ms, a fully open hand, 60 deg of rotation,
+ * a 700 ms cooldown) recognised, but only with an exaggerated, tiring gesture - "işlemleri
+ * yapana kadar canım çıkıyor". A swipe is now a hand crossing ~1/6 of the frame within
+ * 900 ms with most fingers out; a rotate is 40 deg; the cooldown is 450 ms.
+ */
 export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
-  openHandMinRatio: 0.8,
-  swipeMinDistanceFrac: 0.25,
-  swipeMaxMs: 600,
+  openHandMinRatio: 0.6,
+  swipeMinDistanceFrac: 0.16,
+  swipeMaxMs: 900,
   looseIndexPinchMaxRatio: 0.55,
-  rotateMinDegrees: 60,
-  rotateMaxMs: 800,
-  spreadMinDistanceFrac: 0.5,
-  spreadMaxMs: 800,
+  rotateMinDegrees: 40,
+  rotateMaxMs: 1_000,
+  spreadMinDistanceFrac: 0.35,
+  spreadMaxMs: 1_000,
   tightPinchOnRatio: 0.2,
   tightPinchOffRatio: 0.32,
-  cooldownMs: 700,
-  historyMs: 1_200,
+  cooldownMs: 450,
+  historyMs: 1_500,
 };
 
 // ------------------------------------------------------------------- track

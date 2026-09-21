@@ -20,6 +20,7 @@ import pytest
 
 from app.media.models import PLAYBACK_STATUS_PLAYING, OwnerMediaPlaybackRow
 from app.media.playback_service import SESSION_PREFIX
+from app.routines.dispatch import DeviceRunResult
 from app.voice.realtime_sessions.models import RealtimeSessionRow
 from tests.alarms_support import window_id as window_id_for
 from tests.unit.test_operator_tools import _create, _focus_window, _tool, _wired
@@ -130,6 +131,89 @@ def test_spread_presses_f_for_fullscreen() -> None:
 
 
 # --------------------------------------------------------------------------- rotate
+
+
+# ------------------------------------------------------------------ the media window
+
+
+def _windows(*rows: tuple[str, str, bool]) -> list[dict]:
+    return [
+        {"window_id": wid, "title": title, "foreground": fg, "image": "chrome.exe"}
+        for wid, title, fg in rows
+    ]
+
+
+def test_the_two_halves_spell_the_media_window_reference_the_same() -> None:
+    from app.voice import gestures
+    from app.voice.realtime_sessions import tools_operator
+
+    assert gestures.WINDOW_REF_MEDIA == tools_operator.WINDOW_REF_MEDIA
+    for name in ("swipe_left", "rotate_cw", "spread"):
+        assert gestures.resolve_gesture(name).window_ref == gestures.WINDOW_REF_MEDIA
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected"),
+    [
+        # Two screens: the cockpit was clicked last (foreground) but the video is what the
+        # gesture is for - the live trial of 2026-09-21.
+        (
+            [
+                (window_id_for(1), "PersonalAgentOS Core - Google Chrome", True),
+                (window_id_for(2), "(965) NFS Most Wanted - YouTube - Google Chrome", False),
+            ],
+            window_id_for(2),
+        ),
+        # No player anywhere: the foreground window, unless it is the shell.
+        (
+            [
+                (window_id_for(1), "PersonalAgentOS Core - Google Chrome", True),
+                (window_id_for(3), "Adsız - Not Defteri", False),
+                (window_id_for(4), "Belge.docx - Word", True),
+            ],
+            window_id_for(4),
+        ),
+        # Nothing in front: the topmost non-shell window (the device lists z-order first).
+        (
+            [
+                (window_id_for(1), "PersonalAgentOS Core - Google Chrome", False),
+                (window_id_for(3), "Adsız - Not Defteri", False),
+            ],
+            window_id_for(3),
+        ),
+    ],
+)
+def test_a_gestures_key_goes_to_the_media_window_never_the_shell(rows, expected) -> None:
+    from app.voice.realtime_sessions.tools_operator import _media_window
+
+    assert _media_window(_windows(*rows)) == (expected, None)
+
+
+def test_a_desktop_with_only_the_shell_is_a_question_not_a_key_into_the_cockpit() -> None:
+    from app.voice.realtime_sessions.tools_operator import SPEECH_NO_WINDOW, _media_window
+
+    only_shell = _windows((window_id_for(1), "PersonalAgentOS Core - Google Chrome", True))
+    assert _media_window(only_shell) == (None, SPEECH_NO_WINDOW)
+    assert _media_window([]) == (None, SPEECH_NO_WINDOW)
+
+
+def test_a_swipe_lands_in_the_youtube_window_while_the_cockpit_is_in_front() -> None:
+    client, factory, device, _operator = _wired()
+    device.results["window.list"] = DeviceRunResult(
+        True,
+        result={
+            "windows": _windows(
+                (window_id_for(1), "PersonalAgentOS Core - Google Chrome", True),
+                (window_id_for(2), "(965) NFS Most Wanted - YouTube - Google Chrome", False),
+            )
+        },
+    )
+    sid = _create(client)
+    _gesture(client, sid, "swipe_right")
+    call = _tool(client, sid, "operator.key", {})
+    assert call["status"] == "succeeded", call
+    assert device.payload_for("window.activate")["window_id"] == window_id_for(2)
+    assert device.payload_for("keyboard.key") == {"window_id": window_id_for(2), "key": "right"}
 
 
 @pytest.mark.parametrize(("gesture", "key"), [("rotate_cw", "up"), ("rotate_ccw", "down")])

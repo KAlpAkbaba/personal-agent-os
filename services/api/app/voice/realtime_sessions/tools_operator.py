@@ -659,6 +659,8 @@ def _resolve_window_id(
     marker) the owner cannot tell them apart either, so the most recently focused one wins.
     When the titles genuinely DIFFER, this asks.
     """
+    if window_ref == WINDOW_REF_MEDIA:
+        return _media_window(_live_windows(list_windows))
     if window_ref not in ("current", "previous") and window_ref:
         if _is_window_id(window_ref):
             return window_ref, None
@@ -682,6 +684,60 @@ def _resolve_window_id(
         # may be something they are not even looking at. Ask, and touch no device to do it.
         return None, SPEECH_NO_WINDOW
     return _confirm_alive(entry.object_id, list_windows, fall_back_to_foreground=True)
+
+
+#: ADR-0198: the window a hand gesture's key is for. The shell's own window never - the
+#: owner has two screens, the last click was on the cockpit, and every arrow went there.
+WINDOW_REF_MEDIA: Final = "media"
+#: Title fragments that mark a window as the thing being watched (case-folded compare).
+_MEDIA_TITLE_MARKS: Final[tuple[str, ...]] = (
+    "youtube",
+    "netflix",
+    "prime video",
+    "disney",
+    "twitch",
+    "vimeo",
+    "exxen",
+    "blutv",
+    "puhu",
+    "tabii",
+    "tod tv",
+    "vlc",
+    "mpc-hc",
+    "media player",
+    "izle",
+    "film",
+    "dizi",
+    "video",
+    "bölüm",
+)
+#: The shell's own windows, by title: never a target for a gesture.
+_SHELL_TITLE_MARKS: Final[tuple[str, ...]] = ("personalagentos", "pagentos")
+
+
+def _media_window(live: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """The window a gesture's key goes to (``WINDOW_REF_MEDIA``): in the device's own
+    z-order (top first), the first window whose title says it is a player or a video,
+    else the foreground window, else the topmost - never a window of the shell itself.
+    ``(None, speech)`` when the desktop has nothing but the shell."""
+    candidates = [
+        w
+        for w in live
+        if w.get("window_id")
+        and not any(
+            mark in turkish_casefold(str(w.get("title") or "")) for mark in _SHELL_TITLE_MARKS
+        )
+    ]
+    if not candidates:
+        return None, SPEECH_NO_WINDOW
+    for window in candidates:
+        title = turkish_casefold(str(window.get("title") or ""))
+        if any(mark in title for mark in _MEDIA_TITLE_MARKS):
+            return str(window["window_id"]), None
+    for window in candidates:
+        if window.get("foreground"):
+            return str(window["window_id"]), None
+    return str(candidates[0]["window_id"]), None
 
 
 def _confirm_alive(

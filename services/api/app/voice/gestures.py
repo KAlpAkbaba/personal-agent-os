@@ -56,6 +56,12 @@ GESTURE_NAMES: tuple[str, ...] = (
 #: glance.
 MATCHED_GESTURE = "el hareketi"
 
+#: The window a gesture's key goes to - resolved by ``tools_operator._resolve_window_id``
+#: against the device's live window list: never the shell's own window, a player's window
+#: (YouTube, a film site, VLC) first, else the foreground. Spelled here as a string so this
+#: pure table imports nothing from the tools; the tools module asserts the two agree.
+WINDOW_REF_MEDIA = "media"
+
 #: swipe direction -> the arrow key OPERATOR_KEY presses.
 _ARROW_KEY_BY_SWIPE: dict[str, str] = {
     GESTURE_SWIPE_LEFT: "left",
@@ -95,13 +101,16 @@ def resolve_gesture(gesture: str) -> ResolvedIntent:
     refused - while the owner was turning the cap at a video opened by hand. The owner
     watches in a browser window either way, and the arrows are that player's volume.
     """
+    # Every key a gesture presses goes to the MEDIA window (tools_operator
+    # WINDOW_REF_MEDIA): the owner has two screens, the last click was on the cockpit, and
+    # "current" sent every arrow to the shell's own window (live trial, 2026-09-21).
     if gesture in _ARROW_KEY_BY_SWIPE:
         return ResolvedIntent(
             intent=Intent.OPERATOR_KEY,
             matched=MATCHED_GESTURE,
             gesture=gesture,
             key_press=_ARROW_KEY_BY_SWIPE[gesture],
-            window_ref="current",
+            window_ref=WINDOW_REF_MEDIA,
         )
     if gesture in _PLAYER_VOLUME_KEY_BY_ROTATE:
         return ResolvedIntent(
@@ -109,7 +118,7 @@ def resolve_gesture(gesture: str) -> ResolvedIntent:
             matched=MATCHED_GESTURE,
             gesture=gesture,
             key_press=_PLAYER_VOLUME_KEY_BY_ROTATE[gesture],
-            window_ref="current",
+            window_ref=WINDOW_REF_MEDIA,
         )
     if gesture == GESTURE_SPREAD:
         return ResolvedIntent(
@@ -117,6 +126,7 @@ def resolve_gesture(gesture: str) -> ResolvedIntent:
             matched=MATCHED_GESTURE,
             gesture=gesture,
             key_press="f",
+            window_ref=WINDOW_REF_MEDIA,
         )
     if gesture in _UNWIRED_GESTURES:
         # Intent.NONE carries no entry in CAPABILITY_BY_INTENT/QUERY_TOOL_BY_INTENT, so

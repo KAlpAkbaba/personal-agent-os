@@ -233,7 +233,7 @@ describe("GestureRecognizer: the mirroring sign convention", () => {
 });
 
 describe("GestureRecognizer: the cooldown and 'one gesture at a time'", () => {
-  it("a second qualifying swipe inside the ~700ms cooldown is suppressed", () => {
+  it("a second qualifying swipe inside the cooldown is suppressed", () => {
     const rec = new GestureRecognizer();
     let t = 0;
     const first = names(
@@ -255,8 +255,10 @@ describe("GestureRecognizer: the cooldown and 'one gesture at a time'", () => {
     );
     expect(second).toEqual([]);
 
-    // Well past the cooldown, the same motion fires again.
-    t += 700;
+    // Well past the cooldown AND past the swipe window (a synthetic hand that stands
+    // still at 0.7 and reappears at 0.4 inside swipeMaxMs would itself read as a swipe -
+    // the same thing a real hand does when brought back fast; bring it back slowly).
+    t += DEFAULT_RECOGNIZER_OPTIONS.swipeMaxMs + DEFAULT_RECOGNIZER_OPTIONS.cooldownMs + 100;
     const third = names(
       [0.4, 0.5, 0.6, 0.7].flatMap((x) => {
         const e = rec.ingest(frame(t, [["Right", openHandNoPinch({ x, y: 0.5 })]]));
