@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "kind": "pagentos.realtime_session_contract",
   "legacy": {
     "1": {
@@ -128,6 +128,19 @@
         "ClientEvent": {
           "additionalProperties": false,
           "properties": {
+            "gesture": {
+              "anyOf": [
+                {
+                  "maxLength": 32,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Gesture"
+            },
             "kind": {
               "maxLength": 64,
               "minLength": 1,

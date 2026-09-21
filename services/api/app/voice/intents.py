@@ -1177,6 +1177,12 @@ class ResolvedIntent:
     #: transcript that lost its Turkish letters matched with them folded) or both joined
     #: by "+". None for every route the words reached directly.
     route_repair: str | None = None
+    #: B51-adjacent (el hareketiyle kumanda, Stage 1, ADR-0198): the closed-set gesture
+    #: NAME (app.voice.gestures.GESTURE_NAMES) this turn was resolved from, when it came
+    #: from the browser-side hand tracker rather than an utterance. None for every
+    #: spoken turn - a gesture carries no words, so this is the one field that says a
+    #: turn was a gesture at all, in the durable audit row and in resolved_intents.
+    gesture: str | None = None
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -1236,6 +1242,7 @@ class ResolvedIntent:
             "process_name": self.process_name,
             "service_name": self.service_name,
             "route_repair": self.route_repair,
+            "gesture": self.gesture,
         }
 
     @property

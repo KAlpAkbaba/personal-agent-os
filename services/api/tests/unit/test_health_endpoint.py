@@ -326,7 +326,7 @@ def test_health_serves_the_realtime_contract_version() -> None:
     app = create_app(Settings(_env_file=None))
     with TestClient(app) as client:
         doc = client.get("/v1/system/health").json()
-    assert doc["checks"]["voice_realtime"]["contract_version"] == CONTRACT_VERSION == 2
+    assert doc["checks"]["voice_realtime"]["contract_version"] == CONTRACT_VERSION == 3
     # The action contract's own version rides the manifest too: an owner qualification
     # releases the Cloud Core when the deployed value is older than its checkout's.
     # 5 = M18.2 (ADR-0068): the research fast path's terminal result and failure receipts.

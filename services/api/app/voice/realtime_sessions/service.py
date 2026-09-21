@@ -41,6 +41,7 @@ from app.voice import route_telemetry
 from app.voice import service as voice_service
 from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.gestures import GESTURE_NAMES, resolve_gesture
 from app.voice.intent_router import get_intent_router, resolve_deictic_reference, tool_for
 from app.voice.intents import (
     Intent,
@@ -113,10 +114,22 @@ ACTION_RESEARCH_START_REFUSED = "voice_research_start_refused"
 
 #: client-reported event kinds accepted by POST .../events
 STATE_EVENT_KINDS = ("utterance", "summary", "intent", "state", "error", "spoken")
-CLIENT_EVENT_KINDS = TIMING_EVENT_KINDS + STATE_EVENT_KINDS
+#: el hareketiyle kumanda, Stage 1 (ADR-0198): a DISCRETE gesture from the browser-side
+#: hand tracker (apps/web), resolved the same way an utterance is - into a
+#: ResolvedIntent and a turn record - but through app.voice.gestures.resolve_gesture,
+#: never the text router (a gesture carries no words). Its own tuple, concatenated in
+#: below, because it is neither a timing signal nor a spoken/text state kind.
+GESTURE_EVENT_KINDS = ("gesture",)
+CLIENT_EVENT_KINDS = TIMING_EVENT_KINDS + STATE_EVENT_KINDS + GESTURE_EVENT_KINDS
 
 MAX_PENDING_SIDEBAND = 50
 MAX_SUMMARY_CHARS = 2000
+#: The gesture rate bound (spec: "max ~5 gesture events per second per session"): a
+#: sliding window over the last GESTURE_RATE_WINDOW_MS of SERVER wall-clock, never the
+#: client's own t_ms (client-controlled). The 6th+ event inside the window is dropped -
+#: counted, audited, never resolved into a tool call.
+GESTURE_RATE_WINDOW_MS = 1000
+GESTURE_RATE_MAX_PER_WINDOW = 5
 
 #: Any metadata/payload key containing one of these never reaches an audit row
 #: (and is refused at the route). Keys are NORMALIZED before matching - case and
@@ -2016,6 +2029,87 @@ def record_client_events(
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)
+            accepted += 1
+            continue
+        elif kind == "gesture":
+            # el hareketiyle kumanda, Stage 1 (ADR-0198): a DISCRETE gesture from the
+            # browser-side hand tracker. No words, so no text router, no
+            # resolve_intent(), none of the "known"/lazy-lookup disambiguation the
+            # utterance branch above needs — app.voice.gestures.resolve_gesture is a
+            # total, deterministic table and that is the whole router for a gesture.
+            gesture_name = str(ev.get("gesture") or "")
+            if gesture_name not in GESTURE_NAMES:
+                # Defence in depth behind the route's own 422 (routes.py ClientEvent
+                # already refuses an unknown gesture) - a hand-built event dict could
+                # still reach here with nothing this table can resolve.
+                meta.update({"gesture": gesture_name or None, "dropped": "unknown_gesture"})
+                meta["payload"] = payload
+                _audit(db, ACTION_CLIENT_EVENT, row, trace_id=trace_id, metadata=meta)
+                accepted += 1
+                continue
+            # Rate bound (spec: ~5 gesture events/s/session): a sliding window over
+            # SERVER wall-clock (`now`, computed once above) - never the client's own
+            # t_ms, which the client controls. The 6th+ gesture inside the window is
+            # dropped: counted and audited, never resolved into a tool call, so a jitter
+            # burst from the tracker cannot fire the same key five times in one frame.
+            now_ms = now.timestamp() * 1000
+            recent_ms = [
+                ms
+                for ms in (ctx.get("gesture_recent_ms") or [])
+                if isinstance(ms, int | float) and now_ms - ms < GESTURE_RATE_WINDOW_MS
+            ]
+            if len(recent_ms) >= GESTURE_RATE_MAX_PER_WINDOW:
+                ctx["gesture_recent_ms"] = recent_ms
+                ctx["gesture_dropped_total"] = int(ctx.get("gesture_dropped_total") or 0) + 1
+                meta.update({"gesture": gesture_name, "dropped": "rate_limited"})
+                meta["payload"] = payload
+                _audit(db, ACTION_CLIENT_EVENT, row, trace_id=trace_id, metadata=meta)
+                accepted += 1
+                continue
+            recent_ms.append(now_ms)
+            ctx["gesture_recent_ms"] = recent_ms
+            intent = resolve_gesture(gesture_name)
+            # The same turn record an utterance leaves (ctx["last_utterance"]), narrowed
+            # to the fields the two tools a gesture can name actually read
+            # (tools_operator.operator_key: key_press/window_ref/repeat_count;
+            # tools_media.media_volume: media_volume_direction) - a gesture carries none
+            # of the text-derived fields (research topic, memory statement, ...) the
+            # utterance branch also copies, so there is nothing to add for those.
+            ctx["last_utterance"] = {
+                "at": now.isoformat().replace("+00:00", "Z"),
+                "t_ms": t_ms,
+                "turn": turn,
+                "intent": intent.intent.value,
+                "klass": intent.klass,
+                "gesture": intent.gesture,
+                "key_press": intent.key_press,
+                "media_volume_direction": intent.media_volume_direction,
+                "window_ref": intent.window_ref,
+                "repeat_count": intent.repeat_count,
+            }
+            resolved.append(
+                {
+                    "t_ms": t_ms,
+                    "turn": turn,
+                    **intent.to_dict(),
+                    # Same rule ADR-0173 gives the utterance branch: the ONE tool the
+                    # router names for this gesture, or None for pinch_start/
+                    # pinch_release (Intent.NONE names no capability - Stage 2 wires
+                    # those).
+                    "tool": intent.capability or tool_for(intent.intent),
+                    "normalized_text": None,
+                }
+            )
+            meta.update(
+                {
+                    "intent": intent.intent.value,
+                    "klass": intent.klass,
+                    "capability": intent.capability,
+                    "gesture": gesture_name,
+                }
+            )
+            meta["payload"] = payload
+            _audit(db, ACTION_CLIENT_EVENT, row, trace_id=trace_id, metadata=meta)
             accepted += 1
             continue
         if kind in _UI_STATE_BY_EVENT:

@@ -16,6 +16,7 @@ before a request is sent, and a 422 is shown field by field.
 Version history (bump on every change to a request model's accepted fields):
   1 - M12 tracks A+E: create/attach/tool-call/complete/events as first shipped.
   2 - ADR-0043: ``voice`` on create (a wire voice from the provider's list).
+  3 - el hareketiyle kumanda, Stage 1 (ADR-0198): ``gesture`` on a client event.
 """
 
 from __future__ import annotations

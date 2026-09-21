@@ -30,6 +30,7 @@ from app.identity.dependencies import require_owner_session
 from app.identity.service import SessionContext
 from app.logging import get_logger, trace_id_var
 from app.voice.errors import VoiceError, VoiceErrorClass
+from app.voice.gestures import GESTURE_NAMES
 from app.voice.providers import TRANSPORTS
 from app.voice.realtime_sessions import service
 from app.voice.realtime_sessions.models import REALTIME_STATE_CLOSED, REALTIME_STATE_EXPIRED
@@ -164,12 +165,25 @@ class ClientEvent(BaseModel):
     turn: int = Field(default=0, ge=0, le=10**6)
     payload: dict[str, Any] = Field(default_factory=dict)
     text: str | None = Field(default=None, max_length=4000)
+    #: el hareketiyle kumanda, Stage 1 (ADR-0198): the closed-set gesture NAME for a
+    #: ``kind: "gesture"`` event - a top-level field, never nested in ``payload``, the
+    #: wire shape agreed with the browser-side hand tracker (apps/web). Validated
+    #: against the same closed set the service resolves against, so an unknown gesture
+    #: is refused 422 here and never reaches app.voice.gestures.resolve_gesture.
+    gesture: str | None = Field(default=None, max_length=32)
 
     @field_validator("kind")
     @classmethod
     def _known_kind(cls, value: str) -> str:
         if value not in service.CLIENT_EVENT_KINDS:
             raise ValueError(f"unknown event kind {value!r}")
+        return value
+
+    @field_validator("gesture")
+    @classmethod
+    def _known_gesture(cls, value: str | None) -> str | None:
+        if value is not None and value not in GESTURE_NAMES:
+            raise ValueError(f"unknown gesture {value!r}")
         return value
 
     @field_validator("payload")

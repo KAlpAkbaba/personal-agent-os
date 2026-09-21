@@ -33,7 +33,7 @@ def test_committed_contract_matches_the_live_request_models() -> None:
 
 def test_contract_version_and_create_fields() -> None:
     doc = realtime_contract()
-    assert doc["contract_version"] == CONTRACT_VERSION == 2
+    assert doc["contract_version"] == CONTRACT_VERSION == 3
     v2 = set(create_fields())
     assert set(LEGACY_V1_CREATE_FIELDS) < v2
     assert v2 - set(LEGACY_V1_CREATE_FIELDS) == {"voice"}  # the v2 addition, and only that
