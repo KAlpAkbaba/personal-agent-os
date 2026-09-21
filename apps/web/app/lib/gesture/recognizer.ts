@@ -145,10 +145,12 @@ export type RecognizerOptions = {
   rotateMinDegrees: number;
   /** ...within this many ms of the loose-pinch anchor. */
   rotateMaxMs: number;
-  /** Two-hand wrist-to-wrist distance growth needed for `spread` (frame-width fraction). */
-  spreadMinDistanceFrac: number;
-  /** ...within this many ms of the two-hands-visible anchor. */
-  spreadMaxMs: number;
+  /** spread = two OPEN hands held at least this far apart (wrist to wrist, frame widths)... */
+  spreadWideFrac: number;
+  /** ...for at least this long... */
+  spreadHoldMs: number;
+  /** ...and it re-arms only once they come back closer than this (or a hand is lost). */
+  spreadRearmFrac: number;
   /** thumb-index ratio at/under which a TIGHT pinch begins (`pinch_start`). */
   tightPinchOnRatio: number;
   /** thumb-index ratio at/over which a TIGHT pinch ends (`pinch_release`); hysteresis band
@@ -159,6 +161,13 @@ export type RecognizerOptions = {
    * discrete actions, and are deliberately NOT subject to this cooldown: Stage 2's
    * pinch-mouse needs the pinch state itself, not a throttled pulse of it. */
   cooldownMs: number;
+  /**
+   * After a swipe or a rotate, the OPPOSITE gesture within this window is the hand
+   * coming back to where it started, not a new command (second live trial, 2026-09-21:
+   * "sağ döndürüyorum, elimi eski pozisyona getirirken sol algılıyor"). Swallowed, and it
+   * does not restart the cooldown. The SAME direction again is a real repeat.
+   */
+  returnSuppressMs: number;
   /** How far back frame history is kept, for all windows above; must exceed every *MaxMs. */
   historyMs: number;
 };
@@ -171,19 +180,48 @@ export type RecognizerOptions = {
  * 900 ms with most fingers out; a rotate is 40 deg; the cooldown is 450 ms.
  */
 export const DEFAULT_RECOGNIZER_OPTIONS: RecognizerOptions = {
-  openHandMinRatio: 0.6,
+  // Second live trial: a swiping hand tilts toward the camera and its 2D "openness" drops
+  // below 0.6 mid-motion, which reset the swipe anchor every few frames - "sağa sola
+  // kaydırmada çok zor algılıyor". The hand must be open where the swipe STARTS; what it
+  // looks like at the end is not held against it.
+  openHandMinRatio: 0.45,
   swipeMinDistanceFrac: 0.16,
   swipeMaxMs: 900,
   looseIndexPinchMaxRatio: 0.55,
   rotateMinDegrees: 40,
   rotateMaxMs: 1_000,
-  spreadMinDistanceFrac: 0.35,
-  spreadMaxMs: 1_000,
+  // Second live trial: "iki elimi yana açtığımda tam ekran yapmıyor" - MediaPipe sees two
+  // hands only once they are already apart, so "growing apart by half a frame" rarely
+  // had a start to measure from. Now: two open hands HELD wide.
+  spreadWideFrac: 0.55,
+  spreadHoldMs: 250,
+  spreadRearmFrac: 0.4,
   tightPinchOnRatio: 0.2,
   tightPinchOffRatio: 0.32,
   cooldownMs: 450,
+  returnSuppressMs: 1_500,
   historyMs: 1_500,
 };
+
+/** The gesture a hand makes on its way BACK from `name`, or null for the rest. */
+export function oppositeOf(name: GestureName): GestureName | null {
+  switch (name) {
+    case "swipe_left":
+      return "swipe_right";
+    case "swipe_right":
+      return "swipe_left";
+    case "swipe_up":
+      return "swipe_down";
+    case "swipe_down":
+      return "swipe_up";
+    case "rotate_cw":
+      return "rotate_ccw";
+    case "rotate_ccw":
+      return "rotate_cw";
+    default:
+      return null;
+  }
+}
 
 // ------------------------------------------------------------------- track
 
@@ -211,9 +249,11 @@ function emptyTrack(): HandTrack {
 export class GestureRecognizer {
   private readonly opts: RecognizerOptions;
   private readonly tracks = new Map<HandednessLabel, HandTrack>();
-  private twoHandsSince: number | null = null;
-  private spreadBuffer: Array<{ t_ms: number; dist: number }> = [];
-  private lastEmitAtMs: number | null = null;
+  /** Since when two OPEN hands have been held wide apart; null once they came back. */
+  private wideSince: number | null = null;
+  /** The last spread fired and the hands have not come back since: no second spread. */
+  private spreadArmed = true;
+  private lastEmit: { name: GestureName; t_ms: number } | null = null;
 
   constructor(options: Partial<RecognizerOptions> = {}) {
     this.opts = { ...DEFAULT_RECOGNIZER_OPTIONS, ...options };
@@ -246,11 +286,42 @@ export class GestureRecognizer {
 
     // "One gesture at a time": at most one non-pinch (swipe/rotate/spread) event per tick,
     // spread checked first (it needs both hands and is the most specific precondition).
-    const nonPinch = this.detectSpread(frame) ?? this.detectPerHand(frame);
+    // A swipe and a rotate are ONE-hand gestures: with two hands in view the only thing
+    // looked for is the spread, and the per-hand motion histories restart at the current
+    // sample - two hands parting or meeting are not two swipes (found by the spread tests
+    // once the pose itself became the gesture).
+    let nonPinch: GestureEvent | null;
+    if (frame.hands.length >= 2) {
+      nonPinch = this.detectSpread(frame);
+      for (const track of this.tracks.values()) {
+        const last = track.buffer.at(-1);
+        track.buffer = last ? [last] : [];
+      }
+    } else {
+      nonPinch = this.detectPerHand(frame);
+    }
     if (nonPinch) events.push(nonPinch);
 
-    if (seen.size < 2) this.twoHandsSince = null;
+    if (seen.size < 2) {
+      this.wideSince = null;
+      this.spreadArmed = true;
+    }
     return events;
+  }
+
+  /**
+   * The one gate every swipe/rotate/spread passes on its way out: the shared cooldown,
+   * and the return-suppression window (`returnSuppressMs`) for the OPPOSITE of the last
+   * gesture. Returns the event to emit, or null when it is swallowed.
+   */
+  private emit(name: GestureName, now: number): GestureEvent | null {
+    const last = this.lastEmit;
+    if (last !== null) {
+      if (now - last.t_ms < this.opts.cooldownMs) return null;
+      if (oppositeOf(last.name) === name && now - last.t_ms < this.opts.returnSuppressMs) return null;
+    }
+    this.lastEmit = { name, t_ms: now };
+    return { name, t_ms: now };
   }
 
   private updateTrack(track: HandTrack, raw: readonly Point[], t_ms: number): void {
@@ -280,10 +351,6 @@ export class GestureRecognizer {
     while (track.buffer.length > 1 && track.buffer[0].t_ms < cutoff) track.buffer.shift();
   }
 
-  private onCooldown(now: number): boolean {
-    return this.lastEmitAtMs !== null && now - this.lastEmitAtMs < this.opts.cooldownMs;
-  }
-
   private detectPerHand(frame: TrackedFrame): GestureEvent | null {
     for (const hand of frame.hands) {
       const track = this.tracks.get(hand.handedness);
@@ -297,10 +364,12 @@ export class GestureRecognizer {
   }
 
   private detectSwipe(track: HandTrack, now: number): GestureEvent | null {
-    if (track.openSince === null) return null;
     const current = track.buffer.at(-1);
-    if (!current || !current.open) return null;
-    const anchorTime = Math.max(track.openSince, now - this.opts.swipeMaxMs);
+    if (!current) return null;
+    // The hand must be OPEN where the swipe starts (a fist or a pinch moving across the
+    // frame is not a swipe); what it looks like at the end is not held against it - a
+    // swiping hand tilts and its 2D openness drops mid-motion (second live trial).
+    const anchorTime = now - this.opts.swipeMaxMs;
     const anchor = track.buffer.find((s) => s.t_ms >= anchorTime && s.open);
     if (!anchor || anchor.t_ms >= now) return null;
     const dx = current.palm.x - anchor.palm.x;
@@ -308,14 +377,12 @@ export class GestureRecognizer {
     const horizontal = Math.abs(dx) >= Math.abs(dy);
     const magnitude = horizontal ? Math.abs(dx) : Math.abs(dy);
     if (magnitude < this.opts.swipeMinDistanceFrac) return null;
-    // A qualifying displacement always resets the anchor — emitted or not — so the same
-    // already-crossed motion cannot re-fire the instant the cooldown lapses without any
-    // fresh movement (see the module docstring's cooldown discussion).
-    track.openSince = now;
-    if (this.onCooldown(now)) return null;
-    this.lastEmitAtMs = now;
+    // Crossed: this motion is spent whether or not it is emitted - the buffer restarts at
+    // the current sample so the same displacement cannot re-fire when the cooldown lapses.
+    track.buffer = [current];
+    track.openSince = current.open ? now : null;
     const name: GestureName = horizontal ? (dx > 0 ? "swipe_right" : "swipe_left") : dy > 0 ? "swipe_down" : "swipe_up";
-    return { name, t_ms: now };
+    return this.emit(name, now);
   }
 
   private detectRotate(track: HandTrack, now: number): GestureEvent | null {
@@ -333,9 +400,7 @@ export class GestureRecognizer {
     if (Math.abs(degrees) < this.opts.rotateMinDegrees) return null;
     track.looseSince = now;
     track.rotationDeg = 0;
-    if (this.onCooldown(now)) return null;
-    this.lastEmitAtMs = now;
-    return { name: degrees > 0 ? "rotate_cw" : "rotate_ccw", t_ms: now };
+    return this.emit(degrees > 0 ? "rotate_cw" : "rotate_ccw", now);
   }
 
   private detectSpread(frame: TrackedFrame): GestureEvent | null {
@@ -343,21 +408,18 @@ export class GestureRecognizer {
     const [a, b] = frame.hands;
     const ma = mirror(a.landmarks);
     const mb = mirror(b.landmarks);
-    const distance = dist(ma[WRIST], mb[WRIST]);
     const now = frame.t_ms;
-    if (this.twoHandsSince === null) this.twoHandsSince = now;
-    this.spreadBuffer.push({ t_ms: now, dist: distance });
-    const cutoff = now - this.opts.spreadMaxMs;
-    while (this.spreadBuffer.length > 1 && this.spreadBuffer[0].t_ms < cutoff) this.spreadBuffer.shift();
-    const anchorTime = Math.max(this.twoHandsSince, cutoff);
-    const anchor = this.spreadBuffer.find((s) => s.t_ms >= anchorTime);
-    if (!anchor || anchor.t_ms >= now) return null;
-    const growth = distance - anchor.dist;
-    if (growth < this.opts.spreadMinDistanceFrac) return null;
-    this.twoHandsSince = now;
-    this.spreadBuffer = [{ t_ms: now, dist: distance }];
-    if (this.onCooldown(now)) return null;
-    this.lastEmitAtMs = now;
-    return { name: "spread", t_ms: now };
+    const distance = dist(ma[WRIST], mb[WRIST]);
+    const bothOpen = openness(ma) >= this.opts.openHandMinRatio && openness(mb) >= this.opts.openHandMinRatio;
+    if (distance < this.opts.spreadRearmFrac) this.spreadArmed = true;
+    if (!bothOpen || distance < this.opts.spreadWideFrac) {
+      this.wideSince = null;
+      return null;
+    }
+    this.wideSince ??= now;
+    if (!this.spreadArmed || now - this.wideSince < this.opts.spreadHoldMs) return null;
+    this.spreadArmed = false;
+    this.wideSince = null;
+    return this.emit("spread", now);
   }
 }

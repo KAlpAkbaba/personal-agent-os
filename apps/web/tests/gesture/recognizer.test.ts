@@ -111,6 +111,7 @@ describe("GestureRecognizer: the closed set, once each", () => {
   it("every GESTURE_NAMES member is producible (and nothing else is emitted)", () => {
     const rec = new GestureRecognizer();
     const emitted = new Set<GestureName>();
+    const GAP = DEFAULT_RECOGNIZER_OPTIONS.returnSuppressMs + 100;
 
     // swipe_right: mirrored x increasing = RAW x DECREASING (see module docstring).
     let t = 0;
@@ -118,28 +119,28 @@ describe("GestureRecognizer: the closed set, once each", () => {
       for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch({ x, y: 0.5 })]]))) emitted.add(e.name);
       t += 100;
     }
-    t += 1000; // clear the cooldown between distinct gestures in this survey test
+    t += GAP; // past the cooldown AND the return-suppression window between opposite gestures
 
     // swipe_left: RAW x increasing.
     for (const x of [0.3, 0.4, 0.5, 0.6]) {
       for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch({ x, y: 0.5 })]]))) emitted.add(e.name);
       t += 100;
     }
-    t += 1000;
+    t += GAP;
 
     // swipe_up: y decreasing (toward the top of the frame).
     for (const y of [0.7, 0.6, 0.5, 0.4]) {
       for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y })]]))) emitted.add(e.name);
       t += 100;
     }
-    t += 1000;
+    t += GAP;
 
     // swipe_down: y increasing.
     for (const y of [0.3, 0.4, 0.5, 0.6]) {
       for (const e of rec.ingest(frame(t, [["Right", openHandNoPinch({ x: 0.5, y })]]))) emitted.add(e.name);
       t += 100;
     }
-    t += 1000;
+    t += GAP;
 
     // rotate_cw: a RAW thumb-index angle sweep that DECREASES (mirroring reverses rotational
     // sense too, see the module docstring — a raw sweep from 110° down to 0° is what reads
@@ -149,7 +150,7 @@ describe("GestureRecognizer: the closed set, once each", () => {
         emitted.add(e.name);
       t += 100;
     }
-    t += 1000;
+    t += GAP;
 
     // rotate_ccw: a RAW angle sweep that INCREASES.
     for (const thetaDeg of [0, 30, 60, 90, 110]) {
@@ -157,12 +158,14 @@ describe("GestureRecognizer: the closed set, once each", () => {
         emitted.add(e.name);
       t += 100;
     }
-    t += 1000;
+    t += GAP;
 
     // spread: two hands' wrists moving apart.
     for (const [lx, rx] of [
       [0.45, 0.55],
       [0.35, 0.65],
+      [0.2, 0.8],
+      [0.2, 0.8], // held wide past spreadHoldMs
       [0.2, 0.8],
     ] as const) {
       for (const e of rec.ingest(
@@ -174,7 +177,7 @@ describe("GestureRecognizer: the closed set, once each", () => {
         emitted.add(e.name);
       t += 200;
     }
-    t += 1000;
+    t += GAP;
 
     // pinch_start then pinch_release.
     for (const e of rec.ingest(frame(t, [["Right", tightPinchHand({ x: 0.5, y: 0.5 })]]))) emitted.add(e.name);
@@ -323,7 +326,7 @@ describe("GestureRecognizer: what must NOT be a swipe", () => {
   });
 });
 
-describe("GestureRecognizer: spread needs two hands growing apart", () => {
+describe("GestureRecognizer: spread is two open hands HELD wide apart", () => {
   it("one hand alone, however far it moves, never produces spread", () => {
     const rec = new GestureRecognizer();
     const events: GestureName[] = [];
@@ -335,50 +338,131 @@ describe("GestureRecognizer: spread needs two hands growing apart", () => {
     expect(events).not.toContain("spread");
   });
 
-  it("two hands' wrists growing apart by >= half the frame width within 800ms is spread", () => {
+  it("two open hands wider than spreadWideFrac for spreadHoldMs is spread - once, until they come back", () => {
+    // Second live trial (2026-09-21): MediaPipe sees two hands only once they are already
+    // apart, so "growing apart" rarely had a start to measure; the pose itself is the gesture.
     const rec = new GestureRecognizer();
     const events: GestureName[] = [];
     let t = 0;
-    for (const [lx, rx] of [
-      [0.48, 0.52],
-      [0.3, 0.7],
-      [0.15, 0.85],
-    ] as const) {
-      events.push(
-        ...names(
-          rec.ingest(
-            frame(t, [
-              ["Left", openHandNoPinch({ x: lx, y: 0.5 })],
-              ["Right", openHandNoPinch({ x: rx, y: 0.5 })],
-            ]),
-          ),
-        ),
-      );
-      t += 200;
+    for (let i = 0; i < 6; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.15, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.85, y: 0.5 })]]))));
+      t += 100;
     }
     expect(events).toEqual(["spread"]);
+    // Still wide, long after the cooldown: no second spread.
+    t += 2000;
+    for (let i = 0; i < 4; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.15, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.85, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["spread"]);
+    // Back together (under spreadRearmFrac), then wide again: a second spread.
+    for (let i = 0; i < 3; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.45, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.55, y: 0.5 })]]))));
+      t += 100;
+    }
+    for (let i = 0; i < 4; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.15, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.85, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["spread", "spread"]);
   });
 
-  it("two hands drifting apart slowly (small growth per window) never reach spread", () => {
+  it("two hands apart but only briefly, or not wide enough, never reach spread", () => {
     const rec = new GestureRecognizer();
     const events: GestureName[] = [];
     let t = 0;
     for (let i = 0; i <= 10; i += 1) {
       const lx = 0.45 - i * 0.01;
-      const rx = 0.55 + i * 0.01;
-      events.push(
-        ...names(
-          rec.ingest(
-            frame(t, [
-              ["Left", openHandNoPinch({ x: lx, y: 0.5 })],
-              ["Right", openHandNoPinch({ x: rx, y: 0.5 })],
-            ]),
-          ),
-        ),
-      );
+      const rx = 0.55 + i * 0.01; // at most 0.3 apart
+      events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: lx, y: 0.5 })], ["Right", openHandNoPinch({ x: rx, y: 0.5 })]]))));
       t += 100;
     }
     expect(events).not.toContain("spread");
+    // Wide for one frame only.
+    events.push(...names(rec.ingest(frame(t, [["Left", openHandNoPinch({ x: 0.15, y: 0.5 })], ["Right", openHandNoPinch({ x: 0.85, y: 0.5 })]]))));
+    expect(events).not.toContain("spread");
+  });
+
+  it("two FISTS held wide apart are not a spread", () => {
+    const rec = new GestureRecognizer();
+    const events: GestureName[] = [];
+    let t = 0;
+    for (let i = 0; i < 6; i += 1) {
+      events.push(...names(rec.ingest(frame(t, [["Left", fistHand({ x: 0.15, y: 0.5 })], ["Right", fistHand({ x: 0.85, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).not.toContain("spread");
+  });
+});
+
+describe("GestureRecognizer: the way back is not a gesture (returnSuppressMs)", () => {
+  it("a rotate followed by turning the hand back is ONE rotate; the same direction again is a second", () => {
+    // Second live trial: "sağ döndürüyorum, elimi eski pozisyona getirirken sol algılıyor".
+    const rec = new GestureRecognizer();
+    const events: GestureName[] = [];
+    let t = 0;
+    const turn = (degs: readonly number[]) => {
+      for (const thetaDeg of degs) {
+        events.push(...names(rec.ingest(frame(t, [["Right", loosePinchHand({ x: 0.5, y: 0.5 }, (thetaDeg * Math.PI) / 180)]]))));
+        t += 100;
+      }
+    };
+    turn([110, 80, 50, 20, 0]); // cw
+    expect(events).toEqual(["rotate_cw"]);
+    t += 500; // past the cooldown, inside returnSuppressMs
+    turn([0, 30, 60, 90, 110]); // the hand coming back = ccw motion
+    expect(events).toEqual(["rotate_cw"]);
+    t += 500;
+    turn([110, 80, 50, 20, 0]); // cw again: a real repeat
+    expect(events).toEqual(["rotate_cw", "rotate_cw"]);
+    t += DEFAULT_RECOGNIZER_OPTIONS.returnSuppressMs + 100;
+    turn([0, 30, 60, 90, 110]); // long after: a real ccw
+    expect(events).toEqual(["rotate_cw", "rotate_cw", "rotate_ccw"]);
+  });
+
+  it("a swipe followed by the hand coming back is ONE swipe", () => {
+    const rec = new GestureRecognizer();
+    const events: GestureName[] = [];
+    let t = 0;
+    for (const x of [0.7, 0.6, 0.5, 0.4]) {
+      events.push(...names(rec.ingest(frame(t, [["Right", openHandNoPinch({ x, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["swipe_right"]);
+    t += 600; // past the cooldown, inside returnSuppressMs
+    for (const x of [0.4, 0.5, 0.6, 0.7]) {
+      events.push(...names(rec.ingest(frame(t, [["Right", openHandNoPinch({ x, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["swipe_right"]);
+  });
+});
+
+describe("GestureRecognizer: a swipe is judged where it STARTS", () => {
+  it("a hand that is open at the start and tilts (reads closed) by the end still swipes", () => {
+    // Second live trial: a swiping hand tilts toward the camera and its 2D openness drops
+    // mid-motion - "sağa sola kaydırmada çok zor algılıyor".
+    const rec = new GestureRecognizer();
+    const events: GestureName[] = [];
+    let t = 0;
+    const hands = [openHandNoPinch({ x: 0.7, y: 0.5 }), openHandNoPinch({ x: 0.6, y: 0.5 }), fistHand({ x: 0.5, y: 0.5 }), fistHand({ x: 0.4, y: 0.5 })];
+    for (const h of hands) {
+      events.push(...names(rec.ingest(frame(t, [["Right", h]]))));
+      t += 100;
+    }
+    expect(events).toEqual(["swipe_right"]);
+  });
+
+  it("a fist moving across the frame is never a swipe", () => {
+    const rec = new GestureRecognizer();
+    const events: GestureName[] = [];
+    let t = 0;
+    for (const x of [0.7, 0.6, 0.5, 0.4, 0.3]) {
+      events.push(...names(rec.ingest(frame(t, [["Right", fistHand({ x, y: 0.5 })]]))));
+      t += 100;
+    }
+    expect(events.filter((e) => e.startsWith("swipe"))).toEqual([]);
   });
 });
 
