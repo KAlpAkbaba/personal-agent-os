@@ -1,19 +1,51 @@
-# Devir notu — 2026-09-20 gecesi (2026-09-19 akşamından devam)
+# Devir notu — canlı (son güncelleme 2026-09-21)
 
-Yeni bir Claude oturumu (başka hesap dahil) buradan devam eder. Önce `CLAUDE.md`, sonra bu
-dosya, sonra gerektikçe `docs/DECISIONS.md` sonundaki ADR-0170…0178. Sahibe Türkçe yaz.
+Sahip iki Claude hesabını dönüşümlü kullanır (token bitince diğerine geçer). Yeni oturum,
+hangi hesap olursa olsun, buradan devam eder: `.claude/hooks/session-start.ps1` aşağıdaki
+işaretli bloğu, `git status`'u ve son commitleri oturum açılır açılmaz bağlama koyar.
+Önce `CLAUDE.md`, sonra bu dosya, gerektikçe `docs/DECISIONS.md` sonundaki ADR'ler.
+Sahibe Türkçe yaz. Geçiş tarifi (sahip için): `docs/HESAP_GECISI.md`.
+
+**Bu dosyanın canlı kalma kuralı (her iki hesap için bağlayıcı):**
+1. Bir işe başlarken, ilk kod değişikliğinden ÖNCE "Şu an üzerinde çalışılan" bölümünü yaz.
+2. Her commit'te bu bölümü ve gerekiyorsa "Şu anki durum"u güncelle (aynı commit'e koy).
+3. İş bitince bölümü "Yok" yap, işi "Sıradaki işler"den düş.
+Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'ten bulur.
+
+<!-- session-start:begin -->
+## Şu an üzerinde çalışılan
+
+Yok — son iş (iki hesap geçişi düzeni) tamamlandı. Sahip sırada "2 not + 2 yeni ekleme"
+verecek; gelince buraya yaz.
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `d040659` (api-green), last-known-good `2336300`, recovery bundle
-  `d040659`'a pinli, `pagentos-bluegreen-reconcile.timer` aktif, sağlık `ok`.
-  Realtime sağlayıcıları: `local-router`, `openai-realtime`. Geçişte cihaz oturumu (1/1)
-  yeni renge taşındı.
-- **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`, kaynak sürümü `0d03d9e`, 105 yetenek
-  (`screen.ocr` dahil). Tek karakter tuş desteği **kurulu** (2026-09-20 kurulumu).
-- **Çalışma ağacı temiz**, her şey `origin/main`'de. Arka planda iş yok.
+- **Üretim:** Cloud Core `6d9681a` (api-green), `pagentos-bluegreen-reconcile.timer` aktif.
+  Recovery bundle pini `6d9681abf66891987664215fbc7c339afbc5f55f` için sahipten
+  istendi; yapılıp yapılmadığını sunucudan oku (okuma serbest, uzak yazma sahibin işi).
+  Realtime sağlayıcıları: `local-router`, `openai-realtime`.
+- **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
+  Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.
+- **Hafıza:** 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu
+  hem ücretli oturumda hem yerel moddaki serbest sohbette (ADR-0183…0193).
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da
   "her seferinde tüm testleri koşma" dedi → dokunulan paketler + hedefli korpus yeter.
+
+## Sıradaki işler
+
+1. **Sahibin "2 not + 2 yeni ekleme"si** — hafıza bitince vereceğini söyledi (2026-09-21).
+2. *Tarifle tıklama.* "Şu kameralı videoyu aç", "Kratos'un olduğu videoyu aç" bugün
+   çalışmaz: `vision.LOCATE_QUESTION_TR` bir ADA göre soruyor ("X adlı düğme ya da öğe
+   nerede?"), tarif değil; üstelik bulunamayınca `search_if_missing` YouTube'da o kelimeyi
+   aratıyor. Yapılacak: planlayıcı ad/tarif ayrımı yapsın, tarif için ayrı bir görsel soru
+   kurulsun, tarif bulunamazsa arama yapılmasın. Yazıyla bulunabilen hedefler yine ücretsiz
+   yerel OCR'da kalsın (ücretli görsel çağrı yalnız tarif için).
+3. Bildirim "hiçbir kanal taşımadı" (başarısız iş bildirimi hiçbir kanaldan gitmedi).
+4. Sözcü sayfalarında alıntıya sayfa çerçevesi satırı karışıyor.
+5. `scripts/verify-device-service.ps1` 6b.4: DateTime taşması (ayrı iş çipi açıldı).
+6. Test defteri (claude.ai artefaktı) eski hesaba ait; gerekirse `default_registry()`'den
+   yeniden üret.
+<!-- session-start:end -->
 
 ## Nasıl yayınlanır / kurulur
 
@@ -76,33 +108,6 @@ bas", "YouTube hariç tüm sekmeleri kapat", "birinci sekmeye geç", "yanlış y
   "… hakkında ne biliyorsun" yerel modda da çalışıyor (ADR-0192).
 - ADR-0193 kapsamındaki eski makine-kaydı satırları da sahibin onayıyla silindi
   (2026-09-21, 935 satır). İki temizlikte toplam 1890 satır; ledger'da hepsinin aslı duruyor.
-
-## Sıradaki işler
-
-0. **Sahibin 2026-09-20 sabahı soracağı iki iş** (o gece konuşuldu, sıraya alındı):
-   - *Tarifle tıklama.* "Şu kameralı videoyu aç", "Kratos'un olduğu videoyu aç" bugün
-     çalışmaz: `vision.LOCATE_QUESTION_TR` bir ADA göre soruyor ("X adlı düğme ya da öğe
-     nerede?"), tarif değil; üstelik bulunamayınca `search_if_missing` YouTube'da o kelimeyi
-     aratıyor. Yapılacak: planlayıcı ad/tarif ayrımı yapsın, tarif için ayrı bir görsel soru
-     kurulsun, tarif bulunamazsa arama yapılmasın. Yazıyla bulunabilen hedefler yine ücretsiz
-     yerel OCR'da kalsın (ücretli görsel çağrı yalnız tarif için).
-   - *Hafıza.* Üretimde 2219 anı var ama 2208'i epizodik ADAY; kalıcı olan 9 satırın hepsi
-     sahibin açıkça söyledikleri, tercih/proje/yordamsal sınıflarında tek satır yok. Terfi
-     eşikleri (kanıt sayısı + güven) epizodik olaylarda hiç dolmuyor. Ayrıca hafıza bloğu
-     yalnız ücretli oturumun kişilik metnine giriyor: yerel moddaki serbest sohbet
-     (`tools_assistant.assistant_chat`) yalnız oturum içi geçmişi görüyor, sahibi tanımıyor.
-
-1. Sahibin canlı denemelerini kayıtlardan doğrula (yukarıdaki ❌ satırlar). Özellikle
-   araştırma: `research_runs.progress_json` / `events_json` — kaç sayfa, hangi tarayıcı,
-   kaç kaynak doğrulandı, `research_reports.synthesis_provider`.
-2. Cihaz kurulumunu sahipten iste (tek karakter tuşlar için), sonra "0 tuşuna bas" dene.
-3. ~~"Yanlış yere tıkladım" görev sanılıyor~~ — 2026-09-19, `42eb997` (ADR-0179 A).
-4. ~~Arama bölgesi cihaz/işçi tarafında uygulanmıyor~~ — `c71fc46` (ADR-0179 C).
-5. ~~Duyurucu başarısız aşamada raporu okumuyor~~ — `c71fc46` (ADR-0179 B).
-6. `scripts/verify-device-service.ps1` 6b.4: DateTime taşması (ayrı iş çipi açıldı).
-7. Test defteri (claude.ai artefaktı) eski hesaba ait; kaynağı
-   `scripts/…` değil, oturumun scratchpad'inde idi — gerekirse `default_registry()`'den
-   yeniden üret.
 
 ## Bilinen tuzaklar
 

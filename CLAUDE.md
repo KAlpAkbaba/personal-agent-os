@@ -41,6 +41,20 @@ every work item ends with the completion report the policy names.
 9. Record decisions and state.
 10. Release only when gates pass.
 
+## Session continuity (two Claude accounts)
+
+The owner alternates two Claude accounts on this checkout; only the conversation is
+per-account. `docs/HANDOFF.md` is the live handoff and `.claude/hooks/session-start.ps1`
+injects its marked block at every session start. Binding for every session:
+
+- Before the first code change of a task, write the task under "Şu an üzerinde çalışılan".
+- Every commit updates that section (and "Şu anki durum" when it changed) in the same commit.
+- When the task is done, set the section to "Yok" and remove the item from "Sıradaki işler".
+- On "devir notunu güncelle" / an announced account switch: update the handoff and commit
+  what is safe to commit before answering.
+- A dirty tree at session start is the other account's unfinished work: finish it, never
+  discard it.
+
 ## Asking the owner
 
 Do **not** ask the owner routine implementation questions.

@@ -14516,3 +14516,31 @@ the heartbeat rows the owner had seen, and this is a second batch they have not.
 **Tests**: `tests/unit/test_experience_memory_is_not_a_log.py` (+12 machine records excluded,
 mission outcome and escalation kept), `tests/unit/test_experience_cleanup.py` (+1: a receipt
 row is selected, a mission outcome is not). Gate: 2612.
+
+
+## ADR-0194 — Two Claude accounts, one live handoff (2026-09-21)
+
+The owner alternates two Claude accounts on this checkout because one runs out of tokens.
+Measured what crosses the switch on the same machine and Windows user: the repository,
+`CLAUDE.md`, `docs/HANDOFF.md` and Claude's auto-memory directory (keyed by project path,
+not by account) all do. Only the conversation does not, and the handoff used to be updated
+at session END, which is exactly the moment a token-exhausted session never reaches.
+
+Decision:
+- `docs/HANDOFF.md` gains a "Şu an üzerinde çalışılan" section, written BEFORE a task's
+  first change and updated with every commit; its live part sits between
+  `<!-- session-start:begin/end -->` markers.
+- `.claude/settings.json` (committed, so both accounts get it) runs
+  `.claude/hooks/session-start.ps1` on startup/clear/compact: it prints that block,
+  `git status` and the last commits into the new session, and warns that a dirty tree is the
+  other account's unfinished work. It never fails a session start (always exit 0) and is
+  ASCII-only (PowerShell 5.1 reads a BOM-less script as ANSI; the Turkish comes from the
+  UTF-8 handoff, read with `-Encoding UTF8`).
+- `CLAUDE.md` makes the rule binding; `docs/HESAP_GECISI.md` is the owner's recipe
+  (before: "devir notunu güncelle"; after: "devam"; never both accounts on the checkout at
+  once).
+- The template's PostToolUse/TaskCompleted hooks stay NOT enabled: the owner approved the
+  session-start hook only, and the TaskCompleted quality gate is minutes long.
+
+Verified by running the hook exactly as the settings invoke it: exit 0, 56 lines, Turkish
+intact, dirty-tree warning shown.
