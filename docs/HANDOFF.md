@@ -74,9 +74,8 @@ bas", "YouTube hariç tüm sekmeleri kapat", "birinci sekmeye geç", "yanlış y
   hafızaya yazılmıyor (ADR-0193). İlk öğrenilmiş tercih üretimde durable:
   "Sahip 'yapay zeka' konusunu düzenli olarak araştırıyor". "bunu hatırla" ve
   "… hakkında ne biliyorsun" yerel modda da çalışıyor (ADR-0192).
-- AÇIK: ADR-0193 kapsamındaki eski makine-kaydı satırları (~1000) henüz silinmedi —
-  sahip onayı bekleniyor. Komut: `docker exec -i pagentos-prod-api-<renk> uv run python
-  scripts/forget_telemetry_memories.py` (önce kuru koşu, sonra --apply).
+- ADR-0193 kapsamındaki eski makine-kaydı satırları da sahibin onayıyla silindi
+  (2026-09-21, 935 satır). İki temizlikte toplam 1890 satır; ledger'da hepsinin aslı duruyor.
 
 ## Sıradaki işler
 
