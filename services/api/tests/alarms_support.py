@@ -337,6 +337,17 @@ def _activate_result(payload: dict[str, Any]) -> DeviceRunResult:
     return ok(window={**_OPERATOR_WINDOW, "window_id": requested, "foreground": True})
 
 
+def _pointer_stream_begin_result(payload: dict[str, Any]) -> DeviceRunResult:
+    """ADR-0199 stage 2: echoes the session id it was asked to open and says it
+    started - the plan's own postcondition (``plans.pointer_session_begin``) reads
+    both back, so a stale/foreign echo does not read as success."""
+    return ok(session=payload.get("session"), window_id=payload.get("window_id"), started=True)
+
+
+def _pointer_stream_end_result(payload: dict[str, Any]) -> DeviceRunResult:
+    return ok(session=payload.get("session"), stopped=True)
+
+
 def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
     _STOPPED_IMAGES.clear()  # a fresh desktop per harness: nothing stopped yet
     return {
@@ -403,6 +414,9 @@ def happy_operator_device_results() -> dict[str, DeviceRunResult | Callable]:
             }
         ),
         "terminal.execute": _terminal_result,
+        # ADR-0199 stage 2: the pinch-mouse's pointer-streaming session.
+        "pointer.stream_begin": _pointer_stream_begin_result,
+        "pointer.stream_end": _pointer_stream_end_result,
     }
 
 

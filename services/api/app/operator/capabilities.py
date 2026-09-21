@@ -97,6 +97,14 @@ CAPABILITY_SERVICE: Final = "operator.service"
 #: closed loop (observe, decide, act, verify, replan), parked for the owner's yes when
 #: they ask to see the plan first, paused/resumed/cancelled by voice or REST.
 CAPABILITY_MISSION: Final = "operator.mission"
+#: ADR-0199 stage 2: the pinch-mouse's own tool - ``{"action":"begin"}`` opens a
+#: receipted pointer-streaming session on the MEDIA window and mints the single-use
+#: token the browser presents on the pointer WebSocket; ``{"action":"end"}`` closes it.
+#: The WebSocket itself never mints a receipt under this name - the tool and the
+#: WebSocket's own three endings (the ``end`` frame, the socket closing, 60s of
+#: silence) all write through the ONE shared helper
+#: (``app.voice.realtime_sessions.pointer_session.end_receipt``).
+CAPABILITY_POINTER_SESSION: Final = "operator.pointer_session"
 
 OPERATOR_CAPABILITIES: Final[tuple[str, ...]] = (
     CAPABILITY_APP_OPEN,
@@ -115,6 +123,7 @@ OPERATOR_CAPABILITIES: Final[tuple[str, ...]] = (
     CAPABILITY_PROCESS,
     CAPABILITY_SERVICE,
     CAPABILITY_MISSION,
+    CAPABILITY_POINTER_SESSION,
 )
 
 # ----------------------------------------------------------------- the plan names
@@ -187,6 +196,15 @@ PLAN_UI_INSPECT: Final = "ui_inspect"
 #: declared mapping (the structural test reads exactly that shape).
 PLAN_BY_READ_MODE: Final[dict[str, str]] = {"read": PLAN_UI_READ, "inspect": PLAN_UI_INSPECT}
 
+#: ADR-0199: ``operator.pointer_session``'s ``{"action":"begin"}`` - ``window.activate``
+#: -> ``pointer.stream_begin``, declared the way ``PLAN_PRESS_KEY`` is. There is
+#: deliberately no plan name for ``end``: the receipt it writes carries counts
+#: (``moves``/``buttons``/``dropped``/``duration_ms``) no ``OperatorTask`` trail holds,
+#: and it is reached from three places (the tool, the socket closing, 60s of silence),
+#: not one dispatch through ``OperatorService.start_task`` - see
+#: ``app.voice.realtime_sessions.pointer_session.end_receipt``.
+PLAN_POINTER_SESSION_BEGIN: Final = "pointer_session_begin"
+
 # ------------------------------------------------------- plan -> receipt capability
 
 #: The one declared source: every plan this package can run, and the capability its
@@ -235,6 +253,8 @@ RECEIPT_BY_PLAN: Final[dict[str, str]] = {
     "ui_select": CAPABILITY_UI,
     "ui_read": CAPABILITY_INSPECT,
     "ui_inspect": CAPABILITY_INSPECT,
+    # ADR-0199 stage 2.
+    "pointer_session_begin": CAPABILITY_POINTER_SESSION,
 }
 
 # --------------------------------------------------------------- the retired names
@@ -303,6 +323,7 @@ __all__ = [
     "CAPABILITY_KEY",
     "CAPABILITY_MISSION",
     "CAPABILITY_POINTER",
+    "CAPABILITY_POINTER_SESSION",
     "CAPABILITY_SCREENSHOT",
     "CAPABILITY_SEE",
     "CAPABILITY_SHELL",
@@ -312,6 +333,7 @@ __all__ = [
     "PLAN_BY_UI_ACTION",
     "PLAN_UI_INSPECT",
     "PLAN_UI_READ",
+    "PLAN_POINTER_SESSION_BEGIN",
     "PLAN_PRESS_KEY",
     "PLAN_PRESS_SHORTCUT",
     "CAPABILITY_STATUS",

@@ -50,6 +50,7 @@ from app.operator.capabilities import (
     PLAN_BY_WINDOW_ACTION,
     PLAN_CLOSE_APPLICATION,
     PLAN_OPEN_APPLICATION,
+    PLAN_POINTER_SESSION_BEGIN,
     PLAN_PRESS_KEY,
     PLAN_PRESS_SHORTCUT,
     PLAN_TYPE_TEXT,
@@ -68,6 +69,7 @@ from app.operator.plans import (
     move_window,
     open_application,
     pointer,
+    pointer_session_begin,
     press_key,
     press_shortcut,
     previous_window,
@@ -135,6 +137,8 @@ PLAN_STEPS: dict[str, Any] = {
     PLAN_BY_PROCESS_ACTION["stop"]: lambda: process_stop("chrome.exe", force=False),
     PLAN_BY_SERVICE_ACTION["status"]: lambda: service_status("Spooler"),
     PLAN_BY_SERVICE_ACTION["restart"]: lambda: service_restart("Spooler"),
+    # ADR-0199 stage 2.
+    PLAN_POINTER_SESSION_BEGIN: lambda: pointer_session_begin(WINDOW, "regression-session"),
 }
 
 

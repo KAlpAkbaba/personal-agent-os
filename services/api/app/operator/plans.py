@@ -743,6 +743,37 @@ def pointer(
     ]
 
 
+def pointer_session_begin(window_id: str, session: str) -> list[OperatorStep]:
+    """ADR-0199 stage 2: ``window.activate`` -> ``pointer.stream_begin`` (level
+    ``pointer``), the same shape ``press_key`` builds - one activate, one guarded input
+    step. Postcondition: the device echoes back the SAME session id it was asked to open
+    and says it started, so a stale/foreign echo (the device answering about a stream it
+    already had) does not read as success.
+
+    Unlike ``press_key``/``pointer``, there is no ``count`` here and no read-back of a
+    cursor position: opening the stream is one event, not a rung on the interaction
+    ladder, and what happens ON it (moves, clicks) rides the pointer WebSocket, never a
+    device command.
+    """
+
+    def _opened(result: DeviceRunResult) -> bool:
+        payload = result.result if isinstance(result.result, dict) else {}
+        return payload.get("session") == session and bool(payload.get("started"))
+
+    return [
+        _activate_step(window_id, "pointer_session_begin:activate"),
+        OperatorStep(
+            capability="pointer.stream_begin",
+            payload={"session": session, "window_id": window_id},
+            postcondition=_opened,
+            timeout_s=10.0,
+            retries=0,
+            level=LEVEL_POINTER,
+            name="pointer_session_begin:begin",
+        ),
+    ]
+
+
 # ------------------------------------------------------------- B29: UI Automation
 
 UI_ACTIONS: Final[tuple[str, ...]] = ("invoke", "set_value", "select")
@@ -2159,6 +2190,7 @@ __all__ = [
     "close_app",
     "move_window",
     "pointer",
+    "pointer_session_begin",
     "press_key",
     "press_shortcut",
     "process_list",

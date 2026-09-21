@@ -145,6 +145,7 @@ from app.voice.intent_router import (
 )
 from app.voice.qualification.routes import router as voice_qualification_router
 from app.voice.realtime_sessions import service as realtime_service
+from app.voice.realtime_sessions.pointer_ws import router as voice_pointer_ws_router
 from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
 from app.voice.realtime_sessions.routes import router as voice_realtime_router
 from app.voice.realtime_sessions.runtime import RealtimeVoiceRuntime
@@ -820,6 +821,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(mail_device_router)
     app.include_router(voice_router)
     app.include_router(voice_realtime_router)
+    app.include_router(voice_pointer_ws_router)
     app.include_router(narration_router)
     app.include_router(memory_router)
     app.include_router(selfhealing_router)

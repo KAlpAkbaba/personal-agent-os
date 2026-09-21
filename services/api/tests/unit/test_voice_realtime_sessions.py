@@ -502,6 +502,8 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "pronunciation.teach",
         "pronunciation.list",
         "pronunciation.forget",
+        # ADR-0199 stage 2: the pinch-mouse's pointer-streaming session.
+        "operator.pointer_session",
     }
     research = next(t for t in data["tools"] if t["name"] == "research.start")
     assert research["long_running"] is True and research["preamble"] == RESEARCH_PREAMBLE_TR

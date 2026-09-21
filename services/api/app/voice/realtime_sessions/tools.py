@@ -936,6 +936,9 @@ OPERATOR_CLARIFYING_TOOLS: frozenset[str] = frozenset(
         "operator.app_close",
         "operator.process",
         "operator.service",
+        # ADR-0199 stage 2: "begin" may answer "Hangi pencere?" the same way a spoken
+        # key does - there is no MEDIA window to open the pointer stream on.
+        "operator.pointer_session",
     }
 )
 

@@ -67,6 +67,10 @@ FAMILY_TR: dict[str, str] = {
     # B35 (req 622/623): assigning the system work on its own code, by voice.
     "selfdev": "Kendi kodunu düzeltme",
     "routine": "Rutinler",
+    # ADR-0196 / ADR-0197 (2026-09-21): found missing by test_capability_list after both
+    # families shipped - a family with no Turkish name reads as its prefix in the palette.
+    "macro": "Hareketler",
+    "godseye": "Dünya Gözü",
     "scene": "3B sahne",
     "state": "Anlık durum",
     "voice": "Ses yönlendirme",

@@ -54,6 +54,7 @@ from app.operator.capabilities import (
     CAPABILITY_INSPECT,
     CAPABILITY_KEY,
     CAPABILITY_POINTER,
+    CAPABILITY_POINTER_SESSION,
     CAPABILITY_PROCESS,
     CAPABILITY_SCREENSHOT,
     CAPABILITY_SEE,
@@ -72,6 +73,7 @@ from app.operator.capabilities import (
     PLAN_BY_WINDOW_ACTION,
     PLAN_CLOSE_APPLICATION,
     PLAN_OPEN_APPLICATION,
+    PLAN_POINTER_SESSION_BEGIN,
     PLAN_PRESS_KEY,
     PLAN_PRESS_SHORTCUT,
     PLAN_TYPE_TEXT,
@@ -93,6 +95,7 @@ from app.operator.plans import (
     move_window,
     open_application,
     parse_ipv4,
+    pointer_session_begin,
     press_key,
     press_shortcut,
     previous_window,
@@ -119,6 +122,7 @@ from app.operator.task import STATUS_SUCCEEDED
 from app.operator.vision import DEFAULT_QUESTION_TR, VisionError
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import contains_secret_reference, normalize_transcript, turkish_casefold
+from app.voice.realtime_sessions import pointer_session
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -147,6 +151,7 @@ TOOL_SEE: Final = CAPABILITY_SEE
 TOOL_APP_CLOSE: Final = CAPABILITY_APP_CLOSE
 TOOL_PROCESS: Final = CAPABILITY_PROCESS
 TOOL_SERVICE: Final = CAPABILITY_SERVICE
+TOOL_POINTER_SESSION: Final = CAPABILITY_POINTER_SESSION
 
 OPERATOR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_APP_OPEN,
@@ -164,6 +169,7 @@ OPERATOR_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_APP_CLOSE,
     TOOL_PROCESS,
     TOOL_SERVICE,
+    TOOL_POINTER_SESSION,
 )
 
 #: B29: the UI Automation family's sentences and refusals.
@@ -1934,6 +1940,109 @@ def operator_screenshot(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str
     )
 
 
+# ---------------------------------------------------------- ADR-0199: pointer session
+
+
+def operator_pointer_session(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The pinch-mouse's own tool (ADR-0199 stage 2): ``{"action":"begin"}`` opens a
+    receipted pointer-streaming session on the MEDIA window (the same
+    ``WINDOW_REF_MEDIA`` rule a gesture's key uses) and returns the single-use token the
+    browser presents on ``GET /v1/voice/realtime/sessions/{id}/pointer``;
+    ``{"action":"end"}`` closes it the same way the socket's own three endings do (the
+    client's ``end`` frame, the socket closing, 60s of silence — all through
+    ``app.voice.realtime_sessions.pointer_session.end_receipt``).
+
+    Unlike every other operator tool, this one reads NO WORDS: ``_turn_record`` is never
+    consulted. A gesture (a pinch closing into a fist) carries no utterance to read one
+    from, and the browser always calls this with an explicit ``action`` — the module
+    docstring's own contract, restated here as code: ``action`` is required, never
+    inferred.
+    """
+    action = str(arguments.get("action") or "")
+    if action not in ("begin", "end"):
+        raise VoiceError(
+            VoiceErrorClass.VALIDATION_ERROR,
+            "operator.pointer_session needs 'action' in ('begin', 'end')",
+        )
+    if action == "begin":
+        return _pointer_session_begin(ctx)
+    return _pointer_session_end(ctx)
+
+
+def _pointer_session_begin(ctx: ToolContext) -> dict[str, Any]:
+    db = _require_db(ctx, TOOL_POINTER_SESSION)
+    # A second "begin" while one is already open (mid-stream re-arm) abandons the old
+    # bookkeeping rather than leaving two records to confuse "end": the owner closing
+    # their hand again is opening a NEW stream, not multiplying one.
+    pointer_session.clear(ctx.context)
+    window_id, refusal = _resolve_window_id(
+        db, action="activate", window_ref=WINDOW_REF_MEDIA, list_windows=_window_lister(ctx)
+    )
+    if window_id is None:
+        return _clarification(refusal or SPEECH_NO_WINDOW)
+    device_action = ctx.live.get("device_action")
+    if device_action is None:
+        return _capability_missing(ctx, capability=TOOL_POINTER_SESSION, requested_state="open")
+    operator = _require_operator(ctx, TOOL_POINTER_SESSION)
+    session = pointer_session.new_session_id()
+    plan = Plan(
+        name=PLAN_POINTER_SESSION_BEGIN,
+        goal=f"open pointer stream {session} in {window_id}",
+        steps=pointer_session_begin(window_id, session),
+    )
+    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    if task.status != STATUS_SUCCEEDED:
+        return {
+            **(task.action_receipt or {}),
+            "status": "refused",
+            "speech": pointer_session.SPEECH_OPEN_FAILED,
+        }
+    stream_token = pointer_session.new_stream_token()
+    record = pointer_session.build_record(
+        session=session, window_id=window_id, stream_token=stream_token, started_at=ctx.now
+    )
+    ctx.context[pointer_session.CONTEXT_KEY] = record
+    return {
+        **(task.action_receipt or {}),
+        "status": "open",
+        "stream_token": stream_token,
+        "expires_at": record["expires_at"],
+        "speech": pointer_session.SPEECH_OPENED,
+    }
+
+
+def _pointer_session_end(ctx: ToolContext) -> dict[str, Any]:
+    record = pointer_session.record_from_context(ctx.context)
+    if record is None:
+        return _receipt(
+            ctx,
+            capability=TOOL_POINTER_SESSION,
+            requested_state="closed",
+            execution=EXECUTION_NOOP,
+            terminal=TERMINAL_ALREADY,
+            server={"moves": 0, "buttons": 0, "dropped": 0, "duration_ms": 0},
+            speech=pointer_session.SPEECH_NOTHING_OPEN,
+        )
+    started_at = pointer_session.parse_iso(record.get("started_at")) or ctx.now
+    out = pointer_session.end_receipt(
+        ctx.db,
+        session_id=ctx.session_id,
+        action_id=_action_id(ctx),
+        record=record,
+        device_action=ctx.live.get("device_action"),
+        # Reached via the tool relay rather than the WebSocket's own ending: no frame
+        # was ever streamed on THIS path, so the honest count is zero — the socket's own
+        # endings pass their real, live-tallied counts to the same function.
+        moves=0,
+        buttons=0,
+        dropped=0,
+        started_at=started_at,
+        now=ctx.now,
+    )
+    pointer_session.clear(ctx.context)
+    return out
+
+
 # ------------------------------------------------------------------ registration
 
 
@@ -2281,6 +2390,27 @@ def register_operator_tools(reg: ToolRegistry) -> ToolRegistry:
             handler=operator_service,
         )
     )
+    reg.register(
+        ToolSpec(
+            name=operator_capabilities.CAPABILITY_POINTER_SESSION,
+            description=(
+                "El hareketiyle FARE AKIŞI açar/kapatır (ADR-0199): tarayıcı bir sıkma "
+                "(pinch) jestini FARE MODUNA çevirdiğinde 'action':'begin' ile çağırır - "
+                "MEDIA penceresini öne getirir ve tarayıcının imleç akışını göndereceği "
+                "tek kullanımlık bir jeton döner; el açıldığında/akış bittiğinde "
+                "'action':'end' ile kapatır. Bu araç konuşulan sözcükleri OKUMAZ - "
+                "'action' HER ZAMAN açıkça verilir, asla tahmin edilmez. Dönen 'speech' "
+                "metnini aynen oku."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {"action": {"type": "string", "enum": ["begin", "end"]}},
+                "required": ["action"],
+                "additionalProperties": False,
+            },
+            handler=operator_pointer_session,
+        )
+    )
     # B39 (req 127-130): the mission tool is one of the operator's own - registered here so
     # the declared capabilities and the registered tools stay one set.
     from app.voice.realtime_sessions.tools_mission import register_mission_tools
@@ -2298,6 +2428,7 @@ __all__ = [
     "TOOL_INSPECT",
     "TOOL_KEY",
     "TOOL_POINTER",
+    "TOOL_POINTER_SESSION",
     "TOOL_PROCESS",
     "TOOL_SCREENSHOT",
     "TOOL_SEE",
@@ -2313,6 +2444,7 @@ __all__ = [
     "operator_inspect",
     "operator_key",
     "operator_pointer",
+    "operator_pointer_session",
     "operator_process",
     "operator_screenshot",
     "operator_see",

@@ -357,3 +357,32 @@ class VoiceSidebandFrame(_Frame):
 def voice_sideband_frame_size(frame: dict[str, Any]) -> int:
     """Bytes on the wire as the broker sends them (UTF-8 JSON)."""
     return len(json.dumps(frame, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+# ------------------------------------------------------- pointer stream (ADR-0199)
+
+#: Cloud Core -> agent, additive to v1, beside ``command``/``heartbeat``/
+#: ``voice_sideband``: one batch of relative pointer moves/button events per tick, for
+#: the pinch-mouse's live cursor. Best effort - unlike ``command`` there is no
+#: ``device_commands`` row, no ack and no re-delivery (ADR-0199: "a cursor cannot ride
+#: the tool-call relay"). Keyed ``kind`` rather than ``type`` (the ADR's own wire shape,
+#: binding): it is neither an inbound-classified frame nor a command awaiting an ack, so
+#: it does not pretend to be either.
+POINTER_STREAM_FRAME_KIND = "pointer_stream"
+#: One tick's frame count, generous but finite - a coalescing bug must not be able to
+#: grow this without bound the way an unbatched relay would.
+MAX_POINTER_STREAM_BATCH = 64
+
+
+class PointerStreamFrame(_Frame):
+    """Outbound-only, like :class:`VoiceSidebandFrame` — kept as a model so a test can
+    prove what the pointer WebSocket route sends is exactly this shape."""
+
+    kind: Literal["pointer_stream"]
+    session: str = Field(min_length=1, max_length=64)
+    frames: list[dict[str, Any]] = Field(max_length=MAX_POINTER_STREAM_BATCH)
+
+
+def pointer_stream_frame(*, session: str, frames: list[dict[str, Any]]) -> dict[str, Any]:
+    built = PointerStreamFrame(kind="pointer_stream", session=session, frames=list(frames))
+    return built.model_dump()

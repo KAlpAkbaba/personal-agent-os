@@ -231,6 +231,10 @@ _TIERS: Final[dict[str, str]] = {
     # B28 req 92-98: keys and the pointer change the owner's desktop.
     "operator.key": TIER_SENSITIVE,
     "operator.pointer": TIER_SENSITIVE,
+    # ADR-0199 stage 2: a pointer-streaming session opens a live cursor/click channel to
+    # the owner's desktop for as long as it stays open - the same tier as the input
+    # family it replaces for continuous movement.
+    "operator.pointer_session": TIER_SENSITIVE,
     # B29 req 99-105: UI Automation acts on the desktop; reading a tree or a screen reads
     # what is private (the other half of the mail.read rule).
     "operator.ui": TIER_SENSITIVE,
