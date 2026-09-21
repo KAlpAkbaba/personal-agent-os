@@ -472,6 +472,16 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         # was made by the alarm subsystem on the owner's behalf.
         "routine.create",
         "routine.list",
+        # ADR-0196: the owner's recorded, named sequences of spoken actions.
+        "macro.record_start",
+        "macro.record_end",
+        "macro.name",
+        "macro.cancel",
+        "macro.run",
+        "macro.list",
+        "macro.delete",
+        # ADR-0197: God's Eye View in the owner's browser.
+        "godseye.open",
         "routine.cancel",
         "routine.pause",
         "routine.resume",
