@@ -20,15 +20,28 @@
  * tick, never grown, never serialised, never exposed by any getter), and
  * plain numbers (motion energy, a rolling window of booleans, a still-time
  * counter). `tick()` returns `void`; the ONLY thing that leaves this module
- * bound for the outside world is whatever `onObservation`/`onStatusChange`
- * receive, and both receive `EyeObservation` — the seven-field type — or a
- * `PerceptionStatus` that carries the same. There is no method anywhere in
- * `FrameSource`, `PerceptionSession`, `EyeStore` (`store.ts`) or
- * `useActivePerception` that returns pixel data, a canvas, a video element,
- * or a `MediaStream`'s frames to a caller. That is the mechanism, not a comment on top of one: grep this
+ * bound for the outside world through `onObservation`/`onStatusChange` is
+ * `EyeObservation` — the seven-field type — or a `PerceptionStatus` that
+ * carries the same. There is no method anywhere in `FrameSource`,
+ * `PerceptionSession`, `EyeStore` (`store.ts`) or `useActivePerception` that
+ * returns pixel DATA — a canvas, an `ImageData`, a `MediaStream`'s frames —
+ * to a caller. That is the mechanism, not a comment on top of one: grep this
  * module for `ImageData`, `getImageData`, `Uint8ClampedArray`, `toDataURL` or
  * `captureStream` and every hit is inside `BrowserFrameSource`, and none of
  * them is returned by anything the class exposes publicly.
+ *
+ * ADR-0198 (el hareketi kumandası, Stage 1) narrows this one specific way, deliberately:
+ * `FrameSource.videoElement()` / `PerceptionSession.videoElement()` /
+ * `PerceptionSession.attachVideoConsumer()` DO hand out the live `<video>` ELEMENT itself —
+ * not a frame, not a pixel, not a copy — to a same-tab, in-process consumer (the gesture
+ * tracker, `lib/gesture/tracker.ts`), because MediaPipe's `HandLandmarker.detectForVideo`
+ * needs the element itself to read frames for local inference, the same way `sample()`'s own
+ * `drawImage`/`getImageData` do. This is still "never leaves the tab": no new sink is added
+ * that could serialise, upload or persist a frame — a consumer can only feed the element to
+ * more on-device inference, exactly what `BrowserFrameSource.sample()` already does
+ * internally. What remains categorically true, unchanged by this addition, is the ORIGINAL
+ * claim above: no PIXEL BUFFER (a copyable, serialisable `ImageData`/`Uint8ClampedArray`)
+ * is ever returned by anything in this module.
  *
  * ## Disable is immediate and total
  *
@@ -155,6 +168,17 @@ export interface FrameSource {
    * and never a device identifier. Optional: a synthetic source has none.
    */
   trackShortId?(): string | null;
+  /**
+   * ADR-0198 (el hareketi kumandası, Stage 1): the live `<video>` element this source is
+   * currently drawing from, or `null` when none is open — a SECOND consumer (the gesture
+   * tracker) reading frames from the SAME element `sample()` already reads, never a second
+   * `getUserMedia`. Optional: a synthetic test source has none, and returning `undefined`
+   * here is the same as `null` to every caller (`PerceptionSession.videoElement()` below
+   * folds it with `?? null`). This is read-only: nothing about the video element's own
+   * pixels crosses this boundary any more than `sample()`'s pixel buffer does — a consumer
+   * gets the element itself (as `detectForVideo` needs) and must not mutate it.
+   */
+  videoElement?(): HTMLVideoElement | null;
 }
 
 /** How much of a `MediaStreamTrack.id` the trace shows. */
@@ -282,6 +306,11 @@ export class BrowserFrameSource implements FrameSource {
     return shortTrackId(this.#lastTrack);
   }
 
+  /** ADR-0198: the live element (see the module docstring), or `null` when no camera is open. */
+  videoElement(): HTMLVideoElement | null {
+    return this.#video;
+  }
+
   sample(reduce: FrameReducer): Float32Array | null {
     if (!this.#video || !this.#canvas || !this.#ctx) return null;
     const { width, height } = this.#canvas;
@@ -380,6 +409,8 @@ export class PerceptionSession {
   #stopped = true;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #abort: AbortController | null = null;
+  /** ADR-0198: same-tab consumers of the live video element (see the module docstring). */
+  #videoConsumers = new Set<(video: HTMLVideoElement | null) => void>();
 
   #previousGrid: Float32Array | null = null;
   #sampleCount = 0;
@@ -455,6 +486,7 @@ export class PerceptionSession {
         startedAt: this.#opts.now(),
         lastError: null,
       });
+      this.#notifyVideoConsumers();
       this.#scheduleNext(generation, 0);
     } catch (cause) {
       // The stream is open but the loop is not: release the camera rather
@@ -479,6 +511,33 @@ export class PerceptionSession {
     return this.#frameSource.trackShortId?.() ?? null;
   }
 
+  /** ADR-0198: the live video element the frame source is currently drawing from, or `null`
+   * when no camera is open. See the module docstring — this hands out the ELEMENT, never a
+   * pixel buffer. */
+  videoElement(): HTMLVideoElement | null {
+    return this.#frameSource.videoElement?.() ?? null;
+  }
+
+  /**
+   * ADR-0198: subscribe to the live video element, called immediately with the CURRENT value
+   * and again whenever it might have changed (the loop starting, or stopping). Returns an
+   * unsubscribe. This is the gesture tracker's only way to reach a video element — it never
+   * opens its own camera (`GestureTracker` takes a `<video>` element as an argument, never a
+   * `deviceId`).
+   */
+  attachVideoConsumer(cb: (video: HTMLVideoElement | null) => void): () => void {
+    this.#videoConsumers.add(cb);
+    cb(this.videoElement());
+    return () => {
+      this.#videoConsumers.delete(cb);
+    };
+  }
+
+  #notifyVideoConsumers(): void {
+    const video = this.videoElement();
+    for (const cb of this.#videoConsumers) cb(video);
+  }
+
   /**
    * Stops perception immediately: clears the timer, releases the camera
    * (the browser's own indicator light goes out synchronously, here), and
@@ -496,6 +555,7 @@ export class PerceptionSession {
     this.#abort = null;
     this.#frameSource.stop();
     this.#setStatus({ running: false, cameraLabel: null });
+    this.#notifyVideoConsumers();
   }
 
   #setStatus(patch: Partial<PerceptionStatus>): void {

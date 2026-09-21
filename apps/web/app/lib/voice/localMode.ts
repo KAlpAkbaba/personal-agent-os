@@ -454,6 +454,55 @@ export class LocalVoiceMode {
       });
   }
 
+  // --------------------------------------------------------- ADR-0198 gestures
+
+  /**
+   * A browser-recognised hand gesture (`lib/gesture/controller.ts`) executes the SAME tool
+   * the local voice router would for a spoken command, through the SAME turn/tool plumbing
+   * as `turnBody` — but it POSTs a `gesture` client event (no text, no router: the server's
+   * `app/voice/gestures.py` resolves it deterministically) and, critically, NEVER speaks.
+   * A swipe repeated every few hundred ms must not narrate "Sağ ok tuşuna bastım efendim"
+   * each time (owner, 2026-09-21) — `controller.ts`'s HUD shows the last gesture instead.
+   * Requires an active session: the caller gates on the eye being enabled, the "El
+   * kumandası" toggle being on, AND a local-mode session existing before ever calling this
+   * (a gesture has no session of its own) — this method still checks, defensively, and is a
+   * silent no-op when there is none, the same as `onFinal` is for a stopped mode.
+   */
+  async dispatchGesture(gesture: string): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!this.active || !sessionId) return;
+    this.turn += 1;
+    const turn = this.turn;
+    let answer: EventsResponse;
+    try {
+      answer = await this.deps.api.events(sessionId, [
+        { kind: "gesture", t_ms: Math.max(0, Math.round(this.now() - this.t0)), turn, gesture },
+      ]);
+    } catch (error) {
+      this.log(`gesture.failed turn=${turn} ${describe(error)}`);
+      return;
+    }
+    this.log(`gesture:${gesture} turn=${turn}`);
+    const tools: string[] = [];
+    for (const intent of answer.resolved_intents ?? []) {
+      const tool = toolOf(intent);
+      if (tool && !tools.includes(tool)) tools.push(tool);
+    }
+    for (const name of tools) {
+      if (!this.active) return;
+      const callId = `${LOCAL_CALL_ID_PREFIX}${this.newId()}`;
+      let response: ToolCallResponse;
+      try {
+        response = await this.deps.api.toolCall(sessionId, { call_id: callId, name, arguments: {} });
+      } catch (error) {
+        this.log(`tool:${name} request.failed ${describe(error)}`);
+        continue;
+      }
+      this.log(`tool:${name} ${response.status}${response.replayed ? " replayed" : ""}`);
+      // Deliberately never spoken — see this method's docstring.
+    }
+  }
+
   // -------------------------------------------------------------- a turn
 
   private async handle(text: string): Promise<void> {

@@ -22,6 +22,13 @@ node_modules/
 dist/
 coverage/
 
+# El hareketi kumandası (ADR-0198, Stage 1): the MediaPipe WASM runtime and the
+# hand_landmarker model, fetched by apps/web/scripts/fetch-mediapipe-assets.mjs
+# ("pnpm run fetch:mediapipe" from apps/web) — a local copy of node_modules and a
+# pinned download, never source. tracker.ts fails closed with a Turkish message
+# when this directory is missing.
+apps/web/public/mediapipe/
+
 # .NET
 bin/
 obj/

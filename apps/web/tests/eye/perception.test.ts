@@ -41,10 +41,19 @@ class FakeFrameSource implements FrameSource {
   private pixels: Uint8Array | null = new Uint8Array(4 * 4 * 4);
   onCapture: (() => void) | null = null;
   startImpl: (() => Promise<void>) | null = null;
+  /** ADR-0198: a fake "video element" (an opaque marker object, never real DOM) present
+   * only while `start()` has run and `stop()` has not — mirrors `BrowserFrameSource`'s own
+   * open/close of its `#video` field. */
+  private video: HTMLVideoElement | null = null;
 
   async start(): Promise<void> {
     this.startCalls += 1;
     if (this.startImpl) await this.startImpl();
+    this.video = { fake: "video-element" } as unknown as HTMLVideoElement;
+  }
+
+  videoElement(): HTMLVideoElement | null {
+    return this.video;
   }
 
   sample(reduce: FrameReducer): Float32Array | null {
@@ -55,6 +64,7 @@ class FakeFrameSource implements FrameSource {
 
   stop(): void {
     this.stopCalls += 1;
+    this.video = null;
   }
 
   label(): string | null {
@@ -273,5 +283,55 @@ describe("server-side disable reconciliation", () => {
     expect(postObservation).toHaveBeenCalledTimes(2); // still running
 
     session.stop();
+  });
+});
+
+describe("ADR-0198: attachVideoConsumer / videoElement (el hareketi kumandası, Stage 1)", () => {
+  it("videoElement() is null before start(), the live element once running, and null again after stop()", async () => {
+    const { session } = buildSession();
+    expect(session.videoElement()).toBeNull();
+    await startAndFlush(session);
+    expect(session.videoElement()).not.toBeNull();
+    session.stop();
+    expect(session.videoElement()).toBeNull();
+  });
+
+  it("attachVideoConsumer() reports the CURRENT element immediately, then again on start/stop — with no second getUserMedia", async () => {
+    const { session, frameSource } = buildSession();
+    const seen: Array<HTMLVideoElement | null> = [];
+    const unsubscribe = session.attachVideoConsumer((video) => seen.push(video));
+    expect(seen).toEqual([null]); // called immediately with the current (not-yet-started) value
+
+    await startAndFlush(session);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).not.toBeNull();
+    expect(frameSource.startCalls).toBe(1); // one open — attaching a consumer never opens a camera
+
+    session.stop();
+    expect(seen).toHaveLength(3);
+    expect(seen[2]).toBeNull();
+
+    unsubscribe();
+  });
+
+  it("an unsubscribed consumer receives nothing further", async () => {
+    const { session } = buildSession();
+    const seen: Array<HTMLVideoElement | null> = [];
+    const unsubscribe = session.attachVideoConsumer((video) => seen.push(video));
+    unsubscribe();
+    await startAndFlush(session);
+    session.stop();
+    expect(seen).toEqual([null]); // only the immediate call at attach time
+  });
+
+  it("a second, independent consumer sees the same element (one camera, many readers)", async () => {
+    const { session } = buildSession();
+    const a: Array<HTMLVideoElement | null> = [];
+    const b: Array<HTMLVideoElement | null> = [];
+    session.attachVideoConsumer((v) => a.push(v));
+    session.attachVideoConsumer((v) => b.push(v));
+    await startAndFlush(session);
+    expect(a.at(-1)).toBe(b.at(-1));
+    expect(a.at(-1)).not.toBeNull();
   });
 });

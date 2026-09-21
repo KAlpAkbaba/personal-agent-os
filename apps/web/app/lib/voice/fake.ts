@@ -618,6 +618,13 @@ export type FakeCloudCoreOptions = {
    * default resolves nothing, which is what every pre-existing test expects.
    */
   resolveIntents?: (text: string) => Array<Record<string, unknown>>;
+  /**
+   * ADR-0198: what `app/voice/gestures.py`'s table answers for a `kind: "gesture"` event's
+   * `gesture` name — the SAME `resolved_intents` shape as `resolveIntents`, but keyed off a
+   * gesture name instead of a transcript (no text router involved, a gesture carries no
+   * words). The default resolves nothing, matching `resolveIntents`'s own default.
+   */
+  resolveGesture?: (gesture: string) => Array<Record<string, unknown>>;
 };
 
 type ForcedFailure = { status: number; detail: unknown };
@@ -837,11 +844,11 @@ export class FakeCloudCore {
       const pending = this.pendingSideband;
       this.pendingSideband = [];
       const resolve = this.options.resolveIntents;
+      const resolveGesture = this.options.resolveGesture;
       const resolved: Array<Record<string, unknown>> = [];
-      if (resolve) {
-        for (const event of batch) {
-          if (event.kind === "utterance") resolved.push(...resolve(event.text ?? ""));
-        }
+      for (const event of batch) {
+        if (event.kind === "utterance" && resolve) resolved.push(...resolve(event.text ?? ""));
+        else if (event.kind === "gesture" && resolveGesture) resolved.push(...resolveGesture(event.gesture ?? ""));
       }
       const response: EventsResponse = {
         accepted: batch.length,

@@ -72,6 +72,7 @@ import ChannelReadout from "../ChannelReadout";
 import CoreBar from "../CoreBar";
 import CoreView from "../CoreView";
 import EyeControl from "../EyeControl";
+import GestureControl from "../GestureControl";
 import StateReadout from "../StateReadout";
 import VoiceControl from "../VoiceControl";
 import { useCorePreferences } from "../usePreferences";
@@ -287,6 +288,11 @@ function Cockpit() {
           />
           <section className="ambient-band" aria-label="Göz kontrolü">
             <EyeControl eye={eye} />
+            {/* ADR-0198 (Stage 1): its own cell, beside (never inside) the eye's — the
+                same "own component, own tests" split EyeControl's docstring explains,
+                since the gesture toggle is a distinct owner action on a distinct
+                capability that merely depends on the eye being on. */}
+            <GestureControl />
           </section>
         </div>
 

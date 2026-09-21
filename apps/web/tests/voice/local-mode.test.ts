@@ -181,6 +181,74 @@ describe("Yerel mod: a final transcript becomes the relay's own calls", () => {
   });
 });
 
+describe("ADR-0198: dispatchGesture — same tool plumbing as an utterance, but never spoken", () => {
+  it("posts a gesture client event (no text) and issues the tool the server named, with {} arguments", async () => {
+    const { core, synthesis, mode } = setup({
+      resolveGesture: (gesture) =>
+        gesture === "swipe_right" ? [{ intent: "operator_key", klass: "action", capability: "operator.key", tool: "operator.key", gesture }] : [],
+      toolResponses: { "operator.key": { result: { speech: "Sağ ok tuşuna bastım efendim." } } },
+    });
+    await mode.start();
+    await mode.dispatchGesture("swipe_right");
+
+    const events = posts(core, "/events");
+    expect(events).toHaveLength(1);
+    expect(events[0].body).toEqual({
+      events: [{ kind: "gesture", t_ms: expect.any(Number), turn: 1, gesture: "swipe_right" }],
+    });
+    const calls = posts(core, "/tool-calls");
+    expect(calls).toHaveLength(1);
+    const body = calls[0].body as { call_id: string; name: string; arguments: Record<string, unknown> };
+    expect(body.name).toBe("operator.key");
+    expect(body.arguments).toEqual({});
+    expect(body.call_id.startsWith(LOCAL_CALL_ID_PREFIX)).toBe(true);
+
+    // The whole point: never narrated aloud, unlike the identical tool called from an utterance.
+    expect(synthesis.texts()).toEqual([]);
+    expect(mode.getSnapshot().state).not.toBe("speaking");
+  });
+
+  it("a gesture the server resolves with no tool (pinch_start, Stage 2) posts no tool-call and stays silent", async () => {
+    const { core, synthesis, mode } = setup({
+      resolveGesture: (gesture) => [{ intent: "none", klass: "control", capability: null, tool: null, gesture }],
+    });
+    await mode.start();
+    await mode.dispatchGesture("pinch_start");
+    expect(posts(core, "/events")).toHaveLength(1);
+    expect(posts(core, "/tool-calls")).toHaveLength(0);
+    expect(synthesis.texts()).toEqual([]);
+  });
+
+  it("never says Anlayamadım efendim. for an unresolved gesture — that line is for the owner's WORDS only", async () => {
+    const { core, synthesis, mode } = setup(); // no resolveGesture: resolves nothing
+    await mode.start();
+    await mode.dispatchGesture("spread");
+    expect(posts(core, "/events")).toHaveLength(1);
+    expect(synthesis.texts()).toEqual([]);
+    expect(mode.getSnapshot().unresolved).toBe(0); // not counted as an unresolved UTTERANCE either
+  });
+
+  it("logs the gesture name and the tool's status, never a spoken word, and is a no-op with no active session", async () => {
+    const { mode } = setup();
+    await mode.dispatchGesture("swipe_up"); // never started: silent no-op
+    expect(mode.getSnapshot().log).toEqual([]);
+  });
+
+  it("each dispatchGesture call advances the turn counter independently of spoken utterances", async () => {
+    const { core, recognition, mode } = setup({
+      resolveIntents: () => [{ intent: "none", klass: "query", capability: null, tool: null }],
+      resolveGesture: (gesture) => [{ intent: "operator_key", klass: "action", capability: "operator.key", tool: "operator.key", gesture }],
+    });
+    await mode.start();
+    recognition.final("bu cümleyi kimse anlamaz");
+    await tick();
+    await mode.dispatchGesture("swipe_down");
+    const events = posts(core, "/events");
+    expect((events[0].body as { events: Array<{ turn: number }> }).events[0].turn).toBe(1);
+    expect((events[1].body as { events: Array<{ turn: number }> }).events[0].turn).toBe(2);
+  });
+});
+
 describe("Yerel mod: listening, speaking and barging in", () => {
   it("stops the recogniser while the assistant speaks and restarts it when the speech ends", async () => {
     const { synthesis, recognition, mode } = setup({

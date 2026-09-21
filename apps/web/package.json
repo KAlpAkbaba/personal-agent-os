@@ -8,9 +8,11 @@
     "start": "next start",
     "lint": "oxlint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "fetch:mediapipe": "node scripts/fetch-mediapipe-assets.mjs"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
     "@react-three/fiber": "9.7.0",
     "next": "16.3.3",
     "react": "19.2.8",
