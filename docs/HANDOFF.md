@@ -34,7 +34,8 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 **Durum (2026-09-21 akşam): BİTTİ ve YAYINDA.** Commit `6de7ab39`, blue-green yayın OK
 (api-blue, migrasyon 0061 uygulandı, `voice_macros` tablosu üretimde, sağlık ok). Güvenlik
 + test incelemesi bulguları (rezerve adlar, "hareketi durdur" = operatör iptali, "unutma"
-silme değil) aynı commit'te düzeltildi. Kalan yalnız sahibin: canlı deneme + recovery pin.
+silme değil) aynı commit'te düzeltildi. Recovery pin sahip tarafından yapıldı. Kalan
+yalnız sahibin canlı denemesi.
 
 **Sahibin deneyeceği cümleler (yerel mod, bir pencere odaktayken):** "Yukarı tuşuna 5 kere
 bas" · "Üç kere aşağı kaydır" · "Kontrol Z'ye iki kere bas" · "Yeni hareket oluştur" →
@@ -46,10 +47,9 @@ Sahip bu 2 nottan sonra "2 yeni ekleme" daha verecek; gelince buraya ekle.
 ## Şu anki durum
 
 - **Üretim:** Cloud Core `6de7ab3` (api-blue, 2026-09-21 17:20; önceki `6d9681a` son iyi
-  bilinen), `pagentos-bluegreen-reconcile.timer` aktif. Recovery bundle pini sahipten
-  isteniyor: sunucuda
-  `bash /opt/pagentos/app/scripts/cloud/install-recovery-supervisor.sh 6de7ab39e2e1c5d99c800ec768e8e7716ed03467`
-  (okuma serbest, uzak yazma sahibin işi).
+  bilinen), `pagentos-bluegreen-reconcile.timer` aktif. Recovery supervisor pini
+  `6de7ab39…` — sahip 2026-09-21'de yaptı ("RECOVERY SUPERVISOR INSTALLED", timer enabled/
+  active). Sonraki her yayında pin yine sahibin işi (okuma serbest, uzak yazma değil).
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
   Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.

@@ -672,7 +672,7 @@
       ],
       "found_on_the_way": "in-place append inside the session's JSON context is never written (old == new); every nested write now replaces the dict"
     },
-    "deployment": "blue-green release 6de7ab39e2e1c5d99c800ec768e8e7716ed03467 at 2026-09-21T17:20Z; alembic 0061 applied on production; voice_macros present (0 rows); recovery pin for this sha READY_FOR_OWNER",
+    "deployment": "blue-green release 6de7ab39e2e1c5d99c800ec768e8e7716ed03467 at 2026-09-21T17:20Z; alembic 0061 applied on production; voice_macros present (0 rows); recovery supervisor pinned to this sha by the owner (timer enabled/active)",
     "review": "security-reviewer: 1 high (stop word as macro name) + 2 medium fixed before commit; test-engineer: 3 mutation probes RED, full corpus 2723 green, 2 router defects (hareketi durdur, unutma) fixed before commit"
   }
 }
