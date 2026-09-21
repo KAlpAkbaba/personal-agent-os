@@ -377,6 +377,33 @@ def _derive_semantic_facts(
                 report.semantic_created += 1
 
 
+#: How far back the preference pass reads to count a subject. Research runs are a handful a
+#: day; this is weeks of them, and a bound on a query that runs every scheduler pass.
+PREFERENCE_HISTORY_LIMIT = 500
+
+
+def _research_topic(session: Session, row: ActivityEventRow) -> str:
+    """The owner's topic for one research event.
+
+    The event carries it since ADR-0191. Before that it did not, so every earlier research
+    would be invisible to the preference pass - but the event names the research it
+    describes (``research_job_id``), and that research's report still holds the topic. The
+    report is durable state exactly as the ledger is; this reads it, never writes it.
+    """
+    topic = str((row.detail_json or {}).get("topic") or "").strip()
+    if topic or row.research_job_id is None:
+        return topic
+    try:
+        from app.research.models import ResearchReportRow
+
+        report = session.get(ResearchReportRow, row.research_job_id)
+    except Exception:  # noqa: BLE001 - an older schema without the table: nothing to read
+        return ""
+    if report is None or not isinstance(report.report_json, dict):
+        return ""
+    return str(report.report_json.get("topic") or "").strip()
+
+
 def _derive_preferences(
     session: Session, embedder: Embedder, rows: list[ActivityEventRow], report: IngestReport
 ) -> None:
@@ -393,17 +420,30 @@ def _derive_preferences(
     """
     from app.research.plan import bare_subject
 
-    groups: dict[str, list[ActivityEventRow]] = defaultdict(list)
+    # The subjects THIS pass has news about...
+    touched: set[str] = set()
     for row in rows:
         if row.event_type != EVENT_TYPE_RESEARCH_COMPLETED:
             continue
-        topic = str((row.detail_json or {}).get("topic") or "").strip()
-        if not topic:
-            continue
-        subject = bare_subject(topic).strip()
-        if len(subject) < 3:
-            continue
-        groups[subject.casefold()].append(row)
+        subject = bare_subject(_research_topic(session, row)).strip().casefold()
+        if len(subject) >= 3:
+            touched.add(subject)
+    if not touched:
+        return
+
+    # ...counted over the WHOLE history, not over this pass's window. The scheduler ingests
+    # "everything since the last pass", so a research a day is one event per window: a
+    # count limited to the window never reaches three and the preference never forms.
+    # (The first version did exactly that, and its test passed only because it put all
+    # three events in one window.)
+    history = ledger_service.query(
+        session, event_types=[EVENT_TYPE_RESEARCH_COMPLETED], limit=PREFERENCE_HISTORY_LIMIT
+    )
+    groups: dict[str, list[ActivityEventRow]] = defaultdict(list)
+    for row in history:
+        subject = bare_subject(_research_topic(session, row)).strip().casefold()
+        if subject in touched:
+            groups[subject].append(row)
 
     for subject, members in sorted(groups.items()):
         if len(members) < PREFERENCE_MIN_OCCURRENCES:
@@ -413,7 +453,7 @@ def _derive_preferences(
         if not new_members:
             report.semantic_skipped_no_new_evidence += 1
             continue
-        display = bare_subject(str((members[0].detail_json or {}).get("topic") or subject)).strip()
+        display = bare_subject(_research_topic(session, members[0]) or subject).strip()
         text = (
             f"Sahip '{display}' konusunu düzenli olarak araştırıyor "
             f"({len(members)} kez sordu)."

@@ -153,3 +153,62 @@ def test_a_second_pass_adds_no_new_row(session) -> None:
     experience.ingest(session, now=NOW)
 
     assert len(_preferences(session)) == before == 1
+
+
+# ------------------------------------------ the cursor splits what the ladder must count
+
+
+def test_three_researches_seen_by_three_different_passes_still_make_one_preference(
+    session,
+) -> None:
+    """The scheduler ingests "everything since the last pass". A research a day is one
+    event per window, and a pass that only counted its own window would never see three -
+    the preference would never form. My own first test put all three in ONE window and so
+    proved nothing about the cursor."""
+    for day in range(3):
+        minutes = 60 * 24 * (2 - day)  # two days ago, yesterday, today
+        _research(session, "yapay zeka haberleri", minutes=minutes)
+        moment = NOW - timedelta(minutes=minutes)
+        # Each pass sees exactly ONE event: its own day's research.
+        experience.ingest(
+            session,
+            now=moment,
+            since=moment - timedelta(minutes=1),
+            until=moment + timedelta(minutes=1),
+        )
+
+    prefs = _preferences(session)
+    assert len(prefs) == 1, [p.text for p in prefs]
+    assert prefs[0].evidence_count >= 3, prefs[0].evidence_count
+
+
+def test_a_research_from_before_the_topic_was_recorded_still_counts(session) -> None:
+    """research.completed did not carry the topic until ADR-0191, so every past research
+    would be invisible to the preference pass. Its report still has it - the event names
+    the research it describes, and the report is durable state like the ledger."""
+    from app.research.models import ResearchReportRow
+
+    ResearchReportRow.__table__.create(session.get_bind(), checkfirst=True)
+    for i in range(3):
+        task_id = uuid.uuid4()
+        session.add(
+            ResearchReportRow(
+                task_id=task_id,
+                report_json={"topic": "yapay zeka haberleri"},
+                synthesis_provider="deterministic",
+            )
+        )
+        session.commit()
+        event = ledger_service.build_research_completed_event(
+            task_id=task_id,
+            occurred_at=NOW - timedelta(minutes=30 * (i + 1)),
+            report_json={"findings": [], "sources": [], "stats": {}},
+            source_ref=f"research_runs:{task_id}:ready",
+        )
+        assert "topic" not in (event.detail_json or {}), "the old shape: no topic"
+        ledger_service.record(session, event)
+
+    experience.ingest(session, now=NOW)
+
+    prefs = _preferences(session)
+    assert len(prefs) == 1, [p.text for p in prefs]

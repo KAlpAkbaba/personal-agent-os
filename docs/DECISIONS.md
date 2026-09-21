@@ -14431,6 +14431,18 @@ three phrasings of one subject become one preference with three pieces of eviden
 reaches durable, two do not, different subjects stay apart, the text is Turkish, and the pass
 is idempotent). Gate: experience/memory/ledger/research, 1402.
 
+**Found the same day, after the release**: the pass counted only the rows of ITS OWN ingest
+window. The scheduler ingests "everything since the last pass", so a research a day is one
+event per window and three is never reached — in production the preference would never have
+formed. The first test passed only because it put all three events into one window; the
+second version of it, which proved nothing either, passed because three events at the same
+minute were all inside every overlapping window. Now: the subjects a pass has news about are
+counted over the WHOLE history (`PREFERENCE_HISTORY_LIMIT` = 500 research events), and the
+test ingests three days in three passes that each see exactly one event. And since the topic
+only reached the ledger event with this ADR, an older event reads it from the report of the
+research it names (`research_job_id`) — read-only, durable state like the ledger — so the
+owner's past researches count too.
+
 **Next, not done**: the same shape for the other behaviours the ledger already records —
 applications opened, the answer register asked for, the local mode — and turning action
 receipts ("operator.mission -> started: executed, unverified") into sentences about what the
