@@ -62,9 +62,16 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
    `gesture` istemci olayı → aynı araçlar; pinç olayları yalnız üretilir. 2. aşama (pinç-fare)
    akış kanalı ister; 1. aşama sahibin elinde ölçüldükten sonra tasarlanacak.
    Sahip: "ajan bitince birleştir, önce ayrı test edelim" → **dal `feat/hand-gestures-stage1`
-   (`5b4e771c`, origin'de; worktree `.claude/worktrees/agent-ac27be8adddc2920d`) AYRI
-   DENEME İÇİN ÜRETİMDE** (api-blue, kontrat v3, 2026-09-21 18:37; son iyi bilinen
-   `dad462ac`). Gate: API 268 (worktree'den), web 2049+ (vitest), tsc/oxlint temiz.
+   (`9e15476f`, origin'de; worktree `.claude/worktrees/agent-ac27be8adddc2920d`) AYRI
+   DENEME İÇİN ÜRETİMDE** (api-green, kontrat v3, 2026-09-21 19:01; son iyi bilinen
+   `5b4e771c`, ondan önce `dad462ac`). Gate: API 268+87 (worktree'den), web 2049+ (vitest),
+   tsc/oxlint temiz. İlk canlı denemede bulunan ve dalda düzeltilen 2 hata: (a) `EyeStore`
+   sayaçlı kaynak sarmalayıcısı `videoElement()`'ı iletmiyordu → el kumandası sonsuza dek
+   "Bekleniyor" (`72000f3f`, regresyon testi KIRMIZI kanıtlı); (b) çevirme her zaman
+   `media.volume`'a gidip "volume_failed" ile reddediliyordu (sahip videoyu elle açmıştı)
+   → canlı medya oturumu yoksa odaktaki oynatıcının ok tuşları (`9e15476f`). Sonraki
+   ekleme adayı: cihaz ajanına sistem ses tuşları (`volume_up/down/mute`), ajan yayını ister.
+   Canlıda görülen: izleme 18 kare/sn, pinç "tutma" algılanıyor; kaydırma henüz raporlanmadı.
    Sahip web kabuğunu worktree'den başlatır: `…\agent-ac27be8adddc2920d\scripts\voice\
    start-web-voice.ps1` → /core/cockpit → Yerel mod → kamera aç → "El kumandası" aç.
    Sonuç iyiyse: `git merge feat/hand-gestures-stage1` main'e, ADR-0198'e kanıt satırı,
