@@ -14742,6 +14742,91 @@ Decision — staged, and the stages are separate deliverables:
 MediaPipe is recorded in `docs/THIRD_PARTY_COMPONENTS.md`. Proof for stage 1 is stated
 in its own commit when the worktree's patch is integrated.
 
+Stage 1 on the owner's camera (2026-09-21 evening, branch `feat/hand-gestures-stage1`,
+four trial releases): the eye store's counting wrapper did not forward the video element
+(fixed); a rotate went to `media.volume` and was refused (now the focused player's own
+keys); the key went to the cockpit window on a two-screen desk (now the MEDIA window:
+`tools_operator.WINDOW_REF_MEDIA` — a player-titled window first, never the shell's);
+the way back read as the opposite gesture (`returnSuppressMs`); a swipe is judged where
+it STARTS (a tilting hand); spread is two open hands HELD wide and gather (added: Escape)
+two open hands held together; a live calibration readout in the HUD. Still open after
+the second trial and decided below: a hand at the chin or a cigarette must not be a
+gesture (an engagement gate), and the pinch-mouse the owner now asks for in full.
+
+
+## ADR-0199 — Stage 2 of the hand control: the pointer stream, and the engagement gate (2026-09-21)
+
+Owner (second trial, by voice): "yumruğumu tuttuğumda sol tık basılı tutma, yumruğumu
+oynattığımda tuttuğum şeyi oynatma; pinç'i kapattığımda sol tık; pinç'i kapatıp uzun
+basınca sağ tık; elimi pinç haline getirdiğimde fareyi sağa sola hareket ettirebilme;
+iki elle birleştirme = tam ekrandan çıkma; hızlı yaptığımda da algılasın; çeneme
+koyduğumda ya da sigara içtiğimde hareket sanmasın."
+
+### The engagement gate (browser, stage 1 fix)
+
+A gesture counts only while the recogniser is ARMED. Arming is deliberate and cheap: one
+open hand, fingers up (fingertips above the wrist), held still (palm moves < 0.02 frame)
+for ~400 ms — "el kaldır". Armed lasts 4 s and every recognised gesture extends it; a hand
+leaving the frame ends it. While disarmed nothing is emitted — not a swipe, a rotate, a
+spread, a gather nor a pinch — so a hand going to the chin, a cigarette or a cup does
+nothing. The HUD says "Hazır" while armed. Two hands arm together by both being open and
+still. Gather no longer needs the two hands to touch (≤ 0.3 frame apart), and a brief
+one-hand frame (MediaPipe merging two touching hands) no longer resets its arming.
+
+### The pointer stream (stage 2)
+
+A cursor cannot ride the tool-call relay (an HTTP call, a `device_commands` row and a
+device round trip per move). It gets its own path, bounded and receipted at the edges:
+
+- **Browser → Cloud Core**: WebSocket `/v1/voice/realtime/sessions/{session_id}/pointer`,
+  owner-session-gated like the session's other routes, opened only while a pointer
+  session is live. Frames (JSON, tiny): `{"t":"move","dx":int,"dy":int,"seq":n}` (relative
+  pixels the browser derives from palm displacement × screen size × gain),
+  `{"t":"button","button":"left"|"right","action":"down"|"up"|"click"}`,
+  `{"t":"end"}`. ≤ 30 frames/s; the server coalesces moves it cannot forward in time.
+- **A pointer session is a tool call**: `operator.pointer_session` (`{"action":"begin"}`)
+  runs through the relay like every action — step-up tier SENSITIVE, the MEDIA window
+  activated first (the same `WINDOW_REF_MEDIA` rule), one `ActionReceipt` — and returns a
+  `stream_token` (random, single-use, bound to the session, expires in 5 min) the browser
+  presents on the WebSocket. `{"action":"end"}` (or the socket closing, or 60 s of
+  silence) closes it and the receipt's `observed_after.server` carries `moves`, `buttons`,
+  `dropped`, `duration_ms`.
+- **Cloud Core → device**: over the device's existing WebSocket, a new frame kind
+  `pointer_stream` (`app/broker/frames.py`, beside `command`/`heartbeat`/`voice_sideband`):
+  `{"kind":"pointer_stream","session":"<id>","frames":[...]}` — best effort, no
+  `device_commands` row per frame, never re-delivered; a `pointer_stream` for a session
+  the device does not know is ignored. The stream's begin/end travel as ordinary commands
+  (`pointer.stream_begin` / `pointer.stream_end` capabilities) so the device can refuse a
+  stream it did not open.
+- **Device service → companion**: the frame is forwarded over the existing authenticated
+  pipe as a fire-and-forget `pointer.stream` capability (batch payload), never waiting for
+  an answer; begin/end are answered like any capability.
+- **Companion**: `SendInput` relative mouse moves (`MOUSEEVENTF_MOVE`, dx/dy clamped to
+  ±200 per frame, ≤ 60 frames/s), left/right button down/up/click; refuses when no stream
+  is open, when the session is locked, or when the foreground window is the shell's own
+  (the focus guard's spirit: the owner's mouse never lands in the cockpit by a gesture).
+  Nothing is typed, nothing scrolls, nothing is stored.
+
+### The gestures (browser, stage 2 recogniser, on top of the gate)
+
+- loose pinch (thumb–index close, other fingers relaxed) held → MOUSE MODE: the palm's
+  displacement drives `move` frames (gain ~2.5 screen widths per frame width, dead zone
+  0.005); the HUD says "Fare";
+- from mouse mode, a TIGHT pinch (tips touching) released within 350 ms → `left click`;
+  held ≥ 600 ms then released → `right click`;
+- a FIST (all four fingers curled, thumb over) → `left down`; the fist's palm movement
+  drives `move` frames (a drag); opening the hand → `left up`;
+- `gather` → Escape (stage 1), `spread` → "f" (stage 1).
+- Speed: a swipe is judged on the last ≤ 900 ms with the hand open at its START only;
+  the recogniser runs every frame the landmarker gives (~45 fps on the owner's camera).
+
+Proof plan: the companion's lab (a relative move landing within tolerance, a button
+down/up pair, refusal with no stream and with the shell in front), the device service's
+frame test (a `pointer_stream` never creates a command row and reaches the pipe as one
+batch), the API's WebSocket test (token bound to the session, a foreign token refused,
+coalescing, the receipt's counts), the recogniser's synthetic sequences (mouse mode,
+click, long click, fist drag, the gate), and the owner's hand.
+
 Found on the way: an in-place append to a nested list inside the session's
 `context_json` is never written — SQLAlchemy's plain JSON column compares the new value
 to the loaded one and a shallow copy shares the nested object, so old == new. The first
