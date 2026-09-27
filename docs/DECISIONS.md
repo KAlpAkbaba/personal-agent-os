@@ -14998,3 +14998,73 @@ Temporal, MinIO, Redis and the 2 GB-capped `godseye`. The api services carry no
 `mem_limit` today. If the host proves tight the cheap remedy is already in the design —
 a model that cannot be loaded falls back to the deterministic embedder and the API keeps
 serving — so capping the colours is a configuration change, not a code change.
+
+## ADR-0201 — The memory learns from what the owner SAYS in every mode and from what he DOES, again (2026-09-27)
+
+Owner (2026-09-27): "hafızasını geliştirebilecek, daha iyi yapacak, sürekli kaydedecek …
+bir agent"; then "Başla ve ne gerekiyorsa yap". JARVIS order item 1, PR-2 (ROADMAP "The
+JARVIS target").
+
+### What was actually happening
+
+1. **Only a paid session ever taught the memory anything.** B16 wired the write policy
+   to the client's `summary` event. The local mode (ADR-0173, the mode the owner has used
+   daily since 2026-09-19) never sends one — no model is there to write it — and neither
+   does an operator turn or a research turn. Every sentence the owner said in the local
+   mode was read by the router, acted on, and forgotten, unless he prefixed it with "bunu
+   hatırla" (ADR-0192). Measured on this checkout: `extract_from_summary` has exactly one
+   caller, the `summary` branch.
+2. **The preference pass knew one behaviour.** ADR-0191 turned "the same research topic,
+   three times" into a preference and hard-wired topic, key and sentence into one function.
+   ADR-0193 then removed the machine's own records from episodic memory and said, in so
+   many words, that "the pattern behind repeated actions is the preference pass's job" —
+   and the pass could not see any action but research.
+
+### Decision
+
+1. **The owner's own sentence goes through the write policy in every mode.** In
+   `record_client_events`, after the router has resolved an utterance, the sentence is fed
+   to the SAME extractor (`extract_from_summary`), the same frozen decision table, with
+   `explicit=False` always: a command is chatty and ignored; a sentence with a signal
+   ("her zaman", "bundan sonra", "tercih ederim", "karar") is a CANDIDATE capped at
+   `SINGLE_OBSERVATION_MAX_CONFIDENCE`; only evidence promotes it. Not extracted: the
+   `memory_*` intents — `memory.remember` files the statement itself, explicitly (ADR-0126),
+   and a candidate copy beside it would be the ladder corroborating an owner memory with a
+   paraphrase of itself; the others are questions and corrections about the store. Not
+   extracted either: the sentence that names a macro (ADR-0196). The source records
+   `kind: owner_utterance` and the channel (`local` / `voice`), so a retrieval can say
+   where it heard a thing. The sentence is already on the turn record (ADR-0192); it
+   travels nowhere new, and the event's audit metadata carries counts, never words.
+2. **Behaviours are a table.** `app.experience.engine.BEHAVIOUR_SIGNALS`: one row per kind
+   of thing the owner does — which ledger event, how to read its subject, the key family,
+   the Turkish sentence. The research row keeps ADR-0191's key byte for byte (production
+   rows carry it; a fourth research must corroborate, not open a second row). The second
+   row is `media.opened` → `media.request`: what the owner asks to be played, in his own
+   words ("Güldür Güldür"), three times over the whole history, is a preference. Adding a
+   behaviour is adding a row; the same threshold, the same ladder, the same
+   `_new_corroborating_rows` guard against self-corroboration for every row.
+
+### What this does not do
+
+It does not lower the bar. One sentence is never durable, never explicit; three plays are
+a candidate the ladder may promote, exactly as three researches were. It does not touch
+what ADR-0190/0193 excluded from episodic memory. It adds no model call anywhere.
+
+### Proof
+
+`tests/unit/test_memory_extraction_every_mode.py` (7, through the REAL relay with the
+local-router provider): a preference said in the local mode is a CANDIDATE with
+`source.channel == "local"`; three commands write nothing; "bunu hatırla" is filed once,
+by the tool, explicit; a credential is refused and counted with no content anywhere;
+the same sentence twice is one observation; a paid session's channel is `voice`; the
+audit metadata carries counts and never the words. Mutations RED: the memory-intent gate
+removed → the "filed once" test fails; the hook removed → five tests fail; restored from
+a sha256-verified copy. `tests/unit/test_experience_preferences.py` (+5): three plays
+become one preference with `media.request` key and `media.opened:media.request`
+provenance; two do not; a media and a research on the same words are two preferences;
+the research key is exactly ADR-0191's; every signal names a real ledger event and a
+unique family. Mutation RED: the media row removed from the table → three tests fail.
+Neighbouring suites (memory, local mode, voice relay, experience engine/scheduler,
+assistant chat, ADR-0200's embedder) 234 green; the Owner Utterance Corpus's memory /
+operator / research / daily / macro families 584 cases, 0 changed verdicts, 0 forbidden
+side effects.

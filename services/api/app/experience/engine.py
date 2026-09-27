@@ -51,6 +51,7 @@ already processed.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -71,6 +72,7 @@ from app.ledger.vocabulary import (
     EVENT_TYPE_EYE_DISABLED,
     EVENT_TYPE_EYE_ENABLED,
     EVENT_TYPE_LEDGER_BACKFILL,
+    EVENT_TYPE_MEDIA_OPENED,
     EVENT_TYPE_OPERATOR_MISSION_STARTED,
     EVENT_TYPE_OPERATOR_TASK_COMPLETED,
     EVENT_TYPE_OPERATOR_TASK_FAILED,
@@ -446,10 +448,78 @@ def _research_topic(session: Session, row: ActivityEventRow) -> str:
     return str(report.report_json.get("topic") or "").strip()
 
 
+def _media_request(session: Session, row: ActivityEventRow) -> str:
+    """The owner's own words for one media the assistant opened for him (ADR-0112: the
+    title he NAMED travels as ``request_text``; the resolved ``title`` is what actually
+    played). The words he said are the subject - it is those he will say again."""
+    del session
+    detail = row.detail_json or {}
+    return str(detail.get("request_text") or detail.get("title") or "").strip()
+
+
+def _normalise_subject(raw: str) -> str:
+    """One subject, one key. Exactly ADR-0191's ``.strip().casefold()`` - the research
+    preference rows already in production carry keys made this way, and a fourth research
+    must land on the row the first three made, not open a new one beside it."""
+    return (raw or "").strip().casefold()
+
+
+@dataclass(frozen=True, slots=True)
+class BehaviourSignal:
+    """ADR-0201: one kind of thing the owner DOES that, repeated, is a preference.
+
+    ADR-0191 built this for research topics and nothing else, with the subject, the key
+    and the sentence hard-wired into one function. The pattern is general - "the same
+    subject, again, at least ``PREFERENCE_MIN_OCCURRENCES`` times over the whole history"
+    - and ADR-0193 named it as the job of this pass ("the pattern behind repeated actions
+    is the preference pass's job, not a hundred copies of the action"). A signal is a row
+    in this table: which ledger event, how to read its subject, what to call the key,
+    and the Turkish sentence the memory gets. Adding a behaviour is adding a row.
+    """
+
+    event_type: str
+    #: The key family under ``PREFERENCE_KEY_PREFIX`` - stable, never renamed: the key
+    #: IS how the third occurrence lands on the same row as the first two.
+    family: str
+    #: The subject of one event, in the owner's words (display form).
+    subject_of: Callable[[Session, ActivityEventRow], str]
+    #: The memory's text: (display subject, occurrences) -> Turkish sentence.
+    sentence: Callable[[str, int], str]
+    #: Subjects shorter than this are noise ("ok", "bu"), never a preference.
+    min_subject_chars: int = 3
+
+
+def _research_subject(session: Session, row: ActivityEventRow) -> str:
+    from app.research.plan import bare_subject
+
+    return bare_subject(_research_topic(session, row)).strip()
+
+
+BEHAVIOUR_SIGNALS: tuple[BehaviourSignal, ...] = (
+    BehaviourSignal(
+        event_type=EVENT_TYPE_RESEARCH_COMPLETED,
+        family="research.subject",
+        subject_of=_research_subject,
+        sentence=lambda subject, n: (
+            f"Sahip '{subject}' konusunu düzenli olarak araştırıyor ({n} kez sordu)."
+        ),
+    ),
+    BehaviourSignal(
+        event_type=EVENT_TYPE_MEDIA_OPENED,
+        family="media.request",
+        subject_of=_media_request,
+        sentence=lambda subject, n: (
+            f"Sahip '{subject}' medyasını sık sık açtırıyor ({n} kez istedi)."
+        ),
+    ),
+)
+
+
 def _derive_preferences(
     session: Session, embedder: Embedder, rows: list[ActivityEventRow], report: IngestReport
 ) -> None:
-    """The subjects the owner keeps coming back to (ADR-0191).
+    """The subjects the owner keeps coming back to (ADR-0191; every behaviour in
+    ``BEHAVIOUR_SIGNALS`` since ADR-0201).
 
     Measured on 2026-09-20: thirteen durable memories, every one of them a one-off
     "Araştırma tamamlandı: <konu>", and an empty preference class — after sixteen days in
@@ -460,15 +530,24 @@ def _derive_preferences(
     imported, never re-implemented: a second copy of a Turkish suffix table drifting from
     the first is a defect this repository has already paid for twice.
     """
-    from app.research.plan import bare_subject
+    for signal in BEHAVIOUR_SIGNALS:
+        _derive_preferences_for(session, embedder, rows, report, signal)
 
+
+def _derive_preferences_for(
+    session: Session,
+    embedder: Embedder,
+    rows: list[ActivityEventRow],
+    report: IngestReport,
+    signal: BehaviourSignal,
+) -> None:
     # The subjects THIS pass has news about...
     touched: set[str] = set()
     for row in rows:
-        if row.event_type != EVENT_TYPE_RESEARCH_COMPLETED:
+        if row.event_type != signal.event_type:
             continue
-        subject = bare_subject(_research_topic(session, row)).strip().casefold()
-        if len(subject) >= 3:
+        subject = _normalise_subject(signal.subject_of(session, row))
+        if len(subject) >= signal.min_subject_chars:
             touched.add(subject)
     if not touched:
         return
@@ -479,27 +558,24 @@ def _derive_preferences(
     # (The first version did exactly that, and its test passed only because it put all
     # three events in one window.)
     history = ledger_service.query(
-        session, event_types=[EVENT_TYPE_RESEARCH_COMPLETED], limit=PREFERENCE_HISTORY_LIMIT
+        session, event_types=[signal.event_type], limit=PREFERENCE_HISTORY_LIMIT
     )
     groups: dict[str, list[ActivityEventRow]] = defaultdict(list)
     for row in history:
-        subject = bare_subject(_research_topic(session, row)).strip().casefold()
+        subject = _normalise_subject(signal.subject_of(session, row))
         if subject in touched:
             groups[subject].append(row)
 
     for subject, members in sorted(groups.items()):
         if len(members) < PREFERENCE_MIN_OCCURRENCES:
             continue
-        key = f"{PREFERENCE_KEY_PREFIX}:research.subject:{subject}"
+        key = f"{PREFERENCE_KEY_PREFIX}:{signal.family}:{subject}"
         new_members = _new_corroborating_rows(session, MemoryClass.PREFERENCE.value, key, members)
         if not new_members:
             report.semantic_skipped_no_new_evidence += 1
             continue
-        display = bare_subject(_research_topic(session, members[0]) or subject).strip()
-        text = (
-            f"Sahip '{display}' konusunu düzenli olarak araştırıyor "
-            f"({len(members)} kez sordu)."
-        )
+        display = signal.subject_of(session, members[0]).strip() or subject
+        text = signal.sentence(display, len(members))
         for row in new_members:
             obs = Observation(
                 text=text,
@@ -511,7 +587,7 @@ def _derive_preferences(
                 source={
                     "kind": "inference",
                     "origin": "experience_engine",
-                    "derived_from": "research.completed:topic",
+                    "derived_from": f"{signal.event_type}:{signal.family}",
                     "event_id": str(row.event_id),
                 },
             )

@@ -85,6 +85,13 @@ _PROJECT_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
 #: the sweeper would then spend its time deleting them.
 _KEPT_STAGES = (WriteStage.CANDIDATE, WriteStage.DURABLE)
 
+#: ADR-0201: where an extracted sentence came from. ``conversation_summary`` is B16's
+#: source (the client's summary of a paid realtime session). ``owner_utterance`` is the
+#: owner's own sentence as the relay received it - the ONLY source the local mode, an
+#: operator turn or a research turn ever produces, since no model summarises those.
+SOURCE_KIND_SUMMARY = "conversation_summary"
+SOURCE_KIND_UTTERANCE = "owner_utterance"
+
 
 def sentence_key(sentence: str) -> str:
     """A stable id for "this session already extracted this sentence".
@@ -199,6 +206,8 @@ def extract_from_summary(
 __all__ = [
     "MAX_PER_SUMMARY",
     "MAX_SENTENCE_CHARS",
+    "SOURCE_KIND_SUMMARY",
+    "SOURCE_KIND_UTTERANCE",
     "ExtractionResult",
     "classify",
     "extract_from_summary",

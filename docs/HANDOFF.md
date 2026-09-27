@@ -15,40 +15,19 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Hafıza PR-1 — yerel semantik embedder (ADR-0200), dal `feat/memory-local-embedder`
-(2026-09-27, Cowork oturumu; sahip kararı: "hafızadan başlayalım, sonra browser-use").**
-Bulgu: üretimde OpenAI anahtarı olmadığı için hafıza **semantik değil**, n-gram hash ile
-çalışıyordu. Yapılan: `app/memory/providers.py` `LocalEmbedder` (fastembed, ONNX, CPU,
-anahtarsız), `memory_embedding_provider=local`, varsayılan model
-`minishlab/potion-multilingual-128M` (**256 native → migration YOK**), Matryoshka
-allowlist (Qwen3-Embedding / embeddinggemma 256'ya kırpılır, başka genişlik reddedilir),
-`memory_index` retention sweep'i (aktif modelin eksik satırlarını 200'lük partilerle
-kendisi doldurur), compose: `PAGENTOS_MEMORY_EMBEDDING_PROVIDER=local` + `/mnt/pagentos-
-data/models` mount (iki renk paylaşır), yayın betiği modeli önce uid 10001 olarak çeker
-(3 deneme, çıkış **85**). Kanıt: `tests/unit/test_memory_local_embedder.py` 18 ✓,
-komşu paketler 168 ✓ + health 14 ✓, 2 mutasyon KIRMIZI, sha256 geri yükleme.
-**Sahibin makinesinde doğrulandı (2026-09-27 akşam, bu oturum).** Sandbox'ın yapamadığı
-üç adım yapıldı: (1) `uv sync` → fastembed 0.8.1 + onnxruntime 1.30, hedefli paketler
-**76 ✓ / 0 ✗**, gerçek `MemoryRuntime` `local → local`,
-`local-minishlab/potion-multilingual-128M`, 256 boyut, `semantic True`; (2) Türkçe ölçüm —
-**AYRIM potion +0.457** (anlamdaş 0.480 / alakasız 0.023) vs n-gram +0.277 vs
-Qwen3-0.6B-Q (1024→256) +0.354; potion 0.2 ms/embed ve 1.07 GB, Qwen 694 ms/embed ve
-1.22 GB (tepe 1.77) → **varsayılan potion kalıyor**; (3) `cloud-release-bluegreen.tests.ps1`
-**78 ✓** (iki ADR-0200 iddiası adıyla) + `quality-gate.ps1 -Fast` **PASS** (12518 ✓).
-Kapının bulduğu **üç hata bu dalda düzeltildi**, üçü de mutasyonla KIRMIZI: yeni çıkış 85
-önce 8x korumasının okuduğu yerde belgeli değildi, sonra sahibe cümle isteyen korumanın
-izin verdiği yerde değildi (85 bir mutabakat değil yayın çıkışı → paragraf
-`--reconcile exits:` işaretinin ÜSTÜNE alındı); ve `macro`/`godseye` aileleri sahibe
-Türkçe adsız ulaşıyordu (ADR-0196/0197'den beri main'de kırıktı) → "Hareketler" /
-"Dünya gözü". Kanıt: `docs/DECISIONS.md` ADR-0200 addendum + `docs/QUALIFICATION.md`
-Stage 30.
-**Kalan (READY_FOR_OWNER):** sahip "birleştir" derse → main'e merge → `-BlueGreen` yayın →
-compose değiştiği için recovery pinini yenile. Yayında **belleği izle**: model API
-sürecinin içinde (~1 GB/renk), sunucu CPX32 (8 GB) ve geçiş anında iki renk birden ayakta;
-api renklerinde `mem_limit` yok (gerekirse sınır koymak yapılandırma işi; model
-yüklenemezse n-gram'a düşüp API ayakta kalıyor). Sonra **PR-2**: otomatik hafıza çıkarımını
-tüm modlara yay + tercih türetmeyi (ADR-0191) araştırma dışına genişlet; **PR-3**:
-Jev/cross-encoder rerank.
+**Hafıza PR-2 — sürekli öğrenme (ADR-0201), dal `feat/memory-continuous-learning`
+(PR-1 dalının üstünde; 2026-09-27 Cowork).** Bulgu: hafızaya yalnız ücretli oturumun
+`summary` olayı yazıyordu — **yerel modda söylenen hiçbir cümle** (bunu hatırla hariç)
+hafızaya girmiyordu; tercih geçişi de yalnız araştırma konusunu görüyordu. Yapılan:
+(1) `record_client_events` söz dalı → her modda sahibin cümlesi aynı yazım politikasından
+geçer (`explicit=False`, komut=chatty, sinyalli cümle=aday; `memory_*` niyetleri ve makro
+adı hariç; kaynak `owner_utterance` + kanal local/voice); (2) `BEHAVIOUR_SIGNALS` tablosu:
+araştırma konusu (ADR-0191 anahtarı birebir) + **`media.opened` → "Sahip 'X' medyasını sık
+sık açtırıyor"**. Kanıt: 7+5 yeni test, 2+1 mutasyon KIRMIZI, komşu 234 ✓, korpus 584 ✓.
+**PR-1 (ADR-0200) durumu:** `feat/memory-local-embedder` `6ee5970a`, senin makinende
+PROVEN_REAL (AYRIM +0.457), Claude Code raporu alındı; **"birleştir" bekliyor** (merge →
+`-BlueGreen` → recovery pin; yayın öncesi `free -m`, model renk başına ~1 GB).
+Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
 
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
 
