@@ -429,3 +429,63 @@ a demonstration.
 
    Listen-only rides on top: "sadece dinle" stops it acting, a second command releases it,
    and the boundary between hearing and acting is visible rather than implied.
+
+## The JARVIS target — spoken 2026-09-27 ("aslında birebir aynı hale getirmek istiyorum")
+
+The owner's north star, in his words: PersonalAgentOS should become JARVIS — the assistant
+of the Iron Man films — "birebir". Recorded here so that every later choice can be judged
+against it, and so that the parts fiction can have and reality cannot are stated once,
+not rediscovered.
+
+### What JARVIS does, and where this system stands (2026-09-27)
+
+| JARVIS | PersonalAgentOS today | State |
+|---|---|---|
+| Always-listening natural conversation, interruptible, in the owner's language | Realtime voice (OpenAI) + the free local mode (Chrome Web Speech + the ONE router + Haiku), barge-in, the Arbor voice target | **HAVE** — quality work remains (Turkish TTS gap, K66 noise, ADR-0043/0080) |
+| Knows the owner completely, remembers everything that matters | Memory (M5, B16–B19) — now SEMANTIC with ADR-0200 (local embedder); ledger + experience engine | **IN PROGRESS** — PR-1 landed on `feat/memory-local-embedder`; PR-2 (extraction in every mode, broader preference derivation) and PR-3 (rerank) follow |
+| Researches anything, reads the world's data | Research in the owner's own Chrome (ADR-0183), Latest News Mode, God's Eye | **HAVE** |
+| Runs the workshop by voice: machines, files, fabrication | Digital Operator (M19), documents (M20), artifact/app/native/3D factories (M22–M28) | **HAVE** |
+| The same JARVIS in the house, the car, the suit, the phone | Multi-device / roaming owner (M19 above; "M29") — **deferred by the owner 2026-09-12** | **MISSING** — the largest gap; to be reopened for this target |
+| Runs the house: lights, doors, climate | Home Assistant behind a `smart_home` provider (research 2026-09-26) | **MISSING** — adopt |
+| Secretary: mail, calendar, answers calls on his behalf | Mail/calendar built (M21) but no account; calendar → Radicale (own CalDAV); calls → a telephony bridge (Twilio/Telnyx) into the realtime voice path, with the KVKK announcement | **MISSING** — accounts and the bridge |
+| Proactive: warns, briefs, watches over him | Alarms, routines, morning briefing, presence, notifications; briefings still pull-only for a web session (queue item 1) | **PARTIAL** |
+| Holograms and hands in the air | Holographic/Living Core (M18), hand gestures stage 1+2 (ADR-0198/0199, branch), God's Eye | **PARTIAL** — on a screen; volumetric holograms do not exist, AR glasses are the nearest real thing |
+| Repairs and improves itself | Self-healing (M6), evolution (M7/M18.4), self-dev (B35), recovery supervisor (B08) | **HAVE** — controlled, and staying controlled |
+| Personality, dry wit | The persona instructions | **PARTIAL** — tune, never at the cost of truthful speech (ADR-0063) |
+| Breaks into any system; flies the suit; drives the car | — | **NEVER / HARDWARE** — see the limits |
+
+### The limits, stated once
+
+- **No unauthorised access, ever.** JARVIS "gets into" things; this system acts only on
+  assets in the Authorized Asset Registry (constitution §8). That face of JARVIS is not a
+  goal and does not become one.
+- **No holograms in the air.** A screen, the Living Core, and later an AR headset are the
+  real versions; the interaction (voice + gaze + hands) is what is being built, not the
+  optics.
+- **No physical agency without hardware.** Doors, lights and cars are Home Assistant and
+  whatever the owner wires to it; a robot arm is a hardware project of its own. The
+  software side (device selection, receipts, step-up) is already the shape it needs.
+- **An always-on frontier model is not affordable.** The JARVIS feeling is a cheap
+  always-on layer (local mode, local embedder, a fast classifier for routing/injection —
+  the Jev-shaped seam) with the expensive model called only when the task needs it.
+- **The name.** "JARVIS" is the owner's word for it in private; the product carries its
+  own name if it is ever shown outside (Marvel's mark).
+
+### The order (binding until the owner changes it)
+
+1. **Memory** — the JARVIS that knows him. PR-1 (ADR-0200) landed; PR-2: automatic
+   extraction in every mode (ADR-0192) + preference derivation beyond research topics
+   (ADR-0191); PR-3: a semantic rerank over `hybrid_search`.
+2. **browser-use** — the JARVIS that does anything on the web, in the owner's own Chrome
+   (ADR-0113/0183), reversible actions free, irreversible ones behind read-back + step-up.
+3. **Secretary** — Radicale (own calendar/contacts), a mail account, then the telephony
+   bridge into the realtime voice path (announce the assistant, KVKK).
+4. **The house** — Home Assistant as the `smart_home` provider; "salonun ışığını kapat".
+5. **Everywhere** — reopen the multi-device / roaming-owner milestone (M19/M29 above):
+   the same identity, memory and conversation on every enrolled device.
+6. **Voice and character** — close the Turkish TTS gap, then give the persona its wit.
+7. **Sight** — gesture stage 2 merged after the owner's trial; AR as a later surface.
+
+Done for this target = each row above says HAVE with real (PROVEN_REAL) evidence, the
+limits still hold, and the owner says it feels like JARVIS — the last one is his verdict
+alone, as with voice (ADR-0034 §6).

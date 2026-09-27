@@ -967,3 +967,21 @@ Both proven through the real relay against the fake device (the plan's own steps
 | 29.4 | Record → name → the name alone replays the same device calls in order | `PROVEN_PROXY` | `test_voice_macros.py`: `macro.record_start`, `operator.key` + `operator.pointer` kept, `macro.record_end` asks, "Yeni mail sekmesi" saves (row `yeni mail sekmesi`, 2 steps), "Yeni mail sekmesi aç" → `macro.run` → `keyboard.key(enter)` then `pointer.scroll`; corpus `macro.run.1` (multi-turn) |
 | 29.5 | A replay stops at the first step that did not succeed and every step meets the step-up gate on its own name | `PROVEN_PROXY` | `focus_mismatch` on step 1 → `stopped_at 1`, no scroll; the step-up spy saw `macro.run, operator.key, operator.pointer` and a refusal on the second stopped the third |
 | 29.6 | The owner hears it on the real PC (local mode) | `READY_FOR_OWNER` | "Yukarı tuşuna 5 kere bas" in a focused window; the whole "yeni hareket oluştur … hareketi bitir … yeni mail sekmesi … yeni mail sekmesi aç" conversation |
+
+
+## Stage 30 — Memory retrieval on a real semantic model (ADR-0200)
+
+The owner's PC ran what the Linux sandbox could not: the Windows lock, the Turkish
+quality measurement against huggingface-hosted models, and the PowerShell 5.1 release
+suite. Branch `feat/memory-local-embedder` @ `b4949d21`; nothing merged, nothing
+deployed — the owner's "birleştir" is still outstanding.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 30.1 | The dependency resolves and runs on Windows, not only in the Linux image | `PROVEN_REAL` | `uv sync` → `fastembed 0.8.1` + `onnxruntime 1.30.0` in `services/api/.venv`; targeted suites **76 passed / 0 failed** (18 embedder, 15 b37, 5 maintenance, 14 health, 14 orphan sweeps, 10 migration agreement); the real `MemoryRuntime` reports `local → local`, `local-minishlab/potion-multilingual-128M`, dim 256, `semantic True` |
+| 30.2 | The model is a real semantic model on the owner's own Turkish sentences | `PROVEN_REAL` | `bench-memory-embedding.py`: AYRIM **+0.457** (anlamdaş 0.480 / alakasız 0.023) against the n-gram's **+0.277**; the pair with no shared characters moves from 0.000 to 0.170, "Aktivra benim kurduğum şirket" ~ "Şirketimin adı Aktivra" from 0.495 to 0.718 |
+| 30.3 | The heavier candidate was measured, not assumed | `PROVEN_REAL` | `Qwen/Qwen3-Embedding-0.6B-Q` truncated 1024→256: AYRIM **+0.354**, unrelated floor 0.367, **694 ms** per embedding, 1.2 GB resident (peak 1.77 GB). Better on the two hardest paraphrases, worse on separation and ~3000× slower — the default stays potion |
+| 30.4 | The retrieval cost stays inside a voice turn, and the host can hold the model | `PROVEN_REAL` | `scripts/core/measure-embedder-cost.py` re-runs the measurement and writes it: `docs/evidence/adr-0200-embedder-cost-2026-09-27.json` — warm load **2.07 s** once per process, median embedding **0.18 ms** over eight Turkish sentences (slowest 0.38 ms), so a `memory_index_fill_batch` of 200 rows costs **0.04 s**; the model holds **1073 MB** of the API process (peak 1103, from 39 MB before it was built) — one such process per colour, two alive through a blue-green drain |
+| 30.5 | The release script fetches the model before it can matter, and fails loudly | `PROVEN_REAL` | `cloud-release-bluegreen.tests.ps1` 78/78 with both ADR-0200 assertions named: prefetch as uid 10001 **before** the idle colour; a failing fetch retried thrice → exit **85**, nothing switched |
+| 30.6 | The repository's own gate agrees | `PROVEN_REAL` | `quality-gate.ps1 -Fast`: PASS, after two defects it found were fixed on this branch: the new exit 85 was not documented where the 8x guard reads, then not where the owner-sentence guard permits (it is a release exit, not a reconcile one); and `macro`/`godseye` reached the owner with no Turkish family name — failing on `main` since ADR-0196/0197 shipped. Three mutations RED, restored byte-exact; the three guards green (58 tests) |
+| 30.7 | The index actually moves to the new space on the production host | `READY_FOR_OWNER` | Needs the merge and a release: the retention sweep backfills `memory_index` for the active model in 200-row batches. Watch host memory on that first release (~1 GB per colour on an 8 GB CPX32, both colours live through the drain) |

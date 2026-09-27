@@ -131,6 +131,34 @@ owner's browser tab; frames never leave it, and only gesture NAMES reach the Clo
 Upgrade rule: bump the pin, re-pin the asset URLs/hashes, run the gesture recogniser
 tests and the eye/perception tests, then a real camera run.
 
+## Local memory embedding model (ADR-0200, 2026-09-27)
+
+Role: the sentence-embedding model behind `app.memory.providers.LocalEmbedder` - what
+makes memory retrieval SEMANTIC on the Cloud Core without a key and without a network
+call per query (until ADR-0200 production hashed n-grams unless an OpenAI key was set).
+
+- `fastembed` (Apache-2.0; Qdrant, https://github.com/qdrant/fastembed) pinned in
+  `services/api/pyproject.toml` / `uv.lock`. ONNX Runtime on the CPU, no torch. Imported
+  lazily: an environment without it still starts and the memory check says why.
+- `minishlab/potion-multilingual-128M` (MIT; https://huggingface.co/minishlab/potion-multilingual-128M)
+  - the default model: multilingual (Turkish included), natively 256-wide (= the frozen
+  `EMBEDDING_DIM` column, so no migration), ~0.5 GB, a static-embedding model that answers
+  in milliseconds on a CPU. Fetched ONCE per host by the release script into
+  `/mnt/pagentos-data/models` (both colours mount it); never from a CDN at run time.
+- Matryoshka alternatives the provider may truncate to 256 (allowlist
+  `MRL_TRUNCATABLE_MODELS`, from the model cards): `Qwen/Qwen3-Embedding-0.6B(-Q)`
+  (Apache-2.0), `google/embeddinggemma-300m` (Gemma terms; gated download). Heavier and
+  better; the choice for the owner's PC once the Cloud Core moves there.
+
+Adapter boundary: `Embedder` protocol (`app/memory/embedding.py`); `memory_embeddings`
+rows carry `model_id`, so a model change is a re-index (`/v1/memory/reindex`, or the
+retention clock's `memory_index` sweep filling the gaps) and never a mixed index.
+Fallback: deterministic n-gram embedder with the reason on `/v1/system/health`.
+
+Upgrade rule: bump the pin, run `tests/unit/test_memory_local_embedder.py` and
+`test_memory_b37.py`, re-run the owner's Turkish benchmark
+(`scripts/core/bench-memory-embedding.py`), release, and let the sweep re-index.
+
 ## Document parsers in the Windows agent (M20, ADR-0083)
 
 Role: the per-format providers behind `PagentOS.SessionCompanion/Documents/` (`IDocumentExtractor`); they run on the owner's machine only, inside the authorised roots, and never in Cloud Core. Both are pinned in `PagentOS.SessionCompanion.csproj`.

@@ -22,6 +22,7 @@
 #   pre-migration backup (ADR-0122; a warning, not a stop, when not installed)     74
 #   alembic upgrade head (expand-only, gated by test_migration_compatibility)        82
 #   record the idle colour's image + release sha in the env file
+#   prefetch the memory embedding model into the shared models dir (ADR-0200)      85
 #   up the IDLE colour only (--no-deps --wait); the active colour keeps serving
 #   health on the idle colour (in-container; it has no published port)          75
 #   served realtime contract_version == the tree's CONTRACT_VERSION           73
@@ -36,6 +37,10 @@
 #   record RELEASE, LAST_KNOWN_GOOD (the previous sha) and the active colour
 # A release is COMPLETE only when RELEASE names the active colour's sha; --reconcile
 # treats anything else as an interrupted promotion and returns to the last completed one.
+# Release-path exits that also fall in this range (the transaction list above names where
+# each one is raised): 82 the expand-only migration failed; 83 the served schema revision
+# is not the tree's head; 85 the memory embedding model could not be fetched into the
+# shared models dir (ADR-0200) - retried thrice, and nothing was switched.
 # --reconcile exits: 0 consistent and ok; 80 neither colour serves (nothing switched);
 # 81 the canonical colour did not serve and the recorded other one took over (loud);
 # 82 another release/recovery holds the lock; 83 no tree matches the pinned recovery inputs;
@@ -76,6 +81,8 @@ prev="$base/app.prev"
 # mounts ${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}); the script writes where compose
 # mounts, and pins the path into the env file so the two can never disagree.
 edge_dir=${PAGENTOS_EDGE_DIR:-/mnt/pagentos-data/edge}
+# ADR-0200: the memory embedding model files, mounted into both colours by compose.
+models_dir=${PAGENTOS_MODELS_DIR:-/mnt/pagentos-data/models}
 health_url=${PAGENTOS_HEALTH_URL:-http://127.0.0.1:8001/v1/system/health}
 drain_s=${PAGENTOS_DRAIN_S:-60}
 handoff_wait_s=${PAGENTOS_HANDOFF_WAIT_S:-30}
@@ -800,6 +807,48 @@ if [ "$migrate_rc" -ne 0 ]; then
     # side's tests could see the collision because the two paths never run in one pass.
     exit 79
 fi
+
+# ADR-0200: the model the owner chose for semantic memory is fetched HERE, once, into
+# the directory both colours mount - so the idle colour starts instantly, the two
+# colours never hold two copies, and a download that fails fails loudly before anything
+# is switched (the API itself would only fall back to the n-gram hash with a reason,
+# which is honest but not what an explicit `local` asked for). Run as the uid the app
+# runs as (10001) so the files are readable in the container; bounded, retried thrice.
+prefetch_embedding_model() {
+    local provider model rc=0 attempt
+    provider="$(env_value PAGENTOS_MEMORY_EMBEDDING_PROVIDER)"
+    provider="${provider:-local}"
+    if [ "$provider" != "local" ]; then
+        echo "memory embedding provider is '$provider': no model to prefetch"
+        return 0
+    fi
+    model="$(env_value PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL)"
+    model="${model:-minishlab/potion-multilingual-128M}"
+    mkdir -p "$models_dir"
+    # Best effort: a host without chown (the test sandbox) still runs the prefetch, and a
+    # directory uid 10001 cannot write is what the docker run below reports, loudly.
+    chown 10001:10001 "$models_dir" 2>/dev/null || true
+    for attempt in 1 2 3; do
+        rc=0
+        docker run --rm --user 10001:10001 \
+            -v "$models_dir:/srv/pagentos/var/models" \
+            -e PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL="$model" \
+            "$image_repo:$sha" \
+            /srv/pagentos/.venv/bin/python -c \
+'import os
+from fastembed import TextEmbedding
+m = TextEmbedding(model_name=os.environ["PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL"], cache_dir="/srv/pagentos/var/models")
+v = list(m.embed(["probe"]))[0]
+print("embedding model ready:", os.environ["PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL"], "dim", len(v))' \
+            2>&1 | tail -1 || rc=$?
+        [ "$rc" -eq 0 ] && return 0
+        echo "embedding model prefetch attempt $attempt failed (rc $rc)" >&2
+        sleep 5
+    done
+    return 85
+}
+
+prefetch_embedding_model || { echo "the memory embedding model could not be fetched into $models_dir; nothing was switched" >&2; exit 85; }
 
 echo "starting the idle colour api-$idle on $sha (api-$active keeps serving)..."
 up_out=""; up_rc=0

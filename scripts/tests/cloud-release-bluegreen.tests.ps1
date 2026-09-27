@@ -66,6 +66,8 @@ $posix = { param($p) $p = ($p -replace '\\', '/'); if ($p -match '^([A-Za-z]):(.
 # FAKE_SCHEMA_CURRENT / FAKE_SCHEMA_HEAD (B01 req 2: the schema revision a colour serves).
 # FAKE_HEALTH_STATUS (every colour's top-level status), FAKE_HEALTH_STATUS_<COLOUR> (one
 # colour's, e.g. FAKE_HEALTH_STATUS_BLUE=degraded while green stays ok).
+# FAKE_PREFETCH_EXIT (ADR-0200: the one-off `docker run` that fetches the memory embedding
+# model into the shared models dir fails with this code).
 $docker = @(
     '#!/usr/bin/env bash',
     '# The real docker refuses to run from a deleted working directory ("getwd: no such file',
@@ -141,6 +143,10 @@ $docker = @(
     '  build\ *)',
     '    if [ -n "${FAKE_BUILD_EXIT:-}" ]; then echo "ERROR: failed to solve: process did not complete successfully" >&2; exit "$FAKE_BUILD_EXIT"; fi',
     '    exit 0;;',
+    '  run\ --rm*)',
+    '    # ADR-0200: the embedding-model prefetch, one docker run as uid 10001 before the idle colour.',
+    '    if [ -n "${FAKE_PREFETCH_EXIT:-}" ]; then echo "huggingface.co: connection refused" >&2; exit "$FAKE_PREFETCH_EXIT"; fi',
+    '    echo "embedding model ready: fake dim 256"; exit 0;;',
     '  compose*" run "*|stop\ *) exit 0;;',
     'esac',
     'exit 0'
@@ -193,7 +199,7 @@ function Reset-Host {
 
 function Invoke-Release {
     param([string]$Sha = "2222222222222222222222222222222222222222", [string]$Mode = "", [hashtable]$Env = @{})
-    $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 PAGENTOS_EDGE_SETTLE_TRIES=2 PAGENTOS_EDGE_SETTLE_STEP_S=0 " +
+    $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_MODELS_DIR='$(& $u (Join-Path $hostBase 'models'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 PAGENTOS_EDGE_SETTLE_TRIES=2 PAGENTOS_EDGE_SETTLE_STEP_S=0 " +
            "FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_ENV='$(& $u (Join-Path $hostBase '.env'))' FAKE_EDGE='$(& $u (Join-Path $hostBase 'edge'))' " +
            (($Env.GetEnumerator() | ForEach-Object { "$($_.Key)='$($_.Value)' " }) -join "") +
            "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $Sha $Mode 2>&1"
@@ -317,6 +323,20 @@ try {
         Reset-Host
         $rbf = Invoke-Release -Env @{ FAKE_BUILD_EXIT = "1" }
         Assert-True ($rbf.Exit -eq 78 -and $rbf.Output -match "image build FAILED" -and -not ($rbf.Calls -match "alembic upgrade head")) "a failed image build stops the release before any migration"
+
+        # ADR-0200: the memory embedding model is fetched ONCE into the shared models dir
+        # before the idle colour starts (both colours mount it), and a fetch that fails
+        # fails loudly (85) before anything is switched - the API alone would only fall
+        # back to the n-gram hash with a reason, which is not what an explicit `local` asked.
+        Write-Host "embedding model prefetch (ADR-0200)"
+        Reset-Host
+        $rp = Invoke-Release
+        $iPrefetch = [array]::IndexOf($rp.Calls, ($rp.Calls | Where-Object { $_ -match "^docker run --rm --user 10001:10001 " } | Select-Object -First 1))
+        $iIdleUp = [array]::IndexOf($rp.Calls, ($rp.Calls | Where-Object { $_ -match " up -d --no-deps --wait api-green" } | Select-Object -First 1))
+        Assert-True ($rp.Exit -eq 0 -and $iPrefetch -ge 0 -and $iIdleUp -gt $iPrefetch -and $rp.Output -match "embedding model ready" -and (Test-Path (Join-Path $hostBase "models"))) "the embedding model is prefetched into the shared models dir as uid 10001 BEFORE the idle colour starts"
+        Reset-Host
+        $rpf = Invoke-Release -Env @{ FAKE_PREFETCH_EXIT = "1" }
+        Assert-True ($rpf.Exit -eq 85 -and $rpf.Output -match "embedding model could not be fetched" -and ($rpf.Calls -match "^docker run --rm ").Count -eq 3 -and (Get-Active) -eq "blue" -and -not (Test-Up "green") -and (Get-Release) -eq $old) "a failed model prefetch is retried thrice, exits 85, and nothing is switched"
 
         # B01 requirement 2: the migration's RESULT is verified, not just its exit code. The
         # colour serves the alembic revision it is on and the revision its tree expects; a

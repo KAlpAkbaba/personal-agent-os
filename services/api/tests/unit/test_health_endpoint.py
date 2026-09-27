@@ -145,6 +145,8 @@ def test_health_ok_shape(monkeypatch) -> None:
     # orphan sweeps (2026-09-12).
     assert retention["sweeps"] == [
         "memory",
+        # ADR-0200: the embedding index fills itself on this clock (bounded batches).
+        "memory_index",
         "identity_sessions",
         "security_assets",
         "interrupted_tool_calls",

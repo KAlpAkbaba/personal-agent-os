@@ -15,6 +15,25 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**Sahip "birleştir" dedi (2026-09-27): hafıza PR-1 + PR-2 main'e ve yayına.**
+`feat/memory-continuous-learning` (`6acbcf0c`, ADR-0201) PR-1'in (`6ee5970a`, ADR-0200)
+üstünde duruyor; ikisi birlikte main'e alınıyor. `feat/hand-gestures-stage1` DOKUNULMUYOR.
+Sıra: (1) PR-2 doğrulama — hedefli 5 paket **50 ✓**, `quality-gate.ps1 -Fast`; (2) merge
+`--no-ff` → main'de üç paket yeşil → push; (3) yayın öncesi `free -m` (eşik 2,5 GB;
+ölçülen **5649 MB available** → geçti); (4) `release-cloud-core.ps1 -BlueGreen` (asla
+`2>&1` ile değil; çıkış 85 = model indirilemedi, hiçbir şey anahtarlanmadı);
+(5) compose değiştiği için recovery pinini main'in tam sha'sıyla yenile;
+(6) çalışma-zamanı: `checks.memory.embedder.provider == "local"`, `semantic true`,
+kapsam artıyor, yerel modda söylenen bir cümle CANDIDATE satırı oluyor.
+**Kapının bulduğu hata (benim, PR-1 dalından):** QUALIFICATION 30.4 satırı `PROVEN_REAL`
+diyip makinenin izleyebileceği hiçbir şey adlandırmıyordu — Stage 30'u kapıyı çalıştırdıktan
+SONRA yazıp commit etmişim. Düzeltme: ölçüm aleti artık depoda
+(`scripts/core/measure-embedder-cost.py`) ve kanıtı yazıyor
+(`docs/evidence/adr-0200-embedder-cost-2026-09-27.json`: ısınmış yükleme 2,07 s, embed
+ortanca 0,18 ms, 1073 MB — tepe 1103). İki mutasyon KIRMIZI (düz metne dönüş; var olmayan
+dosya adları), dosya sha256 ile birebir geri konuldu.
+Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
+
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
 
 1. *Tekrar sayısı.* "Yukarı tuşuna 5 kere bas" / "5 defa yap" kabul edilmiyor; sahip her
@@ -113,6 +132,12 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
   hem ücretli oturumda hem yerel moddaki serbest sohbette (ADR-0183…0193).
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da
   "her seferinde tüm testleri koşma" dedi → dokunulan paketler + hedefli korpus yeter.
+
+
+**JARVIS hedefi (2026-09-27, sahip: "aslında birebir aynı hale getirmek istiyorum"):**
+`docs/ROADMAP.md` sonuna "The JARVIS target" bölümü eklendi — yetenek↔durum tablosu, tek seferlik
+sınırlar ve **bağlayıcı sıra**: 1 hafıza (PR-2/PR-3) → 2 browser-use → 3 sekreter (Radicale+mail+telefon
+köprüsü) → 4 ev (Home Assistant) → 5 her yerde (M29 yeniden açılır) → 6 ses+karakter → 7 görüş.
 
 ## Sıradaki işler
 

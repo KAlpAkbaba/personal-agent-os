@@ -4,7 +4,7 @@
   "current_milestone": "M28_DONE_2026_09_12 (row 26.16 PROVEN_REAL); M29 NOT STARTED",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
   "last_completed_milestone": "M28_NATIVE_APP_FACTORY",
-  "last_updated": "2026-09-21T18:12:00Z",
+  "last_updated": "2026-09-27T20:00:00Z",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -702,5 +702,50 @@
       "stage_1": "in-browser MediaPipe hand landmarks on the eye's camera; swipes -> arrow keys, thumb+index rotate -> volume, two hands spread -> 'f'; server 'gesture' client event -> same tools; pinch events emitted only",
       "stage_2": "pinch-mouse needs a pointer.stream over the device WebSocket; designed after stage 1 is measured on the real camera"
     }
+  },
+  "memory_local_embedder_adr_0200": {
+    "status": "PROVEN_REAL on the owner's machine 2026-09-27 (AYRIM n-gram +0.277 -> potion +0.457; Qwen3 +0.354); 76 targeted + 78 PS + quality-gate 12518 green (Claude Code report); branch feat/memory-local-embedder 6ee5970a; awaiting the owner's 'birleştir' -> merge -> -BlueGreen -> recovery pin",
+    "adr": "ADR-0200",
+    "finding": "production memory embedded with the n-gram hash (auto + no dedicated OpenAI key) - not semantic",
+    "code": [
+      "services/api/app/memory/providers.py:LocalEmbedder",
+      "app/memory/runtime.py:fill_index",
+      "app/memory/lifecycle.py:reindex_missing(limit)",
+      "app/config.py:memory_local_embedding_*",
+      "app/main.py:memory_index sweep",
+      "infra/docker/docker-compose.prod.yml (provider env + models mount)",
+      "scripts/cloud/release-cloud-core-bluegreen.sh:prefetch_embedding_model (exit 85)"
+    ],
+    "tests": [
+      "tests/unit/test_memory_local_embedder.py (18)",
+      "tests/unit/test_maintenance.py",
+      "tests/unit/test_health_endpoint.py",
+      "scripts/tests/cloud-release-bluegreen.tests.ps1 (prefetch, not yet run on Windows)"
+    ],
+    "no_migration": "EMBEDDING_DIM stays 256; default model is natively 256; MRL models truncated by allowlist",
+    "owner_steps": [
+      "run the Turkish benchmark",
+      "uv sync on Windows + PS suite",
+      "merge on 'birleştir', release -BlueGreen, re-pin recovery (compose changed)"
+    ]
+  },
+  "memory_continuous_learning_adr_0201": {
+    "status": "BUILT_AND_TESTED on branch feat/memory-continuous-learning (on top of feat/memory-local-embedder), 2026-09-27; PROVEN_AUTOMATED through the real relay; not merged, not released",
+    "adr": "ADR-0201",
+    "finding": "only a paid session's summary event ever fed the memory write policy; the local mode, operator and research turns taught it nothing; the preference pass saw research only",
+    "code": [
+      "app/voice/realtime_sessions/service.py (utterance -> extractor in every mode; _INTENTS_NOT_EXTRACTED)",
+      "app/memory/extraction.py (SOURCE_KIND_*)",
+      "app/experience/engine.py (BEHAVIOUR_SIGNALS: research.subject, media.request)"
+    ],
+    "tests": [
+      "tests/unit/test_memory_extraction_every_mode.py (7)",
+      "tests/unit/test_experience_preferences.py (+5)",
+      "corpus memory/operator/research/daily/macro 584/584"
+    ],
+    "next": [
+      "PR-3 semantic rerank over hybrid_search",
+      "then JARVIS order 2: browser-use"
+    ]
   }
 }

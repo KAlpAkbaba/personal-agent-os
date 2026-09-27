@@ -191,12 +191,26 @@ class Settings(BaseSettings):
     #: be a flag and not a revert.
     memory_injection_enabled: bool = True
     #: B37 req 51/53: which embedding provider serves memory retrieval -
-    #: "deterministic" (the seeded n-gram hash, offline, NOT semantic), "openai"
-    #: (text-embedding-3-small at the index width; needs a key) or "auto" (OpenAI when a
-    #: key is configured, otherwise deterministic). Every fallback is reported with its
-    #: reason by /v1/system/health and /v1/memory/embedding.
+    #: "deterministic" (the seeded n-gram hash, offline, NOT semantic), "local" (ADR-0200:
+    #: a sentence-embedding model on this host through fastembed - no key, no network after
+    #: the one model download, Turkish-capable), "openai" (text-embedding-3-small at the
+    #: index width; needs a key) or "auto" (OpenAI when a key is configured, otherwise
+    #: deterministic; never starts a model download on its own). Every fallback is reported
+    #: with its reason by /v1/system/health and /v1/memory/embedding.
     memory_embedding_provider: str = "auto"
     memory_embedding_model: str = "text-embedding-3-small"
+    #: ADR-0200: the local model. Must be natively EMBEDDING_DIM wide or on the Matryoshka
+    #: allowlist (app.memory.providers.MRL_TRUNCATABLE_MODELS); anything else is refused
+    #: with its reason and deterministic serves.
+    memory_local_embedding_model: str = "minishlab/potion-multilingual-128M"
+    #: Where the downloaded model files live (empty = fastembed's default cache). Production
+    #: mounts one directory into both colours so a release never re-downloads the model.
+    memory_local_embedding_cache_dir: str = ""
+    #: ADR-0200: on the retention clock, embed the memories the ACTIVE model has not indexed
+    #: yet (resumable; a provider change is picked up without an owner-run reindex). Bounded
+    #: per pass so housekeeping never monopolises the process.
+    memory_index_fill_enabled: bool = True
+    memory_index_fill_batch: int = 200
 
     # M18.3 (spec §3.3): the routine clock — the ONE named, owner-visible component that
     # asks "is anything due?". The routines package still has no timer of its own and

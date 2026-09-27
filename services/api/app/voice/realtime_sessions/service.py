@@ -31,6 +31,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_VOICE,
 )
 from app.logging import get_logger
+from app.memory.extraction import SOURCE_KIND_UTTERANCE
 from app.monotonic_clock import SESSION_CLOCK
 from app.narration import service as narration_service
 from app.narration.commands import NarrationState, State
@@ -1361,6 +1362,23 @@ def _narration_state_for(db: Session, row: RealtimeSessionRow) -> NarrationState
 EXTRACTED_KEYS_KEPT = 200
 
 
+#: ADR-0201: the intents whose sentence is NOT fed to the extractor. ``memory.remember``
+#: files the owner's statement itself, explicitly and durably, through the tool (ADR-0126)
+#: - a candidate copy of the same sentence beside it would be the ladder corroborating an
+#: owner memory with a paraphrase of itself. The other memory intents are questions and
+#: corrections ABOUT the store ("ne biliyorsun", "bunu unut"), not facts about the owner.
+_INTENTS_NOT_EXTRACTED: frozenset[str] = frozenset(
+    {
+        Intent.MEMORY_REMEMBER.value,
+        Intent.MEMORY_SEARCH.value,
+        Intent.MEMORY_FORGET.value,
+        Intent.MEMORY_CORRECT.value,
+        Intent.MEMORY_PIN.value,
+        Intent.MEMORY_WHY.value,
+    }
+)
+
+
 def _extract_memories(
     db: Session,
     ctx: dict[str, Any],
@@ -1368,8 +1386,10 @@ def _extract_memories(
     memory_runtime: Any,
     *,
     row: RealtimeSessionRow,
+    source_kind: str = "conversation_summary",
 ) -> dict[str, Any]:
-    """Feed one conversation summary to the memory write policy (B16 req 33/34).
+    """Feed one conversation summary - or, since ADR-0201, one of the owner's own
+    sentences - to the memory write policy (B16 req 33/34).
 
     Returns what to put on the event's audit metadata - counts only, never content.
 
@@ -1404,8 +1424,11 @@ def _extract_memories(
         summary,
         already=already,
         source={
-            "kind": "conversation_summary",
-            "channel": "voice",
+            "kind": source_kind,
+            # ADR-0201: WHICH mode the sentence came through. A retrieval can then say
+            # "the owner said this in the local mode" rather than pretending every
+            # sentence was a paid realtime turn.
+            "channel": "local" if row.provider == LOCAL_ROUTER_PROVIDER_NAME else "voice",
             "session_id": str(row.id),
         },
     )
@@ -1967,6 +1990,31 @@ def record_client_events(
                     "normalized_text": None,
                 }
             )
+            # ADR-0201: the owner's OWN sentence goes through the memory write policy in
+            # EVERY mode. Until now only a paid session's `summary` event fed the policy
+            # (B16) - and the local mode, an operator turn and a research turn never
+            # produce one, so nothing the owner said there could ever become a memory
+            # unless he prefixed it with "bunu hatırla". Same extractor, same frozen
+            # decision table, `explicit=False` always: a command is chatty and ignored, a
+            # sentence with a signal ("her zaman", "tercih ederim") is a CANDIDATE capped
+            # at SINGLE_OBSERVATION_MAX_CONFIDENCE, and only evidence promotes it. The
+            # sentence is already on this turn's record (ADR-0192); it travels nowhere new.
+            if (
+                text
+                and memory_runtime is not None
+                and intent.intent.value not in _INTENTS_NOT_EXTRACTED
+                and not macro_awaiting_name_known
+            ):
+                meta.update(
+                    _extract_memories(
+                        db,
+                        ctx,
+                        text,
+                        memory_runtime,
+                        row=row,
+                        source_kind=SOURCE_KIND_UTTERANCE,
+                    )
+                )
             # B51 (req 744): the question is spoken only under the owner's flag - the
             # model may already be answering the same utterance.
             if routed.clarification and get_intent_router().clarify_aloud:

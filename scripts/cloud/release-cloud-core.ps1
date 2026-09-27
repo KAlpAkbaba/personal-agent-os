@@ -81,6 +81,7 @@ $exitMeanings = @{
     77  = "the edge (nginx) reload failed; rolled back"
     78  = "the active colour marker on the host is neither blue nor green"
     79  = "the device sessions did not arrive on the new colour within PAGENTOS_HANDOFF_WAIT_S; rolled back (M18.4 gap 1)"
+    85  = "the memory embedding model could not be fetched into the shared models dir (ADR-0200); nothing was switched"
     127 = "the host tree has no scripts/cloud/release-cloud-core.sh (the archive did not extract)"
     255 = "ssh could not reach ${CloudUser}@${BrokerHost} (Tailscale up? key-based auth in BatchMode?)"
 }

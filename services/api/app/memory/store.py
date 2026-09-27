@@ -199,9 +199,9 @@ class NativeMemoryBackend:
         with self._session_scope() as session:
             return lifecycle.embedding_coverage(session, self.embedder)
 
-    def reindex_missing(self) -> int:
+    def reindex_missing(self, *, limit: int | None = None) -> int:
         with self._session_scope() as session:
-            return lifecycle.reindex_missing(session, self.embedder)
+            return lifecycle.reindex_missing(session, self.embedder, limit=limit)
 
     def forget(
         self, memory_id: uuid.UUID, *, actor: Actor, reason: str = "owner_request"

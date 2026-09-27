@@ -33,9 +33,7 @@ NOW = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
 
 @pytest.fixture()
 def session():
-    db = create_engine(
-        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
-    )
+    db = create_engine("sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False})
     for table in ALL_TABLES:
         table.create(db)
     factory = sessionmaker(bind=db, expire_on_commit=False)
@@ -64,9 +62,7 @@ def _research(session, topic: str, *, minutes: int) -> None:
 
 def _preferences(session) -> list[Memory]:
     return list(
-        session.execute(
-            select(Memory).where(Memory.memory_class == MemoryClass.PREFERENCE.value)
-        )
+        session.execute(select(Memory).where(Memory.memory_class == MemoryClass.PREFERENCE.value))
         .scalars()
         .all()
     )
@@ -212,3 +208,101 @@ def test_a_research_from_before_the_topic_was_recorded_still_counts(session) -> 
 
     prefs = _preferences(session)
     assert len(prefs) == 1, [p.text for p in prefs]
+
+
+# --------------------------------------------------- ADR-0201: every behaviour, one table
+
+
+def _media(session, request_text: str, *, minutes: int, title: str | None = None) -> None:
+    """The ledger row `tools_media.media_play` writes when a media actually played."""
+    from app.ledger.vocabulary import EVENT_TYPE_MEDIA_OPENED, SUBSYSTEM_MEDIA
+
+    playback_id = uuid.uuid4().hex
+    ledger_service.record(
+        session,
+        ledger_service.ActivityEvent(
+            event_type=EVENT_TYPE_MEDIA_OPENED,
+            subsystem=SUBSYSTEM_MEDIA,
+            action="opened",
+            factual_summary=f"Sahibin istediği medya: {title or request_text} (playing).",
+            occurred_at=NOW - timedelta(minutes=minutes),
+            detail_json={
+                "playback_id": playback_id,
+                "status": "playing",
+                "video_id": "abc123",
+                "error_class": None,
+                "request_text": request_text,
+                "title": title,
+            },
+            source="live",
+            source_ref=f"owner_media:{playback_id}:{EVENT_TYPE_MEDIA_OPENED}",
+        ),
+    )
+
+
+def test_three_plays_of_one_media_become_one_preference(session) -> None:
+    """ADR-0193 said it: "the pattern behind repeated actions is the preference pass's
+    job". Until ADR-0201 the pass knew one behaviour (research) and no other."""
+    for i in range(3):
+        _media(session, "Güldür Güldür", minutes=30 * (i + 1), title="Güldür Güldür Show 412")
+
+    experience.ingest(session, now=NOW)
+
+    prefs = _preferences(session)
+    assert len(prefs) == 1, [p.text for p in prefs]
+    assert "Güldür Güldür" in prefs[0].text and "3 kez" in prefs[0].text
+    assert prefs[0].evidence_count >= 3
+    assert prefs[0].key == f"{experience.PREFERENCE_KEY_PREFIX}:media.request:güldür güldür"
+    source = (prefs[0].provenance_json or {}).get("source") or {}
+    assert source.get("derived_from") == "media.opened:media.request"
+
+
+def test_two_plays_are_not_yet_a_preference(session) -> None:
+    for i in range(2):
+        _media(session, "Güldür Güldür", minutes=30 * (i + 1))
+    experience.ingest(session, now=NOW)
+    assert _preferences(session) == []
+
+
+def test_a_media_and_a_research_on_the_same_words_are_two_preferences(session) -> None:
+    """Different behaviours are different keys even when the words coincide: researching
+    'yapay zeka' three times and playing a video called 'yapay zeka' three times are two
+    facts about the owner, not six pieces of evidence for one."""
+    for i in range(3):
+        _research(session, "yapay zeka", minutes=10 * (i + 1))
+        _media(session, "yapay zeka", minutes=10 * (i + 1) + 5)
+
+    experience.ingest(session, now=NOW)
+
+    keys = sorted(p.key for p in _preferences(session))
+    assert keys == [
+        f"{experience.PREFERENCE_KEY_PREFIX}:media.request:yapay zeka",
+        f"{experience.PREFERENCE_KEY_PREFIX}:research.subject:yapay zeka",
+    ]
+
+
+def test_the_research_key_is_exactly_what_adr_0191_wrote(session) -> None:
+    """Production rows carry ADR-0191's keys; a fourth research must corroborate them,
+    not open a second row with a differently normalised subject."""
+    for i in range(3):
+        _research(session, "Yapay Zeka Haberleri", minutes=30 * (i + 1))
+    experience.ingest(session, now=NOW)
+    prefs = _preferences(session)
+    assert len(prefs) == 1
+    assert prefs[0].key.startswith(f"{experience.PREFERENCE_KEY_PREFIX}:research.subject:")
+    assert prefs[0].key == prefs[0].key.casefold()
+
+
+def test_every_behaviour_signal_names_a_real_ledger_event_and_a_unique_family() -> None:
+    from app.ledger import vocabulary
+
+    known = {value for name, value in vars(vocabulary).items() if name.startswith("EVENT_TYPE_")}
+    families = [s.family for s in experience.BEHAVIOUR_SIGNALS]
+    assert len(families) == len(set(families))
+    for signal in experience.BEHAVIOUR_SIGNALS:
+        assert signal.event_type in known, signal.event_type
+        assert signal.sentence("x", 3).strip(), signal.family
+    assert {s.event_type for s in experience.BEHAVIOUR_SIGNALS} >= {
+        "research.completed",
+        "media.opened",
+    }

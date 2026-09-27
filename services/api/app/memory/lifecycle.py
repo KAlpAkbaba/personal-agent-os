@@ -197,12 +197,16 @@ def embedding_coverage(session: Session, embedder: Embedder) -> dict[str, Any]:
     }
 
 
-def reindex_missing(session: Session, embedder: Embedder) -> int:
+def reindex_missing(session: Session, embedder: Embedder, *, limit: int | None = None) -> int:
     """B37 req 54: embed only the memories that have no row for this model - the
     resumable half of a provider change. Returns the rows written; a second pass
-    writes none."""
+    writes none. ``limit`` (ADR-0200) bounds one pass so the retention clock can fill
+    a fresh model's index in batches without monopolising the process."""
     done = select(MemoryEmbedding.memory_id).where(MemoryEmbedding.model_id == embedder.model_id)
-    memories = session.execute(select(Memory).where(Memory.id.not_in(done))).scalars().all()
+    stmt = select(Memory).where(Memory.id.not_in(done)).order_by(Memory.created_at)
+    if limit is not None:
+        stmt = stmt.limit(max(0, int(limit)))
+    memories = session.execute(stmt).scalars().all()
     count = 0
     for memory in memories:
         upsert_embedding(session, embedder, memory)

@@ -14839,3 +14839,242 @@ name → the name alone replays the same device calls in order; stop at the firs
 step; step-up evaluated per step by name; a clarification and a macro word are not steps;
 replace on the same name; delete makes the name a plain sentence; run while recording
 refused), corpus `macro.*` cases including the multi-turn `macro.run.1`.
+## ADR-0200 — Memory retrieval embeds with a model on this host, not an n-gram hash (2026-09-27)
+
+Owner (2026-09-27, the "make the memory better, learning all the time" track, chosen over
+trading and the rest of the inventory): start with memory; the machine may host it
+("benim bilgisayarıma da kurabilirsin, sorun değil, bir zaman sonra bunların hepsini
+taşıyacağım zaten").
+
+### What was actually serving
+
+`app.memory.embedding.DeterministicEmbedder` — a seeded character n-gram hash whose own
+docstring says "NOT a semantic model" — was the production embedder: `auto` (B37) picks
+OpenAI only with a dedicated key, and no key was installed. Every "meaning" retrieval
+since M5 has been lexical overlap with a cosine dressed on top: "kahve içmeyi sever" and
+"her sabah bir fincan kahve" share a stem and score; "Aktivra benim kurduğum şirket" and
+"şirketimin adı Aktivra" barely do. The hybrid rerank (0.55 semantic + recency +
+confidence + explicit + project) was weighing a number that carried no meaning.
+
+### Decision
+
+1. A third provider, `local` (`app.memory.providers.LocalEmbedder`): a sentence-embedding
+   model run in the API process through `fastembed` (ONNX, CPU, no torch, no key, no
+   network after the one model download). Selected explicitly —
+   `PAGENTOS_MEMORY_EMBEDDING_PROVIDER=local`, now the production compose default;
+   `auto` keeps its B37 meaning and never starts a download on its own.
+2. **The index width is a contract, not a target.** `EMBEDDING_DIM` stays 256 and there is
+   NO migration: the default model `minishlab/potion-multilingual-128M` is natively 256
+   wide (multilingual, Turkish included, ~0.5 GB, milliseconds per text on a CPU — it fits
+   the Cloud Core beside everything else it runs, in both colours during a release). A
+   model on the Matryoshka allowlist (`MRL_TRUNCATABLE_MODELS`, from the model cards:
+   `Qwen/Qwen3-Embedding-0.6B(-Q)`, `google/embeddinggemma-300m`) is truncated to 256 and
+   re-normalised, as its own documentation prescribes, and its `model_id` carries the width
+   (`local-<model>@256`). Any other width is REFUSED with the reason: a truncated non-MRL
+   vector is a different, worse space, and the column must never hold two.
+3. **The index fills itself.** A new retention sweep, `memory_index`, embeds the memories
+   the active model has not indexed, in bounded batches (`memory_index_fill_batch`, 200),
+   on the same clock as the other sweeps. A provider change is therefore picked up pass by
+   pass without an owner-run reindex; a complete index costs nothing; a non-semantic
+   embedder never fills anything (hash rows would only be work the next real model throws
+   away). `/v1/memory/reindex` stays for the impatient.
+4. **Never a crash, never a silent downgrade.** fastembed missing, the model missing, a
+   wrong width — each is the deterministic embedder WITH the reason on `/v1/system/health`
+   (`checks.memory.embedder.fallback_reason`, `semantic: false`), as B37 promised. And
+   because an explicit `local` asked for semantic memory, the RELEASE fetches the model
+   first — once, as uid 10001, into `/mnt/pagentos-data/models`, mounted into both colours
+   — and a fetch that fails after three tries exits **85** before anything is switched.
+5. The model runs where the memory is READ: on the Cloud Core. Memory injection happens at
+   every session create; an embedder on the owner's PC would have made every session
+   depend on that PC being awake. When the Cloud Core moves to the PC (the owner's plan),
+   the same seam takes a heavier model on the GPU — a setting and a re-index, not a design.
+
+### What this does not decide
+
+Turkish retrieval QUALITY of the default model versus the Matryoshka alternatives. No
+sandbox this session could reach huggingface.co, so the benchmark is the owner's:
+`scripts/core/bench-memory-embedding.py` compares the n-gram hash with the local model(s)
+on Turkish paraphrase/unrelated pairs and prints the separation. Until it has run, the
+provider is PROVEN_AUTOMATED (the contract, the fallbacks, the sweep, the wiring) and the
+quality claim is READY_FOR_OWNER — not made here.
+
+### Proof
+
+`tests/unit/test_memory_local_embedder.py` (18): native width served as is, normalised
+and cached; Matryoshka truncation with the width in the model_id; another width refused
+with its reason; a narrower model refused even on the allowlist; a width that drifts
+mid-flight is an error, not a bad row; selection by configuration with the model and
+cache dir it was given; every failure deterministic with the reason and never raising;
+the load error names the exception class and never its text; `auto` never downloads;
+the health check says `local` / semantic; the sweep fills in batches then writes
+nothing, never fills a non-semantic index, can be turned off, and is registered on the
+REAL application object. Mutations RED: the allowlist removed → 2 tests fail; the sweep
+registration removed → 1 test fails; both restored from a sha256-verified copy. The
+release script's prefetch: `scripts/tests/cloud-release-bluegreen.tests.ps1` (runs before
+the idle colour; a failing fetch is retried thrice, exits 85, switches nothing).
+Neighbouring suites green: memory (b37, retrieval, store, service, routes, injection,
+extraction, policy), maintenance, orphan sweeps, health endpoint (the sweep name is on the
+manifest), migration model agreement and compatibility.
+
+Deployment: compose gained the provider env and the models mount, so the recovery
+supervisor bundle is STALE after this release until the owner re-pins it
+(`install-recovery-supervisor.sh <sha>`). Owner PC path: the PS 5.1 suite and the
+benchmark are the owner's (or the Windows-side session's) to run; nothing here ran on
+Windows.
+
+
+## ADR-0200 — Kanıt (sahibin makinesi, 2026-09-27)
+
+The three steps the Linux sandbox could not take — it reaches neither huggingface.co nor
+Windows — taken on the owner's PC against `feat/memory-local-embedder` @ `b4949d21`.
+
+**1. The lock, on Windows.** `uv sync` in `services/api` installed `fastembed 0.8.1`,
+`onnxruntime 1.30.0`, `tokenizers 0.23.2`, `huggingface-hub 1.33.0` and friends. The
+targeted suites: **76 passed, 0 failed** — `test_memory_local_embedder` 18,
+`test_memory_b37` 15, `test_maintenance` 5, `test_health_endpoint` 14,
+`test_orphan_sweeps` 14, `test_migration_model_agreement` 10. And the real application
+object agrees with the suites: `MemoryRuntime(Settings(memory_embedding_provider="local"))`
+— the runtime the API builds at startup and the health endpoint reports — answers
+`local → local`, `model_id local-minishlab/potion-multilingual-128M`, `dim 256`,
+`semantic True`, and embeds a Turkish sentence to 256 dimensions.
+
+**2. The Turkish measurement** (`scripts/core/bench-memory-embedding.py`, 7 paraphrase +
+7 unrelated pairs drawn from the shapes owner memory actually holds):
+
+| model | AYRIM | anlamdaş ort. | alakasız ort. | yükleme (ilk / ısınmış) | embed | süreç RSS |
+|---|---|---|---|---|---|---|
+| deterministic n-gram (what was serving) | +0.277 | 0.282 | 0.005 | — | <0.1 ms | — |
+| `minishlab/potion-multilingual-128M` (256 native) | **+0.457** | 0.480 | 0.023 | 76.4 s (indirme dahil) / 2.7 s | 0.2 ms ortanca | 39 → 1073 MB (tepe 1103) |
+| `Qwen/Qwen3-Embedding-0.6B-Q` (1024→256, MRL) | +0.354 | 0.721 | 0.367 | 97.2 s / 3.0 s | 694 ms ortanca | 39 → 1218 MB (tepe 1768) |
+
+All three rank the paraphrase above the unrelated sentence for 7/7 anchors; what differs
+is the margin, and the n-gram's margin is decoration: "Ekranlar 15 dakika sonra kapansın"
+~ "Monitörler çeyrek saat boşta kalınca sönsün" scores **0.000** against −0.029 — no
+shared characters, therefore no meaning — and "Sahip sabahları kahve içmeyi sever" ~
+"Kadir her sabah bir fincan kahve içer" clears its unrelated pair by 0.108. potion widens
+the separation by 65 % over the n-gram (+0.457 vs +0.277) and answers in a fifth of a
+millisecond. Qwen3 reads the two hardest paraphrases far better (0.680 and 0.572 where
+potion reads 0.142 and 0.170), but truncated to the index's 256 dimensions its floor for
+unrelated sentences rises to 0.367: the separation ends up narrower than potion's, any
+fixed threshold has to move with it, and every embedding costs ~0.7 s on this CPU — a
+200-row retention batch would take 2.3 minutes against potion's 0.04 s. **The default
+stays `minishlab/potion-multilingual-128M`**; the Matryoshka allowlist keeps Qwen3
+available for a later, better-provisioned host.
+
+The time-and-memory half of this measurement is re-runnable rather than recounted:
+`scripts/core/measure-embedder-cost.py` builds the embedder, embeds eight Turkish
+sentences and reads this process's working set through the Win32 API, then writes what
+it saw as `docs/evidence/adr-0200-embedder-cost-2026-09-27.json` — warm load **2.07 s**,
+median embed **0.18 ms**, **1073 MB** resident (peak 1103) from 39 MB before the model
+was built. It exists because the first version of this addendum's QUALIFICATION row
+(30.4) stated those numbers and named nothing: `test_qualification_evidence` refused it,
+correctly — a proof mark must point at something a machine can follow, and a sentence
+about a run cannot be re-checked after the machine is rebuilt.
+
+**3. PowerShell 5.1 on the owner's machine.**
+`scripts/tests/cloud-release-bluegreen.tests.ps1`: **78 passed, 0 failed**, including
+this ADR's two assertions by name — "the embedding model is prefetched into the shared
+models dir as uid 10001 BEFORE the idle colour starts" and "a failed model prefetch is
+retried thrice, exits 85, and nothing is switched". `scripts/quality-gate.ps1 -Fast`:
+**PASS** — but only after it found two defects, both fixed on this branch and each proven
+by a mutation (restored byte-exact, sha256):
+
+* **This branch's, and it took two moves to say truthfully.** Exit **85** lives in the
+  script's 8x range, which the header presents as the `--reconcile` family. Two independent
+  guards read that header: `test_release_exit_codes` refuses any 8x code an operator can
+  meet and not find there, and `test_notification_events` demands an owner-facing sentence
+  in `app.notifications.events._RECOVERY_BY_EXIT` for every code listed *after* the
+  `--reconcile exits:` marker. Documenting 85 inside that paragraph satisfied the first and
+  broke the second — correctly, because the recovery supervisor can never produce 85: it is
+  a release-path failure, not a reconcile outcome. The header now carries a short paragraph
+  for the release-path codes that share the range (82 the expand-only migration, 83 the
+  served schema revision, 85 the model prefetch) placed **above** the reconcile marker, so
+  each guard is told exactly the truth. Mutations: drop 85 from that paragraph →
+  `test_release_exit_codes` RED; move the paragraph below the marker →
+  `test_notification_events` RED. (7x, the release family, is full: 71-79 are all taken,
+  which is why the prefetch reached into the 8x range at all.)
+* **Not this branch's, but this is the branch that runs next.** `macro` (ADR-0196) and
+  `godseye` (ADR-0197) reached the owner with no Turkish family name — the capability list
+  would have read them out as bare English prefixes — and `test_capability_list` has been
+  failing on `main` since those two shipped. Named here: "Hareketler" and "Dünya gözü".
+  Mutation: remove either name → RED.
+
+**Carry into the release, not a defect of this branch.** The model lives inside the API
+process — `MemoryRuntime` builds the embedder at construction, one uvicorn worker per
+container — and measured ~1.0 GB resident here. The Cloud Core is a CPX32 (4 vCPU /
+**8 GB**, ADR-0033) and a blue-green release runs BOTH colours through the drain window,
+so the first release of this branch is worth watching: ~2 GB of embedder beside Postgres,
+Temporal, MinIO, Redis and the 2 GB-capped `godseye`. The api services carry no
+`mem_limit` today. If the host proves tight the cheap remedy is already in the design —
+a model that cannot be loaded falls back to the deterministic embedder and the API keeps
+serving — so capping the colours is a configuration change, not a code change.
+
+## ADR-0201 — The memory learns from what the owner SAYS in every mode and from what he DOES, again (2026-09-27)
+
+Owner (2026-09-27): "hafızasını geliştirebilecek, daha iyi yapacak, sürekli kaydedecek …
+bir agent"; then "Başla ve ne gerekiyorsa yap". JARVIS order item 1, PR-2 (ROADMAP "The
+JARVIS target").
+
+### What was actually happening
+
+1. **Only a paid session ever taught the memory anything.** B16 wired the write policy
+   to the client's `summary` event. The local mode (ADR-0173, the mode the owner has used
+   daily since 2026-09-19) never sends one — no model is there to write it — and neither
+   does an operator turn or a research turn. Every sentence the owner said in the local
+   mode was read by the router, acted on, and forgotten, unless he prefixed it with "bunu
+   hatırla" (ADR-0192). Measured on this checkout: `extract_from_summary` has exactly one
+   caller, the `summary` branch.
+2. **The preference pass knew one behaviour.** ADR-0191 turned "the same research topic,
+   three times" into a preference and hard-wired topic, key and sentence into one function.
+   ADR-0193 then removed the machine's own records from episodic memory and said, in so
+   many words, that "the pattern behind repeated actions is the preference pass's job" —
+   and the pass could not see any action but research.
+
+### Decision
+
+1. **The owner's own sentence goes through the write policy in every mode.** In
+   `record_client_events`, after the router has resolved an utterance, the sentence is fed
+   to the SAME extractor (`extract_from_summary`), the same frozen decision table, with
+   `explicit=False` always: a command is chatty and ignored; a sentence with a signal
+   ("her zaman", "bundan sonra", "tercih ederim", "karar") is a CANDIDATE capped at
+   `SINGLE_OBSERVATION_MAX_CONFIDENCE`; only evidence promotes it. Not extracted: the
+   `memory_*` intents — `memory.remember` files the statement itself, explicitly (ADR-0126),
+   and a candidate copy beside it would be the ladder corroborating an owner memory with a
+   paraphrase of itself; the others are questions and corrections about the store. Not
+   extracted either: the sentence that names a macro (ADR-0196). The source records
+   `kind: owner_utterance` and the channel (`local` / `voice`), so a retrieval can say
+   where it heard a thing. The sentence is already on the turn record (ADR-0192); it
+   travels nowhere new, and the event's audit metadata carries counts, never words.
+2. **Behaviours are a table.** `app.experience.engine.BEHAVIOUR_SIGNALS`: one row per kind
+   of thing the owner does — which ledger event, how to read its subject, the key family,
+   the Turkish sentence. The research row keeps ADR-0191's key byte for byte (production
+   rows carry it; a fourth research must corroborate, not open a second row). The second
+   row is `media.opened` → `media.request`: what the owner asks to be played, in his own
+   words ("Güldür Güldür"), three times over the whole history, is a preference. Adding a
+   behaviour is adding a row; the same threshold, the same ladder, the same
+   `_new_corroborating_rows` guard against self-corroboration for every row.
+
+### What this does not do
+
+It does not lower the bar. One sentence is never durable, never explicit; three plays are
+a candidate the ladder may promote, exactly as three researches were. It does not touch
+what ADR-0190/0193 excluded from episodic memory. It adds no model call anywhere.
+
+### Proof
+
+`tests/unit/test_memory_extraction_every_mode.py` (7, through the REAL relay with the
+local-router provider): a preference said in the local mode is a CANDIDATE with
+`source.channel == "local"`; three commands write nothing; "bunu hatırla" is filed once,
+by the tool, explicit; a credential is refused and counted with no content anywhere;
+the same sentence twice is one observation; a paid session's channel is `voice`; the
+audit metadata carries counts and never the words. Mutations RED: the memory-intent gate
+removed → the "filed once" test fails; the hook removed → five tests fail; restored from
+a sha256-verified copy. `tests/unit/test_experience_preferences.py` (+5): three plays
+become one preference with `media.request` key and `media.opened:media.request`
+provenance; two do not; a media and a research on the same words are two preferences;
+the research key is exactly ADR-0191's; every signal names a real ledger event and a
+unique family. Mutation RED: the media row removed from the table → three tests fail.
+Neighbouring suites (memory, local mode, voice relay, experience engine/scheduler,
+assistant chat, ADR-0200's embedder) 234 green; the Owner Utterance Corpus's memory /
+operator / research / daily / macro families 584 cases, 0 changed verdicts, 0 forbidden
+side effects.
