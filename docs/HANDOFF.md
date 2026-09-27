@@ -15,23 +15,18 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Sahip "birleştir" dedi (2026-09-27): hafıza PR-1 + PR-2 main'e ve yayına.**
-`feat/memory-continuous-learning` (`6acbcf0c`, ADR-0201) PR-1'in (`6ee5970a`, ADR-0200)
-üstünde duruyor; ikisi birlikte main'e alınıyor. `feat/hand-gestures-stage1` DOKUNULMUYOR.
-Sıra: (1) PR-2 doğrulama — hedefli 5 paket **50 ✓**, `quality-gate.ps1 -Fast`; (2) merge
-`--no-ff` → main'de üç paket yeşil → push; (3) yayın öncesi `free -m` (eşik 2,5 GB;
-ölçülen **5649 MB available** → geçti); (4) `release-cloud-core.ps1 -BlueGreen` (asla
-`2>&1` ile değil; çıkış 85 = model indirilemedi, hiçbir şey anahtarlanmadı);
-(5) compose değiştiği için recovery pinini main'in tam sha'sıyla yenile;
-(6) çalışma-zamanı: `checks.memory.embedder.provider == "local"`, `semantic true`,
-kapsam artıyor, yerel modda söylenen bir cümle CANDIDATE satırı oluyor.
-**Kapının bulduğu hata (benim, PR-1 dalından):** QUALIFICATION 30.4 satırı `PROVEN_REAL`
-diyip makinenin izleyebileceği hiçbir şey adlandırmıyordu — Stage 30'u kapıyı çalıştırdıktan
-SONRA yazıp commit etmişim. Düzeltme: ölçüm aleti artık depoda
-(`scripts/core/measure-embedder-cost.py`) ve kanıtı yazıyor
-(`docs/evidence/adr-0200-embedder-cost-2026-09-27.json`: ısınmış yükleme 2,07 s, embed
-ortanca 0,18 ms, 1073 MB — tepe 1103). İki mutasyon KIRMIZI (düz metne dönüş; var olmayan
-dosya adları), dosya sha256 ile birebir geri konuldu.
+**Hafıza yayını yapıldı; recovery pini ADR-0202'yi bekliyor (2026-09-27 gece).**
+PR-1 + PR-2 main'de (`3a8f4637`, merge `--no-ff`) ve **üretimde** (api-blue). Pin
+yenilemesi BAŞARISIZ oldu ve eski pin geri kondu: mutabakat, kendi eski hata işaretinin
+bozduğu sağlığı "renk bozuk" diye okuyup 84 ile çıkıyor, işaret de bu yüzden hiç
+silinmiyor (2026-09-18 kilidinin mutabakat yolundaki ikizi). **Düzeltme hazır, dal
+`fix/reconcile-own-marker`** (ADR-0202): `degraded_only_by_own_marker`, PS paketi 82 ✓,
+dört mutasyon KIRMIZI. **Sahibin sözü gerekiyor** (talimat "başarısız adımda dur" idi):
+"yayınla" derse → dalı main'e al → `release-cloud-core.ps1 -BlueGreen` →
+`install-recovery-supervisor.sh <main'in tam sha'sı>` → `failing_checks` boşalmalı.
+Ayrıca sahipten: yerel modda bir cümle söylemesi ("Bundan sonra araştırma raporlarını her
+zaman Türkçe oku") — satırı ben okurum (üretime sahip parolasıyla ben girmiyorum).
+`feat/hand-gestures-stage1` DOKUNULMADI.
 Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
 
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
@@ -120,15 +115,18 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `dad462a` (api-green, 2026-09-21 18:08; önceki `6de7ab3` son iyi
-  bilinen) + `godseye` aux servisi (`:4173`, yalnız tailnet), `pagentos-bluegreen-
-  reconcile.timer` aktif. Recovery supervisor pini `6de7ab39` (sahip yaptı); `dad462ac`
-  compose'u değiştirdiği için bundle STALE — yeniden pin sahibin işi (okuma serbest, uzak
-  yazma değil).
+- **Üretim:** Cloud Core `3a8f4637` (api-blue, 2026-09-27 20:29 UTC; son iyi bilinen
+  `2dcf434a`) + `godseye` aux servisi. Hafıza **semantik**: `local-minishlab/potion-
+  multilingual-128M`, 256 boyut, 22/22 satır gömülü. api-blue ~1,43 GiB tutuyor; tek renkle
+  4657 MB kullanılabilir. Sağlık `degraded`, tek sebep `backup` ←
+  `pagentos-bluegreen-reconcile.service` hata işareti. **Recovery pini ESKİ** (2026-09-21
+  tarihli bundle; zamanlayıcı her dakika 83 ile reddediyor) — ADR-0202 yayını + yeniden pin
+  gerekiyor. Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-
+  bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
   Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.
-- **Hafıza:** 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu
+- **Hafıza (2026-09-27):** her modda sahibin cümlesi yazım politikasından geçiyor (ADR-0201), geri çağırma semantik (ADR-0200). Önceki not: 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu
   hem ücretli oturumda hem yerel moddaki serbest sohbette (ADR-0183…0193).
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da
   "her seferinde tüm testleri koşma" dedi → dokunulan paketler + hedefli korpus yeter.

@@ -45,7 +45,8 @@
 # 81 the canonical colour did not serve and the recorded other one took over (loud);
 # 82 another release/recovery holds the lock; 83 no tree matches the pinned recovery inputs;
 # 84 the canonical colour serves its release but reports degraded - kept, never switched,
-# because a colour switch cannot repair a dependency both colours share.
+# because a colour switch cannot repair a dependency both colours share. Degraded ONLY by
+# this unit's own earlier failure marker is not 84: that run ends the failure (exit 0).
 # Any failure after the switch switches back (devices first, then HTTP; the old colour is
 # still up during the drain; after it, the old colour is started again first). Any failure
 # before the switch stops the idle colour and restores the trees. The database is never
@@ -352,6 +353,29 @@ serving_status_of() {
     return 1
 }
 
+degraded_only_by_own_marker() {
+    # degraded_only_by_own_marker BODY: the colour is degraded by NOTHING except this
+    # unit's own earlier failure. 2026-09-27, production: a stale recovery pin failed the
+    # timer (83) and OnFailure= wrote the marker; the backup check reads the marker, so the
+    # colour reported 'degraded' for [backup]; and the run that would have ended the
+    # failure - the freshly pinned reconcile, the installer's own proof - read that status
+    # and exited 84, which kept the marker, which kept the status. The alarm blocked its
+    # own remedy, and the installer restored the STALE pin. The 2026-09-18 fix taught the
+    # release path this; the reconcile path had the same loop. All four must hold, so
+    # nothing else hides behind it: the only failing check is backup; its only reason is a
+    # failed scheduled unit; this unit's marker exists; and it is the ONLY marker (a failed
+    # backup or restore drill is a real condition and stays 84).
+    local body=$1 block reasons
+    local failures="${PAGENTOS_BACKUP_ROOT:-/var/lib/pagentos-backup}/failures"
+    [ "$(failing_checks_of "$body")" = "backup" ] || return 1
+    block="$(grep -m1 -oE '"backup":[[:space:]]*\{[^}]*' <<<"$body" || true)"
+    reasons="$(grep -m1 -oE '"reasons":[[:space:]]*\[[^]]*\]' <<<"$block" | tr -d '[:space:]' || true)"
+    [ "$reasons" = '"reasons":["scheduled_unit_failed"]' ] || return 1
+    [ -f "$failures/pagentos-bluegreen-reconcile.service.json" ] || return 1
+    [ "$(find "$failures" -maxdepth 1 -type f | wc -l)" -eq 1 ] || return 1
+    return 0
+}
+
 install_edge_config() {
     # install_edge_config [TREE]: the tree's nginx.conf becomes the edge's (atomic copy into
     # the edge dir the container reads with -c). A missing tree file leaves the edge's alone.
@@ -548,7 +572,12 @@ if [ "$mode" = "--reconcile" ]; then
         # recovers while the other colour starts would make an OLDER build live and rewrite
         # RELEASE to it. The serving colour stays canonical; the state is reported loudly
         # at the end (84). Only a colour that does not serve at all is replaced.
-        echo "reconcile: api-$canonical serves $canonical_sha but reports '$degraded'; it stays canonical (a colour switch cannot repair a shared dependency)" >&2
+        if degraded_only_by_own_marker "$(in_container_health "$canonical" 2>/dev/null || true)"; then
+            echo "reconcile: api-$canonical serves $canonical_sha and reports '$degraded' only for this unit's own earlier failure marker; that is the failure this run ends, not a condition of the colour"
+            degraded=""
+        else
+            echo "reconcile: api-$canonical serves $canonical_sha but reports '$degraded'; it stays canonical (a colour switch cannot repair a shared dependency)" >&2
+        fi
     else
         degraded=""
         if [ -n "$other_sha" ]; then
