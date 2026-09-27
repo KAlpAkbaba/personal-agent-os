@@ -19,7 +19,7 @@ from app.config import Settings
 from app.db import build_engine, build_session_factory
 from app.logging import get_logger
 from app.memory.embedding import DeterministicEmbedder, Embedder
-from app.memory.providers import EmbedderReport, build_embedder
+from app.memory.providers import EmbedderReport, ModelFactory, build_embedder
 from app.memory.store import NativeMemoryBackend
 
 logger = get_logger("app.memory.runtime")
@@ -32,6 +32,7 @@ class MemoryRuntime:
         *,
         engine: Engine | None = None,
         embedder: Embedder | None = None,
+        model_factory: ModelFactory | None = None,
     ) -> None:
         self.settings = settings
         self._engine: Engine | None = engine
@@ -53,7 +54,9 @@ class MemoryRuntime:
                 semantic=not isinstance(embedder, DeterministicEmbedder),
             )
         else:
-            self.embedder, self.embedder_report = build_embedder(settings)
+            self.embedder, self.embedder_report = build_embedder(
+                settings, model_factory=model_factory
+            )
         self._backend: NativeMemoryBackend | None = None
 
     @property
@@ -115,6 +118,23 @@ class MemoryRuntime:
             self.backend.reindex_missing() if only_missing else self.backend.reindex(self.embedder)
         )
         return {"rows": rows, "model_id": self.embedder.model_id, "only_missing": only_missing}
+
+    def fill_index(self) -> int:
+        """ADR-0200: the retention clock's sweep - embed a bounded batch of the memories
+        the ACTIVE model has not indexed. A provider change (deterministic -> local, or a
+        new local model) is therefore picked up on its own, pass by pass, without an
+        owner-run reindex; a second pass over a complete index writes nothing. Off when
+        the active embedder is not semantic: hashing n-grams into the index would only
+        be work the next real model throws away."""
+        if not self.embedder_report.semantic:
+            return 0
+        if not bool(getattr(self.settings, "memory_index_fill_enabled", True)):
+            return 0
+        batch = int(getattr(self.settings, "memory_index_fill_batch", 200) or 200)
+        rows = self.backend.reindex_missing(limit=batch)
+        if rows:
+            logger.info("memory_index_filled", rows=rows, model_id=self.embedder.model_id)
+        return rows
 
 
 __all__ = ["MemoryRuntime"]

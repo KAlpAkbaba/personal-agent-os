@@ -62,6 +62,10 @@ def test_the_application_sweeps_memory_sessions_and_assets(monkeypatch) -> None:
         # B07 req 679: a dry run on an empty database counts nothing, which is the honest
         # answer and not a skipped sweep.
         "audit_retention": 0,
+        # ADR-0200: the embedding index fills itself in batches; with the default
+        # (deterministic, non-semantic) embedder there is nothing to fill, and 0 is the
+        # honest count of a sweep that ran, not one that was skipped.
+        "memory_index": 0,
     }
     assert app.state.retention_sweeper.last_results == results
     assert app.state.retention_sweeper.last_run_at is not None

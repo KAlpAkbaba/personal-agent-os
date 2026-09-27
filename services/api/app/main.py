@@ -589,6 +589,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     retention_sweeper = RetentionSweeper(
         {
             "memory": lambda: memory.backend.sweep_expired(),
+            # ADR-0200: the active embedding model's index is filled in bounded batches,
+            # so a provider change never needs an owner-run reindex to take effect.
+            "memory_index": lambda: memory.fill_index(),
             "identity_sessions": lambda: identity.service.sweep_expired(),
             "security_assets": lambda: security.registry.sweep_expired(),
             # Rows a stopped process left mid-flight (a crash; a colour drained mid-call).

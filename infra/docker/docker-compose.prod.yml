@@ -141,7 +141,19 @@ services:
       # here; "unknown" is reported as unknown, never guessed from the tree.
       PAGENTOS_RELEASE: ${PAGENTOS_RELEASE:-}
       PAGENTOS_LAST_KNOWN_GOOD: ${PAGENTOS_LAST_KNOWN_GOOD:-}
+      # ADR-0200: memory retrieval embeds with a sentence-embedding model ON THIS HOST
+      # (fastembed, ONNX, CPU, no key, no network after the one download) instead of the
+      # n-gram hash that served until then. The model files live on the data volume and
+      # are mounted into BOTH colours, so a release never re-downloads them and the
+      # release script prefetches them before the idle colour starts (exit 85 if it
+      # cannot). A model that cannot be loaded never stops the API: the memory check then
+      # says `semantic: false` with the reason. `deterministic` here turns it back off.
+      PAGENTOS_MEMORY_EMBEDDING_PROVIDER: ${PAGENTOS_MEMORY_EMBEDDING_PROVIDER:-local}
+      PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL: ${PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL:-minishlab/potion-multilingual-128M}
+      PAGENTOS_MEMORY_LOCAL_EMBEDDING_CACHE_DIR: /srv/pagentos/var/models
     volumes:
+      # ADR-0200: the embedding model files, shared by both colours (see the env above).
+      - ${PAGENTOS_MODELS_DIR:-/mnt/pagentos-data/models}:/srv/pagentos/var/models
       # ADR-0027: the owner-credential hash lives OUTSIDE the database and OUTSIDE the
       # image, on the persistent volume, so neither a DB restore nor an image rebuild
       # can mint or destroy owner identity.

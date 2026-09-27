@@ -40,6 +40,13 @@ dependencies = [
     # (pulled in by python-docx/python-pptx), pinned here explicitly for the same reason
     # defusedxml is above: never left to an unrelated dependency's own version bump.
     "pillow>=10.0",
+    # ADR-0200 (local semantic memory embedder): fastembed runs an ONNX sentence
+    # embedding model on the CPU with no torch, no network after the one model download,
+    # and no key. It sits behind the same ``Embedder`` protocol as the OpenAI provider
+    # and the deterministic n-gram fallback (app.memory.providers.LocalEmbedder), so a
+    # missing model never crashes the API — it degrades to deterministic WITH a reason
+    # on the health report (docs/THIRD_PARTY_COMPONENTS.md).
+    "fastembed>=0.7",
 ]
 
 [dependency-groups]

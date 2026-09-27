@@ -14839,3 +14839,85 @@ name → the name alone replays the same device calls in order; stop at the firs
 step; step-up evaluated per step by name; a clarification and a macro word are not steps;
 replace on the same name; delete makes the name a plain sentence; run while recording
 refused), corpus `macro.*` cases including the multi-turn `macro.run.1`.
+## ADR-0200 — Memory retrieval embeds with a model on this host, not an n-gram hash (2026-09-27)
+
+Owner (2026-09-27, the "make the memory better, learning all the time" track, chosen over
+trading and the rest of the inventory): start with memory; the machine may host it
+("benim bilgisayarıma da kurabilirsin, sorun değil, bir zaman sonra bunların hepsini
+taşıyacağım zaten").
+
+### What was actually serving
+
+`app.memory.embedding.DeterministicEmbedder` — a seeded character n-gram hash whose own
+docstring says "NOT a semantic model" — was the production embedder: `auto` (B37) picks
+OpenAI only with a dedicated key, and no key was installed. Every "meaning" retrieval
+since M5 has been lexical overlap with a cosine dressed on top: "kahve içmeyi sever" and
+"her sabah bir fincan kahve" share a stem and score; "Aktivra benim kurduğum şirket" and
+"şirketimin adı Aktivra" barely do. The hybrid rerank (0.55 semantic + recency +
+confidence + explicit + project) was weighing a number that carried no meaning.
+
+### Decision
+
+1. A third provider, `local` (`app.memory.providers.LocalEmbedder`): a sentence-embedding
+   model run in the API process through `fastembed` (ONNX, CPU, no torch, no key, no
+   network after the one model download). Selected explicitly —
+   `PAGENTOS_MEMORY_EMBEDDING_PROVIDER=local`, now the production compose default;
+   `auto` keeps its B37 meaning and never starts a download on its own.
+2. **The index width is a contract, not a target.** `EMBEDDING_DIM` stays 256 and there is
+   NO migration: the default model `minishlab/potion-multilingual-128M` is natively 256
+   wide (multilingual, Turkish included, ~0.5 GB, milliseconds per text on a CPU — it fits
+   the Cloud Core beside everything else it runs, in both colours during a release). A
+   model on the Matryoshka allowlist (`MRL_TRUNCATABLE_MODELS`, from the model cards:
+   `Qwen/Qwen3-Embedding-0.6B(-Q)`, `google/embeddinggemma-300m`) is truncated to 256 and
+   re-normalised, as its own documentation prescribes, and its `model_id` carries the width
+   (`local-<model>@256`). Any other width is REFUSED with the reason: a truncated non-MRL
+   vector is a different, worse space, and the column must never hold two.
+3. **The index fills itself.** A new retention sweep, `memory_index`, embeds the memories
+   the active model has not indexed, in bounded batches (`memory_index_fill_batch`, 200),
+   on the same clock as the other sweeps. A provider change is therefore picked up pass by
+   pass without an owner-run reindex; a complete index costs nothing; a non-semantic
+   embedder never fills anything (hash rows would only be work the next real model throws
+   away). `/v1/memory/reindex` stays for the impatient.
+4. **Never a crash, never a silent downgrade.** fastembed missing, the model missing, a
+   wrong width — each is the deterministic embedder WITH the reason on `/v1/system/health`
+   (`checks.memory.embedder.fallback_reason`, `semantic: false`), as B37 promised. And
+   because an explicit `local` asked for semantic memory, the RELEASE fetches the model
+   first — once, as uid 10001, into `/mnt/pagentos-data/models`, mounted into both colours
+   — and a fetch that fails after three tries exits **85** before anything is switched.
+5. The model runs where the memory is READ: on the Cloud Core. Memory injection happens at
+   every session create; an embedder on the owner's PC would have made every session
+   depend on that PC being awake. When the Cloud Core moves to the PC (the owner's plan),
+   the same seam takes a heavier model on the GPU — a setting and a re-index, not a design.
+
+### What this does not decide
+
+Turkish retrieval QUALITY of the default model versus the Matryoshka alternatives. No
+sandbox this session could reach huggingface.co, so the benchmark is the owner's:
+`scripts/core/bench-memory-embedding.py` compares the n-gram hash with the local model(s)
+on Turkish paraphrase/unrelated pairs and prints the separation. Until it has run, the
+provider is PROVEN_AUTOMATED (the contract, the fallbacks, the sweep, the wiring) and the
+quality claim is READY_FOR_OWNER — not made here.
+
+### Proof
+
+`tests/unit/test_memory_local_embedder.py` (18): native width served as is, normalised
+and cached; Matryoshka truncation with the width in the model_id; another width refused
+with its reason; a narrower model refused even on the allowlist; a width that drifts
+mid-flight is an error, not a bad row; selection by configuration with the model and
+cache dir it was given; every failure deterministic with the reason and never raising;
+the load error names the exception class and never its text; `auto` never downloads;
+the health check says `local` / semantic; the sweep fills in batches then writes
+nothing, never fills a non-semantic index, can be turned off, and is registered on the
+REAL application object. Mutations RED: the allowlist removed → 2 tests fail; the sweep
+registration removed → 1 test fails; both restored from a sha256-verified copy. The
+release script's prefetch: `scripts/tests/cloud-release-bluegreen.tests.ps1` (runs before
+the idle colour; a failing fetch is retried thrice, exits 85, switches nothing).
+Neighbouring suites green: memory (b37, retrieval, store, service, routes, injection,
+extraction, policy), maintenance, orphan sweeps, health endpoint (the sweep name is on the
+manifest), migration model agreement and compatibility.
+
+Deployment: compose gained the provider env and the models mount, so the recovery
+supervisor bundle is STALE after this release until the owner re-pins it
+(`install-recovery-supervisor.sh <sha>`). Owner PC path: the PS 5.1 suite and the
+benchmark are the owner's (or the Windows-side session's) to run; nothing here ran on
+Windows.

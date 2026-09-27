@@ -15,6 +15,26 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**Hafıza PR-1 — yerel semantik embedder (ADR-0200), dal `feat/memory-local-embedder`
+(2026-09-27, Cowork oturumu; sahip kararı: "hafızadan başlayalım, sonra browser-use").**
+Bulgu: üretimde OpenAI anahtarı olmadığı için hafıza **semantik değil**, n-gram hash ile
+çalışıyordu. Yapılan: `app/memory/providers.py` `LocalEmbedder` (fastembed, ONNX, CPU,
+anahtarsız), `memory_embedding_provider=local`, varsayılan model
+`minishlab/potion-multilingual-128M` (**256 native → migration YOK**), Matryoshka
+allowlist (Qwen3-Embedding / embeddinggemma 256'ya kırpılır, başka genişlik reddedilir),
+`memory_index` retention sweep'i (aktif modelin eksik satırlarını 200'lük partilerle
+kendisi doldurur), compose: `PAGENTOS_MEMORY_EMBEDDING_PROVIDER=local` + `/mnt/pagentos-
+data/models` mount (iki renk paylaşır), yayın betiği modeli önce uid 10001 olarak çeker
+(3 deneme, çıkış **85**). Kanıt: `tests/unit/test_memory_local_embedder.py` 18 ✓,
+komşu paketler 168 ✓ + health 14 ✓, 2 mutasyon KIRMIZI, sha256 geri yükleme.
+**Sahibin kalanı (READY_FOR_OWNER):** (1) Türkçe kalite ölçümü
+`services\api\.venv\Scripts\python.exe scripts\core\bench-memory-embedding.py`
+(sandbox'lar huggingface.co'ya erişemedi); (2) Windows'ta `uv sync` (fastembed lock'a
+girdi) + `scripts\tests\cloud-release-bluegreen.tests.ps1` (prefetch testleri eklendi);
+(3) "birleştir" → main'e merge → `-BlueGreen` yayın → compose değiştiği için recovery
+pinini yenile. Sonra **PR-2**: otomatik hafıza çıkarımını tüm modlara yay + tercih
+türetmeyi (ADR-0191) araştırma dışına genişlet; **PR-3**: Jev/cross-encoder rerank.
+
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
 
 1. *Tekrar sayısı.* "Yukarı tuşuna 5 kere bas" / "5 defa yap" kabul edilmiyor; sahip her
