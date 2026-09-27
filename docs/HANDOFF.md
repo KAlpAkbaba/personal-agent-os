@@ -15,18 +15,23 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Hafıza PR-2 — sürekli öğrenme (ADR-0201), dal `feat/memory-continuous-learning`
-(PR-1 dalının üstünde; 2026-09-27 Cowork).** Bulgu: hafızaya yalnız ücretli oturumun
-`summary` olayı yazıyordu — **yerel modda söylenen hiçbir cümle** (bunu hatırla hariç)
-hafızaya girmiyordu; tercih geçişi de yalnız araştırma konusunu görüyordu. Yapılan:
-(1) `record_client_events` söz dalı → her modda sahibin cümlesi aynı yazım politikasından
-geçer (`explicit=False`, komut=chatty, sinyalli cümle=aday; `memory_*` niyetleri ve makro
-adı hariç; kaynak `owner_utterance` + kanal local/voice); (2) `BEHAVIOUR_SIGNALS` tablosu:
-araştırma konusu (ADR-0191 anahtarı birebir) + **`media.opened` → "Sahip 'X' medyasını sık
-sık açtırıyor"**. Kanıt: 7+5 yeni test, 2+1 mutasyon KIRMIZI, komşu 234 ✓, korpus 584 ✓.
-**PR-1 (ADR-0200) durumu:** `feat/memory-local-embedder` `6ee5970a`, senin makinende
-PROVEN_REAL (AYRIM +0.457), Claude Code raporu alındı; **"birleştir" bekliyor** (merge →
-`-BlueGreen` → recovery pin; yayın öncesi `free -m`, model renk başına ~1 GB).
+**Sahip "birleştir" dedi (2026-09-27): hafıza PR-1 + PR-2 main'e ve yayına.**
+`feat/memory-continuous-learning` (`6acbcf0c`, ADR-0201) PR-1'in (`6ee5970a`, ADR-0200)
+üstünde duruyor; ikisi birlikte main'e alınıyor. `feat/hand-gestures-stage1` DOKUNULMUYOR.
+Sıra: (1) PR-2 doğrulama — hedefli 5 paket **50 ✓**, `quality-gate.ps1 -Fast`; (2) merge
+`--no-ff` → main'de üç paket yeşil → push; (3) yayın öncesi `free -m` (eşik 2,5 GB;
+ölçülen **5649 MB available** → geçti); (4) `release-cloud-core.ps1 -BlueGreen` (asla
+`2>&1` ile değil; çıkış 85 = model indirilemedi, hiçbir şey anahtarlanmadı);
+(5) compose değiştiği için recovery pinini main'in tam sha'sıyla yenile;
+(6) çalışma-zamanı: `checks.memory.embedder.provider == "local"`, `semantic true`,
+kapsam artıyor, yerel modda söylenen bir cümle CANDIDATE satırı oluyor.
+**Kapının bulduğu hata (benim, PR-1 dalından):** QUALIFICATION 30.4 satırı `PROVEN_REAL`
+diyip makinenin izleyebileceği hiçbir şey adlandırmıyordu — Stage 30'u kapıyı çalıştırdıktan
+SONRA yazıp commit etmişim. Düzeltme: ölçüm aleti artık depoda
+(`scripts/core/measure-embedder-cost.py`) ve kanıtı yazıyor
+(`docs/evidence/adr-0200-embedder-cost-2026-09-27.json`: ısınmış yükleme 2,07 s, embed
+ortanca 0,18 ms, 1073 MB — tepe 1103). İki mutasyon KIRMIZI (düz metne dönüş; var olmayan
+dosya adları), dosya sha256 ile birebir geri konuldu.
 Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
 
 **Sahibin 2 notu (2026-09-21, sesle verildi):**

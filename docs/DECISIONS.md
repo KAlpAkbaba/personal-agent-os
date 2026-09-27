@@ -14961,6 +14961,16 @@ fixed threshold has to move with it, and every embedding costs ~0.7 s on this CP
 stays `minishlab/potion-multilingual-128M`**; the Matryoshka allowlist keeps Qwen3
 available for a later, better-provisioned host.
 
+The time-and-memory half of this measurement is re-runnable rather than recounted:
+`scripts/core/measure-embedder-cost.py` builds the embedder, embeds eight Turkish
+sentences and reads this process's working set through the Win32 API, then writes what
+it saw as `docs/evidence/adr-0200-embedder-cost-2026-09-27.json` — warm load **2.07 s**,
+median embed **0.18 ms**, **1073 MB** resident (peak 1103) from 39 MB before the model
+was built. It exists because the first version of this addendum's QUALIFICATION row
+(30.4) stated those numbers and named nothing: `test_qualification_evidence` refused it,
+correctly — a proof mark must point at something a machine can follow, and a sentence
+about a run cannot be re-checked after the machine is rebuilt.
+
 **3. PowerShell 5.1 on the owner's machine.**
 `scripts/tests/cloud-release-bluegreen.tests.ps1`: **78 passed, 0 failed**, including
 this ADR's two assertions by name — "the embedding model is prefetched into the shared

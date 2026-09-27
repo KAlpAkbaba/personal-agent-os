@@ -1,0 +1,24 @@
+{
+  "measured_at": "2026-09-27T20:01:23+00:00",
+  "host": {
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.12.7"
+  },
+  "model_name": "minishlab/potion-multilingual-128M",
+  "model_id": "local-minishlab/potion-multilingual-128M",
+  "dim": 256,
+  "native_dim": 256,
+  "truncated": false,
+  "semantic": true,
+  "vector_len": 256,
+  "warm_load_s": 2.07,
+  "first_embed_ms": 0.5,
+  "embed_median_ms": 0.18,
+  "embed_slowest_ms": 0.38,
+  "embed_samples": 8,
+  "retention_batch_rows": 200,
+  "retention_batch_s": 0.04,
+  "rss_before_mb": 38.9,
+  "rss_after_mb": 1073.0,
+  "rss_peak_mb": 1102.8
+}
