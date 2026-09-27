@@ -37,6 +37,10 @@
 #   record RELEASE, LAST_KNOWN_GOOD (the previous sha) and the active colour
 # A release is COMPLETE only when RELEASE names the active colour's sha; --reconcile
 # treats anything else as an interrupted promotion and returns to the last completed one.
+# Release-path exits that also fall in this range (the transaction list above names where
+# each one is raised): 82 the expand-only migration failed; 83 the served schema revision
+# is not the tree's head; 85 the memory embedding model could not be fetched into the
+# shared models dir (ADR-0200) - retried thrice, and nothing was switched.
 # --reconcile exits: 0 consistent and ok; 80 neither colour serves (nothing switched);
 # 81 the canonical colour did not serve and the recorded other one took over (loud);
 # 82 another release/recovery holds the lock; 83 no tree matches the pinned recovery inputs;

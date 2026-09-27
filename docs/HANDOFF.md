@@ -27,13 +27,28 @@ kendisi doldurur), compose: `PAGENTOS_MEMORY_EMBEDDING_PROVIDER=local` + `/mnt/p
 data/models` mount (iki renk paylaşır), yayın betiği modeli önce uid 10001 olarak çeker
 (3 deneme, çıkış **85**). Kanıt: `tests/unit/test_memory_local_embedder.py` 18 ✓,
 komşu paketler 168 ✓ + health 14 ✓, 2 mutasyon KIRMIZI, sha256 geri yükleme.
-**Sahibin kalanı (READY_FOR_OWNER):** (1) Türkçe kalite ölçümü
-`services\api\.venv\Scripts\python.exe scripts\core\bench-memory-embedding.py`
-(sandbox'lar huggingface.co'ya erişemedi); (2) Windows'ta `uv sync` (fastembed lock'a
-girdi) + `scripts\tests\cloud-release-bluegreen.tests.ps1` (prefetch testleri eklendi);
-(3) "birleştir" → main'e merge → `-BlueGreen` yayın → compose değiştiği için recovery
-pinini yenile. Sonra **PR-2**: otomatik hafıza çıkarımını tüm modlara yay + tercih
-türetmeyi (ADR-0191) araştırma dışına genişlet; **PR-3**: Jev/cross-encoder rerank.
+**Sahibin makinesinde doğrulandı (2026-09-27 akşam, bu oturum).** Sandbox'ın yapamadığı
+üç adım yapıldı: (1) `uv sync` → fastembed 0.8.1 + onnxruntime 1.30, hedefli paketler
+**76 ✓ / 0 ✗**, gerçek `MemoryRuntime` `local → local`,
+`local-minishlab/potion-multilingual-128M`, 256 boyut, `semantic True`; (2) Türkçe ölçüm —
+**AYRIM potion +0.457** (anlamdaş 0.480 / alakasız 0.023) vs n-gram +0.277 vs
+Qwen3-0.6B-Q (1024→256) +0.354; potion 0.2 ms/embed ve 1.07 GB, Qwen 694 ms/embed ve
+1.22 GB (tepe 1.77) → **varsayılan potion kalıyor**; (3) `cloud-release-bluegreen.tests.ps1`
+**78 ✓** (iki ADR-0200 iddiası adıyla) + `quality-gate.ps1 -Fast` **PASS** (12518 ✓).
+Kapının bulduğu **üç hata bu dalda düzeltildi**, üçü de mutasyonla KIRMIZI: yeni çıkış 85
+önce 8x korumasının okuduğu yerde belgeli değildi, sonra sahibe cümle isteyen korumanın
+izin verdiği yerde değildi (85 bir mutabakat değil yayın çıkışı → paragraf
+`--reconcile exits:` işaretinin ÜSTÜNE alındı); ve `macro`/`godseye` aileleri sahibe
+Türkçe adsız ulaşıyordu (ADR-0196/0197'den beri main'de kırıktı) → "Hareketler" /
+"Dünya gözü". Kanıt: `docs/DECISIONS.md` ADR-0200 addendum + `docs/QUALIFICATION.md`
+Stage 30.
+**Kalan (READY_FOR_OWNER):** sahip "birleştir" derse → main'e merge → `-BlueGreen` yayın →
+compose değiştiği için recovery pinini yenile. Yayında **belleği izle**: model API
+sürecinin içinde (~1 GB/renk), sunucu CPX32 (8 GB) ve geçiş anında iki renk birden ayakta;
+api renklerinde `mem_limit` yok (gerekirse sınır koymak yapılandırma işi; model
+yüklenemezse n-gram'a düşüp API ayakta kalıyor). Sonra **PR-2**: otomatik hafıza çıkarımını
+tüm modlara yay + tercih türetmeyi (ADR-0191) araştırma dışına genişlet; **PR-3**:
+Jev/cross-encoder rerank.
 
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
 

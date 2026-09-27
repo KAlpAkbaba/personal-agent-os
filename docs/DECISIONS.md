@@ -14921,3 +14921,80 @@ supervisor bundle is STALE after this release until the owner re-pins it
 (`install-recovery-supervisor.sh <sha>`). Owner PC path: the PS 5.1 suite and the
 benchmark are the owner's (or the Windows-side session's) to run; nothing here ran on
 Windows.
+
+
+## ADR-0200 — Kanıt (sahibin makinesi, 2026-09-27)
+
+The three steps the Linux sandbox could not take — it reaches neither huggingface.co nor
+Windows — taken on the owner's PC against `feat/memory-local-embedder` @ `b4949d21`.
+
+**1. The lock, on Windows.** `uv sync` in `services/api` installed `fastembed 0.8.1`,
+`onnxruntime 1.30.0`, `tokenizers 0.23.2`, `huggingface-hub 1.33.0` and friends. The
+targeted suites: **76 passed, 0 failed** — `test_memory_local_embedder` 18,
+`test_memory_b37` 15, `test_maintenance` 5, `test_health_endpoint` 14,
+`test_orphan_sweeps` 14, `test_migration_model_agreement` 10. And the real application
+object agrees with the suites: `MemoryRuntime(Settings(memory_embedding_provider="local"))`
+— the runtime the API builds at startup and the health endpoint reports — answers
+`local → local`, `model_id local-minishlab/potion-multilingual-128M`, `dim 256`,
+`semantic True`, and embeds a Turkish sentence to 256 dimensions.
+
+**2. The Turkish measurement** (`scripts/core/bench-memory-embedding.py`, 7 paraphrase +
+7 unrelated pairs drawn from the shapes owner memory actually holds):
+
+| model | AYRIM | anlamdaş ort. | alakasız ort. | yükleme (ilk / ısınmış) | embed | süreç RSS |
+|---|---|---|---|---|---|---|
+| deterministic n-gram (what was serving) | +0.277 | 0.282 | 0.005 | — | <0.1 ms | — |
+| `minishlab/potion-multilingual-128M` (256 native) | **+0.457** | 0.480 | 0.023 | 76.4 s (indirme dahil) / 2.7 s | 0.2 ms ortanca | 39 → 1073 MB (tepe 1103) |
+| `Qwen/Qwen3-Embedding-0.6B-Q` (1024→256, MRL) | +0.354 | 0.721 | 0.367 | 97.2 s / 3.0 s | 694 ms ortanca | 39 → 1218 MB (tepe 1768) |
+
+All three rank the paraphrase above the unrelated sentence for 7/7 anchors; what differs
+is the margin, and the n-gram's margin is decoration: "Ekranlar 15 dakika sonra kapansın"
+~ "Monitörler çeyrek saat boşta kalınca sönsün" scores **0.000** against −0.029 — no
+shared characters, therefore no meaning — and "Sahip sabahları kahve içmeyi sever" ~
+"Kadir her sabah bir fincan kahve içer" clears its unrelated pair by 0.108. potion widens
+the separation by 65 % over the n-gram (+0.457 vs +0.277) and answers in a fifth of a
+millisecond. Qwen3 reads the two hardest paraphrases far better (0.680 and 0.572 where
+potion reads 0.142 and 0.170), but truncated to the index's 256 dimensions its floor for
+unrelated sentences rises to 0.367: the separation ends up narrower than potion's, any
+fixed threshold has to move with it, and every embedding costs ~0.7 s on this CPU — a
+200-row retention batch would take 2.3 minutes against potion's 0.04 s. **The default
+stays `minishlab/potion-multilingual-128M`**; the Matryoshka allowlist keeps Qwen3
+available for a later, better-provisioned host.
+
+**3. PowerShell 5.1 on the owner's machine.**
+`scripts/tests/cloud-release-bluegreen.tests.ps1`: **78 passed, 0 failed**, including
+this ADR's two assertions by name — "the embedding model is prefetched into the shared
+models dir as uid 10001 BEFORE the idle colour starts" and "a failed model prefetch is
+retried thrice, exits 85, and nothing is switched". `scripts/quality-gate.ps1 -Fast`:
+**PASS** — but only after it found two defects, both fixed on this branch and each proven
+by a mutation (restored byte-exact, sha256):
+
+* **This branch's, and it took two moves to say truthfully.** Exit **85** lives in the
+  script's 8x range, which the header presents as the `--reconcile` family. Two independent
+  guards read that header: `test_release_exit_codes` refuses any 8x code an operator can
+  meet and not find there, and `test_notification_events` demands an owner-facing sentence
+  in `app.notifications.events._RECOVERY_BY_EXIT` for every code listed *after* the
+  `--reconcile exits:` marker. Documenting 85 inside that paragraph satisfied the first and
+  broke the second — correctly, because the recovery supervisor can never produce 85: it is
+  a release-path failure, not a reconcile outcome. The header now carries a short paragraph
+  for the release-path codes that share the range (82 the expand-only migration, 83 the
+  served schema revision, 85 the model prefetch) placed **above** the reconcile marker, so
+  each guard is told exactly the truth. Mutations: drop 85 from that paragraph →
+  `test_release_exit_codes` RED; move the paragraph below the marker →
+  `test_notification_events` RED. (7x, the release family, is full: 71-79 are all taken,
+  which is why the prefetch reached into the 8x range at all.)
+* **Not this branch's, but this is the branch that runs next.** `macro` (ADR-0196) and
+  `godseye` (ADR-0197) reached the owner with no Turkish family name — the capability list
+  would have read them out as bare English prefixes — and `test_capability_list` has been
+  failing on `main` since those two shipped. Named here: "Hareketler" and "Dünya gözü".
+  Mutation: remove either name → RED.
+
+**Carry into the release, not a defect of this branch.** The model lives inside the API
+process — `MemoryRuntime` builds the embedder at construction, one uvicorn worker per
+container — and measured ~1.0 GB resident here. The Cloud Core is a CPX32 (4 vCPU /
+**8 GB**, ADR-0033) and a blue-green release runs BOTH colours through the drain window,
+so the first release of this branch is worth watching: ~2 GB of embedder beside Postgres,
+Temporal, MinIO, Redis and the 2 GB-capped `godseye`. The api services carry no
+`mem_limit` today. If the host proves tight the cheap remedy is already in the design —
+a model that cannot be loaded falls back to the deterministic embedder and the API keeps
+serving — so capping the colours is a configuration change, not a code change.
