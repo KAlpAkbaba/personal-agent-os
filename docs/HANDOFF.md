@@ -149,6 +149,12 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da
   "her seferinde tüm testleri koşma" dedi → dokunulan paketler + hedefli korpus yeter.
 
+
+**JARVIS hedefi (2026-09-27, sahip: "aslında birebir aynı hale getirmek istiyorum"):**
+`docs/ROADMAP.md` sonuna "The JARVIS target" bölümü eklendi — yetenek↔durum tablosu, tek seferlik
+sınırlar ve **bağlayıcı sıra**: 1 hafıza (PR-2/PR-3) → 2 browser-use → 3 sekreter (Radicale+mail+telefon
+köprüsü) → 4 ev (Home Assistant) → 5 her yerde (M29 yeniden açılır) → 6 ses+karakter → 7 görüş.
+
 ## Sıradaki işler
 
 1. **Sahibin "2 not + 2 yeni ekleme"si** — hafıza bitince vereceğini söyledi (2026-09-21).
