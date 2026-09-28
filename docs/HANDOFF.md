@@ -15,23 +15,25 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok. (2026-09-28 gece: tarayıcı görev döngüsü PR-A main'de - sözleşme v1.6 madde 1, 2, 3,
-10, 12; yayınlanmadı; sahibin tetikleyebileceği hiçbir şey değişmedi.)
-**Sıradaki: PR-B** (ADR-0207): `app/webtask/` döngüsü saf fonksiyon olarak, planlayıcı
-arayüzü (kural tablosu + sahte), kapı (risk sınıfı + `confirmation_gate` ile read-back),
-doğrulayıcı, bütçeler, döngü tespiti, yasak liste JSON'u (`packages/protocol`, işveren
-sistemleri ve Kolay Monitor dahil), `BrowserTaskWorkflow`; T1-T5 sahte tarayıcı + sahte
-planlayıcıyla. v1.6'nın kalan maddeleri (`press`, `type`, `hover`, çerçeveler, `dialog`,
-`stable`) döngü ilk ihtiyaç duyduğunda gelir.
-**Bir işlem adı eklemek ALTI yere dokunur:** sözleşme, işçi, C# host listesi, kurulum
-doğrulaması, bulut izin listesi (`app/routines/dispatch.py`) + sabitlenmiş manifest sayıları
-(`DeviceVoiceCapabilityTests`, `DEVICE_PROTOCOL.md`). Tam kapı olmadan görünmez.
-**Sahibi bekleyenler:** (1) T3 mağazası ve T5 web postası (kararda `<MAĞAZA>` / `<WEBMAIL>`
-olarak boş geldi; PR-C'den önce gerekli); (2) PR-C'den önce MAIL'de Windows ajanının bu
-ağaçtan yeniden kurulması (UAC) - kurulu 0.6.0 `browser.observe` adını reddeder;
-(3) yerel modda bir cümle (ADR-0201, 30.10); (4) M19b sesli deneme.
-Rerank KAPALI (ADR-0206 eki: hafıza >= 300 satır ya da CPX41).
-`feat/hand-gestures-stage1` DOKUNULMADI.
+**Tarayıcı görev döngüsü PR-B — döngü, kapı, yasak liste, iş akışı (ADR-0207), dal
+`feat/browser-task-loop` (main `c9084610`'dan), ev PC'si, 2026-09-28/29.**
+Kapsam: `app/webtask/` — döngü port'lar üstünde saf fonksiyon (observe → plan → gate → act →
+verify; doğrulama = yeni bir gözlem), planlayıcı arayüzü (kural tablosu + betikli sahte;
+gerçek modeller PR-C), kapı (risk sınıfı ÖĞEDEN; geri alınamaz eylem read-back + sahibin
+sözü), bütçeler (25 tur, 8 dk, art arda 3 başarısız tur), döngü tespiti,
+`packages/protocol/browser-task-denylist.json` (iki taraf okur), `web_tasks` tablosu
+(satır gerçektir) + göç, `BrowserTaskWorkflow` (tur başına bir activity; onay / devam /
+iptal sinyalleri), defter satırları. Kabul: T1–T5 sahte tarayıcı + sahte planlayıcıyla, ve
+üç ret (düşman sayfa almıyor; tutar read-back ile tıklama arasında değişirse tıklanmıyor;
+çerez duvarında döngü `loop_detected`).
+**Sahibin ek kararları (ADR-0207 madde 6-7):** parola/kod alanına ASLA yazılmaz, `auth_wall`
+→ `ask_owner` ("giriş yap, sonra devam et"), "devam" AYNI turdan sürdürür; göremediği öğede
+(kapalı gölge DOM, iframe, `not_unique`) `ask_owner` ("göremiyorum"), tahmin yok; v1.7 notu.
+**Sahibin tetikleyebileceği hiçbir şey eklenmez** (niyet ve kabuk PR-D). **Yayın YOK.**
+Sahibin Chrome'u sürülmez (PR-C). Ödeme KALICI olarak kapsam dışı.
+Bir işlem adı eklemek ALTI yere dokunur (beş ayna + manifest sayıları) — PR-B ad EKLEMİYOR.
+Açık: T3 mağazası / T5 web postası; MAIL'de ajanın yeniden kurulması (PR-C ön koşulu).
+Rerank KAPALI. `feat/hand-gestures-stage1` DOKUNULMAZ.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)

@@ -15895,3 +15895,21 @@ not run. Nothing is released, and nothing in production changes until a Windows 
 built from this tree is installed: the companion host refuses a name that is not in its
 own list, so an installed 0.6.0 agent answers `browser.observe` with
 `capability_missing`. That is the contract check of item 12 doing its job.
+
+### ADR-0207 - the owner's decisions for PR-B (2026-09-28) - binding
+
+6. **An auth wall is the owner's to pass.** The loop NEVER types into a password or a code
+   field - not from the goal, not from an answer, not at all. When the page is an
+   `auth_wall` the loop stops with `ask_owner`: "giriş yap, sonra devam et". (In the
+   owner's own Chrome, where he is already signed in, the wall does not normally appear;
+   when it does, it is because the site wants HIM.) When the owner says "devam" the loop
+   takes up **the same round** - it observes again and plans again; the round counter
+   does not advance for the wait, and the wait is not counted against the time budget.
+7. **What the loop cannot see, it says it cannot see.** Closed shadow roots and iframes
+   are outside contract v1.6. When the element a step needs is not in the observation -
+   or a reference is refused as `not_unique`, which is what an ambiguous path inside a
+   shadow root looks like - the loop stops with `ask_owner`: "göremiyorum". It does not
+   guess, does not fall back to a text match, does not click the nearest thing.
+   **For contract v1.7:** frames by index and by host, `observe` listing the frames it
+   saw and descending into same-origin ones, a closed shadow host reported as
+   `shadow: closed` (items 7 and 8 of this ADR's v1.6 proposal, which v1.6 did not take).
