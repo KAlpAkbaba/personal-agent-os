@@ -25,6 +25,11 @@ döngüsünü izle, LKG'yi raporla (elle değiştirme); (5) `mint-enrollment-tok
 var mı; (6) rapor, temiz checkout. Şirket PC'si bu sırada checkout'a dokunmuyor.
 `feat/hand-gestures-stage1` DOKUNULMAZ. Önceki durakta SSH, Tailscale ek doğrulamasına
 takılmıştı (sahibin girişi) — yine isterse yayın orada durur.
+**Tam kapı ilk koşuda KIRMIZI (bu dalın hatası değil, main'de de vardı):** `Browser agent
+lint + tests` — `test_google_ui_e2e.py`'deki iki sahte `build_search_url`, `c71fc461`'in eklediği
+`region` anahtarını kabul etmiyordu (6 test TypeError). `-Fast` bu adımı koşmadığı için
+görünmemişti. Sahteler gerçek imzaya getirildi; dosya 15 ✓. Diğer 31 adım, mint 21 ✓,
+`reconcile_build_state` uyumlu.
 
 **İkinci cihaz: şirket PC'si (ADR-0203, M29 ilk adım) — 2026-09-28, makine GMKADIRAKBABA.**
 Dal `feat/second-device-enrollment` (main `2da05c94`'ten). Bu oturum ŞİRKET PC'sinde

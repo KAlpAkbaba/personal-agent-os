@@ -298,10 +298,12 @@ async def test_interstitial_fallback_falls_back_to_duckduckgo(
     )
     real_build_search_url = search_engines.build_search_url
 
-    def fake_build_search_url(engine, query, *, recency_days=None, locale=None):
+    def fake_build_search_url(engine, query, *, recency_days=None, locale=None, region=None):
         if engine == "duckduckgo":
             return f"{site_url}/duckduckgo-results.html"
-        return real_build_search_url(engine, query, recency_days=recency_days, locale=locale)
+        return real_build_search_url(
+            engine, query, recency_days=recency_days, locale=locale, region=region
+        )
 
     monkeypatch.setattr(search_engines, "build_search_url", fake_build_search_url)
 
@@ -336,10 +338,12 @@ async def test_interstitial_fallback_falls_back_to_duckduckgo(
 def _ddg_fixture(monkeypatch, site_url: str) -> None:
     real_build_search_url = search_engines.build_search_url
 
-    def fake_build_search_url(engine, query, *, recency_days=None, locale=None):
+    def fake_build_search_url(engine, query, *, recency_days=None, locale=None, region=None):
         if engine == "duckduckgo":
             return f"{site_url}/duckduckgo-results.html"
-        return real_build_search_url(engine, query, recency_days=recency_days, locale=locale)
+        return real_build_search_url(
+            engine, query, recency_days=recency_days, locale=locale, region=region
+        )
 
     monkeypatch.setattr(search_engines, "build_search_url", fake_build_search_url)
 
