@@ -15514,11 +15514,12 @@ re-argue it:
   `checks.memory.reranker.active` on the health check.
 * Until then the code ships off, costs nothing, and is covered by its tests.
 
-## ADR-0207 — DRAFT: the browser task loop — a goal, carried out on the web, in the owner's own Chrome (2026-09-28)
+## ADR-0207 — The browser task loop — a goal, carried out on the web, in the owner's own Chrome (2026-09-28)
 
-Status: **Draft for the owner's review. No code was written for this ADR.** JARVIS order,
-item 2 ("browser-use"). Everything below is a proposal until the owner answers the
-questions at the end; the contract (`BROWSER_CAPABILITIES.md`) is unchanged at v1.5.
+Status: **Accepted by the owner on 2026-09-28** - his five decisions are recorded at the
+end and override the text above them wherever the two differ. JARVIS order, item 2
+("browser-use"). Built in four PRs; PR-A (contract v1.6 items 1, 2, 3, 10, 12) is the
+first, on `feat/browser-observe`.
 
 ### What exists, read before anything was proposed
 
@@ -15551,7 +15552,7 @@ questions at the end; the contract (`BROWSER_CAPABILITIES.md`) is unchanged at v
    button, a combobox that opens on ArrowDown and a dialog that closes on Escape cannot be
    operated at all.
 
-### Decision (proposed)
+### Decision
 
 #### a) The loop
 
@@ -15776,7 +15777,7 @@ Tests:
 * Mutations to be shown RED: the cap removed; a ref resolved after navigation; the value
   of a password field included; a marker matched as a substring.
 
-### Questions for the owner (five)
+### The questions that were put to the owner
 
 1. **What is "step-up" for a web action?** (a) the mail pattern - read-back, then your
    spoken word, bound to the session by the existing gate [this draft's assumption]; (b)
@@ -15794,3 +15795,32 @@ Tests:
 5. **Which sites for the five real tasks?** T3 needs a real shop you use, T5 the webmail
    you read - and whether the deny-list (banks, e-Devlet, payment providers, the password
    manager) is the right starting list.
+
+### The owner's decisions (2026-09-28) - binding
+
+1. **Step-up is the read-back and the owner's word.** Option (a). By voice: the read-back,
+   then the owner's spoken word, bound to the session by the existing gate. In the web
+   shell: the read-back TEXT on the screen and an explicit **Onayla** button - the button
+   is never shown without the text it approves. B05 speaker verification is NOT switched
+   on by this ADR; it may be added for HIGH_IMPACT only, by its own ADR, and only once B05
+   itself is `PROVEN_REAL`.
+2. **A form that sends is behind the read-back. No exception.** Contact forms, comments,
+   sending an e-mail from webmail: EXTERNAL_COMMUNICATION stops, reads back and waits,
+   exactly as HIGH_IMPACT does. The cost - a question on every submitted form - is
+   accepted.
+3. **No unattended task from PR-A to PR-D.** A task runs only while the owner is present.
+   Unattended use comes later, only on sites the owner has NAMED, and only under a
+   separate device grant.
+4. **Payment is permanently out of scope.** The loop stops at the payment boundary and
+   hands over to the owner. This is not a phase: no later PR completes a payment, and
+   acceptance never pays.
+5. **The deny-list**, on which the loop never acts beyond READ: banks; e-Devlet; payment
+   providers; password managers; **the employer's systems** (the `turka.com` domain and
+   the company's management panels); **Kolay Monitor**. It lives under
+   `packages/protocol/` as ONE JSON file that both sides read (it lands with PR-B, where
+   the loop first consults it; PR-A carries the risk markers file, by the same rule).
+
+**Still open, and said plainly.** The decision text named the shop for T3 and the webmail
+for T5 as `<MAĞAZA>` and `<WEBMAIL>` - placeholders that were never filled in. Nothing in
+PR-A or PR-B needs them (both run against the fixture site); PR-C cannot start without
+them. They are asked for again in the PR-A report.
