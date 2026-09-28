@@ -15,7 +15,22 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok. (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
+**Kurucu temiz makinede duruyor (ADR-0204) — 2026-09-28, makine GMKADIRAKBABA (şirket PC'si).**
+Dal `fix/installer-fresh-machine` (main `0f5387d5`'ten). ADR-0203'ün 1. adımı bu makinede
+gerçek hatayla durdu: `install-device-service.ps1 ... -SkipBrowser -SkipCoreVerify` →
+"previous deployment state: Blocked - no journal and the live trees are incomplete"
+(`install-device-service.ps1:449`; log `C:\ProgramData\PagentOS\install-logs\install-20260928-152803.log`).
+Kök neden: `scripts/lib/Deployment.ps1` `Resolve-InterruptedDeployment` "hiç kurulmamış
+makine"yi "yarım kurulum"dan ayırmıyordu. **Düzeltme dalda, itildi:** günlük yok + canlı
+bileşen yok + staged bileşen yok + `.previous` altında dosya yok → `None` ("fresh machine");
+tek bir iz bile varsa `Blocked` kalır. `installer-deploy.tests.ps1` 22 ✓ (+8), düzeltmeden
+önce KIRMIZI (18/3), dört mutasyon KIRMIZI, sha256 ile geri alındı.
+**Sırada (sahip):** bu daldan, yükseltilmiş PowerShell'de kurulumu yeniden çalıştırmak.
+449. satırdan sonrası da temiz makinede hiç koşmadı — ikinci bir duruş çıkarsa aynı işin
+parçasıdır. **Sırada (ev PC):** tam kapı → main'e merge. Bu makineden merge EDİLMEZ, yayın
+YAPILMAZ. Ev PC bu dala dokunmuyor.
+
+Önceki durum: (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
 **Sahibi bekleyen iki şey:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını
 her zaman Türkçe oku") → CANDIDATE satırı okununca ADR-0201 PROVEN_REAL olur (QUALIFICATION
 30.10); (2) ADR-0203'ün sahip adımları (şirket PC'si: politika kararı, .NET 10 SDK, kurulum,

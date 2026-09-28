@@ -15242,3 +15242,69 @@ redirected file.
   health line the owner sees here is not green.
 - *Two checkouts.* This branch is pushed only from this machine; the first machine's
   session does not edit it, and this one does not touch `main`.
+
+## ADR-0204 — The installer knows a machine it has never been on (2026-09-28)
+
+**Found on a real machine, by the owner, on ADR-0203's first step.** Host `GMKADIRAKBABA`,
+elevated PowerShell, main `0f5387d5`:
+`.\scripts\install-device-service.ps1 -BrokerRestUrl http://100.90.158.26:8001 -SkipBrowser -SkipCoreVerify`
+stopped at `install-device-service.ps1:449` with
+
+    previous deployment state: Blocked - no journal and the live trees are incomplete;
+    refuse to guess - inspect .previous and .staging by hand
+
+(`C:\ProgramData\PagentOS\install-logs\install-20260928-152803.log`, and again in
+`...-152938.log`). Nothing had ever been installed there: `Invoke-InstallRecovery` had just
+created an empty `C:\Program Files\PagentOS\agent`, and there was no `.previous` and no
+`.staging` to inspect.
+
+**Cause.** `Resolve-InterruptedDeployment` (`scripts/lib/Deployment.ps1`) had three
+journal-less answers — live + staged, live only, and everything else is `Blocked`. "Everything
+else" was written when every machine this engine met already had an agent, so a missing
+live tree could only mean a lost one. The first install on a second machine is the first
+time it meant "not yet". The engine itself was never the problem: `Invoke-AgentDeployment`
+already skips a live tree that is not there.
+
+**Decision.** With no journal, a machine is **fresh** — `None`, reason `no journal; nothing
+installed yet (fresh machine)` — only when there is no trace at all: no live component, no
+staged component, and no file under `.previous`. Fresh is the absence of every trace, never
+the absence of one. So these stay `Blocked`, each with its own test:
+
+- one component live and another missing (half an install);
+- no live tree but a component staged;
+- no live tree but a tree parked under `.previous` (the only copy of an install — calling
+  that fresh would build over it).
+
+Empty `.staging` / `.previous` directories hold no component and do not block. Deciding
+creates nothing (a root that does not exist is fresh and still does not exist afterwards).
+
+**Proof (this machine, PowerShell only).** `scripts/tests/installer-deploy.tests.ps1`,
+8 new cases (22 in the suite):
+
+- RED first, against the unfixed engine (sha256 `9B21D7F0…`): the three fresh cases got
+  `Blocked`, 18 passed / 3 failed — the owner's failure, reproduced.
+- GREEN with the fix (sha256 `5FA51DF0…`): 22 passed, including the installer's own opening
+  sequence (`Invoke-InstallRecovery` then the resolution, on a root that did not exist) and
+  a first install through `Invoke-AgentDeployment` with no live tree, which commits and
+  then resolves to `None`.
+- Four mutations, one per condition, each RED on its own assertion and the file restored
+  byte-exact (sha256 compared after each): the fresh branch disabled → the four fresh
+  cases; the live trace ignored → "partial live tree stays Blocked" and the older "missing
+  live tree with no journal is Blocked"; the staged trace ignored → "a staged component
+  stays Blocked"; the displaced trace ignored → "a displaced component under .previous
+  stays Blocked".
+
+**Evidence class.**
+
+| Row | Class |
+|---|---|
+| The failure on the owner's machine | `PROVEN_REAL` (two install logs) |
+| The resolution on a fresh / partial / staged / displaced root | `PROVEN_AUTOMATED` (real directory trees, no fakes) |
+| A first install through the engine | `PROVEN_AUTOMATED` (injected runtime handlers) |
+| The installer end to end on this machine | `READY_FOR_OWNER` — not run here: it needs elevation and the owner's word |
+| Full quality gate, API unit tests | `NOT_RUN` on this machine (no uv); the change touches PowerShell only. The gate runs on the first machine before any merge |
+
+**Not claimed.** That the rest of the installer is clean on a fresh machine. Everything
+after line 449 has also only ever run where an agent already existed; this fix removes the
+first stop, and the owner's next run is what finds out whether there is a second. If there
+is, it is this work item's, not a new one.
