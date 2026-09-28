@@ -22,6 +22,12 @@ mevcut tarayıcı sözleşmesi (`BROWSER_CAPABILITIES.md` v1.5), `services/brows
 (döngü goal→observe→plan→act→verify, Temporal'da koşar, HIGH_IMPACT öncesi read-back +
 step-up, sayfa metni talimat değildir), v1.6 sözleşme önerileri, PR-A..D kesme planı,
 THIRD_PARTY kaydı (browser-use = fikir kaynağı, bağımlılık değil) ve sahibe en fazla 5 soru.
+**Taslak yazıldı (2026-09-28):** `docs/DECISIONS.md` ADR-0207 (DRAFT). Okurken bulunan
+dört şey: `snapshot`'ta öğe tutamağı yok; `click` ilk eşleşmeyi alıyor; HIGH_IMPACT
+işaretleri alt dize (`sil`/`ode`/`pay` başka sözcüklerin içinde eşleşiyor, "siparişi
+tamamla" gibi Türkçe ödeme sözleri eksik); klavye yok. v1.6 önerisi 12 madde. **Sahibin
+5 sorusu yanıt bekliyor** (step-up ne demek; gönderen formlar; gözetimsiz görev; ödeme;
+hangi siteler). Yanıttan sonra PR-A.
 **Rerank kararı (sahip, 2026-09-28): KAPALI kalır**; açma eşiği hafıza ≥ 300 satır VEYA
 CPX41; sıra: sunucuda RSS ölçümü → env → `-BlueGreen` (ADR-0206 eki).
 Bekleyenler: yerel modda bir cümle (ADR-0201, 30.10); M19b sesli deneme.

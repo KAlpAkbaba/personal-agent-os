@@ -196,3 +196,44 @@ Fallback: no reranker, with the reason on `/v1/system/health` (`checks.memory.re
 Upgrade rule: bump the pin, run `tests/unit/test_memory_rerank.py`, re-run
 `scripts/core/bench-memory-rerank.py` (quality, milliseconds per pair AND memory), and
 only then change a default.
+
+## browser-use (2026-09-28, ADR-0207) - a source of ideas, NOT a dependency
+
+`browser-use` (MIT; https://github.com/browser-use/browser-use) is the open-source library
+that made "an LLM drives a browser towards a goal" a common pattern, and it is the name
+the owner uses for JARVIS order 2. It is recorded here because the design of the browser
+task loop (ADR-0207) learned from it. **It is not installed, not vendored and not imported
+anywhere in this repository.**
+
+What was taken, as ideas:
+
+- the page reduced to a NUMBERED LIST of interactive elements, and actions that name an
+  element by its number instead of by a selector;
+- one action per step, observed again before the next;
+- a step budget and the detection of a loop on an unchanged page.
+
+Why it is not a dependency:
+
+- **It runs the agent where the browser is.** The library's loop, its model calls and its
+  state live in the process that holds the Playwright handle. Here that process is the
+  Browser Worker on the owner's device, which this system keeps a dumb executor on
+  purpose (ADR-0050): no goal, no plan, no model key on the device; the brain is the Cloud
+  Core, every step a durable, idempotent Temporal activity.
+- **It chooses its own actions from page content.** The safety boundary of this system is
+  that risk is computed from the element by a declared rule on both sides, and that an
+  irreversible action passes `confirmation_gate`. A library that decides and acts in one
+  place would have to be wrapped until nothing of its loop was left.
+- **Its control surface is wider than the browser rule allows.** Coordinates, JavaScript
+  evaluation and free-form key chords are part of its action space; contract v1.5 refuses
+  all three, and v1.6 keeps refusing them.
+- **The owner's Chrome is attached, never launched.** The `owner` profile (ADR-0113) and
+  its device-side grants are this system's own; the library's browser lifecycle would be
+  a second owner of the same browser.
+- **Dependencies.** It brings its own LLM client layer and its own telemetry defaults
+  into a process that today depends on Playwright alone. (Stated from the project's
+  public documentation as known at the time of writing, not from an audit of a pinned
+  version - nothing was installed to check.)
+
+Adapter boundary: none - there is nothing to adapt. If a future version of the library
+exposes its element reduction as a standalone, side-effect-free function under a
+compatible licence, using THAT would be a new decision with its own ADR.
