@@ -1113,6 +1113,12 @@ public static class BrowserCapabilities
     public const string MediaStatus = "browser.media_status";
     public const string MediaStop = "browser.media_stop";
 
+    // Contract v1.6 (ADR-0207): the page as a numbered list of what can be acted on.
+    // READ: the worker numbers the elements in its own memory and writes nothing
+    // into the page. The host's job is the same as for every other name here - let
+    // it through, cap the result, scan it for forbidden keys.
+    public const string Observe = "browser.observe";
+
     /// <summary>Every per-operation name, in the order of BROWSER_CAPABILITIES.md §1.</summary>
     public static readonly IReadOnlyList<string> Operations =
     [
@@ -1122,6 +1128,7 @@ public static class BrowserCapabilities
         Inspect, Find, Click, Fill, SelectOption, SetChecked, Scroll, Wait,
         Extract, Snapshot, Screenshot, Download, Upload, Search, FetchEvidence,
         MediaPlay, MediaVolume, MediaStatus, MediaStop,
+        Observe,
     ];
 
     /// <summary>Family marker first, then the operations — what the manifest carries.</summary>

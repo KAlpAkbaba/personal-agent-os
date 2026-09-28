@@ -89,6 +89,21 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
         why="one marker list for the API and the browser agent; two lists is two policies",
         held_by=("services/api", "services/browser"),
     ),
+    "browser-risk-markers.json": Contract(
+        guard="test_the_risk_markers_file_is_well_formed_and_the_worker_carries_it_verbatim",
+        why=(
+            "ADR-0207 (contract v1.6): the words that make a web action irreversible. Until "
+            "v1.6 they were a substring list inside the worker alone - 'sil' matched "
+            "'silver', 'pay' matched 'paylaş', and the Turkish checkout phrases were missing"
+        ),
+        held_by=("services/browser",),
+        unheld=(
+            "the Cloud Core has no CODE that reads the markers until the task loop's gate "
+            "(ADR-0207 PR-B); today its suite holds the worker's copy to the file "
+            "(test_browser_contract_v16) and nothing of its own. Until PR-B a gate that "
+            "classified a step from a list of its own would be a second policy"
+        ),
+    ),
     "realtime-session-contract.json": Contract(
         guard="test_committed_contract_matches_the_live_request_models",
         why=(

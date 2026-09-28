@@ -45,7 +45,7 @@ from urllib.parse import urlencode, urlsplit
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from . import launch_guard, lifecycle, media, policy, release, search_engines
+from . import launch_guard, lifecycle, media, observe, policy, release, search_engines
 from .backends import ExistingSessionBackend, ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
@@ -82,7 +82,7 @@ WORKER_VERSION = "0.5.0"
 # Cloud Core checks it before it plans a media wake, so an agent installed before M18.3
 # produces a named contract mismatch and the tone fallback, never a missing-key crash
 # in the middle of an alarm.
-CONTRACTS: dict[str, int] = {"browser.search": 3, "browser.media": 1}
+CONTRACTS: dict[str, int] = {"browser.search": 3, "browser.media": 1, "browser.observe": 1}
 PROTOCOL_VERSION = 1
 DEFAULT_TIMEOUT_MS = 30_000
 DEFAULT_NAV_TIMEOUT_MS = 15_000
@@ -449,6 +449,16 @@ class SessionState:
     own_tabs: int = 0
     popups_closed: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Contract v1.6 (ADR-0207): the LAST observation of this session and where it was
+    # taken. A reference is good for exactly this observation, this tab and this
+    # document: a newer observation replaces it, and a navigation of the tab's main frame
+    # (counted by the listener ``_op_observe`` installs) makes every reference stale.
+    observation: observe.Observation | None = None
+    observation_page: Any = None
+    observation_url: str = ""
+    observation_navigations: int = 0
+    navigations_seen: int = 0
+    navigation_listener_pages: set[int] = field(default_factory=set)
     # Set when a browser.search (interstitial="handoff") returns
     # state=waiting_for_owner_verification, holding the query that was
     # pending; consumed (and cleared) by the next browser.search for this
@@ -495,6 +505,45 @@ _DESCRIBE_ELEMENT_JS = r"""
   };
 }
 """
+
+# What an element is NOW, in the collector's own terms, to compare with what it was when
+# it was observed. It reuses the collector: one definition of role and name, not two.
+_DESCRIBE_OBSERVED_JS = (
+    r"""
+(el) => {
+  const collect = """
+    + observe.COLLECT_JS.strip()
+    + r""";
+  const path = [];
+  const all = collect(100000).elements;
+  const step = (n) => {
+    let i = 1;
+    for (let s = n.previousElementSibling; s; s = s.previousElementSibling) {
+      if (s.tagName === n.tagName) i += 1;
+    }
+    return n.tagName.toLowerCase() + ':nth-of-type(' + i + ')';
+  };
+  let node = el;
+  let steps = [];
+  while (node && node.nodeType === 1) {
+    steps.unshift(step(node));
+    const parent = node.parentNode;
+    if (parent && parent.nodeType === 11 && parent.host) {
+      path.unshift(steps.join(' > '));
+      steps = [];
+      node = parent.host;
+      continue;
+    }
+    if (!parent || parent.nodeType === 9) break;
+    node = parent;
+  }
+  path.unshift(steps.join(' > '));
+  const key = path.join(' >> ');
+  const hit = all.find((r) => r.path.join(' >> ') === key);
+  return hit ? { tag: hit.tag, role: hit.role, name: hit.name } : {};
+}
+"""
+)
 
 _SCROLL_JS = r"""
 (args) => {
@@ -1595,13 +1644,158 @@ class Worker:
             "page_kind": kind_result.page_kind,
         }
 
+    # ------------------------------------------------------------------ #
+    # contract v1.6: observe, and targets that name an observed element
+    # ------------------------------------------------------------------ #
+
+    def _watch_navigations(self, state: SessionState, page: Page) -> None:
+        """Count main-frame navigations of ``page`` (once per page object)."""
+        if id(page) in state.navigation_listener_pages:
+            return
+        state.navigation_listener_pages.add(id(page))
+
+        def on_navigated(frame: Frame) -> None:
+            if frame.parent_frame is None:
+                state.navigations_seen += 1
+
+        page.on("framenavigated", on_navigated)
+
+    async def _op_observe(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        max_elements = observe.clamp(
+            payload.get("max_elements"),
+            default=observe.DEFAULT_MAX_ELEMENTS,
+            ceiling=observe.MAX_ELEMENTS_CEILING,
+            name="max_elements",
+        )
+        max_text_chars = observe.clamp(
+            payload.get("max_text_chars"),
+            default=observe.DEFAULT_MAX_TEXT_CHARS,
+            ceiling=observe.MAX_TEXT_CHARS_CEILING,
+            name="max_text_chars",
+        )
+        scope = payload.get("scope", observe.SCOPE_PAGE)
+        browser_session = state.browser_session
+        page = browser_session.backend.current_page
+        self._watch_navigations(state, page)
+        try:
+            collected = await page.evaluate(observe.COLLECT_JS, observe.RAW_ELEMENT_LIMIT)
+        except Exception as exc:
+            raise map_playwright_error(
+                exc, phase=Phase.ACT, op="observe", evidence={"url": redact_url(page.url)}
+            ) from exc
+        observation = observe.reduce_elements(
+            list(collected.get("elements") or []),
+            max_elements=max_elements,
+            scope=scope,
+            collector_truncated=bool(collected.get("truncated")),
+        )
+        raw = await read_raw_page_data(page)
+        body_text = await browser_session.page_text()
+        kind_result = classify_page(
+            title=raw.title,
+            heading_text=raw.heading_text,
+            body_text=body_text,
+            has_password_field=raw.has_password_field,
+            http_status=None,
+        )
+        text, text_truncated, markers = observe.reduce_text(
+            await read_primary_text(page), max_chars=max_text_chars
+        )
+        # 120 names and 6 000 characters of Turkish text weigh more than the result cap:
+        # the observation fits itself (text first, then the far end of the list), so
+        # what is held below is exactly what is returned.
+        observation, text, elements_cut, text_cut = observe.fit_to_budget(observation, text)
+        text_truncated = text_truncated or text_cut
+        # The observation replaces the previous one: its references die with it.
+        state.observation = observation
+        state.observation_page = page
+        state.observation_url = page.url
+        state.observation_navigations = state.navigations_seen
+        name_markers = sum(count_injection_markers(e.name) for e in observation.elements)
+        return {
+            "observation_id": observation.observation_id,
+            "url": page.url,
+            "title": raw.title,
+            "page_kind": kind_result.page_kind,
+            "scope": scope,
+            "elements": [element.as_dict() for element in observation.elements],
+            "element_count": len(observation.elements),
+            "elements_seen": observation.seen,
+            "text": text,
+            "truncated": observation.truncated or text_truncated,
+            "elements_truncated": observation.truncated,
+            "text_truncated": text_truncated,
+            "injection_markers": markers + name_markers,
+        }
+
+    async def _bound_target(self, state: SessionState, target: Any) -> TargetSpec:
+        """A payload target as a spec a locator can be built from.
+
+        A semantic target passes through unchanged. A ``ref`` is bound to the path its
+        observation recorded - and refused, with ``ui_state_changed``, when it belongs to
+        any observation but the session's last one, when the tab is another one, when the
+        tab's document has changed since, or when the element at that path is no longer
+        the element that was observed. It is never resolved to "something similar".
+        """
+        spec = coerce_target(target)
+        if spec.ref is None:
+            return spec
+        ref = observe.validate_ref(spec.ref)
+        page = state.browser_session.backend.current_page
+        held = state.observation
+
+        def stale(reason: str) -> BrowserError:
+            return BrowserError(
+                ErrorClass.UI_STATE_CHANGED,
+                f"reference {ref} is no longer valid ({reason}); observe the page again",
+                retryable=True,
+                evidence={"ref": ref, "reason": reason, "url": redact_url(page.url)},
+            )
+
+        if held is None:
+            raise stale("no_observation")
+        if spec.observation_id != held.observation_id:
+            raise stale("other_observation")
+        if state.observation_page is not page:
+            raise stale("other_tab")
+        if (
+            state.navigations_seen != state.observation_navigations
+            or page.url != state.observation_url
+        ):
+            raise stale("navigated")
+        element = held.by_ref(ref)
+        if element is None:
+            raise BrowserError(
+                ErrorClass.VALIDATION_ERROR,
+                f"reference {ref} was not handed out by observation {held.observation_id}",
+                retryable=False,
+                evidence={"ref": ref, "element_count": len(held.elements)},
+            )
+        bound = spec.resolved(tuple(observe.selector_for(element)))
+        locator = bound.to_locator(page)
+        try:
+            count = await locator.count()
+            described = await locator.first.evaluate(_DESCRIBE_OBSERVED_JS) if count == 1 else {}
+        except Exception as exc:
+            raise stale("detached") from exc
+        if count != 1:
+            raise stale("not_unique" if count else "gone")
+        seen = (
+            str(described.get("tag") or ""),
+            str(described.get("role") or ""),
+            observe.clean_name(described.get("name")),
+        )
+        if seen != element.fingerprint:
+            raise stale("changed")
+        return bound
+
     async def _op_find(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         target = payload.get("target")
         if not target:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR, "find: 'target' is required", retryable=False
             )
-        spec = coerce_target(target)
+        spec = await self._bound_target(state, target)
         page = state.browser_session.backend.current_page
         root = _frame_root(page, payload.get("frame"))
         locator = spec.to_locator(root)
@@ -1635,7 +1829,7 @@ class Worker:
             raise BrowserError(
                 ErrorClass.VALIDATION_ERROR, "click: 'target' is required", retryable=False
             )
-        spec = coerce_target(target)
+        spec = await self._bound_target(state, target)
         frame = payload.get("frame")
         timeout_ms = payload.get("timeout_ms", 5_000)
         page = state.browser_session.backend.current_page
@@ -1691,7 +1885,9 @@ class Worker:
                 ErrorClass.VALIDATION_ERROR, "fill: 'value' must be a string", retryable=False
             )
         await state.browser_session.fill(
-            coerce_target(payload.get("target")), value, frame=payload.get("frame")
+            await self._bound_target(state, payload.get("target")),
+            value,
+            frame=payload.get("frame"),
         )
         return {"ok": True}
 
@@ -1706,7 +1902,9 @@ class Worker:
                 retryable=False,
             )
         await state.browser_session.select_option(
-            coerce_target(payload.get("target")), value=value, frame=payload.get("frame")
+            await self._bound_target(state, payload.get("target")),
+            value=value,
+            frame=payload.get("frame"),
         )
         return {"ok": True}
 
@@ -1719,7 +1917,9 @@ class Worker:
                 retryable=False,
             )
         await state.browser_session.set_checked(
-            coerce_target(payload.get("target")), checked, frame=payload.get("frame")
+            await self._bound_target(state, payload.get("target")),
+            checked,
+            frame=payload.get("frame"),
         )
         return {"ok": True}
 
@@ -1778,7 +1978,7 @@ class Worker:
                         "wait: 'target' is required for for='target'",
                         retryable=False,
                     )
-                spec = coerce_target(target)
+                spec = await self._bound_target(state, target)
                 root = _frame_root(page, payload.get("frame"))
                 await spec.to_locator(root).first.wait_for(state="attached", timeout=timeout_ms)
         except BrowserError:
@@ -2071,7 +2271,9 @@ class Worker:
             )
         cap = transfer_cap(payload)
         downloads_dir = self._data_dir / "downloads"
-        result = await state.browser_session.download(coerce_target(target), save_dir=downloads_dir)
+        result = await state.browser_session.download(
+            await self._bound_target(state, target), save_dir=downloads_dir
+        )
         size = enforce_transfer_size(result.path, cap=cap, op="browser.download")
         return {
             "path": str(result.path),
@@ -2119,7 +2321,7 @@ class Worker:
         cap = transfer_cap(payload)
         size = enforce_transfer_size(path, cap=cap, op="browser.upload", delete=False)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        await state.browser_session.upload(coerce_target(target), path)
+        await state.browser_session.upload(await self._bound_target(state, target), path)
         return {
             "uploaded": True,
             "path": str(path),
@@ -2752,6 +2954,7 @@ _HANDLERS: dict[str, Callable[[Worker, SessionState, dict[str, Any]], Any]] = {
     "browser.media_play": Worker._op_media_play,
     "browser.media_volume": Worker._op_media_volume,
     "browser.media_status": Worker._op_media_status,
+    "browser.observe": Worker._op_observe,
     # browser.media_stop is NOT here: it ends the session, so Worker._execute
     # dispatches it beside browser.session_close (see the comment there).
 }

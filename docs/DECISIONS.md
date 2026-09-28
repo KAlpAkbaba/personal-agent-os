@@ -15514,11 +15514,12 @@ re-argue it:
   `checks.memory.reranker.active` on the health check.
 * Until then the code ships off, costs nothing, and is covered by its tests.
 
-## ADR-0207 — DRAFT: the browser task loop — a goal, carried out on the web, in the owner's own Chrome (2026-09-28)
+## ADR-0207 — The browser task loop — a goal, carried out on the web, in the owner's own Chrome (2026-09-28)
 
-Status: **Draft for the owner's review. No code was written for this ADR.** JARVIS order,
-item 2 ("browser-use"). Everything below is a proposal until the owner answers the
-questions at the end; the contract (`BROWSER_CAPABILITIES.md`) is unchanged at v1.5.
+Status: **Accepted by the owner on 2026-09-28** - his five decisions are recorded at the
+end and override the text above them wherever the two differ. JARVIS order, item 2
+("browser-use"). Built in four PRs; PR-A (contract v1.6 items 1, 2, 3, 10, 12) is the
+first, on `feat/browser-observe`.
 
 ### What exists, read before anything was proposed
 
@@ -15551,7 +15552,7 @@ questions at the end; the contract (`BROWSER_CAPABILITIES.md`) is unchanged at v
    button, a combobox that opens on ArrowDown and a dialog that closes on Escape cannot be
    operated at all.
 
-### Decision (proposed)
+### Decision
 
 #### a) The loop
 
@@ -15776,7 +15777,7 @@ Tests:
 * Mutations to be shown RED: the cap removed; a ref resolved after navigation; the value
   of a password field included; a marker matched as a substring.
 
-### Questions for the owner (five)
+### The questions that were put to the owner
 
 1. **What is "step-up" for a web action?** (a) the mail pattern - read-back, then your
    spoken word, bound to the session by the existing gate [this draft's assumption]; (b)
@@ -15794,3 +15795,103 @@ Tests:
 5. **Which sites for the five real tasks?** T3 needs a real shop you use, T5 the webmail
    you read - and whether the deny-list (banks, e-Devlet, payment providers, the password
    manager) is the right starting list.
+
+### The owner's decisions (2026-09-28) - binding
+
+1. **Step-up is the read-back and the owner's word.** Option (a). By voice: the read-back,
+   then the owner's spoken word, bound to the session by the existing gate. In the web
+   shell: the read-back TEXT on the screen and an explicit **Onayla** button - the button
+   is never shown without the text it approves. B05 speaker verification is NOT switched
+   on by this ADR; it may be added for HIGH_IMPACT only, by its own ADR, and only once B05
+   itself is `PROVEN_REAL`.
+2. **A form that sends is behind the read-back. No exception.** Contact forms, comments,
+   sending an e-mail from webmail: EXTERNAL_COMMUNICATION stops, reads back and waits,
+   exactly as HIGH_IMPACT does. The cost - a question on every submitted form - is
+   accepted.
+3. **No unattended task from PR-A to PR-D.** A task runs only while the owner is present.
+   Unattended use comes later, only on sites the owner has NAMED, and only under a
+   separate device grant.
+4. **Payment is permanently out of scope.** The loop stops at the payment boundary and
+   hands over to the owner. This is not a phase: no later PR completes a payment, and
+   acceptance never pays.
+5. **The deny-list**, on which the loop never acts beyond READ: banks; e-Devlet; payment
+   providers; password managers; **the employer's systems** (the `turka.com` domain and
+   the company's management panels); **Kolay Monitor**. It lives under
+   `packages/protocol/` as ONE JSON file that both sides read (it lands with PR-B, where
+   the loop first consults it; PR-A carries the risk markers file, by the same rule).
+
+**Still open, and said plainly.** The decision text named the shop for T3 and the webmail
+for T5 as `<MAĞAZA>` and `<WEBMAIL>` - placeholders that were never filled in. Nothing in
+PR-A or PR-B needs them (both run against the fixture site); PR-C cannot start without
+them. They are asked for again in the PR-A report.
+
+### ADR-0207 - PR-A as built (2026-09-28): contract v1.6, items 1, 2, 3, 10, 12
+
+**What was built.** `browser.observe` (READ) and `browser_agent/observe.py`; the `ref` and
+`nth` targets; `packages/protocol/browser-risk-markers.json` with the worker's verbatim
+copy in `risk_markers.py`; `contracts["browser.observe"] = 1`; the contract text. Nothing
+the owner can trigger: no intent, no workflow and no planner names these yet.
+
+**Four things building it found that the design had not said.**
+
+1. *The design's own numbers did not fit the contract's cap.* 120 elements with
+   80-character names and 6 000 characters of text are counts of CHARACTERS; every browser
+   result is held to 48 KiB of UTF-8, and in Turkish that observation weighs **56 KB**.
+   Left to the worker's generic cap it would have had its text halved until nothing was
+   left and then been replaced by `{"truncated": true, "note": ...}` - the observation
+   lost, with a success status. An observation now fits a byte budget of its own
+   (40 KiB): the text gives way first and never below 1 000 characters, then elements are
+   dropped from the END of the list, and the worker holds exactly what it returned. The
+   test that found it is kept as a test (`test_the_character_caps_alone_do_not_fit...`).
+2. *The capability list has FIVE mirrors, not four.* `test_capability_mirrors` names the
+   contract, the worker, the C# host allowlist and install verification. The fifth is the
+   Cloud Core's `BROWSER_ACTION_ALLOWLIST` in `app/routines/dispatch.py`, held by another
+   test in another suite. All five carry `browser.observe`; `test_browser_contract_v16`
+   now holds the Cloud Core to the same list by count and by name.
+3. *A control can be NAMED as one that sends.* "Onayla", "Yayınla", "Paylaş", "Post" on a
+   `<div role="button">` or a plain button outside any form were REVERSIBLE_WRITE by
+   shape. With the owner's decision 2 (a form that sends is behind the read-back, no
+   exception) that would have been the hole in it, so `external_communication` is a second
+   list in the markers file and the click classification reads it.
+4. *A page with a password field is an `auth_wall`.* The fixture shop's checkout form
+   carries one, and the classifier every other operation uses says so. An observation
+   reports the kind and lists the page all the same; what to make of it is the loop's
+   decision in PR-B (a checkout that asks for a password is where the loop hands over).
+
+**How a reference is kept, and why this way.** The collector records, for every element,
+its structural path - `nth-of-type` steps from the document, a new segment at every open
+shadow root. The path stays in the worker's memory; `coerce_target` refuses any payload
+field that could carry one, and a stored path is checked against a closed grammar before
+it is used. NOTHING is written into the page: no attribute, no property, no global - the
+owner's Chrome is the owner's, and a page that can see it is being numbered can behave
+differently because of it. Resolving a reference re-describes the element at that path
+with the collector's own code and compares tag, role and name with what was observed; a
+difference is `changed`, never a click.
+
+**Proof.**
+
+| What | Result |
+|---|---|
+| `services/browser` unit suite | 765 passed (450 before PR-A; +315) |
+| `tests/unit/test_observe_reduction.py` | the caps, the order, stable numbering, values, the byte budget |
+| `tests/unit/test_observe_hostile.py` | a name that gives an order is data and changes no other field |
+| `tests/unit/test_target_ref.py` | the spec, no path from a payload, the four refusals before the page is touched |
+| `tests/unit/test_risk_markers.py` | 200 cases: every marker, every near miss, the file held verbatim |
+| `tests/browser/test_observe_e2e.py` | 17, real headless Chromium against the fixture site |
+| `services/api/tests/unit/test_browser_contract_v16.py` | 12: the five mirrors, the bounds, the reasons, the markers |
+| Mutations, each RED, each file restored byte-exact (sha256) | the element cap removed; a reference resolved after a navigation; the value of a field used as its name; a marker matched as a substring; the byte budget disabled; an element that changed accepted |
+
+One mutation was GREEN the first time and is the reason a test was rewritten: with the
+value of a field used as its name, the end-to-end test still passed - every field of the
+fixture had a label, so the collector never reached the line. Only a source-text check
+was holding "the value never leaves the page". The fixture gained a field with a
+placeholder and no label, and one with nothing at all; the mutation is RED in the
+end-to-end test now.
+
+**Evidence classes.** The reduction, the targets and the markers: `PROVEN_AUTOMATED`.
+Observe, act by reference, refuse the stale one, on a real browser against the fixture
+site: `PROVEN_PROXY`. The owner's own Chrome: `NOT_STARTED` - it is PR-C's work and was
+not run. Nothing is released, and nothing in production changes until a Windows agent
+built from this tree is installed: the companion host refuses a name that is not in its
+own list, so an installed 0.6.0 agent answers `browser.observe` with
+`capability_missing`. That is the contract check of item 12 doing its job.
