@@ -24,6 +24,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Final
 
+from app.protocol_files import protocol_file
 from app.webtask.types import (
     ACTION_BACK,
     ACTION_CHECK,
@@ -39,8 +40,9 @@ from app.webtask.types import (
     Element,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-MARKERS_PATH: Final = _REPO_ROOT / "packages" / "protocol" / "browser-risk-markers.json"
+#: The run-time copy of ``packages/protocol/browser-risk-markers.json``
+#: (app/protocol_files.py): the image holds no repository.
+MARKERS_PATH: Final[Path] = protocol_file("browser-risk-markers.json")
 
 _ZERO_WIDTH = re.compile("[​‌‍⁠﻿­]")
 _WHITESPACE = re.compile(r"\s+")

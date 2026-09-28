@@ -1048,3 +1048,30 @@ driven - that is PR-C.
 | 33.9 | A page that gives orders is observed and nothing on it is done | `PROVEN_PROXY` | `test_a_hostile_page_is_observed_and_nothing_on_it_is_done`: the markers are counted, the button named after an instruction is HIGH_IMPACT, and a session allowed to write reversibly is refused both buttons by the worker's own classification |
 | 33.10 | The five mirrors of the operation list agree | `PROVEN_AUTOMATED` | `test_capability_mirrors.py` (contract, worker, C# host, install verification) and `test_browser_contract_v16.py` (the Cloud Core's `BROWSER_ACTION_ALLOWLIST`), 30 operations |
 | 33.11 | Observe on the owner's own Chrome | `NOT_YET_PROVEN` | PR-C. Needs a Windows agent built from this tree installed on MAIL (the installed 0.6.0 host refuses the name) and the `-AuthorizeTasks` grant |
+
+## Stage 34 — The browser task loop, PR-B: the loop, the gate, the workflow (ADR-0207, contract v1.7)
+
+Built and tested on the owner's PC; not released. Nothing the owner can trigger exists
+yet (PR-D), and the owner's own Chrome was not driven (PR-C). T3's shop and T5's web mail
+are fake sites here; the real ones are still to be named by the owner.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 34.1 | T1: a story is found, opened and summarised, and nothing is written | `PROVEN_AUTOMATED` | `test_t1_a_story_is_found_opened_and_summarised_and_nothing_is_written` (fake browser, scripted planner) |
+| 34.2 | T2: a form is filled and the control that sends is never pressed without the word | `PROVEN_AUTOMATED` | `test_t2_the_form_is_filled_and_the_submit_control_is_never_pressed`, `test_t2_a_planner_that_sends_anyway_is_stopped_at_the_read_back` |
+| 34.3 | T3: the item is in the cart and the loop stops at the payment boundary | `PROVEN_AUTOMATED` | `test_t3_the_item_is_in_the_cart_and_the_loop_stops_at_the_payment_boundary`, `test_t3_no_word_of_the_owners_makes_the_loop_pay`, `test_t3_buy_now_on_the_product_page_is_the_same_boundary`. Mutation M1 RED |
+| 34.4 | T4: a site the owner names by its name is where the loop goes, and no other | `PROVEN_AUTOMATED` | `test_t4_the_owner_names_the_site_by_its_name_and_the_song_is_opened`, `test_t4_a_site_the_owner_did_not_name_is_not_where_the_loop_goes`. Playing is a flag of the fake; the real proof is PR-C |
+| 34.5 | T5: the newest mail is read and summarised; a mail that gives orders is not obeyed | `PROVEN_AUTOMATED` | `test_t5_the_newest_mail_is_read_and_summarised_and_nothing_is_touched`, `test_t5_a_mail_that_gives_orders_is_read_and_not_obeyed`. Mutation M6 RED |
+| 34.6 | R1: what a page wrote is not typed and not followed | `PROVEN_AUTOMATED` | `test_r1_what_the_page_wrote_is_not_typed_and_not_followed`. Mutations M4, M5 RED |
+| 34.7 | R2: a total that changes between the read-back and the click is not clicked | `PROVEN_AUTOMATED` | `test_r2_a_page_that_changes_the_total_after_the_read_back_is_not_clicked`. Mutation M2 RED |
+| 34.8 | R3: a loop on a cookie wall ends `loop_detected` | `PROVEN_AUTOMATED` | `test_r3_a_loop_on_a_cookie_wall_ends_loop_detected`. Mutation M7 RED |
+| 34.9 | A confirmation is the owner's word for THIS read-back, on a later turn, once | `PROVEN_AUTOMATED` | `test_webtask_service.py`: refused before the read-back, refused from another session, refused from the same turn, used once; the web shell's button only after the text was shown. Mutation M8 RED |
+| 34.10 | The loop never types into a password or a code field; an auth wall is handed to the owner and "devam" takes up the same round | `PROVEN_AUTOMATED` | `test_webtask_acceptance.py` (login site), `test_devam_takes_up_the_same_round`, `test_devam_is_not_a_confirmation_at_the_row_either` |
+| 34.11 | What the loop cannot see it says it cannot see | `PROVEN_AUTOMATED` | `not_unique` and a missing element end `ask_owner(cannot_see)`; the reason reaches the loop as a reason, never as the device's sentence (`test_the_devices_sentence_is_not_carried_into_the_loop`) |
+| 34.12 | Both sides deny the same sites, from one file | `PROVEN_AUTOMATED` | `test_both_sides_deny_the_same_sites`, `test_both_sides_answer_the_same_for_the_same_address` (the worker's matcher run from its source), `test_task_denylist.py` (57). Mutations M3, W2, W3 RED |
+| 34.13 | A click above the class it was gated at is refused by the device and nothing happens | `PROVEN_PROXY` | `test_observe_e2e.py::test_a_click_above_the_class_it_was_gated_at_is_refused_and_nothing_happens` in real headless Chromium. Mutations W1, W1E, M10 RED |
+| 34.14 | The task runs as a durable workflow: one activity per round, a heartbeat from the round's thread, the row as the truth | `PROVEN_PROXY` | `tests/integration/test_webtask_worker.py` (5) under a real Temporal worker on the dev stack, PostgreSQL, migration 0062. Mutation M11 RED |
+| 34.15 | A word that changes nothing runs no round; a round is never retried; a cancel is not overwritten by the round it arrived in | `PROVEN_PROXY` | the same suite and `test_a_cancel_that_arrives_during_a_round_is_not_overwritten_by_it`. Mutations M9, M12, M13 RED |
+| 34.16 | The Cloud Core reads its shared files from the bundle the image carries | `PROVEN_AUTOMATED` | `test_the_cloud_reads_the_bundled_copy_and_it_is_the_shared_file`, `test_protocol_bundle.py` |
+| 34.17 | A task on the owner's own Chrome, planned by a model | `NOT_YET_PROVEN` | PR-C. Needs the Windows agent rebuilt and installed on MAIL, the `-AuthorizeTasks` grant, and the owner's names for T3's shop and T5's web mail |
+| 34.18 | The owner starts, hears and confirms a task by voice and in the web shell | `NOT_YET_PROVEN` | PR-D |

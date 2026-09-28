@@ -45,7 +45,16 @@ from urllib.parse import urlencode, urlsplit
 from playwright.async_api import Frame, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
-from . import launch_guard, lifecycle, media, observe, policy, release, search_engines
+from . import (
+    launch_guard,
+    lifecycle,
+    media,
+    observe,
+    policy,
+    release,
+    search_engines,
+    task_denylist,
+)
 from .backends import ExistingSessionBackend, ManagedBackend
 from .destination import require_public_destination
 from .detect import BrowserInfo, detect_browser
@@ -382,6 +391,30 @@ def _frame_root(page: Page, frame: str | None) -> Any:
             ErrorClass.VALIDATION_ERROR, "frame must be a non-empty iframe name", retryable=False
         )
     return page.frame_locator(f'iframe[name="{frame}"]')
+
+
+def _refuse_on_denied_site(state: SessionState, capability: str) -> None:
+    """Contract v1.7: on a site of the task deny-list nothing but reading and leaving.
+
+    Judged from the ADDRESS of the session's current page, never from what the page says
+    about itself, and for every session: no caller of this worker has business clicking
+    inside a bank."""
+    page = state.browser_session.backend.current_page
+    category = task_denylist.denied(page.url)
+    if category is None:
+        return
+    raise BrowserError(
+        ErrorClass.SECURITY_SCOPE_ERROR,
+        f"{capability}: this site is on the task deny-list ({category}); it may be read, "
+        "and it may be left",
+        retryable=False,
+        evidence={
+            "capability": capability,
+            "reason": "denied_site",
+            "category": category,
+            "host": task_denylist.host_of(page.url),
+        },
+    )
 
 
 async def _stdin_lines(loop: asyncio.AbstractEventLoop) -> AsyncIterator[str]:
@@ -1824,6 +1857,7 @@ class Worker:
         return {"match_count": count, "elements": elements}
 
     async def _op_click(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        _refuse_on_denied_site(state, "browser.click")
         target = payload.get("target")
         if not target:
             raise BrowserError(
@@ -1860,6 +1894,8 @@ class Worker:
         )
         risk_class = policy.classify_click(resolved)
         policy.enforce(state.policy_allowed, risk_class, capability="browser.click")
+        # v1.7: never above the class the consumer gated this step at.
+        policy.enforce_ceiling(risk_class, payload.get("risk_ceiling"), capability="browser.click")
 
         url_before = page.url
         try:
@@ -1879,6 +1915,7 @@ class Worker:
         }
 
     async def _op_fill(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        _refuse_on_denied_site(state, "browser.fill")
         value = payload.get("value")
         if not isinstance(value, str):
             raise BrowserError(
@@ -1894,6 +1931,7 @@ class Worker:
     async def _op_select_option(
         self, state: SessionState, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        _refuse_on_denied_site(state, "browser.select_option")
         value = payload.get("value")
         if not isinstance(value, str):
             raise BrowserError(
@@ -1909,6 +1947,7 @@ class Worker:
         return {"ok": True}
 
     async def _op_set_checked(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        _refuse_on_denied_site(state, "browser.set_checked")
         checked = payload.get("checked")
         if not isinstance(checked, bool):
             raise BrowserError(
@@ -2263,6 +2302,7 @@ class Worker:
         }
 
     async def _op_download(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        _refuse_on_denied_site(state, "browser.download")
         target = payload.get("target")
         authorization_ref = require_transfer_authorization(state, payload, op="browser.download")
         if not target:
@@ -2284,6 +2324,7 @@ class Worker:
         }
 
     async def _op_upload(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
+        _refuse_on_denied_site(state, "browser.upload")
         """B31 req 181: the operation behind the ``uploads`` flag. A file from the
         companion data dir's ``uploads/`` folder, under the same policy gate as a
         download (HIGH_IMPACT + a well-formed ``authorization_ref``) and the same size cap,

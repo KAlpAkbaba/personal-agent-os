@@ -433,3 +433,62 @@ async def test_a_hostile_page_is_observed_and_nothing_on_it_is_done(worker, site
 async def test_the_hello_advertises_the_observe_contract(worker) -> None:
     status = await worker._execute("browser.worker_status", {})
     assert status["contracts"]["browser.observe"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# contract v1.7: the risk ceiling
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_click_above_the_class_it_was_gated_at_is_refused_and_nothing_happens(
+    worker, site_url
+) -> None:
+    """The session MAY send; the step was gated as a reversible write. The button turns
+    out to be one that sends, so the worker refuses it - the step was not what it looked
+    like."""
+    await _open(worker, classes=(*WRITE, "EXTERNAL_COMMUNICATION", "HIGH_IMPACT"))
+    await _goto(worker, f"{site_url}/observe.html")
+    seen = await _observe(worker)
+    share = _by_name(seen, "Paylaş")[0]
+
+    with pytest.raises(BrowserError) as caught:
+        await worker._execute(
+            "browser.click",
+            {
+                "session_id": "s1",
+                "target": _ref(seen, share),
+                "risk_ceiling": "REVERSIBLE_WRITE",
+            },
+        )
+    assert caught.value.error_class == ErrorClass.SECURITY_SCOPE_ERROR
+    assert caught.value.evidence["reason"] == "above_ceiling"
+    assert caught.value.evidence["risk_class"] == "EXTERNAL_COMMUNICATION"
+
+    # At its own class, and with no ceiling at all (a caller from before v1.7), it runs.
+    for extra in ({"risk_ceiling": "EXTERNAL_COMMUNICATION"}, {}):
+        again = await _observe(worker)
+        clicked = await worker._execute(
+            "browser.click",
+            {"session_id": "s1", "target": _ref(again, _by_name(again, "Paylaş")[0]), **extra},
+        )
+        assert clicked["clicked"] is True
+    await worker._execute("browser.session_close", {"session_id": "s1"})
+
+
+async def test_a_ceiling_does_not_widen_what_the_session_allows(worker, site_url) -> None:
+    await _open(worker)  # READ, NAVIGATE, REVERSIBLE_WRITE
+    await _goto(worker, f"{site_url}/observe.html")
+    seen = await _observe(worker)
+    with pytest.raises(BrowserError) as caught:
+        await worker._execute(
+            "browser.click",
+            {
+                "session_id": "s1",
+                "target": _ref(seen, _by_name(seen, "Siparişi tamamla")[0]),
+                "risk_ceiling": "HIGH_IMPACT",
+            },
+        )
+    assert caught.value.error_class == ErrorClass.SECURITY_SCOPE_ERROR
+    assert caught.value.evidence.get("reason") != "above_ceiling"
+    assert (await _observe(worker))["url"].endswith("observe.html")
+    await worker._execute("browser.session_close", {"session_id": "s1"})

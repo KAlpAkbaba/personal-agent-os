@@ -25,8 +25,11 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-DENYLIST_PATH: Final = _REPO_ROOT / "packages" / "protocol" / "browser-task-denylist.json"
+from app.protocol_files import protocol_file
+
+#: The run-time copy of ``packages/protocol/browser-task-denylist.json``
+#: (app/protocol_files.py): the image holds no repository.
+DENYLIST_PATH: Final[Path] = protocol_file("browser-task-denylist.json")
 
 _SECOND_LEVEL: Final = frozenset(
     {"com", "org", "net", "gov", "edu", "co", "ac", "gen", "bel", "pol", "mil", "k12", "av", "web"}

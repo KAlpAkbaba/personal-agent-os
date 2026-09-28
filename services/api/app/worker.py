@@ -29,6 +29,8 @@ from app.research.activities import (
 from app.research.browser_activities import BROWSER_RESEARCH_ACTIVITIES
 from app.research.browser_workflow import BrowserResearchWorkflow
 from app.research.workflow import ResearchWorkflow
+from app.webtask.activities import WEB_TASK_ACTIVITIES
+from app.webtask.workflow import BrowserTaskWorkflow
 from app.workflows import HealthPingWorkflow, ping_activity
 
 logger = get_logger("app.worker")
@@ -65,6 +67,9 @@ def build_worker(
             ExecutiveWorkflow,
             # B39 (req 128): the operator mission's durable driver, same queue.
             OperatorMissionWorkflow,
+            # ADR-0207: the browser task's durable driver, same queue. Nothing
+            # starts one yet - the intent and the shell are PR-D.
+            BrowserTaskWorkflow,
         ],
         activities=[
             ping_activity,
@@ -72,6 +77,7 @@ def build_worker(
             *BROWSER_RESEARCH_ACTIVITIES,
             *EXECUTIVE_ACTIVITIES,
             *MISSION_ACTIVITIES,
+            *WEB_TASK_ACTIVITIES,
         ],
         activity_executor=executor,
     )

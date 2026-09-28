@@ -416,6 +416,12 @@ EVENT_TYPE_OPERATOR_TASK_CANCELLED = "operator.task.cancelled"
 EVENT_TYPE_OPERATOR_MISSION_STARTED = "operator.mission.started"
 EVENT_TYPE_OPERATOR_MISSION_ESCALATED = "operator.mission.escalated"
 EVENT_TYPE_OPERATOR_MISSION_FINISHED = "operator.mission.finished"
+#: ADR-0207: a browser task - a goal carried out on the web. One row when it starts,
+#: one each time it stops for the owner, one when it ends; the rounds (site, action,
+#: element, risk, who confirmed) are on the task's own row. A typed value is in neither.
+EVENT_TYPE_WEB_TASK_STARTED = "web_task.started"
+EVENT_TYPE_WEB_TASK_ASKED_OWNER = "web_task.asked_owner"
+EVENT_TYPE_WEB_TASK_FINISHED = "web_task.finished"
 #: M20 File & Document Intelligence (spec §3): one row per document interaction the owner
 #: initiated — never on a schedule, per the module's "no background crawling" rule.
 EVENT_TYPE_DOCUMENT_SEARCHED = "document.search"
@@ -628,6 +634,9 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_OPERATOR_MISSION_STARTED,
     EVENT_TYPE_OPERATOR_MISSION_ESCALATED,
     EVENT_TYPE_OPERATOR_MISSION_FINISHED,
+    EVENT_TYPE_WEB_TASK_STARTED,
+    EVENT_TYPE_WEB_TASK_ASKED_OWNER,
+    EVENT_TYPE_WEB_TASK_FINISHED,
     EVENT_TYPE_DOCUMENT_SEARCHED,
     EVENT_TYPE_DOCUMENT_READ,
     EVENT_TYPE_DOCUMENT_ANSWERED,

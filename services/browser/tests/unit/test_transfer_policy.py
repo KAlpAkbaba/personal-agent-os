@@ -47,7 +47,13 @@ GOOD_REF = "approval:2026-09-14:0001"
 # --------------------------------------------------------------------------- fakes
 
 
+class _FakePage:
+    #: Contract v1.7: every write is judged against the address of the current page.
+    url = "https://files.example.org/reports"
+
+
 class _FakeBackend:
+    current_page = _FakePage()
     main_pid = 4242
     last_launch_kind = "dedicated"
     launch_lock_name = None

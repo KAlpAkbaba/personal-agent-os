@@ -1,7 +1,20 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.6** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.7** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
+
+- **v1.7 (2026-09-29, ADR-0207, PR-B): the device's half of the task gate** — two
+  refusals, no new operation name (§4a). `browser.click` accepts an optional
+  `risk_ceiling`: the class the consumer gated the step at; an element the worker
+  classifies ABOVE it is refused and never clicked. And on a site of
+  `browser-task-denylist.json` the worker serves READ and navigation and refuses
+  `click`, `fill`, `select_option`, `set_checked`, `download` and `upload`, for every
+  session and every profile. Additive for a caller that names no ceiling; the
+  deny-list is a TIGHTENING: a command that v1.6 performed on such a site is refused.
+  Not in v1.7, and the task loop says so instead of guessing: elements inside frames
+  and closed shadow roots are not in an observation (the loop asks the owner,
+  `cannot_see`); `press`, `type`, `hover`, `dialog` and `wait` for `stable` remain
+  proposals of ADR-0207 (items 4–9, 11) for the version that first needs them.
 
 - **v1.6 (2026-09-28, ADR-0207, PR-A): the page as a numbered list, and targets that say WHICH
   element** — `browser.observe` (§1, §3c), the `ref` target strategy and `nth` (§3), risk
@@ -576,6 +589,41 @@ HIGH_IMPACT; `button`/`input` with `type=submit` or inside a form, or (v1.6) an
 `security_scope_error` (`retryable:false`, message names the class) when the session policy
 does not allow it. Research sessions are READ+NAVIGATE. Cloud Core's research workflow only
 ever issues READ/NAVIGATE operations; anything else goes through the confirmation framework.
+
+## 4a. The risk ceiling and the task deny-list (contract v1.7, ADR-0207)
+
+Both rules are the device's half of a decision the Cloud Core's gate also makes. They
+exist because the two halves look at different things: the gate classifies a step from
+the OBSERVATION it planned on, the worker from the element it actually resolved, a
+moment later. When they disagree the worker's answer is the one that holds.
+
+**`risk_ceiling` on `browser.click`.** Optional; one of `READ`, `NAVIGATE`,
+`REVERSIBLE_WRITE`, `EXTERNAL_COMMUNICATION`, `HIGH_IMPACT` (the order of §4,
+ascending). The worker classifies the resolved element as §4 says, applies the session
+policy, and then refuses when the class is ABOVE the ceiling: `security_scope_error`,
+`retryable:false`, evidence `{"reason":"above_ceiling","risk_class":…,"risk_ceiling":…}`.
+The element is not clicked. A value that is not a risk class is a `validation_error`.
+A payload without the field is served as in v1.6. A ceiling never WIDENS anything: the
+session policy is applied first and a ceiling above it opens nothing.
+
+**The task deny-list.** `packages/protocol/browser-task-denylist.json` names the sites
+no browser task acts on — banks, government identity, payment providers, password
+managers, the owner's employer, Kolay Monitor and this system's own hosts — as
+categories of `domains` and `host_label_parts`. Both sides read it (the worker carries a
+verbatim copy, held identical by a test; the Cloud Core reads its bundled copy). A host
+matches when it IS one of a category's domains or a subdomain of one, or when one of its
+labels CONTAINS one of the category's parts; containment over-matches on purpose, and
+the cost of a false match is a refusal and a question. The match is made on the HOST of
+the session's current page and nothing else: not the path, not the query, not what the
+page says about itself.
+
+On a matching page the worker refuses `browser.click`, `browser.fill`,
+`browser.select_option`, `browser.set_checked`, `browser.download` and `browser.upload`
+BEFORE it resolves a target: `security_scope_error`, `retryable:false`, evidence
+`{"reason":"denied_site","category":…,"host":…}` — the host, never the URL. Reading
+(`observe`, `extract`, `snapshot`, …) and leaving (`navigate`, `back`, tabs) are served:
+the owner may ask what a page says, and a task that landed there must be able to go.
+The rule holds for every session and every profile, the owner's own Chrome included.
 
 ## 5. Errors
 

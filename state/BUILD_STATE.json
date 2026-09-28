@@ -948,10 +948,10 @@
     ]
   },
   "browser_task_loop_adr_0207": {
-    "status": "ACCEPTED; PR-A merged; PR-B (the loop, the gate, the deny-list, the workflow) in progress on feat/browser-task-loop",
+    "status": "ACCEPTED; PR-A merged; PR-B (the loop, the gate, the deny-list, the workflow) built on feat/browser-task-loop; not released; nothing the owner can trigger until PR-D",
     "adr": "ADR-0207",
     "milestone": "JARVIS order 2 (browser-use)",
-    "contract": "BROWSER_CAPABILITIES.md v1.6",
+    "contract": "BROWSER_CAPABILITIES.md v1.7",
     "cut": [
       "PR-A observe + ref + risk markers",
       "PR-B loop + Temporal + fake browser",
@@ -966,7 +966,9 @@
     ],
     "evidence_class": "NOT_STARTED (design)",
     "next": [
-      "PR-B: the loop, the gate, the deny-list, BrowserTaskWorkflow"
+      "PR-C: the model planners and the owner's own Chrome (needs the agent reinstalled on MAIL, the -AuthorizeTasks grant, T3 shop and T5 webmail named)",
+      "PR-D: the intent, the voice tools and the web shell",
+      "contract v1.8: frames by index and host, closed shadow hosts reported (decision 7 said v1.7; v1.7 became the ceiling and the deny-list)"
     ],
     "owner_decisions": {
       "step_up": "read-back + the owner's word; web shell = read-back text + explicit Onayla; B05 only by its own ADR once PROVEN_REAL",
@@ -1012,6 +1014,53 @@
         "the operation list has five mirrors, not four",
         "a control can be named as one that sends without being a form's submit button",
         "a page with a password field is classified auth_wall"
+      ]
+    },
+    "pr_b": {
+      "date": "2026-09-29",
+      "code": [
+        "services/api/app/webtask/ (types, risk, sites, gate, verify, planner, loop, models, service, device_port, activities, workflow)",
+        "services/api/alembic/versions/20260929_0062_web_tasks.py",
+        "services/api/app/worker.py (BrowserTaskWorkflow, WEB_TASK_ACTIVITIES)",
+        "services/api/app/ledger/vocabulary.py (three events)",
+        "services/api/app/protocol_files.py + app/protocol_bundle/ (the two browser files)",
+        "packages/protocol/browser-task-denylist.json",
+        "packages/protocol/browser-risk-markers.json (version 2: payment)",
+        "packages/protocol/BROWSER_CAPABILITIES.md (v1.7, section 4a)",
+        "services/browser/browser_agent/task_denylist.py, policy.py (enforce_ceiling), worker.py"
+      ],
+      "tests": [
+        "services/api/tests/unit/test_webtask_acceptance.py (40)",
+        "services/api/tests/unit/test_webtask_gate.py (121)",
+        "services/api/tests/unit/test_webtask_service.py (27)",
+        "services/api/tests/unit/test_webtask_device_port.py (20)",
+        "services/api/tests/unit/test_browser_contract_v17.py (20)",
+        "services/api/tests/integration/test_webtask_worker.py (5, real Temporal worker)",
+        "services/browser/tests/unit/test_task_denylist.py (57)",
+        "services/browser/tests/browser/test_observe_e2e.py (19, headless Chromium)",
+        "17 mutations RED: docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json"
+      ],
+      "evidence_class": {
+        "loop_gate_verifier_service_port": "PROVEN_AUTOMATED",
+        "workflow_under_a_real_worker": "PROVEN_PROXY (fake browser, scripted planner)",
+        "worker_ceiling": "PROVEN_PROXY (real Chromium, fixture site)",
+        "owner_chrome": "NOT_STARTED (PR-C)",
+        "model_planners": "NOT_STARTED (PR-C)",
+        "owner_surface": "NOT_STARTED (PR-D)"
+      },
+      "found": [
+        "the device has to hold the gate's line: risk_ceiling and the deny-list on the worker (contract v1.7)",
+        "risk.py and sites.py read the shared files from a path the production image does not have",
+        "a parked workflow ran a round activity every time it was woken",
+        "no test noticed a round activity being retried",
+        "a word inside a hostname the owner wrote is not a site name",
+        "proton.me is a mail site; the password manager is pass.proton.me"
+      ],
+      "thin": [
+        "field_has_value verifies that a field has a value, not which one",
+        "T4 playing is a flag of the fake; the real proof is a device read (PR-C)",
+        "the site-name rule does not look at the top-level domain",
+        "a bank whose host is not listed and carries no part of the word is not recognised"
       ]
     }
   }

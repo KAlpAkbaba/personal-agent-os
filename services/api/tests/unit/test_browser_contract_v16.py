@@ -84,7 +84,9 @@ def test_the_additions_are_appended_so_a_manifest_diff_reads_as_an_addition() ->
 
 def test_the_document_says_v1_6_and_what_it_is_made_of() -> None:
     contract = CONTRACT.read_text("utf-8")
-    assert "Status: contract **v1.6**" in contract
+    # The document's status moved on with v1.7 (test_browser_contract_v17); what v1.6
+    # is made of stays in it.
+    assert "- **v1.6 (2026-09-28, ADR-0207, PR-A)" in contract
     assert "## 3c. Observation (contract v1.6, ADR-0207)" in contract
     for phrase in (
         "The value of a field is never returned",
@@ -134,12 +136,22 @@ def test_the_hello_contract_is_what_the_document_promises() -> None:
 
 def test_the_risk_markers_file_is_well_formed_and_the_worker_carries_it_verbatim() -> None:
     shared = json.loads(RISK_MARKERS.read_text("utf-8"))
-    assert shared["version"] == 1
-    assert set(shared) == {"version", "matching", "high_impact", "external_communication"}
+    # Version 2 (ADR-0207 PR-B) added `payment`: the subset of `high_impact` a browser
+    # task never performs at all. The worker reads the two lists it classifies with.
+    assert shared["version"] == 2
+    assert set(shared) == {
+        "version",
+        "matching",
+        "high_impact",
+        "payment",
+        "external_communication",
+    }
+    assert set(shared["payment"]) <= set(shared["high_impact"])
+    assert len(shared["payment"]) == len(set(shared["payment"])) > 0
     source = RISK_MARKERS_PY.read_text("utf-8")
     assert _python_tuple(source, "HIGH_IMPACT") == shared["high_impact"]
     assert _python_tuple(source, "EXTERNAL_COMMUNICATION") == shared["external_communication"]
-    for markers in (shared["high_impact"], shared["external_communication"]):
+    for markers in (shared["high_impact"], shared["payment"], shared["external_communication"]):
         assert markers and all(isinstance(m, str) and m == m.strip() and m for m in markers)
         assert len(markers) == len(set(markers))
         assert all(m == m.lower() or m != m.casefold() for m in markers)

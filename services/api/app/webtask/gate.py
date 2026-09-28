@@ -214,9 +214,14 @@ def url_is_allowed(url: str, observation: Observation, context: TaskContext) -> 
     # is allowed when the name of its registrable domain is a word he said. The suffix is
     # not checked (youtube.com or youtube.com.tr), which is the limit of this rule: going
     # somewhere is a NAVIGATE, and what may be DONE there is judged element by element.
+    # A word that is part of an address he wrote is not a site NAME: where he named a
+    # host, the host is the rule (above), and "example" inside "magaza.example.com" names
+    # nothing else.
     label = site_of(url).split(".")[0]
+    spoken = " ".join((context.goal, *context.answers))
+    spoken = _HOST_IN_TEXT.sub(" ", _URL_IN_TEXT.sub(" ", spoken))
     if len(label) >= 4 and re.search(
-        rf"(?<![0-9a-z]){re.escape(risk_rules.fold(label))}(?![0-9a-z])", _owner_words(context)
+        rf"(?<![0-9a-z]){re.escape(risk_rules.fold(label))}(?![0-9a-z])", risk_rules.fold(spoken)
     ):
         return True
     linked = {e.href_host.lower() for e in observation.elements if e.href_host}
