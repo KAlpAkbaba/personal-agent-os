@@ -3,7 +3,7 @@
   "work": "PR-B: the loop, the gate, the deny-list, the workflow",
   "date": "2026-09-29",
   "method": "one mutation at a time, in one process; the file is backed up, mutated, the named tests are run, the file is restored from the backup and its sha256 compared with the one taken before. RED = the tests failed (pytest exit 1).",
-  "note": "M13 was GREEN on its first run: no test noticed a round activity being retried. test_a_round_that_cannot_run_leaves_a_failed_row now counts the attempts, and the verdict below is the run after that.",
+  "note": "M13 was GREEN on its first run: no test noticed a round activity being retried. test_a_round_that_cannot_run_leaves_a_failed_row now counts the attempts, and the verdict below is the run after that. M14, M15 and M16 hold the three rules changed after the independent review; M1-M6 were run before that change to gate.py and their sha256 is of the file as it was then.",
   "mutations": [
     {
       "id": "M1",
@@ -121,6 +121,33 @@
       "tests": "        assert failed.completed_at is not None | FAILED tests/integration/test_webtask_worker.py::test_a_round_that_cannot_run_leaves_a_failed_row | 1 failed, 3 passed, 1 warning in 9.08s",
       "sha256_before": "dc8927131fcd7f1230a078c733efcf0ccbe40f4d478190645e00d47b4ff163b0",
       "sha256_after": "dc8927131fcd7f1230a078c733efcf0ccbe40f4d478190645e00d47b4ff163b0"
+    },
+    {
+      "id": "M14",
+      "name": "M14 a fragment of the owner's words counts as his value",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_a_fragment_of_what_the_owner_said_is_not_a_value_he_gave[d\\xfcn] | 1 failed, 161 passed in 0.75s",
+      "sha256_before": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007",
+      "sha256_after": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007"
+    },
+    {
+      "id": "M15",
+      "name": "M15 the page's name is said whole",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_a_name_that_is_a_sentence_is_not_said_as_one | 1 failed, 174 passed in 0.78s",
+      "sha256_before": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007",
+      "sha256_after": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007"
+    },
+    {
+      "id": "M16",
+      "name": "M16 any parent of a named host is allowed",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_a_named_host_allows_its_site_and_nothing_above_it[mail.ornek.com.tr-https://com.tr/-False] | 1 failed, 185 passed in 0.83s",
+      "sha256_before": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007",
+      "sha256_after": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007"
     },
     {
       "id": "W1",

@@ -1031,14 +1031,15 @@
       ],
       "tests": [
         "services/api/tests/unit/test_webtask_acceptance.py (40)",
-        "services/api/tests/unit/test_webtask_gate.py (121)",
+        "services/api/tests/unit/test_webtask_gate.py (149)",
         "services/api/tests/unit/test_webtask_service.py (27)",
         "services/api/tests/unit/test_webtask_device_port.py (20)",
         "services/api/tests/unit/test_browser_contract_v17.py (20)",
         "services/api/tests/integration/test_webtask_worker.py (5, real Temporal worker)",
         "services/browser/tests/unit/test_task_denylist.py (57)",
         "services/browser/tests/browser/test_observe_e2e.py (19, headless Chromium)",
-        "17 mutations RED: docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json"
+        "20 mutations RED: docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json",
+        "independent security review: three fixes on the branch, six limits binding on PR-C (DECISIONS.md)"
       ],
       "evidence_class": {
         "loop_gate_verifier_service_port": "PROVEN_AUTOMATED",
@@ -1054,13 +1055,20 @@
         "a parked workflow ran a round activity every time it was woken",
         "no test noticed a round activity being retried",
         "a word inside a hostname the owner wrote is not a site name",
-        "proton.me is a mail site; the password manager is pass.proton.me"
+        "proton.me is a mail site; the password manager is pass.proton.me",
+        "review: the read-back said the page's words in the system's voice",
+        "review: a fragment of the owner's words counted as a value he gave",
+        "any parent of a host the owner named (even a bare suffix) was allowed"
       ],
       "thin": [
         "field_has_value verifies that a field has a value, not which one",
         "T4 playing is a flag of the fake; the real proof is a device read (PR-C)",
         "the site-name rule does not look at the top-level domain",
-        "a bank whose host is not listed and carries no part of the word is not recognised"
+        "a bank whose host is not listed and carries no part of the word is not recognised",
+        "PR-C must close: fill/select/set_checked are not classified from the element and carry no ceiling",
+        "PR-C must close: an unnamed control is REVERSIBLE_WRITE",
+        "PR-C must close: the site-name rule reads every word the owner said",
+        "PR-C must close: no retention rule for the observation kept in web_tasks.state_json"
       ]
     }
   }

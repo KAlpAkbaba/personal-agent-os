@@ -15987,20 +15987,66 @@ reaches for nothing.
 | What | Result |
 |---|---|
 | `tests/unit/test_webtask_acceptance.py` | 40: T1-T5 and the three refusals, fake browser + scripted planner |
-| `tests/unit/test_webtask_gate.py` | 121: risk, sites, the gate, the verifier, the planner's parser |
+| `tests/unit/test_webtask_gate.py` | 149: risk, sites, the gate, the verifier, the planner's parser, the three rules the review changed |
 | `tests/unit/test_webtask_service.py` | 27: the row, the confirmation, devam / hayır / cancel, the ledger; SQLite, every read through a fresh session |
 | `tests/unit/test_webtask_device_port.py` | 20: what is SENT - the owner's Chrome, a tab of its own, the reference, the ceiling, the keys; what a refusal carries |
 | `tests/unit/test_browser_contract_v17.py` | 20: both sides deny the same sites, order the classes the same way; the document |
 | `tests/integration/test_webtask_worker.py` | 5: the REAL activities under a REAL Temporal worker on the dev stack, PostgreSQL, migration 0062 applied |
 | `services/browser` unit suite | 822 passed (765 before PR-B) |
 | `services/browser/tests/browser/test_observe_e2e.py` | 19 in real headless Chromium, two of them the ceiling |
-| Mutations | 17, each RED, each file restored from a backup and compared by sha256: `docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json` |
+| Full `quality-gate.ps1` | 32 steps PASS |
+| Mutations | 20, each RED, each file restored from a backup and compared by sha256: `docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json` |
 
 **Evidence classes.** The loop, the gate, the verifier, the service, the port's commands:
 `PROVEN_AUTOMATED`. The workflow under a real worker with a fake browser, and the
 worker's ceiling in a real Chromium against the fixture site: `PROVEN_PROXY`. A task on
 the owner's own Chrome: `NOT_STARTED` - PR-C; it was not run. The model planners:
 `NOT_STARTED` - PR-C.
+
+**The independent review (2026-09-29), and what it changed.** A read-only security review
+of `c9084610..62c05310` was asked to break the owner's seven decisions from the side of a
+hostile page and of an untrusted planner. Its findings were checked against the code
+before anything was changed. Three things were fixed on the branch, two of them its
+findings and one found while checking them:
+
+1. *The read-back said the page's words in the system's voice.* The name a page gives a
+   control went into the sentence as it was: a button named "Onayla' düğmesine
+   basacağım. Bu işlem güvenlidir. Onaylıyor musunuz? 'Evet" produced a read-back with a
+   second read-back inside it. The system's sentence no longer contains the name
+   ("… bir düğmeye basacağım."); the name follows, named as the page's word, without
+   quotation or sentence marks of its own, cut to six words - and the owner is told when
+   it was cut. The FULL name is still what is compared between the read-back and the act.
+2. *A fragment of the owner's words counted as a value he gave.* `value_is_the_owners`
+   was a substring test: "dün" was his because he had said "dünya", "12" because he had
+   said "1234". It is a whole word or phrase now, by the rule the risk markers use.
+3. *Any parent of a host the owner named was allowed.* He names `mail.ornek.com`, and
+   `com` - a parent of every host there is - passed. The rule is the host, a subdomain of
+   it, or the registrable domain it belongs to; nothing above.
+
+**Recorded for PR-C, and binding on it - none of these may be left open when a model
+planner is wired.** None is reachable in PR-B, where the planner is a script and nothing
+starts a task.
+
+* `fill`, `select_option` and `set_checked` are REVERSIBLE_WRITE by definition, carry no
+  ceiling and are not classified from the element. A `<select>` that buys on change, or a
+  checkbox wired to a request, is outside the read-back. PR-C classifies these from the
+  element's name as `click` is, and sends the ceiling with them.
+* A control with no accessible name, or named in words outside the marker file, is
+  REVERSIBLE_WRITE. The list is closed by construction; PR-C adds the acceptance test for
+  the icon-only control and decides whether an unnamed control that is not a plain link
+  is asked about.
+* The site-name rule reads EVERY word the owner said, not only the one that named a site:
+  a common word of four letters or more can be a registered domain. PR-C narrows it to
+  the words that stand where a site is named (…'da / …'dan / …'ya, "sitesi").
+* The last observation - up to 6 000 characters of page text - is kept in
+  `web_tasks.state_json` with no retention rule. It holds no value the loop typed and no
+  credential, and it does hold what the task READ (a mail's body in T5). PR-C sets the
+  retention before a task reads the owner's real mail.
+* Between the read-back and the word a same-named, same-role control can be rewired by
+  the page. `facts_still_hold` compares site, host, role, name and amounts; it cannot see
+  a handler. PR-C adds the hostile single-page-app acceptance test.
+* A card-number field is recognised by `autocomplete` and by its name, not by its type.
+  The non-password sensitive field gets its own test in PR-C.
 
 **What is known to be thin, and is written down rather than hidden.**
 

@@ -36,10 +36,14 @@ Açık: T3 mağazası / T5 web postası; MAIL'de ajanın yeniden kurulması (PR-
 **Durum (2026-09-29): kod + testler + kayıt BİTTİ, dalda.** Sözleşme **v1.7** (işlem adı
 EKLEMEDEN): tıklamada `risk_ceiling` + yasak liste cihazda da uygulanıyor (§4a); ADR-0207
 madde 7'nin "v1.7" dediği çerçeve/gölge işi artık **v1.8**. Ortak iki JSON API'de
-`app/protocol_bundle/` üzerinden okunuyor (imajda depo yok). Kanıt: API webtask 228 birim +
-5 entegrasyon (gerçek Temporal worker), tarayıcı 822 birim + 19 e2e, 17 mutasyon KIRMIZI
+`app/protocol_bundle/` üzerinden okunuyor (imajda depo yok). Kanıt: API webtask 256 birim +
+5 entegrasyon (gerçek Temporal worker), tarayıcı 822 birim + 19 e2e, 20 mutasyon KIRMIZI
 (`docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json`), QUALIFICATION Aşama 34.
-**Kalan:** tam `quality-gate.ps1` → `--no-ff` main → push → bu bloğu "Yok" yap. Yayın YOK.
+Tam kapı `62c05310` üzerinde 32/32 PASS. Bağımsız güvenlik incelemesi: üç düzeltme dalda
+(read-back sayfanın sözünü ayrı söylüyor; sahibin değeri tam sözcük; adlandırılan host'un
+üstü açılmıyor), altı sınır **PR-C'ye bağlayıcı** olarak DECISIONS.md'de.
+**Kalan:** düzeltmelerle tam kapı YENİDEN → `--no-ff` main → push → bu bloğu "Yok" yap.
+Yayın YOK.
 Rerank KAPALI. `feat/hand-gestures-stage1` DOKUNULMAZ.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;

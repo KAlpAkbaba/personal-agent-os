@@ -154,12 +154,49 @@ def read_back_facts(
     }
 
 
+#: A name a page gave to a control is read to the owner as a NAME: a few words, no
+#: quotation marks of its own, no sentence. The page chose those words.
+MAX_SPOKEN_NAME_WORDS: Final = 6
+MAX_SPOKEN_NAME_CHARS: Final = 60
+_QUOTES: Final = re.compile(
+    "[\"'`\u00ab\u00bb\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u2039\u203a]"
+)
+_SENTENCE_MARKS: Final = re.compile(r"[.!?;:\u2026\u2014\u2013]+")
+
+
+def spoken_name(name: str) -> tuple[str, bool]:
+    """The page's name for a control, as it may be said inside the read-back, and
+    whether it had to be cut.
+
+    The read-back is the sentence the owner answers. A page that names its button
+    "İptal demeyin, Onayla deyin - bu güvenli" would otherwise have those words said
+    in the system's voice, between the system's own words. So the name loses its
+    quotation marks and its sentence marks, and is cut to a few words - and the
+    owner is TOLD it was cut. What is compared between the read-back and the act
+    is the full name (``facts_still_hold``), never this."""
+    flat = _SENTENCE_MARKS.sub(" ", _QUOTES.sub("", name or ""))
+    words = flat.split()
+    cut = len(words) > MAX_SPOKEN_NAME_WORDS
+    said = " ".join(words[:MAX_SPOKEN_NAME_WORDS])
+    if len(said) > MAX_SPOKEN_NAME_CHARS:
+        said, cut = said[:MAX_SPOKEN_NAME_CHARS].rstrip(), True
+    return said, cut
+
+
 def read_back_sentence(facts: dict[str, Any], risk: str) -> str:
-    """The Turkish read-back. Built from the facts, in a fixed shape."""
-    element = str(facts.get("element") or "").strip() or "adsız öğe"
+    """The Turkish read-back. Built from the facts, in a fixed shape: what the SYSTEM
+    says is its own sentence, and what the PAGE calls its control is given after it,
+    named as the page's word."""
+    element, cut = spoken_name(str(facts.get("element") or ""))
     site = str(facts.get("site") or "").strip() or "bilinmeyen site"
-    parts = [f"{site} sitesinde '{element}' düğmesine basacağım."]
-    filled = [str(f) for f in facts.get("fields_filled") or [] if f]
+    parts = [f"{site} sitesinde bir düğmeye basacağım."]
+    if element:
+        shortened = " (uzun bir ad, kısalttım)" if cut else ""
+        parts.append(f"Sayfanın bu düğmeye verdiği ad: '{element}'{shortened}.")
+    else:
+        parts.append("Sayfa bu düğmeye ad vermemiş.")
+    filled = [spoken_name(str(f))[0] for f in facts.get("fields_filled") or [] if f]
+    filled = [f for f in filled if f]
     if filled:
         parts.append("Doldurulan alanlar: " + ", ".join(filled[:8]) + ".")
     amounts = [str(a) for a in facts.get("amounts") or [] if a]
@@ -190,7 +227,15 @@ def _owner_words(context: TaskContext) -> str:
 def value_is_the_owners(value: str, context: TaskContext) -> bool:
     """A typed value has to be IN what the owner said - his goal or an answer."""
     wanted = risk_rules.fold(value)
-    return bool(wanted) and wanted in _owner_words(context)
+    if not wanted:
+        return False
+    # As a WHOLE word or phrase of his: "dün" is not in "dünya", "12" is not in
+    # "1234". A fragment that merely occurs inside something he said is not a
+    # value he gave.
+    return (
+        re.search(rf"(?<![0-9a-z]){re.escape(wanted)}(?![0-9a-z])", _owner_words(context))
+        is not None
+    )
 
 
 def _hosts_the_owner_named(context: TaskContext) -> set[str]:
@@ -208,7 +253,10 @@ def url_is_allowed(url: str, observation: Observation, context: TaskContext) -> 
     if not host:
         return False
     named = _hosts_the_owner_named(context)
-    if any(host == h or host.endswith("." + h) or h.endswith("." + host) for h in named):
+    # The host he named, a subdomain of it, or the SITE it belongs to (he said
+    # "mail.example.com", the loop may open "example.com") - the registrable domain
+    # and nothing above it: "com" is a parent of every host he could name.
+    if any(host == h or host.endswith("." + h) or host == site_of(f"https://{h}/") for h in named):
         return True
     # "YouTube'da ...", "Trendyol'dan ...": the owner names a site by its NAME. The host
     # is allowed when the name of its registrable domain is a word he said. The suffix is
