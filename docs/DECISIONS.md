@@ -15320,3 +15320,80 @@ Windows PowerShell with `PAGENTOS_INSTALL_ASSUME_UNELEVATED=1` - a switch that c
 make the script refuse, so the test is safe and still meaningful on an elevated runner -
 and `ProgramData` pointed at a sandbox, asserting one refusal, no second error and no log
 directory. Red before the fix; two mutations RED; restored byte-exact (sha256).
+
+## ADR-0205 — The second device is "ofis", and a locative is a closed form (2026-09-28)
+
+**The device is real.** Read from the production database, read-only, 2026-09-28 13:56 UTC:
+
+| device_id | name | status | agent | build | source revision | capabilities | open sessions | last seen |
+|---|---|---|---|---|---|---|---|---|
+| `3f60fdb5-5022-48cf-bb3c-d7192466b701` | MAIL | enrolled | 0.6.0 | `36ecfc6a2edd31d9` | `8ca5ff90` | 105 | 1 | 5 s before the read |
+| `9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` | GMKADIRAKBABA | enrolled | 0.6.0 | `949a61a528b63418` | `5ffe1871` | 13 | 1 | 3 s before the read |
+
+The broker reported `active_sessions: 2`. GMKADIRAKBABA enrolled at 13:52:06 UTC with its
+own key, from the tree of `fix/installer-fresh-machine` (ADR-0204), with a token minted on
+the host by `mint-enrollment-token.sh`. 13 capabilities against MAIL's 105 is ADR-0203's
+decision made visible: no operator, no display power, no browser worker on a company
+machine. ADR-0203 moves from `READY_FOR_OWNER` to `PROVEN_REAL` for enrolment and
+presence; the device-side verification is the company PC session's report
+(`verify-device-service.ps1`: every check real except 6b.1, the browser worker, which
+`-SkipBrowser` leaves `NOT_YET_PROVEN` by design).
+
+**Decision 1 - "ofis" is a canonical alias.** `app/devices/aliases.py` knew ev / iş /
+laptop. "ofis" selected a device only through the free-form equality branch, i.e. as the
+bare word; "ofis bilgisayarımda aç" selected nothing. `ALIAS_OFIS` is added with the same
+shapes the other two have: the bare word, "ofis bilgisayar…", "ofisteki…", "ofiste",
+"ofisimde…". The mapping from word to machine stays owner data
+(`devices.metadata_json.aliases`), set through `PATCH /v1/devices/{id}`.
+
+**Decision 2 - a locative is a closed form, never a stem with an open tail.** Found while
+writing the tests for decision 1: the pattern for "işte" was the stem followed by any word
+characters, with `s` accepted for `ş`. It therefore read every conjugation of *istemek* as
+"at work": "istediğim videoyu aç", "istemiyorum", "istersen aç". The home pattern read
+"evden çıkınca" as "at home". With one enrolled device a wrong alias could not pick a wrong
+machine; from today it can, and the machine it would pick is the owner's employer's. The
+locatives are now closed: "evde" / "evdeyken" / "evdeki…" / "evimde…", "işte" / "işteyken"
+/ "işteki…", "ofiste" / "ofisteyken" / "ofisteki…" / "ofisimde…". This is the repository's
+recurring Turkish defect (a stem match is a guess about the suffix) in a new place.
+
+**Proof.** `test_devices_aliases` and `test_devices_selection`: 72 passed, 27 of them new -
+the office forms, the sentences that must select nothing, the forms that must keep
+working, and the production inventory driven through the real `select_device` (MAIL "ev",
+GMKADIRAKBABA "ofis" + "iş"). Red before the change (15 failed). Four mutations, each RED,
+the file restored byte-exact (sha256): the work stem reopened, the home stem reopened, the
+office noun form removed, the office stem left open.
+
+**Not done here.** The parser runs on Cloud Core: it reaches production only with a
+release, and a release is the owner's word. Until then "ofis" selects GMKADIRAKBABA as the
+bare word only (once the alias is set), and the open stems are still live. The aliases
+themselves are set by the owner's session: `scripts/core/set-device-aliases.ps1 -Device
+GMKADIRAKBABA -Aliases ofis,iş`.
+
+**ADR-0205 addendum (2026-09-28) - the aliases are set, and why the first run said "found 0".**
+The owner's first run of `set-device-aliases.ps1` printed "devices (1)", one row with no
+fields, and refused: "expected exactly one device named 'GMKADIRAKBABA', found 0". Two
+explanations were possible and they were told apart from the record, not by argument.
+
+*Timing - the second device not listed yet - is ruled out.* `broker_device_enrolled` for
+`9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` is logged at 13:52:06 UTC; a read-only query of the `devices` table at 13:56
+returned both rows, both online; the first run's `GET /v1/devices` is logged at
+**14:06:12 UTC**, fourteen minutes after the enrolment, status 200. The list the server
+sent contained two devices.
+
+*Parsing is the cause.* The script read the list through `@(Get-ArrayProperty ...)`.
+`Get-ArrayProperty` already returns the array wrapped so that one element does not unroll;
+`@()` wrapped it again, and two devices arrived as ONE element - the array itself - whose
+`name` is empty and whose aliases print as `System.Object[]`, which is exactly the line
+the owner saw. A single-device list unrolling into its properties (the other suspicion)
+is a different defect with a different signature, and is now covered too.
+
+The second run, after the fix: `GET /v1/devices` 14:15:31.698, `PATCH
+/v1/devices/9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` 200 at 14:15:31.837 (`broker_device_metadata_updated`), read-back
+`GET` 14:15:31.902. The row's `metadata_json` is `{"aliases": ["ofis", "iş"]}`; MAIL's is
+still empty - "ev" is not set on it yet.
+(Set by the owner at 14:22:21 UTC the same day: MAIL's row now carries `{"aliases": ["ev"]}`.)
+
+The refusal now names what was listed - "found 0 among 1 listed (MAIL)", and a nameless
+row is said to be one - so the three causes can be read off the message.
+`device-aliases.tests.ps1`: 12 passed; mutations RED: the double wrap (9 tests), a list
+returned without its wrap (2), the refusal without the names (1).

@@ -114,6 +114,38 @@ def test_explicit_turkish_alias_resolves_to_configured_device() -> None:
     assert result.reason == REASON_EXPLICIT_ALIAS
 
 
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("ofis bilgisayarımda aç", "GMKADIRAKBABA"),
+        ("ofisteki bilgisayarda araştır", "GMKADIRAKBABA"),
+        ("iş bilgisayarında aç", "GMKADIRAKBABA"),
+        ("ev bilgisayarımda aç", "MAIL"),
+    ],
+)
+def test_the_owners_two_machines_are_told_apart_by_the_word_he_says(
+    target: str, expected: str
+) -> None:
+    """ADR-0205, the inventory as it is in production: MAIL is "ev", GMKADIRAKBABA is
+    "ofis" and "iş". Both are online and both can do the work, so the word decides."""
+    home = _view("MAIL", aliases=("ev",))
+    office = _view("GMKADIRAKBABA", aliases=("ofis", "iş"))
+    result = select_device([home, office], capability="browser.chrome", target=target)
+    assert result.device.name == expected
+    assert result.reason == REASON_EXPLICIT_ALIAS
+
+
+@pytest.mark.parametrize("target", ["istediğim videoyu aç", "evden çıkınca kapat"])
+def test_a_sentence_that_names_no_machine_selects_no_machine(target: str) -> None:
+    """The stem patterns sent "istediğim ..." to the device aliased "iş". A target that
+    names nothing is refused - never resolved to the office because it starts like it."""
+    home = _view("MAIL", aliases=("ev",))
+    office = _view("GMKADIRAKBABA", aliases=("ofis", "iş"))
+    with pytest.raises(NoCapableDeviceError) as exc_info:
+        select_device([home, office], capability="browser.chrome", target=target)
+    assert exc_info.value.reason == "target_not_found"
+
+
 def test_explicit_target_with_no_match_raises_target_not_found_never_falls_back() -> None:
     ev = _view("ev-pc")
     with pytest.raises(NoCapableDeviceError) as exc_info:
