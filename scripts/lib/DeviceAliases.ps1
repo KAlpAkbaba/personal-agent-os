@@ -39,12 +39,14 @@ function Select-DeviceRowByName {
         if ($rowName) { [void]$seen.Add($rowName) } else { [void]$seen.Add("<a row with no name>") }
         if ($rowName -ieq $Name) { [void]$found.Add($row) }
     }
-    if ($found.Count -ne 1) {
+    $foundCount = @($found.ToArray()).Count
+    $seenCount = @($seen.ToArray()).Count
+    if ($foundCount -ne 1) {
         # The refusal names what WAS listed, so "found 0" can be told apart at a glance:
         # a device that is not enrolled yet, a name typed differently, or a list that was
         # read wrongly (2026-09-28: two devices arrived as one nameless row).
-        $listed = if ($seen.Count -gt 0) { @($seen.ToArray()) -join ", " } else { "none" }
-        throw "expected exactly one device named '$Name', found $($found.Count) among $($seen.Count) listed ($listed); nothing was changed."
+        $listed = if ($seenCount -gt 0) { @($seen.ToArray()) -join ", " } else { "none" }
+        throw "expected exactly one device named '$Name', found $foundCount among $seenCount listed ($listed); nothing was changed."
     }
     return $found[0]
 }

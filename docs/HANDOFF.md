@@ -34,7 +34,11 @@ hata: `işte` kalıbı açık kökle yazılmıştı, "istediğim videoyu aç" `i
 seçiyordu (artık o cihaz şirket PC'si). 72 ✓ (27 yeni), önce KIRMIZI (15), dört mutasyon
 KIRMIZI. Bulut satırı okundu: GMKADIRAKBABA `9efa9d8b-b0e6-4758-a03a-387c3e20a0d2`,
 çevrimiçi, 13 yetenek. Alias için `scripts/core/set-device-aliases.ps1` (sahip çalıştırır).
-Envanter: `docs/OPERATIONS.md` "Device inventory". **Yayın gerekli, onay bekliyor.**
+Envanter: `docs/OPERATIONS.md` "Device inventory". Alias'lar üretimde yazılı (MAIL `ev`,
+GMKADIRAKBABA `ofis`/`iş`). **Sahip yayın ONAYI verdi (2026-09-28 akşam).** Kurucu dalı main'de
+(`f30ba5f1`). Bu dalın ilk tam kapısı bir adımda kırmızıydı: `installer-strictmode` lint'i
+`scripts/lib/DeviceAliases.ps1`'de `@( )`'siz `.Count` buldu → düzeltildi. Sıra: tam kapı PASS →
+main → `-BlueGreen` → health → pin (tam sha) → zamanlayıcı döngüsü → LKG → rapor.
 
 Önceki durum: (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
 **Sahibi bekleyen iki şey:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını
