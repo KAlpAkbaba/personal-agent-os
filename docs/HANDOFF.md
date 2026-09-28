@@ -15,6 +15,32 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**EV PC'si (MAIL), 2026-09-28: ADR-0203 dalını main'e al + ADR-0202 yayını + yeniden pin.**
+Sahibin sırası: (1) `feat/second-device-enrollment` (`0627c64b`) farkını oku; (2) TAM kalite
+kapısı (`quality-gate.ps1`, `-Fast` değil) + `mint-enrollment-token.tests.ps1` +
+`reconcile_build_state.py`; kırmızıysa dalda düzelt, itme, bildir; (3) yeşilse main'e al, push;
+(4) main HEAD'i `-BlueGreen` ile yayınla (asla `2>&1`; 85 = model indirilemedi), health
+`failing_checks` boş olana dek doğrula, pini TAM 40 haneli sha ile yenile, zamanlayıcının bir
+döngüsünü izle, LKG'yi raporla (elle değiştirme); (5) `mint-enrollment-token.sh` host'ta
+var mı; (6) rapor, temiz checkout. Şirket PC'si bu sırada checkout'a dokunmuyor.
+`feat/hand-gestures-stage1` DOKUNULMAZ. Önceki durakta SSH, Tailscale ek doğrulamasına
+takılmıştı (sahibin girişi) — yine isterse yayın orada durur.
+**Tam kapı ilk koşuda KIRMIZI (bu dalın hatası değil, main'de de vardı):** `Browser agent
+lint + tests` — `test_google_ui_e2e.py`'deki iki sahte `build_search_url`, `c71fc461`'in eklediği
+`region` anahtarını kabul etmiyordu (6 test TypeError). `-Fast` bu adımı koşmadığı için
+görünmemişti. Sahteler gerçek imzaya getirildi; dosya 15 ✓. Diğer 31 adım, mint 21 ✓,
+`reconcile_build_state` uyumlu.
+
+**İkinci cihaz: şirket PC'si (ADR-0203, M29 ilk adım) — 2026-09-28, makine GMKADIRAKBABA.**
+Dal `feat/second-device-enrollment` (main `2da05c94`'ten). Bu oturum ŞİRKET PC'sinde
+(`kadir.akbaba`, alan `turka.com`, repo `C:\AI\...`; bu makinede `E:` yok — betiklerdeki
+`E:\AI` varsayılanlarına DOKUNULMADI). Bağlayıcı: ev PC'den (MAIL) hiçbir anahtar buraya
+kopyalanmaz; yayın betiği bu makinede çalıştırılmaz; LKG elle düzenlenmez; servis kurulumu
+sahibin onayı olmadan çalıştırılmaz. Yapılan: salt okunur teşhis, kayıt akışının çıkarılması,
+`scripts/cloud/mint-enrollment-token.sh` (token yalnız Cloud Core'un loopback'inden
+üretilebiliyor), ADR-0203, BUILD_STATE girişi. Kurulum ÇALIŞTIRILMADI → `READY_FOR_OWNER`.
+Ev PC'deki oturumla aynı anda düzenleme yapılmaz: bu dal yalnız bu makineden itilir.
+
 **Hafıza yayını yapıldı; recovery pini ADR-0202'yi bekliyor (2026-09-27 gece).**
 PR-1 + PR-2 main'de (`3a8f4637`, merge `--no-ff`) ve **üretimde** (api-blue). Pin
 yenilemesi BAŞARISIZ oldu ve eski pin geri kondu: mutabakat, kendi eski hata işaretinin
