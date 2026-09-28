@@ -15,7 +15,18 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
+**Hafıza PR-3 — yerel semantik rerank (ADR-0206), dal `feat/memory-rerank` (main
+`4a830698`'den), ev PC'si, 2026-09-28.** `hybrid_search`'ün üstüne isteğe bağlı bir
+`Reranker` protokolü (`none` | `local`, embedder ile aynı disiplin): top-K aday (varsayılan 20)
+sorgu-aday çifti olarak puanlanır, son sıra = rerank puanı + mevcut sinyaller. Ayar kapalıyken
+davranış bugünküyle bit-bit aynı (testle sabitlenir). Sıra: (1) Türkçe rerank ölçümü
+(`bge-reranker-v2-m3`, `jina-reranker-v2-base-multilingual`, varsa INT8): doğru adayın sırası,
+yükleme, çift başına ms, RSS; **renk başına +700 MB'ı geçerse varsayılan `none` kalır**;
+(2) kod + prefetch (uid 10001, çıkış 85) + eksik modelde `none`'a düşüş + health;
+(3) testler + mutasyon; (4) TAM kapı → main. **Yayın YAPILMAZ**: ölçüm tablosu + öneri ile
+sahibin onayı istenir. `feat/hand-gestures-stage1` DOKUNULMAZ.
+
+Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)
 **Sahibi bekleyen:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını her zaman
 Türkçe oku") → CANDIDATE satırı okununca ADR-0201 PROVEN_REAL olur (QUALIFICATION 30.10);
