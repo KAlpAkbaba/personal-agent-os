@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "rule": "On a site in this list a browser task never acts beyond READ: it may observe and read, and it may leave; it does not click, fill, select, tick, upload or download. A host matches a category when it IS one of the category's domains or a subdomain of one, or when one of its labels CONTAINS one of the category's host_label_parts. Containment over-matches on purpose (foodbank.example is treated as a bank): the cost of a false match is that the task stops and asks.",
+  "categories": {
+    "bank": {
+      "domains": [
+        "garantibbva.com.tr",
+        "isbank.com.tr",
+        "akbank.com",
+        "yapikredi.com.tr",
+        "ziraatbank.com.tr",
+        "halkbank.com.tr",
+        "vakifbank.com.tr",
+        "qnb.com.tr",
+        "qnbfinansbank.com",
+        "denizbank.com",
+        "teb.com.tr",
+        "ing.com.tr",
+        "kuveytturk.com.tr",
+        "albaraka.com.tr",
+        "turkiyefinans.com.tr",
+        "enpara.com",
+        "odeabank.com.tr",
+        "fibabanka.com.tr",
+        "sekerbank.com.tr",
+        "hsbc.com.tr",
+        "anadolubank.com.tr"
+      ],
+      "host_label_parts": ["bank", "banka"]
+    },
+    "government_identity": {
+      "domains": ["turkiye.gov.tr", "edevlet.gov.tr", "gib.gov.tr", "sgk.gov.tr", "nvi.gov.tr"],
+      "host_label_parts": ["edevlet"]
+    },
+    "payment_provider": {
+      "domains": [
+        "paypal.com",
+        "iyzico.com",
+        "iyzipay.com",
+        "paytr.com",
+        "stripe.com",
+        "wise.com",
+        "papara.com",
+        "ininal.com",
+        "payu.com.tr",
+        "masterpass.com.tr",
+        "bkmexpress.com.tr",
+        "pay.google.com",
+        "payments.google.com",
+        "wallet.google.com"
+      ],
+      "host_label_parts": []
+    },
+    "password_manager": {
+      "domains": [
+        "1password.com",
+        "bitwarden.com",
+        "lastpass.com",
+        "dashlane.com",
+        "keepersecurity.com",
+        "nordpass.com",
+        "pass.proton.me",
+        "passwords.google.com",
+        "myaccount.google.com",
+        "account.microsoft.com",
+        "appleid.apple.com"
+      ],
+      "host_label_parts": []
+    },
+    "employer": {
+      "domains": ["turka.com"],
+      "host_label_parts": ["turka"]
+    },
+    "kolay_monitor": {
+      "domains": [],
+      "host_label_parts": ["kolaymonitor", "kolay-monitor"]
+    },
+    "own_system": {
+      "domains": [],
+      "host_label_parts": ["pagentos"]
+    }
+  }
+}

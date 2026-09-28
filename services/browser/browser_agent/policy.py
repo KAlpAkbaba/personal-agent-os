@@ -212,6 +212,46 @@ def enforce(
         )
 
 
+#: Contract section 4, ascending. The order is the contract's.
+RISK_ORDER: tuple[RiskClass, ...] = (
+    RiskClass.READ,
+    RiskClass.NAVIGATE,
+    RiskClass.REVERSIBLE_WRITE,
+    RiskClass.EXTERNAL_COMMUNICATION,
+    RiskClass.HIGH_IMPACT,
+)
+
+
+def enforce_ceiling(risk_class: RiskClass, ceiling: Any, *, capability: str) -> None:
+    """Contract v1.7: a consumer that gated a step tells the worker the class it gated
+    at. The worker classifies the element it actually resolved, and a class ABOVE the
+    ceiling is refused - the step was more than it looked, and it is never performed.
+    ``None`` means the caller named no ceiling (every caller before v1.7)."""
+    if ceiling is None:
+        return
+    try:
+        limit = RiskClass(str(ceiling))
+    except ValueError:
+        raise BrowserError(
+            ErrorClass.VALIDATION_ERROR,
+            f"{capability}: 'risk_ceiling' must be one of {', '.join(c.value for c in RISK_ORDER)}",
+            retryable=False,
+        ) from None
+    if RISK_ORDER.index(risk_class) > RISK_ORDER.index(limit):
+        raise BrowserError(
+            ErrorClass.SECURITY_SCOPE_ERROR,
+            f"{capability}: the element is {risk_class}, above the ceiling {limit} "
+            "this step was gated at",
+            retryable=False,
+            evidence={
+                "capability": capability,
+                "risk_class": str(risk_class),
+                "risk_ceiling": str(limit),
+                "reason": "above_ceiling",
+            },
+        )
+
+
 def parse_risk_classes(
     values: Any, *, field_name: str = "allowed_risk_classes"
 ) -> frozenset[RiskClass]:

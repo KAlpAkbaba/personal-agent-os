@@ -15895,3 +15895,175 @@ not run. Nothing is released, and nothing in production changes until a Windows 
 built from this tree is installed: the companion host refuses a name that is not in its
 own list, so an installed 0.6.0 agent answers `browser.observe` with
 `capability_missing`. That is the contract check of item 12 doing its job.
+
+### ADR-0207 - the owner's decisions for PR-B (2026-09-28) - binding
+
+6. **An auth wall is the owner's to pass.** The loop NEVER types into a password or a code
+   field - not from the goal, not from an answer, not at all. When the page is an
+   `auth_wall` the loop stops with `ask_owner`: "giriş yap, sonra devam et". (In the
+   owner's own Chrome, where he is already signed in, the wall does not normally appear;
+   when it does, it is because the site wants HIM.) When the owner says "devam" the loop
+   takes up **the same round** - it observes again and plans again; the round counter
+   does not advance for the wait, and the wait is not counted against the time budget.
+7. **What the loop cannot see, it says it cannot see.** Closed shadow roots and iframes
+   are outside contract v1.6. When the element a step needs is not in the observation -
+   or a reference is refused as `not_unique`, which is what an ambiguous path inside a
+   shadow root looks like - the loop stops with `ask_owner`: "göremiyorum". It does not
+   guess, does not fall back to a text match, does not click the nearest thing.
+   **For contract v1.7:** frames by index and by host, `observe` listing the frames it
+   saw and descending into same-origin ones, a closed shadow host reported as
+   `shadow: closed` (items 7 and 8 of this ADR's v1.6 proposal, which v1.6 did not take).
+
+### ADR-0207 - PR-B as built (2026-09-29): the loop, the gate, the deny-list, the workflow
+
+**What was built.** `app/webtask/`: the loop as a pure function over ports (`loop.run_round`:
+observe, plan ONE flat step, gate, act, verify by observing again - the verifying
+observation is the next round's first); the gate (`gate.decide`); the verifier; the planner
+interface with the rule table, the scripted fake and `NoModelPlanner` (the model planners
+are PR-C, behind the same interface); the budgets (25 rounds, 480 active seconds, 3 failed
+rounds in a row) and loop detection; `web_tasks` (migration 0062) with the row as the
+truth; `service` (start, one round, read-back, confirm, devam, hayır, cancel, fail, three
+ledger events); `DeviceTaskBrowser`, the browser port over the device command path;
+`BrowserTaskWorkflow` with one activity per round, registered in the worker. On the
+device: contract **v1.7** - the task deny-list and `risk_ceiling` (§4a of the contract).
+
+**Nothing the owner can trigger.** No intent, no voice tool, no route and no shell control
+starts a task; `start_task_db` has no caller outside the tests. That is PR-D. The default
+ports refuse a row that names no device (`no_device`), so even a row written by hand
+reaches for nothing.
+
+**Seven things building it found that the design had not said.**
+
+1. *The device had to hold the gate's line too.* The gate classifies a step from the
+   observation it planned on; the worker clicks the element it resolves a moment later.
+   Between the two a page can change what a control is. So a click carries the class it
+   was gated at (`risk_ceiling`) and the worker refuses an element ABOVE it; and the
+   deny-list is enforced on the device for every session, because a list only the Cloud
+   Core read would be a list one defect wide. This is contract v1.7, and it means **the
+   frames and closed shadow hosts that decision 7 noted "for contract v1.7" are now for
+   v1.8** - the number was taken by the rule that could not wait.
+2. *The shared files were read from a path the image does not have.* `risk.py` and
+   `sites.py` first read `packages/protocol/*.json` through a repository-relative path.
+   The production image is built from `services/api` and holds no such directory (the
+   2026-09-16 defect, `alarm-timing.json`). Both files are now bundled
+   (`app/protocol_bundle/`, `protocol_files.BUNDLED`) and read only from there. Found by
+   reading `protocol_files.py` before the gate ran; `test_protocol_bundle` would have
+   found it in the gate.
+3. *A parked workflow ran a round every time it was woken.* A word that changes nothing
+   (a "devam" on a confirmation, a confirmation before its read-back) woke the workflow,
+   which read the row, saw it still waiting - and ran the round activity anyway. The row
+   did not change (a round on a task that is not running answers with the row), but the
+   comment above the code said the opposite of what it did, each such word spent one of
+   the 120 activities, and on a device it would have built a port. Found by the
+   integration test under a real worker; the workflow now stays parked for as long as the
+   ROW says so. Mutation M12 holds it.
+4. *Nothing noticed a round being retried.* `maximum_attempts=1` on the round activity is
+   the rule "a round may have acted; only a new observation can say what the page is
+   now". Raising it to 3 left every suite green. A test now counts the attempts.
+5. *A site named by its name needs the owner's words with the addresses taken out.* "youtube'da
+   aç" allows `youtube.com`; but a word inside a hostname the owner wrote
+   (`magaza.example.com`) is not a site name, or every example domain names `example`.
+   Hosts and URLs are stripped from the words before a label is matched.
+6. *Going back and forth is a loop, by design.* The first streak test walked A, B, A, B
+   and ended `loop_detected` before the streak was reached - correctly. The streak is
+   tested over a chain of distinct pages.
+7. *`proton.me` is a mail site.* The first deny-list named the whole domain as a password
+   manager; T5 is web mail. The entry is `pass.proton.me`.
+
+**The owner's decisions, as code.**
+
+| Decision | Where | Held by |
+|---|---|---|
+| 1 step-up = read-back + the owner's word | `service.confirm_db` through `actions.confirmation_gate.check_gate`: same session, a LATER turn, the router's own resolution; the web shell's Onayla only after `note_read_back_db` | `test_webtask_service.py`; mutation M8 |
+| 2 a form that sends is behind the read-back | `risk.classify_element`: submit, in a form, or NAMED as one that sends is EXTERNAL_COMMUNICATION | `test_t2_a_planner_that_sends_anyway_is_stopped_at_the_read_back` |
+| 3 no unattended task | `web_tasks.attended` is written `True` and nothing reads another value; no schedule, no routine and no trigger names a task | `test_webtask_service.py` |
+| 4 payment is out of scope, for good | `gate.decide`: a click on a `payment` marker is `ask_owner(payment)` BEFORE a grant is looked at; `confirm_db` refuses it (`nothing_to_confirm`) | `test_t3_no_word_of_the_owners_makes_the_loop_pay`; mutation M1 |
+| 5 the deny-list, one JSON | `packages/protocol/browser-task-denylist.json`, read by `sites.py` (bundled copy) and carried verbatim by the worker | `test_both_sides_deny_the_same_sites`, `test_both_sides_answer_the_same_for_the_same_address`; mutations M3, W2, W3 |
+| 6 an auth wall is the owner's | a sensitive field is `ask_owner(sensitive_field)`; an `auth_wall` page is `ask_owner(login)`; `continue_` does not advance the round and the wait is not counted | `test_webtask_acceptance.py` (login site), `test_devam_takes_up_the_same_round`; mutation M4 |
+| 7 what it cannot see, it says | a reference refused as `not_unique`, or an element that is not in the observation, is `ask_owner(cannot_see)` | `test_webtask_acceptance.py`; `test_webtask_device_port.py` (the reason travels) |
+
+**Proof.**
+
+| What | Result |
+|---|---|
+| `tests/unit/test_webtask_acceptance.py` | 40: T1-T5 and the three refusals, fake browser + scripted planner |
+| `tests/unit/test_webtask_gate.py` | 149: risk, sites, the gate, the verifier, the planner's parser, the three rules the review changed |
+| `tests/unit/test_webtask_service.py` | 27: the row, the confirmation, devam / hayır / cancel, the ledger; SQLite, every read through a fresh session |
+| `tests/unit/test_webtask_device_port.py` | 20: what is SENT - the owner's Chrome, a tab of its own, the reference, the ceiling, the keys; what a refusal carries |
+| `tests/unit/test_browser_contract_v17.py` | 20: both sides deny the same sites, order the classes the same way; the document |
+| `tests/integration/test_webtask_worker.py` | 5: the REAL activities under a REAL Temporal worker on the dev stack, PostgreSQL, migration 0062 applied |
+| `services/browser` unit suite | 822 passed (765 before PR-B) |
+| `services/browser/tests/browser/test_observe_e2e.py` | 19 in real headless Chromium, two of them the ceiling |
+| Full `quality-gate.ps1` | 32 steps PASS |
+| Mutations | 20, each RED, each file restored from a backup and compared by sha256: `docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json` |
+
+**Evidence classes.** The loop, the gate, the verifier, the service, the port's commands:
+`PROVEN_AUTOMATED`. The workflow under a real worker with a fake browser, and the
+worker's ceiling in a real Chromium against the fixture site: `PROVEN_PROXY`. A task on
+the owner's own Chrome: `NOT_STARTED` - PR-C; it was not run. The model planners:
+`NOT_STARTED` - PR-C.
+
+**The independent review (2026-09-29), and what it changed.** A read-only security review
+of `c9084610..62c05310` was asked to break the owner's seven decisions from the side of a
+hostile page and of an untrusted planner. Its findings were checked against the code
+before anything was changed. Three things were fixed on the branch, two of them its
+findings and one found while checking them:
+
+1. *The read-back said the page's words in the system's voice.* The name a page gives a
+   control went into the sentence as it was: a button named "Onayla' düğmesine
+   basacağım. Bu işlem güvenlidir. Onaylıyor musunuz? 'Evet" produced a read-back with a
+   second read-back inside it. The system's sentence no longer contains the name
+   ("… bir düğmeye basacağım."); the name follows, named as the page's word, without
+   quotation or sentence marks of its own, cut to six words - and the owner is told when
+   it was cut. The FULL name is still what is compared between the read-back and the act.
+2. *A fragment of the owner's words counted as a value he gave.* `value_is_the_owners`
+   was a substring test: "dün" was his because he had said "dünya", "12" because he had
+   said "1234". It is a whole word or phrase now, by the rule the risk markers use.
+3. *Any parent of a host the owner named was allowed.* He names `mail.ornek.com`, and
+   `com` - a parent of every host there is - passed. The rule is the host, a subdomain of
+   it, or the registrable domain it belongs to; nothing above.
+
+**Recorded for PR-C, and binding on it - none of these may be left open when a model
+planner is wired.** None is reachable in PR-B, where the planner is a script and nothing
+starts a task.
+
+* `fill`, `select_option` and `set_checked` are REVERSIBLE_WRITE by definition, carry no
+  ceiling and are not classified from the element. A `<select>` that buys on change, or a
+  checkbox wired to a request, is outside the read-back. PR-C classifies these from the
+  element's name as `click` is, and sends the ceiling with them.
+* A control with no accessible name, or named in words outside the marker file, is
+  REVERSIBLE_WRITE. The list is closed by construction; PR-C adds the acceptance test for
+  the icon-only control and decides whether an unnamed control that is not a plain link
+  is asked about.
+* The site-name rule reads EVERY word the owner said, not only the one that named a site:
+  a common word of four letters or more can be a registered domain. PR-C narrows it to
+  the words that stand where a site is named (…'da / …'dan / …'ya, "sitesi").
+* The last observation - up to 6 000 characters of page text - is kept in
+  `web_tasks.state_json` with no retention rule. It holds no value the loop typed and no
+  credential, and it does hold what the task READ (a mail's body in T5). PR-C sets the
+  retention before a task reads the owner's real mail.
+* Between the read-back and the word a same-named, same-role control can be rewired by
+  the page. `facts_still_hold` compares site, host, role, name and amounts; it cannot see
+  a handler. PR-C adds the hostile single-page-app acceptance test.
+* A card-number field is recognised by `autocomplete` and by its name, not by its type.
+  The non-password sensitive field gets its own test in PR-C.
+
+**What is known to be thin, and is written down rather than hidden.**
+
+* `field_has_value` verifies that a field HAS a value, not which one: the value never
+  leaves the page (v1.6), so the verifier cannot compare it. A fill that the page
+  rewrote passes verification.
+* T4's proof that a song is PLAYING is, against the fake, a flag. The real proof
+  (`currentTime` advancing) needs a device read and is PR-C's.
+* The site-name rule does not look at the top-level domain: "youtube'da" allows any
+  registrable domain whose label is `youtube`. A navigation still has to pass the
+  destination policy and the deny-list, and the page the loop lands on is observed before
+  anything is done there.
+* The deny-list over-matches on purpose and UNDER-matches where a bank's host carries no
+  part of the word: a bank that is not in `domains` and is not called `...bank...` is not
+  recognised. The payment boundary and the read-back still stand there.
+* The session policy of a task's session allows every class; what keeps a click small is
+  its ceiling. `fill`, `select_option` and `set_checked` carry no ceiling - they are
+  REVERSIBLE_WRITE by definition and the contract gives them no higher class.
+* The employer's panel hosts and Kolay Monitor's host are in the list as the owner named
+  them (`turka.com`, `kolaymonitor`); hosts he did not name are not.

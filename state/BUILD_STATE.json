@@ -4,7 +4,7 @@
   "current_milestone": "M28_DONE_2026_09_12 (row 26.16 PROVEN_REAL); M29 first step DONE 2026-09-28 (ADR-0203/0204/0205: two devices enrolled, online and selected by alias - MAIL=ev, GMKADIRAKBABA=ofis/iş); M19b acceptance rows NOT_STARTED",
   "status": "M18 PROVEN_REAL and CLOSED 2026-09-06 from the durable record (ADR-0064): 18 of 20 Stage 12 rows real from the owner's runs - /core + realtime voice as one surface, real listening/speaking states, cognition on both paths, the eye opened/closed/re-opened by voice with verified receipts (contract v3), the MediaStream lifecycle, action receipts with runtime read-back, state.now agreement, a camera presence observation and a real leave-and-return transition (present -> away -> present with the engine's confidence), the alarm over the device path with its ramp, camera privacy, the SHADOW_READY / production authority boundary. Deliberately open: 12.13 media playback (never exercised for real; its own short owner run when wanted) and 12.19 display-off (separate, gated twice). Every monolithic-harness FAIL of that day was a qualification-harness / session-correlation defect while the record proved the capability. M18.1 (the Holographic Core visual experience pass) is in progress; M19 Digital Operator next.",
   "last_completed_milestone": "M28_NATIVE_APP_FACTORY",
-  "last_updated": "2026-09-28T23:00:00Z",
+  "last_updated": "2026-09-29T00:00:00Z",
   "qualification": {
     "matrix": "docs/QUALIFICATION.md",
     "owner_queue": "docs/OWNER_ACTIONS.md",
@@ -948,10 +948,10 @@
     ]
   },
   "browser_task_loop_adr_0207": {
-    "status": "ACCEPTED; PR-A BUILT_AND_TESTED and merged (contract v1.6 items 1, 2, 3, 10, 12); not released; PR-B next",
+    "status": "ACCEPTED; PR-A merged; PR-B (the loop, the gate, the deny-list, the workflow) merged to main from feat/browser-task-loop (f0d556b5, full gate 32/32); not released; nothing the owner can trigger until PR-D",
     "adr": "ADR-0207",
     "milestone": "JARVIS order 2 (browser-use)",
-    "contract": "BROWSER_CAPABILITIES.md v1.6",
+    "contract": "BROWSER_CAPABILITIES.md v1.7",
     "cut": [
       "PR-A observe + ref + risk markers",
       "PR-B loop + Temporal + fake browser",
@@ -966,14 +966,18 @@
     ],
     "evidence_class": "NOT_STARTED (design)",
     "next": [
-      "PR-B: the loop, the gate, the deny-list, BrowserTaskWorkflow"
+      "PR-C: the model planners and the owner's own Chrome (needs the agent reinstalled on MAIL, the -AuthorizeTasks grant, T3 shop and T5 webmail named)",
+      "PR-D: the intent, the voice tools and the web shell",
+      "contract v1.8: frames by index and host, closed shadow hosts reported (decision 7 said v1.7; v1.7 became the ceiling and the deny-list)"
     ],
     "owner_decisions": {
       "step_up": "read-back + the owner's word; web shell = read-back text + explicit Onayla; B05 only by its own ADR once PROVEN_REAL",
       "sending_forms": "behind the read-back, no exception",
       "unattended": "none through PR-A..D; later only named sites under a separate grant",
       "payment": "permanently out of scope; the loop stops at the boundary",
-      "deny_list": "banks, e-Devlet, payment providers, password managers, employer systems (turka.com, company panels), Kolay Monitor - one JSON under packages/protocol"
+      "deny_list": "banks, e-Devlet, payment providers, password managers, employer systems (turka.com, company panels), Kolay Monitor - one JSON under packages/protocol",
+      "auth_wall": "the loop never types into a password or code field; an auth_wall page is ask_owner ('giriş yap, sonra devam et'); 'devam' resumes the same round",
+      "cannot_see": "an element the loop cannot reach (closed shadow root, iframe, not_unique) is ask_owner ('göremiyorum'), never a guess; frames and closed shadow hosts are for contract v1.7"
     },
     "open": [
       "T3 shop and T5 webmail were given as unfilled placeholders; needed before PR-C",
@@ -1010,6 +1014,61 @@
         "the operation list has five mirrors, not four",
         "a control can be named as one that sends without being a form's submit button",
         "a page with a password field is classified auth_wall"
+      ]
+    },
+    "pr_b": {
+      "date": "2026-09-29",
+      "code": [
+        "services/api/app/webtask/ (types, risk, sites, gate, verify, planner, loop, models, service, device_port, activities, workflow)",
+        "services/api/alembic/versions/20260929_0062_web_tasks.py",
+        "services/api/app/worker.py (BrowserTaskWorkflow, WEB_TASK_ACTIVITIES)",
+        "services/api/app/ledger/vocabulary.py (three events)",
+        "services/api/app/protocol_files.py + app/protocol_bundle/ (the two browser files)",
+        "packages/protocol/browser-task-denylist.json",
+        "packages/protocol/browser-risk-markers.json (version 2: payment)",
+        "packages/protocol/BROWSER_CAPABILITIES.md (v1.7, section 4a)",
+        "services/browser/browser_agent/task_denylist.py, policy.py (enforce_ceiling), worker.py"
+      ],
+      "tests": [
+        "services/api/tests/unit/test_webtask_acceptance.py (40)",
+        "services/api/tests/unit/test_webtask_gate.py (149)",
+        "services/api/tests/unit/test_webtask_service.py (27)",
+        "services/api/tests/unit/test_webtask_device_port.py (20)",
+        "services/api/tests/unit/test_browser_contract_v17.py (20)",
+        "services/api/tests/integration/test_webtask_worker.py (5, real Temporal worker)",
+        "services/browser/tests/unit/test_task_denylist.py (57)",
+        "services/browser/tests/browser/test_observe_e2e.py (19, headless Chromium)",
+        "20 mutations RED: docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json",
+        "independent security review: three fixes on the branch, six limits binding on PR-C (DECISIONS.md)"
+      ],
+      "evidence_class": {
+        "loop_gate_verifier_service_port": "PROVEN_AUTOMATED",
+        "workflow_under_a_real_worker": "PROVEN_PROXY (fake browser, scripted planner)",
+        "worker_ceiling": "PROVEN_PROXY (real Chromium, fixture site)",
+        "owner_chrome": "NOT_STARTED (PR-C)",
+        "model_planners": "NOT_STARTED (PR-C)",
+        "owner_surface": "NOT_STARTED (PR-D)"
+      },
+      "found": [
+        "the device has to hold the gate's line: risk_ceiling and the deny-list on the worker (contract v1.7)",
+        "risk.py and sites.py read the shared files from a path the production image does not have",
+        "a parked workflow ran a round activity every time it was woken",
+        "no test noticed a round activity being retried",
+        "a word inside a hostname the owner wrote is not a site name",
+        "proton.me is a mail site; the password manager is pass.proton.me",
+        "review: the read-back said the page's words in the system's voice",
+        "review: a fragment of the owner's words counted as a value he gave",
+        "any parent of a host the owner named (even a bare suffix) was allowed"
+      ],
+      "thin": [
+        "field_has_value verifies that a field has a value, not which one",
+        "T4 playing is a flag of the fake; the real proof is a device read (PR-C)",
+        "the site-name rule does not look at the top-level domain",
+        "a bank whose host is not listed and carries no part of the word is not recognised",
+        "PR-C must close: fill/select/set_checked are not classified from the element and carry no ceiling",
+        "PR-C must close: an unnamed control is REVERSIBLE_WRITE",
+        "PR-C must close: the site-name rule reads every word the owner said",
+        "PR-C must close: no retention rule for the observation kept in web_tasks.state_json"
       ]
     }
   }

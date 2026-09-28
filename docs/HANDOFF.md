@@ -15,23 +15,20 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok. (2026-09-28 gece: tarayıcı görev döngüsü PR-A main'de - sözleşme v1.6 madde 1, 2, 3,
-10, 12; yayınlanmadı; sahibin tetikleyebileceği hiçbir şey değişmedi.)
-**Sıradaki: PR-B** (ADR-0207): `app/webtask/` döngüsü saf fonksiyon olarak, planlayıcı
-arayüzü (kural tablosu + sahte), kapı (risk sınıfı + `confirmation_gate` ile read-back),
-doğrulayıcı, bütçeler, döngü tespiti, yasak liste JSON'u (`packages/protocol`, işveren
-sistemleri ve Kolay Monitor dahil), `BrowserTaskWorkflow`; T1-T5 sahte tarayıcı + sahte
-planlayıcıyla. v1.6'nın kalan maddeleri (`press`, `type`, `hover`, çerçeveler, `dialog`,
-`stable`) döngü ilk ihtiyaç duyduğunda gelir.
-**Bir işlem adı eklemek ALTI yere dokunur:** sözleşme, işçi, C# host listesi, kurulum
-doğrulaması, bulut izin listesi (`app/routines/dispatch.py`) + sabitlenmiş manifest sayıları
-(`DeviceVoiceCapabilityTests`, `DEVICE_PROTOCOL.md`). Tam kapı olmadan görünmez.
-**Sahibi bekleyenler:** (1) T3 mağazası ve T5 web postası (kararda `<MAĞAZA>` / `<WEBMAIL>`
-olarak boş geldi; PR-C'den önce gerekli); (2) PR-C'den önce MAIL'de Windows ajanının bu
-ağaçtan yeniden kurulması (UAC) - kurulu 0.6.0 `browser.observe` adını reddeder;
-(3) yerel modda bir cümle (ADR-0201, 30.10); (4) M19b sesli deneme.
-Rerank KAPALI (ADR-0206 eki: hafıza >= 300 satır ya da CPX41).
-`feat/hand-gestures-stage1` DOKUNULMADI.
+**Yok.**
+
+Son biten iş (2026-09-29): **tarayıcı görev döngüsü PR-B (ADR-0207)** — main'de, YAYINLANMADI.
+Dal `feat/browser-task-loop`, uç `f0d556b5` üzerinde tam kapı 32/32 PASS. `app/webtask/`
+(döngü, kapı, doğrulayıcı, planlayıcı arayüzü, servis, cihaz portu, `BrowserTaskWorkflow`),
+`web_tasks` tablosu (göç 0062), sözleşme **v1.7** (işlem adı eklemeden: tıklamada
+`risk_ceiling`, yasak liste cihazda da). Sahibin tetikleyebileceği hiçbir şey YOK (PR-D);
+sahibin Chrome'u sürülmedi (PR-C). Kanıt: QUALIFICATION Aşama 34, 20 mutasyon KIRMIZI
+(`docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json`), bağımsız güvenlik incelemesi.
+**PR-C başlamadan okunacak:** DECISIONS.md "Recorded for PR-C, and binding on it" — altı
+sınır (fill/select/set_checked sınıflandırılmıyor; adsız düğme; site adı kuralı; gözlem
+saklama süresi; read-back ile söz arasında yeniden bağlanan düğme; kart alanı).
+Yayınlanırsa göç 0062 üretimde uygulanır; yayın yalnız sahibin onayıyla.
+Rerank KAPALI. `feat/hand-gestures-stage1` DOKUNULMAZ.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)
@@ -158,6 +155,11 @@ köprüsü) → 4 ev (Home Assistant) → 5 her yerde (M29 yeniden açılır) �
 
 ## Sıradaki işler
 
+0. **ADR-0207 PR-C** (model planlayıcılar + sahibin kendi Chrome'u, PROVEN_REAL). Ön koşul,
+   hepsi sahipte: T3 mağazasının ve T5 web postasının adı; MAIL'de ajanın bu ağaçtan yeniden
+   kurulması (kurulu 0.6.0 `browser.observe` adını reddediyor); `-AuthorizeTasks` izni;
+   varsa yasak listeye eklenecek şirket paneli / Kolay Monitor host'ları. Sonra PR-D (niyet,
+   ses araçları, web kabuğu) ve sözleşme v1.8 (iframe, kapalı gölge DOM).
 1. **Sahibin "2 not + 2 yeni ekleme"si** — hafıza bitince vereceğini söyledi (2026-09-21).
 2. *Tarifle tıklama.* "Şu kameralı videoyu aç", "Kratos'un olduğu videoyu aç" bugün
    çalışmaz: `vision.LOCATE_QUESTION_TR` bir ADA göre soruyor ("X adlı düğme ya da öğe

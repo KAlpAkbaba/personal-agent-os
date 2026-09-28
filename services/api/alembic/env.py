@@ -26,6 +26,7 @@ import app.security.models  # noqa: F401 - register security tables on Base.meta
 import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
 import app.voice.models  # noqa: F401 - register voice tables on Base.metadata
 import app.voice.realtime_sessions.models  # noqa: F401 - register M12 realtime tables
+import app.webtask.models  # noqa: F401 - register ADR-0207 web_tasks on Base.metadata
 from app.config import get_settings
 from app.models import Base
 

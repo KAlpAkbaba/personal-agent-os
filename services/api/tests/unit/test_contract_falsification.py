@@ -96,13 +96,16 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
             "v1.6 they were a substring list inside the worker alone - 'sil' matched "
             "'silver', 'pay' matched 'paylaş', and the Turkish checkout phrases were missing"
         ),
-        held_by=("services/browser",),
-        unheld=(
-            "the Cloud Core has no CODE that reads the markers until the task loop's gate "
-            "(ADR-0207 PR-B); today its suite holds the worker's copy to the file "
-            "(test_browser_contract_v16) and nothing of its own. Until PR-B a gate that "
-            "classified a step from a list of its own would be a second policy"
+        held_by=("services/api", "services/browser"),
+    ),
+    "browser-task-denylist.json": Contract(
+        guard="test_both_sides_deny_the_same_sites",
+        why=(
+            "ADR-0207 decision 5 (contract v1.7): the sites no browser task acts on. The "
+            "Cloud Core's gate refuses the step and the worker refuses the command; two "
+            "lists would be a bank one side stops at and the other clicks in"
         ),
+        held_by=("services/api", "services/browser"),
     ),
     "realtime-session-contract.json": Contract(
         guard="test_committed_contract_matches_the_live_request_models",

@@ -24,6 +24,8 @@ BUNDLE_DIR: Final[Path] = Path(__file__).resolve().parent / "protocol_bundle"
 #: it here, copying it with scripts/sync-protocol-bundle.py, and nothing else.
 BUNDLED: Final[tuple[str, ...]] = (
     "alarm-timing.json",
+    "browser-risk-markers.json",
+    "browser-task-denylist.json",
     "desktop-notify.json",
     "device-voice.json",
     "file-search-roots.json",

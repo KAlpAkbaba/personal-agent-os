@@ -1,0 +1,189 @@
+{
+  "adr": "ADR-0207",
+  "work": "PR-B: the loop, the gate, the deny-list, the workflow",
+  "date": "2026-09-29",
+  "method": "one mutation at a time, in one process; the file is backed up, mutated, the named tests are run, the file is restored from the backup and its sha256 compared with the one taken before. RED = the tests failed (pytest exit 1).",
+  "note": "M13 was GREEN on its first run: no test noticed a round activity being retried. test_a_round_that_cannot_run_leaves_a_failed_row now counts the attempts, and the verdict below is the run after that. M14, M15 and M16 hold the three rules changed after the independent review; M1-M6 were run before that change to gate.py and their sha256 is of the file as it was then.",
+  "mutations": [
+    {
+      "id": "M1",
+      "name": "M1 the payment boundary is removed from the gate",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_acceptance.py::test_t3_the_item_is_in_the_cart_and_the_loop_stops_at_the_payment_boundary | 1 failed, 3 passed in 0.63s",
+      "sha256_before": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358",
+      "sha256_after": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358"
+    },
+    {
+      "id": "M2",
+      "name": "M2 a grant holds whatever the page says now",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_acceptance.py::test_r2_a_page_that_changes_the_total_after_the_read_back_is_not_clicked | 1 failed, 13 passed in 0.65s",
+      "sha256_before": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358",
+      "sha256_after": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358"
+    },
+    {
+      "id": "M3",
+      "name": "M3 the deny-list is not asked by the gate",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_acceptance.py::test_on_a_denied_site_the_loop_reads_and_leaves_and_does_nothing_else | 1 failed, 28 passed in 0.66s",
+      "sha256_before": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358",
+      "sha256_after": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358"
+    },
+    {
+      "id": "M4",
+      "name": "M4 a sensitive field is written into",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "E         + failed | FAILED tests/unit/test_webtask_acceptance.py::test_r1_what_the_page_wrote_is_not_typed_and_not_followed | 1 failed, 11 passed in 0.68s",
+      "sha256_before": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358",
+      "sha256_after": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358"
+    },
+    {
+      "id": "M5",
+      "name": "M5 a value that is not the owner's is typed",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_acceptance.py::test_r1_what_the_page_wrote_is_not_typed_and_not_followed | 1 failed, 11 passed in 0.66s",
+      "sha256_before": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358",
+      "sha256_after": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358"
+    },
+    {
+      "id": "M6",
+      "name": "M6 a flagged page does not raise the class of a step",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "E         + failed | FAILED tests/unit/test_webtask_acceptance.py::test_t5_a_mail_that_gives_orders_is_read_and_not_obeyed | 1 failed, 9 passed in 0.63s",
+      "sha256_before": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358",
+      "sha256_after": "08079db373de0d1838fbf0c58ee163f28f7d1b610784c8975786838ff618b358"
+    },
+    {
+      "id": "M7",
+      "name": "M7 loop detection is off",
+      "file": "services/api/app/webtask/loop.py",
+      "verdict": "RED",
+      "tests": "E           failed and 'too_many_failed_rounds' == 'loop_detected' | FAILED tests/unit/test_webtask_acceptance.py::test_r3_a_loop_on_a_cookie_wall_ends_loop_detected | 1 failed, 18 passed in 0.65s",
+      "sha256_before": "6d4970995f1d6071507c03c78212d5d8c06482c26fc6e408d608028310edd24c",
+      "sha256_after": "6d4970995f1d6071507c03c78212d5d8c06482c26fc6e408d608028310edd24c"
+    },
+    {
+      "id": "M8",
+      "name": "M8 a confirmation is applied without being judged",
+      "file": "services/api/app/webtask/service.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_service.py::test_a_confirmation_before_the_read_back_was_heard_is_refused | 1 failed, 171 passed in 0.93s",
+      "sha256_before": "d8e54617735783b84418ba1cebebf50f4d71f0a1725a9f8c5fd59d013762bde0",
+      "sha256_after": "d8e54617735783b84418ba1cebebf50f4d71f0a1725a9f8c5fd59d013762bde0"
+    },
+    {
+      "id": "M9",
+      "name": "M9 a cancel that arrived during the round is overwritten by it",
+      "file": "services/api/app/webtask/service.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_service.py::test_a_cancel_that_arrives_during_a_round_is_not_overwritten_by_it | 1 failed, 186 passed in 1.08s",
+      "sha256_before": "d8e54617735783b84418ba1cebebf50f4d71f0a1725a9f8c5fd59d013762bde0",
+      "sha256_after": "d8e54617735783b84418ba1cebebf50f4d71f0a1725a9f8c5fd59d013762bde0"
+    },
+    {
+      "id": "M10",
+      "name": "M10 a click is sent without its ceiling",
+      "file": "services/api/app/webtask/device_port.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_the_port_sends_the_ceiling_under_the_name_the_worker_reads | 1 failed, 45 passed in 0.70s",
+      "sha256_before": "b9f7c75f5da6b09dde250cb4469c8c10403aa5f3cb80790a63a723152140f3fc",
+      "sha256_after": "b9f7c75f5da6b09dde250cb4469c8c10403aa5f3cb80790a63a723152140f3fc"
+    },
+    {
+      "id": "M11",
+      "name": "M11 the heartbeat is issued from the round's own thread",
+      "file": "services/api/app/webtask/activities.py",
+      "verdict": "RED",
+      "tests": "E         + failed) | FAILED tests/integration/test_webtask_worker.py::test_a_task_runs_to_the_end_under_a_real_worker | 1 failed, 2 warnings in 1.82s",
+      "sha256_before": "41023d94b4e2586a3dc138d7e803e9832303230057eda0f1e710b6fab9246a40",
+      "sha256_after": "41023d94b4e2586a3dc138d7e803e9832303230057eda0f1e710b6fab9246a40"
+    },
+    {
+      "id": "M12",
+      "name": "M12 a parked workflow runs a round whenever it is woken",
+      "file": "services/api/app/webtask/workflow.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/integration/test_webtask_worker.py::test_the_task_stops_at_the_payment_boundary_and_a_cancel_ends_it | 1 failed, 1 passed, 1 warning in 3.60s",
+      "sha256_before": "dc8927131fcd7f1230a078c733efcf0ccbe40f4d478190645e00d47b4ff163b0",
+      "sha256_after": "dc8927131fcd7f1230a078c733efcf0ccbe40f4d478190645e00d47b4ff163b0"
+    },
+    {
+      "id": "M13",
+      "name": "M13 a round activity is retried",
+      "file": "services/api/app/webtask/workflow.py",
+      "verdict": "RED",
+      "tests": "        assert failed.completed_at is not None | FAILED tests/integration/test_webtask_worker.py::test_a_round_that_cannot_run_leaves_a_failed_row | 1 failed, 3 passed, 1 warning in 9.08s",
+      "sha256_before": "dc8927131fcd7f1230a078c733efcf0ccbe40f4d478190645e00d47b4ff163b0",
+      "sha256_after": "dc8927131fcd7f1230a078c733efcf0ccbe40f4d478190645e00d47b4ff163b0"
+    },
+    {
+      "id": "M14",
+      "name": "M14 a fragment of the owner's words counts as his value",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_a_fragment_of_what_the_owner_said_is_not_a_value_he_gave[d\\xfcn] | 1 failed, 161 passed in 0.75s",
+      "sha256_before": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007",
+      "sha256_after": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007"
+    },
+    {
+      "id": "M15",
+      "name": "M15 the page's name is said whole",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_a_name_that_is_a_sentence_is_not_said_as_one | 1 failed, 174 passed in 0.78s",
+      "sha256_before": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007",
+      "sha256_after": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007"
+    },
+    {
+      "id": "M16",
+      "name": "M16 any parent of a named host is allowed",
+      "file": "services/api/app/webtask/gate.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_webtask_gate.py::test_a_named_host_allows_its_site_and_nothing_above_it[mail.ornek.com.tr-https://com.tr/-False] | 1 failed, 185 passed in 0.83s",
+      "sha256_before": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007",
+      "sha256_after": "bba071b3a0673705623f328e77e2ac6325aaa65a41eb74b74236184b06661007"
+    },
+    {
+      "id": "W1",
+      "name": "W1 the worker's ceiling refuses nothing",
+      "file": "services/browser/browser_agent/policy.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_task_denylist.py::test_an_element_above_the_ceiling_is_refused[REVERSIBLE_WRITE-NAVIGATE] | 1 failed, 40 passed, 19 deselected in 0.55s",
+      "sha256_before": "18dbff64831e03ccde4c1b67a07287e15677683aac2620b7184a056dd7164369",
+      "sha256_after": "18dbff64831e03ccde4c1b67a07287e15677683aac2620b7184a056dd7164369"
+    },
+    {
+      "id": "W1E",
+      "name": "W1E the worker's ceiling refuses nothing (real Chromium)",
+      "file": "services/browser/browser_agent/policy.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/browser/test_observe_e2e.py::test_a_click_above_the_class_it_was_gated_at_is_refused_and_nothing_happens | 1 failed, 17 passed in 22.74s",
+      "sha256_before": "18dbff64831e03ccde4c1b67a07287e15677683aac2620b7184a056dd7164369",
+      "sha256_after": "18dbff64831e03ccde4c1b67a07287e15677683aac2620b7184a056dd7164369"
+    },
+    {
+      "id": "W2",
+      "name": "W2 the worker does not ask the deny-list",
+      "file": "services/browser/browser_agent/worker.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_task_denylist.py::test_on_a_denied_site_every_write_is_refused[browser.click] | 1 failed, 32 passed in 0.56s",
+      "sha256_before": "e8eada4e5b33317407aaddd956938578cf6d1043400767ff26ef092af08078c3",
+      "sha256_after": "e8eada4e5b33317407aaddd956938578cf6d1043400767ff26ef092af08078c3"
+    },
+    {
+      "id": "W3",
+      "name": "W3 a label part must BE the label",
+      "file": "services/browser/browser_agent/task_denylist.py",
+      "verdict": "RED",
+      "tests": "FAILED tests/unit/test_task_denylist.py::test_a_denied_site_is_recognised_from_its_address[https://internetbankaciligi.example.com.tr/-bank] | 1 failed, 6 passed in 0.52s",
+      "sha256_before": "b6a9b4385f55dda83bdb97791c1c0f24d38b14b37273c2d026aed6edf6b7a337",
+      "sha256_after": "b6a9b4385f55dda83bdb97791c1c0f24d38b14b37273c2d026aed6edf6b7a337"
+    }
+  ]
+}
