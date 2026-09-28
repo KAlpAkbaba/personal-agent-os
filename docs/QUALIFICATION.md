@@ -991,3 +991,22 @@ deployed — the owner's "birleştir" is still outstanding.
 | 30.11 | The recovery pin names the released tree | `PROVEN_REAL` | 2026-09-28 12:13 UTC: `install-recovery-supervisor.sh 00d179cd4c0914938cc9aae1f4e6a8dc16573c9c` exit 0, `RECOVERY SUPERVISOR INSTALLED`; `/opt/pagentos-recovery/APPROVED_SHA` reads that sha; `pagentos-bluegreen-reconcile.timer` enabled and active |
 | 30.12 | A reconcile ends its own earlier failure instead of being blocked by it (ADR-0202) | `PROVEN_REAL` | production journal 2026-09-28 12:16:17 UTC, with the marker still on disk and nothing deleted by hand: `degraded_only_by_own_marker` took the branch ("only for this unit's own earlier failure marker"), `RECONCILE OK`, unit `Result=success` `ExecMainStatus=0`, the `failures/` directory empty; the next timer cycle (12:17:23) found api-green healthy and exited 0; `GET /v1/system/health` 200 `ok` with `failing_checks` empty. Automated: `cloud-release-bluegreen.tests.ps1` 82 passed, `test_systemd_onfailure_units` |
 | 30.13 | The release that carried it kept the memory semantic and the last known good honest | `PROVEN_REAL` | `release-cloud-core.ps1 -BlueGreen` 2026-09-28 12:11 UTC: `00d179cd4c0914938cc9aae1f4e6a8dc16573c9c` as api-green, prefetch ready (no exit 85), `RELEASE OK`; `/opt/pagentos/LAST_KNOWN_GOOD` moved from `2dcf434a` to `3a8f4637b23bff840769a906f17946e551a78e3b` by the release itself; health embedder provider `local`, `semantic` true; 22 of 22 `memory_embeddings` rows for the local model |
+
+## Stage 31 — The second device (ADR-0203 / ADR-0204 / ADR-0205)
+
+The owner's company PC, GMKADIRAKBABA, beside the home PC, MAIL. Device-side rows are the
+company PC session's report; cloud-side rows were read on the home PC.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 31.1 | A second device enrols with its own key and a token minted on the host | `PROVEN_REAL` | production `devices` row `9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` (GMKADIRAKBABA, enrolled 2026-09-28 13:52:06 UTC, status `enrolled`, not revoked); token from `mint-enrollment-token.sh` on the host; nothing copied from MAIL |
+| 31.2 | It is online beside the first | `PROVEN_REAL` | same read, 13:56 UTC: both rows seen within 6 s, one open `device_sessions` row each, `GET /v1/system/health` broker `active_sessions` 2 |
+| 31.3 | It carries less authority than the first | `PROVEN_REAL` | 13 capabilities against MAIL's 105: no operator, no display power, no browser worker (`install-device-service.ps1 -SkipBrowser -SkipCoreVerify`) |
+| 31.4 | The installed agent is the one the tree built | `PROVEN_REAL` | the row's `source_revision` is `5ffe187174222ac6ea332c7b53907a665766bf99`, the head of `fix/installer-fresh-machine`; agent 0.6.0, build `949a61a528b63418` |
+| 31.5 | The installer installs on a machine that never had an install (ADR-0204) | `PROVEN_REAL` | the install above ran from that branch after `Resolve-InterruptedDeployment` stopped calling a fresh machine `Blocked`; `installer-deploy.tests.ps1` 22 passed |
+| 31.6 | The device verifies on itself | `PROVEN_REAL` | company PC run of `verify-device-service.ps1`: every check real except 6b.1 |
+| 31.7 | 6b.1 - the browser worker starts as the owner from the installed tree | `NOT_YET_PROVEN` | `-SkipBrowser`: no browser worker was installed on the company machine, by decision (ADR-0203) |
+| 31.8 | An unelevated install says one thing | `PROVEN_AUTOMATED` | `installer-invocation.tests.ps1` runs the real `install-device-service.ps1` in a child process: one refusal, no second error, no log directory; two mutations RED |
+| 31.9 | The owner's word for the machine selects it | `PROVEN_AUTOMATED` | `test_devices_selection` drives `select_device` with the production inventory: "ofis bilgisayarımda aç" and "iş bilgisayarında aç" select GMKADIRAKBABA, "ev bilgisayarımda aç" selects MAIL; `test_devices_aliases` 8 office forms. In production after a release - `READY_FOR_OWNER` |
+| 31.10 | A sentence that names no machine selects no machine | `PROVEN_AUTOMATED` | `test_wanting_something_is_not_being_at_work` and `test_a_sentence_that_names_no_machine_selects_no_machine`: "istediğim videoyu aç" no longer resolves to the device aliased "iş"; four mutations RED |
+| 31.11 | The aliases are set on the production row | `READY_FOR_OWNER` | `scripts/core/set-device-aliases.ps1 -Device GMKADIRAKBABA -Aliases ofis,iş` - needs the owner's session; it reads the inventory back and fails unless the aliases are there |

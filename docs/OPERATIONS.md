@@ -131,3 +131,23 @@ two secrets above.
 configured yet — it needs an S3-compatible bucket and an access key, which is an owner action.
 Until it is, `/v1/system/health` reports `checks.backup.advisories: ["no_offhost_copy"]`, and
 the recovery objectives above cover losing the host's *data*, not losing the host.
+
+## Device inventory
+
+The owner's machines as Cloud Core knows them. The aliases are owner data on the device
+row (`devices.metadata_json.aliases`); this table is the record of what they are meant to
+be, `scripts/core/set-device-aliases.ps1` sets them and prints the live inventory.
+
+| Alias | Name | device_id | Where | Agent | Authority |
+|---|---|---|---|---|---|
+| `ev` | MAIL | `3f60fdb5-5022-48cf-bb3c-d7192466b701` | home PC, the owner's own | 0.6.0 | full: operator, display power, browser worker, the owner's Chrome (105 capabilities) |
+| `ofis`, `iş` | GMKADIRAKBABA | `9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` | company PC, domain-joined (`turka.com`) | 0.6.0 | reduced by decision (ADR-0203): no operator, no display power, no browser worker (13 capabilities) |
+
+Rules that come with a second machine:
+
+- A device is enrolled with its own key, generated on it. Nothing is copied between
+  machines; a lost machine is revoked, not re-keyed from another.
+- The enrolment token is minted on the host: `ssh -t root@pagentos-core "bash
+  /opt/pagentos/app/scripts/cloud/mint-enrollment-token.sh"`.
+- Releases are made from the home PC only. The company PC never runs the release script
+  and stores no owner credential.
