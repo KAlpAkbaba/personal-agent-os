@@ -36,6 +36,12 @@ kendi bayt bütçesine (40 KiB) sığıyor; (2) işlem listesinin BEŞ aynası v
 EXTERNAL_COMMUNICATION; (4) parola alanı olan sayfa `auth_wall` sınıflanıyor. **Cihaza
 ulaşması için Windows ajanının bu ağaçtan yeniden kurulması gerekir** (kurulu 0.6.0 adı
 reddeder) - PR-C'nin ön koşulu, sahibin UAC'li işi. Kalan: tam kapı → main. Yayın yok.
+**İlk tam kapı KIRMIZI (2 adım), ikisi de aynı eklemenin C# yansıması:**
+`DeviceVoiceCapabilityTests` manifest boyutunu 105'e (ve 44'e) sabitlemişti → 106 / 45;
+aşamalı güncelleme nitelemesi de C# testi düştüğü için ESKİ Release ikilisini yargıladı
+(`MISSING browser.observe`). Sayılar güncellendi, `dotnet test` 1242 + 185 ✓,
+`qualify-staged-update.ps1` 89 ✓. İşlem listesine ad eklemek ALTI yere dokunuyor:
+beş ayna + sabitlenmiş manifest sayıları (C# testi ve `DEVICE_PROTOCOL.md`).
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)
