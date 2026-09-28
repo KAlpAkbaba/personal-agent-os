@@ -151,6 +151,15 @@ services:
       PAGENTOS_MEMORY_EMBEDDING_PROVIDER: ${PAGENTOS_MEMORY_EMBEDDING_PROVIDER:-local}
       PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL: ${PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL:-minishlab/potion-multilingual-128M}
       PAGENTOS_MEMORY_LOCAL_EMBEDDING_CACHE_DIR: /srv/pagentos/var/models
+      # ADR-0206: a cross-encoder re-reads the top candidates of a memory search. OFF by
+      # default - `none` means no model is loaded and retrieval is exactly what it was.
+      # `local` loads the model from the same shared directory, ONLY from there (the
+      # release script prefetches it, exit 85 if it cannot); a model that is not there
+      # never stops the API: the memory check says `reranker.active: false` and why.
+      PAGENTOS_MEMORY_RERANK_PROVIDER: ${PAGENTOS_MEMORY_RERANK_PROVIDER:-none}
+      PAGENTOS_MEMORY_RERANK_MODEL: ${PAGENTOS_MEMORY_RERANK_MODEL:-onnx-community/bge-reranker-v2-m3-ONNX#int8}
+      PAGENTOS_MEMORY_RERANK_CACHE_DIR: /srv/pagentos/var/models
+      PAGENTOS_MEMORY_RERANK_TOP_K: ${PAGENTOS_MEMORY_RERANK_TOP_K:-20}
     volumes:
       # ADR-0200: the embedding model files, shared by both colours (see the env above).
       - ${PAGENTOS_MODELS_DIR:-/mnt/pagentos-data/models}:/srv/pagentos/var/models

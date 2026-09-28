@@ -20,6 +20,13 @@ from app.db import build_engine, build_session_factory
 from app.logging import get_logger
 from app.memory.embedding import DeterministicEmbedder, Embedder
 from app.memory.providers import EmbedderReport, ModelFactory, build_embedder
+from app.memory.rerank import (
+    Reranker,
+    RerankerReport,
+    RerankModelFactory,
+    build_reranker,
+    rerank_top_k,
+)
 from app.memory.store import NativeMemoryBackend
 
 logger = get_logger("app.memory.runtime")
@@ -33,6 +40,8 @@ class MemoryRuntime:
         engine: Engine | None = None,
         embedder: Embedder | None = None,
         model_factory: ModelFactory | None = None,
+        reranker: Reranker | None = None,
+        rerank_model_factory: RerankModelFactory | None = None,
     ) -> None:
         self.settings = settings
         self._engine: Engine | None = engine
@@ -57,6 +66,22 @@ class MemoryRuntime:
             self.embedder, self.embedder_report = build_embedder(
                 settings, model_factory=model_factory
             )
+        # ADR-0206: the same selection, for the reranker. `None` is the default and is
+        # a real state - no object, no model, the retrieval path it has always been.
+        self.reranker: Reranker | None
+        if reranker is not None:
+            self.reranker = reranker
+            self.reranker_report = RerankerReport(
+                requested="injected",
+                active="injected",
+                model_id=reranker.model_id,
+                top_k=rerank_top_k(settings),
+            )
+        else:
+            self.reranker, self.reranker_report = build_reranker(
+                settings, model_factory=rerank_model_factory
+            )
+        self.rerank_top_k = self.reranker_report.top_k
         self._backend: NativeMemoryBackend | None = None
 
     @property
@@ -79,7 +104,12 @@ class MemoryRuntime:
     @property
     def backend(self) -> NativeMemoryBackend:
         if self._backend is None:
-            self._backend = NativeMemoryBackend(self.session, self.embedder)
+            self._backend = NativeMemoryBackend(
+                self.session,
+                self.embedder,
+                reranker=self.reranker,
+                rerank_top_k=self.rerank_top_k,
+            )
         return self._backend
 
     def health_check(self) -> dict[str, object]:
@@ -101,6 +131,9 @@ class MemoryRuntime:
                 "semantic": self.embedder_report.semantic,
                 "fallback_reason": self.embedder_report.fallback_reason,
             },
+            # ADR-0206: whether a search is reranked, by which model, and - when the
+            # owner asked for one and none serves - why not.
+            "reranker": self.reranker_report.as_dict(),
         }
 
     # ------------------------------------------------------------ B37: the index

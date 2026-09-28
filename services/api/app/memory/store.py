@@ -27,6 +27,7 @@ from app.memory import lifecycle, retrieval, service
 from app.memory.embedding import Embedder
 from app.memory.errors import MemoryErrorClass, MemorySubsystemError
 from app.memory.policy import Observation
+from app.memory.rerank import DEFAULT_TOP_K, Reranker
 from app.memory.retrieval import RetrievalFilters
 from app.memory.service import MemoryLinks, ObserveResult
 from app.memory.types import Actor
@@ -112,9 +113,19 @@ class NativeMemoryBackend:
 
     name = "native"
 
-    def __init__(self, session_scope: SessionScope, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        session_scope: SessionScope,
+        embedder: Embedder,
+        *,
+        reranker: Reranker | None = None,
+        rerank_top_k: int = DEFAULT_TOP_K,
+    ) -> None:
         self._session_scope = session_scope
         self.embedder = embedder
+        #: ADR-0206: None means retrieval is exactly what it was.
+        self.reranker = reranker
+        self.rerank_top_k = rerank_top_k
 
     # ------------------------------------------------------------- writes
     def observe(self, obs: Observation, links: MemoryLinks | None = None) -> ObserveResult:
@@ -219,7 +230,15 @@ class NativeMemoryBackend:
         k: int = retrieval.DEFAULT_K,
     ) -> list[dict[str, Any]]:
         with self._session_scope() as session:
-            scored = retrieval.hybrid_search(session, self.embedder, query, filters, k=k)
+            scored = retrieval.hybrid_search(
+                session,
+                self.embedder,
+                query,
+                filters,
+                k=k,
+                reranker=self.reranker,
+                rerank_top_k=self.rerank_top_k,
+            )
             return [
                 {
                     **retrieval.to_payload(item.memory),

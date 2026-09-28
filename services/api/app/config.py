@@ -209,6 +209,15 @@ class Settings(BaseSettings):
     #: ADR-0200: on the retention clock, embed the memories the ACTIVE model has not indexed
     #: yet (resumable; a provider change is picked up without an owner-run reindex). Bounded
     #: per pass so housekeeping never monopolises the process.
+    #: ADR-0206: a cross-encoder re-reads the top candidates of a memory search. "none"
+    #: (no reranker exists; retrieval is exactly what it was) | "local" (a model on this
+    #: host through fastembed, loaded ONLY from the directory the release prefetched into;
+    #: a model that is not there is "none" with the reason on the health check).
+    memory_rerank_provider: str = "none"
+    memory_rerank_model: str = "onnx-community/bge-reranker-v2-m3-ONNX#int8"
+    memory_rerank_cache_dir: str = ""
+    #: How many candidates one search pays the cross-encoder for (1..50).
+    memory_rerank_top_k: int = 20
     memory_index_fill_enabled: bool = True
     memory_index_fill_batch: int = 200
 

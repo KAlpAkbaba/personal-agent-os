@@ -39,8 +39,9 @@
 # treats anything else as an interrupted promotion and returns to the last completed one.
 # Release-path exits that also fall in this range (the transaction list above names where
 # each one is raised): 82 the expand-only migration failed; 83 the served schema revision
-# is not the tree's head; 85 the memory embedding model could not be fetched into the
-# shared models dir (ADR-0200) - retried thrice, and nothing was switched.
+# is not the tree's head; 85 the memory embedding model (ADR-0200) or, when the owner
+# turned it on, the memory rerank model (ADR-0206) could not be fetched into the shared
+# models dir - retried thrice, and nothing was switched.
 # --reconcile exits: 0 consistent and ok; 80 neither colour serves (nothing switched);
 # 81 the canonical colour did not serve and the recorded other one took over (loud);
 # 82 another release/recovery holds the lock; 83 no tree matches the pinned recovery inputs;
@@ -874,10 +875,51 @@ print("embedding model ready:", os.environ["PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODE
         echo "embedding model prefetch attempt $attempt failed (rc $rc)" >&2
         sleep 5
     done
+    echo "the memory embedding model could not be fetched into $models_dir" >&2
     return 85
 }
 
-prefetch_embedding_model || { echo "the memory embedding model could not be fetched into $models_dir; nothing was switched" >&2; exit 85; }
+# ADR-0206: the rerank model, by the same rule and into the same directory. The API
+# process loads it with local_files_only - it can never start a download of its own - so
+# THIS is the only place the model ever comes from. Provider `none` (the default) fetches
+# nothing. A fetch that fails is 85 before anything is switched: an explicit `local`
+# that silently served unreranked results would be a release that did not do what it said.
+prefetch_rerank_model() {
+    local provider model rc=0 attempt
+    provider="$(env_value PAGENTOS_MEMORY_RERANK_PROVIDER)"
+    provider="${provider:-none}"
+    if [ "$provider" != "local" ]; then
+        echo "memory rerank provider is '$provider': no model to prefetch"
+        return 0
+    fi
+    model="$(env_value PAGENTOS_MEMORY_RERANK_MODEL)"
+    model="${model:-onnx-community/bge-reranker-v2-m3-ONNX#int8}"
+    mkdir -p "$models_dir"
+    chown 10001:10001 "$models_dir" 2>/dev/null || true
+    for attempt in 1 2 3; do
+        rc=0
+        docker run --rm --user 10001:10001 \
+            -v "$models_dir:/srv/pagentos/var/models" \
+            -e PAGENTOS_MEMORY_RERANK_MODEL="$model" \
+            -w /srv/pagentos \
+            "$image_repo:$sha" \
+            /srv/pagentos/.venv/bin/python -c \
+'import os
+from app.memory.rerank import LocalReranker
+r = LocalReranker(model_name=os.environ["PAGENTOS_MEMORY_RERANK_MODEL"], cache_dir="/srv/pagentos/var/models", local_files_only=False)
+print("rerank model ready:", r.model_id, "score", round(r.score("probe", ["probe"])[0], 3))' \
+            2>&1 | tail -1 || rc=$?
+        [ "$rc" -eq 0 ] && return 0
+        echo "rerank model prefetch attempt $attempt failed (rc $rc)" >&2
+        sleep 5
+    done
+    echo "the memory rerank model could not be fetched into $models_dir" >&2
+    return 85
+}
+
+# ONE failure, one exit: a model the memory was told to use is not on the host. Which
+# model is said by the function that could not fetch it; what to do about it is the same.
+{ prefetch_embedding_model && prefetch_rerank_model; } || { echo "a memory model could not be fetched; nothing was switched" >&2; exit 85; }
 
 echo "starting the idle colour api-$idle on $sha (api-$active keeps serving)..."
 up_out=""; up_rc=0

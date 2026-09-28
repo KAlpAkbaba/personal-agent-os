@@ -147,6 +147,10 @@ $docker = @(
     '  build\ *)',
     '    if [ -n "${FAKE_BUILD_EXIT:-}" ]; then echo "ERROR: failed to solve: process did not complete successfully" >&2; exit "$FAKE_BUILD_EXIT"; fi',
     '    exit 0;;',
+    '  run\ --rm*PAGENTOS_MEMORY_RERANK_MODEL*)',
+    '    # ADR-0206: the rerank-model prefetch - its own docker run, after the embedding one.',
+    '    if [ -n "${FAKE_RERANK_PREFETCH_EXIT:-}" ]; then echo "huggingface.co: connection refused" >&2; exit "$FAKE_RERANK_PREFETCH_EXIT"; fi',
+    '    echo "rerank model ready: fake score 0.5"; exit 0;;',
     '  run\ --rm*)',
     '    # ADR-0200: the embedding-model prefetch, one docker run as uid 10001 before the idle colour.',
     '    if [ -n "${FAKE_PREFETCH_EXIT:-}" ]; then echo "huggingface.co: connection refused" >&2; exit "$FAKE_PREFETCH_EXIT"; fi',
@@ -341,6 +345,25 @@ try {
         Reset-Host
         $rpf = Invoke-Release -Env @{ FAKE_PREFETCH_EXIT = "1" }
         Assert-True ($rpf.Exit -eq 85 -and $rpf.Output -match "embedding model could not be fetched" -and ($rpf.Calls -match "^docker run --rm ").Count -eq 3 -and (Get-Active) -eq "blue" -and -not (Test-Up "green") -and (Get-Release) -eq $old) "a failed model prefetch is retried thrice, exits 85, and nothing is switched"
+
+        # ADR-0206: the rerank model follows the same rule - and is OFF unless the owner
+        # turned it on, in which case a release that cannot fetch it must not pretend.
+        Write-Host "rerank model prefetch (ADR-0206)"
+        $rerankRun = "^docker run --rm --user 10001:10001 .*PAGENTOS_MEMORY_RERANK_MODEL="
+        Assert-True (-not ($rp.Calls -match $rerankRun) -and $rp.Output -match "memory rerank provider is 'none': no model to prefetch") "with the provider off (the default) no rerank model is fetched, and the release says so"
+        Reset-Host
+        [IO.File]::AppendAllText((Join-Path $hostBase ".env"), "PAGENTOS_MEMORY_RERANK_PROVIDER=local`n")
+        $rr = Invoke-Release
+        $iEmbed = [array]::IndexOf($rr.Calls, ($rr.Calls | Where-Object { $_ -match "^docker run --rm --user 10001:10001 .*PAGENTOS_MEMORY_LOCAL_EMBEDDING_MODEL=" } | Select-Object -First 1))
+        $iRerank = [array]::IndexOf($rr.Calls, ($rr.Calls | Where-Object { $_ -match $rerankRun } | Select-Object -First 1))
+        $iIdleUp = [array]::IndexOf($rr.Calls, ($rr.Calls | Where-Object { $_ -match " up -d --no-deps --wait api-green" } | Select-Object -First 1))
+        if ($rr.Exit -ne 0 -or $env:PAGENTOS_BG_VERBOSE) { Write-Host $rr.Output; $rr.Calls | ForEach-Object { Write-Host "  call: $_" } }
+        Assert-True ($rr.Exit -eq 0 -and $iEmbed -ge 0 -and $iRerank -gt $iEmbed -and $iIdleUp -gt $iRerank -and $rr.Output -match "rerank model ready" -and ($rr.Calls[$iRerank] -match "onnx-community/bge-reranker-v2-m3-ONNX#int8") -and ($rr.Calls[$iRerank] -match "/models:/srv/pagentos/var/models")) "turned on, the rerank model is prefetched as uid 10001 into the shared models dir, after the embedding model and BEFORE the idle colour starts"
+        Reset-Host
+        [IO.File]::AppendAllText((Join-Path $hostBase ".env"), "PAGENTOS_MEMORY_RERANK_PROVIDER=local`n")
+        $rrf = Invoke-Release -Env @{ FAKE_RERANK_PREFETCH_EXIT = "1" }
+        Assert-True ($rrf.Exit -eq 85 -and $rrf.Output -match "rerank model could not be fetched" -and ($rrf.Calls -match $rerankRun).Count -eq 3 -and (Get-Active) -eq "blue" -and -not (Test-Up "green") -and (Get-Release) -eq $old) "a failed rerank prefetch is retried thrice, exits 85, and nothing is switched"
+        Reset-Host
 
         # B01 requirement 2: the migration's RESULT is verified, not just its exit code. The
         # colour serves the alembic revision it is on and the revision its tree expects; a

@@ -15405,3 +15405,94 @@ released parser was run inside the serving container against the production alia
 three office sentences match GMKADIRAKBABA's row and not MAIL's, the home sentence the
 reverse, and "istediğim videoyu aç" and "evden çıkınca kapat" match neither. What this
 does not prove is a spoken command travelling to the chosen machine - that is M19b.
+
+## ADR-0206 — A local semantic rerank over `hybrid_search`, built and left OFF (2026-09-28)
+
+**Context.** The third part of the memory work (JARVIS order 1): ADR-0200 made retrieval
+semantic, ADR-0201 made the memory learn in every mode. What is left is order. An
+embedding answers "which memories are about this"; it cannot tell the memory that ANSWERS
+a question from four that share its words. A cross-encoder reads the query and one memory
+together and can.
+
+**Decision.**
+
+1. *A `Reranker` protocol, `none` | `local`* (`app/memory/rerank.py`), selected once by
+   `build_reranker`, which never raises. `none` is the default and means no reranker
+   object exists at all.
+2. *Where it sits.* `hybrid_search(..., reranker=None, rerank_top_k=20)`. With a reranker
+   and query text, the top K rows of the existing ordering are scored as (query, memory)
+   pairs; for those rows the cross-encoder's answer (its logit through a logistic, 0..1)
+   stands where the cosine stood, at the cosine's weight (`W_RERANK = W_SEMANTIC = 0.55`).
+   Rows below the top K keep their score and their place after the reranked ones.
+3. *The other signals keep their weight.* The brief named recency, evidence count,
+   explicit and stage; the signals `hybrid_search` actually scores are recency,
+   confidence, explicit and project match (stage is a filter, evidence feeds confidence),
+   and those are the ones kept, unchanged. A model's mild preference does not outvote an
+   explicit, fresh, certain memory - there is a test for exactly that.
+4. *Off is the same function.* With no reranker the ids, scores and components are what
+   they were, float for float, asserted with `==` against the documented formula
+   computed independently in the test.
+5. *The API never downloads.* `LocalReranker` loads with `local_files_only`; the release
+   script is the only place the model comes from (`prefetch_rerank_model`: uid 10001,
+   `/mnt/pagentos-data/models`, three attempts). A model that is not there is `none` with
+   the reason under `checks.memory.reranker` - and the memory check stays `ok`, because a
+   missing refinement is not a failing memory.
+6. *One exit, 85.* "A model the memory was told to use is not on the host" is one failure
+   whichever model it is; the two prefetch functions each say which, and one line exits.
+   `test_no_exit_code_carries_two_different_meanings` refused the first version, which had
+   two exit sites with two sentences.
+7. *A reranker that fails while scoring* costs the turn the rerank and nothing else.
+8. *Wired where a person asks:* `/v1/memory/search` (the backend) and the spoken
+   `memory_search` tool. NOT wired into `select_for_instruction`: it has its own
+   precedence, usually no query, and runs one search per memory class at session start -
+   three times the pairs for an ordering the injection then re-sorts.
+9. *Only measured models load.* A name that is neither in `CUSTOM_MODELS` nor in
+   fastembed's list is refused with its reason.
+
+**Measured on the owner's PC, 2026-09-28** (`scripts/core/bench-memory-rerank.py` ->
+`docs/evidence/adr-0206-rerank-bench-2026-09-28.json`; ten Turkish queries, each with one
+right memory and four near-wrong ones; every model in its own child process, beside an
+already loaded embedder, warm):
+
+| model | licence | top-1 | MRR | worst rank | warm load | per pair | 20 candidates | RSS added | process peak |
+|---|---|---|---|---|---|---|---|---|---|
+| embedder only (potion, what serves today) | MIT | 0.70 | 0.833 | 3 | - | - | - | - | - |
+| `bge-reranker-v2-m3`, fp32 | Apache-2.0 | 1.00 | 1.000 | 1 | 2.1 s | 27.2 ms | 607 ms | **1490 MB** | 2563 MB |
+| `bge-reranker-v2-m3`, int8 | Apache-2.0 | 1.00 | 1.000 | 1 | 1.8 s | 16.3 ms | 390 ms | **870 MB** | 1944 MB |
+| `jina-reranker-v2-base-multilingual`, fp32 | CC-BY-NC-4.0 | 1.00 | 1.000 | 1 | 2.3 s | 8.4 ms | 214 ms | **1392 MB** | 2876 MB |
+| `jina-reranker-v2-base-multilingual`, int8 | CC-BY-NC-4.0 | 0.90 | 0.950 | 2 | 1.2 s | 6.1 ms | 167 ms | **583 MB** | 1656 MB |
+
+First (cold) loads, download included: 235 s, 97 s, 112 s, 49 s. Turning the ONNX memory
+arena off moved the int8 figures by about 40 MB (870 -> 828, 583 -> 540) and changed
+nothing that matters.
+
+**What the numbers say.** Every reranker beats the embedder on order: 7 of 10 right
+becomes 10 of 10 (9 of 10 for the smallest). And every one costs more memory than the
+embedder it refines. The owner's rule for this host was 700 MB per colour:
+
+* `bge-reranker-v2-m3` int8 - the only candidate that is both Apache-licensed and perfect
+  here - adds **870 MB**. Over the rule. Two colours through a drain would hold about
+  2 x (1.4 + 0.87) = 4.5 GiB on an 8 GB host that showed 4.6 GiB available with one.
+* `jina-reranker-v2-base-multilingual` int8 adds **583 MB**, under the rule by 117 MB,
+  but it is **CC-BY-NC-4.0** (non-commercial), it misses one query in ten, and the figure
+  was measured on Windows, not on the Linux host it would run on.
+
+**Therefore the default is `none`, in the settings, in the compose file and in
+production.** `memory_rerank_model` defaults to the bge int8 export so that turning the
+provider on, on a host that can afford it, loads the model that was measured best under
+a licence with no conditions.
+
+**Proven.** `test_memory_rerank` 24 and two spoken-search tests; nine mutations RED
+(reranked without a query; the cosine kept beside the rerank; top-K ignored; a failing
+reranker failing the turn; the off path shifted by 1e-15; the API allowed to download; on
+by default; a score outside 0..1 trusted; `build_reranker` raising), each file restored
+byte-exact (sha256). `cloud-release-bluegreen.tests.ps1` 85 passed (78 + 4 + 3). On this
+machine, through the real `MemoryRuntime` and the real model: the health check reports
+`active: true`, a search of five Turkish memories moves the right one from second to
+first in 115 ms against 7 ms unreranked; with an empty model directory it reports
+`active: false` with the reason and writes no file into that directory.
+
+**Not proven, and said so.** The model has never run on the Cloud Core: its memory there,
+its latency on 4 shared vCPUs and the prefetch against the real huggingface.co from the
+host are all unmeasured. Ten queries are a benchmark, not the owner's memory. None of it
+is released.
