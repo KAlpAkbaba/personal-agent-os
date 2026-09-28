@@ -314,6 +314,90 @@ try {
     }
 
     Write-Host ""
+    Write-Host "a machine that never had an install (ADR-0204)"
+
+    # The incident: 2026-09-28, the owner's second machine. Nothing had ever been installed
+    # there; the installer created the empty root, found no journal and no live trees, and
+    # refused with "inspect .previous and .staging by hand" - about a machine that had
+    # neither. Every earlier run of this engine was on a machine that already had an agent.
+
+    Test-Case "a fresh machine (the root exists and is empty) resolves to None" {
+        $root = Join-Path $script:Sandbox "fresh-empty"
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+        $resolution = Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")
+        Assert-Equal -Expected "None" -Actual $resolution.Action `
+            -Because "nothing installed, nothing staged, nothing displaced is a first install, not an interrupted one: $($resolution.Reason)"
+        Assert-True -Condition ($resolution.Reason -match "fresh machine") -Because "the reason must say why: $($resolution.Reason)"
+    }
+
+    Test-Case "a root that does not exist at all resolves to None" {
+        $root = Join-Path $script:Sandbox "fresh-absent"
+
+        $resolution = Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")
+        Assert-Equal -Expected "None" -Actual $resolution.Action -Because $resolution.Reason
+        Assert-True -Condition (-not (Test-Path -LiteralPath $root)) -Because "deciding must not create anything"
+    }
+
+    Test-Case "empty .staging and .previous directories do not make a fresh machine a broken one" {
+        $root = Join-Path $script:Sandbox "fresh-empty-dirs"
+        New-Item -ItemType Directory -Force -Path (Join-Path $root ".staging"), (Join-Path $root ".previous") | Out-Null
+
+        Assert-Equal -Expected "None" -Actual (Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")).Action `
+            -Because "an empty directory holds no component"
+    }
+
+    Test-Case "a partial live tree (service present, companion missing) stays Blocked" {
+        $root = New-DeployRoot -Name "partial-live" -NoStaging
+        Remove-Item -LiteralPath (Join-Path $root "companion") -Recurse -Force
+
+        $resolution = Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")
+        Assert-Equal -Expected "Blocked" -Actual $resolution.Action `
+            -Because "half an install is a real interrupted state; fresh-machine must not excuse it: $($resolution.Reason)"
+    }
+
+    Test-Case "no live tree but a staged component stays Blocked" {
+        $root = New-DeployRoot -Name "staged-only"
+        foreach ($component in @("service", "companion")) { Remove-Item -LiteralPath (Join-Path $root $component) -Recurse -Force }
+        Remove-Item -LiteralPath (Join-Path $root ".staging\companion") -Recurse -Force
+
+        Assert-Equal -Expected "Blocked" -Actual (Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")).Action `
+            -Because "something was staged here once; that is not a machine nothing ever happened on"
+    }
+
+    Test-Case "no live tree but a displaced component under .previous stays Blocked" {
+        $root = Join-Path $script:Sandbox "displaced-only"
+        New-Item -ItemType Directory -Force -Path (Join-Path $root ".previous\20260903-101500\service") | Out-Null
+        Set-Content -LiteralPath (Join-Path $root ".previous\20260903-101500\service\PagentOS.Fake.exe") -Value "v1" -Encoding ASCII
+
+        Assert-Equal -Expected "Blocked" -Actual (Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")).Action `
+            -Because "the only copy of an install sits in .previous; calling that fresh would build over it"
+    }
+
+    Test-Case "the installer's own opening sequence on a fresh root is not Blocked" {
+        # Exactly what install-device-service.ps1 does before it stages anything:
+        # Invoke-InstallRecovery (which CREATES the empty root), then the resolution.
+        $root = Join-Path $script:Sandbox "fresh-installer-sequence"
+        $recovery = Invoke-InstallRecovery -Root $root -Components @("service", "companion", "browser") -Quiet
+        Assert-Equal -Expected 0 -Actual @($recovery.Restored).Count -Because "there is nothing to restore on a fresh machine"
+
+        $resolution = Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")
+        Assert-Equal -Expected "None" -Actual $resolution.Action -Because $resolution.Reason
+    }
+
+    Test-Case "a first install deploys from staging with no live tree, and then resolves to None" {
+        $root = New-DeployRoot -Name "first-install"
+        foreach ($component in @("service", "companion")) { Remove-Item -LiteralPath (Join-Path $root $component) -Recurse -Force }
+
+        $result = Invoke-AgentDeployment -Root $root -Components @("service", "companion") `
+            -StopRuntime $noop -StartRuntime $noop -TestHealth $healthy
+        Assert-True -Condition $result -Because "the first install should commit"
+        Assert-Equal -Expected "new" -Actual (Get-Content (Join-Path $root "service\marker.txt")) -Because "the candidate is live"
+        Assert-Equal -Expected "None" -Actual (Resolve-InterruptedDeployment -Root $root -Components @("service", "companion")).Action `
+            -Because "committed"
+    }
+
+    Write-Host ""
     Write-Host "hardened destination"
 
     Test-Case "a hardened (admin-writable) destination deploys under an elevated caller, or refuses cleanly otherwise" {

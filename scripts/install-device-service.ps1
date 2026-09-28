@@ -127,7 +127,11 @@ $agentRoot = Join-Path $repoRoot "devices\windows-agent"
 function Assert-Elevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    # PAGENTOS_INSTALL_ASSUME_UNELEVATED=1 can only make this REFUSE: the regression test
+    # for the refusal runs the real script, and must get the refusal on an elevated runner
+    # too instead of an install.
+    if ($env:PAGENTOS_INSTALL_ASSUME_UNELEVATED -eq "1" -or
+        -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw "This script installs a Windows Service and must run elevated. Right-click PowerShell -> Run as administrator, then run it again."
     }
 }
@@ -393,6 +397,13 @@ function Register-CompanionAutostart {
 
 # ------------------------------------------------------------------------------- install
 
+# A trap belongs to the whole script scope, not to the lines below it: the refusal thrown
+# by Assert-Elevated lands in the trap further down BEFORE the log exists. Under StrictMode
+# reading the unset variable there was a second error ("$script:InstallLog cannot be
+# retrieved because it has not been set") printed over the one sentence the owner needed
+# (2026-09-28, the second machine). Declared here, so the trap can ask whether a run began.
+$script:InstallLog = $null
+
 Assert-Elevated
 
 # Every run is transcribed under ProgramData: an elevated window that closes on error must
@@ -405,6 +416,11 @@ Start-Transcript -Path $script:InstallLog -Append | Out-Null
 Write-Host "install log: $script:InstallLog"
 trap {
     Write-Host ""
+    if ($null -eq $script:InstallLog) {
+        # Refused before anything began: no log, no transcript, nothing to restore.
+        Write-Host "INSTALL NOT STARTED: $($_.Exception.Message)" -ForegroundColor Red
+        break
+    }
     Write-Host "INSTALL FAILED: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "nothing that failed was left half-done: the deployment engine restores the previous trees and restarts the runtime on any failure after the swap."
     Write-Host "install log: $script:InstallLog"

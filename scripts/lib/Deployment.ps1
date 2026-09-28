@@ -349,5 +349,26 @@ function Resolve-InterruptedDeployment {
     if ($liveComplete) {
         return [pscustomobject]@{ Action = "None"; Reason = "no journal; live trees intact, nothing staged" }
     }
+
+    # A machine nothing was ever installed on (ADR-0204). Until 2026-09-28 every run of this
+    # engine was on a machine that already had an agent, so "no live tree" could only mean
+    # "lost"; on the owner's second machine it meant "not yet", and the installer refused a
+    # first install with advice to inspect directories that did not exist. Fresh is decided
+    # by ABSENCE of every trace, never by the absence of one: no live component, no staged
+    # component, nothing displaced under .previous. One component present and another
+    # missing, a candidate staged, or an old tree parked in .previous is still a state
+    # somebody has to look at.
+    $anyLive = $false
+    $anyStaged = $false
+    foreach ($component in $Components) {
+        if (Test-Path -LiteralPath (Join-Path $Root $component)) { $anyLive = $true }
+        if (Test-Path -LiteralPath (Join-Path $stagingRoot $component)) { $anyStaged = $true }
+    }
+    $previousParent = Join-Path $Root ".previous"
+    $anyDisplaced = (Test-Path -LiteralPath $previousParent) -and
+        (@(Get-ChildItem -LiteralPath $previousParent -Force -Recurse -File -ErrorAction SilentlyContinue).Count -gt 0)
+    if (-not $anyLive -and -not $anyStaged -and -not $anyDisplaced) {
+        return [pscustomobject]@{ Action = "None"; Reason = "no journal; nothing installed yet (fresh machine)" }
+    }
     return [pscustomobject]@{ Action = "Blocked"; Reason = "no journal and the live trees are incomplete; refuse to guess - inspect .previous and .staging by hand" }
 }

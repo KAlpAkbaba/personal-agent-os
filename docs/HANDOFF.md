@@ -15,7 +15,22 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok. (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
+**EV PC'si (MAIL), 2026-09-28 akşam: ikinci cihaz kayıtlı; kurucu düzeltmeleri main'e.**
+Şirket PC'si GMKADIRAKBABA ikinci cihaz olarak kaydoldu (ajan 0.6.0, `-SkipBrowser
+-SkipCoreVerify`, DisplayPower/Operator kapalı); kurulum `fix/installer-fresh-machine`
+(`5ffe1871`, ADR-0204) dalından yapıldı, token host'ta üretildi. Şirket PC'si checkout'a
+dokunmuyor. Sıra: (1) bu blok; (2) `fix/installer-fresh-machine` tam kapı → main
+(`feat/second-device-enrollment` zaten main'de, `00d179cd`); (3) bulutta cihaz satırı →
+ADR-0203 PROVEN_REAL; (4) alias `ofis`/`iş` + cihaz envanteri; (5) yükseltilmemiş kurucu
+ikinci hata basıyordu → bu dalda düzeltildi: `$script:InstallLog` reddedişten ÖNCE
+tanımlanıyor, tuzak "kurulum başladı mı" diye soruyor; gerçek betiği çocuk süreçte koşan
+regresyon testi (`installer-invocation.tests.ps1` 33 ✓), düzeltmeden önce KIRMIZI, iki
+mutasyon KIRMIZI; (6) ayrıştırıcıya "ofis" — AYRI dal, tam kapı, main; **yayın YAPILMAZ,
+sahibin onayı beklenir**. `feat/hand-gestures-stage1` DOKUNULMAZ.
+Not: üretime sahip parolasıyla ben giriş yapmıyorum; cihaz satırı salt-okunur DB sorgusuyla
+okunur, alias PATCH'i sahibin oturumunu ister.
+
+Önceki durum: (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
 **Sahibi bekleyen iki şey:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını
 her zaman Türkçe oku") → CANDIDATE satırı okununca ADR-0201 PROVEN_REAL olur (QUALIFICATION
 30.10); (2) ADR-0203'ün sahip adımları (şirket PC'si: politika kararı, .NET 10 SDK, kurulum,
