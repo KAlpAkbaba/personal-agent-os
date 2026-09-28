@@ -140,7 +140,7 @@ be, `scripts/core/set-device-aliases.ps1` sets them and prints the live inventor
 
 | Alias | Name | device_id | Where | Agent | Authority |
 |---|---|---|---|---|---|
-| `ev` (not set yet) | MAIL | `3f60fdb5-5022-48cf-bb3c-d7192466b701` | home PC, the owner's own | 0.6.0 | full: operator, display power, browser worker, the owner's Chrome (105 capabilities) |
+| `ev` (set 2026-09-28) | MAIL | `3f60fdb5-5022-48cf-bb3c-d7192466b701` | home PC, the owner's own | 0.6.0 | full: operator, display power, browser worker, the owner's Chrome (105 capabilities) |
 | `ofis`, `iş` (set 2026-09-28) | GMKADIRAKBABA | `9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` | company PC, domain-joined (`turka.com`) | 0.6.0 | reduced by decision (ADR-0203): no operator, no display power, no browser worker (13 capabilities) |
 
 Rules that come with a second machine:

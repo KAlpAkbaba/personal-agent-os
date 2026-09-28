@@ -837,10 +837,9 @@
       "mint_script": "PROVEN_REAL (the token that enrolled the device came from it)",
       "alias_selection": "PROVEN_AUTOMATED; in production 'iş' and the bare word 'ofis' select the device today, 'ofis bilgisayarımda' after the release",
       "m19b_acceptance": "NOT_STARTED",
-      "alias_on_the_row": "PROVEN_REAL (owner run 2026-09-28 14:15 UTC; devices row read back)"
+      "alias_on_the_row": "PROVEN_REAL (owner runs 2026-09-28 14:21 and 14:22 UTC; MAIL [ev], GMKADIRAKBABA [ofis, iş]; rows read back)"
     },
     "owner_steps": [
-      "scripts/core/set-device-aliases.ps1 -Device MAIL -Aliases ev",
       "say 'release' for the alias parser (ADR-0205)"
     ],
     "next": [
@@ -902,8 +901,7 @@
       }
     },
     "next": [
-      "release -BlueGreen on the owner's word",
-      "alias 'ev' on MAIL"
+      "release -BlueGreen on the owner's word"
     ]
   }
 }

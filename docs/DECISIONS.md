@@ -15391,6 +15391,7 @@ The second run, after the fix: `GET /v1/devices` 14:15:31.698, `PATCH
 /v1/devices/9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` 200 at 14:15:31.837 (`broker_device_metadata_updated`), read-back
 `GET` 14:15:31.902. The row's `metadata_json` is `{"aliases": ["ofis", "iş"]}`; MAIL's is
 still empty - "ev" is not set on it yet.
+(Set by the owner at 14:22:21 UTC the same day: MAIL's row now carries `{"aliases": ["ev"]}`.)
 
 The refusal now names what was listed - "found 0 among 1 listed (MAIL)", and a nameless
 row is said to be one - so the three causes can be read off the message.
