@@ -15496,3 +15496,20 @@ first in 115 ms against 7 ms unreranked; with an empty model directory it report
 its latency on 4 shared vCPUs and the prefetch against the real huggingface.co from the
 host are all unmeasured. Ten queries are a benchmark, not the owner's memory. None of it
 is released.
+
+**ADR-0206 addendum - the owner's decision (2026-09-28): the rerank stays OFF.** Not a
+"not yet" without a condition; the condition is written down so that nobody has to
+re-argue it:
+
+* **When to reopen.** The memory holds **300 rows or more** (it holds 22 today: with so
+  few candidates the embedder's ordering is rarely wrong enough to matter), **or** the
+  Cloud Core moves to a **CPX41** (16 GB), where two colours each holding the reranker fit
+  beside everything else. Either one is enough.
+* **The order when it is reopened.** (1) Measure the model's resident memory ON THE HOST -
+  a one-off container from the released image loading the model from the shared models
+  directory, read with `docker stats`; the Windows figure in the table above is not the
+  Linux one. (2) Only if that figure fits: `PAGENTOS_MEMORY_RERANK_PROVIDER=local` (and
+  the model, if not the default) in the host's env file. (3) `release-cloud-core.ps1
+  -BlueGreen`, whose prefetch fetches the model (85 if it cannot), then
+  `checks.memory.reranker.active` on the health check.
+* Until then the code ships off, costs nothing, and is covered by its tests.

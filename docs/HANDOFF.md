@@ -15,18 +15,17 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-Yok. (2026-09-28 gece: hafıza PR-3 / ADR-0206 main'de, **KAPALI**; yayınlanmadı.)
-**Sahibin kararı bekleniyor — rerank açılsın mı?** Ölçüm (ev PC'si, 10 Türkçe sorgu): embedder
-tek başına 7/10; `bge-reranker-v2-m3` int8 10/10, çift başına 16 ms, renk başına **+870 MB**
-(kural 700 → varsayılan `none`); `jina-v2` int8 9/10, +583 MB, **CC-BY-NC**. Açmak için:
-host `.env`'ine `PAGENTOS_MEMORY_RERANK_PROVIDER=local` (+ istenirse
-`PAGENTOS_MEMORY_RERANK_MODEL=`) ve `-BlueGreen` yayın; prefetch modeli indirir (85 =
-indirilemedi). Sunucuda bellek/gecikme ÖLÇÜLMEDİ. Tablo: `docs/DECISIONS.md` ADR-0206,
-kanıt `docs/evidence/adr-0206-rerank-bench-2026-09-28.json`. Modeller bu makinede
-`E:\AI\.model-cache` altında (4 GB, depo dışı; silinebilir).
-Önceki bekleyenler sürüyor: yerel modda bir cümle (ADR-0201, 30.10); M19b sesli deneme.
-`feat/hand-gestures-stage1` DOKUNULMADI.
-Sonraki: JARVIS sırası 2: browser-use.
+**JARVIS sırası 2 — browser-use: TASARIM TURU (ADR-0207 taslağı), dal
+`feat/browser-task-loop-design` (main `88670c15`'ten), ev PC'si, 2026-09-28.** KOD YOK:
+mevcut tarayıcı sözleşmesi (`BROWSER_CAPABILITIES.md` v1.5), `services/browser/browser_agent`,
+`app/research/browser_*` ve ADR-0050/0113/0138/0177/0183 okunur; çıktı ADR-0207 taslağı
+(döngü goal→observe→plan→act→verify, Temporal'da koşar, HIGH_IMPACT öncesi read-back +
+step-up, sayfa metni talimat değildir), v1.6 sözleşme önerileri, PR-A..D kesme planı,
+THIRD_PARTY kaydı (browser-use = fikir kaynağı, bağımlılık değil) ve sahibe en fazla 5 soru.
+**Rerank kararı (sahip, 2026-09-28): KAPALI kalır**; açma eşiği hafıza ≥ 300 satır VEYA
+CPX41; sıra: sunucuda RSS ölçümü → env → `-BlueGreen` (ADR-0206 eki).
+Bekleyenler: yerel modda bir cümle (ADR-0201, 30.10); M19b sesli deneme.
+`feat/hand-gestures-stage1` DOKUNULMAZ.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)
