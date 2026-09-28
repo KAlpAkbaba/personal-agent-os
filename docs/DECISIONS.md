@@ -15111,3 +15111,134 @@ header.
 it; both wait for the owner's word (the instruction for this run was to stop at a failed
 step). Production serves `3a8f4637` meanwhile; what is missing is the crash/boot
 reconcile, which refuses (83) until the pin is refreshed.
+
+## ADR-0203 — The second device is the owner's company PC: its own key, a token minted on the host, and less authority than the first (2026-09-28)
+
+Status: **Draft — `READY_FOR_OWNER`.** Nothing was installed, enrolled or released by this
+work; the owner runs the steps and the rows below are re-marked from what the machine then
+shows. First step of the reopened multi-device milestone (ROADMAP "M19 — Multi-device /
+roaming owner", called M29 in the JARVIS order; ACCEPTANCE_TESTS "M19b"). Written on the
+second device itself: host `GMKADIRAKBABA`, account `kadir.akbaba`, domain-joined
+(`turka.com`), repository at `C:\AI\...` (this machine has no `E:`; the `E:\AI` paths in
+the handoff and the scripts belong to the first machine and were left alone).
+
+**Measured on the machine, read-only (2026-09-28).**
+
+| What | Result |
+|---|---|
+| python / node / git | 3.11.9 (launcher also has 3.12, 3.14) / v24.19.0 / 2.55.0.windows.5 |
+| Tailscale | 1.102.4, installed but NOT on `PATH` (`C:\Program Files\Tailscale\tailscale.exe`); this node `gmkadirakbaba` 100.80.20.54, `mail` 100.92.148.30, `pagentos-core` 100.90.158.26 (direct) |
+| `Test-NetConnection 100.90.158.26 -Port 8001` | `TcpTestSucceeded: True`, over the Tailscale interface |
+| `GET /health` | **404** — there is no such route; the health route is `/v1/system/health` |
+| `GET /v1/system/health` | 200, `degraded`, `failing_checks: backup` (`scheduled_unit_failed`, the ADR-0202 marker), release `3a8f4637`, last known good `2dcf434a`, schema `0061_voice_macros`, broker ok with 1 active session |
+| .NET SDK | **absent** (`global.json` asks for 10.0.4xx) — the installer cannot publish the agent |
+| uv | **absent** — needed only for the Browser Worker |
+| Chrome | 153.0.8010.53 |
+| Elevation | the account is in `BUILTIN\Administrators` (filtered token); a UAC prompt is possible |
+| PagentOS on this machine | nothing: no service, no `Program Files\PagentOS`, no `ProgramData\PagentOS`, no secret store |
+
+**Three findings the enrolment flow did not say about itself.**
+
+1. *The token cannot be minted from the second device.* `POST /v1/devices/enrollment-tokens`
+   is `require_owner_session` **and** `_require_loopback`; a tailnet caller gets 403.
+   `scripts/complete-device-enrollment.ps1` mints against the broker the installed agent
+   dials, so on a second machine it stops there. The first machine never met this: it
+   enrolled against its own loopback broker and its row was carried to the cloud
+   (`restore-device-row.sh`). The guard is right — tailnet reachability is not authority
+   (M19b: "a freshly enrolled device with tailnet reachability but no authorisation gains
+   nothing") — so the guard stays and the mint moves to where the trust already is.
+2. *The device key is not DPAPI material.* `DeviceIdentity` stores the P-256 private key as
+   PKCS#8 PEM under `ProgramData\PagentOS\agent\device.key`, protected by ACL (SYSTEM read,
+   Administrators full); DPAPI hardening is named there as a later milestone. What IS
+   DPAPI-encrypted on the first machine is owner-session material
+   (`%LOCALAPPDATA%\PagentOS\secrets`). "Regenerate with DPAPI" on this machine therefore
+   means: the key is generated here by the agent's own `enroll` verb, and no owner secret
+   is stored here at all (below).
+3. *"ofis" is not a phrase the alias parser knows.* `app/devices/aliases.py` extracts
+   `ev` / `iş` / `laptop`. A free-form alias matches only when the whole target text equals
+   it, so "ofis" alone selects the device and "ofis bilgisayarımda aç" does not.
+
+**Decision.**
+
+1. **One device, one key, made where it lives.** Every device generates its own keypair at
+   enrolment; only the public key leaves it. No key, token, session or credential is copied
+   between machines, and nothing is restored from the first machine's row. Losing or
+   leaving a device is `POST /v1/devices/{id}/revoke` (sessions die first), never a
+   rotation of the owner identity.
+2. **The enrolment token is minted on the Cloud Core host**, by
+   `scripts/cloud/mint-enrollment-token.sh`: hidden prompt for the owner credential → a
+   labelled 300 s session → one token → the session revoked, all inside the ACTIVE
+   colour's container. The credential crosses on stdin; it is no argument, no environment
+   variable and no output. A recorded colour that is not running is not replaced by the
+   other one (65) — a mint is not a reason to talk to a colour the edge does not serve.
+3. **A company device holds less than the owner's own machine.** The machine belongs to an
+   employer: its administrators can read anything under `ProgramData`, its disk and screen
+   carry the employer's data, and an endpoint agent may judge a remote-control service by
+   its behaviour. So, on this device:
+   - **`-Operator`: NO.** The family is keyboard, pointer, screen, UI tree, terminal. On
+     this machine that is the employer's screen leaving for the cloud and a remote hand on
+     the employer's applications — the one capability whose misuse is not the owner's alone
+     to forgive, and the behaviour an EDR is built to flag.
+   - **`-DisplayPower`: NO.** Harmless by comparison, but it is the capability that takes
+     something away, it is off by default until qualified on the hardware it runs on, and
+     a management client has no use for it. Wake and status need no switch.
+   - **`-SkipBrowser` for the first install.** The worker's own profile is not the risk;
+     the point is the smallest first step, with one prerequisite (.NET SDK) instead of two.
+     It can be added later by rerunning the installer without the switch.
+   - **`enroll-owner-chrome.ps1`: NOT on this machine.** It lets the agent act as the
+     signed-in user on every site; here those sessions are the employer's.
+   - **No owner credential and no automation session stored here.**
+     `complete-device-enrollment.ps1` (which stores one by default) is not used; the
+     installer runs with `-SkipCoreVerify` because there is no stored credential for it to
+     read, and says so rather than faking the read.
+   The device therefore advertises the desktop family only. What it does NOT advertise
+   cannot be routed to it; a central `policy.deny` on the row is the second lock and is
+   left for the step that adds a capability.
+4. **Alias.** `aliases: ["ofis", "iş"]`, set centrally with `PATCH /v1/devices/{id}` from a
+   machine that already holds an owner session (the first machine), not from here. "iş
+   bilgisayarımda aç" then works today through the parser; "ofis" works as the bare word.
+   Teaching the parser `ofis bilgisayar*` / `ofiste*` is a Cloud Core change with its own
+   corpus cases and a release — named here, not done here: this machine is a management
+   client, it does not release.
+
+**Proof (automated, this machine).** `scripts/tests/mint-enrollment-token.tests.ps1` —
+**21 passed**, Git Bash, a fake docker that runs the script's python for real against a
+fake Cloud Core on loopback: the active colour's container; session → token → revoke in
+order; revoke still happens when the token route refuses; exits 64 / 65 / 66 / 67 with no
+token printed; the credential in no argument and no output. Two mutations, each RED on its
+own assertion, the script restored byte-exact after each: the credential passed as an
+argument ("the credential is in NO process argument"); the revoke removed ("session →
+token → revoke", "the session is STILL revoked"). `script-syntax.tests.ps1` 120/120.
+The suite's own first run found one defect in the harness, not the script: .NET's stdin
+writer prepends a byte-order mark under a UTF-8 console, so the credential is fed from a
+redirected file.
+
+**Evidence class.**
+
+| Row | Class |
+|---|---|
+| Diagnosis of this machine and of Cloud Core reachability | `PROVEN_REAL` (read-only, the table above) |
+| `mint-enrollment-token.sh` behaviour | `PROVEN_AUTOMATED` (fakes); on the real host `READY_FOR_OWNER` |
+| Install on this machine | `READY_FOR_OWNER` — not run; blocked on the .NET 10 SDK and the owner's approval |
+| Enrolment, service start, row in `GET /v1/devices` | `READY_FOR_OWNER` |
+| Alias "ofis" / "iş" selects this device | `READY_FOR_OWNER`; "ofis bilgisayarımda" is `NOT_BUILT` |
+| M19b acceptance (roaming, failover, rollout, revoke) | `NOT_STARTED` — this ADR is enrolment only |
+
+**Open risks, stated.**
+
+- *Employer policy.* A LocalSystem service with an outbound connection to a personal
+  tailnet, on a domain machine, may be against the employer's rules whatever it advertises.
+  That is the owner's call and only his; the ADR does not make it for him.
+- *Administrators of the machine can read `device.key`.* Anyone with the key can be THIS
+  device to the broker — with this device's (deliberately small) capabilities, not with
+  the owner's identity. Revoke ends it.
+- *The token is an argument of `enroll`* for the milliseconds it takes, visible to a
+  process listing, and the line stays in PSReadLine history. Single-use, 900 s, consumed
+  at once; stated rather than hidden, as `complete-device-enrollment.ps1` states it.
+- *The script reaches `/opt/pagentos/app` only with a release.* Until this branch is
+  merged and released from the first machine, the owner copies the one file to the host.
+- *Production is `degraded [backup]`* until the ADR-0202 release and re-pin happen on the
+  first machine. It does not block enrolment (the broker check is ok); it does mean the
+  health line the owner sees here is not green.
+- *Two checkouts.* This branch is pushed only from this machine; the first machine's
+  session does not edit it, and this one does not touch `main`.

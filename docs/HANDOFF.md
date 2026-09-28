@@ -15,6 +15,16 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**İkinci cihaz: şirket PC'si (ADR-0203, M29 ilk adım) — 2026-09-28, makine GMKADIRAKBABA.**
+Dal `feat/second-device-enrollment` (main `2da05c94`'ten). Bu oturum ŞİRKET PC'sinde
+(`kadir.akbaba`, alan `turka.com`, repo `C:\AI\...`; bu makinede `E:` yok — betiklerdeki
+`E:\AI` varsayılanlarına DOKUNULMADI). Bağlayıcı: ev PC'den (MAIL) hiçbir anahtar buraya
+kopyalanmaz; yayın betiği bu makinede çalıştırılmaz; LKG elle düzenlenmez; servis kurulumu
+sahibin onayı olmadan çalıştırılmaz. Yapılan: salt okunur teşhis, kayıt akışının çıkarılması,
+`scripts/cloud/mint-enrollment-token.sh` (token yalnız Cloud Core'un loopback'inden
+üretilebiliyor), ADR-0203, BUILD_STATE girişi. Kurulum ÇALIŞTIRILMADI → `READY_FOR_OWNER`.
+Ev PC'deki oturumla aynı anda düzenleme yapılmaz: bu dal yalnız bu makineden itilir.
+
 **Hafıza yayını yapıldı; recovery pini ADR-0202'yi bekliyor (2026-09-27 gece).**
 PR-1 + PR-2 main'de (`3a8f4637`, merge `--no-ff`) ve **üretimde** (api-blue). Pin
 yenilemesi BAŞARISIZ oldu ve eski pin geri kondu: mutabakat, kendi eski hata işaretinin

@@ -218,6 +218,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\owner-explain.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-secret.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-owner-rotation.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\mint-enrollment-token.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\cloud-release-bluegreen.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\item28-gate.tests.ps1 && ^
