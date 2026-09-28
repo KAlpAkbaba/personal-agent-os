@@ -103,3 +103,6 @@ apps/web/CLAUDE.md
 # and the loopback proxy's input: a run record with every case's speech, kept as a CI
 # artifact and posted to the Cloud Core, never source (2026-09-07).
 /state/reports/
+
+# The desktop app's own output folder (owner documents; never part of the tree)
+Claude outputs/

@@ -15,36 +15,11 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**EV PC'si (MAIL), 2026-09-28 akşam: ikinci cihaz kayıtlı; kurucu düzeltmeleri main'e.**
-Şirket PC'si GMKADIRAKBABA ikinci cihaz olarak kaydoldu (ajan 0.6.0, `-SkipBrowser
--SkipCoreVerify`, DisplayPower/Operator kapalı); kurulum `fix/installer-fresh-machine`
-(`5ffe1871`, ADR-0204) dalından yapıldı, token host'ta üretildi. Şirket PC'si checkout'a
-dokunmuyor. Sıra: (1) bu blok; (2) `fix/installer-fresh-machine` tam kapı → main
-(`feat/second-device-enrollment` zaten main'de, `00d179cd`); (3) bulutta cihaz satırı →
-ADR-0203 PROVEN_REAL; (4) alias `ofis`/`iş` + cihaz envanteri; (5) yükseltilmemiş kurucu
-ikinci hata basıyordu → bu dalda düzeltildi: `$script:InstallLog` reddedişten ÖNCE
-tanımlanıyor, tuzak "kurulum başladı mı" diye soruyor; gerçek betiği çocuk süreçte koşan
-regresyon testi (`installer-invocation.tests.ps1` 33 ✓), düzeltmeden önce KIRMIZI, iki
-mutasyon KIRMIZI; (6) ayrıştırıcıya "ofis" — AYRI dal, tam kapı, main; **yayın YAPILMAZ,
-sahibin onayı beklenir**. `feat/hand-gestures-stage1` DOKUNULMAZ.
-Not: üretime sahip parolasıyla ben giriş yapmıyorum; cihaz satırı salt-okunur DB sorgusuyla
-okunur, alias PATCH'i sahibin oturumunu ister.
-**Dal `feat/alias-ofis` (ADR-0205):** `ALIAS_OFIS` + kapalı bulunma halleri. Yolda bulunan
-hata: `işte` kalıbı açık kökle yazılmıştı, "istediğim videoyu aç" `iş` takma adlı cihazı
-seçiyordu (artık o cihaz şirket PC'si). 72 ✓ (27 yeni), önce KIRMIZI (15), dört mutasyon
-KIRMIZI. Bulut satırı okundu: GMKADIRAKBABA `9efa9d8b-b0e6-4758-a03a-387c3e20a0d2`,
-çevrimiçi, 13 yetenek. Alias için `scripts/core/set-device-aliases.ps1` (sahip çalıştırır).
-Envanter: `docs/OPERATIONS.md` "Device inventory". Alias'lar üretimde yazılı (MAIL `ev`,
-GMKADIRAKBABA `ofis`/`iş`). **Sahip yayın ONAYI verdi (2026-09-28 akşam).** Kurucu dalı main'de
-(`f30ba5f1`). Bu dalın ilk tam kapısı bir adımda kırmızıydı: `installer-strictmode` lint'i
-`scripts/lib/DeviceAliases.ps1`'de `@( )`'siz `.Count` buldu → düzeltildi. Sıra: tam kapı PASS →
-main → `-BlueGreen` → health → pin (tam sha) → zamanlayıcı döngüsü → LKG → rapor.
-
-Önceki durum: (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
-**Sahibi bekleyen iki şey:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını
-her zaman Türkçe oku") → CANDIDATE satırı okununca ADR-0201 PROVEN_REAL olur (QUALIFICATION
-30.10); (2) ADR-0203'ün sahip adımları (şirket PC'si: politika kararı, .NET 10 SDK, kurulum,
-`ssh -t root@pagentos-core "bash /opt/pagentos/app/scripts/cloud/mint-enrollment-token.sh"`).
+Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
+ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)
+**Sahibi bekleyen:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını her zaman
+Türkçe oku") → CANDIDATE satırı okununca ADR-0201 PROVEN_REAL olur (QUALIFICATION 30.10);
+(2) M19b kabul satırları: iki gerçek makinede sesle "ofis bilgisayarımda … aç".
 `feat/hand-gestures-stage1` DOKUNULMADI, sahibin "birleştir"ini bekliyor.
 Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
 
@@ -134,17 +109,22 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `00d179cd` (api-green, 2026-09-28 12:11 UTC; son iyi bilinen
-  `3a8f4637` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
-  boş. Recovery pini `00d179cd4c0914938cc9aae1f4e6a8dc16573c9c` (2026-09-28 12:13 UTC); `pagentos-bluegreen-
-  reconcile.timer` her dakika 0 ile çıkıyor. Hafıza semantik: `local-minishlab/potion-
-  multilingual-128M`, 22/22 satır gömülü; api-green ~1,36 GiB, 4640 MB kullanılabilir.
-  Yedek: host dışı kopya YOK (`no_offhost_copy` uyarısı sürüyor).
-  `scripts/cloud/mint-enrollment-token.sh` yayınla host'a geldi (`/opt/pagentos/app/...`).
+- **Üretim:** Cloud Core `be2975ae` (api-blue, 2026-09-28 15:50 UTC; son iyi bilinen
+  `00d179cd` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
+  boş. Recovery pini `be2975ae673af9e7739260abbc9eb9761bfc9bf6`; `pagentos-bluegreen-
+  reconcile.timer` her dakika 0 ile çıkıyor. Hafıza semantik, 22/22 satır gömülü; api-blue
+  ~1,40 GiB, 4666 MB kullanılabilir. Yedek: host dışı kopya YOK (`no_offhost_copy`).
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
+- **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
+  PC'si, tam yetki, 105 yetenek); GMKADIRAKBABA = `ofis` / `iş`
+  (`9efa9d8b-b0e6-4758-a03a-387c3e20a0d2`, şirket PC'si, azaltılmış yetki: operator, ekran gücü,
+  tarayıcı işçisi YOK, 13 yetenek). Alias'lar `scripts/core/set-device-aliases.ps1` ile
+  ayarlanır; envanter `docs/OPERATIONS.md` "Device inventory". Yayın yalnız ev PC'sinden.
+  Bu makinede PATH bozuk: `powershell` adıyla bulunmaz, betik `& "tam\yol.ps1"` ile çağrılır.
 - **Kapı notu:** `-Fast` kapısı tarayıcı e2e, entegrasyon ve PS paketlerini KOŞMAZ; yayın
-  betiklerine ya da `services/browser`'a dokunan iş tam `quality-gate.ps1` ister (~45 dk).
+  betiklerine, `scripts/lib`'e ya da `services/browser`'a dokunan iş tam `quality-gate.ps1`
+  ister (~45 dk). Sahibe verilen her betik önce çalıştırılır.
 - **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
   Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.
 - **Hafıza (2026-09-27):** her modda sahibin cümlesi yazım politikasından geçiyor (ADR-0201), geri çağırma semantik (ADR-0200). Önceki not: 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu

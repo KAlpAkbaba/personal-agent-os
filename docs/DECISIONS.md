@@ -15397,3 +15397,11 @@ The refusal now names what was listed - "found 0 among 1 listed (MAIL)", and a n
 row is said to be one - so the three causes can be read off the message.
 `device-aliases.tests.ps1`: 12 passed; mutations RED: the double wrap (9 tests), a list
 returned without its wrap (2), the refusal without the names (1).
+
+**ADR-0205 - released (2026-09-28 15:50 UTC).** `be2975ae673af9e7739260abbc9eb9761bfc9bf6` serves as api-blue; health 200
+`ok` with `failing_checks` empty; the recovery pin names that sha and two timer cycles
+ended `RECONCILE OK`, exit 0; last known good is `00d179cd4c0914938cc9aae1f4e6a8dc16573c9c`, written by the release. The
+released parser was run inside the serving container against the production aliases: the
+three office sentences match GMKADIRAKBABA's row and not MAIL's, the home sentence the
+reverse, and "istediğim videoyu aç" and "evden çıkınca kapat" match neither. What this
+does not prove is a spoken command travelling to the chosen machine - that is M19b.
