@@ -28,6 +28,14 @@ karakter, parola ve kart alanının DEĞERİ asla dönmez), `ref` hedefi (eski g
 (PROVEN_PROXY). **Sahibin Chrome'unda smoke KOŞULMAZ (PR-C'nin işi). Yayın YOK.**
 Açık: T3 mağazası ve T5 web postası kararda `<MAĞAZA>` / `<WEBMAIL>` olarak boş geldi;
 PR-C'den önce gerekiyor. Rerank KAPALI (ADR-0206 eki). `feat/hand-gestures-stage1` DOKUNULMAZ.
+**PR-A yazıldı (2026-09-28 gece).** İşçi birim paketi 765 ✓, fixture sitede e2e 17 ✓
+(gerçek Chromium), bulut sözleşme testi 12 ✓, altı mutasyon KIRMIZI. Yolda bulunanlar:
+(1) 120 öğe + 6000 karakter Türkçe metin 56 KB tutuyor, 48 KiB sınırını aşıyor → gözlem
+kendi bayt bütçesine (40 KiB) sığıyor; (2) işlem listesinin BEŞ aynası var (beşincisi
+`app/routines/dispatch.py`); (3) "Onayla/Paylaş/Yayınla" adlı düğme artık
+EXTERNAL_COMMUNICATION; (4) parola alanı olan sayfa `auth_wall` sınıflanıyor. **Cihaza
+ulaşması için Windows ajanının bu ağaçtan yeniden kurulması gerekir** (kurulu 0.6.0 adı
+reddeder) - PR-C'nin ön koşulu, sahibin UAC'li işi. Kalan: tam kapı → main. Yayın yok.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Fixture mağaza - gözlem</title>
+  <style>
+    .gone { display: none; }
+    .far { margin-top: 3000px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Kulaklıklar</h1>
+    <p id="status">Sepet boş.</p>
+
+    <a href="second.html">Kargo bilgisi</a>
+    <a href="https://example.org/yardim">Yardım</a>
+
+    <section aria-label="Ürün 1">
+      <h2>Kulaklık A</h2>
+      <button type="button" id="add-a" onclick="document.getElementById('status').textContent='Sepette: Kulaklık A'">Sepete ekle</button>
+    </section>
+    <section aria-label="Ürün 2">
+      <h2>Kulaklık B</h2>
+      <button type="button" id="add-b" onclick="document.getElementById('status').textContent='Sepette: Kulaklık B'">Sepete ekle</button>
+    </section>
+
+    <button type="button">Silver plan</button>
+    <button type="button">Dark mode</button>
+    <button type="button">Paylaş</button>
+    <button type="button" disabled>Stokta yok</button>
+    <button type="button" class="gone">Görünmez düğme</button>
+    <button type="button" aria-hidden="true">Yardımcı teknolojiden gizli</button>
+
+    <form id="checkout" action="result.html" method="get">
+      <label for="email">E-posta</label>
+      <input id="email" name="email" type="email" value="sahip@example.org">
+      <label for="note">Not</label>
+      <textarea id="note" name="note"></textarea>
+      <label for="pw">Parola</label>
+      <input id="pw" name="password" type="password" value="cok-gizli-parola-9731">
+      <label for="card">Kart numarası</label>
+      <input id="card" name="cardnumber" type="text" autocomplete="cc-number" value="4111111111111111">
+      <label for="cvv">Güvenlik kodu</label>
+      <input id="cvv" name="cvv" type="text" value="987">
+      <!-- No label at all: the name has to come from the placeholder, and the value
+           is the first thing a careless collector would reach for instead. -->
+      <input id="coupon" name="coupon" type="text" placeholder="İndirim kodu" value="GIZLI-KUPON-4417">
+      <input id="bare" type="text" value="ETIKETSIZ-DEGER-5520">
+      <label><input type="checkbox" name="gift" checked> Hediye paketi</label>
+      <select name="adet" aria-label="Adet">
+        <option>1</option>
+        <option>2</option>
+      </select>
+      <button type="submit">Siparişi tamamla</button>
+    </form>
+
+    <div id="host"></div>
+
+    <p class="far">Sayfanın sonu.</p>
+    <button type="button" id="far-button">Sayfanın sonundaki düğme</button>
+  </main>
+  <script>
+    const root = document.getElementById('host').attachShadow({ mode: 'open' });
+    root.innerHTML = '<div><button type="button" id="in-shadow">Gölgedeki düğme</button></div>';
+    root.getElementById('in-shadow').addEventListener('click', () => {
+      document.getElementById('status').textContent = 'Gölge düğmesine basıldı';
+    });
+  </script>
+</body>
+</html>

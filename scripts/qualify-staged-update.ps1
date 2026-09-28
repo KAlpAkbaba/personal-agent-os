@@ -503,7 +503,8 @@ try {
         "browser.inspect", "browser.find", "browser.click", "browser.fill", "browser.select_option",
         "browser.set_checked", "browser.scroll", "browser.wait", "browser.extract", "browser.snapshot",
         "browser.screenshot", "browser.download", "browser.upload", "browser.search", "browser.fetch_evidence",
-        "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop")
+        "browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop",
+        "browser.observe")
     $missingBrowser = @($expectedBrowser | Where-Object { $caps -notcontains $_ })
     Assert-True (@($missingBrowser).Count -eq 0) "the whole browser family is advertised, contract v1.2 included$(if (@($missingBrowser).Count) { ": MISSING $($missingBrowser -join ', ')" })"
     $media = @("browser.media_play", "browser.media_volume", "browser.media_status", "browser.media_stop")

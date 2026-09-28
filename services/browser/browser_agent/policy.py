@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from . import risk_markers
 from .errors import BrowserError, ErrorClass
 
 CAPABILITY_NAME_RE_SOURCE = r"^[a-z][a-z0-9_.]{1,63}$"
@@ -73,6 +74,8 @@ CAPABILITIES: tuple[str, ...] = (
     "browser.media_volume",
     "browser.media_status",
     "browser.media_stop",
+    # Contract v1.6 (ADR-0207): the page as a numbered list of what can be acted on.
+    "browser.observe",
 )
 
 #: Static risk class per capability. ``browser.click`` is intentionally absent
@@ -107,6 +110,8 @@ CAPABILITY_RISK_CLASS: dict[str, RiskClass] = {
     "browser.media_volume": RiskClass.NAVIGATE,
     "browser.media_status": RiskClass.READ,
     "browser.media_stop": RiskClass.NAVIGATE,
+    # Reads and changes nothing: no attribute is written into the page to number it.
+    "browser.observe": RiskClass.READ,
 }
 
 #: Research sessions per contract §2: READ + NAVIGATE only.
@@ -129,24 +134,10 @@ OWNER_SESSION_CLASSES: frozenset[RiskClass] = frozenset(RiskClass)
 #: All classes — used to validate a session_open payload's requested set.
 ALL_RISK_CLASSES: frozenset[RiskClass] = frozenset(RiskClass)
 
-# Accessible-name markers that make a click HIGH_IMPACT regardless of its
-# element shape (contract §4; English + Turkish).
-_HIGH_IMPACT_NAME_MARKERS: tuple[str, ...] = (
-    "buy",
-    "purchase",
-    "pay",
-    "delete",
-    "remove",
-    "send",
-    "submit order",
-    "satın al",
-    "satin al",
-    "öde",
-    "ode",
-    "sil",
-    "gönder",
-    "gonder",
-)
+# The words that make a click HIGH_IMPACT or EXTERNAL_COMMUNICATION regardless of the
+# element's shape live in ``risk_markers`` (contract v1.6 item 10): whole words and whole
+# phrases, English and Turkish, one JSON source for both sides. Until v1.6 they were
+# SUBSTRINGS here - "sil" matched "silver", "pay" matched "paylaş".
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,8 +165,8 @@ class ResolvedElement:
 def classify_click(element: ResolvedElement) -> RiskClass:
     """Classify a resolved click target per contract §4, in priority order:
 
-    1. Accessible-name HIGH_IMPACT markers (buy/purchase/pay/delete/remove/
-       send/submit order/satın al/öde/sil/gönder) — checked first because a
+    1. Accessible-name HIGH_IMPACT markers (``risk_markers.HIGH_IMPACT``, whole
+       words and phrases) — checked first because a
        "Delete" button that also happens to be a submit control is still
        HIGH_IMPACT, not merely EXTERNAL_COMMUNICATION.
     2. A submit control, or a click on a path that submits an enclosing
@@ -183,10 +174,11 @@ def classify_click(element: ResolvedElement) -> RiskClass:
     3. ``a[href]`` without an onclick handler -> NAVIGATE.
     4. Otherwise -> REVERSIBLE_WRITE.
     """
-    lowered_name = (element.name or "").strip().lower()
-    if any(marker in lowered_name for marker in _HIGH_IMPACT_NAME_MARKERS):
+    if risk_markers.is_high_impact(element.name or ""):
         return RiskClass.HIGH_IMPACT
-    if element.is_submit:
+    # v1.6: a control NAMED as one that sends ("Onayla", "Yayınla", "Post") is one,
+    # whether or not the page built it as a form's submit button.
+    if element.is_submit or risk_markers.is_external_communication(element.name or ""):
         return RiskClass.EXTERNAL_COMMUNICATION
     if element.has_href and not element.has_onclick:
         return RiskClass.NAVIGATE

@@ -1,7 +1,20 @@
 # Browser capabilities over the device protocol (M13, ADR-0050)
 
-Status: contract **v1.5** — binding for `services/api` (Cloud Core), `devices/windows-agent`
+Status: contract **v1.6** — binding for `services/api` (Cloud Core), `devices/windows-agent`
 (Session Companion) and `services/browser` (Browser Worker). Change it here first.
+
+- **v1.6 (2026-09-28, ADR-0207, PR-A): the page as a numbered list, and targets that say WHICH
+  element** — `browser.observe` (§1, §3c), the `ref` target strategy and `nth` (§3), risk
+  markers matched as whole words from `browser-risk-markers.json` (§4), and
+  `contracts["browser.observe"] = 1` in the hello. Additive: every v1.5 name, payload and
+  result is unchanged. Two behaviours are NARROWER than v1.5 and one is wider, all in §4's
+  click classification: a name that merely CONTAINS a marker ("silver", "mode", "paylaş"
+  for `pay`) is no longer HIGH_IMPACT; the Turkish checkout and subscription phrases that
+  v1.5 missed now are; and a control NAMED as one that sends ("Onayla", "Yayınla", "Post")
+  is EXTERNAL_COMMUNICATION even when the page did not build it as a form's submit button.
+  Items 4–9 and 11 of ADR-0207's proposal (`press`, `type`, `hover`, frames by index/host,
+  closed shadow roots, `dialog`, `wait` for `stable`) are NOT in v1.6; they land with the
+  loop that first needs them.
 
 - v1 (M13, ADR-0050): the family, sessions, risk classes, the error taxonomy, §3's payloads.
 - v1.1 (2026-09-04, ADR-0050 addendum): the persistent research session, Google through the
@@ -82,6 +95,7 @@ Per-operation names (each is a device command `capability`):
 | `browser.media_volume` | NAVIGATE | v1.2. Ramp the media element's own volume inside the page. |
 | `browser.media_status` | READ | v1.2. Read the media element. Changes nothing. |
 | `browser.media_stop` | NAVIGATE | v1.2. Pause, then close the session. Idempotent. |
+| `browser.observe` | READ | v1.6. The page as a bounded, numbered list of what can be acted on (§3c). Changes nothing. |
 
 Names match `^[a-z][a-z0-9_.]{1,63}$`. Anything else in the `browser.` namespace fails with
 `capability_missing`.
@@ -212,9 +226,21 @@ Browser-family commands may run up to 120 s (`InteractiveCapabilityExecutor` rai
 for `browser.*`); Cloud Core sends `timeout_s` 60–120.
 
 `target` is a semantic `TargetSpec` object exactly as `browser_agent.targets.TargetSpec`
-accepts it: one of `role`(+`name`), `text`, `label`, `placeholder`, `test_id`; optional
-`exact`; optional `frame` (iframe `name`). Coordinates/CSS/XPath are rejected with
-`validation_error`.
+accepts it: one of `role`(+`name`), `text`, `label`, `placeholder`, `test_id`, or (v1.6)
+`ref`; optional `exact`; optional `frame` (iframe `name`). Coordinates/CSS/XPath are
+rejected with `validation_error`.
+
+**v1.6 — saying WHICH element.** Until v1.6 a target that matched twice resolved to the
+first match and nothing could say otherwise.
+
+- `{"ref":"e12","observation_id":"obs-…"}` names the element a `browser.observe` numbered
+  (§3c). `observation_id` is required; `name`, `exact` and `nth` do not apply to a `ref`.
+  Accepted by every operation that takes a `target`.
+- `nth` (integer, 0–199) on any of the five semantic strategies picks among the matches:
+  `{"role":"button","name":"Sepete ekle","nth":1}` is the second. An `nth` beyond the
+  matches is `ui_target_not_found`. Without `nth` the first match is used, as before.
+- There is still no way to pass a selector: the path a `ref` resolves through is recorded
+  by the worker when it observes and is never read from a payload.
 
 Navigation result (`navigate`, `back`, `forward`, `tab_select`, `wait` with navigation):
 
@@ -276,7 +302,9 @@ Google's own domains are excluded; each result carries `rank`, `title`, `url`
 (`/url?q=` redirects unwrapped) and the visible snippet when present. `max_results` ≤ 20.
 `bing`/`brave` remain selectable by name only. **Schema versioning**: the result carries
 `schema_version` (2 = provider evidence present), and the hello / `browser.worker_status`
-carry `contracts: {"browser.search": 2}`; a consumer checks the contract BEFORE searching and
+carry `contracts: {"browser.search": 2}` (v1.6: also `"browser.observe": 1` — a consumer
+checks it BEFORE planning a task, so an agent installed before v1.6 is a named contract
+mismatch and never a failure inside one); a consumer checks the contract BEFORE searching and
 reports a *contract/version mismatch* naming the installed worker version when it is lower,
 never a missing-property failure (an installed worker predating this schema answered a real
 owner run without evidence on 2026-09-03).
@@ -465,9 +493,65 @@ semantics (including the bounded wait for the browser process to actually exit, 
 closed — the alarm must end even when the tab did not survive. `media_stop` and `session_open`
 results also carry `lifecycle` (§2), as every session-scoped result does.
 
+## 3c. Observation (contract v1.6, ADR-0207)
+
+`browser.observe` payload `{"session_id":"…","max_elements":120,"max_text_chars":6000,"scope":"page|viewport"}` →
+
+```json
+{"observation_id":"obs-3f9c2a71b0de","url":"…","title":"…","page_kind":"ok","scope":"page",
+ "elements":[{"ref":"e1","role":"button","name":"Sepete ekle","tag":"button","state":[],
+              "in_form":false,"submits":false,"href_host":null,"in_viewport":true,
+              "sensitive":false,"risk_hint":"REVERSIBLE_WRITE"}],
+ "element_count":1,"elements_seen":1,"text":"…","truncated":false,
+ "elements_truncated":false,"text_truncated":false,"injection_markers":0}
+```
+
+- **Bounds.** `max_elements` ≤ 120 and `max_text_chars` ≤ 6000 (defaults and ceilings; a caller
+  may lower them, never raise them). An element's `name` is at most 80 characters. Those are
+  counts of CHARACTERS; the result cap of §3 is 48 KiB of UTF-8, and 120 names of Turkish
+  letters with 6000 characters of Turkish text weigh 56 KB. So an observation also fits a
+  byte budget of its own (40 KiB for `elements` and `text` together), by its own
+  priorities: the text is cut first, never below 1000 characters; then elements are
+  dropped from the END of the list; `text_truncated` and `elements_truncated` say which.
+  A reference that was cut from the result does not exist.
+- **Order.** Hidden elements (no box, `display:none`, `visibility:hidden`, `aria-hidden`,
+  `hidden`, `inert`) are not listed; a DISABLED one is, with `disabled` in `state`. With
+  `scope: "page"` the elements in the viewport come first, then the rest in document order;
+  `scope: "viewport"` lists only what is on the screen. The caps apply after ordering, so
+  what is cut is always the far end of the page, and `elements_truncated` says so.
+- **`state`** is a list drawn from `disabled`, `readonly`, `required`, `checked`,
+  `not_checked`, `expanded`, `not_expanded`, `selected`, `has_value`, `empty`, `in_shadow`.
+- **The value of a field is never returned** — not for a password, not for a card number, not
+  for an ordinary text box. `has_value` / `empty` is all an observation says about content.
+  The collector reads a boolean; there is no value in the worker to leak.
+- **`sensitive: true`** marks a field the consumer must never fill: `type="password"`, an
+  `autocomplete` token naming a credential or a card (`current-password`, `new-password`,
+  `one-time-code`, `cc-*`), or a name/id carrying one of a closed list of whole words
+  (password, parola, şifre, PIN, CVV/CVC, card number, kart numarası, IBAN, TC kimlik, OTP, …).
+- **`risk_hint`** is what acting on the element would be by §4's rule, computed from the same
+  inputs. It is a HINT for the consumer's gate; the worker's own classification when the
+  command arrives stays the authority, and a consumer that gated lower than the worker
+  classifies is refused (`security_scope_error`).
+- **Nothing is written into the page.** No attribute, no property, no global. The numbering
+  lives in the worker's memory. Open shadow roots are walked; iframes are not descended in
+  v1.6.
+- **`text`** is page text, verbatim, main/article region first — data, exactly as in
+  `fetch_evidence`. `injection_markers` counts the §6 patterns in the text AND in the element
+  names; a name is page content like any other.
+- **A reference lives as long as its observation.** A session holds ONE observation: the
+  last. Its `ref`s are refused with `ui_state_changed` (retryable — observe again), naming
+  the reason in `evidence.reason`, when: a newer observation replaced it
+  (`other_observation`); the session's current tab is another one (`other_tab`); the tab's
+  main frame navigated or its URL changed since (`navigated`); the element is gone, is no
+  longer unique at its place, or is no longer the element that was observed — another tag,
+  role or name (`gone`, `not_unique`, `changed`, `detached`); or no observation was ever
+  taken (`no_observation`). A reference is never resolved to "something similar". A `ref`
+  the observation never handed out is `validation_error`.
+
 ## 4. Risk classes and enforcement
 
-`READ` (inspect, find, wait, extract, snapshot, screenshot, worker_status, media_status) ·
+`READ` (inspect, find, wait, extract, snapshot, screenshot, worker_status, media_status,
+observe) ·
 `NAVIGATE` (session_open/close, navigate, back, forward, tabs, scroll, search, fetch_evidence,
 media_play, media_volume, media_stop, click on a plain link) · `REVERSIBLE_WRITE` (fill, select_option, set_checked, click on a
 non-submitting control) · `EXTERNAL_COMMUNICATION` (click on a submit control or inside a
@@ -475,9 +559,20 @@ non-submitting control) · `EXTERNAL_COMMUNICATION` (click on a submit control o
 click the worker classifies as purchase/delete/send by accessible name markers such as
 buy/purchase/pay/delete/remove/send/submit order/satın al/öde/sil/gönder).
 
-The worker classifies `click` by the resolved element (`a[href]` without `onclick` → NAVIGATE;
-`button`/`input` with `type=submit` or inside a form → EXTERNAL_COMMUNICATION; marker names →
-HIGH_IMPACT; otherwise REVERSIBLE_WRITE) BEFORE acting and refuses with
+**v1.6 — the markers are whole words, from one file.** `packages/protocol/browser-risk-markers.json`
+holds two lists, `high_impact` and `external_communication`, English and Turkish, and both
+sides read it (the worker carries a verbatim copy, held identical by a test, because an
+installed worker has no repository beside it). A marker matches only as a WHOLE word or
+phrase of the accessible name after folding — NFKC, zero-width characters removed,
+whitespace collapsed, casefold, Turkish letters folded to ASCII — so `sil` does not match
+"silver", `öde` does not match "mode" and `pay` does not match "paylaş", while "Siparişi
+tamamla", "Onayla ve öde", "Abone ol" and "Place order" do. Every inflected form that
+should match is written out in the file; nothing is matched by stem.
+
+The worker classifies `click` by the resolved element (`high_impact` marker names →
+HIGH_IMPACT; `button`/`input` with `type=submit` or inside a form, or (v1.6) an
+`external_communication` marker name → EXTERNAL_COMMUNICATION; `a[href]` without `onclick`
+→ NAVIGATE; otherwise REVERSIBLE_WRITE) BEFORE acting and refuses with
 `security_scope_error` (`retryable:false`, message names the class) when the session policy
 does not allow it. Research sessions are READ+NAVIGATE. Cloud Core's research workflow only
 ever issues READ/NAVIGATE operations; anything else goes through the confirmation framework.

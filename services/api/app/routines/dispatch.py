@@ -470,6 +470,11 @@ BROWSER_ACTION_ALLOWLIST: frozenset[str] = frozenset(
         "media_volume",
         "media_status",
         "media_stop",
+        # Contract v1.6 (ADR-0207): READ - the page as a numbered list. Admitting the
+        # NAME here is what the mirror test demands; it is not a task loop, and a routine
+        # that observes can still act only through the operations above, each gated by
+        # its own risk class (ADR-0207 decision 3: no unattended task).
+        "observe",
     }
 )
 
