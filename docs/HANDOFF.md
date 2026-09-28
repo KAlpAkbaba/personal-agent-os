@@ -15,33 +15,23 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Tarayıcı görev döngüsü PR-A — observe (ADR-0207, sözleşme v1.6), dal `feat/browser-observe`
-(main `4603804e`'den), ev PC'si, 2026-09-28.** ADR-0207 sahibince KABUL edildi (5 karar
-ADR'nin sonunda: step-up = read-back + sahibin sözü; gönderen formlar read-back ardında,
-istisnasız; PR-A→D boyunca gözetimsiz görev yok; ödeme KALICI olarak kapsam dışı; yasak liste
-işveren sistemleri + Kolay Monitor dahil, `packages/protocol` altında tek JSON).
-PR-A kapsamı: sözleşme v1.6 madde 1, 2, 3, 10, 12 — `browser.observe` (120 öğe / 6000
-karakter, parola ve kart alanının DEĞERİ asla dönmez), `ref` hedefi (eski gözlemin numarası
-`ui_state_changed`), `nth`, `packages/protocol/browser-risk-markers.json` (sözcük sınırlı;
-"silver/mode/paylaş" yüksek etkili DEĞİL; Türkçe ödeme/onay/abonelik sözleri var),
-`contracts["browser.observe"]`. Altı test dosyası, dört mutasyon KIRMIZI, fixture sitede e2e
-(PROVEN_PROXY). **Sahibin Chrome'unda smoke KOŞULMAZ (PR-C'nin işi). Yayın YOK.**
-Açık: T3 mağazası ve T5 web postası kararda `<MAĞAZA>` / `<WEBMAIL>` olarak boş geldi;
-PR-C'den önce gerekiyor. Rerank KAPALI (ADR-0206 eki). `feat/hand-gestures-stage1` DOKUNULMAZ.
-**PR-A yazıldı (2026-09-28 gece).** İşçi birim paketi 765 ✓, fixture sitede e2e 17 ✓
-(gerçek Chromium), bulut sözleşme testi 12 ✓, altı mutasyon KIRMIZI. Yolda bulunanlar:
-(1) 120 öğe + 6000 karakter Türkçe metin 56 KB tutuyor, 48 KiB sınırını aşıyor → gözlem
-kendi bayt bütçesine (40 KiB) sığıyor; (2) işlem listesinin BEŞ aynası var (beşincisi
-`app/routines/dispatch.py`); (3) "Onayla/Paylaş/Yayınla" adlı düğme artık
-EXTERNAL_COMMUNICATION; (4) parola alanı olan sayfa `auth_wall` sınıflanıyor. **Cihaza
-ulaşması için Windows ajanının bu ağaçtan yeniden kurulması gerekir** (kurulu 0.6.0 adı
-reddeder) - PR-C'nin ön koşulu, sahibin UAC'li işi. Kalan: tam kapı → main. Yayın yok.
-**İlk tam kapı KIRMIZI (2 adım), ikisi de aynı eklemenin C# yansıması:**
-`DeviceVoiceCapabilityTests` manifest boyutunu 105'e (ve 44'e) sabitlemişti → 106 / 45;
-aşamalı güncelleme nitelemesi de C# testi düştüğü için ESKİ Release ikilisini yargıladı
-(`MISSING browser.observe`). Sayılar güncellendi, `dotnet test` 1242 + 185 ✓,
-`qualify-staged-update.ps1` 89 ✓. İşlem listesine ad eklemek ALTI yere dokunuyor:
-beş ayna + sabitlenmiş manifest sayıları (C# testi ve `DEVICE_PROTOCOL.md`).
+Yok. (2026-09-28 gece: tarayıcı görev döngüsü PR-A main'de - sözleşme v1.6 madde 1, 2, 3,
+10, 12; yayınlanmadı; sahibin tetikleyebileceği hiçbir şey değişmedi.)
+**Sıradaki: PR-B** (ADR-0207): `app/webtask/` döngüsü saf fonksiyon olarak, planlayıcı
+arayüzü (kural tablosu + sahte), kapı (risk sınıfı + `confirmation_gate` ile read-back),
+doğrulayıcı, bütçeler, döngü tespiti, yasak liste JSON'u (`packages/protocol`, işveren
+sistemleri ve Kolay Monitor dahil), `BrowserTaskWorkflow`; T1-T5 sahte tarayıcı + sahte
+planlayıcıyla. v1.6'nın kalan maddeleri (`press`, `type`, `hover`, çerçeveler, `dialog`,
+`stable`) döngü ilk ihtiyaç duyduğunda gelir.
+**Bir işlem adı eklemek ALTI yere dokunur:** sözleşme, işçi, C# host listesi, kurulum
+doğrulaması, bulut izin listesi (`app/routines/dispatch.py`) + sabitlenmiş manifest sayıları
+(`DeviceVoiceCapabilityTests`, `DEVICE_PROTOCOL.md`). Tam kapı olmadan görünmez.
+**Sahibi bekleyenler:** (1) T3 mağazası ve T5 web postası (kararda `<MAĞAZA>` / `<WEBMAIL>`
+olarak boş geldi; PR-C'den önce gerekli); (2) PR-C'den önce MAIL'de Windows ajanının bu
+ağaçtan yeniden kurulması (UAC) - kurulu 0.6.0 `browser.observe` adını reddeder;
+(3) yerel modda bir cümle (ADR-0201, 30.10); (4) M19b sesli deneme.
+Rerank KAPALI (ADR-0206 eki: hafıza >= 300 satır ya da CPX41).
+`feat/hand-gestures-stage1` DOKUNULMADI.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)
