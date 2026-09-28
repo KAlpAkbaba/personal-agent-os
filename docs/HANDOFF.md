@@ -15,49 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**EV PC'si (MAIL), 2026-09-28: ADR-0203 dalını main'e al + ADR-0202 yayını + yeniden pin.**
-Sahibin sırası: (1) `feat/second-device-enrollment` (`0627c64b`) farkını oku; (2) TAM kalite
-kapısı (`quality-gate.ps1`, `-Fast` değil) + `mint-enrollment-token.tests.ps1` +
-`reconcile_build_state.py`; kırmızıysa dalda düzelt, itme, bildir; (3) yeşilse main'e al, push;
-(4) main HEAD'i `-BlueGreen` ile yayınla (asla `2>&1`; 85 = model indirilemedi), health
-`failing_checks` boş olana dek doğrula, pini TAM 40 haneli sha ile yenile, zamanlayıcının bir
-döngüsünü izle, LKG'yi raporla (elle değiştirme); (5) `mint-enrollment-token.sh` host'ta
-var mı; (6) rapor, temiz checkout. Şirket PC'si bu sırada checkout'a dokunmuyor.
-`feat/hand-gestures-stage1` DOKUNULMAZ. Önceki durakta SSH, Tailscale ek doğrulamasına
-takılmıştı (sahibin girişi) — yine isterse yayın orada durur.
-**Tam kapı ilk koşuda KIRMIZI (bu dalın hatası değil, main'de de vardı):** `Browser agent
-lint + tests` — `test_google_ui_e2e.py`'deki iki sahte `build_search_url`, `c71fc461`'in eklediği
-`region` anahtarını kabul etmiyordu (6 test TypeError). `-Fast` bu adımı koşmadığı için
-görünmemişti. Sahteler gerçek imzaya getirildi; dosya 15 ✓. Diğer 31 adım, mint 21 ✓,
-`reconcile_build_state` uyumlu.
-
-**İkinci cihaz: şirket PC'si (ADR-0203, M29 ilk adım) — 2026-09-28, makine GMKADIRAKBABA.**
-Dal `feat/second-device-enrollment` (main `2da05c94`'ten). Bu oturum ŞİRKET PC'sinde
-(`kadir.akbaba`, alan `turka.com`, repo `C:\AI\...`; bu makinede `E:` yok — betiklerdeki
-`E:\AI` varsayılanlarına DOKUNULMADI). Bağlayıcı: ev PC'den (MAIL) hiçbir anahtar buraya
-kopyalanmaz; yayın betiği bu makinede çalıştırılmaz; LKG elle düzenlenmez; servis kurulumu
-sahibin onayı olmadan çalıştırılmaz. Yapılan: salt okunur teşhis, kayıt akışının çıkarılması,
-`scripts/cloud/mint-enrollment-token.sh` (token yalnız Cloud Core'un loopback'inden
-üretilebiliyor), ADR-0203, BUILD_STATE girişi. Kurulum ÇALIŞTIRILMADI → `READY_FOR_OWNER`.
-Ev PC'deki oturumla aynı anda düzenleme yapılmaz: bu dal yalnız bu makineden itilir.
-
-**Hafıza yayını yapıldı; recovery pini ADR-0202'yi bekliyor (2026-09-27 gece).**
-PR-1 + PR-2 main'de (`3a8f4637`, merge `--no-ff`) ve **üretimde** (api-blue). Pin
-yenilemesi BAŞARISIZ oldu ve eski pin geri kondu: mutabakat, kendi eski hata işaretinin
-bozduğu sağlığı "renk bozuk" diye okuyup 84 ile çıkıyor, işaret de bu yüzden hiç
-silinmiyor (2026-09-18 kilidinin mutabakat yolundaki ikizi). **Düzeltme hazır, dal
-`fix/reconcile-own-marker`** (ADR-0202): `degraded_only_by_own_marker`, PS paketi 82 ✓,
-dört mutasyon KIRMIZI. **Sahibin sözü gerekiyor** (talimat "başarısız adımda dur" idi):
-"yayınla" derse → dalı main'e al → `release-cloud-core.ps1 -BlueGreen` →
-`install-recovery-supervisor.sh <main'in tam sha'sı>` → `failing_checks` boşalmalı.
-Ayrıca sahipten: yerel modda bir cümle söylemesi ("Bundan sonra araştırma raporlarını her
-zaman Türkçe oku") — satırı ben okurum (üretime sahip parolasıyla ben girmiyorum).
-`feat/hand-gestures-stage1` DOKUNULMADI.
-**2026-09-28: sahip "Yayınla" dedi.** Sıra: bu dalda tam kapı + PS paketi + recovery-supervisor
-testleri → merge → `-BlueGreen` → eski işareti sil → pin → doğrula → LKG → yerel mod kanıtı.
-İlk tam kapı bir test yakaladı: `test_systemd_onfailure_units` işaretin adının yalnız `rm -f`
-satırlarında geçmesini istiyordu; ADR-0202 işarete BAKIYOR (`[ -f`). Koruma gerçek iddiasına
-çevrildi (silen var, yazan yok; bakmak serbest), iki mutasyon KIRMIZI.
+Yok. (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
+**Sahibi bekleyen iki şey:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını
+her zaman Türkçe oku") → CANDIDATE satırı okununca ADR-0201 PROVEN_REAL olur (QUALIFICATION
+30.10); (2) ADR-0203'ün sahip adımları (şirket PC'si: politika kararı, .NET 10 SDK, kurulum,
+`ssh -t root@pagentos-core "bash /opt/pagentos/app/scripts/cloud/mint-enrollment-token.sh"`).
+`feat/hand-gestures-stage1` DOKUNULMADI, sahibin "birleştir"ini bekliyor.
 Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
 
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
@@ -146,15 +109,17 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `3a8f4637` (api-blue, 2026-09-27 20:29 UTC; son iyi bilinen
-  `2dcf434a`) + `godseye` aux servisi. Hafıza **semantik**: `local-minishlab/potion-
-  multilingual-128M`, 256 boyut, 22/22 satır gömülü. api-blue ~1,43 GiB tutuyor; tek renkle
-  4657 MB kullanılabilir. Sağlık `degraded`, tek sebep `backup` ←
-  `pagentos-bluegreen-reconcile.service` hata işareti. **Recovery pini ESKİ** (2026-09-21
-  tarihli bundle; zamanlayıcı her dakika 83 ile reddediyor) — ADR-0202 yayını + yeniden pin
-  gerekiyor. Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-
-  bluegreen.sh --rollback`.
+- **Üretim:** Cloud Core `00d179cd` (api-green, 2026-09-28 12:11 UTC; son iyi bilinen
+  `3a8f4637` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
+  boş. Recovery pini `00d179cd4c0914938cc9aae1f4e6a8dc16573c9c` (2026-09-28 12:13 UTC); `pagentos-bluegreen-
+  reconcile.timer` her dakika 0 ile çıkıyor. Hafıza semantik: `local-minishlab/potion-
+  multilingual-128M`, 22/22 satır gömülü; api-green ~1,36 GiB, 4640 MB kullanılabilir.
+  Yedek: host dışı kopya YOK (`no_offhost_copy` uyarısı sürüyor).
+  `scripts/cloud/mint-enrollment-token.sh` yayınla host'a geldi (`/opt/pagentos/app/...`).
+  Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
+- **Kapı notu:** `-Fast` kapısı tarayıcı e2e, entegrasyon ve PS paketlerini KOŞMAZ; yayın
+  betiklerine ya da `services/browser`'a dokunan iş tam `quality-gate.ps1` ister (~45 dk).
 - **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
   Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.
 - **Hafıza (2026-09-27):** her modda sahibin cümlesi yazım politikasından geçiyor (ADR-0201), geri çağırma semantik (ADR-0200). Önceki not: 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu
