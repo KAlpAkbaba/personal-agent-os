@@ -25,6 +25,13 @@ yükleme, çift başına ms, RSS; **renk başına +700 MB'ı geçerse varsayıla
 (2) kod + prefetch (uid 10001, çıkış 85) + eksik modelde `none`'a düşüş + health;
 (3) testler + mutasyon; (4) TAM kapı → main. **Yayın YAPILMAZ**: ölçüm tablosu + öneri ile
 sahibin onayı istenir. `feat/hand-gestures-stage1` DOKUNULMAZ.
+**Ölçüm yapıldı (2026-09-28):** embedder tek başına 10 sorgunun 7'sinde doğru hafızayı
+başa koyuyor; `bge-reranker-v2-m3` int8 10/10 ama renk başına **+870 MB** (kural 700) →
+**varsayılan `none` kaldı**; `jina-v2` int8 +583 MB ama CC-BY-NC ve 9/10. Kod, prefetch
+(tek çıkış 85), health (`checks.memory.reranker`), eksik modelde `none`'a düşüş yazıldı;
+`test_memory_rerank` 24 ✓, PS paketi 85 ✓, on bir mutasyon KIRMIZI. Gerçek model gerçek
+`MemoryRuntime`'da bu makinede çalıştı. Modeller `E:\AI\.model-cache` altında (4 GB,
+depo dışı). Kalan: tam kapı → main. Yayın yok.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
 ADR-0203/0204/0205 main'de ve üretimde; pin yenilendi.)

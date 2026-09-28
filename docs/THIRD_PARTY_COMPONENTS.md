@@ -167,3 +167,32 @@ Role: the per-format providers behind `PagentOS.SessionCompanion/Documents/` (`I
 - `PdfPig` **0.1.16** (Apache-2.0; UglyToad, https://github.com/UglyToad/PdfPig) — PDF page text in content order (`ContentOrderTextExtractor`) and the information dictionary's title. Opened with the companion's `BoundedFilterProvider` through `ParsingOptions.FilterProvider`, which wraps the library's own Flate / LZW / RunLength filters with a streaming length count so no stream inflates past the companion's bounds. Pulls its own `PdfPig.*` assemblies (same version, Apache-2.0); no native code.
 
 Upgrade rule: bump the pin, run the documents lab (`dotnet test … --filter FullyQualifiedName~Documents`: every fixture against its expected extract), then the whole agent project.
+
+## Local memory rerank model (ADR-0206, 2026-09-28) - built, OFF by default
+
+Role: the cross-encoder behind `app.memory.rerank.LocalReranker` - re-reads the top
+candidates of a memory search, query and memory together. No key, no network call per
+query. **Not loaded unless `PAGENTOS_MEMORY_RERANK_PROVIDER=local`**; the default is
+`none` because of what it costs in memory (ADR-0206).
+
+- `fastembed` `TextCrossEncoder` (Apache-2.0) - the same pinned package as the embedder.
+- `BAAI/bge-reranker-v2-m3` (Apache-2.0; https://huggingface.co/BAAI/bge-reranker-v2-m3),
+  loaded from its ONNX export `onnx-community/bge-reranker-v2-m3-ONNX`
+  (https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX), file
+  `onnx/model_int8.onnx` (571 MB) - the default model when the provider is on.
+  Multilingual, Turkish included. The fp32 export (2.27 GB) is registered and measured,
+  and too large for the Cloud Core.
+- `jinaai/jina-reranker-v2-base-multilingual` (**CC-BY-NC-4.0 - non-commercial**;
+  https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual), int8 export
+  registered and measured (280 MB file, the smallest footprint). Usable only while this
+  system stays what it is - one owner's personal, non-commercial assistant. It is NOT the
+  default, and choosing it is an owner decision that the licence is part of.
+
+Adapter boundary: `Reranker` protocol (`app/memory/rerank.py`). Only models listed in
+`CUSTOM_MODELS` or by fastembed load. Fetched ONCE per host by the release script into
+`/mnt/pagentos-data/models`; the API loads with `local_files_only` and never downloads.
+Fallback: no reranker, with the reason on `/v1/system/health` (`checks.memory.reranker`).
+
+Upgrade rule: bump the pin, run `tests/unit/test_memory_rerank.py`, re-run
+`scripts/core/bench-memory-rerank.py` (quality, milliseconds per pair AND memory), and
+only then change a default.

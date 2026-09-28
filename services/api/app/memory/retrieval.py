@@ -18,6 +18,17 @@ Hybrid rerank (documented weight formula):
 Candidates are the union of semantic top-N and keyword/structured hits; ties
 break on memory id so ordering is fully deterministic.
 
+Semantic rerank (ADR-0206), only when a reranker is passed AND there is query text:
+the top ``rerank_top_k`` rows of the ordering above are read, query and memory together,
+by a cross-encoder, and for those rows its answer stands where the cosine stood:
+
+    score = 0.55 * rerank             # 0..1, the cross-encoder's logit squashed
+          + the recency / confidence / explicit / project terms, unchanged
+
+Rows below the top-K keep their score and their place after the reranked ones. With no
+reranker the function is the one it has always been - pinned by a test, not by intent.
+A reranker that fails while scoring costs the turn nothing but the rerank.
+
 Invariants:
 - status != active (superseded) rows are ALWAYS excluded.
 - A project-scoped query returns ONLY rows of that project (strict equality;
@@ -37,16 +48,22 @@ from typing import Any
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session
 
+from app.logging import get_logger
 from app.memory.embedding import Embedder, cosine_similarity
 from app.memory.lifecycle import aware, utcnow
 from app.memory.models import Memory, MemoryEmbedding
+from app.memory.rerank import DEFAULT_TOP_K, Reranker
 from app.memory.types import MemoryStatus, WriteStage
+
+logger = get_logger("app.memory.retrieval")
 
 SEMANTIC_CANDIDATES = 50
 KEYWORD_CANDIDATES = 50
 DEFAULT_K = 10
 
 W_SEMANTIC = 0.55
+#: ADR-0206: the cross-encoder's answer takes the cosine's place, at the cosine's weight.
+W_RERANK = W_SEMANTIC
 W_RECENCY = 0.15
 W_CONFIDENCE = 0.15
 W_EXPLICIT = 0.10
@@ -210,10 +227,13 @@ def hybrid_search(
     *,
     k: int = DEFAULT_K,
     now: datetime | None = None,
+    reranker: Reranker | None = None,
+    rerank_top_k: int = DEFAULT_TOP_K,
 ) -> list[ScoredMemory]:
     """Union of semantic + keyword/structured candidates, reranked by the
     documented weighted score. With no query text this degrades to structured
-    retrieval ranked by recency/confidence/explicit."""
+    retrieval ranked by recency/confidence/explicit. ``reranker`` (ADR-0206) re-reads
+    the top ``rerank_top_k`` of that ordering; ``None`` changes nothing."""
     now = now or utcnow()
     candidates: dict[uuid.UUID, tuple[Memory, float]] = {}
 
@@ -245,7 +265,35 @@ def hybrid_search(
             ScoredMemory(memory=memory, score=sum(components.values()), components=components)
         )
     results.sort(key=lambda r: (-r.score, str(r.memory.id)))
+    if reranker is not None and query_text and results:
+        results = _rerank_head(results, reranker, query_text, rerank_top_k)
     return results[:k]
+
+
+def _rerank_head(
+    ordered: list[ScoredMemory], reranker: Reranker, query_text: str, top_k: int
+) -> list[ScoredMemory]:
+    """The top ``top_k`` of ``ordered``, re-scored by the cross-encoder and re-sorted; the
+    rest follow in the order they had. Any failure returns ``ordered`` untouched: a turn
+    must never lose its memories because the model that refines their order fell over."""
+    head, tail = ordered[: max(1, top_k)], ordered[max(1, top_k) :]
+    try:
+        scores = reranker.score(query_text, [str(item.memory.text or "") for item in head])
+    except Exception as exc:  # noqa: BLE001 - the reason is logged, the text never is
+        logger.warning("memory_rerank_failed", reason=type(exc).__name__, candidates=len(head))
+        return ordered
+    if len(scores) != len(head):
+        logger.warning("memory_rerank_failed", reason="score_count_mismatch", candidates=len(head))
+        return ordered
+    reranked: list[ScoredMemory] = []
+    for item, score in zip(head, scores, strict=True):
+        components = {name: value for name, value in item.components.items() if name != "semantic"}
+        components["rerank"] = W_RERANK * max(0.0, min(1.0, float(score)))
+        reranked.append(
+            ScoredMemory(memory=item.memory, score=sum(components.values()), components=components)
+        )
+    reranked.sort(key=lambda r: (-r.score, str(r.memory.id)))
+    return reranked + tail
 
 
 def best_similarity(
@@ -309,6 +357,7 @@ __all__ = [
     "W_EXPLICIT",
     "W_PROJECT",
     "W_RECENCY",
+    "W_RERANK",
     "W_SEMANTIC",
     "apply_filters",
     "best_similarity",

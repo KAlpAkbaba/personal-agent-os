@@ -403,7 +403,19 @@ def memory_search(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     filters = RetrievalFilters(memory_class=_memory_class(arguments).value if requested else None)
 
     try:
-        hits = hybrid_search(db, embedder, query or None, filters, k=limit, now=ctx.now)
+        # ADR-0206: the runtime's reranker, never one made here (the same rule as the
+        # embedder above); a runtime without one searches exactly as before.
+        runtime = ctx.live.get("memory_runtime")
+        hits = hybrid_search(
+            db,
+            embedder,
+            query or None,
+            filters,
+            k=limit,
+            now=ctx.now,
+            reranker=getattr(runtime, "reranker", None),
+            rerank_top_k=int(getattr(runtime, "rerank_top_k", 20) or 20),
+        )
     except MemorySubsystemError as exc:
         raise _voice_error(exc) from exc
 

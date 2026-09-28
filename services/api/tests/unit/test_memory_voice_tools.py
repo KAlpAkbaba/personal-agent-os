@@ -700,3 +700,54 @@ def test_the_search_subject_is_what_is_left_of_the_question(said: str, query: st
     from app.voice.intents import memory_query_of
 
     assert memory_query_of(said) == query
+
+
+# --- ADR-0206: the spoken search is reranked by the runtime's reranker, or not at all ----
+
+
+class _TableReranker:
+    model_id = "fake-reranker"
+
+    def __init__(self, favourite: str) -> None:
+        self.favourite = favourite
+        self.calls: list[tuple[str, list[str]]] = []
+
+    def score(self, query: str, documents: list[str]) -> list[float]:
+        self.calls.append((query, list(documents)))
+        return [0.99 if self.favourite in text else 0.01 for text in documents]
+
+
+def test_the_spoken_search_asks_the_runtime_s_reranker(db):
+    _remember(_Ctx(db), "İçecek olarak sabahları kahve tercih ederim.")
+    _remember(_Ctx(db, call_id="c2"), "İçecek olarak akşamları çay tercih ederim.")
+    plain = memory_search(_Ctx(db, call_id="c3"), {"query": "içecek tercihi"})
+    last = plain["memories"][-1]
+
+    class _Reranking:
+        embedder = EMBEDDER
+        reranker = _TableReranker(str(last["text"]))
+        rerank_top_k = 20
+
+    answer = memory_search(
+        _Ctx(db, call_id="c4", runtime=_Reranking()), {"query": "içecek tercihi"}
+    )
+
+    assert answer["memories"][0]["memory_id"] == last["memory_id"]
+    assert _Reranking.reranker.calls and _Reranking.reranker.calls[0][0] == "içecek tercihi"
+
+
+def test_a_runtime_with_no_reranker_searches_exactly_as_before(db):
+    """`_Runtime` above has no `reranker` attribute at all - the shape every runtime had
+    before ADR-0206, and the shape a test double written before it still has."""
+    _remember(_Ctx(db), "İçecek olarak sabahları kahve tercih ederim.")
+    _remember(_Ctx(db, call_id="c2"), "İçecek olarak akşamları çay tercih ederim.")
+
+    class _Off:
+        embedder = EMBEDDER
+        reranker = None
+        rerank_top_k = 20
+
+    bare = memory_search(_Ctx(db, call_id="c3"), {"query": "içecek tercihi"})
+    off = memory_search(_Ctx(db, call_id="c4", runtime=_Off()), {"query": "içecek tercihi"})
+    assert [m["memory_id"] for m in off["memories"]] == [m["memory_id"] for m in bare["memories"]]
+    assert off["speech"] == bare["speech"]
