@@ -15308,3 +15308,15 @@ creates nothing (a root that does not exist is fresh and still does not exist af
 after line 449 has also only ever run where an agent already existed; this fix removes the
 first stop, and the owner's next run is what finds out whether there is a second. If there
 is, it is this work item's, not a new one.
+
+**ADR-0204 addendum (home PC, 2026-09-28) — the refusal says one thing.** Run unelevated,
+the installer printed its refusal and then a second error, "The variable
+'$script:InstallLog' cannot be retrieved because it has not been set": a `trap` belongs to
+the whole script scope, so the throw from `Assert-Elevated` landed in a trap that reads a
+variable assigned only after it. The variable is now declared before the refusal and the
+trap asks whether a run began ("INSTALL NOT STARTED", no log path, no reassurance about a
+deployment that was never attempted). The regression test runs the REAL script in a child
+Windows PowerShell with `PAGENTOS_INSTALL_ASSUME_UNELEVATED=1` - a switch that can only
+make the script refuse, so the test is safe and still meaningful on an elevated runner -
+and `ProgramData` pointed at a sandbox, asserting one refusal, no second error and no log
+directory. Red before the fix; two mutations RED; restored byte-exact (sha256).

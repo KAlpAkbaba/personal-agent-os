@@ -15,20 +15,20 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Kurucu temiz makinede duruyor (ADR-0204) — 2026-09-28, makine GMKADIRAKBABA (şirket PC'si).**
-Dal `fix/installer-fresh-machine` (main `0f5387d5`'ten). ADR-0203'ün 1. adımı bu makinede
-gerçek hatayla durdu: `install-device-service.ps1 ... -SkipBrowser -SkipCoreVerify` →
-"previous deployment state: Blocked - no journal and the live trees are incomplete"
-(`install-device-service.ps1:449`; log `C:\ProgramData\PagentOS\install-logs\install-20260928-152803.log`).
-Kök neden: `scripts/lib/Deployment.ps1` `Resolve-InterruptedDeployment` "hiç kurulmamış
-makine"yi "yarım kurulum"dan ayırmıyordu. **Düzeltme dalda, itildi:** günlük yok + canlı
-bileşen yok + staged bileşen yok + `.previous` altında dosya yok → `None` ("fresh machine");
-tek bir iz bile varsa `Blocked` kalır. `installer-deploy.tests.ps1` 22 ✓ (+8), düzeltmeden
-önce KIRMIZI (18/3), dört mutasyon KIRMIZI, sha256 ile geri alındı.
-**Sırada (sahip):** bu daldan, yükseltilmiş PowerShell'de kurulumu yeniden çalıştırmak.
-449. satırdan sonrası da temiz makinede hiç koşmadı — ikinci bir duruş çıkarsa aynı işin
-parçasıdır. **Sırada (ev PC):** tam kapı → main'e merge. Bu makineden merge EDİLMEZ, yayın
-YAPILMAZ. Ev PC bu dala dokunmuyor.
+**EV PC'si (MAIL), 2026-09-28 akşam: ikinci cihaz kayıtlı; kurucu düzeltmeleri main'e.**
+Şirket PC'si GMKADIRAKBABA ikinci cihaz olarak kaydoldu (ajan 0.6.0, `-SkipBrowser
+-SkipCoreVerify`, DisplayPower/Operator kapalı); kurulum `fix/installer-fresh-machine`
+(`5ffe1871`, ADR-0204) dalından yapıldı, token host'ta üretildi. Şirket PC'si checkout'a
+dokunmuyor. Sıra: (1) bu blok; (2) `fix/installer-fresh-machine` tam kapı → main
+(`feat/second-device-enrollment` zaten main'de, `00d179cd`); (3) bulutta cihaz satırı →
+ADR-0203 PROVEN_REAL; (4) alias `ofis`/`iş` + cihaz envanteri; (5) yükseltilmemiş kurucu
+ikinci hata basıyordu → bu dalda düzeltildi: `$script:InstallLog` reddedişten ÖNCE
+tanımlanıyor, tuzak "kurulum başladı mı" diye soruyor; gerçek betiği çocuk süreçte koşan
+regresyon testi (`installer-invocation.tests.ps1` 33 ✓), düzeltmeden önce KIRMIZI, iki
+mutasyon KIRMIZI; (6) ayrıştırıcıya "ofis" — AYRI dal, tam kapı, main; **yayın YAPILMAZ,
+sahibin onayı beklenir**. `feat/hand-gestures-stage1` DOKUNULMAZ.
+Not: üretime sahip parolasıyla ben giriş yapmıyorum; cihaz satırı salt-okunur DB sorgusuyla
+okunur, alias PATCH'i sahibin oturumunu ister.
 
 Önceki durum: (2026-09-28: ADR-0203 main'de, ADR-0202 üretimde ve kanıtlandı, pin yenilendi.)
 **Sahibi bekleyen iki şey:** (1) yerel modda bir cümle ("Bundan sonra araştırma raporlarını

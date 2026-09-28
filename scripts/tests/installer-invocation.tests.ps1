@@ -455,5 +455,39 @@ Test-Case "installed endpoints are read from appsettings.json and a missing file
 }
 
 Write-Host ""
+Write-Host "Refusal before the install begins"
+
+Test-Case "an unelevated run says ONE thing - run elevated - and starts nothing" {
+    # 2026-09-28, the owner's second machine: the refusal was followed by
+    # "The variable '$script:InstallLog' cannot be retrieved because it has not been set".
+    # The REAL script runs here, in a child Windows PowerShell, the way the owner runs it.
+    # PAGENTOS_INSTALL_ASSUME_UNELEVATED can only make the script refuse, so this is safe
+    # (and still a test) on an elevated runner.
+    $installer = Join-Path $repoRoot "scripts\install-device-service.ps1"
+    $programData = Join-Path $env:TEMP "pagentos-unelevated-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $programData | Out-Null
+    $saved = @{ Assume = $env:PAGENTOS_INSTALL_ASSUME_UNELEVATED; ProgramData = $env:ProgramData }
+    try {
+        $env:PAGENTOS_INSTALL_ASSUME_UNELEVATED = "1"
+        $env:ProgramData = $programData
+        $shell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $result = Invoke-NativeProcess -FilePath $shell `
+            -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $installer, "-SkipBuild", "-SkipBrowser")
+        $text = "$($result.StdOut)`n$($result.StdErr)"
+        Assert-True -Condition ($result.ExitCode -ne 0) -Because "a refusal is a failure: exit $($result.ExitCode)"
+        Assert-True -Condition ($text -match "must run elevated") -Because "the refusal must reach the owner:`n$text"
+        Assert-True -Condition ($text -notmatch "cannot be retrieved") -Because "no second error may be printed over the refusal:`n$text"
+        Assert-True -Condition ($text -notmatch "InstallLog") -Because "the refusal must not talk about a log that was never opened:`n$text"
+        Assert-True -Condition ($text -notmatch "nothing that failed was left half-done") -Because "nothing was attempted, so there is nothing to reassure about:`n$text"
+        Assert-True -Condition (@(Get-ChildItem -LiteralPath $programData -Force -Recurse).Count -eq 0) -Because "a refused run creates no log directory"
+    }
+    finally {
+        $env:PAGENTOS_INSTALL_ASSUME_UNELEVATED = $saved.Assume
+        $env:ProgramData = $saved.ProgramData
+        Remove-Item -LiteralPath $programData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Write-Host ""
 Write-Host "$($script:Passes) passed, $($script:Failures) failed"
 exit $script:Failures
