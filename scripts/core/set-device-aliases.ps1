@@ -35,23 +35,14 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 . (Join-Path $repoRoot "scripts\lib\SecretStore.ps1")
 . (Join-Path $repoRoot "scripts\lib\OwnerHarness.ps1")
+. (Join-Path $repoRoot "scripts\lib\DeviceAliases.ps1")
 
 if (-not $BaseUrl) { $BaseUrl = "http://${BrokerHost}:$ApiPort" }
 if ($Aliases.Count -gt 0 -and -not $Device) { throw "-Aliases needs -Device: say which device gets the names." }
 
 function Write-Inventory {
     param([object[]]$Rows)
-    foreach ($row in $Rows) {
-        $names = @(Get-ArrayProperty -InputObject $row -Name "aliases")
-        Write-Host ("  {0}  {1,-16} {2,-8} agent {3,-8} {4,3} capabilities  last seen {5}  aliases [{6}]" -f `
-            (Get-OptionalProperty -InputObject $row -Name "device_id"),
-            (Get-OptionalProperty -InputObject $row -Name "name"),
-            (Get-OptionalProperty -InputObject $row -Name "presence"),
-            (Get-OptionalProperty -InputObject $row -Name "software_version"),
-            (Get-OptionalProperty -InputObject $row -Name "capability_count"),
-            (Get-OptionalProperty -InputObject $row -Name "last_seen_at"),
-            ($names -join ", "))
-    }
+    foreach ($row in $Rows) { Write-Host (Format-DeviceInventoryLine -Row $row) }
 }
 
 $credential = $null
@@ -72,35 +63,28 @@ $headers = @{ Authorization = "Bearer $([string]$issued.token)" }
 $sessionId = [string](Get-OptionalProperty -InputObject $issued -Name "session_id")
 
 try {
-    $listed = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/devices" -Headers $headers -TimeoutSec 30
-    $rows = @(Get-ArrayProperty -InputObject $listed -Name "devices")
+    $rows = Get-DeviceRows -Document (Invoke-JsonUtf8 -Uri "$BaseUrl/v1/devices" -Headers $headers -TimeoutSec 30)
     Write-Host "devices on $BaseUrl ($($rows.Count)):"
     Write-Inventory -Rows $rows
 
     if ($Device) {
-        $found = @($rows | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "name") -ieq $Device })
-        if ($found.Count -ne 1) { throw "expected exactly one device named '$Device', found $($found.Count); nothing was changed." }
-        $deviceId = [string](Get-OptionalProperty -InputObject $found[0] -Name "device_id")
+        $target = Select-DeviceRowByName -Rows $rows -Name $Device
+        $deviceId = [string](Get-OptionalProperty -InputObject $target -Name "device_id")
 
         if ($Aliases.Count -gt 0) {
-            # ConvertTo-Json unrolls a one-element array into a scalar on PowerShell 5.1;
-            # the list is built by hand so ONE alias is still a list.
-            $quoted = @($Aliases | ForEach-Object { ConvertTo-Json -InputObject ([string]$_) -Compress })
-            $patch = '{"aliases":[' + ($quoted -join ",") + ']}'
+            $patch = ConvertTo-AliasPatchBody -Aliases $Aliases
             Invoke-JsonUtf8 -Method PATCH -Uri "$BaseUrl/v1/devices/$deviceId" -Headers $headers -Body $patch | Out-Null
             Write-Host "PATCH /v1/devices/$deviceId aliases [$($Aliases -join ', ')]"
         }
 
-        $after = Invoke-JsonUtf8 -Uri "$BaseUrl/v1/devices" -Headers $headers -TimeoutSec 30
-        $afterRows = @(Get-ArrayProperty -InputObject $after -Name "devices")
+        $afterRows = Get-DeviceRows -Document (Invoke-JsonUtf8 -Uri "$BaseUrl/v1/devices" -Headers $headers -TimeoutSec 30)
         Write-Host "read back:"
         Write-Inventory -Rows $afterRows
         if ($Aliases.Count -gt 0) {
-            $row = @($afterRows | Where-Object { [string](Get-OptionalProperty -InputObject $_ -Name "device_id") -eq $deviceId })[0]
-            $now = @(Get-ArrayProperty -InputObject $row -Name "aliases")
-            $missing = @($Aliases | Where-Object { $now -notcontains $_ })
+            $row = Select-DeviceRowByName -Rows $afterRows -Name $Device
+            $missing = Get-MissingAliases -Row $row -Wanted $Aliases
             if ($missing.Count -gt 0) { throw "the read-back does not carry [$($missing -join ', ')]; the aliases were NOT set." }
-            Write-Host "ALIASES SET: $Device answers to [$($now -join ', ')]" -ForegroundColor Green
+            Write-Host "ALIASES SET: $Device answers to [$((Get-DeviceAliases -Row $row) -join ', ')]" -ForegroundColor Green
         }
     }
 }
