@@ -15,35 +15,19 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Tarayıcı görev döngüsü PR-B — döngü, kapı, yasak liste, iş akışı (ADR-0207), dal
-`feat/browser-task-loop` (main `c9084610`'dan), ev PC'si, 2026-09-28/29.**
-Kapsam: `app/webtask/` — döngü port'lar üstünde saf fonksiyon (observe → plan → gate → act →
-verify; doğrulama = yeni bir gözlem), planlayıcı arayüzü (kural tablosu + betikli sahte;
-gerçek modeller PR-C), kapı (risk sınıfı ÖĞEDEN; geri alınamaz eylem read-back + sahibin
-sözü), bütçeler (25 tur, 8 dk, art arda 3 başarısız tur), döngü tespiti,
-`packages/protocol/browser-task-denylist.json` (iki taraf okur), `web_tasks` tablosu
-(satır gerçektir) + göç, `BrowserTaskWorkflow` (tur başına bir activity; onay / devam /
-iptal sinyalleri), defter satırları. Kabul: T1–T5 sahte tarayıcı + sahte planlayıcıyla, ve
-üç ret (düşman sayfa almıyor; tutar read-back ile tıklama arasında değişirse tıklanmıyor;
-çerez duvarında döngü `loop_detected`).
-**Sahibin ek kararları (ADR-0207 madde 6-7):** parola/kod alanına ASLA yazılmaz, `auth_wall`
-→ `ask_owner` ("giriş yap, sonra devam et"), "devam" AYNI turdan sürdürür; göremediği öğede
-(kapalı gölge DOM, iframe, `not_unique`) `ask_owner` ("göremiyorum"), tahmin yok; v1.7 notu.
-**Sahibin tetikleyebileceği hiçbir şey eklenmez** (niyet ve kabuk PR-D). **Yayın YOK.**
-Sahibin Chrome'u sürülmez (PR-C). Ödeme KALICI olarak kapsam dışı.
-Bir işlem adı eklemek ALTI yere dokunur (beş ayna + manifest sayıları) — PR-B ad EKLEMİYOR.
-Açık: T3 mağazası / T5 web postası; MAIL'de ajanın yeniden kurulması (PR-C ön koşulu).
-**Durum (2026-09-29): kod + testler + kayıt BİTTİ, dalda.** Sözleşme **v1.7** (işlem adı
-EKLEMEDEN): tıklamada `risk_ceiling` + yasak liste cihazda da uygulanıyor (§4a); ADR-0207
-madde 7'nin "v1.7" dediği çerçeve/gölge işi artık **v1.8**. Ortak iki JSON API'de
-`app/protocol_bundle/` üzerinden okunuyor (imajda depo yok). Kanıt: API webtask 256 birim +
-5 entegrasyon (gerçek Temporal worker), tarayıcı 822 birim + 19 e2e, 20 mutasyon KIRMIZI
-(`docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json`), QUALIFICATION Aşama 34.
-Tam kapı `62c05310` üzerinde 32/32 PASS. Bağımsız güvenlik incelemesi: üç düzeltme dalda
-(read-back sayfanın sözünü ayrı söylüyor; sahibin değeri tam sözcük; adlandırılan host'un
-üstü açılmıyor), altı sınır **PR-C'ye bağlayıcı** olarak DECISIONS.md'de.
-**Kalan:** düzeltmelerle tam kapı YENİDEN → `--no-ff` main → push → bu bloğu "Yok" yap.
-Yayın YOK.
+**Yok.**
+
+Son biten iş (2026-09-29): **tarayıcı görev döngüsü PR-B (ADR-0207)** — main'de, YAYINLANMADI.
+Dal `feat/browser-task-loop`, uç `f0d556b5` üzerinde tam kapı 32/32 PASS. `app/webtask/`
+(döngü, kapı, doğrulayıcı, planlayıcı arayüzü, servis, cihaz portu, `BrowserTaskWorkflow`),
+`web_tasks` tablosu (göç 0062), sözleşme **v1.7** (işlem adı eklemeden: tıklamada
+`risk_ceiling`, yasak liste cihazda da). Sahibin tetikleyebileceği hiçbir şey YOK (PR-D);
+sahibin Chrome'u sürülmedi (PR-C). Kanıt: QUALIFICATION Aşama 34, 20 mutasyon KIRMIZI
+(`docs/evidence/adr-0207-pr-b-mutations-2026-09-29.json`), bağımsız güvenlik incelemesi.
+**PR-C başlamadan okunacak:** DECISIONS.md "Recorded for PR-C, and binding on it" — altı
+sınır (fill/select/set_checked sınıflandırılmıyor; adsız düğme; site adı kuralı; gözlem
+saklama süresi; read-back ile söz arasında yeniden bağlanan düğme; kart alanı).
+Yayınlanırsa göç 0062 üretimde uygulanır; yayın yalnız sahibin onayıyla.
 Rerank KAPALI. `feat/hand-gestures-stage1` DOKUNULMAZ.
 
 Önceki durum: Yok. (2026-09-28 akşam: M29 ilk adım tamam — iki cihaz kayıtlı ve adlarıyla seçiliyor;
@@ -171,6 +155,11 @@ köprüsü) → 4 ev (Home Assistant) → 5 her yerde (M29 yeniden açılır) �
 
 ## Sıradaki işler
 
+0. **ADR-0207 PR-C** (model planlayıcılar + sahibin kendi Chrome'u, PROVEN_REAL). Ön koşul,
+   hepsi sahipte: T3 mağazasının ve T5 web postasının adı; MAIL'de ajanın bu ağaçtan yeniden
+   kurulması (kurulu 0.6.0 `browser.observe` adını reddediyor); `-AuthorizeTasks` izni;
+   varsa yasak listeye eklenecek şirket paneli / Kolay Monitor host'ları. Sonra PR-D (niyet,
+   ses araçları, web kabuğu) ve sözleşme v1.8 (iframe, kapalı gölge DOM).
 1. **Sahibin "2 not + 2 yeni ekleme"si** — hafıza bitince vereceğini söyledi (2026-09-21).
 2. *Tarifle tıklama.* "Şu kameralı videoyu aç", "Kratos'un olduğu videoyu aç" bugün
    çalışmaz: `vision.LOCATE_QUESTION_TR` bir ADA göre soruyor ("X adlı düğme ya da öğe

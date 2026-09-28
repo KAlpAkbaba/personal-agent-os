@@ -948,7 +948,7 @@
     ]
   },
   "browser_task_loop_adr_0207": {
-    "status": "ACCEPTED; PR-A merged; PR-B (the loop, the gate, the deny-list, the workflow) built on feat/browser-task-loop; not released; nothing the owner can trigger until PR-D",
+    "status": "ACCEPTED; PR-A merged; PR-B (the loop, the gate, the deny-list, the workflow) merged to main from feat/browser-task-loop (f0d556b5, full gate 32/32); not released; nothing the owner can trigger until PR-D",
     "adr": "ADR-0207",
     "milestone": "JARVIS order 2 (browser-use)",
     "contract": "BROWSER_CAPABILITIES.md v1.7",
