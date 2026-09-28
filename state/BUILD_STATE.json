@@ -835,11 +835,12 @@
       "device_verify": "PROVEN_REAL except 6b.1 (company PC report)",
       "verify_6b_1_browser_worker": "NOT_YET_PROVEN (-SkipBrowser)",
       "mint_script": "PROVEN_REAL (the token that enrolled the device came from it)",
-      "alias_selection": "PROVEN_AUTOMATED; production READY_FOR_OWNER (alias PATCH + release)",
-      "m19b_acceptance": "NOT_STARTED"
+      "alias_selection": "PROVEN_AUTOMATED; in production 'iş' and the bare word 'ofis' select the device today, 'ofis bilgisayarımda' after the release",
+      "m19b_acceptance": "NOT_STARTED",
+      "alias_on_the_row": "PROVEN_REAL (owner run 2026-09-28 14:15 UTC; devices row read back)"
     },
     "owner_steps": [
-      "scripts/core/set-device-aliases.ps1 -Device GMKADIRAKBABA -Aliases ofis,iş",
+      "scripts/core/set-device-aliases.ps1 -Device MAIL -Aliases ev",
       "say 'release' for the alias parser (ADR-0205)"
     ],
     "next": [
@@ -881,12 +882,14 @@
     "finding": "'ofis' matched only as the bare word; the open stem for 'işte' read every form of 'istemek' as 'at work' and would select the device aliased 'iş'",
     "code": [
       "app/devices/aliases.py (ALIAS_OFIS; closed locatives)",
-      "scripts/core/set-device-aliases.ps1"
+      "scripts/core/set-device-aliases.ps1",
+      "scripts/lib/DeviceAliases.ps1"
     ],
     "tests": [
       "tests/unit/test_devices_aliases.py",
       "tests/unit/test_devices_selection.py",
-      "72 passed (27 new); four mutations RED"
+      "72 passed (27 new); four mutations RED",
+      "scripts/tests/device-aliases.tests.ps1 (12; three mutations RED)"
     ],
     "inventory": {
       "ev": {
@@ -900,7 +903,7 @@
     },
     "next": [
       "release -BlueGreen on the owner's word",
-      "set the aliases with the owner's session"
+      "alias 'ev' on MAIL"
     ]
   }
 }

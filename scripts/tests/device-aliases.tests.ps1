@@ -98,6 +98,36 @@ Test-Case "a name nobody carries, and a name two devices carry, are both refused
     Assert-True -Condition $threw -Because "an empty inventory has no such device"
 }
 
+Test-Case "the refusal names the devices that WERE listed" {
+    # The owner's first run said "found 0" and nothing else; whether the device was not
+    # enrolled yet, named differently, or lost in parsing could not be read off the message.
+    $message = ""
+    try { Select-DeviceRowByName -Rows (Get-DeviceRows -Document $one) -Name "GMKADIRAKBABA" | Out-Null } catch { $message = $_.Exception.Message }
+    Assert-True -Condition ($message -match "found 0 among 1 listed \(MAIL\)") -Because "one device listed, and it is named: $message"
+    $message = ""
+    try { Select-DeviceRowByName -Rows (Get-DeviceRows -Document $two) -Name "LAPTOP" | Out-Null } catch { $message = $_.Exception.Message }
+    Assert-True -Condition ($message -match "among 2 listed \(MAIL, GMKADIRAKBABA\)") -Because "both are named: $message"
+    $message = ""
+    try { Select-DeviceRowByName -Rows (Get-DeviceRows -Document $none) -Name "MAIL" | Out-Null } catch { $message = $_.Exception.Message }
+    Assert-True -Condition ($message -match "among 0 listed \(none\)") -Because "an empty inventory says so: $message"
+    $nameless = ConvertFrom-Json '{"devices":[{"device_id":"x"}]}'
+    $message = ""
+    try { Select-DeviceRowByName -Rows (Get-DeviceRows -Document $nameless) -Name "MAIL" | Out-Null } catch { $message = $_.Exception.Message }
+    Assert-True -Condition ($message -match "a row with no name") -Because "a nameless row is the mark of a mis-read list and must be said: $message"
+}
+
+Test-Case "a response with ONE device, read the way the script reads the wire, finds that device" {
+    # The suspicion worth ruling out: a single-element list unrolling into its properties.
+    # The document is parsed from the bytes a server would send, as HttpJson.ps1 does.
+    $wire = [Text.Encoding]::UTF8.GetBytes('{"devices":[' + $office + ']}')
+    $document = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString($wire))
+    $rows = Get-DeviceRows -Document $document
+    Assert-Equal -Expected 1 -Actual $rows.Count -Because "one device is one row"
+    $row = Select-DeviceRowByName -Rows $rows -Name "GMKADIRAKBABA"
+    Assert-Equal -Expected "9efa9d8b-b0e6-4758-a03a-387c3e20a0d2" -Actual ([string]$row.device_id) -Because "and it is found by name"
+    Assert-True -Condition ((Format-DeviceInventoryLine -Row $rows[0]) -match "GMKADIRAKBABA") -Because "and it is printed"
+}
+
 Write-Host ""
 Write-Host "the PATCH body"
 

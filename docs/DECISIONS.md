@@ -15368,3 +15368,31 @@ release, and a release is the owner's word. Until then "ofis" selects GMKADIRAKB
 bare word only (once the alias is set), and the open stems are still live. The aliases
 themselves are set by the owner's session: `scripts/core/set-device-aliases.ps1 -Device
 GMKADIRAKBABA -Aliases ofis,iş`.
+
+**ADR-0205 addendum (2026-09-28) - the aliases are set, and why the first run said "found 0".**
+The owner's first run of `set-device-aliases.ps1` printed "devices (1)", one row with no
+fields, and refused: "expected exactly one device named 'GMKADIRAKBABA', found 0". Two
+explanations were possible and they were told apart from the record, not by argument.
+
+*Timing - the second device not listed yet - is ruled out.* `broker_device_enrolled` for
+`9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` is logged at 13:52:06 UTC; a read-only query of the `devices` table at 13:56
+returned both rows, both online; the first run's `GET /v1/devices` is logged at
+**14:06:12 UTC**, fourteen minutes after the enrolment, status 200. The list the server
+sent contained two devices.
+
+*Parsing is the cause.* The script read the list through `@(Get-ArrayProperty ...)`.
+`Get-ArrayProperty` already returns the array wrapped so that one element does not unroll;
+`@()` wrapped it again, and two devices arrived as ONE element - the array itself - whose
+`name` is empty and whose aliases print as `System.Object[]`, which is exactly the line
+the owner saw. A single-device list unrolling into its properties (the other suspicion)
+is a different defect with a different signature, and is now covered too.
+
+The second run, after the fix: `GET /v1/devices` 14:15:31.698, `PATCH
+/v1/devices/9efa9d8b-b0e6-4758-a03a-387c3e20a0d2` 200 at 14:15:31.837 (`broker_device_metadata_updated`), read-back
+`GET` 14:15:31.902. The row's `metadata_json` is `{"aliases": ["ofis", "iş"]}`; MAIL's is
+still empty - "ev" is not set on it yet.
+
+The refusal now names what was listed - "found 0 among 1 listed (MAIL)", and a nameless
+row is said to be one - so the three causes can be read off the message.
+`device-aliases.tests.ps1`: 12 passed; mutations RED: the double wrap (9 tests), a list
+returned without its wrap (2), the refusal without the names (1).
