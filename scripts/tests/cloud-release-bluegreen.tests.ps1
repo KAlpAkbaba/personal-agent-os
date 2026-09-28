@@ -116,7 +116,11 @@ $docker = @(
     '    sc_head="${FAKE_SCHEMA_HEAD:-0040_device_build_identity}"',
     '    sc_cur="${FAKE_SCHEMA_CURRENT:-$sc_head}"',
     '    sc_status=ok; [ "$sc_cur" = "$sc_head" ] || sc_status=fail',
-    '    printf "{\"status\":\"%s\",\"failing_checks\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$st" "$fc" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
+    # 2026-09-27: WHY the backup check fails, as the real colour publishes it. A reconcile
+    # must tell its own earlier failure marker from a backup that is actually broken.
+    '    br="$(printf "%s" "${FAKE_BACKUP_REASONS:-}" | sed -E "s/[^,]+/\"&\"/g")"',
+    '    bk=""; [ -z "$br" ] || bk="\"backup\":{\"status\":\"fail\",\"reasons\":[$br]},"',
+    '    printf "{\"status\":\"%s\",\"failing_checks\":\"%s\",\"release\":{\"component\":\"cloud-core\",\"version\":\"%s\",\"build_id\":\"%s\"},\"checks\":{%s\"voice_realtime\":{\"contract_version\":%s},\"broker\":{\"active_sessions\":%s,\"draining\":%s},\"schema\":{\"status\":\"%s\",\"current\":\"%s\",\"head\":\"%s\"}}}" "$st" "$fc" "$rel" "${FAKE_BUILD_ID:-abc123def4567890}" "$bk" "${FAKE_CONTRACT_VERSION:-2}" "$(sessions_of "$colour")" "$draining" "$sc_status" "$sc_cur" "$sc_head"',
     '    exit 0;;',
     '  compose*" exec -T edge nginx -t"*) exit 0;;',
     '  compose*" exec -T edge nginx -s reload"*)',
@@ -496,6 +500,31 @@ try {
         [IO.File]::WriteAllText($marker, '{"unit":"pagentos-bluegreen-reconcile.service","exit_status":"84"}')
         $c1c = Invoke-Release -Mode "--reconcile" -Env @{ PAGENTOS_BACKUP_ROOT = (& $u (Join-Path $hostBase "backup-root")); FAKE_HEALTH_STATUS = "degraded" }
         Assert-True ($c1c.Exit -eq 84 -and (Test-Path $marker)) "...but a reconcile that ends DEGRADED leaves the marker where it is"
+
+        # 2026-09-27, measured on the live host: the marker above IS what degraded the colour
+        # (backup check -> scheduled_unit_failed), so the freshly pinned reconcile read its own
+        # earlier failure as a condition of the colour, exited 84 and kept the marker - for
+        # ever. install-recovery-supervisor.sh then restored the stale pin. The alarm may not
+        # block its own remedy; everything else that degrades a colour still may.
+        $root = & $u (Join-Path $hostBase "backup-root")
+        $own = @{ PAGENTOS_BACKUP_ROOT = $root; FAKE_HEALTH_STATUS = "degraded"; FAKE_FAILING_CHECKS = "backup"; FAKE_BACKUP_REASONS = "scheduled_unit_failed" }
+        [IO.File]::WriteAllText($marker, '{"unit":"pagentos-bluegreen-reconcile.service","exit_status":"83"}')
+        $c1d = Invoke-Release -Mode "--reconcile" -Env $own
+        if ($c1d.Exit -ne 0 -or $env:PAGENTOS_BG_VERBOSE) { Write-Host "--- reconcile 1d (exit $($c1d.Exit)) ---"; Write-Host $c1d.Output }
+        Assert-True ($c1d.Exit -eq 0 -and $c1d.Output -match "only for this unit's own earlier failure marker" -and $c1d.Output -match "RECONCILE OK" -and -not (Test-Path $marker)) "a colour degraded ONLY by the reconcile's own earlier failure marker is reconciled OK and the marker is cleared: the alarm does not block its own remedy"
+        [IO.File]::WriteAllText($marker, '{"unit":"pagentos-bluegreen-reconcile.service","exit_status":"83"}')
+        $foreign = Join-Path $markerDir "pagentos-backup.service.json"
+        [IO.File]::WriteAllText($foreign, '{"unit":"pagentos-backup.service","exit_status":"1"}')
+        $c1e = Invoke-Release -Mode "--reconcile" -Env $own
+        Assert-True ($c1e.Exit -eq 84 -and (Test-Path $marker) -and (Test-Path $foreign)) "...but beside ANOTHER unit's failure marker (a backup that really failed) it is still DEGRADED, and no marker is touched"
+        Remove-Item -LiteralPath $foreign -Force
+        $stale = $own.Clone(); $stale.FAKE_BACKUP_REASONS = "scheduled_unit_failed,backup_stale"
+        $c1f = Invoke-Release -Mode "--reconcile" -Env $stale
+        Assert-True ($c1f.Exit -eq 84 -and (Test-Path $marker)) "...and with a second backup reason (a stale backup) it is still DEGRADED"
+        $two = $own.Clone(); $two.FAKE_FAILING_CHECKS = "backup,db"
+        $c1g = Invoke-Release -Mode "--reconcile" -Env $two
+        Assert-True ($c1g.Exit -eq 84 -and (Test-Path $marker)) "...and with any second failing check it is still DEGRADED"
+        Remove-Item -LiteralPath $marker -Force
 
         Reset-Host
         $i2 = Invoke-Release -Env @{ PAGENTOS_INTERRUPT_AT = "after_switch" }

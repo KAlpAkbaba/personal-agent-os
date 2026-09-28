@@ -15078,3 +15078,36 @@ Neighbouring suites (memory, local mode, voice relay, experience engine/schedule
 assistant chat, ADR-0200's embedder) 234 green; the Owner Utterance Corpus's memory /
 operator / research / daily / macro families 584 cases, 0 changed verdicts, 0 forbidden
 side effects.
+
+## ADR-0202 — A reconcile does not judge the colour by the reconcile's own failure marker (2026-09-27)
+
+**Found in production, on the release of ADR-0200/0201 (`3a8f4637`).** The release itself
+went through: model prefetched, api-blue healthy, edge switched, api-green drained. It
+changed the Compose file, so the recovery bundle was stale and the timer's reconcile
+exited 83 every minute. `OnFailure=` wrote
+`failures/pagentos-bluegreen-reconcile.service.json`; the backup health check reads that
+directory, so the serving colour reported `degraded` for `[backup]`, reason
+`scheduled_unit_failed`. Then `install-recovery-supervisor.sh 3a8f4637b23bff840769a906f17946e551a78e3b` copied the new
+bundle and ran its proof - a reconcile - which found the colour `degraded`, exited **84**,
+and therefore left the marker in place. The installer restored the STALE pin. Nothing in
+that loop can end without a human deleting a file: the 2026-09-18 deadlock (fixed for the
+release path in `wait_for_colour`) had a twin in the reconcile path.
+
+**Decision.** `degraded_only_by_own_marker` in `release-cloud-core-bluegreen.sh`: a
+reconcile whose canonical colour serves its recorded release and is degraded by nothing
+except this unit's own earlier failure ends OK, and the existing success path removes the
+marker. All four conditions must hold - the only failing check is `backup`; its only
+reason is `scheduled_unit_failed`; this unit's marker exists; it is the ONLY marker. A
+failed backup, a failed restore drill, a stale backup or any second failing check is
+still 84.
+
+**Proof.** `scripts/tests/cloud-release-bluegreen.tests.ps1` 82 passed (78 + 4: the
+exemption, and one refusal per remaining condition). Four mutations, one per condition,
+each RED on its own assertion; the script restored byte-exact from a sha256-verified copy
+after each. `test_release_exit_codes` and `test_notification_events` still agree with the
+header.
+
+**Not done here.** The fix reaches the host only with a release, and the pin only after
+it; both wait for the owner's word (the instruction for this run was to stop at a failed
+step). Production serves `3a8f4637` meanwhile; what is missing is the crash/boot
+reconcile, which refuses (83) until the pin is refreshed.

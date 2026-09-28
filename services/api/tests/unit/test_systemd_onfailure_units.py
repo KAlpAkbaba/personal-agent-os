@@ -129,8 +129,12 @@ def test_a_successful_reconcile_clears_its_own_marker() -> None:
     marker = "failures/pagentos-bluegreen-reconcile.service.json"
     script = RECONCILE.read_text(encoding="utf-8")
     assert marker in script
-    clearing = [line for line in script.splitlines() if marker in line]
-    assert clearing and all(line.strip().startswith("rm -f") for line in clearing)
+    naming = [line.strip() for line in script.splitlines() if marker in line]
+    assert any(line.startswith("rm -f") for line in naming), "nothing clears the marker"
+    # ADR-0202: the reconcile also LOOKS at its marker (`[ -f ... ]`), to tell a colour
+    # degraded by this unit's own earlier failure from a colour that is degraded. Looking
+    # is allowed; the script must still never write one - only OnFailure= does.
+    assert all(line.startswith(("rm -f", "[ -f")) for line in naming), naming
     for peer, own in (
         ("scripts/cloud/backup-cloud-core.sh", "failures/pagentos-backup.service.json"),
         ("scripts/cloud/restore-cloud-core.sh", "failures/pagentos-restore-drill.service.json"),
