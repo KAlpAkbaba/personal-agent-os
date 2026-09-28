@@ -27,6 +27,11 @@ dört mutasyon KIRMIZI. **Sahibin sözü gerekiyor** (talimat "başarısız adı
 Ayrıca sahipten: yerel modda bir cümle söylemesi ("Bundan sonra araştırma raporlarını her
 zaman Türkçe oku") — satırı ben okurum (üretime sahip parolasıyla ben girmiyorum).
 `feat/hand-gestures-stage1` DOKUNULMADI.
+**2026-09-28: sahip "Yayınla" dedi.** Sıra: bu dalda tam kapı + PS paketi + recovery-supervisor
+testleri → merge → `-BlueGreen` → eski işareti sil → pin → doğrula → LKG → yerel mod kanıtı.
+İlk tam kapı bir test yakaladı: `test_systemd_onfailure_units` işaretin adının yalnız `rm -f`
+satırlarında geçmesini istiyordu; ADR-0202 işarete BAKIYOR (`[ -f`). Koruma gerçek iddiasına
+çevrildi (silen var, yazan yok; bakmak serbest), iki mutasyon KIRMIZI.
 Sonraki: PR-3 rerank (Jev/cross-encoder) → sonra JARVIS sırası 2: browser-use.
 
 **Sahibin 2 notu (2026-09-21, sesle verildi):**
