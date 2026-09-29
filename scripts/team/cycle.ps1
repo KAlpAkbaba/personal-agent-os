@@ -53,6 +53,9 @@ param(
     [string]$Machine = $env:COMPUTERNAME,
     [string]$Base = "main",
     [switch]$Research,
+    # What the lead asks the researcher to study, one line per subject. It is placed in the
+    # researcher's prompt under a heading of its own; the role file stays the role.
+    [string[]]$ResearchBrief = @(),
     [switch]$DryRun
 )
 
@@ -182,6 +185,11 @@ try {
         else {
             $prompt = "# Run ($Role, cycle $CycleId)`n`nWork as your role file says. Write your proposals under team/proposals/. " +
             "Return your report as your final message, at most 40 lines, naming each file you wrote."
+            $subjects = @($ResearchBrief | Where-Object { ([string]$_).Trim() })
+            if (@($subjects).Count -gt 0) {
+                $prompt += "`n`n## The subjects the lead asks for (one proposal each, at most three)`n"
+                foreach ($subject in $subjects) { $prompt += "`n- " + ([string]$subject).Trim() }
+            }
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory
         return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = ([datetime]::UtcNow.AddMinutes($RunMinutes)) }

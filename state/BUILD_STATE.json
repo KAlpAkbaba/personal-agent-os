@@ -1126,7 +1126,7 @@
       "docs/ROADMAP.md (the owner's update of 2026-09-29)"
     ],
     "tests": [
-      "scripts/tests/team-cycle.tests.ps1 (69, fake model, a git repository of its own)",
+      "scripts/tests/team-cycle.tests.ps1 (70, fake model, a git repository of its own)",
       "services/api/tests/unit/test_team_queue_schema.py (38)",
       "16 mutations RED: docs/evidence/adr-0214-team-mutations-2026-09-30.json"
     ],

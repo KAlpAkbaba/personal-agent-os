@@ -494,7 +494,8 @@ function New-Sandbox {
 function Invoke-Cycle {
     param(
         [string]$Root, [string]$Scenario, [string]$CycleId = "c1", [double]$MaxUsd = 20,
-        [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL"
+        [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
+        [string[]]$Brief = @()
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
@@ -506,6 +507,7 @@ function Invoke-Cycle {
             " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture)) -MaxParallel $MaxParallel -Machine '$Machine'" +
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
+            $(if (@($Brief).Count -gt 0) { " -ResearchBrief " + ((@($Brief) | ForEach-Object { "'" + $_ + "'" }) -join ",") } else { "" }) +
             "; exit `$LASTEXITCODE")
         )
         $result = Invoke-NativeProcess -FilePath $powershell -Arguments $arguments -WorkingDirectory $Root `
@@ -722,6 +724,18 @@ try {
         $second = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -Research
         Assert-Equal -Expected 1 -Actual @(Get-TeamTasks -Queue $second.Queue).Count -Because "the same proposal is not queued twice"
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $second.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    Test-Case "what the lead asks the researcher to study reaches it, subject by subject" {
+        $root = New-Sandbox -Tasks @()
+        $asked = Invoke-Cycle -Root $root -Scenario "approve" -Research -Brief @("execution in the cloud (ADR-0213)", "the narrative: bu hafta ne oldu")
+        Assert-Equal -Expected 0 -Actual $asked.ExitCode -Because ($asked.StdOut + $asked.StdErr)
+        $subjects = @($asked.Calls[0].subjects)
+        Assert-Equal -Expected 2 -Actual @($subjects).Count -Because "two subjects: $($subjects -join ' / ')"
+        Assert-Equal -Expected "- execution in the cloud (ADR-0213)" -Actual ([string]$subjects[0]).Trim() -Because "as written"
+        Assert-Equal -Expected "- the narrative: bu hafta ne oldu" -Actual ([string]$subjects[1]).Trim() -Because "as written"
+        $plain = Invoke-Cycle -Root (New-Sandbox -Tasks @()) -Scenario "approve" -Research
+        Assert-Equal -Expected 0 -Actual @($plain.Calls[0].subjects).Count -Because "no brief, no heading"
     }
 
     Test-Case "the worktree of a finished task is closed only when it is clean" {

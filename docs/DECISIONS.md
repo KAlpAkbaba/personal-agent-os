@@ -16541,7 +16541,7 @@ decision until the pilot has been measured.
 11. *The nightly task's two refusals are not mutated.* Removing either would register a real
     scheduled task on the owner's machine while the test runs. They are held by tests only.
 
-**Proof.** `scripts/tests/team-cycle.tests.ps1` (69): the decisions as functions, and the
+**Proof.** `scripts/tests/team-cycle.tests.ps1` (70): the decisions as functions, and the
 cycle run for real in a git repository made for the test with a fake in place of the model.
 `services/api/tests/unit/test_team_queue_schema.py` (38): the queue against its schema.
 Sixteen mutations, each RED, each file restored from a backup and compared by sha256
