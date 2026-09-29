@@ -416,6 +416,15 @@ Test-Case "what a run printed is a result only when it is the result document" {
     $overBudget = Read-TeamRunResult -StdOut '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":"","total_cost_usd":5.01}' -ExitCode 1
     Assert-True -Condition (-not $overBudget.Ok) -Because "over budget is a failure"
     Assert-Equal -Expected 5.01 -Actual $overBudget.CostUsd -Because "and it is still counted"
+    Assert-Equal -Expected "error_max_budget_usd" -Actual $overBudget.Why -Because "the reason is named"
+    # pilot-01, 2026-09-30: the command-line tool was not signed in. It said so, with the
+    # subtype 'success', and the owner's report read 'failed: success'.
+    $signedOut = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in \u00b7 Please run /login","total_cost_usd":0}' -ExitCode 1
+    Assert-True -Condition (-not $signedOut.Ok) -Because "not signed in is a failure"
+    Assert-Equal -Expected "Not logged in   Please run /login" -Actual $signedOut.Why -Because "in the tool's own words"
+    Assert-Equal -Expected "" -Actual $signedOut.Text -Because "what an error printed is not kept as a report"
+    $long = Read-TeamRunResult -StdOut ('{"is_error":true,"result":"' + ('x' * 500) + '"}') -ExitCode 1
+    Assert-Equal -Expected 120 -Actual $long.Why.Length -Because "bounded"
     Assert-True -Condition (-not (Read-TeamRunResult -StdOut "I could not do that." -ExitCode 0).Ok) -Because "prose is not a result"
     Assert-True -Condition (-not (Read-TeamRunResult -StdOut "" -ExitCode 0).Ok) -Because "nothing is not a result"
     Assert-True -Condition (-not (Read-TeamRunResult -StdOut '{"result":"","total_cost_usd":0}' -ExitCode 0).Ok) -Because "an empty report is not a report"

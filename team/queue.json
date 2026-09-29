@@ -1,28 +1,32 @@
 {
-  "version": 1,
-  "note": "The agent team's queue (docs/TEAM_PROTOCOL.md). Until the Onay Merkezi exists, the owner approves by setting a task's state to \"approved\" here.",
-  "tasks": [
-    {
-      "id": "onay-merkezi",
-      "title": "Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit'te; kabukta Onayla/Reddet, sesle \"fikri onayla / yayını onayla\"",
-      "roadmap_row": "How it is built from here",
-      "state": "approved",
-      "area": [
-        "services/api/app/team",
-        "services/api/tests/unit/test_team_approvals.py",
-        "apps/web/src/app/core/approvals"
-      ],
-      "branch": "",
-      "worktree": "",
-      "assignee": "",
-      "reports": [],
-      "budget": { "max_usd": 5 },
-      "created_at": "2026-09-30T00:00:00Z",
-      "updated_at": "2026-09-30T00:00:00Z",
-      "goal": "The cycle report and every task at an owner gate are readable in the Cockpit's Onay Merkezi; the owner approves or rejects in the shell or by voice; the decision is written where the next cycle reads it (team/queue.json state), never applied mid-run.",
-      "acceptance": "A task at awaiting_owner / awaiting_release is listed with its proposal or report; Onayla moves it to approved and Reddet to stopped with the owner's reason; a voice approval is refused unless it names which gate (fikir / yayın) and resolves to exactly one task; a release approval never starts a release by itself; every decision is a ledger event.",
-      "evidence_expected": "PROVEN_AUTOMATED for the API and the router; READY_FOR_OWNER for the shell and the voice path",
-      "needs_integration": false
-    }
-  ]
+    "version":  1,
+    "note":  "The agent team\u0027s queue (docs/TEAM_PROTOCOL.md). Until the Onay Merkezi exists, the owner approves by setting a task\u0027s state to \"approved\" here.",
+    "tasks":  [
+                  {
+                      "id":  "onay-merkezi",
+                      "title":  "Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit\u0027te; kabukta Onayla/Reddet, sesle \"fikri onayla / yayını onayla\"",
+                      "roadmap_row":  "How it is built from here",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/team",
+                                   "services/api/tests/unit/test_team_approvals.py",
+                                   "apps/web/src/app/core/approvals"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T00:00:00Z",
+                      "updated_at":  "2026-09-30T00:00:00Z",
+                      "goal":  "The cycle report and every task at an owner gate are readable in the Cockpit\u0027s Onay Merkezi; the owner approves or rejects in the shell or by voice; the decision is written where the next cycle reads it (team/queue.json state), never applied mid-run.",
+                      "acceptance":  "A task at awaiting_owner / awaiting_release is listed with its proposal or report; Onayla moves it to approved and Reddet to stopped with the owner\u0027s reason; a voice approval is refused unless it names which gate (fikir / yayın) and resolves to exactly one task; a release approval never starts a release by itself; every decision is a ledger event.",
+                      "evidence_expected":  "PROVEN_AUTOMATED for the API and the router; READY_FOR_OWNER for the shell and the voice path",
+                      "needs_integration":  false
+                  }
+              ]
 }

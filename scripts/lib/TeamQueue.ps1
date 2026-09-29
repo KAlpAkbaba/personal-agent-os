@@ -304,7 +304,19 @@ function Read-TeamRunResult {
         $isError = [bool](Get-TeamProperty -InputObject $document -Name "is_error" -Default $false)
         $subtype = [string](Get-TeamProperty -InputObject $document -Name "subtype" -Default "")
         $ok = ($ExitCode -eq 0) -and (-not $isError) -and ($text.Trim().Length -gt 0)
-        if (-not $ok) { $why = if ($subtype) { $subtype } else { "exit $ExitCode" } }
+        if (-not $ok) {
+            # The tool's own words first ("Not logged in"): a run that failed with the
+            # subtype 'success' was reported to the owner as 'failed: success'
+            # (pilot-01, 2026-09-30). ASCII, one line, bounded: it goes into a report.
+            $said = (($text -split "`r?`n")[0] -replace '[^\x20-\x7E]', ' ').Trim()
+            if ($said.Length -gt 120) { $said = $said.Substring(0, 120) }
+            if ($isError -and $said) { $why = $said }
+            elseif ($subtype -and $subtype -ne "success") { $why = $subtype }
+            elseif (-not $text.Trim()) { $why = "the run returned an empty report" }
+            else { $why = "exit $ExitCode" }
+            # What an error printed is not a report, and is not kept as one.
+            if ($isError) { $text = "" }
+        }
     }
     catch {
         $why = "the run printed no result document (exit $ExitCode)"
