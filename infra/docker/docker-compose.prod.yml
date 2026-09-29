@@ -137,6 +137,14 @@ services:
       # PAGENTOS_WEB_ORIGINS; the edge's network, never a wildcard.
       PAGENTOS_DEVICE_AFFINITY_BY_SOURCE_IP: ${PAGENTOS_DEVICE_AFFINITY_BY_SOURCE_IP:-false}
       PAGENTOS_TRUSTED_PROXY_CIDRS: ${PAGENTOS_TRUSTED_PROXY_CIDRS:-[]}
+      # ADR-0210 (M22 decision 5): the origin a VOICE-triggered artifact open builds its URL
+      # from - there is no HTTP request to read one from. Until this line existed the setting
+      # could not be reached from /opt/pagentos/.env at all (compose only forwards what it
+      # names), so it was always empty and a voice open built a relative URL. Empty is still
+      # the default and still means "not configured": the value is the edge as a device's
+      # browser and its agent reach it, e.g. http://<PAGENTOS_BIND_IP>:8001 - set it in
+      # /opt/pagentos/.env, never here.
+      PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN: ${PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN:-}
       # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
       # M13/ADR-0050 §9: production runs no separate worker container, and the

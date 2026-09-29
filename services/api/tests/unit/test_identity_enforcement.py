@@ -154,6 +154,14 @@ EXPECTED_OPEN = {
     # no body -- the artifact id is never named. Deliberately open, like the greeting
     # audio route above, which this mirrors.
     ("GET", "/v1/artifacts/renders/fetch/{token}"),
+    # ADR-0210: the same idea for a report the owner's own BROWSER is sent to when the
+    # device it runs on cannot file.fetch (app.artifacts.browser_open). A browser tab
+    # cannot present an owner session either; a 256-bit, fifteen-minute token in the query
+    # (app.artifacts.render_view_store) - a few reads instead of one, html renders only -
+    # names exactly one (artifact, format, content_hash). Every refusal is the same bare
+    # 404, and there is no parameter that lists anything. Deliberately open, like the
+    # render fetch above, which this mirrors.
+    ("GET", "/v1/artifacts/renders/view"),
     # B45 (req 348, ADR-0152): the device's file.fetch of ONE mail attachment - the same
     # single-use, ten-minute, 256-bit token discipline as the render fetch above
     # (app.mail.attachment_fetch); unknown, expired, redeemed and hash-mismatched tokens

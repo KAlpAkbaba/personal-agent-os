@@ -26,6 +26,7 @@ from app.appfactory.code_model import AnthropicCodeModel, ModelAssistedGenerator
 from app.appfactory.routes import router as apps_router
 from app.appfactory.service import AppFactoryService
 from app.artifacts.render_fetch_store import get_render_fetch_store
+from app.artifacts.render_view_store import get_render_view_store
 from app.artifacts.routes import device_router as artifacts_device_router
 from app.artifacts.routes import router as artifacts_router
 from app.artifacts.runtime import ArtifactRuntime
@@ -771,6 +772,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # way as the alarm audio store above — the device-facing route reads it from
     # app.state so a test can swap it, and open_service mints into it either way.
     app.state.artifact_render_fetch_store = get_render_fetch_store()
+    # ADR-0210: the bounded-read sibling for a report opened in the owner's browser. A
+    # separate store on a separate route: neither kind of token is redeemable as the other.
+    app.state.artifact_render_view_store = get_render_view_store()
     app.state.operator_service = operator_service
     app.state.document_service = document_service
     app.state.document_mutations = document_mutations
