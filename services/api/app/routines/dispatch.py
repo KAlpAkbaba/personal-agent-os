@@ -423,6 +423,30 @@ class BrokerDeviceAction:
         # pragma: no cover - every DeviceCommandClient outcome type is handled above
         return DeviceRunResult(False, "internal_bug", f"unexpected outcome: {outcome!r}")
 
+    def can_run(self, capability: str) -> bool:
+        """Whether ``run`` would find a device for ``capability`` right now - and nothing
+        else: no command is created, nothing is sent (ADR-0209).
+
+        It asks the SAME question ``run`` asks, over the same live views, so its answer is
+        the answer ``run`` would give: a probe that disagreed with the run it stands in
+        front of would route an owner's sentence down a path that then cannot happen. A
+        test holds the two equal over a matrix of capabilities; whoever changes how ``run``
+        selects (a target, a session affinity) changes this method with it.
+        """
+        runtime = get_broker_runtime()
+        if runtime is None:
+            return False
+        session = self._session_factory()
+        try:
+            views = list_device_views(session, runtime)
+        finally:
+            session.close()
+        try:
+            select_device(views, capability=capability)
+        except NoCapableDeviceError:
+            return False
+        return True
+
 
 # ------------------------------------------------------------------------ browser allowlist
 

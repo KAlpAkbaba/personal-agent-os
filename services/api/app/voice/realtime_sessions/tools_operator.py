@@ -37,6 +37,7 @@ from app.actions.receipt import (
     EXECUTION_REFUSED,
     TERMINAL_ALREADY,
     TERMINAL_FAILED,
+    TERMINAL_UNVERIFIED,
     TERMINAL_VERIFIED,
     ActionReceipt,
     record_receipt,
@@ -47,6 +48,7 @@ from app.operator import adapters as app_adapters
 from app.operator import allowlists as app_allowlists
 from app.operator import capabilities as operator_capabilities
 from app.operator import focus as focus_module
+from app.operator import launch_fallback
 from app.operator.capabilities import (
     CAPABILITY_APP_CLOSE,
     CAPABILITY_APP_OPEN,
@@ -459,8 +461,8 @@ def _once(
     return _cached
 
 
-def _allowlist_speech() -> str:
-    names = ", ".join(_APP_TR_NAMES.get(a, a) for a in APP_ALLOWLIST)
+def _allowlist_speech(applications: tuple[str, ...] = APP_ALLOWLIST) -> str:
+    names = ", ".join(_APP_TR_NAMES.get(a, a) for a in applications)
     return f"Bunu açamam efendim; açabildiklerim: {names}."
 
 
@@ -502,6 +504,7 @@ def _receipt(
     server: dict[str, Any],
     speech: str,
     error_class: str | None = None,
+    local: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(UTC)
     receipt = ActionReceipt(
@@ -510,7 +513,7 @@ def _receipt(
         requested_state=requested_state,
         execution_status=execution,
         terminal_status=terminal,
-        observed_after={"server": server, "local": {}},
+        observed_after={"server": server, "local": local or {}},
         evidence_refs=[{"kind": "realtime_session", "ref": str(ctx.session_id)}],
         error_class=error_class,
         speech=speech,
@@ -778,6 +781,29 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     device_action = ctx.live.get("device_action")
     if device_action is None:
         return _capability_missing(ctx, capability=TOOL_APP_OPEN, requested_state="opened")
+    # ADR-0209: a launch on a device that carries no Operator (the office PC, ADR-0203) is
+    # the pre-Operator ``desktop.open_application``, for the applications its contract names.
+    # Everything else - every device that advertises ``app.launch`` - is decided further down,
+    # unchanged.
+    route = launch_fallback.route_for(device_action, canonical)
+    if route == launch_fallback.ROUTE_DIRECT:
+        return _open_application_directly(ctx, device_action, canonical)
+    if route == launch_fallback.ROUTE_REFUSED:
+        return _receipt(
+            ctx,
+            capability=TOOL_APP_OPEN,
+            requested_state="opened",
+            execution=EXECUTION_REFUSED,
+            terminal=TERMINAL_FAILED,
+            server={
+                "requested": arguments.get("application"),
+                "application": canonical,
+                "path": launch_fallback.CAPABILITY_DESKTOP_OPEN_APPLICATION,
+                "allowlist": list(launch_fallback.DESKTOP_OPEN_APPLICATION_NAMES),
+            },
+            speech=_allowlist_speech(launch_fallback.DESKTOP_OPEN_APPLICATION_NAMES),
+            error_class=ERROR_UNKNOWN_APPLICATION,
+        )
     operator = _require_operator(ctx, TOOL_APP_OPEN)
     already = _window_already_open(ctx, canonical)
     if already is not None:
@@ -800,6 +826,101 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     else:
         speech = f"{name_tr} açamadım efendim."
     return {**(task.action_receipt or {}), "speech": speech}
+
+
+#: A launch is one command and its answer is the process id; the Operator's step allowed
+#: 15 s and one retry. There is no retry here: a launch is not idempotent, and the
+#: idempotency key below is what makes a re-sent tool call the same command.
+TIMEOUT_DESKTOP_OPEN_APPLICATION_S: Final = 15.0
+
+
+def _device_named(ctx: ToolContext, device_id: Any) -> tuple[str | None, str | None]:
+    """``(name, spoken)`` of the device a command went to, or ``(None, None)`` when it cannot
+    be read. ``spoken`` is the owner's own word for it (the first alias, "ofis") because that
+    is the word they used to name the machine; the name ("GMKADIRAKBABA") is for the record.
+    Best effort: a receipt without a device name is still a true receipt."""
+    if ctx.db is None or device_id is None:
+        return None, None
+    try:
+        from app.broker.models import Device
+
+        row = ctx.db.get(Device, device_id)
+    except Exception:  # noqa: BLE001 - a lookup that fails is "I don't know", never a crash
+        logger.warning("operator_launch_device_lookup_failed")
+        return None, None
+    if row is None:
+        return None, None
+    aliases = (row.metadata_json or {}).get("aliases") or []
+    spoken = str(aliases[0]).strip() if aliases else ""
+    return row.name, (spoken[:1].upper() + spoken[1:]) if spoken else row.name
+
+
+def _open_application_directly(
+    ctx: ToolContext, device_action: Any, canonical: str
+) -> dict[str, Any]:
+    """The single-step launch on a device with no Operator (ADR-0209): the pre-Operator
+    ``desktop.open_application`` and nothing else - no plan, no focus stack, no operator
+    task and no ``operator.task.*`` ledger rows, because none of that ran.
+
+    The receipt keeps the capability the owner COMMANDED (``operator.app_open``: ADR-0114/0116,
+    only a registered tool name resolves in the self-model) and says what actually ran under
+    ``observed_after.server.path``, with the device it ran on. What it can verify is what the
+    device's own answer carries - the process it started - and it says so: a launch the
+    device acknowledged without a pid is ``unverified``, not a success.
+    """
+    name_tr = _APP_TR_NAMES.get(canonical, canonical)
+    result = device_action.run(
+        capability=launch_fallback.CAPABILITY_DESKTOP_OPEN_APPLICATION,
+        payload={"application": canonical},
+        idempotency_key=f"open-application-{_action_id(ctx)}",
+        timeout_s=TIMEOUT_DESKTOP_OPEN_APPLICATION_S,
+    )
+    device_id = getattr(result, "device_id", None)
+    device_name, spoken_device = _device_named(ctx, device_id)
+    where = f"{spoken_device} cihazında " if spoken_device else ""
+    server: dict[str, Any] = {
+        "path": launch_fallback.CAPABILITY_DESKTOP_OPEN_APPLICATION,
+        "application": canonical,
+        "fallback_for": launch_fallback.CAPABILITY_APP_LAUNCH,
+        "device_id": str(device_id) if device_id is not None else None,
+        "device": device_name,
+    }
+    requested = f"opened ({launch_fallback.CAPABILITY_DESKTOP_OPEN_APPLICATION})"
+    if not result.ok:
+        # The service's own translation (app.operator.service.OperatorService._receipt): the
+        # device layer's "no capable device" is, for the owner, "no authority on this machine".
+        error_class = (
+            "capability_missing"
+            if result.error_class == "no_capable_device"
+            else result.error_class
+        )
+        return _receipt(
+            ctx,
+            capability=TOOL_APP_OPEN,
+            requested_state=requested,
+            execution=EXECUTION_FAILED,
+            terminal=TERMINAL_FAILED,
+            server={**server, "device_message": str(result.message)[:200]},
+            speech=f"{where}{name_tr} açamadım efendim.",
+            error_class=error_class or "internal_bug",
+        )
+    observed = result.result if isinstance(result.result, dict) else {}
+    started = observed.get("pid") is not None
+    local = {key: observed[key] for key in ("pid", "executable") if key in observed}
+    return _receipt(
+        ctx,
+        capability=TOOL_APP_OPEN,
+        requested_state=requested,
+        execution=EXECUTION_EXECUTED,
+        terminal=TERMINAL_VERIFIED if started else TERMINAL_UNVERIFIED,
+        server=server,
+        speech=(
+            f"{where}{name_tr} açtım efendim."
+            if started
+            else f"{where}{name_tr} açma isteğini gönderdim efendim; başladığını doğrulayamadım."
+        ),
+        local=local,
+    )
 
 
 # --------------------------------------------------------------- window control
