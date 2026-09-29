@@ -30,6 +30,7 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
+from app.devices import aliases as device_aliases
 from app.ledger.vocabulary import SUBSYSTEM_OPERATOR
 from app.logging import get_logger
 from app.operator import mission_service
@@ -155,7 +156,14 @@ def _start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         preview = True
     try:
         row = mission_service.start_mission_db(
-            ctx.db, text=text, preview=preview, source=SOURCE_VOICE, session_id=str(ctx.session_id)
+            ctx.db,
+            text=text,
+            preview=preview,
+            source=SOURCE_VOICE,
+            session_id=str(ctx.session_id),
+            # ADR-0212: the planner plans steps, not machines - the device the owner named
+            # ("ofis bilgisayarımda ... aç ve yaz") rides on the mission itself.
+            device_targets=device_aliases.targets_of_turn(_turn_record(ctx)),
         )
     except MissionServiceError as exc:
         return _clarification(exc.speech, error_class=exc.error_class)

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.broker.audit import record_audit_event
 from app.devices import affinity as device_affinity
+from app.devices import aliases as device_aliases
 from app.identity.service import SessionContext
 from app.ledger import service as ledger_service
 from app.ledger.briefing import VIA_VOICE, mark_delivered
@@ -883,10 +884,17 @@ def handle_tool_call(
         source=live_sources.pop("source_device_id", None),
     )
     live_sources["session_device_ids"] = session_devices
+    # ADR-0212: the device(s) the owner NAMED in the sentence this call belongs to. A named
+    # device wins over where the session is and over the healthiest one; one that cannot
+    # serve is a refusal, never another machine. Only the words the router recorded for the
+    # LATEST utterance are read: the model's own arguments name no device.
+    named_devices = device_aliases.targets_of_turn(ctx.get("last_utterance"))
     device_port = live_sources.get("device_action")
     bind = getattr(device_port, "bound_to", None)
-    if session_devices and callable(bind):
-        live_sources["device_action"] = bind(session_devices)
+    if (session_devices or named_devices) and callable(bind):
+        live_sources["device_action"] = (
+            bind(session_devices, targets=named_devices) if named_devices else bind(session_devices)
+        )
     tool_ctx = ToolContext(
         session_id=row.id,
         owner_session_id=owner.session_id,
@@ -1983,6 +1991,12 @@ def record_client_events(
                 # and the mission word the router heard.
                 "mission_request": intent.mission_request,
                 "mission_action": intent.mission_action,
+                # ADR-0212: the device(s) the owner NAMED in this sentence ("ofis
+                # bilgisayarımda ..."), as the canonical alias WORDS - never the sentence.
+                # Kept here, where the words are, because a tool call arrives without them;
+                # ``handle_tool_call`` binds it into the call's device port. Overwritten by
+                # every utterance, so a device named once is not named for the next sentence.
+                "device_targets": list(device_aliases.extract_aliases(text)) if text else [],
             }
             resolved.append(
                 {
