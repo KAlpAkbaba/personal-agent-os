@@ -17,6 +17,7 @@ prove nothing: the defect is what the relay hands the port.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -484,6 +485,13 @@ def test_a_named_mission_runs_every_step_on_the_named_device(monkeypatch, tmp_pa
             },
         )
     )
+    with world.factory() as db:
+        # Who the ordinary rule prefers is decided by last_seen (a clock tie on Windows is
+        # not a preference): MAIL a second ago, the office a minute ago.
+        now = datetime.now(UTC)
+        db.get(Device, world.ids["MAIL"]).last_seen_at = now - timedelta(seconds=1)
+        db.get(Device, world.ids["GMKADIRAKBABA"]).last_seen_at = now - timedelta(seconds=60)
+        db.commit()
     unnamed = world.action.selection_for("app.launch")
     assert unnamed is not None and unnamed.device.name == "MAIL", "the ordinary rule prefers MAIL"
     with world.factory() as db:

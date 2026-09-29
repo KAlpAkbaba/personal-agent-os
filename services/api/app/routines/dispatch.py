@@ -48,7 +48,6 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.devices.aliases import alias_matches
 from app.devices.commands import (
     CommandExpired,
     CommandFailed,
@@ -61,6 +60,7 @@ from app.devices.selection import (
     REASON_SESSION_AFFINITY,
     NoCapableDeviceError,
     SelectionResult,
+    named_device_target,
     select_device,
 )
 from app.devices.service import list_device_views
@@ -369,31 +369,6 @@ class RealtimeSayBriefing:
 # ---------------------------------------------------------------- real: device action
 
 
-def _one_named_device(views: list[Any], targets: Sequence[str], capability: str) -> str:
-    """The one alias token to hand ``select_device`` for what the owner NAMED (ADR-0212).
-
-    One word is that word. Several are one only when every one of them names the SAME single
-    enrolled device ("ofis bilgisayarımda, yani iş bilgisayarımda": both are GMKADIRAKBABA);
-    otherwise which machine was meant is not something to guess - the parser's first pattern
-    would answer "ev" for "evdeki dosyayı ofis bilgisayarımda aç" - so it is refused, and
-    nothing is sent anywhere. A word that names nobody is left to ``select_device``'s own
-    "not found" when it is the only word; beside another word it is the same refusal.
-    """
-    if len(targets) == 1:
-        return targets[0]
-    live = [v for v in views if v.status != "revoked"]
-    owners = [{v.id for v in live if alias_matches(list(v.aliases), t)} for t in targets]
-    if all(len(o) == 1 for o in owners) and len(set().union(*owners)) == 1:
-        return targets[0]
-    raise NoCapableDeviceError(
-        f"Birden fazla bilgisayar söylediniz ({' ve '.join(targets)}); "
-        "hangisinde yapacağımı anlayamadım.",
-        capability=capability,
-        target=" / ".join(targets),
-        reason="ambiguous_target",
-    )
-
-
 def _select_for(
     views: list[Any],
     capability: str,
@@ -412,7 +387,7 @@ def _select_for(
     """
     if targets:
         return select_device(
-            views, capability=capability, target=_one_named_device(views, targets, capability)
+            views, capability=capability, target=named_device_target(views, targets, capability)
         )
     if session_device_ids:
         return select_device(views, capability=capability, session_device_ids=session_device_ids)

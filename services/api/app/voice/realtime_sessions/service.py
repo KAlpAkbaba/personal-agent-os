@@ -14,6 +14,7 @@ import re
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Final
 
 from sqlalchemy import func, select
@@ -92,6 +93,7 @@ from app.voice.realtime_sessions.tools import (
     research_followup_refusal,
     terminal_status_for,
 )
+from app.voice.spoken_device import resolve_without_device_phrase
 
 logger = get_logger("app.voice.realtime_sessions.service")
 
@@ -1752,27 +1754,36 @@ def record_client_events(
                 macro_names_known = macros_service.name_keys(db)
             except Exception:  # noqa: BLE001 - a deployment without the macros table
                 macro_names_known = ()
-            intent: ResolvedIntent = resolve_intent(
+            # ADR-0212: a sentence that NAMES a device ("ofis bilgisayarında ... araştır") is
+            # also read without that phrase, and that reading is kept when it routes the same:
+            # the phrase is not part of the subject (a research topic, a media search, a
+            # file pattern ...). ``spoken_devices`` is the alias words, ``subject_text`` the
+            # words the subject helpers below read.
+            intent: ResolvedIntent
+            intent, subject_text, spoken_devices = resolve_without_device_phrase(
                 text,
-                macro_names=macro_names_known,
-                macro_awaiting_name=macro_awaiting_name_known,
-                session_state=RealtimeState(fsm) if fsm else None,
-                narration=narration_state,
-                has_completed_research=research_context_known,
-                alarm_ringing=alarm_ringing_known,
-                operator_running=operator_running_known,
-                document_focused=document_focused_known,
-                event_focused=event_focused_known,
-                draft_pending=draft_pending_known,
-                proposal_pending=proposal_pending_known,
-                genesis_awaiting_approval=genesis_awaiting_approval_known,
-                executive_run_state=executive_run_state_known,
-                native_build_focused=native_build_focused_known,
-                mutation_pending=mutation_pending_known,
-                mission_state=mission_state_known,
-                app_project_focused=app_project_focused_known,
-                artifact_focused=artifact_focused_known,
-                creative_focused=creative_focused_known,
+                partial(
+                    resolve_intent,
+                    macro_names=macro_names_known,
+                    macro_awaiting_name=macro_awaiting_name_known,
+                    session_state=RealtimeState(fsm) if fsm else None,
+                    narration=narration_state,
+                    has_completed_research=research_context_known,
+                    alarm_ringing=alarm_ringing_known,
+                    operator_running=operator_running_known,
+                    document_focused=document_focused_known,
+                    event_focused=event_focused_known,
+                    draft_pending=draft_pending_known,
+                    proposal_pending=proposal_pending_known,
+                    genesis_awaiting_approval=genesis_awaiting_approval_known,
+                    executive_run_state=executive_run_state_known,
+                    native_build_focused=native_build_focused_known,
+                    mutation_pending=mutation_pending_known,
+                    mission_state=mission_state_known,
+                    app_project_focused=app_project_focused_known,
+                    artifact_focused=artifact_focused_known,
+                    creative_focused=creative_focused_known,
+                ),
             )
             # B51 (req 740, 743, 744): how sure the router is; the model only for what
             # the rules left unrouted and only under the owner's flag; a question
@@ -1808,17 +1819,17 @@ def record_client_events(
                 "research_class": intent.research_class,
                 # ADR-0173: the topic of a NEW research, from the owner's own sentence - the
                 # one argument research.start needs when no model is there to write it.
-                "research_topic": research_topic_of(text) if text else None,
+                "research_topic": research_topic_of(subject_text) if text else None,
                 # ADR-0192: the fact a "bunu hatırla" sentence carries and the subject a
                 # "... hakkında ne biliyorsun" asks about - the arguments memory.remember and
                 # memory.search need when no model is there to write them (the local mode).
                 "memory_statement": (
-                    memory_statement_of(text)
+                    memory_statement_of(subject_text)
                     if text and intent.intent is Intent.MEMORY_REMEMBER
                     else None
                 ),
                 "memory_query": (
-                    memory_query_of(text)
+                    memory_query_of(subject_text)
                     if text and intent.intent is Intent.MEMORY_SEARCH
                     else None
                 ),
@@ -1957,7 +1968,7 @@ def record_client_events(
                 # (research.start's own "topic" is the same shape). Carried only for
                 # EXEC_START so no other tool is ever tempted to read raw text off the
                 # turn record instead of its own model argument.
-                "exec_directive_text": text if intent.intent == Intent.EXEC_START else None,
+                "exec_directive_text": subject_text if intent.intent == Intent.EXEC_START else None,
                 # ADR-0076. The research SHAPE, decided without the "does a completed
                 # research exist?" precondition (that precondition is what let a deictic
                 # follow-up on an empty history become a crawl), and WHICH research the
@@ -1996,7 +2007,7 @@ def record_client_events(
                 # Kept here, where the words are, because a tool call arrives without them;
                 # ``handle_tool_call`` binds it into the call's device port. Overwritten by
                 # every utterance, so a device named once is not named for the next sentence.
-                "device_targets": list(device_aliases.extract_aliases(text)) if text else [],
+                "device_targets": list(spoken_devices),
             }
             resolved.append(
                 {
@@ -2013,7 +2024,7 @@ def record_client_events(
                     or tool_for(intent.intent)
                     # A NEW research names no intent of its own (the model used to decide);
                     # the router knows its class and its topic, which is all the tool needs.
-                    or ("research.start" if text and research_topic_of(text) else None)
+                    or ("research.start" if text and research_topic_of(subject_text) else None)
                     # ...and in a LOCAL session, anything else the router did not understand
                     # is free conversation (owner decision 2026-09-19).
                     or (
