@@ -429,6 +429,11 @@ trap {
 }
 
 $OwnerSid = Resolve-OwnerSid -Explicit $OwnerSid
+# Before recovery, staging or any grant. This SID is written into DACLs with Modify, into the
+# pipe's DACL and into the service's configuration: -OwnerSid S-1-5-32-545 would have handed
+# every local user the companion's data (security review of 2a2f7f95). A user account, or
+# nothing happens.
+Assert-OwnerAccountSid -Sid $OwnerSid
 $serviceDir = Join-Path $InstallRoot "service"
 Write-Host "repo HEAD: $(Get-RepoHead -RepoRoot $repoRoot)"
 Write-Host "parameters: SkipBuild=$([bool]$SkipBuild) SkipBrowser=$([bool]$SkipBrowser) BrowserChannel=$BrowserChannel InstallRoot=$InstallRoot"

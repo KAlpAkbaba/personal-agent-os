@@ -68,6 +68,22 @@ public sealed class AuditLog
             return;
         }
 
+        if (writer == AuditWriter.OwnerSessionCompanion)
+        {
+            // Security review of 2a2f7f95: the companion's data root is a place other
+            // accounts can create folders in, so `audit` - or the root itself - may be a
+            // junction somebody planted. Asked before the directory is created, before any
+            // DACL is written and (in Write) before every row; a trail refused this way is
+            // a failed write like any other, counted and reported once.
+            _guardedDirectory = directory;
+            var refusal = Security.OwnerSessionMaterial.ReparsePointRefusal(directory);
+            if (refusal is not null)
+            {
+                _directoryProblem = refusal;
+                return;
+            }
+        }
+
         var created = !Directory.Exists(directory);
         Directory.CreateDirectory(directory);
 
@@ -80,7 +96,12 @@ public sealed class AuditLog
             // the directory is new: the machines that already carry the locked directory are
             // repaired by the process that locked it. A directory it cannot repair (created
             // elevated) is left for the installer; the write failure is reported either way.
-            _directoryProblem = Security.OwnerSessionMaterial.EnsureOwnerWritableDirectory(directory, justCreated: created);
+            //
+            // Whether an EXISTING directory needs repair is decided by writing into it, not
+            // by reading its DACL for the owner's SID: access through a group is access.
+            _directoryProblem = Security.OwnerSessionMaterial
+                .EnsureOwnerWritableDirectory(directory, justCreated: created, existingFile: path)
+                .Problem;
             return;
         }
 
@@ -150,6 +171,10 @@ public sealed class AuditLog
 
     private readonly object _failureSync = new();
     private readonly string? _directoryProblem;
+
+    // Set for the companion's trail only: the directory that is checked for a reparse point
+    // before every row. The service's directory admits no unprivileged writer to plant one.
+    private readonly string? _guardedDirectory;
     private Action<string>? _failureReport;
     private string? _firstFailure;
     private bool _failureReported;
@@ -186,6 +211,13 @@ public sealed class AuditLog
         {
             lock (_sync)
             {
+                if (_guardedDirectory is not null
+                    && Security.OwnerSessionMaterial.ReparsePointRefusal(_guardedDirectory) is { } refusal)
+                {
+                    // Not written, and not written THROUGH: the row is lost on purpose.
+                    throw new IOException(refusal);
+                }
+
                 AppendWithRetry(line + Environment.NewLine);
             }
         }

@@ -63,38 +63,60 @@ function Get-ElevationAdvice {
            "After that one run the owner's ordinary session can write and revoke it."
 }
 
-function Get-OwnerEnrollmentAclState {
+function Get-OwnerEnrollmentAclStateFromSecurity {
     <#
     .SYNOPSIS
-        Is the record's DACL the intended one, merely a safe one, or neither?
+        Is this descriptor - owner AND DACL - the intended one, merely a safe one, or neither?
+
+    .DESCRIPTION
+        Security review of 2a2f7f95. "Safe" used to read the DACL and nothing else, and to
+        wave OWNER RIGHTS through whatever it carried. browser\ lets every local user create
+        files, so another account can create the record first and keep it: the owner of a
+        file holds WRITE_DAC over it whatever its DACL says, and an OWNER RIGHTS entry can
+        grant that owner full control in so many words. The DACL can look exactly right
+        while the file is somebody else's to re-permission and rewrite - and what would be
+        rewritten is owner_authorized_for_research.
+
+        Takes the descriptor rather than a path, so that the decision can be tested against
+        owners a non-elevated test cannot give a real file.
 
     .OUTPUTS
-        Intended  - protected; SYSTEM (R,W) and the owner Modify; nothing else
-        Safe      - protected; only SYSTEM, Administrators, the owner and OWNER RIGHTS appear;
-                    the owner can read and write; no deny entry against the owner
+        Intended  - Safe, and: SYSTEM (R,W), the owner Modify, nothing else at all
+        Safe      - owned by the owner's account, Administrators or SYSTEM; protected; only
+                    SYSTEM, Administrators, the owner and OWNER RIGHTS appear; OWNER RIGHTS
+                    carries read at most; the owner can read and write; no deny against it
         Problems  - why it is not Safe (empty when it is)
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][System.Security.AccessControl.FileSystemSecurity]$Security,
         [Parameter(Mandatory = $true)][string]$OwnerSid
     )
 
-    $access = [System.Security.AccessControl.AccessControlSections]::Access
-    $security = ([System.IO.FileInfo]$Path).GetAccessControl($access)
     $problems = New-Object System.Collections.ArrayList
 
-    if (-not $security.AreAccessRulesProtected) {
+    $fileOwner = $null
+    try { $fileOwner = $Security.GetOwner([System.Security.Principal.SecurityIdentifier]) } catch { $fileOwner = $null }
+    $fileOwnerValue = if ($null -eq $fileOwner) { "(unreadable)" } else { $fileOwner.Value }
+    $ownerTrusted = ($fileOwnerValue -eq $OwnerSid) -or
+                    ($fileOwnerValue -eq $script:EnrollmentSidAdministrators) -or
+                    ($fileOwnerValue -eq $script:EnrollmentSidSystem)
+    if (-not $ownerTrusted) {
+        [void]$problems.Add("it is owned by $fileOwnerValue, which is neither $OwnerSid nor Administrators nor SYSTEM - and an owner can re-permission and rewrite what it owns")
+    }
+
+    if (-not $Security.AreAccessRulesProtected) {
         [void]$problems.Add("it inherits its permissions from the directory, whose readers include every local user")
     }
 
     $synchronize = [int][System.Security.AccessControl.FileSystemRights]::Synchronize
     $readWrite = [int]([System.Security.AccessControl.FileSystemRights]::Read -bor [System.Security.AccessControl.FileSystemRights]::Write) -band (-bnot $synchronize)
+    $readOnly = [int][System.Security.AccessControl.FileSystemRights]::Read -band (-bnot $synchronize)
     $modify = [int][System.Security.AccessControl.FileSystemRights]::Modify
     $ownerRights = 0
     $systemRights = 0
     $others = 0
-    foreach ($ace in $security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+    foreach ($ace in $Security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
         $sid = $ace.IdentityReference.Value
         $rights = [int]$ace.FileSystemRights -band (-bnot $synchronize)
         if ($ace.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) {
@@ -103,7 +125,15 @@ function Get-OwnerEnrollmentAclState {
         }
         if ($sid -eq $OwnerSid) { $ownerRights = $ownerRights -bor $rights }
         elseif ($sid -eq $script:EnrollmentSidSystem) { $systemRights = $systemRights -bor $rights }
-        elseif ($sid -eq $script:EnrollmentSidAdministrators -or $sid -eq $script:EnrollmentSidOwnerRights) { $others++ }
+        elseif ($sid -eq $script:EnrollmentSidAdministrators) { $others++ }
+        elseif ($sid -eq $script:EnrollmentSidOwnerRights) {
+            $others++
+            # Read (which contains READ_CONTROL) is all it may say. Anything more is a grant
+            # to whoever owns the file, in words the rest of the DACL does not show.
+            if (($rights -band (-bnot $readOnly)) -ne 0) {
+                [void]$problems.Add("OWNER RIGHTS carries $($ace.FileSystemRights): whoever owns the record may do that to it, which is more than read")
+            }
+        }
         else {
             $others++
             [void]$problems.Add("$sid is allowed $($ace.FileSystemRights) on a record that names the endpoint driving a signed-in browser")
@@ -114,12 +144,42 @@ function Get-OwnerEnrollmentAclState {
     }
 
     $safe = (@($problems).Count -eq 0)
+    $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
     return [pscustomobject]@{
-        Intended = ($safe -and $others -eq 0 -and $ownerRights -eq $modify -and $systemRights -eq $readWrite)
-        Safe     = $safe
-        Problems = @($problems)
-        Sddl     = $security.GetSecurityDescriptorSddlForm($access)
+        Intended     = ($safe -and $others -eq 0 -and $ownerRights -eq $modify -and $systemRights -eq $readWrite)
+        Safe         = $safe
+        Owner        = $fileOwnerValue
+        OwnerTrusted = $ownerTrusted
+        Problems     = @($problems)
+        Sddl         = $Security.GetSecurityDescriptorSddlForm($sections)
     }
+}
+
+function Get-OwnerEnrollmentAclState {
+    <#
+    .SYNOPSIS
+        Get-OwnerEnrollmentAclStateFromSecurity for a record on disk: its owner and its DACL
+        are read, and nothing else (the SACL would need a privilege this has no use for).
+
+    .PARAMETER ReadSecurity
+        How the descriptor is read. Injectable, because a non-elevated test cannot make
+        another account the owner of a real file; the script never passes it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        [scriptblock]$ReadSecurity = $null
+    )
+
+    if ($null -ne $ReadSecurity) {
+        $security = & $ReadSecurity $Path
+    }
+    else {
+        $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+        $security = ([System.IO.FileInfo]$Path).GetAccessControl($sections)
+    }
+    return Get-OwnerEnrollmentAclStateFromSecurity -Security $security -OwnerSid $OwnerSid
 }
 
 function Set-OwnerEnrollmentAcl {
@@ -131,17 +191,43 @@ function Set-OwnerEnrollmentAcl {
         Acl   - "already" (nothing to do), "set" (written), "kept" (could not be changed
                 from this account, and what is there is safe)
         Note  - for "kept": what is there, and what would change it
-        Throws when the DACL can neither be changed nor accepted.
+        Throws when the record can neither be put right nor accepted - in particular when
+        it is owned by an account that should not own it and this run is not elevated.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$OwnerSid
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        [scriptblock]$ReadSecurity = $null,
+        [bool]$Elevated = ([System.Security.Principal.WindowsPrincipal]::new(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator)
     )
 
-    $state = Get-OwnerEnrollmentAclState -Path $Path -OwnerSid $OwnerSid
+    $state = Get-OwnerEnrollmentAclState -Path $Path -OwnerSid $OwnerSid -ReadSecurity $ReadSecurity
     if ($state.Intended) {
         return [pscustomobject]@{ Acl = "already"; Note = ""; Sddl = $state.Sddl }
+    }
+
+    if (-not $state.OwnerTrusted) {
+        # Somebody else's file. Writing a DACL onto it settles nothing - its owner rewrites
+        # the DACL whenever it likes - so either the file is taken over, which takes an
+        # elevated run, or nothing is done to it at all.
+        if (-not $Elevated) {
+            throw "the enrollment record at $Path is owned by $($state.Owner), which is neither the owner's account ($OwnerSid) nor Administrators nor SYSTEM. " +
+                  "Whoever owns it can change its permissions and its content at any time, so nothing was written to it. " +
+                  "Run this once from an ELEVATED PowerShell (Start menu > Windows PowerShell > Run as administrator): an elevated run takes the file over and protects it."
+        }
+        try {
+            $ownership = New-Object System.Security.AccessControl.FileSecurity
+            $ownership.SetOwner((New-Object System.Security.Principal.SecurityIdentifier($script:EnrollmentSidAdministrators)))
+            ([System.IO.FileInfo]$Path).SetAccessControl($ownership)
+        }
+        catch {
+            $why = $_.Exception.Message
+            if ($_.Exception.InnerException) { $why = $_.Exception.InnerException.Message }
+            throw "the enrollment record at $Path is owned by $($state.Owner) and could not be taken over by Administrators ($why). Nothing was written to it. Delete the file from an elevated session and run this again."
+        }
     }
 
     $allow = [System.Security.AccessControl.AccessControlType]::Allow
@@ -168,7 +254,7 @@ function Set-OwnerEnrollmentAcl {
     }
 
     if ($null -eq $refusal) {
-        $after = Get-OwnerEnrollmentAclState -Path $Path -OwnerSid $OwnerSid
+        $after = Get-OwnerEnrollmentAclState -Path $Path -OwnerSid $OwnerSid -ReadSecurity $ReadSecurity
         if (-not $after.Intended) {
             throw "the permissions of $Path were written and do not read back as intended ($($after.Sddl)): $($after.Problems -join '; ')"
         }
@@ -179,7 +265,7 @@ function Set-OwnerEnrollmentAcl {
         return [pscustomobject]@{
             Acl  = "kept"
             Note = "the permissions of $Path could not be changed from this session ($refusal) and were kept as they are: $($state.Sddl). " +
-                   "They are safe - only SYSTEM, Administrators and the owner appear - but the owner holds less than Modify, so the file can be emptied and not deleted. " +
+                   "They are safe - the file is owned by $($state.Owner), and only SYSTEM, Administrators and the owner appear - but the owner holds less than Modify, so the file can be emptied and not deleted. " +
                    (Get-ElevationAdvice -Path $Path)
             Sddl = $state.Sddl
         }
@@ -188,7 +274,6 @@ function Set-OwnerEnrollmentAcl {
     throw "the enrollment record cannot be protected: $($state.Problems -join '; '), and its permissions could not be changed from this session ($refusal). Nothing was written. " +
           (Get-ElevationAdvice -Path $Path)
 }
-
 function Test-OwnerEnrollmentWritable {
     <#
     .SYNOPSIS
@@ -270,7 +355,12 @@ function Write-OwnerEnrollmentRecord {
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Json,
         [string]$OwnerSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value,
-        [scriptblock]$ReadBack = { param($p) [System.IO.File]::ReadAllBytes($p) }
+        [scriptblock]$ReadBack = { param($p) [System.IO.File]::ReadAllBytes($p) },
+        # Both for tests, which can be neither elevated nor the stranger who owns a file.
+        [scriptblock]$ReadSecurity = $null,
+        [bool]$Elevated = ([System.Security.Principal.WindowsPrincipal]::new(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator)
     )
 
     $writable = Test-OwnerEnrollmentWritable -Path $Path
@@ -289,7 +379,7 @@ function Write-OwnerEnrollmentRecord {
     }
 
     try {
-        $acl = Set-OwnerEnrollmentAcl -Path $Path -OwnerSid $OwnerSid
+        $acl = Set-OwnerEnrollmentAcl -Path $Path -OwnerSid $OwnerSid -ReadSecurity $(if ($createdHere) { $null } else { $ReadSecurity }) -Elevated $Elevated
     }
     catch {
         # Nothing of the record has been written yet; an empty file made a moment ago is
