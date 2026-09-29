@@ -712,15 +712,43 @@ def research_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     }
     label = f"{topic} araştırmasını" if topic else "Araştırmayı"
     if resolution.artifact_id and ctx.live.get("device_action") is not None:
-        from app.voice.realtime_sessions.tools_artifacts import artifact_open
+        from app.voice.realtime_sessions.tools_artifacts import open_artifact_by_id
 
-        opened = artifact_open(ctx, {"artifact_id": str(resolution.artifact_id)})
+        # THIS research's report, by id. ``artifact_open`` resolves its target from the
+        # artifact focus stack, which a research never moves: handing it the id as an
+        # argument (what this did until 2026-09-29) opened whatever that stack held, or
+        # asked "Hangi dosya?" - and either way the owner heard "cihazda açamadım".
+        try:
+            report_artifact_id = uuid.UUID(str(resolution.artifact_id))
+        except ValueError:
+            report_artifact_id = None
+        opened = (
+            open_artifact_by_id(ctx, report_artifact_id)
+            if report_artifact_id is not None
+            else {"error_class": "not_found", "speech": ""}
+        )
         out["open_receipt"] = opened
-        if opened.get("execution_status") == "executed":
+        if opened.get("execution_status") == "executed" and opened.get("state") == "opened":
             out["opened"] = True
             out["speech"] = f"{label} açtım efendim. {summary}"
             return out
-        out["speech"] = f"{label} odağa aldım efendim; cihazda açamadım. {summary}"
+        # Not opened, and the owner is told WHY in the open's own sentence (no device
+        # that can fetch a file, a refused origin, a render that is not there ...) - the
+        # same sentence the Cockpit shows for the same refusal. One warning names it for
+        # whoever reads the log: this failure used to leave no line anywhere.
+        error_class = str(opened.get("error_class") or "") or "not_opened"
+        out["open_error_class"] = error_class
+        logger.warning(
+            "research_open_device_open_failed",
+            research_job_id=str(resolution.research_job_id),
+            artifact_id=str(resolution.artifact_id),
+            error_class=error_class,
+            state=opened.get("state"),
+            format=opened.get("format"),
+        )
+        why = str(opened.get("speech") or "").strip()
+        not_opened = f"{label} odağa aldım efendim; cihazda açamadım."
+        out["speech"] = " ".join(part for part in (not_opened, why, summary) if part)
         return out
     out["speech"] = f"{label} odağa aldım efendim; açacak bir cihaz yok. {summary}"
     return out
