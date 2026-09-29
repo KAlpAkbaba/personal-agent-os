@@ -4,6 +4,30 @@ using System.Text.Json.Nodes;
 namespace PagentOS.Agent.Core.Audit;
 
 /// <summary>
+/// Which process writes this trail, which decides who may write its directory.
+///
+/// Stated by the caller, never inferred from the account the process happens to run as: an
+/// elevated developer console and the installed service look alike from the inside, and so do
+/// the companion and any other process of the owner's.
+/// </summary>
+public enum AuditWriter
+{
+    /// <summary>
+    /// The Device Service, as LocalSystem. The directory is service-owned machine material:
+    /// SYSTEM and Administrators, nobody else. This is the zero value AND the constructor's
+    /// default, so a caller that forgets the argument gets the strict posture — the service
+    /// cannot inherit the weaker one by omission.
+    /// </summary>
+    Service = 0,
+
+    /// <summary>
+    /// The Session Companion, as the owner, not elevated. The directory additionally grants
+    /// the account the companion runs as Modify; see <see cref="Security.OwnerSessionMaterial"/>.
+    /// </summary>
+    OwnerSessionCompanion = 1,
+}
+
+/// <summary>
 /// Local append-only JSONL audit log (DEVICE_PROTOCOL.md §7). One JSON object per line.
 /// Never records secrets; detail payloads are truncated at 4 KB.
 /// </summary>
@@ -26,23 +50,112 @@ public sealed class AuditLog
     private readonly object _sync = new();
     private readonly string _path;
 
-    public AuditLog(string path)
+    /// <param name="path">The JSONL file. Its directory is created if it is missing.</param>
+    /// <param name="writer">
+    /// Whose trail this is. <see cref="AuditWriter.Service"/> unless the caller says otherwise.
+    /// </param>
+    /// <param name="developerRun">
+    /// For <see cref="AuditWriter.Service"/> only: the machine-material posture, stated at the
+    /// call instead of read from the process-wide default (tests assert the production
+    /// posture this way). Null means the process-wide default.
+    /// </param>
+    public AuditLog(string path, AuditWriter writer = AuditWriter.Service, bool? developerRun = null)
     {
         _path = path;
         var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory))
+        if (string.IsNullOrEmpty(directory))
         {
-            var created = !Directory.Exists(directory);
-            Directory.CreateDirectory(directory);
-            if (created)
-            {
-                // The audit directory is service-owned machine material: the service writes
-                // it as SYSTEM, and nobody unprivileged should be able to edit the record of
-                // what the agent did.
-                Security.MachineMaterial.Protect(directory, Security.MachineMaterialKind.Directory);
-            }
+            return;
+        }
+
+        var created = !Directory.Exists(directory);
+        Directory.CreateDirectory(directory);
+
+        if (writer == AuditWriter.OwnerSessionCompanion)
+        {
+            // 2026-09-29: this branch did not exist. The companion's directory was protected
+            // as the service's is - SYSTEM and Administrators only - by the companion itself,
+            // which could apply that DACL (it owned the directory it had just created) and
+            // could not write a row afterwards. So this runs on EVERY start, not only when
+            // the directory is new: the machines that already carry the locked directory are
+            // repaired by the process that locked it. A directory it cannot repair (created
+            // elevated) is left for the installer; the write failure is reported either way.
+            _directoryProblem = Security.OwnerSessionMaterial.EnsureOwnerWritableDirectory(directory, justCreated: created);
+            return;
+        }
+
+        if (created)
+        {
+            // The audit directory is service-owned machine material: the service writes
+            // it as SYSTEM, and nobody unprivileged should be able to edit the record of
+            // what the agent did.
+            Security.MachineMaterial.Protect(directory, Security.MachineMaterialKind.Directory, developerRun);
         }
     }
+
+    /// <summary>
+    /// Names where the FIRST failed write is reported — the process's own log, where someone
+    /// will read it. Once per instance, however many rows are lost after it: the count is in
+    /// <see cref="FailedWrites"/>, and a broken path must not turn every audited action into
+    /// a log line.
+    ///
+    /// The audit log is built before the logger in both hosts, so a failure that happened
+    /// before this was called is reported at the call rather than forgiven.
+    /// </summary>
+    public void ReportFirstWriteFailureTo(Action<string> report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        string? pending;
+        lock (_failureSync)
+        {
+            _failureReport = report;
+            pending = _failureReported ? null : _firstFailure;
+            if (pending is not null)
+            {
+                _failureReported = true;
+            }
+        }
+
+        if (pending is not null)
+        {
+            Deliver(report, pending);
+        }
+    }
+
+    private void NoteFailure(string message)
+    {
+        Action<string>? report;
+        string text;
+        lock (_failureSync)
+        {
+            _firstFailure ??= _directoryProblem is null ? message : $"{message} [{_directoryProblem}]";
+            if (_failureReported || _failureReport is null)
+            {
+                return;
+            }
+
+            _failureReported = true;
+            report = _failureReport;
+            text = _firstFailure;
+        }
+
+        Deliver(report, text);
+    }
+
+    private static void Deliver(Action<string> report, string message)
+    {
+        // The same rule as the write itself: reporting a lost row must not lose the command.
+        try { report(message); } catch (Exception) { }
+    }
+
+    private readonly object _failureSync = new();
+    private readonly string? _directoryProblem;
+    private Action<string>? _failureReport;
+    private string? _firstFailure;
+    private bool _failureReported;
+
+    /// <summary>The file this trail is written to.</summary>
+    public string FilePath => _path;
 
     public void Write(
         string eventType,
@@ -92,6 +205,11 @@ public sealed class AuditLog
             {
                 try { Console.Error.WriteLine($"audit write failed ({_path}): {message}"); } catch (Exception) { }
             }
+
+            // stderr is captured for the service and read by nobody for the companion, which
+            // is how a trail stayed unwritten for a day (2026-09-29). The first failure also
+            // goes wherever the host said its log is.
+            NoteFailure(message);
         }
     }
 

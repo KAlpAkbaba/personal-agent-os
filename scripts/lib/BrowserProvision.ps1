@@ -336,6 +336,63 @@ function Set-OwnerWritableDirectory {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
+function Initialize-CompanionDataDirectories {
+    <#
+    .SYNOPSIS
+        Everything under the companion's data root that the OWNER's non-elevated companion
+        must be able to write, created or repaired before the runtime starts: the root, the
+        audit directory, and (when a browser is provisioned) the browser data directory.
+
+    .DESCRIPTION
+        The installer used to do this inline, for the root and the browser directory only,
+        and only when a browser was provisioned. The audit directory was nobody's: the
+        companion created it and protected it against itself (see InstallAcl.ps1), the
+        inheritable grant on the root could not reach a protected DACL, and on 2026-09-29
+        two installs of a healthy browser worker 0.5.0 were rolled back for want of an audit
+        row. A function, so that a rerun repairing an already-broken machine is a thing the
+        tests can do without elevation.
+
+        Needs InstallAcl.ps1 (Set-CompanionAuditDirectoryAcl), which the installer loads.
+        Returns what it did, as lines the installer prints.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CompanionDataDir,
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        # Empty when the install has no browser worker (-SkipBrowser).
+        [string]$BrowserDataDir
+    )
+
+    $messages = New-Object System.Collections.ArrayList
+
+    # The root first: the companion writes logs\, artifacts\ and its candidate files here,
+    # browser or no browser.
+    Set-OwnerWritableDirectory -Path $CompanionDataDir -OwnerSid $OwnerSid
+
+    $auditDir = Join-Path $CompanionDataDir "audit"
+    $audit = Set-CompanionAuditDirectoryAcl -Path $auditDir -OwnerSid $OwnerSid
+    if ($audit.Created) {
+        [void]$messages.Add("companion audit directory $auditDir created, writable by SID $OwnerSid")
+    }
+    elseif ($audit.Changed) {
+        [void]$messages.Add("companion audit directory $auditDir REPAIRED: it was not writable by SID $OwnerSid as it stood ($($audit.Before)); it is now")
+    }
+    else {
+        [void]$messages.Add("companion audit directory $auditDir is writable by SID $OwnerSid")
+    }
+
+    if ($BrowserDataDir) {
+        Set-OwnerWritableDirectory -Path $BrowserDataDir -OwnerSid $OwnerSid
+        [void]$messages.Add("browser data directory $BrowserDataDir is writable by SID $OwnerSid")
+    }
+
+    return [pscustomobject]@{
+        AuditDirectory = $auditDir
+        Audit          = $audit
+        Messages       = @($messages)
+    }
+}
+
 function Test-OwnerWritableDirectory {
     <#  Does an explicit, inheritable Modify (or better) ACE for this SID exist on the directory?  #>
     [CmdletBinding()]

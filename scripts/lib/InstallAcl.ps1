@@ -516,6 +516,221 @@ function Set-MachineDataAcl {
     }
 }
 
+# ------------------------------------------------------- the companion's audit directory
+#
+# 2026-09-29, on the owner's machine. The Session Companion is the OWNER's non-elevated
+# process, and its audit directory was protected as if it were the service's: a protected
+# DACL naming SYSTEM and Administrators only, applied by the companion itself on its first
+# start (it had just created the directory, and a creator owns what it creates). From then
+# on it could not write a row. The installer granted the owner Modify on the companion's
+# data ROOT, inheritable - and a protected DACL inherits nothing - so the health check
+# waited 90 s for a browser_worker_started row that could not be written and rolled back a
+# browser worker 0.5.0 that had passed its self-check. Twice, until the owner ran icacls by
+# hand.
+#
+# Protection is therefore by identity. Set-MachineDataAcl above stays what it is, for what
+# the service owns. What the companion writes names the owner SID the companion runs as -
+# with Modify, not full control, and nobody else.
+
+function Get-CompanionAuditDirectoryReport {
+    <#
+    .SYNOPSIS
+        Can this SID write the companion's audit trail? Read from the DACL, so the answer
+        is the same whoever asks - the elevated installer asks about another account.
+
+    .DESCRIPTION
+        OwnerCanWrite is true when allow entries for the SID (explicit or inherited) that
+        reach the FILES in the directory add up to Modify, and no deny entry against the
+        SID takes any of it away. OtherWriters lists every other principal holding write
+        authority beyond SYSTEM and Administrators; it is evidence, not the verdict.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$OwnerSid
+    )
+
+    $acl = Get-AclReport -Path $Path
+    $problems = New-Object System.Collections.ArrayList
+    $otherWriters = New-Object System.Collections.ArrayList
+    $ownerCanWrite = $false
+
+    if (-not $acl.Exists) {
+        [void]$problems.Add("$Path does not exist")
+    }
+    elseif (-not $acl.Readable) {
+        [void]$problems.Add("the security descriptor of $Path cannot be read from this account: $($acl.Error)")
+    }
+    else {
+        $modify = [int][System.Security.AccessControl.FileSystemRights]::Modify
+        $allowed = 0
+        $denied = 0
+        foreach ($ace in $acl.Aces) {
+            $sid = Resolve-SidValue -Identity $ace.IdentityReference
+            if (-not $sid) { continue }
+            $isAllow = ($ace.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow)
+            if ($sid -eq $OwnerSid) {
+                if (-not $isAllow) { $denied = $denied -bor ([int]$ace.FileSystemRights -band $modify) }
+                elseif ($ace.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ObjectInherit) {
+                    # An entry for "this folder only" never reaches the audit FILE.
+                    $allowed = $allowed -bor [int]$ace.FileSystemRights
+                }
+                continue
+            }
+            if ($isAllow -and (([int]$ace.FileSystemRights -band [int]$script:WriteRights) -ne 0) -and
+                ($script:WriteAuthorizedSids -notcontains $sid)) {
+                [void]$otherWriters.Add("$sid ($($ace.FileSystemRights))")
+            }
+        }
+
+        if ($denied -ne 0) {
+            [void]$problems.Add("a deny entry against $OwnerSid takes away $([System.Security.AccessControl.FileSystemRights]$denied)")
+        }
+        if (($allowed -band $modify) -ne $modify) {
+            $has = if ($allowed -eq 0) { "nothing" } else { [string][System.Security.AccessControl.FileSystemRights]$allowed }
+            [void]$problems.Add("$OwnerSid is allowed $has on files in $Path; the companion needs Modify to append a row")
+        }
+        $ownerCanWrite = (@($problems).Count -eq 0)
+    }
+
+    return [pscustomobject]@{
+        Path          = $Path
+        OwnerSid      = $OwnerSid
+        Exists        = [bool]$acl.Exists
+        Readable      = [bool]$acl.Readable
+        IsProtected   = [bool]$acl.IsProtected
+        OwnerCanWrite = $ownerCanWrite
+        OtherWriters  = @($otherWriters)
+        Problems      = @($problems)
+        Sddl          = $acl.Sddl
+    }
+}
+
+function Set-CompanionAuditDirectoryAcl {
+    <#
+    .SYNOPSIS
+        Create or REPAIR the companion's audit directory: a protected DACL with SYSTEM and
+        Administrators full control and the owner SID Modify, inherited by the trail.
+
+    .DESCRIPTION
+        Idempotent: a directory that already carries exactly this DACL is left alone and
+        reported as unchanged. Anything else - the locked state the old companion produced,
+        a deny entry, a stray grant, plain ProgramData inheritance (which lets every local
+        user create files beside the trail) - is replaced, not merged into.
+
+        Only the descriptor is written. The rows already in the trail are never touched.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$OwnerSid
+    )
+
+    $created = -not (Test-Path -LiteralPath $Path)
+    if ($created) {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    }
+
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+               [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $none = [System.Security.AccessControl.PropagationFlags]::None
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+
+    # Built from nothing rather than edited: what the directory ends up with is what is
+    # written here, whatever it carried before.
+    $wanted = New-Object System.Security.AccessControl.DirectorySecurity
+    $wanted.SetAccessRuleProtection($true, $false)
+    foreach ($grant in @(
+        @{ Sid = $script:SidSystem;         Rights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ Sid = $script:SidAdministrators; Rights = [System.Security.AccessControl.FileSystemRights]::FullControl },
+        @{ Sid = $OwnerSid;                 Rights = [System.Security.AccessControl.FileSystemRights]::Modify }
+    )) {
+        $identity = New-Object System.Security.Principal.SecurityIdentifier($grant.Sid)
+        $wanted.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($identity, $grant.Rights, $inherit, $none, $allow)))
+    }
+    # Compared entry by entry, not as SDDL text: the descriptor read back from disk carries
+    # the auto-inherited flag (D:PAI) that one built in memory does not (D:P), and a string
+    # comparison called every correct directory changed.
+    $describe = {
+        param($security)
+        $entries = @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+            "$($_.IdentityReference.Value)|$([int]$_.FileSystemRights)|$([int]$_.InheritanceFlags)|$([int]$_.PropagationFlags)|$($_.AccessControlType)|$($_.IsInherited)"
+        } | Sort-Object)
+        "protected=$($security.AreAccessRulesProtected);" + ($entries -join ";")
+    }
+    $access = [System.Security.AccessControl.AccessControlSections]::Access
+    $before = $null
+    $current = $null
+    try {
+        $onDisk = Get-SecurityDescriptor -Path $Path -Sections $access
+        $before = $onDisk.GetSecurityDescriptorSddlForm($access)
+        $current = & $describe $onDisk
+    }
+    catch { $before = "unreadable: $($_.Exception.Message)" }
+
+    $changed = ($current -ne (& $describe $wanted))
+    if ($changed) {
+        ([System.IO.DirectoryInfo]$Path).SetAccessControl($wanted)
+
+        # A trail written while the directory was in some other state may carry explicit
+        # entries of its own; /reset makes it inherit what the directory now says.
+        if (@(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue).Count -gt 0) {
+            $icacls = Get-SystemTool -Name "icacls.exe"
+            $reset = Invoke-NativeProcess -FilePath $icacls `
+                -Arguments @((Join-Path $Path "*"), "/reset", "/T", "/C", "/Q") -TimeoutSeconds 120
+            if ($reset.ExitCode -ne 0) {
+                Write-Warning "icacls reported exit $($reset.ExitCode) while resetting the audit trail's ACL under $Path; the report below is authoritative"
+            }
+        }
+    }
+
+    $after = Get-CompanionAuditDirectoryReport -Path $Path -OwnerSid $OwnerSid
+    if (-not $after.OwnerCanWrite) {
+        throw "the companion's audit directory is still not writable by $OwnerSid after the repair: $($after.Problems -join '; ')"
+    }
+
+    return [pscustomobject]@{
+        Path    = $Path
+        Created = $created
+        Changed = $changed
+        Before  = $before
+        After   = $after
+    }
+}
+
+function Get-CompanionAuditDirectoryVerdict {
+    <#
+    .SYNOPSIS
+        The verifier's row "audit dir writable by owner", as Criterion / Status / Evidence
+        in the PROVEN_REAL / NOT_YET_PROVEN vocabulary. Read-only.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$OwnerSid
+    )
+
+    $criterion = "audit dir writable by owner"
+    $report = Get-CompanionAuditDirectoryReport -Path $Path -OwnerSid $OwnerSid
+    if ($report.OwnerCanWrite) {
+        $evidence = "$OwnerSid holds Modify on $Path, inherited by the trail ($($report.Sddl))"
+        if (@($report.OtherWriters).Count -gt 0) {
+            $evidence += "; NOTE other principals can write there too: $($report.OtherWriters -join ', ') - rerun scripts\install-device-service.ps1 to state the DACL"
+        }
+        return [pscustomobject]@{ Criterion = $criterion; Status = "PROVEN_REAL"; Evidence = $evidence }
+    }
+
+    $remedy = "rerun scripts\install-device-service.ps1 elevated: it creates or repairs this directory before the runtime starts"
+    if (-not $report.Exists) {
+        $remedy = "start the companion once, or $remedy"
+    }
+    return [pscustomobject]@{
+        Criterion = $criterion
+        Status    = "NOT_YET_PROVEN"
+        Evidence  = "$($report.Problems -join '; ') - the companion (running as $OwnerSid) cannot write its audit trail, so no browser_worker_started row can appear; $remedy"
+    }
+}
+
 function Restore-MachineStateAcl {
     <#
     .SYNOPSIS

@@ -68,20 +68,45 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# Writing, protecting and revoking the record live in the library, where they are tested
+# against sandbox files (scripts\tests\owner-enrollment.tests.ps1). This script cannot be:
+# it closes and relaunches the owner's browser.
+. (Join-Path $PSScriptRoot "..\lib\OwnerEnrollment.ps1")
+
 function Write-Step { param([string]$Text) Write-Host "  $Text" }
 
 # ---------------------------------------------------------------- revoke
 
 if ($Revoke) {
-    if (Test-Path -LiteralPath $EnrollmentFile) {
-        Remove-Item -LiteralPath $EnrollmentFile -Force
-        Write-Host "Enrollment revoked: $EnrollmentFile removed." -ForegroundColor Green
-        Write-Host "The worker will now refuse profile 'owner'. Close Chrome and reopen it normally."
+    # 2026-09-29: a record created by an elevated run could not be deleted by the owner's
+    # ordinary session, and the delete's refusal was all the owner was told. Revoking now
+    # empties what it cannot delete, and fails - non-zero, in words - when it can do neither.
+    try {
+        $revoked = Remove-OwnerEnrollmentRecord -Path $EnrollmentFile
+    }
+    catch {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        exit 1
+    }
+    if ($revoked.Outcome -eq "absent") {
+        Write-Host $revoked.Message -ForegroundColor Yellow
     }
     else {
-        Write-Host "Nothing to revoke; $EnrollmentFile does not exist." -ForegroundColor Yellow
+        Write-Host $revoked.Message -ForegroundColor Green
+        Write-Host "The worker will now refuse profile 'owner'. Close Chrome and reopen it normally."
     }
     exit 0
+}
+
+# ------------------------------------------------- can this run finish at all?
+#
+# Asked BEFORE Chrome is touched. On 2026-09-29 the owner's browser was closed and relaunched
+# and only then did the record turn out to be beyond this session's reach.
+$writable = Test-OwnerEnrollmentWritable -Path $EnrollmentFile
+if (-not $writable.Ok) {
+    Write-Host "Stopped. Nothing was changed, and Chrome was not touched." -ForegroundColor Red
+    Write-Host $writable.Reason -ForegroundColor Red
+    exit 2
 }
 
 # ---------------------------------------------------------------- chrome
@@ -180,23 +205,37 @@ $record = [ordered]@{
         }
     )
 }
-$directory = Split-Path -Parent $EnrollmentFile
-if (-not (Test-Path -LiteralPath $directory)) {
-    $null = New-Item -ItemType Directory -Path $directory -Force
-}
 # WITHOUT a byte-order mark. PowerShell 5.1's `Out-File -Encoding utf8` always writes
 # one, and the Python side that reads this file rejected it outright
 # ("Unexpected UTF-8 BOM") the first time this ran for real. The reader tolerates a BOM
 # now as well, because a human editing this in Notepad would reintroduce one - but the
 # writer should not be the thing that needs forgiving.
-$json = $record | ConvertTo-Json -Depth 6
-[System.IO.File]::WriteAllText($EnrollmentFile, $json, (New-Object System.Text.UTF8Encoding($false)))
-Write-Step "recorded: $EnrollmentFile"
-
+#
 # Owner-only. The record is not a secret in the password sense, but it names the exact
 # loopback endpoint that drives a signed-in browser, so it is not world-readable either.
-$acl = "$env:SystemRoot\System32\icacls.exe"
-& $acl $EnrollmentFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" /grant:r "SYSTEM:(R,W)" | Out-Null
+#
+# Protected, written and READ BACK by the library, which throws on any of the three. The
+# line after it is therefore the only place that may say "recorded" (2026-09-29: it was
+# said before the permissions call, whose refusal went to Out-Null).
+$json = $record | ConvertTo-Json -Depth 6
+try {
+    $written = Write-OwnerEnrollmentRecord -Path $EnrollmentFile -Json $json
+}
+catch {
+    Write-Host ""
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    Write-Host "Chrome IS running with the debugging port, and the agent is NOT authorized to use it: there is no valid record." -ForegroundColor Red
+    Write-Host "Close Chrome and reopen it normally, or run this again as the message above says."
+    exit 3
+}
+Write-Step "recorded: $EnrollmentFile ($($written.Bytes) bytes, sha256 $($written.Sha256.Substring(0, 12)), read back and compared)"
+if ($written.Acl -eq "kept") {
+    Write-Host ""
+    Write-Host "NOTE: $($written.AclNote)" -ForegroundColor Yellow
+}
+else {
+    Write-Step "protected: SYSTEM and $($env:USERNAME) only (permissions $($written.Acl))"
+}
 
 # A shortcut that launches Chrome the SAME way this script just did.
 #

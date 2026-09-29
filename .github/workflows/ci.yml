@@ -205,6 +205,7 @@ jobs:
           powershell -NoProfile -File scripts\tests\installer-deploy.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-acl.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-browser.tests.ps1 && ^
+          powershell -NoProfile -File scripts\tests\owner-enrollment.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-evidence.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\agent-update.tests.ps1 && ^
           powershell -NoProfile -File scripts\tests\installer-release.tests.ps1 && ^
