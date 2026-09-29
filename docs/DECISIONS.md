@@ -16278,3 +16278,127 @@ this PC (ADR-0208, ADR-0212); a research report opens here in the owner's Chrome
 `file.fetch` path belongs to the Operator family (ADR-0210). Open risk unchanged and the
 owner's alone to weigh: an employer's endpoint policy may object to a LocalSystem service
 that dials a personal tailnet, and now also to a debugging port on a signed-in Chrome.
+## ADR-0210 — A report opened from a device that cannot `file.fetch` opens as a new tab in the owner's own Chrome (2026-09-29)
+
+**Finding.** The owner finished a research run from the office PC and heard "…cihazda
+açamadım". The device was never asked, and the cloud side had two defects: `research_open`
+handed the report's id to `artifact_open` as an argument that tool never reads (it resolves
+its target from the artifact focus stack, which a research never moves — with an empty stack
+the open became the question "Hangi dosya efendim?", reported as "açamadım"; with a factory
+artifact on the stack the wrong file opened), and every failure was spoken as the same three
+words and logged nowhere. Underneath both: opening an artifact is the device's `file.fetch`,
+which belongs to the documents family and is advertised only with the Operator family, so the
+office PC (ADR-0203, no Operator) could never have served it; it advertises
+`desktop.open_artifact`, which nothing in Cloud Core sends. Two further facts: a single-use
+render-fetch token cannot serve a browser tab (reload, session restore and back/forward all
+re-request it), and `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN` could not reach the api process at all
+in production (`docker-compose.prod.yml` forwards only named variables), so even the home PC's
+voice open had no origin to build a URL from.
+
+**Decision.**
+1. `research_open` opens THAT research's report by id (`open_artifact_by_id`, the half of
+   `artifact.open` after "which one"; the model cannot reach it) and says "açtım" only when
+   the state is `opened`. A failure speaks the open's own sentence, returns
+   `open_error_class` and logs one warning, `research_open_device_open_failed`.
+2. The route is one probe over the port's `selection_for` (the single `_select_for`,
+   ADR-0208/0209). A device that advertises `file.fetch`: the old path, unchanged (home PC). One
+   that does not but advertises the browser operations: `browser.session_open` (the `owner`
+   profile, READ + NAVIGATE, default session kind so the device itself enforces the
+   enrolment's research grant) → `browser.tab_new` with a minted URL → `browser.inspect` →
+   `browser.session_close`. No grant → a Turkish refusal, and no other profile is ever tried.
+   Before every command the route re-probes that the session's device is still the chosen one.
+3. The URL carries a **separate** bounded-read token: HTML renders only, hash-pinned to the
+   render, 6 reads within 900 s, unknown/expired/exhausted/mismatched all the same bare 404,
+   nothing listed; the view route sends `default-src 'none'`, `sandbox`, `no-referrer`,
+   `nosniff`, `no-store`. The `file.fetch` token and route are unchanged and the two stores
+   cannot be swapped. It trades "one read" for "six reads in fifteen minutes" and puts the
+   secret in Chrome history for that window; the worker and the companion audit redact the
+   query string.
+4. A PDF-only or DOCX-only report is refused ("HTML hali yok"): nothing is minted, nothing is
+   downloaded through the browser. A page `inspect` cannot confirm is reported unverified.
+5. The compose file forwards `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN` (one line, so the recovery
+   bundle is stale until re-pinned). Receipt keeps the registered capability `artifact.open`
+   and records `path=browser.tab_new`, `via=browser` and the device; nothing carries the bearer
+   URL into a receipt, ledger row or log. Step-up tiers unchanged (`artifact.open` SENSITIVE,
+   `research.open` OPEN). No contract, registry or schema version changed.
+
+**Blocker found by the work, and it is a decision for the owner.**
+`services/browser/browser_agent/destination.py:33-38` refuses every destination in
+`100.64.0.0/10` (the tailnet), private ranges, `*.internal` and `*.local`, and the edge is
+bound to the tailnet only, at `100.90.158.26:8001`, without TLS. On the real fleet `tab_new`
+answers `security_scope_error` and the owner hears "reddetti", with
+`artifact_browser_open_tab_refused` in the log. Making it work needs a device-side allowance
+for exactly one origin plus the `/v1/artifacts/renders/view` path (a worker option carried in
+`BrowserWorkerArgs`, `scripts/lib/BrowserProvision.ps1`), a worker change, an installer change
+and a reinstall on the company PC. The browser's private-destination refusal is an SSRF
+defence; narrowing it for one named origin is device authority and was **not** taken here.
+`godseye.open` opens `http://pagentos-core:4173/` the same way and probably meets the same
+refusal; it has only ever been tested against fakes.
+
+**Proof.** 90 tests in three new files through the real application object (real device rows,
+port and selection; only the command client is faked; RED first: the first office-session run
+sent `file.fetch` to the home PC), about 30 mutations each RED and restored by bytes, ruff
+clean. The browser-transfer contract guard (the cloud never names the device's research grant)
+caught a comment of the work's own; fixed.
+
+**Evidence class.** `PROVEN_AUTOMATED` for the cloud half. **Not `PROVEN_REAL`, and cannot be
+until the device accepts the edge origin.** The nginx dial origin lacking the port is inferred,
+not measured.
+
+**Owner steps for it to work in production.** (1) release the compose change and re-pin the
+recovery bundle; (2) set `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://<tailnet address>:8001` in
+`/opt/pagentos/.env` (check read-only: `grep ARTIFACT_DOWNLOAD /opt/pagentos/.env`, then
+`docker exec <api> printenv PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`); (3) decide the device-side
+allowance above.
+
+## ADR-0212 — The device the owner names in a sentence is the device that acts (2026-09-29)
+
+**Finding.** The owner's rule is that an alias always wins. In the voice path it did not:
+`select_device` supported an explicit target and `app.devices.aliases` parsed the phrases, but
+the relay never handed the parsed phrase to the port; only research (`target_device`) and REST
+`/v1/devices/select` did. "Ofis bilgisayarımda hesap makinesini aç", from a home session or
+from an unbound one with the home PC online, opened the calculator on the home PC. The
+2026-09-28 handoff line "two devices, selected by name" was true for research and REST only.
+The same day a screenshot showed the office PC's Google box holding the literal query
+**"ofis bilgisayarında Yapay Zeka son gelişmeler"**: the phrase naming the machine had entered
+the research topic (written by the paid model into its own argument, and kept by the router's
+extractor) and never became the run's target. It had also reached the media query, the
+document text query, the file pattern (the pattern *was* "bilgisayarımda"), the news source,
+the image prompt, the app request and the remembered fact.
+
+**Decision.**
+1. The relay records the canonical alias words of the latest utterance in
+   `last_utterance.device_targets` (never the sentence) and binds them, next to the session's
+   device, into that call's port; `_select_for` passes them as `target`, so the launch probe and
+   the run still share one selection.
+2. A named device wins over session affinity and over the healthiest device. One that cannot
+   serve (offline, incapable, policy-denied, unknown, revoked, shared alias) is a refusal in
+   Turkish naming it; nothing falls back to another machine. A sentence naming two different
+   devices is refused; two words for one device are fine.
+3. The sentence-level grammar is narrower than `extract_alias` (which REST keeps): plural or
+   accusative "bilgisayar…", a bare "laptop"/"dizüstü", a bare "işte" and a lone "ev"/"iş" are
+   the subject, not a machine ("ofis mobilyaları", "iş dünyası", "ev fiyatları", "evrak").
+   `normalize` folds "İ" (a pre-existing bug: a transcript starting "İş bilgisayarımda…"
+   named nothing).
+4. The device phrase is removed from what the sentence is about: the router reads a sentence
+   that names a device twice and keeps the cleaned reading only when it routes to the same
+   intent; the research topic, including the model's own, is cleaned; `research.start` and its
+   workflow receive the target and refuse in Turkish if the named device cannot serve.
+5. A mission carries the named device on its row (`mission_json.device_targets`) and every step
+   is bound to it; a port that cannot be bound fails the mission instead of running elsewhere.
+
+**Proof.** 77 unit tests through `create_app` with real device rows (home naming office, office
+naming home, unbound, every refusal, ordinary-word sentences) + corpus cases; 25 mutations,
+each RED and restored by bytes; RED first reproduced the calculator opening on MAIL and the
+topic "Ofis bilgisayarında yapay zeka son gelişmeleri".
+
+**Evidence class.** `PROVEN_AUTOMATED`. No real device, Chrome, Google-query or voice run:
+`READY_FOR_OWNER` after a release. M19b's row "from PC-B the owner commands PC-A" stays open.
+
+**Not claimed / risks.** Only `operator.app_open`, `research.start` and the mission path speak
+the named reason; other tools refuse without naming the device. `chat_question` and
+`selfdev_request` still carry the whole sentence; model-written arguments of tools with no
+turn-record field are not cleaned. A paid session whose transcript arrives after the tool call
+can apply the previous sentence's alias to non-research tools (a staleness bound was not
+added). "İşte aç" no longer names the office at sentence level (ADR-0205 keeps it for REST);
+"evde mi?" does name the home PC. ADR-0208's session affinity still does not reach missions.

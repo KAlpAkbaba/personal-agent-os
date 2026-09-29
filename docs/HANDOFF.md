@@ -15,25 +15,29 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Ofis günü: altı gerçek olay (2026-09-29, makine GMKADIRAKBABA — şirket PC'si).**
-main `4d5dd637`'den. Her madde ayrı dalda, toplama dalı `integrate/office-day-2026-09-29`
-(belgeler + birleştirmeler burada; kapı burada koşar). Bu makineden YAYIN YOK; kurulum
-betiği bu oturumda çalıştırılmaz.
-- **A/B/C** `fix/companion-audit-dir-acl`: (A) `AuditLog` audit klasörünü ilk oluşturunca
-  SYSTEM/Admin-only yapıyor → sahip hesabındaki companion kendi audit'ine yazamıyor, kurucu
-  `browser_worker_started` bulamayıp sağlam işçiyi geri alıyor (günlükler
-  `install-20260929-113625`, `-113936`; elle `icacls` sonrası `-115013` geçti);
-  (B) `enroll-owner-chrome.ps1` yükseltilmemiş çalışınca "Access is denied" + yanlış
-  "recorded:" satırı; (C) `verify-device-service.ps1` 6b.4 DateTime taşması.
-- **D** `feat/session-device-affinity` (ADR-0208): alias yoksa hedef = komutun geldiği
-  oturumun cihazı; alias her zaman üstün.
-- **E** `feat/open-application-fallback` (ADR-0209): Operatör ilan etmeyen ama
-  `desktop.open_application` ilan eden cihazda tek adımlık uygulama açma doğrudan o komutla.
-- **F** araştırma raporu ofiste "cihazda açamadım": `open_artifact` neden düştü.
-**Bu makinenin sınırı:** docker/WSL yok → tam kapının üç adımı (dev stack, alembic,
-entegrasyon testleri) burada KOŞAMAZ; geri kalanı koşar. Main'e alma bu yüzden ev PC'de
-tam kapıdan sonra.
-
+**Ofis günü (2026-09-29, makine GMKADIRAKBABA — şirket PC'si): İŞ BİTTİ, EV PC'DE KAPI BEKLİYOR.**
+Toplama dalı `integrate/office-day-2026-09-29` (origin'de; main `4d5dd637`'den) altı olayın
+hepsinin düzeltmesini taşıyor; ADR-0208…0212 + ADR-0203 eki DECISIONS.md sonunda,
+`state/BUILD_STATE.json` `office_day_2026_09_29`. **Bu makinede yayın YOK, main'e merge YOK.**
+- **A/B/C** audit klasörü ACL + kayıt dosyası + 6b.4 (ADR-0211; bağımsız güvenlik incelemesi
+  5 bulgu buldu, hepsi kapandı — junction takibi dahil).
+- **D** oturum cihazı yakınlığı (ADR-0208, gerçek zamanlı sözleşme **v3**).
+- **E** Operatörsüz cihazda tek adımlık uygulama açma (ADR-0209) + **D+E birleşim düzeltmesi**
+  (`a36125ac`: oturuma bağlı portun yoklaması yoktu → ofis oturumunda hesap makinesi evde açılıyordu).
+- **F** araştırma raporu: `research.open` düzeltildi (F1); ofiste sahibin Chrome'unda sekme
+  olarak açma (ADR-0210, F2) **bulut yarısı hazır, ÜRETİMDE ÇALIŞMAZ** — tarayıcı işçisi tailnet
+  hedeflerini reddediyor (cihaz tarafı karar gerekir) ve `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`
+  üretimde api'ye hiç ulaşmıyordu (compose düzeltildi → yayın + pin).
+- **G** söylenen cihaz adı artık işi yapan cihaz (ADR-0212). Ses yolunda hiç iletilmiyordu;
+  ekran görüntüsünde Google sorgusu "ofis bilgisayarında Yapay Zeka son gelişmeler" idi.
+**EV PC'DE YAPILACAK (bu makinede yapılmaz):** `git fetch && git checkout
+integrate/office-day-2026-09-29` → tam kapı: **`dotnet test`** (17 Operatör/Belge masaüstü
+testi dahil; ofis PC'sinde koşulmaz çünkü sahibin masaüstünde Not Defteri açar), docker
+adımları (dev stack, alembic, entegrasyon) → main'e merge → yayın için sahibin sözü
+(`-BlueGreen` + recovery pin; sözleşme v3, compose env satırları) → MAIL ajanını yeniden kur,
+`-AuthorizeTasks`. Sonra sahip: web kabuğunda "Bu bilgisayar"ı bir kez seçer.
+**Bu makinenin sınırı (kalıcı):** docker/WSL yok; `dotnet test` yasak (bkz. bellek).
+Temel `4d5dd637` üzerinde de aynı 14 Temporal testi kırmızı (14 kaldı / 206 geçti): ortam.
 Son biten iş (2026-09-29): **tarayıcı görev döngüsü PR-B (ADR-0207)** — main'de, YAYINLANMADI.
 Dal `feat/browser-task-loop`, uç `f0d556b5` üzerinde tam kapı 32/32 PASS. `app/webtask/`
 (döngü, kapı, doğrulayıcı, planlayıcı arayüzü, servis, cihaz portu, `BrowserTaskWorkflow`),

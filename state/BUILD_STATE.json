@@ -1071,5 +1071,44 @@
         "PR-C must close: no retention rule for the observation kept in web_tasks.state_json"
       ]
     }
+  },
+  "office_day_2026_09_29": {
+    "status": "BUILT_AND_TESTED on integrate/office-day-2026-09-29 (not merged to main, not released). Full API unit run on the integrated branch and the home-PC-only steps are listed in owner_steps.",
+    "adrs": ["ADR-0208", "ADR-0209", "ADR-0210", "ADR-0211", "ADR-0212", "ADR-0203 addendum"],
+    "branches": {
+      "fix/companion-audit-dir-acl": "7816ffe56b596b14975a1dfb88dea6fc4eebcf49 (A audit ACL, B enrolment record, C 6b.4; security-reviewed, 5 findings fixed)",
+      "feat/session-device-affinity": "48281584268fdcdde940f5da3b7dec99714ad07e (D, realtime contract v3)",
+      "feat/open-application-fallback": "0520f833e77aec9fe506a793e1884589754097f8 (E)",
+      "fix/office-open-artifact": "f54baadf9e52ac48a7fb9a8173ab91d89f978c9e (F1 research.open)",
+      "feat/research-open-in-owner-chrome": "0795a6216c5af939199790dd8b97812382148c23 (F2, cloud half; blocked on the device destination policy)",
+      "feat/spoken-device-alias": "e1f518ac79576db8e7812ae3caa410de99bf8e98 (G, the named device acts; research topic leak)",
+      "integration_fixes": "a36125ac (D+E probe/select parity), db43e179 (owner-harness guard red on main)"
+    },
+    "findings_beyond_the_brief": [
+      "voice path never passed a spoken device to selection (ADR-0212); handoff line 'two devices selected by name' was true for research and REST only",
+      "D+E merge: the session-bound port had no probe, so the direct launch never fired on it (fixed, a36125ac)",
+      "device phrase leaked into research topic, media query, file pattern, news source, remembered fact (screenshot: Google query 'ofis bilgisayarında Yapay Zeka son gelişmeler')",
+      "browser worker refuses tailnet destinations: research report cannot open in Chrome on the office PC until a device-side allowance exists",
+      "PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN never reached the api process in production (compose forwarded named variables only)",
+      "the elevated installer followed a junction planted at companion/audit (security review, fixed)",
+      "owner-harness.tests.ps1 was red on main 4d5dd637 (guard matched prose)",
+      "the 14 Temporal-server tests fail identically on base 4d5dd637 (14 failed, 206 passed): environmental"
+    ],
+    "evidence_class": {
+      "office_pc_install_after_fix": "PROVEN_REAL (install-20260929-115013, browser worker live, owner Chrome research)",
+      "cloud_logic_for_D_E_F_G": "PROVEN_AUTOMATED (unit tests through create_app; real command hop NOT exercised)",
+      "companion_audit_acl_and_enrolment_record": "PROVEN_AUTOMATED; elevated ownership take-over NOT_YET_PROVEN",
+      "report_opens_on_office_pc": "NOT_YET_PROVEN (blocked: device destination policy, origin setting)",
+      "spoken_alias_on_two_real_machines": "READY_FOR_OWNER after release (M19b row still open)",
+      "dotnet_test_agent_tests": "NOT_RUN on the office PC (opens Notepad on the owner's desktop); runs on the home PC",
+      "integration_tests_and_dev_stack": "NOT_RUN on the office PC (no docker/WSL); run on the home PC"
+    },
+    "owner_steps": [
+      "home PC: git fetch; checkout integrate/office-day-2026-09-29; full quality gate (dotnet test incl. the 17 Operator/Documents desktop tests, docker steps); then merge to main",
+      "release Cloud Core -BlueGreen (realtime contract v3, compose env lines) and re-pin the recovery supervisor - needs the owner's word",
+      "set PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN in /opt/pagentos/.env; decide the device-side allowance for the edge origin (ADR-0210)",
+      "home PC: reinstall the agent (MAIL) and -AuthorizeTasks as the owner intends (installer now creates the companion audit directory with the right ACL)",
+      "web shell: pick 'Bu bilgisayar' once per browser after the release"
+    ]
   }
 }
