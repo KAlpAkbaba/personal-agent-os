@@ -16067,3 +16067,214 @@ starts a task.
   REVERSIBLE_WRITE by definition and the contract gives them no higher class.
 * The employer's panel hosts and Kolay Monitor's host are in the list as the owner named
   them (`turka.com`, `kolaymonitor`); hosts he did not name are not.
+
+## ADR-0208 — Session device affinity: a command that names no device goes to the device its session is on (2026-09-29)
+
+**Finding.** 2026-09-29, office PC (GMKADIRAKBABA), home PC (MAIL) off: the owner said
+"hesap makinesini aç" in the web shell and heard that no device could do it. Two causes,
+found by reading the path and not by assuming. (1) The Operator plan for one application
+launch needs `app.launch` and `window.current`, which the office PC does not advertise
+(ADR-0203: no `-Operator` on an employer's machine), so `select_device` found nobody
+(`tools_operator.py` → `plans.py` → `routines/dispatch.py` → `selection.py`). That is
+ADR-0209. (2) Underneath it: a command that names no device went to the "healthiest"
+machine, i.e. the home PC whenever it had been seen a second more recently — while the owner
+sat at the other one. `select_device` knew nothing of the session. **Correction to the
+handoff of 2026-09-28** ("two devices, selected by name"): that holds for research and REST
+only; in the voice path no device the owner *named* ever reached selection (ADR-0212).
+
+**Decision.**
+1. An explicit target (id, exact name, Turkish alias) wins, unchanged.
+2. Otherwise the session's own device, when it is enrolled, not revoked, online, capable and
+   policy-allowed; reason `session_affinity`, `explicit=False`. Otherwise the old rule, byte
+   for byte (same reasons, same Turkish errors).
+3. Where the session is, best first: a `device_id` the client *declares* on the realtime
+   session (contract **v3**, create and attach; kept apart from `row.device_id`, which is
+   where sideband frames go and what device trust reads); the device the identity session is
+   bound to; the enrolled device connected from the request's own address
+   (`device_affinity_by_source_ip`, **OFF by default**; the address is recorded in memory on
+   the device's authenticated WebSocket handshake; `X-Real-IP` is believed only from
+   `trusted_proxy_cidrs`, never `X-Forwarded-For`; two devices at one address = no answer;
+   a `/0` CIDR is refused at start).
+4. A declared id is a claim, not authority (M19b): unknown or revoked ids are ignored
+   without an error, it grants no device trust, and it can only choose among devices the
+   owner could have named.
+5. `BrokerDeviceAction.bound_to(ids)` is a per-session view of the one device port;
+   research.start and news.summarize pass the same hint. With no hint every call is the call
+   it always was.
+6. Web shell: "Bu bilgisayar" on /voice, per browser, sent only to a v3 server.
+
+**Merge finding (ADR-0208 + ADR-0209), fixed in `a36125ac`.** ADR-0209's probe (`can_run`)
+was written against a port that selects by capability alone; the per-session view had no
+probe, and the launch route reads "a port that cannot be asked" as the Operator path. So on
+a session-bound port the direct launch never fired, and with the home PC online the office
+session's "hesap makinesini aç" opened the calculator **at home** (RED: the dispatch log
+showed `app.launch` on MAIL, reason `auto`). `_select_for` is now the one selection call,
+used by `run` and by the `selection_for` probe, and the bound view carries the probe with
+its ids. Four cases hold the two ADRs together; two mutations, each RED, restored by bytes.
+
+**Proof.** 85 API tests + 16 web tests (rule, address rules, the real application object end
+to end incl. the real WebSocket handshake); RED against the unfixed tree first; 20 API and 7
+web mutations, each RED on its named test, files restored by bytes (sha256).
+
+**Evidence class.**
+
+| Row | Class |
+|---|---|
+| Selection rule, address rules, declared-id wiring through `create_app` | `PROVEN_AUTOMATED` |
+| The office session actually served by the office PC in production | `READY_FOR_OWNER` (needs the release, then "Bu bilgisayar" picked once on /voice) |
+| The source-address path | `NOT_YET_PROVEN` (off; needs `X-Real-IP` measured on the real edge and the edge network CIDR) |
+| Realtime contract v3 served and honoured by production | `READY_FOR_OWNER` (release decision) |
+
+**Not claimed.** That a session on a device that cannot do the job is refused: it falls back
+to the old rule, which may act on the other machine (ADR-0209 closes that for launches;
+other capabilities are as before). That REST `/v1/devices/select`, `/v1/research`, routines
+or alarms use affinity (they do not). That the source-address path is trustworthy on the real
+edge.
+
+**Risks.** The identity session's `device_id` is unvalidated and feeds `device_is_trusted`
+(pre-existing; the web claim deliberately avoids it; step-up is still in shadow mode). The
+realtime contract is v3: a release must serve v3, and a web build older than the server
+never sends the field. The address map is per Cloud Core colour and in memory only; after a
+drain it repopulates within about a second as devices reconnect. The commit also carries two
+`docker-compose.prod.yml` env lines (defaults off): a release decision.
+
+## ADR-0209 — A single-step launch on a device without the Operator is `desktop.open_application` (2026-09-29)
+
+**Finding.** The owner said "ofis bilgisayarımda hesap makinesini aç". The sentence routed to
+`operator.app_open`, whose plan begins with `app.launch` (`plans.open_application`, first
+step `open_application:launch` — the name on the receipt). The office PC advertises
+`desktop.open_application` and no `app.launch`. Selection found no online device with
+`app.launch` and answered `no_capable_device`; the owner heard "açamadım" for the sentence
+the pre-Operator capability was written to serve. The cloud had never sent
+`desktop.open_application` anywhere.
+
+**Decision.**
+1. `operator.app_open` asks the device port which path applies: `selection_for` (the same
+   `_select_for` as `run`; sends nothing). If the device the launch would go to advertises
+   `app.launch`: the Operator path, byte-for-byte unchanged (home PC).
+2. If it does not but advertises `desktop.open_application`: that capability, for
+   `notepad`, `calc`, `mspaint` only — the contract's names, equal to the device's
+   `AppLauncher.DefaultAllowlist` and `DEVICE_PROTOCOL.md` §6, held by a test that reads
+   both back. Any other application is refused with the existing Turkish refusal, dispatching
+   nothing and trying no other device. The device still enforces its own allowlist.
+3. Neither: the Operator path, `no_capable_device` as before. A request with anything after
+   the launch is a mission, never reaches this tool, and still needs the Operator.
+4. With a session-bound port (ADR-0208), when the session's own device can open the
+   application only the direct way and another online device carries the Operator, the
+   launch goes direct **on the session's device**.
+5. The receipt keeps the registered capability `operator.app_open`; the path is in
+   `observed_after.server` (`path: desktop.open_application`, application, device id and
+   name), the device's `pid`/`executable` in `observed_after.local`. No `operator.task.*`
+   rows. A launch acknowledged with a `pid` is `verified`, without one `unverified` with
+   honest speech. The command key derives from the tool call. The step-up tier is the
+   tool's, unchanged. Speech names the device by its first alias.
+
+**Proof.** 26 tests through the real application object over real device rows, real port and
+selection, only the command client recorded (14 RED before the change); 11 + 2 mutations
+RED and restored by bytes; ruff clean. No contract, tool schema or capability registry
+changed.
+
+**Evidence class.** `PROVEN_AUTOMATED`. A real launch on GMKADIRAKBABA is `NOT_YET_PROVEN`
+(`READY_FOR_OWNER` after a release).
+
+**Not claimed.** That a window appeared: "verified" here is the device's pid, weaker than the
+Operator's foreground-window check (the office device has no `window.current`; on Windows 11
+`calc.exe` hands off to a Store app). That "ofis" steers a launch to the office PC while the
+session is elsewhere (ADR-0212).
+
+## ADR-0211 — The companion can write its own audit trail, and the installer no longer follows a planted junction (2026-09-29)
+
+**Found on the office PC by the owner's installs** (`install-20260929-113625`, `-113936`:
+"the companion recorded no browser_worker_started … within 90 s", a healthy worker rolled
+back; the elevated `icacls` grant that let `-115013` pass was the workaround) and by a
+non-elevated `enroll-owner-chrome.ps1` that printed "recorded:" over an "Access is denied".
+
+**Causes, each verified.**
+- *A.* `AuditLog` protected the directory it created as machine material (SYSTEM /
+  Administrators). The **owner-session companion** built its log with the same constructor:
+  it created the directory as the owner, locked itself out of it, and the write failed to
+  stderr only. The installer's owner grant lives on the companion root and the browser
+  directory, only when the browser is provisioned, and an inheritable grant cannot reach a
+  protected DACL.
+- *B.* The write succeeded; the `icacls` call that follows was denied (exit 5), its output to
+  `Out-Null` and its exit code never read; "recorded:" was printed between the two.
+  `-Revoke` was broken too: `(R,W)` carries no DELETE.
+- *C.* `BrowserRelease.ps1` did `$DeployStartedAt.AddSeconds(-1)`, and `verify-device-service`
+  passes `[datetime]::MinValue` — the known 6b.4 overflow.
+
+**Decision.** Protection by identity, named and strict by default: `AuditWriter.Service`
+(the zero value and the default: SYSTEM / Administrators only) and
+`AuditWriter.OwnerSessionCompanion` (owner Modify), so a service cannot inherit the weaker
+posture by omitting an argument. The installer creates or repairs the companion audit
+directory on every run (also with `-SkipBrowser`); verify has a row `2.2b` "audit dir
+writable by owner"; a write failure is one Warning in `companion.log`. The enrolment record
+is written ACL first, content second, verified by byte-for-byte read-back, and "recorded:" is
+printed only after that; a record that cannot be written asks for elevation with a clear
+exit code; the owner gets Modify (so `-Revoke` works, and empties the file where it cannot
+delete it). Tick arithmetic replaces the DateTime subtraction.
+
+**Security review of the first commit (independent), all fixed in `7816ffe5`.**
+MEDIUM-1: an elevated `icacls /reset /T` followed a junction planted at `companion\audit`
+(demonstrated: a SYSTEM-only file came back with inherited ACEs) → reparse points on the path
+or any ancestor are refused, and children are reset by a walk that never enters one.
+MEDIUM-2: the "already safe" verdict for the enrolment record ignored the file's owner and
+accepted OWNER RIGHTS with any rights → the owner must be the owner SID, Administrators or
+SYSTEM, and OWNER RIGHTS may carry read at most. LOW: the directory's owner is checked and
+set to Administrators when elevated; `-OwnerSid` must be a user account (not a group or a
+well-known principal); the companion decides writability by a write probe, not by reading
+ACEs.
+
+**Proof.** C#: `CompanionAuditDirectoryTests` 13/13 (the filtered class only — see below);
+`installer-acl` 44, `owner-enrollment` 18, `installer-release` 14, all other installer
+suites green; `qualify-staged-update.ps1` 89 PASS, no pin changed. Each finding RED first
+(incl. the reviewer's junction PoC reproduced), one to five mutations each, restored by bytes.
+Also fixed on the way: `owner-harness.tests.ps1` was red on main — its "no wrapped
+Get-ArrayProperty" guard matched sentences that only *name* the trap; it now walks the parse
+tree (`db43e179`).
+
+**Evidence class.**
+
+| Row | Class |
+|---|---|
+| The lock-out and the "Access is denied" on this machine | `PROVEN_REAL` (install logs, ACLs) |
+| Repairs, verdicts, junction refusal, record writing | `PROVEN_AUTOMATED` (real sandbox directories) |
+| Owner take-over to Administrators, elevated | `NOT_YET_PROVEN` (never ran elevated here) |
+| Full `Agent.Tests` (`dotnet test`) | `NOT_RUN` on this machine: it opens Notepad and Explorer on the owner's desktop while he works (the 17 failures of the first run coincide with the owner closing those windows). It runs on the home PC. |
+
+**Not claimed / remaining.** A check-then-write window remains on the reparse check. The
+older `icacls /T` resets (`Set-MachineDataAcl`, `Set-HardenedAcl`, `Repair-InstallTreeAcl`)
+were left alone: their trees admit no unprivileged writer. A data root deliberately under a
+junction (or a synced folder carrying the reparse attribute) loses its audit trail, with the
+one Warning.
+
+### ADR-0203 addendum (2026-09-29) — the office PC is now fully equipped, except for the Operator
+
+Recorded from the machine, not from a decision made in this session: the owner installed the
+browser worker on GMKADIRAKBABA and authorised his own Chrome for research. What is on the
+disk today (read-only, 2026-09-29):
+
+| What | State | Evidence |
+|---|---|---|
+| Browser worker | 0.5.0, 30 capabilities, Chrome 153.0.8010.53, proven live from the installed venv | `install-20260929-115013.log` (INSTALL VERIFIED) |
+| Owner-Chrome enrolment | `owner-chrome`, `cdp_loopback` on `127.0.0.1:19222`, **`owner_authorized_for_research: true`** | `C:\ProgramData\PagentOS\browser\owner-enrollment.json` |
+| Research in the owner's Chrome | working: `browser.fetch_evidence … outcome=ok`, tabs opened in his own profile, session closed 11:45 UTC | `companion.log` |
+| Operator | **OFF** (`OperatorEnabled: false`) | service `appsettings.json`, install log |
+| Display power | OFF | same |
+| Service / companion | agent 0.6.0, 44 capabilities advertised (desktop + browser families) | install log |
+
+This reverses two lines of the decision above — "`-SkipBrowser` for the first install" and
+"`enroll-owner-chrome.ps1`: NOT on this machine" — and keeps the third, the one that mattered
+most: **no Operator, no display power, no owner secret stored on the device.** The reasoning
+for withholding the Operator is unchanged and stronger for what has since been granted:
+research authorisation lets the agent act as the owner on every site his Chrome is signed
+into, and on this machine those sessions are the employer's (mail, the panel hosts on
+`turka.com`). The browser task loop's deny-list (ADR-0207) is the second lock on that, and
+`enroll-owner-chrome.ps1 -Revoke` is the way back (fixed in ADR-0211 so a non-elevated owner
+can run it).
+
+Three consequences found the same day, each with its own ADR: a single-step launch on this
+device is `desktop.open_application` (ADR-0209); a command spoken at this PC must land on
+this PC (ADR-0208, ADR-0212); a research report opens here in the owner's Chrome, because the
+`file.fetch` path belongs to the Operator family (ADR-0210). Open risk unchanged and the
+owner's alone to weigh: an employer's endpoint policy may object to a LocalSystem service
+that dials a personal tailnet, and now also to a debugging port on a signed-in Chrome.
