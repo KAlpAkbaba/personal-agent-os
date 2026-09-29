@@ -50,6 +50,7 @@ Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot "lib\NativeProcess.ps1")
 . (Join-Path $PSScriptRoot "lib\ConfigSwap.ps1")
+. (Join-Path $PSScriptRoot "lib\BrowserProvision.ps1")
 
 # Intent captured once, under a name no result object will ever want (the [switch]
 # collision class that broke provisioning: `$rollback = <object>` would bind to this parameter).
@@ -238,3 +239,18 @@ catch {
 Write-Host ""
 Write-Host "switched. Runtime healthy; the agent now dials $restUrl. Previous config kept at $backupPath" -ForegroundColor Green
 Write-Host "Rollback at any time:  .\scripts\switch-agent-broker.ps1 -Rollback"
+
+# This script rewrites the SERVICE configuration only. The companion's browser worker carries
+# its own `--trusted-origin` (the report-view route of the broker the device dials; written by
+# the installer), and a switch leaves the OLD origin trusted. Not silent: say so, and name the
+# one command that recomputes it from the broker the installer is given.
+try {
+    $originCheck = Test-CompanionTrustedOriginCurrent -CompanionConfigPath (Join-Path $InstallRoot "companion\appsettings.json") -BrokerRestUrl $restUrl
+    if (-not $originCheck.Current) {
+        Write-Warning ("the companion's browser worker still trusts '$($originCheck.Installed)' (expected '$($originCheck.Expected)'). " +
+            "Re-run scripts\install-device-service.ps1 -BrokerRestUrl $restUrl -SkipCoreVerify to bring it in line; until then a report served by the new broker is refused by the worker.")
+    }
+}
+catch {
+    Write-Warning "could not compare the companion's browser trusted origin: $($_.Exception.Message)"
+}

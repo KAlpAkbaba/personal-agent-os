@@ -8,8 +8,11 @@ device's ``file.fetch`` redeems) it says so in its names.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -167,3 +170,25 @@ def test_a_store_that_allows_no_read_cannot_be_built() -> None:
 def test_the_store_has_no_way_to_list_what_it_holds() -> None:
     public = {name for name in dir(RenderViewStore) if not name.startswith("_")}
     assert public == {"put", "read", "size", "clear"}
+
+
+def test_the_route_is_the_one_the_office_pcs_browser_worker_is_allowed_to_open() -> None:
+    # The device admits exactly ONE route of the broker origin (owner decision 2026-09-29, the
+    # narrow SSRF exception in services/browser/browser_agent/destination.py). services/api
+    # cannot import services/browser, so the mirror is read from its source: if either side moves
+    # this route the drift fails HERE, instead of on the owner's desk as a spoken refusal.
+    destination = (
+        Path(__file__).resolve().parents[4]
+        / "services"
+        / "browser"
+        / "browser_agent"
+        / "destination.py"
+    )
+    if not destination.is_file():  # a services/api-only checkout
+        pytest.skip("services/browser is not part of this checkout")
+    match = re.search(r'^TRUSTED_VIEW_PATH = "([^"]+)"$', destination.read_text("utf-8"), re.M)
+    assert match is not None, "TRUSTED_VIEW_PATH is not in the canonical form"
+    assert match.group(1) == VIEW_PATH
+    # ...and the URL the open builds (origin + handle.path()) has exactly that path.
+    minted = urlsplit("http://100.90.158.26:8001" + _put(RenderViewStore()).path())
+    assert minted.path == match.group(1)

@@ -120,11 +120,133 @@ function Get-BrowserWorkerPython {
     return (Join-Path $BrowserRoot ".venv\Scripts\python.exe")
 }
 
-function Get-BrowserWorkerArgs {
-    <#  The leading arguments the companion prepends (BROWSER_CAPABILITIES.md §7 CLI).  #>
+function Get-BrowserTrustedOrigin {
+    <#
+    .SYNOPSIS
+        The origin the browser worker is told to trust (`--trusted-origin`), derived from the
+        broker REST URL THIS DEVICE dials - or nothing, with the reason.
+
+    .DESCRIPTION
+        Owner decision 2026-09-29: the office PC's worker has to open the report Cloud Core
+        serves at {broker}/v1/artifacts/renders/view, and that broker is a tailnet address the
+        worker's destination policy refuses. The worker admits exactly that origin's
+        report-view route and nothing else on it. The trust is derived HERE, from the URL the
+        device itself was installed with, and written into the companion's own configuration:
+        a command from Cloud Core can neither set nor widen it, so the device keeps enforcing
+        its policy independently of the cloud.
+
+        The same refusals the worker applies at start (a bad origin stops the worker, which
+        would take the whole browser family down): loopback (the dev default 127.0.0.1 - a
+        loopback broker means the worker would be trusting ITSELF), link-local incl. the cloud
+        metadata address, multicast, unspecified, reserved, localhost and the local/internal
+        name families, non-http(s) schemes, userinfo. Private and CGNAT (the tailnet) ARE
+        acceptable: that is the point. Anything after the origin (a path prefix) is dropped.
+
+        Returns Origin ($null = no option is written) and Reason (why not, or how derived).
+    #>
     [CmdletBinding()]
-    param()
-    return "-m browser_agent.worker"
+    param([AllowEmptyString()][AllowNull()][string]$BrokerRestUrl)
+
+    $none = { param($why) [pscustomobject]@{ Origin = $null; Reason = $why } }
+    if ([string]::IsNullOrWhiteSpace($BrokerRestUrl)) { return (& $none "no broker REST URL") }
+
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($BrokerRestUrl.Trim(), [System.UriKind]::Absolute, [ref]$uri)) {
+        return (& $none "the broker URL '$BrokerRestUrl' is not an absolute URL")
+    }
+    if ($uri.Scheme -notin @("http", "https")) { return (& $none "the broker URL scheme '$($uri.Scheme)' is not http or https") }
+    if (-not [string]::IsNullOrEmpty($uri.UserInfo)) { return (& $none "the broker URL carries credentials") }
+
+    $hostName = $uri.Host.Trim().TrimEnd('.').ToLowerInvariant()
+    $bare = $hostName.Trim('[', ']')
+    if ($bare.Contains('%')) { $bare = $bare.Substring(0, $bare.IndexOf('%')) }
+    if ([string]::IsNullOrEmpty($bare)) { return (& $none "the broker URL has no host") }
+
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse($bare, [ref]$ip)) {
+        if ($ip.IsIPv4MappedToIPv6) { $ip = $ip.MapToIPv4() }
+        if ([System.Net.IPAddress]::IsLoopback($ip)) { return (& $none "the broker address $bare is loopback (a local broker: the worker would be trusting itself)") }
+        if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+            if ($ip.IsIPv6LinkLocal -or $ip.IsIPv6Multicast -or $ip.Equals([System.Net.IPAddress]::IPv6Any)) {
+                return (& $none "the broker address $bare is link-local, multicast or unspecified")
+            }
+        }
+        else {
+            $b = $ip.GetAddressBytes()
+            if ($b[0] -eq 0 -or ($b[0] -eq 169 -and $b[1] -eq 254) -or $b[0] -ge 224) {
+                return (& $none "the broker address $bare is unspecified, link-local (incl. the metadata address), multicast or reserved")
+            }
+        }
+        # .NET's Uri.Host spells an IPv6 literal out in full; the compressed form is the one
+        # people (and the worker's log) recognise.
+        $bare = $ip.ToString()
+    }
+    else {
+        if ($bare -eq "localhost" -or $bare -eq "metadata.google.internal" -or $bare -match '\.(local|internal|localhost)$' -or $bare -match '\.home\.arpa$') {
+            return (& $none "the broker host '$bare' is a local or internal name")
+        }
+        if ($bare -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$') {
+            return (& $none "the broker host '$bare' is not a plain host name")
+        }
+    }
+
+    $shown = if ($bare.Contains(':')) { "[$bare]" } else { $bare }
+    $origin = "$($uri.Scheme)://$shown"
+    if (-not $uri.IsDefaultPort) { $origin += ":$($uri.Port)" }
+    return [pscustomobject]@{ Origin = $origin; Reason = "derived from the broker URL $BrokerRestUrl" }
+}
+
+function Get-BrowserWorkerArgs {
+    <#
+    .SYNOPSIS
+        The leading arguments the companion prepends (BROWSER_CAPABILITIES.md §7 CLI), plus
+        `--trusted-origin <origin>` when the caller has one (Get-BrowserTrustedOrigin).
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$TrustedOrigin)
+
+    $arguments = "-m browser_agent.worker"
+    if (-not [string]::IsNullOrWhiteSpace($TrustedOrigin)) {
+        $arguments += " --trusted-origin $($TrustedOrigin.Trim())"
+    }
+    return $arguments
+}
+
+function Get-TrustedOriginFromWorkerArgs {
+    <#  The `--trusted-origin` value inside a BrowserWorkerArgs string, or $null.  #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$WorkerArgs)
+
+    if ($WorkerArgs -match '(?:^|\s)--trusted-origin(?:\s+|=)(\S+)') { return $Matches[1] }
+    return $null
+}
+
+function Test-CompanionTrustedOriginCurrent {
+    <#
+    .SYNOPSIS
+        Does the installed companion's `--trusted-origin` match the broker the device now
+        dials? Read-only; used by switch-agent-broker.ps1, which rewrites only the SERVICE
+        configuration, to say so instead of leaving a stale origin silent.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CompanionConfigPath,
+        [Parameter(Mandatory = $true)][string]$BrokerRestUrl
+    )
+
+    $expected = (Get-BrowserTrustedOrigin -BrokerRestUrl $BrokerRestUrl).Origin
+    $installed = $null
+    if (Test-Path -LiteralPath $CompanionConfigPath) {
+        $config = [System.IO.File]::ReadAllText($CompanionConfigPath) | ConvertFrom-Json
+        if ($config.PSObject.Properties.Name -contains "BrowserWorkerArgs") {
+            $installed = Get-TrustedOriginFromWorkerArgs -WorkerArgs ([string]$config.BrowserWorkerArgs)
+        }
+    }
+    return [pscustomobject]@{
+        Current   = [string]::Equals([string]$installed, [string]$expected, [System.StringComparison]::OrdinalIgnoreCase)
+        Installed = $installed
+        Expected  = $expected
+    }
 }
 
 function New-BrowserWorkerSelfCheckArgumentList {
@@ -278,18 +400,26 @@ function New-CompanionBrowserSettings {
         The companion appsettings keys for the provisioned worker, as an ordered hashtable
         the caller merges into its configuration. Paths only, no secrets, nothing per-PC
         beyond the install and data roots the caller chose.
+
+        -BrokerRestUrl is the URL the device dials: its origin becomes the worker's
+        `--trusted-origin` (the one narrow SSRF exception, Get-BrowserTrustedOrigin) unless it
+        is loopback or otherwise unusable, in which case NO option is written. The whole
+        companion file is rewritten on every install, so an upgrade recomputes this from the
+        broker it is installed against - it is never carried over from an older file.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$BrowserRoot,
         [Parameter(Mandatory = $true)][string]$BrowserDataDir,
         [string]$Channel = "chrome",
-        [bool]$Visible = $true
+        [bool]$Visible = $true,
+        [AllowEmptyString()][AllowNull()][string]$BrokerRestUrl
     )
 
+    $trusted = Get-BrowserTrustedOrigin -BrokerRestUrl $BrokerRestUrl
     return [ordered]@{
         BrowserWorkerCommand = (Get-BrowserWorkerPython -BrowserRoot $BrowserRoot)
-        BrowserWorkerArgs    = (Get-BrowserWorkerArgs)
+        BrowserWorkerArgs    = (Get-BrowserWorkerArgs -TrustedOrigin $trusted.Origin)
         BrowserDataDir       = $BrowserDataDir
         BrowserProfileDir    = (Join-Path $BrowserDataDir "profile")
         BrowserChannel       = $Channel

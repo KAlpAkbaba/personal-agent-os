@@ -56,7 +56,12 @@ from . import (
     task_denylist,
 )
 from .backends import ExistingSessionBackend, ManagedBackend
-from .destination import require_public_destination
+from .destination import (
+    TRUSTED_VIEW_PATH,
+    TrustedOrigin,
+    parse_trusted_origin,
+    require_public_destination,
+)
 from .detect import BrowserInfo, detect_browser
 from .enrollment import (
     BrowserEnrollment,
@@ -678,6 +683,12 @@ class Worker:
         # --allow-private-destinations (test fixture sites only; the companion never
         # passes it). Cloud Core applies the same policy before dispatching.
         self._allow_private_destinations = bool(getattr(args, "allow_private_destinations", False))
+        # The ONE narrow exception to that policy (owner decision 2026-09-29): the report-view
+        # route of the broker origin THIS device dials, so the worker can open a report Cloud
+        # Core serves over the tailnet. Set only by --trusted-origin from the companion's own
+        # configuration (the installer writes it); already validated by argparse, and never
+        # something a Cloud Core command can set or widen.
+        self._trusted_origin: TrustedOrigin | None = getattr(args, "trusted_origin", None)
         # Base URL for Google's home page (contract §3a). Defaults to the real
         # Google; the browser e2e suite points this at the fixture site so
         # the Google-through-the-UI flow is deterministic and offline.
@@ -1559,7 +1570,7 @@ class Worker:
     def _check_destination(self, url: str, *, op: str) -> None:
         if self._allow_private_destinations:
             return
-        require_public_destination(url, op=op)
+        require_public_destination(url, op=op, trusted_origin=self._trusted_origin)
 
     async def _op_navigate(self, state: SessionState, payload: dict[str, Any]) -> dict[str, Any]:
         url = payload.get("url")
@@ -3006,6 +3017,15 @@ _HANDLERS: dict[str, Callable[[Worker, SessionState, dict[str, Any]], Any]] = {
 # ----------------------------------------------------------------------- #
 
 
+def _trusted_origin_arg(value: str) -> TrustedOrigin | None:
+    """argparse ``type=``: a bad origin stops the worker at start (exit 2, the reason on
+    stderr) instead of running with a wider policy than the owner meant."""
+    try:
+        return parse_trusted_origin(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--trusted-origin {value!r}: {exc}") from exc
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m browser_agent.worker",
@@ -3071,6 +3091,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--allow-private-destinations",
         action="store_true",
         help="Permit loopback/private/tailnet destinations (fixture tests only)",
+    )
+    parser.add_argument(
+        "--trusted-origin",
+        type=_trusted_origin_arg,
+        default=None,
+        help=(
+            "The ONE origin (scheme://host[:port]) whose report-view route "
+            f"({TRUSTED_VIEW_PATH}) is admitted although it is a private/tailnet address: "
+            "the broker origin this device dials (written by the installer). Nothing else "
+            "on that origin, no other port and no other address is admitted; loopback, "
+            "link-local (incl. the cloud metadata address), multicast, reserved and "
+            "local/internal names are refused at start. Absent = no exception."
+        ),
     )
     parser.add_argument(
         "--google-base-url",
