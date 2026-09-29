@@ -1082,6 +1082,7 @@
       "fix/office-open-artifact": "f54baadf9e52ac48a7fb9a8173ab91d89f978c9e (F1 research.open)",
       "feat/research-open-in-owner-chrome": "0795a6216c5af939199790dd8b97812382148c23 (F2, cloud half; blocked on the device destination policy)",
       "feat/spoken-device-alias": "e1f518ac79576db8e7812ae3caa410de99bf8e98 (G, the named device acts; research topic leak)",
+      "fix/artifact-origin-ssrf-allow": "8c2e0dd9c3bc674292c712c3d2fe28da4153924a (owner-approved narrow SSRF exception: broker origin + /v1/artifacts/renders/view; installer rerun needed on the office PC; godseye.open NOT covered)",
       "integration_fixes": "a36125ac (D+E probe/select parity), db43e179 (owner-harness guard red on main)"
     },
     "findings_beyond_the_brief": [
@@ -1098,7 +1099,7 @@
       "office_pc_install_after_fix": "PROVEN_REAL (install-20260929-115013, browser worker live, owner Chrome research)",
       "cloud_logic_for_D_E_F_G": "PROVEN_AUTOMATED (unit tests through create_app; real command hop NOT exercised)",
       "companion_audit_acl_and_enrolment_record": "PROVEN_AUTOMATED; elevated ownership take-over NOT_YET_PROVEN",
-      "report_opens_on_office_pc": "NOT_YET_PROVEN (blocked: device destination policy, origin setting)",
+      "report_opens_on_office_pc": "NOT_YET_PROVEN (unblocked by the owner-approved exception; needs the installer rerun on the office PC, the origin setting and a release)",
       "spoken_alias_on_two_real_machines": "READY_FOR_OWNER after release (M19b row still open)",
       "dotnet_test_agent_tests": "NOT_RUN on the office PC (opens Notepad on the owner's desktop); runs on the home PC",
       "integration_tests_and_dev_stack": "NOT_RUN on the office PC (no docker/WSL); run on the home PC"

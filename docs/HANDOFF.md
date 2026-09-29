@@ -26,7 +26,8 @@ hepsinin düzeltmesini taşıyor; ADR-0208…0212 + ADR-0203 eki DECISIONS.md so
   (`a36125ac`: oturuma bağlı portun yoklaması yoktu → ofis oturumunda hesap makinesi evde açılıyordu).
 - **F** araştırma raporu: `research.open` düzeltildi (F1); ofiste sahibin Chrome'unda sekme
   olarak açma (ADR-0210, F2) **bulut yarısı hazır, ÜRETİMDE ÇALIŞMAZ** — tarayıcı işçisi tailnet
-  hedeflerini reddediyor (cihaz tarafı karar gerekir) ve `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`
+  hedeflerini reddediyordu; **sahip dar istisnayı onayladı** (`fix/artifact-origin-ssrf-allow`: yalnız broker
+  host+port + `/v1/artifacts/renders/view`; **ofis PC'de kurucu yeniden çalışmalı**; `godseye.open` KAPSAM DIŞI) ve `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`
   üretimde api'ye hiç ulaşmıyordu (compose düzeltildi → yayın + pin).
 - **G** söylenen cihaz adı artık işi yapan cihaz (ADR-0212). Ses yolunda hiç iletilmiyordu;
   ekran görüntüsünde Google sorgusu "ofis bilgisayarında Yapay Zeka son gelişmeler" idi.

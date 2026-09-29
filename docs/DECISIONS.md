@@ -16348,8 +16348,8 @@ not measured.
 **Owner steps for it to work in production.** (1) release the compose change and re-pin the
 recovery bundle; (2) set `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://<tailnet address>:8001` in
 `/opt/pagentos/.env` (check read-only: `grep ARTIFACT_DOWNLOAD /opt/pagentos/.env`, then
-`docker exec <api> printenv PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`); (3) decide the device-side
-allowance above.
+`docker exec <api> printenv PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`); (3) on the office PC rerun the installer (below; the allowance was decided by the
+owner).
 
 ## ADR-0212 — The device the owner names in a sentence is the device that acts (2026-09-29)
 
@@ -16402,3 +16402,47 @@ turn-record field are not cleaned. A paid session whose transcript arrives after
 can apply the previous sentence's alias to non-research tools (a staleness bound was not
 added). "İşte aç" no longer names the office at sentence level (ADR-0205 keeps it for REST);
 "evde mi?" does name the home PC. ADR-0208's session affinity still does not reach missions.
+
+
+### ADR-0210 addendum (2026-09-29): the device may open the broker's report-view route
+
+The blocker above is resolved by an **owner decision (final): a narrow SSRF exception.** The
+browser worker takes `--trusted-origin <scheme://host:port>`, written by the installer from the
+broker URL the device itself dials (equal to `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN` in production),
+never set or widened by a Cloud Core command: the device enforces this policy independently of
+the cloud. It admits exactly that origin's **`/v1/artifacts/renders/view`** route (the token is
+in the query, not the path; the owner's rule was "host and port", the path is narrower on
+purpose) - not other ports (`:4173`), not other addresses in the same /24, not other routes,
+not `https` on the same host, and never by resolving a hostname. Loopback, link-local
+(including the cloud metadata address), multicast, reserved and local/internal names are
+refused as a configured origin and the worker refuses to start with one. A loopback broker
+writes no option; with no option no private address passes. The refusal stays
+`security_scope_error` and is spoken.
+
+**Proof.** `services/browser` `test_trusted_origin.py` (the broker address passes; the same /24,
+the same host on another port, another route, another scheme, userinfo and a resolving hostname
+are refused; an empty origin refuses the whole private/CGNAT/loopback/link-local matrix; bad
+configured origins refuse to start), installer and invocation suites, a drift guard against
+the route the cloud mints; eight mutations, each RED, restored by bytes (sha256). Browser unit
+suite 947 passed, 1 failed (`test_detect_chromium_reads_version_without_any_process`: no
+Chromium here; red on the base commit too).
+
+**Not covered: `godseye.open`** (`http://pagentos-core:4173/`): a different name, port and
+route; a test pins it. It still ends in the spoken refusal on a device with only this
+exception. Covering it needs a second explicit trusted origin, an owner decision.
+
+**Known gaps.** `switch-agent-broker.ps1` warns but does not rewrite the companion's origin
+(after a switch the old origin stays trusted until the installer is rerun). A worker hot-swap
+request that omits `--trusted-origin` gets no exception (fails safe). The Python and PowerShell
+refusal lists are separate copies without a drift check.
+
+**Effect on the office PC: the installer must be rerun** (no C# change, no re-enrolment, no
+`dotnet test`): the worker tree under `Program Files\PagentOS\agent\browser` and the
+companion's `appsettings.json` are installer-written. From an elevated PowerShell at the repo
+root, on this branch after it is on the office PC's checkout:
+
+    scripts\install-device-service.ps1 -BrokerRestUrl http://100.90.158.26:8001 -SkipCoreVerify
+
+(no `-SkipBrowser`; add `-Operator` / `-DisplayPower` only if they are on today - the office PC
+has both OFF, and a rerun without a switch turns it off). Evidence: `NOT_YET_PROVEN` on the
+real fleet until that run and one spoken "araştırma raporunu aç".
