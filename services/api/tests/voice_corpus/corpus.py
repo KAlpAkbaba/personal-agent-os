@@ -1515,6 +1515,15 @@ def _operator_app_open_cases() -> list[UtteranceCase]:
         ("op.app.11", "Dosya gezginini aç.", "paraphrase"),
         ("op.app.12", "Microsoft Edge'i aç.", "paraphrase"),
         ("op.app.13", "Hesap makinesi aç.", "paraphrase"),
+        # ADR-0209 (2026-09-29): naming the machine does not change what the sentence IS - a
+        # single-step launch, routed to the same tool. Which capability serves it (the
+        # Operator's ``app.launch``, or ``desktop.open_application`` on a device that has no
+        # Operator - the office PC) is decided by the device's advertised list, not by the
+        # words, and is proved in tests/unit/test_operator_open_application_fallback.py.
+        ("op.app.office.1", "Ofis bilgisayarımda hesap makinesini aç.", "canonical"),
+        ("op.app.office.2", "Ofisteki bilgisayarda Not Defteri'ni aç.", "paraphrase"),
+        ("op.app.office.3", "Ofiste hesap makinesi aç.", "paraphrase"),
+        ("op.app.home.1", "Ev bilgisayarımda hesap makinesini aç.", "canonical"),
     ):
         cases.extend(
             _with_variants(
