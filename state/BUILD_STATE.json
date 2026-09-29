@@ -1141,6 +1141,7 @@
       "owner step: reinstall the agent on MAIL (-DisplayPower -Operator); -AuthorizeTasks does not exist",
       "idea approval: none yet; the pilot's researcher writes the first three proposals"
     ],
-    "gaps": "ADR-0214 lists eleven protocol gaps; the lock is not shared between machines"
+    "gaps": "ADR-0214 lists eleven protocol gaps; the lock is not shared between machines",
+    "found_by_the_gate": "ADR-0215: the broker could hand one command to a device twice (the 2026-09-18 race, a second ordering); fixed on this branch with test_broker_deliver_once.py; NOT released - production 771a9e53 still has it"
   }
 }

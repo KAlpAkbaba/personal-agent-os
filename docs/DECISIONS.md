@@ -16548,3 +16548,46 @@ Sixteen mutations, each RED, each file restored from a backup and compared by sh
 (`docs/evidence/adr-0214-team-mutations-2026-09-30.json`). Evidence class:
 `PROVEN_AUTOMATED` for the script and the queue; **a cycle with a real model has not been
 run** - that is the pilot.
+
+## ADR-0215 — One connection is handed one command once: the claim is taken before the send (2026-09-30)
+
+**What happened.** The full gate on `feat/dev-team` (home PC, 2026-09-29) failed in
+`test_duplicate_ws_delivery_tolerated_via_reack`: the frame after a duplicate terminal ack
+was a `command`, not the heartbeat ack. The branch had changed no broker code, and the same
+code had passed three gates that day. It is the failure of 2026-09-18 (commit `8a8bd255`),
+a week after its fix.
+
+**Why the fix of 2026-09-18 did not hold.** `replay_guard` writes "sent" AFTER the send, and
+the send is an `await`. While one path is inside it, another looks, sees the command as not
+yet sent, and sends it too. The guard also covered one window only - the opening replay -
+and was dropped when that replay ended. Four paths deliver: the POST that created the
+command, the opening replay, the sweep for commands another process created, and a worker
+thread's immediate delivery (`app.devices.commands`, with an event loop of its own). Any
+two of them can reach for one command, because the row says "undelivered" until the first
+send has been RECORDED, which is a second await later. The regression test of 2026-09-18
+ran its two deliveries one after the other and never saw an overlap.
+
+A duplicate is tolerated by the protocol (the agent re-acks). Tolerating is not intending:
+the frame is a real `desktop.open_application` handed to the device a second time.
+
+**Decision.** `deliver_command` takes a claim on the connection BEFORE it sends
+(`DeviceConnection.claim`), with nothing awaited between the look and the mark, under a
+`threading.Lock` because one path is a thread. A command that has been sent on this
+connection, or is being sent right now, is not sent again: the call returns `False` and
+counts `commands_duplicate_skipped`. A send that failed gives the claim back. The memory is
+the CONNECTION's - a redelivery across a reconnect is the protocol's own and arrives on a
+new connection - and is bounded (1024 ids, oldest first), so a connection that lives for
+days does not grow. `replay_guard` stays as it was.
+
+**Proof.** `services/api/tests/unit/test_broker_deliver_once.py` (8), with a socket whose
+sends wait at a gate so that two deliveries overlap. Before the change five of them were
+RED - the same command id twice in the frames sent, in four different interleavings - and
+with the claim disabled by mutation the same five are RED again (file restored, sha256
+compared). The broker's integration suite passes, the race test five times in a row.
+Evidence class: `PROVEN_AUTOMATED`. Not released: production is `771a9e53` and still has
+the race; it reaches the device as a second launch of an application that is already open.
+
+**What this does not close.** Two PROCESSES (blue and green during a release) each hold
+their own connections; a device is connected to one of them at a time, and the hand-off is
+the release script's. A command delivered on the old connection and again on the new one
+after a reconnect is, as before, the agent's to re-ack.

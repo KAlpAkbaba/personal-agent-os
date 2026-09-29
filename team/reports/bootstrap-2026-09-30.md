@@ -70,6 +70,9 @@ Yok.
 
 ## Açık riskler
 
+- **Üretimdeki broker aynı komutu cihaza iki kez verebiliyor (ADR-0215).** Ekip dalının kapısı buldu;
+  dalda düzeltildi, YAYINLANMADI. Görünen etkisi: zaten açık bir uygulamanın ikinci kez açılması.
+  Seyrek (bugün dört kapıda bir kez), ama gerçek. Sonraki yayın onayını bekliyor.
 - **`RECOVERY_BUNDLE_STALE` dosyası pin'den sonra da duruyor.** Paket ile canlı ağaç bayt bayt aynı
   (sunucuda `cmp`), timer 0 ile çıkıyor, sağlık `ok`; ama dosyayı yalnız bir sonraki yayın siliyor.
   Çaresi uygulanmış bir uyarının durması bir kusur: kuyruğa iş olarak girmeli.

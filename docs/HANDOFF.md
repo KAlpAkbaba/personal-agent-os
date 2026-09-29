@@ -24,6 +24,10 @@ son hüküm). Kurulan: `.claude/agents/` (lead, researcher, integrator, worker, 
 register-nightly) + `scripts/tests/team-cycle.tests.ps1` (kapıda). Gece görevi KAYDEDİLMEDİ.
 **YAYINLANDI (sahibin cümlesiyle, 2026-09-29 19:58 UTC):** main `771a9e53` (ofis günü,
 ADR-0208…0212 + PR-B) üretimde; pin ve timer doğrulandı.
+**Kapının bulduğu kusur (ADR-0215):** broker aynı komutu cihaza İKİ KEZ verebiliyordu (18 Eylül
+yarışının kapanmamış sıralaması; "gönderdim" notu gönderimden SONRA düşülüyordu). Dalda düzeltildi
+(`deliver_command` göndermeden ÖNCE sahipleniyor), `test_broker_deliver_once.py`. **Yayınlanmadı:**
+üretim `771a9e53` bu yarışı hâlâ taşıyor; sonraki yayınla gider.
 **Sahip kapısında bekleyenler:** (1) MAIL ajanının bu ağaçtan yeniden kurulması (komutlar döngü
 raporunda); `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi); (2) gerçek cihaz denemeleri
 (`team/reports/bootstrap-2026-09-30.md`); (3) ofis PC'sinde kurucunun yeniden koşulması.

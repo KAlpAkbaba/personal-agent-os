@@ -116,8 +116,9 @@ def test_the_replay_still_delivers_what_live_dispatch_did_not(monkeypatch):
 
 
 def test_the_window_closes_so_a_long_connection_accumulates_nothing(monkeypatch):
-    """After the opening replay the guard is dropped: a later duplicate is a genuine
-    redelivery, and a connection that lives for days holds no growing set of ids."""
+    """After the opening replay the REPLAY guard is dropped. What a connection keeps for
+    its whole life is the bounded memory of ADR-0215 (test_broker_deliver_once); a
+    redelivery that is the protocol's own arrives on a NEW connection."""
     socket = FakeSocket()
     connection = _connection(socket)
     runtime = FakeRuntime([])
