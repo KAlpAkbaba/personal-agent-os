@@ -570,8 +570,18 @@ if ($Operator) {
 if (-not $SkipBrowser) {
     # Paths the companion will use at runtime: the LIVE browser tree (not staging) and a
     # data directory the OWNER can write, created below with an explicit grant.
-    foreach ($entry in (New-CompanionBrowserSettings -BrowserRoot $browserDir -BrowserDataDir $browserDataDir -Channel $BrowserChannel).GetEnumerator()) {
+    foreach ($entry in (New-CompanionBrowserSettings -BrowserRoot $browserDir -BrowserDataDir $browserDataDir -Channel $BrowserChannel -BrokerRestUrl $BrokerRestUrl).GetEnumerator()) {
         $companionConfig[$entry.Key] = $entry.Value
+    }
+    # The one narrow SSRF exception (owner decision 2026-09-29): the worker may open the report
+    # view of the broker THIS device dials, and nothing else that is private. Derived here, from
+    # the resolved broker URL (explicit, or preserved from the installed service), on every run.
+    $trustedOrigin = Get-BrowserTrustedOrigin -BrokerRestUrl $BrokerRestUrl
+    if ($trustedOrigin.Origin) {
+        Write-Host "browser worker: --trusted-origin $($trustedOrigin.Origin) (the report-view route of the broker this device dials, and nothing else private)"
+    }
+    else {
+        Write-Host "browser worker: no --trusted-origin written - $($trustedOrigin.Reason); the worker refuses every private destination"
     }
 }
 Write-JsonFile -Path (Join-Path $stagedCompanionDir "appsettings.json") -Content ($companionConfig | ConvertTo-Json -Depth 4)
