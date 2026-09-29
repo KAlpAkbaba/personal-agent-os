@@ -31,10 +31,14 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\InstallAcl.ps1")
+. (Join-Path $repoRoot "scripts\lib\BrowserProvision.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
 $script:Sandbox = Join-Path $env:TEMP "pagentos-acl-tests-$([guid]::NewGuid().ToString('N'))"
+$script:LockedForCleanup = New-Object System.Collections.ArrayList
+$script:Junctions = New-Object System.Collections.ArrayList
+$script:ProtectedFiles = New-Object System.Collections.ArrayList
 
 function Test-Case {
     param([string]$Name, [scriptblock]$Body)
@@ -525,15 +529,557 @@ try {
         Assert-Equal -Expected 1 -Actual @($first).Count -Because "first pass repairs the one damaged file"
         Assert-Equal -Expected 0 -Actual @($second).Count -Because "second pass finds nothing to do"
     }
+
+    Write-Host ""
+    Write-Host "the companion's audit directory (2026-09-29: a healthy browser worker 0.5.0 rolled back twice)"
+
+    # What happened. The Session Companion - the OWNER's non-elevated process - created
+    # C:\ProgramData\PagentOS\companion\audit on its first start and protected it the way the
+    # service protects its own: a protected DACL naming SYSTEM and Administrators only. It
+    # could apply that (a creator owns what it creates) and could not write a row afterwards.
+    # The installer granted the owner Modify on the companion's data ROOT, inheritable - and a
+    # protected DACL does not inherit. So the health check waited 90 s for a
+    # browser_worker_started row that could not be written, and rolled back.
+    #
+    # Reproduced for real below: this test account creates the directory, so it owns it
+    # exactly as the owner's account does on the real machine, and after the old protection
+    # it genuinely cannot write there.
+
+    $script:CurrentSid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $script:TokenIsAdmin = ([System.Security.Principal.WindowsPrincipal]::new(
+        [System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+        [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    function New-CompanionDataFixture {
+        <#  C:\ProgramData\PagentOS\companion as the incident left it: audit\ locked, a trail inside.  #>
+        param([string]$Name, [switch]$WithTrail)
+        $companion = Join-Path $script:Sandbox "$Name\companion"
+        $audit = Join-Path $companion "audit"
+        New-Item -ItemType Directory -Force -Path $audit | Out-Null
+        if ($WithTrail) {
+            [System.IO.File]::WriteAllText((Join-Path $audit "companion-audit.jsonl"), "{`"event`":`"before`"}`n")
+        }
+        # The old AuditLog constructor's MachineMaterial.Protect(Directory), byte for byte.
+        Set-MachineDataAcl -Root $audit
+        [void]$script:LockedForCleanup.Add($audit)
+        return $companion
+    }
+
+    function Test-CanAppendRow {
+        <#  What the companion does for every audited action: open for append, write a line.  #>
+        param([string]$AuditDir)
+        try {
+            $stream = New-Object System.IO.FileStream((Join-Path $AuditDir "companion-audit.jsonl"),
+                [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            try { $bytes = [System.Text.Encoding]::UTF8.GetBytes("{`"event`":`"browser_worker_started`"}`n"); $stream.Write($bytes, 0, $bytes.Length) }
+            finally { $stream.Dispose() }
+            return $true
+        }
+        catch { return $false }
+    }
+
+    function Get-AllowedRights {
+        <#  Everything the DACL allows one SID on this path, explicit and inherited.  #>
+        param([string]$Path, [string]$Sid)
+        $rights = 0
+        foreach ($ace in (Get-AclReport -Path $Path).Aces) {
+            if ((Resolve-SidValue -Identity $ace.IdentityReference) -ne $Sid) { continue }
+            if ($ace.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+            $rights = $rights -bor [int]$ace.FileSystemRights
+        }
+        # .NET adds SYNCHRONIZE to every allow entry it writes; it is not a permission anyone
+        # chose, so it is not part of what is compared (FullControl already contains it).
+        if ($rights -ne [int][System.Security.AccessControl.FileSystemRights]::FullControl) {
+            $rights = $rights -band (-bnot [int][System.Security.AccessControl.FileSystemRights]::Synchronize)
+        }
+        return $rights
+    }
+
+    $script:Modify = [int][System.Security.AccessControl.FileSystemRights]::Modify
+
+    Test-Case "the incident, reproduced: the grant on the companion's data root does not reach a protected audit directory" {
+        $companion = New-CompanionDataFixture -Name "audit-repro"
+        $audit = Join-Path $companion "audit"
+        Set-OwnerWritableDirectory -Path $companion -OwnerSid $script:CurrentSid   # all the installer used to do
+
+        Assert-True -Condition (Test-OwnerWritableDirectory -Path $companion -OwnerSid $script:CurrentSid) -Because "the root really is granted"
+        Assert-Equal -Expected 0 -Actual ((Get-AllowedRights -Path $audit -Sid $script:CurrentSid) -band $script:Modify) `
+            -Because "and the audit directory, protected, inherits none of it"
+        if (-not $script:TokenIsAdmin) {
+            Assert-True -Condition (-not (Test-CanAppendRow -AuditDir $audit)) -Because "which is the row the health check waited 90 s for"
+        }
+    }
+
+    Test-Case "a rerun of the installer's step repairs the locked audit directory, and the row can be written" {
+        $companion = New-CompanionDataFixture -Name "audit-rerun" -WithTrail
+        $audit = Join-Path $companion "audit"
+
+        Initialize-CompanionDataDirectories -CompanionDataDir $companion -BrowserDataDir (Join-Path $companion "browser") -OwnerSid $script:CurrentSid | Out-Null
+
+        Assert-Equal -Expected $script:Modify -Actual ((Get-AllowedRights -Path $audit -Sid $script:CurrentSid) -band $script:Modify) `
+            -Because "the owner SID must hold Modify on the audit directory after a rerun"
+        Assert-Equal -Expected $script:Modify -Actual ((Get-AllowedRights -Path (Join-Path $audit "companion-audit.jsonl") -Sid $script:CurrentSid) -band $script:Modify) `
+            -Because "and on the trail that was already there"
+        Assert-True -Condition (Test-CanAppendRow -AuditDir $audit) -Because "measured, not inferred: the append the companion makes must succeed"
+        Assert-True -Condition ([System.IO.File]::ReadAllText((Join-Path $audit "companion-audit.jsonl")).StartsWith("{`"event`":`"before`"}")) `
+            -Because "a repair touches the descriptor, never the rows already written"
+    }
+
+    Test-Case "the audit directory is repaired when the browser is skipped too - the companion audits without one" {
+        $companion = New-CompanionDataFixture -Name "audit-skipbrowser"
+        $audit = Join-Path $companion "audit"
+
+        Initialize-CompanionDataDirectories -CompanionDataDir $companion -OwnerSid $script:CurrentSid | Out-Null
+
+        Assert-True -Condition (Test-CanAppendRow -AuditDir $audit) -Because "-SkipBrowser must not leave the trail unwritable"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $companion "browser"))) -Because "and must not create a browser directory nobody asked for"
+    }
+
+    Test-Case "a first install creates the audit directory: protected, SYSTEM and Administrators full, the owner Modify, nobody else" {
+        $companion = Join-Path $script:Sandbox "audit-fresh\companion"
+        $audit = Join-Path $companion "audit"
+        [void]$script:LockedForCleanup.Add($audit)
+
+        Initialize-CompanionDataDirectories -CompanionDataDir $companion -BrowserDataDir (Join-Path $companion "browser") -OwnerSid $script:CurrentSid | Out-Null
+
+        $report = Get-AclReport -Path $audit
+        Assert-True -Condition $report.Exists -Because "the installer creates it before the runtime starts"
+        Assert-True -Condition $report.IsProtected -Because "the posture is stated on the directory, not borrowed from ProgramData (whose ACL lets every user create files)"
+        Assert-Equal -Expected 3 -Actual $report.AceCount -Because "three principals: $($report.Sddl)"
+        $full = [int][System.Security.AccessControl.FileSystemRights]::FullControl
+        Assert-Equal -Expected $full -Actual (Get-AllowedRights -Path $audit -Sid "S-1-5-18") -Because "SYSTEM full control"
+        Assert-Equal -Expected $full -Actual (Get-AllowedRights -Path $audit -Sid "S-1-5-32-544") -Because "Administrators full control"
+        Assert-Equal -Expected $script:Modify -Actual (Get-AllowedRights -Path $audit -Sid $script:CurrentSid) `
+            -Because "the owner gets Modify exactly: the process that writes the trail does not get to re-permission it"
+        foreach ($ace in $report.Aces) {
+            Assert-True -Condition ([bool]($ace.InheritanceFlags -band [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)) `
+                -Because "the audit FILE is created later and must inherit: $($ace.IdentityReference)"
+        }
+    }
+
+    Test-Case "protection is by identity: the grant names the owner SID it was given, not whoever runs the installer" {
+        # The installer runs elevated as an administrator and is told the owner's SID. A SID
+        # that is not this account stands in for that: this account must NOT be granted.
+        $someoneElse = "S-1-5-21-1111111111-2222222222-3333333333-1005"
+        $companion = Join-Path $script:Sandbox "audit-identity\companion"
+        $audit = Join-Path $companion "audit"
+        [void]$script:LockedForCleanup.Add($audit)
+
+        # Elevated, the step hands the directory to Administrators and returns. NOT elevated,
+        # this account created the directory, owns it, and is not the owner it was told to
+        # install for - which since the security review of 2a2f7f95 is a refusal by itself
+        # (an owner keeps WRITE_DAC). The DACL is written before the owner is looked at, so
+        # what it says is asserted either way.
+        $refusal = $null
+        try { Initialize-CompanionDataDirectories -CompanionDataDir $companion -OwnerSid $someoneElse -AllowUnresolvedOwnerSid | Out-Null }
+        catch { $refusal = $_.Exception.Message }
+        if ($script:TokenIsAdmin) {
+            Assert-True -Condition ($null -eq $refusal) -Because "elevated, the step succeeds: $refusal"
+            Assert-Equal -Expected "S-1-5-32-544" -Actual (Get-AclReport -Path $audit).Owner -Because "and the directory is Administrators'"
+        }
+        else {
+            Assert-True -Condition ($refusal -match "owned by $([regex]::Escape($script:CurrentSid))") `
+                -Because "not elevated, a directory owned by an account that is not the owner is refused: $refusal"
+        }
+
+        Assert-Equal -Expected $script:Modify -Actual (Get-AllowedRights -Path $audit -Sid $someoneElse) -Because "the named owner holds Modify"
+        Assert-Equal -Expected 0 -Actual (Get-AllowedRights -Path $audit -Sid $script:CurrentSid) -Because "the installing account is not written into the audit directory's DACL"
+        Assert-True -Condition (Get-CompanionAuditDirectoryReport -Path $audit -OwnerSid $someoneElse).OwnerCanWrite -Because "the report answers for the SID it is asked about"
+        Assert-True -Condition (-not (Get-CompanionAuditDirectoryReport -Path $audit -OwnerSid $script:CurrentSid).OwnerCanWrite) -Because "and for no other"
+    }
+
+    Test-Case "the repair is idempotent: a second run changes nothing and says so" {
+        $companion = New-CompanionDataFixture -Name "audit-idempotent"
+        $audit = Join-Path $companion "audit"
+
+        $first = Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid
+        $sddl = (Get-AclReport -Path $audit).Sddl
+        $second = Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid
+
+        Assert-True -Condition $first.Changed -Because "the locked directory must be reported as repaired"
+        Assert-True -Condition (-not $first.Created) -Because "it already existed"
+        Assert-True -Condition (-not $second.Changed) -Because "a correct directory is left alone"
+        Assert-Equal -Expected $sddl -Actual (Get-AclReport -Path $audit).Sddl -Because "a rerun must not drift the ACL"
+    }
+
+    Test-Case "a deny entry against the owner is not 'writable', whatever else is allowed" {
+        $companion = Join-Path $script:Sandbox "audit-deny\companion"
+        $audit = Join-Path $companion "audit"
+        [void]$script:LockedForCleanup.Add($audit)
+        [void](Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid)
+        $acl = Get-SecurityDescriptor -Path $audit
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($script:CurrentSid)),
+            [System.Security.AccessControl.FileSystemRights]::WriteData,
+            ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Deny)))
+        Set-SecurityDescriptor -Path $audit -Security $acl
+
+        $report = Get-CompanionAuditDirectoryReport -Path $audit -OwnerSid $script:CurrentSid
+        Assert-True -Condition (-not $report.OwnerCanWrite) -Because "a deny wins over an allow"
+        Assert-True -Condition (@($report.Problems | Where-Object { $_ -match "deny" }).Count -gt 0) -Because "and is named: $($report.Problems -join '; ')"
+
+        [void](Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid)
+        Assert-True -Condition (Get-CompanionAuditDirectoryReport -Path $audit -OwnerSid $script:CurrentSid).OwnerCanWrite -Because "the repair replaces the DACL, deny entry included"
+    }
+
+    Test-Case "the verifier's row: PROVEN_REAL when the owner can write, NOT_YET_PROVEN with the remedy when not, or when absent" {
+        $companion = New-CompanionDataFixture -Name "audit-verdict"
+        $audit = Join-Path $companion "audit"
+
+        $locked = Get-CompanionAuditDirectoryVerdict -Path $audit -OwnerSid $script:CurrentSid
+        Assert-Equal -Expected "NOT_YET_PROVEN" -Actual $locked.Status -Because "the incident state must not pass"
+        Assert-True -Condition ($locked.Evidence -match [regex]::Escape($script:CurrentSid)) -Because "the evidence names the SID: $($locked.Evidence)"
+        Assert-True -Condition ($locked.Evidence -match "install-device-service") -Because "and what to run: $($locked.Evidence)"
+
+        [void](Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid)
+        $repaired = Get-CompanionAuditDirectoryVerdict -Path $audit -OwnerSid $script:CurrentSid
+        Assert-Equal -Expected "PROVEN_REAL" -Actual $repaired.Status -Because $repaired.Evidence
+        Assert-Equal -Expected "audit dir writable by owner" -Actual $repaired.Criterion -Because "the row is found by this name"
+
+        $absent = Get-CompanionAuditDirectoryVerdict -Path (Join-Path $companion "no-such-audit") -OwnerSid $script:CurrentSid
+        Assert-Equal -Expected "NOT_YET_PROVEN" -Actual $absent.Status -Because "nothing to check is not a pass"
+        Assert-True -Condition ($absent.Evidence -match "does not exist") -Because $absent.Evidence
+    }
+
+    Test-Case "the installer and the verifier are wired to it: before the runtime starts, outside the browser branch" {
+        $tokens = $null; $errors = $null
+        $installerPath = Join-Path $repoRoot "scripts\install-device-service.ps1"
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$errors)
+        $calls = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
+        $initialize = @($calls | Where-Object { $_.GetCommandName() -eq "Initialize-CompanionDataDirectories" })
+        Assert-Equal -Expected 1 -Actual @($initialize).Count -Because "the installer calls the step exactly once"
+
+        # Not inside `if (-not $SkipBrowser) { ... }`: the companion audits with or without a browser.
+        $parent = $initialize[0].Parent
+        while ($null -ne $parent) {
+            if ($parent -is [System.Management.Automation.Language.IfStatementAst]) {
+                throw "the step sits inside an if statement at line $($parent.Extent.StartLineNumber); it must run on every install"
+            }
+            $parent = $parent.Parent
+        }
+
+        $register = @($calls | Where-Object { $_.GetCommandName() -eq "Register-CompanionAutostart" })[0]
+        Assert-True -Condition ($initialize[0].Extent.StartLineNumber -lt $register.Extent.StartLineNumber) `
+            -Because "the directory is put right before the companion is registered, and long before it is started"
+        $raw = @($calls | Where-Object { $_.GetCommandName() -eq "Set-OwnerWritableDirectory" })
+        Assert-Equal -Expected 0 -Actual @($raw).Count -Because "the inline grants were the code that missed the audit directory; they live in the step now"
+
+        $verifier = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\verify-device-service.ps1"))
+        Assert-True -Condition ($verifier -match "Get-CompanionAuditDirectoryVerdict") -Because "the verifier reports the row"
+    }
+
+    Write-Host ""
+    Write-Host "security review of 2a2f7f95: what an ELEVATED repair may be steered into"
+
+    # The repair runs elevated, on a path an unprivileged account can shape: the owner holds
+    # Modify on companion\, and ProgramData lets every local user create folders there. So
+    # whatever stands at companion\audit when the installer arrives was possibly put there
+    # by someone who wants the installer's privileges pointed somewhere else.
+
+    function New-Junction {
+        <#  mklink /J: a junction needs no privilege, which is exactly why it is the attack.  #>
+        param([string]$At, [string]$Target)
+        $output = & "$env:SystemRoot\System32\cmd.exe" /c mklink /J "$At" "$Target" 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "mklink /J failed: $output" }
+        [void]$script:Junctions.Add($At)
+    }
+
+    function New-VictimTree {
+        <#  Somewhere else on the machine: a directory and a file whose ACLs are nobody's business.  #>
+        param([string]$Name)
+        $victim = Join-Path $script:Sandbox "$Name\victim"
+        New-Item -ItemType Directory -Force -Path $victim | Out-Null
+        $secret = Join-Path $victim "secret.txt"
+        [System.IO.File]::WriteAllText($secret, "not the installer's")
+        # Protected, and naming this account only with Read: if anything re-inherits this
+        # file, its descriptor changes, and that is what the assertions look for.
+        $security = New-Object System.Security.AccessControl.FileSecurity
+        $security.SetAccessRuleProtection($true, $false)
+        $security.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")),
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
+        ([System.IO.FileInfo]$secret).SetAccessControl($security)
+        [void]$script:ProtectedFiles.Add($secret)
+        return [pscustomobject]@{
+            Directory     = $victim
+            File          = $secret
+            DirectorySddl = (Get-AclReport -Path $victim).Sddl
+            FileSddl      = (Get-AclReport -Path $secret).Sddl
+        }
+    }
+
+    function Assert-VictimUntouched {
+        param($Victim)
+        Assert-Equal -Expected $Victim.DirectorySddl -Actual (Get-AclReport -Path $Victim.Directory).Sddl `
+            -Because "the directory behind the junction must keep its descriptor"
+        Assert-Equal -Expected $Victim.FileSddl -Actual (Get-AclReport -Path $Victim.File).Sddl `
+            -Because "the SYSTEM-only file behind the junction must keep its descriptor (the reviewer's PoC: it came back with inherited ACEs)"
+    }
+
+    function Assert-Refused {
+        param([scriptblock]$Body, [string]$Pattern, [string]$Because)
+        $message = $null
+        try { & $Body | Out-Null } catch { $message = $_.Exception.Message }
+        if ($null -eq $message) { throw "$Because`n          expected a refusal matching <$Pattern>, and nothing was thrown" }
+        if ($message -notmatch $Pattern) { throw "$Because`n          expected a refusal matching <$Pattern>`n          actual  : <$message>" }
+    }
+
+    Test-Case "MEDIUM-1: a junction planted at companion\audit is refused, and nothing behind it is touched" {
+        $victim = New-VictimTree -Name "junction-audit"
+        $companion = Join-Path $script:Sandbox "junction-audit\companion"
+        New-Item -ItemType Directory -Force -Path $companion | Out-Null
+        New-Junction -At (Join-Path $companion "audit") -Target $victim.Directory
+
+        Assert-Refused -Pattern "(?i)reparse point" -Because "the repair must not follow a junction" -Body {
+            Set-CompanionAuditDirectoryAcl -Path (Join-Path $companion "audit") -OwnerSid $script:CurrentSid
+        }
+        Assert-VictimUntouched -Victim $victim
+    }
+
+    Test-Case "MEDIUM-1: the installer's step refuses the same junction, before it grants anything anywhere" {
+        $victim = New-VictimTree -Name "junction-step"
+        $companion = Join-Path $script:Sandbox "junction-step\companion"
+        New-Item -ItemType Directory -Force -Path $companion | Out-Null
+        New-Junction -At (Join-Path $companion "audit") -Target $victim.Directory
+        $before = (Get-AclReport -Path $companion).Sddl
+
+        Assert-Refused -Pattern "(?i)reparse point" -Because "one planted junction stops the whole step" -Body {
+            Initialize-CompanionDataDirectories -CompanionDataDir $companion -BrowserDataDir (Join-Path $companion "browser") -OwnerSid $script:CurrentSid
+        }
+        Assert-VictimUntouched -Victim $victim
+        Assert-Equal -Expected $before -Actual (Get-AclReport -Path $companion).Sddl -Because "nothing changed: the check comes before the first grant"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $companion "browser"))) -Because "and before the first directory is created"
+    }
+
+    Test-Case "MEDIUM-1: a junction as the companion data root, or as the browser directory, is refused too" {
+        $victim = New-VictimTree -Name "junction-root"
+        $root = Join-Path $script:Sandbox "junction-root\companion"
+        New-Junction -At $root -Target $victim.Directory
+        Assert-Refused -Pattern "(?i)reparse point" -Because "the root itself" -Body {
+            Initialize-CompanionDataDirectories -CompanionDataDir $root -OwnerSid $script:CurrentSid
+        }
+        Assert-Refused -Pattern "(?i)reparse point" -Because "an ANCESTOR of the audit directory, up to the root the caller names" -Body {
+            Set-CompanionAuditDirectoryAcl -Path (Join-Path $root "audit") -OwnerSid $script:CurrentSid -TrustedRoot $root
+        }
+        Assert-VictimUntouched -Victim $victim
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $victim.Directory "audit"))) -Because "no audit directory was created THROUGH the junction"
+
+        $victim2 = New-VictimTree -Name "junction-browser"
+        $companion = Join-Path $script:Sandbox "junction-browser\companion"
+        New-Item -ItemType Directory -Force -Path $companion | Out-Null
+        New-Junction -At (Join-Path $companion "browser") -Target $victim2.Directory
+        Assert-Refused -Pattern "(?i)reparse point" -Because "the browser data directory" -Body {
+            Initialize-CompanionDataDirectories -CompanionDataDir $companion -BrowserDataDir (Join-Path $companion "browser") -OwnerSid $script:CurrentSid
+        }
+        Assert-VictimUntouched -Victim $victim2
+    }
+
+    Test-Case "MEDIUM-1: resetting the trail never descends into, or resets through, a junction INSIDE the audit directory" {
+        $victim = New-VictimTree -Name "junction-inside"
+        $companion = Join-Path $script:Sandbox "junction-inside-c\companion"
+        $audit = Join-Path $companion "audit"
+        [void]$script:LockedForCleanup.Add($audit)
+        New-Item -ItemType Directory -Force -Path $audit | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $audit "companion-audit.jsonl"), "{`"event`":`"before`"}`n")
+        $older = Join-Path $audit "rotated"
+        New-Item -ItemType Directory -Force -Path $older | Out-Null
+        $explicit = Join-Path $older "companion-audit.1.jsonl"
+        [System.IO.File]::WriteAllText($explicit, "{}")
+        $own = New-Object System.Security.AccessControl.FileSecurity
+        $own.SetAccessRuleProtection($true, $false)
+        $own.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            (New-Object System.Security.Principal.SecurityIdentifier($script:CurrentSid)),
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.AccessControlType]::Allow)))
+        ([System.IO.FileInfo]$explicit).SetAccessControl($own)
+        New-Junction -At (Join-Path $audit "elsewhere") -Target $victim.Directory
+        # Locked the way the old companion locked it - written directly, because the helper
+        # the other fixtures use resets children with icacls /T and would itself walk the
+        # junction, which is the defect under test.
+        $locked = New-Object System.Security.AccessControl.DirectorySecurity
+        $locked.SetAccessRuleProtection($true, $false)
+        foreach ($sid in @("S-1-5-18", "S-1-5-32-544")) {
+            $locked.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                (New-Object System.Security.Principal.SecurityIdentifier($sid)),
+                [System.Security.AccessControl.FileSystemRights]::FullControl,
+                ([System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit),
+                [System.Security.AccessControl.PropagationFlags]::None,
+                [System.Security.AccessControl.AccessControlType]::Allow)))
+        }
+        ([System.IO.DirectoryInfo]$audit).SetAccessControl($locked)
+        Assert-VictimUntouched -Victim $victim   # the fixture itself must not have done it
+
+        $result = Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid
+
+        Assert-True -Condition $result.Changed -Because "the locked directory is repaired"
+        Assert-VictimUntouched -Victim $victim
+        Assert-True -Condition (-not (Get-AclReport -Path $explicit).IsProtected) -Because "a real file two levels down DOES inherit again - the walk is recursive, just not through reparse points"
+        Assert-Equal -Expected 1 -Actual @($result.SkippedReparsePoints).Count -Because "and the junction it stepped around is reported: $($result.SkippedReparsePoints -join ', ')"
+    }
+
+    Test-Case "LOW-1: a directory owned by some other account is a failed row, whatever its DACL allows" {
+        $companion = Join-Path $script:Sandbox "owner-foreign\companion"
+        $audit = Join-Path $companion "audit"
+        [void]$script:LockedForCleanup.Add($audit)
+        [void](Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid)
+
+        # This account cannot make anyone else the owner of a real directory, so the owner is
+        # changed in the REPORT the verdict reads: the DACL is the real, correct one.
+        $real = Get-AclReport -Path $audit
+        foreach ($case in @(
+            @{ Owner = "S-1-5-21-1111111111-2222222222-3333333333-1005"; Trusted = $false },
+            @{ Owner = "S-1-5-32-545";                                   Trusted = $false },
+            @{ Owner = "S-1-5-32-544";                                   Trusted = $true },
+            @{ Owner = "S-1-5-18";                                       Trusted = $true },
+            @{ Owner = $script:CurrentSid;                               Trusted = $true }
+        )) {
+            $forged = $real.PSObject.Copy()
+            $forged.Owner = $case.Owner
+            $report = Get-CompanionAuditDirectoryReport -Path $audit -OwnerSid $script:CurrentSid -AclReport $forged
+            $verdict = Get-CompanionAuditDirectoryVerdict -Path $audit -OwnerSid $script:CurrentSid -AclReport $forged
+            Assert-Equal -Expected $case.Trusted -Actual $report.OwnerTrusted -Because "owner $($case.Owner)"
+            if ($case.Trusted) {
+                Assert-Equal -Expected "PROVEN_REAL" -Actual $verdict.Status -Because "owner $($case.Owner): $($verdict.Evidence)"
+            }
+            else {
+                Assert-Equal -Expected "NOT_YET_PROVEN" -Actual $verdict.Status -Because "an owner keeps WRITE_DAC: $($case.Owner) could re-permission the trail at will"
+                Assert-True -Condition ($verdict.Evidence -match "owned by $([regex]::Escape($case.Owner))") -Because $verdict.Evidence
+            }
+        }
+    }
+
+    Test-Case "LOW-1: an elevated repair hands the directory to Administrators after the DACL is written" {
+        $companion = Join-Path $script:Sandbox "owner-elevated\companion"
+        $audit = Join-Path $companion "audit"
+        [void]$script:LockedForCleanup.Add($audit)
+
+        if ($script:TokenIsAdmin) {
+            [void](Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid -Elevated $true)
+            Assert-Equal -Expected "S-1-5-32-544" -Actual (Get-AclReport -Path $audit).Owner -Because "measured: the elevated run owns it as Administrators"
+        }
+        else {
+            # Not elevated, this account may not name Administrators as an owner - so the
+            # attempt itself is what can be observed: told it is elevated, the repair TRIES,
+            # and says what it could not do instead of leaving the owner as it was, silently.
+            Assert-Refused -Pattern "(?i)owner" -Because "the owner change is attempted, and its failure is not swallowed" -Body {
+                Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $script:CurrentSid -Elevated $true
+            }
+            Assert-True -Condition (Get-CompanionAuditDirectoryReport -Path $audit -OwnerSid $script:CurrentSid).OwnerCanWrite `
+                -Because "AFTER the DACL write: the directory is already writable when the owner change is tried"
+        }
+    }
+
+    Test-Case "LOW-2: a group, a well-known principal or a non-SID is refused as the owner, before anything is changed" {
+        $domain = ($script:CurrentSid -replace "-\d+$", "")
+        foreach ($bad in @(
+            "S-1-5-32-545",      # BUILTIN\Users
+            "S-1-1-0",           # Everyone
+            "S-1-5-11",          # Authenticated Users
+            "S-1-5-4",           # INTERACTIVE
+            "S-1-5-32-544",      # BUILTIN\Administrators
+            "S-1-5-18",          # SYSTEM
+            "S-1-3-0",           # CREATOR OWNER
+            "$domain-513",       # Domain Users
+            "$domain-512",       # Domain Admins
+            "not-a-sid"
+        )) {
+            $companion = Join-Path $script:Sandbox "sid-$([guid]::NewGuid().ToString('N'))\companion"
+            Assert-Refused -Pattern "(?i)owner SID" -Because "'$bad' must be refused" -Body {
+                Initialize-CompanionDataDirectories -CompanionDataDir $companion -OwnerSid $bad
+            }
+            Assert-True -Condition (-not (Test-Path -LiteralPath $companion)) -Because "'$bad': refused before the first directory is created"
+
+            $audit = Join-Path $script:Sandbox "sid-$([guid]::NewGuid().ToString('N'))\audit"
+            Assert-Refused -Pattern "(?i)owner SID" -Because "'$bad' must be refused by the repair itself too" -Body {
+                Set-CompanionAuditDirectoryAcl -Path $audit -OwnerSid $bad
+            }
+            Assert-True -Condition (-not (Test-Path -LiteralPath $audit)) -Because "'$bad': nothing created"
+        }
+    }
+
+    Test-Case "LOW-2: this account's own SID is accepted; one that resolves to nobody only when the caller says so" {
+        Assert-OwnerAccountSid -Sid $script:CurrentSid
+        $nobody = "S-1-5-21-1111111111-2222222222-3333333333-1005"
+        Assert-Refused -Pattern "(?i)owner SID" -Because "unresolvable: nothing says it is a user" -Body { Assert-OwnerAccountSid -Sid $nobody }
+        Assert-OwnerAccountSid -Sid $nobody -AllowUnresolved
+        Assert-Refused -Pattern "(?i)owner SID" -Because "the switch forgives 'unknown', never 'known to be a group'" -Body {
+            Assert-OwnerAccountSid -Sid "S-1-5-32-545" -AllowUnresolved
+        }
+    }
+
+    Test-Case "LOW-2: the installer validates the owner SID as soon as it has one" {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot "scripts\install-device-service.ps1"), [ref]$tokens, [ref]$errors)
+        $calls = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true))
+        $top = @($calls | Where-Object { $_.GetCommandName() -eq "Resolve-OwnerSid" })[0].Extent.StartLineNumber
+        $check = @($calls | Where-Object { $_.GetCommandName() -eq "Assert-OwnerAccountSid" })
+        Assert-Equal -Expected 1 -Actual @($check).Count -Because "the installer validates it, once"
+        Assert-True -Condition ($check[0].Extent.StartLineNumber -gt $top -and $check[0].Extent.StartLineNumber -le ($top + 12)) `
+            -Because "right after resolving it (line $top), before recovery, staging or any grant; found on line $($check[0].Extent.StartLineNumber)"
+        Assert-True -Condition ($check[0].Extent.Text -notmatch "AllowUnresolved") -Because "the installer never forgives an unresolvable SID"
+    }
 }
 finally {
+    # Junctions first, and as junctions: removing one must never reach what it points at.
+    foreach ($junction in @($script:Junctions)) {
+        try { if (Test-Path -LiteralPath $junction) { [System.IO.Directory]::Delete($junction, $false) } } catch { }
+    }
+    foreach ($file in @($script:ProtectedFiles)) {
+        try {
+            if (Test-Path -LiteralPath $file) {
+                $open = New-Object System.Security.AccessControl.FileSecurity
+                $open.SetAccessRuleProtection($false, $false)
+                ([System.IO.FileInfo]$file).SetAccessControl($open)
+            }
+        } catch { }
+    }
+    # The audit fixtures are protected against this account on purpose. It owns them, and an
+    # owner keeps WRITE_DAC, so inheritance is handed back before the sandbox is removed.
+    foreach ($locked in @($script:LockedForCleanup)) {
+        if (-not (Test-Path -LiteralPath $locked)) { continue }
+        try {
+            $open = New-Object System.Security.AccessControl.DirectorySecurity
+            $open.SetAccessRuleProtection($false, $false)
+            ([System.IO.DirectoryInfo]$locked).SetAccessControl($open)
+        } catch { }
+    }
+
     # Test trees are hardened against the test account, so ownership is what makes cleanup
     # possible - the same property the repair relies on.
+    #
+    # Top-down, one directory at a time: a hardened directory cannot be listed until its own
+    # DACL is handed back, so a tree-wide tool started from the top sees nothing below it -
+    # which is how this suite used to leave its sandbox behind in %TEMP% on every run.
     if (Test-Path -LiteralPath $script:Sandbox) {
-        Get-ChildItem -LiteralPath $script:Sandbox -Directory -ErrorAction SilentlyContinue | ForEach-Object {
-            try { [void](Repair-InstallTreeAcl -Root $_.FullName -Quiet) } catch { }
+        $pending = New-Object System.Collections.Stack
+        $pending.Push($script:Sandbox)
+        while ($pending.Count -gt 0) {
+            $directory = $pending.Pop()
+            try {
+                $open = New-Object System.Security.AccessControl.DirectorySecurity
+                $open.SetAccessRuleProtection($false, $false)
+                ([System.IO.DirectoryInfo]$directory).SetAccessControl($open)
+                foreach ($entry in [System.IO.Directory]::GetFileSystemEntries($directory)) {
+                    $attributes = [System.IO.File]::GetAttributes($entry)
+                    if ($attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                        [System.IO.Directory]::Delete($entry, $false)   # the link, never its target
+                    }
+                    elseif ($attributes -band [System.IO.FileAttributes]::Directory) { $pending.Push($entry) }
+                    else {
+                        $openFile = New-Object System.Security.AccessControl.FileSecurity
+                        $openFile.SetAccessRuleProtection($false, $false)
+                        ([System.IO.FileInfo]$entry).SetAccessControl($openFile)
+                    }
+                }
+            } catch { }
         }
         Remove-Item -LiteralPath $script:Sandbox -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $script:Sandbox) {
+            Write-Host "  NOTE  the sandbox could not be removed: $script:Sandbox" -ForegroundColor Yellow
+        }
     }
 }
 

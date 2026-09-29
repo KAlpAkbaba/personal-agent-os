@@ -33,13 +33,16 @@ def test_committed_contract_matches_the_live_request_models() -> None:
 
 def test_contract_version_and_create_fields() -> None:
     doc = realtime_contract()
-    assert doc["contract_version"] == CONTRACT_VERSION == 2
-    v2 = set(create_fields())
-    assert set(LEGACY_V1_CREATE_FIELDS) < v2
-    assert v2 - set(LEGACY_V1_CREATE_FIELDS) == {"voice"}  # the v2 addition, and only that
+    assert doc["contract_version"] == CONTRACT_VERSION == 3
+    current = set(create_fields())
+    assert set(LEGACY_V1_CREATE_FIELDS) < current
+    # v2 added `voice` (ADR-0043), v3 added `device_id` (ADR-0208) - and nothing else.
+    assert current - set(LEGACY_V1_CREATE_FIELDS) == {"voice", "device_id"}
     assert doc["legacy"]["1"]["create_session"] == list(LEGACY_V1_CREATE_FIELDS)
     props = doc["requests"]["create_session"]["properties"]
-    assert set(props) == v2
+    assert set(props) == current
+    # ADR-0208: a declared device on attach too - the leg that takes over says where it is.
+    assert set(doc["requests"]["attach"]["properties"]) == {"client_kind", "transport", "device_id"}
     assert doc["requests"]["create_session"].get("additionalProperties") is False, (
         "extra=forbid must be visible in the schema so a client can drop unknown fields itself"
     )

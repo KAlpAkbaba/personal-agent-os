@@ -429,6 +429,11 @@ trap {
 }
 
 $OwnerSid = Resolve-OwnerSid -Explicit $OwnerSid
+# Before recovery, staging or any grant. This SID is written into DACLs with Modify, into the
+# pipe's DACL and into the service's configuration: -OwnerSid S-1-5-32-545 would have handed
+# every local user the companion's data (security review of 2a2f7f95). A user account, or
+# nothing happens.
+Assert-OwnerAccountSid -Sid $OwnerSid
 $serviceDir = Join-Path $InstallRoot "service"
 Write-Host "repo HEAD: $(Get-RepoHead -RepoRoot $repoRoot)"
 Write-Host "parameters: SkipBuild=$([bool]$SkipBuild) SkipBrowser=$([bool]$SkipBrowser) BrowserChannel=$BrowserChannel InstallRoot=$InstallRoot"
@@ -565,8 +570,18 @@ if ($Operator) {
 if (-not $SkipBrowser) {
     # Paths the companion will use at runtime: the LIVE browser tree (not staging) and a
     # data directory the OWNER can write, created below with an explicit grant.
-    foreach ($entry in (New-CompanionBrowserSettings -BrowserRoot $browserDir -BrowserDataDir $browserDataDir -Channel $BrowserChannel).GetEnumerator()) {
+    foreach ($entry in (New-CompanionBrowserSettings -BrowserRoot $browserDir -BrowserDataDir $browserDataDir -Channel $BrowserChannel -BrokerRestUrl $BrokerRestUrl).GetEnumerator()) {
         $companionConfig[$entry.Key] = $entry.Value
+    }
+    # The one narrow SSRF exception (owner decision 2026-09-29): the worker may open the report
+    # view of the broker THIS device dials, and nothing else that is private. Derived here, from
+    # the resolved broker URL (explicit, or preserved from the installed service), on every run.
+    $trustedOrigin = Get-BrowserTrustedOrigin -BrokerRestUrl $BrokerRestUrl
+    if ($trustedOrigin.Origin) {
+        Write-Host "browser worker: --trusted-origin $($trustedOrigin.Origin) (the report-view route of the broker this device dials, and nothing else private)"
+    }
+    else {
+        Write-Host "browser worker: no --trusted-origin written - $($trustedOrigin.Reason); the worker refuses every private destination"
     }
 }
 Write-JsonFile -Path (Join-Path $stagedCompanionDir "appsettings.json") -Content ($companionConfig | ConvertTo-Json -Depth 4)
@@ -585,16 +600,19 @@ else {
     Write-Host "digital operator: disabled (pass -Operator to enable the M19 families)"
 }
 
-if (-not $SkipBrowser) {
-    # ProgramData's inherited ACL would make a directory created by this ELEVATED process
-    # unwritable for the owner's non-elevated companion — and the worker must write its
-    # profile, downloads and logs exactly there and nowhere else (Program Files is
-    # read-only to it). The grant is explicit and inheritable, on the companion's data root
-    # and the browser directory under it.
-    Set-OwnerWritableDirectory -Path $companionDataDir -OwnerSid $OwnerSid
-    Set-OwnerWritableDirectory -Path $browserDataDir -OwnerSid $OwnerSid
-    Write-Host "browser data directory $browserDataDir is writable by SID $OwnerSid"
-}
+# ProgramData's inherited ACL would make a directory created by this ELEVATED process
+# unwritable for the owner's non-elevated companion — and the worker must write its
+# profile, downloads and logs exactly there and nowhere else (Program Files is
+# read-only to it). The grant is explicit and inheritable, on the companion's data root
+# and the browser directory under it.
+#
+# And the audit directory, on EVERY install, browser or not (2026-09-29): it carries a
+# protected DACL, which the inheritable grant on the root cannot reach, and the companion had
+# protected it against itself. The health check below reads browser_worker_started from the
+# trail in that directory, so it is created or repaired here, before anything is started.
+$companionDirectories = Initialize-CompanionDataDirectories -CompanionDataDir $companionDataDir -OwnerSid $OwnerSid `
+    -BrowserDataDir $(if ($SkipBrowser) { "" } else { $browserDataDir })
+foreach ($line in @($companionDirectories.Messages)) { Write-Host $line }
 
 # --- register, then deploy through the journaled engine ----------------------------------
 #

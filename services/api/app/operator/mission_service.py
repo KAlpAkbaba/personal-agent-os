@@ -14,7 +14,7 @@ activity reads from the row before every round through ``MissionPorts``.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -179,10 +179,23 @@ def start_mission_db(
     preview: bool | None = None,
     source: str = SOURCE_VOICE,
     session_id: str | None = None,
+    device_targets: Sequence[str] = (),
 ) -> OperatorMissionRow:
     """Plan the owner's sentence and persist the mission (planned, or awaiting approval
     when they asked to see the plan first). Refuses a second mission while one is in
-    flight - honestly, naming it."""
+    flight - honestly, naming it.
+
+    ``device_targets`` is the device the sentence NAMED (ADR-0212), as alias words: it is
+    kept on the mission, and every step runs against that device. More than one word is
+    refused - which of two machines was meant is not guessed, and steps that run later in a
+    worker cannot ask."""
+    targets = list(device_targets)
+    if len(targets) > 1:
+        raise MissionServiceError(
+            "ambiguous_device",
+            f"Birden fazla bilgisayar söylediniz ({' ve '.join(targets)}); "
+            "görevi hangisinde yapacağımı anlayamadım efendim.",
+        )
     running = active_mission(db)
     if running is not None and _orphaned(running):
         _close_orphan(db, running)
@@ -201,6 +214,7 @@ def start_mission_db(
         mission.preview = bool(preview)
     if mission.preview:
         mission.status = MISSION_AWAITING_APPROVAL
+    mission.device_targets = targets
     now = _now()
     row = OperatorMissionRow(
         id=mission.id,
@@ -362,6 +376,23 @@ def run_step_db(
         _finished_event(db, row, mission)
         return _outcome(mission)
 
+    if mission.device_targets:
+        # ADR-0212: the device the owner named when they gave the mission. Bound HERE, from
+        # the row, because the worker's port has heard no sentence; a port that cannot be
+        # bound to a device fails the mission rather than running it somewhere else.
+        bind = getattr(ports.device, "bound_to", None)
+        if not callable(bind):
+            mission.status = MISSION_FAILED
+            mission.error_class = "device_target_unsupported"
+            mission.message = "Görev için söylenen bilgisayara bağlanamadım; çalıştırmadım."
+            mission.completed_at = _now()
+            _write(row, mission)
+            db.commit()
+            _finished_event(db, row, mission)
+            return _outcome(mission)
+        ports = MissionPorts(
+            device=bind((), targets=tuple(mission.device_targets)), vision=ports.vision
+        )
     publish_ui_state(
         UiState.OPERATOR_RUNNING,
         subsystem=SUBSYSTEM_OPERATOR,

@@ -15,8 +15,41 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Yok.**
+**Ev PC'si (MAIL), 2026-09-29/30: AŞAMA 0 (ofis gününü kapat) → sonra team bootstrap.**
+1. `integrate/office-day-2026-09-29` (`1da96831`, SSRF dar istisnası DAHİL, main `4d5dd637`
+   üstünde, birleştirme temiz): tam `quality-gate.ps1` → yeşilse `--no-ff` main + push.
+   İlk kapı (eski uç `7b77986e`) 29/33: Docker Desktop kapalıydı (3 adım) + bir masaüstü
+   testi Not Defteri'nde araya giren bir tuşla düştü (tek başına 3/3 geçti). Docker açıldı.
+2. **Yayın ve MAIL ajanının yeniden kurulumu SAHİP KAPISI** — çalıştırılmaz, komutlar rapora
+   yazılır. `enroll-owner-chrome.ps1`'de `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi).
+3. Sonra **team bootstrap** (dal `feat/dev-team`): kaynak `docs/team-setup/` (sahip elle koydu,
+   izlenmiyor) → `.claude/agents/`, `docs/TEAM_PROTOCOL.md`, ROADMAP güncellemesi, `team/`
+   kuyruğu + şema, `scripts/team/`. Gece görevi KAYDEDİLMEZ; komutu rapora yazılır.
 
+**Ofis günü (2026-09-29, makine GMKADIRAKBABA — şirket PC'si): İŞ BİTTİ, EV PC'DE KAPI BEKLİYOR.**
+Toplama dalı `integrate/office-day-2026-09-29` (origin'de; main `4d5dd637`'den) altı olayın
+hepsinin düzeltmesini taşıyor; ADR-0208…0212 + ADR-0203 eki DECISIONS.md sonunda,
+`state/BUILD_STATE.json` `office_day_2026_09_29`. **Bu makinede yayın YOK, main'e merge YOK.**
+- **A/B/C** audit klasörü ACL + kayıt dosyası + 6b.4 (ADR-0211; bağımsız güvenlik incelemesi
+  5 bulgu buldu, hepsi kapandı — junction takibi dahil).
+- **D** oturum cihazı yakınlığı (ADR-0208, gerçek zamanlı sözleşme **v3**).
+- **E** Operatörsüz cihazda tek adımlık uygulama açma (ADR-0209) + **D+E birleşim düzeltmesi**
+  (`a36125ac`: oturuma bağlı portun yoklaması yoktu → ofis oturumunda hesap makinesi evde açılıyordu).
+- **F** araştırma raporu: `research.open` düzeltildi (F1); ofiste sahibin Chrome'unda sekme
+  olarak açma (ADR-0210, F2) **bulut yarısı hazır, ÜRETİMDE ÇALIŞMAZ** — tarayıcı işçisi tailnet
+  hedeflerini reddediyordu; **sahip dar istisnayı onayladı** (`fix/artifact-origin-ssrf-allow`: yalnız broker
+  host+port + `/v1/artifacts/renders/view`; **ofis PC'de kurucu yeniden çalışmalı**; `godseye.open` KAPSAM DIŞI) ve `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`
+  üretimde api'ye hiç ulaşmıyordu (compose düzeltildi → yayın + pin).
+- **G** söylenen cihaz adı artık işi yapan cihaz (ADR-0212). Ses yolunda hiç iletilmiyordu;
+  ekran görüntüsünde Google sorgusu "ofis bilgisayarında Yapay Zeka son gelişmeler" idi.
+**EV PC'DE YAPILACAK (bu makinede yapılmaz):** `git fetch && git checkout
+integrate/office-day-2026-09-29` → tam kapı: **`dotnet test`** (17 Operatör/Belge masaüstü
+testi dahil; ofis PC'sinde koşulmaz çünkü sahibin masaüstünde Not Defteri açar), docker
+adımları (dev stack, alembic, entegrasyon) → main'e merge → yayın için sahibin sözü
+(`-BlueGreen` + recovery pin; sözleşme v3, compose env satırları) → MAIL ajanını yeniden kur,
+`-AuthorizeTasks`. Sonra sahip: web kabuğunda "Bu bilgisayar"ı bir kez seçer.
+**Bu makinenin sınırı (kalıcı):** docker/WSL yok; `dotnet test` yasak (bkz. bellek).
+Temel `4d5dd637` üzerinde de aynı 14 Temporal testi kırmızı (14 kaldı / 206 geçti): ortam.
 Son biten iş (2026-09-29): **tarayıcı görev döngüsü PR-B (ADR-0207)** — main'de, YAYINLANMADI.
 Dal `feat/browser-task-loop`, uç `f0d556b5` üzerinde tam kapı 32/32 PASS. `app/webtask/`
 (döngü, kapı, doğrulayıcı, planlayıcı arayüzü, servis, cihaz portu, `BrowserTaskWorkflow`),

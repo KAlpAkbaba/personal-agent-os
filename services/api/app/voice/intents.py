@@ -31,6 +31,7 @@ from enum import StrEnum
 from typing import Any, Final
 
 from app.calendar import tr_time as calendar_tr_time
+from app.devices.aliases import strip_device_phrases
 from app.macros.naming import match_stored_name
 from app.macros.naming import spoken_name as macro_spoken_name
 from app.narration import commands
@@ -7701,6 +7702,9 @@ def research_topic_of(text: str) -> str | None:
     _, tokens, _ = normalize_transcript(text)
     if classify_research_shape(tokens) != RESEARCH_CLASS_NEW:
         return None
+    # ADR-0212: "ofis bilgisayarında yapay zeka son gelişmeleri araştır" - the phrase that
+    # names the machine is not what is being researched (2026-09-29: it was searched for).
+    text, _ = strip_device_phrases(text)
     kept: list[str] = []
     for word in text.split():
         _, word_tokens, _ = normalize_transcript(word)

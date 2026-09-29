@@ -1515,6 +1515,21 @@ def _operator_app_open_cases() -> list[UtteranceCase]:
         ("op.app.11", "Dosya gezginini aç.", "paraphrase"),
         ("op.app.12", "Microsoft Edge'i aç.", "paraphrase"),
         ("op.app.13", "Hesap makinesi aç.", "paraphrase"),
+        # ADR-0209 (2026-09-29): naming the machine does not change what the sentence IS - a
+        # single-step launch, routed to the same tool. Which capability serves it (the
+        # Operator's ``app.launch``, or ``desktop.open_application`` on a device that has no
+        # Operator - the office PC) is decided by the device's advertised list, not by the
+        # words, and is proved in tests/unit/test_operator_open_application_fallback.py.
+        ("op.app.office.1", "Ofis bilgisayarımda hesap makinesini aç.", "canonical"),
+        ("op.app.office.2", "Ofisteki bilgisayarda Not Defteri'ni aç.", "paraphrase"),
+        ("op.app.office.3", "Ofiste hesap makinesi aç.", "paraphrase"),
+        ("op.app.home.1", "Ev bilgisayarımda hesap makinesini aç.", "canonical"),
+        # ADR-0212 (2026-09-29): the machine the sentence NAMES is the one that acts - the
+        # words are what the relay records as the call's device (the per-call port), proved
+        # end to end in tests/unit/test_devices_spoken_alias.py. A transcript that starts the
+        # sentence with a capital dotted İ must still name it.
+        ("op.app.office.4", "İş bilgisayarımda hesap makinesini aç.", "paraphrase"),
+        ("op.app.home.2", "Evdeki bilgisayarda Not Defteri'ni aç.", "paraphrase"),
     ):
         cases.extend(
             _with_variants(

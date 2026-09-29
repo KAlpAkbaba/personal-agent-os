@@ -219,9 +219,16 @@ export type CreateSessionBody = {
   session_ttl_s?: number;
   /** ADR-0043: one of the provider's supported wire voices (the page offers marin | cedar). */
   voice?: string;
+  /** ADR-0208 (contract v3): the enrolled Cloud Core device this browser shares a computer with. */
+  device_id?: string;
 };
 
-export type AttachBody = { client_kind?: string; transport?: string };
+export type AttachBody = {
+  client_kind?: string;
+  transport?: string;
+  /** ADR-0208 (contract v3): as on create - the leg that takes over says where it runs. */
+  device_id?: string;
+};
 
 const BASE = "/v1/voice/realtime/sessions";
 

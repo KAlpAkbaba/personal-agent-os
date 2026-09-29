@@ -120,11 +120,133 @@ function Get-BrowserWorkerPython {
     return (Join-Path $BrowserRoot ".venv\Scripts\python.exe")
 }
 
-function Get-BrowserWorkerArgs {
-    <#  The leading arguments the companion prepends (BROWSER_CAPABILITIES.md §7 CLI).  #>
+function Get-BrowserTrustedOrigin {
+    <#
+    .SYNOPSIS
+        The origin the browser worker is told to trust (`--trusted-origin`), derived from the
+        broker REST URL THIS DEVICE dials - or nothing, with the reason.
+
+    .DESCRIPTION
+        Owner decision 2026-09-29: the office PC's worker has to open the report Cloud Core
+        serves at {broker}/v1/artifacts/renders/view, and that broker is a tailnet address the
+        worker's destination policy refuses. The worker admits exactly that origin's
+        report-view route and nothing else on it. The trust is derived HERE, from the URL the
+        device itself was installed with, and written into the companion's own configuration:
+        a command from Cloud Core can neither set nor widen it, so the device keeps enforcing
+        its policy independently of the cloud.
+
+        The same refusals the worker applies at start (a bad origin stops the worker, which
+        would take the whole browser family down): loopback (the dev default 127.0.0.1 - a
+        loopback broker means the worker would be trusting ITSELF), link-local incl. the cloud
+        metadata address, multicast, unspecified, reserved, localhost and the local/internal
+        name families, non-http(s) schemes, userinfo. Private and CGNAT (the tailnet) ARE
+        acceptable: that is the point. Anything after the origin (a path prefix) is dropped.
+
+        Returns Origin ($null = no option is written) and Reason (why not, or how derived).
+    #>
     [CmdletBinding()]
-    param()
-    return "-m browser_agent.worker"
+    param([AllowEmptyString()][AllowNull()][string]$BrokerRestUrl)
+
+    $none = { param($why) [pscustomobject]@{ Origin = $null; Reason = $why } }
+    if ([string]::IsNullOrWhiteSpace($BrokerRestUrl)) { return (& $none "no broker REST URL") }
+
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($BrokerRestUrl.Trim(), [System.UriKind]::Absolute, [ref]$uri)) {
+        return (& $none "the broker URL '$BrokerRestUrl' is not an absolute URL")
+    }
+    if ($uri.Scheme -notin @("http", "https")) { return (& $none "the broker URL scheme '$($uri.Scheme)' is not http or https") }
+    if (-not [string]::IsNullOrEmpty($uri.UserInfo)) { return (& $none "the broker URL carries credentials") }
+
+    $hostName = $uri.Host.Trim().TrimEnd('.').ToLowerInvariant()
+    $bare = $hostName.Trim('[', ']')
+    if ($bare.Contains('%')) { $bare = $bare.Substring(0, $bare.IndexOf('%')) }
+    if ([string]::IsNullOrEmpty($bare)) { return (& $none "the broker URL has no host") }
+
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse($bare, [ref]$ip)) {
+        if ($ip.IsIPv4MappedToIPv6) { $ip = $ip.MapToIPv4() }
+        if ([System.Net.IPAddress]::IsLoopback($ip)) { return (& $none "the broker address $bare is loopback (a local broker: the worker would be trusting itself)") }
+        if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+            if ($ip.IsIPv6LinkLocal -or $ip.IsIPv6Multicast -or $ip.Equals([System.Net.IPAddress]::IPv6Any)) {
+                return (& $none "the broker address $bare is link-local, multicast or unspecified")
+            }
+        }
+        else {
+            $b = $ip.GetAddressBytes()
+            if ($b[0] -eq 0 -or ($b[0] -eq 169 -and $b[1] -eq 254) -or $b[0] -ge 224) {
+                return (& $none "the broker address $bare is unspecified, link-local (incl. the metadata address), multicast or reserved")
+            }
+        }
+        # .NET's Uri.Host spells an IPv6 literal out in full; the compressed form is the one
+        # people (and the worker's log) recognise.
+        $bare = $ip.ToString()
+    }
+    else {
+        if ($bare -eq "localhost" -or $bare -eq "metadata.google.internal" -or $bare -match '\.(local|internal|localhost)$' -or $bare -match '\.home\.arpa$') {
+            return (& $none "the broker host '$bare' is a local or internal name")
+        }
+        if ($bare -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$') {
+            return (& $none "the broker host '$bare' is not a plain host name")
+        }
+    }
+
+    $shown = if ($bare.Contains(':')) { "[$bare]" } else { $bare }
+    $origin = "$($uri.Scheme)://$shown"
+    if (-not $uri.IsDefaultPort) { $origin += ":$($uri.Port)" }
+    return [pscustomobject]@{ Origin = $origin; Reason = "derived from the broker URL $BrokerRestUrl" }
+}
+
+function Get-BrowserWorkerArgs {
+    <#
+    .SYNOPSIS
+        The leading arguments the companion prepends (BROWSER_CAPABILITIES.md §7 CLI), plus
+        `--trusted-origin <origin>` when the caller has one (Get-BrowserTrustedOrigin).
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$TrustedOrigin)
+
+    $arguments = "-m browser_agent.worker"
+    if (-not [string]::IsNullOrWhiteSpace($TrustedOrigin)) {
+        $arguments += " --trusted-origin $($TrustedOrigin.Trim())"
+    }
+    return $arguments
+}
+
+function Get-TrustedOriginFromWorkerArgs {
+    <#  The `--trusted-origin` value inside a BrowserWorkerArgs string, or $null.  #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$WorkerArgs)
+
+    if ($WorkerArgs -match '(?:^|\s)--trusted-origin(?:\s+|=)(\S+)') { return $Matches[1] }
+    return $null
+}
+
+function Test-CompanionTrustedOriginCurrent {
+    <#
+    .SYNOPSIS
+        Does the installed companion's `--trusted-origin` match the broker the device now
+        dials? Read-only; used by switch-agent-broker.ps1, which rewrites only the SERVICE
+        configuration, to say so instead of leaving a stale origin silent.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CompanionConfigPath,
+        [Parameter(Mandatory = $true)][string]$BrokerRestUrl
+    )
+
+    $expected = (Get-BrowserTrustedOrigin -BrokerRestUrl $BrokerRestUrl).Origin
+    $installed = $null
+    if (Test-Path -LiteralPath $CompanionConfigPath) {
+        $config = [System.IO.File]::ReadAllText($CompanionConfigPath) | ConvertFrom-Json
+        if ($config.PSObject.Properties.Name -contains "BrowserWorkerArgs") {
+            $installed = Get-TrustedOriginFromWorkerArgs -WorkerArgs ([string]$config.BrowserWorkerArgs)
+        }
+    }
+    return [pscustomobject]@{
+        Current   = [string]::Equals([string]$installed, [string]$expected, [System.StringComparison]::OrdinalIgnoreCase)
+        Installed = $installed
+        Expected  = $expected
+    }
 }
 
 function New-BrowserWorkerSelfCheckArgumentList {
@@ -278,18 +400,26 @@ function New-CompanionBrowserSettings {
         The companion appsettings keys for the provisioned worker, as an ordered hashtable
         the caller merges into its configuration. Paths only, no secrets, nothing per-PC
         beyond the install and data roots the caller chose.
+
+        -BrokerRestUrl is the URL the device dials: its origin becomes the worker's
+        `--trusted-origin` (the one narrow SSRF exception, Get-BrowserTrustedOrigin) unless it
+        is loopback or otherwise unusable, in which case NO option is written. The whole
+        companion file is rewritten on every install, so an upgrade recomputes this from the
+        broker it is installed against - it is never carried over from an older file.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$BrowserRoot,
         [Parameter(Mandatory = $true)][string]$BrowserDataDir,
         [string]$Channel = "chrome",
-        [bool]$Visible = $true
+        [bool]$Visible = $true,
+        [AllowEmptyString()][AllowNull()][string]$BrokerRestUrl
     )
 
+    $trusted = Get-BrowserTrustedOrigin -BrokerRestUrl $BrokerRestUrl
     return [ordered]@{
         BrowserWorkerCommand = (Get-BrowserWorkerPython -BrowserRoot $BrowserRoot)
-        BrowserWorkerArgs    = (Get-BrowserWorkerArgs)
+        BrowserWorkerArgs    = (Get-BrowserWorkerArgs -TrustedOrigin $trusted.Origin)
         BrowserDataDir       = $BrowserDataDir
         BrowserProfileDir    = (Join-Path $BrowserDataDir "profile")
         BrowserChannel       = $Channel
@@ -334,6 +464,81 @@ function Set-OwnerWritableDirectory {
         [System.Security.AccessControl.AccessControlType]::Allow)
     $acl.AddAccessRule($rule)
     Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Initialize-CompanionDataDirectories {
+    <#
+    .SYNOPSIS
+        Everything under the companion's data root that the OWNER's non-elevated companion
+        must be able to write, created or repaired before the runtime starts: the root, the
+        audit directory, and (when a browser is provisioned) the browser data directory.
+
+    .DESCRIPTION
+        The installer used to do this inline, for the root and the browser directory only,
+        and only when a browser was provisioned. The audit directory was nobody's: the
+        companion created it and protected it against itself (see InstallAcl.ps1), the
+        inheritable grant on the root could not reach a protected DACL, and on 2026-09-29
+        two installs of a healthy browser worker 0.5.0 were rolled back for want of an audit
+        row. A function, so that a rerun repairing an already-broken machine is a thing the
+        tests can do without elevation.
+
+        Needs InstallAcl.ps1 (Set-CompanionAuditDirectoryAcl), which the installer loads.
+        Returns what it did, as lines the installer prints.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$CompanionDataDir,
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        # Empty when the install has no browser worker (-SkipBrowser).
+        [string]$BrowserDataDir,
+        # For tests that name an account this machine has never heard of. Never the installer.
+        [switch]$AllowUnresolvedOwnerSid
+    )
+
+    # Security review of 2a2f7f95: every refusal comes BEFORE the first grant. This step runs
+    # elevated over directories an unprivileged account can create things in, so a group SID
+    # or a junction standing where one of them should be is decided here, with nothing
+    # changed yet - not discovered halfway, with the root already granted.
+    Assert-OwnerAccountSid -Sid $OwnerSid -AllowUnresolved:$AllowUnresolvedOwnerSid
+    $auditDir = Join-Path $CompanionDataDir "audit"
+    Assert-NoReparsePointInPath -Path $CompanionDataDir -TrustedRoot $CompanionDataDir -Purpose "the companion's data root"
+    Assert-NoReparsePointInPath -Path $auditDir -TrustedRoot $CompanionDataDir -Purpose "the companion's audit directory"
+    if ($BrowserDataDir) {
+        $browserRoot = Split-Path -Parent $BrowserDataDir
+        Assert-NoReparsePointInPath -Path $BrowserDataDir -TrustedRoot $browserRoot -Purpose "the browser data directory"
+    }
+
+    $messages = New-Object System.Collections.ArrayList
+
+    # The root first: the companion writes logs\, artifacts\ and its candidate files here,
+    # browser or no browser.
+    Set-OwnerWritableDirectory -Path $CompanionDataDir -OwnerSid $OwnerSid
+
+    $audit = Set-CompanionAuditDirectoryAcl -Path $auditDir -OwnerSid $OwnerSid -TrustedRoot $CompanionDataDir `
+        -AllowUnresolvedOwnerSid:$AllowUnresolvedOwnerSid
+    if ($audit.OwnerChanged) {
+        [void]$messages.Add("companion audit directory $auditDir is now owned by Administrators (it was owned by the account that created it, which could have re-permissioned it)")
+    }
+    if ($audit.Created) {
+        [void]$messages.Add("companion audit directory $auditDir created, writable by SID $OwnerSid")
+    }
+    elseif ($audit.Changed) {
+        [void]$messages.Add("companion audit directory $auditDir REPAIRED: it was not writable by SID $OwnerSid as it stood ($($audit.Before)); it is now")
+    }
+    else {
+        [void]$messages.Add("companion audit directory $auditDir is writable by SID $OwnerSid")
+    }
+
+    if ($BrowserDataDir) {
+        Set-OwnerWritableDirectory -Path $BrowserDataDir -OwnerSid $OwnerSid
+        [void]$messages.Add("browser data directory $BrowserDataDir is writable by SID $OwnerSid")
+    }
+
+    return [pscustomobject]@{
+        AuditDirectory = $auditDir
+        Audit          = $audit
+        Messages       = @($messages)
+    }
 }
 
 function Test-OwnerWritableDirectory {

@@ -233,6 +233,56 @@ Test-Case "live worker check: the good case passes and each disagreement is name
     Assert-True (($problems -join ';') -match "is not running") "pid gone"
 }
 
+# 2026-09-29, verify-device-service.ps1 check 6b.4 on the owner's machine: the verifier has no
+# deployment to compare against, says so with [datetime]::MinValue, and the live-worker check
+# answered 'Exception calling "AddSeconds" ... un-representable DateTime' - the one-second
+# tolerance was subtracted from the smallest date there is. A healthy worker was reported
+# NOT_YET_PROVEN with an arithmetic error for evidence.
+Test-Case "live worker check: 'no deployment to compare against' (MinValue) is a verdict, not an AddSeconds overflow" {
+    $root = New-SourceTree "live-nofloor"
+    $expected = Get-ExpectedWorkerRelease -BrowserSource $root
+    $exe = Join-Path $root ".venv\Scripts\python.exe"
+    $module = Join-Path (Get-SitePackagesBrowserAgentDir -BrowserRoot $root) "worker.py"
+    $started = [datetime]::Parse("2026-09-29T11:51:38")
+    $audit = [pscustomobject]@{ Ts = $started.ToUniversalTime(); Pid = 500; WorkerVersion = "0.3.0"; Module = $module; Detail = "" }
+    $good = [pscustomobject]@{ ProcessId = 500; Name = "python.exe"; ExecutablePath = $exe; CommandLine = "`"$exe`" -m browser_agent.worker --data-dir C:\ProgramData\PagentOS\companion\browser --channel chrome"; CreationDate = $started }
+
+    # Exactly the verifier's call.
+    $problems = @(Test-LiveBrowserWorker -Audit $audit -Expected $expected -BrowserRoot $root -BrowserDataDir "C:\ProgramData\PagentOS\companion\browser" -DeployStartedAt ([datetime]::MinValue) -Processes @($good))
+    Assert-Equal 0 $problems.Count "no floor, healthy worker: $($problems -join '; ')"
+
+    # The other end of the range must not overflow either, and there the answer is the
+    # opposite one: nothing can have been created after the end of time.
+    $problems = @(Test-LiveBrowserWorker -Audit $audit -Expected $expected -BrowserRoot $root -BrowserDataDir "C:\ProgramData\PagentOS\companion\browser" -DeployStartedAt ([datetime]::MaxValue) -Processes @($good))
+    Assert-True (($problems -join ';') -match "before this deployment") "MaxValue floor: $($problems -join '; ')"
+    Assert-True (($problems -join ';') -notmatch "AddSeconds|un-representable") "MaxValue floor must not leak an arithmetic error: $($problems -join '; ')"
+}
+
+Test-Case "creation-time verdict: zero, negative, huge and non-finite tolerances and both ends of DateTime all answer" {
+    $created = [datetime]::Parse("2026-09-29T11:51:38")
+    $floor = [datetime]::Parse("2026-09-29T11:51:39")
+    foreach ($tolerance in @(0, -1, -1e300, 1e300, [double]::NaN, [double]::PositiveInfinity, [double]::NegativeInfinity, [double]::MaxValue)) {
+        foreach ($deploy in @([datetime]::MinValue, [datetime]::MinValue.AddTicks(1), $floor, [datetime]::MaxValue)) {
+            $verdict = Test-WorkerCreatedSinceDeployment -Created $created -DeployStartedAt $deploy -ToleranceSeconds $tolerance
+            Assert-True ($verdict.Ok -is [bool]) "tolerance $tolerance, deployment $($deploy.Ticks): Ok must be a boolean"
+            Assert-True (-not [string]::IsNullOrWhiteSpace($verdict.Reason)) "tolerance $tolerance, deployment $($deploy.Ticks): a verdict carries its reason"
+        }
+    }
+
+    Assert-True (Test-WorkerCreatedSinceDeployment -Created $created -DeployStartedAt $floor -ToleranceSeconds 1).Ok "one second early is inside a one-second tolerance"
+    Assert-True (-not (Test-WorkerCreatedSinceDeployment -Created $created -DeployStartedAt $floor -ToleranceSeconds 0).Ok) "and outside a zero tolerance"
+    Assert-True (-not (Test-WorkerCreatedSinceDeployment -Created $created -DeployStartedAt $floor -ToleranceSeconds -5).Ok) "a negative tolerance widens nothing: it is read as zero"
+    Assert-True (-not (Test-WorkerCreatedSinceDeployment -Created $created -DeployStartedAt $floor.AddSeconds(2) -ToleranceSeconds 1).Ok) "three seconds early is outside a one-second tolerance"
+
+    $noFloor = Test-WorkerCreatedSinceDeployment -Created $created -DeployStartedAt ([datetime]::MinValue)
+    Assert-True $noFloor.Ok "MinValue means there is no deployment to predate"
+    Assert-Equal "no_floor" $noFloor.Verdict "and the verdict says so"
+
+    $unknown = Test-WorkerCreatedSinceDeployment -Created $null -DeployStartedAt $floor
+    Assert-True (-not $unknown.Ok) "an unreadable creation time proves nothing"
+    Assert-Equal "no_creation_time" $unknown.Verdict "and is named"
+}
+
 Remove-Item -LiteralPath $script:Sandbox -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "$($script:Passes) passed, $($script:Failures) failed"

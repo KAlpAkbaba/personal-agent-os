@@ -1,4 +1,4 @@
-"""DeviceSelection: explicit target -> online -> capability -> policy -> healthiest.
+"""DeviceSelection: explicit target -> session -> online -> capability -> policy -> healthiest.
 
 BROWSER_CAPABILITIES.md §8 / M13 spec §4/§8: given a requested capability and
 an optional owner-supplied target (device id, exact name, or a Turkish alias
@@ -15,13 +15,26 @@ additive, since neither spec document freezes its shape: an optional
 capability is policy-allowed when it is not in ``deny`` AND (``allow`` is
 absent/empty OR the capability is in ``allow``). This is a documented
 implementation choice, not part of the frozen contract — see the M13 report.
+
+Session affinity (ADR-0208). A command that names no device is, before anything else, a
+command from a SESSION, and the session is on a machine: the owner sitting at the office PC
+who says "hesap makinesini aç" means the office PC, not whichever enrolled machine was seen
+a second more recently. ``session_device_ids`` carries what the caller knows about where the
+session is, in priority order. The first id that names an enrolled, non-revoked device IS the
+session's device; it is chosen when it is online, capable and policy-allowed, and otherwise
+the ordinary rule runs exactly as if nothing had been said. The ids are a HINT and never an
+authority (M19b: reachability and a claimed id gain nothing): an unknown or revoked id is
+skipped without a word - so which ids exist never leaks - and a device the owner could not
+have chosen anyway is not one this can choose.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from app.devices import aliases
 from app.devices.capabilities import has_capability
@@ -32,6 +45,9 @@ REASON_EXPLICIT_ID = "explicit_id"
 REASON_EXPLICIT_NAME = "explicit_name"
 REASON_EXPLICIT_ALIAS = "explicit_alias"
 REASON_AUTO = "auto"
+#: ADR-0208: no device was named, and the one the command's session is on was chosen. Kept
+#: apart from ``REASON_AUTO`` so a receipt or the ledger shows WHY this machine acted.
+REASON_SESSION_AFFINITY = "session_affinity"
 
 
 class NoCapableDeviceError(Exception):
@@ -102,11 +118,51 @@ def _match_explicit(
     return None
 
 
+def named_device_target(devices: list[DeviceView], targets: Sequence[str], capability: str) -> str:
+    """The one alias token to hand ``select_device`` for what the owner NAMED in a sentence
+    (ADR-0212).
+
+    One word is that word. Several are one only when every one of them names the SAME single
+    enrolled device ("ofis bilgisayarımda, yani iş bilgisayarımda": both are GMKADIRAKBABA);
+    otherwise which machine was meant is not something to guess - ``extract_alias``'s first
+    pattern would answer "ev" for "evdeki dosyayı ofis bilgisayarımda aç" - so it is refused
+    (``ambiguous_target``) and nothing is sent anywhere. A word that names nobody is left to
+    ``select_device``'s own "not found" when it is the only word; beside another word it is
+    the same refusal.
+    """
+    if len(targets) == 1:
+        return targets[0]
+    live = [d for d in devices if d.status != "revoked"]
+    owners = [{d.id for d in live if aliases.alias_matches(list(d.aliases), t)} for t in targets]
+    if all(len(o) == 1 for o in owners) and len(set().union(*owners)) == 1:
+        return targets[0]
+    raise NoCapableDeviceError(
+        f"Birden fazla bilgisayar söylediniz ({' ve '.join(targets)}); "
+        "hangisinde yapacağımı anlayamadım.",
+        capability=capability,
+        target=" / ".join(targets),
+        reason="ambiguous_target",
+    )
+
+
+def _session_device(
+    devices: list[DeviceView], session_device_ids: Sequence[UUID] | None
+) -> DeviceView | None:
+    """The device the session is on: the first id that names one of ``devices`` (already
+    without the revoked). An id that names nothing is skipped as if never declared."""
+    for wanted in session_device_ids or ():
+        for d in devices:
+            if d.id == wanted:
+                return d
+    return None
+
+
 def select_device(
     devices: list[DeviceView],
     *,
     capability: str,
     target: str | None = None,
+    session_device_ids: Sequence[UUID] | None = None,
     now: datetime | None = None,
 ) -> SelectionResult:
     del now  # presence is already resolved on each DeviceView by the caller
@@ -131,6 +187,18 @@ def select_device(
         matched_device, reason = match
         candidates = [matched_device]
         explicit = True
+    else:
+        # ADR-0208: nothing was named. If the session's own device can do this, it does it;
+        # if it cannot (offline, no such capability, policy), fall through to the ordinary
+        # rule with nothing changed - same candidates, same reason, same error text.
+        home = _session_device(devices, session_device_ids)
+        if (
+            home is not None
+            and home.presence == PRESENCE_ONLINE
+            and has_capability(home.capabilities, capability)
+            and _policy_allows(home.policy, capability)
+        ):
+            return SelectionResult(device=home, reason=REASON_SESSION_AFFINITY, explicit=False)
 
     online = [d for d in candidates if d.presence == PRESENCE_ONLINE]
     if not online:
@@ -196,6 +264,8 @@ __all__ = [
     "REASON_EXPLICIT_ALIAS",
     "REASON_EXPLICIT_ID",
     "REASON_EXPLICIT_NAME",
+    "REASON_SESSION_AFFINITY",
     "SelectionResult",
+    "named_device_target",
     "select_device",
 ]

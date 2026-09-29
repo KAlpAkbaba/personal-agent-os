@@ -36,6 +36,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\ServiceInstall.ps1")
+. (Join-Path $repoRoot "scripts\lib\BrowserProvision.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -452,6 +453,33 @@ Test-Case "installed endpoints are read from appsettings.json and a missing file
         Assert-True -Condition ($null -eq (Get-InstalledBrokerEndpoints -ServiceDir $dir)) -Because "an unreadable file is treated as nothing installed, never a crash"
     }
     finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Write-Host ""
+Write-Host "the browser worker's trusted origin follows the broker on re-install (owner decision 2026-09-29)"
+
+# The installer rewrites the WHOLE companion file on every run from the broker it resolved, so the
+# origin can neither be dropped by an upgrade nor outlive a change of broker. These run the same
+# two functions, in the installer's order, that the installer runs.
+$installedTailnet26 = [pscustomobject]@{ BrokerRestUrl = "http://100.90.158.26:8001"; BrokerWsUrl = "ws://100.90.158.26:8001/v1/devices/connect" }
+$workerArgsFor = {
+    param($Resolved)
+    (New-CompanionBrowserSettings -BrowserRoot "C:\b" -BrowserDataDir "C:\d" -BrokerRestUrl $Resolved.BrokerRestUrl).BrowserWorkerArgs
+}
+
+Test-Case "a re-run that names no broker keeps the installed broker's origin (the upgrade never drops it)" {
+    $r = Resolve-BrokerEndpoints -ExplicitRestUrl "http://127.0.0.1:8001" -ExplicitWsUrl "" -RestUrlWasExplicit $false -Installed $installedTailnet26 -DefaultRestUrl "http://127.0.0.1:8001"
+    Assert-Equal -Expected "-m browser_agent.worker --trusted-origin http://100.90.158.26:8001" -Actual (& $workerArgsFor $r) -Because "preserved endpoint -> preserved origin"
+}
+
+Test-Case "an explicit broker replaces the origin - a stale one is never kept" {
+    $r = Resolve-BrokerEndpoints -ExplicitRestUrl "http://100.90.158.99:8001" -ExplicitWsUrl "" -RestUrlWasExplicit $true -Installed $installedTailnet26 -DefaultRestUrl "http://127.0.0.1:8001"
+    Assert-Equal -Expected "-m browser_agent.worker --trusted-origin http://100.90.158.99:8001" -Actual (& $workerArgsFor $r) -Because "the new broker's origin, not the installed one"
+}
+
+Test-Case "a first install against the loopback default writes no origin" {
+    $r = Resolve-BrokerEndpoints -ExplicitRestUrl "http://127.0.0.1:8001" -ExplicitWsUrl "" -RestUrlWasExplicit $false -Installed $null -DefaultRestUrl "http://127.0.0.1:8001"
+    Assert-Equal -Expected "-m browser_agent.worker" -Actual (& $workerArgsFor $r) -Because "loopback -> no exception"
 }
 
 Write-Host ""

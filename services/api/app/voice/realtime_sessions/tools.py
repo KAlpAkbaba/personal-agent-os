@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.devices import aliases as device_aliases
 from app.logging import get_logger
 from app.narration.commands import NarrationState, State
 from app.narration.engine import PARAGRAPH_LIST
@@ -293,6 +294,16 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         spoken_topic = (_turn_record(ctx) or {}).get("research_topic")
         if isinstance(spoken_topic, str) and spoken_topic.strip():
             arguments = {**arguments, "topic": spoken_topic.strip()}
+    # ADR-0212: the phrase that NAMES a machine is not what is researched. In a paid session
+    # the model writes the topic and wrote the phrase into it (2026-09-29: the office PC's
+    # search box held "ofis bilgisayarında Yapay Zeka son gelişmeler"); the router's own topic
+    # is cleaned where it is extracted. What the topic named is the call's own word for the
+    # device, so it wins over a turn record that may still be the previous sentence's.
+    cleaned_topic, topic_devices = device_aliases.strip_device_phrases(
+        str(arguments.get("topic") or "")
+    )
+    arguments = {**arguments, "topic": cleaned_topic}
+    named_devices = topic_devices or device_aliases.targets_of_turn(_turn_record(ctx))
     topic = _require_str(arguments, "topic", max_len=500)
     scope = str(arguments.get("scope") or "genel")[:500]
     if ctx.db is None:
@@ -359,12 +370,18 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         source=research_service.SOURCE_VOICE,
         session_id=ctx.session_id,
         tool_call_id=ctx.call_id,
+        session_device_ids=ctx.live.get("session_device_ids"),
+        named_devices=named_devices,
     )
     if started.error is not None:
+        # A device the owner NAMED that cannot serve is said as what it is ("'ofis' cihazı şu
+        # anda çevrimiçi değil."), not as "there is no browser device" - and nothing was
+        # started anywhere else.
+        speech = started.error if named_devices else RESEARCH_START_NO_DEVICE_TR
         raise VoiceError(
             VoiceErrorClass.CAPABILITY_MISSING,
             RESEARCH_START_NO_DEVICE_TR,
-            details={"speech": RESEARCH_START_NO_DEVICE_TR, "task_id": str(started.task_id)},
+            details={"speech": speech, "task_id": str(started.task_id)},
         )
 
     plan = {
@@ -391,6 +408,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     workflow_id = started.workflow_id
     synthesis = artifacts_runtime.settings.research_default_synthesis
     search_provider = artifacts_runtime.settings.research_search_provider
+    workflow_target = named_devices[0] if named_devices else None
 
     async def _start_workflow_followup() -> None:
         try:
@@ -401,6 +419,9 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
                 task_id=task_id,
                 workflow_id=workflow_id,
                 input=topic,
+                # The workflow re-selects only if the planned machine went away; it must
+                # then re-select the NAMED one (or fail), never another.
+                target_device=workflow_target,
                 recency_days=recency_days,
                 max_sources=max_sources,
                 synthesis=synthesis,
@@ -712,15 +733,57 @@ def research_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     }
     label = f"{topic} araştırmasını" if topic else "Araştırmayı"
     if resolution.artifact_id and ctx.live.get("device_action") is not None:
-        from app.voice.realtime_sessions.tools_artifacts import artifact_open
+        from app.voice.realtime_sessions.tools_artifacts import open_artifact_by_id
 
-        opened = artifact_open(ctx, {"artifact_id": str(resolution.artifact_id)})
+        # THIS research's report, by id. ``artifact_open`` resolves its target from the
+        # artifact focus stack, which a research never moves: handing it the id as an
+        # argument (what this did until 2026-09-29) opened whatever that stack held, or
+        # asked "Hangi dosya?" - and either way the owner heard "cihazda açamadım".
+        try:
+            report_artifact_id = uuid.UUID(str(resolution.artifact_id))
+        except ValueError:
+            report_artifact_id = None
+        opened = (
+            open_artifact_by_id(ctx, report_artifact_id)
+            if report_artifact_id is not None
+            else {"error_class": "not_found", "speech": ""}
+        )
         out["open_receipt"] = opened
-        if opened.get("execution_status") == "executed":
+        by_browser = opened.get("via") == "browser"
+        if opened.get("execution_status") == "executed" and opened.get("state") == "opened":
             out["opened"] = True
-            out["speech"] = f"{label} açtım efendim. {summary}"
+            if by_browser:
+                # ADR-0210: said as it was done - which machine, and that it was the browser.
+                where = (
+                    f"{opened.get('spoken_device')} cihazında "
+                    if opened.get("spoken_device")
+                    else ""
+                )
+                out["speech"] = f"{label} {where}tarayıcıda açtım efendim. {summary}"
+            else:
+                out["speech"] = f"{label} açtım efendim. {summary}"
             return out
-        out["speech"] = f"{label} odağa aldım efendim; cihazda açamadım. {summary}"
+        # Not opened, and the owner is told WHY in the open's own sentence (no device
+        # that can fetch a file, a refused origin, a render that is not there ...) - the
+        # same sentence the Cockpit shows for the same refusal. One warning names it for
+        # whoever reads the log: this failure used to leave no line anywhere.
+        error_class = str(opened.get("error_class") or "") or "not_opened"
+        out["open_error_class"] = error_class
+        logger.warning(
+            "research_open_device_open_failed",
+            research_job_id=str(resolution.research_job_id),
+            artifact_id=str(resolution.artifact_id),
+            error_class=error_class,
+            state=opened.get("state"),
+            format=opened.get("format"),
+        )
+        why = str(opened.get("speech") or "").strip()
+        not_opened = f"{label} odağa aldım efendim; cihazda açamadım."
+        if by_browser and opened.get("execution_status") == "executed":
+            # A tab exists but its page was not confirmed: the open's own sentence says that,
+            # and "cihazda açamadım" would contradict it.
+            not_opened = f"{label} odağa aldım efendim."
+        out["speech"] = " ".join(part for part in (not_opened, why, summary) if part)
         return out
     out["speech"] = f"{label} odağa aldım efendim; açacak bir cihaz yok. {summary}"
     return out

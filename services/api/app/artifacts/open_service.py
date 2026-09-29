@@ -94,6 +94,13 @@ class OpenOutcome:
     format: str | None = None
     #: B43 (req 509): where the device put the file (its own answer), for the driver.
     path: str | None = None
+    #: ADR-0210: which way the report was opened when it was NOT the file path this module
+    #: runs - ``"browser"`` (:mod:`app.artifacts.browser_open`) - with the device it went to and
+    #: the owner's own word for it. ``None`` for every open this module performs itself.
+    via: str | None = None
+    device_id: str | None = None
+    device: str | None = None
+    spoken_device: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {

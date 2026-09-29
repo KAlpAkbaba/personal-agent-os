@@ -4,9 +4,10 @@ qualification can read it without touching the routes.
 Bump on every change to the accepted fields of a request body (see contract.py).
   1 - M12 tracks A+E as first shipped.
   2 - ADR-0043: ``voice`` on create.
+  3 - ADR-0208: ``device_id`` on create and attach (the enrolled device the client runs on).
 """
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 #: Fields a version-1 server accepts on create; a client that gets 404 from the
 #: contract endpoint is talking to v1.
 LEGACY_V1_CREATE_FIELDS = (

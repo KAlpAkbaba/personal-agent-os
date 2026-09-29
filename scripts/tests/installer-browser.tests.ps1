@@ -261,6 +261,92 @@ public static extern uint GetShortPathNameW(string longPath, System.Text.StringB
         Assert-True -Condition ($json -match '"BrowserWorkerEager":\s*"true"') -Because "eager start: the installer proves WHICH worker is live right after the swap (2026-09-04)"
     }
 
+    Write-Host ""
+    Write-Host "the narrow SSRF exception: --trusted-origin (owner decision 2026-09-29)"
+
+    # The office PC's worker must open the report Cloud Core serves at
+    # {broker}/v1/artifacts/renders/view, and the broker is a tailnet address the worker's
+    # destination policy refuses. The device (this installer) - never a Cloud Core command -
+    # names the ONE origin the worker admits, from the broker URL the device itself dials.
+    $tailnetArgs = "-m browser_agent.worker --trusted-origin http://100.90.158.26:8001"
+    $settingsFor = {
+        param([string]$Url)
+        New-CompanionBrowserSettings -BrowserRoot "C:\Program Files\PagentOS\agent\browser" `
+            -BrowserDataDir "C:\ProgramData\PagentOS\companion\browser" -Channel "chrome" -BrokerRestUrl $Url
+    }
+
+    Test-Case "the tailnet broker becomes the worker's trusted origin, next to the existing arguments" {
+        Assert-Equal -Expected $tailnetArgs -Actual (& $settingsFor "http://100.90.158.26:8001").BrowserWorkerArgs -Because "the origin of the broker URL, appended"
+        Assert-Equal -Expected $tailnetArgs -Actual (& $settingsFor "http://100.90.158.26:8001/").BrowserWorkerArgs -Because "a trailing slash is not part of the origin"
+        Assert-Equal -Expected $tailnetArgs -Actual (& $settingsFor "  http://100.90.158.26:8001  ").BrowserWorkerArgs -Because "whitespace is not part of the origin"
+    }
+
+    Test-Case "a broker named by host and a default port keep exactly their own origin" {
+        Assert-Equal -Expected "-m browser_agent.worker --trusted-origin http://pagentos-core:8001" -Actual (& $settingsFor "http://pagentos-core:8001").BrowserWorkerArgs -Because "a name is kept as a name"
+        Assert-Equal -Expected "-m browser_agent.worker --trusted-origin https://core.example.com" -Actual (& $settingsFor "https://core.example.com:443").BrowserWorkerArgs -Because "the default port is dropped, the worker makes it explicit again"
+        Assert-Equal -Expected "-m browser_agent.worker --trusted-origin http://100.90.158.26:8001" -Actual (& $settingsFor "http://100.90.158.26:8001/some/prefix").BrowserWorkerArgs -Because "a path prefix is dropped: the trust is an origin, not a path"
+        Assert-Equal -Expected "-m browser_agent.worker --trusted-origin http://[fd7a:115c:a1e0::1]:8001" -Actual (& $settingsFor "http://[fd7a:115c:a1e0::1]:8001").BrowserWorkerArgs -Because "an IPv6 literal keeps its brackets"
+    }
+
+    Test-Case "a loopback broker (the dev default) writes NO option - the worker would be trusting itself" {
+        foreach ($url in @("http://127.0.0.1:8001", "http://localhost:8001", "http://127.5.5.5:8001", "http://[::1]:8001", "http://2130706433:8001")) {
+            $result = Get-BrowserTrustedOrigin -BrokerRestUrl $url
+            Assert-True -Condition ($null -eq $result.Origin) -Because "$url must not become a trusted origin"
+            Assert-True -Condition ($result.Reason -match "loopback|local") -Because "the reason is stated: $($result.Reason)"
+            Assert-Equal -Expected "-m browser_agent.worker" -Actual (& $settingsFor $url).BrowserWorkerArgs -Because "$url leaves the arguments exactly as they were"
+        }
+    }
+
+    Test-Case "every other origin the worker would refuse at start is refused here too" {
+        foreach ($url in @(
+                "http://169.254.169.254", "http://169.254.1.1:8001", "http://[fe80::1]:8001", "http://224.0.0.1:8001",
+                "http://0.0.0.0:8001", "http://[::]:8001", "http://240.0.0.1:8001", "http://255.255.255.255:8001",
+                "http://metadata.google.internal", "http://core.internal:8001", "http://printer.local:8001", "http://x.localhost",
+                "ftp://100.90.158.26", "file:///C:/x", "http://user:pw@100.90.158.26:8001", "not a url", "", "   ")) {
+            $result = Get-BrowserTrustedOrigin -BrokerRestUrl $url
+            Assert-True -Condition ($null -eq $result.Origin) -Because "'$url' must not become a trusted origin (got $($result.Origin))"
+            Assert-Equal -Expected "-m browser_agent.worker" -Actual (& $settingsFor $url).BrowserWorkerArgs -Because "'$url' leaves the arguments exactly as they were"
+        }
+    }
+
+    Test-Case "private and tailnet origins ARE acceptable - that is the point of the exception" {
+        foreach ($url in @("http://100.64.0.1:8001", "http://100.127.255.254:8001", "http://192.168.1.10:8001", "http://10.1.2.3:8001", "http://172.16.0.9:8001")) {
+            Assert-True -Condition ($null -ne (Get-BrowserTrustedOrigin -BrokerRestUrl $url).Origin) -Because "$url is a legitimate broker address"
+        }
+    }
+
+    Test-Case "no broker URL at all writes no option and no other key changes" {
+        $with = & $settingsFor "http://100.90.158.26:8001"
+        $without = New-CompanionBrowserSettings -BrowserRoot "C:\Program Files\PagentOS\agent\browser" -BrowserDataDir "C:\ProgramData\PagentOS\companion\browser"
+        Assert-Equal -Expected "-m browser_agent.worker" -Actual $without.BrowserWorkerArgs -Because "a caller that names no broker gets today's arguments"
+        Assert-Equal -Expected (($with.Keys | Sort-Object) -join ",") -Actual (($without.Keys | Sort-Object) -join ",") -Because "the same keys either way"
+        foreach ($key in @($with.Keys | Where-Object { $_ -ne "BrowserWorkerArgs" })) {
+            Assert-Equal -Expected $with[$key] -Actual $without[$key] -Because "$key does not depend on the broker"
+        }
+    }
+
+    Test-Case "the trusted origin is read back out of the arguments, and only an exact match is current" {
+        Assert-Equal -Expected "http://100.90.158.26:8001" -Actual (Get-TrustedOriginFromWorkerArgs -WorkerArgs $tailnetArgs) -Because "read back"
+        Assert-True -Condition ($null -eq (Get-TrustedOriginFromWorkerArgs -WorkerArgs "-m browser_agent.worker")) -Because "none present"
+        $config = Join-Path $script:Sandbox "companion-origin.json"
+        [System.IO.File]::WriteAllText($config, (@{ BrowserWorkerArgs = $tailnetArgs } | ConvertTo-Json))
+        Assert-True -Condition (Test-CompanionTrustedOriginCurrent -CompanionConfigPath $config -BrokerRestUrl "http://100.90.158.26:8001").Current -Because "the broker it was written for"
+        $stale = Test-CompanionTrustedOriginCurrent -CompanionConfigPath $config -BrokerRestUrl "http://100.90.158.99:8001"
+        Assert-True -Condition (-not $stale.Current) -Because "a switched broker leaves the old origin behind - and it is SAID, not silent"
+        Assert-Equal -Expected "http://100.90.158.26:8001" -Actual $stale.Installed -Because "names what is installed"
+        Assert-Equal -Expected "http://100.90.158.99:8001" -Actual $stale.Expected -Because "names what it should be"
+        [System.IO.File]::WriteAllText($config, (@{ BrowserWorkerArgs = "-m browser_agent.worker" } | ConvertTo-Json))
+        Assert-True -Condition (-not (Test-CompanionTrustedOriginCurrent -CompanionConfigPath $config -BrokerRestUrl "http://100.90.158.26:8001").Current) -Because "an install from before the exception has no origin"
+    }
+
+    Test-Case "the installer derives the origin from the RESOLVED broker URL and says what it did" {
+        $installer = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\install-device-service.ps1") -Raw
+        Assert-True -Condition ($installer -match 'New-CompanionBrowserSettings[^\r\n]*-BrokerRestUrl \$BrokerRestUrl') -Because "the settings are built from the URL the installer resolved (explicit, or preserved from the installed service), on every run"
+        Assert-True -Condition ($installer -match 'no --trusted-origin written') -Because "a loopback install says so in its output instead of leaving the owner guessing"
+        $switch = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\switch-agent-broker.ps1") -Raw
+        Assert-True -Condition ($switch -match 'Test-CompanionTrustedOriginCurrent') -Because "switch-agent-broker rewrites only the SERVICE configuration; it must say the companion's origin is stale"
+    }
+
     Test-Case "the installer declares -SkipBrowser, -BrowserChannel and -UvPath and stages browser as a component" {
         $installer = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\install-device-service.ps1") -Raw
         Assert-True -Condition ($installer -match '\[switch\]\$SkipBrowser') -Because "-SkipBrowser"

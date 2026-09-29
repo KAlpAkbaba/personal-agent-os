@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
@@ -38,7 +39,12 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from app.artifacts import service as artifact_service
 from app.artifacts.models import TASK_STATUS_CREATED, TASK_STATUS_FAILED_TERMINAL, Task
 from app.devices import service as devices_service
-from app.devices.selection import NoCapableDeviceError, select_device
+from app.devices.selection import (
+    REASON_SESSION_AFFINITY,
+    NoCapableDeviceError,
+    named_device_target,
+    select_device,
+)
 from app.logging import get_logger
 from app.research import runs_service
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
@@ -72,8 +78,24 @@ def workflow_id_for(task_id: uuid.UUID) -> str:
     return f"research-browser-{task_id}"
 
 
-def _device_summary(view: Any) -> dict[str, Any]:
-    return {"device_id": str(view.id), "name": view.name}
+#: Said beside the device's name when the session's own machine was chosen (ADR-0208).
+SESSION_AFFINITY_TR: Final = "Komutu verdiğiniz cihaz seçildi."
+
+
+#: ...and when the owner NAMED the machine in the sentence (ADR-0212).
+NAMED_DEVICE_TR: Final = "Söylediğiniz cihaz seçildi."
+
+
+def _device_summary(view: Any, reason: str | None = None) -> dict[str, Any]:
+    summary: dict[str, Any] = {"device_id": str(view.id), "name": view.name}
+    if reason:
+        # ADR-0208: WHY this machine ("session_affinity" = the one the owner is on), and the
+        # same in the owner's language for whatever shows this summary to him.
+        summary["reason"] = reason
+        summary["reason_tr"] = (
+            SESSION_AFFINITY_TR if reason == REASON_SESSION_AFFINITY else NAMED_DEVICE_TR
+        )
+    return summary
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +126,8 @@ def start_browser_research(
     source: str = SOURCE_REST,
     session_id: uuid.UUID | None = None,
     tool_call_id: str | None = None,
+    session_device_ids: Sequence[uuid.UUID] | None = None,
+    named_devices: Sequence[str] = (),
 ) -> StartedResearch:
     """Create the task, pick a capable device, and record the PLANNED (or FAILED) run
     row — the synchronous DB half both callers share. Device selection happens HERE,
@@ -121,7 +145,19 @@ def start_browser_research(
         provenance["tool_call_id"] = tool_call_id
     views = devices_service.list_device_views(db, broker)
     try:
-        result = select_device(views, capability=RESEARCH_CAPABILITY, target=target_device)
+        # The session hint is passed only when there is one: with none this is the call it
+        # always was (ADR-0208).
+        hint = {"session_device_ids": session_device_ids} if session_device_ids else {}
+        # ADR-0212: the device the owner SAID in the sentence ("ofis bilgisayarında ...
+        # araştır") is the owner's latest word, ahead of a REST caller's ``target_device``
+        # and - inside ``select_device``, which ignores the session hint once a device is
+        # named - ahead of the session's own. It refuses rather than falling back.
+        target = (
+            named_device_target(views, named_devices, RESEARCH_CAPABILITY)
+            if named_devices
+            else target_device
+        )
+        result = select_device(views, capability=RESEARCH_CAPABILITY, target=target, **hint)
     except NoCapableDeviceError as exc:
         artifact_service.transition_task(
             db,
@@ -141,6 +177,9 @@ def start_browser_research(
         return StartedResearch(
             task_id=task.id, workflow_id=workflow_id, device=None, error=exc.detail_tr
         )
+    # ADR-0208: said only when the session's own device was chosen, so what a research run
+    # reported before this change is reported byte for byte the same.
+    say_why = result.reason == REASON_SESSION_AFFINITY or bool(named_devices)
     runs_service.update_run(
         db,
         task.id,
@@ -149,13 +188,14 @@ def start_browser_research(
         event={
             "stage": STAGE_PLANNED,
             "detail": f"selected {result.device.name}",
+            **({"selection_reason": result.reason} if say_why else {}),
             **provenance,
         },
     )
     return StartedResearch(
         task_id=task.id,
         workflow_id=workflow_id,
-        device=_device_summary(result.device),
+        device=_device_summary(result.device, result.reason if say_why else None),
         error=None,
     )
 

@@ -26,6 +26,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.devices import affinity as device_affinity
 from app.identity.dependencies import require_owner_session
 from app.identity.service import SessionContext
 from app.logging import get_logger, trace_id_var
@@ -120,6 +121,11 @@ class CreateSessionRequest(BaseModel):
     # ADR-0043: a wire voice id from the provider's supported list (A/B in the owner
     # qualification); absent -> the configured default. Never a profile name.
     voice: str | None = Field(default=None, pattern=r"^[a-z]{2,16}$")
+    # ADR-0208 (contract v3): the enrolled device the client runs on, when it knows. A claim
+    # and only ever a hint to device selection: it grants nothing, an id that names no live
+    # enrolled device is ignored (never an error that would say which ids exist), and
+    # `client_kind` / owner session authority are untouched by it.
+    device_id: uuid.UUID | None = None
 
     @field_validator("transport")
     @classmethod
@@ -189,6 +195,8 @@ class AttachRequest(BaseModel):
 
     client_kind: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,15}$")
     transport: str | None = None
+    # ADR-0208 (contract v3): where the client that takes over runs; absent = unknown.
+    device_id: uuid.UUID | None = None
 
     @field_validator("transport")
     @classmethod
@@ -292,6 +300,7 @@ async def create_session(request: Request, body: CreateSessionRequest) -> dict[s
                 provider=provider,
                 transport=transport,
                 client_kind=body.client_kind,
+                declared_device_id=body.device_id,
                 language=body.language,
                 voice=voice,
                 voice_profile=voice_profile,
@@ -368,6 +377,14 @@ async def relay_tool_call(
     # ToolContext.followups and this local name refer to one list object, so whatever
     # the thread appended is visible here once asyncio.to_thread returns.
     followups: list[Any] = []
+    # ADR-0208 source (b): the enrolled device connected from this request's address; None
+    # unless the (default-off) setting is on and the address can be told and is unambiguous.
+    source_device_id = device_affinity.source_device_id(
+        peer_host=request.client.host if request.client else None,
+        headers=request.headers,
+        broker=getattr(request.app.state, "broker", None),
+        settings=runtime.settings,
+    )
 
     def work() -> dict[str, Any]:
         with runtime.session() as db:
@@ -381,7 +398,7 @@ async def relay_tool_call(
                 registry=runtime.registry,
                 sideband=runtime.sideband,
                 trace_id=trace_id,
-                live=runtime.live_sources(),
+                live={**runtime.live_sources(), "source_device_id": source_device_id},
                 followups=followups,
             )
 
@@ -498,6 +515,7 @@ async def attach_session(
                 registry=runtime.registry,
                 sideband=runtime.sideband,
                 client_kind=body.client_kind,
+                declared_device_id=body.device_id,
                 transport=body.transport,
                 credential_ttl_s=runtime.settings.voice_realtime_credential_ttl_s,
                 trace_id=trace_id,

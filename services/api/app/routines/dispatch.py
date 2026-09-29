@@ -56,7 +56,13 @@ from app.devices.commands import (
     DeviceCommandClientProtocol,
     get_broker_runtime,
 )
-from app.devices.selection import NoCapableDeviceError, select_device
+from app.devices.selection import (
+    REASON_SESSION_AFFINITY,
+    NoCapableDeviceError,
+    SelectionResult,
+    named_device_target,
+    select_device,
+)
 from app.devices.service import list_device_views
 from app.logging import get_logger
 from app.narration.normalizer import normalize
@@ -124,6 +130,11 @@ class DeviceRunResult:
     #: The device the command was sent to, when one was selected. B11-toast review: a toast
     #: button press is believed only from the device that showed the toast.
     device_id: UUID | None = None
+    #: ``REASON_SESSION_AFFINITY`` when the machine the command was sent from is the one that
+    #: acted (ADR-0208) and ``REASON_EXPLICIT_ALIAS`` (or the id/name reasons) when the owner
+    #: NAMED the device (ADR-0212), so a receipt can say so; "" for every other choice - what
+    #: a result carried before those ADRs - and when no device was selected.
+    selection_reason: str = ""
 
 
 class DeviceActionPort(Protocol):
@@ -358,6 +369,32 @@ class RealtimeSayBriefing:
 # ---------------------------------------------------------------- real: device action
 
 
+def _select_for(
+    views: list[Any],
+    capability: str,
+    session_device_ids: Sequence[UUID],
+    targets: Sequence[str] = (),
+) -> SelectionResult:
+    """The ONE place this port decides which device acts (ADR-0208, ADR-0209, ADR-0212).
+
+    ``run`` sends to the device this returns and ``selection_for`` (the probe the launch
+    route asks first) reports it, so what is asked and what is done cannot drift apart.
+    Raises ``NoCapableDeviceError`` exactly as ``select_device`` does.
+
+    ``targets`` is what the owner's sentence NAMED: a named device wins over the session's
+    own and over the healthiest one, and a named device that cannot serve is a refusal that
+    names it - ``select_device`` already never falls back past an explicit target.
+    """
+    if targets:
+        return select_device(
+            views, capability=capability, target=named_device_target(views, targets, capability)
+        )
+    if session_device_ids:
+        return select_device(views, capability=capability, session_device_ids=session_device_ids)
+    # No session hint: the very call this port has always made.
+    return select_device(views, capability=capability)
+
+
 class BrokerDeviceAction:
     """Runs one device command over the SAME proven device/broker path
     ``app.research.browser_activities.select_device_activity`` uses: select a device by
@@ -378,6 +415,22 @@ class BrokerDeviceAction:
             session_factory
         )
 
+    def bound_to(
+        self, session_device_ids: Sequence[UUID] = (), *, targets: Sequence[str] = ()
+    ) -> DeviceActionPort:
+        """This port for ONE call (ADR-0208, ADR-0212): a command that names no device goes to
+        the session's own device when it can do it, and to whatever the ordinary rule picks
+        when it cannot; a command whose sentence NAMED a device (``targets``: the canonical
+        alias words the owner said) goes to that device or is refused. The object returned is
+        a view over this one - the same command client, the same session factory, no second
+        desktop-control path - so it is cheap to make per call. Nothing to bind is the
+        ordinary rule, and this same port."""
+        ids = tuple(session_device_ids)
+        named = tuple(targets)
+        if not ids and not named:
+            return self
+        return _SessionBoundDeviceAction(self, ids, named)
+
     def run(
         self,
         *,
@@ -385,6 +438,25 @@ class BrokerDeviceAction:
         payload: dict[str, Any],
         idempotency_key: str,
         timeout_s: float,
+    ) -> DeviceRunResult:
+        return self._run(
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=timeout_s,
+            session_device_ids=(),
+            targets=(),
+        )
+
+    def _run(
+        self,
+        *,
+        capability: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        timeout_s: float,
+        session_device_ids: Sequence[UUID],
+        targets: Sequence[str],
     ) -> DeviceRunResult:
         runtime = get_broker_runtime()
         if runtime is None:
@@ -399,9 +471,33 @@ class BrokerDeviceAction:
             session.close()
 
         try:
-            selection = select_device(views, capability=capability)
+            selection = _select_for(views, capability, session_device_ids, targets)
         except NoCapableDeviceError as exc:
+            if targets:
+                logger.info(
+                    "broker_device_action_refused",
+                    capability=capability,
+                    device_alias=",".join(targets),
+                    reason=exc.reason,
+                )
             return DeviceRunResult(False, "no_capable_device", exc.detail_tr)
+        # Said only when the session's own device was chosen or the owner named one: a result
+        # for any other choice is exactly what it was before ADR-0208.
+        why = ""
+        if session_device_ids or targets:
+            # Only when a session hint or a spoken device was in play: why this machine acted,
+            # for whoever reads the log after "it opened on the wrong computer". The alias
+            # WORD is logged, never the sentence it came from (ADR-0212).
+            logger.info(
+                "broker_device_action_selected",
+                capability=capability,
+                device_id=str(selection.device.id),
+                device_name=selection.device.name,
+                reason=selection.reason,
+                **({"device_alias": ",".join(targets)} if targets else {}),
+            )
+            if selection.reason == REASON_SESSION_AFFINITY or selection.explicit:
+                why = selection.reason
 
         outcome = self._command_client.run(
             device_id=selection.device.id,
@@ -413,15 +509,103 @@ class BrokerDeviceAction:
         )
         target = selection.device.id
         if isinstance(outcome, CommandSucceeded):
-            return DeviceRunResult(True, result=dict(outcome.result), device_id=target)
+            return DeviceRunResult(
+                True, result=dict(outcome.result), device_id=target, selection_reason=why
+            )
         if isinstance(outcome, CommandFailed):
-            return DeviceRunResult(False, outcome.error_class, outcome.message, device_id=target)
+            return DeviceRunResult(
+                False, outcome.error_class, outcome.message, device_id=target, selection_reason=why
+            )
         if isinstance(outcome, CommandExpired):
             return DeviceRunResult(
-                False, "timeout", "command expired before completion", device_id=target
+                False,
+                "timeout",
+                "command expired before completion",
+                device_id=target,
+                selection_reason=why,
             )
         # pragma: no cover - every DeviceCommandClient outcome type is handled above
         return DeviceRunResult(False, "internal_bug", f"unexpected outcome: {outcome!r}")
+
+    def selection_for(
+        self,
+        capability: str,
+        session_device_ids: Sequence[UUID] = (),
+        targets: Sequence[str] = (),
+    ) -> SelectionResult | None:
+        """The device ``run`` would pick for ``capability`` right now, or ``None`` - and
+        nothing else: no command is created, nothing is sent (ADR-0209).
+
+        It makes the SAME call ``run`` makes (``_select_for``, one function for both) over
+        the same live views, so the two can never disagree: a probe that said yes while the
+        run said no_capable_device would route an owner's sentence down a path that cannot
+        happen. Until 2026-09-29 the two were separate copies, and the per-session view
+        ADR-0208 added had no probe at all.
+        """
+        runtime = get_broker_runtime()
+        if runtime is None:
+            return None
+        session = self._session_factory()
+        try:
+            views = list_device_views(session, runtime)
+        finally:
+            session.close()
+        try:
+            return _select_for(views, capability, session_device_ids, targets)
+        except NoCapableDeviceError:
+            return None
+
+    def can_run(self, capability: str) -> bool:
+        """Whether ``run`` would find a device for ``capability`` right now (ADR-0209)."""
+        return self.selection_for(capability) is not None
+
+
+class _SessionBoundDeviceAction:
+    """A :class:`BrokerDeviceAction` seen from one session and one sentence (ADR-0208,
+    ADR-0212): satisfies :class:`DeviceActionPort` and holds nothing of its own but the ids
+    of where the session is and the alias words the sentence named."""
+
+    def __init__(
+        self,
+        inner: BrokerDeviceAction,
+        session_device_ids: Sequence[UUID],
+        targets: Sequence[str] = (),
+    ) -> None:
+        self._inner = inner
+        self.session_device_ids: tuple[UUID, ...] = tuple(session_device_ids)
+        #: What the sentence NAMED; empty when it named no device.
+        self.targets: tuple[str, ...] = tuple(targets)
+
+    def run(
+        self,
+        *,
+        capability: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        timeout_s: float,
+    ) -> DeviceRunResult:
+        return self._inner._run(
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=timeout_s,
+            session_device_ids=self.session_device_ids,
+            targets=self.targets,
+        )
+
+    def selection_for(self, capability: str) -> SelectionResult | None:
+        # The probe of this view asks what THIS view's run would ask - the same ids and the
+        # same named device.
+        return self._inner.selection_for(capability, self.session_device_ids, self.targets)
+
+    def can_run(self, capability: str) -> bool:
+        return self.selection_for(capability) is not None
+
+    def bound_to(
+        self, session_device_ids: Sequence[UUID] = (), *, targets: Sequence[str] = ()
+    ) -> DeviceActionPort:
+        # Binding again re-binds the one underlying port; ids and targets never accumulate.
+        return self._inner.bound_to(session_device_ids, targets=targets)
 
 
 # ------------------------------------------------------------------------ browser allowlist

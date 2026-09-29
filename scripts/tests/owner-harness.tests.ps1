@@ -156,16 +156,76 @@ Test-Case "wrapping a Get-ArrayProperty call in @() hands back ONE element: the 
     $bare = Get-ArrayProperty -InputObject $firingTwo -Name "dispatch_results"
     Assert-Equal 2 $bare.Count "bare: the elements"
 }
+function Find-WrappedArrayPropertyCall {
+    # The lines of a script where @( ) wraps a Get-ArrayProperty CALL - read from the parse
+    # tree, not from the text. The text version (a regex per line, skipping lines that begin
+    # with #) failed main on 2026-09-29 over two places that only NAME the trap: a sentence
+    # inside a <# #> help block (DeviceAliases.ps1) and the pattern string of another guard
+    # (device-aliases.tests.ps1). A guard that fires on its own documentation gets switched
+    # off; this one now fires on code and on nothing else.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+    $wraps = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ArrayExpressionAst] }, $true))
+    $lines = @()
+    foreach ($wrap in $wraps) {
+        $statements = @($wrap.SubExpression.Statements)
+        if ($statements.Count -ne 1) { continue }
+        $pipeline = $statements[0]
+        if (-not ($pipeline -is [System.Management.Automation.Language.PipelineAst])) { continue }
+        $elements = @($pipeline.PipelineElements)
+        # Only the bare call is the trap: `@(Get-ArrayProperty ... | Where-Object ...)` pipes
+        # the ELEMENTS on, and wrapping that is the correct way to count what is left.
+        if ($elements.Count -ne 1) { continue }
+        $command = $elements[0]
+        if (-not ($command -is [System.Management.Automation.Language.CommandAst])) { continue }
+        if ($command.GetCommandName() -eq "Get-ArrayProperty") { $lines += $wrap.Extent.StartLineNumber }
+    }
+    return , @($lines)
+}
+
+Test-Case "the guard finds a wrapped call and is silent about a comment, a help block and a string" {
+    $probeDir = Join-Path $env:TEMP "pagentos-owner-harness-guard-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+    try {
+        $offender = Join-Path $probeDir "offender.ps1"
+        Set-Content -LiteralPath $offender -Encoding ASCII -Value @(
+            '$doc = $null',
+            '$rows = @(Get-ArrayProperty -InputObject $doc -Name "devices")',
+            '$also = @(  Get-ArrayProperty -InputObject $doc -Name "devices"  )'
+        )
+        $found = Find-WrappedArrayPropertyCall -Path $offender
+        Assert-Equal "2; 3" ($found -join "; ") "both wrapped calls, by line"
+
+        $innocent = Join-Path $probeDir "innocent.ps1"
+        Set-Content -LiteralPath $innocent -Encoding ASCII -Value @(
+            '<#',
+            '.DESCRIPTION',
+            '    it read the list through @(Get-ArrayProperty ...), which wraps it twice',
+            '#>',
+            '# @(Get-ArrayProperty ...) is the trap',
+            '$doc = $null',
+            '$pattern = "@\(\s*Get-ArrayProperty"',
+            '$bare = Get-ArrayProperty -InputObject $doc -Name "devices"',
+            '$left = @(Get-ArrayProperty -InputObject $doc -Name "devices" | Where-Object { $_ })'
+        )
+        $none = Find-WrappedArrayPropertyCall -Path $innocent
+        Assert-Equal 0 $none.Count "naming the trap, or piping the elements on, is not the trap"
+    }
+    finally {
+        Remove-Item -LiteralPath $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Test-Case "no script wraps a Get-ArrayProperty call in @()" {
     $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $offenders = @()
     foreach ($file in Get-ChildItem -Path (Join-Path $root "scripts") -Recurse -Filter *.ps1) {
+        # This file wraps one on purpose, to pin what the wrap returns (the case above it).
         if ($file.Name -eq "owner-harness.tests.ps1") { continue }
-        $n = 0
-        foreach ($line in (Get-Content -LiteralPath $file.FullName)) {
-            $n++
-            if ($line -match '^\s*#') { continue }  # a comment may name the trap
-            if ($line -match '@\(\s*Get-ArrayProperty') { $offenders += "$($file.Name):$n" }
+        foreach ($line in (Find-WrappedArrayPropertyCall -Path $file.FullName)) {
+            $offenders += "$($file.Name):$line"
         }
     }
     Assert-Equal "" ($offenders -join "; ") "scripts that wrap Get-ArrayProperty in @()"

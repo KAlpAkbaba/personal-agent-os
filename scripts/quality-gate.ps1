@@ -327,6 +327,17 @@ if (-not $Fast) {
     Assert-ExitCode "installer browser tests"
   }
 
+  Invoke-Step "Owner Chrome enrollment record tests (PS 5.1)" {
+    # 2026-09-29: the enrollment script printed "recorded:" and then "Access is denied" - an
+    # icacls refusal piped to Out-Null, on a record an elevated run had created - and -Revoke
+    # could not delete that record either. These reproduce the record's exact access in a
+    # sandbox and pin the write, the read-back, the permissions and the revoke. The script
+    # itself is parsed, never run: it closes and relaunches Chrome.
+    $script = Join-Path $repoRoot "scripts\tests\owner-enrollment.tests.ps1"
+    & (Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe") -NoProfile -File $script
+    Assert-ExitCode "owner enrollment record tests"
+  }
+
   Invoke-Step "Installer evidence + engine wiring tests (PS 5.1)" {
     # 2026-09-03: the installer's inline swap failed under running processes and looked
     # successful; these pin the journaled engine as the only deploy path, the evidence

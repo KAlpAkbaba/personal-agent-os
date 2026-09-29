@@ -16067,3 +16067,382 @@ starts a task.
   REVERSIBLE_WRITE by definition and the contract gives them no higher class.
 * The employer's panel hosts and Kolay Monitor's host are in the list as the owner named
   them (`turka.com`, `kolaymonitor`); hosts he did not name are not.
+
+## ADR-0208 — Session device affinity: a command that names no device goes to the device its session is on (2026-09-29)
+
+**Finding.** 2026-09-29, office PC (GMKADIRAKBABA), home PC (MAIL) off: the owner said
+"hesap makinesini aç" in the web shell and heard that no device could do it. Two causes,
+found by reading the path and not by assuming. (1) The Operator plan for one application
+launch needs `app.launch` and `window.current`, which the office PC does not advertise
+(ADR-0203: no `-Operator` on an employer's machine), so `select_device` found nobody
+(`tools_operator.py` → `plans.py` → `routines/dispatch.py` → `selection.py`). That is
+ADR-0209. (2) Underneath it: a command that names no device went to the "healthiest"
+machine, i.e. the home PC whenever it had been seen a second more recently — while the owner
+sat at the other one. `select_device` knew nothing of the session. **Correction to the
+handoff of 2026-09-28** ("two devices, selected by name"): that holds for research and REST
+only; in the voice path no device the owner *named* ever reached selection (ADR-0212).
+
+**Decision.**
+1. An explicit target (id, exact name, Turkish alias) wins, unchanged.
+2. Otherwise the session's own device, when it is enrolled, not revoked, online, capable and
+   policy-allowed; reason `session_affinity`, `explicit=False`. Otherwise the old rule, byte
+   for byte (same reasons, same Turkish errors).
+3. Where the session is, best first: a `device_id` the client *declares* on the realtime
+   session (contract **v3**, create and attach; kept apart from `row.device_id`, which is
+   where sideband frames go and what device trust reads); the device the identity session is
+   bound to; the enrolled device connected from the request's own address
+   (`device_affinity_by_source_ip`, **OFF by default**; the address is recorded in memory on
+   the device's authenticated WebSocket handshake; `X-Real-IP` is believed only from
+   `trusted_proxy_cidrs`, never `X-Forwarded-For`; two devices at one address = no answer;
+   a `/0` CIDR is refused at start).
+4. A declared id is a claim, not authority (M19b): unknown or revoked ids are ignored
+   without an error, it grants no device trust, and it can only choose among devices the
+   owner could have named.
+5. `BrokerDeviceAction.bound_to(ids)` is a per-session view of the one device port;
+   research.start and news.summarize pass the same hint. With no hint every call is the call
+   it always was.
+6. Web shell: "Bu bilgisayar" on /voice, per browser, sent only to a v3 server.
+
+**Merge finding (ADR-0208 + ADR-0209), fixed in `a36125ac`.** ADR-0209's probe (`can_run`)
+was written against a port that selects by capability alone; the per-session view had no
+probe, and the launch route reads "a port that cannot be asked" as the Operator path. So on
+a session-bound port the direct launch never fired, and with the home PC online the office
+session's "hesap makinesini aç" opened the calculator **at home** (RED: the dispatch log
+showed `app.launch` on MAIL, reason `auto`). `_select_for` is now the one selection call,
+used by `run` and by the `selection_for` probe, and the bound view carries the probe with
+its ids. Four cases hold the two ADRs together; two mutations, each RED, restored by bytes.
+
+**Proof.** 85 API tests + 16 web tests (rule, address rules, the real application object end
+to end incl. the real WebSocket handshake); RED against the unfixed tree first; 20 API and 7
+web mutations, each RED on its named test, files restored by bytes (sha256).
+
+**Evidence class.**
+
+| Row | Class |
+|---|---|
+| Selection rule, address rules, declared-id wiring through `create_app` | `PROVEN_AUTOMATED` |
+| The office session actually served by the office PC in production | `READY_FOR_OWNER` (needs the release, then "Bu bilgisayar" picked once on /voice) |
+| The source-address path | `NOT_YET_PROVEN` (off; needs `X-Real-IP` measured on the real edge and the edge network CIDR) |
+| Realtime contract v3 served and honoured by production | `READY_FOR_OWNER` (release decision) |
+
+**Not claimed.** That a session on a device that cannot do the job is refused: it falls back
+to the old rule, which may act on the other machine (ADR-0209 closes that for launches;
+other capabilities are as before). That REST `/v1/devices/select`, `/v1/research`, routines
+or alarms use affinity (they do not). That the source-address path is trustworthy on the real
+edge.
+
+**Risks.** The identity session's `device_id` is unvalidated and feeds `device_is_trusted`
+(pre-existing; the web claim deliberately avoids it; step-up is still in shadow mode). The
+realtime contract is v3: a release must serve v3, and a web build older than the server
+never sends the field. The address map is per Cloud Core colour and in memory only; after a
+drain it repopulates within about a second as devices reconnect. The commit also carries two
+`docker-compose.prod.yml` env lines (defaults off): a release decision.
+
+## ADR-0209 — A single-step launch on a device without the Operator is `desktop.open_application` (2026-09-29)
+
+**Finding.** The owner said "ofis bilgisayarımda hesap makinesini aç". The sentence routed to
+`operator.app_open`, whose plan begins with `app.launch` (`plans.open_application`, first
+step `open_application:launch` — the name on the receipt). The office PC advertises
+`desktop.open_application` and no `app.launch`. Selection found no online device with
+`app.launch` and answered `no_capable_device`; the owner heard "açamadım" for the sentence
+the pre-Operator capability was written to serve. The cloud had never sent
+`desktop.open_application` anywhere.
+
+**Decision.**
+1. `operator.app_open` asks the device port which path applies: `selection_for` (the same
+   `_select_for` as `run`; sends nothing). If the device the launch would go to advertises
+   `app.launch`: the Operator path, byte-for-byte unchanged (home PC).
+2. If it does not but advertises `desktop.open_application`: that capability, for
+   `notepad`, `calc`, `mspaint` only — the contract's names, equal to the device's
+   `AppLauncher.DefaultAllowlist` and `DEVICE_PROTOCOL.md` §6, held by a test that reads
+   both back. Any other application is refused with the existing Turkish refusal, dispatching
+   nothing and trying no other device. The device still enforces its own allowlist.
+3. Neither: the Operator path, `no_capable_device` as before. A request with anything after
+   the launch is a mission, never reaches this tool, and still needs the Operator.
+4. With a session-bound port (ADR-0208), when the session's own device can open the
+   application only the direct way and another online device carries the Operator, the
+   launch goes direct **on the session's device**.
+5. The receipt keeps the registered capability `operator.app_open`; the path is in
+   `observed_after.server` (`path: desktop.open_application`, application, device id and
+   name), the device's `pid`/`executable` in `observed_after.local`. No `operator.task.*`
+   rows. A launch acknowledged with a `pid` is `verified`, without one `unverified` with
+   honest speech. The command key derives from the tool call. The step-up tier is the
+   tool's, unchanged. Speech names the device by its first alias.
+
+**Proof.** 26 tests through the real application object over real device rows, real port and
+selection, only the command client recorded (14 RED before the change); 11 + 2 mutations
+RED and restored by bytes; ruff clean. No contract, tool schema or capability registry
+changed.
+
+**Evidence class.** `PROVEN_AUTOMATED`. A real launch on GMKADIRAKBABA is `NOT_YET_PROVEN`
+(`READY_FOR_OWNER` after a release).
+
+**Not claimed.** That a window appeared: "verified" here is the device's pid, weaker than the
+Operator's foreground-window check (the office device has no `window.current`; on Windows 11
+`calc.exe` hands off to a Store app). That "ofis" steers a launch to the office PC while the
+session is elsewhere (ADR-0212).
+
+## ADR-0211 — The companion can write its own audit trail, and the installer no longer follows a planted junction (2026-09-29)
+
+**Found on the office PC by the owner's installs** (`install-20260929-113625`, `-113936`:
+"the companion recorded no browser_worker_started … within 90 s", a healthy worker rolled
+back; the elevated `icacls` grant that let `-115013` pass was the workaround) and by a
+non-elevated `enroll-owner-chrome.ps1` that printed "recorded:" over an "Access is denied".
+
+**Causes, each verified.**
+- *A.* `AuditLog` protected the directory it created as machine material (SYSTEM /
+  Administrators). The **owner-session companion** built its log with the same constructor:
+  it created the directory as the owner, locked itself out of it, and the write failed to
+  stderr only. The installer's owner grant lives on the companion root and the browser
+  directory, only when the browser is provisioned, and an inheritable grant cannot reach a
+  protected DACL.
+- *B.* The write succeeded; the `icacls` call that follows was denied (exit 5), its output to
+  `Out-Null` and its exit code never read; "recorded:" was printed between the two.
+  `-Revoke` was broken too: `(R,W)` carries no DELETE.
+- *C.* `BrowserRelease.ps1` did `$DeployStartedAt.AddSeconds(-1)`, and `verify-device-service`
+  passes `[datetime]::MinValue` — the known 6b.4 overflow.
+
+**Decision.** Protection by identity, named and strict by default: `AuditWriter.Service`
+(the zero value and the default: SYSTEM / Administrators only) and
+`AuditWriter.OwnerSessionCompanion` (owner Modify), so a service cannot inherit the weaker
+posture by omitting an argument. The installer creates or repairs the companion audit
+directory on every run (also with `-SkipBrowser`); verify has a row `2.2b` "audit dir
+writable by owner"; a write failure is one Warning in `companion.log`. The enrolment record
+is written ACL first, content second, verified by byte-for-byte read-back, and "recorded:" is
+printed only after that; a record that cannot be written asks for elevation with a clear
+exit code; the owner gets Modify (so `-Revoke` works, and empties the file where it cannot
+delete it). Tick arithmetic replaces the DateTime subtraction.
+
+**Security review of the first commit (independent), all fixed in `7816ffe5`.**
+MEDIUM-1: an elevated `icacls /reset /T` followed a junction planted at `companion\audit`
+(demonstrated: a SYSTEM-only file came back with inherited ACEs) → reparse points on the path
+or any ancestor are refused, and children are reset by a walk that never enters one.
+MEDIUM-2: the "already safe" verdict for the enrolment record ignored the file's owner and
+accepted OWNER RIGHTS with any rights → the owner must be the owner SID, Administrators or
+SYSTEM, and OWNER RIGHTS may carry read at most. LOW: the directory's owner is checked and
+set to Administrators when elevated; `-OwnerSid` must be a user account (not a group or a
+well-known principal); the companion decides writability by a write probe, not by reading
+ACEs.
+
+**Proof.** C#: `CompanionAuditDirectoryTests` 13/13 (the filtered class only — see below);
+`installer-acl` 44, `owner-enrollment` 18, `installer-release` 14, all other installer
+suites green; `qualify-staged-update.ps1` 89 PASS, no pin changed. Each finding RED first
+(incl. the reviewer's junction PoC reproduced), one to five mutations each, restored by bytes.
+Also fixed on the way: `owner-harness.tests.ps1` was red on main — its "no wrapped
+Get-ArrayProperty" guard matched sentences that only *name* the trap; it now walks the parse
+tree (`db43e179`).
+
+**Evidence class.**
+
+| Row | Class |
+|---|---|
+| The lock-out and the "Access is denied" on this machine | `PROVEN_REAL` (install logs, ACLs) |
+| Repairs, verdicts, junction refusal, record writing | `PROVEN_AUTOMATED` (real sandbox directories) |
+| Owner take-over to Administrators, elevated | `NOT_YET_PROVEN` (never ran elevated here) |
+| Full `Agent.Tests` (`dotnet test`) | `NOT_RUN` on this machine: it opens Notepad and Explorer on the owner's desktop while he works (the 17 failures of the first run coincide with the owner closing those windows). It runs on the home PC. |
+
+**Not claimed / remaining.** A check-then-write window remains on the reparse check. The
+older `icacls /T` resets (`Set-MachineDataAcl`, `Set-HardenedAcl`, `Repair-InstallTreeAcl`)
+were left alone: their trees admit no unprivileged writer. A data root deliberately under a
+junction (or a synced folder carrying the reparse attribute) loses its audit trail, with the
+one Warning.
+
+### ADR-0203 addendum (2026-09-29) — the office PC is now fully equipped, except for the Operator
+
+Recorded from the machine, not from a decision made in this session: the owner installed the
+browser worker on GMKADIRAKBABA and authorised his own Chrome for research. What is on the
+disk today (read-only, 2026-09-29):
+
+| What | State | Evidence |
+|---|---|---|
+| Browser worker | 0.5.0, 30 capabilities, Chrome 153.0.8010.53, proven live from the installed venv | `install-20260929-115013.log` (INSTALL VERIFIED) |
+| Owner-Chrome enrolment | `owner-chrome`, `cdp_loopback` on `127.0.0.1:19222`, **`owner_authorized_for_research: true`** | `C:\ProgramData\PagentOS\browser\owner-enrollment.json` |
+| Research in the owner's Chrome | working: `browser.fetch_evidence … outcome=ok`, tabs opened in his own profile, session closed 11:45 UTC | `companion.log` |
+| Operator | **OFF** (`OperatorEnabled: false`) | service `appsettings.json`, install log |
+| Display power | OFF | same |
+| Service / companion | agent 0.6.0, 44 capabilities advertised (desktop + browser families) | install log |
+
+This reverses two lines of the decision above — "`-SkipBrowser` for the first install" and
+"`enroll-owner-chrome.ps1`: NOT on this machine" — and keeps the third, the one that mattered
+most: **no Operator, no display power, no owner secret stored on the device.** The reasoning
+for withholding the Operator is unchanged and stronger for what has since been granted:
+research authorisation lets the agent act as the owner on every site his Chrome is signed
+into, and on this machine those sessions are the employer's (mail, the panel hosts on
+`turka.com`). The browser task loop's deny-list (ADR-0207) is the second lock on that, and
+`enroll-owner-chrome.ps1 -Revoke` is the way back (fixed in ADR-0211 so a non-elevated owner
+can run it).
+
+Three consequences found the same day, each with its own ADR: a single-step launch on this
+device is `desktop.open_application` (ADR-0209); a command spoken at this PC must land on
+this PC (ADR-0208, ADR-0212); a research report opens here in the owner's Chrome, because the
+`file.fetch` path belongs to the Operator family (ADR-0210). Open risk unchanged and the
+owner's alone to weigh: an employer's endpoint policy may object to a LocalSystem service
+that dials a personal tailnet, and now also to a debugging port on a signed-in Chrome.
+## ADR-0210 — A report opened from a device that cannot `file.fetch` opens as a new tab in the owner's own Chrome (2026-09-29)
+
+**Finding.** The owner finished a research run from the office PC and heard "…cihazda
+açamadım". The device was never asked, and the cloud side had two defects: `research_open`
+handed the report's id to `artifact_open` as an argument that tool never reads (it resolves
+its target from the artifact focus stack, which a research never moves — with an empty stack
+the open became the question "Hangi dosya efendim?", reported as "açamadım"; with a factory
+artifact on the stack the wrong file opened), and every failure was spoken as the same three
+words and logged nowhere. Underneath both: opening an artifact is the device's `file.fetch`,
+which belongs to the documents family and is advertised only with the Operator family, so the
+office PC (ADR-0203, no Operator) could never have served it; it advertises
+`desktop.open_artifact`, which nothing in Cloud Core sends. Two further facts: a single-use
+render-fetch token cannot serve a browser tab (reload, session restore and back/forward all
+re-request it), and `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN` could not reach the api process at all
+in production (`docker-compose.prod.yml` forwards only named variables), so even the home PC's
+voice open had no origin to build a URL from.
+
+**Decision.**
+1. `research_open` opens THAT research's report by id (`open_artifact_by_id`, the half of
+   `artifact.open` after "which one"; the model cannot reach it) and says "açtım" only when
+   the state is `opened`. A failure speaks the open's own sentence, returns
+   `open_error_class` and logs one warning, `research_open_device_open_failed`.
+2. The route is one probe over the port's `selection_for` (the single `_select_for`,
+   ADR-0208/0209). A device that advertises `file.fetch`: the old path, unchanged (home PC). One
+   that does not but advertises the browser operations: `browser.session_open` (the `owner`
+   profile, READ + NAVIGATE, default session kind so the device itself enforces the
+   enrolment's research grant) → `browser.tab_new` with a minted URL → `browser.inspect` →
+   `browser.session_close`. No grant → a Turkish refusal, and no other profile is ever tried.
+   Before every command the route re-probes that the session's device is still the chosen one.
+3. The URL carries a **separate** bounded-read token: HTML renders only, hash-pinned to the
+   render, 6 reads within 900 s, unknown/expired/exhausted/mismatched all the same bare 404,
+   nothing listed; the view route sends `default-src 'none'`, `sandbox`, `no-referrer`,
+   `nosniff`, `no-store`. The `file.fetch` token and route are unchanged and the two stores
+   cannot be swapped. It trades "one read" for "six reads in fifteen minutes" and puts the
+   secret in Chrome history for that window; the worker and the companion audit redact the
+   query string.
+4. A PDF-only or DOCX-only report is refused ("HTML hali yok"): nothing is minted, nothing is
+   downloaded through the browser. A page `inspect` cannot confirm is reported unverified.
+5. The compose file forwards `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN` (one line, so the recovery
+   bundle is stale until re-pinned). Receipt keeps the registered capability `artifact.open`
+   and records `path=browser.tab_new`, `via=browser` and the device; nothing carries the bearer
+   URL into a receipt, ledger row or log. Step-up tiers unchanged (`artifact.open` SENSITIVE,
+   `research.open` OPEN). No contract, registry or schema version changed.
+
+**Blocker found by the work, and it is a decision for the owner.**
+`services/browser/browser_agent/destination.py:33-38` refuses every destination in
+`100.64.0.0/10` (the tailnet), private ranges, `*.internal` and `*.local`, and the edge is
+bound to the tailnet only, at `100.90.158.26:8001`, without TLS. On the real fleet `tab_new`
+answers `security_scope_error` and the owner hears "reddetti", with
+`artifact_browser_open_tab_refused` in the log. Making it work needs a device-side allowance
+for exactly one origin plus the `/v1/artifacts/renders/view` path (a worker option carried in
+`BrowserWorkerArgs`, `scripts/lib/BrowserProvision.ps1`), a worker change, an installer change
+and a reinstall on the company PC. The browser's private-destination refusal is an SSRF
+defence; narrowing it for one named origin is device authority and was **not** taken here.
+`godseye.open` opens `http://pagentos-core:4173/` the same way and probably meets the same
+refusal; it has only ever been tested against fakes.
+
+**Proof.** 90 tests in three new files through the real application object (real device rows,
+port and selection; only the command client is faked; RED first: the first office-session run
+sent `file.fetch` to the home PC), about 30 mutations each RED and restored by bytes, ruff
+clean. The browser-transfer contract guard (the cloud never names the device's research grant)
+caught a comment of the work's own; fixed.
+
+**Evidence class.** `PROVEN_AUTOMATED` for the cloud half. **Not `PROVEN_REAL`, and cannot be
+until the device accepts the edge origin.** The nginx dial origin lacking the port is inferred,
+not measured.
+
+**Owner steps for it to work in production.** (1) release the compose change and re-pin the
+recovery bundle; (2) set `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://<tailnet address>:8001` in
+`/opt/pagentos/.env` (check read-only: `grep ARTIFACT_DOWNLOAD /opt/pagentos/.env`, then
+`docker exec <api> printenv PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN`); (3) on the office PC rerun the installer (below; the allowance was decided by the
+owner).
+
+## ADR-0212 — The device the owner names in a sentence is the device that acts (2026-09-29)
+
+**Finding.** The owner's rule is that an alias always wins. In the voice path it did not:
+`select_device` supported an explicit target and `app.devices.aliases` parsed the phrases, but
+the relay never handed the parsed phrase to the port; only research (`target_device`) and REST
+`/v1/devices/select` did. "Ofis bilgisayarımda hesap makinesini aç", from a home session or
+from an unbound one with the home PC online, opened the calculator on the home PC. The
+2026-09-28 handoff line "two devices, selected by name" was true for research and REST only.
+The same day a screenshot showed the office PC's Google box holding the literal query
+**"ofis bilgisayarında Yapay Zeka son gelişmeler"**: the phrase naming the machine had entered
+the research topic (written by the paid model into its own argument, and kept by the router's
+extractor) and never became the run's target. It had also reached the media query, the
+document text query, the file pattern (the pattern *was* "bilgisayarımda"), the news source,
+the image prompt, the app request and the remembered fact.
+
+**Decision.**
+1. The relay records the canonical alias words of the latest utterance in
+   `last_utterance.device_targets` (never the sentence) and binds them, next to the session's
+   device, into that call's port; `_select_for` passes them as `target`, so the launch probe and
+   the run still share one selection.
+2. A named device wins over session affinity and over the healthiest device. One that cannot
+   serve (offline, incapable, policy-denied, unknown, revoked, shared alias) is a refusal in
+   Turkish naming it; nothing falls back to another machine. A sentence naming two different
+   devices is refused; two words for one device are fine.
+3. The sentence-level grammar is narrower than `extract_alias` (which REST keeps): plural or
+   accusative "bilgisayar…", a bare "laptop"/"dizüstü", a bare "işte" and a lone "ev"/"iş" are
+   the subject, not a machine ("ofis mobilyaları", "iş dünyası", "ev fiyatları", "evrak").
+   `normalize` folds "İ" (a pre-existing bug: a transcript starting "İş bilgisayarımda…"
+   named nothing).
+4. The device phrase is removed from what the sentence is about: the router reads a sentence
+   that names a device twice and keeps the cleaned reading only when it routes to the same
+   intent; the research topic, including the model's own, is cleaned; `research.start` and its
+   workflow receive the target and refuse in Turkish if the named device cannot serve.
+5. A mission carries the named device on its row (`mission_json.device_targets`) and every step
+   is bound to it; a port that cannot be bound fails the mission instead of running elsewhere.
+
+**Proof.** 77 unit tests through `create_app` with real device rows (home naming office, office
+naming home, unbound, every refusal, ordinary-word sentences) + corpus cases; 25 mutations,
+each RED and restored by bytes; RED first reproduced the calculator opening on MAIL and the
+topic "Ofis bilgisayarında yapay zeka son gelişmeleri".
+
+**Evidence class.** `PROVEN_AUTOMATED`. No real device, Chrome, Google-query or voice run:
+`READY_FOR_OWNER` after a release. M19b's row "from PC-B the owner commands PC-A" stays open.
+
+**Not claimed / risks.** Only `operator.app_open`, `research.start` and the mission path speak
+the named reason; other tools refuse without naming the device. `chat_question` and
+`selfdev_request` still carry the whole sentence; model-written arguments of tools with no
+turn-record field are not cleaned. A paid session whose transcript arrives after the tool call
+can apply the previous sentence's alias to non-research tools (a staleness bound was not
+added). "İşte aç" no longer names the office at sentence level (ADR-0205 keeps it for REST);
+"evde mi?" does name the home PC. ADR-0208's session affinity still does not reach missions.
+
+
+### ADR-0210 addendum (2026-09-29): the device may open the broker's report-view route
+
+The blocker above is resolved by an **owner decision (final): a narrow SSRF exception.** The
+browser worker takes `--trusted-origin <scheme://host:port>`, written by the installer from the
+broker URL the device itself dials (equal to `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN` in production),
+never set or widened by a Cloud Core command: the device enforces this policy independently of
+the cloud. It admits exactly that origin's **`/v1/artifacts/renders/view`** route (the token is
+in the query, not the path; the owner's rule was "host and port", the path is narrower on
+purpose) - not other ports (`:4173`), not other addresses in the same /24, not other routes,
+not `https` on the same host, and never by resolving a hostname. Loopback, link-local
+(including the cloud metadata address), multicast, reserved and local/internal names are
+refused as a configured origin and the worker refuses to start with one. A loopback broker
+writes no option; with no option no private address passes. The refusal stays
+`security_scope_error` and is spoken.
+
+**Proof.** `services/browser` `test_trusted_origin.py` (the broker address passes; the same /24,
+the same host on another port, another route, another scheme, userinfo and a resolving hostname
+are refused; an empty origin refuses the whole private/CGNAT/loopback/link-local matrix; bad
+configured origins refuse to start), installer and invocation suites, a drift guard against
+the route the cloud mints; eight mutations, each RED, restored by bytes (sha256). Browser unit
+suite 947 passed, 1 failed (`test_detect_chromium_reads_version_without_any_process`: no
+Chromium here; red on the base commit too).
+
+**Not covered: `godseye.open`** (`http://pagentos-core:4173/`): a different name, port and
+route; a test pins it. It still ends in the spoken refusal on a device with only this
+exception. Covering it needs a second explicit trusted origin, an owner decision.
+
+**Known gaps.** `switch-agent-broker.ps1` warns but does not rewrite the companion's origin
+(after a switch the old origin stays trusted until the installer is rerun). A worker hot-swap
+request that omits `--trusted-origin` gets no exception (fails safe). The Python and PowerShell
+refusal lists are separate copies without a drift check.
+
+**Effect on the office PC: the installer must be rerun** (no C# change, no re-enrolment, no
+`dotnet test`): the worker tree under `Program Files\PagentOS\agent\browser` and the
+companion's `appsettings.json` are installer-written. From an elevated PowerShell at the repo
+root, on this branch after it is on the office PC's checkout:
+
+    scripts\install-device-service.ps1 -BrokerRestUrl http://100.90.158.26:8001 -SkipCoreVerify
+
+(no `-SkipBrowser`; add `-Operator` / `-DisplayPower` only if they are on today - the office PC
+has both OFF, and a rerun without a switch turns it off). Evidence: `NOT_YET_PROVEN` on the
+real fleet until that run and one spoken "araştırma raporunu aç".
