@@ -486,6 +486,15 @@ if (-not $Fast) {
     }
   }
 
+  Invoke-Step "Agent team cycle (PS5.1 + git, no model)" {
+    # docs/TEAM_PROTOCOL.md: the queue, the lock, the role runs and the report, with a
+    # fake in place of the model and a git repository made for the test.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-cycle.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-cycle tests"
+  }
+
   Invoke-Step "Web shell build" {
     $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
     if (-not $pnpm) { throw "pnpm not found" }

@@ -15,16 +15,27 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Ev PC'si (MAIL), 2026-09-29/30: AŞAMA 0 (ofis gününü kapat) → sonra team bootstrap.**
-1. `integrate/office-day-2026-09-29` (`1da96831`, SSRF dar istisnası DAHİL, main `4d5dd637`
-   üstünde, birleştirme temiz): tam `quality-gate.ps1` → yeşilse `--no-ff` main + push.
-   İlk kapı (eski uç `7b77986e`) 29/33: Docker Desktop kapalıydı (3 adım) + bir masaüstü
-   testi Not Defteri'nde araya giren bir tuşla düştü (tek başına 3/3 geçti). Docker açıldı.
-2. **Yayın ve MAIL ajanının yeniden kurulumu SAHİP KAPISI** — çalıştırılmaz, komutlar rapora
-   yazılır. `enroll-owner-chrome.ps1`'de `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi).
-3. Sonra **team bootstrap** (dal `feat/dev-team`): kaynak `docs/team-setup/` (sahip elle koydu,
-   izlenmiyor) → `.claude/agents/`, `docs/TEAM_PROTOCOL.md`, ROADMAP güncellemesi, `team/`
-   kuyruğu + şema, `scripts/team/`. Gece görevi KAYDEDİLMEZ; komutu rapora yazılır.
+**Yok.** Sıradaki: pilot döngü (TEAM_BOOTSTRAP_PROMPT aşama 2) — araştırmacı üç öneri yazar, fikir
+onayında durur.
+
+Son biten iş (2026-09-30): **team bootstrap (TEAM_PROTOCOL.md, ADR-0214)** — main'de. Dal
+`feat/dev-team`, uç `137d7ef5` üzerinde tam kapı 34/34 PASS.
+Sahibin kararı (2026-09-29): proje bundan sonra bir Claude ajan EKİBİYLE, döngülerle
+geliştirilir; sahip yalnız üç kapıda konuşur (fikir onayı, yayın onayı, gerçek cihaz kanıtı +
+son hüküm). Kurulan: `.claude/agents/` (lead, researcher, integrator, worker, inspector),
+`docs/TEAM_PROTOCOL.md`, ROADMAP güncellemesi, `team/` (kuyruk + şema + kilit),
+`scripts/team/` (cycle, new-worktree, close-worktree, integration-branch, collect-reports,
+register-nightly) + `scripts/tests/team-cycle.tests.ps1` (kapıda). Gece görevi KAYDEDİLMEDİ.
+**YAYINLANDI (sahibin cümlesiyle, 2026-09-29 19:58 UTC):** main `771a9e53` (ofis günü,
+ADR-0208…0212 + PR-B) üretimde; pin ve timer doğrulandı.
+**Kapının bulduğu kusur (ADR-0215):** broker aynı komutu cihaza İKİ KEZ verebiliyordu (18 Eylül
+yarışının kapanmamış sıralaması; "gönderdim" notu gönderimden SONRA düşülüyordu). Dalda düzeltildi
+(`deliver_command` göndermeden ÖNCE sahipleniyor), `test_broker_deliver_once.py`. **Yayınlanmadı:**
+üretim `771a9e53` bu yarışı hâlâ taşıyor; sonraki yayınla gider.
+**Sahip kapısında bekleyenler:** (1) MAIL ajanının bu ağaçtan yeniden kurulması (komutlar döngü
+raporunda); `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi); (2) gerçek cihaz denemeleri
+(`team/reports/bootstrap-2026-09-30.md`); (3) ofis PC'sinde kurucunun yeniden koşulması.
+Ofis günü kapandı: `integrate/office-day-2026-09-29` tam kapı 33/33 (`8cff1a69`), main'de.
 
 **Ofis günü (2026-09-29, makine GMKADIRAKBABA — şirket PC'si): İŞ BİTTİ, EV PC'DE KAPI BEKLİYOR.**
 Toplama dalı `integrate/office-day-2026-09-29` (origin'de; main `4d5dd637`'den) altı olayın
@@ -157,11 +168,15 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `be2975ae` (api-blue, 2026-09-28 15:50 UTC; son iyi bilinen
-  `00d179cd` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
-  boş. Recovery pini `be2975ae673af9e7739260abbc9eb9761bfc9bf6`; `pagentos-bluegreen-
-  reconcile.timer` her dakika 0 ile çıkıyor. Hafıza semantik, 22/22 satır gömülü; api-blue
-  ~1,40 GiB, 4666 MB kullanılabilir. Yedek: host dışı kopya YOK (`no_offhost_copy`).
+- **Üretim:** Cloud Core `771a9e53` (api-green, 2026-09-29 19:58 UTC; son iyi bilinen
+  `be2975ae` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
+  boş. Recovery pini `771a9e53483bc952b17a404dce456d0109d44abe`; `pagentos-bluegreen-
+  reconcile.timer` her dakika 0 ile çıkıyor. Şema `0062_web_tasks`, gerçek zamanlı sözleşme **v3**,
+  iki cihaz oturumu da yeşile taşındı. `/opt/pagentos/.env` içinde
+  `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://100.90.158.26:8001` (api süreci görüyor; önceki hali
+  `.env.bak-20260930`). Yedek: host dışı kopya YOK (`no_offhost_copy`).
+  **Bilinen artık:** `/opt/pagentos/RECOVERY_BUNDLE_STALE` dosyası pin'den sonra da duruyor; paket
+  ile canlı ağaç bayt bayt aynı (cmp) — dosyayı yalnız bir SONRAKİ yayın siliyor, pin silmiyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
@@ -188,6 +203,9 @@ köprüsü) → 4 ev (Home Assistant) → 5 her yerde (M29 yeniden açılır) �
 
 ## Sıradaki işler
 
+00. **Pilot döngü** (`scripts/team/cycle.ps1 -Research -ResearchBrief ...`): konular ADR-0213
+   (bulutta yürütme), anlatı satırı, PR-C'nin bulutta koşan hali. Sonra **YAYIN ONAYI**: ADR-0215
+   (broker tek teslim) main'de, üretimde değil.
 0. **ADR-0207 PR-C** (model planlayıcılar + sahibin kendi Chrome'u, PROVEN_REAL). Ön koşul,
    hepsi sahipte: T3 mağazasının ve T5 web postasının adı; MAIL'de ajanın bu ağaçtan yeniden
    kurulması (kurulu 0.6.0 `browser.observe` adını reddediyor); `-AuthorizeTasks` izni;

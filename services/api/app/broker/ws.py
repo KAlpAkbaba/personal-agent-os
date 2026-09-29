@@ -151,10 +151,28 @@ def _command_to_frame(command: DeviceCommand) -> dict[str, Any]:
 async def deliver_command(
     runtime: BrokerRuntime, connection: DeviceConnection, command: DeviceCommand
 ) -> bool:
-    """Send a command frame over an active connection and record delivery."""
+    """Send a command frame over an active connection and record delivery.
+
+    ``False`` when THIS call sent nothing: the socket failed, or the command has been
+    sent on this connection already (or is being sent right now by another path).
+    """
+    # ADR-0215: claimed before the send, with nothing awaited between the look and the
+    # mark. Four paths reach here - the POST, the opening replay, the sweep, a worker
+    # thread - and the row says 'undelivered' until the first send has been recorded.
+    if not connection.claim(command.id):
+        runtime.counters["commands_duplicate_skipped"] += 1
+        logger.info(
+            "broker_command_duplicate_skipped",
+            command_id=str(command.id),
+            device_id=str(connection.device_id),
+            command_trace_id=command.trace_id,
+        )
+        return False
     try:
         await connection.send_json(_command_to_frame(command))
     except Exception as exc:  # noqa: BLE001 - socket may die mid-send
+        # Nothing was delivered: the command is still this connection's to send.
+        connection.release(command.id)
         logger.warning(
             "broker_command_delivery_failed",
             command_id=str(command.id),

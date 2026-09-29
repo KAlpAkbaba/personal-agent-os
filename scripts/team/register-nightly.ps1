@@ -1,0 +1,96 @@
+<#
+.SYNOPSIS
+    The nightly cycle as a Windows scheduled task: 02:00 Europe/Istanbul, home PC only.
+
+.DESCRIPTION
+    Without -Register this script changes NOTHING: it prints the task it would register
+    and how to register it. The protocol opens the nightly cycle only after the pilot has
+    been measured and the owner has said so (TEAM_PROTOCOL.md section 9).
+
+    With -Register it registers the task for the current user, to run only while that user
+    is logged on (no stored password, not elevated). It refuses on any machine but the home
+    PC: the office PC never runs a scheduled cycle.
+
+.EXAMPLE
+    .\scripts\team\register-nightly.ps1 -MaxUsd 15
+    .\scripts\team\register-nightly.ps1 -MaxUsd 15 -Register
+    .\scripts\team\register-nightly.ps1 -Unregister
+#>
+[CmdletBinding()]
+param(
+    [double]$MaxUsd = 15,
+    [int]$MaxParallel = 2,
+    [int]$CycleMinutes = 240,
+    [string]$TaskName = "PagentOS Team Nightly Cycle",
+    [string]$HomeMachine = "MAIL",
+    [string]$Machine = $env:COMPUTERNAME,
+    [switch]$Register,
+    [switch]$Unregister,
+    # The tests read the plan and register nothing.
+    [switch]$PlanOnly
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+
+function Get-NightlyPlan {
+    <# What would be registered, as data: the tests read this, and so does the owner. #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][double]$MaxUsd,
+        [Parameter(Mandatory = $true)][int]$MaxParallel,
+        [Parameter(Mandatory = $true)][int]$CycleMinutes,
+        [Parameter(Mandatory = $true)][System.TimeZoneInfo]$LocalZone
+    )
+    $istanbul = [System.TimeZoneInfo]::FindSystemTimeZoneById("Turkey Standard Time")
+    $two = [datetime]::SpecifyKind((Get-Date).Date.AddHours(2), [System.DateTimeKind]::Unspecified)
+    $utc = [System.TimeZoneInfo]::ConvertTimeToUtc($two, $istanbul)
+    $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($utc, $LocalZone)
+    $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $script = Join-Path $RepoRoot "scripts\team\cycle.ps1"
+    $usd = $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes"
+    return [pscustomobject]@{
+        Execute          = $powershell
+        Arguments        = $arguments
+        WorkingDirectory = $RepoRoot
+        LocalTime        = $local.ToString("HH:mm", [System.Globalization.CultureInfo]::InvariantCulture)
+        IstanbulTime     = "02:00"
+    }
+}
+
+if ($Machine.ToUpperInvariant() -ne $HomeMachine.ToUpperInvariant()) {
+    Write-Host "this is $Machine; the nightly cycle runs on $HomeMachine only. Nothing was changed."
+    exit 6
+}
+
+if ($Unregister) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Write-Host "the task '$TaskName' is not registered."
+    exit 0
+}
+
+$plan = Get-NightlyPlan -RepoRoot $repoRoot -MaxUsd $MaxUsd -MaxParallel $MaxParallel `
+    -CycleMinutes $CycleMinutes -LocalZone ([System.TimeZoneInfo]::Local)
+Write-Host "task      : $TaskName"
+Write-Host "when      : every day at $($plan.LocalTime) local time ($($plan.IstanbulTime) Europe/Istanbul)"
+Write-Host "runs      : $($plan.Execute) $($plan.Arguments)"
+Write-Host "in        : $($plan.WorkingDirectory)"
+Write-Host "as        : $env:USERNAME, only while logged on; no stored password, not elevated"
+
+if ($PlanOnly -or -not $Register) {
+    Write-Host ""
+    Write-Host "NOT registered. To register it, run this script again with -Register."
+    exit 0
+}
+
+$action = New-ScheduledTaskAction -Execute $plan.Execute -Argument $plan.Arguments -WorkingDirectory $plan.WorkingDirectory
+$trigger = New-ScheduledTaskTrigger -Daily -At $plan.LocalTime
+$limit = New-TimeSpan -Minutes ($CycleMinutes + 30)
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit $limit -MultipleInstances IgnoreNew -StartWhenAvailable
+$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+[void](Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force)
+Write-Host "registered."
+exit 0

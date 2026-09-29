@@ -7,8 +7,9 @@ state (devices, sessions, commands, audit) is PostgreSQL.
 
 import asyncio
 import contextlib
+import threading
 import uuid
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -23,6 +24,12 @@ from app.db import build_engine, build_session_factory
 from app.logging import get_logger
 
 logger = get_logger("app.broker.runtime")
+
+#: How many command ids a connection remembers having sent. A redelivery on the SAME
+#: connection is never the protocol's (that is what a reconnect is for), so the memory
+#: only has to outlast the moments in which two paths can reach for one command; the
+#: bound keeps a connection that lives for days from growing.
+SENT_MEMORY = 1024
 
 
 @dataclass
@@ -49,6 +56,33 @@ class DeviceConnection:
     #: right now, which is exactly what "the session is on this device" needs, and a stored
     #: one would outlive a laptop that moved networks.
     peer_ip: str | None = None
+    #: ADR-0215: the command ids this connection has sent or is sending, newest last.
+    #: `replay_guard` above is written AFTER the send, and the send is an await: while
+    #: one path is inside it another sees the command as not yet sent (the gate,
+    #: 2026-09-29). A claim is taken BEFORE the send, under a lock, because one of the
+    #: four paths delivers from a worker thread with an event loop of its own.
+    _sent: OrderedDict[uuid.UUID, None] = field(default_factory=OrderedDict, repr=False)
+    _sent_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def claim(self, command_id: uuid.UUID) -> bool:
+        """Take the right to send ``command_id`` on this connection. ``False`` when it
+        has been sent here, or is being sent right now."""
+        with self._sent_lock:
+            if command_id in self._sent:
+                return False
+            self._sent[command_id] = None
+            while len(self._sent) > SENT_MEMORY:
+                self._sent.popitem(last=False)
+            return True
+
+    def release(self, command_id: uuid.UUID) -> None:
+        """Give a claim back: the send did not happen."""
+        with self._sent_lock:
+            self._sent.pop(command_id, None)
+
+    def remembered(self) -> int:
+        with self._sent_lock:
+            return len(self._sent)
 
     def note_delivered(self, command_id: uuid.UUID) -> None:
         if self.replay_guard is not None:
