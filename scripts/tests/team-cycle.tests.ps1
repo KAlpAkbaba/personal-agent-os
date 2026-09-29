@@ -495,7 +495,7 @@ function Invoke-Cycle {
     param(
         [string]$Root, [string]$Scenario, [string]$CycleId = "c1", [double]$MaxUsd = 20,
         [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
-        [string[]]$Brief = @()
+        [string[]]$Brief = @(), [switch]$ResearchOnly
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
@@ -507,6 +507,7 @@ function Invoke-Cycle {
             " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture)) -MaxParallel $MaxParallel -Machine '$Machine'" +
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
+            $(if ($ResearchOnly) { " -ResearchOnly" } else { "" }) +
             $(if (@($Brief).Count -gt 0) { " -ResearchBrief " + ((@($Brief) | ForEach-Object { "'" + $_ + "'" }) -join ",") } else { "" }) +
             "; exit `$LASTEXITCODE")
         )
@@ -736,6 +737,21 @@ try {
         Assert-Equal -Expected "- the narrative: bu hafta ne oldu" -Actual ([string]$subjects[1]).Trim() -Because "as written"
         $plain = Invoke-Cycle -Root (New-Sandbox -Tasks @()) -Scenario "approve" -Research
         Assert-Equal -Expected 0 -Actual @($plain.Calls[0].subjects).Count -Because "no brief, no heading"
+    }
+
+    Test-Case "research by itself runs the researcher and touches no task, not even an approved one" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "new-idea" -State "proposed" -Area @()))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -ResearchOnly
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "researcher" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "nobody else was started"
+        Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the approved task was not run"
+        Assert-Equal -Expected "proposed" -Actual (Get-TaskById -Queue $run.Queue -Id "new-idea").state -Because "and no state was moved"
+        Assert-Equal -Expected 3 -Actual @(Get-TeamTasks -Queue $run.Queue).Count -Because "the proposal was queued"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+        Assert-True -Condition ($run.Report.Contains("## Onay bekleyenler (fikir / yayın)")) -Because "the report is written"
+        $threw = $false
+        try { [void](Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "--verify", "--quiet", "refs/heads/team/c1/worker-task-one")) } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "no branch was made for the approved task"
     }
 
     Test-Case "the worktree of a finished task is closed only when it is clean" {

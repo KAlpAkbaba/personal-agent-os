@@ -56,6 +56,9 @@ param(
     # What the lead asks the researcher to study, one line per subject. It is placed in the
     # researcher's prompt under a heading of its own; the role file stays the role.
     [string[]]$ResearchBrief = @(),
+    # The first step of a cycle by itself: the researcher writes its proposals, they are
+    # queued for the owner, and NO task is run or moved - not even an approved one.
+    [switch]$ResearchOnly,
     [switch]$DryRun
 )
 
@@ -71,6 +74,7 @@ if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $CycleId) { $CycleId = "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }
 if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$CycleId'" }
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
+if ($ResearchOnly) { $Research = $true }
 
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
@@ -268,7 +272,7 @@ try {
     }
 
     # ---------------------------------------------------------------- the tasks
-    $capped = $false
+    $capped = [bool]$ResearchOnly
     while (-not $capped) {
         $runnable = New-Object System.Collections.ArrayList
         $moved = $false
