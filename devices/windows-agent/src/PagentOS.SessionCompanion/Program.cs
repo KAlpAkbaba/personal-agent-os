@@ -50,6 +50,30 @@ public static class Program
         return ServiceAdmissionPolicy.DeveloperMode(ownerSid);
     }
 
+    /// <summary>
+    /// Sends the audit trail's first write failure to the companion's own log, as ONE warning.
+    ///
+    /// 2026-09-29: the companion could not write <c>companion-audit.jsonl</c> (its directory
+    /// named SYSTEM and Administrators only) and said so on stderr, which for a process
+    /// started by a logon task is nowhere. companion.log — the file that exists so that
+    /// someone can reconstruct what happened — had not one line about it, and the installer
+    /// rolled back a healthy release for want of a row the companion knew it had lost.
+    ///
+    /// Once, not per row: every audited action would otherwise become a log line, and the
+    /// number lost is already counted in <see cref="AuditLog.FailedWrites"/>.
+    /// </summary>
+    public static void ReportAuditFailures(AuditLog audit, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        ArgumentNullException.ThrowIfNull(logger);
+        audit.ReportFirstWriteFailureTo(reason => logger.LogWarning(
+            "audit trail is NOT being written: {Path}: {Reason}. Rows are being lost; this is said once, further failures are only counted. "
+            + "If this is access denied, the audit directory's ACL does not name this account - rerun the installer, which repairs it "
+            + "(verify-device-service.ps1 reports it as 'audit dir writable by owner').",
+            audit.FilePath,
+            reason));
+    }
+
     public static async Task<int> Main(string[] args)
     {
         string? pipeArg = null;
@@ -147,7 +171,9 @@ public static class Program
         }
 
         Directory.CreateDirectory(artifactRoots[0]);
-        var audit = new AuditLog(Path.Combine(dataDir, "audit", "companion-audit.jsonl"));
+        // Named, not defaulted: this trail is written by the owner's non-elevated process, and
+        // the default posture (the service's) is the one that locked it out on 2026-09-29.
+        var audit = new AuditLog(Path.Combine(dataDir, "audit", "companion-audit.jsonl"), AuditWriter.OwnerSessionCompanion);
         var artifactOpener = new ArtifactOpener(artifactRoots, new ShellFileOpener(), allowedExtensions, audit);
 
         // Console AND a size-bounded file (the same lines, the Device Service's JSONL
@@ -170,6 +196,7 @@ public static class Program
             logFilePath,
             CompanionLogMaxBytes / (1024 * 1024),
             CompanionLogKeepRotated);
+        ReportAuditFailures(audit, logger);
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>

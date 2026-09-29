@@ -78,6 +78,33 @@ else {
     Add-Result "2.2" "Companion runs in the owner's interactive session" $status "session=$companionSession user=$($owner.Domain)\$($owner.User) path=$($companion.ExecutablePath)"
 }
 
+# --- 2.2b the companion can write its own audit trail ---------------------------
+# 2026-09-29: it could not. Its audit directory carried the SERVICE's protection (SYSTEM and
+# Administrators only), so the owner's non-elevated companion lost every row, the installer's
+# health check never saw browser_worker_started, and a healthy release was rolled back -
+# while every row above this one read PROVEN_REAL. Read from the DACL, for the SID the
+# companion is configured to run as; nothing is written.
+
+$companionDataRoot = Join-Path $env:ProgramData "PagentOS\companion"
+$companionOwnerSid = $null
+$companionSettingsEarly = Join-Path $InstallRoot "companion\appsettings.json"
+$serviceSettingsEarly = Join-Path $InstallRoot "service\appsettings.json"
+try {
+    if (Test-Path -LiteralPath $companionSettingsEarly) {
+        $early = Get-Content -LiteralPath $companionSettingsEarly -Raw | ConvertFrom-Json
+        if ((Test-ObjectProperty -InputObject $early -Name "DataDir") -and $early.DataDir) { $companionDataRoot = [string]$early.DataDir }
+    }
+    if (Test-Path -LiteralPath $serviceSettingsEarly) {
+        $early = Get-Content -LiteralPath $serviceSettingsEarly -Raw | ConvertFrom-Json
+        if ((Test-ObjectProperty -InputObject $early -Name "CompanionSid") -and $early.CompanionSid) { $companionOwnerSid = [string]$early.CompanionSid }
+    }
+} catch { }
+if (-not $companionOwnerSid) {
+    $companionOwnerSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+}
+$auditVerdict = Get-CompanionAuditDirectoryVerdict -Path (Join-Path $companionDataRoot "audit") -OwnerSid $companionOwnerSid
+Add-Result "2.2b" $auditVerdict.Criterion $auditVerdict.Status $auditVerdict.Evidence
+
 # --- 1.1 pipe DACL --------------------------------------------------------------
 # Lifecycle facts, measured on this machine rather than assumed (scratch-pipe probes):
 #   - while the companion is CONNECTED (the normal steady state), EVERY external open of a

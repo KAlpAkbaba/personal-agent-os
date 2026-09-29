@@ -585,16 +585,19 @@ else {
     Write-Host "digital operator: disabled (pass -Operator to enable the M19 families)"
 }
 
-if (-not $SkipBrowser) {
-    # ProgramData's inherited ACL would make a directory created by this ELEVATED process
-    # unwritable for the owner's non-elevated companion — and the worker must write its
-    # profile, downloads and logs exactly there and nowhere else (Program Files is
-    # read-only to it). The grant is explicit and inheritable, on the companion's data root
-    # and the browser directory under it.
-    Set-OwnerWritableDirectory -Path $companionDataDir -OwnerSid $OwnerSid
-    Set-OwnerWritableDirectory -Path $browserDataDir -OwnerSid $OwnerSid
-    Write-Host "browser data directory $browserDataDir is writable by SID $OwnerSid"
-}
+# ProgramData's inherited ACL would make a directory created by this ELEVATED process
+# unwritable for the owner's non-elevated companion — and the worker must write its
+# profile, downloads and logs exactly there and nowhere else (Program Files is
+# read-only to it). The grant is explicit and inheritable, on the companion's data root
+# and the browser directory under it.
+#
+# And the audit directory, on EVERY install, browser or not (2026-09-29): it carries a
+# protected DACL, which the inheritable grant on the root cannot reach, and the companion had
+# protected it against itself. The health check below reads browser_worker_started from the
+# trail in that directory, so it is created or repaired here, before anything is started.
+$companionDirectories = Initialize-CompanionDataDirectories -CompanionDataDir $companionDataDir -OwnerSid $OwnerSid `
+    -BrowserDataDir $(if ($SkipBrowser) { "" } else { $browserDataDir })
+foreach ($line in @($companionDirectories.Messages)) { Write-Host $line }
 
 # --- register, then deploy through the journaled engine ----------------------------------
 #

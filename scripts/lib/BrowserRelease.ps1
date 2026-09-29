@@ -301,6 +301,63 @@ function Wait-LiveBrowserWorkerAudit {
     return $null
 }
 
+function Test-WorkerCreatedSinceDeployment {
+    <#
+    .SYNOPSIS
+        Was this process created at or after the deployment began, within a tolerance? Always
+        a verdict (Ok, Verdict, Reason) - never an exception, whatever the inputs.
+
+    .DESCRIPTION
+        2026-09-29, verify-device-service.ps1 check 6b.4: the verifier has no deployment to
+        compare against and says so with [datetime]::MinValue. The floor used to be computed
+        as `$DeployStartedAt.AddSeconds(-1)`, and one second before the smallest DateTime is
+        not a DateTime: "The added or subtracted value results in an un-representable
+        DateTime". A healthy worker was reported NOT_YET_PROVEN with that sentence as its
+        evidence.
+
+        So the floor is never materialised as a DateTime. It is a tick count, computed in
+        decimal (which holds every tick value and every clamped tolerance exactly) and
+        compared as a number:
+
+          - a floor at or below tick zero means there is nothing to predate: `no_floor`;
+          - a tolerance that is negative, NaN or infinite is read as zero - a tolerance may
+            only forgive, and an unreadable one forgives nothing;
+          - a tolerance larger than the whole DateTime range is clamped to that range;
+          - an unreadable creation time is `no_creation_time`, which proves nothing.
+
+        The instants are compared as given, as the code this replaces did: both come from
+        this machine's clock in the same kind (Win32_Process.CreationDate and Get-Date).
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()]$Created,
+        [Parameter(Mandatory = $true)][datetime]$DeployStartedAt,
+        [double]$ToleranceSeconds = 1
+    )
+
+    $createdAt = $null
+    if ($null -ne $Created) {
+        try { $createdAt = [datetime]$Created } catch { $createdAt = $null }
+    }
+    if ($null -eq $createdAt) {
+        return [pscustomobject]@{ Ok = $false; Verdict = "no_creation_time"; Reason = "the process has no readable creation time" }
+    }
+
+    $tolerance = $ToleranceSeconds
+    if ([double]::IsNaN($tolerance) -or [double]::IsInfinity($tolerance) -or $tolerance -lt 0) { $tolerance = 0 }
+    $rangeSeconds = [double]([datetime]::MaxValue.Ticks / [TimeSpan]::TicksPerSecond)
+    if ($tolerance -gt $rangeSeconds) { $tolerance = $rangeSeconds }
+
+    $floorTicks = [decimal]$DeployStartedAt.Ticks - ([decimal]$tolerance * [decimal][TimeSpan]::TicksPerSecond)
+    if ($floorTicks -le 0) {
+        return [pscustomobject]@{ Ok = $true; Verdict = "no_floor"; Reason = "there is no deployment to compare against (the floor is the beginning of time), so the creation time is not a criterion" }
+    }
+    if ([decimal]$createdAt.Ticks -lt $floorTicks) {
+        return [pscustomobject]@{ Ok = $false; Verdict = "created_before"; Reason = "created $($createdAt.ToString('o')), before this deployment ($($DeployStartedAt.ToString('o')))" }
+    }
+    return [pscustomobject]@{ Ok = $true; Verdict = "created_since"; Reason = "created $($createdAt.ToString('o')), at or after this deployment ($($DeployStartedAt.ToString('o')))" }
+}
+
 function Test-LiveBrowserWorker {
     <#
     .SYNOPSIS
@@ -336,10 +393,11 @@ function Test-LiveBrowserWorker {
         if (@(Select-BrowserWorkerProcess -Processes @($process) -DataDir $BrowserDataDir).Count -eq 0) {
             $problems += "worker pid $($Audit.Pid) command line does not name --data-dir $BrowserDataDir"
         }
-        $created = $null
-        try { $created = [datetime]$process.CreationDate } catch { $created = $null }
-        if ($null -eq $created) { $problems += "worker pid $($Audit.Pid) has no readable creation time" }
-        elseif ($created -lt $DeployStartedAt.AddSeconds(-1)) { $problems += "worker pid $($Audit.Pid) was created $($created.ToString('o')), before this deployment ($($DeployStartedAt.ToString('o')))" }
+        # Never `$DeployStartedAt.AddSeconds(-1)`: the verifier passes MinValue for "no
+        # deployment to compare against", and that subtraction threw (6b.4, 2026-09-29).
+        $since = Test-WorkerCreatedSinceDeployment -Created $process.CreationDate -DeployStartedAt $DeployStartedAt -ToleranceSeconds 1
+        if ($since.Verdict -eq "no_creation_time") { $problems += "worker pid $($Audit.Pid) has no readable creation time" }
+        elseif (-not $since.Ok) { $problems += "worker pid $($Audit.Pid) was $($since.Reason)" }
     }
     foreach ($old in @($PreviousPids)) {
         if ($Processes | Where-Object { [int]$_.ProcessId -eq $old }) { $problems += "pre-swap worker pid $old is still alive" }
