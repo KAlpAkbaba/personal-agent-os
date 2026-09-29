@@ -15,7 +15,24 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Yok.**
+**Ofis günü: altı gerçek olay (2026-09-29, makine GMKADIRAKBABA — şirket PC'si).**
+main `4d5dd637`'den. Her madde ayrı dalda, toplama dalı `integrate/office-day-2026-09-29`
+(belgeler + birleştirmeler burada; kapı burada koşar). Bu makineden YAYIN YOK; kurulum
+betiği bu oturumda çalıştırılmaz.
+- **A/B/C** `fix/companion-audit-dir-acl`: (A) `AuditLog` audit klasörünü ilk oluşturunca
+  SYSTEM/Admin-only yapıyor → sahip hesabındaki companion kendi audit'ine yazamıyor, kurucu
+  `browser_worker_started` bulamayıp sağlam işçiyi geri alıyor (günlükler
+  `install-20260929-113625`, `-113936`; elle `icacls` sonrası `-115013` geçti);
+  (B) `enroll-owner-chrome.ps1` yükseltilmemiş çalışınca "Access is denied" + yanlış
+  "recorded:" satırı; (C) `verify-device-service.ps1` 6b.4 DateTime taşması.
+- **D** `feat/session-device-affinity` (ADR-0208): alias yoksa hedef = komutun geldiği
+  oturumun cihazı; alias her zaman üstün.
+- **E** `feat/open-application-fallback` (ADR-0209): Operatör ilan etmeyen ama
+  `desktop.open_application` ilan eden cihazda tek adımlık uygulama açma doğrudan o komutla.
+- **F** araştırma raporu ofiste "cihazda açamadım": `open_artifact` neden düştü.
+**Bu makinenin sınırı:** docker/WSL yok → tam kapının üç adımı (dev stack, alembic,
+entegrasyon testleri) burada KOŞAMAZ; geri kalanı koşar. Main'e alma bu yüzden ev PC'de
+tam kapıdan sonra.
 
 Son biten iş (2026-09-29): **tarayıcı görev döngüsü PR-B (ADR-0207)** — main'de, YAYINLANMADI.
 Dal `feat/browser-task-loop`, uç `f0d556b5` üzerinde tam kapı 32/32 PASS. `app/webtask/`
