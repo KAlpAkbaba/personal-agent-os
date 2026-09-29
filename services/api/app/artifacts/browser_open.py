@@ -26,7 +26,8 @@ The rule, and the whole of it:
 What it never does:
 
 * fall back to another profile. ``owner`` is the owner's Chrome and the default session kind is
-  the one the worker gates on the enrolment's ``owner_authorized_for_research``; a refusal is
+  the one the worker gates on the enrolment's research grant (the device's to give; the cloud
+  never names or reads it: ``test_browser_transfer_contract``); a refusal is
   said in Turkish and nothing else is tried;
 * navigate to anything but the URL it minted a moment ago. There is no parameter through which
   a caller names one, and the worker's own destination policy is not asked to bend (a refusal
@@ -141,7 +142,7 @@ _SPEECH: Final[dict[str, str]] = {
 _SESSION_OPEN_TRANSLATION: Final[dict[str, str]] = {
     # No ``cdp_loopback`` enrolment record.
     "capability_missing": ERROR_OWNER_BROWSER_MISSING,
-    # An enrolment that does not carry owner_authorized_for_research (worker.py: the default
+    # An enrolment that does not carry the research grant (worker.py: the default
     # session kind on the owner profile is gated on it).
     "security_scope_error": ERROR_OWNER_BROWSER_NOT_AUTHORIZED,
     # The enrolled Chrome is not running with its debugging port.
@@ -326,7 +327,7 @@ def open_in_owner_browser(
                 "session_id": session_id,
                 # The owner's attached Chrome. The session kind is left at the worker's
                 # default (research): that is the one the worker gates on the enrolment's
-                # owner_authorized_for_research, so a browser the owner did not authorise for
+                # research grant, so a browser the owner did not authorise for
                 # this is refused by the device itself, not by our reading of a record.
                 "profile": OWNER_ATTACHED_PROFILE,
                 "policy": {"allowed_risk_classes": ["READ", "NAVIGATE"], "visible": True},
