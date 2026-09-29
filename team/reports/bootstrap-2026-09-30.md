@@ -14,11 +14,12 @@ Bu döngüde model koşusu başlatılmadı; pilot döngü AŞAMA 2'dir.
 
 ## Onay bekleyenler (fikir / yayın)
 
-- **YAYIN: main'in Cloud Core'a yayını.** Üretim bugün `be2975ae673af9e7739260abbc9eb9761bfc9bf6`
-  (pin aynı, LKG `00d179cd4c0914938cc9aae1f4e6a8dc16573c9c`, sağlık `ok`). Yayınlanırsa: göç 0062
-  (`web_tasks`), gerçek zamanlı sözleşme v3, compose env satırları. Yayın öncesi sunucuda
-  `/opt/pagentos/.env` içine `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://100.90.158.26:8001` eklenir
-  (bugün YOK; 2026-09-29'da okundu). Yayın cümlesi bekleniyor.
+- YAYIN: bekleyen yok. **main `771a9e53483bc952b17a404dce456d0109d44abe` sahibin cümlesiyle yayınlandı**
+  (2026-09-29 19:58 UTC, blue/green, api-green). Göç `0062_web_tasks` uygulandı, gerçek zamanlı
+  sözleşme v3, iki cihaz oturumu 1 saniyede taşındı, sağlık `ok`, `failing_checks` boş.
+  Pin `771a9e53483bc952b17a404dce456d0109d44abe`; timer bir döngüde `RECONCILE OK`.
+  LKG `be2975ae673af9e7739260abbc9eb9761bfc9bf6` (yayın kendisi yazdı; elle dokunulmadı).
+  `.env` satırı eklendi ve api süreci onu görüyor.
 - **SAHİP ADIMI: MAIL ajanının bu ağaçtan yeniden kurulması** (aşağıda, komutlarıyla).
 - FİKİR: yok. İlk öneriler pilot döngüde (AŞAMA 2) araştırmacıdan gelecek.
 
@@ -69,7 +70,12 @@ Yok.
 
 ## Açık riskler
 
-- **Üretim main'in gerisinde.** Ofis gününün altı düzeltmesi ve PR-B yayınlanmadı.
+- **`RECOVERY_BUNDLE_STALE` dosyası pin'den sonra da duruyor.** Paket ile canlı ağaç bayt bayt aynı
+  (sunucuda `cmp`), timer 0 ile çıkıyor, sağlık `ok`; ama dosyayı yalnız bir sonraki yayın siliyor.
+  Çaresi uygulanmış bir uyarının durması bir kusur: kuyruğa iş olarak girmeli.
+- **İlk ön kontrol 82 ile döndü** (dakikalık reconcile kilidi tutuyordu); ikinci deneme temiz. Yayın
+  betiği bu çakışmada kendisi beklemiyor.
+- **Sunucuda `.env.bak-20260930` duruyor** (sırlar içerir, 0600 root). Sahip isterse silinir.
 - **ADR-0210 yayından sonra da ofiste çalışmaz**, ofis PC'sinde kurucu yeniden koşulana kadar
   (`--trusted-origin` kurucunun yazdığı bir ayar).
 - **PR-C'ye bağlayıcı altı sınır açık** (DECISIONS.md, ADR-0207 "Recorded for PR-C").

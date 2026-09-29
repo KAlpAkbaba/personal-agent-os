@@ -1137,7 +1137,7 @@
       "nightly_task": "NOT registered; the command is in team/reports/bootstrap-2026-09-30.md"
     },
     "owner_gates_open": [
-      "release approval: main (the office day + PR-B) is not released; production is be2975ae",
+      "released 2026-09-29 19:58 UTC on the owner's sentence: main 771a9e53483bc952b17a404dce456d0109d44abe as api-green; pin 771a9e53...; LKG be2975ae673af9e7739260abbc9eb9761bfc9bf6",
       "owner step: reinstall the agent on MAIL (-DisplayPower -Operator); -AuthorizeTasks does not exist",
       "idea approval: none yet; the pilot's researcher writes the first three proposals"
     ],

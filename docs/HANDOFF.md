@@ -22,9 +22,11 @@ son hüküm). Kurulan: `.claude/agents/` (lead, researcher, integrator, worker, 
 `docs/TEAM_PROTOCOL.md`, ROADMAP güncellemesi, `team/` (kuyruk + şema + kilit),
 `scripts/team/` (cycle, new-worktree, close-worktree, integration-branch, collect-reports,
 register-nightly) + `scripts/tests/team-cycle.tests.ps1` (kapıda). Gece görevi KAYDEDİLMEDİ.
-**Sahip kapısında bekleyenler:** (1) YAYIN — main `771a9e53` (ofis günü, ADR-0208…0212 +
-PR-B) yayınlanmadı; (2) MAIL ajanının bu ağaçtan yeniden kurulması (komutlar döngü
-raporunda); `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi).
+**YAYINLANDI (sahibin cümlesiyle, 2026-09-29 19:58 UTC):** main `771a9e53` (ofis günü,
+ADR-0208…0212 + PR-B) üretimde; pin ve timer doğrulandı.
+**Sahip kapısında bekleyenler:** (1) MAIL ajanının bu ağaçtan yeniden kurulması (komutlar döngü
+raporunda); `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi); (2) gerçek cihaz denemeleri
+(`team/reports/bootstrap-2026-09-30.md`); (3) ofis PC'sinde kurucunun yeniden koşulması.
 Ofis günü kapandı: `integrate/office-day-2026-09-29` tam kapı 33/33 (`8cff1a69`), main'de.
 
 **Ofis günü (2026-09-29, makine GMKADIRAKBABA — şirket PC'si): İŞ BİTTİ, EV PC'DE KAPI BEKLİYOR.**
@@ -158,11 +160,15 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `be2975ae` (api-blue, 2026-09-28 15:50 UTC; son iyi bilinen
-  `00d179cd` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
-  boş. Recovery pini `be2975ae673af9e7739260abbc9eb9761bfc9bf6`; `pagentos-bluegreen-
-  reconcile.timer` her dakika 0 ile çıkıyor. Hafıza semantik, 22/22 satır gömülü; api-blue
-  ~1,40 GiB, 4666 MB kullanılabilir. Yedek: host dışı kopya YOK (`no_offhost_copy`).
+- **Üretim:** Cloud Core `771a9e53` (api-green, 2026-09-29 19:58 UTC; son iyi bilinen
+  `be2975ae` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
+  boş. Recovery pini `771a9e53483bc952b17a404dce456d0109d44abe`; `pagentos-bluegreen-
+  reconcile.timer` her dakika 0 ile çıkıyor. Şema `0062_web_tasks`, gerçek zamanlı sözleşme **v3**,
+  iki cihaz oturumu da yeşile taşındı. `/opt/pagentos/.env` içinde
+  `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://100.90.158.26:8001` (api süreci görüyor; önceki hali
+  `.env.bak-20260930`). Yedek: host dışı kopya YOK (`no_offhost_copy`).
+  **Bilinen artık:** `/opt/pagentos/RECOVERY_BUNDLE_STALE` dosyası pin'den sonra da duruyor; paket
+  ile canlı ağaç bayt bayt aynı (cmp) — dosyayı yalnız bir SONRAKİ yayın siliyor, pin silmiyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
