@@ -30,6 +30,7 @@ from app.artifacts.models import (
 )
 from app.artifacts.provenance import ACTOR_OWNER_REST, Actor
 from app.artifacts.render_fetch_store import RenderFetchStore, get_render_fetch_store
+from app.artifacts.render_view_store import TOKEN_PARAM, RenderViewStore, get_render_view_store
 from app.artifacts.renderers import (
     DEFAULT_RENDER_FORMATS,
     EXTENSIONS,
@@ -817,5 +818,78 @@ async def fetch_render_by_token(
     )
 
 
+def _render_view_store(request: Request) -> RenderViewStore:
+    return getattr(request.app.state, "artifact_render_view_store", None) or get_render_view_store()
+
+
+#: What a browser is allowed to do with a report it was sent to (ADR-0210): show it. A document
+#: that cannot run script, load a sub-resource from anywhere but an https image or a data
+#: image, submit or be framed, that is in an opaque origin (so nothing on this server's origin
+#: - cookies, storage - is reachable from it) and that never tells a site it links to where the
+#: reader came from (the URL carries a bearer token).
+_VIEW_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; img-src https: data:; style-src 'unsafe-inline'; "
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex, nofollow",
+}
+
+
+@device_router.get("/renders/view")
+async def view_render_by_token(request: Request) -> Response:
+    """Serve ONE report's HTML render to the owner's own browser (ADR-0210): the page
+    ``app.artifacts.browser_open`` sends a new tab to when the device it runs on cannot
+    ``file.fetch``. Not owner-gated, for the reason ``fetch_render_by_token`` is not: the
+    fetcher is a browser tab opened by a device agent and holds no owner session; a token
+    minted for exactly one render (``app.artifacts.render_view_store``) is the authority. It
+    differs from the fetch token in the ways that store's docstring names - a few reads inside
+    fifteen minutes instead of one, and ``html`` only - and in nothing else.
+
+    Unknown, expired, exhausted and content-hash-mismatched tokens are all the SAME bare
+    404 with no body (a token for a non-HTML render cannot exist: the store refuses to mint
+    one), and there is no parameter that lists or names anything: the
+    only input is the token, the only output is that token's own render.
+    """
+    runtime = _runtime(request)
+    store = _render_view_store(request)
+    token = request.query_params.get(TOKEN_PARAM) or ""
+
+    def redeem() -> tuple[bytes, str] | None:
+        if not token or len(token) > 128:
+            return None
+        target = store.read(token)
+        if target is None:
+            return None
+        with runtime.session() as session:
+            artifact = service.get_artifact(session, target.artifact_id)
+            if artifact is None:
+                return None
+            version = service.get_current_version(session, artifact.id)
+            if version is None:
+                return None
+            row = service.get_render(session, version.id, target.fmt)
+            if row is None or row.content_hash != target.content_hash:
+                return None
+            try:
+                data = runtime.store.get(row.object_key)
+            except KeyError:
+                return None
+            return data, row.mime_type
+
+    result = await asyncio.to_thread(redeem)
+    if result is None:
+        raise HTTPException(status_code=404)
+    data, mime = result
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={**_VIEW_HEADERS, "Content-Length": str(len(data))},
+    )
+
+
 # Re-export for wiring/tests.
-__all__ = ["router", "device_router", "DEFAULT_RENDER_FORMATS"]
+__all__ =["router", "device_router", "DEFAULT_RENDER_FORMATS"]

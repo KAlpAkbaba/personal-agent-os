@@ -729,9 +729,19 @@ def research_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
             else {"error_class": "not_found", "speech": ""}
         )
         out["open_receipt"] = opened
+        by_browser = opened.get("via") == "browser"
         if opened.get("execution_status") == "executed" and opened.get("state") == "opened":
             out["opened"] = True
-            out["speech"] = f"{label} açtım efendim. {summary}"
+            if by_browser:
+                # ADR-0210: said as it was done - which machine, and that it was the browser.
+                where = (
+                    f"{opened.get('spoken_device')} cihazında "
+                    if opened.get("spoken_device")
+                    else ""
+                )
+                out["speech"] = f"{label} {where}tarayıcıda açtım efendim. {summary}"
+            else:
+                out["speech"] = f"{label} açtım efendim. {summary}"
             return out
         # Not opened, and the owner is told WHY in the open's own sentence (no device
         # that can fetch a file, a refused origin, a render that is not there ...) - the
@@ -749,6 +759,10 @@ def research_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
         )
         why = str(opened.get("speech") or "").strip()
         not_opened = f"{label} odağa aldım efendim; cihazda açamadım."
+        if by_browser and opened.get("execution_status") == "executed":
+            # A tab exists but its page was not confirmed: the open's own sentence says that,
+            # and "cihazda açamadım" would contradict it.
+            not_opened = f"{label} odağa aldım efendim."
         out["speech"] = " ".join(part for part in (not_opened, why, summary) if part)
         return out
     out["speech"] = f"{label} odağa aldım efendim; açacak bir cihaz yok. {summary}"

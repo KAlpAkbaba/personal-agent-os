@@ -42,7 +42,7 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
-from app.artifacts import factory, open_service, service
+from app.artifacts import browser_open, factory, open_service, service
 from app.artifacts import lifecycle as artifact_lifecycle
 from app.artifacts.provenance import ACTOR_OWNER_VOICE, Actor
 from app.artifacts.spec import ArtifactSpec
@@ -593,14 +593,30 @@ def open_artifact_by_id(
     runtime = _artifacts_runtime(ctx, TOOL_ARTIFACT_OPEN)
     device_action = ctx.live.get("device_action")
     base_url = getattr(runtime.settings, "artifact_download_origin", "") or ""
-    outcome = open_service.open_artifact(
-        db,
-        device_action,
-        artifact_id=artifact_id,
-        fmt=fmt,
-        base_url=base_url,
-        idempotency_key=f"artifact-open:{ctx.call_id or uuid.uuid4()}",
-    )
+    key = f"artifact-open:{ctx.call_id or uuid.uuid4()}"
+    # ADR-0210: a device that cannot ``file.fetch`` but carries the browser worker opens the
+    # report as a new tab in the owner's own Chrome. Every other case - the home PC above
+    # all - is the call below, exactly as it was.
+    browser_route = browser_open.route_for(device_action)
+    if browser_route is not None:
+        outcome = browser_open.open_in_owner_browser(
+            db,
+            device_action,
+            browser_route,
+            artifact_id=artifact_id,
+            fmt=fmt,
+            configured_origin=base_url,
+            idempotency_prefix=key,
+        )
+    else:
+        outcome = open_service.open_artifact(
+            db,
+            device_action,
+            artifact_id=artifact_id,
+            fmt=fmt,
+            base_url=base_url,
+            idempotency_key=key,
+        )
     if outcome.ok and outcome.error_class is None:
         execution, terminal = (
             EXECUTION_EXECUTED,
@@ -612,12 +628,43 @@ def open_artifact_by_id(
         execution, terminal = EXECUTION_EXECUTED, TERMINAL_UNVERIFIED
     else:
         execution, terminal = EXECUTION_REFUSED, TERMINAL_FAILED
+    detail: dict[str, Any] = {
+        "artifact_id": str(artifact_id),
+        "format": outcome.format,
+        "state": outcome.state,
+    }
+    server: dict[str, Any] = {
+        "artifact_id": outcome.artifact_id,
+        "format": outcome.format,
+        "state": outcome.state,
+    }
+    extra: dict[str, Any] = {
+        "artifact_id": outcome.artifact_id,
+        "format": outcome.format,
+        "state": outcome.state,
+        "window_title": outcome.window_title,
+    }
+    summary = f"artifact.open -> {outcome.state or outcome.error_class}"
+    if outcome.via:
+        # ADR-0210 (as ADR-0209 did for a direct launch): the receipt keeps the capability the
+        # owner COMMANDED - only a registered tool name resolves in the self-model - and says
+        # what actually ran, and where, under ``observed_after.server``.
+        on_device = {
+            "path": browser_open.PATH_BROWSER,
+            "via": outcome.via,
+            "device_id": outcome.device_id,
+            "device": outcome.device,
+        }
+        server.update(on_device)
+        detail.update(on_device)
+        extra.update(via=outcome.via, spoken_device=outcome.spoken_device)
+        summary = f"{summary} ({outcome.via}, {outcome.device})"
     _ledger(
         db,
         event_type=EVENT_TYPE_ARTIFACT_OPENED,
         action="artifact.open",
-        summary=f"artifact.open -> {outcome.state or outcome.error_class}",
-        detail={"artifact_id": str(artifact_id), "format": outcome.format, "state": outcome.state},
+        summary=summary,
+        detail=detail,
     )
     return _receipt(
         ctx,
@@ -625,19 +672,10 @@ def open_artifact_by_id(
         requested_state="opened",
         execution=execution,
         terminal=terminal,
-        server={
-            "artifact_id": outcome.artifact_id,
-            "format": outcome.format,
-            "state": outcome.state,
-        },
+        server=server,
         speech=outcome.speech,
         error_class=outcome.error_class,
-        extra={
-            "artifact_id": outcome.artifact_id,
-            "format": outcome.format,
-            "state": outcome.state,
-            "window_title": outcome.window_title,
-        },
+        extra=extra,
     )
 
 
