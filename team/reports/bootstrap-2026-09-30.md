@@ -115,3 +115,10 @@ Onay vermek için (Onay Merkezi hazır olana kadar): `team/queue.json` içinde i
 Gece döngüsünü açmak için (pilot ölçüldükten ve siz onayladıktan SONRA; şu an KAYITLI DEĞİL):
 
     & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "E:\AI\PersonalAgentOS_Claude_Autonomous_Build_Package_v1\scripts\team\register-nightly.ps1" -MaxUsd 15 -Register
+
+## Kapanış
+
+- `feat/dev-team` ucu (kapının koştuğu kod): `137d7ef57cac5fac362b03f66a3b0850576e3c6f` — tam kapı 34/34 PASS
+  (yeni adım: "Agent team cycle"). Önceki iki koşu kırmızıydı: CI iş akışında listelenmemiş paket
+  (bekçi testi) ve broker çift teslim yarışı (ADR-0215); ikisi de dalda düzeltildi.
+- main birleştirmesinin sha'sı HANDOFF "Şu anki durum"da ve `git log main` içindedir.

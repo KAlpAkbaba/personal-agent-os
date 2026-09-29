@@ -15,7 +15,11 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Team bootstrap (TEAM_PROTOCOL.md) — dal `feat/dev-team`, ev PC'si (MAIL), 2026-09-30.**
+**Yok.** Sıradaki: pilot döngü (TEAM_BOOTSTRAP_PROMPT aşama 2) — araştırmacı üç öneri yazar, fikir
+onayında durur.
+
+Son biten iş (2026-09-30): **team bootstrap (TEAM_PROTOCOL.md, ADR-0214)** — main'de. Dal
+`feat/dev-team`, uç `137d7ef5` üzerinde tam kapı 34/34 PASS.
 Sahibin kararı (2026-09-29): proje bundan sonra bir Claude ajan EKİBİYLE, döngülerle
 geliştirilir; sahip yalnız üç kapıda konuşur (fikir onayı, yayın onayı, gerçek cihaz kanıtı +
 son hüküm). Kurulan: `.claude/agents/` (lead, researcher, integrator, worker, inspector),
@@ -199,6 +203,9 @@ köprüsü) → 4 ev (Home Assistant) → 5 her yerde (M29 yeniden açılır) �
 
 ## Sıradaki işler
 
+00. **Pilot döngü** (`scripts/team/cycle.ps1 -Research -ResearchBrief ...`): konular ADR-0213
+   (bulutta yürütme), anlatı satırı, PR-C'nin bulutta koşan hali. Sonra **YAYIN ONAYI**: ADR-0215
+   (broker tek teslim) main'de, üretimde değil.
 0. **ADR-0207 PR-C** (model planlayıcılar + sahibin kendi Chrome'u, PROVEN_REAL). Ön koşul,
    hepsi sahipte: T3 mağazasının ve T5 web postasının adı; MAIL'de ajanın bu ağaçtan yeniden
    kurulması (kurulu 0.6.0 `browser.observe` adını reddediyor); `-AuthorizeTasks` izni;
