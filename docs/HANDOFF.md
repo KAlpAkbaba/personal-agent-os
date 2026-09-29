@@ -15,16 +15,17 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Ev PC'si (MAIL), 2026-09-29/30: AŞAMA 0 (ofis gününü kapat) → sonra team bootstrap.**
-1. `integrate/office-day-2026-09-29` (`1da96831`, SSRF dar istisnası DAHİL, main `4d5dd637`
-   üstünde, birleştirme temiz): tam `quality-gate.ps1` → yeşilse `--no-ff` main + push.
-   İlk kapı (eski uç `7b77986e`) 29/33: Docker Desktop kapalıydı (3 adım) + bir masaüstü
-   testi Not Defteri'nde araya giren bir tuşla düştü (tek başına 3/3 geçti). Docker açıldı.
-2. **Yayın ve MAIL ajanının yeniden kurulumu SAHİP KAPISI** — çalıştırılmaz, komutlar rapora
-   yazılır. `enroll-owner-chrome.ps1`'de `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi).
-3. Sonra **team bootstrap** (dal `feat/dev-team`): kaynak `docs/team-setup/` (sahip elle koydu,
-   izlenmiyor) → `.claude/agents/`, `docs/TEAM_PROTOCOL.md`, ROADMAP güncellemesi, `team/`
-   kuyruğu + şema, `scripts/team/`. Gece görevi KAYDEDİLMEZ; komutu rapora yazılır.
+**Team bootstrap (TEAM_PROTOCOL.md) — dal `feat/dev-team`, ev PC'si (MAIL), 2026-09-30.**
+Sahibin kararı (2026-09-29): proje bundan sonra bir Claude ajan EKİBİYLE, döngülerle
+geliştirilir; sahip yalnız üç kapıda konuşur (fikir onayı, yayın onayı, gerçek cihaz kanıtı +
+son hüküm). Kurulan: `.claude/agents/` (lead, researcher, integrator, worker, inspector),
+`docs/TEAM_PROTOCOL.md`, ROADMAP güncellemesi, `team/` (kuyruk + şema + kilit),
+`scripts/team/` (cycle, new-worktree, close-worktree, integration-branch, collect-reports,
+register-nightly) + `scripts/tests/team-cycle.tests.ps1` (kapıda). Gece görevi KAYDEDİLMEDİ.
+**Sahip kapısında bekleyenler:** (1) YAYIN — main `771a9e53` (ofis günü, ADR-0208…0212 +
+PR-B) yayınlanmadı; (2) MAIL ajanının bu ağaçtan yeniden kurulması (komutlar döngü
+raporunda); `-AuthorizeTasks` anahtarı YOK (PR-C'nin işi).
+Ofis günü kapandı: `integrate/office-day-2026-09-29` tam kapı 33/33 (`8cff1a69`), main'de.
 
 **Ofis günü (2026-09-29, makine GMKADIRAKBABA — şirket PC'si): İŞ BİTTİ, EV PC'DE KAPI BEKLİYOR.**
 Toplama dalı `integrate/office-day-2026-09-29` (origin'de; main `4d5dd637`'den) altı olayın
