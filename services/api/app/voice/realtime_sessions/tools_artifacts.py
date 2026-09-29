@@ -568,14 +568,30 @@ def artifact_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
     ``file.fetch`` (DEVICE_PROTOCOL.md §6k). ``capability_missing`` when no device
     advertises it (the 0.1.0/0.3.x agent) — never a guess, never a claim of an open that
     did not happen."""
-    db = _require_db(ctx, TOOL_ARTIFACT_OPEN)
-    runtime = _artifacts_runtime(ctx, TOOL_ARTIFACT_OPEN)
+    _require_db(ctx, TOOL_ARTIFACT_OPEN)
     artifact_id = _resolve_artifact_id(ctx, arguments)
     if artifact_id is None:
         return _clarification(_no_target_speech(ctx))
-    device_action = ctx.live.get("device_action")
     raw_fmt = arguments.get("format")
     fmt = str(raw_fmt).lower() if isinstance(raw_fmt, str) and raw_fmt else None
+    return open_artifact_by_id(ctx, artifact_id, fmt=fmt)
+
+
+def open_artifact_by_id(
+    ctx: ToolContext, artifact_id: uuid.UUID, *, fmt: str | None = None
+) -> dict[str, Any]:
+    """Fetch + open THIS artifact on the owner's machine: the half of ``artifact.open``
+    that comes after "which one".
+
+    For a SERVER-side caller that already knows the artifact by id - ``research.open``,
+    whose target is the research's own report and never whatever the artifact focus
+    stack holds. Not reachable from the model: the tool's schema has no id field, and
+    ``artifact_open`` reads none (office event 2026-09-29: ``research.open`` passed the
+    report's id as an argument nothing read, so the open was a question about the focus
+    stack, or the wrong file)."""
+    db = _require_db(ctx, TOOL_ARTIFACT_OPEN)
+    runtime = _artifacts_runtime(ctx, TOOL_ARTIFACT_OPEN)
+    device_action = ctx.live.get("device_action")
     base_url = getattr(runtime.settings, "artifact_download_origin", "") or ""
     outcome = open_service.open_artifact(
         db,
@@ -1117,5 +1133,6 @@ __all__ = [
     "artifact_open",
     "artifact_render",
     "artifact_validate",
+    "open_artifact_by_id",
     "register_artifacts_tools",
 ]
