@@ -350,6 +350,13 @@ export type ControllerDeps = {
    * is built from the real terminal state.
    */
   localActions?: LocalActionPort;
+  /**
+   * ADR-0208: the enrolled Cloud Core device this browser shares a computer with, when the
+   * owner has said so (`lib/thisDevice.ts`). Sent as `device_id` on create and on re-attach
+   * - only to a server that speaks contract v3, an older one would refuse the field - so a
+   * command that names no computer runs on the one the owner is at. A claim, never authority.
+   */
+  enrolledDeviceId?: () => string | null;
   /** Ordered operation log — tests pin ordering with it. */
   log?: (op: string) => void;
 };
@@ -827,10 +834,13 @@ export class VoiceSessionController {
       this.fail("Oturum açık değil: Cloud Core kimlik doğrulaması gerekiyor; yeniden giriş yapın.");
       return;
     }
+    const enrolledDevice = this.deps.enrolledDeviceId?.() ?? null;
     const wanted: Record<string, unknown> = {
       client_kind: "web",
       language: options.language,
       ...(options.voice ? { voice: options.voice } : {}),
+      // ADR-0208: dropped by validateCreateBody (and said so) when the server is older.
+      ...(enrolledDevice ? { device_id: enrolledDevice } : {}),
     };
     const checked = validateCreateBody(wanted, contract.version, contract.createSession);
     if (checked.problems.length > 0) {
@@ -2811,7 +2821,15 @@ export class VoiceSessionController {
 
   private async runAttach(): Promise<void> {
     if (!this.sessionId || !this.reporter) throw new Error("no session");
-    const payload = await this.deps.api.attach(this.sessionId, { transport: this.descriptor?.kind });
+    // ADR-0208: a leg that takes over says where it runs, or the server forgets it. Only to a
+    // server known to speak v3: attach has no contract check of its own and an older server
+    // refuses an unknown field, which would turn a network blip into a dead session.
+    const enrolledDevice = this.deps.enrolledDeviceId?.() ?? null;
+    const declares = enrolledDevice !== null && (this.contract?.version ?? 0) >= 3;
+    const payload = await this.deps.api.attach(this.sessionId, {
+      transport: this.descriptor?.kind,
+      ...(declares ? { device_id: enrolledDevice } : {}),
+    });
     this.log("api.attach");
     this.teardownLeg("reattach");
     await this.openLeg(payload);

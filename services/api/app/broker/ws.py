@@ -36,6 +36,7 @@ from app.broker.models import DEVICE_STATUS_ENROLLED, Device, DeviceCommand
 from app.broker.runtime import BrokerRuntime, DeviceConnection
 from app.broker.security import generate_nonce, verify_device_signature
 from app.broker.state import TransitionDecision
+from app.devices import affinity
 from app.logging import get_logger
 
 logger = get_logger("app.broker.ws")
@@ -319,8 +320,19 @@ async def device_connect(websocket: WebSocket) -> None:
             return row.id
 
     session_id = await asyncio.to_thread(start_session)
+    # ADR-0208: where this device is on the network, kept with the live connection so a
+    # request from the same address can be told to be "on this device". Recorded always
+    # (it costs nothing); believed only when ``device_affinity_by_source_ip`` is on.
+    peer = websocket.client
     connection = DeviceConnection(
-        device_id=device_id, session_id=session_id, websocket=websocket
+        device_id=device_id,
+        session_id=session_id,
+        websocket=websocket,
+        peer_ip=affinity.client_ip(
+            peer.host if peer else None,
+            websocket.headers,
+            affinity.trusted_networks(settings.trusted_proxy_cidrs),
+        ),
     )
 
     # M18.3 (spec §3.7 / DEVICE_PROTOCOL.md §6h): remember the origin this device dialled,

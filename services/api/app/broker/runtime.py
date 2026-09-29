@@ -43,6 +43,12 @@ class DeviceConnection:
     #: done the window is closed, later duplicates are genuine cross-reconnect redeliveries,
     #: and nothing grows for the life of a long connection.
     replay_guard: set[uuid.UUID] | None = field(default_factory=set)
+    #: ADR-0208: the network address this device connected FROM, as the edge reported it
+    #: (``app.devices.affinity.client_ip``); ``None`` when it could not be told. In memory
+    #: only and only as long as the connection lives: the address is where the device IS
+    #: right now, which is exactly what "the session is on this device" needs, and a stored
+    #: one would outlive a laptop that moved networks.
+    peer_ip: str | None = None
 
     def note_delivered(self, command_id: uuid.UUID) -> None:
         if self.replay_guard is not None:
@@ -109,6 +115,14 @@ class BrokerRuntime:
 
     def get_connection(self, device_id: uuid.UUID) -> DeviceConnection | None:
         return self.connections.get(device_id)
+
+    def device_id_for_peer_ip(self, ip: str) -> uuid.UUID | None:
+        """The one connected device that dialled in from ``ip`` (ADR-0208), else ``None``.
+
+        Two devices behind the same address are indistinguishable BY that address, so it names
+        neither: an ambiguous answer is no answer."""
+        found = [c.device_id for c in self.connections.values() if c.peer_ip == ip]
+        return found[0] if len(found) == 1 else None
 
     async def send_frame(self, device_id: uuid.UUID, frame: dict[str, Any]) -> bool:
         """Best-effort send to a connected device. False when offline/failed."""

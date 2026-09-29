@@ -1,5 +1,5 @@
 {
-  "contract_version": 2,
+  "contract_version": 3,
   "kind": "pagentos.realtime_session_contract",
   "legacy": {
     "1": {
@@ -28,6 +28,19 @@
           ],
           "default": null,
           "title": "Client Kind"
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Id"
         },
         "transport": {
           "anyOf": [
@@ -60,6 +73,19 @@
           ],
           "default": null,
           "title": "Client Kind"
+        },
+        "device_id": {
+          "anyOf": [
+            {
+              "format": "uuid",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Device Id"
         },
         "language": {
           "default": "tr-TR",

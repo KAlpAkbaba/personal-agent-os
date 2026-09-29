@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import OwnerGate, { SignOutButton } from "../components/OwnerGate";
 import Capabilities from "./Capabilities";
+import ThisDevice from "./ThisDevice";
 import {
   BrowserMicrophone,
   type GatedDetectorSnapshot,
@@ -356,6 +357,7 @@ function VoiceConsole() {
             Cihazları yenile
           </button>
         </div>
+        <ThisDevice />
         {simulated && live && (
           <p className="muted" style={{ marginTop: "0.75rem" }}>
             Sunucu simülatör sağlayıcısını seçti: ses yok, kablolama gerçek API üzerinden çalışıyor.{" "}

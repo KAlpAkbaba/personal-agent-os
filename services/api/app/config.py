@@ -177,6 +177,39 @@ class Settings(BaseSettings):
     backup_root: str = "/var/lib/pagentos-backup"
     broker_handshake_timeout_s: float = 10.0
 
+    #: ADR-0208, session device affinity, source (b): map the request's source address to the
+    #: enrolled device that is CONNECTED from that same address, and treat that device as the
+    #: one the session is on. OFF by default, and it stays off until the two facts it rests on
+    #: are measured on the real edge: that nginx's ``X-Real-IP`` really carries the tailnet
+    #: address of the caller (Docker's port publishing can replace it with the bridge
+    #: gateway), and which address the edge itself has (``trusted_proxy_cidrs``). Source (a),
+    #: a device id the client declares, needs neither and is always on.
+    device_affinity_by_source_ip: bool = False
+    #: The only peers whose ``X-Real-IP`` is believed - the edge container's network, as
+    #: JSON in the environment (``PAGENTOS_TRUSTED_PROXY_CIDRS='["172.18.0.0/16"]'``). Empty
+    #: means no header is ever believed; the peer address itself is then used as it is. Never
+    #: a wildcard: a header from any other peer is the caller's own claim.
+    trusted_proxy_cidrs: tuple[str, ...] = ()
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def _validate_trusted_proxy_cidrs(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        import ipaddress
+
+        for cidr in v:
+            try:
+                network = ipaddress.ip_network(cidr, strict=False)
+            except ValueError as exc:
+                raise ValueError(
+                    f"PAGENTOS_TRUSTED_PROXY_CIDRS holds {cidr!r}, which is not a CIDR"
+                ) from exc
+            if network.prefixlen == 0:
+                raise ValueError(
+                    "PAGENTOS_TRUSTED_PROXY_CIDRS must not trust every address "
+                    f"({cidr!r}): a forwarded header is only as good as the peer that sent it"
+                )
+        return v
+
     #: B15 req 281: whether the wake alarm reads the morning briefing aloud after its
     #: greeting. On by default, because a morning briefing nobody hears without opening a
     #: browser is the gap this batch exists to close - and off by one setting, because the

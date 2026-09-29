@@ -359,6 +359,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         source=research_service.SOURCE_VOICE,
         session_id=ctx.session_id,
         tool_call_id=ctx.call_id,
+        session_device_ids=ctx.live.get("session_device_ids"),
     )
     if started.error is not None:
         raise VoiceError(
