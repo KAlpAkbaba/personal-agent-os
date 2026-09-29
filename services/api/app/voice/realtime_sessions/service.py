@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.broker.audit import record_audit_event
+from app.devices import affinity as device_affinity
 from app.identity.service import SessionContext
 from app.ledger import service as ledger_service
 from app.ledger.briefing import VIA_VOICE, mark_delivered
@@ -468,6 +469,7 @@ def create_session(
     transport: str,
     client_kind: str | None = None,
     device_id: uuid.UUID | None = None,
+    declared_device_id: uuid.UUID | None = None,
     language: str = "tr-TR",
     session_ttl_s: int = 3600,
     credential_ttl_s: int = 600,
@@ -502,6 +504,10 @@ def create_session(
             "fsm_state": RealtimeState.IDLE.value,
             "barge_in_count": 0,
             "legs": 1,
+            # ADR-0208: the enrolled device the CLIENT says it runs on. A claim: it is only
+            # ever a hint to device selection (which ignores an id that names no live
+            # enrolled device) and unlike ``row.device_id`` it is not where sideband frames go.
+            "declared_device_id": str(declared_device_id) if declared_device_id else None,
             "selection": selection or {},
             # ADR-0043: the requested wire voice (already validated against the
             # provider) and the owner's perceptual profile, recorded for the benchmark
@@ -865,6 +871,22 @@ def handle_tool_call(
 
     ctx = dict(row.context_json or {})
     device_trusted = device_is_trusted(db, owner)
+    live_sources = dict(live or {})
+    # ADR-0208: where this session is, best guess first - the machine the client declared,
+    # the one the identity session is bound to, the one connected from this request's own
+    # address (the route computes that last one, and only when its setting is on). Every
+    # device command this call makes that names no device goes to the first of them that is
+    # enrolled, online, capable and allowed, and otherwise as it always did.
+    session_devices = device_affinity.session_device_ids(
+        declared=ctx.get("declared_device_id"),
+        bound=row.device_id,
+        source=live_sources.pop("source_device_id", None),
+    )
+    live_sources["session_device_ids"] = session_devices
+    device_port = live_sources.get("device_action")
+    bind = getattr(device_port, "bound_to", None)
+    if session_devices and callable(bind):
+        live_sources["device_action"] = bind(session_devices)
     tool_ctx = ToolContext(
         session_id=row.id,
         owner_session_id=owner.session_id,
@@ -875,7 +897,7 @@ def handle_tool_call(
         now=now,
         call_id=call_id,
         live={
-            **dict(live or {}),
+            **live_sources,
             # ADR-0196: macro.run replays recorded calls through the SAME handlers and
             # the SAME step-up gate as a call arriving here would meet - so it needs the
             # registry and the device-trust fact this relay derived, never a copy of
@@ -2304,6 +2326,7 @@ def attach(
     sideband: SidebandPusher,
     client_kind: str | None = None,
     device_id: uuid.UUID | None = None,
+    declared_device_id: uuid.UUID | None = None,
     transport: str | None = None,
     credential_ttl_s: int = 600,
     trace_id: str | None = None,
@@ -2339,6 +2362,9 @@ def attach(
     row.owner_session_id = owner.session_id
     row.client_kind = (client_kind or owner.client_kind)[:16]
     row.device_id = device_id if device_id is not None else owner.device_id
+    # ADR-0208: the claim belongs to the leg. The client that takes over says where IT is or
+    # says nothing; the previous client's machine is not this one's.
+    ctx["declared_device_id"] = str(declared_device_id) if declared_device_id else None
     if transport:
         row.transport = transport
     ctx["legs"] = int(ctx.get("legs", 1)) + (0 if same_leg else 1)

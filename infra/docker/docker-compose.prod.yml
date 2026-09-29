@@ -130,6 +130,13 @@ services:
       # web_origins"), not an empty list. Defaulting to no origins is also the right
       # production posture — CORS is an allowlist, and nothing browser-based is served yet.
       PAGENTOS_WEB_ORIGINS: ${PAGENTOS_WEB_ORIGINS:-[]}
+      # ADR-0208, session device affinity source (b): map a request's source address to the
+      # enrolled device connected from it. OFF until both are measured on the real edge -
+      # that nginx's X-Real-IP carries the caller's tailnet address (not the bridge
+      # gateway's), and which network the edge container sits in. A JSON list, like
+      # PAGENTOS_WEB_ORIGINS; the edge's network, never a wildcard.
+      PAGENTOS_DEVICE_AFFINITY_BY_SOURCE_IP: ${PAGENTOS_DEVICE_AFFINITY_BY_SOURCE_IP:-false}
+      PAGENTOS_TRUSTED_PROXY_CIDRS: ${PAGENTOS_TRUSTED_PROXY_CIDRS:-[]}
       # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
       # M13/ADR-0050 §9: production runs no separate worker container, and the

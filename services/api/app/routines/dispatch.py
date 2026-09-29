@@ -56,7 +56,7 @@ from app.devices.commands import (
     DeviceCommandClientProtocol,
     get_broker_runtime,
 )
-from app.devices.selection import NoCapableDeviceError, select_device
+from app.devices.selection import REASON_SESSION_AFFINITY, NoCapableDeviceError, select_device
 from app.devices.service import list_device_views
 from app.logging import get_logger
 from app.narration.normalizer import normalize
@@ -124,6 +124,10 @@ class DeviceRunResult:
     #: The device the command was sent to, when one was selected. B11-toast review: a toast
     #: button press is believed only from the device that showed the toast.
     device_id: UUID | None = None
+    #: ``REASON_SESSION_AFFINITY`` when the machine the command was sent from is the one that
+    #: acted (ADR-0208), so a receipt can say so; "" for every other choice - what a result
+    #: carried before that ADR - and when no device was selected.
+    selection_reason: str = ""
 
 
 class DeviceActionPort(Protocol):
@@ -378,6 +382,17 @@ class BrokerDeviceAction:
             session_factory
         )
 
+    def bound_to(self, session_device_ids: Sequence[UUID]) -> DeviceActionPort:
+        """This port for ONE session (ADR-0208): a command that names no device goes to the
+        session's own device when it can do it, and to whatever the ordinary rule picks when
+        it cannot. The object returned is a view over this one - the same command client, the
+        same session factory, no second desktop-control path - so it is cheap to make per call.
+        An empty list is the ordinary rule, and this same port."""
+        ids = tuple(session_device_ids)
+        if not ids:
+            return self
+        return _SessionBoundDeviceAction(self, ids)
+
     def run(
         self,
         *,
@@ -385,6 +400,23 @@ class BrokerDeviceAction:
         payload: dict[str, Any],
         idempotency_key: str,
         timeout_s: float,
+    ) -> DeviceRunResult:
+        return self._run(
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=timeout_s,
+            session_device_ids=(),
+        )
+
+    def _run(
+        self,
+        *,
+        capability: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        timeout_s: float,
+        session_device_ids: Sequence[UUID],
     ) -> DeviceRunResult:
         runtime = get_broker_runtime()
         if runtime is None:
@@ -399,9 +431,30 @@ class BrokerDeviceAction:
             session.close()
 
         try:
-            selection = select_device(views, capability=capability)
+            if session_device_ids:
+                selection = select_device(
+                    views, capability=capability, session_device_ids=session_device_ids
+                )
+            else:
+                # No session hint: the very call this port has always made.
+                selection = select_device(views, capability=capability)
         except NoCapableDeviceError as exc:
             return DeviceRunResult(False, "no_capable_device", exc.detail_tr)
+        # Said only when the session's own device was chosen: a result for any other choice is
+        # exactly what it was before ADR-0208.
+        why = ""
+        if session_device_ids:
+            # Only when a session hint was in play: why this machine acted, for whoever reads
+            # the log after "it opened on the wrong computer".
+            logger.info(
+                "broker_device_action_selected",
+                capability=capability,
+                device_id=str(selection.device.id),
+                device_name=selection.device.name,
+                reason=selection.reason,
+            )
+            if selection.reason == REASON_SESSION_AFFINITY:
+                why = selection.reason
 
         outcome = self._command_client.run(
             device_id=selection.device.id,
@@ -413,12 +466,20 @@ class BrokerDeviceAction:
         )
         target = selection.device.id
         if isinstance(outcome, CommandSucceeded):
-            return DeviceRunResult(True, result=dict(outcome.result), device_id=target)
+            return DeviceRunResult(
+                True, result=dict(outcome.result), device_id=target, selection_reason=why
+            )
         if isinstance(outcome, CommandFailed):
-            return DeviceRunResult(False, outcome.error_class, outcome.message, device_id=target)
+            return DeviceRunResult(
+                False, outcome.error_class, outcome.message, device_id=target, selection_reason=why
+            )
         if isinstance(outcome, CommandExpired):
             return DeviceRunResult(
-                False, "timeout", "command expired before completion", device_id=target
+                False,
+                "timeout",
+                "command expired before completion",
+                device_id=target,
+                selection_reason=why,
             )
         # pragma: no cover - every DeviceCommandClient outcome type is handled above
         return DeviceRunResult(False, "internal_bug", f"unexpected outcome: {outcome!r}")
@@ -446,6 +507,35 @@ class BrokerDeviceAction:
         except NoCapableDeviceError:
             return False
         return True
+
+
+class _SessionBoundDeviceAction:
+    """A :class:`BrokerDeviceAction` seen from one session (ADR-0208): satisfies
+    :class:`DeviceActionPort`, holds nothing of its own but the ids, and names no device."""
+
+    def __init__(self, inner: BrokerDeviceAction, session_device_ids: Sequence[UUID]) -> None:
+        self._inner = inner
+        self.session_device_ids: tuple[UUID, ...] = tuple(session_device_ids)
+
+    def run(
+        self,
+        *,
+        capability: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        timeout_s: float,
+    ) -> DeviceRunResult:
+        return self._inner._run(
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=timeout_s,
+            session_device_ids=self.session_device_ids,
+        )
+
+    def bound_to(self, session_device_ids: Sequence[UUID]) -> DeviceActionPort:
+        # Binding again re-binds the one underlying port; ids never accumulate.
+        return self._inner.bound_to(session_device_ids)
 
 
 # ------------------------------------------------------------------------ browser allowlist

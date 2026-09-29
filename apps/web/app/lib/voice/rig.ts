@@ -44,6 +44,7 @@ import type {
 } from "./ports";
 import { eyeLocalActions } from "../eye/local-actions";
 import { getEyeStore } from "../eye/store";
+import { getThisDeviceId } from "../thisDevice";
 import {
   type DeviceIdentity,
   LocalStorageProfileStore,
@@ -145,6 +146,8 @@ export type VoiceRigParts = {
    * before a tool call is relayed (the eye). Absent = the client has none.
    */
   localActions?: LocalActionPort;
+  /** ADR-0208: the enrolled device this browser shares a computer with (`lib/thisDevice.ts`). */
+  enrolledDeviceId?: () => string | null;
 };
 
 export type VoiceRigBuilder = (profile: ProfileHolder) => VoiceRigParts;
@@ -246,6 +249,7 @@ export function browserRigParts(options: BrowserRigOptions): VoiceRigBuilder {
       // against the tab's one `EyeStore` (reason `voice:<utterance>`) before
       // the call is relayed with what was observed.
       localActions: eyeLocalActions(getEyeStore),
+      enrolledDeviceId: () => getThisDeviceId(),
     };
   };
 }
@@ -406,6 +410,7 @@ export function createVoiceRig(build: VoiceRigBuilder): VoiceRig {
     network: parts.network,
     now: parts.now,
     localActions: parts.localActions,
+    enrolledDeviceId: parts.enrolledDeviceId,
     // ADR-0047 §4: the AGC A/B result travels with the read-back, as numbers.
     inputEvidence: () => {
       const bench = profile.current?.agcBenchmark;
