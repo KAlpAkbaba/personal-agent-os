@@ -532,6 +532,223 @@ function Set-MachineDataAcl {
 # the service owns. What the companion writes names the owner SID the companion runs as -
 # with Modify, not full control, and nobody else.
 
+# Security review of 2a2f7f95 (2026-09-29). Everything below runs ELEVATED on a path an
+# unprivileged account can shape - the owner holds Modify on companion\, and ProgramData lets
+# every local user create folders there - so four things are checked before anything is
+# written, each because a proof of concept showed what happens without it:
+#
+#   - no reparse point. A junction planted at companion\audit pointed the installer's
+#     `icacls <audit>\* /reset /T` at another directory, and a SYSTEM-only file there came
+#     back with inherited Administrators and user entries;
+#   - no walking through one either: the child reset is an enumeration that looks at every
+#     entry's attributes, and steps around what it will not enter;
+#   - the owner SID is a USER. -OwnerSid S-1-5-32-545 would have granted every local user
+#     Modify on the trail;
+#   - the directory's OWNER is someone who may hold WRITE_DAC over it. A directory
+#     pre-created by another account stays that account's to re-permission, whatever DACL is
+#     written onto it.
+#
+# What this does NOT close: the check and the write are two system calls on a path, not one
+# operation on a handle. An account that can replace companion\audit between them still
+# wins the race; the window is milliseconds, and closing it takes handle-based Win32 calls
+# this installer does not have.
+
+#: Domain RIDs that name a GROUP (or a machine) under an S-1-5-21 domain. Refused without a
+#: lookup, because the lookup needs a domain controller and the answer is already known.
+$script:GroupRids = @(498, 512, 513, 514, 515, 516, 517, 518, 519, 520, 521, 522, 525, 526, 527, 553, 571, 572)
+
+#: Who may own the companion's audit directory besides the owner account itself.
+$script:TrustedOwnerSids = @($script:SidSystem, $script:SidAdministrators)
+
+function Get-SidNameUse {
+    <#
+    .SYNOPSIS
+        What kind of principal a SID names, from the system (LookupAccountSid): 1 is a user.
+        0 when the SID resolves to nobody.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][System.Security.Principal.SecurityIdentifier]$Sid)
+
+    if (-not ("PagentOS.Install.SidLookup" -as [type])) {
+        Add-Type -Namespace PagentOS.Install -Name SidLookup -MemberDefinition @"
+[DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern bool LookupAccountSid(string systemName, byte[] sid, System.Text.StringBuilder name, ref uint nameLength, System.Text.StringBuilder domain, ref uint domainLength, out int use);
+"@
+    }
+    $bytes = New-Object byte[] $Sid.BinaryLength
+    $Sid.GetBinaryForm($bytes, 0)
+    $name = New-Object System.Text.StringBuilder 512
+    $domain = New-Object System.Text.StringBuilder 512
+    [uint32]$nameLength = 512
+    [uint32]$domainLength = 512
+    $use = 0
+    if ([PagentOS.Install.SidLookup]::LookupAccountSid($null, $bytes, $name, [ref]$nameLength, $domain, [ref]$domainLength, [ref]$use)) {
+        return $use
+    }
+    return 0
+}
+
+function Assert-OwnerAccountSid {
+    <#
+    .SYNOPSIS
+        Throws unless the SID names a USER ACCOUNT. Called before anything is changed.
+
+    .DESCRIPTION
+        The owner SID is written into DACLs with Modify. A group there - BUILTIN\Users,
+        Everyone, Authenticated Users, Domain Users - turns "the owner may write the trail"
+        into "everybody may", and nothing downstream would notice: the grant would be exactly
+        what was asked for.
+
+        -AllowUnresolved forgives a SID the system cannot resolve (a test's made-up account,
+        a domain account while the domain is unreachable). It never forgives one the system
+        DOES resolve to something other than a user, and the installer does not pass it.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Sid,
+        [switch]$AllowUnresolved
+    )
+
+    $refuse = { param($why) throw "the owner SID '$Sid' is refused: $why. It must be the SID of the owner's own user account (whoami /user). Nothing was changed." }
+
+    $parsed = $null
+    try { $parsed = New-Object System.Security.Principal.SecurityIdentifier($Sid) } catch { $parsed = $null }
+    if ($null -eq $parsed) { & $refuse "it is not a SID" }
+
+    $value = $parsed.Value
+    if (($script:UnprivilegedSids -contains $value) -or ($script:WriteAuthorizedSids -contains $value)) {
+        & $refuse "it is a well-known group or service principal, not a person"
+    }
+    # A user account is S-1-5-21-<domain>-<rid> (local or domain) or S-1-12-1-... (Entra ID).
+    # Everything else - BUILTIN aliases, CREATOR OWNER, logon and service SIDs - is not.
+    if ($value -notmatch '^S-1-5-21-\d+-\d+-\d+-(\d+)$' -and $value -notmatch '^S-1-12-1-\d+-\d+-\d+-\d+$') {
+        & $refuse "it is not an account SID"
+    }
+    if ($value -match '^S-1-5-21-\d+-\d+-\d+-(\d+)$' -and ($script:GroupRids -contains [int64]$Matches[1])) {
+        & $refuse "RID $($Matches[1]) is a domain group or machine account"
+    }
+
+    $use = Get-SidNameUse -Sid $parsed
+    if ($use -eq 1) { return }
+    if ($use -eq 0) {
+        if ($AllowUnresolved) { return }
+        & $refuse "this machine cannot resolve it to any account, so nothing says it is a user"
+    }
+    & $refuse "it resolves to a principal of kind $use (2 group, 4 alias, 5 well-known group, 9 computer), not a user"
+}
+
+function Test-IsReparsePoint {
+    <#  Is this path itself a junction, symbolic link or mount point? False when it does not exist.  #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        # The attributes of the LINK, never of what it points at - and they are there for a
+        # dangling link too, which Test-Path reports as absent.
+        $attributes = [System.IO.File]::GetAttributes($Path)
+        return [bool]($attributes -band [System.IO.FileAttributes]::ReparsePoint)
+    }
+    catch [System.IO.FileNotFoundException] { return $false }
+    catch [System.IO.DirectoryNotFoundException] { return $false }
+}
+
+function Assert-NoReparsePointInPath {
+    <#
+    .SYNOPSIS
+        Throws when the path, or any directory between it and -TrustedRoot (inclusive), is
+        a reparse point. Nothing is created or changed by asking.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$TrustedRoot,
+        [Parameter(Mandatory = $true)][string]$Purpose
+    )
+
+    $trim = [char[]]@('\', '/')
+    $stop = [System.IO.Path]::GetFullPath($TrustedRoot).TrimEnd($trim)
+    $current = [System.IO.Path]::GetFullPath($Path).TrimEnd($trim)
+    if (-not ($current.Equals($stop, [System.StringComparison]::OrdinalIgnoreCase) -or
+              $current.StartsWith($stop + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "cannot check $Path for reparse points: it is not under $TrustedRoot"
+    }
+
+    while ($true) {
+        if (Test-IsReparsePoint -Path $current) {
+            throw "refusing to touch $Path ($Purpose): $current is a reparse point (a junction or a symbolic link), and whatever is written there would land where it points. " +
+                  "Nothing was changed. Look at where it leads (dir /AL `"$(Split-Path -Parent $current)`"), remove it, and run this again."
+        }
+        if ($current.Equals($stop, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+        $current = Split-Path -Parent $current
+        if (-not $current) { break }
+    }
+}
+
+function Reset-ChildAclToInherit {
+    <#
+    .SYNOPSIS
+        Make everything under a directory inherit from it again - by enumeration, looking at
+        every entry, and never into or through a reparse point.
+
+    .DESCRIPTION
+        Replaces `icacls <dir>\* /reset /T`, which follows junctions: planted inside (or as)
+        the directory, one pointed an elevated installer at another tree.
+
+        Returns Reset (count), SkippedReparsePoints and Failures (paths with the reason).
+        One entry that cannot be reset does not stop the rest, as /C did not.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [string]$NewOwnerSid
+    )
+
+    $skipped = New-Object System.Collections.ArrayList
+    $failures = New-Object System.Collections.ArrayList
+    $reset = 0
+    # A list walked by index, growing as directories are found: every real directory is
+    # visited once, in the order it was met. (@( ).Count, per the cardinality note above.)
+    $pending = New-Object System.Collections.ArrayList
+    [void]$pending.Add($Directory)
+
+    for ($index = 0; $index -lt @($pending).Count; $index++) {
+        $directory = $pending[$index]
+        $entries = @()
+        try { $entries = @([System.IO.Directory]::GetFileSystemEntries($directory)) }
+        catch { [void]$failures.Add("$directory (listing): $($_.Exception.Message)"); continue }
+
+        foreach ($entry in $entries) {
+            try {
+                $attributes = [System.IO.File]::GetAttributes($entry)
+                if ($attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    # Neither reset nor entered: its descriptor is not ours to decide from
+                    # here, and what is behind it is not under this directory at all.
+                    [void]$skipped.Add($entry)
+                    continue
+                }
+                $isDirectory = [bool]($attributes -band [System.IO.FileAttributes]::Directory)
+                if ($isDirectory) { $security = New-Object System.Security.AccessControl.DirectorySecurity }
+                else { $security = New-Object System.Security.AccessControl.FileSecurity }
+                $security.SetAccessRuleProtection($false, $false)
+                if ($NewOwnerSid) { $security.SetOwner((New-Object System.Security.Principal.SecurityIdentifier($NewOwnerSid))) }
+                if ($isDirectory) { ([System.IO.DirectoryInfo]$entry).SetAccessControl($security); [void]$pending.Add($entry) }
+                else { ([System.IO.FileInfo]$entry).SetAccessControl($security) }
+                $reset++
+            }
+            catch {
+                $why = $_.Exception.Message
+                if ($_.Exception.InnerException) { $why = $_.Exception.InnerException.Message }
+                [void]$failures.Add("$entry : $why")
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Reset                = $reset
+        SkippedReparsePoints = @($skipped)
+        Failures             = @($failures)
+    }
+}
+
 function Get-CompanionAuditDirectoryReport {
     <#
     .SYNOPSIS
@@ -547,15 +764,24 @@ function Get-CompanionAuditDirectoryReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$OwnerSid
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        # What Get-AclReport said about the path. Injectable because a non-elevated test
+        # cannot make another account the owner of a real directory; the verifier and the
+        # installer never pass it.
+        $AclReport = $null
     )
 
-    $acl = Get-AclReport -Path $Path
+    $acl = if ($null -ne $AclReport) { $AclReport } else { Get-AclReport -Path $Path }
     $problems = New-Object System.Collections.ArrayList
     $otherWriters = New-Object System.Collections.ArrayList
     $ownerCanWrite = $false
+    $ownerTrusted = $false
+    $isReparsePoint = Test-IsReparsePoint -Path $Path
 
-    if (-not $acl.Exists) {
+    if ($isReparsePoint) {
+        [void]$problems.Add("$Path is a reparse point (a junction or a symbolic link): the trail would be written wherever it points")
+    }
+    elseif (-not $acl.Exists) {
         [void]$problems.Add("$Path does not exist")
     }
     elseif (-not $acl.Readable) {
@@ -591,18 +817,29 @@ function Get-CompanionAuditDirectoryReport {
             [void]$problems.Add("$OwnerSid is allowed $has on files in $Path; the companion needs Modify to append a row")
         }
         $ownerCanWrite = (@($problems).Count -eq 0)
+
+        # The directory's OWNER, separately from its DACL: an owner holds WRITE_DAC whatever
+        # the DACL says, so a directory some other account pre-created is that account's to
+        # re-permission - and then to rewrite the trail in - at any time.
+        $ownerTrusted = ($acl.Owner -eq $OwnerSid) -or ($script:TrustedOwnerSids -contains $acl.Owner)
+        if (-not $ownerTrusted) {
+            [void]$problems.Add("$Path is owned by $($acl.Owner), which is neither $OwnerSid nor Administrators nor SYSTEM; an owner can re-permission what it owns")
+        }
     }
 
     return [pscustomobject]@{
-        Path          = $Path
-        OwnerSid      = $OwnerSid
-        Exists        = [bool]$acl.Exists
-        Readable      = [bool]$acl.Readable
-        IsProtected   = [bool]$acl.IsProtected
-        OwnerCanWrite = $ownerCanWrite
-        OtherWriters  = @($otherWriters)
-        Problems      = @($problems)
-        Sddl          = $acl.Sddl
+        Path           = $Path
+        OwnerSid       = $OwnerSid
+        Exists         = [bool]$acl.Exists
+        Readable       = [bool]$acl.Readable
+        IsProtected    = [bool]$acl.IsProtected
+        IsReparsePoint = $isReparsePoint
+        Owner          = $acl.Owner
+        OwnerTrusted   = $ownerTrusted
+        OwnerCanWrite  = $ownerCanWrite
+        OtherWriters   = @($otherWriters)
+        Problems       = @($problems)
+        Sddl           = $acl.Sddl
     }
 }
 
@@ -623,12 +860,28 @@ function Set-CompanionAuditDirectoryAcl {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$OwnerSid
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        # How far up reparse points are looked for: the path and every directory between it
+        # and this one, inclusive. The companion data root, when the installer calls.
+        [string]$TrustedRoot = (Split-Path -Parent $Path),
+        # Whether this process holds the Administrators token. Stated by the tests, which
+        # cannot be elevated; computed everywhere else.
+        [bool]$Elevated = ([System.Security.Principal.WindowsPrincipal]::new(
+            [System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator),
+        [switch]$AllowUnresolvedOwnerSid
     )
+
+    # Both refusals come before the first thing that is created or written.
+    Assert-OwnerAccountSid -Sid $OwnerSid -AllowUnresolved:$AllowUnresolvedOwnerSid
+    Assert-NoReparsePointInPath -Path $Path -TrustedRoot $TrustedRoot -Purpose "the companion's audit directory"
 
     $created = -not (Test-Path -LiteralPath $Path)
     if ($created) {
         New-Item -ItemType Directory -Force -Path $Path | Out-Null
+        # Created a moment ago by this process, and still checked: between the check above
+        # and the creation, the name was free for anyone to take.
+        Assert-NoReparsePointInPath -Path $Path -TrustedRoot $TrustedRoot -Purpose "the companion's audit directory"
     }
 
     $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
@@ -671,30 +924,60 @@ function Set-CompanionAuditDirectoryAcl {
     $changed = ($current -ne (& $describe $wanted))
     if ($changed) {
         ([System.IO.DirectoryInfo]$Path).SetAccessControl($wanted)
+    }
 
-        # A trail written while the directory was in some other state may carry explicit
-        # entries of its own; /reset makes it inherit what the directory now says.
-        if (@(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue).Count -gt 0) {
-            $icacls = Get-SystemTool -Name "icacls.exe"
-            $reset = Invoke-NativeProcess -FilePath $icacls `
-                -Arguments @((Join-Path $Path "*"), "/reset", "/T", "/C", "/Q") -TimeoutSeconds 120
-            if ($reset.ExitCode -ne 0) {
-                Write-Warning "icacls reported exit $($reset.ExitCode) while resetting the audit trail's ACL under $Path; the report below is authoritative"
+    # The owner, AFTER the DACL. An elevated run hands the directory to Administrators: the
+    # account that created it - the companion's, or anybody's who got there first - keeps
+    # WRITE_DAC over it for as long as it owns it, whatever the DACL above says.
+    $ownerChanged = $false
+    $newOwner = ""
+    if ($Elevated) {
+        $owner = (Get-AclReport -Path $Path).Owner
+        if ($script:TrustedOwnerSids -notcontains $owner) {
+            try {
+                $ownership = New-Object System.Security.AccessControl.DirectorySecurity
+                $ownership.SetOwner((New-Object System.Security.Principal.SecurityIdentifier($script:SidAdministrators)))
+                ([System.IO.DirectoryInfo]$Path).SetAccessControl($ownership)
             }
+            catch {
+                $why = $_.Exception.Message
+                if ($_.Exception.InnerException) { $why = $_.Exception.InnerException.Message }
+                throw "the owner of $Path is $owner and could not be changed to Administrators ($why). Its permissions were written; its owner can still change them."
+            }
+            $ownerChanged = $true
+            $newOwner = $script:SidAdministrators
+        }
+    }
+
+    # A trail written while the directory was in some other state may carry explicit entries
+    # (or an owner) of its own. Walked entry by entry - never `icacls /T`, which follows
+    # junctions, and never into a reparse point.
+    $skipped = @()
+    if ($changed -or $ownerChanged) {
+        $walk = Reset-ChildAclToInherit -Directory $Path -NewOwnerSid $newOwner
+        $skipped = @($walk.SkippedReparsePoints)
+        foreach ($failure in @($walk.Failures)) {
+            Write-Warning "could not reset the ACL of $failure; the report below is authoritative"
+        }
+        foreach ($link in $skipped) {
+            Write-Warning "$link is a reparse point inside the companion's audit directory; it was neither entered nor changed. Nothing the agent writes belongs behind one - look at where it leads and remove it."
         }
     }
 
     $after = Get-CompanionAuditDirectoryReport -Path $Path -OwnerSid $OwnerSid
-    if (-not $after.OwnerCanWrite) {
-        throw "the companion's audit directory is still not writable by $OwnerSid after the repair: $($after.Problems -join '; ')"
+    if (-not $after.OwnerCanWrite -or -not $after.OwnerTrusted) {
+        $advice = if ($Elevated) { "" } else { " Run the installer elevated: only an elevated run can take a directory away from the account that owns it." }
+        throw "the companion's audit directory is not as it must be after the repair: $($after.Problems -join '; ').$advice"
     }
 
     return [pscustomobject]@{
-        Path    = $Path
-        Created = $created
-        Changed = $changed
-        Before  = $before
-        After   = $after
+        Path                 = $Path
+        Created              = $created
+        Changed              = $changed
+        OwnerChanged         = $ownerChanged
+        SkippedReparsePoints = @($skipped)
+        Before               = $before
+        After                = $after
     }
 }
 
@@ -707,13 +990,16 @@ function Get-CompanionAuditDirectoryVerdict {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)][string]$OwnerSid
+        [Parameter(Mandatory = $true)][string]$OwnerSid,
+        $AclReport = $null
     )
 
     $criterion = "audit dir writable by owner"
-    $report = Get-CompanionAuditDirectoryReport -Path $Path -OwnerSid $OwnerSid
-    if ($report.OwnerCanWrite) {
-        $evidence = "$OwnerSid holds Modify on $Path, inherited by the trail ($($report.Sddl))"
+    $report = Get-CompanionAuditDirectoryReport -Path $Path -OwnerSid $OwnerSid -AclReport $AclReport
+    # Writable by the owner AND not re-permissionable by anyone else: a directory owned by
+    # another account, or one that is a junction, passes the first and means nothing.
+    if ($report.OwnerCanWrite -and $report.OwnerTrusted -and -not $report.IsReparsePoint) {
+        $evidence = "$OwnerSid holds Modify on $Path, inherited by the trail; the directory is owned by $($report.Owner) ($($report.Sddl))"
         if (@($report.OtherWriters).Count -gt 0) {
             $evidence += "; NOTE other principals can write there too: $($report.OtherWriters -join ', ') - rerun scripts\install-device-service.ps1 to state the DACL"
         }
@@ -727,7 +1013,7 @@ function Get-CompanionAuditDirectoryVerdict {
     return [pscustomobject]@{
         Criterion = $criterion
         Status    = "NOT_YET_PROVEN"
-        Evidence  = "$($report.Problems -join '; ') - the companion (running as $OwnerSid) cannot write its audit trail, so no browser_worker_started row can appear; $remedy"
+        Evidence  = "$($report.Problems -join '; ') - the companion (running as $OwnerSid) cannot write an audit trail that can be relied on, so no browser_worker_started row counts; $remedy"
     }
 }
 

@@ -40,6 +40,13 @@ public sealed class CompanionAuditDirectoryTests : IDisposable
 
     public void Dispose()
     {
+        // Junctions first, and as junctions (a non-recursive delete removes the link): the
+        // clean-up below must never walk through one.
+        foreach (var junction in _junctions)
+        {
+            try { Directory.Delete(junction, recursive: false); } catch (Exception) { }
+        }
+
         // A directory protected against this account cannot be walked by it; the DACL is
         // handed back first, through the WRITE_DAC an owner always keeps.
         RestoreAccess(_root);
@@ -163,6 +170,111 @@ public sealed class CompanionAuditDirectoryTests : IDisposable
         Assert.Equal(before, after);
         Assert.Equal(0, audit.FailedWrites);
     }
+
+    // --------------------------------------------------- security review of 2a2f7f95
+
+    [Fact]
+    public void Access_that_comes_through_a_group_is_access_and_the_directory_is_left_as_it_is()
+    {
+        // LOW-3. "Can the owner write" was answered by looking for the owner's SID in the
+        // DACL. A directory that lets the owner write through a GROUP - here Authenticated
+        // Users, which this process is a member of like every logged-on account - has no
+        // such entry, was judged unwritable, and had its DACL replaced wholesale. Whether it
+        // can be written is decided by writing.
+        var directory = Path.Combine(_root, "companion", "audit");
+        Directory.CreateDirectory(directory);
+        const InheritanceFlags inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        var viaGroup = new DirectorySecurity();
+        viaGroup.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        viaGroup.AddAccessRule(new FileSystemAccessRule(SystemSid, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+        viaGroup.AddAccessRule(new FileSystemAccessRule(AdministratorsSid, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+        viaGroup.AddAccessRule(new FileSystemAccessRule(
+            new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+            FileSystemRights.Modify, inherit, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(directory).SetAccessControl(viaGroup);
+        var before = new DirectoryInfo(directory).GetAccessControl(AccessControlSections.Access)
+            .GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        Assert.Equal((FileSystemRights)0, AllowedTo(DaclOf(directory).Rules, CurrentUser));
+
+        var audit = new AuditLog(Path.Combine(directory, "companion-audit.jsonl"), AuditWriter.OwnerSessionCompanion, developerRun: false);
+        audit.Write("artifact_opened", status: "ok");
+
+        Assert.Equal(0, audit.FailedWrites);
+        var after = new DirectoryInfo(directory).GetAccessControl(AccessControlSections.Access)
+            .GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        Assert.Equal(before, after);
+        // The probe cleans up after itself: the trail is the only file there.
+        Assert.Equal(new[] { "companion-audit.jsonl" }, Directory.GetFiles(directory).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public void A_junction_standing_where_the_audit_directory_should_be_is_refused_and_nothing_is_written_through_it()
+    {
+        // MEDIUM-1, the companion's half. Whoever can create a folder under the companion's
+        // data root can make `audit` a junction, and the trail - and any DACL the companion
+        // writes on "its" directory - would land wherever that points.
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var before = new DirectoryInfo(elsewhere).GetAccessControl(AccessControlSections.Access)
+            .GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+        var companion = Path.Combine(_root, "companion");
+        Directory.CreateDirectory(companion);
+        var junction = Path.Combine(companion, "audit");
+        CreateJunction(junction, elsewhere);
+
+        var audit = new AuditLog(Path.Combine(junction, "companion-audit.jsonl"), AuditWriter.OwnerSessionCompanion, developerRun: false);
+        var log = new ListLogger();
+        Program.ReportAuditFailures(audit, log);
+        audit.Write("browser_worker_started", status: "ok");
+        audit.Write("browser_request", status: "ok");
+
+        Assert.Equal(2, audit.FailedWrites);
+        Assert.Empty(Directory.GetFileSystemEntries(elsewhere));
+        Assert.Equal(before, new DirectoryInfo(elsewhere).GetAccessControl(AccessControlSections.Access)
+            .GetSecurityDescriptorSddlForm(AccessControlSections.Access));
+        var warning = Assert.Single(log.Lines);
+        Assert.StartsWith("[Warning]", warning, StringComparison.Ordinal);
+        Assert.Contains("reparse point", warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_junction_that_replaces_the_directory_AFTER_the_companion_started_is_refused_at_the_next_row()
+    {
+        var elsewhere = Path.Combine(_root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var directory = Path.Combine(_root, "companion", "audit");
+        var path = Path.Combine(directory, "companion-audit.jsonl");
+        var audit = new AuditLog(path, AuditWriter.OwnerSessionCompanion, developerRun: false);
+        audit.Write("first", status: "ok");
+        Assert.Equal(0, audit.FailedWrites);
+
+        File.Delete(path);
+        Directory.Delete(directory);
+        CreateJunction(directory, elsewhere);
+        audit.Write("second", status: "ok");
+
+        Assert.Equal(1, audit.FailedWrites);
+        Assert.Empty(Directory.GetFileSystemEntries(elsewhere));
+    }
+
+    /// <summary><c>mklink /J</c>: a junction needs no privilege, which is why it is the attack.</summary>
+    private void CreateJunction(string at, string target)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+            Arguments = $"/c mklink /J \"{at}\" \"{target}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        })!;
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, $"mklink /J failed: {process.StandardError.ReadToEnd()}");
+        _junctions.Add(at);
+    }
+
+    private readonly List<string> _junctions = new();
 
     // ------------------------------------------------- the service does not get the weaker one
 

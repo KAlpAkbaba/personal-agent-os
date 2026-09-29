@@ -360,8 +360,23 @@ function Initialize-CompanionDataDirectories {
         [Parameter(Mandatory = $true)][string]$CompanionDataDir,
         [Parameter(Mandatory = $true)][string]$OwnerSid,
         # Empty when the install has no browser worker (-SkipBrowser).
-        [string]$BrowserDataDir
+        [string]$BrowserDataDir,
+        # For tests that name an account this machine has never heard of. Never the installer.
+        [switch]$AllowUnresolvedOwnerSid
     )
+
+    # Security review of 2a2f7f95: every refusal comes BEFORE the first grant. This step runs
+    # elevated over directories an unprivileged account can create things in, so a group SID
+    # or a junction standing where one of them should be is decided here, with nothing
+    # changed yet - not discovered halfway, with the root already granted.
+    Assert-OwnerAccountSid -Sid $OwnerSid -AllowUnresolved:$AllowUnresolvedOwnerSid
+    $auditDir = Join-Path $CompanionDataDir "audit"
+    Assert-NoReparsePointInPath -Path $CompanionDataDir -TrustedRoot $CompanionDataDir -Purpose "the companion's data root"
+    Assert-NoReparsePointInPath -Path $auditDir -TrustedRoot $CompanionDataDir -Purpose "the companion's audit directory"
+    if ($BrowserDataDir) {
+        $browserRoot = Split-Path -Parent $BrowserDataDir
+        Assert-NoReparsePointInPath -Path $BrowserDataDir -TrustedRoot $browserRoot -Purpose "the browser data directory"
+    }
 
     $messages = New-Object System.Collections.ArrayList
 
@@ -369,8 +384,11 @@ function Initialize-CompanionDataDirectories {
     # browser or no browser.
     Set-OwnerWritableDirectory -Path $CompanionDataDir -OwnerSid $OwnerSid
 
-    $auditDir = Join-Path $CompanionDataDir "audit"
-    $audit = Set-CompanionAuditDirectoryAcl -Path $auditDir -OwnerSid $OwnerSid
+    $audit = Set-CompanionAuditDirectoryAcl -Path $auditDir -OwnerSid $OwnerSid -TrustedRoot $CompanionDataDir `
+        -AllowUnresolvedOwnerSid:$AllowUnresolvedOwnerSid
+    if ($audit.OwnerChanged) {
+        [void]$messages.Add("companion audit directory $auditDir is now owned by Administrators (it was owned by the account that created it, which could have re-permissioned it)")
+    }
     if ($audit.Created) {
         [void]$messages.Add("companion audit directory $auditDir created, writable by SID $OwnerSid")
     }

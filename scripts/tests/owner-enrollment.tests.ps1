@@ -29,6 +29,28 @@
     DELETE. The first test case proves the fixture behaves that way before anything relies
     on it.
 
+    WHAT THAT EMULATION IS, EXACTLY, AND WHAT IT CANNOT SHOW (security review of 2a2f7f95,
+    which made the file's owner and the content of OWNER RIGHTS part of "safe"):
+
+      - on disk, the fixture is: owner = THIS account; protected DACL SYSTEM:(R,W), this
+        account:(R,W), OWNER RIGHTS:(read permissions). The real record is: owner =
+        BUILTIN\Administrators; protected DACL SYSTEM:(R,W), the owner's account:(R,W);
+      - the ACCESS this account gets is the same in both (measured: write data granted,
+        WRITE_DAC and DELETE denied), so every outcome that depends on access - the write
+        succeeding, the permissions call refused, "kept", the revoke emptying instead of
+        deleting - is measured for real;
+      - the OWNER FIELD is not the same, and nothing on disk here can make it so. The
+        fixture passes the owner check because this account IS the owner SID it is asked
+        about; the real record passes it because Administrators is a trusted owner. That
+        second reason, and the refusal of a record owned by a stranger, are asserted on
+        descriptors built in memory (where SetOwner needs no privilege) and, for the write
+        path, through an injected descriptor reader;
+      - so what NO test here shows is a real file, owned by another account, being refused
+        or taken over. The take-over itself (an elevated run setting the owner to
+        Administrators) runs only elevated and is not exercised by this suite at all;
+      - OWNER RIGHTS with read-permissions only is inside what the review allows that entry
+        to carry ("at most Read/ReadControl"), which is why the fixture could keep it.
+
     THE SCRIPT ITSELF IS NEVER RUN HERE: it closes and relaunches Chrome. Its wiring to the
     library is read with the PowerShell parser instead.
 
@@ -280,6 +302,112 @@ try {
         Assert-Equal -Expected "already" -Actual $second.Acl -Because "nothing to change"
         Assert-Equal -Expected $sddl -Actual (Get-FileSddl -Path $file) -Because "a rerun must not drift the ACL"
         Assert-Equal -Expected $script:NewJson -Actual ([System.IO.File]::ReadAllText($file)) -Because "the newer record wins"
+    }
+
+    Write-Host ""
+    Write-Host "security review of 2a2f7f95: who OWNS the record, and what OWNER RIGHTS may carry"
+
+    # browser\ lets every local user create files. Another account can therefore get there
+    # first, create owner-enrollment.json, give it a DACL that looks exactly right - and keep
+    # it: whoever owns a file holds WRITE_DAC over it, whatever the DACL says, and an OWNER
+    # RIGHTS entry can say "full control" out loud. Later it re-permissions the record and
+    # writes owner_authorized_for_research into it. "Safe" used to look at neither.
+
+    function New-RecordDescriptor {
+        <#  A descriptor in memory: the one place a non-elevated test can name any owner it likes.  #>
+        param(
+            [string]$Owner,
+            [System.Security.AccessControl.FileSystemRights]$OwnerAccountRights = $script:ReadWrite,
+            $OwnerRightsEntry = $null
+        )
+        $security = New-Object System.Security.AccessControl.FileSecurity
+        $security.SetAccessRuleProtection($true, $false)
+        $security.SetOwner((New-Object System.Security.Principal.SecurityIdentifier($Owner)))
+        $security.AddAccessRule((New-FileRule -Sid "S-1-5-18" -Rights $script:ReadWrite))
+        $security.AddAccessRule((New-FileRule -Sid $script:Me.Value -Rights $OwnerAccountRights))
+        if ($null -ne $OwnerRightsEntry) { $security.AddAccessRule((New-FileRule -Sid "S-1-3-4" -Rights $OwnerRightsEntry)) }
+        return $security
+    }
+
+    $script:Stranger = "S-1-5-21-1111111111-2222222222-3333333333-1005"
+
+    Test-Case "MEDIUM-2: the reviewer's PoC on disk - SYSTEM, the owner with Modify, and OWNER RIGHTS with full control - is NOT safe" {
+        $file = Join-Path $script:Sandbox "poc\browser\owner-enrollment.json"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $file) | Out-Null
+        [System.IO.File]::WriteAllText($file, "{}")
+        $security = New-Object System.Security.AccessControl.FileSecurity
+        $security.SetAccessRuleProtection($true, $false)
+        $security.AddAccessRule((New-FileRule -Sid "S-1-5-18" -Rights $script:ReadWrite))
+        $security.AddAccessRule((New-FileRule -Sid $script:Me.Value -Rights ([System.Security.AccessControl.FileSystemRights]::Modify)))
+        $security.AddAccessRule((New-FileRule -Sid "S-1-3-4" -Rights ([System.Security.AccessControl.FileSystemRights]::FullControl)))
+        ([System.IO.FileInfo]$file).SetAccessControl($security)
+
+        $state = Get-OwnerEnrollmentAclState -Path $file -OwnerSid $script:Me.Value
+
+        Assert-True -Condition (-not $state.Safe) -Because "whoever owns this file may do anything to it: $($state.Sddl)"
+        Assert-True -Condition (-not $state.Intended) -Because "and it is certainly not the intended DACL"
+        Assert-True -Condition (@($state.Problems | Where-Object { $_ -match "OWNER RIGHTS" }).Count -gt 0) -Because "named: $($state.Problems -join '; ')"
+    }
+
+    Test-Case "MEDIUM-2: OWNER RIGHTS is accepted only when it carries read and nothing else" {
+        foreach ($case in @(
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::ReadPermissions; Safe = $true },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::Read;            Safe = $true },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::Write;           Safe = $false },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::ChangePermissions; Safe = $false },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::TakeOwnership;   Safe = $false },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::Delete;          Safe = $false },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::Modify;          Safe = $false },
+            @{ Rights = [System.Security.AccessControl.FileSystemRights]::FullControl;     Safe = $false }
+        )) {
+            $state = Get-OwnerEnrollmentAclStateFromSecurity -Security (New-RecordDescriptor -Owner "S-1-5-32-544" -OwnerRightsEntry $case.Rights) -OwnerSid $script:Me.Value
+            Assert-Equal -Expected $case.Safe -Actual $state.Safe -Because "OWNER RIGHTS:$($case.Rights) - $($state.Problems -join '; ')"
+        }
+    }
+
+    Test-Case "MEDIUM-2: a record is safe only when the owner's account, Administrators or SYSTEM owns it" {
+        foreach ($case in @(
+            @{ Owner = "S-1-5-32-544";    Safe = $true;  What = "Administrators - the elevated run of 2026-09-29, with its TRUE owner" },
+            @{ Owner = "S-1-5-18";        Safe = $true;  What = "SYSTEM" },
+            @{ Owner = $script:Me.Value;  Safe = $true;  What = "the owner's own account" },
+            @{ Owner = $script:Stranger;  Safe = $false; What = "another account" },
+            @{ Owner = "S-1-5-32-545";    Safe = $false; What = "BUILTIN\Users" }
+        )) {
+            $state = Get-OwnerEnrollmentAclStateFromSecurity -Security (New-RecordDescriptor -Owner $case.Owner) -OwnerSid $script:Me.Value
+            Assert-Equal -Expected $case.Safe -Actual $state.Safe -Because "$($case.What): $($state.Problems -join '; ')"
+            Assert-True -Condition (-not $state.Intended) -Because "$($case.What): (R,W) for the owner is never the intended DACL"
+            if (-not $case.Safe) {
+                Assert-True -Condition (@($state.Problems | Where-Object { $_ -match "owned by $([regex]::Escape($case.Owner))" }).Count -gt 0) `
+                    -Because "the owner is named: $($state.Problems -join '; ')"
+            }
+        }
+
+        # The intended DACL under a stranger's ownership is not "already" right either.
+        $perfect = New-RecordDescriptor -Owner $script:Stranger -OwnerAccountRights ([System.Security.AccessControl.FileSystemRights]::Modify)
+        $state = Get-OwnerEnrollmentAclStateFromSecurity -Security $perfect -OwnerSid $script:Me.Value
+        Assert-True -Condition (-not $state.Intended -and -not $state.Safe) -Because "a perfect DACL on a file somebody else owns is theirs to change"
+    }
+
+    Test-Case "MEDIUM-2: a record owned by another account stops the run before a byte is written, and asks for elevation" {
+        $file = Join-Path $script:Sandbox "stranger\browser\owner-enrollment.json"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $file) | Out-Null
+        [System.IO.File]::WriteAllText($file, '{"enrollments":[{"id":"planted"}]}')
+        $before = Get-Sha256 -Path $file
+        $sddl = Get-FileSddl -Path $file
+
+        # This account cannot make a stranger the owner of a real file, so the descriptor the
+        # library READS is the stranger's; every write still goes to the real file, which is
+        # how "nothing was written" is a measurement.
+        $asOwnedByStranger = {
+            param($path)
+            New-RecordDescriptor -Owner $script:Stranger -OwnerAccountRights ([System.Security.AccessControl.FileSystemRights]::Modify)
+        }
+
+        Assert-Throws -Pattern "(?i)owned by .*elevated" -Because "not elevated, there is nothing this run may do about a stranger's file" -Body {
+            Write-OwnerEnrollmentRecord -Path $file -Json $script:NewJson -OwnerSid $script:Me.Value -ReadSecurity $asOwnedByStranger -Elevated $false
+        }
+        Assert-Equal -Expected $before -Actual (Get-Sha256 -Path $file) -Because "the record was not written"
+        Assert-Equal -Expected $sddl -Actual (Get-FileSddl -Path $file) -Because "and its permissions were not touched"
     }
 
     Write-Host ""
