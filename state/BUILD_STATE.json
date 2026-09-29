@@ -1111,5 +1111,36 @@
       "home PC: reinstall the agent (MAIL) and -AuthorizeTasks as the owner intends (installer now creates the companion audit directory with the right ACL)",
       "web shell: pick 'Bu bilgisayar' once per browser after the release"
     ]
+  },
+  "agent_team_adr_0214": {
+    "status": "BUILT on feat/dev-team; no cycle has been run with a real model (the pilot)",
+    "adr": "ADR-0214",
+    "protocol": "docs/TEAM_PROTOCOL.md (owner decision 2026-09-29)",
+    "date": "2026-09-30",
+    "code": [
+      ".claude/agents/ (lead, researcher, integrator, worker, inspector)",
+      "team/queue.json, team/queue.schema.json, team/lock.json, team/proposals, team/plans, team/reports",
+      "scripts/lib/TeamQueue.ps1, scripts/lib/TeamRun.ps1",
+      "scripts/team/ (cycle, new-worktree, close-worktree, integration-branch, collect-reports, register-nightly)",
+      "scripts/quality-gate.ps1 (the step 'Agent team cycle')",
+      "docs/ROADMAP.md (the owner's update of 2026-09-29)"
+    ],
+    "tests": [
+      "scripts/tests/team-cycle.tests.ps1 (69, fake model, a git repository of its own)",
+      "services/api/tests/unit/test_team_queue_schema.py (38)",
+      "16 mutations RED: docs/evidence/adr-0214-team-mutations-2026-09-30.json"
+    ],
+    "evidence_class": {
+      "queue_lock_cycle": "PROVEN_AUTOMATED / PROVEN_PROXY (fake model)",
+      "cycle_with_a_real_model": "NOT_STARTED (the pilot)",
+      "onay_merkezi": "NOT_STARTED (queued as a worker task)",
+      "nightly_task": "NOT registered; the command is in team/reports/bootstrap-2026-09-30.md"
+    },
+    "owner_gates_open": [
+      "release approval: main (the office day + PR-B) is not released; production is be2975ae",
+      "owner step: reinstall the agent on MAIL (-DisplayPower -Operator); -AuthorizeTasks does not exist",
+      "idea approval: none yet; the pilot's researcher writes the first three proposals"
+    ],
+    "gaps": "ADR-0214 lists eleven protocol gaps; the lock is not shared between machines"
   }
 }

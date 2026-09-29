@@ -1,0 +1,153 @@
+{
+  "adr": "ADR-0214",
+  "work": "team bootstrap: the queue, the lock, the cycle",
+  "date": "2026-09-30",
+  "method": "one mutation at a time, in one process; the file is backed up, mutated, scripts/tests/team-cycle.tests.ps1 is run, the file is restored from the backup and its sha256 compared with the one taken before. RED = the suite failed (exit 1) and named a failing case.",
+  "not_mutated": "register-nightly.ps1's two refusals (no -Register, not the home PC): removing either would register a real scheduled task on the owner's machine while the test runs.",
+  "mutations": [
+    {
+      "id": "T1",
+      "name": "T1 a task at an owner gate is run",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  every state has an answer, and the table names all thirteen | FAIL  no run is ever started for a task at one of the owner's gates | team-cycle tests: 67 passed, 2 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T2",
+      "name": "T2 a lock is stale after one hour",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  the other machine's fresh lock stops the cycle | FAIL  a lock is stale at six hours and not a minute before | FAIL  the lock this script writes is one it can read | team-cycle tests: 65 passed, 4 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T3",
+      "name": "T3 a report without a verdict is an approval",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  'I cannot APPROVE this.' is NONE | FAIL  'approve' is NONE | FAIL  'APPROVED_BY nobody' is NONE | team-cycle tests: 65 passed, 4 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T4",
+      "name": "T4 a task may be returned three times",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  returned once it goes back; returned twice it is stopped | FAIL  returned twice, the task is stopped and the report says why | team-cycle tests: 67 passed, 2 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T5",
+      "name": "T5 the summary is four hundred lines",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  a long report is cut to forty lines and keeps its END | FAIL  the report is the protocol's, in Turkish, and the queue holds forty lines of each run | team-cycle tests: 67 passed, 2 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T6",
+      "name": "T6 two tasks may share an area",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  refused: two tasks in work on one area, or on an area inside the other's | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T7",
+      "name": "T7 a proposal goes straight to work",
+      "file": "scripts/lib/TeamQueue.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  every state has an answer, and the table names all thirteen | FAIL  a proposal never reaches a worker on its own | team-cycle tests: 67 passed, 2 failed",
+      "sha256_before": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90",
+      "sha256_after": "c7c71731c13b8fa1b205c3babce6c5bdb709faa2a6e4f2631e47732a51cc9a90"
+    },
+    {
+      "id": "T8",
+      "name": "T8 a run may start agents of its own",
+      "file": "scripts/lib/TeamRun.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  a run is capped, fresh, and cannot start agents of its own | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "753e4581982e8d006eb94eddf36e48b373a5b03efb52042461f9d60ade8c63f9",
+      "sha256_after": "753e4581982e8d006eb94eddf36e48b373a5b03efb52042461f9d60ade8c63f9"
+    },
+    {
+      "id": "T9",
+      "name": "T9 a dirty worktree is removed",
+      "file": "scripts/lib/TeamRun.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  the worktree of a finished task is closed only when it is clean | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "753e4581982e8d006eb94eddf36e48b373a5b03efb52042461f9d60ade8c63f9",
+      "sha256_after": "753e4581982e8d006eb94eddf36e48b373a5b03efb52042461f9d60ade8c63f9"
+    },
+    {
+      "id": "T10",
+      "name": "T10 a conflict is left in the integration branch",
+      "file": "scripts/lib/TeamRun.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  a conflict leaves the integration branch as it was and says which branch | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "753e4581982e8d006eb94eddf36e48b373a5b03efb52042461f9d60ade8c63f9",
+      "sha256_after": "753e4581982e8d006eb94eddf36e48b373a5b03efb52042461f9d60ade8c63f9"
+    },
+    {
+      "id": "T11",
+      "name": "T11 a worker may leave its area",
+      "file": "scripts/team/cycle.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  a worker that leaves its area is sent back before anyone inspects it | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f",
+      "sha256_after": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f"
+    },
+    {
+      "id": "T12",
+      "name": "T12 the money cap stops nothing",
+      "file": "scripts/team/cycle.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  the cycle's cap stops it: no run is started once the money is spent | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f",
+      "sha256_after": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f"
+    },
+    {
+      "id": "T13",
+      "name": "T13 the other machine's lock is ignored",
+      "file": "scripts/team/cycle.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  the other machine's lock stops the cycle before it starts anything | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f",
+      "sha256_after": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f"
+    },
+    {
+      "id": "T14",
+      "name": "T14 the lock is never released",
+      "file": "scripts/team/cycle.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  the cycle's cap stops it: no run is started once the money is spent | FAIL  a run past its time is killed, counted as a failure, and the lock is released | team-cycle tests: 67 passed, 2 failed",
+      "sha256_before": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f",
+      "sha256_after": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f"
+    },
+    {
+      "id": "T15",
+      "name": "T15 a run is given its own cap, whatever is left",
+      "file": "scripts/team/cycle.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  the cycle's cap stops it: no run is started once the money is spent | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f",
+      "sha256_after": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f"
+    },
+    {
+      "id": "T16",
+      "name": "T16 a failed run is counted as a result",
+      "file": "scripts/team/cycle.ps1",
+      "verdict": "RED",
+      "tests": "FAIL  a run that prints no result is a failure, and two of them stop the task | team-cycle tests: 68 passed, 1 failed",
+      "sha256_before": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f",
+      "sha256_after": "d0fa141bc304d11f59b1a70f18b2e1acbd66cabc6a0d07f85757b5df31d9307f"
+    }
+  ]
+}

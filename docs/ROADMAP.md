@@ -442,12 +442,13 @@ not rediscovered.
 | JARVIS | PersonalAgentOS today | State |
 |---|---|---|
 | Always-listening natural conversation, interruptible, in the owner's language | Realtime voice (OpenAI) + the free local mode (Chrome Web Speech + the ONE router + Haiku), barge-in, the Arbor voice target | **HAVE** — quality work remains (Turkish TTS gap, K66 noise, ADR-0043/0080) |
-| Knows the owner completely, remembers everything that matters | Memory (M5, B16–B19) — now SEMANTIC with ADR-0200 (local embedder); ledger + experience engine | **IN PROGRESS** — PR-1 landed on `feat/memory-local-embedder`; PR-2 (extraction in every mode, broader preference derivation) and PR-3 (rerank) follow |
+| Knows the owner completely, remembers everything that matters | Memory (M5, B16–B19) — SEMANTIC with ADR-0200 (local embedder, potion in production, 22/22 rows embedded); extraction in every mode (ADR-0201); rerank built and kept off by decision (ADR-0206); ledger + experience engine | **HAVE** (2026-09-29) — ADR-0201 is PROVEN_AUTOMATED; the owner's live local-mode sentence is pending |
 | Researches anything, reads the world's data | Research in the owner's own Chrome (ADR-0183), Latest News Mode, God's Eye | **HAVE** |
 | Runs the workshop by voice: machines, files, fabrication | Digital Operator (M19), documents (M20), artifact/app/native/3D factories (M22–M28) | **HAVE** |
-| The same JARVIS in the house, the car, the suit, the phone | Multi-device / roaming owner (M19 above; "M29") — **deferred by the owner 2026-09-12** | **MISSING** — the largest gap; to be reopened for this target |
+| The same JARVIS in the house, the car, the suit, the phone | Multi-device (M29): a second device, GMKADIRAKBABA, is enrolled (ADR-0203, aliases `ofis` / `iş`); browser worker and owner-Chrome research proven in the office 2026-09-29; session→device affinity, launch without the Operator and the spoken device name are on main (ADR-0208/0209/0212), not yet released | **PARTIAL** (2026-09-29) — two PCs; no phone, no handoff of a running task |
 | Runs the house: lights, doors, climate | Home Assistant behind a `smart_home` provider (research 2026-09-26) | **MISSING** — adopt |
 | Secretary: mail, calendar, answers calls on his behalf | Mail/calendar built (M21) but no account; calendar → Radicale (own CalDAV); calls → a telephony bridge (Twilio/Telnyx) into the realtime voice path, with the KVKK announcement | **MISSING** — accounts and the bridge |
+| **Records everything and tells him, whenever he asks** — "her şeyi kaydeden ve istediğim zaman bana anlatan" | Activity ledger (M16), memory (M5/ADR-0200–0206), activity briefing, research reports, audit trails. Missing: ONE narrative over all of it — "bu hafta ne oldu", "ofiste ne yaptın", "ne başarısız oldu" — spoken on demand, with failures included | **PARTIAL** — its own line under order item 2c |
 | Proactive: warns, briefs, watches over him | Alarms, routines, morning briefing, presence, notifications; briefings still pull-only for a web session (queue item 1) | **PARTIAL** |
 | Holograms and hands in the air | Holographic/Living Core (M18), hand gestures stage 1+2 (ADR-0198/0199, branch), God's Eye | **PARTIAL** — on a screen; volumetric holograms do not exist, AR glasses are the nearest real thing |
 | Repairs and improves itself | Self-healing (M6), evolution (M7/M18.4), self-dev (B35), recovery supervisor (B08) | **HAVE** — controlled, and staying controlled |
@@ -473,19 +474,62 @@ not rediscovered.
 
 ### The order (binding until the owner changes it)
 
-1. **Memory** — the JARVIS that knows him. PR-1 (ADR-0200) landed; PR-2: automatic
-   extraction in every mode (ADR-0192) + preference derivation beyond research topics
-   (ADR-0191); PR-3: a semantic rerank over `hybrid_search`.
-2. **browser-use** — the JARVIS that does anything on the web, in the owner's own Chrome
-   (ADR-0113/0183), reversible actions free, irreversible ones behind read-back + step-up.
+1. **Memory** — DONE 2026-09-29: PR-1 in production (ADR-0200), PR-2 automated
+   (ADR-0201), PR-3 built and off (ADR-0206).
+2. **browser-use, anywhere** — the JARVIS that does anything on the web:
+   - 2a. **In the owner's own Chrome** (ADR-0113/0183/0207): the task loop's PR-A and PR-B
+     landed; PR-C (real Chrome, the six binding risks closed) and PR-D (voice + shell)
+     remain. Reversible actions free, irreversible ones behind read-back + the owner's word.
+   - 2b. **Execution in the cloud (ADR-0213)** — owner decision 2026-09-29: "işlemleri
+     LLM'in koştuğu makine üzerinde yapsak daha stabil olmaz mı?". A headless-Chromium
+     browser worker on the Cloud Core registered as a virtual device (`device_kind=cloud`,
+     alias "bulut"); an `execution_target` rule (cloud | owner_chrome | device) with
+     fallbacks and events; a network-less `compute.run` sandbox for calculation and data
+     work; scheduled jobs always run in the cloud. Capacity: measure on CPX32, plan CPX41.
+   - 2c. **The narrative** — the table's new row: one spoken account of what happened, on
+     demand, failures included.
 3. **Secretary** — Radicale (own calendar/contacts), a mail account, then the telephony
    bridge into the realtime voice path (announce the assistant, KVKK).
 4. **The house** — Home Assistant as the `smart_home` provider; "salonun ışığını kapat".
-5. **Everywhere** — reopen the multi-device / roaming-owner milestone (M19/M29 above):
-   the same identity, memory and conversation on every enrolled device.
+5. **Everywhere** — reopened: the office PC is the second device; next: session→device
+   affinity in production (ADR-0208), device-to-device handoff of a running task, the phone.
 6. **Voice and character** — close the Turkish TTS gap, then give the persona its wit.
 7. **Sight** — gesture stage 2 merged after the owner's trial; AR as a later surface.
 
-Done for this target = each row above says HAVE with real (PROVEN_REAL) evidence, the
-limits still hold, and the owner says it feels like JARVIS — the last one is his verdict
-alone, as with voice (ADR-0034 §6).
+### Definition of done (owner, 2026-09-29)
+
+In the owner's words: the project is at its finishing level when it is "iron-man filmindeki
+gibi aynı gerçek dünyaya etki edebilen, araştırabilen, her şeyi kaydeden ve istediğim zaman
+bana anlatan bir JARVIS". Operationally:
+
+- every row of the table above says **HAVE** with **PROVEN_REAL** evidence — real device,
+  real voice, production; PROVEN_AUTOMATED / PROVEN_PROXY from the inspector never close a row;
+- the limits above still hold;
+- the owner says it feels like JARVIS. That verdict is his alone and is the last gate, as
+  with voice (ADR-0034 §6).
+
+Finishing the roadmap is therefore necessary, not sufficient: when the owner says "olmadı",
+a new row is opened. The roadmap is the path; this section is the destination.
+
+### How it is built from here (owner decision 2026-09-29)
+
+The project is developed by a **team of Claude agents** working in cycles, not by one
+session. Roles, gates and the cycle are binding in `docs/TEAM_PROTOCOL.md`; role
+definitions live in `.claude/agents/`. In short:
+
+- **Lead (Proje Hakimi)** owns this roadmap and the definition of done, splits work,
+  assigns it, sends incomplete or wrong work back, merges, reports to the owner.
+- **Researcher** knows the whole project, scans the world for what to add, proposes to the
+  owner; only owner-approved ideas reach the lead. Roadmap changes are proposed by the
+  researcher, approved by the owner, written by the lead.
+- **Integrator** finds existing code/libraries for an assigned task (licence and safety
+  checked, registered in THIRD_PARTY_COMPONENTS) and writes the integration plan.
+- **Workers ×2–3** implement under DEVELOPMENT_POLICY in their own worktrees.
+- **Inspector** runs the result, runs the gate, tries to break it; reports the evidence
+  class to the lead. No merge without the inspector.
+- **Three owner gates, and only three:** idea approval, release approval, real-world
+  evidence (PROVEN_REAL) plus the final verdict. Everything else runs without him.
+- The cycle is driven by a script (`scripts/team/cycle.ps1`), each agent run is short and
+  fresh-context, state lives on disk (`team/queue.json`, HANDOFF, BUILD_STATE, reports), so
+  the context window is never the limit. Cycles are scheduled nightly on the home PC once the
+  pilot has been measured.

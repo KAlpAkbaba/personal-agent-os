@@ -16446,3 +16446,105 @@ root, on this branch after it is on the office PC's checkout:
 (no `-SkipBrowser`; add `-Operator` / `-DisplayPower` only if they are on today - the office PC
 has both OFF, and a rerun without a switch turns it off). Evidence: `NOT_YET_PROVEN` on the
 real fleet until that run and one spoken "araştırma raporunu aç".
+
+## ADR-0214 — The project is built by a team of agents, in cycles, with three owner gates (2026-09-30)
+
+**Status.** Accepted - the owner's decision of 2026-09-29, binding in `docs/TEAM_PROTOCOL.md`.
+This ADR records how the protocol was BUILT and where the build had to choose. (ADR-0213 is
+reserved for execution in the cloud, roadmap order 2b.)
+
+**Decision.** PersonalAgentOS is developed by five roles - lead, researcher, integrator,
+worker, inspector (`.claude/agents/`) - working in cycles driven by `scripts/team/cycle.ps1`.
+Each role run is a fresh `claude -p` process: the role file is its system prompt, the task
+card is its prompt, its tools are the ones the role file grants, and it has a money cap and a
+time cap. State lives on disk: `team/queue.json` (held to `team/queue.schema.json`),
+`team/lock.json`, `team/reports/`. The owner speaks at three gates and only there: idea
+approval, release approval, real-world evidence and the final verdict.
+
+**What the cycle does, and what it leaves to the lead on purpose.**
+
+| Step | Who | Where |
+|---|---|---|
+| A proposal becomes a task that waits for the owner | `cycle.ps1 -Research` | `team/proposals/`, state `awaiting_owner` |
+| The owner approves | the owner | `state: approved` in `team/queue.json` (until the Onay Merkezi exists) |
+| Plan, work, inspection | `cycle.ps1`, one fresh run per role | the task's own worktree under `.claude/worktrees/` |
+| An approved branch is merged | `cycle.ps1` | `integrate/<cycle-id>`, in a worktree of its own |
+| The full gate on the integration branch, the merge to main | **the lead** | not in the script |
+| Release, pin, LKG | **the owner's sentence, then the lead** | not in the script |
+
+The script never merges to main, never pushes, never releases and never registers the
+nightly task. Those are one command each and they stay a person's (or the lead session's)
+decision until the pilot has been measured.
+
+**Rules the script holds, each with a test and a mutation.**
+
+* A task at an owner gate starts nobody (T1). A proposal never reaches a worker on its own (T7).
+* Two tasks in work never share a file area, nor an area inside the other's (T6).
+* A worker that leaves its area is sent back before anyone inspects it (T11).
+* A report that does not end in a verdict is not an approval (T3); returned twice, a task is
+  stopped (T4); a run that prints no result document is a failure, and two stop the task (T16).
+* The cycle's money cap stops it, and a run is given what is LEFT, not its own cap (T12, T15).
+* The other machine's fresh lock stops the cycle before it starts anything (T13); a lock is
+  stale at six hours (T2); the lock is released however the cycle ends (T14).
+* A run cannot start agents of its own: the cycle dispatches (T8).
+* A worktree with work in it is not removed (T9); a conflict is aborted and the integration
+  branch is left as it was (T10).
+* At most forty lines of a report enter the queue, and they are its END (T5).
+
+**Four things building it found.**
+
+1. *`return , @(...)` is the DeviceAliases defect again.* The idiom returns the array as ONE
+   object; a caller that wraps the call in `@( )` - which StrictMode's `.Count` rule makes
+   every caller do - gets an array of one array. Thirteen states were one state, and an empty
+   queue had one problem, which was nothing. The libraries return plain arrays.
+2. *Windows PowerShell 5.1 reads a script without a byte-order mark as ANSI.* The byte 0x94
+   of an em dash is a closing quotation mark there: the first `TeamRun.ps1` did not parse. A
+   Turkish letter that does not break the parse is worse - it arrives in the owner's report
+   as two wrong letters. Team scripts that hold non-ASCII text carry a BOM, and a test holds
+   them to it.
+3. *PowerShell variables are case-insensitive, and a parameter is typed.* In
+   `integration-branch.ps1` the local `$merge` WAS the `[string[]]$Merge` parameter, so the
+   merge's result was converted to a string array and `.Already` did not exist.
+4. *`-notmatch` is case-insensitive.* "Pilot" was a valid cycle id and "Bad-Id" a valid task
+   id until the patterns were made `-cnotmatch`. The schema's pattern is case-sensitive by
+   definition, so the two halves disagreed without either test noticing.
+
+**Protocol gaps - written down instead of asked (TEAM_PROTOCOL section 3).**
+
+1. *Pester.* The bootstrap prompt asks for Pester tests. This repository's PowerShell suites
+   use their own harness (`Test-Case` / `Assert-Equal`, 30 suites in the gate) and the machine
+   has Pester 3.4.0 only. The team suite follows the repository.
+2. *"It ends at the first owner gate it meets."* Read per TASK: a task at a gate stops there,
+   and the cycle goes on with the tasks that can run. Read per cycle, one idea waiting for the
+   owner would stop every approved task behind it.
+3. *The lock is a file in the checkout.* It stops two cycles on ONE machine. It stops two
+   MACHINES only if it is pushed and pulled, and the script does neither. Until the lock lives
+   where both machines can see it (the Cloud Core is the natural place), section 8 is held by
+   the rule that the office PC does not run cycles.
+4. *"Worktrees under `.claude/worktrees/<branch>` (never inside the main checkout)."* That
+   directory IS inside the main checkout's folder; it is ignored by git, which is what the
+   sentence needs. Built as the path says.
+5. *Per-run caps "in the role files".* The role files carry none. The caps are parameters of
+   `cycle.ps1` (`-RunMaxUsd`, `-RunMinutes`) and a task's own `budget.max_usd`.
+6. *Models per role* (section 2: lead and inspector on the strongest, workers on a cheaper
+   one). `cycle.ps1` has one `-Model` for a cycle; the role files name none.
+7. *Tokens.* The pilot is asked to measure tokens; a run's result document gives its cost in
+   USD, which is what the caps are in. The raw document of every run is kept in
+   `team/reports/<cycle-id>/` and holds the usage.
+8. *The researcher replaced a role that existed.* `.claude/agents/researcher.md` was the
+   read-only research agent of CLAUDE.md's delegation rule ("do not modify the repo"). The
+   team's researcher may write proposals. One name, the owner's file.
+9. *The lead "never writes feature code itself".* The bootstrap is scripts and tests, written
+   by the lead session because the bootstrap prompt says so and no team existed to write it.
+10. *The morning report in the web shell and by voice* (section 9) does not exist; it is part
+    of the Onay Merkezi task in the queue. Until then the report is a file.
+11. *The nightly task's two refusals are not mutated.* Removing either would register a real
+    scheduled task on the owner's machine while the test runs. They are held by tests only.
+
+**Proof.** `scripts/tests/team-cycle.tests.ps1` (69): the decisions as functions, and the
+cycle run for real in a git repository made for the test with a fake in place of the model.
+`services/api/tests/unit/test_team_queue_schema.py` (38): the queue against its schema.
+Sixteen mutations, each RED, each file restored from a backup and compared by sha256
+(`docs/evidence/adr-0214-team-mutations-2026-09-30.json`). Evidence class:
+`PROVEN_AUTOMATED` for the script and the queue; **a cycle with a real model has not been
+run** - that is the pilot.

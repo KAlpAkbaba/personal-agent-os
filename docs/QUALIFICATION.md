@@ -1076,3 +1076,23 @@ are fake sites here; the real ones are still to be named by the owner.
 | 34.16a | The read-back keeps the page's words apart from its own; a value is the owner's as a whole word; a named host allows its site and nothing above | `PROVEN_AUTOMATED` | `test_the_read_back_keeps_the_pages_words_apart_from_its_own`, `test_a_name_that_is_a_sentence_is_not_said_as_one`, `test_a_fragment_of_what_the_owner_said_is_not_a_value_he_gave`, `test_a_named_host_allows_its_site_and_nothing_above_it`. Found by the independent review. Mutations M14, M15, M16 RED |
 | 34.17 | A task on the owner's own Chrome, planned by a model | `NOT_YET_PROVEN` | PR-C. Needs the Windows agent rebuilt and installed on MAIL, the `-AuthorizeTasks` grant, and the owner's names for T3's shop and T5's web mail |
 | 34.18 | The owner starts, hears and confirms a task by voice and in the web shell | `NOT_YET_PROVEN` | PR-D |
+
+## Stage 35 — The agent team: the queue, the lock, the cycle (ADR-0214, TEAM_PROTOCOL)
+
+Built and tested on the home PC with a fake in place of the model. No cycle has been run
+with a real model: that is the pilot, and its numbers are what opens the nightly cycle.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 35.1 | The queue holds what the protocol names, and nothing else | `PROVEN_AUTOMATED` | `test_team_queue_schema.py` (38): `team/queue.json` against `team/queue.schema.json`, thirteen states, twelve required fields, a rule the validator does not know fails the test |
+| 35.2 | The script and the schema name the same states and the same fields | `PROVEN_AUTOMATED` | `team-cycle.tests.ps1`: the schema is READ and compared with `scripts/lib/TeamQueue.ps1` |
+| 35.3 | A task at one of the owner's three gates starts nobody; a proposal never reaches a worker on its own | `PROVEN_AUTOMATED` | `team-cycle.tests.ps1`, the cycle run in a repository of its own. Mutations T1, T7 RED |
+| 35.4 | An approved task is worked on in its own worktree, inspected, and merged into `integrate/<cycle>`; main is not written to | `PROVEN_PROXY` | the same suite: the fake's own log of where each run was started; `main` has the sha it had. Fake model |
+| 35.5 | Two tasks in work never share an area; a worker that leaves its area is sent back | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` (two tasks on one area are refused; the worker that leaves its area is sent back before the inspector is started). Mutations T6, T11 RED: `docs/evidence/adr-0214-team-mutations-2026-09-30.json` |
+| 35.6 | No verdict is no approval; returned twice is stopped; a run with no result is a failure | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` (the verdict table; returned twice; two runs with no result). Mutations T3, T4, T16 RED: `docs/evidence/adr-0214-team-mutations-2026-09-30.json` |
+| 35.7 | The money cap and the time cap stop the cycle; a run is given what is left | `PROVEN_PROXY` | `scripts/tests/team-cycle.tests.ps1` with `scripts/tests/lib/fake-claude.ps1`: a fake run of 4 USD against a cap of 6; a fake that sleeps ten minutes is killed. Mutations T12, T15 RED |
+| 35.8 | One machine at a time: the other machine's fresh lock stops the cycle, a stale one is taken over, the lock is released however the cycle ends | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` (the lock table; the cycle run against a held lock). Mutations T2, T13, T14 RED. Across two REAL machines the lock is not shared (ADR-0214 gap 3) |
+| 35.9 | The cycle report is the protocol's, in Turkish | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1`: the eight headings, the sha of what is ready, the one line that says how to approve |
+| 35.10 | The nightly task is not registered by anything but the owner's `-Register`, and only on the home PC | `PROVEN_AUTOMATED` | `team-cycle.tests.ps1`: the Task Scheduler holds no such task after either run. Not mutated (ADR-0214 gap 11) |
+| 35.11 | A cycle with a real model: researcher, workers, inspector, measured | `NOT_YET_PROVEN` | the pilot (TEAM_BOOTSTRAP_PROMPT stage 2); needs the owner's idea approval |
+| 35.12 | The owner approves in the Onay Merkezi, in the shell or by voice | `NOT_YET_PROVEN` | the task `onay-merkezi` in `team/queue.json` |
