@@ -118,6 +118,33 @@ def _match_explicit(
     return None
 
 
+def named_device_target(devices: list[DeviceView], targets: Sequence[str], capability: str) -> str:
+    """The one alias token to hand ``select_device`` for what the owner NAMED in a sentence
+    (ADR-0212).
+
+    One word is that word. Several are one only when every one of them names the SAME single
+    enrolled device ("ofis bilgisayarımda, yani iş bilgisayarımda": both are GMKADIRAKBABA);
+    otherwise which machine was meant is not something to guess - ``extract_alias``'s first
+    pattern would answer "ev" for "evdeki dosyayı ofis bilgisayarımda aç" - so it is refused
+    (``ambiguous_target``) and nothing is sent anywhere. A word that names nobody is left to
+    ``select_device``'s own "not found" when it is the only word; beside another word it is
+    the same refusal.
+    """
+    if len(targets) == 1:
+        return targets[0]
+    live = [d for d in devices if d.status != "revoked"]
+    owners = [{d.id for d in live if aliases.alias_matches(list(d.aliases), t)} for t in targets]
+    if all(len(o) == 1 for o in owners) and len(set().union(*owners)) == 1:
+        return targets[0]
+    raise NoCapableDeviceError(
+        f"Birden fazla bilgisayar söylediniz ({' ve '.join(targets)}); "
+        "hangisinde yapacağımı anlayamadım.",
+        capability=capability,
+        target=" / ".join(targets),
+        reason="ambiguous_target",
+    )
+
+
 def _session_device(
     devices: list[DeviceView], session_device_ids: Sequence[UUID] | None
 ) -> DeviceView | None:
@@ -239,5 +266,6 @@ __all__ = [
     "REASON_EXPLICIT_NAME",
     "REASON_SESSION_AFFINITY",
     "SelectionResult",
+    "named_device_target",
     "select_device",
 ]

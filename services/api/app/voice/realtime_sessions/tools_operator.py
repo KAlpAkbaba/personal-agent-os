@@ -824,8 +824,27 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     if task.status == STATUS_SUCCEEDED:
         speech = f"{name_tr} açtım efendim."
     else:
-        speech = f"{name_tr} açamadım efendim."
+        speech = (
+            _named_refusal_speech(
+                device_action, task.error_class, task.error_message, f"{name_tr} açmadım efendim."
+            )
+            or f"{name_tr} açamadım efendim."
+        )
     return {**(task.action_receipt or {}), "speech": speech}
+
+
+def _named_refusal_speech(
+    device_action: Any, error_class: str | None, message: str | None, tail: str
+) -> str | None:
+    """When the owner NAMED a device (ADR-0212) and that device could not serve, the reason
+    in selection's own Turkish ("'ofis' cihazı şu anda çevrimiçi değil.") ahead of ``tail``.
+    ``None`` for every other failure - a sentence that named no device keeps the wording it
+    always had - so the caller falls back to its own."""
+    if error_class != "no_capable_device" or not message:
+        return None
+    if not getattr(device_action, "targets", ()):
+        return None
+    return f"{message} {tail}"
 
 
 #: A launch is one command and its answer is the process id; the Operator's step allowed
@@ -901,7 +920,13 @@ def _open_application_directly(
             execution=EXECUTION_FAILED,
             terminal=TERMINAL_FAILED,
             server={**server, "device_message": str(result.message)[:200]},
-            speech=f"{where}{name_tr} açamadım efendim.",
+            speech=_named_refusal_speech(
+                device_action,
+                result.error_class,
+                result.message,
+                f"{name_tr} açmadım efendim.",
+            )
+            or f"{where}{name_tr} açamadım efendim.",
             error_class=error_class or "internal_bug",
         )
     observed = result.result if isinstance(result.result, dict) else {}

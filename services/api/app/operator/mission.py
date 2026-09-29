@@ -272,12 +272,18 @@ class Mission:
     escalation: dict[str, Any] | None = None
     pause_requested: bool = False
     cancel_requested: bool = False
+    #: ADR-0212: the device the owner NAMED in the sentence ("ofis bilgisayarımda ... aç ve
+    #: yaz"), as canonical alias words. The planner cannot carry it - it plans steps, not
+    #: machines - and the steps run later, in a worker, over a port that has heard no sentence,
+    #: so the mission itself remembers it and every step's port is bound to it. Empty (and
+    #: absent from ``as_dict``) when the sentence named no device.
+    device_targets: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     started_at: datetime | None = None
     completed_at: datetime | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "mission_id": str(self.id),
             "goal": self.goal,
             "steps": [s.as_dict() for s in self.steps],
@@ -294,6 +300,9 @@ class Mission:
             "started_at": _iso(self.started_at),
             "completed_at": _iso(self.completed_at),
         }
+        if self.device_targets:
+            out["device_targets"] = list(self.device_targets)
+        return out
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Mission:
@@ -309,6 +318,7 @@ class Mission:
             error_class=str(raw.get("error_class") or ""),
             message=str(raw.get("message") or ""),
             escalation=dict(raw["escalation"]) if raw.get("escalation") else None,
+            device_targets=[str(w) for w in raw.get("device_targets") or []],
             created_at=_parse(raw.get("created_at")) or datetime.now(UTC),
             started_at=_parse(raw.get("started_at")),
             completed_at=_parse(raw.get("completed_at")),

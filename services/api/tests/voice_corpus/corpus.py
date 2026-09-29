@@ -1524,6 +1524,12 @@ def _operator_app_open_cases() -> list[UtteranceCase]:
         ("op.app.office.2", "Ofisteki bilgisayarda Not Defteri'ni aç.", "paraphrase"),
         ("op.app.office.3", "Ofiste hesap makinesi aç.", "paraphrase"),
         ("op.app.home.1", "Ev bilgisayarımda hesap makinesini aç.", "canonical"),
+        # ADR-0212 (2026-09-29): the machine the sentence NAMES is the one that acts - the
+        # words are what the relay records as the call's device (the per-call port), proved
+        # end to end in tests/unit/test_devices_spoken_alias.py. A transcript that starts the
+        # sentence with a capital dotted İ must still name it.
+        ("op.app.office.4", "İş bilgisayarımda hesap makinesini aç.", "paraphrase"),
+        ("op.app.home.2", "Evdeki bilgisayarda Not Defteri'ni aç.", "paraphrase"),
     ):
         cases.extend(
             _with_variants(

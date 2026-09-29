@@ -24,6 +24,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.devices import aliases as device_aliases
 from app.logging import get_logger
 from app.narration.commands import NarrationState, State
 from app.narration.engine import PARAGRAPH_LIST
@@ -293,6 +294,16 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         spoken_topic = (_turn_record(ctx) or {}).get("research_topic")
         if isinstance(spoken_topic, str) and spoken_topic.strip():
             arguments = {**arguments, "topic": spoken_topic.strip()}
+    # ADR-0212: the phrase that NAMES a machine is not what is researched. In a paid session
+    # the model writes the topic and wrote the phrase into it (2026-09-29: the office PC's
+    # search box held "ofis bilgisayarında Yapay Zeka son gelişmeler"); the router's own topic
+    # is cleaned where it is extracted. What the topic named is the call's own word for the
+    # device, so it wins over a turn record that may still be the previous sentence's.
+    cleaned_topic, topic_devices = device_aliases.strip_device_phrases(
+        str(arguments.get("topic") or "")
+    )
+    arguments = {**arguments, "topic": cleaned_topic}
+    named_devices = topic_devices or device_aliases.targets_of_turn(_turn_record(ctx))
     topic = _require_str(arguments, "topic", max_len=500)
     scope = str(arguments.get("scope") or "genel")[:500]
     if ctx.db is None:
@@ -360,12 +371,17 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         session_id=ctx.session_id,
         tool_call_id=ctx.call_id,
         session_device_ids=ctx.live.get("session_device_ids"),
+        named_devices=named_devices,
     )
     if started.error is not None:
+        # A device the owner NAMED that cannot serve is said as what it is ("'ofis' cihazı şu
+        # anda çevrimiçi değil."), not as "there is no browser device" - and nothing was
+        # started anywhere else.
+        speech = started.error if named_devices else RESEARCH_START_NO_DEVICE_TR
         raise VoiceError(
             VoiceErrorClass.CAPABILITY_MISSING,
             RESEARCH_START_NO_DEVICE_TR,
-            details={"speech": RESEARCH_START_NO_DEVICE_TR, "task_id": str(started.task_id)},
+            details={"speech": speech, "task_id": str(started.task_id)},
         )
 
     plan = {
@@ -392,6 +408,7 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
     workflow_id = started.workflow_id
     synthesis = artifacts_runtime.settings.research_default_synthesis
     search_provider = artifacts_runtime.settings.research_search_provider
+    workflow_target = named_devices[0] if named_devices else None
 
     async def _start_workflow_followup() -> None:
         try:
@@ -402,6 +419,9 @@ def research_start(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
                 task_id=task_id,
                 workflow_id=workflow_id,
                 input=topic,
+                # The workflow re-selects only if the planned machine went away; it must
+                # then re-select the NAMED one (or fail), never another.
+                target_device=workflow_target,
                 recency_days=recency_days,
                 max_sources=max_sources,
                 synthesis=synthesis,
