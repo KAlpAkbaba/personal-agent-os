@@ -621,6 +621,78 @@ def test_the_port_probe_is_false_without_a_broker(monkeypatch, tmp_path) -> None
     assert action.can_run("desktop.open_application") is False
 
 
+# ------------------------------------------- with session affinity (ADR-0208 + ADR-0209)
+#
+# Merge finding, 2026-09-29: ADR-0209's probe (``can_run``) was written against a port that
+# selects by capability alone, and ADR-0208 wrapped that port in a per-session view that had
+# no probe. ``route_for`` reads "a port that cannot be asked" as "the old path", so on a
+# session-bound port the fallback silently never fired - and with the home PC online the
+# office session's "hesap makinesini aç" still opened the calculator at home. The tests
+# below hold the two ADRs together.
+
+
+def _bound_session(world: _World, name: str) -> str:
+    response = world.client.post(
+        "/v1/voice/realtime/sessions", json={"device_id": str(world.ids[name])}
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["session_id"]
+
+
+def _both_online(monkeypatch, tmp_path) -> _World:
+    return _wired(
+        monkeypatch,
+        tmp_path,
+        {
+            "MAIL": {"capabilities": HOME_CAPABILITIES, "aliases": ["ev"]},
+            "GMKADIRAKBABA": {"capabilities": OFFICE_CAPABILITIES, "aliases": ["ofis", "iş"]},
+        },
+    )
+
+
+def test_an_office_session_launches_at_the_office_even_with_the_home_pc_online(
+    monkeypatch, tmp_path
+) -> None:
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")
+    _say(world.client, sid, "hesap makinesini aç")
+    call = _tool(world.client, sid, "operator.app_open", {"application": "calc"})
+    assert call["status"] == "succeeded", call
+    assert world.commands.capabilities() == ["desktop.open_application"]
+    assert world.commands.calls[0]["device_id"] == world.ids["GMKADIRAKBABA"]
+
+
+def test_a_home_session_keeps_the_operator_path_with_both_machines_online(
+    monkeypatch, tmp_path
+) -> None:
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    _say(world.client, sid, "hesap makinesini aç")
+    call = _tool(world.client, sid, "operator.app_open", {"application": "calc"})
+    assert call["status"] == "succeeded", call
+    assert "app.launch" in world.commands.capabilities()
+    assert "desktop.open_application" not in world.commands.capabilities()
+    assert {c["device_id"] for c in world.commands.calls} == {world.ids["MAIL"]}
+
+
+def test_an_unbound_session_with_both_online_keeps_the_home_operator_path(
+    monkeypatch, tmp_path
+) -> None:
+    world = _both_online(monkeypatch, tmp_path)
+    result = _owner_says_open(world, "hesap makinesini aç", "calc")
+    assert result is not None
+    assert "app.launch" in world.commands.capabilities()
+    assert {c["device_id"] for c in world.commands.calls} == {world.ids["MAIL"]}
+
+
+def test_the_session_bound_port_can_be_probed_like_the_plain_one(monkeypatch, tmp_path) -> None:
+    world = _both_online(monkeypatch, tmp_path)
+    bound = world.action.bound_to([world.ids["GMKADIRAKBABA"]])
+    for capability in ("app.launch", "desktop.open_application", "no.such.capability"):
+        ran = bound.run(capability=capability, payload={}, idempotency_key="k", timeout_s=1.0)
+        assert bound.can_run(capability) is (ran.error_class != "no_capable_device"), capability
+
+
 # ------------------------------------------------------- the contract mirror (drift guard)
 
 
