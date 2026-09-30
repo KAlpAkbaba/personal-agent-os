@@ -6,7 +6,7 @@
 **Decision.**
 - `services/api/app/team` reads `team/queue.json` as data. `GET /v1/team/approvals` lists the
   two gates with proposal/report, the newest `team/reports/*.md`, and `cycle_running`.
-  `POST /v1/team/approvals/decision` takes `approve` -> `approved`, `reject` -> `stopped` with a
+  `POST /v1/team/approvals/decision` takes `approve` -> `approved` (idea) / the release flag (see below), `reject` -> `stopped` with a
   required reason. Both write `state`, `updated_at` (and `reason`) and nothing else, atomically.
 - A decision is refused (409 `cycle_running`) while `team/lock.json` is held and younger than
   6 h: the cycle's own read-modify-write would overwrite it. Never applied mid-run.
@@ -27,12 +27,14 @@
    checkout; the route is meaningful where the queue lives, i.e. the dev/home Core).
 3. The web shell's navigation link to `/core/approvals` (file: apps/web/app/core/approvals).
 
-**Open decision for the lead.** The acceptance says Onayla moves BOTH gates to `approved`. For
-`awaiting_release` that state is what the cycle reads as "assign a worker", so a merged task
-approved for release would be re-assigned next cycle. The target is one constant per gate in
-`decide` (`to_state`); the cycle script needs a release-approved reading (a state or a field the
-schema allows) before the release approval is meaningful. Not changed here: the schema and the
-cycle are outside the area.
+**Release approval (decided, lead's return note).** `awaiting_release` + Onayla does NOT write
+`approved` (the cycle reads that as "assign a worker"). It keeps the state and writes
+`release_approved=true`, `release_approved_at` (UTC `YYYY-MM-DDTHH:MM:SSZ`), `release_approved_by`
+(`shell` | `voice`; `owner_sentence` is the lead's own write). The idea gate still writes
+`approved`; Reddet writes `stopped` + `reason` at both. The lead must add the three fields to
+`team/queue.schema.json` (`additionalProperties: false` would otherwise reject the queue; outside
+this area) and teach `cycle.ps1` to read the flag. The shell button reads "Yayını onayla"; it
+starts nothing.
 
 **Consequences.** Queue rewrite is JSON with 2-space indent, UTF-8 without BOM, final newline;
 formatting differs slightly from the PowerShell writer's (valid, schema-conformant).

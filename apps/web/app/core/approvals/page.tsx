@@ -72,7 +72,7 @@ function ApprovalCard({
         onChange={(event) => setReason(event.target.value)}
       />
       <button type="button" disabled={busy || locked} onClick={() => void send("approve")}>
-        Onayla
+        {approval.gate === "yayin" ? "Yayını onayla" : "Onayla"}
       </button>
       <button
         type="button"
