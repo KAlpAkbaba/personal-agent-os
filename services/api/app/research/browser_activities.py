@@ -34,6 +34,7 @@ from app.artifacts.models import (
 from app.artifacts.renderers import DEFAULT_RENDER_FORMATS, content_hash
 from app.artifacts.runtime import build_artifact_context
 from app.artifacts.state import IllegalTransition
+from app.broker import service as broker_service
 from app.config import get_settings
 from app.db import build_engine, build_session_factory
 from app.devices import service as devices_service
@@ -51,6 +52,7 @@ from app.logging import get_logger, task_id_var
 from app.memory.embedding import DeterministicEmbedder
 from app.memory.service import remember_explicit
 from app.memory.types import MemoryClass
+from app.narrative.device_writer import stamp_device
 from app.research import challenge as challenge_policy
 from app.research import discovery, eligibility, runs_service, sources
 from app.research.browser_gateway import (
@@ -1673,10 +1675,13 @@ def rank_activity(
                         occurred_at=datetime.now(UTC),
                         research_job_id=tid,
                         evidence_refs=[{"kind": "research_run", "ref": str(tid)}],
-                        detail_json={
-                            "rejected": rejected,
-                            "rejected_examples": rejection_details[:10],
-                        },
+                        detail_json=stamp_device(
+                            {
+                                "rejected": rejected,
+                                "rejected_examples": rejection_details[:10],
+                            },
+                            _run_device_name(session, tid),
+                        ),
                         source="live",
                         source_ref=f"research_runs:{tid}:quality_gate:attempt:{_current_attempt()}",
                     ),
@@ -2065,6 +2070,34 @@ def _count_search_fallbacks(run_row: Any) -> int:
     return count
 
 
+def _run_device_name(session: Any, tid: uuid.UUID) -> str | None:
+    """The word for the device the run was given (ADR-0221): its owner-set alias when it has
+    one ('ev', 'ofis' - what the owner says), else its name. ``None``: no run, no device yet
+    (a run that failed selecting one stays a cloud row), or a lookup that failed - evidence
+    is never worth failing the writer for."""
+    try:
+        run = runs_service.get_run(session, tid)
+        if run is None or run.device_id is None:
+            return None
+        device = broker_service.get_device(session, run.device_id)
+        if device is None:
+            return None
+        aliases = [a for a in (device.metadata_json or {}).get("aliases") or [] if a]
+        return str(aliases[0]) if aliases else device.name
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _stamp_run_device(
+    session: Any, tid: uuid.UUID, event: ledger_service.ActivityEvent
+) -> ledger_service.ActivityEvent:
+    """``event`` with the run's device in its detail, so the narrative can find the row."""
+    device = _run_device_name(session, tid)
+    if device is None:
+        return event
+    return dataclasses.replace(event, detail_json=stamp_device(event.detail_json, device))
+
+
 def _record_provider_fallback(session: Any, tid: uuid.UUID, fallback: dict[str, Any]) -> None:
     """B31 req 207: the run event and the ledger row for a synthesis substitution. Neither
     may fail the synthesis that already succeeded."""
@@ -2096,7 +2129,12 @@ def _record_provider_fallback(session: Any, tid: uuid.UUID, fallback: dict[str, 
                 occurred_at=datetime.now(UTC),
                 research_job_id=tid,
                 evidence_refs=[{"kind": "research_run", "ref": str(tid)}],
-                detail_json=dict(fallback),
+                detail_json=stamp_device(dict(fallback), _run_device_name(session, tid)),
+                # BUG FOUND 2026-10-01 (ledger-device-stamp): the event was built without
+                # `source` / `source_ref` (both required), so the TypeError below was
+                # swallowed and this row was never written.
+                source="live",
+                source_ref=f"research_runs:{tid}:synthesis_fallback:{fallback['used']}",
             ),
         )
     except Exception:  # noqa: BLE001
@@ -2186,13 +2224,17 @@ def persist_artifact_activity(task_id: str, topic: str) -> dict[str, Any]:
         try:
             ledger_event = ledger_service.record(
                 session,
-                ledger_service.build_research_completed_event(
-                    task_id=tid,
-                    occurred_at=datetime.now(UTC),
-                    report_json=report_json,
-                    artifact_id=artifact_id,
-                    source="live",
-                    source_ref=f"research_runs:{tid}:ready",
+                _stamp_run_device(
+                    session,
+                    tid,
+                    ledger_service.build_research_completed_event(
+                        task_id=tid,
+                        occurred_at=datetime.now(UTC),
+                        report_json=report_json,
+                        artifact_id=artifact_id,
+                        source="live",
+                        source_ref=f"research_runs:{tid}:ready",
+                    ),
                 ),
             )
             ledger_briefing.queue_briefing(session, ledger_event)
@@ -2403,13 +2445,17 @@ def fail_run_activity(task_id: str, error_class: str, detail: str) -> bool:
         try:
             ledger_event = ledger_service.record(
                 session,
-                ledger_service.build_research_failed_event(
-                    task_id=tid,
-                    occurred_at=datetime.now(UTC),
-                    error_class=error_class,
-                    error=detail,
-                    source="live",
-                    source_ref=f"research_runs:{tid}:failed",
+                _stamp_run_device(
+                    session,
+                    tid,
+                    ledger_service.build_research_failed_event(
+                        task_id=tid,
+                        occurred_at=datetime.now(UTC),
+                        error_class=error_class,
+                        error=detail,
+                        source="live",
+                        source_ref=f"research_runs:{tid}:failed",
+                    ),
                 ),
             )
             ledger_briefing.queue_briefing(session, ledger_event)
