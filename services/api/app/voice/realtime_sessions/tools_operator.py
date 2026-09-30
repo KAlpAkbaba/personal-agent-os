@@ -42,6 +42,7 @@ from app.actions.receipt import (
     ActionReceipt,
     record_receipt,
 )
+from app.devices import aliases as device_aliases
 from app.ledger.vocabulary import SUBSYSTEM_OPERATOR
 from app.logging import get_logger
 from app.operator import adapters as app_adapters
@@ -740,6 +741,43 @@ def _require_operator(ctx: ToolContext, tool: str) -> Any:
 # ------------------------------------------------------------------------ app.open
 
 
+#: A computer word or an "ofis..." place word in the owner's own sentence. "bu/şu bilgisayar"
+#: is THIS machine, which is what an unnamed launch already means.
+_MACHINE_WORD_RE: Final = re.compile(r"\bbilgisayar\w*|\bofis\w*")
+_THIS_COMPUTER_RE: Final = re.compile(r"\b(?:bu|şu|su)\s+bilgisayar\w*")
+
+
+def _names_an_unbound_machine(turn: dict[str, Any]) -> bool:
+    """The turn record's ``utterance_text`` names a machine ("bilgisayarında", "ofis...") and
+    the alias parser bound no device for it (``device_targets`` empty)."""
+    text = turn.get("utterance_text")
+    if not isinstance(text, str) or not text.strip():
+        return False
+    if device_aliases.targets_of_turn(turn):
+        return False
+    folded = _THIS_COMPUTER_RE.sub(" ", device_aliases.normalize(text))
+    return _MACHINE_WORD_RE.search(folded) is not None
+
+
+def _which_computer_question(ctx: ToolContext) -> str:
+    """ONE question naming the aliases the owner configured on their devices."""
+    aliases: list[str] = []
+    if ctx.db is not None:
+        try:
+            from app.broker.models import Device
+
+            for row in ctx.db.query(Device).filter(Device.revoked_at.is_(None)).all():
+                for alias in (row.metadata_json or {}).get("aliases") or []:
+                    word = str(alias).strip()
+                    if word and word.casefold() not in (a.casefold() for a in aliases):
+                        aliases.append(word)
+        except Exception:  # noqa: BLE001 - no alias list is still a question, never a crash
+            logger.warning("operator_launch_alias_lookup_failed")
+    if not aliases:
+        return "Hangi bilgisayarda açayım efendim?"
+    return f"Hangi bilgisayarda: {', '.join(f'{a} mi' for a in aliases)}?"
+
+
 def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     """ "Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" / "PowerShell aç" (spec §3).
 
@@ -778,6 +816,12 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
             speech=_allowlist_speech(),
             error_class=ERROR_UNKNOWN_APPLICATION,
         )
+    if _names_an_unbound_machine(turn):
+        # ADR-0224: the model may not guess a device and this tool has no device argument.
+        # The owner NAMED a machine ("Ofisü bilgisayarında ...") that the alias parser could
+        # not bind; launching on the session's own device would act on a machine they did
+        # not ask for, silently (production 2026-09-30 20:11). One question, no dispatch.
+        return _clarification(_which_computer_question(ctx))
     device_action = ctx.live.get("device_action")
     if device_action is None:
         return _capability_missing(ctx, capability=TOOL_APP_OPEN, requested_state="opened")
