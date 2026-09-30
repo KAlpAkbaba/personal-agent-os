@@ -15,13 +15,13 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Pilot döngü `pilot-01` — ÜÇ İŞ BİTTİ, `integrate/pilot-01` TAM KAPIDA; sonra main; YAYIN KAPISI.**
+**Pilot döngü `pilot-01` — MAIN'DE (tam kapı 34/34, uç `1c7014c3`); YAYIN KAPISINDA (sahip).**
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
 (ADR-0213 PR 1), `onay-merkezi` (ADR-0217). Lead birleştirmede ortak dosyaları bağladı (ledger sözlüğü,
 `main.py` router, kabuk bağlantısı, şema, `test_pilot01_wiring.py`). Toplam 5,89 USD; 0 çakışma, 3 geri
 verme (biri lead'in kart hatası). Döngünün öğrettikleri ADR-0214 ekinde.
-**Sıradaki:** tam kapı → `--no-ff` main → push → YAYIN ONAYI (sahip): main'de ADR-0215 (broker tek
+**Sıradaki:** YAYIN ONAYI (sahip): main'de ADR-0215 (broker tek
 teslim) + pilot işleri, üretim `771a9e53`. Sonra pilot-02: bulut işçisi (entegratör önce), kural
 tablosunun bağlanması, anlatının sesi; sahibe soru: bulut işinde "sahip yokken görev yok".
 
