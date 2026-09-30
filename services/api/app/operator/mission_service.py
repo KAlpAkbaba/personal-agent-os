@@ -32,6 +32,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_OPERATOR,
 )
 from app.logging import get_logger
+from app.narrative.device_writer import stamp_device
 from app.operator import mission as mission_module
 from app.operator.capabilities import CAPABILITY_MISSION
 from app.operator.mission import (
@@ -256,7 +257,12 @@ def _ledger(
                 action=CAPABILITY_MISSION,
                 factual_summary=f"{CAPABILITY_MISSION} -> {summary}",
                 occurred_at=_now(),
-                detail_json={"mission_id": str(mission.id), **detail},
+                # ADR-0221: the one device the sentence named (two words are refused at the
+                # start); none = a cloud-side row, left unstamped.
+                detail_json=stamp_device(
+                    {"mission_id": str(mission.id), **detail},
+                    mission.device_targets[0] if mission.device_targets else None,
+                ),
                 source="live",
                 source_ref=f"operator_mission:{mission.id}:{event_type}:{mission.current_step}:{mission.status}",
             ),

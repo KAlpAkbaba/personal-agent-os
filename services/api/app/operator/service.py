@@ -42,6 +42,7 @@ from app.ledger.vocabulary import (
     SUBSYSTEM_OPERATOR,
 )
 from app.logging import get_logger
+from app.narrative.device_writer import stamp_device
 from app.operator import focus as focus_module
 from app.operator.capabilities import RECEIPT_BY_PLAN, receipt_capability_for_plan
 from app.operator.models import FOCUS_KIND_WINDOW
@@ -170,6 +171,7 @@ class OperatorService:
         *,
         now: datetime | None = None,
         session_id: str | None = None,
+        device: str | None = None,
     ) -> OperatorTask:
         """Run ``plan`` to completion (spec §7: every voice plan is <= 3 steps, so this
         always returns synchronously) and record the trail: one ``operator.task.*``
@@ -180,13 +182,15 @@ class OperatorService:
         ``speech`` is left empty here — the voice tool that called this
         knows the Turkish sentence and overlays it onto the returned receipt dict
         (``task.action_receipt``); the shape and the statuses are decided in one place.
+        ``device`` is the machine the plan ran on, when the caller knows it: every ledger
+        row of the task and its receipt carry it (ADR-0221).
         """
         started_at = now or datetime.now(UTC)
         task = new_task(goal=plan.goal, plan_name=plan.name, steps=plan.steps)
         with self._lock:
             self._current = task
 
-        self._ledger(db, task, EVENT_TYPE_OPERATOR_TASK_STARTED, started_at)
+        self._ledger(db, task, EVENT_TYPE_OPERATOR_TASK_STARTED, started_at, device=device)
         publish_ui_state(
             UiState.OPERATOR_RUNNING,
             subsystem=SUBSYSTEM_OPERATOR,
@@ -226,7 +230,7 @@ class OperatorService:
                 self._last = task
 
         event_type = _LEDGER_EVENT_BY_STATUS.get(task.status, EVENT_TYPE_OPERATOR_TASK_FAILED)
-        self._ledger(db, task, event_type, task.completed_at or started_at)
+        self._ledger(db, task, event_type, task.completed_at or started_at, device=device)
         if task.status != STATUS_SUCCEEDED:
             publish_ui_state(
                 UiState.OPERATOR_FAILED,
@@ -237,7 +241,7 @@ class OperatorService:
                 metadata={"error_class": (task.error_class or "")[:64]},
             )
 
-        task.action_receipt = self._receipt(db, task, session_id=session_id)
+        task.action_receipt = self._receipt(db, task, session_id=session_id, device=device)
         return task
 
     def _maybe_set_window_focus(
@@ -274,7 +278,13 @@ class OperatorService:
     # ------------------------------------------------------------- recording
 
     def _ledger(
-        self, db: Session | None, task: OperatorTask, event_type: str, occurred_at: datetime
+        self,
+        db: Session | None,
+        task: OperatorTask,
+        event_type: str,
+        occurred_at: datetime,
+        *,
+        device: str | None = None,
     ) -> None:
         if db is None:
             return
@@ -293,11 +303,14 @@ class OperatorService:
                     action=capability,
                     factual_summary=f"{capability} ({task.plan_name}) -> {task.status}",
                     occurred_at=occurred_at,
-                    detail_json={
-                        "task_id": str(task.id),
-                        "step_count": len(task.steps),
-                        "plan": task.plan_name,
-                    },
+                    detail_json=stamp_device(
+                        {
+                            "task_id": str(task.id),
+                            "step_count": len(task.steps),
+                            "plan": task.plan_name,
+                        },
+                        device,
+                    ),
                     source="live",
                     source_ref=f"operator_task:{task.id}:{event_type}",
                 ),
@@ -308,7 +321,12 @@ class OperatorService:
             )
 
     def _receipt(
-        self, db: Session | None, task: OperatorTask, *, session_id: str | None
+        self,
+        db: Session | None,
+        task: OperatorTask,
+        *,
+        session_id: str | None,
+        device: str | None = None,
     ) -> dict[str, Any]:
         execution = EXECUTION_EXECUTED if task.status == STATUS_SUCCEEDED else EXECUTION_FAILED
         terminal = TERMINAL_VERIFIED if task.status == STATUS_SUCCEEDED else TERMINAL_FAILED
@@ -365,7 +383,7 @@ class OperatorService:
             observed_at=task.completed_at,
         )
         if db is not None:
-            record_receipt(db, receipt, SUBSYSTEM_OPERATOR)
+            record_receipt(db, receipt, SUBSYSTEM_OPERATOR, device=device)
         return receipt.as_dict()
 
 

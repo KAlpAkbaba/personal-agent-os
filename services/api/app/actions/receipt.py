@@ -46,6 +46,7 @@ from app.ledger.vocabulary import (
     STATUS_VERIFIED,
 )
 from app.logging import get_logger
+from app.narrative.device_writer import stamp_device
 
 logger = get_logger("app.actions.receipt")
 
@@ -441,7 +442,9 @@ def _severity_for(receipt: ActionReceipt) -> str:
     return SEVERITY_WARNING
 
 
-def record_receipt(db: Session, receipt: ActionReceipt, subsystem: str) -> Any | None:
+def record_receipt(
+    db: Session, receipt: ActionReceipt, subsystem: str, *, device: str | None = None
+) -> Any | None:
     """Write the ``action.receipt`` ledger row (contract §5.5): subsystem = the
     capability's, action = the capability, status = the terminal status, detail =
     the receipt WITHOUT its speech (so ``detail_json.session_id`` and
@@ -450,6 +453,9 @@ def record_receipt(db: Session, receipt: ActionReceipt, subsystem: str) -> Any |
     Best-effort like every other ledger note: the receipt is evidence of the action,
     never a dependency of it - the owner still hears the grounded answer if the ledger
     is down, and the failure is logged where an operator will see it.
+
+    ``device`` is the machine that acted, when the caller knows it (ADR-0221): it goes into
+    ``detail_json["device"]`` so "ofiste ne yaptın" finds the row. No device, no stamp.
     """
     try:
         return ledger_service.record(
@@ -467,7 +473,7 @@ def record_receipt(db: Session, receipt: ActionReceipt, subsystem: str) -> Any |
                 ),
                 occurred_at=receipt.completed_at,
                 evidence_refs=[dict(r) for r in receipt.evidence_refs],
-                detail_json=receipt.as_dict(include_speech=False),
+                detail_json=stamp_device(receipt.as_dict(include_speech=False), device),
                 source="live",
                 source_ref=f"action_receipt:{receipt.capability}:{receipt.action_id}",
             ),
