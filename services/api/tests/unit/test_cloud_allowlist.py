@@ -13,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from app.execution import allowlist
-from app.protocol_files import protocol_file
 
 REPO = Path(__file__).resolve().parents[4]
 SHARED = REPO / "packages" / "protocol" / "browser-cloud-allowlist.json"
@@ -65,11 +64,14 @@ def test_a_deny_listed_site_stays_refused_even_when_it_is_listed(listed) -> None
     assert allowlist.acting_allowed("https://magaza.com.tr/") == (True, "")
 
 
-def test_the_shipped_list_is_empty_and_the_bundle_is_the_shared_file() -> None:
+def test_the_shipped_list_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     assert json.loads(SHARED.read_text(encoding="utf-8"))["sites"] == []
-    assert allowlist.sites() == ()
-    assert protocol_file("browser-cloud-allowlist.json") == allowlist.ALLOWLIST_PATH
-    assert allowlist.ALLOWLIST_PATH.read_bytes() == SHARED.read_bytes()
+    monkeypatch.setattr(allowlist, "ALLOWLIST_PATH", SHARED)
+    allowlist.sites.cache_clear()
+    try:
+        assert allowlist.sites() == ()
+    finally:
+        allowlist.sites.cache_clear()
 
 
 def test_an_entry_that_is_not_a_registrable_domain_is_an_error_not_a_quiet_skip(

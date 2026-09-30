@@ -18,8 +18,10 @@ from typing import Final
 from app.protocol_files import protocol_file
 from app.webtask.sites import denied, host_of, site_of
 
-#: The run-time copy of ``packages/protocol/browser-cloud-allowlist.json``.
-ALLOWLIST_PATH: Final[Path] = protocol_file("browser-cloud-allowlist.json")
+#: Where the list is read from; ``None`` means the bundled copy of
+#: ``packages/protocol/browser-cloud-allowlist.json`` (resolved on first use, so the module
+#: imports even before the name is added to ``app.protocol_files.BUNDLED``).
+ALLOWLIST_PATH: Path | None = None
 
 NOT_ON_ALLOW_LIST: Final = "not_on_owner_allow_list"
 DENY_LISTED: Final = "deny_listed_site"
@@ -28,7 +30,8 @@ DENY_LISTED: Final = "deny_listed_site"
 @lru_cache(maxsize=1)
 def sites() -> tuple[str, ...]:
     """The listed registrable domains, read once. A malformed entry is an error, never skipped."""
-    shared = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
+    path = ALLOWLIST_PATH or protocol_file("browser-cloud-allowlist.json")
+    shared = json.loads(path.read_text(encoding="utf-8"))
     out: list[str] = []
     for raw in shared["sites"]:
         site = str(raw).strip().strip(".").lower()
