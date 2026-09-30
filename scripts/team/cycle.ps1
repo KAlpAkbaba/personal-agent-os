@@ -8,6 +8,11 @@
     the role file as its system prompt and the task card as its prompt. The run's raw output
     goes to `team/reports/<cycle-id>/`; at most forty lines of its report go into the queue.
 
+    After the researcher step, a proposal that serves a roadmap row and has no area yet is
+    split into tasks: one fresh `lead` run (Read and Write only) writes
+    `team/plans/<cycle>-split-<id>.json`, and THIS script validates it (Test-TeamSplit) and
+    queues the tasks as `approved`, or refuses the whole split and says why in the report.
+
     It never waits for a human. It ends when nothing in the queue can run - every task is at
     a gate, done or stopped - or when a cap is reached, and it writes
     `team/reports/<cycle-id>.md` in Turkish either way.

@@ -14,6 +14,9 @@
       silent     every run prints something that is not the result document
       costly     as approve, and every run costs 4 USD
       slow       the run sleeps for longer than the cycle lets it
+      split      the lead's split run writes two sound tasks to the file its card names;
+                 split-overlap / split-shared / split-missing write one task that breaks the
+                 rule named, any other scenario writes no file (cycle-lead-run)
       limited    the FIRST worker run of a task answers with the subscription's usage-limit
                  error (reset time 200 s in the past); every later run is as approve
 #>
