@@ -1859,6 +1859,61 @@
                       "acceptance":  "Tests: preflight refuses on each of: health not ok, backup older than 24 h, a failure marker, pin != RELEASE, disk over 80 %, a held docker-ce; passes when all hold. --run refuses without preflight; stops the timer before upgrading and the marker exists before the reboot command; --verify refuses when the kernel is still the old one or the reconcile did not say OK, and writes the downtime. Mutations: the pin check removed -\u003e RED; the marker written after the reboot -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED (fakes); PROVEN_REAL at the first window",
                       "needs_integration":  false
+                  },
+                  {
+                      "id":  "answer-mode-intent-precision",
+                      "title":  "Dil tercihi cümlesi cevap kipi değişikliğine dönüşmesin; asistanın kendi cevabı hafıza adayı olmasın",
+                      "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/voice/intents.py",
+                                   "services/api/app/voice/realtime_sessions/tools.py",
+                                   "services/api/app/memory/extraction.py",
+                                   "services/api/tests/unit/test_voice_intents_answer_mode.py",
+                                   "services/api/tests/unit/test_memory_extraction_assistant_lines.py",
+                                   "team/plans/answer-mode-intent-precision-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  6
+                                 },
+                      "created_at":  "2026-09-30T20:45:00Z",
+                      "updated_at":  "2026-09-30T20:45:00Z",
+                      "goal":  "Owner\u0027s real trial 2026-09-30 20:11 UTC (MAIL, /voice, release aa35fcf3): the sentence \u0027Bundan sonra araştırma raporlarını her zaman Türkçe oku\u0027 is a standing LANGUAGE preference. What happened: (1) the router (app/voice/intents.py, the RESEARCH_OPEN branch near \u0027ADR-0188: reading a research out loud\u0027) resolved it as RESEARCH_OPEN \u0027araştırmayı oku\u0027 with answer_level=detail - a sentence with a standing marker (\u0027bundan sonra\u0027, \u0027her zaman\u0027) and a plural object (\u0027raporlarını\u0027) is not \u0027read me the research\u0027; (2) the realtime model called research.answer_mode with level=executive; (3) research_answer_mode in realtime_sessions/tools.py preferred the turn record\u0027s answer_level (\u0027detail\u0027) over the model\u0027s argument and set the durable register to detail, speaking \u0027Bundan sonra araştırmaları ayrıntılı anlatacağım efendim\u0027. Nothing in the sentence names a level. (4) 39 s later app/memory/extraction.py extract_from_summary filed the assistant\u0027s reply line \u0027| Asistan: Bundan sonra araştırmaları ayrıntılı anlatacağım efendim.\u0027 as a preference CANDIDATE: the summary carries speaker-prefixed lines and the splitter treats every sentence as the owner\u0027s. Fix, RED first: (a) the router does not resolve a standing-marker sentence without a level word as RESEARCH_OPEN or RESEARCH_ANSWER_MODE; a language word (türkçe/ingilizce/almanca…) with a standing marker resolves to the existing preference/memory intent if one exists, else to a plain acknowledgement path - read intents.py before choosing, do not add a second phrase table; (b) research_answer_mode refuses (VALIDATION_ERROR with a spoken sentence) when the resolved utterance carries no level word, instead of blending the router\u0027s level with the model\u0027s; (c) extract_from_summary skips lines whose speaker prefix is the assistant (\u0027Asistan:\u0027 and the English form, with or without a leading \u0027|\u0027), counts them as skipped, and never files them. Keep the corpus tests green (tests/unit/test_voice_corpus*.py); add the three sentences to the corpus. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: production realtime_tool_calls 20:11:00Z (research.answer_mode, arguments level=executive, result level=detail), memories rows 20:11:00Z and 20:11:39Z (both preference/candidate). QUALIFICATION row 30.10. The owner\u0027s durable answer level is now \u0027detail\u0027; the lead asked him whether to revert it.",
+                      "acceptance":  "Tests: the trial sentence resolves to the preference/acknowledgement path, not RESEARCH_OPEN and not RESEARCH_ANSWER_MODE (RED before); \u0027Bundan sonra teknik anlat\u0027, \u0027Teknik modu kapat\u0027, \u0027Araştırmayı oku\u0027 keep their intents; research_answer_mode with a turn record whose utterance has no level word raises VALIDATION_ERROR and the durable level is unchanged (RED before); extract_from_summary on a summary with \u0027| Sahip: …\u0027 and \u0027| Asistan: …\u0027 lines files only the owner\u0027s sentence (RED before). Mutations: the speaker-prefix skip removed -\u003e RED; the standing-marker guard removed -\u003e RED. Corpus suite green.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner repeats the sentence after the release",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "operator-postcondition-uwp",
+                      "title":  "Store/UWP uygulamaları (Hesap Makinesi vb.) açıldığında operatör \u0027açamadım\u0027 demesin",
+                      "roadmap_row":  "Runs the workshop by voice: machines, files, fabrication",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/operator/plans.py",
+                                   "services/api/tests/unit/test_operator_plans_uwp.py",
+                                   "team/plans/operator-postcondition-uwp-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  4
+                                 },
+                      "created_at":  "2026-09-30T20:45:00Z",
+                      "updated_at":  "2026-09-30T20:45:00Z",
+                      "goal":  "Owner\u0027s real trial 2026-09-30 20:10:29 and 20:11:20 UTC (MAIL, release aa35fcf3): \u0027Hesap makinesini aç\u0027 -\u003e operator.app_open \u0027Hesap Makinesi\u0027 -\u003e device app.launch calc SUCCEEDED, then window.current reported foreground=true, title \u0027Hesap Makinesi\u0027, image applicationframehost.exe, owned=false - and the task ended postcondition_failed, spoken \u0027Hesap Makinesi açamadım efendim\u0027, twice. Cause: in app/operator/plans.py open_application\u0027s _window_ok accepts an ApplicationFrameHost-hosted window only for images in UWP_HOSTED_IMAGES, which lists systemsettings.exe alone (B39 req 123); Calculator, and every other Store app launched by an alias (calc.exe, Photos, Clock, Terminal in some builds), is hosted the same way. Fix, RED first: a launched image whose window is hosted by applicationframehost.exe passes when the window is foreground AND its title is one of the app\u0027s own display names - take those from the existing alias table (_APP_ALIAS_PHRASES / the Turkish display label the tool speaks) rather than a second hand-written list; keep the exact-image path for classic apps; a foreground ApplicationFrameHost window with an UNRELATED title still fails (the Settings case of B39 stays). Read the existing test file for open_application before writing the new one. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: production device_commands 20:10:29Z/20:11:20Z (app.launch calc succeeded; window.current result as above), realtime_tool_calls operator.app_open error_class postcondition_failed. QUALIFICATION row 30.10 note (b).",
+                      "acceptance":  "Tests: the trial\u0027s real window.current payload (foreground true, title \u0027Hesap Makinesi\u0027, image applicationframehost.exe, pid != launched pid) satisfies the observe_window postcondition for a launch of calc (RED before); the same payload with title \u0027Ayarlar\u0027 for a calc launch FAILS; Settings keeps its B39 behaviour; a classic app (notepad.exe) still needs its own image. Mutation: the title check removed -\u003e RED (an unrelated title would pass).",
+                      "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner says \u0027Hesap makinesini aç\u0027 on MAIL after the release",
+                      "needs_integration":  false
                   }
               ]
 }
