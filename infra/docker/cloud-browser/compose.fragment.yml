@@ -1,0 +1,43 @@
+# Cloud browser worker (ADR-0213 PR 2). A FRAGMENT: the lead wires it into the production
+# compose; this file is not `docker compose`-complete on its own (the `default` network and
+# the `api` service belong to the production file).
+#
+# One-shot enrollment: mint a token on the Cloud Core host (owner session + loopback), write
+# it to the state volume as enroll.token, start the service. The worker persists its identity
+# and deletes the token. `shm` counts inside the cgroup limit, so shm_size 2gb under
+# mem_limit 2g is headroom, not extra memory.
+services:
+  cloud-browser:
+    build:
+      context: ../../../services/browser
+      dockerfile: ../../infra/docker/cloud-browser/Dockerfile
+    image: pagentos-cloud-browser:local
+    init: true
+    shm_size: 2gb
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PAGENTOS_CLOUD_BROKER_URL: http://api:8000
+      PAGENTOS_CLOUD_STATE_DIR: /var/lib/pagentos-cloud/state
+      PAGENTOS_CLOUD_DATA_DIR: /var/lib/pagentos-cloud/data
+      PAGENTOS_CLOUD_ENROLLMENT_TOKEN_FILE: /var/lib/pagentos-cloud/state/enroll.token
+    volumes:
+      - cloud-browser-state:/var/lib/pagentos-cloud/state
+      - cloud-browser-data:/var/lib/pagentos-cloud/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "browser_agent.cloud.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  cloud-browser-state:
+  cloud-browser-data:

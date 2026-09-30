@@ -1,0 +1,18 @@
+{
+  "adr": "ADR-0213 PR 2",
+  "status": "NOT_RUN",
+  "reason": "The Docker daemon is not running on this PC (docker CLI 28.3.2 present, engine pipe absent, 2026-09-30); the image was not built and no container ran. Nothing below was measured.",
+  "machine": null,
+  "date_utc": null,
+  "image_digest": null,
+  "peak_rss_bytes": null,
+  "mem_limit_bytes": 2147483648,
+  "estimate_only": "Idle Chromium 0.5-1 GB, two contexts up to about 2 GB (blog sources, medium quality). Not a measurement.",
+  "command_for_the_lead_on_the_cloud_core": [
+    "docker compose -f infra/docker/docker-compose.prod.yml -f infra/docker/cloud-browser/compose.fragment.yml build cloud-browser",
+    "docker compose -f infra/docker/docker-compose.prod.yml -f infra/docker/cloud-browser/compose.fragment.yml up -d cloud-browser",
+    "MEASURE_WINDOW_S=90 infra/docker/cloud-browser/measure-memory.sh cloud-browser docs/evidence/adr-0213-cloud-worker-memory-2026-09-30.json"
+  ],
+  "drive": "While the script samples, POST three device commands to the 'bulut' device: browser.session_open, then browser.navigate to each of the three pages of services/browser/tests/fixtures/site served from a public URL (the worker refuses private destinations), then browser.session_close.",
+  "note": "The script overwrites this file with status PROVEN_REAL and the measured numbers."
+}
