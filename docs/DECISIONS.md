@@ -16962,3 +16962,29 @@ lock's pid liveness is still the client's to check (`takeover_dead`); the server
 process table. The Onay Merkezi's proposal text still comes from `team/` on the machine serving
 the API. A stale write inside the same second as the last write is indistinguishable by
 `updated_at`; the cycle stamps every change, so this only matters for two writers in one second.
+
+### ADR-0219 addendum (2026-09-30): the first real build found two defects the cycle had marked NOT_RUN
+
+The image was built on the Cloud Core for the first time after the release of `8d8d0f18`, before
+any token was minted. Two things were wrong, and neither could have been seen by a test that
+did not start the thing:
+
+1. *The container would have done nothing.* `browser_agent/cloud/__main__.py` defined `main`
+   and never called it: `python -m browser_agent.cloud` - the image's ENTRYPOINT - exited 0 in
+   silence. Every unit test called `main()` itself. With `restart: unless-stopped` the
+   container would have restarted for ever. Fixed (`raise SystemExit(main())`);
+   `test_the_module_run_the_way_the_container_runs_it_refuses_and_says_why` starts the module
+   as a process and was RED before the fix (exit 0, no output).
+2. *Chromium did not launch.* `pip install .` resolved Playwright 1.63.0 onto the 1.62.0 base
+   image, whose browsers are 1.62.0's: `Executable doesn't exist`. The base image's tag and the
+   installed package are now ONE build argument (`PLAYWRIGHT_VERSION`), held to `uv.lock` by
+   `test_pilot02_wiring.py` (RED before the fix).
+
+Proof on the real host, from a throwaway image built under `/tmp` (removed afterwards):
+Playwright 1.62.0, `chromium launched 151.0.7922.34`, and a start without enrollment
+material exits 2 with "cloud worker refuses to start: no enrollment material". Evidence class
+of "the image builds and its Chromium launches on the Cloud Core": `PROVEN_REAL` for the
+fixed files; the released tree (`8d8d0f18`) still holds the broken ones, so the cloud worker
+is NOT started until this fix is released. The worker and the inspector had both written
+NOT_RUN for exactly these claims; the classes were honest, and the lesson is the old one - a
+claim nobody ran is where the defect is.
