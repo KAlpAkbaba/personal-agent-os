@@ -125,7 +125,8 @@
                       "integration_branch":  "integrate/pilot-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-09-30T09:40:00Z",
-                      "release_approved_by":  "owner_sentence"
+                      "release_approved_by":  "owner_sentence",
+                      "reason":  "yayinlandi 2026-09-30 10:11 UTC, main 2e3b16689fdf51b6f41bc687e5afed43eac39610 (api-blue)"
                   },
                   {
                       "id":  "execution-target-rule",
