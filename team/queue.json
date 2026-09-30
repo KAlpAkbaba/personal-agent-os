@@ -1914,6 +1914,34 @@
                       "acceptance":  "Tests: the trial\u0027s real window.current payload (foreground true, title \u0027Hesap Makinesi\u0027, image applicationframehost.exe, pid != launched pid) satisfies the observe_window postcondition for a launch of calc (RED before); the same payload with title \u0027Ayarlar\u0027 for a calc launch FAILS; Settings keeps its B39 behaviour; a classic app (notepad.exe) still needs its own image. Mutation: the title check removed -\u003e RED (an unrelated title would pass).",
                       "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner says \u0027Hesap makinesini aç\u0027 on MAIL after the release",
                       "needs_integration":  false
+                  },
+                  {
+                      "id":  "app-open-named-device-not-dropped",
+                      "title":  "\u0027Ofis bilgisayarımdan hesap makinesini aç\u0027 kendi cihazda açılmasın: \u0027açın\u0027 kipi + araçta cihaz sözcüğü",
+                      "roadmap_row":  "The same JARVIS in the house, the car, the suit, the phone",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/voice/intents.py",
+                                   "services/api/app/voice/realtime_sessions/tools_operator.py",
+                                   "services/api/tests/unit/test_voice_intents_polite_open.py",
+                                   "services/api/tests/unit/test_operator_app_open_named_device.py",
+                                   "team/plans/app-open-named-device-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  6
+                                 },
+                      "created_at":  "2026-09-30T21:05:00Z",
+                      "updated_at":  "2026-09-30T21:05:00Z",
+                      "goal":  "Owner\u0027s real trial 2026-09-30 20:11:19 UTC (MAIL, /voice, release aa35fcf3): he said \u0027Ofis bilgisayarımdan hesap makinesini aç\u0027; the realtime STT rendered it \u0027Ofisü bilgisayarında hesap makinesini açın.\u0027 (43 chars; content_words in realtime_sessions.context_json.last_utterance). Two things then went wrong. (1) The router (app/voice/intents.py) resolved intent NONE, klass query: \u0027açın\u0027 (the polite imperative, which the STT produces often) is in neither _OPEN_VERB_FORMS nor _APP_OPEN_VERB_FORMS - \u0027açar mısın\u0027 is, \u0027açın\u0027/\u0027açınız\u0027/\u0027acın\u0027 are not. With a correct verb the same sentence resolves to app_open calc and the alias parser (app/devices/aliases.py extract_aliases) reads \u0027ofis\u0027 from \u0027ofis bilgisayarında\u0027 (verified locally; \u0027ofisü\u0027 itself is STT noise nobody can parse). (2) With no router record the model called operator.app_open({application: \u0027Hesap Makinesi\u0027}) - the tool\u0027s schema has only \u0027application\u0027, so the machine the owner NAMED had nowhere to go, and operator_app_open in realtime_sessions/tools_operator.py launched on the SESSION\u0027s device (MAIL) and said nothing about it. Fix, RED first: (a) add the polite imperative forms (\u0027açın\u0027, \u0027açınız\u0027, \u0027acın\u0027, \u0027aciniz\u0027) to the open-verb tables that the app_open and the generic open paths read - check every table that lists \u0027açsana\u0027 and add the forms there, not a new table; corpus tests stay green; (b) give operator.app_open an optional \u0027device\u0027 argument (string, maxLength 40, described in Turkish as the owner\u0027s word for the machine: ev/ofis/iş/laptop/bulut) and, ONLY when the resolved turn record carries no device targets (ADR-0212 - the router\u0027s reading of the owner\u0027s words still wins when it has one), pass the argument through app.devices.aliases.extract_alias and the existing selection path so the launch goes to that device or is refused with selection\u0027s own Turkish (\u0027ofis cihazı şu anda çevrimiçi değil\u0027); the receipt\u0027s speech names the device it went to (\u0027Ofiste Hesap Makinesi açtım efendim\u0027) using the existing _device_named helper. Do not touch STT. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: audit_events voice_intent_resolved 20:11:19.59Z (turn 3, intent none, klass query, 43 chars), realtime_tool_calls 20:11:20.23Z (operator.app_open, arguments {application: \u0027Hesap Makinesi\u0027} - no device), device_commands app.launch on MAIL 3f60fdb5; the office PC GMKADIRAKBABA 9efa9d8b (aliases ofis, iş) had an open device session since 17:12 UTC.",
+                      "acceptance":  "Tests: \u0027Ofis bilgisayarında hesap makinesini açın.\u0027 resolves to app_open calc with the device alias \u0027ofis\u0027 (RED before); \u0027Hesap makinesini açın.\u0027 -\u003e app_open calc; \u0027açın\u0027 inside a question (\u0027neden açın?\u0027) does not become an open. operator_app_open with a turn record without targets and arguments {application: \u0027Hesap Makinesi\u0027, device: \u0027ofis\u0027} sends app.launch to the device aliased \u0027ofis\u0027 (a fake device_action with two devices), and its speech names it (RED before); the same call with a turn record that already targets \u0027ev\u0027 ignores the argument (the owner\u0027s words win); device: \u0027mars\u0027 is refused with a spoken sentence, nothing launched. Mutations: the device argument ignored -\u003e RED; \u0027açın\u0027 removed from the table -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner says the sentence again from MAIL and Calculator opens on GMKADIRAKBABA",
+                      "needs_integration":  false
                   }
               ]
 }

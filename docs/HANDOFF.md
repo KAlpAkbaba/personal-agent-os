@@ -22,7 +22,9 @@ PROVEN_REAL (aday hafıza satırı üretimde). İki kusur görüldü, kuyruğa `
 `answer-mode-intent-precision` ("Türkçe oku" cümlesi cevap kipini `detail` yaptı + asistanın kendi cevabı hafıza
 adayı oldu) ve `operator-postcondition-uwp` (Hesap Makinesi açıldı ama "açamadım" dendi: `UWP_HOSTED_IMAGES`
 yalnız `systemsettings.exe`). Sahibin kalıcı cevap seviyesi şu an `detail`; geri alınması sahibe soruldu.
-Üçüncü cümlenin (ofis PC'de hesap makinesi) izi yok. MAIL yeniden kuruldu (verify 14/14, evidence dosyasında).
+Üçüncü cümle ("Ofis bilgisayarımdan hesap makinesini aç") STT'de "Ofisü bilgisayarında … açın" oldu: yönlendirici
+niyet bulamadı ("açın" kipi tabloda yok), model cihazsız `operator.app_open` çağırdı (araçta cihaz alanı yok),
+Hesap Makinesi MAIL'de açıldı — `app-open-named-device-not-dropped` kuyrukta. MAIL yeniden kuruldu (verify 14/14).
 Bulut işçisi ÇALIŞIYOR (`bulut`, ölçüm evidence'ta); `/tmp/cb-watch.sh` durduruldu.
 **pilot-02 — YAYINLANDI (main `8d8d0f18`, 2026-09-30 12:38 UTC). Dal `team/nightly/lead`: gece döngüsünün
 (02:00) yazacağı kuyruk/rapor değişiklikleri buraya düşer; işçi dalları `main`'den açılır.** ADR-0218…0222.
@@ -30,7 +32,7 @@ Bulut işçisi ÇALIŞIYOR (`bulut`, ölçüm evidence'ta); `/tmp/cb-watch.sh` d
 test yarışı (düzeltildi). Sonra lead'in sunucu adımları (sahip devretti): bulut işçisi imajı, profil,
 `docker stats` ölçümü, `bulut` alias'ı; `PAGENTOS_TEAM_STORE=database` geçişi sahibin oturum belirteci
 dosyasından SONRA (yoksa iki ayrı kuyruk olur). Sahipte: kayıt belirteci + oturum belirteci + MAIL kurulumu.
-Kuyrukta sekiz iş `approved` (gece döngüsü 02:00). Bulut kuralı seçenek 4.
+Kuyrukta dokuz iş `approved` (gece döngüsü 02:00). Bulut kuralı seçenek 4.
 Önceki: pilot-01 MAIN'DE (tam kapı 34/34, uç `1c7014c3`).
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
