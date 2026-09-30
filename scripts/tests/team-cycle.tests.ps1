@@ -416,6 +416,15 @@ Test-Case "what a run printed is a result only when it is the result document" {
     $overBudget = Read-TeamRunResult -StdOut '{"type":"result","subtype":"error_max_budget_usd","is_error":true,"result":"","total_cost_usd":5.01}' -ExitCode 1
     Assert-True -Condition (-not $overBudget.Ok) -Because "over budget is a failure"
     Assert-Equal -Expected 5.01 -Actual $overBudget.CostUsd -Because "and it is still counted"
+    Assert-Equal -Expected "error_max_budget_usd" -Actual $overBudget.Why -Because "the reason is named"
+    # pilot-01, 2026-09-30: the command-line tool was not signed in. It said so, with the
+    # subtype 'success', and the owner's report read 'failed: success'.
+    $signedOut = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in \u00b7 Please run /login","total_cost_usd":0}' -ExitCode 1
+    Assert-True -Condition (-not $signedOut.Ok) -Because "not signed in is a failure"
+    Assert-Equal -Expected "Not logged in   Please run /login" -Actual $signedOut.Why -Because "in the tool's own words"
+    Assert-Equal -Expected "" -Actual $signedOut.Text -Because "what an error printed is not kept as a report"
+    $long = Read-TeamRunResult -StdOut ('{"is_error":true,"result":"' + ('x' * 500) + '"}') -ExitCode 1
+    Assert-Equal -Expected 120 -Actual $long.Why.Length -Because "bounded"
     Assert-True -Condition (-not (Read-TeamRunResult -StdOut "I could not do that." -ExitCode 0).Ok) -Because "prose is not a result"
     Assert-True -Condition (-not (Read-TeamRunResult -StdOut "" -ExitCode 0).Ok) -Because "nothing is not a result"
     Assert-True -Condition (-not (Read-TeamRunResult -StdOut '{"result":"","total_cost_usd":0}' -ExitCode 0).Ok) -Because "an empty report is not a report"
@@ -495,7 +504,7 @@ function Invoke-Cycle {
     param(
         [string]$Root, [string]$Scenario, [string]$CycleId = "c1", [double]$MaxUsd = 20,
         [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
-        [string[]]$Brief = @()
+        [string[]]$Brief = @(), [switch]$ResearchOnly
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
@@ -507,6 +516,7 @@ function Invoke-Cycle {
             " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture)) -MaxParallel $MaxParallel -Machine '$Machine'" +
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
+            $(if ($ResearchOnly) { " -ResearchOnly" } else { "" }) +
             $(if (@($Brief).Count -gt 0) { " -ResearchBrief " + ((@($Brief) | ForEach-Object { "'" + $_ + "'" }) -join ",") } else { "" }) +
             "; exit `$LASTEXITCODE")
         )
@@ -636,6 +646,18 @@ try {
         $run = Invoke-Cycle -Root $root -Scenario "return"
         $workers = @($run.Calls | Where-Object { $_.role -eq "worker" })
         Assert-True -Condition ([int]$workers[1].lines -gt [int]$workers[0].lines + 30) -Because "the card grew by the inspector's summary: $($workers[0].lines) -> $($workers[1].lines)"
+        Assert-Equal -Expected $false -Actual ([bool]$workers[0].came_back) -Because "the first run is not a return"
+        Assert-Equal -Expected $true -Actual ([bool]$workers[1].came_back) -Because "the second run is told why it came back"
+    }
+
+    Test-Case "a task the lead returned by hand carries the lead's reason into the card" {
+        $task = New-Task -Id "task-one" -State "returned"
+        $task | Add-Member -NotePropertyName reason -NotePropertyValue "the area was wrong; also write the flag"
+        $card = New-TeamTaskCard -Task $task -Role "worker" -CycleId "c1"
+        Assert-True -Condition ($card.Contains("## Why this task came back")) -Because $card
+        Assert-True -Condition ($card.Contains("also write the flag")) -Because "the words themselves"
+        $fresh = New-TeamTaskCard -Task (New-Task -Id "task-two") -Role "worker" -CycleId "c1"
+        Assert-True -Condition (-not $fresh.Contains("came back")) -Because "a task that never came back says nothing of it"
     }
 
     Test-Case "a worker that leaves its area is sent back before anyone inspects it" {
@@ -736,6 +758,21 @@ try {
         Assert-Equal -Expected "- the narrative: bu hafta ne oldu" -Actual ([string]$subjects[1]).Trim() -Because "as written"
         $plain = Invoke-Cycle -Root (New-Sandbox -Tasks @()) -Scenario "approve" -Research
         Assert-Equal -Expected 0 -Actual @($plain.Calls[0].subjects).Count -Because "no brief, no heading"
+    }
+
+    Test-Case "research by itself runs the researcher and touches no task, not even an approved one" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "new-idea" -State "proposed" -Area @()))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -ResearchOnly
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "researcher" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "nobody else was started"
+        Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the approved task was not run"
+        Assert-Equal -Expected "proposed" -Actual (Get-TaskById -Queue $run.Queue -Id "new-idea").state -Because "and no state was moved"
+        Assert-Equal -Expected 3 -Actual @(Get-TeamTasks -Queue $run.Queue).Count -Because "the proposal was queued"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+        Assert-True -Condition ($run.Report.Contains("## Onay bekleyenler (fikir / yayın)")) -Because "the report is written"
+        $threw = $false
+        try { [void](Invoke-SandboxGit -Root $root -Arguments @("rev-parse", "--verify", "--quiet", "refs/heads/team/c1/worker-task-one")) } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "no branch was made for the approved task"
     }
 
     Test-Case "the worktree of a finished task is closed only when it is clean" {
