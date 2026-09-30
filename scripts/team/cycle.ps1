@@ -74,7 +74,8 @@ if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $CycleId) { $CycleId = "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }
 if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$CycleId'" }
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
-if ($ResearchOnly) { $Research = $true }
+# A parameter is never assigned over (provision.tests.ps1 holds every script to it).
+$runResearch = [bool]$Research -or [bool]$ResearchOnly
 
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
@@ -247,7 +248,7 @@ try {
     }
 
     # ---------------------------------------------------------------- the researcher
-    if ($Research -and -not (Test-CapReached)) {
+    if ($runResearch -and -not (Test-CapReached)) {
         $proposals = Join-Path $TeamRoot "proposals"
         if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
         $done = Complete-RoleRun -Started (Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot)
