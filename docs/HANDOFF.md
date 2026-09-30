@@ -205,8 +205,10 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 - **Kapı notu:** `-Fast` kapısı tarayıcı e2e, entegrasyon ve PS paketlerini KOŞMAZ; yayın
   betiklerine, `scripts/lib`'e ya da `services/browser`'a dokunan iş tam `quality-gate.ps1`
   ister (~45 dk). Sahibe verilen her betik önce çalıştırılır.
-- **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
-  Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.
+- **Cihaz (sahibin PC'si, "MAIL"):** ajan 2026-09-30 20:03 UTC'de main `aa35fcf3` ağacından yeniden kuruldu
+  (`-DisplayPower -Operator`); `verify-device-service.ps1` 14/14 PROVEN_REAL (6b.4 dahil), 106 yetenek, `browser.observe`
+  duyuruluyor (`docs/evidence/verify-device-service-mail-2026-09-30.md`). Araştırma izni yerinde. Sahibin gerçek cihaz
+  denemeleri (dört cümle) hâlâ bekliyor.
 - **Hafıza (2026-09-27):** her modda sahibin cümlesi yazım politikasından geçiyor (ADR-0201), geri çağırma semantik (ADR-0200). Önceki not: 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu
   hem ücretli oturumda hem yerel moddaki serbest sohbette (ADR-0183…0193).
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da

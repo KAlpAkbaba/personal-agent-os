@@ -1047,7 +1047,7 @@ driven - that is PR-C.
 | 33.8 | Risk markers are whole words, English and Turkish, from one file | `PROVEN_AUTOMATED` | `test_risk_markers.py` (200): "Silver plan", "Dark mode", "Paylaş", "Ödeme geçmişi" are not HIGH_IMPACT; "Siparişi tamamla", "Onayla ve öde", "Abone ol", "Place order" are; `browser-risk-markers.json` held verbatim against `risk_markers.py`. Mutation (substring matching) RED |
 | 33.9 | A page that gives orders is observed and nothing on it is done | `PROVEN_PROXY` | `test_a_hostile_page_is_observed_and_nothing_on_it_is_done`: the markers are counted, the button named after an instruction is HIGH_IMPACT, and a session allowed to write reversibly is refused both buttons by the worker's own classification |
 | 33.10 | The five mirrors of the operation list agree | `PROVEN_AUTOMATED` | `test_capability_mirrors.py` (contract, worker, C# host, install verification) and `test_browser_contract_v16.py` (the Cloud Core's `BROWSER_ACTION_ALLOWLIST`), 30 operations |
-| 33.11 | Observe on the owner's own Chrome | `NOT_YET_PROVEN` | PR-C. Needs a Windows agent built from this tree installed on MAIL (the installed 0.6.0 host refuses the name) and the `-AuthorizeTasks` grant |
+| 33.11 | Observe on the owner's own Chrome | `NOT_YET_PROVEN` | PR-C. The precondition is met since 2026-09-30: the agent on MAIL was reinstalled from main `aa35fcf3` and advertises `browser.observe` (`docs/evidence/verify-device-service-mail-2026-09-30.md`); `-AuthorizeTasks` does not exist yet (PR-C's grant). No task has been run on the owner's Chrome |
 
 ## Stage 34 — The browser task loop, PR-B: the loop, the gate, the workflow (ADR-0207, contract v1.7)
 
