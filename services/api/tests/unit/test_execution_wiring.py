@@ -3,6 +3,7 @@ registry and the ledger's own table in SQLite."""
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 import types
 import uuid
@@ -203,3 +204,37 @@ def test_a_spoken_device_alias_that_names_no_device_is_refused(db, registry):
     registry.append(_device("ofis", aliases=("ofis",)))
     decision = _choose(db, spoken_target="evde")
     assert decision.outcome == "refused"
+
+
+def _revoked(device):
+    return dataclasses.replace(device, status="revoked")
+
+
+def test_a_revoked_online_cloud_device_is_not_chosen(db, registry):
+    registry.append(_revoked(_device("bulut-eski", platform="cloud")))
+    decision = _choose(db)
+    assert decision.outcome == "refused"
+    assert wiring.error_class_of(decision) == "no_capable_device"
+
+
+def test_a_revoked_owner_chrome_device_is_not_a_fallback(db, registry):
+    registry.append(_device("bulut-1", platform="cloud", presence="offline"))
+    registry.append(_revoked(_device("ofis-eski", labels=("owner_chrome",))))
+    decision = _choose(db)
+    assert decision.outcome == "refused"
+    assert "execution.selected" not in [t for t, _ in _events(db)]
+
+
+def test_a_blocked_cloud_run_asks_the_owner_and_is_not_a_missing_device(db, registry):
+    registry.append(_device("bulut-1", platform="cloud"))
+    decision = _choose(db, cloud_blocker="captcha")
+    assert decision.outcome == "ask_owner"
+    assert wiring.error_class_of(decision) is None
+    events = _events(db)
+    assert [t for t, _ in events] == ["execution.refused"]
+    assert events[0][1]["ask_owner"] is True
+
+
+def test_no_blocker_leaves_the_cloud_run_selected(db, registry):
+    registry.append(_device("bulut-1", platform="cloud"))
+    assert _choose(db, cloud_blocker=None).outcome == "selected"
