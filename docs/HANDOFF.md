@@ -15,6 +15,10 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**BAKIM PENCERESİ ONAYLI (sahip): Çarşamba 2026-10-01 06:30–07:00 İstanbul, ADR-0223 prosedürü, lead yürütür
+(bu oturumda 06:27'ye tek seferlik uyandırma kurulu; oturum kapanırsa sahip "pencereyi yürüt" der).**
+Bulut işçisi: ilk belirteç süresi dolmuş (17:29 UTC yazıldı, 18:13'te başlatıldı); sunucuda `/tmp/cb-watch.sh`
+taze belirteci görünce profili kendisi başlatıyor (3 saat bekler; günlük `/tmp/cb-watch.log`).
 **pilot-02 — YAYINLANDI (main `8d8d0f18`, 2026-09-30 12:38 UTC). Dal `team/nightly/lead`: gece döngüsünün
 (02:00) yazacağı kuyruk/rapor değişiklikleri buraya düşer; işçi dalları `main`'den açılır.** ADR-0218…0222.
 İlk kapı 30/34 idi: Docker Desktop yine kapanmıştı (3 adım) + sahte API günlüğünü yanıttan sonra yazan bir
