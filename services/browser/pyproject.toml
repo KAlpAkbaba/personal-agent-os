@@ -9,13 +9,6 @@ dependencies = [
     "beautifulsoup4>=4.12",
 ]
 
-[project.optional-dependencies]
-# The Linux cloud worker (browser_agent.cloud, ADR-0213 PR 2); the Windows agent venv omits it.
-cloud = [
-    "websockets>=13",
-    "cryptography>=43",
-]
-
 [dependency-groups]
 dev = [
     "ruff>=0.6",

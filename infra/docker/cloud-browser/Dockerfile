@@ -11,8 +11,8 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY browser_agent ./browser_agent
-# The `cloud` extra: websockets + cryptography (the Windows agent venv does not carry them).
-RUN pip install ".[cloud]"
+# websockets + cryptography are named here, not in pyproject (the Windows agent venv does not carry them).
+RUN pip install . "websockets>=13" "cryptography>=43"
 
 RUN useradd --create-home --uid 10001 pagentos \
  && mkdir -p /var/lib/pagentos-cloud/state /var/lib/pagentos-cloud/data \
