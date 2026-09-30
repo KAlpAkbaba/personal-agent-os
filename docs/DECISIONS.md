@@ -16988,3 +16988,90 @@ fixed files; the released tree (`8d8d0f18`) still holds the broken ones, so the 
 is NOT started until this fix is released. The worker and the inspector had both written
 NOT_RUN for exactly these claims; the classes were honest, and the lesson is the old one - a
 claim nobody ran is where the defect is.
+
+## ADR-0223 — A maintenance window for the Cloud Core: package updates and a safe reboot on a one-host blue/green (2026-09-30)
+
+**Status.** Proposed by the lead on the owner's request ("27 güncelleme + yeniden başlatma
+gerekiyor ve 1 zombi süreç var; bakım penceresi planla"). The WINDOW is the owner's to open
+(TEAM_PROTOCOL 3a item 2b: a disruptive action); the procedure below is binding once he does.
+
+**What the host says (read 2026-09-30 17:30 UTC, nothing changed).**
+
+| Fact | Value |
+|---|---|
+| Uptime / kernel | 28 days; running `6.8.0-138-generic`, installed and waiting `6.8.0-142-generic` |
+| `/var/run/reboot-required` | yes: kernel, `linux-base`, `libc6` |
+| Pending upgrades | 27: `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin`, `tailscale 1.102.3`, `netplan`, `apparmor`, `krb5`, `libaudit`, `base-files`, `python3-apt`, `ubuntu-release-upgrader-core`, `dmidecode`, `libevent`, `motd-news-config` (1 marked security) |
+| Unattended upgrades | on, security origin only, no automatic reboot - which is why the kernel waits |
+| The "zombie" | `auto-setup.sh <defunct>` (pid 1821), parent `temporal-server` (pid 1521, the temporal container's pid 1, 28 days old). Harmless: one dead entry the container's pid 1 never reaped; it goes when the container restarts |
+| Docker | no `/etc/docker/daemon.json`, so NO `live-restore`: upgrading `docker-ce`/`containerd` stops every container; all are `restart: unless-stopped` and come back with the daemon |
+| Leftover | `pagentos-prod-api` in state `created` since the 2026-09-16 single-container attempt (ADR-0033 lesson); never started |
+| Edge state | `active.txt` = blue; the release `aa35fcf3` serves as api-blue, LKG `8d8d0f18` |
+| Timers | backup 00:39 UTC daily; reconcile every minute; restore drill Sunday 01:31 UTC; apt-daily 04:42 / upgrade 06:43 UTC; the team's nightly cycle 23:00 UTC (02:00 Istanbul, up to 4 h) |
+
+**Why blue/green does not remove the outage here.** Both colours run on ONE host. A kernel
+reboot and a Docker daemon upgrade stop both. Blue/green protects a RELEASE (the old tree keeps
+serving while the new one is checked); a host maintenance is a short full outage by nature, and
+the design's job is to make it short, self-healing and honest: the devices reconnect on their
+own (their connection is outbound with backoff), the edge keeps its `active.txt` on the data
+volume, and `pagentos-bluegreen-reconcile.timer` runs after boot and puts the marked colour
+back behind the edge.
+
+**Decision - the procedure (run by the lead over Tailscale SSH; ~10 minutes of outage).**
+
+*Before (all must hold, else the window is postponed and the report says why):*
+1. Health `ok`, `failing_checks` empty; `RELEASE`, `LAST_KNOWN_GOOD` and the recovery pin agree
+   with `git` (pin = RELEASE, 40 hex).
+2. The last backup is younger than 24 h (`LAST_BACKUP.json`); no failure marker under
+   `/var/lib/pagentos-backup/failures/`.
+3. No team cycle running (`team/lock.json` released on the home PC; the nightly window is
+   avoided), no release in flight, the owner not mid-task (the window is his).
+4. `apt-get -s upgrade` lists nothing that removes a package; `docker-ce` is not held. Disk
+   `/` under 80 %.
+5. The two devices' presence is read and written down (so "reconnected" can be checked
+   afterwards).
+
+*The window:*
+6. Take a pre-maintenance snapshot: `bash /opt/pagentos/app/scripts/cloud/backup-cloud-core.sh`
+   (the same backup the release takes before a migration).
+7. Stop the reconcile timer for the window (`systemctl stop pagentos-bluegreen-reconcile.timer`)
+   so it does not fight a half-restarted Docker; the unit stays enabled and returns at boot.
+8. Remove the never-started leftover container: `docker rm pagentos-prod-api` (state
+   `created`; nothing runs in it).
+9. `apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confold upgrade`.
+   Docker restarts inside this step; every container returns by its restart policy. Wait for
+   `docker ps` to show postgres, redis, minio, temporal, edge, api-blue, godseye running
+   (api-green stays `exited`: that is the idle colour).
+10. `reboot`. Expected downtime 1-3 minutes of no edge; the devices' agents retry with backoff.
+
+*After:*
+11. Within 5 minutes of boot: `uname -r` is `6.8.0-142`; `/var/run/reboot-required` is gone;
+    `docker ps` as in step 9; the reconcile timer is active and its first run says
+    `RECONCILE OK: api-blue is canonical (release aa35fcf3...)`; the edge answers
+    `/v1/system/health` with `status ok`, the same release, `failing_checks` empty; the two
+    devices are back (`presence: online`, the same device ids); `tailscale status` shows the
+    host active; godseye up; the zombie is gone (`ps -eo stat | grep -c Z` = 0).
+12. If health is not `ok` after 10 minutes: `release-cloud-core-bluegreen.sh --rollback` is
+    NOT the tool (nothing was released); the reconcile timer is; if it cannot bring the
+    marked colour back, start the LKG colour by hand (`docker compose ... --profile bluegreen
+    up -d api-green` with `PAGENTOS_IMAGE_GREEN`/`PAGENTOS_RELEASE_GREEN` as the `.env` names
+    them) and switch the edge upstream file, then write an incident marker and stop.
+13. The report: before/after facts (kernel, packages, containers, health, devices, downtime
+    measured from the last good health probe to the first good one), in `team/reports/` and
+    HANDOFF.
+
+**The window proposed.** Wednesday 2026-10-01, **06:30-07:00 Europe/Istanbul (03:30-04:00 UTC)**:
+after the backup (00:39 UTC) and the nightly cycle's worst case (23:00-03:00 UTC), before
+apt-daily (04:42 UTC), and outside the owner's working hours. The owner opens it with one
+sentence; the lead runs it and reports. An alternative the owner may prefer: any evening
+after 22:00 Istanbul, before the nightly cycle.
+
+**What is deliberately not done.** No `daemon.json` with `live-restore` yet (it would keep
+containers running through a Docker upgrade, but changes the daemon's behaviour on every
+restart and deserves its own test on the dev stack - queued as a task). No automatic
+reboot for unattended upgrades: a kernel reboot stays a decision, not a timer.
+
+**Follow-up (queued):** `maintenance-reboot-script` - the procedure as
+`scripts/cloud/maintenance-reboot.sh` with `--preflight`, the checks of steps 1-5 as code,
+and a PowerShell test suite in the gate, so the next window is one command with the same
+report.

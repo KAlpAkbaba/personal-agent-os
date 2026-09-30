@@ -1833,6 +1833,32 @@
                       "acceptance":  "team-cycle.tests.ps1 (fake model): a roadmap-serving proposal becomes its tasks and runs in the same cycle; a split with an overlapping area, a shared file or a missing field is rejected whole; a proposal without a roadmap row waits for the owner; the lead run\u0027s tools hold no Bash/Edit; a second cycle does not split the same proposal again. Mutations: the overlap check removed -\u003e RED; the roadmap_row condition removed -\u003e RED. script-syntax and provision suites stay green.",
                       "evidence_expected":  "PROVEN_AUTOMATED (fake model)",
                       "needs_integration":  false
+                  },
+                  {
+                      "id":  "maintenance-reboot-script",
+                      "title":  "Bakım penceresi betiği: ADR-0223 prosedürü (ön kontroller, güncelleme, yeniden başlatma, doğrulama, rapor) tek komut + kapıda test",
+                      "roadmap_row":  "Repairs and improves itself (kept controlled)",
+                      "state":  "approved",
+                      "area":  [
+                                   "scripts/cloud/maintenance-reboot.sh",
+                                   "scripts/tests/maintenance-reboot.tests.ps1",
+                                   "team/plans/maintenance-reboot-script-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T17:45:00Z",
+                      "updated_at":  "2026-09-30T17:45:00Z",
+                      "goal":  "Read ADR-0223 in docs/DECISIONS.md (the procedure, steps 1-13) and the existing scripts/cloud/release-cloud-core-bluegreen.sh and backup-cloud-core.sh for the house style (set -eu -o pipefail, numbered exit codes, no pipe into a truncating reader, status lines to stderr). Write scripts/cloud/maintenance-reboot.sh with --preflight (steps 1-5 as checks, each a named line, exit 0 only when all hold; never changes anything), --run (steps 6-10; refuses unless --preflight passed in the same invocation; writes a maintenance marker file with the start time before the reboot), and --verify (step 11 after boot, reads the marker, measures downtime from the marker to the first good health probe, writes /opt/pagentos/LAST_MAINTENANCE.json and removes the marker). Every check names what it read. The PowerShell test suite drives the script with a fake docker/apt/systemctl/curl on PATH (the pattern of scripts/tests/cloud-release-bluegreen.tests.ps1) and is added to quality-gate.ps1 and .github/workflows/ci.yml by the LEAD (name it under \u0027For the lead at merge\u0027). Work only inside the area; no new dependency; mutation per rule RED with sha256.",
+                      "acceptance":  "Tests: preflight refuses on each of: health not ok, backup older than 24 h, a failure marker, pin != RELEASE, disk over 80 %, a held docker-ce; passes when all hold. --run refuses without preflight; stops the timer before upgrading and the marker exists before the reboot command; --verify refuses when the kernel is still the old one or the reconcile did not say OK, and writes the downtime. Mutations: the pin check removed -\u003e RED; the marker written after the reboot -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED (fakes); PROVEN_REAL at the first window",
+                      "needs_integration":  false
                   }
               ]
 }
