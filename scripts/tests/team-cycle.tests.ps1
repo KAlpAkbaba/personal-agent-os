@@ -30,6 +30,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamRun.ps1")
+. (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 
 $script:Failures = 0
 $script:Passes = 0
@@ -463,6 +464,7 @@ Write-Host "the cycle, in a repository of its own, with a fake in place of the m
 
 $fakeSource = Join-Path $repoRoot "scripts\tests\lib\fake-claude.ps1"
 $sandboxes = New-Object System.Collections.ArrayList
+$fakeApis = New-Object System.Collections.ArrayList
 
 function Invoke-SandboxGit {
     param([string]$Root, [string[]]$Arguments)
@@ -478,7 +480,7 @@ function New-Sandbox {
     foreach ($folder in @("scripts\lib", "scripts\team", "scripts\tests\lib", ".claude\agents", "team", "src\area")) {
         [void](New-Item -ItemType Directory -Force -Path (Join-Path $root $folder))
     }
-    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1")) {
+    foreach ($name in @("NativeProcess.ps1", "TeamQueue.ps1", "TeamRun.ps1", "HttpJson.ps1")) {
         Copy-Item -LiteralPath (Join-Path $repoRoot "scripts\lib\$name") -Destination (Join-Path $root "scripts\lib\$name")
     }
     Copy-Item -Path (Join-Path $repoRoot "scripts\team\*.ps1") -Destination (Join-Path $root "scripts\team")
@@ -504,7 +506,7 @@ function Invoke-Cycle {
     param(
         [string]$Root, [string]$Scenario, [string]$CycleId = "c1", [double]$MaxUsd = 20,
         [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
-        [string[]]$Brief = @(), [switch]$ResearchOnly
+        [string[]]$Brief = @(), [switch]$ResearchOnly, [string]$QueueUrl = "", [string]$QueueTokenFile = ""
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
@@ -517,6 +519,7 @@ function Invoke-Cycle {
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
             $(if ($ResearchOnly) { " -ResearchOnly" } else { "" }) +
+            $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
             $(if (@($Brief).Count -gt 0) { " -ResearchBrief " + ((@($Brief) | ForEach-Object { "'" + $_ + "'" }) -join ",") } else { "" }) +
             "; exit `$LASTEXITCODE")
         )
@@ -826,8 +829,146 @@ try {
         Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $tree -Arguments @("status", "--porcelain")) -Because "the failed merge was aborted"
         Assert-Equal -Expected "changed by a" -Actual (Get-Content -LiteralPath (Join-Path $tree "src\area\README.txt") -TotalCount 1) -Because "the first merge stands"
     }
+
+    # ------------------------------------------------------------------ the queue on the Cloud Core
+    Write-Host ""
+    Write-Host "the queue and the lock on the Cloud Core (a fake listener with the real routes' rules)"
+
+    function Start-FakeApi {
+        param([object[]]$Tasks = @(), $Lock = $null)
+        $work = Join-Path $env:TEMP ("pagentos-teamapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+        [void](New-Item -ItemType Directory -Force -Path $work)
+        [void]$sandboxes.Add($work)
+        $lockDocument = if ($null -ne $Lock) { $Lock } else { New-TeamLockReleased }
+        $seed = [pscustomobject]@{ queue = (New-Queue -Tasks $Tasks); lock = $lockDocument }
+        [System.IO.File]::WriteAllText((Join-Path $work "seed.json"), (ConvertTo-Json -InputObject $seed -Depth 12), (New-Object System.Text.UTF8Encoding($false)))
+        $probe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+        $probe.Start(); $port = $probe.LocalEndpoint.Port; $probe.Stop()
+        $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $repoRoot "scripts\tests\lib\fake-team-api.ps1") + '"'),
+            "-Port", $port, "-Seed", ('"' + (Join-Path $work "seed.json") + '"'), "-Log", ('"' + (Join-Path $work "requests.log") + '"'),
+            "-Ready", ('"' + (Join-Path $work "ready") + '"'), "-Token", "test-token")
+        $process = Start-Process -FilePath $powershell -ArgumentList $arguments -PassThru -WindowStyle Hidden
+        [void]$fakeApis.Add($process)
+        $deadline = [datetime]::UtcNow.AddSeconds(40)
+        while (-not (Test-Path -LiteralPath (Join-Path $work "ready"))) {
+            if ([datetime]::UtcNow -gt $deadline -or $process.HasExited) { throw "the fake team API did not start" }
+            Start-Sleep -Milliseconds 200
+        }
+        $tokenFile = Join-Path $work "token.txt"
+        [System.IO.File]::WriteAllText($tokenFile, "test-token`n", (New-Object System.Text.UTF8Encoding($false)))
+        return [pscustomobject]@{ Url = "http://127.0.0.1:$port"; Port = $port; Work = $work; TokenFile = $tokenFile; Process = $process }
+    }
+
+    function Get-FakeApiState {
+        param($Api)
+        return (Invoke-JsonUtf8 -Uri ($Api.Url + "/__state"))
+    }
+
+    function Get-FakeApiRequests {
+        param($Api)
+        $log = Join-Path $Api.Work "requests.log"
+        if (-not (Test-Path -LiteralPath $log)) { return @() }
+        return @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_.Trim() })
+    }
+
+    Test-Case "in API mode the cycle takes the lock through the API, writes the task's states there, posts the report, and leaves the files alone" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $task = @($state.tasks | Where-Object { $_.id -eq "task-one" })[0]
+        Assert-Equal -Expected "merged" -Actual $task.state -Because "the state was written to the API"
+        Assert-True -Condition ($task.sha -match "^[0-9a-f]{40}$") -Because "the sha reached the API too: $($task.sha)"
+        Assert-Equal -Expected 2 -Actual @($task.reports).Count -Because "the worker's and the inspector's report"
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock was released through the API"
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-Equal -Expected 2 -Actual @($requests | Where-Object { $_ -match "^POST /v1/team/queue/lock 200" }).Count -Because "one acquire, one release"
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 200" }).Count -ge 2) -Because ($requests -join "; ")
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^GET /v1/team/queue 200" }).Count -eq 1) -Because "the queue is read once"
+        Assert-True -Condition ($state.reports.PSObject.Properties["c1.md"].Value -match "pilot|c1") -Because "the report text is in the store"
+        Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the sandbox's queue.json was not written in API mode"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "nor was its lock.json ever held"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\reports\c1.md")) -Because "the report is still a file"
+    }
+
+    Test-Case "in API mode the other machine's fresh lock stops the cycle before it starts anything, and stays theirs" {
+        $held = New-TeamLock -Machine "GMKADIRAKBABA" -CycleId "office" -Now ([datetime]::UtcNow.AddHours(-1))
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock $held
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 3 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected "GMKADIRAKBABA" -Actual $state.lock.machine -Because "the lock is still theirs"
+        Assert-Equal -Expected "approved" -Actual @($state.tasks)[0].state -Because "the queue was not written"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(PUT|DELETE)" }).Count -Because "no write at all"
+        Assert-True -Condition ($run.Report -match "kilit GMKADIRAKBABA makinesinde") -Because "the stop is a line in the report"
+    }
+
+    Test-Case "in API mode a lock the other machine held for seven hours is taken over, and the report says so" {
+        $held = New-TeamLock -Machine "GMKADIRAKBABA" -CycleId "office" -Now ([datetime]::UtcNow.AddHours(-7))
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Lock $held
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected "merged" -Actual @((Get-FakeApiState -Api $api).tasks)[0].state -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition ($run.Report -match "bayat kilit devral") -Because $run.Report
+    }
+
+    Test-Case "a task another writer changed since the cycle read it is not overwritten, and one nobody changed is not written at all" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two" -Area @("src/b")))
+        $store = New-TeamApiStore -Url $api.Url -TokenFile $api.TokenFile
+        $queue = Read-TeamQueueApi -Store $store
+        # Someone else (the owner, in the Onay Merkezi) moves task-one after the cycle read it.
+        $theirs = New-Task -Id "task-one" -State "stopped"
+        $theirs.updated_at = "2026-09-30T05:00:00Z"
+        [void](Invoke-TeamApi -Store $store -Method "PUT" -Path "/v1/team/queue/tasks/task-one" `
+                -Body ([ordered]@{ task = $theirs; expected_updated_at = "2026-09-30T00:00:00Z" }))
+        $before = @(Get-FakeApiRequests -Api $api).Count
+        Save-TeamQueueApi -Store $store -Queue $queue
+        Assert-Equal -Expected $before -Actual @(Get-FakeApiRequests -Api $api).Count -Because "nothing changed locally: no PUT"
+        Set-TeamProperty -InputObject @(Get-TeamTasks -Queue $queue)[1] -Name "state" -Value "assigned"
+        Save-TeamQueueApi -Store $store -Queue $queue
+        Assert-Equal -Expected ($before + 1) -Actual @(Get-FakeApiRequests -Api $api).Count -Because "task-two changed and was written, with the version it was read at"
+        Set-TeamProperty -InputObject @(Get-TeamTasks -Queue $queue)[0] -Name "state" -Value "assigned"
+        $message = ""
+        try { Save-TeamQueueApi -Store $store -Queue $queue } catch { $message = $_.Exception.Message }
+        Assert-True -Condition ($message -match "HTTP 409") -Because "a stale write throws: '$message'"
+        Assert-Equal -Expected "stopped" -Actual @((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0].state -Because "the owner's decision stands"
+    }
+
+    Test-Case "a wrong token is refused by the API, and a token file that is missing or empty is refused before any call" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
+        $wrong = Join-Path $api.Work "wrong.txt"
+        [System.IO.File]::WriteAllText($wrong, "not-the-token", (New-Object System.Text.UTF8Encoding($false)))
+        $message = ""
+        try { [void](Read-TeamQueueApi -Store (New-TeamApiStore -Url $api.Url -TokenFile $wrong)) } catch { $message = $_.Exception.Message }
+        Assert-True -Condition ($message -match "HTTP 401") -Because "'$message'"
+        $threw = $false
+        try { [void](New-TeamApiStore -Url $api.Url -TokenFile (Join-Path $api.Work "nothing.txt")) } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "a missing token file"
+        $empty = Join-Path $api.Work "empty.txt"
+        [System.IO.File]::WriteAllText($empty, "  `n", (New-Object System.Text.UTF8Encoding($false)))
+        $threw = $false
+        try { [void](New-TeamApiStore -Url $api.Url -TokenFile $empty) } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "an empty token file"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api).Count -Because "only the wrong-token call reached the API; the missing and empty files made none"
+    }
+
+    Test-Case "-QueueUrl without -QueueToken runs nothing, and the token is a path parameter, never the secret itself" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            ("& '" + (Join-Path $root "scripts\team\cycle.ps1") + "' -CycleId c1 -QueueUrl http://127.0.0.1:9; exit `$LASTEXITCODE"))
+        $result = Invoke-NativeProcess -FilePath $powershell -Arguments $arguments -WorkingDirectory $root -TimeoutSeconds 60 -SuccessExitCodes @(0, 1, 2, 3)
+        Assert-True -Condition ($result.ExitCode -ne 0) -Because "it must not start"
+        Assert-True -Condition (($result.StdOut + $result.StdErr) -match "QueueToken") -Because "it says what is missing: $($result.StdErr)"
+        $script = [System.IO.File]::ReadAllText((Join-Path $repoRoot "scripts\team\cycle.ps1"), [System.Text.Encoding]::UTF8)
+        Assert-True -Condition ($script -match '\[string\]\$QueueToken') -Because "the parameter is a string path"
+        Assert-True -Condition ($script -match 'TokenFile \$QueueToken') -Because "and it is handed to the reader of the file"
+    }
 }
 finally {
+    foreach ($api in $fakeApis) { try { if (-not $api.HasExited) { $api.Kill() } } catch { } }
     foreach ($root in $sandboxes) {
         if (-not (Test-Path -LiteralPath $root)) { continue }
         try { [void](Invoke-TeamGit -WorkingDirectory $root -Arguments @("worktree", "prune")) } catch { }
