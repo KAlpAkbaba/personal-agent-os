@@ -16,7 +16,11 @@
         the owner's three gates, where nothing runs;
       * what a role's report means: the verdict line, the 40-line summary, the money spent.
 
-    Windows PowerShell 5.1, StrictMode. Nothing here reads a secret or the network.
+    The queue can also live in the Cloud Core's database (pilot-02): the functions of the
+    'store on the Cloud Core' section at the end are the ONLY ones that touch the network or
+    read a secret (the token file); everything above them takes its inputs and returns.
+
+    Windows PowerShell 5.1, StrictMode.
 #>
 
 Set-StrictMode -Version Latest
@@ -414,4 +418,95 @@ function Test-TeamPathInsideArea {
         if ($file -eq $root -or $file.StartsWith($root + "/")) { return $true }
     }
     return $false
+}
+
+# ---------------------------------------------------- the store on the Cloud Core (pilot-02)
+#
+# The same queue and lock, served by /v1/team/queue (services/api/app/team/routes.py). The
+# rules are the server's: a task is validated on write, a write carries the updated_at the
+# writer last read (409 when stale), and the lock is stale after six hours. What this side
+# adds is bookkeeping: what each task looked like when it was read, so that only a task that
+# CHANGED is written back, and only with the version it was read at.
+# services/api/tests/unit/test_team_state.py reads this file's paths and field names.
+
+function New-TeamApiStore {
+    <# -TokenFile is a PATH: the token is read from the file, never taken on a command line. #>
+    param([Parameter(Mandatory = $true)][string]$Url, [Parameter(Mandatory = $true)][string]$TokenFile)
+    if (-not (Test-Path -LiteralPath $TokenFile)) { throw "the queue token file does not exist: $TokenFile" }
+    $token = [System.IO.File]::ReadAllText($TokenFile, [System.Text.Encoding]::UTF8).Trim()
+    if (-not $token) { throw "the queue token file is empty: $TokenFile" }
+    return [pscustomobject]@{ Base = $Url.TrimEnd("/"); Token = $token; Baseline = @{} }
+}
+
+function Invoke-TeamApi {
+    <# One call, UTF-8 both ways (Invoke-JsonUtf8, scripts/lib/HttpJson.ps1). #>
+    param(
+        [Parameter(Mandatory = $true)]$Store,
+        [Parameter(Mandatory = $true)][string]$Method,
+        [Parameter(Mandatory = $true)][string]$Path,
+        $Body = $null
+    )
+    $json = $null
+    if ($null -ne $Body) { $json = ConvertTo-Json -InputObject $Body -Depth 12 -Compress }
+    return (Invoke-JsonUtf8 -Uri ($Store.Base + $Path) -Method $Method -Headers @{ Authorization = ("Bearer " + $Store.Token) } -Body $json)
+}
+
+function Read-TeamQueueApi {
+    <# The whole queue, and a note of each task as it was read. #>
+    param([Parameter(Mandatory = $true)]$Store)
+    $queue = Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue"
+    $Store.Baseline.Clear()
+    foreach ($task in (Get-TeamTasks -Queue $queue)) {
+        $Store.Baseline[[string]$task.id] = [pscustomobject]@{
+            Updated = [string]$task.updated_at
+            Json    = (ConvertTo-Json -InputObject $task -Depth 12 -Compress)
+        }
+    }
+    return $queue
+}
+
+function Save-TeamQueueApi {
+    <# Writes back the tasks that changed (or are new), each with the version it was read at.
+       A stale write throws: the queue moved under us and the cycle must not overwrite it. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue)
+    foreach ($task in (Get-TeamTasks -Queue $Queue)) {
+        $id = [string]$task.id
+        $json = ConvertTo-Json -InputObject $task -Depth 12 -Compress
+        $known = $Store.Baseline[$id]
+        if ($null -ne $known -and $known.Json -ceq $json) { continue }
+        $expected = $null
+        if ($null -ne $known) { $expected = $known.Updated }
+        $body = [ordered]@{ task = $task; expected_updated_at = $expected }
+        [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/tasks/$id" -Body $body)
+        $Store.Baseline[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Json = $json }
+    }
+}
+
+function Get-TeamLockApi {
+    param([Parameter(Mandatory = $true)]$Store)
+    return (Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue/lock")
+}
+
+function Set-TeamLockApi {
+    <# Takes the lock. The answer says acquired, kind (free/stale/ours/dead/held), holder, since. #>
+    param(
+        [Parameter(Mandatory = $true)]$Store,
+        [Parameter(Mandatory = $true)][string]$Machine,
+        [Parameter(Mandatory = $true)][string]$CycleId,
+        [bool]$TakeoverDead = $false
+    )
+    $body = [ordered]@{ action = "acquire"; machine = $Machine; cycle_id = $CycleId; pid = $PID; takeover_dead = $TakeoverDead }
+    return (Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/lock" -Body $body)
+}
+
+function Clear-TeamLockApi {
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Machine, [Parameter(Mandatory = $true)][string]$CycleId)
+    $body = [ordered]@{ action = "release"; machine = $Machine; cycle_id = $CycleId }
+    [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/lock" -Body $body)
+}
+
+function Send-TeamReportApi {
+    <# The report as text, so the Onay Merkezi on the Cloud Core can show it. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
+    [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/reports" -Body ([ordered]@{ name = $Name; text = $Text }))
 }

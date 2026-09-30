@@ -530,3 +530,93 @@ def test_a_decision_the_ledger_vocabulary_refuses_is_not_written_to_the_queue(
     assert response.json()["detail"]["code"] == "ledger_refused"
     assert _digest(team_root) == before
     assert _events(engine) == []
+
+
+# ------------------------------------------------- the same rules on the database store
+#
+# The Onay Merkezi reads and writes whatever ``app.state.team_store`` is: the Cloud Core's
+# database, or (unset) the files under ``team_root``. Every rule below must hold on both.
+
+
+@pytest.fixture(params=["file", "db"])
+def both(request, app_and_client, wired_vocabulary, engine, team_root):
+    from app.team import store as team_store
+    from app.team.models import TeamStateRow
+
+    app, test_client = app_and_client
+    if request.param == "db":
+        TeamStateRow.__table__.create(engine)
+        db = team_store.DbStore(sessionmaker(bind=engine, expire_on_commit=False))
+        for task in _queue(team_root)["tasks"]:
+            db.put_task(task, None)
+        app.state.team_store = db
+        reader = db
+    else:
+        # Wired explicitly here so the stale-write test can intercept the one instance; the
+        # default (unset) path is what every test above this section already runs on.
+        reader = team_store.FileStore(team_root)
+        app.state.team_store = reader
+    authenticate(app, test_client, settings=Settings(_env_file=None))
+    return test_client, reader, team_store
+
+
+def _tasks(reader) -> dict[str, dict[str, Any]]:
+    return {t["id"]: t for t in reader.read_queue()["tasks"]}
+
+
+def test_the_same_two_tasks_are_listed_on_both_stores(both):
+    test_client, _, _ = both
+    listed = {a["task_id"]: a["gate"] for a in test_client.get(BASE).json()["approvals"]}
+    assert listed == {"fikir-a": "fikir", "yayin-b": "yayin"}
+
+
+def test_an_idea_approval_writes_approved_on_both_stores_and_a_release_one_does_not(both):
+    test_client, reader, _ = both
+    assert _decide(test_client, task_id="fikir-a", decision="approve").status_code == 200
+    assert _decide(test_client, task_id="yayin-b", decision="approve").status_code == 200
+    tasks = _tasks(reader)
+    assert tasks["fikir-a"]["state"] == "approved"
+    assert tasks["yayin-b"]["state"] == "awaiting_release"
+    assert tasks["yayin-b"]["release_approved"] is True
+    assert "release_approved" not in tasks["fikir-a"]
+
+
+def test_a_rejection_needs_its_reason_and_keeps_it_on_both_stores(both):
+    test_client, reader, _ = both
+    assert _decide(test_client, task_id="fikir-a", decision="reject").status_code == 422
+    assert _tasks(reader)["fikir-a"]["state"] == "awaiting_owner"
+    assert (
+        _decide(test_client, task_id="fikir-a", decision="reject", reason="gerek yok").status_code
+        == 200
+    )
+    assert _tasks(reader)["fikir-a"]["reason"] == "gerek yok"
+
+
+def test_a_decision_is_refused_while_a_cycle_holds_the_lock_on_both_stores(both):
+    test_client, reader, _ = both
+    reader.acquire_lock(machine="MAIL", cycle_id="c1", pid=1)
+    refused = _decide(test_client, task_id="fikir-a", decision="approve")
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "cycle_running"
+    assert _tasks(reader)["fikir-a"]["state"] == "awaiting_owner"
+    reader.release_lock(machine="MAIL", cycle_id="c1")
+    assert _decide(test_client, task_id="fikir-a", decision="approve").status_code == 200
+
+
+def test_a_task_changed_after_the_owner_saw_it_is_a_stale_write_not_an_overwrite(both, monkeypatch):
+    test_client, reader, _ = both
+    original = reader.put_task
+
+    def someone_else_first(task, expected):
+        bumped = copy.deepcopy(_tasks(reader)[task["id"]])
+        bumped["updated_at"] = "2026-09-30T05:00:00Z"
+        bumped["title"] = "başkası değiştirdi"
+        original(bumped, expected)
+        return original(task, expected)
+
+    monkeypatch.setattr(reader, "put_task", someone_else_first)
+    refused = _decide(test_client, task_id="fikir-a", decision="approve")
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "stale_write"
+    assert _tasks(reader)["fikir-a"]["title"] == "başkası değiştirdi"
+    assert _tasks(reader)["fikir-a"]["state"] == "awaiting_owner"
