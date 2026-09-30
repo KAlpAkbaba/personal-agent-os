@@ -399,6 +399,26 @@ Test-Case "a run is capped, fresh, and cannot start agents of its own" {
     Assert-True -Condition ($tools -match "Read") -Because "the role's own tools are granted"
 }
 
+Test-Case "a run without a cap is given no --max-budget-usd at all (owner, 2026-09-30: the subscription has none)" {
+    $line = @(Get-TeamRunArguments -RoleFile (Join-Path $roles "lead.md")) -join " "
+    Assert-True -Condition ($line -notmatch "max-budget") -Because "no cap named, no flag: $line"
+    $zero = @(Get-TeamRunArguments -RoleFile (Join-Path $roles "lead.md") -MaxUsd 0) -join " "
+    Assert-True -Condition ($zero -notmatch "max-budget") -Because "0 is no cap: $zero"
+}
+
+Test-Case "the usage limit is read from the tool's words, with the time it lifts" {
+    $limited = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1790836000","total_cost_usd":0}' -ExitCode 1
+    Assert-True -Condition (-not $limited.Ok) -Because "not a result"
+    Assert-True -Condition ([bool]$limited.UsageLimited) -Because "the one stop the team has"
+    Assert-Equal -Expected "2026-10-01T06:26:40Z" -Actual $limited.ResetsAt -Because "the epoch, as UTC"
+    Assert-Equal -Expected "Max kullanım limiti" -Actual $limited.Why -Because "named for the report"
+    $onStderr = Read-TeamRunResult -StdOut "" -ExitCode 1 -StdErr "You've hit your limit until 3pm"
+    Assert-True -Condition ([bool]$onStderr.UsageLimited) -Because "said on stderr, without a time"
+    Assert-Equal -Expected "" -Actual $onStderr.ResetsAt -Because "no epoch given"
+    $plain = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in","total_cost_usd":0}' -ExitCode 1
+    Assert-True -Condition (-not [bool]$plain.UsageLimited) -Because "another failure is not the limit"
+}
+
 Test-Case "a role file without tools starts nothing" {
     $file = Join-Path $env:TEMP ("pagentos-team-role-" + [guid]::NewGuid().ToString("N") + ".md")
     try {
@@ -506,16 +526,22 @@ function Invoke-Cycle {
     param(
         [string]$Root, [string]$Scenario, [string]$CycleId = "c1", [double]$MaxUsd = 20,
         [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
-        [string[]]$Brief = @(), [switch]$ResearchOnly, [string]$QueueUrl = "", [string]$QueueTokenFile = ""
+        [string[]]$Brief = @(), [switch]$ResearchOnly, [string]$QueueUrl = "", [string]$QueueTokenFile = "",
+        # The script's own defaults (no money cap, no time cap) instead of the harness's caps.
+        [switch]$NoCaps, [string]$ExtraArguments = ""
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
     $env:PAGENTOS_FAKE_CLAUDE_LOG = $log
+    $caps = if ($NoCaps) { "" } else {
+        " -MaxUsd $($MaxUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture))" +
+        " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture))"
+    }
     try {
         $arguments = @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-            ("& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId '$CycleId' -MaxUsd $($MaxUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture))" +
-            " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture)) -MaxParallel $MaxParallel -Machine '$Machine'" +
+            ("& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId '$CycleId'" + $caps + $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" }) +
+            " -MaxParallel $MaxParallel -Machine '$Machine'" +
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
             $(if ($ResearchOnly) { " -ResearchOnly" } else { "" }) +
@@ -584,7 +610,7 @@ try {
         }
         Assert-True -Condition ($run.Report -match "FİKİR: idea-one") -Because "what waits for the owner is named"
         Assert-True -Condition ($run.Report -match "task-one .* \[merged\] \([0-9a-f]{40}\)") -Because "what is ready carries its sha"
-        Assert-True -Condition ($run.Report -match "0[.,]50 USD / tavan 20[.,]00 USD") -Because "two runs of 0.25: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "tahmini 0[.,]50 USD / tavan 20[.,]00 USD") -Because "two runs of 0.25, as an estimate: $($run.Report)"
         Assert-True -Condition ($run.Report.Contains('`state` alanını `approved` yapın')) -Because "how to approve, in one line"
         $task = Get-TaskById -Queue $run.Queue -Id "task-one"
         Assert-Equal -Expected 2 -Actual @($task.reports).Count -Because "the worker's and the inspector's"
@@ -703,6 +729,37 @@ try {
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
     }
 
+    Test-Case "without caps (the defaults) a run gets no budget flag, the report says 'tavan yok', and the work is done" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "" -Actual ([string]$run.Calls[0].budget) -Because "no --max-budget-usd was passed: $($run.Calls[0] | ConvertTo-Json -Compress)"
+        Assert-True -Condition ($run.Report -match "tahmini 0[.,]50 USD \(tavan yok\)") -Because $run.Report
+    }
+
+    Test-Case "the usage limit: the task goes back, nothing is counted against it, the cycle waits it out and finishes the work" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker,worker,inspector" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the limited run, the run after the wait, the inspection"
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0)) -Because "the limit is not the task's failure"
+        Assert-True -Condition ($run.Report -match "Max kullanım limiti: .* sıfırlanmasına kadar beklendi") -Because $run.Report
+        Assert-True -Condition ($run.Report -match "task-one / worker: .*Max kullanım limiti") -Because "the limited run is in the run list: $($run.Report)"
+    }
+
+    Test-Case "the usage limit without waiting: the cycle stops, says how to continue, and the task is where it was" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -ExtraArguments '-WaitForUsageLimit:$false'
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "assigned" -Actual $task.state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "nothing after the limit"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma .*aynı -CycleId ile yeniden başlat") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
+    }
+
     Test-Case "two tasks on two areas run side by side, each in its own worktree" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
         $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
@@ -740,6 +797,30 @@ try {
         $run = Invoke-Cycle -Root $root -Scenario "approve"
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr)
         Assert-True -Condition ($run.Report -match "bayat kilit devralındı: GMKADIRAKBABA") -Because $run.Report
+    }
+
+    Test-Case "a task waits for its dependencies to be on main; the report says so; a dependency must exist" {
+        $first = New-Task -Id "layer-one" -Area @("src/one")
+        $second = New-Task -Id "layer-three" -Area @("src/three")
+        $second | Add-Member -NotePropertyName "depends_on" -NotePropertyValue @("layer-one")
+        Assert-Equal -Expected "layer-one" -Actual (@(Get-TeamUnmetDependencies -Task $second -Queue (New-Queue -Tasks @($first, $second))) -join ",") -Because "approved is not on main"
+        $first.state = "merged"
+        Assert-Equal -Expected "layer-one" -Actual (@(Get-TeamUnmetDependencies -Task $second -Queue (New-Queue -Tasks @($first, $second))) -join ",") -Because "merged is the integration branch, not main"
+        $first.state = "awaiting_release"
+        Assert-Equal -Expected 0 -Actual @(Get-TeamUnmetDependencies -Task $second -Queue (New-Queue -Tasks @($first, $second))).Count -Because "gated main is main"
+        $orphan = New-Task -Id "orphan"
+        $orphan | Add-Member -NotePropertyName "depends_on" -NotePropertyValue @("nobody")
+        $problems = @(Test-TeamQueue -Queue (New-Queue -Tasks @($orphan)))
+        Assert-True -Condition (@($problems | Where-Object { $_ -match "depends on 'nobody', which is not in the queue" }).Count -eq 1) -Because ($problems -join "; ")
+
+        $first.state = "approved"
+        $root = New-Sandbox -Tasks @($first, $second)
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "layer-one").state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "layer-three").state -Because "it waited: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.task -eq "layer-three" }).Count -Because "no run for the waiting task"
+        Assert-True -Condition ($run.Report -match "bekliyor: layer-three -> layer-one main'e girince") -Because $run.Report
     }
 
     Test-Case "a queue that breaks the protocol runs nothing" {

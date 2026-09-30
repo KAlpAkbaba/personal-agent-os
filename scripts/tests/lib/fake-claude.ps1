@@ -14,6 +14,8 @@
       silent     every run prints something that is not the result document
       costly     as approve, and every run costs 4 USD
       slow       the run sleeps for longer than the cycle lets it
+      limited    the FIRST worker run of a task answers with the subscription's usage-limit
+                 error (reset time 200 s in the past); every later run is as approve
 #>
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
@@ -61,6 +63,19 @@ if ($scenario -eq "silent") {
 if ($scenario -eq "slow") {
     Start-Sleep -Seconds 600
     exit 0
+}
+if ($scenario -eq "limited" -and $role -eq "worker") {
+    # This call's own log entry is already written: one entry means the first call.
+    $earlier = 0
+    if ($log -and (Test-Path -LiteralPath $log)) {
+        $earlier = @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_ -match '"role":"worker"' -and $_ -match ('"task":"' + $taskId + '"') }).Count
+    }
+    if ($earlier -le 1) {
+        $epoch = [DateTimeOffset]::UtcNow.AddSeconds(-200).ToUnixTimeSeconds()
+        $document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $true; result = "Claude AI usage limit reached|$epoch"; total_cost_usd = 0 }
+        [Console]::Out.Write(($document | ConvertTo-Json -Compress))
+        exit 1
+    }
 }
 $cost = if ($scenario -eq "costly") { 4.0 } else { 0.25 }
 

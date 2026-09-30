@@ -180,7 +180,7 @@ function Get-TeamRunArguments {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$RoleFile,
-        [Parameter(Mandatory = $true)][double]$MaxUsd,
+        [double]$MaxUsd = 0,
         [string]$Model = "",
         [string[]]$PrefixArguments = @()
     )
@@ -194,9 +194,14 @@ function Get-TeamRunArguments {
             "-p", "--output-format", "json", "--no-session-persistence",
             "--append-system-prompt-file", $RoleFile,
             "--allowedTools", ($tools -join ","),
-            "--permission-mode", "acceptEdits",
-            "--max-budget-usd", $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
+            "--permission-mode", "acceptEdits"
         )) { [void]$arguments.Add([string]$argument) }
+    if ($MaxUsd -gt 0) {
+        # Owner decision 2026-09-30 (ADR-0214 addendum 3): the subscription has no money cap,
+        # so a run is given none by default; the flag only appears when a caller names one.
+        [void]$arguments.Add("--max-budget-usd")
+        [void]$arguments.Add($MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture))
+    }
     if ($Model) { [void]$arguments.Add("--model"); [void]$arguments.Add($Model) }
     return @($arguments.ToArray())
 }
@@ -253,7 +258,10 @@ function Wait-TeamRun {
         children, and what it printed is kept.
     #>
     param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline)
-    $remaining = [int][Math]::Max(0, ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds)
+    # [datetime]::MaxValue is "no deadline" (owner decision 2026-09-30: no time cap on a
+    # run); WaitForExit(-1) waits for ever, and a span that large would not fit an int.
+    $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
+    $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
     $timedOut = -not $Run.Process.WaitForExit($remaining)
     if ($timedOut) {
         Stop-TeamProcessTree -ProcessId $Run.Process.Id
@@ -341,8 +349,11 @@ function New-TeamCycleReport {
     $spent = [double](Get-TeamProperty -InputObject $Cycle -Name "spent_usd" -Default 0)
     $cap = [double](Get-TeamProperty -InputObject $Cycle -Name "max_usd" -Default 0)
     $runs = @(Get-TeamProperty -InputObject $Cycle -Name "runs" -Default @())
+    # The USD is the tool's own estimate, kept as information (abonelik, API değil - owner,
+    # 2026-09-30); a cap is named only when the cycle was given one.
+    $capText = if ($cap -gt 0) { (" / tavan {0:0.00} USD" -f $cap) } else { " (tavan yok)" }
     $budget = @(
-        ("{0:0.00} USD / tavan {1:0.00} USD" -f $spent, $cap),
+        ("tahmini {0:0.00} USD{1}" -f $spent, $capText),
         "koşu sayısı: $(@($runs).Count); çakışma: $([int](Get-TeamProperty -InputObject $Cycle -Name 'conflicts' -Default 0)); geri verilen: $([int](Get-TeamProperty -InputObject $Cycle -Name 'returned' -Default 0))"
     )
     foreach ($run in $runs) {

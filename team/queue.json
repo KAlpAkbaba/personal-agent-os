@@ -3,6 +3,161 @@
     "note":  "The agent team\u0027s queue (docs/TEAM_PROTOCOL.md). Until the Onay Merkezi exists, the owner approves by setting a task\u0027s state to \"approved\" here.",
     "tasks":  [
                   {
+                      "state":  "approved",
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "created_at":  "2026-09-30T21:30:00Z",
+                      "updated_at":  "2026-09-30T21:30:00Z",
+                      "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
+                      "id":  "understanding-normalize",
+                      "title":  "ADR-0224 katman 1: Türkçe ek düşürme (kapalı tablo) + STT karışıklık sözlüğü (protokol dosyası)",
+                      "area":  [
+                                   "services/api/app/voice/understanding/__init__.py",
+                                   "services/api/app/voice/understanding/normalize.py",
+                                   "packages/protocol/stt-confusions.json",
+                                   "services/api/tests/unit/test_understanding_normalize.py",
+                                   "team/plans/understanding-normalize-adr.md"
+                               ],
+                      "budget":  {
+                                     "max_usd":  8
+                                 },
+                      "goal":  "ADR-0224 layer 1. Build app/voice/understanding/normalize.py: normalize(text) -\u003e Normalized(text, tokens, lemmas: tuple[Lemma], applied_confusions) where Lemma = (surface, stem, suffixes, kind in {verb, noun, other}). (a) A CLOSED, table-driven Turkish suffix stripper: verb forms (imperative \u0027aç\u0027, polite \u0027açın\u0027/\u0027açınız\u0027, \u0027açsana\u0027, \u0027açar mısın\u0027, \u0027açabilir misin\u0027, aorist question) and noun suffixes (plural, possessive, case: \u0027bilgisayarımdan\u0027 -\u003e bilgisayar + (poss1sg, abl); \u0027raporlarını\u0027 -\u003e rapor + (pl, acc/poss)). A suffix is dropped ONLY when the remainder is a known stem: the verb table, the application names (app/operator/plans.py _APP_ALIAS_PHRASES / the allow-list), the device alias words (app/devices/aliases.py), and a small noun list drawn from the corpus; \u0027istediğim\u0027 must NOT become \u0027iş\u0027 (ADR-0205), \u0027unutma\u0027 must NOT become \u0027unut\u0027 (see docs/DECISIONS.md on the delete/remember confusion). (b) The STT confusion dictionary packages/protocol/stt-confusions.json: entries {heard, meant, seen_at, sentence}; seed it with ofisü -\u003e ofis (2026-09-30, \u0027Ofisü bilgisayarında hesap makinesini açın.\u0027); read through app.protocol_files.protocol_file (the lead registers the file in BUNDLED and the falsification test at merge - say so under \u0027For the lead at merge\u0027). (c) Keep normalize_transcript (app/voice/intents.py) as the filler/diacritic step it is; do NOT change the rule tables in this task - the next tasks wire the layers. Provide one function the router can call later: lemma_tokens(text) -\u003e the token tuple with verbs and nouns replaced by their stems, so \u0027Ofisü bilgisayarında hesap makinesini açın\u0027 -\u003e (\u0027ofis\u0027,\u0027bilgisayar\u0027,\u0027hesap\u0027,\u0027makine\u0027,\u0027aç\u0027). Read ADR-0224 in docs/DECISIONS.md first (the owner\u0027s directive; it is the contract). Work only inside the area; RED-first; mutation per rule RED with sha256 (restore from the backup copy, never git checkout --); the Owner Utterance Suite (tests/unit/test_owner_utterance_corpus.py, 2745 cases) must stay 100 % - run it before the report. Shared files (protocol bundle registration in app/protocol_files.py, the falsification test list, quality-gate/ci) are the LEAD\u0027s at merge: name what the lead must wire under \u0027For the lead at merge\u0027. No new dependency without the integrator\u0027s THIRD_PARTY record.",
+                      "acceptance":  "Tests: the trial sentence normalises to the stems above with the confusion applied and recorded (RED before); \u0027açın\u0027, \u0027açınız\u0027, \u0027açar mısın\u0027, \u0027açabilir misin\u0027 all lemmatise to \u0027aç\u0027; \u0027istediğim\u0027 keeps its surface (not \u0027iş\u0027); \u0027unutma\u0027 keeps its surface; \u0027bilgisayarımdan\u0027 -\u003e bilgisayar with (poss1sg, abl); a word whose remainder is not a known stem is left whole; the protocol file validates against a schema the test holds (heard/meant/seen_at/sentence required, no duplicates); at least 40 surface-\u003estem cases from the corpus. Mutations: the known-stem guard removed -\u003e RED (\u0027istediğim\u0027 -\u003e \u0027iş\u0027); the confusion lookup removed -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED",
+                      "needs_integration":  false
+                  },
+                  {
+                      "state":  "approved",
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "created_at":  "2026-09-30T21:30:00Z",
+                      "updated_at":  "2026-09-30T21:30:00Z",
+                      "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
+                      "id":  "understanding-semantic-index",
+                      "title":  "ADR-0224 katman 2: niyet + varlık vektör dizini (yerel potion embedder), bulanık dize, güven puanı ve birleştirici",
+                      "area":  [
+                                   "services/api/app/voice/understanding/semantic.py",
+                                   "services/api/app/voice/understanding/fuzzy.py",
+                                   "services/api/app/voice/understanding/combine.py",
+                                   "services/api/tests/unit/test_understanding_semantic.py",
+                                   "services/api/tests/unit/test_understanding_combine.py",
+                                   "team/plans/understanding-semantic-index-adr.md",
+                                   "docs/THIRD_PARTY.md"
+                               ],
+                      "budget":  {
+                                     "max_usd":  10
+                                 },
+                      "goal":  "ADR-0224 layer 2. INTEGRATOR FIRST (needs_integration): is there a licence-clean (MIT/BSD/Apache) Turkish-aware fuzzy/stemming library already in services/api/uv.lock or worth adding (rapidfuzz? a Turkish stemmer?) that beats a hand-written Damerau-Levenshtein and the closed stripper of layer 1; write the THIRD_PARTY record either way; the default is NO new dependency. Then the worker: (a) semantic.py - an IntentIndex built from exemplar sentences (seeded from tests/voice_corpus/corpus.py canonical cases, one exemplar per case: the corpus IS the exemplar set) and an EntityIndex of applications (allow-list + Turkish names), device aliases (passed in from devices.metadata_json.aliases by the caller - never hard-coded) and the vocabulary synonyms (a later task feeds them); both embedded through app.memory.embedding.Embedder (LocalEmbedder in production, DeterministicEmbedder in tests); cosine similarity; the index is built once per process and reloadable. (b) fuzzy.py - Damerau-Levenshtein similarity in [0,1] over the folded form, pure Python, no dependency unless the integrator said so. (c) combine.py - Candidate(intent, entities{app, device, ...}, confidence, evidence) and combine(rule_candidate, semantic_candidates) -\u003e ranked list: the rule-table result is candidate #1 with confidence 1.0 when it matched an exact closed form, 0.9 when layer 1 had to drop a suffix, 0.75 when a confusion entry was used; a semantic intent candidate\u0027s confidence is its cosine calibrated by the margin to the runner-up; an entity\u0027s is min(vector, fuzzy) so a lexically far entity cannot win; evidence names the words, the exemplar and the distances. Do NOT wire into resolve_intent yet (the policy task does); expose understand(text, *, device_aliases, rule_result) -\u003e ranked candidates. Read ADR-0224 in docs/DECISIONS.md first (the owner\u0027s directive; it is the contract). Work only inside the area; RED-first; mutation per rule RED with sha256 (restore from the backup copy, never git checkout --); the Owner Utterance Suite (tests/unit/test_owner_utterance_corpus.py, 2745 cases) must stay 100 % - run it before the report. Shared files (protocol bundle registration in app/protocol_files.py, the falsification test list, quality-gate/ci) are the LEAD\u0027s at merge: name what the lead must wire under \u0027For the lead at merge\u0027. No new dependency without the integrator\u0027s THIRD_PARTY record.",
+                      "acceptance":  "Tests (DeterministicEmbedder): \u0027Ofisü bilgisayarında hesap makinesini açın\u0027 -\u003e top candidate intent app_open, app calc, device \u0027ofis\u0027 with evidence naming the fuzzy match ofisü~ofis (RED before); \u0027Bundan sonra araştırma raporlarını her zaman Türkçe oku\u0027 -\u003e NOT research_open and NOT research_answer_mode at the top (a preference/none candidate ranks first, or confidence below the HIGH band); an exact closed-form rule result keeps 1.0 and ranks first; an entity with high vector but low fuzzy similarity does not win the device slot; the index rebuilds when aliases change. Mutations: the min(vector, fuzzy) bound removed -\u003e RED; the rule candidate\u0027s 1.0 removed -\u003e RED. Report the wall time of understand() on the corpus (target \u003c 5 ms per sentence with DeterministicEmbedder, measured, not asserted).",
+                      "evidence_expected":  "PROVEN_AUTOMATED; timing measured on the home PC with LocalEmbedder in the report",
+                      "needs_integration":  true
+                  },
+                  {
+                      "state":  "approved",
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "created_at":  "2026-09-30T21:30:00Z",
+                      "updated_at":  "2026-09-30T21:30:00Z",
+                      "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
+                      "id":  "understanding-threshold-policy",
+                      "title":  "ADR-0224 katman 3: güven eşiği (yap / read-back ile yap / tek soru), model yalnız düşükte, cihaz tahmini yasak",
+                      "area":  [
+                                   "services/api/app/voice/understanding/policy.py",
+                                   "packages/protocol/understanding-thresholds.json",
+                                   "services/api/app/voice/intents.py",
+                                   "services/api/app/voice/realtime_sessions/service.py",
+                                   "services/api/app/voice/realtime_sessions/tools_operator.py",
+                                   "services/api/tests/unit/test_understanding_policy.py",
+                                   "services/api/tests/unit/test_understanding_relay.py",
+                                   "team/plans/understanding-threshold-policy-adr.md"
+                               ],
+                      "budget":  {
+                                     "max_usd":  10
+                                 },
+                      "goal":  "ADR-0224 layer 3, after understanding-normalize and understanding-semantic-index are merged (read their code first). (a) policy.py + packages/protocol/understanding-thresholds.json (high 0.85, medium 0.60 to start; the file is read through the protocol bundle): decide(candidates) -\u003e Decision(band in {high, medium, low}, candidate, question). HIGH: act as today. MEDIUM: act AND read back in the same receipt speech (\u0027Ofiste Hesap Makinesi\u0027ni açıyorum\u0027) - never a second confirmation (owner rule 2026-09-18/19). LOW: one question naming the two best candidates or the missing entity (\u0027Hangi bilgisayarda: ofis mi, ev mi?\u0027); no action, no silent default to the session\u0027s device. (b) Wire it: resolve_intent\u0027s result becomes candidate #1, understand() adds the rest, decide() picks; ResolvedIntent gains confidence/band/candidates (copy the new fields into the turn record - see the memory note on ResolvedIntent fields); the audit row voice_intent_resolved gains an \u0027understanding\u0027 block {layer, band, confidence, candidates[:3]}. (c) The model is consulted ONLY in the LOW band: the relay\u0027s tool schemas for intent-carrying tools are strict (enum slots, additionalProperties false) and NO tool schema carries a device slot the model can fill - a device comes from layers 1-2 or from the owner\u0027s answer to the question; operator_app_open refuses to launch when the owner\u0027s sentence named a device the layers could not bind (question instead of the session device). Keep every existing corpus case at 100 % - most are exact closed forms at 1.0 and never reach the bands. Read ADR-0224 in docs/DECISIONS.md first (the owner\u0027s directive; it is the contract). Work only inside the area; RED-first; mutation per rule RED with sha256 (restore from the backup copy, never git checkout --); the Owner Utterance Suite (tests/unit/test_owner_utterance_corpus.py, 2745 cases) must stay 100 % - run it before the report. Shared files (protocol bundle registration in app/protocol_files.py, the falsification test list, quality-gate/ci) are the LEAD\u0027s at merge: name what the lead must wire under \u0027For the lead at merge\u0027. No new dependency without the integrator\u0027s THIRD_PARTY record.",
+                      "acceptance":  "Tests: the three trial sentences through the real relay path with DeterministicEmbedder: \u0027Ofisü bilgisayarında hesap makinesini açın\u0027 -\u003e app.launch dispatched to the device aliased ofis with read-back speech (MEDIUM) or the one question (LOW) - never a launch on the session device (RED before); \u0027Hesap makinesini aç\u0027 -\u003e HIGH, unchanged receipt; the Turkish-reading sentence -\u003e no answer-mode change; a LOW decision produces exactly one question and no tool dispatch; the audit row carries the understanding block; the thresholds file validates. Mutations: the device-slot prohibition removed -\u003e RED; MEDIUM read-back removed -\u003e RED; the corpus suite 100 % after wiring.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner\u0027s three sentences pass on MAIL after release",
+                      "needs_integration":  false,
+                      "depends_on":  [
+                                         "understanding-normalize",
+                                         "understanding-semantic-index"
+                                     ]
+                  },
+                  {
+                      "state":  "approved",
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "created_at":  "2026-09-30T21:30:00Z",
+                      "updated_at":  "2026-09-30T21:30:00Z",
+                      "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
+                      "id":  "understanding-corrections-memory",
+                      "title":  "ADR-0224: sahibin düzeltmesi eşanlamlı olarak hafızaya yazılır ve sonraki eşleşmede kullanılır",
+                      "area":  [
+                                   "services/api/app/voice/understanding/corrections.py",
+                                   "services/api/app/voice/intents.py",
+                                   "services/api/app/memory/policy.py",
+                                   "services/api/tests/unit/test_understanding_corrections.py",
+                                   "team/plans/understanding-corrections-memory-adr.md"
+                               ],
+                      "budget":  {
+                                     "max_usd":  8
+                                 },
+                      "goal":  "ADR-0224 corrections, after the three layer tasks are merged. A correction turn right after a MEDIUM read-back or a LOW question (\u0027hayır, ofis bilgisayarında\u0027; \u0027ona hesap makinesi deme, calculator de\u0027; \u0027onu değil, Not Defteri\u0027) is resolved (rule first, then the layers) and the pair (heard/read -\u003e meant) is written through the memory write policy as a SYNONYM observation: memory class \u0027vocabulary\u0027 (add it to app/memory/policy.py as an explicit, owner-sourced class that is never a candidate - the owner said it), text \u0027ofisü = ofis (cihaz)\u0027, source the session. The EntityIndex reloads vocabulary rows on the next understand() (a cheap version check, not a rebuild per sentence). The relay proposes each new synonym as an STT-confusion candidate into team/proposals/ for the nightly cycle - it never writes the protocol file. Deleting a vocabulary memory (\u0027ofisü\u0027yü unut\u0027) removes the synonym from the index. Read ADR-0224 in docs/DECISIONS.md first (the owner\u0027s directive; it is the contract). Work only inside the area; RED-first; mutation per rule RED with sha256 (restore from the backup copy, never git checkout --); the Owner Utterance Suite (tests/unit/test_owner_utterance_corpus.py, 2745 cases) must stay 100 % - run it before the report. Shared files (protocol bundle registration in app/protocol_files.py, the falsification test list, quality-gate/ci) are the LEAD\u0027s at merge: name what the lead must wire under \u0027For the lead at merge\u0027. No new dependency without the integrator\u0027s THIRD_PARTY record.",
+                      "acceptance":  "Tests: after a LOW question and the answer \u0027ofis bilgisayarında\u0027, a vocabulary memory row exists and the same misheard sentence resolves HIGH on the next call with evidence naming the synonym (RED before); a correction never writes a candidate (explicit, class vocabulary); deletion removes it from the index; the proposal file is written once per synonym. Mutation: the index reload removed -\u003e RED (second call still LOW).",
+                      "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL at the owner\u0027s first correction in production",
+                      "needs_integration":  false,
+                      "depends_on":  [
+                                         "understanding-threshold-policy"
+                                     ]
+                  },
+                  {
+                      "state":  "approved",
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "created_at":  "2026-09-30T21:30:00Z",
+                      "updated_at":  "2026-09-30T21:30:00Z",
+                      "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
+                      "id":  "understanding-stt-corpus",
+                      "title":  "ADR-0224 ölçüm: STT\u0027nin yazdığı gerçek cümlelerden ikinci korpus, hedef \u003e= %95, gece raporu iki sayı",
+                      "area":  [
+                                   "services/api/tests/voice_corpus/stt_corpus.py",
+                                   "services/api/tests/voice_corpus/stt_harness.py",
+                                   "services/api/tests/unit/test_stt_utterance_corpus.py",
+                                   "scripts/voice/collect-stt-corpus.ps1",
+                                   "team/plans/understanding-stt-corpus-adr.md"
+                               ],
+                      "budget":  {
+                                     "max_usd":  8
+                                 },
+                      "goal":  "ADR-0224 measurement, after understanding-threshold-policy is merged. (a) stt_corpus.py: cases AS THE STT RENDERED THEM with what the owner meant (intent, entities, device) and the band expected; seed with the three sentences of 2026-09-30 (\u0027Ofisü bilgisayarında hesap makinesini açın.\u0027 -\u003e app_open calc @ofis, medium-or-question, never session device; \u0027Bundan sonra araştırma raporlarını her zaman Türkçe oku\u0027 -\u003e preference, no mode change; \u0027Hesap makinesini aç\u0027 -\u003e app_open calc high) and at least 60 further real renderings the worker derives by applying the documented STT distortions (polite forms, dropped diacritics, a fused word, one invented suffix) to corpus canonical cases - each marked derived, never presented as real. (b) stt_harness.py runs them through the same canonical path as tests/voice_corpus/harness.py and judges: correct = intended intent+entities at HIGH or MEDIUM with no wrong action, OR the one question at LOW; wrong-device action = fail regardless of band. (c) The unit test asserts \u003e= 95 % correct and 0 wrong-device actions, and writes the report JSON the nightly run records (extend the report of test_owner_utterance_corpus.py with both numbers). (d) scripts/voice/collect-stt-corpus.ps1: reads new real renderings from the production audit (the lead runs it read-only over SSH) into a proposals file for the corpus - a tool, not a scheduled job. The lead adds the QUALIFICATION stage at merge. Read ADR-0224 in docs/DECISIONS.md first (the owner\u0027s directive; it is the contract). Work only inside the area; RED-first; mutation per rule RED with sha256 (restore from the backup copy, never git checkout --); the Owner Utterance Suite (tests/unit/test_owner_utterance_corpus.py, 2745 cases) must stay 100 % - run it before the report. Shared files (protocol bundle registration in app/protocol_files.py, the falsification test list, quality-gate/ci) are the LEAD\u0027s at merge: name what the lead must wire under \u0027For the lead at merge\u0027. No new dependency without the integrator\u0027s THIRD_PARTY record.",
+                      "acceptance":  "Tests: the STT corpus \u003e= 95 % correct, 0 wrong-device actions, the report holds both corpora\u0027s numbers (RED before the layers: the three seed cases fail on the rule tables alone - show the RED run in the report); the derived cases are marked derived; the collect script parses a sample audit dump (fixture) and never writes the corpus itself. Mutation: the wrong-device rule in the judge removed -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; the nightly report\u0027s two numbers are the running evidence",
+                      "needs_integration":  false,
+                      "depends_on":  [
+                                         "understanding-threshold-policy"
+                                     ]
+                  },
+                  {
                       "id":  "narrative-collector",
                       "title":  "Anlatı: dönem + cihaz için deterministik toplayıcı, anlatıcı arayüzü, başarısızlığı atlatmayan denetçi (öneri 2, adım 1)",
                       "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
@@ -1917,15 +2072,15 @@
                   },
                   {
                       "id":  "app-open-named-device-not-dropped",
-                      "title":  "\u0027Ofis bilgisayarımdan hesap makinesini aç\u0027 kendi cihazda açılmasın: \u0027açın\u0027 kipi + araçta cihaz sözcüğü",
+                      "title":  "\u0027Ofis bilgisayarımdan hesap makinesini aç\u0027 kendi cihazda açılmasın: \u0027açın\u0027 kipi + adlandırılmış cihaz bağlanamazsa soru",
                       "roadmap_row":  "The same JARVIS in the house, the car, the suit, the phone",
                       "state":  "approved",
                       "area":  [
                                    "services/api/app/voice/intents.py",
                                    "services/api/app/voice/realtime_sessions/tools_operator.py",
                                    "services/api/tests/unit/test_voice_intents_polite_open.py",
-                                   "services/api/tests/unit/test_operator_app_open_named_device.py",
-                                   "team/plans/app-open-named-device-adr.md"
+                                   "team/plans/app-open-named-device-adr.md",
+                                   "services/api/tests/unit/test_operator_app_open_named_device.py"
                                ],
                       "branch":  "",
                       "worktree":  "",
@@ -1937,9 +2092,9 @@
                                      "max_usd":  6
                                  },
                       "created_at":  "2026-09-30T21:05:00Z",
-                      "updated_at":  "2026-09-30T21:05:00Z",
-                      "goal":  "Owner\u0027s real trial 2026-09-30 20:11:19 UTC (MAIL, /voice, release aa35fcf3): he said \u0027Ofis bilgisayarımdan hesap makinesini aç\u0027; the realtime STT rendered it \u0027Ofisü bilgisayarında hesap makinesini açın.\u0027 (43 chars; content_words in realtime_sessions.context_json.last_utterance). Two things then went wrong. (1) The router (app/voice/intents.py) resolved intent NONE, klass query: \u0027açın\u0027 (the polite imperative, which the STT produces often) is in neither _OPEN_VERB_FORMS nor _APP_OPEN_VERB_FORMS - \u0027açar mısın\u0027 is, \u0027açın\u0027/\u0027açınız\u0027/\u0027acın\u0027 are not. With a correct verb the same sentence resolves to app_open calc and the alias parser (app/devices/aliases.py extract_aliases) reads \u0027ofis\u0027 from \u0027ofis bilgisayarında\u0027 (verified locally; \u0027ofisü\u0027 itself is STT noise nobody can parse). (2) With no router record the model called operator.app_open({application: \u0027Hesap Makinesi\u0027}) - the tool\u0027s schema has only \u0027application\u0027, so the machine the owner NAMED had nowhere to go, and operator_app_open in realtime_sessions/tools_operator.py launched on the SESSION\u0027s device (MAIL) and said nothing about it. Fix, RED first: (a) add the polite imperative forms (\u0027açın\u0027, \u0027açınız\u0027, \u0027acın\u0027, \u0027aciniz\u0027) to the open-verb tables that the app_open and the generic open paths read - check every table that lists \u0027açsana\u0027 and add the forms there, not a new table; corpus tests stay green; (b) give operator.app_open an optional \u0027device\u0027 argument (string, maxLength 40, described in Turkish as the owner\u0027s word for the machine: ev/ofis/iş/laptop/bulut) and, ONLY when the resolved turn record carries no device targets (ADR-0212 - the router\u0027s reading of the owner\u0027s words still wins when it has one), pass the argument through app.devices.aliases.extract_alias and the existing selection path so the launch goes to that device or is refused with selection\u0027s own Turkish (\u0027ofis cihazı şu anda çevrimiçi değil\u0027); the receipt\u0027s speech names the device it went to (\u0027Ofiste Hesap Makinesi açtım efendim\u0027) using the existing _device_named helper. Do not touch STT. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: audit_events voice_intent_resolved 20:11:19.59Z (turn 3, intent none, klass query, 43 chars), realtime_tool_calls 20:11:20.23Z (operator.app_open, arguments {application: \u0027Hesap Makinesi\u0027} - no device), device_commands app.launch on MAIL 3f60fdb5; the office PC GMKADIRAKBABA 9efa9d8b (aliases ofis, iş) had an open device session since 17:12 UTC.",
-                      "acceptance":  "Tests: \u0027Ofis bilgisayarında hesap makinesini açın.\u0027 resolves to app_open calc with the device alias \u0027ofis\u0027 (RED before); \u0027Hesap makinesini açın.\u0027 -\u003e app_open calc; \u0027açın\u0027 inside a question (\u0027neden açın?\u0027) does not become an open. operator_app_open with a turn record without targets and arguments {application: \u0027Hesap Makinesi\u0027, device: \u0027ofis\u0027} sends app.launch to the device aliased \u0027ofis\u0027 (a fake device_action with two devices), and its speech names it (RED before); the same call with a turn record that already targets \u0027ev\u0027 ignores the argument (the owner\u0027s words win); device: \u0027mars\u0027 is refused with a spoken sentence, nothing launched. Mutations: the device argument ignored -\u003e RED; \u0027açın\u0027 removed from the table -\u003e RED.",
+                      "updated_at":  "2026-09-30T21:30:00Z",
+                      "goal":  "Owner\u0027s real trial 2026-09-30 20:11:19 UTC (MAIL, /voice, release aa35fcf3): he said \u0027Ofis bilgisayarımdan hesap makinesini aç\u0027; the realtime STT rendered it \u0027Ofisü bilgisayarında hesap makinesini açın.\u0027 (43 chars; content_words in realtime_sessions.context_json.last_utterance). Two things then went wrong. (1) The router (app/voice/intents.py) resolved intent NONE, klass query: \u0027açın\u0027 (the polite imperative, which the STT produces often) is in neither _OPEN_VERB_FORMS nor _APP_OPEN_VERB_FORMS - \u0027açar mısın\u0027 is, \u0027açın\u0027/\u0027açınız\u0027/\u0027acın\u0027 are not. With a correct verb the same sentence resolves to app_open calc and the alias parser (app/devices/aliases.py extract_aliases) reads \u0027ofis\u0027 from \u0027ofis bilgisayarında\u0027 (verified locally; \u0027ofisü\u0027 itself is STT noise nobody can parse). (2) With no router record the model called operator.app_open({application: \u0027Hesap Makinesi\u0027}) - the tool\u0027s schema has only \u0027application\u0027, so the machine the owner NAMED had nowhere to go, and operator_app_open in realtime_sessions/tools_operator.py launched on the SESSION\u0027s device (MAIL) and said nothing about it. Fix, RED first: (a) add the polite imperative forms (\u0027açın\u0027, \u0027açınız\u0027, \u0027acın\u0027, \u0027aciniz\u0027) to the open-verb tables that the app_open and the generic open paths read - check every table that lists \u0027açsana\u0027 and add the forms there, not a new table; corpus tests stay green; (b) AMENDED BY ADR-0224 (the model may not guess a device): operator.app_open gets NO device argument. Instead, when the owner\u0027s sentence (the turn record\u0027s raw text) contains a computer word (\u0027bilgisayar\u0027 with a case suffix) or a place word the alias parser could not bind, the tool does NOT launch on the session\u0027s device: it answers with ONE question (\u0027Hangi bilgisayarda: ofis mi, ev mi?\u0027, the aliases read from the devices\u0027 metadata) and no dispatch. When the alias IS bound (ADR-0212 targets) the launch goes there and the receipt\u0027s speech names the device (\u0027Ofiste Hesap Makinesi açtım efendim\u0027) via the existing _device_named helper. Do not touch STT. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: audit_events voice_intent_resolved 20:11:19.59Z (turn 3, intent none, klass query, 43 chars), realtime_tool_calls 20:11:20.23Z (operator.app_open, arguments {application: \u0027Hesap Makinesi\u0027} - no device), device_commands app.launch on MAIL 3f60fdb5; the office PC GMKADIRAKBABA 9efa9d8b (aliases ofis, iş) had an open device session since 17:12 UTC.",
+                      "acceptance":  "Tests: \u0027Ofis bilgisayarında hesap makinesini açın.\u0027 resolves to app_open calc with the device alias \u0027ofis\u0027 (RED before); \u0027Hesap makinesini açın.\u0027 -\u003e app_open calc; \u0027açın\u0027 inside a question (\u0027neden açın?\u0027) does not become an open. operator_app_open with a turn record whose raw text names a computer the alias parser did not bind (\u0027Ofisü bilgisayarında ...\u0027) dispatches NOTHING and speaks one question naming the enrolled aliases (RED before: today it launches on the session device); with a bound \u0027ofis\u0027 target it dispatches to that device and the speech names it; a sentence without any computer word keeps today\u0027s behaviour. Mutations: the unbound-computer guard removed -\u003e RED; \u0027açın\u0027 removed from the table -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner says the sentence again from MAIL and Calculator opens on GMKADIRAKBABA",
                       "needs_integration":  false
                   }

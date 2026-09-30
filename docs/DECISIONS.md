@@ -16797,6 +16797,32 @@ What it changes in the machinery, and what it does not yet:
 * `awaiting_owner` remains the state for the things of item 2(b) - a new roadmap row, a new
   dependency, an irreversible action - and for nothing else.
 
+### ADR-0214 addendum 3 (2026-09-30): no money cap, no time cap; the one stop is the usage limit
+
+The owner, on seeing the queue grow past what one night's cap would cover: "Bütçe
+tavanlarını kaldır: döngü ve koşu başına USD tavanı yok (abonelik, API yok); USD sadece
+'tahmini' bilgi olarak raporda kalsın. Tek durma nedeni Max kullanım limiti; takılırsa dur,
+raporda yaz, limit açılınca kaldığı yerden devam et. Süre tavanı da kalksın; idempotent
+olduğu için yarıda kesilirse zararsız."
+
+What changed in the machinery: `cycle.ps1` defaults `-MaxUsd 0 -RunMaxUsd 0 -RunMinutes 0
+-CycleMinutes 0`, and 0 is no cap - `Get-TeamRunArguments` then passes no
+`--max-budget-usd` at all and a run's deadline is `[datetime]::MaxValue` (`Wait-TeamRun`
+waits without a timeout). A cap named by a caller still works as before (the tests keep
+theirs). `Read-TeamRunResult` reads the subscription's limit from the tool's own words
+("Claude AI usage limit reached|<epoch>", "hit your limit", on stdout or stderr) and
+returns `UsageLimited` with `ResetsAt` when the epoch was given; the cycle then puts a
+worker task back to `assigned`, does not count the run as a failure or a try, and - with
+`-WaitForUsageLimit` (the default) and a known reset - sleeps until 90 s past it and goes
+on; otherwise it stops with the line "Max kullanım limiti; ... aynı -CycleId ile yeniden
+başlat: kaldığı yerden devam eder". The report's budget section reads "tahmini X USD (tavan
+yok)". `register-nightly.ps1` registers the task without caps and without a scheduler
+execution-time limit. Tests: `scripts/tests/team-cycle.tests.ps1` (84; the `limited`
+scenario of `fake-claude.ps1`; mutation: the usage-limit branch disabled -> 2 RED).
+
+What did not change: a task's `budget.max_usd` stays in the queue as the lead's estimate;
+`MaxRunsPerTask` (4) stays - it bounds a task that never converges, which is not money.
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
@@ -17075,3 +17101,128 @@ reboot for unattended upgrades: a kernel reboot stays a decision, not a timer.
 `scripts/cloud/maintenance-reboot.sh` with `--preflight`, the checks of steps 1-5 as code,
 and a PowerShell test suite in the gate, so the next window is one command with the same
 report.
+
+## ADR-0224 — Voice command understanding in three layers: normalisation, semantic match with a confidence, a threshold policy (owner's architectural requirement, 2026-09-30)
+
+**Status.** Accepted - the owner's directive, given after the trial of 2026-09-30 20:11 UTC
+(QUALIFICATION 30.10 notes a-c). His words, kept as the contract: "sesli komut anlama üç katman
+olacak — (1) normalizasyon: Türkçe fiil kökü + ek düşürme + STT karışıklık sözlüğü; (2) anlamsal
+eşleşme: mevcut yerel embedder (potion) ile niyet + varlık (uygulama, cihaz alias) vektör
+eşleşmesi, varlıklarda ek bulanık dize; güven puanı üretir; (3) güven eşiği: yüksek→yap,
+orta→read-back ile yap, düşük→tek soru; model yalnız düşük güvende, katı şema, cihaz tahmini
+yasak. Kullanıcı düzeltmesi eşanlamlı olarak hafızaya yazılır ve sonraki eşleşmede kullanılır.
+Kural tabloları kalır ama son söz değil, ilk aday. Korpus ölçümü bu mimariyle tekrarlanır;
+hedef aynı: ≥95%."
+
+**What the trial showed, and why one more rule would not do.** Three sentences, three failures
+of the same shape: the rule tables in `app/voice/intents.py` read a sentence by exact token
+forms, so one suffix the STT chose ("açın" for "aç"), one word it invented ("ofisü" for
+"ofis"), or one sentence whose meaning the tables never listed (a language preference with a
+standing marker) either falls to the model - which then chooses a tool, fills its arguments
+from its own guess, and runs it on whichever device the session has - or is bent into the
+nearest rule (RESEARCH_OPEN for "raporlarını ... oku"). Twice today the wrong thing was DONE
+with full confidence; nothing in the path can say "I am not sure". 2745 corpus cases at 100 %
+did not predict any of the three, because the corpus is written in the forms the tables know.
+The lesson of ADR-0205 stands and is sharpened here: a stem match without a confidence is a
+guess about the suffix; a stem match WITH a confidence, checked against what the owner
+actually said, is a candidate.
+
+**Decision - the three layers, in the order a sentence passes them.**
+
+*Layer 1 - normalisation (`app/voice/understanding/normalize.py`).* Input: the STT text.
+Output: the normalised text, its tokens, and for every token a lemma with the suffixes it
+dropped. (a) A Turkish suffix stripper for verbs (imperative and polite forms: "açın",
+"açınız", "açsana", "açar mısın", "açabilir misin" -> "aç") and for nouns (case, possessive,
+plural: "bilgisayarımdan" -> "bilgisayar" + {1sg-poss, abl}; "raporlarını" -> "rapor" +
+{pl, acc}). The stripper is table-driven and closed: a suffix is dropped only when what is
+left is a known stem (the verb table, the application and device vocabularies, the
+corpus's own nouns), so "istediğim" never becomes "iş" - the ADR-0205 failure is the test
+case that guards it. (b) An STT confusion dictionary, `packages/protocol/stt-confusions.json`
+(a protocol file, bundled by `app/protocol_files.py`, registered in the falsification test):
+`{"ofisü": "ofis", ...}` - forms the realtime STT has actually produced, each entry carrying
+the date and the sentence it came from; nothing speculative. (c) Diacritic folding and the
+existing `normalize_transcript` filler removal, unchanged. Layer 1 has no opinion about
+intent; it only makes the tables and the vectors see the same word the owner said.
+
+*Layer 2 - semantic match with a confidence (`app/voice/understanding/semantic.py`).* Two
+indexes, both embedded with the LOCAL embedder that already serves memory (ADR-0200:
+`LocalEmbedder`, `minishlab/potion-multilingual-128M`, 256 dims, on this host, no network),
+so understanding costs nothing per sentence and works when the paid model is off: (a) an
+INTENT index - for every intent the router knows, its exemplar sentences (seeded from the
+corpus's canonical cases, so the two never drift: a corpus case is an exemplar); (b) an
+ENTITY index - applications (the allow-list and `_APP_TR_NAMES`), device aliases (read from
+`devices.metadata_json.aliases`, never hard-coded), and later sites and people. A sentence
+is matched as a whole against the intent index (cosine), and its normalised tokens against
+the entity index with BOTH the vector and a fuzzy string distance (Damerau-Levenshtein over
+the folded form; "ofisü" ~ "ofis" at 0.8), the fuzzy score bounding the vector one so a
+semantically near but lexically far entity cannot win. The rule tables run FIRST and their
+result enters as candidate #1 with a confidence of its own (1.0 for an exact closed form,
+lower when the match needed a dropped suffix or a confusion entry - the trace says which);
+layer 2 adds its candidates; a combiner produces ONE ranked list with a calibrated
+confidence and the evidence for each (which words, which exemplar, which distance). The
+confidence is a number the tests can assert on, not a feeling.
+
+*Layer 3 - the threshold policy (`app/voice/understanding/policy.py`,
+`packages/protocol/understanding-thresholds.json`).* HIGH (>= 0.85 to start): do it, the
+receipt as today. MEDIUM (0.60-0.85): do it AND read it back in the same breath - "Ofiste
+Hesap Makinesi'ni açıyorum" - so a wrong reading is caught while it is still cheap; the
+read-back is the receipt's speech, not a second confirmation (owner rule 2026-09-18/19: no
+second spoken confirmation). LOW (< 0.60): ONE question naming the two best candidates or
+the missing entity ("Hangi bilgisayarda: ofis mi, ev mi?"), never a guess and never a
+silent default to the session's device. The model (the realtime tool call) is consulted
+ONLY at LOW, with a strict schema (enum-typed intent and entity slots, `additionalProperties`
+false) and it is FORBIDDEN to name a device: the device slot is filled by layers 1-2 or by
+the owner's answer, never by the model - today's "ran it on MAIL because nothing said
+otherwise" is exactly the guess this forbids. The thresholds live in the protocol file so
+the corpus measurement can move them with evidence; the relay records the layer, the
+confidence and the outcome on every utterance (`voice_intent_resolved` gains
+`understanding: {layer, confidence, candidates}`), which is the data the calibration reads.
+
+*Corrections become vocabulary (`app/voice/understanding/corrections.py`).* When the owner
+corrects a reading ("hayır, ofis bilgisayarında"; "ona hesap makinesi deme, calculator de")
+the pair (what was heard/read -> what was meant) is written to memory as a SYNONYM
+observation (memory class `vocabulary`, explicit, source the session) through the existing
+write policy, and the entity index reloads it on the next match: the second time is right
+without a release. A correction is the owner's own word, so it is also an STT-confusion
+candidate; it is proposed into the protocol file by the nightly cycle, never written there
+by the relay (the file is a release artefact).
+
+**What stays.** The rule tables, every corpus case at 100 %, `ResolvedIntent`, the relay,
+the tools and their receipts. The tables become candidate #1, not the last word; a table
+that answers with an exact closed form still wins outright (its confidence is 1.0). No new
+model, no network call, no new service: the embedder is the one memory already runs, the
+fuzzy distance is a small pure function (no new dependency unless the integrator finds a
+licence-clean one the lock already resolves).
+
+**Measurement - the corpus, twice.** (1) The existing Owner Utterance Suite (2745 cases,
+`tests/voice_corpus/corpus.py`) stays a 100 % gate: the new layers may not lose a case.
+(2) A SECOND corpus, `tests/voice_corpus/stt_corpus.py`, of sentences AS THE STT RENDERED
+THEM in production (read from `realtime_sessions.context_json.last_utterance` and the
+audit rows - the owner's real sentences, starting with today's three), each with the
+intent, entities and device the owner meant and the layer/threshold expected. Target on
+this corpus: >= 95 % correct at HIGH or MEDIUM with no wrong action, and 0 wrong-device
+actions at any confidence. The nightly voice-corpus run reports both numbers; QUALIFICATION
+gains a stage for it.
+
+**The work (queued for the team, in this order; each RED-first, mutation, own tests):**
+1. `understanding-normalize` - layer 1 with the confusion dictionary (protocol file, bundle,
+   falsification test) and the closed suffix stripper; the tables read the normalised form.
+2. `understanding-semantic-index` - layer 2: the two indexes on `LocalEmbedder`
+   (`DeterministicEmbedder` in tests), the fuzzy distance, the combiner, the confidence with
+   its evidence; the integrator checks first whether a licence-clean stemmer/fuzzy library
+   already in the lock or in the world beats the hand-written one.
+3. `understanding-threshold-policy` - layer 3: thresholds file, read-back speech, the one
+   question, the model at LOW only with the strict schema and the device slot closed; the
+   audit row's `understanding` block.
+4. `understanding-corrections-memory` - corrections as vocabulary memory and the index reload.
+5. `understanding-stt-corpus` - the second corpus with today's three sentences, the report,
+   the QUALIFICATION stage, the nightly run reporting both numbers.
+The three defect tasks queued from the trial (`answer-mode-intent-precision`,
+`operator-postcondition-uwp`, `app-open-named-device-not-dropped`) stay ahead of these: they
+are the rule-table fixes the architecture keeps as candidate #1, and their sentences seed the
+STT corpus. `app-open-named-device-not-dropped` is amended by this ADR: the model gets NO
+`device` argument (device guessing by the model is forbidden here); the device the owner
+named reaches the launch through layers 1-2 or the LOW question.
+
+**Owner gates.** None before the work: this is the owner's own directive. Release approval
+per release as always; the real-device proof is the owner's three sentences said again.

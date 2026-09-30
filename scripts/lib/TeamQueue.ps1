@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     The agent team's state on disk: the queue, the lock, the role runs (TEAM_PROTOCOL.md).
 
@@ -165,6 +165,13 @@ function Test-TeamQueue {
         if ($branch -match 'hand-gestures' -or $branch -eq "main") {
             [void]$problems.Add("${label}: the branch '$branch' is not a team branch")
         }
+        foreach ($dependency in @(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @())) {
+            $name = [string]$dependency
+            if ($name -eq $id) { [void]$problems.Add("${label}: a task cannot depend on itself") }
+            elseif (@(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -eq $name }).Count -eq 0) {
+                [void]$problems.Add("${label}: depends on '$name', which is not in the queue")
+            }
+        }
         $budget = Get-TeamProperty -InputObject $task -Name "budget"
         if ($null -ne $budget) {
             $cap = Get-TeamProperty -InputObject $budget -Name "max_usd" -Default 0
@@ -191,6 +198,29 @@ function Test-TeamQueue {
         }
     }
     return @($problems.ToArray())
+}
+
+function Get-TeamUnmetDependencies {
+    <#
+    .SYNOPSIS
+        The ids in a task's `depends_on` that are not yet ON MAIN, so the task must wait.
+
+    .DESCRIPTION
+        A worker's branch is opened from main, so a dependency serves it only once it is
+        there: `awaiting_release`, `released` or `done`. `merged` is the cycle's integration
+        branch, not main - a task that depends on it waits for the lead's merge (ADR-0224
+        needed this: layer 3 reads the code of layers 1 and 2).
+    #>
+    param([Parameter(Mandatory = $true)]$Task, [Parameter(Mandatory = $true)]$Queue)
+    $onMain = @("awaiting_release", "released", "done")
+    $unmet = New-Object System.Collections.ArrayList
+    foreach ($dependency in @(Get-TeamProperty -InputObject $Task -Name "depends_on" -Default @())) {
+        $name = [string]$dependency
+        $other = @(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -eq $name })
+        $state = if (@($other).Count -gt 0) { [string](Get-TeamProperty -InputObject $other[0] -Name "state" -Default "") } else { "" }
+        if ($onMain -notcontains $state) { [void]$unmet.Add($name) }
+    }
+    return @($unmet.ToArray())
 }
 
 function Get-TeamNextRole {
@@ -296,11 +326,13 @@ function Read-TeamRunResult {
         Output that is not the JSON document is not trusted to be a report: the run FAILED,
         and its raw output stays in its file.
     #>
-    param([string]$StdOut, [int]$ExitCode = 0)
+    param([string]$StdOut, [int]$ExitCode = 0, [string]$StdErr = "")
     $text = ""
     $cost = 0.0
     $ok = $false
     $why = ""
+    $usageLimited = $false
+    $resetsAt = ""
     try {
         $document = ConvertFrom-Json -InputObject ([string]$StdOut)
         $text = [string](Get-TeamProperty -InputObject $document -Name "result" -Default "")
@@ -325,7 +357,20 @@ function Read-TeamRunResult {
     catch {
         $why = "the run printed no result document (exit $ExitCode)"
     }
-    return [pscustomobject]@{ Ok = $ok; Text = $text; CostUsd = $cost; Why = $why }
+    if (-not $ok) {
+        # Owner decision 2026-09-30: the ONE stop the team has is the subscription's usage
+        # limit. The tool says it in its result ("Claude AI usage limit reached|<epoch>",
+        # "You've hit your limit ...") or on stderr; the epoch, when given, is when it lifts.
+        $said = ([string]$StdOut) + "`n" + ([string]$StdErr)
+        if ($said -match "(?i)usage limit|hit your (usage |rate )?limit|limit reached|out of extra usage") {
+            $usageLimited = $true
+            $why = "Max kullanım limiti"
+            if ($said -match "limit reached\|(\d{10})") {
+                $resetsAt = ([DateTimeOffset]::FromUnixTimeSeconds([long]$Matches[1])).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
+            }
+        }
+    }
+    return [pscustomobject]@{ Ok = $ok; Text = $text; CostUsd = $cost; Why = $why; UsageLimited = $usageLimited; ResetsAt = $resetsAt }
 }
 
 function Get-TeamRoleTools {

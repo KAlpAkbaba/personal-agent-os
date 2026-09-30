@@ -46,7 +46,8 @@ researcher scan → OWNER approves ideas → lead splits & assigns
 1. **Work that serves a roadmap row is approved in advance.** The lead queues the
    researcher's proposals in roadmap order without asking; workers build, the inspector
    inspects, the lead merges to main. A cycle stops for no approval: it runs until the queue
-   is empty or the budget cap is reached, then moves to the next roadmap item.
+   is empty, then moves to the next roadmap item. (Owner, 2026-09-30: there is no money cap
+   and no time cap - see section 7 and 10.)
 2. **What needs the owner ACCUMULATES in the Onay Merkezi and blocks nothing:** (a) a
    release - every gated main version is listed as "yayın bekliyor"; when he approves, the
    lead releases the newest green main; (b) a new roadmap row, a change of the order, a new
@@ -97,8 +98,14 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
   returns a ≤ 40-line report. Raw logs go to files, never into another agent's context.
 - Every step is idempotent: existing branch/worktree/file → skip; a killed run resumes from
   the queue on the next trigger.
-- Budgets: per-run token/time caps in the role files; per-cycle cap in `cycle.ps1`. Over
-  budget → stop, report, wait for the next trigger.
+- Budgets (owner decision 2026-09-30, ADR-0214 addendum 3): NO money cap per cycle or per
+  run - the subscription has none; the USD the tool reports stays in the report as an
+  ESTIMATE ("tahmini"), and a task's `budget.max_usd` is an estimate too. NO time cap:
+  every step is idempotent, so a run cut short is harmless. The ONE stop is the
+  subscription's usage limit (Max): the run's task goes back to where it was, nothing is
+  counted against it, the cycle waits until the limit lifts (when the tool says when) and
+  carries on; otherwise it stops, says so in the report, and the next cycle with the same
+  id continues where it left off.
 
 ## 8. Machines
 
@@ -112,13 +119,14 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
 ## 9. Scheduling
 
 - Pilot cycles are started by the owner. After the pilot report, a Windows scheduled task on
-  the home PC starts `cycle.ps1` nightly (02:00, Europe/Istanbul) with the budget caps.
+  the home PC starts `cycle.ps1` nightly (02:00, Europe/Istanbul) without caps (section 7).
 - The morning report reaches the owner in the web shell (Bildirimler) and, when the voice
   path allows, as one spoken paragraph: what is ready, what needs his approval, what he must
   try on a real device.
 
 ## 10. Stop conditions
 
-A cycle stops itself when: budget cap hit; inspector rejected the same task twice; gate red
+A cycle stops itself when: the usage limit is hit and the tool did not say when it lifts
+(else it waits); inspector rejected the same task twice; gate red
 twice on the same integration branch; lock held by the other machine; production health not
 `ok` before a release step. Each stop is a line in the report with the reason.

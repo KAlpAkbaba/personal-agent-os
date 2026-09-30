@@ -17,6 +17,14 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 
 **BAKIM PENCERESİ ONAYLI (sahip): Çarşamba 2026-10-01 06:30–07:00 İstanbul, ADR-0223 prosedürü, lead yürütür
 (bu oturumda 06:27'ye tek seferlik uyandırma kurulu; oturum kapanırsa sahip "pencereyi yürüt" der).**
+**DÖNGÜ ÇALIŞIYOR (sahip: "döngüyü şimdi başlat", 2026-09-30 ~21:10 UTC): `cycle.ps1 -CycleId cycle-2026-10-01
+-Base team/nightly/lead -MaxParallel 2`, tavansız (ADR-0214 ek 3: USD/süre tavanı yok, tek durma Max kullanım
+limiti — beklenir ve devam edilir). Kuyrukta 14 `approved`; ADR-0224 (üç katmanlı ses anlama, sahibin mimari
+şartı) en başta: `understanding-normalize`, `understanding-semantic-index` (entegratör önce), sonra `depends_on`
+ile bekleyen `understanding-threshold-policy` → `-corrections-memory`, `-stt-corpus` (katman 1-2 main'e girince
+lead açar). Rapor: `team/reports/cycle-2026-10-01.md`; ham çıktılar `team/reports/cycle-2026-10-01/`.
+Döngü bitince lead: `integrate/cycle-2026-10-01` üzerinde tam kapı → main → sahibin yayın onayı.
+Gece görevi tavansız yeniden kaydedildi (02:00; bu döngü kilidi tutarken exit 3 verir, zararsız).**
 **Sahibin gerçek cihaz denemesi (2026-09-30 20:10 UTC, MAIL, `/voice` "Bu bilgisayar"):** QUALIFICATION 30.10
 PROVEN_REAL (aday hafıza satırı üretimde). İki kusur görüldü, kuyruğa `approved` düştü (gece döngüsü):
 `answer-mode-intent-precision` ("Türkçe oku" cümlesi cevap kipini `detail` yaptı + asistanın kendi cevabı hafıza
@@ -32,7 +40,7 @@ Bulut işçisi ÇALIŞIYOR (`bulut`, ölçüm evidence'ta); `/tmp/cb-watch.sh` d
 test yarışı (düzeltildi). Sonra lead'in sunucu adımları (sahip devretti): bulut işçisi imajı, profil,
 `docker stats` ölçümü, `bulut` alias'ı; `PAGENTOS_TEAM_STORE=database` geçişi sahibin oturum belirteci
 dosyasından SONRA (yoksa iki ayrı kuyruk olur). Sahipte: kayıt belirteci + oturum belirteci + MAIL kurulumu.
-Kuyrukta dokuz iş `approved` (gece döngüsü 02:00). Bulut kuralı seçenek 4.
+Kuyrukta on dört iş `approved` (gece döngüsü 02:00). Bulut kuralı seçenek 4.
 Önceki: pilot-01 MAIN'DE (tam kapı 34/34, uç `1c7014c3`).
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
