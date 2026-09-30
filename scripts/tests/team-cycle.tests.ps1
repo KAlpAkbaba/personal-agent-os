@@ -866,9 +866,15 @@ try {
 
     function Get-FakeApiRequests {
         param($Api)
+        # The fake writes a request's line AFTER it has answered it, so a reader that comes
+        # straight from the answer can find the log one line short (the gate, 2026-09-30:
+        # "expected 1, actual 0"). The listener serves one request at a time: by the time it
+        # answers THIS call, every earlier line is written. The barrier's own lines are not
+        # requests of the code under test and are left out.
+        [void](Get-FakeApiState -Api $Api)
         $log = Join-Path $Api.Work "requests.log"
         if (-not (Test-Path -LiteralPath $log)) { return @() }
-        return @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_.Trim() })
+        return @(Get-Content -LiteralPath $log -Encoding UTF8 | Where-Object { $_.Trim() -and $_ -notmatch ' /__state ' })
     }
 
     Test-Case "in API mode the cycle takes the lock through the API, writes the task's states there, posts the report, and leaves the files alone" {
