@@ -8,6 +8,11 @@
     the role file as its system prompt and the task card as its prompt. The run's raw output
     goes to `team/reports/<cycle-id>/`; at most forty lines of its report go into the queue.
 
+    After the researcher step, a proposal that serves a roadmap row and has no area yet is
+    split into tasks: one fresh `lead` run (Read and Write only) writes
+    `team/plans/<cycle>-split-<id>.json`, and THIS script validates it (Test-TeamSplit) and
+    queues the tasks as `approved`, or refuses the whole split and says why in the report.
+
     It never waits for a human. It ends when nothing in the queue can run - every task is at
     a gate, done or stopped - or when a cap is reached, and it writes
     `team/reports/<cycle-id>.md` in Turkish either way.
@@ -229,7 +234,7 @@ try {
     }
 
     function Start-RoleRun {
-        param($Task, [string]$Role, [string]$WorkingDirectory)
+        param($Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @())
         $roleFile = Join-Path $agentsRoot "$Role.md"
         if (-not (Test-Path -LiteralPath $roleFile)) { throw "there is no role file for '$Role': $roleFile" }
         # A run cap of 0 is no cap at all: then the task's budget.max_usd is an estimate for
@@ -245,8 +250,9 @@ try {
                 if ($left -lt $cap) { $cap = [Math]::Max(0.01, $left) }
             }
         }
-        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $Model -PrefixArguments $ClaudePrefixArguments
-        if ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
+        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $Model -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
+        if ($Prompt) { $prompt = $Prompt }
+        elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
         else {
             $prompt = "# Run ($Role, cycle $CycleId)`n`nWork as your role file says. Write your proposals under team/proposals/. " +
             "Return your report as your final message, at most 40 lines, naming each file you wrote."
@@ -348,6 +354,51 @@ try {
             Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $task)
         }
         Save-Queue -Document $queue
+    }
+
+    # ---------------------------------------------------------------- the lead's split
+    # A proposal that serves a roadmap row is approved in advance (TEAM_PROTOCOL 3a) but has no
+    # area yet. ONE fresh lead run per proposal writes the split; THIS script judges it
+    # (Test-TeamSplit) and takes it whole or refuses it whole. A refused split leaves the
+    # proposal where it was; the next cycle asks again.
+    if (-not $ResearchOnly) {
+        foreach ($proposal in @(Get-TeamSplitCandidates -Queue $queue)) {
+            if (Test-CapReached) { break }
+            $proposalId = [string]$proposal.id
+            $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
+            $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
+            # A file left by an earlier run is not this run's answer.
+            if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
+            $splitFolder = Split-Path -Parent $splitPath
+            if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
+            $card = New-TeamSplitCard -Task $proposal -Queue $queue -CycleId $CycleId -SplitFile $splitRelative
+            $done = Complete-RoleRun -Started (Start-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit"))
+            if ($done.UsageLimited -and (Wait-UsageLimit -ResetsAt $done.ResetsAt)) {
+                $done = Complete-RoleRun -Started (Start-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit"))
+            }
+            if (-not $done.Ok) {
+                Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: $($done.Outcome)"
+                continue
+            }
+            $read = Read-TeamSplitFile -Path $splitPath
+            $why = @()
+            if (-not $read.Ok) { $why = @($read.Why) }
+            else { $why = @(Test-TeamSplit -Split $read.Split -Queue $queue) }
+            if (@($why).Count -eq 0) {
+                $made = @(ConvertTo-TeamSplitTasks -Split $read.Split -Proposal $proposal -MaxUsd $RunMaxUsd)
+                $trial = [pscustomobject]@{ version = 1; tasks = @(@(Get-TeamTasks -Queue $queue) + $made) }
+                $why = @(Test-TeamQueue -Queue $trial)
+                if (@($why).Count -eq 0) {
+                    Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $made)
+                    Set-TeamProperty -InputObject $proposal -Name "state" -Value "done"
+                    Set-TeamProperty -InputObject $proposal -Name "reason" -Value ("bölündü: " + ((@($made) | ForEach-Object { [string]$_.id }) -join ", "))
+                    Set-TeamProperty -InputObject $proposal -Name "updated_at" -Value (Get-TeamTimestamp)
+                    Save-Queue -Document $queue
+                    continue
+                }
+            }
+            Add-CycleNote -List "risks" -Text ("bölme reddedildi: ${proposalId}: " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
+        }
     }
 
     # ---------------------------------------------------------------- the tasks

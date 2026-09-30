@@ -14,6 +14,9 @@
       silent     every run prints something that is not the result document
       costly     as approve, and every run costs 4 USD
       slow       the run sleeps for longer than the cycle lets it
+      split      the lead's split run writes two sound tasks to the file its card names;
+                 split-overlap / split-shared / split-missing write one task that breaks the
+                 rule named, any other scenario writes no file (cycle-lead-run)
       limited    the FIRST worker run of a task answers with the subscription's usage-limit
                  error (reset time 200 s in the past); every later run is as approve
 #>
@@ -85,6 +88,28 @@ switch ($role) {
         if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
         Set-Content -LiteralPath (Join-Path $folder "2026-09-30-anlati.md") -Value "# Anlatı: bu hafta ne oldu`n`nYapalım mı?" -Encoding UTF8
         Send-Result -Text "1 öneri yazıldı: team/proposals/2026-09-30-anlati.md" -Cost $cost
+    }
+    "lead" {
+        # The split run (cycle-lead-run): writes the file the card names, in the shape the
+        # scenario asks for. Any other scenario writes nothing, as a lead that failed would.
+        $target = ""
+        if ($card -match '(?m)^- split_file: (\S+)') { $target = Join-Path $here ($Matches[1] -replace "/", "\") }
+        $one = [ordered]@{ id = "$taskId-a"; title = "first half of $taskId"; roadmap_row = "row"; area = @("src/s1"); goal = "g"; acceptance = "a"; evidence_expected = "PROVEN_AUTOMATED" }
+        $two = [ordered]@{ id = "$taskId-b"; title = "second half of $taskId"; roadmap_row = "row"; area = @("src/s2"); goal = "g"; acceptance = "a"; evidence_expected = "PROVEN_AUTOMATED" }
+        $split = $null
+        switch ($scenario) {
+            "split" { $split = @($one, $two) }
+            "split-overlap" { $two.area = @("src/busy/deep"); $split = @($one, $two) }
+            "split-shared" { $two.area = @("docs/HANDOFF.md"); $split = @($one, $two) }
+            "split-missing" { $two.Remove("acceptance"); $split = @($one, $two) }
+        }
+        if ($null -ne $split -and $target) {
+            $folder = Split-Path -Parent $target
+            if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+            [System.IO.File]::WriteAllText($target, (ConvertTo-Json -InputObject @($split) -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+            Send-Result -Text "split written: $target" -Cost $cost
+        }
+        Send-Result -Text "I wrote no split." -Cost $cost
     }
     "integrator" {
         $folder = Join-Path $here "team\plans"
