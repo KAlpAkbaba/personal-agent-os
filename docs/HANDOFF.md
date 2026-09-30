@@ -15,7 +15,8 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**pilot-02 — MAIN'DE (tam kapı 34/34, uç `518de0ba`); sahibin ÖN ONAYIYLA yayınlanıyor.** ADR-0218…0222.
+**pilot-02 — YAYINLANDI (main `8d8d0f18`, 2026-09-30 12:38 UTC). Dal `team/nightly/lead`: gece döngüsünün
+(02:00) yazacağı kuyruk/rapor değişiklikleri buraya düşer; işçi dalları `main`'den açılır.** ADR-0218…0222.
 İlk kapı 30/34 idi: Docker Desktop yine kapanmıştı (3 adım) + sahte API günlüğünü yanıttan sonra yazan bir
 test yarışı (düzeltildi). Sonra lead'in sunucu adımları (sahip devretti): bulut işçisi imajı, profil,
 `docker stats` ölçümü, `bulut` alias'ı; `PAGENTOS_TEAM_STORE=database` geçişi sahibin oturum belirteci
@@ -181,12 +182,13 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `2e3b1668` (api-blue, 2026-09-30 10:11 UTC; son iyi bilinen `771a9e53` —
+- **Üretim:** Cloud Core `8d8d0f18` (api-green, 2026-09-30 12:38 UTC; son iyi bilinen `2e3b1668` —
   yayın kendisi yazdı) + `godseye`. Sağlık **ok**, `failing_checks` boş. Recovery pini
-  `2e3b16689fdf51b6f41bc687e5afed43eac39610`; reconcile timer her dakika 0 ile çıkıyor;
-  `RECOVERY_BUNDLE_STALE` YOK. Şema `0062_web_tasks`, gerçek zamanlı sözleşme v3, iki cihaz oturumu
-  maviye taşındı. İçinde: ADR-0215 (broker tek teslim), ADR-0213 PR 1, ADR-0216, ADR-0217.
-  Yedek: host dışı kopya YOK. Tailscale SSH her yeni bağlantıda sahibin ek doğrulamasını istiyor.
+  `8d8d0f18d6ae102f0650bafc1dffad6152ea38f3`; timer 0 ile çıkıyor; `RECOVERY_BUNDLE_STALE` YOK (pin'den
+  sonra paket ile ağaç cmp ile aynı bulundu, dosya silindi). Şema `0063_team_state`, sözleşme v3.
+  `PAGENTOS_TEAM_STORE=file` (veritabanına geçiş sahibin oturum belirteci dosyasını bekliyor).
+  Bulut işçisi: dizinler hazır (`/mnt/pagentos-data/cloud-browser`, uid 10001), imaj sunucuda derleniyor;
+  profil BAŞLATILMADI (sahibin kayıt belirtecini bekliyor). Tailscale SSH ek doğrulaması zaman zaman isteniyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
