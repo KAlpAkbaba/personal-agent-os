@@ -16776,3 +16776,39 @@ found in the protocol and the script, fixed on the same branch:
    check did its job; the cost was one stopped task and one extra run.
 7. *The queue's format is the script's.* A cycle rewrote the whole file the first time; it is
    committed in the writer's own format now, and a cycle's diff is what it changed.
+
+### ADR-0214 addendum 2 (2026-09-30): the autonomy setting - "onaylar bekler, iş durmaz"
+
+The owner, after the pilot's report: work that serves a roadmap row is approved in advance;
+what needs him accumulates in the Onay Merkezi and blocks nothing; policy questions are not
+asked - the most restrictive safe option is applied and written down with "sahip incelemesi
+bekliyor"; the nightly cycle is registered; pilot-02 starts now. Written into
+`docs/TEAM_PROTOCOL.md` section 3a in his words.
+
+What it changes in the machinery, and what it does not yet:
+
+* The researcher's proposals no longer wait at `awaiting_owner` when they serve a roadmap
+  row: the lead queues them as tasks. Splitting a proposal into tasks with areas is the
+  lead's judgement and is done by the lead session today; a lead RUN inside `cycle.ps1`
+  (a fresh `claude -p` with `lead.md`) is queued for pilot-02 so that a nightly cycle can
+  take a proposal to tasks without a person.
+* A release is never started by a cycle. Gated main versions are listed for the owner; the
+  lead releases the newest green main on his word.
+* `awaiting_owner` remains the state for the things of item 2(b) - a new roadmap row, a new
+  dependency, an irreversible action - and for nothing else.
+
+### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
+
+The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
+else; scheduled jobs are read-only.** The allow-list starts empty; the owner adds sites from
+the Onay Merkezi. This is the cloud interpretation of ADR-0207 decision 3 ("no unattended
+task"): a cloud job the owner started may keep running when he leaves, because it can act
+nowhere he did not name; every other cloud job is a reader.
+
+Consequences for the tasks of `team/plans/pilot-01-split.md`: task 4 (the cloud worker)
+registers with a session policy that allows READ and NAVIGATE only unless the site is on the
+allow-list; task 5 (the wiring) passes `acting=False` for every scheduled job and refuses an
+acting step on a site outside the list with the reason `not_on_owner_allow_list`; the
+allow-list is a shared file under `packages/protocol/` read by both halves, with its editor
+in the Onay Merkezi. Payment stays out of scope everywhere; the deny-list stays above the
+allow-list (a deny-listed site can never be allow-listed).
