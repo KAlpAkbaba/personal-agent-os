@@ -27,6 +27,69 @@
                       "acceptance":  "A task at awaiting_owner / awaiting_release is listed with its proposal or report; Onayla moves it to approved and Reddet to stopped with the owner\u0027s reason; a voice approval is refused unless it names which gate (fikir / yayın) and resolves to exactly one task; a release approval never starts a release by itself; every decision is a ledger event.",
                       "evidence_expected":  "PROVEN_AUTOMATED for the API and the router; READY_FOR_OWNER for the shell and the voice path",
                       "needs_integration":  false
+                  },
+                  {
+                      "id":  "idea-2026-09-30-anlati-satiri",
+                      "title":  "Öneri: Anlatı — \"bu hafta ne oldu, ofiste ne yaptın, ne başarısız oldu\"",
+                      "roadmap_row":  "",
+                      "state":  "awaiting_owner",
+                      "area":  [
+
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "researcher",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T05:38:35Z",
+                      "updated_at":  "2026-09-30T05:38:35Z",
+                      "proposal":  "team/proposals/2026-09-30-anlati-satiri.md"
+                  },
+                  {
+                      "id":  "idea-2026-09-30-bulutta-yurutme",
+                      "title":  "Öneri: Bulutta yürütme — \"bulut\" sanal cihazı, execution_target kuralı, ağsız compute.run",
+                      "roadmap_row":  "",
+                      "state":  "awaiting_owner",
+                      "area":  [
+
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "researcher",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T05:38:35Z",
+                      "updated_at":  "2026-09-30T05:38:35Z",
+                      "proposal":  "team/proposals/2026-09-30-bulutta-yurutme.md"
+                  },
+                  {
+                      "id":  "idea-2026-09-30-gorev-dongusu-bulutta",
+                      "title":  "Öneri: Tarayıcı görev döngüsü PR-C\u0027nin bulutta koşan hali",
+                      "roadmap_row":  "",
+                      "state":  "awaiting_owner",
+                      "area":  [
+
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "researcher",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T05:38:35Z",
+                      "updated_at":  "2026-09-30T05:38:35Z",
+                      "proposal":  "team/proposals/2026-09-30-gorev-dongusu-bulutta.md"
                   }
               ]
 }
