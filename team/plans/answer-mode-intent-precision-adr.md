@@ -13,6 +13,12 @@ Decision.
    level; otherwise VALIDATION_ERROR with a spoken sentence. The model's `level` argument is no longer consulted (it is a paraphrase).
 3. memory.extraction: summary is split on '|' / newline into lines; lines prefixed Asistan:/Assistant: are counted skipped and never
    filed; Sahip:/Owner: prefixes are stripped from the owner's lines.
+4. intents._executive_start_match: a standing sentence carrying a read verb is never an executive start. With RESEARCH_OPEN declining,
+   the trial sentence would otherwise have fallen into EXEC_START (action class, exec_shape research_report) and could launch a
+   research-report mission from a preference (inspector, second pass). It now resolves to Intent.NONE (klass query).
+5. "Bundan sonra raporlari ayrintili oku" / "...teknik oku" (a level word, read verb) route the one-off narration controls
+   DETAIL / TECHNICAL, not the durable register: the answer-mode phrase needs anlat/konus/cevap/soyle. Deliberate, pinned by a test;
+   the owner who wants the standing register says "bundan sonra ayrintili anlat".
 
-Consequences. A model-only call with no owner level word now gets a question instead of a silent register change. Not done: tests/voice_corpus/corpus.py
-is outside this task's area, so the three sentences live in test_voice_intents_answer_mode.py; adding them to the corpus is a follow-up.
+Consequences. A model-only call with no owner level word now gets a question instead of a silent register change. The three
+sentences are corpus cases r.lang.1-3 (tests/voice_corpus/corpus.py, added with the lead's return note; one file outside the card's area list).

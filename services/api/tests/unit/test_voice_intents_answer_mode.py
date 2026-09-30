@@ -27,8 +27,28 @@ LANGUAGE_SENTENCES = [
 @pytest.mark.parametrize("text", LANGUAGE_SENTENCES)
 def test_a_standing_language_sentence_is_neither_a_read_nor_a_level(text: str) -> None:
     resolved = resolve_intent(text)
-    assert resolved.intent not in (Intent.RESEARCH_OPEN, Intent.RESEARCH_ANSWER_MODE), text
+    assert resolved.intent is Intent.NONE, (text, resolved.intent)
+    assert resolved.klass != "action", text
     assert resolved.answer_level is None, text
+    assert resolved.exec_shape is None, text
+
+
+@pytest.mark.parametrize(
+    ("text", "intent"),
+    [
+        ("Bundan sonra raporları ayrıntılı oku.", Intent.DETAIL),
+        ("Bundan sonra araştırmaları teknik oku.", Intent.TECHNICAL),
+    ],
+)
+def test_a_standing_read_with_a_level_word_is_a_narration_control(
+    text: str, intent: Intent
+) -> None:
+    """Decided (ADR): "...oku" is not the answer-mode phrase ("anlat/konuş/cevap"), so the
+    level word routes the one-off narration control, never a durable register, and never a
+    mission."""
+    resolved = resolve_intent(text)
+    assert resolved.intent is intent
+    assert resolved.klass != "action"
 
 
 @pytest.mark.parametrize(

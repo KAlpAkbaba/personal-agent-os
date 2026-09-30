@@ -6854,6 +6854,11 @@ def _executive_start_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     given the SAME directive text verbatim (module comment above)."""
     if not _executive_output_requested(tokens):
         return None
+    if _is_standing_sentence(tokens) and _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS):
+        # Owner's trial 2026-09-30: "Bundan sonra araştırma raporlarını her zaman Türkçe
+        # oku" is a standing READ preference; with RESEARCH_OPEN declining it, this branch
+        # would start a research-report MISSION from a preference sentence.
+        return None
     if _has_exact(tokens, *_EXEC_MAIL_STEMS) and (
         _has(tokens, *_EXEC_MAIL_THREAD_STEMS) or _has(tokens, *_EXEC_DRAFT_STEMS)
     ):
