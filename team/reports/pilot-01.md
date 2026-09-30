@@ -1,6 +1,6 @@
 # Döngü raporu — pilot-01
 
-Makine: MAIL · başladı 2026-09-30T06:13:37Z · bitti 2026-09-30T06:15:24Z
+Makine: MAIL · başladı 2026-09-30T06:17:35Z · bitti 2026-09-30T06:21:18Z
 
 ## Hazır olanlar (sha)
 
@@ -9,7 +9,7 @@ Makine: MAIL · başladı 2026-09-30T06:13:37Z · bitti 2026-09-30T06:15:24Z
 - idea-2026-09-30-anlati-satiri — Öneri: Anlatı — "bu hafta ne oldu, ofiste ne yaptın, ne başarısız oldu" [done] (sha yok)
 - idea-2026-09-30-bulutta-yurutme — Öneri: Bulutta yürütme — "bulut" sanal cihazı, execution_target kuralı, ağsız compute.run [done] (sha yok)
 - idea-2026-09-30-gorev-dongusu-bulutta — Öneri: Tarayıcı görev döngüsü PR-C'nin bulutta koşan hali [done] (sha yok)
-- onay-merkezi — Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit'te; kabukta Onayla/Reddet, sesle "fikri onayla / yayını onayla" [merged] (82711a29b23f118ff423fba0831399cfabb401c4)
+- onay-merkezi — Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit'te; kabukta Onayla/Reddet, sesle "fikri onayla / yayını onayla" [merged] (a2faeaa10e7d539eeb3760c155b97cc0e85de3ff)
 
 ## Onay bekleyenler (fikir / yayın)
 
@@ -29,10 +29,10 @@ Yok.
 
 ## Harcanan bütçe
 
-- 0,38 USD / tavan 15,00 USD
+- 0,74 USD / tavan 15,00 USD
 - koşu sayısı: 2; çakışma: 0; geri verilen: 0
-- onay-merkezi / worker: 0,13 USD, 28 sn, tamam
-- onay-merkezi / inspector: 0,25 USD, 79 sn, tamam
+- onay-merkezi / worker: 0,48 USD, 124 sn, tamam
+- onay-merkezi / inspector: 0,26 USD, 97 sn, tamam
 
 ## Açık riskler
 
