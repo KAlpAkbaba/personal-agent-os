@@ -192,7 +192,8 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
   sonra paket ile ağaç cmp ile aynı bulundu, dosya silindi). Şema `0063_team_state`, sözleşme v3.
   `PAGENTOS_TEAM_STORE=file` (veritabanına geçiş sahibin oturum belirteci dosyasını bekliyor).
   Bulut işçisi: dizinler hazır, imaj `aa35fcf3` ağacından derlendi ve sınandı (Playwright 1.62.0, Chromium
-  açılıyor, malzemesiz başlatma 2 ile çıkıyor); profil BAŞLATILMADI (sahibin kayıt belirtecini bekliyor). Tailscale SSH ek doğrulaması zaman zaman isteniyor.
+  açılıyor, malzemesiz başlatma 2 ile çıkıyor); profil ÇALIŞIYOR: cihaz `bulut` (`ad64617c-b1e8-465f-ac65-4c780082cc18`, platform cloud, alias `bulut`),
+  broker'a bağlı, sağlıklı; tepe bellek 650 MB / 2 GB (kanıt dosyası). Bekçi ve yardımcı betik: `/usr/local/sbin/cloud-browser-mint.sh` kaldı, `/tmp/cb-watch.sh` durduruldu. Tailscale SSH ek doğrulaması zaman zaman isteniyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
