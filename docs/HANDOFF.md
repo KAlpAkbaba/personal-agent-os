@@ -182,13 +182,13 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `8d8d0f18` (api-green, 2026-09-30 12:38 UTC; son iyi bilinen `2e3b1668` —
-  yayın kendisi yazdı) + `godseye`. Sağlık **ok**, `failing_checks` boş. Recovery pini
+- **Üretim:** Cloud Core `aa35fcf3` (api-blue, 2026-09-30 17:05 UTC; son iyi bilinen `8d8d0f18` —
+  yayın kendisi yazdı; pin `aa35fcf3a57e8df4ad7dfabced705848c0976377`) + `godseye`. Sağlık **ok**, `failing_checks` boş. Recovery pini
   `8d8d0f18d6ae102f0650bafc1dffad6152ea38f3`; timer 0 ile çıkıyor; `RECOVERY_BUNDLE_STALE` YOK (pin'den
   sonra paket ile ağaç cmp ile aynı bulundu, dosya silindi). Şema `0063_team_state`, sözleşme v3.
   `PAGENTOS_TEAM_STORE=file` (veritabanına geçiş sahibin oturum belirteci dosyasını bekliyor).
-  Bulut işçisi: dizinler hazır (`/mnt/pagentos-data/cloud-browser`, uid 10001), imaj sunucuda derleniyor;
-  profil BAŞLATILMADI (sahibin kayıt belirtecini bekliyor). Tailscale SSH ek doğrulaması zaman zaman isteniyor.
+  Bulut işçisi: dizinler hazır, imaj `aa35fcf3` ağacından derlendi ve sınandı (Playwright 1.62.0, Chromium
+  açılıyor, malzemesiz başlatma 2 ile çıkıyor); profil BAŞLATILMADI (sahibin kayıt belirtecini bekliyor). Tailscale SSH ek doğrulaması zaman zaman isteniyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
