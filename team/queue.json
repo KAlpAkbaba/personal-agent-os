@@ -6,7 +6,7 @@
                       "id":  "narrative-collector",
                       "title":  "Anlatı: dönem + cihaz için deterministik toplayıcı, anlatıcı arayüzü, başarısızlığı atlatmayan denetçi (öneri 2, adım 1)",
                       "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
-                      "state":  "awaiting_release",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/narrative",
                                    "services/api/tests/unit/test_narrative_collector.py",
@@ -114,7 +114,7 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T06:10:00Z",
-                      "updated_at":  "2026-09-30T07:43:44Z",
+                      "updated_at":  "2026-09-30T10:13:54Z",
                       "proposal":  "team/proposals/2026-09-30-anlati-satiri.md",
                       "needs_integration":  false,
                       "goal":  "A new package services/api/app/narrative with three pure parts. (1) collector: given a period (\u0027bu hafta\u0027 = the last 7 days, \u0027bugün\u0027, \u0027dün\u0027, or explicit start/end in UTC) and an optional device word (ev / ofis / bulut / a device name), read the activity ledger through the existing read-only query in app/ledger/service.py (query / latest - read that file first; do not change it) and produce a NarrativeFacts dataclass: failed events FIRST (each with its subsystem, summary and the reason the ledger holds), then completed events grouped by subsystem, counts per subsystem and per device, no_capable_device events, and the period actually covered. Deterministic: the same rows give the same facts. (2) narrator: a Protocol `Narrator.tell(facts) -\u003e str` with a RuleNarrator that writes Turkish sentences from the facts alone (no model call in this task; the model narrator is a later task behind the same Protocol) - about 30 seconds of speech, failures first, then what was done, then counts; an empty period says \u0027bu dönemde kayıt yok\u0027. (3) auditor: `audit(facts, text) -\u003e Verdict` that REJECTS a narrative in which any failed event is not mentioned (match by its summary words), any completed subsystem is missing, or a number appears that is not one of the facts\u0027 counts; and `repair(facts, text)` that appends the missing failure sentences deterministically. The public entry is `tell(db, period, device=None, narrator=None) -\u003e str` = collect → narrate → audit → repair. Read docs/DECISIONS.md ADR-0201 and the ledger vocabulary for the event types and statuses; use their constants by import, never string copies. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md, app/ledger/vocabulary.py or any file outside the area: the lead wires shared files at merge time from your report. No new dependency. Python 3.12, ruff clean, tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api. Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --).",
@@ -122,13 +122,16 @@
                       "evidence_expected":  "PROVEN_AUTOMATED",
                       "sha":  "8544c885761f7ef9e84aa5a09262f69fe3f7650c",
                       "returns":  0,
-                      "integration_branch":  "integrate/pilot-01"
+                      "integration_branch":  "integrate/pilot-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-09-30T09:40:00Z",
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "execution-target-rule",
                       "title":  "Bulutta yürütme: execution_target kuralı (cloud / owner_chrome / device), düşüş zinciri ve olayları — saf kural tablosu (öneri 1, PR 1)",
                       "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
-                      "state":  "awaiting_release",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/execution",
                                    "services/api/tests/unit/test_execution_target.py",
@@ -331,7 +334,7 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T06:10:00Z",
-                      "updated_at":  "2026-09-30T07:43:44Z",
+                      "updated_at":  "2026-09-30T10:13:54Z",
                       "proposal":  "team/proposals/2026-09-30-bulutta-yurutme.md",
                       "needs_integration":  false,
                       "goal":  "A new package services/api/app/execution holding the execution_target decision as pure functions - nothing here talks to a device, a database or a model. Inputs: a JobKind (research, browser_task, desktop, scheduled, compute), what the owner said (a spoken target word: \u0027bulutta\u0027 / \u0027bulut\u0027 forces cloud; a named device or alias forces that device; ADR-0212\u0027s spoken-device rule stays the device layer\u0027s - you only take the resolved word), the site\u0027s needs (needs_signed_in_session, on the task deny-list of packages/protocol/browser-task-denylist.json - read it, do not copy it), and the availability of each target (cloud online, owner Chrome enrolled and its device online, named device online). Output: a Decision with the chosen target, the ORDERED fallback chain that was considered, and one reason code per skipped target. Rules, each with a test: scheduled jobs always run in the cloud and never fall back to the owner\u0027s Chrome; research defaults to cloud, then owner_chrome, then device; a job that needs a signed-in session defaults to owner_chrome and NEVER to cloud; desktop jobs run on the device and never in the cloud; compute runs in the cloud only; a forced target that is unavailable is a refusal with reason `forced_target_unavailable`, not a silent fallback; a cloud run that meets an auth wall, a CAPTCHA or a challenge does not fall back on its own - the decision says `ask_owner` (ADR-0207 decision 6); payment is out of scope everywhere; the deny-list refuses acting (not reading) on every target. Also: `events(decision)` returns the ledger event records to write (`execution.selected`, `execution.fallback` with the reason, `execution.refused`) as plain dicts with an event_type key - define the three event-type strings as constants in app/execution/vocabulary.py; the lead registers them in app/ledger/vocabulary.py at merge. Write team/plans/execution-target-rule-adr.md: the rule table as a markdown table, the fallback chain, and the open question of where the owner\u0027s \u0027no unattended task\u0027 (ADR-0207 decision 3) stands for a cloud job (state the options; decide nothing). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md, app/ledger/vocabulary.py or any file outside the area: the lead wires shared files at merge time from your report. No new dependency. Python 3.12, ruff clean, tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api. Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --).",
@@ -339,8 +342,11 @@
                       "evidence_expected":  "PROVEN_AUTOMATED",
                       "sha":  "4a07170eb8f5d2f6dc16621914fa2daedc9c6622",
                       "returns":  1,
-                      "reason":  "rapor bir hukumle bitmedi",
-                      "integration_branch":  "integrate/pilot-01"
+                      "reason":  "yayinlandi 2026-09-30 10:11 UTC, main 2e3b16689fdf51b6f41bc687e5afed43eac39610 (api-blue)",
+                      "integration_branch":  "integrate/pilot-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-09-30T09:40:00Z",
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "idea-2026-09-30-anlati-satiri",
@@ -412,7 +418,7 @@
                       "id":  "onay-merkezi",
                       "title":  "Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit\u0027te; kabukta Onayla/Reddet, sesle \"fikri onayla / yayını onayla\"",
                       "roadmap_row":  "How it is built from here",
-                      "state":  "awaiting_release",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/team",
                                    "services/api/tests/unit/test_team_approvals.py",
@@ -727,15 +733,18 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T00:00:00Z",
-                      "updated_at":  "2026-09-30T07:43:44Z",
+                      "updated_at":  "2026-09-30T10:13:54Z",
                       "goal":  "The cycle report and every task at an owner gate are readable in the Cockpit\u0027s Onay Merkezi; the owner approves or rejects in the shell or by voice; the decision is written where the next cycle reads it (team/queue.json state), never applied mid-run. Start with the Cloud Core half: app/team (the queue read as data, the two decisions \u0027Onayla\u0027/\u0027Reddet\u0027 written to team/queue.json state with a ledger event, a REST route under /v1/team/approvals that lists tasks at a gate and takes a decision) and its unit tests; the web shell page under apps/web/src/app/core/approvals lists and calls it. The voice path (\u0027fikri onayla\u0027 / \u0027yayını onayla\u0027) is a LATER task: only leave the API shape it needs. A release approval never starts a release. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md, app/ledger/vocabulary.py or any file outside the area: the lead wires shared files at merge time from your report. No new dependency. Python 3.12, ruff clean, tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api. Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --).",
                       "acceptance":  "A task at awaiting_owner / awaiting_release is listed with its proposal or report; Onayla moves it to approved and Reddet to stopped with the owner\u0027s reason; a voice approval is refused unless it names which gate (fikir / yayın) and resolves to exactly one task; a release approval never starts a release by itself; every decision is a ledger event.",
                       "evidence_expected":  "PROVEN_AUTOMATED for the API and the router; READY_FOR_OWNER for the shell and the voice path",
                       "needs_integration":  false,
                       "returns":  0,
-                      "reason":  "Onceki geri verme notu karta girmemisti (betik kusuru, duzeltildi); is DEGISMEDEN onaylandi. Simdi yap: yayin onayi (awaiting_release) \u0027approved\u0027 durumuna YAZILMAZ - dongu bunu \u0027isci ata\u0027 diye okur. Yayin onayi durumu awaiting_release\u0027de birakir ve release_approved=true, release_approved_at (UTC, YYYY-MM-DDTHH:MM:SSZ), release_approved_by (shell|voice|owner_sentence) alanlarini yazar (sema: team/queue.schema.json). Fikir onayi (awaiting_owner) eskisi gibi \u0027approved\u0027 yazar. Reddet her iki kapida \u0027stopped\u0027 + reason. Testini ekle (yayin onayindan sonra state hala awaiting_release ve bayrak true; fikir onayi approved), mutasyonunu goster (bayrak yerine approved yazan mutant RED). sha256\u0027yi TAM 64 hex olarak yaz. Kabuk sayfasinda \u0027Onayla\u0027 yayin kapisi icin \u0027Yayini onayla\u0027 diye yazsin; bu yayini BASLATMAZ, lead yapar.",
+                      "reason":  "yayinlandi 2026-09-30 10:11 UTC, main 2e3b16689fdf51b6f41bc687e5afed43eac39610 (api-blue)",
                       "sha":  "a2faeaa10e7d539eeb3760c155b97cc0e85de3ff",
-                      "integration_branch":  "integrate/pilot-01"
+                      "integration_branch":  "integrate/pilot-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-09-30T09:40:00Z",
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "cloud-allow-list",

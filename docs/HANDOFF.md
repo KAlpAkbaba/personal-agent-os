@@ -18,8 +18,8 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 **pilot-02 — dal `team/pilot-02/lead`; sahibin otonomi ayarı (TEAM_PROTOCOL 3a) uygulandı, gece
 döngüsü KAYITLI (02:00, 30 USD / 2 paralel / 240 dk), beş iş kuyrukta `approved` (bulut izin listesi,
 bulut işçisi [entegratör önce], kural tablosunun bağlanması, anlatının sesi, kuyruğun Cloud Core'a
-taşınması). Bulut kuralı seçenek 4 (ADR-0213 eki). YAYIN: sahip onayladı (main `2e3b1668`), Tailscale
-SSH ek doğrulaması bekliyor; döngü yayından SONRA başlar (çalışma ağacı temiz kalsın).**
+taşınması). Bulut kuralı seçenek 4 (ADR-0213 eki). YAYINLANDI: main `2e3b1668` (2026-09-30 10:11 UTC), pin + timer doğrulandı;
+pilot-01'in üç işi kuyrukta `released`. Döngü `pilot-02` koşuyor.**
 Önceki: pilot-01 MAIN'DE (tam kapı 34/34, uç `1c7014c3`).
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
@@ -180,15 +180,12 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `771a9e53` (api-green, 2026-09-29 19:58 UTC; son iyi bilinen
-  `be2975ae` — yayın kendisi yazdı) + `godseye` aux servisi. Sağlık **ok**, `failing_checks`
-  boş. Recovery pini `771a9e53483bc952b17a404dce456d0109d44abe`; `pagentos-bluegreen-
-  reconcile.timer` her dakika 0 ile çıkıyor. Şema `0062_web_tasks`, gerçek zamanlı sözleşme **v3**,
-  iki cihaz oturumu da yeşile taşındı. `/opt/pagentos/.env` içinde
-  `PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN=http://100.90.158.26:8001` (api süreci görüyor; önceki hali
-  `.env.bak-20260930`). Yedek: host dışı kopya YOK (`no_offhost_copy`).
-  **Bilinen artık:** `/opt/pagentos/RECOVERY_BUNDLE_STALE` dosyası pin'den sonra da duruyor; paket
-  ile canlı ağaç bayt bayt aynı (cmp) — dosyayı yalnız bir SONRAKİ yayın siliyor, pin silmiyor.
+- **Üretim:** Cloud Core `2e3b1668` (api-blue, 2026-09-30 10:11 UTC; son iyi bilinen `771a9e53` —
+  yayın kendisi yazdı) + `godseye`. Sağlık **ok**, `failing_checks` boş. Recovery pini
+  `2e3b16689fdf51b6f41bc687e5afed43eac39610`; reconcile timer her dakika 0 ile çıkıyor;
+  `RECOVERY_BUNDLE_STALE` YOK. Şema `0062_web_tasks`, gerçek zamanlı sözleşme v3, iki cihaz oturumu
+  maviye taşındı. İçinde: ADR-0215 (broker tek teslim), ADR-0213 PR 1, ADR-0216, ADR-0217.
+  Yedek: host dışı kopya YOK. Tailscale SSH her yeni bağlantıda sahibin ek doğrulamasını istiyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
