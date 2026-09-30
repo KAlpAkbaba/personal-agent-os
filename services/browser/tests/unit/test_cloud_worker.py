@@ -203,6 +203,29 @@ def test_main_exits_2_when_the_enrollment_material_is_missing(tmp_path, monkeypa
     assert main([]) == 2
 
 
+def test_the_module_run_the_way_the_container_runs_it_refuses_and_says_why(tmp_path):
+    """The image's ENTRYPOINT is ``python -m browser_agent.cloud``. The first real build
+    (Cloud Core, 2026-09-30) found that this did NOTHING and exited 0: ``main`` was
+    defined and never called, and every test called ``main()`` itself. This one starts
+    the module as a process, the way the container does."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, **_env(tmp_path), "PYTHONPATH": str(Path(policy.__file__).parents[1])}
+    done = subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "browser_agent.cloud"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(tmp_path),
+    )
+    assert done.returncode == 2, (done.returncode, done.stderr[-400:])
+    assert "cloud worker refuses to start" in done.stderr
+    assert "no enrollment material" in done.stderr
+
+
 # --------------------------------------------------------------------------- #
 # the enrollment and hello the module sends are the contract's
 # --------------------------------------------------------------------------- #

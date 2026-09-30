@@ -73,8 +73,17 @@ def test_the_image_is_built_on_the_playwright_the_lock_resolves() -> None:
     lock = BROWSER_LOCK.read_text("utf-8")
     locked = re.search(r'name = "playwright"\nversion = "([0-9.]+)"', lock)
     assert locked is not None
-    tag = re.search(r"^ARG PLAYWRIGHT_TAG=v([0-9.]+)-noble$", DOCKERFILE.read_text("utf-8"), re.M)
-    assert tag is not None and tag.group(1) == locked.group(1)
+    dockerfile = DOCKERFILE.read_text("utf-8")
+    version = re.search(r"^ARG PLAYWRIGHT_VERSION=([0-9.]+)$", dockerfile, re.M)
+    assert version is not None and version.group(1) == locked.group(1)
+    # The base image carries the browsers of ONE Playwright. The first real build
+    # (2026-09-30) let `pip install .` resolve a newer one: 1.63.0 on a 1.62.0 image,
+    # and Chromium did not launch ("Executable doesn't exist"). The image tag and the
+    # installed package are the same number, from the same ARG.
+    assert "python:v${PLAYWRIGHT_VERSION}-noble" in dockerfile
+    assert '"playwright==${PLAYWRIGHT_VERSION}"' in dockerfile
+    after_from = dockerfile.split("FROM ", 1)[1]
+    assert re.search(r"^ARG PLAYWRIGHT_VERSION$", after_from, re.M), "re-declared after FROM"
 
 
 def test_the_team_store_is_the_file_unless_the_setting_says_the_database() -> None:
