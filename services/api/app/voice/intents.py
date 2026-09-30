@@ -1386,6 +1386,22 @@ _INTENT_CORROBORATION: dict[str, tuple[str, ...]] = {
 }
 
 
+#: ``ResolvedIntent.query_kind`` of the narrative read (``app.explain.engine.QUERY_NARRATIVE``
+#: spells the same word; the engine cannot be imported here, it imports this module).
+QUERY_KIND_NARRATIVE: Final = "narrative"
+
+
+def _narrative_match(text: str) -> str | None:
+    """The period word of a "what happened?" question the narrative recogniser takes.
+
+    The import is local: ``app.narrative`` reaches the ledger, which this module must not
+    load at import time."""
+    from app.narrative.intent import recognise
+
+    ask = recognise(text)
+    return None if ask is None else ask.period
+
+
 def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
     """The kind of question about the system's own activity, or None.
 
@@ -10130,6 +10146,21 @@ def _resolve_intent_rules(
             Intent.RESUME,
             scope=_scope_for(Intent.RESUME, narration),
             matched="kaldığın yerden",
+            **base,
+        )
+
+    # 99. ADR-0216/0221 (ROADMAP order 2c): "Bu hafta ne oldu?" - the owner asking the record
+    #     to be told. A READ, answered by the explain engine's ``narrative`` kind. LAST, below
+    #     every branch, because that placement IS the guard: the recogniser's sentences
+    #     ("bugün ne yaptın", "bugün neler oldu", "ne başarısız oldu") are also taken by the
+    #     artifact-list and explain families, and what they own keeps going where it went.
+    #     Only what reaches here - no family wanted it - is the narrative.
+    if narrative_ask := _narrative_match(text):
+        return ResolvedIntent(
+            Intent.EXPLAIN,
+            scope=SCOPE_CONVERSATION,
+            matched=narrative_ask,
+            query_kind=QUERY_KIND_NARRATIVE,
             **base,
         )
 

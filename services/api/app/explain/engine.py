@@ -45,6 +45,7 @@ from app.explain.classify import (
 )
 from app.ledger.screening import MAX_EVIDENCE_CHARS, safe_evidence_text
 from app.narration.numbers import cardinal
+from app.narrative.intent import recognise as recognise_narrative
 from app.research.result import (
     REASON_INSUFFICIENT_EVIDENCE,
     REASON_INSUFFICIENT_FINDINGS,
@@ -52,6 +53,9 @@ from app.research.result import (
     ResearchResult,
     spoken_result,
 )
+from app.voice.intents import QUERY_KIND_NARRATIVE
+
+QUERY_NARRATIVE = QUERY_KIND_NARRATIVE  # bu hafta ne oldu (ADR-0216/0221)
 
 LABEL_FACT = "known_fact"
 LABEL_INFERENCE = "inference"
@@ -1063,6 +1067,46 @@ def _window_statement(events: list[EventView], query: ExplainQuery) -> Statement
 # ------------------------------------------------------------------ compose
 
 
+def narrative_query(question: str, *, now: datetime | None = None) -> ExplainQuery | None:
+    """The ``narrative`` query for "bu hafta ne oldu", or ``None`` when the narrative
+    recogniser does not take the question. Nothing else is a narrative: a caller that has
+    classified the question as another kind (``classify``) keeps that kind."""
+    if recognise_narrative(question) is None:
+        return None
+    return ExplainQuery(
+        kind=QUERY_NARRATIVE,
+        level=LEVEL_EXECUTIVE,
+        since=None,
+        subsystem=None,
+        module=None,
+        normalized=question.strip(),
+        matched=True,
+    )
+
+
+def _narrative_briefing(source: Any, question: str, query: ExplainQuery, now: datetime) -> Briefing:
+    """The same text at every level: the narrative is ONE audited account of the ledger, so
+    "detaylı" / "teknik" must not turn it into ``NO_EVIDENCE_TR``. A source without a
+    ``narrative`` (or a question the recogniser no longer takes) has no record to tell."""
+    ask = recognise_narrative(question)
+    narrate = getattr(source, "narrative", None)
+    text = narrate(ask, now=now) if ask is not None and callable(narrate) else None
+    if not text:
+        return Briefing(question, query, now, (), (), (), ())
+    statement = Statement(text, LABEL_FACT, ({"kind": "narrative", "ref": ask.period},))
+    item = BriefingItem("Anlatı", (statement,))
+    return Briefing(
+        question=question,
+        query=query,
+        generated_at=now,
+        executive=(statement,),
+        detailed=(item,),
+        technical=(item,),
+        evidence_refs=({"kind": "narrative", "ref": ask.period},),
+        facts={"period": ask.period, "device": ask.device, "failures_only": ask.failures_only},
+    )
+
+
 def explain(
     source: EvidenceSource,
     question: str,
@@ -1081,6 +1125,8 @@ def explain(
     falls back to its ordinary "latest activity" behaviour rather than inventing one.
     """
     now = now or datetime.now(UTC)
+    if query.kind == QUERY_NARRATIVE:
+        return _narrative_briefing(source, question, query, now)
     subsystems = (query.subsystem,) if query.subsystem else None
     recent = source.events(since=query.since, subsystems=subsystems, statuses=None, limit=100)
     all_recent = (
@@ -1594,9 +1640,7 @@ def explain(
             detailed.append(
                 BriefingItem(
                     title=finding.what,
-                    statements=(
-                        Statement(finding.detail or finding.what, LABEL_FACT, (ref,)),
-                    ),
+                    statements=(Statement(finding.detail or finding.what, LABEL_FACT, (ref,)),),
                 )
             )
     elif query.kind == QUERY_SELF_CODE:
@@ -1820,8 +1864,7 @@ def explain(
                 (
                     e
                     for e in (*recent, *all_recent)
-                    if e.event_type == "research.completed"
-                    and e.research_job_id == research_job_id
+                    if e.event_type == "research.completed" and e.research_job_id == research_job_id
                 ),
                 None,
             )
@@ -1969,8 +2012,10 @@ __all__ = [
     "BriefingItem",
     "EventView",
     "EvidenceSource",
+    "QUERY_NARRATIVE",
     "Statement",
     "explain",
+    "narrative_query",
     "owner_relevance",
     "render_markdown",
     "speech_for_level",
