@@ -798,6 +798,10 @@ ANSWER_MODE_SET_TR = {
     "executive": "Bundan sonra araştırmaları kısa, yönetici özetiyle anlatacağım efendim.",
     "full": "Bundan sonra araştırmaları tam haliyle anlatacağım efendim.",
 }
+ANSWER_MODE_NO_LEVEL_TR = (
+    "Hangi ayrıntı seviyesini istediğinizi anlayamadım efendim; teknik, ayrıntılı, tam ya da "
+    "kısa diyebilirsiniz."
+)
 
 
 def research_answer_mode(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -814,11 +818,13 @@ def research_answer_mode(ctx: ToolContext, arguments: dict[str, Any]) -> dict[st
         )
     turn = _turn_record(ctx) or {}
     level = turn.get("answer_level") if isinstance(turn.get("answer_level"), str) else None
-    level = level or str(arguments.get("level") or "")
-    if level not in FOLLOWUP_LEVELS:
+    if level not in FOLLOWUP_LEVELS or turn.get("intent") != "research_answer_mode":
+        # The owner's words name the level, never the model's argument and never another
+        # intent's level ("Türkçe oku" once set 'detail' this way, 2026-09-30): no level word
+        # in the resolved utterance -> refuse, the durable register stays as it is.
         raise VoiceError(
             VoiceErrorClass.VALIDATION_ERROR,
-            f"level must be one of {', '.join(FOLLOWUP_LEVELS)}",
+            ANSWER_MODE_NO_LEVEL_TR,
         )
     focus_module.set_answer_level(ctx.db, level, now=ctx.now)
     return {
