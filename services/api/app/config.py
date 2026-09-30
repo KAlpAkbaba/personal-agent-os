@@ -291,6 +291,12 @@ class Settings(BaseSettings):
     # real deployment sets it to the same origin devices already dial (the same rule
     # ``alarm_audio_origin`` follows for the greeting WAV).
     artifact_download_origin: str = ""
+    # ADR-0222: where the agent team's queue and lock live. ``file`` (the default) is
+    # ``team/`` beside the repository - the home PC, and nothing on the Cloud Core VM.
+    # ``database`` is the ``team_state`` table: the Cloud Core, once the queue has been
+    # seeded there. Explicit on purpose: a Core that finds a database does not move the
+    # owner's queue into it by itself.
+    team_store: str = "file"
     # B42 (req 412): the owner's delete policy for artifacts - confirm (the default:
     # an explicit yes in the same call), deny, or free. Checkpoint 14 is the owner's.
     # Owner decision 2026-09-19 (row 412): no second word before a delete - "free".

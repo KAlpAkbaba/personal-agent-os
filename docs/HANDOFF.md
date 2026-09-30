@@ -15,11 +15,13 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**pilot-02 — dal `team/pilot-02/lead`; sahibin otonomi ayarı (TEAM_PROTOCOL 3a) uygulandı, gece
-döngüsü KAYITLI (02:00, 30 USD / 2 paralel / 240 dk), beş iş kuyrukta `approved` (bulut izin listesi,
-bulut işçisi [entegratör önce], kural tablosunun bağlanması, anlatının sesi, kuyruğun Cloud Core'a
-taşınması). Bulut kuralı seçenek 4 (ADR-0213 eki). YAYINLANDI: main `2e3b1668` (2026-09-30 10:11 UTC), pin + timer doğrulandı;
-pilot-01'in üç işi kuyrukta `released`. Döngü `pilot-02` koşuyor.**
+**pilot-02 — BEŞ İŞ BİTTİ, `integrate/pilot-02`'de; lead bağladı; TAM KAPI BEKLİYOR (sahip MAIL'de
+ajanı yeniden kuruyor - "kurulum bitene kadar kapı başlatma").** Sonra `--no-ff` main + push; yayın
+Onay Merkezi'nde birikir (TEAM_PROTOCOL 3a). ADR-0218…0222. Beş yeni iş kuyrukta `approved`
+(narrative-intent-wiring, ledger-device-stamp, allowlist-editor, cloud-device-registry, cycle-lead-run).
+**DİKKAT - gece döngüsü (02:00) işçi dallarını `main`'den açar:** pilot-02 kapıdan geçip main'e
+girmeden koşarsa yeni işler pilot-02'nin paketlerini bulamaz ve geri döner. Kapı + main ÖNCE.
+Üretim `2e3b1668` (api-blue), pin/timer doğrulandı. Bulut kuralı seçenek 4.
 Önceki: pilot-01 MAIN'DE (tam kapı 34/34, uç `1c7014c3`).
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`

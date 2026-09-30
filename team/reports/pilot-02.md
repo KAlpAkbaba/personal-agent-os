@@ -61,3 +61,51 @@ Yok.
 
 - integrate/pilot-02 üzerinde tam kapı ve main'e birleştirme bu betikte yok; lead yapar, sonra işler 'awaiting_release' olur
 
+## Lead'in kapanışı
+
+- Beş iş `integrate/pilot-02`'de; ADR-0218 (izin listesi), ADR-0219 (bulut işçisi), ADR-0220 (kuralın
+  bağlanması), ADR-0221 (anlatının sesi), ADR-0222 (ekibin durumu veritabanında).
+- Lead'in bağladıkları: izin listesi protokol paketinde + sözleşme sicilinde; bulut işçisi üretim
+  compose'unda KENDİ profilinde (yayın başlatmaz); Playwright etiketi kilit dosyasına sabit; göç 0063
+  alembic'te; ekip deposu ayarla açılır (`PAGENTOS_TEAM_STORE`, varsayılan `file`); THIRD_PARTY kaydı.
+- BİLEREK bağlanmayanlar: kural tablosunun çağrı yerleri (kayıtta bulut cihazı / owner_chrome etiketi
+  yazan yok; bağlansaydı her araştırma `no_capable_device` olurdu) ve anlatı niyeti (tek yönlendirici).
+  İkisi de kuyrukta iş.
+
+### Onay Merkezi'nde birikenler (döngüyü bloklamaz)
+
+- **YAYIN BEKLİYOR:** `integrate/pilot-02` tam kapıdan geçip main'e girince. İçinde göç 0063
+  (`team_state`, yalnız ekleme), compose değişikliği (profilli servis + bir env satırı).
+- **Sahip adımları — bulut işçisi (ADR-0219), yayından sonra, sunucuda:**
+  1. `mkdir -p /mnt/pagentos-data/cloud-browser/{state,data} && chown -R 10001:10001 /mnt/pagentos-data/cloud-browser`
+  2. Kayıt belirteci üretip `/mnt/pagentos-data/cloud-browser/state/enroll.token` dosyasına yazmak
+     (`scripts/cloud/mint-enrollment-token.sh`; sahip oturumu + loopback ister).
+  3. `docker compose -f /opt/pagentos/app/infra/docker/docker-compose.prod.yml --env-file /opt/pagentos/.env --profile cloud-browser up -d --build cloud-browser`
+  4. Ölçüm: `MEASURE_WINDOW_S=90 /opt/pagentos/app/infra/docker/cloud-browser/measure-memory.sh pagentos-prod-cloud-browser <kanıt.json>`
+  5. Cihaza `bulut` alias'ı (`scripts/core/set-device-aliases.ps1`).
+- **Sahip adımları — ekibin durumu Cloud Core'da (ADR-0222):** yayından sonra `.env`'e
+  `PAGENTOS_TEAM_STORE=database`, kuyruğun bir kez tohumlanması, sahip oturum belirtecinin bir dosyaya
+  yazılması (`cycle.ps1 -QueueUrl … -QueueToken <dosya>`).
+- **Gerçek cihaz denemeleri (READY_FOR_OWNER):** Onay Merkezi sayfası (`/core/approvals`); pilot-01'den
+  kalan dört cümle (MAIL kurulumundan sonra).
+
+### Bu geceki döngüye (02:00) bırakılan işler
+
+`narrative-intent-wiring`, `ledger-device-stamp`, `allowlist-editor`, `cloud-device-registry`,
+`cycle-lead-run` — hepsi `approved`, alanları çakışmıyor. `execution-call-sites` bilerek kuyrukta yok:
+bulut cihazı gerçekten var olana kadar bekler.
+
+### Ölçüm (pilot-01 + pilot-02)
+
+| | pilot-01 | pilot-02 |
+|---|---|---|
+| iş | 3 | 5 |
+| koşu | 14 | 16 |
+| maliyet | 5,89 USD | 10,14 USD |
+| döngü süresi | 26 dk (3 parça) | 41 dk |
+| geri verme | 3 | 4 (3'ü alan dışı dosya, 1'i eksik test) |
+| çakışma | 0 | 0 |
+
+Geri vermelerin çoğu "alan dışı dosya": işçi haklı olarak bir dosyaya ihtiyaç duyuyor ama kart onu
+saymıyor. Kartları yazan lead'in (benim) alanları daha tam yazması gerekiyor; `cycle-lead-run` işi bu
+denetimi betiğe alıyor.

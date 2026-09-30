@@ -24,6 +24,7 @@ import app.operator.models  # noqa: F401 - register M19 object_focus on Base.met
 import app.routines.models  # noqa: F401 - register M18 routine tables on Base.metadata
 import app.security.models  # noqa: F401 - register security tables on Base.metadata
 import app.selfhealing.models  # noqa: F401 - register self-healing tables on Base.metadata
+import app.team.models  # noqa: F401 - register ADR-0222 team_state on Base.metadata
 import app.voice.models  # noqa: F401 - register voice tables on Base.metadata
 import app.voice.realtime_sessions.models  # noqa: F401 - register M12 realtime tables
 import app.webtask.models  # noqa: F401 - register ADR-0207 web_tasks on Base.metadata

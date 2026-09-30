@@ -1,7 +1,8 @@
 # Cloud browser worker image (ADR-0213 PR 2). Build context: services/browser.
 #   docker build -f ../../infra/docker/cloud-browser/Dockerfile -t pagentos-cloud-browser:local .
 # Pin PLAYWRIGHT_TAG to the playwright version resolved in uv.lock before a release build.
-ARG PLAYWRIGHT_TAG=v1.49.0-noble
+# services/browser/uv.lock resolves playwright 1.62.0; test_pilot02_wiring holds the two equal.
+ARG PLAYWRIGHT_TAG=v1.62.0-noble
 FROM mcr.microsoft.com/playwright/python:${PLAYWRIGHT_TAG}
 
 ENV PYTHONUNBUFFERED=1 \

@@ -1175,7 +1175,7 @@
                                           "role":  "worker",
                                           "at":  "2026-09-30T10:28:11Z",
                                           "file":  "team/reports/pilot-02/execution-target-wiring-worker-1.md",
-                                          "cost_usd":  0.70000739999999984,
+                                          "cost_usd":  0.7000073999999998,
                                           "outcome":  "tamam",
                                           "summary":  [
                                                           "**Şu an üzerinde çalışılan:** execution-target-wiring, alan `services/api/app/{execution,research,routines}` ve `tests/unit`, makine: bu dizüstü.",
@@ -1394,7 +1394,7 @@
                                           "role":  "worker",
                                           "at":  "2026-09-30T10:29:27Z",
                                           "file":  "team/reports/pilot-02/narrative-voice-worker-1.md",
-                                          "cost_usd":  0.99805440000000023,
+                                          "cost_usd":  0.9980544000000002,
                                           "outcome":  "tamam",
                                           "summary":  [
                                                           "[... 7 satir kesildi; tamami rapor dosyasinda]",
@@ -1678,6 +1678,145 @@
                       "reason":  "alan dışı dosya: scripts/tests/lib/fake-team-api.ps1",
                       "sha":  "09344f829599da5468014b1066d5fd5ffd1dacdf",
                       "integration_branch":  "integrate/pilot-02"
+                  },
+                  {
+                      "id":  "narrative-intent-wiring",
+                      "title":  "Anlatı niyetinin bağlanması: tek yönlendiricide \u0027bu hafta ne oldu\u0027 → app.narrative.tell; explain\u0027e sorgu türü",
+                      "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/voice/intents.py",
+                                   "services/api/app/explain/engine.py",
+                                   "services/api/tests/unit/test_narrative_intent_wiring.py",
+                                   "team/plans/narrative-intent-wiring-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T11:30:00Z",
+                      "updated_at":  "2026-09-30T11:30:00Z",
+                      "goal":  "ADR-0216 and ADR-0221: app/narrative has recognise(), tell() and ModelNarrator, called by nothing. Read how app/voice/intents.py resolves an utterance to an intent and how a READ intent answers in words (the ONE router; local mode and the paid mode both pass through it), and how app/explain/engine.py dispatches a query type. Add (1) a narrative intent: when app.narrative.intent.recognise(text) matches, the answer is app.narrative.service.tell(db, ask.period, ask.device, narrator) spoken through the existing answer path; the narrator is ModelNarrator over the chat provider the router already has, RuleNarrator when there is none; (2) the explain query type that returns the same text. The narrative is a READ: no step-up, no confirmation, no device command. It must not shadow an existing intent: an utterance another intent already takes keeps going where it went (test with the corpus phrases near it). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
+                      "acceptance":  "Tests through the real router function with a fake db/provider: \u0027bu hafta ne oldu\u0027 answers with the narrative; \u0027hafta sonu ne yapalım\u0027 does not; an utterance an existing intent owns is unchanged (at least five near phrases from the existing intent tests); the answer names every failure in a fixed ledger fixture. Mutations: the recogniser call removed -\u003e RED; the narrative placed before an existing intent it would shadow -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; READY_FOR_OWNER (the owner says \u0027bu hafta ne oldu\u0027)",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "ledger-device-stamp",
+                      "title":  "Ledger yazarları cihazı damgalar: detail_json[\u0027device\u0027] (anlatının \u0027ofiste\u0027 süzgeci gerçek veride çalışsın)",
+                      "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/actions/receipt.py",
+                                   "services/api/app/operator/service.py",
+                                   "services/api/app/operator/mission_service.py",
+                                   "services/api/app/research/browser_activities.py",
+                                   "services/api/tests/unit/test_ledger_device_stamp.py",
+                                   "team/plans/ledger-device-stamp-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T11:30:00Z",
+                      "updated_at":  "2026-09-30T11:30:00Z",
+                      "goal":  "ADR-0221 ships app/narrative/device_writer.stamp_device(detail, device_word_or_alias) and lists the ledger writers that know which device acted. For each of the four files in the area: find where it records a ledger event for something a DEVICE did, and pass the device\u0027s alias (or name) through stamp_device into detail_json. Do not change what is recorded otherwise, do not add a device where the writer does not know one (a cloud-side event stays unstamped = \u0027bulut\u0027). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
+                      "acceptance":  "Tests per writer with the writer\u0027s own fakes: an event for the home device carries device \u0027ev\u0027, for the office device \u0027ofis\u0027; an event with no device carries no stamp; an existing stamp is not overwritten; the collector (app.narrative.collector) then selects the office rows for \u0027ofiste\u0027 from rows these writers produced. Mutation per writer: the stamp removed -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "allowlist-editor",
+                      "title":  "Onay Merkezi\u0027nden izin listesine site ekleme/çıkarma: POST /v1/team/allowlist, ledger olayı, listenin işle birlikte işçiye gitmesi",
+                      "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/team/allowlist_routes.py",
+                                   "services/api/app/execution/allowlist_store.py",
+                                   "services/api/tests/unit/test_allowlist_editor.py",
+                                   "apps/web/app/core/approvals/allowlist",
+                                   "team/plans/allowlist-editor-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T11:30:00Z",
+                      "updated_at":  "2026-09-30T11:30:00Z",
+                      "goal":  "ADR-0218: the cloud allow-list is a shared JSON that starts empty, and its ADR names the editor\u0027s API shape. Build it: the owner\u0027s list lives in the database (one row per registrable domain, added_at, added_by channel) - the shared JSON stays the SEED and the schema; allowlist_store merges seed + rows and exposes the same acting_allowed() contract (deny-list first, always). POST /v1/team/allowlist {site} and DELETE, owner-session-gated; a site that is not a registrable domain, is a bare public suffix, or is deny-listed is refused with a reason; every change is a ledger event (name the two event types for the lead). A small page under the Onay Merkezi lists the sites with add/remove. If a migration is needed, STOP at the model and write the migration\u0027s content under \u0027For the lead at merge\u0027 (alembic/versions is not in the area). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
+                      "acceptance":  "Tests: add, list, remove; a deny-listed site is refused even when asked twice; a bare suffix is refused; acting_allowed() follows the store at once; without a session 401/403. Mutations: the deny-list check removed from the editor -\u003e RED; the suffix check removed -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; READY_FOR_OWNER (the page)",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "cloud-device-registry",
+                      "title":  "Bulut cihazı ve sahibin Chrome\u0027u kayıtta görünür: platform=cloud cihazın \u0027bulut\u0027 alias\u0027ı, owner_chrome etiketi — execution_target\u0027ın okuduğu gerçekler yazılır",
+                      "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/devices/cloud_registry.py",
+                                   "services/api/tests/unit/test_cloud_device_registry.py",
+                                   "team/plans/cloud-device-registry-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T11:30:00Z",
+                      "updated_at":  "2026-09-30T11:30:00Z",
+                      "goal":  "ADR-0220: app/execution/wiring.py reads the device registry for a device with platform \u0027cloud\u0027 and for an `owner_chrome` label, and nothing writes either. Read app/devices (types, aliases, the enrollment and hello handling) and ADR-0113/0183 (how the owner\u0027s Chrome enrollment is known to the Cloud Core today - the capability the device advertises). Write cloud_registry.py: (1) `ensure_cloud_alias(db, device)` - a device whose platform is \u0027cloud\u0027 gets the alias \u0027bulut\u0027 in metadata_json.aliases (idempotent; never on another platform); (2) `owner_chrome_label(view)` - derive the label from what the device ALREADY advertises (the owner-profile capability / enrollment fact), so no second source of truth is written; (3) the one function the broker\u0027s hello path should call. Name the call site for the lead; do not edit app/broker. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
+                      "acceptance":  "Tests with the devices package\u0027s own fakes: a cloud device gains \u0027bulut\u0027 once; a Windows device never does; a device advertising the owner profile is labelled, one that does not is not; wiring.choose (imported) then selects cloud / owner_chrome from these facts. Mutations: the platform check removed -\u003e RED; the label derived from the name instead of the capability -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "cycle-lead-run",
+                      "title":  "Döngüde lead koşusu: onaylı öneriler (roadmap\u0027e hizmet eden) alanlı iş kartlarına bölünür — gece döngüsü insansız ilerler",
+                      "roadmap_row":  "How it is built from here (TEAM_PROTOCOL 3a)",
+                      "state":  "approved",
+                      "area":  [
+                                   "scripts/team/cycle.ps1",
+                                   "scripts/lib/TeamQueue.ps1",
+                                   "scripts/lib/TeamRun.ps1",
+                                   "scripts/tests/team-cycle.tests.ps1",
+                                   "scripts/tests/lib/fake-claude.ps1",
+                                   "team/plans/cycle-lead-run-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T11:30:00Z",
+                      "updated_at":  "2026-09-30T11:30:00Z",
+                      "goal":  "ADR-0214 addendum 2: a proposal that serves a roadmap row is approved in advance, but splitting it into tasks (area, goal, acceptance) is done by a person today. Add a lead run to cycle.ps1: after the researcher step, for every task that has a `proposal`, is at `approved` (or at `proposed` with a non-empty roadmap_row) and has an empty area, start ONE fresh run of the `lead` role with the proposal and team/plans/*-split.md; the lead writes team/plans/\u003ccycle\u003e-split-\u003cid\u003e.json: a list of task objects (the queue schema\u0027s shape). The SCRIPT, not the model, validates each (schema fields, area inside the repository, no overlap with a task in work, not a shared file, at most 25 files named, never main / hand-gestures) and appends the valid ones as `approved`; an invalid split is rejected whole with the reasons in the report and the proposal stays where it was. A proposal with an empty roadmap_row goes to awaiting_owner as before. The lead run gets no Bash and no Edit (read, write the one file). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
+                      "acceptance":  "team-cycle.tests.ps1 (fake model): a roadmap-serving proposal becomes its tasks and runs in the same cycle; a split with an overlapping area, a shared file or a missing field is rejected whole; a proposal without a roadmap row waits for the owner; the lead run\u0027s tools hold no Bash/Edit; a second cycle does not split the same proposal again. Mutations: the overlap check removed -\u003e RED; the roadmap_row condition removed -\u003e RED. script-syntax and provision suites stay green.",
+                      "evidence_expected":  "PROVEN_AUTOMATED (fake model)",
+                      "needs_integration":  false
                   }
               ]
 }
