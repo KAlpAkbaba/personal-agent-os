@@ -15,8 +15,15 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Yok.** Sıradaki: pilot döngü (TEAM_BOOTSTRAP_PROMPT aşama 2) — araştırmacı üç öneri yazar, fikir
-onayında durur.
+**Pilot döngü `pilot-01` — MAIN'DE (tam kapı 34/34, uç `1c7014c3`); YAYIN KAPISINDA (sahip).**
+Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
+döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
+(ADR-0213 PR 1), `onay-merkezi` (ADR-0217). Lead birleştirmede ortak dosyaları bağladı (ledger sözlüğü,
+`main.py` router, kabuk bağlantısı, şema, `test_pilot01_wiring.py`). Toplam 5,89 USD; 0 çakışma, 3 geri
+verme (biri lead'in kart hatası). Döngünün öğrettikleri ADR-0214 ekinde.
+**Sıradaki:** YAYIN ONAYI (sahip): main'de ADR-0215 (broker tek
+teslim) + pilot işleri, üretim `771a9e53`. Sonra pilot-02: bulut işçisi (entegratör önce), kural
+tablosunun bağlanması, anlatının sesi; sahibe soru: bulut işinde "sahip yokken görev yok".
 
 Son biten iş (2026-09-30): **team bootstrap (TEAM_PROTOCOL.md, ADR-0214)** — main'de. Dal
 `feat/dev-team`, uç `137d7ef5` üzerinde tam kapı 34/34 PASS.

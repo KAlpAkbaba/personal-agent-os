@@ -162,6 +162,9 @@ export default function CoreControls({
       <Link href="/core/cockpit" className="core-controls-link" data-control="cockpit">
         Kokpit →
       </Link>
+      <Link href="/core/approvals" className="core-controls-link" data-control="approvals">
+        Onay Merkezi →
+      </Link>
     </div>
   );
 }

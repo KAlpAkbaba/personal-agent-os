@@ -41,6 +41,8 @@ SUBSYSTEM_GOAL = "goal"
 SUBSYSTEM_SELF_MODEL = "self_model"
 SUBSYSTEM_EVOLUTION = "evolution"
 SUBSYSTEM_LEDGER = "ledger"
+#: The agent team (ADR-0214): the owner's decisions at the two gates (ADR-0217).
+SUBSYSTEM_TEAM = "team"
 #: M18 Presence Engine + Active Eye (M18_HOLOGRAPHIC_CORE_SPEC.md §1, §2).
 SUBSYSTEM_PRESENCE = "presence"
 #: M18 Routine Engine (app.routines).
@@ -150,6 +152,7 @@ SUBSYSTEMS: Final[tuple[str, ...]] = (
     SUBSYSTEM_SELF_MODEL,
     SUBSYSTEM_EVOLUTION,
     SUBSYSTEM_LEDGER,
+    SUBSYSTEM_TEAM,
     SUBSYSTEM_PRESENCE,
     SUBSYSTEM_ROUTINE,
     SUBSYSTEM_AMBIENT,
@@ -422,6 +425,18 @@ EVENT_TYPE_OPERATOR_MISSION_FINISHED = "operator.mission.finished"
 EVENT_TYPE_WEB_TASK_STARTED = "web_task.started"
 EVENT_TYPE_WEB_TASK_ASKED_OWNER = "web_task.asked_owner"
 EVENT_TYPE_WEB_TASK_FINISHED = "web_task.finished"
+
+# ADR-0213 (PR 1): where a job runs. The strings are ALSO constants in
+# app/execution/vocabulary.py (that package imports nothing of the ledger); a test holds
+# the two equal.
+EVENT_TYPE_EXECUTION_SELECTED = "execution.selected"
+EVENT_TYPE_EXECUTION_FALLBACK = "execution.fallback"
+EVENT_TYPE_EXECUTION_REFUSED = "execution.refused"
+
+# ADR-0217: the owner's decision at a gate of the team's queue. The strings are also
+# constants in app/team/approvals.py; the same test holds them equal.
+EVENT_TYPE_TEAM_TASK_APPROVED = "team.task.approved"
+EVENT_TYPE_TEAM_TASK_REJECTED = "team.task.rejected"
 #: M20 File & Document Intelligence (spec §3): one row per document interaction the owner
 #: initiated — never on a schedule, per the module's "no background crawling" rule.
 EVENT_TYPE_DOCUMENT_SEARCHED = "document.search"
@@ -637,6 +652,11 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_WEB_TASK_STARTED,
     EVENT_TYPE_WEB_TASK_ASKED_OWNER,
     EVENT_TYPE_WEB_TASK_FINISHED,
+    EVENT_TYPE_EXECUTION_SELECTED,
+    EVENT_TYPE_EXECUTION_FALLBACK,
+    EVENT_TYPE_EXECUTION_REFUSED,
+    EVENT_TYPE_TEAM_TASK_APPROVED,
+    EVENT_TYPE_TEAM_TASK_REJECTED,
     EVENT_TYPE_DOCUMENT_SEARCHED,
     EVENT_TYPE_DOCUMENT_READ,
     EVENT_TYPE_DOCUMENT_ANSWERED,

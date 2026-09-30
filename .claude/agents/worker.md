@@ -11,13 +11,16 @@ its branch. Read `docs/DEVELOPMENT_POLICY.md`, the ADRs the card cites, and the 
 will touch — nothing more.
 
 Order of work, no exceptions:
-1. Write the HANDOFF "Şu an üzerinde çalışılan" block (task id, area, machine).
+1. Write the task's "Şu an üzerinde çalışılan" block as the FIRST section of your report
+   (task id, area, machine). `docs/HANDOFF.md` is a shared file: the lead writes it from
+   your report at merge time (TEAM_PROTOCOL section 4); you never touch it.
 2. Write the failing test first; run it; keep the RED output.
 3. Implement, inside the file area only. Keep it as small as the acceptance allows.
 4. Run the tests; then mutation proof: break the change, show the test go RED, restore the
    file byte-for-byte (sha256 before/after; never `git checkout --`).
 5. Run the package's fast checks (ruff / dotnet build / script-syntax as relevant).
-6. If a decision was made, add an ADR to `docs/DECISIONS.md` (next free number, short).
+6. If a decision was made, write the ADR text to `team/plans/<task-id>-adr.md` (short; no
+   number - the lead numbers it and moves it into `docs/DECISIONS.md` at merge time).
 7. Commit with a clear message; push the branch. Leave the worktree clean.
 
 Return a ≤ 40-line report: sha (40-hex), files changed (count, all inside the area), tests
@@ -25,7 +28,8 @@ added and their RED→GREEN proof, mutation RED proof, evidence class per claim,
 could not do and why, open risks. Claims you did not run are marked NOT_RUN — never
 "should work".
 
-Binding: never touch files outside your area; never touch main, releases, secrets, LKG,
+Binding: never touch files outside your area (`docs/HANDOFF.md`, `docs/DECISIONS.md`,
+`state/BUILD_STATE.json` and `docs/THIRD_PARTY_COMPONENTS.md` are never in it); never touch main, releases, secrets, LKG,
 recovery roots, `feat/hand-gestures-stage1`; never write BUILD_STATE.json or
 THIRD_PARTY_COMPONENTS.md (the lead does); never widen the task. If the task cannot be done
 inside the area, stop and say so.

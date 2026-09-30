@@ -151,6 +151,16 @@ function New-TeamTaskCard {
     }
     $area = @(Get-TeamProperty -InputObject $Task -Name "area" -Default @())
     [void]$lines.Add("- area: " + (($area | ForEach-Object { [string]$_ }) -join ", "))
+    # Why it came back, in the words of whoever sent it back (the inspector's list, the
+    # cycle's area check, the lead). pilot-01, 2026-09-30: the lead's return note was in
+    # the queue and never in the card, and the worker re-checked git and changed nothing.
+    $reason = [string](Get-TeamProperty -InputObject $Task -Name "reason" -Default "")
+    $state = [string](Get-TeamProperty -InputObject $Task -Name "state" -Default "")
+    if ($reason.Trim() -and @("returned", "in_progress") -contains $state) {
+        [void]$lines.Add("")
+        [void]$lines.Add("## Why this task came back - address every point")
+        [void]$lines.Add($reason.Trim())
+    }
     $reports = @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())
     if (@($reports).Count -gt 0) {
         $last = $reports[@($reports).Count - 1]
@@ -300,7 +310,14 @@ function New-TeamCycleReport {
             $where = if ($proposal) { " — $proposal" } else { "" }
             "FİKİR: $($_.id) — $($_.title)$where"
         })
-    $releases = @($tasks | Where-Object { $_.state -eq "awaiting_release" } | ForEach-Object { "YAYIN: $($_.id) — $($_.title)" })
+    $releases = @($tasks | Where-Object { $_.state -eq "awaiting_release" } | ForEach-Object {
+            # ADR-0217: the owner's release approval is a flag on the task, never a state
+            # the cycle would read as "assign a worker". The release itself is the lead's.
+            if ([bool](Get-TeamProperty -InputObject $_ -Name "release_approved" -Default $false)) {
+                "YAYIN ONAYLANDI ($([string](Get-TeamProperty -InputObject $_ -Name 'release_approved_at' -Default '?'))): $($_.id) — $($_.title) — lead yayınlar"
+            }
+            else { "YAYIN: $($_.id) — $($_.title)" }
+        })
     Add-Section -Title "Onay bekleyenler (fikir / yayın)" -Rows @($ideas + $releases)
 
     $real = @($tasks | Where-Object { $_.state -eq "awaiting_real_evidence" } | ForEach-Object {

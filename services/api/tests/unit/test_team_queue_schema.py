@@ -147,6 +147,10 @@ def test_no_task_in_the_repository_is_past_a_gate_the_owner_has_not_opened() -> 
     """Nothing is committed as released or done by a script: those states follow the
     owner's release approval and his real-world evidence."""
     for item in _load(QUEUE)["tasks"]:
+        if item["state"] == "done" and item.get("proposal"):
+            # A proposal's life ends when the owner approves it and the lead splits it.
+            assert "sahip onaylad" in item.get("reason", ""), item["id"]
+            continue
         assert item["state"] not in ("released", "done"), item["id"]
 
 
@@ -222,6 +226,25 @@ def test_every_field_the_owner_named_is_required(missing: str) -> None:
     item = task()
     del item[missing]
     assert f"$.tasks[0]: '{missing}' is missing" in check({"version": 1, "tasks": [item]})
+
+
+def test_a_release_the_owner_approved_is_a_flag_on_a_task_that_still_waits() -> None:
+    """ADR-0217: approving a release never writes `approved` (the cycle reads that as
+    "assign a worker"); it raises a flag and the lead releases."""
+    approved = task(
+        state="awaiting_release",
+        release_approved=True,
+        release_approved_at="2026-09-30T07:00:00Z",
+        release_approved_by="shell",
+    )
+    assert check({"version": 1, "tasks": [approved]}) == []
+    for changes, says in (
+        ({"release_approved": "yes"}, "must be boolean"),
+        ({"release_approved_at": "2026-09-30 07:00"}, "does not match"),
+        ({"release_approved_by": "someone"}, "allowed"),
+    ):
+        found = check({"version": 1, "tasks": [task(state="awaiting_release", **changes)]})
+        assert any(says in problem for problem in found), (changes, found)
 
 
 def test_a_queue_of_another_version_or_with_no_tasks_is_refused() -> None:

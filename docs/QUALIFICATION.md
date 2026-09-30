@@ -1097,3 +1097,20 @@ with a real model: that is the pilot, and its numbers are what opens the nightly
 | 35.11 | A cycle with a real model: researcher, workers, inspector, measured | `NOT_YET_PROVEN` | the pilot (TEAM_BOOTSTRAP_PROMPT stage 2); needs the owner's idea approval |
 | 35.12 | The owner approves in the Onay Merkezi, in the shell or by voice | `NOT_YET_PROVEN` | the task `onay-merkezi` in `team/queue.json` |
 | 35.13 | One connection is handed one command once, whichever paths reach for it together (ADR-0215) | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_broker_deliver_once.py` (8): the POST inside its send while the replay looks; two live dispatches; the replay first and the POST after the window closed; eight threads. Five RED before the change and RED again with the claim disabled. Found by the gate in `test_duplicate_ws_delivery_tolerated_via_reack`. Not released |
+
+## Stage 36 — The pilot cycle: three tasks built by the team (ADR-0213 PR 1, ADR-0216, ADR-0217)
+
+The first cycle with real models (`team/reports/pilot-01.md`). Every task's own evidence was
+produced by its worker and re-run by the inspector; the lead read the reports and the
+diffs, wired the shared files, and ran the full gate once on `integrate/pilot-01`.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 36.1 | The execution_target rule: chains per job kind, forced words, walls, payment, the deny-list, events | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_execution_target.py` (47); worker's 3 + inspector's 6 + 3 mutations RED; the inspector's RETURN (a wall on a job that cannot be in the cloud) fixed and tested |
+| 36.2 | The execution events are the ledger's | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_pilot01_wiring.py` |
+| 36.3 | The narrative: failures first, a device word selects only its rows, the auditor rejects a narrative that omits a failure or invents a number, repair puts the failure back | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_narrative_collector.py` (17), `test_narrative_auditor.py` (21); worker's 6 + inspector's 4 mutations RED. One live mutant recorded (order of failures), queued |
+| 36.4 | The narrative spoken on demand ("bu hafta ne oldu") | `NOT_YET_PROVEN` | task 7 of `team/plans/pilot-01-split.md` |
+| 36.5 | The Onay Merkezi API: the two gates listed, Onayla / Reddet written for the NEXT cycle, a release approval is a flag and starts nothing, the ledger first, refused while a cycle holds the lock | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_approvals.py` (38) through the real `create_app`; worker's 8 + 1 and inspector's 2 + 2 mutations RED; mounted: `test_pilot01_wiring.py` |
+| 36.6 | The Onay Merkezi page in the shell | `READY_FOR_OWNER` | `apps/web/app/core/approvals`; lint, typecheck and vitest green (2012); not opened in a browser by anyone |
+| 36.7 | The owner approves by voice | `NOT_YET_PROVEN` | a later task; the API shape (`channel: voice`, `gate`) exists |
+| 36.8 | The cycle itself: researcher → owner → split → workers in parallel → inspector → integration branch, measured | `PROVEN_REAL` | `team/reports/pilot-01.md` and the run files under `team/reports/pilot-01/` (raw result documents with cost and usage): pilot-01 on the home PC: 0.82 + 3.95 + 0.38 + 0.74 USD, 17 + 5 + 4 min of cycle time, 2 workers in parallel, 3 returns, 0 conflicts; ADR-0214 addendum |
