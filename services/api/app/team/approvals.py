@@ -1,8 +1,11 @@
 """The owner's two decidable gates, read from and written to ``team/queue.json``.
 
 A task at ``awaiting_owner`` (the idea) or ``awaiting_release`` (the release) waits for the
-owner. Onayla writes ``approved``; Reddet writes ``stopped`` with the owner's reason. Both are
-written where the NEXT cycle reads them: a decision is refused while a cycle holds the queue
+owner. Onayla on the idea writes ``approved``; Onayla on the release leaves the state at
+``awaiting_release`` and raises ``release_approved`` (the cycle reads ``approved`` as "assign a
+worker", so a release approval must not use it); Reddet writes ``stopped`` with the owner's
+reason at either gate. All of it is
+written where the NEXT cycle reads it: a decision is refused while a cycle holds the queue
 (its own read-modify-write would overwrite ours), and it starts nothing - approving a release
 changes one file and does not run a release.
 
@@ -26,6 +29,7 @@ from typing import Any
 GATES: dict[str, str] = {"awaiting_owner": "fikir", "awaiting_release": "yayin"}
 
 APPROVED_STATE = "approved"
+RELEASE_GATE_STATE = "awaiting_release"
 STOPPED_STATE = "stopped"
 
 SUBSYSTEM_TEAM = "team"
@@ -223,7 +227,13 @@ def decide(
         if cycle_running(team_root, now=at):
             raise Refused(409, "cycle_running", "Bir döngü kuyruğu tutuyor; bitince tekrar dene.")
         from_state = task["state"]
-        to_state = APPROVED_STATE if decision == "approve" else STOPPED_STATE
+        release_approval = decision == "approve" and from_state == RELEASE_GATE_STATE
+        if decision == "reject":
+            to_state = STOPPED_STATE
+        elif release_approval:
+            to_state = RELEASE_GATE_STATE  # never "approved": that means "assign a worker"
+        else:
+            to_state = APPROVED_STATE
         record(
             {
                 "task_id": task["id"],
@@ -240,6 +250,10 @@ def decide(
         task["state"] = to_state
         if decision == "reject":
             task["reason"] = reason
+        if release_approval:
+            task["release_approved"] = True
+            task["release_approved_at"] = _stamp(at)
+            task["release_approved_by"] = channel  # shell | voice
         task["updated_at"] = _stamp(at)
         _write_atomic(path, queue)
     return {

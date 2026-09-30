@@ -16,6 +16,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -362,7 +363,8 @@ def test_a_voice_approval_naming_fikir_resolves_the_one_task_at_that_gate(client
 
 def test_a_voice_approval_accepts_the_gate_spelled_with_or_without_the_dotless_i(client, team_root):
     assert _decide(client, decision="approve", channel="voice", gate="yayın").status_code == 200
-    assert _state(team_root, "yayin-b")["state"] == "approved"
+    assert _state(team_root, "yayin-b")["state"] == "awaiting_release"
+    assert _state(team_root, "yayin-b")["release_approved"] is True
 
 
 def test_a_voice_approval_is_refused_when_two_tasks_wait_at_the_gate(client, team_root):
@@ -409,6 +411,39 @@ def test_approving_a_release_changes_the_queue_file_and_nothing_else_on_disk(cli
     assert body["applied"] == "next_cycle"
     changed = {k for k, v in _tree(team_root).items() if before.get(k) != v}
     assert changed == {"queue.json"}
+
+
+def test_a_release_approval_leaves_the_state_at_awaiting_release_and_raises_the_flag(
+    client, team_root
+):
+    response = _decide(client, task_id="yayin-b", decision="approve")
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "awaiting_release"
+    task = _state(team_root, "yayin-b")
+    assert task["state"] == "awaiting_release"  # the cycle reads "approved" as "assign a worker"
+    assert task["release_approved"] is True
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", task["release_approved_at"])
+    assert task["release_approved_by"] == "shell"
+
+
+def test_a_voice_release_approval_records_voice_as_the_channel(client, team_root):
+    _decide(client, decision="approve", channel="voice", gate="yayin")
+    assert _state(team_root, "yayin-b")["release_approved_by"] == "voice"
+
+
+def test_an_idea_approval_writes_approved_and_no_release_fields(client, team_root):
+    _decide(client, task_id="fikir-a", decision="approve")
+    task = _state(team_root, "fikir-a")
+    assert task["state"] == "approved"
+    assert not {"release_approved", "release_approved_at", "release_approved_by"} & set(task)
+
+
+def test_rejecting_a_release_stops_the_task_and_raises_no_flag(client, team_root):
+    _decide(client, task_id="yayin-b", decision="reject", reason="yanlış sürüm")
+    task = _state(team_root, "yayin-b")
+    assert task["state"] == "stopped"
+    assert task["reason"] == "yanlış sürüm"
+    assert "release_approved" not in task
 
 
 # ------------------------------------------------------------- a running cycle
