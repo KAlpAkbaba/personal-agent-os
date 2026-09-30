@@ -15,7 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Pilot döngü `pilot-01` — MAIN'DE (tam kapı 34/34, uç `1c7014c3`); YAYIN KAPISINDA (sahip).**
+**pilot-02 — dal `team/pilot-02/lead`; sahibin otonomi ayarı (TEAM_PROTOCOL 3a) uygulandı, gece
+döngüsü KAYITLI (02:00, 30 USD / 2 paralel / 240 dk), beş iş kuyrukta `approved` (bulut izin listesi,
+bulut işçisi [entegratör önce], kural tablosunun bağlanması, anlatının sesi, kuyruğun Cloud Core'a
+taşınması). Bulut kuralı seçenek 4 (ADR-0213 eki). YAYIN: sahip onayladı (main `2e3b1668`), Tailscale
+SSH ek doğrulaması bekliyor; döngü yayından SONRA başlar (çalışma ağacı temiz kalsın).**
+Önceki: pilot-01 MAIN'DE (tam kapı 34/34, uç `1c7014c3`).
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
 (ADR-0213 PR 1), `onay-merkezi` (ADR-0217). Lead birleştirmede ortak dosyaları bağladı (ledger sözlüğü,

@@ -143,7 +143,7 @@
                                           "role":  "worker",
                                           "at":  "2026-09-30T05:59:25Z",
                                           "file":  "team/reports/pilot-01/execution-target-rule-worker-1.md",
-                                          "cost_usd":  0.59588020000000008,
+                                          "cost_usd":  0.5958802000000001,
                                           "outcome":  "tamam",
                                           "summary":  [
                                                           "**Report — execution-target-rule (pilot-01)**",
@@ -736,6 +736,153 @@
                       "reason":  "Onceki geri verme notu karta girmemisti (betik kusuru, duzeltildi); is DEGISMEDEN onaylandi. Simdi yap: yayin onayi (awaiting_release) \u0027approved\u0027 durumuna YAZILMAZ - dongu bunu \u0027isci ata\u0027 diye okur. Yayin onayi durumu awaiting_release\u0027de birakir ve release_approved=true, release_approved_at (UTC, YYYY-MM-DDTHH:MM:SSZ), release_approved_by (shell|voice|owner_sentence) alanlarini yazar (sema: team/queue.schema.json). Fikir onayi (awaiting_owner) eskisi gibi \u0027approved\u0027 yazar. Reddet her iki kapida \u0027stopped\u0027 + reason. Testini ekle (yayin onayindan sonra state hala awaiting_release ve bayrak true; fikir onayi approved), mutasyonunu goster (bayrak yerine approved yazan mutant RED). sha256\u0027yi TAM 64 hex olarak yaz. Kabuk sayfasinda \u0027Onayla\u0027 yayin kapisi icin \u0027Yayini onayla\u0027 diye yazsin; bu yayini BASLATMAZ, lead yapar.",
                       "sha":  "a2faeaa10e7d539eeb3760c155b97cc0e85de3ff",
                       "integration_branch":  "integrate/pilot-01"
+                  },
+                  {
+                      "id":  "cloud-allow-list",
+                      "title":  "Bulut izin listesi: packages/protocol/browser-cloud-allowlist.json (başlangıçta boş), iki tarafın okuduğu kural, Onay Merkezi\u0027nden ekleme (ADR-0213 eki, seçenek 4)",
+                      "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
+                      "state":  "approved",
+                      "area":  [
+                                   "packages/protocol/browser-cloud-allowlist.json",
+                                   "services/api/app/execution/allowlist.py",
+                                   "services/api/tests/unit/test_cloud_allowlist.py",
+                                   "services/browser/browser_agent/cloud_allowlist.py",
+                                   "services/browser/tests/unit/test_cloud_allowlist.py",
+                                   "team/plans/cloud-allow-list-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T08:30:00Z",
+                      "updated_at":  "2026-09-30T08:30:00Z",
+                      "goal":  "ADR-0213 addendum (option 4): a cloud job ACTS only on sites of the owner\u0027s allow-list and READS everywhere else. Build the list and its rule on both sides, the way browser-task-denylist.json is done (read app/webtask/sites.py, services/browser/browser_agent/task_denylist.py and services/api/tests/unit/test_browser_contract_v17.py first and follow them exactly): ONE JSON under packages/protocol with version, rule text and a `sites` list of registrable domains (empty at first); the Cloud Core reads its bundled copy through app.protocol_files (add the name to BUNDLED and run scripts/sync-protocol-bundle.py - that file is inside your area for this task); the worker carries a verbatim copy held equal by a test. Rule: `allowed(url) -\u003e bool` matches the host or a subdomain of a listed site; a deny-listed site (app.webtask.sites.denied) is NEVER allowed even if listed; the empty list allows nothing. In app/execution/rule.py DO NOT change anything - instead expose `allowlist.acting_allowed(url) -\u003e tuple[bool, reason]` for task execution-target-wiring to call, with reasons `not_on_owner_allow_list` and `deny_listed_site`. The Onay Merkezi\u0027s editor (adding a site from the shell) is NOT this task: write in the ADR text the API shape it needs (POST /v1/team/allowlist with a registrable domain, ledger event). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md or app/ledger/vocabulary.py; the lead wires shared files at merge from your report (put what the lead must wire under a heading \u0027For the lead at merge\u0027). No new dependency unless the integration plan names it. Python 3.12, ruff clean; tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api (the worktree has no venv; the main checkout\u0027s imports the worktree\u0027s app - check app.__file__). Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --); write the FULL 64-hex sha256. Read the ADRs the card cites in docs/DECISIONS.md before you start.",
+                      "acceptance":  "Both suites: the empty list allows nothing; a listed site and its subdomain are allowed; a lookalike (site.example.evil) is not; a deny-listed site stays refused even when listed; the two copies are equal (a test that reads the other side\u0027s source, as test_browser_contract_v17 does); the bundle equals the shared file (test_protocol_bundle stays green). Mutations: the deny-list precedence removed -\u003e RED; subdomain match turned into substring -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "cloud-browser-worker",
+                      "title":  "Bulut tarayıcı işçisi: Cloud Core\u0027da headless Chromium işçisi, sanal cihaz olarak kayıt (device_kind=cloud, alias bulut), bellek tavanı, CPX32\u0027de docker stats ölçümü (ADR-0213 PR 2)",
+                      "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/browser/browser_agent/cloud",
+                                   "services/browser/tests/unit/test_cloud_worker.py",
+                                   "infra/docker/cloud-browser",
+                                   "docs/evidence/adr-0213-cloud-worker-memory-2026-09-30.json",
+                                   "team/plans/cloud-browser-worker-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T08:30:00Z",
+                      "updated_at":  "2026-09-30T08:30:00Z",
+                      "goal":  "Read team/proposals/2026-09-30-bulutta-yurutme.md, ADR-0213 and its addendum, ADR-0113 (owner profile), packages/protocol/BROWSER_CAPABILITIES.md and DEVICE_PROTOCOL.md, and the existing ManagedBackend in services/browser/browser_agent/backends.py (headless Playwright). The cloud worker is the SAME browser worker package run on Linux in its own container beside the Cloud Core (never inside the api process): a small entry module under browser_agent/cloud that (1) starts the worker with ManagedBackend headless, a dedicated profile dir, --trusted-origin unset, and the session policy READ+NAVIGATE by default (acting only where the allow-list task says); (2) enrolls and connects to the broker as a device with device_kind \u0027cloud\u0027, name \u0027bulut\u0027, over the SAME device protocol the Windows agent uses (read app/broker and the enrollment flow; if the device row needs a new field or value the api side does not accept, STOP and write exactly what the lead must change - do not edit app/devices). (3) A Dockerfile + compose fragment under infra/docker/cloud-browser with --shm-size 2g, --init, mem_limit 2g, cpus 2, restart policy, healthcheck; the compose file of production is NOT edited by you (the lead wires it). (4) The measurement: a script or documented command that records docker stats (peak RSS) of the container during a 3-page navigation on the fixture site, written to the evidence file with machine, date, image digest; if you cannot run Docker on this PC, write the evidence file with status NOT_RUN and the exact command for the lead to run on the Cloud Core. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md or app/ledger/vocabulary.py; the lead wires shared files at merge from your report (put what the lead must wire under a heading \u0027For the lead at merge\u0027). No new dependency unless the integration plan names it. Python 3.12, ruff clean; tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api (the worktree has no venv; the main checkout\u0027s imports the worktree\u0027s app - check app.__file__). Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --); write the FULL 64-hex sha256. Read the ADRs the card cites in docs/DECISIONS.md before you start.",
+                      "acceptance":  "Unit tests without Docker or a network: the entry module builds the worker with headless ManagedBackend and the READ+NAVIGATE policy (a policy that allows more is refused); the device kind/name/capabilities the enrollment sends are the contract\u0027s; a start without the enrollment material refuses to start; the container definition (parsed as YAML) has the memory limit, shm size and init. Mutations: the default policy widened -\u003e RED; mem_limit removed -\u003e RED. Evidence class PROVEN_AUTOMATED for the module; the memory measurement PROVEN_REAL only if run on the Cloud Core (else NOT_RUN, said plainly).",
+                      "evidence_expected":  "PROVEN_AUTOMATED (module) + NOT_RUN or PROVEN_REAL (memory)",
+                      "needs_integration":  true
+                  },
+                  {
+                      "id":  "execution-target-wiring",
+                      "title":  "Kural tablosunun bağlanması: araştırma, tarayıcı görevi ve zamanlanmış işler execution_target\u0027tan geçer; düşüş olayları ledger\u0027a; no_capable_device bir düşüş olayı olur (ADR-0213 PR 1b)",
+                      "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/execution/wiring.py",
+                                   "services/api/app/research/target.py",
+                                   "services/api/app/routines/target.py",
+                                   "services/api/tests/unit/test_execution_wiring.py",
+                                   "team/plans/execution-target-wiring-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T08:30:00Z",
+                      "updated_at":  "2026-09-30T08:30:00Z",
+                      "goal":  "app/execution/rule.py (ADR-0213 PR 1) is pure and unused. Wire it WITHOUT editing the existing research, routine or webtask services directly: write app/execution/wiring.py with one function `choose(job_kind, *, spoken_target, url, needs_signed_in_session, acting, scheduled, db, runtime)` that builds Availability from the device registry (app/devices: is any device online; is a device of kind \u0027cloud\u0027 online; is the owner\u0027s Chrome enrolled and its device online - read the existing selection code and reuse its readers), calls decide(), writes the events through app.ledger.service.record with the registered vocabulary (EVENT_TYPE_EXECUTION_*), and returns the Decision. Scheduled jobs pass acting=False always (ADR-0213 addendum: read-only). An acting step whose target is cloud must also pass app.execution.allowlist.acting_allowed (if that module is not on your branch yet, import it lazily and treat ImportError as \u0027not allowed\u0027, with a test). Then two thin adapters, app/research/target.py and app/routines/target.py, that the research and routine services CAN call (one function each, no call sites changed by you - the lead adds the call sites at merge and you name them under \u0027For the lead at merge\u0027). A \u0027no target\u0027 decision maps to the existing no_capable_device error class so nothing that reads it today breaks. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md or app/ledger/vocabulary.py; the lead wires shared files at merge from your report (put what the lead must wire under a heading \u0027For the lead at merge\u0027). No new dependency unless the integration plan names it. Python 3.12, ruff clean; tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api (the worktree has no venv; the main checkout\u0027s imports the worktree\u0027s app - check app.__file__). Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --); write the FULL 64-hex sha256. Read the ADRs the card cites in docs/DECISIONS.md before you start.",
+                      "acceptance":  "Tests with a fake registry and an in-memory ledger (SQLite, the ledger\u0027s own model): research with the cloud device online chooses cloud and writes execution.selected; with the cloud offline and the owner\u0027s Chrome enrolled chooses owner_chrome and writes one execution.fallback with reason cloud_offline; a scheduled job never passes acting=True; a cloud acting step outside the allow-list is refused with not_on_owner_allow_list; \u0027no target\u0027 is no_capable_device. Mutations: the fallback event dropped -\u003e RED; scheduled acting=True -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "narrative-voice",
+                      "title":  "Anlatının ses yolu: \u0027bu hafta ne oldu / dün ne oldu / ofiste ne yaptın\u0027 niyeti, explain sorgu türü, Haiku anlatıcı aynı Protocol arkasında, denetçiden geçmeden konuşulmaz (ADR-0216, adım 2)",
+                      "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/narrative/model_narrator.py",
+                                   "services/api/app/narrative/intent.py",
+                                   "services/api/app/narrative/device_writer.py",
+                                   "services/api/tests/unit/test_narrative_voice.py",
+                                   "services/api/tests/unit/test_narrative_order.py",
+                                   "team/plans/narrative-voice-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T08:30:00Z",
+                      "updated_at":  "2026-09-30T08:30:00Z",
+                      "goal":  "Read ADR-0216, app/narrative (ADR-0216\u0027s package), app/explain/engine.py, app/voice/intents (how an intent is recognised and answered; the ONE router), and the narration/TTS seam. Build inside app/narrative only: (1) model_narrator.py - a Narrator that asks the cheap model (the provider interface the project already uses for Haiku-class calls; find it, do not add a client) for Turkish prose from the facts ONLY, with the facts given as data under an untrusted marker and the model told to invent nothing; its output goes through audit()/repair() and, if still rejected, falls back to RuleNarrator (tell() already does this); (2) intent.py - a pure recogniser `recognise(utterance) -\u003e NarrativeAsk | None` for \u0027bu hafta ne oldu\u0027, \u0027dün ne oldu\u0027, \u0027bugün ne yaptın\u0027, \u0027ofiste ne yaptın\u0027, \u0027evde ne oldu\u0027, \u0027ne başarısız oldu\u0027 (device word and period word extracted with app/devices/aliases), with near misses (\u0027hafta sonu ne yapalım\u0027 is not an ask); (3) device_writer.py - a helper the ledger WRITERS can call to put the device word into detail_json[\u0027device\u0027] (ADR-0216 says no writer sets it today) and a list, under \u0027For the lead at merge\u0027, of the writers that should call it. Also add test_narrative_order.py: the inspector\u0027s live mutant - failures are ordered newest first (a test that goes RED when the sort key is changed). Do NOT edit app/voice or app/explain; name the two call sites the lead must add. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md or app/ledger/vocabulary.py; the lead wires shared files at merge from your report (put what the lead must wire under a heading \u0027For the lead at merge\u0027). No new dependency unless the integration plan names it. Python 3.12, ruff clean; tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api (the worktree has no venv; the main checkout\u0027s imports the worktree\u0027s app - check app.__file__). Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --); write the FULL 64-hex sha256. Read the ADRs the card cites in docs/DECISIONS.md before you start.",
+                      "acceptance":  "Tests: the recogniser\u0027s hits and near misses; the model narrator with a fake provider that (a) obeys, (b) invents a number, (c) drops a failure - only (a) is spoken as written, (b) and (c) are repaired or replaced, and the audit verdict is in the returned object; nothing from the fake provider\u0027s text reaches the output when it was rejected; the order test RED under the sort mutation. Mutations: the untrusted marker removed -\u003e RED; the fallback removed -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; READY_FOR_OWNER once the lead wires the intent",
+                      "needs_integration":  false
+                  },
+                  {
+                      "id":  "team-state-on-cloud-core",
+                      "title":  "Kuyruk, kilit ve Onay Merkezi Cloud Core\u0027a taşınır: team_state tablosu + /v1/team/queue API; cycle.ps1 kuyruğu API\u0027den okur/yazar; ev PC kapalıyken de onay; ofis PC aynı kuyruğu görür",
+                      "roadmap_row":  "How it is built from here (TEAM_PROTOCOL 3a.5)",
+                      "state":  "approved",
+                      "area":  [
+                                   "services/api/app/team",
+                                   "services/api/alembic/versions/20260930_0063_team_state.py",
+                                   "services/api/tests/unit/test_team_state.py",
+                                   "services/api/tests/unit/test_team_approvals.py",
+                                   "scripts/lib/TeamQueue.ps1",
+                                   "scripts/lib/TeamRun.ps1",
+                                   "scripts/team",
+                                   "scripts/tests/team-cycle.tests.ps1",
+                                   "scripts/tests/lib/fake-claude.ps1",
+                                   "team/plans/team-state-on-cloud-core-adr.md"
+                               ],
+                      "branch":  "",
+                      "worktree":  "",
+                      "assignee":  "",
+                      "reports":  [
+
+                                  ],
+                      "budget":  {
+                                     "max_usd":  5
+                                 },
+                      "created_at":  "2026-09-30T08:30:00Z",
+                      "updated_at":  "2026-09-30T08:30:00Z",
+                      "goal":  "Read docs/TEAM_PROTOCOL.md (sections 7, 8, 3a), ADR-0214 (+ addenda), ADR-0217, team/queue.schema.json, scripts/lib/TeamQueue.ps1, scripts/team/cycle.ps1 and scripts/tests/team-cycle.tests.ps1 (the suite you must keep green; it runs the cycle in a git repository of its own with a fake model). Goal: the queue and the lock live in the Cloud Core\u0027s PostgreSQL (one row per task, the schema validated on write; one lock row with machine/pid/acquired_at), served by /v1/team/queue (GET whole queue; PUT task by id with an updated_at precondition -\u003e 409 on a stale write; POST lock acquire/release with the 6-hour staleness rule) under the owner session; the Onay Merkezi (app/team/approvals) reads and writes THAT store when app.state.team_store is the database, the file when it is not (the home PC without the API keeps working). cycle.ps1 gains -QueueUrl and -QueueToken: with them it reads/writes through the API (Invoke-RestMethod, UTF-8, the token from a file the owner writes, never a parameter on the command line), otherwise the file as today. The PowerShell tests keep the file mode covered and add the API mode against a small fake HTTP listener or the real API on the dev stack if it is up (say which). Alembic migration 0063, expand-only. The report goes on being a file in team/reports (also POSTed to the store as text so the Onay Merkezi on the Cloud Core can show it). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json, docs/THIRD_PARTY_COMPONENTS.md or app/ledger/vocabulary.py; the lead wires shared files at merge from your report (put what the lead must wire under a heading \u0027For the lead at merge\u0027). No new dependency unless the integration plan names it. Python 3.12, ruff clean; tests under services/api/tests/unit run with `.venv/Scripts/python.exe -m pytest \u003cfile\u003e -q` from services/api (the worktree has no venv; the main checkout\u0027s imports the worktree\u0027s app - check app.__file__). Every test name is a sentence about behaviour; every rule has a near miss beside its hit; one mutation per rule shown RED and the file restored by sha256 (never git checkout --); write the FULL 64-hex sha256. Read the ADRs the card cites in docs/DECISIONS.md before you start.",
+                      "acceptance":  "Python: the store round-trips a valid queue and refuses an invalid task; a stale PUT is 409; the lock rules match TeamQueue.ps1 (a test reads the PowerShell source\u0027s staleness constant); approvals behave the same on the database store and on the file store (parametrised). PowerShell: the cycle in API mode acquires/releases the lock through the API and writes its task states there; the file mode is unchanged (all existing cases green). Mutations: the 409 precondition removed -\u003e RED; the staleness constant changed on one side -\u003e RED.",
+                      "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_PROXY on the dev stack",
+                      "needs_integration":  false
                   }
               ]
 }

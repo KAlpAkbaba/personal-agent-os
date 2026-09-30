@@ -41,6 +41,25 @@ researcher scan → OWNER approves ideas → lead splits & assigns
   **real-world evidence + final verdict**. Anything else that seems to need him is a protocol
   gap: the lead writes it down in the report instead of asking.
 
+### 3a. Autonomy setting (owner decision 2026-09-30): "onaylar bekler, iş durmaz"
+
+1. **Work that serves a roadmap row is approved in advance.** The lead queues the
+   researcher's proposals in roadmap order without asking; workers build, the inspector
+   inspects, the lead merges to main. A cycle stops for no approval: it runs until the queue
+   is empty or the budget cap is reached, then moves to the next roadmap item.
+2. **What needs the owner ACCUMULATES in the Onay Merkezi and blocks nothing:** (a) a
+   release - every gated main version is listed as "yayın bekliyor"; when he approves, the
+   lead releases the newest green main; (b) a new roadmap row, a change of the order, a new
+   external dependency, an irreversible action; (c) the list of real-device trials
+   (READY_FOR_OWNER rows), which he ticks as he does them.
+3. **Policy questions are not asked.** The most restrictive safe option is applied, written
+   into the ADR with "sahip incelemesi bekliyor", and shown in the Onay Merkezi; the owner
+   may change it later. The cloud rule is option 4 of ADR-0213 (act only on the owner's
+   allow-list, read everywhere else; scheduled jobs are read-only).
+4. The nightly cycle is registered (02:00 Europe/Istanbul, the pilot's caps).
+5. While the Onay Merkezi lives on the home PC the owner approves there; moving the queue,
+   the lock and the Onay Merkezi to the Cloud Core is a task of pilot-02.
+
 ## 4. Work splitting (no conflicts by construction)
 
 - A task names its **file area** (directories/globs). Two concurrent tasks never share an
