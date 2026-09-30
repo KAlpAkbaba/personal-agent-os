@@ -152,8 +152,9 @@ def decide(request: ExecutionRequest) -> Decision:
     if request.acting and request.url and denied(request.url):
         return _refuse(request, DENY_LISTED_SITE)
     chain = _chain_for(request)
-    if request.cloud_blocker in _CLOUD_BLOCKERS:
+    if request.cloud_blocker in _CLOUD_BLOCKERS and Target.CLOUD in chain:
         # The cloud run stays where it is; only the owner may move it (ADR-0207 d.6).
+        # A job that can never be in the cloud has no cloud run to be blocked.
         return Decision(kind, "ask_owner", Target.CLOUD, (Target.CLOUD,), (), ASK_OWNER)
 
     forced = forced_target_of(request.spoken_target)

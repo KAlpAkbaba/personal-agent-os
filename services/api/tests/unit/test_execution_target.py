@@ -208,6 +208,17 @@ def test_a_cloud_run_that_meets_a_wall_asks_the_owner_and_does_not_fall_back(blo
     assert event["event_type"] == vocab.EXECUTION_REFUSED and event["ask_owner"] is True
 
 
+def test_a_wall_is_not_a_cloud_run_when_the_job_can_never_be_in_the_cloud():
+    desktop = decide(req(JobKind.DESKTOP, cloud_blocker="captcha"))
+    assert desktop.outcome != "ask_owner" and Target.CLOUD not in desktop.chain
+    assert desktop.target is Target.DEVICE
+    signed_in = decide(
+        req(JobKind.RESEARCH, needs_signed_in_session=True, cloud_blocker="auth_wall")
+    )
+    assert signed_in.outcome != "ask_owner" and signed_in.target is not Target.CLOUD
+    assert Target.CLOUD not in signed_in.chain
+
+
 def test_an_unrecognised_cloud_blocker_word_is_not_a_wall():
     d = decide(req(JobKind.BROWSER_TASK, cloud_blocker="slow_page"))
     assert d.outcome == "selected"
