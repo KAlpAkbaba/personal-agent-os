@@ -80,3 +80,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     asyncio.run(_run(cfg))
     return 1  # the loop only ends on an auth refusal
+
+
+if __name__ == "__main__":
+    # The container's ENTRYPOINT. Without this the module defined `main` and exited 0
+    # having done nothing (found by the first real build, 2026-09-30).
+    raise SystemExit(main())
