@@ -16591,3 +16591,188 @@ the race; it reaches the device as a second launch of an application that is alr
 their own connections; a device is connected to one of them at a time, and the hand-off is
 the release script's. A command delivered on the old connection and again on the new one
 after a reconnect is, as before, the agent's to re-ack.
+
+## ADR-0213 — Where a job runs: the execution_target rule (cloud / owner_chrome / device), PR 1 (2026-09-30)
+
+**Status.** Accepted for PR 1 (the pure rule); the owner's decision of 2026-09-29 ("işlemleri
+LLM'in koştuğu makine üzerinde yapsak daha stabil olmaz mı?") and his approval of proposal
+`team/proposals/2026-09-30-bulutta-yurutme.md` on 2026-09-30 ("Üçünü de onaylıyorum, CPX32'de
+ölçerek başla"). Built by the team's worker `execution-target-rule` in cycle pilot-01,
+inspected (one RETURN, then APPROVE), merged by the lead. The text below is the worker's, as
+written in `team/plans/execution-target-rule-adr.md`; the lead numbered it and added the
+inspector's line to the table.
+
+**Lead's additions.** (1) A wall (`auth_wall` / `captcha` / `challenge`) on a job whose chain
+does not hold the cloud is ignored and the normal chain applies (the inspector's RETURN, fixed
+in `4a07170e`). (2) The three event strings are registered in `app/ledger/vocabulary.py`
+(`EVENT_TYPE_EXECUTION_*`); `test_pilot01_wiring.py` holds the two copies equal. (3) Nothing
+reads this rule yet: the wiring into research, browser tasks and schedules is task 5 of
+`team/plans/pilot-01-split.md`; the cloud worker itself is task 4 and is measured on CPX32
+first (CPX41 no longer exists; the 16 GB machine is CPX42 at +€34/month). (4) The open
+question below - the owner's "no unattended task" for a cloud job - is asked of the owner
+with the next cycle's report; nothing runs unattended until he answers.
+
+Status: proposed by worker `execution-target-rule`; the lead numbers it at merge.
+
+## Decision
+
+`app/execution` holds the decision as pure functions (`decide`, `events`, `forced_target_of`).
+It reads no device, database or model; the caller passes the job kind, the spoken word
+(already resolved by ADR-0212's device layer), the site's needs and each target's availability.
+The deny-list is read through `app.webtask.sites.denied` (the shared JSON), never copied.
+
+## Rule table
+
+| Situation | Chain considered (in order) | Result |
+|---|---|---|
+| `scheduled` | cloud | cloud; cloud offline → refused `no_target_available` (never owner_chrome/device) |
+| `research`, `browser_task` | cloud → owner_chrome → device | first available |
+| same, `needs_signed_in_session` | owner_chrome → device | first available; never cloud |
+| `desktop` | device | device; offline → refused |
+| `compute` | cloud | cloud only |
+| `scheduled`, `desktop` or `compute` + `needs_signed_in_session` | (empty) | refused `no_eligible_target` |
+| spoken `bulutta` / `bulut` (whole word) | (cloud) | cloud if allowed for the kind, else refused `forced_target_not_allowed` |
+| spoken other word (device alias) | (device) | device if allowed and online; alias resolved to nothing → `forced_target_unavailable` (skip `device_unresolved`) |
+| forced target offline | (forced) | refused `forced_target_unavailable`, never a fallback |
+| cloud run meets `auth_wall`/`captcha`/`challenge` | (cloud) | outcome `ask_owner` (ADR-0207 d.6); no fallback |
+| `involves_payment` | — | refused `payment_out_of_scope`, every kind and target |
+| acting on a deny-listed site | — | refused `deny_listed_site`, every target; reading is not refused |
+
+Checks run in this order: payment → deny-list (acting) → cloud blocker → forced word → chain.
+Skip reasons: `cloud_offline`, `owner_chrome_not_enrolled`, `owner_chrome_device_offline`,
+`device_offline`, `device_unresolved`.
+
+## Events (`events(decision)`)
+
+`execution.fallback` once per skipped target (with `reason`), then exactly one
+`execution.selected` or `execution.refused` (`ask_owner: true` on a wall). The three strings are
+constants in `app/execution/vocabulary.py`; the lead registers them in `app/ledger/vocabulary.py`.
+
+## Open question (decided by nobody here): the owner's "no unattended task" (ADR-0207 d.3) for a cloud job
+
+A cloud job runs while no owner sits at any device. Options:
+1. Cloud jobs are exempt: unattended by nature, bounded by the deny-list, no-payment and ask-owner-on-wall rules.
+2. A cloud job needs a per-job (or per-schedule) owner approval recorded once, then runs unattended.
+3. Cloud jobs are read-only until the owner has watched a first supervised run of that job.
+4. Cloud may only act on sites the owner has allow-listed; everything else is read-only.
+
+## Notes
+
+- Signed-in research falls back to `device` after owner_chrome (a device browser may hold the session); reversible, one tuple in `_CHAINS`.
+- Not built here: the wiring into the broker/API, the ledger registration, availability probes.
+
+## ADR-0216 — The narrative is collected from the ledger, told by a Protocol and audited before it is spoken (2026-09-30)
+
+**Status.** Accepted (roadmap order 2c, the JARVIS row "records everything and tells him");
+the owner approved proposal `team/proposals/2026-09-30-anlati-satiri.md` on 2026-09-30 with
+"ledger + failures first, memory second". Built by the worker `narrative-collector` in
+pilot-01, inspected (APPROVE), merged by the lead. The text is the worker's
+(`team/plans/narrative-collector-adr.md`).
+
+**Lead's additions.** (1) Nothing speaks it yet: the intent ("bu hafta ne oldu"), the explain
+query type, the model narrator and the TTS path are task 7 of the split. (2) The inspector's
+live mutant - the order of failures (newest first) is not held by a test - is queued as a
+one-test task for pilot-02. (3) No ledger writer sets `detail_json["device"]` today, so the
+device filter is real only once the writers do (task 7 names them).
+
+**Decision.** `app/narrative` = collector (pure facts from `ledger.service.query`, read-only) →
+`Narrator` Protocol (`RuleNarrator` today; a model narrator later behind the same Protocol) →
+auditor (`audit`/`repair`). `tell()` runs all four; a narrative that still fails the audit after
+repair (an invented number, a skipped subsystem) is replaced by the rule text, which is built
+from the facts alone.
+
+**Choices (reversible).**
+- The ledger has no device column. The device is read from `detail_json["device"]`; a row naming
+  none is a cloud row (`bulut`). No writer sets it yet - device filtering is live only once the
+  writers do (next task). A device word matching nothing selects nothing (never everything).
+- Windows are UTC, start inclusive / end exclusive: 'bu hafta' = last 7 days to now, 'bugün' =
+  midnight..now, 'dün' = the previous UTC day. Other words raise `ValueError`.
+- The auditor's "numbers that are facts" = the counts in the facts plus digits inside failure
+  summaries/reasons (a failure "3 kaynak reddedildi" must be speakable). A failure counts as
+  mentioned when every word of its summary (length >= 3) is in the text.
+- Only `failed`/`completed` rows are narrated; `started`/`skipped`/`info` are not.
+- Paging: `query` is capped at 200; the collector walks back by timestamp. More than 200 rows
+  sharing one identical timestamp would be cut short (documented limit).
+
+**Why.** ADR-0201 made the ledger the record of what the system did; a spoken summary must not be
+able to hide a failure, whichever narrator writes it.
+
+## ADR-0217 — The Onay Merkezi: the owner's two gates, decided in the shell, written into the queue for the next cycle (2026-09-30)
+
+**Status.** Accepted (the owner's bootstrap prompt of 2026-09-29, item 5). Built by the
+worker `onay-merkezi` in pilot-01 (two RETURNs - the first the lead's own error in the card's
+area, the second the release-approval semantics - then APPROVE), merged by the lead. The
+text is the worker's (`team/plans/onay-merkezi-adr.md`).
+
+**Lead's additions.** (1) Registered in the ledger vocabulary: subsystem `team`,
+`team.task.approved`, `team.task.rejected`. (2) Mounted in `create_app`
+(`/v1/team/approvals`), owner-session-gated; the shell's controls link to `/core/approvals`.
+(3) `team/queue.schema.json` holds `release_approved`, `release_approved_at`,
+`release_approved_by`; the cycle report tells a release the owner approved apart from one that
+waits ("YAYIN ONAYLANDI … lead yayınlar") and starts nobody for it. (4) On the Cloud Core VM
+there is no checkout: the route answers 503 `queue_unreadable` there until `team/` lives
+somewhere the VM can read; the Onay Merkezi is meaningful on the home Core today. (5) The
+voice path ("fikri onayla" / "yayını onayla") is a later task; only the API shape exists.
+
+**Context.** The owner decides at two gates in the queue: `awaiting_owner` (idea) and
+`awaiting_release`. Until now the owner edited `team/queue.json` by hand.
+
+**Decision.**
+- `services/api/app/team` reads `team/queue.json` as data. `GET /v1/team/approvals` lists the
+  two gates with proposal/report, the newest `team/reports/*.md`, and `cycle_running`.
+  `POST /v1/team/approvals/decision` takes `approve` -> `approved` (idea) / the release flag (see below), `reject` -> `stopped` with a
+  required reason. Both write `state`, `updated_at` (and `reason`) and nothing else, atomically.
+- A decision is refused (409 `cycle_running`) while `team/lock.json` is held and younger than
+  6 h: the cycle's own read-modify-write would overwrite it. Never applied mid-run.
+- The ledger event is recorded BEFORE the queue write; a ledger refusal (503 `ledger_refused`)
+  leaves the queue untouched. No decision exists that the ledger does not know.
+- Voice (later task) uses the same POST with `channel: "voice"`: `gate` (`fikir` / `yayin` /
+  `yayın`) is required, and the task must resolve to exactly ONE task at that gate, else
+  422 `gate_required` / 409 `ambiguous` / 409 `nothing_waiting`. The shell may send `gate` too;
+  a mismatch (page out of date) is 409 `gate_mismatch`.
+- Approving a release changes the queue file only. Nothing here starts a release.
+
+**Lead wires at merge (outside the worker's area):**
+1. `app/ledger/vocabulary.py`: subsystem `team`; event types `team.task.approved`,
+   `team.task.rejected` (constants in `app/team/approvals.py`). Until then every decision is
+   refused with `ledger_refused` (fail closed; tested).
+2. `app/main.py`: `app.include_router(team_router)` from `app.team.routes`.
+   `app.state.team_root` may override the default repo-root `team/` (the Cloud Core VM has no
+   checkout; the route is meaningful where the queue lives, i.e. the dev/home Core).
+3. The web shell's navigation link to `/core/approvals` (file: apps/web/app/core/approvals).
+
+**Release approval (decided, lead's return note).** `awaiting_release` + Onayla does NOT write
+`approved` (the cycle reads that as "assign a worker"). It keeps the state and writes
+`release_approved=true`, `release_approved_at` (UTC `YYYY-MM-DDTHH:MM:SSZ`), `release_approved_by`
+(`shell` | `voice`; `owner_sentence` is the lead's own write). The idea gate still writes
+`approved`; Reddet writes `stopped` + `reason` at both. The lead must add the three fields to
+`team/queue.schema.json` (`additionalProperties: false` would otherwise reject the queue; outside
+this area) and teach `cycle.ps1` to read the flag. The shell button reads "Yayını onayla"; it
+starts nothing.
+
+**Consequences.** Queue rewrite is JSON with 2-space indent, UTF-8 without BOM, final newline;
+formatting differs slightly from the PowerShell writer's (valid, schema-conformant).
+
+### ADR-0214 addendum (2026-09-30): what the pilot cycle taught
+
+Cycle `pilot-01` ran on the home PC with real models: one researcher run (0.82 USD, 183 s),
+three tasks through worker → inspector → integration branch (4.69 USD in all, 8 + 2 + 2 runs,
+two returns by the inspector, one by the lead, no merge conflict), three ADRs above. What it
+found in the protocol and the script, fixed on the same branch:
+
+1. *The command-line tool was not signed in* (0 USD, "Not logged in"); the owner signed in.
+   The report said "failed: success" - a failed run now says why in the tool's words.
+2. *A lead's return note never reached the worker.* It was in the queue, not in the card; the
+   worker re-checked git, changed nothing, and the inspector approved the unchanged branch.
+   The card now carries "Why this task came back".
+3. *`worker.md` contradicted section 4.* It told the worker to write `docs/HANDOFF.md` and
+   `docs/DECISIONS.md`; the cycle's area check would have returned every worker. The HANDOFF
+   block goes into the report and the ADR into `team/plans/`; the lead moves both.
+4. *The cycle needs a research-only step* (`-ResearchOnly`): without it the first run would
+   have started a worker on the owner's queued task before he had approved any idea.
+5. *A release approval is a flag, not a state.* `approved` is what the cycle reads as "assign a
+   worker"; a merged task approved for release would have been re-assigned.
+6. *The lead's own card was wrong* (`apps/web/src/...`; the tree has `apps/web/app`). The area
+   check did its job; the cost was one stopped task and one extra run.
+7. *The queue's format is the script's.* A cycle rewrote the whole file the first time; it is
+   committed in the writer's own format now, and a cycle's diff is what it changed.

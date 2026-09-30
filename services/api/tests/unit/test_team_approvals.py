@@ -508,9 +508,20 @@ def test_a_refused_decision_leaves_no_ledger_event(client, engine):
 
 
 def test_a_decision_the_ledger_vocabulary_refuses_is_not_written_to_the_queue(
-    app_and_client, team_root, engine
+    app_and_client, team_root, engine, monkeypatch: pytest.MonkeyPatch
 ):
-    # No wired_vocabulary here: today's closed vocabulary does not know the team's events.
+    # The lead registered the team's events at merge (ADR-0217); the refusal is made
+    # to happen by taking them out again, so that the rule - the ledger first, a refusal
+    # leaves the queue as it was - is still held.
+    monkeypatch.setattr(
+        vocabulary,
+        "EVENT_TYPES",
+        tuple(
+            name
+            for name in vocabulary.EVENT_TYPES
+            if name not in (approvals.EVENT_TASK_APPROVED, approvals.EVENT_TASK_REJECTED)
+        ),
+    )
     app, test_client = app_and_client
     authenticate(app, test_client, settings=Settings(_env_file=None))
     before = _digest(team_root)

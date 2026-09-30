@@ -15,13 +15,15 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**Pilot döngü `pilot-01` — FİKİR ONAYI KAPISINDA (sahip).** Dal `team/pilot-01/lead-proposals`.
-Araştırmacı üç öneri yazdı (`team/proposals/2026-09-30-*.md`, kuyrukta `awaiting_owner`): bulutta
-yürütme (ADR-0213), anlatı satırı, PR-C'nin bulutta koşan hali. Koşu: 0,82 USD, 183 sn, Sonnet 5.5 +
-Haiku 4.5, 6 web araması. İlk deneme `claude` CLI oturum açmadığı için 0 USD ile düştü; sahip giriş
-yaptı. Onay: `team/queue.json` içinde ilgili işin `state` → `approved`, ya da sahibin cümlesi (lead
-yazar). Sonra: entegratör → iş kartları → 2 işçi → denetleyici → tek kapı → main; yayın adımında DUR.
-Dalın kendi değişiklikleri (`-ResearchOnly`, hata nedeni, kuyruk biçimi) main'e kapıdan sonra.
+**Pilot döngü `pilot-01` — ÜÇ İŞ BİTTİ, `integrate/pilot-01` TAM KAPIDA; sonra main; YAYIN KAPISI.**
+Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
+döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
+(ADR-0213 PR 1), `onay-merkezi` (ADR-0217). Lead birleştirmede ortak dosyaları bağladı (ledger sözlüğü,
+`main.py` router, kabuk bağlantısı, şema, `test_pilot01_wiring.py`). Toplam 5,89 USD; 0 çakışma, 3 geri
+verme (biri lead'in kart hatası). Döngünün öğrettikleri ADR-0214 ekinde.
+**Sıradaki:** tam kapı → `--no-ff` main → push → YAYIN ONAYI (sahip): main'de ADR-0215 (broker tek
+teslim) + pilot işleri, üretim `771a9e53`. Sonra pilot-02: bulut işçisi (entegratör önce), kural
+tablosunun bağlanması, anlatının sesi; sahibe soru: bulut işinde "sahip yokken görev yok".
 
 Son biten iş (2026-09-30): **team bootstrap (TEAM_PROTOCOL.md, ADR-0214)** — main'de. Dal
 `feat/dev-team`, uç `137d7ef5` üzerinde tam kapı 34/34 PASS.

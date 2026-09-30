@@ -1143,5 +1143,30 @@
     ],
     "gaps": "ADR-0214 lists eleven protocol gaps; the lock is not shared between machines",
     "found_by_the_gate": "ADR-0215: the broker could hand one command to a device twice (the 2026-09-18 race, a second ordering); fixed on this branch with test_broker_deliver_once.py; NOT released - production 771a9e53 still has it"
+  },
+  "team_pilot_01": {
+    "status": "DONE on integrate/pilot-01; not released",
+    "date": "2026-09-30",
+    "adrs": ["ADR-0213 (PR 1)", "ADR-0216", "ADR-0217", "ADR-0214 addendum"],
+    "proposals_approved_by_owner": [
+      "team/proposals/2026-09-30-bulutta-yurutme.md",
+      "team/proposals/2026-09-30-anlati-satiri.md",
+      "team/proposals/2026-09-30-gorev-dongusu-bulutta.md"
+    ],
+    "tasks_merged": {
+      "narrative-collector": "8544c885761f7ef9e84aa5a09262f69fe3f7650c",
+      "execution-target-rule": "4a07170eb8f5d2f6dc16621914fa2daedc9c6622",
+      "onay-merkezi": "a2faeaa10e7d539eeb3760c155b97cc0e85de3ff"
+    },
+    "cost_usd": {"researcher": 0.82, "tasks": 5.07, "total": 5.89},
+    "runs": {"researcher": 2, "worker": 7, "inspector": 5, "returned": 3, "conflicts": 0},
+    "evidence_class": {
+      "execution_rule": "PROVEN_AUTOMATED",
+      "narrative_collector_auditor": "PROVEN_AUTOMATED",
+      "onay_merkezi_api": "PROVEN_AUTOMATED",
+      "onay_merkezi_page": "READY_FOR_OWNER",
+      "cycle_machinery_with_real_models": "PROVEN_REAL (home PC)"
+    },
+    "next": "team/plans/pilot-01-split.md tasks 4-8; the owner's answer on 'no unattended task' for a cloud job; pilot-02"
   }
 }

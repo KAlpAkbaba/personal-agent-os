@@ -228,6 +228,25 @@ def test_every_field_the_owner_named_is_required(missing: str) -> None:
     assert f"$.tasks[0]: '{missing}' is missing" in check({"version": 1, "tasks": [item]})
 
 
+def test_a_release_the_owner_approved_is_a_flag_on_a_task_that_still_waits() -> None:
+    """ADR-0217: approving a release never writes `approved` (the cycle reads that as
+    "assign a worker"); it raises a flag and the lead releases."""
+    approved = task(
+        state="awaiting_release",
+        release_approved=True,
+        release_approved_at="2026-09-30T07:00:00Z",
+        release_approved_by="shell",
+    )
+    assert check({"version": 1, "tasks": [approved]}) == []
+    for changes, says in (
+        ({"release_approved": "yes"}, "must be boolean"),
+        ({"release_approved_at": "2026-09-30 07:00"}, "does not match"),
+        ({"release_approved_by": "someone"}, "allowed"),
+    ):
+        found = check({"version": 1, "tasks": [task(state="awaiting_release", **changes)]})
+        assert any(says in problem for problem in found), (changes, found)
+
+
 def test_a_queue_of_another_version_or_with_no_tasks_is_refused() -> None:
     assert check({"version": 2, "tasks": []}) == ["$.version: must be 1"]
     assert check({"version": 1}) == ["$: 'tasks' is missing"]

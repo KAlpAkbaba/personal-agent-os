@@ -42,3 +42,17 @@ Yok.
 
 - integrate/pilot-01 üzerinde tam kapı ve main'e birleştirme bu betikte yok; lead yapar, sonra işler 'awaiting_release' olur
 
+## Lead'in kapanışı
+
+- Üç iş `integrate/pilot-01`'de: narrative-collector `8544c885`, execution-target-rule `4a07170e`,
+  onay-merkezi `a2faeaa1`. Lead'in bağladıkları: ledger sözlüğü (5 olay tipi + `team` alt sistemi),
+  `main.py` router, kabukta "Onay Merkezi →" bağlantısı, şema alanları, döngü raporunda yayın bayrağı.
+- Web kapısı: oxlint uyarısız hata yok, tsc temiz, vitest 2012/2012. Python: yeni paketlerin 143 testi +
+  bağlama testleri yeşil. Tam kapı `integrate/pilot-01` üzerinde koşuyor (rapor bittiğinde HANDOFF'ta).
+- Bu döngünün toplamı: 5,89 USD (araştırmacı 0,82 + işler 5,07); 2 araştırmacı + 7 işçi + 5 denetleyici
+  koşusu; 3 geri verme (2 denetleyici, 1 lead), 0 çakışma; iki işçi paralel 4,5 dk.
+- Öneri (pilot sonu): gece döngüsü HENÜZ açılmasın - önce bir döngü daha (pilot-02: bulut işçisi,
+  entegratörle) elle; paralel işçi 2 yeterli; bütçe tavanı döngü başına 30 USD, koşu başına 5 USD.
+- Sahibe soru (pilot-02 öncesi): bulutta koşan bir iş için "sahip yokken görev yok" (ADR-0207 k.3)
+  — ADR-0213'teki dört seçenekten hangisi?
+

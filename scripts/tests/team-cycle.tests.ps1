@@ -604,6 +604,19 @@ try {
         Assert-True -Condition ($run.Report -match "YAYIN: ship-one") -Because "the release that waits is named"
     }
 
+    Test-Case "a release the owner approved is told apart from one that waits, and still starts nobody" {
+        $approved = New-Task -Id "ship-two" -State "awaiting_release"
+        $approved | Add-Member -NotePropertyName release_approved -NotePropertyValue $true
+        $approved | Add-Member -NotePropertyName release_approved_at -NotePropertyValue "2026-09-30T07:00:00Z"
+        $approved | Add-Member -NotePropertyName release_approved_by -NotePropertyValue "shell"
+        $root = New-Sandbox -Tasks @((New-Task -Id "ship-one" -State "awaiting_release"), $approved)
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "an approved release is the lead's to run, not a worker's"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "ship-two").state -Because "the state did not move"
+        Assert-True -Condition ($run.Report -match "YAYIN ONAYLANDI \(2026-09-30T07:00:00Z\): ship-two") -Because $run.Report
+        Assert-True -Condition ($run.Report -match "YAYIN: ship-one") -Because "the one that waits still waits"
+    }
+
     Test-Case "a proposal never reaches a worker on its own" {
         $root = New-Sandbox -Tasks @((New-Task -Id "new-idea" -State "proposed"))
         $run = Invoke-Cycle -Root $root -Scenario "approve"

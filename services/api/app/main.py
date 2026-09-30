@@ -136,6 +136,7 @@ from app.selfhealing.runtime import SelfHealingRuntime
 from app.selfmodel.refresh import SelfModelRefresher
 from app.selfmodel.routes import router as selfmodel_router
 from app.state.routes import router as state_router
+from app.team.routes import router as team_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
 from app.uistate.routes import router as ui_state_router
@@ -910,6 +911,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(notifications_router)
     # B11 req 372: VAPID public key + subscription management, owner-session-gated.
     app.include_router(webpush_router)
+    # ADR-0217: the Onay Merkezi - the owner's two gates of the team's queue, read as
+    # data from team/ (app.state.team_root overrides the repository path).
+    app.include_router(team_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:
