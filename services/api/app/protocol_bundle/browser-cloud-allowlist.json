@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "rule": "A browser job that runs in the cloud ACTS (click, fill, select, tick, upload, download) only on a site of this list and READS everywhere else. A host matches when it IS a listed site or a subdomain of one (odeme.magaza.com.tr matches magaza.com.tr; magaza.com.tr.evil.example and notmagaza.com.tr do not). An empty list allows nothing. A site of browser-task-denylist.json is never allowed, even when it is listed here: the deny-list wins. Entries are registrable domains, lower-case, added by the owner from the Onay Merkezi.",
+  "sites": []
+}
