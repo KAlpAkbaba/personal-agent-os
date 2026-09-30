@@ -1,6 +1,6 @@
 # Döngü raporu — pilot-01
 
-Makine: MAIL · başladı 2026-09-30T05:54:49Z · bitti 2026-09-30T06:11:48Z
+Makine: MAIL · başladı 2026-09-30T06:13:37Z · bitti 2026-09-30T06:15:24Z
 
 ## Hazır olanlar (sha)
 
@@ -9,6 +9,7 @@ Makine: MAIL · başladı 2026-09-30T05:54:49Z · bitti 2026-09-30T06:11:48Z
 - idea-2026-09-30-anlati-satiri — Öneri: Anlatı — "bu hafta ne oldu, ofiste ne yaptın, ne başarısız oldu" [done] (sha yok)
 - idea-2026-09-30-bulutta-yurutme — Öneri: Bulutta yürütme — "bulut" sanal cihazı, execution_target kuralı, ağsız compute.run [done] (sha yok)
 - idea-2026-09-30-gorev-dongusu-bulutta — Öneri: Tarayıcı görev döngüsü PR-C'nin bulutta koşan hali [done] (sha yok)
+- onay-merkezi — Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit'te; kabukta Onayla/Reddet, sesle "fikri onayla / yayını onayla" [merged] (82711a29b23f118ff423fba0831399cfabb401c4)
 
 ## Onay bekleyenler (fikir / yayın)
 
@@ -24,20 +25,14 @@ Yok.
 
 ## Durdurulanlar
 
-- onay-merkezi — Onay Merkezi: döngü raporu ve onay bekleyenler Kokpit'te; kabukta Onayla/Reddet, sesle "fikri onayla / yayını onayla": alan dışı dosya: apps/web/app/core/approvals/approvalsApi.ts, apps/web/app/core/approvals/page.tsx
+Yok.
 
 ## Harcanan bütçe
 
-- 3,95 USD / tavan 30,00 USD
-- koşu sayısı: 8; çakışma: 0; geri verilen: 3
-- narrative-collector / worker: 0,95 USD, 270 sn, tamam
-- execution-target-rule / worker: 0,60 USD, 252 sn, tamam
-- narrative-collector / inspector: 0,26 USD, 63 sn, tamam
-- execution-target-rule / inspector: 0,22 USD, 73 sn, tamam
-- execution-target-rule / worker: 0,25 USD, 50 sn, tamam
-- onay-merkezi / worker: 1,32 USD, 609 sn, tamam
-- execution-target-rule / inspector: 0,23 USD, 45 sn, tamam
-- onay-merkezi / worker: 0,13 USD, 45 sn, tamam
+- 0,38 USD / tavan 15,00 USD
+- koşu sayısı: 2; çakışma: 0; geri verilen: 0
+- onay-merkezi / worker: 0,13 USD, 28 sn, tamam
+- onay-merkezi / inspector: 0,25 USD, 79 sn, tamam
 
 ## Açık riskler
 

@@ -646,6 +646,18 @@ try {
         $run = Invoke-Cycle -Root $root -Scenario "return"
         $workers = @($run.Calls | Where-Object { $_.role -eq "worker" })
         Assert-True -Condition ([int]$workers[1].lines -gt [int]$workers[0].lines + 30) -Because "the card grew by the inspector's summary: $($workers[0].lines) -> $($workers[1].lines)"
+        Assert-Equal -Expected $false -Actual ([bool]$workers[0].came_back) -Because "the first run is not a return"
+        Assert-Equal -Expected $true -Actual ([bool]$workers[1].came_back) -Because "the second run is told why it came back"
+    }
+
+    Test-Case "a task the lead returned by hand carries the lead's reason into the card" {
+        $task = New-Task -Id "task-one" -State "returned"
+        $task | Add-Member -NotePropertyName reason -NotePropertyValue "the area was wrong; also write the flag"
+        $card = New-TeamTaskCard -Task $task -Role "worker" -CycleId "c1"
+        Assert-True -Condition ($card.Contains("## Why this task came back")) -Because $card
+        Assert-True -Condition ($card.Contains("also write the flag")) -Because "the words themselves"
+        $fresh = New-TeamTaskCard -Task (New-Task -Id "task-two") -Role "worker" -CycleId "c1"
+        Assert-True -Condition (-not $fresh.Contains("came back")) -Because "a task that never came back says nothing of it"
     }
 
     Test-Case "a worker that leaves its area is sent back before anyone inspects it" {

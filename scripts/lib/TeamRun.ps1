@@ -151,6 +151,16 @@ function New-TeamTaskCard {
     }
     $area = @(Get-TeamProperty -InputObject $Task -Name "area" -Default @())
     [void]$lines.Add("- area: " + (($area | ForEach-Object { [string]$_ }) -join ", "))
+    # Why it came back, in the words of whoever sent it back (the inspector's list, the
+    # cycle's area check, the lead). pilot-01, 2026-09-30: the lead's return note was in
+    # the queue and never in the card, and the worker re-checked git and changed nothing.
+    $reason = [string](Get-TeamProperty -InputObject $Task -Name "reason" -Default "")
+    $state = [string](Get-TeamProperty -InputObject $Task -Name "state" -Default "")
+    if ($reason.Trim() -and @("returned", "in_progress") -contains $state) {
+        [void]$lines.Add("")
+        [void]$lines.Add("## Why this task came back - address every point")
+        [void]$lines.Add($reason.Trim())
+    }
     $reports = @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())
     if (@($reports).Count -gt 0) {
         $last = $reports[@($reports).Count - 1]
