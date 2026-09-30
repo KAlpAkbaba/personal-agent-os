@@ -59,7 +59,14 @@ param(
     # The first step of a cycle by itself: the researcher writes its proposals, they are
     # queued for the owner, and NO task is run or moved - not even an approved one.
     [switch]$ResearchOnly,
-    [switch]$DryRun
+    [switch]$DryRun,
+    # The Cloud Core's queue (pilot-02): with -QueueUrl the queue, the lock and the report go
+    # through /v1/team/queue there, so an approval can be given with this PC off and the other
+    # PC sees the same queue. Without it, the files under -TeamRoot, as before.
+    [string]$QueueUrl = "",
+    # A PATH to a file the owner wrote holding the owner-session token. A token is never a
+    # parameter on the command line: it would sit in the process list.
+    [string]$QueueToken = ""
 )
 
 Set-StrictMode -Version Latest
@@ -69,6 +76,7 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\NativeProcess.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamQueue.ps1")
 . (Join-Path $repoRoot "scripts\lib\TeamRun.ps1")
+. (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
 if (-not $CycleId) { $CycleId = "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }
@@ -83,7 +91,18 @@ $reportsRoot = Join-Path $TeamRoot "reports"
 $cycleDir = Join-Path $reportsRoot $CycleId
 $agentsRoot = Join-Path $repoRoot ".claude\agents"
 
-$queue = Read-TeamJson -Path $queuePath
+$useApi = [bool]$QueueUrl
+if ($useApi -and -not $QueueToken) { throw "-QueueUrl needs -QueueToken: the path of a file holding the token" }
+$apiStore = $null
+if ($useApi) { $apiStore = New-TeamApiStore -Url $QueueUrl -TokenFile $QueueToken }
+
+function Save-Queue {
+    param($Document)
+    if ($useApi) { Save-TeamQueueApi -Store $apiStore -Queue $Document }
+    else { Write-TeamJson -Path $queuePath -Document $Document }
+}
+
+$queue = if ($useApi) { Read-TeamQueueApi -Store $apiStore } else { Read-TeamJson -Path $queuePath }
 $problems = @(Test-TeamQueue -Queue $queue)
 if (@($problems).Count -gt 0) {
     Write-Host "the queue breaks the protocol; nothing was run:"
@@ -118,13 +137,20 @@ function Save-Report {
     $text = New-TeamCycleReport -CycleId $CycleId -Queue $script:queue -Cycle $script:cycle
     $path = Join-Path $reportsRoot "$CycleId.md"
     [System.IO.File]::WriteAllText($path, $text + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    if ($useApi) {
+        # The file above is the report; the store keeps its text so the Onay Merkezi on the Cloud
+        # Core can show it. A post that fails does not lose the report.
+        try { Send-TeamReportApi -Store $apiStore -Name "$CycleId.md" -Text $text }
+        catch { Write-Host "the report was not posted to the queue store: $($_.Exception.Message)" }
+    }
     return $path
 }
 
 # ------------------------------------------------------------------ the lock
 
 $lock = $null
-if (Test-Path -LiteralPath $lockPath) { $lock = Read-TeamJson -Path $lockPath }
+if ($useApi) { $lock = Get-TeamLockApi -Store $apiStore }
+elseif (Test-Path -LiteralPath $lockPath) { $lock = Read-TeamJson -Path $lockPath }
 $decision = Get-TeamLockDecision -Lock $lock -Machine $Machine -Now $started
 if ($decision.Kind -eq "ours") {
     # Ours, and fresh. If the process that took it is gone, the run died and the lock with it.
@@ -156,7 +182,17 @@ if ($DryRun) {
     exit 0
 }
 
-Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $CycleId -Now $started)
+if ($useApi) {
+    $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId -TakeoverDead ($decision.Kind -eq "dead")
+    if (-not [bool]$taken.acquired) {
+        # The other machine took it between our read and our write.
+        Add-CycleNote -List "stops" -Text "kilit $($taken.holder) makinesinde ($($taken.since)); bu döngü hiçbir şey çalıştırmadı"
+        $path = Save-Report
+        Write-Host "the lock was taken by $($taken.holder); report: $path"
+        exit 3
+    }
+}
+else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $CycleId -Now $started) }
 
 try {
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
@@ -269,7 +305,7 @@ try {
             }
             Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $task)
         }
-        Write-TeamJson -Path $queuePath -Document $queue
+        Save-Queue -Document $queue
     }
 
     # ---------------------------------------------------------------- the tasks
@@ -295,7 +331,7 @@ try {
             }
             [void]$runnable.Add([pscustomobject]@{ Task = $task; Next = $next })
         }
-        if ($moved) { Write-TeamJson -Path $queuePath -Document $queue }
+        if ($moved) { Save-Queue -Document $queue }
         if (@($runnable).Count -eq 0) {
             if ($moved) { continue }
             break
@@ -329,7 +365,7 @@ try {
                 Stop-Task -Task $task -Reason "koşu başlatılamadı: $($_.Exception.Message)"
             }
         }
-        Write-TeamJson -Path $queuePath -Document $queue
+        Save-Queue -Document $queue
 
         foreach ($startedRun in $startedRuns) {
             $task = $startedRun.Task
@@ -400,7 +436,7 @@ try {
             }
             Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
         }
-        Write-TeamJson -Path $queuePath -Document $queue
+        Save-Queue -Document $queue
     }
 
     $merged = @(Get-TeamTasks -Queue $queue | Where-Object { $_.state -eq "merged" })
@@ -411,6 +447,10 @@ try {
     Write-Host "cycle $CycleId ended; report: $path"
 }
 finally {
-    Write-TeamJson -Path $lockPath -Document (New-TeamLockReleased)
+    if ($useApi) {
+        try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId }
+        catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }
+    }
+    else { Write-TeamJson -Path $lockPath -Document (New-TeamLockReleased) }
 }
 exit 0

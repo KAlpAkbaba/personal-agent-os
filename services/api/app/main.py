@@ -742,6 +742,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.broker = broker
     app.state.artifacts = artifacts
+    if settings.team_store == "database":
+        # ADR-0222: the team's queue, lock and reports in PostgreSQL. Unset (``file``)
+        # the routes read ``team/`` as before.
+        from app.team.store import DbStore
+
+        app.state.team_store = DbStore(artifacts.session)
     app.state.voice = voice
     app.state.memory = memory
     app.state.settings = settings

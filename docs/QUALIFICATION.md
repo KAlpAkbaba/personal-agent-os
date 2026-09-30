@@ -1114,3 +1114,21 @@ diffs, wired the shared files, and ran the full gate once on `integrate/pilot-01
 | 36.6 | The Onay Merkezi page in the shell | `READY_FOR_OWNER` | `apps/web/app/core/approvals`; lint, typecheck and vitest green (2012); not opened in a browser by anyone |
 | 36.7 | The owner approves by voice | `NOT_YET_PROVEN` | a later task; the API shape (`channel: voice`, `gate`) exists |
 | 36.8 | The cycle itself: researcher → owner → split → workers in parallel → inspector → integration branch, measured | `PROVEN_REAL` | `team/reports/pilot-01.md` and the run files under `team/reports/pilot-01/` (raw result documents with cost and usage): pilot-01 on the home PC: 0.82 + 3.95 + 0.38 + 0.74 USD, 17 + 5 + 4 min of cycle time, 2 workers in parallel, 3 returns, 0 conflicts; ADR-0214 addendum |
+
+## Stage 37 — pilot-02: the cloud rule, the cloud worker, the wiring, the narrative's voice, the team's state (ADR-0218…0222)
+
+The second cycle with real models (`team/reports/pilot-02.md`): five tasks, 16 runs, 10.14 USD,
+41 minutes, four returns, no conflict. Every row's evidence was produced by its worker and
+re-run by the inspector with mutations of its own; the lead wired the shared files.
+
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| 37.1 | A cloud job acts only on the owner's allow-list; the empty list allows nothing; a deny-listed site is never allowed; both halves hold one list | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_cloud_allowlist.py`, `services/browser/tests/unit/test_cloud_allowlist.py`, `test_pilot02_wiring.py` (the list read through the bundle), `test_contract_falsification.py` |
+| 37.2 | The cloud worker refuses anything wider than READ and NAVIGATE and any profile but `research`; it does not start without enrollment material | `PROVEN_AUTOMATED` | `services/browser/tests/unit/test_cloud_worker.py` (50, none skipped); worker's 2 + inspector's 4 mutations RED |
+| 37.3 | The cloud worker's container: limits, no published socket, its own profile, the edge as its broker, the locked Playwright | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_pilot02_wiring.py` - the DEFINITION only |
+| 37.4 | The cloud worker's image builds and the container runs on the Cloud Core | `NOT_YET_PROVEN` | never built; needs the owner's enrollment token (READY_FOR_OWNER steps in `team/reports/pilot-02.md`) |
+| 37.5 | Peak memory of the cloud worker on CPX32 | `NOT_YET_PROVEN` | `docs/evidence/adr-0213-cloud-worker-memory-2026-09-30.json` says NOT_RUN and carries the command |
+| 37.6 | The execution_target rule through one function: selection, fallback events, the allow-list refusal, `no_capable_device`, revoked devices, scheduled jobs read-only | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_execution_wiring.py` (21) against a fake registry; no call site exists |
+| 37.7 | The narrative's intent, the model narrator behind the auditor, the device stamp | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_narrative_voice.py`, `test_narrative_order.py` (43); fake provider; the real model NOT_RUN |
+| 37.8 | The team's queue and lock in PostgreSQL: a stale write is 409, the lock rules are TeamQueue.ps1's, approvals behave the same on both stores, the cycle in API mode | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_state.py`, `test_team_approvals.py` (98); `scripts/tests/team-cycle.tests.ps1` (79, API mode against `scripts/team/fake-team-api.ps1`) |
+| 37.9 | The team's state on the real Cloud Core: seeded, approved from anywhere, the cycle reading it | `NOT_YET_PROVEN` | off by default (`PAGENTOS_TEAM_STORE=file`); the steps are in the cycle report |

@@ -5,7 +5,9 @@ owner. Onayla on the idea writes ``approved``; Onayla on the release leaves the 
 ``awaiting_release`` and raises ``release_approved`` (the cycle reads ``approved`` as "assign a
 worker", so a release approval must not use it); Reddet writes ``stopped`` with the owner's
 reason at either gate. All of it is
-written where the NEXT cycle reads it: a decision is refused while a cycle holds the queue
+written where the NEXT cycle reads it (the :class:`app.team.store.TeamStore` the app is wired
+with: the Cloud Core's database, or ``team/queue.json``): a decision is refused while a cycle
+holds the queue
 (its own read-modify-write would overwrite ours), and it starts nothing - approving a release
 changes one file and does not run a release.
 
@@ -17,13 +19,14 @@ know. The ledger's vocabulary is closed; the constants below are what the lead a
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from app.team import store as team_store
 
 #: awaiting_* state -> the gate's name as the owner says it (ASCII, as TeamQueue.ps1).
 GATES: dict[str, str] = {"awaiting_owner": "fikir", "awaiting_release": "yayin"}
@@ -36,7 +39,7 @@ SUBSYSTEM_TEAM = "team"
 EVENT_TASK_APPROVED = "team.task.approved"
 EVENT_TASK_REJECTED = "team.task.rejected"
 
-LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
+LOCK_STALE_HOURS = team_store.LOCK_STALE_HOURS  # TeamQueue.ps1: $script:TeamLockStaleHours
 TEXT_MAX_CHARS = 20000
 _WRITE_LOCK = threading.Lock()
 
@@ -80,19 +83,7 @@ def normalize_gate(word: str | None) -> str | None:
 
 def cycle_running(team_root: Path, *, now: datetime | None = None) -> bool:
     """A held, non-stale ``team/lock.json``. A missing or unreadable lock is not a running cycle."""
-    try:
-        lock = json.loads((team_root / "lock.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not isinstance(lock, dict) or lock.get("held") is not True:
-        return False
-    try:
-        acquired = datetime.strptime(str(lock["acquired_at"]), "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=UTC
-        )
-    except (KeyError, ValueError):
-        return True  # held and unreadable: assume it is held rather than clobber a run
-    return (now or _now()) - acquired < timedelta(hours=LOCK_STALE_HOURS)
+    return team_store.lock_is_running(team_store.FileStore(team_root).read_lock(), now or _now())
 
 
 def _read_inside(team_root: Path, relative: str) -> str | None:
@@ -117,16 +108,7 @@ def _proposal_text(team_root: Path, proposal: str) -> str | None:
 
 
 def newest_cycle_report(team_root: Path) -> dict[str, str] | None:
-    reports = sorted(
-        (team_root / "reports").glob("*.md"), key=lambda p: (p.stat().st_mtime, p.name)
-    )
-    if not reports:
-        return None
-    latest = reports[-1]
-    try:
-        return {"file": latest.name, "text": latest.read_text(encoding="utf-8")[:TEXT_MAX_CHARS]}
-    except OSError:
-        return None
+    return team_store.FileStore(team_root).newest_report()
 
 
 def list_pending(queue: dict[str, Any], team_root: Path) -> list[dict[str, Any]]:
@@ -203,6 +185,7 @@ def _resolve(
 def decide(
     team_root: Path,
     *,
+    store: team_store.TeamStore | None = None,
     task_id: str | None,
     decision: str,
     reason: str | None,
@@ -214,19 +197,21 @@ def decide(
     """Apply one owner decision to the queue file, or raise :class:`Refused`.
 
     ``record`` writes the ledger event (it receives the event's facts) and may raise
-    :class:`Refused` itself; it runs before the queue is written.
+    :class:`Refused` itself; it runs before the queue is written. ``store`` is where the queue
+    and the lock live (default: the files under ``team_root``).
     """
+    store = store or team_store.FileStore(team_root)
     reason = (reason or "").strip()
     if decision == "reject" and not reason:
         raise Refused(422, "reason_required", "Reddetmek için bir gerekçe gerekli.")
     at = now or _now()
-    path = team_root / "queue.json"
     with _WRITE_LOCK:
-        queue = load_queue(path)
+        queue = store.read_queue()
         task, actual_gate = _resolve(queue, task_id=task_id, gate=gate, channel=channel)
-        if cycle_running(team_root, now=at):
+        if team_store.lock_is_running(store.read_lock(), at):
             raise Refused(409, "cycle_running", "Bir döngü kuyruğu tutuyor; bitince tekrar dene.")
         from_state = task["state"]
+        seen_updated_at = task.get("updated_at")
         release_approval = decision == "approve" and from_state == RELEASE_GATE_STATE
         if decision == "reject":
             to_state = STOPPED_STATE
@@ -255,7 +240,14 @@ def decide(
             task["release_approved_at"] = _stamp(at)
             task["release_approved_by"] = channel  # shell | voice
         task["updated_at"] = _stamp(at)
-        _write_atomic(path, queue)
+        try:
+            store.put_task(task, seen_updated_at)
+        except team_store.Stale as error:
+            raise Refused(409, "stale_write", "Görev bu arada değişti; sayfayı yenile.") from error
+        except team_store.Invalid as error:
+            raise Refused(
+                422, "invalid_task", "Görev kuyruk şemasına uymuyor.", {"problems": error.problems}
+            ) from error
     return {
         "task_id": task["id"],
         "gate": actual_gate,
@@ -263,10 +255,3 @@ def decide(
         "state": to_state,
         "applied": "next_cycle",
     }
-
-
-def _write_atomic(path: Path, queue: dict[str, Any]) -> None:
-    text = json.dumps(queue, indent=2, ensure_ascii=False) + "\n"
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(text.encode("utf-8"))
-    os.replace(tmp, path)

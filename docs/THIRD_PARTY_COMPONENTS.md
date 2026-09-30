@@ -237,3 +237,19 @@ Why it is not a dependency:
 Adapter boundary: none - there is nothing to adapt. If a future version of the library
 exposes its element reduction as a standalone, side-effect-free function under a
 compatible licence, using THAT would be a new decision with its own ADR.
+
+## websockets / cryptography / PyYAML in the browser package (ADR-0219, 2026-09-30)
+
+- **Role:** the Linux companion of the browser worker (`browser_agent.cloud`) dials the Device
+  Broker over a WebSocket and signs the broker's challenge with an ECDSA P-256 key. PyYAML
+  is used by tests only, to read the container definition.
+- **Licences:** websockets BSD-3-Clause; cryptography Apache-2.0 OR BSD-3-Clause; PyYAML MIT.
+- **Already in the tree:** all three are locked in `services/api` (websockets 17.1,
+  cryptography 50.0.1). No new project enters the repository.
+- **Where they are installed:** the cloud worker's IMAGE (`infra/docker/cloud-browser/Dockerfile`
+  names websockets and cryptography) and the browser package's DEV group (tests). The
+  installer builds the Windows agent's worker environment with `uv sync --no-dev`, so the
+  owner's machines do not carry them.
+- **Phones home:** no. **Chromium** comes with the Playwright image
+  (`mcr.microsoft.com/playwright/python`, the tag pinned to the locked Playwright version),
+  capped at 2 GB in its own container.

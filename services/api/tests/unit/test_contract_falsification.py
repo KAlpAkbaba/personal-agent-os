@@ -98,6 +98,15 @@ CRITICAL_CONTRACTS: dict[str, Contract] = {
         ),
         held_by=("services/api", "services/browser"),
     ),
+    "browser-cloud-allowlist.json": Contract(
+        guard="test_the_workers_copy_is_the_shared_file_verbatim",
+        why=(
+            "ADR-0213 addendum (option 4): a cloud job acts only on the sites the owner "
+            "listed. The Cloud Core's rule and the cloud worker's copy must be one list, or "
+            "a site is allowed on one side and refused on the other"
+        ),
+        held_by=("services/api", "services/browser"),
+    ),
     "browser-task-denylist.json": Contract(
         guard="test_both_sides_deny_the_same_sites",
         why=(

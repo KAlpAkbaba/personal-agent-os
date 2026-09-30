@@ -144,14 +144,19 @@ def test_the_committed_lock_is_released() -> None:
 
 
 def test_no_task_in_the_repository_is_past_a_gate_the_owner_has_not_opened() -> None:
-    """Nothing is committed as released or done by a script: those states follow the
-    owner's release approval and his real-world evidence."""
+    """`released` and `done` follow the owner: a released task carries his approval (the
+    flag, when, how) and the 40-hex sha that was released; a proposal is done when he
+    approved it and the lead split it; nothing else is done by a script."""
     for item in _load(QUEUE)["tasks"]:
         if item["state"] == "done" and item.get("proposal"):
-            # A proposal's life ends when the owner approves it and the lead splits it.
             assert "sahip onaylad" in item.get("reason", ""), item["id"]
             continue
-        assert item["state"] not in ("released", "done"), item["id"]
+        if item["state"] == "released":
+            assert item.get("release_approved") is True, item["id"]
+            assert item.get("release_approved_at") and item.get("release_approved_by"), item["id"]
+            assert re.search(r"[0-9a-f]{40}", item.get("reason", "")), item["id"]
+            continue
+        assert item["state"] != "done", item["id"]
 
 
 # ------------------------------------------------------------------ the schema says no

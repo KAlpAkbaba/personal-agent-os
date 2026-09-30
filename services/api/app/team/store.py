@@ -1,0 +1,450 @@
+"""Where the team's queue, lock and reports live: the database, or the files (pilot-02).
+
+Two stores, one contract (:class:`TeamStore`). :class:`DbStore` is the Cloud Core's
+``team_state`` table - one row per task, one lock row, the reports as text - so an approval
+can be given with the home PC off and the office PC reads the same queue. :class:`FileStore`
+is ``team/queue.json`` + ``team/lock.json`` as before: the home PC without the API keeps
+working, and the Onay Merkezi reads whichever ``app.state.team_store`` says.
+
+The rules here are the ones ``scripts/lib/TeamQueue.ps1`` states, and each is held to its
+other half by a test: a task is valid when ``team/queue.schema.json`` says so (the copy
+beside this file is compared to it byte for byte), and the lock is stale after
+``LOCK_STALE_HOURS`` (the test reads the PowerShell constant).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+from collections.abc import Callable
+from contextlib import AbstractContextManager
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, Protocol
+
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.team.models import KIND_LOCK, KIND_REPORT, KIND_TASK, TeamStateRow
+
+LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
+TEXT_MAX_CHARS = 20000
+LOCK_KEY = "lock"
+SCHEMA_PATH = Path(__file__).with_name("queue.schema.json")
+_REPORT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.md$")
+_WRITE_LOCK = threading.RLock()
+
+
+class Stale(Exception):
+    """The write did not see the current version (or the lock is not the writer's)."""
+
+
+class Invalid(Exception):
+    def __init__(self, problems: list[str]) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = problems
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def stamp(at: datetime) -> str:
+    return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _copy(document: Any) -> Any:
+    return json.loads(json.dumps(document))
+
+
+# ------------------------------------------------------------------ the schema
+
+_TYPES: dict[str, tuple[type, ...]] = {
+    "object": (dict,),
+    "array": (list,),
+    "string": (str,),
+    "boolean": (bool,),
+    "integer": (int,),
+    "number": (int, float),
+}
+
+
+def _problems(value: Any, schema: dict[str, Any], root: dict[str, Any], where: str) -> list[str]:
+    if "$ref" in schema:
+        return _problems(value, root["$defs"][schema["$ref"].rsplit("/", 1)[-1]], root, where)
+    found: list[str] = []
+    if "const" in schema and value != schema["const"]:
+        found.append(f"{where}: must be {schema['const']!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        found.append(f"{where}: {value!r} is not one of the allowed values")
+    kind = schema.get("type")
+    if kind is not None:
+        wrong = not isinstance(value, _TYPES[kind]) or (
+            kind in ("integer", "number") and isinstance(value, bool)
+        )
+        if wrong:
+            return [*found, f"{where}: must be {kind}"]
+    if isinstance(value, str):
+        if "pattern" in schema and re.search(schema["pattern"], value) is None:
+            found.append(f"{where}: does not match {schema['pattern']}")
+        if len(value) < schema.get("minLength", 0):
+            found.append(f"{where}: is too short")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            found.append(f"{where}: is below {schema['minimum']}")
+    if isinstance(value, list):
+        if len(value) > schema.get("maxItems", len(value)):
+            found.append(f"{where}: has more than {schema['maxItems']} items")
+        for index, item in enumerate(value):
+            if "items" in schema:
+                found += _problems(item, schema["items"], root, f"{where}[{index}]")
+    if isinstance(value, dict):
+        found += [
+            f"{where}: '{n}' is missing" for n in schema.get("required", []) if n not in value
+        ]
+        known = schema.get("properties", {})
+        for name, item in value.items():
+            if name in known:
+                found += _problems(item, known[name], root, f"{where}.{name}")
+            elif schema.get("additionalProperties") is False:
+                found.append(f"{where}: '{name}' is not a field of the protocol")
+    return found
+
+
+def task_problems(task: Any) -> list[str]:
+    """Every way ``task`` breaks ``queue.schema.json``'s task definition. Empty when none."""
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    return _problems(task, schema["$defs"]["task"], schema, "task")
+
+
+# ------------------------------------------------------------------ the lock rules
+
+
+def _parse(text: Any) -> datetime | None:
+    try:
+        return datetime.strptime(str(text), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def lock_is_running(lock: dict[str, Any] | None, at: datetime) -> bool:
+    """A held, non-stale lock. One that does not say when it was taken cannot be shown stale."""
+    if not isinstance(lock, dict) or lock.get("held") is not True:
+        return False
+    acquired = _parse(lock.get("acquired_at"))
+    if acquired is None:
+        return True
+    return at - acquired < timedelta(hours=LOCK_STALE_HOURS)
+
+
+def lock_decision(
+    lock: dict[str, Any] | None, machine: str, at: datetime, *, takeover_dead: bool
+) -> dict[str, Any]:
+    """TeamQueue.ps1 ``Get-TeamLockDecision``: free / stale / ours / held (+ ``dead``).
+
+    ``takeover_dead`` is the client saying that the process that took OUR lock is gone (only
+    the client can look at its own process table); it is never believed for another machine.
+    """
+    if not isinstance(lock, dict) or lock.get("held") is not True:
+        return {"acquired": True, "kind": "free", "holder": "", "since": "", "pid": 0}
+    holder = str(lock.get("machine", ""))
+    base = {
+        "holder": holder,
+        "since": str(lock.get("acquired_at", "")),
+        "pid": int(lock.get("pid") or 0),
+    }
+    if not lock_is_running(lock, at):
+        return {"acquired": True, "kind": "stale", **base}
+    if holder and holder.upper() == machine.upper():
+        return {"acquired": takeover_dead, "kind": "dead" if takeover_dead else "ours", **base}
+    return {"acquired": False, "kind": "held", **base}
+
+
+def _new_lock(machine: str, cycle_id: str, pid: int, at: datetime) -> dict[str, Any]:
+    return {
+        "held": True,
+        "machine": machine,
+        "cycle_id": cycle_id,
+        "pid": pid,
+        "acquired_at": stamp(at),
+    }
+
+
+def _may_release(lock: dict[str, Any] | None, machine: str) -> None:
+    if isinstance(lock, dict) and lock.get("held") is True:
+        if str(lock.get("machine", "")).upper() != machine.upper():
+            raise Stale(f"the lock is held by {lock.get('machine')}, not {machine}")
+
+
+def _check_report_name(name: str) -> None:
+    if not _REPORT_NAME.match(name or ""):
+        raise Invalid([f"a report name is a file name ending in .md: {name!r}"])
+
+
+# ------------------------------------------------------------------ the contract
+
+
+class TeamStore(Protocol):
+    kind: str
+
+    def read_queue(self) -> dict[str, Any]: ...
+    def put_task(self, task: dict[str, Any], expected_updated_at: str | None) -> dict[str, Any]: ...
+    def read_lock(self) -> dict[str, Any] | None: ...
+    def acquire_lock(
+        self,
+        *,
+        machine: str,
+        cycle_id: str,
+        pid: int,
+        takeover_dead: bool = False,
+        now: datetime | None = None,
+    ) -> dict[str, Any]: ...
+    def release_lock(self, *, machine: str, cycle_id: str, now: datetime | None = None) -> None: ...
+    def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None: ...
+    def newest_report(self) -> dict[str, str] | None: ...
+
+
+def _check_put(
+    task: Any, expected: str | None, current_updated_at: str | None, exists: bool
+) -> None:
+    problems = task_problems(task)
+    if problems:
+        raise Invalid(problems)
+    if not exists and expected is not None:
+        raise Stale(f"{task['id']} is not in the queue (expected version {expected})")
+    if exists and current_updated_at != expected:
+        raise Stale(f"{task['id']} changed since it was read")
+
+
+class FileStore:
+    """``team/queue.json`` + ``team/lock.json`` + ``team/reports/*.md``."""
+
+    kind = "file"
+
+    def __init__(self, team_root: Path) -> None:
+        self.root = team_root
+
+    def read_queue(self) -> dict[str, Any]:
+        return json.loads((self.root / "queue.json").read_text(encoding="utf-8"))
+
+    def _write(self, path: Path, document: dict[str, Any]) -> None:
+        text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(text.encode("utf-8"))
+        os.replace(tmp, path)
+
+    def put_task(self, task: dict[str, Any], expected_updated_at: str | None) -> dict[str, Any]:
+        with _WRITE_LOCK:
+            queue = self.read_queue()
+            tasks = queue.setdefault("tasks", [])
+            index = next((i for i, t in enumerate(tasks) if t.get("id") == task.get("id")), None)
+            current = None if index is None else tasks[index].get("updated_at")
+            _check_put(task, expected_updated_at, current, index is not None)
+            stored = _copy(task)
+            if index is None:
+                tasks.append(stored)
+            else:
+                tasks[index] = stored
+            self._write(self.root / "queue.json", queue)
+        return _copy(stored)
+
+    def read_lock(self) -> dict[str, Any] | None:
+        try:
+            lock = json.loads((self.root / "lock.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return lock if isinstance(lock, dict) else None
+
+    def acquire_lock(
+        self,
+        *,
+        machine: str,
+        cycle_id: str,
+        pid: int,
+        takeover_dead: bool = False,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        at = now or utcnow()
+        with _WRITE_LOCK:
+            result = lock_decision(self.read_lock(), machine, at, takeover_dead=takeover_dead)
+            if result["acquired"]:
+                self._write(self.root / "lock.json", _new_lock(machine, cycle_id, pid, at))
+        return result
+
+    def release_lock(self, *, machine: str, cycle_id: str, now: datetime | None = None) -> None:
+        with _WRITE_LOCK:
+            _may_release(self.read_lock(), machine)
+            self._write(self.root / "lock.json", {"held": False})
+
+    def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
+        _check_report_name(name)
+        folder = self.root / "reports"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_bytes(text.encode("utf-8"))
+
+    def newest_report(self) -> dict[str, str] | None:
+        reports = sorted(
+            (self.root / "reports").glob("*.md"), key=lambda p: (p.stat().st_mtime, p.name)
+        )
+        if not reports:
+            return None
+        try:
+            text = reports[-1].read_text(encoding="utf-8")[:TEXT_MAX_CHARS]
+        except OSError:
+            return None
+        return {"file": reports[-1].name, "text": text}
+
+
+class DbStore:
+    """The Cloud Core's ``team_state`` table.
+
+    ``session_factory`` returns a context manager yielding a Session (a ``sessionmaker`` does,
+    and so does ``ArtifactRuntime.session``). Every write is conditional on the version the
+    writer saw (``UPDATE ... WHERE updated_at = :expected``), so two writers cannot both win.
+    """
+
+    kind = "db"
+
+    def __init__(self, session_factory: Callable[[], AbstractContextManager[Session]]) -> None:
+        self._factory = session_factory
+
+    def read_queue(self) -> dict[str, Any]:
+        with self._factory() as session:
+            rows = session.execute(
+                select(TeamStateRow.doc).where(TeamStateRow.kind == KIND_TASK)
+            ).scalars()
+            tasks = [_copy(doc) for doc in rows]
+        tasks.sort(key=lambda t: (str(t.get("created_at", "")), str(t.get("id", ""))))
+        return {"version": 1, "tasks": tasks}
+
+    def put_task(self, task: dict[str, Any], expected_updated_at: str | None) -> dict[str, Any]:
+        stored = _copy(task)
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_TASK, str(task.get("id", ""))))
+            _check_put(
+                task, expected_updated_at, None if row is None else row.updated_at, row is not None
+            )
+            if row is None:
+                session.add(
+                    TeamStateRow(
+                        kind=KIND_TASK, key=task["id"], doc=stored, updated_at=task["updated_at"]
+                    )
+                )
+                try:
+                    session.commit()
+                except IntegrityError as error:
+                    session.rollback()
+                    raise Stale(f"{task['id']} was created by someone else") from error
+                return _copy(stored)
+            changed = session.execute(
+                update(TeamStateRow)
+                .where(
+                    TeamStateRow.kind == KIND_TASK,
+                    TeamStateRow.key == task["id"],
+                    TeamStateRow.updated_at == expected_updated_at,
+                )
+                .values(doc=stored, updated_at=task["updated_at"])
+            )
+            if changed.rowcount != 1:
+                session.rollback()
+                raise Stale(f"{task['id']} changed since it was read")
+            session.commit()
+        return _copy(stored)
+
+    def read_lock(self) -> dict[str, Any] | None:
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_LOCK, LOCK_KEY))
+            return None if row is None else _copy(row.doc)
+
+    def _write_lock(
+        self, session: Session, expected: str | None, doc: dict[str, Any], version: str
+    ) -> None:
+        """Conditional on the version read; ``version`` differs from it even inside one second."""
+        if expected is None:
+            session.add(TeamStateRow(kind=KIND_LOCK, key=LOCK_KEY, doc=doc, updated_at=version))
+            try:
+                session.commit()
+            except IntegrityError as error:
+                session.rollback()
+                raise Stale("the lock was taken by someone else") from error
+            return
+        changed = session.execute(
+            update(TeamStateRow)
+            .where(
+                TeamStateRow.kind == KIND_LOCK,
+                TeamStateRow.key == LOCK_KEY,
+                TeamStateRow.updated_at == expected,
+            )
+            .values(doc=doc, updated_at=version)
+        )
+        if changed.rowcount != 1:
+            session.rollback()
+            raise Stale("the lock changed while it was being written")
+        session.commit()
+
+    def acquire_lock(
+        self,
+        *,
+        machine: str,
+        cycle_id: str,
+        pid: int,
+        takeover_dead: bool = False,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        at = now or utcnow()
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_LOCK, LOCK_KEY))
+            current = None if row is None else _copy(row.doc)
+            result = lock_decision(current, machine, at, takeover_dead=takeover_dead)
+            if not result["acquired"]:
+                return result
+            version = f"{stamp(at)}|{machine}|{cycle_id}|{pid}"
+            try:
+                self._write_lock(
+                    session,
+                    None if row is None else row.updated_at,
+                    _new_lock(machine, cycle_id, pid, at),
+                    version,
+                )
+            except Stale:
+                # Two machines raced for it and the other won: we hold nothing.
+                return {"acquired": False, "kind": "held", "holder": "", "since": "", "pid": 0}
+        return result
+
+    def release_lock(self, *, machine: str, cycle_id: str, now: datetime | None = None) -> None:
+        at = now or utcnow()
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_LOCK, LOCK_KEY))
+            if row is None:
+                return
+            _may_release(row.doc, machine)
+            self._write_lock(session, row.updated_at, {"held": False}, f"{stamp(at)}|released")
+
+    def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
+        _check_report_name(name)
+        at = stamp(now or utcnow())
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_REPORT, name))
+            if row is None:
+                session.add(
+                    TeamStateRow(kind=KIND_REPORT, key=name, doc={"text": text}, updated_at=at)
+                )
+            else:
+                row.doc = {"text": text}
+                row.updated_at = at
+            session.commit()
+
+    def newest_report(self) -> dict[str, str] | None:
+        with self._factory() as session:
+            row = session.execute(
+                select(TeamStateRow)
+                .where(TeamStateRow.kind == KIND_REPORT)
+                .order_by(TeamStateRow.updated_at.desc(), TeamStateRow.key.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return {"file": row.key, "text": str(row.doc.get("text", ""))[:TEXT_MAX_CHARS]}

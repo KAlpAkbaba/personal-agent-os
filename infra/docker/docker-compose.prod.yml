@@ -145,6 +145,8 @@ services:
       # browser and its agent reach it, e.g. http://<PAGENTOS_BIND_IP>:8001 - set it in
       # /opt/pagentos/.env, never here.
       PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN: ${PAGENTOS_ARTIFACT_DOWNLOAD_ORIGIN:-}
+      # ADR-0222: `database` moves the team's queue and lock into PostgreSQL; unset = file.
+      PAGENTOS_TEAM_STORE: ${PAGENTOS_TEAM_STORE:-file}
       # Bootstrap runs ONCE, from the host itself, through this loopback-only guard.
       PAGENTOS_IDENTITY_BOOTSTRAP_LOOPBACK_ONLY: "true"
       # M13/ADR-0050 §9: production runs no separate worker container, and the
@@ -245,6 +247,49 @@ services:
       - "${PAGENTOS_BIND_IP:?the host's Tailscale IP; set in /opt/pagentos/.env}:8001:8001"
       - "127.0.0.1:8001:8001"
     restart: unless-stopped
+
+  # ------------------------------------------------------------------ ADR-0219: the cloud browser worker
+  # The browser worker as a device of its own (`platform=cloud`, name `bulut`), in its own
+  # container: a Chromium that leaks is killed by its memory cap, not by the api's. Under
+  # the `cloud-browser` profile: NOT part of the release transaction and not started by
+  # it. It dials the broker through the edge like every other device. First start needs
+  # a one-time enrollment token in its state volume (owner step; see the ADR).
+  # The limits are the ones infra/docker/cloud-browser/compose.fragment.yml names; a test
+  # holds the two equal.
+  cloud-browser:
+    build:
+      context: ../../services/browser
+      dockerfile: ../../infra/docker/cloud-browser/Dockerfile
+    image: pagentos/cloud-browser:local
+    container_name: pagentos-prod-cloud-browser
+    profiles: ["cloud-browser"]
+    init: true
+    shm_size: 2gb
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PAGENTOS_CLOUD_BROKER_URL: http://edge:8001
+      PAGENTOS_CLOUD_STATE_DIR: /var/lib/pagentos-cloud/state
+      PAGENTOS_CLOUD_DATA_DIR: /var/lib/pagentos-cloud/data
+      PAGENTOS_CLOUD_ENROLLMENT_TOKEN_FILE: /var/lib/pagentos-cloud/state/enroll.token
+    volumes:
+      # Bind mounts on the data volume, like everything persistent here. The container runs
+      # as uid 10001: the two directories are created and chown'ed once, before first start.
+      - /mnt/pagentos-data/cloud-browser/state:/var/lib/pagentos-cloud/state
+      - /mnt/pagentos-data/cloud-browser/data:/var/lib/pagentos-cloud/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "browser_agent.cloud.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
   # ------------------------------------------------------------------ ADR-0197: aux
   # God's Eye View (MIT, pinned in infra/docker/godseye/Dockerfile): an owner-facing

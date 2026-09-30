@@ -25,5 +25,7 @@ Write `team/proposals/<date>-<slug>.md`, in Turkish, for the owner:
 
 Rules: you never edit ROADMAP or code; you never assign work; you never present a library
 as safe without reading its licence and its issue tracker; you say plainly when the evidence
-is thin. One proposal per file, at most three per run; the lead queues them as
-`awaiting_owner`.
+is thin. One proposal per file, at most three per run. TEAM_PROTOCOL section 3a: a proposal that
+serves a roadmap row is approved in advance - the lead queues it as tasks without asking;
+say which roadmap row it serves in its first lines. Only a NEW roadmap row, a new external
+dependency or an irreversible action waits for the owner.

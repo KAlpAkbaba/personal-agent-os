@@ -1168,5 +1168,29 @@
       "cycle_machinery_with_real_models": "PROVEN_REAL (home PC)"
     },
     "next": "team/plans/pilot-01-split.md tasks 4-8; the owner's answer on 'no unattended task' for a cloud job; pilot-02"
+  },
+  "team_pilot_02": {
+    "status": "DONE on integrate/pilot-02; full gate pending (the owner is reinstalling the agent on MAIL); not released",
+    "date": "2026-09-30",
+    "adrs": ["ADR-0218", "ADR-0219", "ADR-0220", "ADR-0221", "ADR-0222", "ADR-0213 addendum (option 4)", "ADR-0214 addendum 2"],
+    "tasks_merged": {
+      "cloud-allow-list": "32a7e9856fb0d72cf120ec00f2e7488b05a37fdc",
+      "cloud-browser-worker": "539841a9244ba80ba6020a7bd2e77c2f4924d5df",
+      "execution-target-wiring": "c67a0cfaf74b2c9e302640f10059278932be150b",
+      "narrative-voice": "04ab501635ee755904de64d02a9c721bda476562",
+      "team-state-on-cloud-core": "09344f829599da5468014b1066d5fd5ffd1dacdf"
+    },
+    "cost_usd": 10.14,
+    "runs": {"integrator": 1, "worker": 9, "inspector": 6, "returned": 4, "conflicts": 0, "minutes": 41},
+    "evidence_class": {
+      "allow_list": "PROVEN_AUTOMATED",
+      "cloud_worker_module_and_definition": "PROVEN_AUTOMATED",
+      "cloud_worker_image_run_and_memory": "NOT_RUN (owner steps: directories, enrollment token, start the profile)",
+      "execution_wiring": "PROVEN_AUTOMATED (no call site)",
+      "narrative_voice": "PROVEN_AUTOMATED (not wired; real model NOT_RUN)",
+      "team_state_database": "PROVEN_AUTOMATED; off by default"
+    },
+    "queued_next": ["narrative-intent-wiring", "ledger-device-stamp", "allowlist-editor", "cloud-device-registry", "cycle-lead-run"],
+    "held": "execution-call-sites waits for cloud-device-registry and a cloud device that exists"
   }
 }
