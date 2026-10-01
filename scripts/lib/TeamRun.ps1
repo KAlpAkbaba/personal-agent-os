@@ -217,7 +217,7 @@ function New-TeamSplitCard {
     }
     [void]$lines.Add("")
     [void]$lines.Add("## Areas that are taken (do not overlap)")
-    if ($taken.Count -eq 0) { [void]$lines.Add("- none") } else { foreach ($row in $taken) { [void]$lines.Add([string]$row) } }
+    if (@($taken).Count -eq 0) { [void]$lines.Add("- none") } else { foreach ($row in $taken) { [void]$lines.Add([string]$row) } }
     [void]$lines.Add("")
     [void]$lines.Add("Return your report as your final message, at most 40 lines: which tasks, and why that split.")
     return (($lines.ToArray()) -join "`n")
