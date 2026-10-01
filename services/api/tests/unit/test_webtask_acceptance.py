@@ -1276,6 +1276,7 @@ def plan_site() -> FakeBrowser:
                     El("combobox", "Satın al", tag="select"),
                     El("checkbox", "Abone ol"),
                     El("combobox", "Hesabı sil", tag="select"),
+                    El("checkbox", "Aboneliği iptal et"),
                     El("combobox", "Dönem", tag="select", in_form=True),
                     El("textbox", "Kart numarası", in_form=True, sensitive=True),
                 ],
@@ -1341,6 +1342,41 @@ def test_a_select_that_cannot_be_undone_is_chosen_only_on_the_owners_word() -> N
     state = drive(state, browser, [choose("Dönem", "Yıllık"), done("Dönemi seçtim.")])
     assert state.status == STATUS_DONE
     assert browser.fields == {"Dönem": "Yıllık"} and browser.done == ["fill:Dönem"]
+
+
+def test_a_confirmed_select_that_cannot_be_undone_is_chosen_once() -> None:
+    browser = plan_site()
+    state = drive(task(PLAN_GOAL), browser, [choose("Hesabı sil", "Yıllık")])
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+    assert browser.done == [] and browser.fields == {}
+
+    state = loop.confirm(state, source="voice")
+    state = drive(state, browser, [choose("Hesabı sil", "Yıllık")])
+    # The owner's word ran the step that was read back, once; the same choice planned
+    # again is a new step, and is read back again.
+    assert browser.fields == {"Hesabı sil": "Yıllık"} and browser.done == ["fill:Hesabı sil"]
+    acted = [r for r in state.rounds if r.action == ACTION_SELECT and r.outcome == ROUND_ACTED]
+    assert len(acted) == 1 and acted[0].confirmed_by == "voice" and acted[0].verified is True
+    assert acted[0].risk == RISK_HIGH_IMPACT and acted[0].planner == "confirmed"
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+
+
+def test_a_confirmed_checkbox_that_cannot_be_undone_is_ticked_once() -> None:
+    browser = plan_site()
+    state = drive(task(PLAN_GOAL), browser, [tick("Aboneliği iptal et")])
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+    assert state.pending.risk == RISK_HIGH_IMPACT
+    assert "bir kutunun işaretini değiştireceğim" in state.pending.message
+    assert browser.done == [] and browser.checked == {}
+
+    state = loop.confirm(state, source="voice")
+    state = drive(state, browser, [tick("Aboneliği iptal et")])
+    assert browser.checked == {"Aboneliği iptal et": True}
+    assert browser.done == ["check:Aboneliği iptal et"]
+    acted = [r for r in state.rounds if r.action == ACTION_CHECK and r.outcome == ROUND_ACTED]
+    assert len(acted) == 1 and acted[0].confirmed_by == "voice" and acted[0].verified is True
+    assert acted[0].risk == RISK_HIGH_IMPACT and acted[0].planner == "confirmed"
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
 
 
 def test_a_card_number_field_is_never_written_by_any_of_the_three_writes() -> None:

@@ -1006,6 +1006,41 @@ def test_an_unnamed_plain_link_is_allowed() -> None:
         ("dünya haberlerini bul", "https://www.duny.com/", False),
         # The limit, written down: a bare name is not site position. He says where.
         ("Trendyol aç", "https://www.trendyol.com/", False),
+        # "Open X" is the accusative, and it is how he says it: the apostrophe is what
+        # makes the word a NAME, so after one every case ending is site position.
+        ("YouTube'u aç", "https://www.youtube.com/", True),
+        ("Trendyol'u aç ve kulaklık ara", "https://www.trendyol.com/", True),
+        ("Google'ı aç", "https://www.google.com/", True),
+        ("Instagram’ı aç", "https://www.instagram.com/", True),
+        ("Hepsiburada'yı aç", "https://www.hepsiburada.com/", True),
+        ("Netflix'i aç", "https://www.netflix.com/", True),
+        ("Kitapyurdu'nu aç", "https://www.kitapyurdu.com/", True),
+        # The genitive, alone after an apostrophe and before "sitesi" without one.
+        ("Trendyol'un indirimlerine bak", "https://www.trendyol.com/", True),
+        ("Trendyol'un sitesinde ara", "https://www.trendyol.com/", True),
+        ("trendyolun sitesinde ara", "https://www.trendyol.com/", True),
+        ("Yemeksepeti'nin sayfasını aç", "https://www.yemeksepeti.com/", True),
+        ("trendyol web sitesinde ara", "https://www.trendyol.com/", True),
+        ("Trendyol internet sitesini aç", "https://www.trendyol.com/", True),
+        # A name that ends in its own possessive takes the buffer n.
+        ("Yemeksepeti'nde pizza ara", "https://www.yemeksepeti.com/", True),
+        ("Yemeksepeti'nden pizza bak", "https://www.yemeksepeti.com/", True),
+        ("Yemeksepeti'ndeki kampanyaya bak", "https://www.yemeksepeti.com/", True),
+        ("Yemeksepeti'ne gir", "https://www.yemeksepeti.com/", True),
+        ("Kitapyurdu'ndan bir roman bak", "https://www.kitapyurdu.com/", True),
+        # Without the apostrophe these endings are what every ordinary noun carries.
+        ("dünyayı gez", "https://www.dunya.com/", False),
+        ("dünyı gez", "https://www.duny.com/", False),
+        ("dünyayı gez", "https://www.duny.com/", False),
+        ("youtubeu aç", "https://www.youtube.com/", False),
+        ("trendyolun indirimlerine bak", "https://www.trendyol.com/", False),
+        ("yapay zeka haberlerinde ara", "https://www.haberleri.com/", False),
+        ("yapay zeka haberlerini bul", "https://www.haberleri.com/", False),
+        ("dünyanın haberlerini bul", "https://www.dunya.com/", False),
+        # The limit, written down: the buffer n without its apostrophe names nothing.
+        ("yemeksepetinde pizza ara", "https://www.yemeksepeti.com/", False),
+        # Not across another word: "web" and "internet" are the only ones before "sitesi".
+        ("trendyol haber sitesinde ara", "https://www.trendyol.com/", False),
     ],
 )
 def test_a_site_is_named_only_where_a_site_is_named(goal: str, url: str, allowed: bool) -> None:
@@ -1014,6 +1049,24 @@ def test_a_site_is_named_only_where_a_site_is_named(goal: str, url: str, allowed
     # An answer of his names a site by the same rule as his goal.
     answered = TaskContext(goal="Devam et", answers=(goal,))
     assert url_is_allowed(url, elsewhere, answered) is allowed
+
+
+@pytest.mark.parametrize(
+    ("goal", "answer", "url"),
+    [
+        ("Şarkıyı aç youtube", "sitesi hangisiydi bilmiyorum", "https://www.youtube.com/"),
+        ("Şarkıyı aç youtube", "web sitesi mi", "https://www.youtube.com/"),
+        ("Bana trendyolun", "sitesinde ne var bilmiyorum", "https://www.trendyol.com/"),
+    ],
+)
+def test_two_things_he_said_are_not_read_as_one_phrase(goal: str, answer: str, url: str) -> None:
+    elsewhere = page(url="https://www.baslangic.example.net/")
+    said_apart = TaskContext(goal=goal, answers=(answer,))
+    assert not url_is_allowed(url, elsewhere, said_apart)
+    # The same words said as ONE phrase do name the site: the boundary is what refuses.
+    assert url_is_allowed(url, elsewhere, TaskContext(goal=f"{goal} {answer}"))
+    between_answers = TaskContext(goal="Devam et", answers=(goal, answer))
+    assert not url_is_allowed(url, elsewhere, between_answers)
 
 
 # ---- the control that was read back is the control that is acted on

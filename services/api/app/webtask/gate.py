@@ -99,14 +99,22 @@ _URL_IN_TEXT: Final = re.compile(r"https?://[^\s\"'<>)\]]+", re.IGNORECASE)
 _HOST_IN_TEXT: Final = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
 #: What stands after a site's name where a site is NAMED, on folded text: a locative
 #: ("YouTube'da", "YouTube'daki"), an ablative ("Trendyol'dan") or a dative
-#: ("Hepsiburada'ya"), with or without its apostrophe; the one-letter dative only WITH
-#: one ("Google'a" - "dünya" is not "düny" and an "a"); or the word "sitesi" / "sayfası"
-#: in any case ("trendyol sitesinde").
+#: ("Hepsiburada'ya"), with or without its apostrophe; or the word "sitesi" / "sayfası"
+#: in any case ("trendyol sitesinde", "trendyol web sitesinde"), the name before it in
+#: the genitive or not ("Trendyol'un sitesinde").
+#: An apostrophe is what makes the word a NAME, so after one every case ending is site
+#: position, and WITHOUT one the endings an ordinary noun carries all day are not: the
+#: accusative ("YouTube'u aç", "Hepsiburada'yı" - "dünyayı" names nothing), the
+#: one-letter dative ("Google'a" - "dünya" is not "düny" and an "a"), the genitive
+#: ("Trendyol'un") and the buffer n of a name that ends in its own possessive
+#: ("Yemeksepeti'nde", "Kitapyurdu'ndan" - "haberlerinde" names nothing).
 _APOSTROPHE: Final = "['\u2019\u02bc\u2018`]"
+_GENITIVE: Final = "n?[iu]n"
 _SITE_POSITION: Final = (
     rf"(?:{_APOSTROPHE}?(?:dan|den|tan|ten|(?:da|de|ta|te)(?:ki)?|ya|ye)(?![0-9a-z])"
-    rf"|{_APOSTROPHE}[ae](?![0-9a-z])"
-    r"|\s+(?:sitesi|sayfasi)[a-z]*(?![0-9a-z]))"
+    rf"|{_APOSTROPHE}(?:[aeiu]|y[iu]|{_GENITIVE}|n(?:dan|den|(?:da|de)(?:ki)?|[aeiu]))(?![0-9a-z])"
+    rf"|(?:{_APOSTROPHE}?{_GENITIVE})?\s+(?:(?:web|internet)\s+)?(?:sitesi|sayfasi)[a-z]*"
+    r"(?![0-9a-z]))"
 )
 
 
