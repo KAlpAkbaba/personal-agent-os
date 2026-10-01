@@ -32,6 +32,13 @@ honest run):
 
 Write `team/proposals/<date>-<slug>.md`, in Turkish, for the owner:
 - **Ne**: one paragraph; which roadmap row; how it looks in use (a sentence the owner would say).
+- **Faydası — örneklerle**: REQUIRED (owner, 2026-10-01: the Onay Merkezi's "Detay" shows this
+  section when he asks what an idea would bring). Three concrete before/after examples from
+  his own day, each two lines: "Bugün: …" (what happens now, with the real sentence, screen
+  or failure) and "Bununla: …" (what happens once this is built). Then one line each for
+  "Kazanç" (what gets better, measurably where it can be) and "Kazanmadığımız" (what it does
+  NOT solve). No adjectives in place of examples; an idea whose benefit you cannot show in
+  three examples is a note in your report, not a proposal.
 - **Neden şimdi**: the evidence (links, dates, versions; for a lesson: the two occurrences).
 - **Nasıl**: the integration sketch — which existing PAOS seam it plugs into, what changes,
   what does not.

@@ -23,7 +23,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 yalnız tohum anlık görüntüsü, ESKİDİR. İş eklemek: `Invoke-TeamApi PUT /v1/team/queue/tasks/<id>` (belirteç
 `%LOCALAPPDATA%/PagentOS/team-queue.token`; `NativeProcess.ps1`+`TeamQueue.ps1`+`HttpJson.ps1` dot-source).
 Döngü: `cycle.ps1 -CycleId <id> -Base main -MaxParallel 3 -Research -QueueUrl http://100.90.158.26:8001
--QueueToken <belirteç dosyası>`. Gece görevi böyle kayıtlı (02:00).**
+-QueueToken <belirteç dosyası>`. **
+**SÜREKLİ DÖNGÜ (sahip 2026-10-01, ADR-0214 ek 6): görev zamanlayıcı `cycle.ps1`'i 30 DAKİKADA BİR başlatır
+(`-DailyId -ResearchEveryHours 6 -Base team/nightly/lead`, veritabanı kipi); günün entegrasyon dalı `integrate/dYYYYMMDD`.
+Lead'in işi: o dalda bağlama + tam kapı + main (kuyruktaki `cycle-auto-integrate` bunu otomatikleştirecek). Onay
+Merkezi döngü koşarken karar reddediyor — düzeltmesi `proposals-on-cloud-core` içinde; 'Detay' görünümü
+`approvals-detail-view`. Sahibi bekleyen 3 fikir: ev-home-assistant, gercek-ev-sahibi-provasi, stt-soniox-olcum.**
 **DÖNGÜ `adr0224-02` ÇALIŞIYOR (11:48 UTC başladı, veritabanı kipi): understanding-threshold-policy (ADR-0224 katman 3),
 office-voice-summary, ledger-device-callers. Bitince LEAD: `integrate/adr0224-02` üzerinde bağlama (araç kaydı
 `team.status`, eşik dosyası paket verisi), tam kapı, main, sahibin YAYIN ONAYI. Sonra bekleyenler: -corrections-memory,

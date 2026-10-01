@@ -75,6 +75,13 @@ param(
     [string]$Machine = $env:COMPUTERNAME,
     [string]$Base = "main",
     [switch]$Research,
+    # The continuous cycle (owner, 2026-10-01: "sürekli, kontrollü"): the scheduled task starts a
+    # cycle every half hour, so what broke or finished at noon reaches the others at noon. With
+    # -DailyId every one of a day's cycles shares ONE id ("dYYYYMMDD") and so ONE integration
+    # branch; with -ResearchEveryHours N the researcher runs only when its last run ended more
+    # than N hours ago (0 = in every cycle) - a web scan forty-eight times a day is not control.
+    [switch]$DailyId,
+    [double]$ResearchEveryHours = 0,
     # What the lead asks the researcher to study, one line per subject. It is placed in the
     # researcher's prompt under a heading of its own; the role file stays the role.
     [string[]]$ResearchBrief = @(),
@@ -101,11 +108,17 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
-if (-not $CycleId) { $CycleId = "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }
+if (-not $CycleId) { $CycleId = $(if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd") } else { "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }) }
 if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$CycleId'" }
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
 # A parameter is never assigned over (provision.tests.ps1 holds every script to it).
 $runResearch = [bool]$Research -or [bool]$ResearchOnly
+# The researcher's last finished run, on this machine: the throttle of -ResearchEveryHours.
+$researchMarker = Join-Path $TeamRoot "research-last.txt"
+if ($runResearch -and -not $ResearchOnly -and $ResearchEveryHours -gt 0 -and (Test-Path -LiteralPath $researchMarker)) {
+    $lastResearch = ConvertFrom-TeamTimestamp -Text ([System.IO.File]::ReadAllText($researchMarker).Trim())
+    if ($null -ne $lastResearch -and ([datetime]::UtcNow - $lastResearch).TotalHours -lt $ResearchEveryHours) { $runResearch = $false }
+}
 
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
@@ -403,7 +416,8 @@ try {
         if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
         $done = Complete-RoleRun -Started (Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot)
         if (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
-        $known = @(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
+        else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
+        $known =@(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
         foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
             $relative = "team/proposals/$($file.Name)"
             if ($known -contains $relative) { continue }

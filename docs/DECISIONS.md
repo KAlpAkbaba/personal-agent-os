@@ -16886,6 +16886,40 @@ görünsün."
   proposal's text from the store - today it reads `team/` on the machine serving the API, so
   in database mode an idea shows its title only).
 
+### ADR-0214 addendum 6 (2026-10-01): the cycle runs all day - "sürekli, kontrollü"
+
+The owner, on the day the cycle ran once a night: "gün içerisinde bozulmalar, iş bitmeleri
+diğerlerine yansımayacak çünkü günde 1 kere döngüye giriyor ... sürekli, kontrollü olması
+gerekiyor." A task finished at noon reached nobody until 02:00; an idea approved in the
+morning waited for the night.
+
+**What runs now.** The scheduled task (`scripts/team/register-nightly.ps1 -EveryMinutes 30`;
+its name is still "PagentOS Team Nightly Cycle") starts `cycle.ps1` every thirty minutes, all
+day, in database mode. What keeps that under control:
+* one cycle at a time - the lock (and the scheduler's `IgnoreNew`); a cycle with nothing to
+  run ends in seconds;
+* `-DailyId`: a day's cycles share one id (`dYYYYMMDD`), so one integration branch and one
+  report a day, not forty-eight;
+* `-ResearchEveryHours 6`: the researcher runs when its last finished run is more than six
+  hours old (`team/research-last.txt`) - "in every cycle" was said of a nightly cycle; a web
+  scan every half hour is not control. The owner can change the number;
+* the stops that were already there: the usage limit (waited out), `MaxRunsPerTask`, two
+  RETURNs, `team/stop.flag`, no release and no merge to main by any script;
+* everything visible on the Ofis page while it happens.
+
+**What is still by hand, and queued.** The cycle ends at "merged into the integration
+branch". The gate on that branch and the merge to main are the lead's, so a task whose
+dependency must be on main still waits for a person: `cycle-auto-integrate` (a lead run for
+the shared files, the full gate in a worktree of its own, main only when green, never a
+release). And the Onay Merkezi refused every decision while a cycle ran - right for the file
+store, wrong for a cycle that runs all day: the fix is part of `proposals-on-cloud-core`
+(in the database store a decision on a task at a gate is safe: the cycle writes only the
+tasks it changed, each conditional on what it read), with the page's "Detay" view in
+`approvals-detail-view`.
+
+Tests: `scripts/tests/team-cycle.tests.ps1` (119): "the continuous cycle: the researcher is
+throttled by its last run, and a day's cycles share one id".
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
