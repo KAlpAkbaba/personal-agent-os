@@ -333,11 +333,15 @@ CONFUSIONS_FILE: Final[str] = "stt-confusions.json"
 
 
 def load_confusions(path: Path | None = None) -> dict[str, str]:
-    """heard -> meant, from the protocol file (``app.protocol_files``) unless a path is given."""
-    if path is None:
-        from app.protocol_files import protocol_file
+    """heard -> meant, from the list beside this module unless a path is given.
 
-        path = protocol_file(CONFUSIONS_FILE)
+    The list has ONE reader - this layer - so it lives with it and ships in the image as
+    package data. It moves to ``packages/protocol`` the day a second component reads it:
+    a shared file with one reader is a file, not a contract (the falsification registry's
+    rule; decided by the lead at integration, 2026-10-01, ADR-0224 addendum).
+    """
+    if path is None:
+        path = Path(__file__).with_name(CONFUSIONS_FILE)
     data = json.loads(path.read_text(encoding="utf-8"))
     return {e["heard"]: e["meant"] for e in data["entries"]}
 

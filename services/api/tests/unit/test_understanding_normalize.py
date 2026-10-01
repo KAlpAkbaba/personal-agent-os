@@ -7,19 +7,17 @@ from pathlib import Path
 
 import pytest
 
-from app import protocol_files
 from app.voice.understanding import normalize as norm
 from app.voice.understanding.normalize import lemma_tokens, load_confusions, normalize
 
-SHARED = Path(__file__).resolve().parents[4] / "packages" / "protocol" / "stt-confusions.json"
+SHARED = Path(norm.__file__).with_name("stt-confusions.json")
 TRIAL = "Ofisü bilgisayarında hesap makinesini açın."
 
 
 @pytest.fixture(autouse=True)
 def _bundled_confusions(monkeypatch):
-    """The lead registers the file in BUNDLED at merge; until then read the shared copy."""
-    monkeypatch.setattr(protocol_files, "BUNDLED", (*protocol_files.BUNDLED, norm.CONFUSIONS_FILE))
-    monkeypatch.setattr(protocol_files, "BUNDLE_DIR", SHARED.parent)
+    """The list is package data beside the module (one reader, so not a protocol file)."""
+    del monkeypatch
     norm._default_confusions.cache_clear()
     yield
     norm._default_confusions.cache_clear()
@@ -174,7 +172,7 @@ def test_seed_entry_is_the_trial_confusion():
     assert load_confusions(SHARED)["ofisü"] == "ofis"
 
 
-def test_default_reads_through_protocol_file():
+def test_default_reads_the_list_beside_the_module():
     assert load_confusions() == load_confusions(SHARED)
     assert normalize(TRIAL).applied_confusions == (("ofisü", "ofis"),)
 
