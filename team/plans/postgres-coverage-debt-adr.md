@@ -22,14 +22,19 @@ Per table, the production writer the test goes through:
 
 | Table | Writer |
 |---|---|
-| `memory_versions` | `service.remember_explicit`, `service.edit_memory`, `PATCH /v1/memory/{id}` |
+| `memory_versions` | `service.remember_explicit`, `service.edit_memory`, `PATCH /v1/memory/{id}`, `POST /v1/memory/remember` |
 | `memory_evidence` | `service.record_observation` (→ `lifecycle.add_evidence`) |
-| `memory_audit_events` | `lifecycle.record_audit` via `service.record_observation` / `remember_explicit`, `lifecycle.reindex_missing`, `POST /v1/memory/remember` |
+| `memory_audit_events` | `lifecycle.record_audit` via `service.record_observation` / `remember_explicit`, `lifecycle.reindex_missing`, `POST /v1/memory/remember`, the `memory.remember` voice tool |
 | `entities` | `service.create_entity`, `graph.sync_from_events`, `POST /v1/memory/entities` |
 | `entity_edges` | `service.create_edge`, `graph.sync_from_events`, `POST /v1/memory/edges` |
 | `routines` | `routines_service.create_routine` / `pause_routine` / `resume_routine` / `cancel_routine`, `evaluate_due` (the condition edge), `POST /v1/routines`, the `routine.create` / `routine.pause` voice tools |
 | `routine_firings` | `routines_service.evaluate_due` |
-| `wake_alarms` | `alarms_service.create_alarm`, `reconcile_local_fired`, `snooze_alarm`, `cancel_alarm`, `POST /v1/alarms` |
+| `wake_alarms` | `alarms_service.create_alarm`, `reconcile_local_fired`, `snooze_alarm`, `cancel_alarm`, `POST /v1/alarms`; and the cloud ring: `alarms_service.tick` (arm, greeting) → `routines_service.evaluate_due` → `ActionDispatcher` → `WakeAlarmRunner.fire` → `fire_alarm` → `WakeSequence.fire` / `speak_greeting`, then `stop_alarm` |
+
+The cloud ring is run with the production dispatcher, runner and wake sequence as `app.main`
+wires them (the runner in its own session); only the device port and the TTS provider are
+fakes. It is what writes `armed_at`, `last_firing_id`, `media_session_id`, `greeting_due_at`
+and `greeted_at`, which the device-local path only ever leaves NULL.
 
 ## Rules the next slice should keep
 
@@ -47,7 +52,10 @@ Per table, the production writer the test goes through:
    database; a `now` in 2001 can only make the test's own routines due, and an alarm "rung"
    in 2001 starts a display holdoff that ended long ago. No test leaves a routine armed while
    an application object (and its 10-second routine clock) is open, except with a trigger in
-   2099.
+   2099. `alarms_service.tick` is safe for the same reason (it arms what is within twelve
+   hours of `now`). Known limit: the condition-trigger test passes `device_idle_s=900`, and a
+   developer's own armed `device_idle` routine in the dev database would get a 2001 firing
+   from it; `evaluate_due` has no filter, so the test cannot narrow it (0 armed today).
 4. **Rows go when the test ends; the append-only ones stay.** Memories are forgotten through
    `service.forget_memory`; entities, routines and alarms have no production delete and are
    removed by the fixture (their children by the tables' own ON DELETE CASCADE, which only
@@ -65,11 +73,39 @@ Per table, the production writer the test goes through:
 | 5 | `alarms_service.cancel_alarm` with a reason of 189+ characters (REST allows 200; measured: 188 passes, 189 raises): the `alarm.cleaned_up` ledger row's `source_ref` embeds the reason and is VARCHAR(256); `_record_ledger`'s handler then reads `alarm.id` on the rolled-back session | `... character varying(256)`, then `PendingRollbackError` out of a function documented "never fails the caller"; alarm already CANCELLED, caller gets 500, cleanup row never written |
 | 6 | `POST /v1/memory/entities` with U+0000 in `name` or inside `attrs` | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes`; `UntranslatableCharacter: unsupported Unicode escape sequence` → 500 |
 | 7 | `POST /v1/routines` with U+0000 in `name` | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` → 500 |
+| 8 | `memory.remember` voice tool bounds the statement (500) and passes the model's `key` unbounded (`tools_memory.py`, the tool's schema names no length); `memories.key` and `memory_audit_events.key` are VARCHAR(256). Driven through the tool handler itself | `StringDataRightTruncation: value too long for type character varying(256)` on `INSERT INTO memories` |
+| 9 | `POST /v1/memory/remember` with U+0000 in `text` (what `memories.text` and `memory_versions.text` store) | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` on `INSERT INTO memories` → 500 |
+| 10 | `POST /v1/alarms` with U+0000 in `label` | `DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes` on `INSERT INTO wake_alarms` → 500 |
 
 Defect 5 probably generalises: `app.alarms.service._record_ledger` logs an ORM attribute in its
 `except` branch without rolling the session back first, so any ledger write PostgreSQL refuses
 turns "the ledger is evidence, not a dependency" into an exception in the caller (measured for
-the alarm path only). `app.routines.service._record_ledger` has the same shape by reading; it
-was NOT run. Defects 6–7 are one class (no surface strips or refuses U+0000) and
-almost certainly reach every text and JSONB column behind a REST body; only the in-slice
-tables were probed.
+the alarm path only, with and without a wake sequence: 188 passes and 200 raises either way).
+`app.routines.service._record_ledger` has the same shape by reading; it was NOT run. Because
+of defect 5, `terminal_reason` (VARCHAR(200)) is proven by a passing test at 188 characters
+only; 189–200 is the strict-xfail test.
+
+Defects 6, 7, 9 and 10 are one class: no surface strips or refuses U+0000. Five fields of
+four in-slice POST bodies were probed and every one answers 500 (entity `name` and `attrs`,
+routine `name`, remembered `text`, alarm `label`).
+NOT_RUN for this class: the other text and JSONB fields of the same bodies (memory `key`,
+`value`, `source`; `PATCH /v1/memory/{id}`; edge `relation`; routine `source_ref`,
+`detail_json`, reasons; alarm `greeting_text`, `media`, cancel `reason`), the voice tools,
+and every table outside this slice. The fix belongs at one place in front of all of them,
+not per field.
+
+## Unpaid in this slice's tables (for the lead to queue)
+
+`wake_alarms` paths no integration test takes yet, each with writes PostgreSQL has not seen:
+
+- the ring that fails (`WakeSequence.fire` → FAILED): `terminal_reason` cut to exactly 200
+  from the device's own messages, `events.alarm_failed`'s notification;
+- the tone fallback after a media failure (`detail_json.media_failure_reason`) and the
+  stand-down when the device already rang (`local_fallback_already_rang`);
+- a recurring alarm's release and catch-up (`_release` re-scheduling, `_catch_up_recurring`),
+  `complete_alarm` at `max_play_seconds`, and `reconcile_local_snoozed`;
+- a greeting that cannot be spoken (`detail_json.greeting_failure`, delivered as text).
+
+`wake_alarms.device_id` has no writer in `app/` at all: it is NULL in every row production
+can make, which is what the tests assert. `media_session_id` is VARCHAR(128) and the only
+value production writes is `alarm-<id>`, 42 characters; that is the value tested.

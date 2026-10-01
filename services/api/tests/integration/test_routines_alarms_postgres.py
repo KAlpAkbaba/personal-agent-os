@@ -5,8 +5,9 @@ written to, and until 2026-10-01 no test under ``tests/integration`` named any o
 every write had only met SQLite, which does not enforce a VARCHAR's length, has no JSONB and
 hands back naive datetimes. These tests take the same writes to the dev stack's PostgreSQL
 through the production functions that make them - ``app.routines.service``,
-``app.alarms.service``, the voice tools and the REST surface in front of them, never
-hand-written SQL - with the values SQLite forgives: the longest string each column's own
+``app.alarms.service``, the production dispatcher and wake sequence (in front of a fake
+device), the voice tools and the REST surface in front of them, never hand-written SQL -
+with the values SQLite forgives: the longest string each column's own
 validation allows (and one more where the code claims to refuse it), JSONB documents with
 nested Turkish text, timezone-aware timestamps that are not UTC, and a NULL in every
 nullable column.
@@ -35,7 +36,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.alarms import history as alarm_history
 from app.alarms import service as alarms_service
+from app.alarms.audio_store import AudioStore
 from app.alarms.models import WakeAlarm
+from app.alarms.routine_port import WakeAlarmRunner
+from app.alarms.sequence import WakeSequence, media_session_id
 from app.alarms.tr_time import ParsedWhen
 from app.config import Settings
 from app.db import build_engine, build_session_factory
@@ -44,10 +48,13 @@ from app.routines import conditions as conditions_mod
 from app.routines import service as routines_service
 from app.routines.actions import NoopDispatcher
 from app.routines.conditions import RoutineConditionContext
+from app.routines.dispatch import ActionDispatcher
 from app.routines.models import Routine, RoutineFiring
 from app.voice.errors import VoiceError
+from app.voice.providers import FakeTTSProvider
 from app.voice.realtime_sessions import tools_routines
 from app.voice.realtime_sessions.tools import ToolContext
+from tests.alarms_support import FakeDeviceAction, happy_device_results
 from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
@@ -572,6 +579,11 @@ def test_a_skip_with_many_unmet_conditions_is_still_recorded(
 # -------------------------------------------------------------------- wake_alarms
 
 
+#: ``alarms:<36-character id>:cleaned_up:<10-digit instant>:<snooze count>:<reason>`` in a
+#: VARCHAR(256): 68 characters before the reason, 188 left for it.
+LONGEST_CANCEL_REASON_THAT_WORKS = 188
+
+
 def _when(moment: datetime, weekdays: tuple[int, ...] = ()) -> ParsedWhen:
     return ParsedWhen(
         at=moment,
@@ -666,7 +678,12 @@ def test_a_wake_alarm_rings_is_snoozed_and_is_cancelled_on_postgres(
 ) -> None:
     """``reconcile_local_fired`` -> ``snooze_alarm`` -> ``cancel_alarm``: every column the
     lifecycle writes, set and then NULL again, with instants the device chose in its own
-    zone. (``terminal_reason`` at its full VARCHAR(200) is the last alarm test's.)"""
+    zone.
+
+    ``terminal_reason`` is VARCHAR(200) and is proven here at 188 characters, not 200: 188 is
+    the longest reason a cancel survives today (the cleanup row's ``source_ref`` spends 68
+    of its 256 characters before the reason starts). 189 to 200 is the strict-xfail test
+    further down; no passing test stores more than 188."""
     ring_at = datetime(2001, 9, 10, 7, 30, tzinfo=ISTANBUL)
     with db() as session:
         alarm = alarms_service.create_alarm(
@@ -704,7 +721,7 @@ def test_a_wake_alarm_rings_is_snoozed_and_is_cancelled_on_postgres(
         assert stored.routine_id != first_routine
         assert fresh.get(Routine, stored.routine_id).source_ref == f"alarm:{alarm_id}:snooze:1"
 
-        reason = f"{token} sahibi çoktan uyandı, İstanbul'da gün ağarmıştı"
+        reason = _exactly(LONGEST_CANCEL_REASON_THAT_WORKS, f"{token} sahibi çoktan uyandı: ")
         alarms_service.cancel_alarm(
             fresh, alarm_id, reason=reason, now=ring_at + timedelta(minutes=2)
         )
@@ -712,11 +729,107 @@ def test_a_wake_alarm_rings_is_snoozed_and_is_cancelled_on_postgres(
     with db() as fresh:
         stored = fresh.get(WakeAlarm, alarm_id)
         assert (stored.state, stored.terminal_state) == ("CANCELLED", "CANCELLED")
-        assert stored.terminal_reason == reason
+        assert stored.terminal_reason == reason and len(stored.terminal_reason) == 188
+        # The row the 189-character cancel never gets to write.
+        story = alarm_history.alarm_history(fresh, alarm_id=alarm_id)
+        assert EVENT_TYPE_ALARM_CLEANED_UP in [entry["event_type"] for entry in story], story
         assert stored.terminal_at == ring_at + timedelta(minutes=2)
         assert stored.terminal_at.utcoffset() is not None
         trigger = fresh.get(Routine, stored.routine_id)
         assert (trigger.status, trigger.cancel_reason) == ("cancelled", "alarm_cancelled")
+
+
+class _NoBriefing:
+    def narrate(self, *, text, routine_id, firing_id, briefing_ids=()):
+        raise AssertionError("a wake alarm says nothing through the briefing port")
+
+
+def test_the_cloud_rings_a_wake_alarm_through_the_routine_engine_on_postgres(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """The path the device-local test above never takes: ``alarms_service.tick`` arms the
+    alarm, ``routines_service.evaluate_due`` fires its routine, the production dispatcher
+    hands the ``wake_alarm`` action to ``WakeAlarmRunner`` -> ``fire_alarm`` ->
+    ``WakeSequence.fire`` (in its own session, as in production), a later tick speaks the
+    greeting and ``stop_alarm`` ends it. Only the device and the voice are fakes: every row
+    is written by the production objects ``app.main`` wires. These are the columns that path
+    alone writes: ``armed_at``, ``last_firing_id``, ``media_session_id``,
+    ``greeting_due_at``, ``greeted_at``."""
+    ring_at = datetime(2001, 9, 12, 7, 30, tzinfo=ISTANBUL)
+    armed_at = ring_at - timedelta(hours=1)
+    fired_at = ring_at + timedelta(seconds=20)
+    greeted_at = fired_at + timedelta(seconds=30)
+    device = FakeDeviceAction(results=happy_device_results())
+    sequence = WakeSequence(
+        device_action=device,
+        # A provider that "really speaks": the plain fake is refused as a synthetic tone.
+        tts=FakeTTSProvider(synthetic_speech=False),
+        audio_store=AudioStore(),
+    )
+    dispatcher = ActionDispatcher(
+        briefing=_NoBriefing(),
+        device_action=device,
+        wake_alarm=WakeAlarmRunner(session_factory=db, sequence=sequence),
+    )
+    with db() as session:
+        alarm = alarms_service.create_alarm(
+            session,
+            when=_when(ring_at),
+            media={"url": "https://www.youtube.com/watch?v=pgcov", "title": "Güneş Doğarken"},
+            label=f"pgcov-{token} bulut çaldırır",
+            greeting_policy={"enabled": True, "text": "Günaydın efendim, çayınız demlendi."},
+        )
+        alarm_id, routine_id = alarm.id, alarm.routine_id
+        made.alarms.append(alarm_id)
+        alarms_service.tick(session, sequence=sequence, now=armed_at)
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert stored.state == "ARMED"
+        assert stored.armed_at == armed_at and stored.armed_at.utcoffset() is not None
+        assert device.payload_for("desktop.alarm_arm")["fire_at"] == "2001-09-12T04:30:00Z"
+
+        result = routines_service.evaluate_due(fresh, now=fired_at, dispatcher=dispatcher)
+        assert [o.status for o in result.outcomes if o.routine_id == routine_id] == ["triggered"]
+
+    with db() as fresh:
+        firing = routines_service.list_firings(fresh, routine_id)[0]
+        assert firing.dispatch_status == "succeeded", firing.dispatch_results
+        assert firing.dispatch_results[0]["detail"]["state"] == "PLAYING"
+
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert (stored.state, stored.media_kind) == ("PLAYING", "youtube")
+        assert stored.last_firing_id == firing.firing_id
+        # The longest value production writes here: "alarm-" and the id, 42 of VARCHAR(128).
+        assert stored.media_session_id == media_session_id(alarm_id)
+        assert stored.triggered_at == fired_at and stored.playing_since == fired_at
+        assert stored.greeting_due_at == fired_at + timedelta(seconds=22)
+        assert stored.greeting_due_at.utcoffset() is not None
+        assert stored.greeted_at is None
+        assert "media_failure_reason" not in stored.detail_json
+
+        assert alarms_service.tick(fresh, sequence=sequence, now=greeted_at).greeted == 1
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert stored.state == "PLAYING"
+        assert stored.greeted_at == greeted_at and stored.greeted_at.utcoffset() is not None
+        assert stored.greeting_due_at is None, "a value, then NULL"
+        assert "greeting_failure" not in stored.detail_json
+        assert device.count("desktop.play_audio") == 1
+
+        alarms_service.stop_alarm(
+            fresh, alarm_id, sequence=sequence, now=greeted_at + timedelta(minutes=1)
+        )
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert (stored.state, stored.terminal_state) == ("STOPPED", "STOPPED")
+        assert stored.terminal_reason == "owner"
+        assert stored.media_session_id is None, "the media session is released"
+        assert stored.last_firing_id == firing.firing_id
+        assert device.count("browser.media_stop") == 1
+        assert fresh.get(Routine, routine_id).status == "completed"
 
 
 def test_one_character_too_many_is_refused_by_the_alarm_surface_not_by_postgres(
@@ -730,6 +843,10 @@ def test_one_character_too_many_is_refused_by_the_alarm_surface_not_by_postgres(
         assert long_label.status_code == 422, long_label.text
         long_zone = client.post("/v1/alarms", json={"when": when, "timezone": "Europe/" + "x" * 58})
         assert long_zone.status_code == 422, long_zone.text
+        # Refused for its LENGTH (65 > 64), before anything asks whether the zone exists.
+        assert [(e["type"], e["loc"]) for e in long_zone.json()["detail"]] == [
+            ("string_too_long", ["body", "timezone"])
+        ]
 
         created = client.post(
             "/v1/alarms",
@@ -816,5 +933,35 @@ def test_a_nul_character_in_a_routine_is_refused_by_the_surface_not_by_postgres(
         if answer.status_code == 201:
             made.routines.append(uuid.UUID(answer.json()["routine_id"]))
             assert "\x00" not in answer.json()["name"]
+        else:
+            assert answer.status_code == 422, answer.text
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): POST /v1/alarms answers 500 for a U+0000 in the "
+        "label, on the INSERT into wake_alarms - psycopg.DataError: PostgreSQL text fields "
+        "cannot contain NUL (0x00) bytes"
+    ),
+)
+def test_a_nul_character_in_an_alarm_label_is_refused_by_the_surface_not_by_postgres(
+    settings: Settings, made: SimpleNamespace, token: str
+) -> None:
+    """The same character through ``POST /v1/alarms``: ``label`` is bounded at 200
+    characters and nothing says which characters."""
+    with owner_client(settings) as client:
+        answer = client.post(
+            "/v1/alarms",
+            json={
+                "when": {"date": "2099-01-01", "time": "07:30"},
+                "test": True,
+                "label": f"pgcov-{token} sıfır\x00bayt",
+            },
+        )
+        if answer.status_code == 201:
+            made.alarms.append(uuid.UUID(answer.json()["alarm_id"]))
+            assert "\x00" not in (answer.json()["label"] or "")
         else:
             assert answer.status_code == 422, answer.text

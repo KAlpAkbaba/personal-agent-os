@@ -48,6 +48,9 @@ from app.memory.policy import Observation
 from app.memory.runtime import MemoryRuntime
 from app.memory.service import MemoryLinks
 from app.memory.types import ENTITY_KINDS, Actor, MemoryClass
+from app.voice.errors import VoiceError
+from app.voice.realtime_sessions import tools_memory
+from app.voice.realtime_sessions.tools import ToolContext
 from tests.integration.conftest import owner_client
 
 pytestmark = pytest.mark.integration
@@ -679,3 +682,83 @@ def test_a_nul_character_is_refused_by_the_surface_not_by_postgres(
             assert "\x00" not in str(stored["attrs"].get("not", ""))
         else:
             assert answer.status_code == 422, answer.text
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): POST /v1/memory/remember answers 500 for a U+0000 in "
+        "the text, on the INSERT into memories (the first of the rows that carry it) - "
+        "psycopg.DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes"
+    ),
+)
+def test_a_nul_character_in_a_remembered_text_is_refused_by_the_surface_not_by_postgres(
+    settings: Settings, runtime: MemoryRuntime, made: SimpleNamespace
+) -> None:
+    """The same character through ``POST /v1/memory/remember``: ``text`` is what the memory
+    and its ``memory_versions`` row store, and a 4000-character bound says nothing about
+    which characters."""
+    token = _token()
+    with owner_client(settings) as client:
+        answer = client.post(
+            "/v1/memory/remember",
+            json={"text": f"Çayı {token} sıfır\x00bayt demli içerim.", "key": f"pgcov.{token}"},
+        )
+        if answer.status_code != 201:
+            assert answer.status_code == 422, answer.text
+            return
+        memory_id = uuid.UUID(answer.json()["memory_id"])
+        made.memories.append(memory_id)
+
+    with runtime.session() as fresh:
+        texts = (
+            fresh.execute(select(MemoryVersion.text).where(MemoryVersion.memory_id == memory_id))
+            .scalars()
+            .all()
+        )
+        assert texts and all("\x00" not in text for text in texts)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): the memory.remember voice tool raises for a "
+        "257-character key, on the INSERT into memories - "
+        "psycopg.errors.StringDataRightTruncation: value too long for type character "
+        "varying(256)"
+    ),
+)
+def test_a_spoken_memory_key_longer_than_its_column_is_refused_in_words(
+    runtime: MemoryRuntime, made: SimpleNamespace
+) -> None:
+    """``memory.remember`` by voice bounds the statement (500) and passes the model's ``key``
+    straight to ``service.remember_explicit``; the column - and the audit row's copy of it -
+    is VARCHAR(256), and the tool's schema names no length. Either answer is the owner's to
+    hear - a refusal in the tool's own words, or a memory whose key fits - but not a
+    database error."""
+    token = _token()
+    with runtime.session() as session:
+        context = ToolContext(
+            session_id=uuid.uuid4(),
+            owner_session_id=uuid.uuid4(),
+            device_id=None,
+            client_kind="web",
+            context={},
+            db=session,
+            live={"memory_runtime": runtime},
+        )
+        try:
+            taught = tools_memory.memory_remember(
+                context,
+                {
+                    "statement": f"Kahveyi {token} fincanında orta şekerli içerim.",
+                    "key": _exactly(257, f"pgcov.{token}."),
+                },
+            )
+        except VoiceError:
+            return
+        memory_id = uuid.UUID(taught["memory_id"])
+        made.memories.append(memory_id)
+        assert len(service.get_memory(session, memory_id).key) <= 256
