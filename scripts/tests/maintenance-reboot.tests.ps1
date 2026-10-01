@@ -187,6 +187,18 @@ try {
         $mk = if (Test-Path (Join-Path $hostBase "MAINTENANCE_MARKER")) { Get-Content (Join-Path $hostBase "MAINTENANCE_MARKER") -Raw } else { "" }
         Assert-True ($mk -match "start_epoch=\d+" -and $mk -match "kernel_before=6.8.0-138") "the marker carries the start time and the old kernel"
 
+        # A defunct process does not fail a window (2026-10-01, the first real window: everything
+        # held - kernel, containers, reconcile, health - and --verify said FAILED for one zombie,
+        # temporal's auto-setup.sh, which that image leaves at EVERY start: its pid 1 never reaps
+        # it. ADR-0223 had said it would go with the restart; it comes back two seconds later.
+        # It is reported, with the count in the record; the cure is an init in that container.)
+        Reset-Host; Write-Marker -AgoS 60
+        $r = Invoke-Maint -Flags @("--verify") -Env @{ FAKE_KERNEL = "6.8.0-142-generic"; FAKE_ZOMBIES = "1" }
+        $lm = Join-Path $hostBase "LAST_MAINTENANCE.json"
+        $json = if (Test-Path $lm) { Get-Content $lm -Raw | ConvertFrom-Json } else { $null }
+        Assert-True ($r.Exit -eq 0 -and $r.Output -match "VERIFY OK" -and $r.Output -match "note zombies: .*1 defunct") "--verify passes with a defunct process and says so"
+        Assert-True ($null -ne $json -and [int]$json.zombies -eq 1 -and [string]$json.downtime_measured -match "upper bound") "the record carries the zombie count and says what its downtime number is"
+
         # The operation lock: the minute reconcile holds it for a few seconds every minute
         # (measured on the host, 2026-10-01: one preflight in forty said "held"). A one-shot
         # window that asked without waiting would be postponed by its own housekeeping, so the

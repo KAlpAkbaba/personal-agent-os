@@ -35,8 +35,10 @@ yolda): o zamana kadar sahip kararını sohbetten söyler, lead işler.**
 tam kapı + main + otomatik yayın. Roadmap sıra 2'den beş ürün kartı kesiliyor (planlayıcı). Web kabuğu:
 `preview_start web-cloud` (port 3000; 3210 yerel API'ye bağlıdır, sahibin kimliğini TANIMAZ). Sahibin deneyecekleri:
 38.3-38.5 ve 39.2-39.4'ün cümleleri.**
-**BAKIM PENCERESİ bu akşam 22:00 İstanbul (19:00 UTC), sunucunun kendi zamanlayıcısında; rapor görevi 22:40/23:10;
-ayrıntı ADR-0223 eki. Ön kontrol yeni sürümle `PREFLIGHT OK`.**
+**BAKIM PENCERESİ KOŞTU VE DOĞRULANDI (2026-10-01 19:00 UTC): çekirdek 6.8.0-142, 26→1 güncelleme, cihazlar ~1 dk'da geri;
+rapor `team/reports/maintenance-2026-10-01.md`, QUALIFICATION 38.13 PROVEN_REAL, ADR-0223 ek 2. Tek seferlik birimler
+kaldırıldı. Kalan: temporal'ın zombisi (`temporal-init-reaper` kuyrukta; compose değişikliği → yayını sahip onaylar).
+Döngü 22:16'da 6 yuvaya çıkarıldı (3 denetim 3 yuvayı doldurup çalışanları boş bırakıyordu).**
 **MODEL POLİTİKASI (sahip, 2026-10-01, ADR-0214 ek 7): `team/models.json` — lead/inspector `claude-fable-5-1`,
 worker/integrator/researcher `claude-opus-5-5`; `cycle.ps1` her koşuyu `--model` ile başlatır (YÜRÜRLÜKTE). Düşüş
 zinciri (Fable→Opus→Sonnet), denetleyici ≥ işçi kuralı, Ofis'te seçici + limit yüzdeleri: kuyrukta

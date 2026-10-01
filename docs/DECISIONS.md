@@ -17357,6 +17357,27 @@ the script stops there (exit 11), the reconcile timer is restarted and productio
 serving the same release; if verification fails the marker stays and step 12 applies. The
 units are removed after the report (they name one date and are inert after it).
 
+### ADR-0223 addendum 2 (2026-10-01): the first real window - what held, and what this ADR had wrong
+
+The window ran from the host's own timer at 19:00 UTC with nobody driving: preflight 9/9, the backup, the upgrade
+(26 packages; Docker 29.7.2 -> 29.8.2, Tailscale 1.102.3 -> 1.102.4), the reboot at 19:00:56, kernel `6.8.0-142`,
+containers back at 19:01:30, the three devices reconnected by 19:01:57, the same release serving, `RECONCILE OK`.
+`team/reports/maintenance-2026-10-01.md` holds the before/after facts.
+
+**Wrong in this ADR:** "the zombie goes when the container restarts". It is `auto-setup.sh`, a child of the
+temporal container's pid 1, which never reaps it; it is back two seconds after every start. Step 11's "zombies = 0"
+therefore failed a window that had held in every respect. The check now reports a defunct process and does not
+fail on it; the cure is `init: true` on the temporal service (`temporal-init-reaper`, queued; a compose change, so
+its release is the owner's).
+
+**Also wrong:** the record's `downtime_seconds` is the time from the marker to the first good probe OF `--verify`,
+which runs minutes after boot: an upper bound (825 s here), not the outage (about one minute). The record says so
+now; a true measurement needs a probe that keeps running across the reboot from outside the host.
+
+**Three defects were found before the window, on the real host, by running the read-only half** (the colour waited
+for by name, the lock asked for once - QUALIFICATION 38.12, 38.17) **and one after it** (this one). The approved
+idea `real-host-rehearsal` is the mechanism that makes the first kind routine.
+
 ## ADR-0224 — Voice command understanding in three layers: normalisation, semantic match with a confidence, a threshold policy (owner's architectural requirement, 2026-09-30)
 
 **Status.** Accepted - the owner's directive, given after the trial of 2026-09-30 20:11 UTC
