@@ -1,4 +1,4 @@
-import type { OfficeView } from "../../app/core/office/officeApi";
+import type { OfficeView } from "../officeApi";
 
 export const SEAT_ORDER = [
   "lead",
