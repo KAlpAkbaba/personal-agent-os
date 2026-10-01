@@ -437,6 +437,11 @@ EVENT_TYPE_EXECUTION_REFUSED = "execution.refused"
 # constants in app/team/approvals.py; the same test holds them equal.
 EVENT_TYPE_TEAM_TASK_APPROVED = "team.task.approved"
 EVENT_TYPE_TEAM_TASK_REJECTED = "team.task.rejected"
+# cycle-2026-10-01 (allowlist-editor): the owner adds or removes a site of the cloud
+# allow-list (ADR-0213 addendum, option 4). Also constants in
+# app/execution/allowlist_store.py; test_office01_wiring holds them equal.
+EVENT_TYPE_ALLOWLIST_SITE_ADDED = "allowlist.site_added"
+EVENT_TYPE_ALLOWLIST_SITE_REMOVED = "allowlist.site_removed"
 #: M20 File & Document Intelligence (spec §3): one row per document interaction the owner
 #: initiated — never on a schedule, per the module's "no background crawling" rule.
 EVENT_TYPE_DOCUMENT_SEARCHED = "document.search"
@@ -657,6 +662,8 @@ EVENT_TYPES: Final[tuple[str, ...]] = (
     EVENT_TYPE_EXECUTION_REFUSED,
     EVENT_TYPE_TEAM_TASK_APPROVED,
     EVENT_TYPE_TEAM_TASK_REJECTED,
+    EVENT_TYPE_ALLOWLIST_SITE_ADDED,
+    EVENT_TYPE_ALLOWLIST_SITE_REMOVED,
     EVENT_TYPE_DOCUMENT_SEARCHED,
     EVENT_TYPE_DOCUMENT_READ,
     EVENT_TYPE_DOCUMENT_ANSWERED,

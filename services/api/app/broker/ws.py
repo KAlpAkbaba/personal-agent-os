@@ -80,18 +80,14 @@ async def _receive_frame(
         return frame
 
 
-async def _handshake(
-    websocket: WebSocket, runtime: BrokerRuntime
-) -> tuple[Device, HelloFrame]:
+async def _handshake(websocket: WebSocket, runtime: BrokerRuntime) -> tuple[Device, HelloFrame]:
     """Run hello/challenge/auth. Raises _HandshakeFailure after auth_error."""
     timeout_s = runtime.settings.broker_handshake_timeout_s
 
     async def fail() -> None:
         runtime.counters["auth_failures"] += 1
         with contextlib.suppress(Exception):
-            await websocket.send_json(
-                frames.error_frame("auth_error", "authentication failed")
-            )
+            await websocket.send_json(frames.error_frame("auth_error", "authentication failed"))
         with contextlib.suppress(Exception):
             await websocket.close(code=1008)
         raise _HandshakeFailure
@@ -112,9 +108,7 @@ async def _handshake(
     device_valid = device is not None and device.status == DEVICE_STATUS_ENROLLED
 
     nonce = generate_nonce()
-    await websocket.send_json(
-        frames.challenge_frame(base64.b64encode(nonce).decode("ascii"))
-    )
+    await websocket.send_json(frames.challenge_frame(base64.b64encode(nonce).decode("ascii")))
 
     auth = await _receive_frame(websocket, runtime, timeout_s)
     if not isinstance(auth, AuthFrame):
@@ -335,6 +329,17 @@ async def device_connect(websocket: WebSocket) -> None:
                 build_id=hello.build_id,
                 source_revision=hello.source_revision,
             )
+            # cloud-device-registry: the alias 'bulut' of a platform=cloud device and the
+            # owner_chrome label are facts of the registry, written where the device
+            # says what it is. Idempotent; a failure here must not refuse the hello.
+            try:
+                from app.devices import cloud_registry
+
+                device = db.get(Device, device_id)
+                if device is not None:
+                    cloud_registry.sync_registry_facts(db, device)
+            except Exception:  # noqa: BLE001 - registry facts never cost a connection
+                logger.warning("registry facts were not synced for %s", device_id, exc_info=True)
             return row.id
 
     session_id = await asyncio.to_thread(start_session)
@@ -373,9 +378,7 @@ async def device_connect(websocket: WebSocket) -> None:
         with contextlib.suppress(Exception):
             await previous.websocket.close(code=1012)
     runtime.register_connection(connection)
-    logger.info(
-        "broker_session_started", device_id=str(device_id), session_id=str(session_id)
-    )
+    logger.info("broker_session_started", device_id=str(device_id), session_id=str(session_id))
 
     await connection.send_json(
         frames.welcome_frame(str(session_id), settings.broker_heartbeat_interval_s)
@@ -401,9 +404,7 @@ async def device_connect(websocket: WebSocket) -> None:
                     # In a thread and swallowed whole — a heartbeat must be acknowledged
                     # even when Cloud Core cannot make sense of what it carried, because a
                     # device that gets disconnected cannot ring an alarm.
-                    await asyncio.to_thread(
-                        _ingest_status, runtime, device_id, dict(frame.status)
-                    )
+                    await asyncio.to_thread(_ingest_status, runtime, device_id, dict(frame.status))
                 await connection.send_json(frames.heartbeat_ack_frame(frame.seq))
             elif isinstance(frame, CommandAckFrame):
                 await _handle_command_ack(runtime, connection, frame)
@@ -419,9 +420,7 @@ async def device_connect(websocket: WebSocket) -> None:
                 # Well-formed but not valid mid-session (e.g. second hello).
                 runtime.counters["malformed_frames"] += 1
                 await connection.send_json(
-                    frames.error_frame(
-                        "validation_error", f"unexpected frame type {frame.type!r}"
-                    )
+                    frames.error_frame("validation_error", f"unexpected frame type {frame.type!r}")
                 )
     except WebSocketDisconnect:
         end_reason = "disconnect"

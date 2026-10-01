@@ -203,7 +203,14 @@ def test_input_that_is_not_a_domain_is_refused(owner, junk):
 
 def test_a_ledger_that_refuses_the_event_leaves_no_row(api, engine, monkeypatch):
     app, client, settings = api
-    authenticate(app, client, settings=settings)  # vocabulary NOT wired
+    authenticate(app, client, settings=settings)
+    # The lead wired the two event types at merge (office-01), so the refusal is produced
+    # the way a closed vocabulary would produce it: the type is taken out again.
+    monkeypatch.setattr(
+        vocabulary,
+        "EVENT_TYPES",
+        tuple(t for t in vocabulary.EVENT_TYPES if t != allowlist_store.EVENT_SITE_ADDED),
+    )
     response = _add(client, "magaza.com.tr")
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "ledger_refused"

@@ -398,7 +398,14 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
         used.add((method, re.sub(r"/tasks/\$id$", "/tasks/{task_id}", path)))
     assert used, "the client's calls were not found: did the call shape change?"
     assert used <= served, f"the client calls what the server does not serve: {used - served}"
-    assert len(used) == len(served), f"a served route the client never calls: {served - used}"
+    # Served for a reader that is not the PowerShell client, each with the reader named:
+    # a route nobody reads does not get in here.
+    read_by_others = {
+        ("GET", "/v1/team/queue/status"): "the read-back of what the cycle PUTs (office-01)",
+    }
+    unread = served - used - set(read_by_others)
+    assert not unread, f"a served route the client never calls: {unread}"
+    assert set(read_by_others) <= served, "an exemption for a route that is gone"
 
     fields = {
         "expected_updated_at": routes.PutTaskRequest,

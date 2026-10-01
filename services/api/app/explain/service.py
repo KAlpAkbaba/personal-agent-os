@@ -30,6 +30,7 @@ from app.explain.engine import (
     EventView,
     EvidenceSource,
     explain,
+    narrative_query,
     render_markdown,
     speech_for_level,
 )
@@ -126,6 +127,15 @@ class LedgerEvidenceSource:
             self._db, since=since, subsystems=subsystems, statuses=statuses, limit=limit
         )
         return [_view(r) for r in rows]
+
+    def narrative(self, ask: Any, *, now: datetime) -> str:
+        """ "Bu hafta ne oldu?" (ADR-0216/0221): one audited account of the ledger for
+        the period and device the owner named. The rule narrator: its text is built
+        from the facts alone and passes the auditor by construction. A model narrator
+        behind the same Protocol is a later wiring (it needs the chat provider here)."""
+        from app.narrative import service as narrative_service
+
+        return narrative_service.tell(self._db, ask.period, ask.device, None, now=now)
 
     def research_report(self, task_id: str) -> dict[str, Any] | None:
         from app.research import runs_service
@@ -334,7 +344,6 @@ class LedgerEvidenceSource:
             for r in rows
         ]
 
-
     def recent_incidents(self, *, limit: int = 10) -> list[dict[str, Any]]:
         """B19 req 77. Every incident, newest first, whatever its status.
 
@@ -448,6 +457,14 @@ def persist_briefing(db: Session, briefing: Briefing) -> tuple[uuid.UUID, int, s
     return artifact.id, version.version, body
 
 
+def query_for(question: str, *, now: datetime) -> ExplainQuery:
+    """The query a question is answered as. The narrative recogniser is asked FIRST:
+    ``classify`` does not know "bu hafta ne oldu", and without this line the router
+    resolved the sentence as a narrative while ``activity.explain`` answered
+    "Bu konuda kayıt bulamadım" (found by the worker of narrative-intent-wiring)."""
+    return narrative_query(question, now=now) or classify(question, now=now)
+
+
 def explain_to_briefing(
     db: Session,
     question: str,
@@ -466,7 +483,7 @@ def explain_to_briefing(
     passed straight through to :func:`app.explain.engine.explain`, which uses it to
     choose WHICH recorded run to read. Nothing here starts or re-runs a research."""
     now = now or datetime.now(UTC)
-    query = classify(question, now=now)
+    query = query_for(question, now=now)
     if level and level != query.level:
         query = ExplainQuery(
             kind=query.kind,
