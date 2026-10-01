@@ -26,6 +26,16 @@ from what the author believed the host looked like.
    script may hold none (`<<<`, `>&2`, `2>/dev/null` only) - files are read with `cat`. The
    schema query runs in a session the server itself holds read-only
    (`PGOPTIONS=-c default_transaction_read_only=on`); the allow-list requires that flag.
+   **The recorder cannot be switched off** (the inspector's return, cycle d20261001: `set +x;
+   touch ...; set -x` left the suite green). `set` is allowed only as `set -eu -o pipefail`; a
+   variable that is not the script's own lower-case one (`PS4`, `BASH_XTRACEFD`, `PATH`) may not
+   be assigned - plainly or through `local` / `read` / `for` / `printf -v` - nor named anywhere
+   in the source (an arithmetic expansion assigns one and is traced as its value only); and the
+   trace must reach the script's last command. **`docker inspect` is not on the list** (the card
+   named it; the script never needed it and `{{json .Config.Env}}` prints every secret of a
+   container), and `docker ps` is allowed only with a `--format` of `.Names` and `.State`.
+   The limit, stated: this is a guard against an honest change that does harm, not a sandbox
+   against an author who hides a name on purpose (`x=PS; (( ${x}4 = 1 ))`).
 4. **Consumers keep explicit cases beside the snapshot's.** The maintenance suite takes its
    container list, serving colour and lock-hold from the fixture, and still runs GREEN, BLUE and
    the measured 2 s hold as named cases: a later collection that samples the lock free sixty
@@ -35,6 +45,8 @@ from what the author believed the host looked like.
    very release that creates the column (the fixture can only gain it after that release).
    `markers.release` is asked of git (`git ls-tree <release> services/api/alembic/versions`);
    a table/column named by a migration outside that tree is reported as waiting, not failed.
+   ONE migration file must name both the table and the column: a column of that name on
+   another table, in another unreleased migration, does not make this one wait.
    When git cannot answer, nothing waits: it fails. The width rule has no exception.
 6. **Patterns that decide what is allowed are culture-invariant.** On this machine (tr-TR) a
    case-insensitive `INTO` does not match `into`; found while writing the allow-list, covered by
@@ -46,7 +58,10 @@ from what the author believed the host looked like.
   or the minute reconcile that asks in that instant is told "another operation is running"
   (exit 82; the reconcile runs again a minute later). The maintenance preflight already probes
   the same way. A probe that takes nothing (`/proc/locks` by inode) is possible and was not
-  built: the task card names `flock -n ... true` as the allowed command.
+  built: the task card names `flock -n ... true` as the allowed command. So: the lead does not
+  collect while a release is running.
+- The column listing is larger than a pipe, so bash keeps the here-string in a temp file under
+  `/tmp` on the host for the life of the loop. Nothing is written under `/opt/pagentos`.
 - A missing lock file is not probed (flock would create it): the snapshot says `present: false`.
 - The first real collection may turn `test_host_snapshot_schema.py` RED: 86 of 87 mapped tables
   are not in the hand-written fixture. Each failure then is a real difference between a model
@@ -56,8 +71,10 @@ from what the author believed the host looked like.
 ## For the lead at merge
 
 - Register `scripts\tests\host-snapshot.tests.ps1` in `.github/workflows/ci.yml` and
-  `scripts/quality-gate.ps1`: `services/api/tests/unit/test_ci_covers_every_suite.py` is RED on
-  this branch until it is named there (both files are outside the worker's area).
+  `scripts/quality-gate.ps1`, IN THE MERGE COMMIT:
+  `services/api/tests/unit/test_ci_covers_every_suite.py::test_ci_runs_every_powershell_suite`
+  is RED on this branch (`['host-snapshot.tests.ps1']`) until it is named there, and with it
+  `quality-gate.ps1 -Fast` as a whole. Both files are outside the worker's area.
 - Run `scripts\cloud\collect-host-snapshot.ps1` (it replaces the hand-written fixture; exit 4 =
   Tailscale's browser check, nothing changed), then the three consumer suites.
 - Inspector rule (`.claude/agents/inspector.md`): a task whose diff touches `scripts/cloud/*.sh`,

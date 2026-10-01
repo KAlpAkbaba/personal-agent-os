@@ -11,10 +11,14 @@
         schema holds for it, and its values are the sandbox's;
       * EVERY command it runs is on a read-only allow-list. The record is bash's own xtrace
         (every command word, builtins and functions included) plus the fakes' call log (the
-        exact arguments): docker ps, docker inspect, docker exec <postgres> psql -Atc with ONE
-        statement that starts with SELECT and reads one information_schema relation,
-        cat/stat of the named marker files, uname, systemctl list-timers/is-active,
-        flock -n <the operation lock> true, sleep. Anything else fails the suite;
+        exact arguments): docker ps with names and states only, docker exec <postgres> psql
+        -Atc with ONE statement that starts with SELECT and reads one information_schema
+        relation, cat/stat of the named marker files, uname, systemctl list-timers/is-active,
+        flock -n <the operation lock> true, sleep. Anything else fails the suite - 'docker
+        inspect' too: the script does not need it and it can print a container's environment;
+      * the recorder cannot be switched off: 'set' is allowed only as 'set -eu -o pipefail',
+        a variable that is not the script's own (PS4, BASH_XTRACEFD, PATH) may be neither
+        assigned nor named in the source, and the trace must reach the script's last command;
       * the allow-list itself refuses what it must: an UPDATE, a SELECT from an application
         table, a join onto one, docker exec of anything but that psql, a path under the base
         that is not a named marker;
@@ -206,9 +210,17 @@ function Test-ReadOnlyCall {
     $first = if ($a.Count -gt 0) { $a[0] } else { "" }
     switch ($Name) {
         "docker" {
-            if ($first -eq "ps" -or $first -eq "inspect") {
-                $bad = @($a | Select-Object -Skip 1 | Where-Object { $_ -match '^-' -and $_ -notin @("-a", "--all", "--no-trunc", "--format", "-f") })
-                if ($bad.Count -gt 0) { return "docker $first with the flag $($bad[0])" }
+            if ($first -eq "ps") {
+                # Names and states and nothing else: '{{.Command}}' is a command line, and
+                # 'docker inspect' (not allowed at all) prints '.Config.Env'.
+                $formats = 0
+                for ($i = 1; $i -lt $a.Count; $i++) {
+                    if ($a[$i] -cin @("-a", "--all")) { continue }
+                    if ($a[$i] -cne "--format" -or ($i + 1) -ge $a.Count) { return "docker ps with '$($a[$i])'" }
+                    $i++; $formats++
+                    if ([regex]::Replace($a[$i], '\{\{\.(Names|State)\}\}', '') -match '[{}]') { return "docker ps with a format that is not names and states only: $($a[$i])" }
+                }
+                if ($formats -ne 1) { return "docker ps without '--format' (names and states only)" }
                 return ""
             }
             if ($first -eq "exec") {
@@ -242,6 +254,45 @@ function Test-ReadOnlyCall {
     return "'$Name' is not on the allow-list"
 }
 
+function Test-TracedCommand {
+    # "" when one traced command is allowed, otherwise why it is not. The trace is the record,
+    # so beyond the command word this refuses whatever would end the record: any 'set' but the
+    # script's one, and any assignment to a variable that is not the script's own (its names
+    # are lower-case; PS4, BASH_XTRACEFD and PATH are not) - plain, or through local / read /
+    # for / printf -v.
+    param([string]$Text)
+    $tokens = @($Text.Trim() -split '\s+' | ForEach-Object { $_.Trim("'") })
+    $word = $tokens[0]
+    $own = '^[a-z_][a-z0-9_]*$'
+    if ($word -cmatch '^([A-Za-z_][A-Za-z0-9_]*)\+?=') {
+        if ($Matches[1] -cmatch $own -or $Matches[1] -ceq "IFS") { return "" }
+        return "an assignment to '$($Matches[1])', which is not a variable of the script"
+    }
+    if ($word -cnotin $allowedBuiltins -and $word -cnotin $allowedFunctions -and $word -cnotin $allowedExternals) { return "traced command '$word' is not on the allow-list" }
+    $names = @()
+    if ($word -ceq "set" -and $Text.Trim() -cne "set -eu -o pipefail") { return "traced command 'set' is not 'set -eu -o pipefail' (it could switch the recorder off)" }
+    if ($word -ceq "printf" -and $tokens.Count -gt 1 -and $tokens[1] -ceq "-v") { return "traced command 'printf -v' assigns a variable" }
+    if ($word -ceq "for") { $names = @($tokens | Select-Object -Skip 1 -First 1) }
+    if ($word -cin @("local", "read")) { $names = @($tokens | Select-Object -Skip 1 | Where-Object { $_ -notmatch '^-' } | ForEach-Object { ($_ -split '=', 2)[0] }) }
+    $foreign = @($names | Where-Object { $_ -cnotmatch $own })
+    if ($foreign.Count -gt 0) { return "traced command '$word' names '$($foreign[0])', which is not a variable of the script" }
+    return ""
+}
+
+function Get-SourceViolations {
+    # What the trace cannot show, refused in the text of the script instead: a redirection
+    # (only '<<<', '>&2' and '2>/dev/null' are allowed), and the names of the recorder's own
+    # variables anywhere at all - an arithmetic expansion can assign one and is traced as its
+    # value only.
+    param([string[]]$Lines)
+    $found = New-Object System.Collections.ArrayList
+    foreach ($line in @($Lines | Where-Object { $_ -notmatch '^\s*#' })) {
+        if (((($line -replace '<<<', '') -replace '2>/dev/null', '') -replace '>&2', '') -match '[<>]') { [void]$found.Add("a redirection the trace cannot see: $line") }
+        if ($line -cmatch '\b(PS4|BASH_XTRACEFD|PATH|SHELLOPTS|BASH_ENV|xtrace)\b') { [void]$found.Add("the recorder's '$($Matches[1])' is named: $line") }
+    }
+    return @($found.ToArray())
+}
+
 function Get-RunViolations {
     # Every reason one run broke the allow-list: the traced command words, the fakes' exact
     # arguments, and every path under the fake host that the trace mentions.
@@ -251,10 +302,9 @@ function Get-RunViolations {
     foreach ($line in @($Trace)) {
         if ($line -notmatch ('^\++' + [regex]::Escape($traceMarker) + ' (.*)$')) { continue }   # the rest of a quoted, multi-line argument
         $words++
-        $word = ($Matches[1].TrimStart() -split '\s+')[0]
-        if ($word -cmatch '^[A-Za-z_][A-Za-z0-9_]*\+?=') { continue }
-        $word = $word.Trim("'")   # the trace quotes a word like '['
-        if ($word -notin $allowedBuiltins -and $word -notin $allowedFunctions -and $word -notin $allowedExternals) { [void]$found.Add("traced command '$word' is not on the allow-list: $($Matches[1])") }
+        $text = $Matches[1]
+        $why = Test-TracedCommand -Text $text
+        if ($why) { [void]$found.Add("$($why): $text") }
     }
     if ($words -eq 0) { [void]$found.Add("the trace is empty: nothing was recorded") }
     foreach ($call in @($Calls)) {
@@ -321,11 +371,48 @@ try {
         Assert-True ($v.Count -eq 1 -and $v[0] -match "curl") "refused: a traced command word outside the list (curl), though no fake recorded it"
         $v = @(Get-RunViolations -Trace @("+$traceMarker [ -f $(& $u (Join-Path $base 'app/.env')) ]") -Calls @())
         Assert-True ($v.Count -eq 1 -and $v[0] -match "not a named marker") "refused: a path under the base that is not a named marker, even in a builtin test"
+        # docker: 'ps' with name and state only. 'inspect' is not a read this script needs, and
+        # '{{json .Config.Env}}' would put every production secret on the host's stderr.
+        Assert-True ((Test-ReadOnlyCall -Name "docker" -CallArgs @("ps", "-a", "--format", "{{.Names}}|{{.State}}")) -eq "") "accepted: docker ps -a with the names and the states"
+        $refusedDocker = @(
+            @{ Why = "docker inspect of a container's environment ('.Config.Env')"; A = @("inspect", "--format", "{{json .Config.Env}}", "pagentos-prod-api-green") },
+            @{ Why = "docker inspect at all, even of a state"; A = @("inspect", "--format", "{{.State.Status}}", "pagentos-prod-api-green") },
+            @{ Why = "docker ps with a field that is not a name or a state (the command line)"; A = @("ps", "-a", "--no-trunc", "--format", "{{.Command}}") },
+            @{ Why = "docker ps with every field as JSON"; A = @("ps", "-a", "--format", "{{json .}}") }
+        )
+        foreach ($r in $refusedDocker) { Assert-True ((Test-ReadOnlyCall -Name "docker" -CallArgs $r.A) -ne "") "refused: $($r.Why)" }
+        # The record is bash's own trace, so nothing the script runs may switch it off, rename
+        # its marker, send it elsewhere, or step around the fakes that log the arguments.
+        $tracedOk = @("set -eu -o pipefail", "IFS='|'", "lock_held=1", "local s=b v", "read -r name state", "for word in Thu UTC pagentos-restore-drill.timer", "printf '\`"%s\`"' x")
+        foreach ($line in $tracedOk) { Assert-True (@(Get-RunViolations -Trace @("+$traceMarker $line") -Calls @()).Count -eq 0) "accepted in the trace: $line" }
+        $tracedRefused = @(
+            @{ Why = "set +x: the recorder is switched off, what follows is not recorded"; Line = "set +x" },
+            @{ Why = "set +o xtrace"; Line = "set +o xtrace" },
+            @{ Why = "set -x (only ever needed after the recorder was switched off)"; Line = "set -x" },
+            @{ Why = "set with the right options and one more"; Line = "set -eu -o pipefail +x" },
+            @{ Why = "PS4 assigned: the trace's marker changes and later lines are not recognised"; Line = "PS4='+ '" },
+            @{ Why = "BASH_XTRACEFD assigned: the trace goes somewhere else"; Line = "BASH_XTRACEFD=2" },
+            @{ Why = "PATH assigned: the fakes that record the arguments are stepped around"; Line = "PATH=/usr/bin" },
+            @{ Why = "PATH assigned through local"; Line = "local PATH=/usr/bin" },
+            @{ Why = "PS4 assigned through read"; Line = "read -r PS4" },
+            @{ Why = "PS4 assigned through printf -v"; Line = "printf -v PS4 %s x" },
+            @{ Why = "PATH assigned as a loop variable"; Line = "for PATH in /usr/bin" }
+        )
+        foreach ($r in $tracedRefused) { Assert-True (@(Get-RunViolations -Trace @("+$traceMarker $($r.Line)") -Calls @()).Count -eq 1) "refused in the trace: $($r.Why)" }
 
         Write-Host "the script holds no redirection xtrace cannot see"
         $code = @(Get-Content -LiteralPath $hostScript -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*#' })
-        $redirects = @($code | Where-Object { (($_ -replace '<<<', '') -replace '2>/dev/null', '') -replace '>&2', '' | Select-String -Pattern '[<>]' -Quiet })
-        Assert-True ($code.Count -gt 20 -and $redirects.Count -eq 0) "no '<' or '>' in the script beyond '<<<', '>&2' and '2>/dev/null' ($($redirects.Count) line(s): $(@($redirects | Select-Object -First 2) -join ' // '))"
+        $inSource = @(Get-SourceViolations -Lines $code)
+        Assert-True ($code.Count -gt 20 -and $inSource.Count -eq 0) "no '<' or '>' in the script beyond '<<<', '>&2' and '2>/dev/null', and the recorder's variables are not named ($($inSource.Count) line(s): $(@($inSource | Select-Object -First 2) -join ' // '))"
+        $sourceRefused = @(
+            @{ Why = "a file read with '<'"; Line = 'v=$(<"$base/.env")' },
+            @{ Why = "a file written with '>'"; Line = 'echo x > "$base/RELEASE"' },
+            @{ Why = "the trace sent elsewhere inside an arithmetic expansion (traced as ': 2')"; Line = ': $((BASH_XTRACEFD = 2))' },
+            @{ Why = "the fakes stepped around through a default expansion"; Line = ': "${PATH:=/usr/bin}"' },
+            @{ Why = "shopt -u -o xtrace"; Line = 'shopt -u -o xtrace' }
+        )
+        foreach ($r in $sourceRefused) { Assert-True (@(Get-SourceViolations -Lines @($r.Line)).Count -eq 1) "refused in the source: $($r.Why)" }
+        Assert-True (@(Get-SourceViolations -Lines @('say "x" >&2', 'done <<< "$listing"', 'if flock -n "$lock_file" true 2>/dev/null; then run=0', '# PATH in a comment')).Count -eq 0) "accepted in the source: '>&2', '<<<', '2>/dev/null', a comment"
         Assert-True (@($code | Where-Object { $_ -match '^set -eu -o pipefail$' }).Count -eq 1) "set -eu -o pipefail"
 
         Write-Host "host-snapshot.sh under Git Bash, fakes: GREEN serves, the lock is held 2 of 60"
@@ -343,6 +430,8 @@ try {
         $violations = @(Get-RunViolations -Trace $s.Trace -Calls $s.Calls)
         foreach ($x in $violations) { Write-Host "        $x" -ForegroundColor Red }
         Assert-True ($violations.Count -eq 0) "every command it ran is on the read-only allow-list ($($s.Calls.Count) recorded calls, $($s.Trace.Count) trace lines)"
+        $traced = @($s.Trace | Where-Object { $_ -match ('^\++' + [regex]::Escape($traceMarker) + ' ') })
+        Assert-True ($traced.Count -gt 0 -and $traced[-1].EndsWith("echo 'snapshot: done'") -and $s.Stderr -notmatch [regex]::Escape($traceMarker)) "the recorder ran to the script's last command, and none of its lines went to stderr instead"
         Assert-True (@($s.Calls | Where-Object { $_ -match "^docker${sep}exec" }).Count -eq 1 -and @($s.Calls | Where-Object { $_ -match "information_schema\.columns" }).Count -eq 1) "the schema is read once, from information_schema.columns"
         Assert-True ($s.Unchanged) "the fake host is byte-for-byte the same after the run"
         Assert-True (($s.Output + $s.Stderr) -notmatch "hunter2") "neither the env file's content nor an environment value is in the output"
@@ -381,6 +470,24 @@ try {
         Reset-Host
         $s = Invoke-Snapshot -Env @{ FAKE_DOCKER_FAIL = "1"; PAGENTOS_LOCK_SAMPLES = "2" }
         Assert-True ($s.Exit -ne 0 -and $s.Output.Trim() -eq "" -and $s.Stderr -match "SNAPSHOT FAILED") "a failing docker: non-zero exit, a named failure on stderr and NO document on stdout"
+
+        # The two holes an inspector walked through (cycle d20261001), each as a scratch copy of
+        # the script with one line added after 'set -eu -o pipefail', run the same way.
+        Write-Host "host-snapshot.sh with a line added: the allow-list is what goes RED"
+        $scriptText = [IO.File]::ReadAllText($hostScript) -replace "`r`n", "`n"
+        $anchor = "set -eu -o pipefail`n"
+        $added = @(
+            @{ Why = "'set +x' around a command hides it from the recorder"; Line = "set +x; : a command nobody recorded; set -x"; Match = "traced command 'set'" },
+            @{ Why = "'docker inspect' of '.Config.Env' prints a container's environment"; Line = 'echo "snapshot: $(docker inspect --format "{{json .Config.Env}}" pagentos-prod-api-green)" >&2'; Match = "docker inspect is not a read" }
+        )
+        foreach ($m in $added) {
+            Reset-Host -Colour green
+            $scratch = Join-Path $state "host-snapshot-added.sh"
+            [IO.File]::WriteAllText($scratch, $scriptText.Replace($anchor, $anchor + $m.Line + "`n"))
+            $s = Invoke-Snapshot -Env @{ PAGENTOS_LOCK_SAMPLES = "2" } -Script $scratch
+            $violations = @(Get-RunViolations -Trace $s.Trace -Calls $s.Calls)
+            Assert-True ($scriptText.Contains($anchor) -and $s.Exit -eq 0 -and @($violations | Where-Object { $_.Contains($m.Match) }).Count -ge 1) "refused when run: $($m.Why) ($($violations.Count) violation(s))"
+        }
 
         Write-Host "the fixture and the collector (collect-host-snapshot.ps1, fake ssh)"
         $val = Invoke-Collector -Arguments @("-ValidateFile", $fixture)

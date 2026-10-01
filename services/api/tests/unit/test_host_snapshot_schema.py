@@ -11,7 +11,8 @@ table / column / data_type / character_maximum_length. Held here:
 * a ``String(n)`` column whose width is not the width production has fails, named;
 * a column or a table production does not have fails, named - unless a migration that the
   serving release does not contain yet adds it (the fixture's ``markers.release`` is asked
-  of git; a new column would otherwise block the very release that creates it);
+  of git; a new column would otherwise block the very release that creates it). ONE
+  migration file must name both the table and the column;
 * while the fixture is still the hand-written one, the tables it does not list are
   REPORTED with their number, not failed: it lists only what the lead read on the host.
 
@@ -28,6 +29,7 @@ import pkgutil
 import re
 import subprocess
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -83,8 +85,8 @@ def _production(fixture: dict[str, object]) -> Production:
     return production
 
 
-def _unreleased_migrations(release: str) -> str | None:
-    """The text of the migrations the serving release does not contain; None when git cannot
+def _unreleased_migrations(release: str) -> list[str] | None:
+    """The text of each migration the serving release does not contain; None when git cannot
     say (no git, or a release this checkout has never seen)."""
     try:
         listed = subprocess.run(
@@ -102,11 +104,11 @@ def _unreleased_migrations(release: str) -> str | None:
     released = {Path(line).name for line in listed.stdout.splitlines() if line.strip()}
     if not released:
         return None
-    return "\n".join(
+    return [
         path.read_text("utf-8", errors="ignore")
         for path in sorted(MIGRATIONS.glob("*.py"))
         if path.name not in released
-    )
+    ]
 
 
 def _quoted(name: str, text: str) -> bool:
@@ -118,14 +120,18 @@ def compare(
     production: Production,
     *,
     hand_written: bool,
-    unreleased: str | None,
+    unreleased: Sequence[str] | None,
 ) -> tuple[list[str], list[str], list[str]]:
-    """(failures, tables the hand-written fixture does not list, what waits for a release)."""
+    """(failures, tables the hand-written fixture does not list, what waits for a release).
+    ``unreleased`` is the text of each migration file the serving release does not contain."""
 
     def waits(table: str, column: str | None) -> bool:
         if unreleased is None:
             return False
-        return _quoted(table, unreleased) and (column is None or _quoted(column, unreleased))
+        return any(
+            _quoted(table, text) and (column is None or _quoted(column, text))
+            for text in unreleased
+        )
 
     failures: list[str] = []
     unlisted: list[str] = []
@@ -214,7 +220,7 @@ _PROD: Production = {
 
 
 def _run(
-    declared: Declared, *, hand_written: bool = False, unreleased: str | None = ""
+    declared: Declared, *, hand_written: bool = False, unreleased: Sequence[str] | None = ()
 ) -> tuple[list[str], list[str], list[str]]:
     return compare(declared, _PROD, hand_written=hand_written, unreleased=unreleased)
 
@@ -243,8 +249,20 @@ def test_a_column_production_does_not_have_fails_and_is_named() -> None:
 
 def test_a_column_an_unreleased_migration_adds_waits_instead_of_failing() -> None:
     migration = 'op.add_column("team_state", sa.Column("owner", sa.String(40)))'
-    failures, _, waiting = _run({"team_state": {"kind": 16, "owner": 40}}, unreleased=migration)
+    failures, _, waiting = _run({"team_state": {"kind": 16, "owner": 40}}, unreleased=[migration])
     assert (failures, waiting) == ([], ["team_state.owner"])
+
+
+def test_a_column_waits_only_when_one_migration_names_its_table_and_itself() -> None:
+    """Two unreleased migrations, one naming the table and another a column called the same
+    on a different table, are not a migration that adds this column."""
+    files = [
+        'op.add_column("team_state", sa.Column("note", sa.String(40)))',
+        'op.add_column("wake_alarms", sa.Column("owner", sa.String(40)))',
+    ]
+    failures, _, waiting = _run({"team_state": {"kind": 16, "owner": 40}}, unreleased=files)
+    assert failures == ["team_state.owner: the model maps a column production does not have"]
+    assert waiting == []
 
 
 def test_a_column_fails_when_git_cannot_say_what_is_released() -> None:
@@ -259,7 +277,7 @@ def test_an_unlisted_table_is_reported_only_while_the_fixture_is_hand_written() 
     assert failures == ["wake_alarms: the model maps a table production does not have"]
     assert unlisted == []
     create = 'op.create_table("wake_alarms", sa.Column("id", sa.String(36)))'
-    assert _run(declared, unreleased=create) == ([], [], ["wake_alarms"])
+    assert _run(declared, unreleased=[create]) == ([], [], ["wake_alarms"])
 
 
 def test_the_release_of_the_fixture_is_one_git_can_list() -> None:
