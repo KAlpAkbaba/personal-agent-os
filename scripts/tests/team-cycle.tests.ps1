@@ -869,6 +869,48 @@ Test-Case "on any machine but the home PC it refuses, even with -Register" {
     Assert-True -Condition ($null -eq (Get-ScheduledTask -TaskName $probeName -ErrorAction SilentlyContinue)) -Because "nothing was registered"
 }
 
+Test-Case "the scheduled task runs the tick: the feeder first, then the cycle - and whatever the feeder says, the cycle runs" {
+    # Owner, 2026-10-01: "roadmap'i otomatik olarak görev ataması oluşsun ve çalışanlar durmaksızın
+    # çalışsın". The task's one action is tick.ps1; a feeder that fails, refuses or finds the lock
+    # held must never keep the cycle from running.
+    $result = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -Arguments @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $nightly, "-EveryMinutes", "30",
+        "-TaskName", $probeName, "-Machine", "MAIL", "-HomeMachine", "MAIL")
+    Assert-True -Condition ($result.StdOut -match "scripts\\team\\tick\.ps1") -Because "the registered action is the tick: $($result.StdOut)"
+    Assert-True -Condition ($result.StdOut -notmatch "scripts\\team\\cycle\.ps1") -Because "not the cycle alone"
+
+    $tick = Join-Path $repoRoot "scripts\team\tick.ps1"
+    $work = Join-Path $env:TEMP ("pagentos-tick-" + [guid]::NewGuid().ToString("N"))
+    [void](New-Item -ItemType Directory -Force -Path $work)
+    try {
+        $log = Join-Path $work "calls.log"
+        $fakeFeed = Join-Path $work "feed.ps1"
+        $fakeCycle = Join-Path $work "cycle.ps1"
+        Set-Content -LiteralPath $fakeCycle -Encoding ASCII -Value ("Add-Content -LiteralPath '" + $log + "' -Value ('cycle ' + (`$args -join ' ')); exit 0")
+        foreach ($feedExit in @(0, 3, 1)) {
+            if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force }
+            Set-Content -LiteralPath $fakeFeed -Encoding ASCII -Value ("Add-Content -LiteralPath '" + $log + "' -Value ('feed ' + (`$args -join ' ')); exit " + $feedExit)
+            $run = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -Arguments @(
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tick, "-FeedPath", $fakeFeed, "-CyclePath", $fakeCycle,
+                "-MaxParallel", "6", "-DailyId", "-Research", "-ResearchEveryHours", "6", "-Base", "team/nightly/lead")
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ("feeder exit ${feedExit}: " + $run.StdOut + $run.StdErr)
+            $calls = @(Get-Content -LiteralPath $log)
+            Assert-Equal -Expected 2 -Actual @($calls).Count -Because "the feeder, then the cycle (feeder exit $feedExit)"
+            Assert-True -Condition ($calls[0] -match "^feed") -Because "the feeder first"
+            Assert-True -Condition ($calls[1] -match "^cycle .*-MaxParallel 6 .*-Research.*-DailyId.*-ResearchEveryHours 6.*-Base team/nightly/lead") -Because "the cycle's arguments travel: $($calls[1])"
+        }
+        Remove-Item -LiteralPath $log -Force
+        $only = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tick, "-FeedPath", $fakeFeed, "-CyclePath", $fakeCycle, "-NoFeed")
+        Assert-Equal -Expected "cycle" -Actual ((@(Get-Content -LiteralPath $log) | ForEach-Object { ($_ -split " ")[0] }) -join ",") -Because ("-NoFeed runs the cycle alone: " + $only.StdOut)
+        Set-Content -LiteralPath $fakeCycle -Encoding ASCII -Value "exit 3"
+        $held = Invoke-NativeProcess -FilePath $powershell -TimeoutSeconds 120 -SuccessExitCodes @(3) -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tick, "-FeedPath", $fakeFeed, "-CyclePath", $fakeCycle)
+        Assert-Equal -Expected 3 -Actual $held.ExitCode -Because "the tick's exit code is the cycle's"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
 # ============================================================================ the cycle, run
 
 Write-Host ""

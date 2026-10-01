@@ -66,7 +66,8 @@ function Get-NightlyPlan {
     $utc = [System.TimeZoneInfo]::ConvertTimeToUtc($two, $istanbul)
     $local = [System.TimeZoneInfo]::ConvertTimeFromUtc($utc, $LocalZone)
     $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $script = Join-Path $RepoRoot "scripts\team\cycle.ps1"
+    # tick.ps1: the roadmap feeder first, then the cycle (ADR-0214 addendum 8).
+    $script = Join-Path $RepoRoot "scripts\team\tick.ps1"
     $usd = $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes -Research"
     # -Research: the researcher runs in EVERY cycle, whether the queue is full or not (owner,

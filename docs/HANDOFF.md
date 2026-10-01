@@ -18,11 +18,19 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 **ÜRETİM: main `ca5cc79512de47574f81df471323615567122412` (2026-10-01 20:47 UTC, api-green), LKG `858c3e0b`, pin = RELEASE,
 reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek 6.8.0-142 (bakım 19:00 UTC'de koştu).
 Kapı 36/36 (`b8a44916`). QUALIFICATION Stage 40. Ana kopya `team/nightly/lead` üzerinde (main birleştirildi).**
-**SIRADAKİ ENTEGRASYON: `integrate/d20261001` üzerinde `b8a44916`'dan SONRA merged olanlar (understanding-stt-corpus,
-model-policy-cycle, …) + denetimden geçecekler (approvals-detail-view → sahibin düğmeleri açılır; roadmap 2a/2b/2c işleri).
-Lead: bağla, tam kapı, main, kural gereği sormadan yayınla (istisnalar ADR-0214 ek 9; `understanding-corrections-memory`
-0064 migration'ı taşır: expand-only testi geçiyorsa otomatik, değilse sahibe sor). Döngü 6 yuva, 30 dk'da bir.
-Öncelikli iş: `office-worker-seats` (sahip: 4. çalışan koltuğu).**
+**SÜREN İŞ (lead, 2026-10-02 gece): ÜÇÜNCÜ ENTEGRASYON, dal `gate/d20261001-3` (worktree `.claude/worktrees/gate`) =
+`integrate/d20261001` @ `8d081d1b` + lead bağlaması. İçinde: understanding-stt-corpus, model-policy-cycle,
+lead-roadmap-feeder, webtask-model-planner, approvals-detail-view (Onay Merkezi düğmeleri + "Detay"). Bağlama:
+`scripts/team/tick.ps1` (önce besleyici, sonra döngü; zamanlanmış görev artık bunu çalıştırır), `team-feed.tests.ps1`
+kapıda ve ci.yml'de, kapıya web lint+vitest+tsc adımı, ADR-0237/0238/0239. İkinci entegrasyonun kapısı (`2c691585`)
+tek testte KIRMIZIYDI (`team-feed.tests.ps1` hiçbir yerde koşmuyordu) - döngü ben çalışırken entegrasyon dalına iş
+birleştirdiği için; bu yüzden kapı artık lead'in KENDİ dalında koşar. SIRA: bu commit'i ana kopyada detached aç, tam
+kapı, yeşilse main'e `--no-ff`, it, kural gereği sormadan blue/green yayınla + pin + doğrula, işleri `released` yap,
+görevi yeniden kaydet (`register-nightly.ps1 -Register …` → tick), Stage 41, ana kopyayı `team/nightly/lead`'e geri al.
+Ana kopya şu an DETACHED (`2c691585`). Öncelikli iş: `office-worker-seats` (sahip: 4. çalışan koltuğu).
+`understanding-corrections-memory` 0064 migration'ı taşır: expand-only testi geçiyorsa otomatik, değilse sahibe sor.**
+**BİLİNEN AÇIK: besleyici kilidi alır; döngü koşarken (iş oldukça bitmez) besleyici "kilit tutuluyor" der ve kart
+kesmez → kuyruk yalnız döngüler ARASINDA beslenir. Kapanışı `cycle-seat-pool` kartında (havuz besleyiciyi kendi çağırır).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,

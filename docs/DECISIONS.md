@@ -18494,3 +18494,227 @@ work, queued: `understanding-polite-forms-everywhere` (the polite imperative for
 production: the 25 "not understood" get no semantic candidate at all today), and the 8 confident wrong readings are the
 first to study (`understanding-confident-wrong`). The collector has not been run against production: the real renderings are
 three.
+
+## ADR-0237 — The roadmap feeds the queue: `scripts/team/feed.ps1`, and the scheduled task's one action is `tick.ps1` (2026-10-02)
+
+Implements ADR-0214 addendum 8 (and the "feeder" of addendum 9); narrows nothing. The worker's text
+(`team/plans/lead-roadmap-feeder-adr.md`) follows; the lead's wiring is at the end.
+
+### Context
+
+The queue was fed by the lead in a chat session. When it ran dry at night, eight seats sat
+idle until a person wrote cards. The owner, 2026-10-01: "hiçbir ajan mümkün olduğunca
+durmasın, mümkün olduğunca roadmap'ten ilerleyelim ve araştırmacının yeni fikirleri
+onaylanırsa bu fikirler roadmap'e eklensin."
+
+### Decision
+
+`scripts/team/feed.ps1` (decisions in `scripts/lib/TeamFeed.ps1`) is a step the scheduled task
+runs BEFORE `cycle.ps1`, on the same store (files, or `-QueueUrl`/`-QueueToken`).
+
+1. **Runnable** = state `approved`, `assigned`, `returned`, `in_progress` or `inspecting`
+   AND no unmet dependency (`Get-TeamUnmetDependencies`). With `-MinRunnable` (3) or more the
+   script does nothing: no lock, no file, one line on stdout.
+2. **One lead run** (`.claude/agents/lead.md`, the model `team/models.json` names for the
+   lead; tools = the role file's minus `Agent`, `Bash`, and `Edit` unless an idea row is to
+   be written) is asked for at most `-MaxNew` (3) cards in ONE file,
+   `team/plans/feed-<date>-<n>.json`. The prompt carries the roadmap's rows as the script
+   reads them, "The limits, stated once", "The order", every task of the queue (id, state,
+   title) and the areas in work.
+3. **The script judges, whole or nothing** (`Test-TeamFeed`). The cards go through the judge
+   of the lead's split, `Test-TeamSplit` - reused, not forked: fields, a free id, no area of
+   a task in work, no shared file, no main. The feeder adds: at most `-MaxNew`; a title no
+   task has; `roadmap_row` IS a row of `docs/ROADMAP.md`. Accepted cards are appended as
+   `approved`, reason `roadmap: <row>; fed by the lead run <date>`, `created_at` one second
+   apart so the lead's order is the queue's order (the queue is ordered by `created_at`).
+4. **What a row is.** Read from "## The JARVIS target": the first cell of each row of the
+   JARVIS table (and its bold part; not the row whose state says NEVER), the bold title of each item of "The order", the
+   section's other headings ("Definition of done", "How it is built from here"), the bold
+   name of each approved idea. A card quotes one exactly; ONE note in brackets may follow
+   ("browser-use, anywhere (order 2b, ADR-0213)") - that is how the queue's cards are written
+   today, and a test holds eleven of them to the real ROADMAP.md.
+5. **What needs the owner is never a task.** The lead run marks such an item `needs_owner`
+   with one sentence (a new dependency or account, a paid service, an irreversible or
+   production action, a roadmap row that does not exist). The script queues it
+   `awaiting_owner`, without an area, WITH a proposal file it writes itself
+   (`team/proposals/<date>-feed-<id>.md`). The proposal is not decoration: an approved task
+   with neither an area nor a proposal is moved to `assigned` by the cycle and breaks the
+   queue's protocol for every cycle; with a proposal it is the lead's to split.
+   A card whose row does not exist and is NOT marked is refused with the whole file.
+6. **Approved ideas -> roadmap.** For a task that is `done`, has a `proposal`, a reason
+   starting "sahip onayladı", and whose proposal path is nowhere in ROADMAP.md, the same run
+   adds one row to the "Approved ideas" table. `Test-TeamFeedRoadmapEdit` accepts only: every
+   old line still there in order; new lines inside that table; five cells, a date first, no
+   empty cell; each row names exactly one asked idea's proposal path; no idea twice. The
+   script then commits `docs/ROADMAP.md` alone (`git commit -m ... -- docs/ROADMAP.md`) on the
+   branch the checkout is on. On `main`, on a detached HEAD, or when ROADMAP.md has
+   uncommitted changes, the row is not asked for at all and the report says why. No push.
+7. **A run that left its file is not trusted.** `git status` + a sha256 of every listed file
+   is taken before and after the run (the main checkout is rarely clean, so "dirty" is not
+   the test - the difference is). Any path that differs, other than the feed file (and
+   ROADMAP.md when a row was asked for), refuses the WHOLE run: nothing queued, nothing
+   committed, ROADMAP.md put back byte for byte. The stray file itself is left as found and
+   named in the report - in a checkout a person also works in, the script cannot tell a stray
+   write from that person's work, and the working tree is never reset.
+   The two verdicts are otherwise independent: a refused feed file does not stop a sound
+   idea row from being committed, and a missing idea row does not stop sound cards.
+8. **The same stops as the cycle.** The team lock is taken as cycle `feed-<date>` and
+   released in `finally` (other machine's fresh lock: exit 3; stale or dead: taken over, said
+   so). `team/stop.flag`: nothing starts and the flag is LEFT - it is the cycle's to remove.
+   Usage limit: waited out and asked once more when the tool says when it lifts, else stop.
+   `-DryRun` prints the plan and writes nothing. Report: `team/reports/feed-<date>.md`
+   (Turkish, a section per lead run that was STARTED; posted to the store in API mode).
+9. **No run, no report.** When nothing was started - the seats are full, `team/stop.flag`, a
+   lock somebody holds (read, or lost in the race of the API's acquire) - the feeder says so
+   on standard output and neither writes nor posts a report. The Onay Merkezi shows the
+   newest report in the store; a "the lock is held" section posted every 30 minutes while a
+   cycle runs took the place of that cycle's report (inspector, on the real routes).
+   A run that fails or is killed at its deadline is not trusted either, whatever it left on
+   disk: a valid feed file written before the failure is not read.
+
+### Consequences / what is deliberately not here
+
+- The feeder cannot see whether an item "needs the owner"; it relies on the lead's mark plus
+  the checks a script can make (row exists, area rules). The inspector's first approved feed
+  card is the real test of the prompt.
+- Idea rows are written only when a lead run happens, i.e. when the queue is low (the card's
+  letter). With a full queue an approved idea waits for the next low moment.
+- An idea the CYCLE splits ends with reason "bölündü: ..." - it no longer starts with "sahip
+  onayladı", so step 6 does not see it. Keeping the owner's word on that task is the cycle's
+  or the Onay Merkezi's (outside this task's area).
+- On today's queue seed three ideas of 2026-09-30 (`idea-2026-09-30-anlati-satiri`,
+  `-bulutta-yurutme`, `-gorev-dongusu-bulutta`) match step 6: they became items 2b/2c of "The
+  order" and were never rows of "Approved ideas". The first real run will ask for their rows.
+- A lead run every 30 minutes while the roadmap's next item cannot be cut (an empty list
+  each time) is not throttled here.
+- The live status (Ofis page) is not written by the feeder: the lead's seat shows nothing
+  while the feed run works.
+- The feeder's roadmap commit does not touch `docs/HANDOFF.md` (the lead's file).
+- The LEAD wires it: the call in the scheduled task (`scripts/team/register-nightly.ps1`,
+  before `cycle.ps1`, same `-QueueUrl/-QueueToken`), `scripts/tests/team-feed.tests.ps1` in
+  `scripts/quality-gate.ps1` and in `.github/workflows/ci.yml` beside `team-cycle.tests.ps1`.
+
+### The lead's wiring (integration d20261001, third)
+
+- `scripts/team/tick.ps1` is the scheduled task's one action: `feed.ps1`, then `cycle.ps1`, each in a child
+  process, on the same store arguments. **The feeder never decides whether the cycle runs**: whatever it
+  answers (seats full, the lock held, a refused feed file, a crash, a script that could not be started) the
+  cycle is started and the tick's exit code is the cycle's. `-NoFeed` is the cycle alone.
+  `scripts/team/register-nightly.ps1` registers the tick (it registered `cycle.ps1`); the arguments are the
+  same ones, so a task registered before this change keeps working until it is registered again.
+- `scripts/tests/team-feed.tests.ps1` is a step of `scripts/quality-gate.ps1` and a line of
+  `.github/workflows/ci.yml`. The second integration's gate (`2c691585`) was RED on exactly this: the suite
+  existed and nothing ran it (`test_ci_runs_every_powershell_suite`).
+- The gate gains "Web shell lint, unit tests and types (oxlint, vitest, tsc)". GitHub Actions has been off
+  since 2026-09-19, so CI's web job ran nowhere: the Ofis and Onay Merkezi suites were run by their workers
+  and inspectors only. From this commit a release cannot leave with a red web suite.
+- **Known limit, not closed here.** The feeder takes the team lock, and a cycle holds it for as long as it
+  has work. While a cycle runs with idle worker seats the tick's feeder therefore answers "the lock is held"
+  and cuts nothing: the queue is fed only BETWEEN cycles. Feeding from inside the running cycle belongs to
+  the seat pool (`cycle-seat-pool`: the pool asks the feeder when fewer tasks are runnable than there are
+  worker seats); its card says so.
+
+## ADR-0238 — The browser task loop's model planner: one forced `step` call, cheap by default, capable for the re-plan (ADR-0207 PR-C 1/2) (2026-10-02)
+
+**Decision.** `app/webtask/model_planner.py::ModelPlanner` is the model behind the `TaskPlanner` interface.
+One Messages API request per plan: `system` = `build_prompt()["system"]`; ONE user message holding the blocks
+`GOAL`, `ELEMENTS`, `HISTORY`, `PAGE` in that order (the goal is read first; the page excerpt is the last thing in
+the message and exists only inside the untrusted-content wrapper); `tools=[STEP_TOOL]`,
+`tool_choice={"type":"tool","name":"step"}`, `max_tokens=600`, `temperature=0`, no `thinking`. The model is
+`settings.research_anthropic_model` (Haiku), and `settings.executive_planner_model` (Sonnet) when
+`request.capable` - which the loop sets for the round after a step that did not hold. That field is the whole
+re-plan rule: this module adds no budget and no second call. Raw `httpx` through an injectable `send`, one retry
+after 1.5 s on 429/529, 30 s timeout (two attempts stay inside the round activity's 150 s heartbeat timeout):
+the shape of `assistant_chat.AnthropicChatProvider`. No SDK, no new dependency, no `config.py` change.
+`default_planner()` chains `[RuleTablePlanner, ModelPlanner]` when `anthropic_api_key` is set and
+`[RuleTablePlanner, NoModelPlanner]` otherwise - a consent banner still costs nothing.
+
+**What is accepted back.** Exactly one `tool_use` block named `step`, whose input survives `parse_step`.
+Words, a refusal, another tool, two calls, `stop_reason == "max_tokens"` (a step cut off mid-arguments), any
+non-200, a transport failure or a timeout is a `PlannerError`, which the loop already turns into a failed task
+(`FAIL_PLANNER`). Every such message is built from fixed words, a status number, an exception CLASS name or a
+count: never the model's text, never the vendor's error message, never a key the model invented
+(`parse_step` names unknown keys in its error; here that case is replaced by a fixed sentence, because a model
+that read a hostile page can write anything as a key).
+
+**Why.** Until now every round the rules could not answer asked the owner "model henüz bağlı değil". The
+boundary (prompt, tool, strict parse, gate) was built and tested before a model existed; this puts a model
+behind it without the loop, the gate or the service changing.
+
+**Open - for the next card (real model, fixture site), none verified here.**
+* No request has been sent to the real API. `temperature: 0` and a forced `tool_choice` are accepted by Haiku
+  4.5 as documented; whether `executive_planner_model` (`claude-sonnet-5` by default) accepts a non-default
+  `temperature` is NOT_RUN. If it answers 400, every capable round fails with "status 400" - loud, not silent.
+* With the key that production already has for research, `default_planner()` returns the model planner as soon
+  as this is released. A task still needs the device's `-AuthorizeTasks` grant to run at all (PR-C), so no
+  round is planned by a model before the owner grants it; after that each unruled round costs one Haiku call.
+* Element NAMES are page-written and sit in `ELEMENTS`, outside the wrapper (`build_prompt`'s design: defused,
+  one line each, labelled as data by the system prompt). The guarantee stays `parse_step` + the gate.
+* The trail's `planner` field says `model`, not which model; the round after a hint is the capable one.
+* A 404 (retired model id) is reported as "status 404" and logged with the model id; it is not retried.
+
+**The lead's reading at merge.** Nothing in production reaches this planner today: `start_task_db` has no
+caller outside its own module (the voice/Kokpit entry is PR-D), and the home PC's agent is not installed with
+`-AuthorizeTasks`. So this release changes no behaviour the owner can meet, and the "Open" list above is
+exactly what the next card (`webtask-prc-gate-bindings`, then a real run against the fixture site) has to
+close before any claim above PROVEN_AUTOMATED: **the real API has not been called (NOT_RUN)**.
+
+## ADR-0239 — The Onay Merkezi's "Detay" reads a proposal with its own small parser (2026-10-02)
+
+**Context.** Owner, 2026-10-01: each waiting idea needs a "Detay" that tells him, with examples,
+what the idea would bring. The page dumped `proposal_text` in one `<pre>`. The text is Markdown
+written by the researcher; it reaches the browser from the Cloud Core and is not trusted markup.
+
+**Decision.**
+- `apps/web/app/core/approvals/proposalSections.ts` is a pure parser, not a Markdown renderer and
+  not a dependency. It yields sections, paragraphs, lists and links; `ProposalDetail.tsx` renders
+  them as React text nodes. No `dangerouslySetInnerHTML`, no HTML from the text, ever.
+- A link exists only for `http://` / `https://` (prefix check AND `new URL().protocol`; the
+  normalised `href` is what is rendered, `rel="noopener noreferrer"`, new tab). Any other scheme
+  stays in the sentence exactly as written. Bare URLs are not auto-linked.
+- Sections are cut at `## ` headings with any title (unknown ones kept under their own title);
+  a `## ` line inside a code fence is the fence's text. The older `**Heading**:` /
+  `**Heading:**` line cuts a section ONLY when the proposal has no `## ` heading at all, ONLY
+  when the line is not a list item, and ONLY for the seven names of the researcher's rule (Ne,
+  Faydası…, Neden şimdi, Nasıl, Maliyet…, Kanıt planı, Karar): the real proposals write
+  `- **Maliyet**: 5 USD/ay` and `**Efor**: orta` as ordinary sentences under a `## ` heading
+  (inspector, d20261001: such a bullet produced a second "Maliyet" and a second "Karar").
+- The benefit section is matched by whole name (`fayda`, `faydası`, `faydalar…` followed by a
+  space, dash or the end), not by stem: "Faydalanılan kaynaklar" is not it. Its "Bugün:" /
+  "Bununla:" lines (plain, bold, numbered or bulleted, with wrapped continuation lines) become
+  pairs, and so does the one-line form `Bugün: … / Bununla: …` (separator `/`, `→`, `->`, `=>`,
+  `—`, `–`, `|` or none; the second label capitalised - "…, bununla: …" is a sentence).
+  "Kazanç:" and "Kazanmadığımız:" (capitals too) are the two closing lines; anything else in the
+  section is kept and shown after them. A half pair shows only the half it has - a label is
+  never rendered with nothing after it - and a pair with neither half is dropped. A benefit
+  section with no pair at all gets the "fayda örnekleri olmadan" sentence above what it holds.
+- Headings and links are found by a single forward scan, not by a backtracking expression: the
+  text comes over the network, and a 100 KB `## # # #…` line or 500 KB of `[` froze the page
+  thread for 8-10 s. A link's text is what stands after the LAST `[` before its `](`. The tests
+  assert the answer on those inputs; the runner's timeout is only the hang guard.
+- A list is numbered (`<ol>`) when its first item is, bulleted otherwise.
+- Order in the panel: benefit, Ne, then every other section in the file's order (the untitled
+  lines under the title - date, roadmap row - come first among those, without a heading).
+- `**bold**` markers are removed and the words kept as plain text; emphasis, code spans, tables
+  and nested lists are not rendered (a `###` line is a paragraph, a nested item a flat item).
+- "Detay" is offered on every idea, and on a release only when it carries a proposal. It is never
+  disabled by the decision lock: reading is not deciding. `aria-expanded`, and `aria-controls`
+  while open; the state is per card, so several may be open.
+- `decisions_open` (sibling task approvals-while-cycle-runs) is optional in the view type;
+  `decisionsOpen(view) = decisions_open ?? !cycle_running` is the only reader. The buttons lock on
+  `!decisionsOpen`. Three sentences: running + open -> "kararınız bir sonraki döngüde uygulanır";
+  running + closed -> the old "bitene kadar karar verilemez"; not running + closed (a state the
+  API may send) -> "Şu anda karar verilemez; biraz sonra yeniden deneyin." - a disabled button is
+  never left unexplained.
+- `page.tsx` keeps the fetch; the rendering moved to `ApprovalsList.tsx` (a Next page may export
+  only its page, and the tests render the list from a view).
+
+**Consequences.** A proposal written with constructs outside this list is still fully readable,
+as text. The three ideas of 2026-10-01 have no benefit section and show the "fayda örnekleri
+olmadan yazılmış" sentence until the researcher rewrites them. No stylesheet was touched (outside
+the area): the panel uses plain `h3` / `p` / `ul` / `ol` inside the existing `detail-row`, and
+takes a row of its own there with an inline `flex-basis: 100%` (the card is a wrapping flex row).
+`tests/approvals/proposal-shapes.test.ts` reads every file under `team/proposals/` and compares
+the parser's section titles with the file's own `## ` lines, so a new shape from the researcher
+fails a test instead of reaching the owner. Not rendered, still: code spans (backticks stay
+literal), a second benefit section (shown as an ordinary section), nested lists.
