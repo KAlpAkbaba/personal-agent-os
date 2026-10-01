@@ -473,7 +473,14 @@ function Invoke-BranchIntegration {
                 $files[[string]$task.id] = @()
                 $taskBranch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
                 if ($taskBranch -and (Test-TeamBranch -RepoRoot $repoRoot -Branch $taskBranch)) {
-                    try { $files[[string]$task.id] = @(Get-TeamChangedFiles -RepoRoot $repoRoot -Branch $taskBranch -Base $baseSha) } catch { }
+                    # Inside the task's AREA only: a worker's branch is opened from the cycle's -Base (the lead's
+                    # branch, which can be ahead of main), so its diff against main also holds files that are not its own.
+                    $area = @(Get-TeamProperty -InputObject $task -Name "area" -Default @())
+                    try {
+                        $files[[string]$task.id] = @(Get-TeamChangedFiles -RepoRoot $repoRoot -Branch $taskBranch -Base $baseSha |
+                                Where-Object { Test-TeamPathInsideArea -Path $_ -Area $area })
+                    }
+                    catch { }
                 }
             }
             $blamed = @(Get-TeamGateBlamedTasks -FailureText $gate.FailureText -TaskFiles $files)

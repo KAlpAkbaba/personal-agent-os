@@ -429,6 +429,12 @@ function New-Sandbox {
         $target = Join-Path $tree (($area -replace "/", "\") + "\$id.txt")
         [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target))
         Set-Content -LiteralPath $target -Value "work on $id" -Encoding ASCII
+        if ($item.ContainsKey("Extra")) {
+            # A file the branch carries that is NOT the task's own (its base was ahead of main).
+            $extra = Join-Path $tree (([string]$item.Extra) -replace "/", "\")
+            [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $extra))
+            Set-Content -LiteralPath $extra -Value "not the task's own" -Encoding ASCII
+        }
         [void](Invoke-SandboxGit -Root $tree -Arguments @("add", "-A"))
         [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-m", "work on $id"))
         [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "remove", "--force", $tree))
@@ -602,15 +608,16 @@ try {
     }
 
     Test-Case "a second red gate on the same branch stops it with the TEAM_PROTOCOL 10 line, and it stays stopped until the lead looks" {
-        $root = New-Sandbox -Work $two
+        $root = New-Sandbox -Work @(@{ Id = "task-one"; Area = "src/a" }, @{ Id = "task-two"; Area = "src/b"; Extra = "src/shared/base.txt" })
         $mainBefore = Get-Sha -Root $root -Revision "main"
         $first = Invoke-Integrate -Root $root -Gate "red" -Names "src/a/task-one.txt"
         Assert-Equal -Expected 6 -Actual $first.ExitCode -Because $first.Output
         Assert-True -Condition ($first.Report -notmatch "TEAM_PROTOCOL 10") -Because "one red gate does not stop the branch"
-        $second = Invoke-Integrate -Root $root -Gate "red" -Names "nothing/named.here"
+        # The gate names a file task-two's branch carries OUTSIDE its area: that is not task-two's file.
+        $second = Invoke-Integrate -Root $root -Gate "red" -Names "src/shared/base.txt"
         Assert-Equal -Expected 8 -Actual $second.ExitCode -Because $second.Output
         Assert-True -Condition ($second.Report -match "iki kez kırmızı.*TEAM_PROTOCOL 10") -Because "the stop is a line in the report: $($second.Report)"
-        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $second.Queue -Id "task-two").state -Because "nobody was named: it stays merged"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $second.Queue -Id "task-two").state -Because "a file outside its area names nobody: it stays merged"
         Assert-True -Condition ((Get-TaskById -Queue $second.Queue -Id "task-two").reason -match "TEAM_PROTOCOL 10") -Because "and says why it waits"
         Assert-Equal -Expected 2 -Actual @($second.GateCalls).Count -Because "two gates ran"
         $third = Invoke-Integrate -Root $root -Gate "green"

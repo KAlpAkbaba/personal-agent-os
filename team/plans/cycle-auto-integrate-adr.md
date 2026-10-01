@@ -54,8 +54,10 @@ production, the recovery supervisor or the last-known-good record (a test reads 
 7. **Red.** Nothing reaches main. The failing steps and the first failing test go into the
    report and each task's `reason`; a task is `returned` when the failing steps' text holds the
    path of a file its branch changed (whole, or at least two last segments - how pytest prints
-   it); the others stay `merged`. A gate-return does not count towards the inspector's two
-   returns.
+   it) AND that file is inside the task's area - a worker's branch is opened from the cycle's
+   `-Base` (the lead's branch, which can be ahead of main), so its diff against main also holds
+   files that are not its own. The others stay `merged`. A gate-return does not count towards
+   the inspector's two returns.
 8. **Two failed attempts in a row stop the branch** (TEAM_PROTOCOL 10) until the lead runs
    `-ClearGateStop`. A refused lead run and a lead run without a result count as attempts (they
    would otherwise be retried every half hour, a lead run each); the usage limit, a missing
@@ -71,6 +73,10 @@ production, the recovery supervisor or the last-known-good record (a test reads 
   mode (per-task versioned writes); in file mode the step would overwrite the cycle's queue.
 - The suite must be added to `scripts/quality-gate.ps1` and `.github/workflows/ci.yml`, and the
   call to `scripts/team/register-nightly.ps1`, by the lead (outside this task's area).
+- `-Base` (default `main`) is the branch that RECEIVES the gated work. While the cycle opens
+  worker branches from `team/nightly/lead`, an integration branch carries that branch's commits
+  too, and the first green gate puts them on main with the tasks. The lead decides whether that
+  is wanted before scheduling the step.
 - `cycle.ps1` still writes "tam kapı ve main'e birleştirme bu betikte yok; lead yapar" under
   the protocol gaps; that line is stale once the step is scheduled.
 - Evidence: PROVEN_AUTOMATED with fakes (sandbox repository, fake gate, fake lead, fake API,
