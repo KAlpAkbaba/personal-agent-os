@@ -17102,6 +17102,60 @@ reboot for unattended upgrades: a kernel reboot stays a decision, not a timer.
 and a PowerShell test suite in the gate, so the next window is one command with the same
 report.
 
+### ADR-0223 addendum (2026-10-01): the first window did not run; the window is the host's own timer now
+
+**What happened.** The window the owner approved (2026-10-01 06:30-07:00 Istanbul) was bound
+to a wake-up of the lead's Claude session. The session ended during the night and the wake-up
+went with it: at 06:27 nothing ran, and the host stayed as it was (kernel `6.8.0-138`,
+`reboot-required`, 26 upgrades, one zombie; health `ok`). Nothing was harmed - and nothing a
+session schedules can be relied on.
+
+**The owner's rule, permanent (2026-10-01):** "Bundan sonra zaman bağlı her iş kalıcı göreve
+bağlansın, oturuma değil." A job that must happen at a time is bound to a durable scheduler -
+a systemd timer on the host it acts on, or a Windows scheduled task on the home PC - never to
+a session wake-up, a cron of the session, or "I will do it when I am woken". The session may
+ALSO watch; it is never the trigger. Written into `docs/TEAM_PROTOCOL.md` section 9.
+
+**The new window: 2026-10-01 22:00-22:30 Istanbul (19:00-19:30 UTC), owner-approved.** How it
+is bound:
+
+* On the host (the trigger and the work - no SSH, no home PC, no session in the path; the
+  Tailscale upgrade inside the window cannot cut its own branch):
+  `pagentos-maintenance-window.timer` (`OnCalendar=2026-10-01 19:00:00 UTC`, `Persistent=false`
+  so a host that was down does not run it late) starts `pagentos-maintenance-window.service`:
+  `ExecCondition` refuses outside 19:00-19:10 UTC of that date (proven: started by hand at
+  08:00 UTC -> "Skipped due to 'exec-condition'", nothing changed); `ExecStartPre` writes the
+  BEFORE facts (`/usr/local/sbin/pagentos-maintenance-facts.sh before` ->
+  `/opt/pagentos/maintenance/before-2026-10-01.txt`: kernel, uptime, upgrades, zombies,
+  release/LKG/pin, health, containers, the devices' open sessions); `ExecStart` is
+  `/usr/local/sbin/pagentos-maintenance-reboot.sh --preflight --run` - the script of the task
+  `maintenance-reboot-script` (cycle-2026-10-01, inspected; sha256 `2d0fbccf...a749a6`, read
+  line by line by the lead), whose preflight ran on the real host today: 9/9 `ok`, `PREFLIGHT
+  OK`; `ExecStopPost` starts the reconcile timer again whatever happened; `TimeoutStartSec=3600`
+  so dpkg is never killed half-way.
+* After the reboot: `pagentos-maintenance-verify.timer` (`OnBootSec=4min`, then every 10 min)
+  starts `pagentos-maintenance-verify.service`, which is inert unless
+  `/opt/pagentos/MAINTENANCE_MARKER` exists; it runs `--verify` (kernel changed,
+  reboot-required gone, containers, reconcile OK, zombies 0, health ok on the same release,
+  downtime measured) -> `/opt/pagentos/LAST_MAINTENANCE.json`, then writes the AFTER facts.
+* On the home PC (the report): the Windows task `PagentOS Maintenance Report 2026-10-01`
+  (22:40 and 23:10 Istanbul) runs `scripts/cloud/collect-maintenance-report.ps1 -Date
+  2026-10-01`, which reads those files over SSH (read-only) and writes
+  `team/reports/maintenance-2026-10-01.md` with a verdict. If Tailscale asks for its browser
+  check the report says so and the facts stay on the host.
+
+**Step 3 of the procedure, restated.** "No team cycle running" was written when the cycle
+might talk to the Cloud Core. With `PAGENTOS_TEAM_STORE=file` a cycle makes no Cloud Core
+call, so a running cycle does not postpone the window; the script checks what it can see (no
+release in flight). When the store moves to the database, the cycle must tolerate the outage
+(its API calls already retry) or the window must check the lock through the API.
+
+**What is honest about tonight.** `--run` and `--verify` run for the first time on a real
+host with nobody driving: the tests proved them on fakes. If a step fails before the reboot
+the script stops there (exit 11), the reconcile timer is restarted and production keeps
+serving the same release; if verification fails the marker stays and step 12 applies. The
+units are removed after the report (they name one date and are inert after it).
+
 ## ADR-0224 — Voice command understanding in three layers: normalisation, semantic match with a confidence, a threshold policy (owner's architectural requirement, 2026-09-30)
 
 **Status.** Accepted - the owner's directive, given after the trial of 2026-09-30 20:11 UTC

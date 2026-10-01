@@ -120,6 +120,11 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
 
 - Pilot cycles are started by the owner. After the pilot report, a Windows scheduled task on
   the home PC starts `cycle.ps1` nightly (02:00, Europe/Istanbul) without caps (section 7).
+- **A time-bound job is bound to a durable scheduler, never to a session** (owner,
+  2026-10-01, after a maintenance window bound to a session wake-up did not run): a systemd
+  timer on the host the job acts on, or a Windows scheduled task on the home PC. A session
+  may also watch; it is never the trigger. The job writes its own result where the next
+  session finds it.
 - The morning report reaches the owner in the web shell (Bildirimler) and, when the voice
   path allows, as one spoken paragraph: what is ready, what needs his approval, what he must
   try on a real device.
