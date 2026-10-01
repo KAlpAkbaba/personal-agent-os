@@ -17833,3 +17833,141 @@ card's area was the lead's omission; `GET /v1/team/queue/status` is exempt, by n
 PowerShell-client contract test (it is the read-back of what the cycle PUTs). Own drawing, no third
 party (`docs/THIRD_PARTY_COMPONENTS.md`). PROVEN_REAL waits for the store's move to the database and
 a screenshot during a real cycle.
+
+### ADR-0224 addendum 3 (2026-10-01): layer 3 as built - the threshold policy, the read-back, the one question
+
+*From `team/plans/understanding-threshold-policy-adr.md` (ADR (lead numbers it) — Layer 3 of ADR-0224 as built: the threshold policy, wired into the relay).*
+
+**Status.** Accepted (worker, cycle adr0224-02). `resolve_intent` itself is untouched; the policy
+runs in the relay (`record_client_events`), on the result the rule tables and the B51 router give.
+
+**Decision.**
+- `app/voice/understanding/policy.py` + `thresholds.json` beside it (package data, one reader, read
+  with `Path(__file__).with_name`; `COPY app ./app` ships it): `high 0.85`, `medium 0.60`,
+  `device_min 0.65`. A file with a missing key, a non-number or crossed bands is refused.
+- `decide(candidates, *, device, device_missing, device_aliases, negated) -> Decision(band,
+  candidate, question, confidence, layer, ranked, device, acts, missing)`.
+  HIGH: act, receipt unchanged. MEDIUM: act and read back. LOW: one question, no action.
+- **The rule candidate is the only one acted on.** A reading no rule matched is recorded (band,
+  confidence, intent names) and never dispatched: the relay has no slots for it, and the lexical
+  embedder scores "Bugün nasılsın" weather_query 0.60. Promotion needs slot extraction and the STT
+  corpus numbers (task `understanding-stt-corpus`). The model path for such a sentence is as today.
+- A repaired rule route (0.9) outranked by an acting semantic reading at HIGH is LOW: one question
+  naming the two families ("Hangisi efendim: medya mı, araştırma mı?"), never a guess. An exact
+  rule (1.0) is never contested.
+- **Device slot** (`DEVICE_SLOT_INTENTS = {app_open}`, closed on purpose: "ofis bilgisayarları
+  hakkında araştır" matches the alias at 1.0 and names no machine). Sources, in order: the owner's
+  own closed form (rule parser, 1.0); the owner's answer to the question (1.0, layer `answer`);
+  layer 1 (`ofisü`->`ofis` through the confusion list 0.75; a suffixed alias before the computer
+  word, "ofisi bilgisayarında", 0.9); layer 2 - only ABOVE 0.65, only when an alias word is in the
+  sentence (exact, or distance >= 0.75 for words of 4+ letters), never HIGH (capped at high-0.01,
+  0.75 when a confusion entry was applied), and only as a canonical alias word the device port can
+  bind. Anything else: `device_missing` -> the question "Hangi bilgisayarda: ev mi, ofis mi, iş mi?"
+  (particle in vowel harmony). Never the session's device by default.
+- A bare, unpossessed "bilgisayarda/-dan/-a" with no picking word before it ("mutfaktaki", "diğer")
+  is this machine, like "bu bilgisayarda" (`names_unbound_machine`).
+- A negative imperative of a known verb caps a rule-less reading just under HIGH.
+- **Relay.** `ResolvedIntent` gains `band`, `candidates`; `confidence` becomes the decision's (the
+  B51 model route keeps its own). The turn record gains `confidence`, `band`, `candidates`,
+  `understanding {layer, band, confidence, candidates[:3], question}`; `device_targets` carries the
+  alias the layers bound. The audit row `voice_intent_resolved` gains `understanding {layer, band,
+  confidence, candidates[:3]}` - intent names and numbers only, never `Candidate.evidence` (KVKK).
+- **Two refusals before any handler** (`handle_tool_call`, beside step-up and ADR-0075): (1) a call
+  whose arguments carry a device-like key (`device`, `device_id`, `cihaz`, `bilgisayar`, `machine`,
+  `computer`, `hostname`) is refused whole, `device_slot_forbidden`; (2) while a LOW turn with a
+  question is fresh (60 s), EVERY tool call of that turn returns the question and runs nothing
+  (`understanding_low`). The relay never speaks the question itself (no `say` frame): it rides the
+  tool result once, in the paid and in the local mode alike.
+- **The answer.** A device question leaves `understanding_pending {intent, application, at}` on the
+  session; the next sentence, if it is ONLY an alias phrase ("Ofis.", "ev bilgisayarında") within
+  120 s, re-issues that intent with the device bound. Any other sentence closes the question.
+- **MEDIUM read-back** (`operator.app_open`, both launch paths): the receipt speech opens with
+  "Ofis cihazında Hesap Makinesi açıyorum efendim." and continues with the outcome; no question
+  mark, no second confirmation (owner rule 2026-09-18/19).
+
+**Not changed, on purpose.** `operator.app_open.application` stays a free string resolved against
+the allow-list on the server (unknown name -> a refusal naming the list). An `enum` would make a
+model that heard "Spotify" pick the nearest allowed value - a guess. Every registered tool schema
+already has `additionalProperties: false` and none declares a device slot (pinned by a test over
+`default_registry()`).
+
+**Consequences.** With no layer-2 engine configured the rule tables and layer 1 decide (this is
+production until start-up calls `configure_default_engine`). Other MEDIUM tools do not read back
+yet: only `operator.app_open` can be MEDIUM today (the device slot is the only layer-filled slot).
+`CANONICAL_ALIASES` has no "bulut": such an alias ends as the question.
+
+#### For the lead at merge
+1. `tests/unit/test_operator_app_open_named_device.py::test_relay_unbound_machine_word_asks_and_dispatches_nothing`
+   (outside this task's area) pins ADR-0233's stopgap for the very sentence this card moves to
+   MEDIUM and is RED on this branch by design. Replace its body with: commands went to
+   `world.ids["GMKADIRAKBABA"]` only; `call["result"]["speech"]` starts with
+   "Ofis cihazında Hesap Makinesi açıyorum efendim."; record `machine_named_unbound is False`,
+   `device_targets == ["ofis"]`. (The same assertions live in `test_understanding_relay.py`.)
+2. Start-up wiring (not in this area): `combine.configure_default_engine(LocalEmbedder, exemplars)`
+   in `create_app`. Production may not import `tests/`: the exemplars need a shipped source.
+   Until then `understanding.layer` is never `semantic` in production.
+3. Nothing to register in `app/protocol_files.py` or the falsification list: `thresholds.json` is
+   package data. A one-line "ships beside its reader" pin may join `test_office01_wiring.py`.
+4. `docs/HANDOFF.md`, the ADR number, `docs/DECISIONS.md`.
+
+**Wired by the lead at merge (adr0224-02).** The test of ADR-0233 that expected a QUESTION for "Ofisü bilgisayarında
+hesap makinesini açın" was rewritten: with layers 1 and 3 the confusion list binds "ofisü" to the office PC and
+the launch goes there with a read-back (`test_relay_the_owners_misheard_sentence_reaches_the_office_and_is_read_back`).
+**Not wired, and queued (`understanding-engine-startup`):** the semantic engine is not configured at start-up -
+production cannot import `tests/`, so the exemplars need a shipped source. Until that lands production runs the
+rule tables, layer 1 and the policy over the RULE candidate only; the semantic candidates of layer 2 exist in tests.
+The worker's open risk stands: after a LOW question every tool is blocked for 60 s, including one the model calls
+for an unrelated reason.
+
+### ADR-0234 addendum 1 (2026-10-01): "ekip ne yapıyor?" - one paragraph from the Ofis page's data
+
+*From `team/plans/office-voice-summary-adr.md` (The Ofis page can be asked by voice: "ekip ne yapıyor?" (office-voice-summary)).*
+
+Context: the Ofis page (ADR-0234) shows who works on what; the owner wants the same answer by voice,
+as one paragraph, without opening the page.
+
+Decision:
+- `app/team/speech.py::office_paragraph(view)` is a pure function over `office_view`'s answer, so
+  the page and the voice cannot disagree. At most ~60 words: how many of six work and on what
+  (titles cut at the first clause, at most three), how many tasks came back, how many approvals
+  wait, the usage-limit state when it is not ok, "tahmini" before any dollar figure. Task ids are
+  never read. Nothing running: "Ekip şu an çalışmıyor efendim." (waiting approvals / returned
+  tasks are still appended).
+- One router (`app/voice/intents.py`): new intent `TEAM_STATUS`, a query (tool `team.status`, no
+  side effect). Nouns are EXACT words ("ekip", "ajanlar"), never the stem "ajan" (= "ajanda",
+  the calendar). "ofiste" counts only with "kim" + "çalış"; "ofiste ne yaptın" (device alias) and
+  "bu hafta ne oldu" (narrative) keep their intents.
+- Tool `team.status` (`tools_team.py`): empty argument object (the relay filters argument keys),
+  result `{status, speech}`; reads `ctx.live["team_store"]`/`["team_root"]`, else a `FileStore` on
+  the repository `team/` exactly as the route does.
+
+Consequences: the lead registers the tool (`register_team_tools(reg)` in `default_registry`) and
+adds `"team.status": TIER_OPEN` to `app/security/step_up.py`; without the tier the step-up policy
+(shadow mode) logs it as `sensitive`. The service should inject `team_store`/`team_root` into
+`ctx.live` from `app.state`; until then the FileStore fallback applies (correct only where the
+`team/` directory is the queue's home, i.e. not in database mode).
+
+**Wired by the lead at merge.** `register_team_tools` in the default registry, `team.status` at `TIER_OPEN`, and in
+database mode the voice runtime is handed `app.state.team_store` (`register_live`) - without it the tool read
+`team/` files, which the Cloud Core does not have. `test_adr022402_wiring.py` holds the three.
+
+### ADR-0228 addendum 1 (2026-10-01): the operator's callers pass the device
+
+*From `team/plans/ledger-device-callers-adr.md` (ADR (unnumbered): operator ledger rows name the bound device).*
+
+Context: ADR-0228 added the device stamp to the ledger writers (`start_task(device=)`,
+`record_receipt(device=)`) but no caller passed it, so real operator rows stayed unstamped.
+
+Decision: one helper, `_bound_device_word(ctx, device_action)` in `tools_operator.py`, returns the
+word to stamp: the first `targets` entry when the sentence named a machine, else the first alias
+(or name) of `session_device_ids[0]` via the existing `_device_named`; `None` when nothing is
+bound or unreadable. Every `operator.start_task(...)` in `tools_operator.py` and its `_receipt`
+`record_receipt` pass it. `actions.py` is unchanged: its receipts (eye, release.promote) are
+cloud-side facts with no device, and stay `bulut` on purpose.
+
+Consequence: "ofiste ne yaptın" now counts operator tasks and receipts. Evidence PROVEN_REAL
+needs the owner asking after an operator action on the office PC.
+
+The ten `operator.start_task` calls hand over the bound device's word; `record_receipt`'s callers in
+`actions.py` needed no change per the worker's reading. "Ofiste ne yaptın" after an operator action on the office
+PC: `READY_FOR_OWNER`.

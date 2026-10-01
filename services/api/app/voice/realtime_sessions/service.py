@@ -45,7 +45,12 @@ from app.voice import route_telemetry
 from app.voice import service as voice_service
 from app.voice.device_trust import device_is_trusted
 from app.voice.errors import VoiceError, VoiceErrorClass
-from app.voice.intent_router import get_intent_router, resolve_deictic_reference, tool_for
+from app.voice.intent_router import (
+    ROUTE_SOURCE_MODEL,
+    get_intent_router,
+    resolve_deictic_reference,
+    tool_for,
+)
 from app.voice.intents import (
     Intent,
     ResolvedIntent,
@@ -93,8 +98,9 @@ from app.voice.realtime_sessions.tools import (
     research_followup_refusal,
     terminal_status_for,
 )
-from app.voice.realtime_sessions.tools_operator import names_unbound_machine
+from app.voice.realtime_sessions.tools_operator import enrolled_aliases, names_unbound_machine
 from app.voice.spoken_device import resolve_without_device_phrase
+from app.voice.understanding import policy as understanding_policy
 
 logger = get_logger("app.voice.realtime_sessions.service")
 
@@ -996,6 +1002,35 @@ def handle_tool_call(
         _touch(row, now)
         db.commit()
         return _tool_row_payload(call)
+    # ADR-0224 layer 3. BEFORE any handler runs, in the same relay and for the same reason as
+    # the two refusals above: the model's choice of tool - or of an argument - cannot route
+    # around it. (1) The model may not name a DEVICE: a device comes from the owner's words
+    # (layers 1-2) or from the owner's answer, and a call that carries one is refused whole.
+    # (2) A LOW decision is ONE question and no action: while the turn that asked it is fresh,
+    # every tool call of that turn gets the question and runs nothing.
+    understanding_refusal = _understanding_refusal(db, name, arguments, ctx, now=now)
+    if understanding_refusal is not None and spec is not None:
+        status, error_class, result_json = understanding_refusal
+        call.status = status
+        call.error_class = error_class
+        call.result_json = result_json
+        call.completed_at = utcnow()
+        call.long_running = False
+        _audit(
+            db,
+            ACTION_TOOL_CALL,
+            row,
+            trace_id=trace_id,
+            metadata={
+                "call_id": call_id,
+                "name": name,
+                "status": status,
+                "refused": result_json["refused"],
+            },
+        )
+        _touch(row, now)
+        db.commit()
+        return _tool_row_payload(call)
     if spec is None:
         call.status = TOOL_STATUS_FAILED
         call.error_class = VoiceErrorClass.CAPABILITY_MISSING.value
@@ -1095,6 +1130,40 @@ def handle_tool_call(
     )
     db.commit()
     return _tool_row_payload(call, preamble=preamble)
+
+
+REFUSED_DEVICE_SLOT: Final = "device_slot_forbidden"
+REFUSED_UNDERSTANDING_LOW: Final = "understanding_low"
+
+
+def _understanding_refusal(
+    db: Session, name: str, arguments: dict[str, Any], ctx: dict[str, Any], *, now: datetime
+) -> tuple[str, str | None, dict[str, Any]] | None:
+    """``(status, error class, result)`` when ADR-0224 layer 3 stops this call, else None."""
+    device_keys = understanding_policy.device_slot_keys(arguments)
+    if device_keys:
+        return (
+            TOOL_STATUS_FAILED,
+            VoiceErrorClass.VALIDATION_ERROR.value,
+            {
+                "refused": REFUSED_DEVICE_SLOT,
+                "keys": device_keys,
+                "speech": understanding_policy.device_question(enrolled_aliases(db)),
+            },
+        )
+    question = understanding_policy.turn_question(ctx.get("last_utterance"), now=now)
+    if question is None:
+        return None
+    result = {
+        "status": "needs_clarification",
+        "speech": question,
+        "candidates": [],
+        "refused": REFUSED_UNDERSTANDING_LOW,
+    }
+    # The status a question EARNS for this tool (ADR-0077), exactly as if its own handler
+    # had asked it.
+    status, error_class = terminal_status_for(name, result)
+    return status, error_class, result
 
 
 #: The tool whose completion establishes "the research THIS conversation is about"
@@ -1791,6 +1860,68 @@ def record_client_events(
             # instead of a guess. (745) What a deictic word points at.
             routed = get_intent_router().route(text, intent)
             intent = routed.resolved
+            # ADR-0224 layer 3: the rule tables' result is candidate #1, layer 2 adds the
+            # rest (when start-up configured its engine), and the threshold policy decides
+            # what may be DONE with it. First the one thing only this relay knows: whether
+            # this sentence is the owner's answer to the question the last turn asked.
+            answered_device: str | None = None
+            answered = (
+                understanding_policy.pending_answer(
+                    ctx.get("understanding_pending"), text or "", now=now
+                )
+                if intent.intent is Intent.NONE
+                else None
+            )
+            ctx.pop("understanding_pending", None)  # a question is answered once, or not at all
+            if answered is not None:
+                asked, answered_device = answered
+                intent = replace(
+                    intent,
+                    intent=Intent(asked["intent"]),
+                    application=asked.get("application"),
+                    klass="",
+                    capability=None,
+                    matched="understanding:answer",
+                )
+            machine_named = names_unbound_machine(text or "", spoken_devices)
+            decision = understanding_policy.read_turn(
+                text or "",
+                rule=(
+                    None
+                    if routed.source == ROUTE_SOURCE_MODEL
+                    else understanding_policy.rule_reading(
+                        intent.intent.value,
+                        application=intent.application,
+                        route_repair=intent.route_repair,
+                    )
+                ),
+                bound_devices=spoken_devices,
+                answered_device=answered_device,
+                names_machine=machine_named,
+                aliases=enrolled_aliases(db) if machine_named else (),
+                engine=understanding_policy.configured_engine(),
+            )
+            if decision.device is not None and not spoken_devices:
+                # The device layers 1-2 bound ("Ofisü" -> ofis): the same alias word the rule
+                # parser would have recorded, so the call's device port is bound the same way.
+                spoken_devices = (decision.device.alias,)
+            intent = replace(
+                intent,
+                confidence=(
+                    intent.confidence
+                    if routed.source == ROUTE_SOURCE_MODEL
+                    else round(decision.confidence, 2)
+                ),
+                band=decision.band,
+                candidates=decision.candidate_names(),
+            )
+            if decision.missing == understanding_policy.SLOT_DEVICE:
+                # The question asks for a machine: the next sentence may be its answer.
+                ctx["understanding_pending"] = {
+                    "intent": intent.intent.value,
+                    "application": intent.application,
+                    "at": now.isoformat().replace("+00:00", "Z"),
+                }
             reference = resolve_deictic_reference(db, intent.tokens, now=now)
             ctx["last_intent"] = intent.intent.value
             # B26 req 749/750: what the router decided, recorded without the owner's words,
@@ -2014,6 +2145,15 @@ def record_client_events(
                 # launching on the session's own device. Written here, beside the targets, so
                 # both halves of the contract live in one place.
                 "machine_named_unbound": names_unbound_machine(text or "", spoken_devices),
+                # ADR-0224 layer 3: what the threshold policy decided for this sentence. The
+                # three ResolvedIntent fields (listed here, or no tool ever sees them), and the
+                # block a tool call reads: MEDIUM is read back in the receipt speech, LOW with
+                # a question runs nothing. Names and numbers only - a candidate's evidence
+                # carries the owner's words and never leaves the policy.
+                "confidence": intent.confidence,
+                "band": intent.band,
+                "candidates": [list(pair) for pair in intent.candidates],
+                "understanding": {**decision.audit_block(), "question": decision.question},
             }
             resolved.append(
                 {
@@ -2114,6 +2254,10 @@ def record_client_events(
                     # ordinal | topic | selection | none. The owner harness reads it off
                     # session_activity's intents, beside the class.
                     "research_reference": intent.research_reference,
+                    # ADR-0224: which layer decided, in which band, how sure, and the three
+                    # best readings by INTENT NAME - the data the calibration reads. Never a
+                    # candidate's evidence: it holds the owner's own words (KVKK).
+                    "understanding": decision.audit_block(),
                 }
             )
             _audit(db, ACTION_INTENT_RESOLVED, row, trace_id=trace_id, metadata=meta)

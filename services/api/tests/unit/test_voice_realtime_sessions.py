@@ -409,6 +409,8 @@ def test_create_selects_by_capability_and_returns_the_contract(wired) -> None:
         "briefing.morning",
         "briefing.system_status",
         "briefing.overnight_work",
+        # office-voice-summary (ADR-0234 addendum 1): "ekip ne yapıyor?"
+        "team.status",
         # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode.
         "news.open",
         "news.close",

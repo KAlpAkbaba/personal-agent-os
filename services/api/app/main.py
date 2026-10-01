@@ -759,6 +759,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from app.team.store import DbStore
 
         app.state.team_store = DbStore(artifacts.session)
+        # The voice tool team.status reads the SAME store the Ofis page reads: without this
+        # it fell back to team/ files, which on the Cloud Core do not exist.
+        voice_realtime.register_live(team_store=app.state.team_store)
     app.state.voice = voice
     app.state.memory = memory
     app.state.settings = settings

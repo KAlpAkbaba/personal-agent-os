@@ -122,6 +122,7 @@ from app.operator.task import STATUS_SUCCEEDED
 from app.operator.vision import DEFAULT_QUESTION_TR, VisionError
 from app.voice.errors import VoiceError, VoiceErrorClass
 from app.voice.intents import contains_secret_reference, normalize_transcript, turkish_casefold
+from app.voice.understanding import policy as understanding_policy
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -524,7 +525,12 @@ def _receipt(
         observed_at=now,
     )
     if ctx.db is not None:
-        record_receipt(ctx.db, receipt, SUBSYSTEM_OPERATOR)
+        record_receipt(
+            ctx.db,
+            receipt,
+            SUBSYSTEM_OPERATOR,
+            device=_bound_device_word(ctx, ctx.live.get("device_action")),
+        )
     return receipt.as_dict()
 
 
@@ -745,6 +751,20 @@ def _require_operator(ctx: ToolContext, tool: str) -> Any:
 #: is THIS machine, which is what an unnamed launch already means.
 _MACHINE_WORD_RE: Final = re.compile(r"\bbilgisayar\w*|\bofis\w*")
 _THIS_COMPUTER_RE: Final = re.compile(r"\b(?:bu|şu|su)\s+bilgisayar\w*")
+#: An unpossessed "bilgisayarda / -dan / -a" with no word before it that picks a machine out
+#: ("mutfaktaki", "diğer") is the machine the owner is at, exactly like "bu bilgisayarda":
+#: "Bilgisayarda hesap makinesini aç" names no OTHER machine (ADR-0224, layer 2 inspection).
+_BARE_COMPUTER_RE: Final = re.compile(r"(?:(?P<before>\w+)\s+)?\bbilgisayar(?:da|dan|a)\b")
+_MACHINE_PICKERS: Final[frozenset[str]] = frozenset(
+    {"diğer", "diger", "öbür", "obur", "öteki", "oteki", "başka", "baska"}
+)
+
+
+def _drop_bare_computer(match: re.Match[str]) -> str:
+    before = match.group("before")
+    if before and (before.endswith("ki") or before in _MACHINE_PICKERS):
+        return match.group(0)
+    return f"{before} " if before else " "
 
 
 def names_unbound_machine(text: str, bound: tuple[str, ...] | list[str]) -> bool:
@@ -754,6 +774,7 @@ def names_unbound_machine(text: str, bound: tuple[str, ...] | list[str]) -> bool
     if not text.strip() or bound:
         return False
     folded = _THIS_COMPUTER_RE.sub(" ", device_aliases.normalize(text))
+    folded = _BARE_COMPUTER_RE.sub(_drop_bare_computer, folded)
     return _MACHINE_WORD_RE.search(folded) is not None
 
 
@@ -765,23 +786,40 @@ def _names_an_unbound_machine(turn: dict[str, Any]) -> bool:
     return turn.get("machine_named_unbound") is True
 
 
+def enrolled_aliases(db: Session | None) -> list[str]:
+    """The aliases the owner configured on the enrolled devices, in enrolment order - owner
+    data, never a hard-coded machine name. Empty when they cannot be read."""
+    aliases: list[str] = []
+    if db is None:
+        return aliases
+    try:
+        from app.broker.models import Device
+
+        for row in db.query(Device).filter(Device.revoked_at.is_(None)).all():
+            for alias in (row.metadata_json or {}).get("aliases") or []:
+                word = str(alias).strip()
+                if word and word.casefold() not in (a.casefold() for a in aliases):
+                    aliases.append(word)
+    except Exception:  # noqa: BLE001 - no alias list is still a question, never a crash
+        logger.warning("operator_launch_alias_lookup_failed")
+    return aliases
+
+
 def _which_computer_question(ctx: ToolContext) -> str:
     """ONE question naming the aliases the owner configured on their devices."""
-    aliases: list[str] = []
-    if ctx.db is not None:
-        try:
-            from app.broker.models import Device
+    return understanding_policy.device_question(enrolled_aliases(ctx.db))
 
-            for row in ctx.db.query(Device).filter(Device.revoked_at.is_(None)).all():
-                for alias in (row.metadata_json or {}).get("aliases") or []:
-                    word = str(alias).strip()
-                    if word and word.casefold() not in (a.casefold() for a in aliases):
-                        aliases.append(word)
-        except Exception:  # noqa: BLE001 - no alias list is still a question, never a crash
-            logger.warning("operator_launch_alias_lookup_failed")
-    if not aliases:
-        return "Hangi bilgisayarda açayım efendim?"
-    return f"Hangi bilgisayarda: {', '.join(f'{a} mi' for a in aliases)}?"
+
+def _read_back(turn: dict[str, Any], canonical: str) -> str | None:
+    """ADR-0224 MEDIUM: the launch is done AND read back in the same receipt speech - the
+    machine the layers bound and the application - so a wrong reading is heard while it is
+    cheap. Never a question: the owner is not asked twice (owner rule 2026-09-18/19)."""
+    if not understanding_policy.turn_reads_back(turn):
+        return None
+    targets = device_aliases.targets_of_turn(turn)
+    return understanding_policy.read_back(
+        _APP_TR_NAMES.get(canonical, canonical), targets[0] if targets else None
+    )
 
 
 def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -836,8 +874,9 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
     # Everything else - every device that advertises ``app.launch`` - is decided further down,
     # unchanged.
     route = launch_fallback.route_for(device_action, canonical)
+    read_back = _read_back(turn, canonical)
     if route == launch_fallback.ROUTE_DIRECT:
-        return _open_application_directly(ctx, device_action, canonical)
+        return _open_application_directly(ctx, device_action, canonical, read_back=read_back)
     if route == launch_fallback.ROUTE_REFUSED:
         return _receipt(
             ctx,
@@ -869,7 +908,13 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
         plan = Plan(
             name=PLAN_OPEN_APPLICATION, goal=f"open {canonical}", steps=open_application(canonical)
         )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     name_tr = _APP_TR_NAMES.get(canonical, canonical)
     if task.status == STATUS_SUCCEEDED:
         speech = f"{name_tr} açtım efendim."
@@ -880,6 +925,8 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
             )
             or f"{name_tr} açamadım efendim."
         )
+    if read_back:
+        speech = f"{read_back} {speech}"
     return {**(task.action_receipt or {}), "speech": speech}
 
 
@@ -924,8 +971,24 @@ def _device_named(ctx: ToolContext, device_id: Any) -> tuple[str | None, str | N
     return row.name, (spoken[:1].upper() + spoken[1:]) if spoken else row.name
 
 
+def _bound_device_word(ctx: ToolContext, device_action: Any) -> str | None:
+    """The word the ledger stamps on rows this call causes (ADR-0228): the machine the port is
+    bound to, as the owner says it. A sentence that NAMED a machine binds it (``targets``: the
+    alias word); otherwise the session's own device, read through :func:`_device_named`.
+    ``None`` when nothing is bound or it cannot be read - a row without a device is still a
+    true row, never a guessed one."""
+    targets = tuple(getattr(device_action, "targets", ()) or ())
+    if targets:
+        return str(targets[0])
+    ids = tuple(getattr(device_action, "session_device_ids", ()) or ())
+    if not ids:
+        return None
+    name, spoken = _device_named(ctx, ids[0])
+    return spoken or name
+
+
 def _open_application_directly(
-    ctx: ToolContext, device_action: Any, canonical: str
+    ctx: ToolContext, device_action: Any, canonical: str, *, read_back: str | None = None
 ) -> dict[str, Any]:
     """The single-step launch on a device with no Operator (ADR-0209): the pre-Operator
     ``desktop.open_application`` and nothing else - no plan, no focus stack, no operator
@@ -947,6 +1010,10 @@ def _open_application_directly(
     device_id = getattr(result, "device_id", None)
     device_name, spoken_device = _device_named(ctx, device_id)
     where = f"{spoken_device} cihazında " if spoken_device else ""
+    lead = ""
+    if read_back:
+        # The read-back has already said where; the outcome after it does not say it again.
+        where, lead = "", f"{read_back} "
     server: dict[str, Any] = {
         "path": launch_fallback.CAPABILITY_DESKTOP_OPEN_APPLICATION,
         "application": canonical,
@@ -970,13 +1037,16 @@ def _open_application_directly(
             execution=EXECUTION_FAILED,
             terminal=TERMINAL_FAILED,
             server={**server, "device_message": str(result.message)[:200]},
-            speech=_named_refusal_speech(
-                device_action,
-                result.error_class,
-                result.message,
-                f"{name_tr} açmadım efendim.",
-            )
-            or f"{where}{name_tr} açamadım efendim.",
+            speech=lead
+            + (
+                _named_refusal_speech(
+                    device_action,
+                    result.error_class,
+                    result.message,
+                    f"{name_tr} açmadım efendim.",
+                )
+                or f"{where}{name_tr} açamadım efendim."
+            ),
             error_class=error_class or "internal_bug",
         )
     observed = result.result if isinstance(result.result, dict) else {}
@@ -989,7 +1059,8 @@ def _open_application_directly(
         execution=EXECUTION_EXECUTED,
         terminal=TERMINAL_VERIFIED if started else TERMINAL_UNVERIFIED,
         server=server,
-        speech=(
+        speech=lead
+        + (
             f"{where}{name_tr} açtım efendim."
             if started
             else f"{where}{name_tr} açma isteğini gönderdim efendim; başladığını doğrulayamadım."
@@ -1060,7 +1131,13 @@ def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict
         goal=f"{action} window {window_id}",
         steps=steps,
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     if task.status == STATUS_SUCCEEDED:
         speech = f"{_WINDOW_SUCCESS_TR[action]} efendim."
     elif task.error_class == "modal_open":
@@ -1131,7 +1208,13 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
             window_id, text, browser=is_browser_image(str(target.get("image") or ""))
         ),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     return {**(task.action_receipt or {}), "speech": _type_speech(task)}
 
 
@@ -1175,7 +1258,13 @@ def operator_shell(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         goal=f"shell query {kind}",
         steps=build_shell_query_steps(kind),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     if task.status == STATUS_SUCCEEDED:
         stdout = str(task.last_observed.get("stdout") or "")
         first_line = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
@@ -1261,7 +1350,13 @@ def operator_app_close(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str,
         goal=f"close application {window_id}",
         steps=close_app(window_id, force=force),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     return {**(task.action_receipt or {}), "speech": _app_close_speech(task, name_tr)}
 
 
@@ -1317,7 +1412,13 @@ def operator_process(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     plan = Plan(
         name=PLAN_BY_PROCESS_ACTION[action], goal=f"process {action} {image or '*'}", steps=steps
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {**(task.action_receipt or {})}
     if action == "list":
         observed = task.last_observed or {}
@@ -1391,7 +1492,13 @@ def operator_service(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     operator = _require_operator(ctx, TOOL_SERVICE)
     steps = service_status(name) if action == "status" else service_restart(name)
     plan = Plan(name=PLAN_BY_SERVICE_ACTION[action], goal=f"service {action} {name}", steps=steps)
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {**(task.action_receipt or {})}
     state = str((task.last_observed or {}).get("state") or "")
     if action == "status":
@@ -1592,7 +1699,13 @@ def operator_key(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         success = SPEECH_SHORTCUT_SUCCESS_TR.format(
             keys="+".join(KEY_TR.get(k, k.upper()) for k in chord), times=times
         )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     return {
         **(task.action_receipt or {}),
         "repeat_count": count,
@@ -1699,7 +1812,13 @@ def operator_pointer(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         goal=f"pointer {action} x{count} at ({x},{y}) {space} in {window_id}",
         steps=steps,
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     success = SPEECH_POINTER_SUCCESS_TR[action]
     if count > 1:
         success = SPEECH_SCROLL_REPEATED_TR.format(count=count)
@@ -1840,7 +1959,13 @@ def operator_ui(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     plan = Plan(
         name=PLAN_BY_UI_ACTION[action], goal=f"ui {action} {query} in {window_id}", steps=steps
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {
         **(task.action_receipt or {}),
         "speech": _ui_speech(
@@ -1882,7 +2007,13 @@ def operator_inspect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         goal=f"ui {mode} {query} in {window_id}",
         steps=ui_read(window_id, query or None),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {**(task.action_receipt or {})}
     root = (task.last_observed or {}).get("root") if task.status == STATUS_SUCCEEDED else None
     if root is None:

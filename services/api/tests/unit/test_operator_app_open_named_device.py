@@ -178,17 +178,24 @@ def _record(world: Any, sid: str) -> dict[str, Any]:
         return dict((row.context_json or {}).get("last_utterance") or {})
 
 
-def test_relay_unbound_machine_word_asks_and_dispatches_nothing(monkeypatch, tmp_path) -> None:
-    """The owner's real sentence, as the STT rendered it. Red before: launched on MAIL."""
+def test_relay_the_owners_misheard_sentence_reaches_the_office_and_is_read_back(
+    monkeypatch, tmp_path
+) -> None:
+    """The owner's real sentence, as the STT rendered it (2026-09-30). First it launched on
+    MAIL; then (ADR-0233) the unbound machine was asked about; since ADR-0224 layers 1 and 3
+    the confusion list reads "ofisü" as "ofis", the office PC is BOUND, and the launch goes
+    there with a read-back instead of a question. Rewritten by the lead at the merge of
+    understanding-threshold-policy, as its worker and inspector asked."""
     world, sid, call = _relay(monkeypatch, tmp_path, "Ofisü bilgisayarında hesap makinesini açın.")
-    assert world.commands.calls == []
-    assert call["result"]["status"] == "needs_clarification", call
-    assert call["result"]["speech"].count("?") == 1
+    assert {c["device_id"] for c in world.commands.calls} == {world.ids["GMKADIRAKBABA"]}
+    assert call["result"]["execution_status"] == "executed", call
+    speech = call["result"]["speech"]
+    assert speech.startswith("Ofis cihazında Hesap Makinesi açıyorum efendim."), speech
+    assert "?" not in speech  # a read-back, never a second confirmation
     record = _record(world, sid)
-    assert record["machine_named_unbound"] is True
+    assert record["machine_named_unbound"] is False
     # word-free: the owner's sentence is never kept on the session (privacy)
     assert "utterance_text" not in record
-    assert "hesap" not in str(record.get("machine_named_unbound")).lower()
 
 
 @pytest.mark.parametrize(

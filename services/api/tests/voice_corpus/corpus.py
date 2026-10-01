@@ -6291,6 +6291,48 @@ def _weather_briefing_negative_cases() -> list[UtteranceCase]:
     return cases
 
 
+def _team_status_cases() -> list[UtteranceCase]:
+    """"Ekip ne yapıyor?" — the Ofis page aloud — and the two neighbours it must not steal."""
+    cases: list[UtteranceCase] = []
+    for case_id, utterance, source in (
+        ("team.status.1", "Ekip ne yapıyor?", "canonical"),
+        ("team.status.2", "Ekip ne durumda?", "paraphrase"),
+        ("team.status.3", "Ofiste kim çalışıyor?", "paraphrase"),
+        ("team.status.4", "Ajanlar ne yapıyor?", "paraphrase"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=utterance,
+                expected_intent="team_status",
+                expected_tool="team.status",
+                expected_response=RESPONSE_OK,
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="team",
+                source=source,
+            )
+        )
+    for case_id, utterance, intent, tool in (
+        ("team.neighbour.device", "Ofiste ne yaptın?", "artifact_list", "artifact.list"),
+        ("team.neighbour.narrative", "Bu hafta ne oldu?", "explain", "activity.explain"),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=utterance,
+                expected_intent=intent,
+                expected_tool=tool,
+                forbidden_tools=("team.status",),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_NONE,
+                category="team",
+                source="regression",
+            )
+        )
+    return cases
+
+
 def _weather_briefing_cases() -> list[UtteranceCase]:
     return [
         *_weather_query_cases(),
@@ -7991,6 +8033,7 @@ def all_cases() -> list[UtteranceCase]:
         *_scene_cases(),
         *_executive_cases(),
         *_weather_briefing_cases(),
+        *_team_status_cases(),
         *_news_cases(),
         *_creative_cases(),
         *_nativeapps_cases(),
