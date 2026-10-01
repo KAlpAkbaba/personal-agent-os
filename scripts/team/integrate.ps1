@@ -20,7 +20,9 @@
          reports and wires the shared files. THIS script checks its diff: docs/, .github/, team/,
          scripts/quality-gate.ps1, state/BUILD_STATE.json and the files a section names; one
          file outside that refuses the run and nothing is merged. What passed is committed on
-         the integration branch;
+         the integration branch. The run shares the repository, so main, the integration branch
+         and the remote's main are read before and after it: one that MOVED refuses the run,
+         is named with both shas, and stops the branch at once (it is not put back here);
       4. the worktree gets its own environment (uv sync, pnpm install) and the FULL gate runs
          there, its log kept as team/reports/<cycle>/gate-<n>.log. Docker's dev stack is shared
          and must be up: if it is not, the step stops with 'Docker çalışmıyor' and changes nothing;
@@ -30,6 +32,12 @@
          report and into each task's reason; the tasks whose files the failure names go back to
          'returned', the others stay 'merged'. Two failed attempts on one branch stop it until
          the lead looks (-ClearGateStop).
+
+    A branch goes onto main WHOLE or not at all: while a task whose code is on it is not
+    'merged' (a red gate returned it; its code is still on the branch) nothing of the branch is
+    gated - the cycle merges the fix into the same branch, and one gate judges everything. And
+    a commit the gate was red on is not gated a second time: the step waits for a new tip (a
+    fix merged in, main moved) or for the lead's -ClearGateStop. Both waits take no lock.
 
     What it does NOT do, on purpose: it starts no release, makes no tag, writes nothing about
     production or the recovery supervisor, and never resets, forces or checks out a branch in a
@@ -43,14 +51,16 @@
     4 Docker is down; 5 conflict with main; 6 the gate is red; 7 the lead's run was refused or
     gave no result; 8 the branch is stopped (two failed attempts); 9 main moved but the push
     failed; 10 the worktree's environment could not be built; 11 a branch could not be moved
-    forward; 12 an unexpected error.
+    forward; 12 an unexpected error; 13 a ref moved during the lead's run.
 
 .PARAMETER GatePath
     The gate script to run in the gate worktree. Empty (the default) is the worktree's own
     scripts\quality-gate.ps1. The tests name scripts/tests/lib/fake-gate.ps1 here.
 
 .PARAMETER ClearGateStop
-    The lead looked at a branch that two failed attempts stopped: the count starts again.
+    The lead looked at a branch that two failed attempts (or a moved ref) stopped: the count
+    starts again. It also gates a commit again that waits after ONE red gate. It does not open
+    a branch that a returned task holds.
 
 .EXAMPLE
     .\scripts\team\integrate.ps1 -QueueUrl https://core.example/ -QueueToken C:\path\token.txt
@@ -99,6 +109,7 @@ $reportsRoot = Join-Path $teamDir "reports"
 $leadRoleFile = Join-Path $repoRoot ".claude\agents\lead.md"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $stopSentence = "aynı entegrasyon dalında iki kez kırmızı (kapı ya da lead koşusu); lead bakana kadar durdu (TEAM_PROTOCOL 10)"
+$movedSentence = "lead koşusu sırasında bir dal YER DEĞİŞTİRDİ; lead bakana kadar durdu (TEAM_PROTOCOL 10)"
 
 $useApi = [bool]$QueueUrl
 if ($useApi -and -not $QueueToken) { throw "-QueueUrl needs -QueueToken: the path of a file holding the token" }
@@ -110,17 +121,11 @@ function Save-Queue {
     else { Write-TeamJson -Path $queuePath -Document $script:queue }
 }
 
-function Resolve-ToolPath {
-    param([string]$Given, [string]$Name, [string[]]$Fallbacks = @())
-    if ($Given) { return $Given }
-    $command = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($null -ne $command -and $command.Source) { return [string]$command.Source }
-    foreach ($candidate in @($Fallbacks)) {
-        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
-        if (Test-Path -LiteralPath $expanded) { return $expanded }
-    }
-    return ""
-}
+# Resolved before anything is taken or written: an .exe or a .cmd, never a .ps1 (a given path
+# that is neither ends the step here, by name). "" = not found; said where the tool is needed.
+$dockerTool = Resolve-TeamToolPath -Given $DockerPath -Name "docker" -Fallbacks @("%ProgramFiles%\Docker\Docker\resources\bin\docker.exe")
+$uvTool = Resolve-TeamToolPath -Given $UvPath -Name "uv" -Fallbacks @("%USERPROFILE%\.local\bin\uv.exe", "%LOCALAPPDATA%\Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe")
+$pnpmTool = Resolve-TeamToolPath -Given $PnpmPath -Name "pnpm" -Fallbacks @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
 
 $queue = if ($useApi) { Read-TeamQueueApi -Store $apiStore } else { Read-TeamJson -Path $queuePath }
 $problems = @(Test-TeamQueue -Queue $queue)
@@ -162,9 +167,28 @@ foreach ($group in @(Get-TeamMergedGroups -Queue $queue)) {
             [string](Get-TeamProperty -InputObject $last -Name "sha" -Default "") -eq $tip) { $green = $last }
     }
     $ahead = -not (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $tip -Of $baseAtStart)
-    if (-not $ahead -and $null -eq $green) {
+    # A branch a moved ref stopped says so every run until the lead looked, wherever its tip is now.
+    $movedStop = ((Get-TeamGateStopKind -Records $records) -eq "refs_moved")
+    if (-not $ahead -and $null -eq $green -and -not $movedStop) {
         Write-Host "nothing to do for ${integration}: it is not ahead of $Base"
         continue
+    }
+    if ($ahead -and -not $movedStop) {
+        # A branch goes onto main whole or not at all. While a task whose code is on it is not
+        # 'merged' (a red gate returned it), a green gate would put that code on main with the
+        # others - so nothing of the branch is gated, and the lead's -ClearGateStop does not open it.
+        $held = @(Get-TeamBranchHeldTasks -Queue $queue -Branch $integration)
+        if (@($held).Count -gt 0) {
+            $who = (@($held) | ForEach-Object { "$($_.id) ($($_.state))" }) -join ", "
+            Write-Host "waits: $integration is held by $who - their code is on the branch and has not passed; the branch goes onto $Base whole, when they are merged again"
+            continue
+        }
+        # The gate was red on this very commit and main has not moved past it: the answer is known.
+        if (-not $ClearGateStop -and -not (Test-TeamGateStopped -Records $records) -and
+            (Test-TeamGateAlreadyRed -Records $records -Sha $tip) -and (Test-TeamAncestor -RepoRoot $repoRoot -Ancestor $baseAtStart -Of $tip)) {
+            Write-Host "waits: $integration - the gate was red on $tip and neither the branch nor $Base has moved; a new commit (or the lead's -ClearGateStop) is gated, not the same one again"
+            continue
+        }
     }
     [void]$pending.Add([pscustomobject]@{
             Branch = $integration; CycleId = $cycleOf; Tasks = @($group.Tasks); Tip = $tip; Ahead = $ahead
@@ -172,7 +196,7 @@ foreach ($group in @(Get-TeamMergedGroups -Queue $queue)) {
         })
 }
 if (@($pending).Count -eq 0) {
-    Write-Host "nothing to integrate: no merged task on an integration branch that is ahead of $Base"
+    Write-Host "nothing to integrate: no merged task on an integration branch that is ahead of $Base and may be gated now"
     exit 0
 }
 
@@ -244,10 +268,9 @@ if ($decision.Kind -eq "dead") { [void]$risks.Add("bu makinenin ölmüş bir ko�
 # ------------------------------------------------------------------ Docker (shared, and the gate needs it)
 
 if (@($pending | Where-Object { $_.Ahead }).Count -gt 0) {
-    $docker = Resolve-ToolPath -Given $DockerPath -Name "docker" -Fallbacks @("%ProgramFiles%\Docker\Docker\resources\bin\docker.exe")
     $dockerUp = $false
-    if ($docker) {
-        try { $dockerUp = [bool](Invoke-NativeProcess -FilePath $docker -Arguments @("info") -TimeoutSeconds 90).Success } catch { $dockerUp = $false }
+    if ($dockerTool) {
+        try { $dockerUp = [bool](Invoke-NativeProcess -FilePath $dockerTool -Arguments @("info") -TimeoutSeconds 90).Success } catch { $dockerUp = $false }
     }
     if (-not $dockerUp) {
         [void]$stops.Add("Docker çalışmıyor; kapı koşmadı, hiçbir şey değişmedi (Docker Desktop açılınca bir sonraki adım dener)")
@@ -311,12 +334,20 @@ function Invoke-BranchIntegration {
         [void]$Outcome.Lines.Add("lead baktı (-ClearGateStop): sayım yeniden başladı")
         $number = Get-TeamGateNextNumber -Directory $Item.Directory
     }
-    if (Test-TeamGateStopped -Records @(Get-TeamGateRecords -Directory $Item.Directory -Branch $integration)) {
+    $attempts = @(Get-TeamGateRecords -Directory $Item.Directory -Branch $integration)
+    $stopKind = Get-TeamGateStopKind -Records $attempts
+    if ($stopKind) {
+        $sentence = $stopSentence
+        if ($stopKind -eq "refs_moved") {
+            # The stop names the ref again, every run, until the lead looked.
+            $last = @($attempts | Where-Object { [string](Get-TeamProperty -InputObject $_ -Name "result" -Default "") -eq "refs_moved" } | Select-Object -Last 1)[0]
+            $sentence = "$movedSentence (" + ((@(Get-TeamProperty -InputObject $last -Name "refs" -Default @()) | ForEach-Object { [string]$_ }) -join "; ") + ")"
+        }
         $Outcome.Result = "durduruldu"
-        [void]$script:stops.Add("${integration}: $stopSentence. Baktıktan sonra: scripts\team\integrate.ps1 -ClearGateStop")
+        [void]$script:stops.Add("${integration}: $sentence. Baktıktan sonra: scripts\team\integrate.ps1 -ClearGateStop")
         foreach ($task in $tasks) {
             $reason = [string](Get-TeamProperty -InputObject $task -Name "reason" -Default "")
-            if ($reason -notmatch "TEAM_PROTOCOL 10") { Set-TaskNote -Task $task -Reason (($reason + " | " + $stopSentence).Trim(" ", "|")) }
+            if ($reason -notmatch "TEAM_PROTOCOL 10") { Set-TaskNote -Task $task -Reason (($reason + " | " + $sentence).Trim(" ", "|")) }
         }
         return 8
     }
@@ -324,6 +355,12 @@ function Invoke-BranchIntegration {
     $tip = [string]$Item.Tip
     $baseSha = Get-TeamRevision -RepoRoot $repoRoot -Revision "refs/heads/$Base"
 
+    if (-not $Item.Ahead -and $null -eq $Item.Green) {
+        # Only a branch that a moved ref had stopped comes here (the lead has just cleared it).
+        $Outcome.Result = "kapıya girecek bir şey yok"
+        [void]$Outcome.Lines.Add("$integration, $Base'in ilerisinde değil ve üzerinde yeşil kapı kaydı yok; işlere dokunulmadı: $ids")
+        return 0
+    }
     # A run that died after main moved: the gate was green on this very commit and it is on main.
     if (-not $Item.Ahead) {
         $onMain = [string](Get-TeamProperty -InputObject $Item.Green -Name "main" -Default "")
@@ -363,13 +400,37 @@ function Invoke-BranchIntegration {
         $leadModel = Get-TeamRoleModel -TeamRoot $teamDir -Role "lead" -Fallback $Model
         $arguments = Get-TeamRunArguments -RoleFile $leadRoleFile -Model $leadModel -PrefixArguments $ClaudePrefixArguments
         $deadline = if ($LeadMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($LeadMinutes) } else { [datetime]::MaxValue }
+        # The run has Bash and shares the repository: what it must not move is read before and after.
+        # The worktree's diff alone does not see a commit made on main from here (main checked out nowhere).
+        $watched = @("refs/heads/$Base", "refs/heads/$integration", "refs/remotes/$Remote/$Base")
+        $refsBefore = Get-TeamRefValues -RepoRoot $repoRoot -Names $watched
         $finished = Wait-TeamRun -Run (Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $card -WorkingDirectory $tree) -Deadline $deadline
+        $movedRefs = @(Compare-TeamRefValues -Before $refsBefore -After (Get-TeamRefValues -RepoRoot $repoRoot -Names $watched))
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr
         if (-not (Test-Path -LiteralPath $Item.Directory)) { [void](New-Item -ItemType Directory -Force -Path $Item.Directory) }
         [System.IO.File]::WriteAllText((Join-Path $Item.Directory "gate-$number-lead.json"), [string]$finished.StdOut, $utf8)
         if ($result.Text) { [System.IO.File]::WriteAllText((Join-Path $Item.Directory "gate-$number-lead.md"), $result.Text.TrimEnd() + "`n", $utf8) }
         $leadLine = ("lead koşusu: {0} sn, tahmini {1:0.00} USD{2}" -f [int]$finished.Seconds, [double]$result.CostUsd, $(if ($leadModel) { ", model $leadModel" } else { "" }))
         [void]$Outcome.Lines.Add($leadLine)
+
+        if (@($movedRefs).Count -gt 0) {
+            # Before anything else is judged, and whatever the run answered. This step does NOT put the
+            # ref back: it cannot tell the run's move from a person's, and a branch is never moved backwards here.
+            [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
+            $said = @($movedRefs | ForEach-Object { "$($_.Name): $(if ($_.Before) { $_.Before } else { 'yoktu' }) -> $(if ($_.After) { $_.After } else { 'silindi' })" })
+            $reason = "$movedSentence. " + ($said -join "; ") + "; koşu reddedildi, kapı koşmadı. Taşınan dal GERİ ALINMADI"
+            Write-TeamGateRecord -Directory $Item.Directory -Number $number -Record ([pscustomobject]@{ n = $number; branch = $integration; at = (Get-TeamTimestamp); result = "refs_moved"; sha = $tip; refs = @($said) })
+            foreach ($task in $tasks) { Set-TaskNote -Task $task -Reason $reason }
+            $Outcome.Result = "DAL YER DEĞİŞTİRDİ"
+            [void]$Outcome.Lines.Add($reason)
+            foreach ($ref in $movedRefs) {
+                Write-Host "  A REF MOVED DURING THE LEAD'S RUN: $($ref.Name) was '$($ref.Before)' and is '$($ref.After)'. The run is refused and $integration is stopped; the ref was NOT put back."
+                if ($ref.Before -and $ref.After) { [void]$Outcome.Lines.Add("lead baktıktan sonra, taşıyan lead koşusuysa geri almak için: git update-ref $($ref.Name) $($ref.Before) $($ref.After)") }
+                [void]$script:risks.Add("$($ref.Name) kapıdan geçmeden yer değiştirdi ($($ref.Before) -> $($ref.After)); $Remote'e itilmeden önce bakılmalı")
+            }
+            [void]$script:stops.Add("${integration}: $movedSentence (" + ($said -join "; ") + "). Baktıktan sonra: scripts\team\integrate.ps1 -ClearGateStop")
+            return 13
+        }
 
         if (-not $result.Ok -or $finished.TimedOut) {
             [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $tip)
@@ -430,9 +491,7 @@ function Invoke-BranchIntegration {
         }
 
         # ---- 4. the worktree's own environment, then the full gate
-        $plan = @(Get-TeamGateEnvironmentPlan -Worktree $tree `
-                -UvPath (Resolve-ToolPath -Given $UvPath -Name "uv" -Fallbacks @("%USERPROFILE%\.local\bin\uv.exe", "%LOCALAPPDATA%\Microsoft\WinGet\Packages\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe\uv.exe")) `
-                -PnpmPath (Resolve-ToolPath -Given $PnpmPath -Name "pnpm" -Fallbacks @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")))
+        $plan = @(Get-TeamGateEnvironmentPlan -Worktree $tree -UvPath $uvTool -PnpmPath $pnpmTool)
         foreach ($step in $plan) {
             $watch = [System.Diagnostics.Stopwatch]::StartNew()
             $failure = ""
@@ -484,8 +543,11 @@ function Invoke-BranchIntegration {
                 }
             }
             $blamed = @(Get-TeamGateBlamedTasks -FailureText $gate.FailureText -TaskFiles $files)
+            # What the branch waits for now, in the words every task carries.
+            $waitsFor = if (@($blamed).Count -gt 0) { "dal $Base'e bütün olarak girer: " + ($blamed -join ", ") + " düzeltilip yeniden birleşene kadar hiçbiri kapıya girmez" }
+            else { "aynı commit yeniden kapıya girmez: yeni bir commit ya da lead'in -ClearGateStop'u beklenir" }
             foreach ($task in $tasks) {
-                $own = $reason
+                $own = $reason + " | " + $waitsFor
                 if ($stopped) { $own += " | " + $stopSentence }
                 if ($blamed -contains [string]$task.id) { Set-TaskNote -Task $task -State "returned" -Reason $own }
                 else { Set-TaskNote -Task $task -Reason $own }
@@ -495,6 +557,7 @@ function Invoke-BranchIntegration {
             if (@($gate.FailedSteps).Count -gt 0) { [void]$Outcome.Lines.Add("kırılan adımlar: " + ($gate.FailedSteps -join "; ")) }
             if ($gate.FirstFailure) { [void]$Outcome.Lines.Add("ilk kırılan test: $($gate.FirstFailure)") }
             [void]$Outcome.Lines.Add("geri verilen: " + $(if (@($blamed).Count -gt 0) { $blamed -join ", " } else { "yok (kapı hiçbir işin dosyasını adlandırmadı)" }) + "; $Base değişmedi")
+            [void]$Outcome.Lines.Add($waitsFor)
             if ($stopped) { [void]$script:stops.Add("${integration}: $stopSentence. Baktıktan sonra: scripts\team\integrate.ps1 -ClearGateStop"); return 8 }
             return 6
         }
@@ -515,6 +578,9 @@ function Invoke-BranchIntegration {
         [void]$Outcome.Lines.Add($reason)
         return 11
     }
+    # What the gate left behind in its worktree (a formatted file, a rewritten lock file) is not
+    # what was gated: the tree is put back on the gated commit before the merge is made in it.
+    [void](Reset-TeamGateWorktree -RepoRoot $repoRoot -Branch $integration -At $candidate)
     [void](Invoke-TreeGit -Tree $tree -Arguments @("checkout", "--detach", "--quiet", $baseNow))
     try {
         [void](Invoke-TreeGit -Tree $tree -Arguments @("merge", "--no-ff", "-m", "merge: $integration (gated $candidate) into $Base", $candidate))

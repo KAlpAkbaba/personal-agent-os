@@ -225,6 +225,67 @@ Test-Case "two failed attempts in a row stop a branch; a green gate or the lead'
     Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("red", "red", "cleared")))) -Because "the lead looked"
     Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("red", "red", "cleared", "red")))) -Because "one red after the lead looked"
     Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("red", "conflict", "environment")))) -Because "what is not the gate's verdict is not counted"
+    Assert-True -Condition (Test-TeamGateStopped -Records (& $r @("refs_moved"))) -Because "a ref that moved under the lead's run stops the branch at once, not at the second time"
+    Assert-Equal -Expected "refs_moved" -Actual (Get-TeamGateStopKind -Records (& $r @("red", "refs_moved"))) -Because "and the stop says which kind it is"
+    Assert-Equal -Expected "strikes" -Actual (Get-TeamGateStopKind -Records (& $r @("red", "red"))) -Because "two failed attempts"
+    Assert-Equal -Expected "" -Actual (Get-TeamGateStopKind -Records (& $r @("red"))) -Because "not stopped"
+    Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("refs_moved", "cleared")))) -Because "until the lead looked"
+}
+
+Test-Case "a commit the gate was red on is not gated again: the same sha as the LAST attempt, and that attempt red" {
+    $rec = { param([string]$Result, [string]$Sha) [pscustomobject]@{ n = 1; branch = "integrate/c1"; result = $Result; sha = $Sha } }
+    $a = "a" * 40; $b = "b" * 40
+    Assert-True -Condition (Test-TeamGateAlreadyRed -Records @((& $rec "red" $a)) -Sha $a) -Because "red on this very commit"
+    Assert-True -Condition (-not (Test-TeamGateAlreadyRed -Records @((& $rec "red" $a)) -Sha $b)) -Because "a new tip is a new question"
+    Assert-True -Condition (-not (Test-TeamGateAlreadyRed -Records @((& $rec "red" $a), (& $rec "cleared" "")) -Sha $a)) -Because "the lead looked: gate it again"
+    Assert-True -Condition (-not (Test-TeamGateAlreadyRed -Records @((& $rec "lead_failed" $a)) -Sha $a)) -Because "a lead run that gave no result is tried again"
+    Assert-True -Condition (-not (Test-TeamGateAlreadyRed -Records @((& $rec "green" $a)) -Sha $a)) -Because "green is not red"
+    Assert-True -Condition (-not (Test-TeamGateAlreadyRed -Records @() -Sha $a)) -Because "no attempt yet"
+    Assert-True -Condition (-not (Test-TeamGateAlreadyRed -Records @((& $rec "red" "")) -Sha "")) -Because "no sha is not a commit"
+}
+
+Test-Case "a branch is held while a task whose code is on it is not 'merged': a returned task's code does not ride to main with the others" {
+    $queue = New-Queue -Tasks @(
+        (New-Task -Id "one-task" -Integration "integrate/c1"), (New-Task -Id "two-task" -State "returned" -Integration "integrate/c1"),
+        (New-Task -Id "three-task" -State "in_progress" -Integration "integrate/c1"), (New-Task -Id "four-task" -State "stopped" -Integration "integrate/c1"),
+        (New-Task -Id "five-task" -State "awaiting_release" -Integration "integrate/c1"), (New-Task -Id "six-task" -State "done" -Integration "integrate/c1"),
+        (New-Task -Id "seven-task" -State "returned" -Integration "integrate/c2"), (New-Task -Id "eight-task" -State "returned"),
+        (New-Task -Id "nine-task" -State "inspecting" -Integration "integrate/c1"), (New-Task -Id "ten-task" -State "released" -Integration "integrate/c1"))
+    Assert-Equal -Expected "two-task,three-task,four-task,nine-task" -Actual (@(Get-TeamBranchHeldTasks -Queue $queue -Branch "integrate/c1" | ForEach-Object { $_.id }) -join ",") -Because "returned, being reworked, inspected again or stopped: their code is on the branch and has not passed"
+    Assert-Equal -Expected "seven-task" -Actual (@(Get-TeamBranchHeldTasks -Queue $queue -Branch "integrate/c2" | ForEach-Object { $_.id }) -join ",") -Because "by branch"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamBranchHeldTasks -Queue $queue -Branch "integrate/c3").Count -Because "a branch nobody is on is held by nobody"
+    Assert-Equal -Expected 0 -Actual @(Get-TeamBranchHeldTasks -Queue (New-Queue) -Branch "integrate/c1").Count -Because "an empty queue"
+}
+
+Test-Case "the refs the lead's run may not move are compared before and after: moved, made and deleted are all named" {
+    $a = "a" * 40; $b = "b" * 40
+    $before = @{ "refs/heads/main" = $a; "refs/heads/integrate/c1" = $b; "refs/remotes/origin/main" = "" }
+    Assert-Equal -Expected 0 -Actual @(Compare-TeamRefValues -Before $before -After $before.Clone()).Count -Because "nothing moved"
+    $moved = @(Compare-TeamRefValues -Before $before -After @{ "refs/heads/main" = $b; "refs/heads/integrate/c1" = ""; "refs/remotes/origin/main" = $a })
+    Assert-Equal -Expected "refs/heads/integrate/c1,refs/heads/main,refs/remotes/origin/main" -Actual (@($moved | ForEach-Object { $_.Name }) -join ",") -Because "all three, by name"
+    $main = @($moved | Where-Object { $_.Name -eq "refs/heads/main" })[0]
+    Assert-Equal -Expected "$a>$b" -Actual "$($main.Before)>$($main.After)" -Because "with where it was and where it is"
+    Assert-Equal -Expected 1 -Actual @(Compare-TeamRefValues -Before @{ "refs/heads/main" = $a } -After @{}).Count -Because "a ref that is gone has moved"
+}
+
+Test-Case "a tool is an .exe or a .cmd, never a .ps1: on PATH, in the fallbacks, and when it is given" {
+    $work = Join-Path $env:TEMP ("pagentos-tool-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    try {
+        foreach ($folder in @("first", "second", "third")) { [void](New-Item -ItemType Directory -Force -Path (Join-Path $work $folder)) }
+        foreach ($file in @("first\pnpm.ps1", "first\pnpm", "second\pnpm.ps1", "second\pnpm.cmd", "third\pnpm.exe", "third\pnpm.cmd", "third\uv.ps1")) {
+            Set-Content -LiteralPath (Join-Path $work $file) -Value "x" -Encoding ASCII
+        }
+        $path = (@("first", "", "no-such-folder", "second", "third") | ForEach-Object { if ($_) { Join-Path $work $_ } else { "" } }) -join ";"
+        Assert-Equal -Expected (Join-Path $work "second\pnpm.cmd") -Actual (Resolve-TeamToolPath -Name "pnpm" -SearchPath $path) -Because "the .ps1 and the extensionless shim that come first are not what a process can start"
+        Assert-Equal -Expected (Join-Path $work "third\pnpm.exe") -Actual (Resolve-TeamToolPath -Name "pnpm" -SearchPath (Join-Path $work "third")) -Because "in one folder the .exe is taken before the .cmd"
+        Assert-Equal -Expected "" -Actual (Resolve-TeamToolPath -Name "uv" -SearchPath $path) -Because "only a uv.ps1 on PATH is no uv"
+        Assert-Equal -Expected (Join-Path $work "third\pnpm.exe") -Actual (Resolve-TeamToolPath -Name "uv" -SearchPath $path -Fallbacks @((Join-Path $work "third\uv.ps1"), (Join-Path $work "nowhere\uv.exe"), (Join-Path $work "third\pnpm.exe"))) -Because "a fallback is held to the same rule, and must exist"
+        Assert-Equal -Expected (Join-Path $work "second\pnpm.cmd") -Actual (Resolve-TeamToolPath -Given (Join-Path $work "second\pnpm.cmd") -Name "pnpm" -SearchPath "") -Because "a given path is taken as given"
+        $threw = $false
+        try { [void](Resolve-TeamToolPath -Given (Join-Path $work "first\pnpm.ps1") -Name "pnpm" -SearchPath $path) } catch { $threw = $true }
+        Assert-True -Condition $threw -Because "a given .ps1 is refused with its name, not started and failed an hour later"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 Test-Case "the attempts of a branch are read from its folder, in order, and the next number is one past the highest" {
@@ -343,12 +404,20 @@ if ($env:PAGENTOS_FAKE_CLAUDE_LOG) {
 }
 if ($env:PAGENTOS_FAKE_LEAD_CARD) { [System.IO.File]::WriteAllText($env:PAGENTOS_FAKE_LEAD_CARD, $card, $utf8) }
 if ($env:PAGENTOS_FAKE_LEAD_LOCK -and $env:PAGENTOS_FAKE_LEAD_LOCK_COPY) { Copy-Item -LiteralPath $env:PAGENTOS_FAKE_LEAD_LOCK -Destination $env:PAGENTOS_FAKE_LEAD_LOCK_COPY -Force }
+function Invoke-LeadGit {
+    # A lead that does with git what its card forbids: one command per ';', before or after it writes.
+    param([string]$Lines)
+    $ErrorActionPreference = "Continue"
+    foreach ($line in @(([string]$Lines) -split ";" | Where-Object { $_.Trim() })) { & git.exe @($line.Trim() -split " ") 2>&1 | Out-Null }
+}
+Invoke-LeadGit -Lines $env:PAGENTOS_FAKE_LEAD_GIT_BEFORE
 foreach ($relative in @(([string]$env:PAGENTOS_FAKE_LEAD_WRITES) -split ";" | Where-Object { $_.Trim() })) {
     $target = Join-Path $here ($relative.Trim() -replace "/", "\")
     $folder = Split-Path -Parent $target
     if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
     Add-Content -LiteralPath $target -Value "wired by the lead" -Encoding ASCII
 }
+Invoke-LeadGit -Lines $env:PAGENTOS_FAKE_LEAD_GIT_AFTER
 if ($env:PAGENTOS_FAKE_LEAD_COMMIT -eq "1") {
     & git.exe add -A 2>&1 | Out-Null
     & git.exe -c user.name=lead -c user.email=lead@example.invalid commit -q -m "the lead committed by itself" 2>&1 | Out-Null
@@ -477,7 +546,9 @@ function Invoke-Integrate {
         [string]$Root, [string]$Gate = "green", [string]$Names = "", [string]$Docker = "ok",
         # "fake-claude" is the repository's own fake (its lead changes nothing here); "stand-in" writes what -LeadWrites names.
         [string]$Lead = "fake-claude", [string]$LeadWrites = "", [hashtable]$Environment = @{},
-        [string]$QueueUrl = "", [string]$QueueTokenFile = "", [string]$Machine = "MAIL", [string]$ExtraArguments = "", [switch]$RealTools
+        [string]$QueueUrl = "", [string]$QueueTokenFile = "", [string]$Machine = "MAIL", [string]$ExtraArguments = "",
+        # -ToolsFromPath passes NO -UvPath and NO -PnpmPath: the step finds them itself, on a PATH that begins with -PathPrefix.
+        [switch]$ToolsFromPath, [string]$PathPrefix = ""
     )
     $tools = "$Root-tools"
     $leadScript = if ($Lead -eq "stand-in") { Join-Path $tools "lead-stand-in.ps1" } else { Join-Path $Root "scripts\tests\lib\fake-claude.ps1" }
@@ -488,19 +559,24 @@ function Invoke-Integrate {
     }
     foreach ($name in @($Environment.Keys)) { $set[$name] = [string]$Environment[$name] }
     foreach ($name in @($set.Keys)) { Set-Item -Path "Env:\$name" -Value $set[$name] }
+    $pathBefore = $env:PATH
+    if ($PathPrefix) { $env:PATH = $PathPrefix + ";" + $pathBefore }
     try {
         $command = "& '" + (Join-Path $Root "scripts\team\integrate.ps1") + "' -Machine '$Machine'" +
         " -GatePath '" + (Join-Path $Root "scripts\tests\lib\fake-gate.ps1") + "' -GateMinutes 3 -LeadMinutes 3" +
         " -DockerPath '" + (Join-Path $tools "docker-$Docker.cmd") + "'" +
-        $(if ($RealTools) { "" } else { " -UvPath '" + (Join-Path $tools "uv.cmd") + "' -PnpmPath '" + (Join-Path $tools "pnpm.cmd") + "'" }) +
+        $(if ($ToolsFromPath) { "" } else { " -UvPath '" + (Join-Path $tools "uv.cmd") + "' -PnpmPath '" + (Join-Path $tools "pnpm.cmd") + "'" }) +
         " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','$leadScript'" +
         $(if ($QueueUrl) { " -QueueUrl '$QueueUrl' -QueueToken '$QueueTokenFile'" } else { "" }) +
         $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" }) + "; exit `$LASTEXITCODE"
         $result = Invoke-NativeProcess -FilePath $powershell -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $command) `
             -WorkingDirectory $Root -TimeoutSeconds 600
     }
-    finally { foreach ($name in @($set.Keys)) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue } }
-    $lines = { param($Path) if (Test-Path -LiteralPath $Path) { @(Get-Content -LiteralPath $Path -Encoding UTF8 | Where-Object { $_.Trim() }) } else { @() } }
+    finally {
+        $env:PATH = $pathBefore
+        foreach ($name in @($set.Keys)) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue }
+    }
+    $lines ={ param($Path) if (Test-Path -LiteralPath $Path) { @(Get-Content -LiteralPath $Path -Encoding UTF8 | Where-Object { $_.Trim() }) } else { @() } }
     $report = Join-Path $Root "team\reports\c1-integrate.md"
     return [pscustomobject]@{
         ExitCode = $result.ExitCode; Output = ($result.StdOut + $result.StdErr)
@@ -607,29 +683,103 @@ try {
         }
     }
 
-    Test-Case "a second red gate on the same branch stops it with the TEAM_PROTOCOL 10 line, and it stays stopped until the lead looks" {
+    Test-Case "a commit the gate was red on is not gated a second time; a second red gate, on a NEW tip, stops the branch with the TEAM_PROTOCOL 10 line until the lead looks" {
         $root = New-Sandbox -Work @(@{ Id = "task-one"; Area = "src/a" }, @{ Id = "task-two"; Area = "src/b"; Extra = "src/shared/base.txt" })
         $mainBefore = Get-Sha -Root $root -Revision "main"
-        $first = Invoke-Integrate -Root $root -Gate "red" -Names "src/a/task-one.txt"
+        # The gate names a file task-two's branch carries OUTSIDE its area: that is not task-two's file.
+        $first = Invoke-Integrate -Root $root -Gate "red" -Names "src/shared/base.txt"
         Assert-Equal -Expected 6 -Actual $first.ExitCode -Because $first.Output
         Assert-True -Condition ($first.Report -notmatch "TEAM_PROTOCOL 10") -Because "one red gate does not stop the branch"
-        # The gate names a file task-two's branch carries OUTSIDE its area: that is not task-two's file.
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $first.Queue -Id "task-two").state -Because "a file outside its area names nobody: it stays merged"
+        Assert-True -Condition ((Get-TaskById -Queue $first.Queue -Id "task-one").reason -match "yeni bir commit") -Because "the reason says what the branch waits for: $((Get-TaskById -Queue $first.Queue -Id 'task-one').reason)"
+        # Nothing moved: the same commit, the same answer. A gate that WOULD be green must not even be started.
+        $same = Invoke-Integrate -Root $root -Gate "green"
+        Assert-Equal -Expected 0 -Actual $same.ExitCode -Because $same.Output
+        Assert-Equal -Expected 1 -Actual @($same.GateCalls).Count -Because "the commit the gate was red on is not gated again"
+        Assert-Equal -Expected 1 -Actual @($same.LeadCalls).Count -Because "nor is a lead run spent on it"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-True -Condition ($same.Output -match "integrate/c1" -and $same.Output -match "red on") -Because "it says why it waits: $($same.Output)"
+        Assert-True -Condition ($same.Report -match "kapı kırmızı") -Because "the red gate's report is still the report"
+        Assert-Equal -Expected $false -Actual ([bool]$same.Lock.held) -Because "the lock is not held by a wait"
+        # main moves: a new tip, a new question.
+        Set-Content -LiteralPath (Join-Path $root "src\area\elsewhere.txt") -Value "main moved" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $root -Arguments @("add", "src/area/elsewhere.txt"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("commit", "-q", "-m", "main moved"))
+        $mainMoved = Get-Sha -Root $root -Revision "main"
         $second = Invoke-Integrate -Root $root -Gate "red" -Names "src/shared/base.txt"
         Assert-Equal -Expected 8 -Actual $second.ExitCode -Because $second.Output
         Assert-True -Condition ($second.Report -match "iki kez kırmızı.*TEAM_PROTOCOL 10") -Because "the stop is a line in the report: $($second.Report)"
-        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $second.Queue -Id "task-two").state -Because "a file outside its area names nobody: it stays merged"
-        Assert-True -Condition ((Get-TaskById -Queue $second.Queue -Id "task-two").reason -match "TEAM_PROTOCOL 10") -Because "and says why it waits"
-        Assert-Equal -Expected 2 -Actual @($second.GateCalls).Count -Because "two gates ran"
+        Assert-True -Condition ((Get-TaskById -Queue $second.Queue -Id "task-two").reason -match "TEAM_PROTOCOL 10") -Because "and the task says why it waits"
+        Assert-Equal -Expected 2 -Actual @($second.GateCalls).Count -Because "two gates ran, on two commits"
+        Assert-True -Condition (@($second.GateCalls[0] -split "\|")[1] -ne @($second.GateCalls[1] -split "\|")[1]) -Because "two different commits"
         $third = Invoke-Integrate -Root $root -Gate "green"
         Assert-Equal -Expected 8 -Actual $third.ExitCode -Because $third.Output
         Assert-Equal -Expected 2 -Actual @($third.GateCalls).Count -Because "a stopped branch is not gated again, even by a gate that would be green"
         Assert-Equal -Expected 2 -Actual @($third.LeadCalls).Count -Because "nor is the lead run again"
-        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-Equal -Expected $mainMoved -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
         Assert-Equal -Expected $false -Actual ([bool]$third.Lock.held) -Because "the lock is not left held by a stop"
         $cleared = Invoke-Integrate -Root $root -Gate "green" -ExtraArguments "-ClearGateStop"
         Assert-Equal -Expected 0 -Actual $cleared.ExitCode -Because $cleared.Output
-        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $cleared.Queue -Id "task-two").state -Because "after the lead looked, a green gate lets it through"
-        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $cleared.Queue -Id "task-one").state -Because "a returned task is the worker's, not this step's"
+        foreach ($id in @("task-one", "task-two")) {
+            Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $cleared.Queue -Id $id).state -Because "after the lead looked, a green gate lets $id through"
+        }
+    }
+
+    Test-Case "the lead's -ClearGateStop gates a waiting commit again (a gate that was red for a reason outside the commit)" {
+        $root = New-Sandbox -Work $one
+        $red = Invoke-Integrate -Root $root -Gate "red"
+        Assert-Equal -Expected 6 -Actual $red.ExitCode -Because $red.Output
+        $wait = Invoke-Integrate -Root $root -Gate "green"
+        Assert-Equal -Expected 0 -Actual $wait.ExitCode -Because $wait.Output
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $wait.Queue -Id "task-one").state -Because "it waits"
+        $again = Invoke-Integrate -Root $root -Gate "green" -ExtraArguments "-ClearGateStop"
+        Assert-Equal -Expected 0 -Actual $again.ExitCode -Because $again.Output
+        Assert-Equal -Expected 2 -Actual @($again.GateCalls).Count -Because "the lead asked for the gate again"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $again.Queue -Id "task-one").state -Because "and it was green"
+    }
+
+    Test-Case "a returned task's code does not reach main: the branch waits WHOLE until the task is merged again, then everything passes one gate" {
+        $root = New-Sandbox -Work $two
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $red = Invoke-Integrate -Root $root -Gate "red" -Names "src/b/task-two.txt"
+        Assert-Equal -Expected 6 -Actual $red.ExitCode -Because $red.Output
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $red.Queue -Id "task-two").state -Because "the gate named its file"
+        Assert-True -Condition ((Get-TaskById -Queue $red.Queue -Id "task-one").reason -match "task-two") -Because "the task that stays merged says whom it waits for: $((Get-TaskById -Queue $red.Queue -Id 'task-one').reason)"
+        # The lead's look does not open this either: a branch goes onto main whole, and task-two has not passed.
+        foreach ($extra in @("", "-ClearGateStop")) {
+            $wait = Invoke-Integrate -Root $root -Gate "green" -ExtraArguments $extra
+            Assert-Equal -Expected 0 -Actual $wait.ExitCode -Because "'$extra': $($wait.Output)"
+            Assert-Equal -Expected 1 -Actual @($wait.GateCalls).Count -Because "'$extra': no gate while task-two is returned"
+            Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "'$extra': main is where it was - task-two's code is on the branch"
+            Assert-Equal -Expected $mainBefore -Actual (Invoke-SandboxGit -Root "$root-origin.git" -Arguments @("rev-parse", "main")) -Because "'$extra': and so is origin's"
+            Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $wait.Queue -Id "task-one").state -Because "'$extra': task-one waits"
+            Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $wait.Queue -Id "task-two").state -Because "'$extra': task-two is the worker's"
+            Assert-True -Condition ($wait.Output -match "task-two" -and $wait.Output -match "returned") -Because "'$extra': it says whom it waits for: $($wait.Output)"
+        }
+        # The worker fixes it, the inspector approves, the cycle merges the branch again.
+        $tree = Join-Path "$root-tools" "fix-two"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", "-q", $tree, "team/c1/worker-task-two"))
+        Set-Content -LiteralPath (Join-Path $tree "src\b\task-two.txt") -Value "fixed" -Encoding ASCII
+        [void](Invoke-SandboxGit -Root $tree -Arguments @("commit", "-q", "-am", "the fix"))
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "remove", "--force", $tree))
+        $merge = Merge-TeamBranch -RepoRoot $root -CycleId "c1" -Branch "team/c1/worker-task-two" -Base "main"
+        Assert-True -Condition ([bool]$merge.Merged -and -not [bool]$merge.Already) -Because "the fix is merged into the integration branch"
+        $queue = Read-TeamJson -Path (Join-Path $root "team\queue.json")
+        (Get-TaskById -Queue $queue -Id "task-two").state = "merged"
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document $queue
+        $green = Invoke-Integrate -Root $root -Gate "green"
+        Assert-Equal -Expected 0 -Actual $green.ExitCode -Because $green.Output
+        Assert-Equal -Expected 2 -Actual @($green.GateCalls).Count -Because "one gate for the whole branch"
+        foreach ($id in @("task-one", "task-two")) { Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $green.Queue -Id $id).state -Because "$id is on main" }
+        Assert-Equal -Expected "fixed" -Actual (Invoke-SandboxGit -Root $root -Arguments @("show", "main:src/b/task-two.txt")) -Because "what is on main is the fixed file"
+    }
+
+    Test-Case "a gate that leaves a tracked file changed in its worktree does not break the merge: main gets exactly the gated commit" {
+        $root = New-Sandbox -Work $one
+        $run = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_GATE_TOUCH = "src/a/task-one.txt" }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the gate was green"
+        Assert-Equal -Expected (Get-Sha -Root $root -Revision "integrate/c1^{tree}") -Actual (Get-Sha -Root $root -Revision "main^{tree}") -Because "what the gate scribbled is not on main"
     }
 
     Test-Case "main having moved is merged into the integration branch BEFORE the gate" {
@@ -727,6 +877,83 @@ try {
             Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $gateTree "src\b\extra.txt"))) -Because "${how}: the file is not there"
             Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "${how}: the lock was released"
         }
+    }
+
+    Test-Case "a lead run that moves main, the integration branch or origin's main is refused LOUDLY and stops the branch: the move is named, never 'nothing merged'" {
+        $moves = @(
+            # main is checked out NOWHERE (the main checkout sits on another branch), so the gate worktree can take it.
+            @{ Name = "main"; Ref = "refs/heads/main"; Before = "checkout -q main"; Writes = "src/b/extra.txt"; Commit = "1"; After = "" },
+            @{ Name = "the integration branch"; Ref = "refs/heads/integrate/c1"; Before = ""; Writes = ""; Commit = ""; After = "update-ref refs/heads/integrate/c1 refs/heads/main" },
+            @{ Name = "origin's main"; Ref = "refs/remotes/origin/main"; Before = ""; Writes = ""; Commit = ""; After = "push -q origin HEAD:refs/heads/main" })
+        foreach ($move in $moves) {
+            $how = $move.Name
+            $root = New-Sandbox -Work $two
+            [void](Invoke-SandboxGit -Root $root -Arguments @("checkout", "-q", "-b", "owner-work"))
+            $refBefore = Get-Sha -Root $root -Revision $move.Ref
+            $originBefore = Invoke-SandboxGit -Root "$root-origin.git" -Arguments @("rev-parse", "main")
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites $move.Writes -Environment @{
+                PAGENTOS_FAKE_LEAD_GIT_BEFORE = $move.Before; PAGENTOS_FAKE_LEAD_GIT_AFTER = $move.After; PAGENTOS_FAKE_LEAD_COMMIT = $move.Commit
+            }
+            $refAfter = Get-Sha -Root $root -Revision $move.Ref
+            Assert-True -Condition ($refAfter -ne $refBefore) -Because "${how}: the stand-in did move $($move.Ref) (else this case proves nothing)"
+            Assert-Equal -Expected 13 -Actual $run.ExitCode -Because "${how}: $($run.Output)"
+            Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "${how}: the gate did not run"
+            Assert-True -Condition ($run.Report.Contains($move.Ref) -and $run.Report.Contains($refBefore) -and $run.Report.Contains($refAfter)) -Because "${how}: the report names the ref, where it was and where it is: $($run.Report)"
+            Assert-True -Condition ($run.Report.Contains("git update-ref $($move.Ref) $refBefore $refAfter")) -Because "${how}: and the command that puts it back: $($run.Report)"
+            Assert-True -Condition ($run.Report -notmatch "hiçbir şey birleştirilmedi" -and $run.Output -notmatch "nothing merged") -Because "${how}: it does not say nothing happened: $($run.Report)"
+            Assert-True -Condition ($run.Output.Contains($move.Ref)) -Because "${how}: the console names the ref too: $($run.Output)"
+            foreach ($id in @("task-one", "task-two")) {
+                $task = Get-TaskById -Queue $run.Queue -Id $id
+                Assert-Equal -Expected "merged" -Actual $task.state -Because "${how}: $id did not pass"
+                Assert-True -Condition ($task.reason.Contains($move.Ref) -and $task.reason -notmatch "hiçbir şey birleştirilmedi") -Because "${how}: the reason of $id names the ref: $($task.reason)"
+            }
+            Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "${how}: the lock was released"
+            Assert-Equal -Expected "HEAD" -Actual (Invoke-SandboxGit -Root (Join-Path $root ".claude\worktrees\gate\integrate\c1") -Arguments @("rev-parse", "--abbrev-ref", "HEAD")) -Because "${how}: the gate worktree does not keep a branch checked out"
+            # The branch is stopped AT ONCE: a gate that would be green must not carry the move to origin.
+            $originAfterRun = Invoke-SandboxGit -Root "$root-origin.git" -Arguments @("rev-parse", "main")
+            $next = Invoke-Integrate -Root $root -Gate "green"
+            Assert-Equal -Expected 8 -Actual $next.ExitCode -Because "${how}: $($next.Output)"
+            Assert-Equal -Expected 0 -Actual @($next.GateCalls).Count -Because "${how}: no gate until the lead looked"
+            Assert-Equal -Expected 1 -Actual @($next.LeadCalls).Count -Because "${how}: no second lead run"
+            Assert-True -Condition ($next.Report.Contains($move.Ref) -and $next.Report -match "TEAM_PROTOCOL 10") -Because "${how}: the stop names the ref: $($next.Report)"
+            Assert-Equal -Expected $originAfterRun -Actual (Invoke-SandboxGit -Root "$root-origin.git" -Arguments @("rev-parse", "main")) -Because "${how}: nothing was pushed by the next run"
+            if ($move.Ref -ne "refs/remotes/origin/main") { Assert-Equal -Expected $originBefore -Actual $originAfterRun -Because "${how}: origin's main is where it was" }
+            Assert-Equal -Expected $refAfter -Actual (Get-Sha -Root $root -Revision $move.Ref) -Because "${how}: the step did not move the ref back by itself (it cannot know whose move it was)"
+        }
+    }
+
+    Test-Case "a lead run that leaves the branch's history (an amended commit) is refused, even when every file it changed is the lead's" {
+        $root = New-Sandbox -Work $one
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "docs/DECISIONS.md" -Environment @{ PAGENTOS_FAKE_LEAD_GIT_AFTER = "add -A;commit -q --amend --no-edit" }
+        Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-True -Condition ($task.reason -match "HEAD dalın dışına") -Because "the reason says the run left the branch: $($task.reason)"
+        Assert-True -Condition ($task.reason -notmatch "DECISIONS") -Because "docs/ is the lead's; the file is not what was wrong: $($task.reason)"
+        Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "a commit that is not on the branch is not gated"
+        Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $root -Revision "integrate/c1") -Because "the integration branch is where it was"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "and so is main"
+        Assert-Equal -Expected "lead_refused" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "it is a refused lead run: a failed attempt, counted"
+        Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root (Join-Path $root ".claude\worktrees\gate\integrate\c1") -Revision "HEAD") -Because "the gate worktree is back on the branch's tip"
+    }
+
+    Test-Case "uv and pnpm are found by the step itself as .exe or .cmd: a pnpm.ps1 and a uv.ps1 that come first on PATH are never what is started" {
+        $root = New-Sandbox -Work $one -Services
+        $bin = Join-Path "$root-tools" "bin"
+        [void](New-Item -ItemType Directory -Force -Path $bin)
+        foreach ($tool in @("uv", "pnpm")) {
+            Copy-Item -LiteralPath (Join-Path "$root-tools" "$tool.cmd") -Destination (Join-Path $bin "$tool.cmd")
+            Set-Content -LiteralPath (Join-Path $bin "$tool.ps1") -Encoding ASCII -Value "Add-Content -LiteralPath '$(Join-Path "$root-tools" "decoy.log")' -Value '$tool.ps1 was started'"
+        }
+        # No -UvPath, no -PnpmPath.
+        $run = Invoke-Integrate -Root $root -Gate "green" -ToolsFromPath -PathPrefix $bin
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        $calls = @($run.ToolCalls | ForEach-Object { $_.ToLowerInvariant().Trim() })
+        Assert-Equal -Expected 3 -Actual @($calls).Count -Because "uv twice and pnpm once, through the .cmd files: $($calls -join '; ')"
+        Assert-True -Condition ($calls[2] -match "\|pnpm install --frozen-lockfile --prefer-offline$") -Because "pnpm ran: $($calls[2])"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path "$root-tools" "decoy.log"))) -Because "no .ps1 was started"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the environment was built and the gate ran"
     }
 
     Test-Case "a lead run that gives no result merges nothing and counts as a failed attempt; the usage limit does not count" {

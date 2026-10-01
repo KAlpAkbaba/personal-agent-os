@@ -33,6 +33,15 @@ $script:TeamLeadClosedFiles = @("team/queue.json", "team/lock.json")
 # The results of an attempt that count towards "two red gates on the same branch" (section 10).
 $script:TeamGateStrikeResults = @("red", "lead_refused", "lead_failed")
 $script:TeamGateMaxStrikes = 2
+# An attempt that stops the branch AT ONCE: a ref moved under the lead's run. A second try would
+# merge the moved main into the branch, gate it and push it - the move would ride out on a green gate.
+$script:TeamGateStopNowResults = @("refs_moved")
+# A task whose code is on an integration branch has PASSED when it is in one of these states. In
+# any other state (returned, being reworked, inspected again, stopped) the branch is held.
+$script:TeamBranchPassedStates = @("merged", "awaiting_release", "released", "awaiting_real_evidence", "done")
+# What Invoke-NativeProcess can start. A .ps1 (pnpm.ps1 is what PowerShell finds first for
+# "pnpm") is not an application: CreateProcess refuses it.
+$script:TeamToolExtensions = @(".exe", ".cmd")
 $script:TeamReasonMaxLength = 900
 
 # ---------------------------------------------------------------------------- names
@@ -73,6 +82,26 @@ function Get-TeamMergedGroups {
         [void]$groups.Add([pscustomobject]@{ Branch = [string]$branch; Tasks = @($byBranch[$branch].ToArray()) })
     }
     return @($groups.ToArray())
+}
+
+function Get-TeamBranchHeldTasks {
+    <#
+    .SYNOPSIS
+        The tasks that HOLD an integration branch: their code was merged into it (the cycle wrote
+        `integration_branch`) and they are not 'merged' any more - returned by a red gate or by
+        the inspector, being reworked, or stopped.
+
+    .DESCRIPTION
+        A branch goes onto main whole or not at all: a green gate on it would put the returned
+        task's code on main with the others. While one task holds it, nothing of it is gated.
+        The worker's fix is merged into the same branch by the cycle; the task is 'merged' again,
+        the tip is new, and one gate judges everything.
+    #>
+    param($Queue, [Parameter(Mandatory = $true)][string]$Branch)
+    return @(Get-TeamTasks -Queue $Queue | Where-Object {
+            ([string](Get-TeamProperty -InputObject $_ -Name "integration_branch" -Default "")) -eq $Branch -and
+            $script:TeamBranchPassedStates -notcontains [string](Get-TeamProperty -InputObject $_ -Name "state" -Default "")
+        })
 }
 
 # ---------------------------------------------------------------------------- the lead's wiring run
@@ -228,6 +257,8 @@ function New-TeamLeadMergeCard {
     [void]$lines.Add("The script checks the diff: one file outside that list refuses the WHOLE run and nothing is merged.")
     [void]$lines.Add("Do not commit, push, tag, switch branch, run the gate or release: the script commits what you")
     [void]$lines.Add("changed and runs the gate. If nothing needs wiring, change nothing and say so.")
+    [void]$lines.Add("The script also compares main, $Branch and the remote's main before and after your run (do not")
+    [void]$lines.Add("fetch either): a ref that moved refuses the run and stops the branch until a person has looked.")
     foreach ($note in @($Notes)) {
         [void]$lines.Add("")
         [void]$lines.Add("## $($note.Id) - $($note.Title)")
@@ -431,9 +462,42 @@ function Get-TeamGateStrikes {
     return $strikes
 }
 
+function Get-TeamGateStopKind {
+    <#
+    .SYNOPSIS
+        Why a branch is stopped until the lead looks: "strikes" (two failed attempts in a row),
+        "refs_moved" (a ref moved under the lead's run: stopped at once), or "" (not stopped).
+    #>
+    param([object[]]$Records = @())
+    $moved = $false
+    foreach ($record in @($Records)) {
+        $result = [string](Get-TeamProperty -InputObject $record -Name "result" -Default "")
+        if ($script:TeamGateStopNowResults -contains $result) { $moved = $true }
+        elseif ($result -eq "green" -or $result -eq "cleared") { $moved = $false }
+    }
+    if ($moved) { return "refs_moved" }
+    if ((Get-TeamGateStrikes -Records $Records) -ge $script:TeamGateMaxStrikes) { return "strikes" }
+    return ""
+}
+
 function Test-TeamGateStopped {
     param([object[]]$Records = @())
-    return ((Get-TeamGateStrikes -Records $Records) -ge $script:TeamGateMaxStrikes)
+    return ((Get-TeamGateStopKind -Records $Records) -ne "")
+}
+
+function Test-TeamGateAlreadyRed {
+    <#
+    .SYNOPSIS
+        Whether the LAST attempt on a branch was a red gate on exactly this commit. Gating it
+        again is an hour holding the lock for an answer that is known: the step waits for a new
+        tip (a fix merged in, main moved) or for the lead's -ClearGateStop.
+    #>
+    param([object[]]$Records = @(), [string]$Sha = "")
+    $all = @($Records)
+    if (-not $Sha -or @($all).Count -eq 0) { return $false }
+    $last = $all[@($all).Count - 1]
+    return ([string](Get-TeamProperty -InputObject $last -Name "result" -Default "") -eq "red" -and
+        [string](Get-TeamProperty -InputObject $last -Name "sha" -Default "") -eq $Sha)
 }
 
 function Write-TeamGateRecord {
@@ -443,6 +507,50 @@ function Write-TeamGateRecord {
 }
 
 # ---------------------------------------------------------------------------- the worktree's environment
+
+function Resolve-TeamToolPath {
+    <#
+    .SYNOPSIS
+        Where a native tool (docker, uv, pnpm) is, as something a process can START: an .exe or a
+        .cmd. "" when there is none.
+
+    .DESCRIPTION
+        Not Get-Command: for "pnpm" it answers pnpm.ps1, which CreateProcess refuses ("not a
+        valid application"), and every run would end in "the environment could not be built".
+        PATH is walked folder by folder, .exe before .cmd in each; then the fallbacks, held to
+        the same rule. A path that is GIVEN is taken as given, and refused by name when it is
+        not one of the two.
+    #>
+    param(
+        [string]$Given = "",
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string[]]$Fallbacks = @(),
+        [AllowEmptyString()][string]$SearchPath = $env:PATH
+    )
+    if ($Given) {
+        if ($script:TeamToolExtensions -notcontains [System.IO.Path]::GetExtension($Given).ToLowerInvariant()) {
+            throw "'$Given' is given for $Name and is neither an .exe nor a .cmd: a process cannot start it"
+        }
+        return $Given
+    }
+    foreach ($folder in @(([string]$SearchPath) -split ";")) {
+        $directory = $folder.Trim().Trim('"')
+        if (-not $directory) { continue }
+        foreach ($extension in $script:TeamToolExtensions) {
+            try {
+                $candidate = Join-Path $directory ($Name + $extension)
+                if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+            }
+            catch { }
+        }
+    }
+    foreach ($fallback in @($Fallbacks)) {
+        $expanded = [Environment]::ExpandEnvironmentVariables([string]$fallback)
+        if ($script:TeamToolExtensions -notcontains [System.IO.Path]::GetExtension($expanded).ToLowerInvariant()) { continue }
+        if (Test-Path -LiteralPath $expanded -PathType Leaf) { return $expanded }
+    }
+    return ""
+}
 
 function Get-TeamGateEnvironmentPlan {
     <#
@@ -486,6 +594,30 @@ function Test-TeamAncestor {
     param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string]$Ancestor, [Parameter(Mandatory = $true)][string]$Of)
     $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("merge-base", "--is-ancestor", $Ancestor, $Of)
     return ($result.ExitCode -eq 0)
+}
+
+function Get-TeamRefValues {
+    <# name -> 40-hex sha ("" when the ref does not exist), for the refs a run may not move. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [string[]]$Names = @())
+    $values = @{}
+    foreach ($name in @($Names)) { $values[[string]$name] = Get-TeamRevision -RepoRoot $RepoRoot -Revision ([string]$name) }
+    return $values
+}
+
+function Compare-TeamRefValues {
+    <#
+    .SYNOPSIS
+        The refs that are not where they were: moved, made or deleted. Each with where it was
+        and where it is ("" = it does not exist). Empty when nothing moved.
+    #>
+    param([Parameter(Mandatory = $true)][hashtable]$Before, [Parameter(Mandatory = $true)][hashtable]$After)
+    $moved = New-Object System.Collections.ArrayList
+    foreach ($name in @(@($Before.Keys) + @($After.Keys) | Sort-Object -Unique)) {
+        $was = if ($Before.ContainsKey($name)) { [string]$Before[$name] } else { "" }
+        $is = if ($After.ContainsKey($name)) { [string]$After[$name] } else { "" }
+        if ($was -ne $is) { [void]$moved.Add([pscustomobject]@{ Name = [string]$name; Before = $was; After = $is }) }
+    }
+    return @($moved.ToArray())
 }
 
 function Get-TeamBranchCheckout {

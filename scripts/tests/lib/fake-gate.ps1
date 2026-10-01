@@ -18,6 +18,8 @@
 
     Every call appends one line to PAGENTOS_FAKE_GATE_LOG: "<working directory>|<HEAD sha>|<scenario>",
     so a test can see WHERE the gate ran and on WHICH commit - and that it ran at all.
+    PAGENTOS_FAKE_GATE_TOUCH names a tracked file (relative) the gate appends a line to, in any
+    scenario: a gate that leaves its worktree dirty.
     A test in the suite holds the words printed here to the real gate's source.
 #>
 [CmdletBinding()]
@@ -34,6 +36,9 @@ if ($log) {
     $head = (& git.exe rev-parse HEAD 2>$null | Out-String).Trim()
     Add-Content -LiteralPath $log -Value "$here|$head|$scenario" -Encoding UTF8
 }
+# A gate that leaves a tracked file changed behind it (a formatter, a regenerated lock file).
+$touch = [string]$env:PAGENTOS_FAKE_GATE_TOUCH
+if ($touch) { Add-Content -LiteralPath (Join-Path $here ($touch -replace "/", "\")) -Value "left by the gate" -Encoding ASCII }
 
 Write-Host ""
 Write-Host "=== Required files ==="
