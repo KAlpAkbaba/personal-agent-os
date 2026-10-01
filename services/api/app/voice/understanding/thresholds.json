@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "description": "The confidence bands of the voice understanding policy (ADR-0224 layer 3). high: do it, the receipt as today. medium..high: do it and read it back in the same receipt speech. below medium: one question, no action. device_min: layer 2 fills the device slot only ABOVE this, and only when an alias word is in the sentence. Starting values; the STT corpus measurement moves them with evidence.",
+  "high": 0.85,
+  "medium": 0.60,
+  "device_min": 0.65,
+  "set_at": "2026-10-01",
+  "evidence": "high/medium: the owner's directive of 2026-09-30 (ADR-0224). device_min: a bare 'bilgisayarda' scored 0.62-0.64 against the alias 'ev bilgisayarı' at the inspection of layer 2 (2026-10-01)."
+}
