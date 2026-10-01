@@ -495,6 +495,15 @@ if (-not $Fast) {
     Assert-ExitCode "team-cycle tests"
   }
 
+  Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
+    # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
+    # fake docker, apt, systemctl and curl. Nothing here touches a host.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\maintenance-reboot.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "maintenance-reboot tests"
+  }
+
   Invoke-Step "Web shell build" {
     $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
     if (-not $pnpm) { throw "pnpm not found" }

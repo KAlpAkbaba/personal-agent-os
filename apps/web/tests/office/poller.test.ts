@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createOfficePoller, type OfficeView } from "../officeApi";
+import { createOfficePoller, type OfficeView } from "../../app/core/office/officeApi";
 import { twoWorkers } from "./fixtures";
 
 function setup(fetchImpl: () => Promise<OfficeView>) {

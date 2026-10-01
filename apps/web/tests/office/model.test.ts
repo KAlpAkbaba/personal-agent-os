@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildOffice, buildPanel, selectSeat } from "../officeModel";
+import { buildOffice, buildPanel, selectSeat } from "../../app/core/office/officeModel";
 import { SEAT_ORDER, twoWorkers } from "./fixtures";
 
 describe("the office model", () => {

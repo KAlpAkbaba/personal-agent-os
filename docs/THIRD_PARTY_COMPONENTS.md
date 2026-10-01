@@ -253,3 +253,25 @@ compatible licence, using THAT would be a new decision with its own ADR.
 - **Phones home:** no. **Chromium** comes with the Playwright image
   (`mcr.microsoft.com/playwright/python`, the tag pinned to the locked Playwright version),
   capped at 2 GB in its own container.
+
+## rapidfuzz, py-rust-stemmers — considered and rejected (2026-10-01, ADR-0224 layer 2)
+
+Role considered: Turkish-aware fuzzy matching (rapidfuzz, MIT, C++ Damerau-Levenshtein) and suffix
+stemming (py-rust-stemmers, Snowball Turkish). Neither is in `services/api/uv.lock`.
+Rejected for now, default "no new dependency":
+- rapidfuzz adds a native wheel to every device/cloud image for a 12-line optimal-string-alignment
+  routine that already meets the budget (mean 3.5 ms a sentence with the lexical embedder, 4.9 ms
+  with LocalEmbedder, most of it in the intent pass, not in fuzzy); Turkish folding (I/İ, ü/u) is ours
+  either way and rapidfuzz does not do it.
+- A Turkish stemmer over-stems (`unutma` = "remember" stems to `unut` = "forget" — the recorded
+  hard-delete trap) and layer 1 already has a closed, reviewed suffix stripper.
+Revisit only if the measured p99 of `understand()` breaks the budget; licence/security status to
+be re-verified at that time.
+
+## Office page sprites (2026-10-01, office-page, ADR-0234) - own drawing, no third party
+
+The Kokpit "Ofis" page (/core/office) draws its desks and characters in code as
+inline SVG pixel maps with CSS animation. No sprite sheet, tileset, font or library
+is used, vendored or fetched; `apps/web/public/office/` holds no third-party file.
+Nothing to license, nothing that phones home. If a pixel-art pack is ever adopted
+instead, only CC0/MIT, with its licence text beside the files.

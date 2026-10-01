@@ -2,14 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiFetch = vi.fn();
-vi.mock("../../../lib/session", () => ({
+vi.mock("../../app/lib/session", () => ({
   API_BASE: "http://core.test:8001",
   apiFetch: (...args: unknown[]) => apiFetch(...args),
   UnauthorizedError: class UnauthorizedError extends Error {},
 }));
 
-import { OFFICE_PATH, fetchOffice } from "../officeApi";
-import OfficeView from "../OfficeView";
+import { OFFICE_PATH, fetchOffice } from "../../app/core/office/officeApi";
+import OfficeView from "../../app/core/office/OfficeView";
 import { twoWorkers } from "./fixtures";
 
 function render(over: Partial<Parameters<typeof OfficeView>[0]> = {}) {
