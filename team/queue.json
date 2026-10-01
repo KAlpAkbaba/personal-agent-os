@@ -230,11 +230,11 @@
                       "needs_integration":  false,
                       "sha":  "dc17cedd7641e6b61e79f9257827f8fb53d8c791",
                       "returns":  1,
-                      "reason":  "fix the dropped returned-worker-task seat indexing, with a mixed working/returned regression test and RED; add the future-dated and no-timezone `updated_at` decision to the ADR or the code",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/office-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "state":  "released",
@@ -453,11 +453,11 @@
                       "needs_integration":  false,
                       "sha":  "680c59dd1867056c4db1a8b614c7a3e0498efd8a",
                       "returns":  1,
-                      "reason":  "rapor bir hukumle bitmedi",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/office-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "state":  "released",
@@ -664,12 +664,12 @@
                       "needs_integration":  true,
                       "plan":  "team/plans/office-page-integration.md",
                       "returns":  1,
-                      "reason":  "alan dışı dosya: apps/web/tests/office/fixtures.ts, apps/web/tests/office/model.test.ts, apps/web/tests/office/poller.test.ts, apps/web/tests/office/view.test.tsx",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "sha":  "7f98647738701b92230e0007bef7954009b9155a",
                       "integration_branch":  "integrate/office-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "state":  "approved",
@@ -893,11 +893,11 @@
                       "needs_integration":  false,
                       "sha":  "af22cac6a2d66fc7cb68781f9f0a72497f648514",
                       "returns":  1,
-                      "reason":  "rapor bir hukumle bitmedi",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "state":  "released",
@@ -1133,11 +1133,11 @@
                       "plan":  "team/plans/understanding-semantic-index-integration.md",
                       "sha":  "7f778f2cf6a1d9a22691e312e95b8b4c48cf2287",
                       "returns":  2,
-                      "reason":  "denetleyici APPROVE; entegrasyon çakışmasını (understanding/__init__.py) lead çözdü (c8263c8a)",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "state":  "approved",
@@ -3152,11 +3152,11 @@
                       "needs_integration":  false,
                       "sha":  "07d8fb1e02b4202516d388d96b77504eda74ffc1",
                       "returns":  1,
-                      "reason":  "rapor bir hukumle bitmedi",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "ledger-device-stamp",
@@ -3287,7 +3287,8 @@
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)"
                   },
                   {
                       "id":  "allowlist-editor",
@@ -3418,7 +3419,8 @@
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)"
                   },
                   {
                       "id":  "cloud-device-registry",
@@ -3543,7 +3545,8 @@
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)"
                   },
                   {
                       "id":  "cycle-lead-run",
@@ -3669,7 +3672,8 @@
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)"
                   },
                   {
                       "id":  "maintenance-reboot-script",
@@ -3798,7 +3802,8 @@
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)"
                   },
                   {
                       "id":  "answer-mode-intent-precision",
@@ -4018,11 +4023,11 @@
                       "needs_integration":  false,
                       "sha":  "d01ed7308adfcb504d7fbe3ae097d39500eb03b8",
                       "returns":  1,
-                      "reason":  "LEAD (kart hatası): alan genişletildi (tests/voice_corpus/corpus.py - kart korpus satırlarını istiyordu ama dosyayı alana yazmamıştı). İşçinin ikinci turu (d01ed730) denetlenmedi; denetle.",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "operator-postcondition-uwp",
@@ -4223,11 +4228,11 @@
                       "needs_integration":  false,
                       "sha":  "c02fee81eacdd1fc7918ac03f7669c3e2a466c88",
                       "returns":  1,
-                      "reason":  "rapor bir hukumle bitmedi",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "app-open-named-device-not-dropped",
@@ -4449,11 +4454,11 @@
                       "needs_integration":  false,
                       "sha":  "2d1ba0214b83964e9f38f28ff2bd693a48ef58ee",
                       "returns":  1,
-                      "reason":  "LEAD (kart hatası): alan genişletildi (realtime_sessions/service.py - denetleyicinin kendi isteği). İşçinin ikinci turu (2d1ba021) denetlenmedi; denetle.",
+                      "reason":  "yayinlandi 2026-10-01 10:30 UTC, main 0f794d97b1b2bdd764e3b90354e487656023cdc4 (api-green)",
                       "integration_branch":  "integrate/cycle-2026-10-01",
                       "release_approved":  true,
                       "release_approved_at":  "2026-10-01T10:05:00Z",
-                      "release_approved_by":  "owner"
+                      "release_approved_by":  "owner_sentence"
                   },
                   {
                       "id":  "ledger-device-callers",
