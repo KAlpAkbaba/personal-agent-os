@@ -72,3 +72,24 @@ Unit (both stores) `tests/unit/test_team_proposals.py`,
   with decisions open during a cycle it is less rare.
 - `PROVEN_REAL` needs the owner: read an idea's text and approve it with the home PC off and a
   cycle running, after the release.
+
+## For the lead at merge: two existing tests outside this task's area
+
+This branch changes no file outside its area, so two existing unit tests are RED on it
+(measured: 2 failed, 208 passed over the team's unit files). Both edits are in commit
+`1df514f06e8fb5c47bf6c9a7e84ec4c6eeb77427`, which is reverted on this branch and still
+reachable from it: `git cherry-pick 1df514f0` on the integration branch applies both.
+
+- `services/api/tests/unit/test_team_state.py`,
+  `test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server_has`:
+  `POST /v1/team/queue/proposals` is served and `TeamQueue.ps1` does not call it yet. The
+  task card asks for an entry in `read_by_others` with its reason; that dict is in this file.
+  `researcher-every-cycle` removes the entry when its client calls the route (if that task
+  merges first, the entry is not needed at all).
+- `services/api/tests/unit/test_team_approvals.py`,
+  `test_a_decision_is_refused_while_a_cycle_holds_the_lock_on_both_stores[db]`: it holds the
+  rule the owner changed on 2026-10-01 (409 `cycle_running` on the database store). The file
+  store half stays; the database half expects 200 and the task approved.
+
+Not done instead: serving the route from a router the contract test does not read. That
+would turn the contract test green by hiding the route from it.
