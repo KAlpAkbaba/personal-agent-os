@@ -15,6 +15,12 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**ŞU AN (2026-10-01 22:35): TAM KAPI `integrate/d20261001` @ `b8a4491669a305d3b0e2d30a903e29c19178b8b0` üzerinde ANA KOPYADA
+(detached HEAD) koşuyor; içinde: real-host-rehearsal (ADR-0235, gerçek fixture toplandı), proposals-on-cloud-core (ADR-0236),
+office-page-polish. Yeşilse: O COMMIT'i (dalın ucunu değil - döngü üstüne merge ekleyebilir) main'e al, işleri
+`awaiting_release` yap, kural gereği SORMADAN blue/green yayınla + pin + doğrula + raporla; sonra bekleyen fikirlerin
+metinlerini `POST /v1/team/queue/proposals` ile gönder; ana kopyayı `team/nightly/lead`'e geri al; `lead-notes` ağacını kaldır.
+Döngü 6 yuvayla koşuyor (zamanlanmış görev, 30 dk). Model: işçi/entegratör/araştırmacı Opus 5.5, lead/denetleyici Fable.**
 **ÜRETİM: main `858c3e0bf974f1984826f4b8f37e7dc8b9e12186` (2026-10-01 16:27 UTC, api-blue), LKG `cc9ca31e`, pin = RELEASE,
 reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`. Kapı 35/35 (`2c509b16`). QUALIFICATION Stage 39.**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
