@@ -525,7 +525,12 @@ def _receipt(
         observed_at=now,
     )
     if ctx.db is not None:
-        record_receipt(ctx.db, receipt, SUBSYSTEM_OPERATOR)
+        record_receipt(
+            ctx.db,
+            receipt,
+            SUBSYSTEM_OPERATOR,
+            device=_bound_device_word(ctx, ctx.live.get("device_action")),
+        )
     return receipt.as_dict()
 
 
@@ -903,7 +908,13 @@ def operator_app_open(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, 
         plan = Plan(
             name=PLAN_OPEN_APPLICATION, goal=f"open {canonical}", steps=open_application(canonical)
         )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     name_tr = _APP_TR_NAMES.get(canonical, canonical)
     if task.status == STATUS_SUCCEEDED:
         speech = f"{name_tr} açtım efendim."
@@ -958,6 +969,22 @@ def _device_named(ctx: ToolContext, device_id: Any) -> tuple[str | None, str | N
     aliases = (row.metadata_json or {}).get("aliases") or []
     spoken = str(aliases[0]).strip() if aliases else ""
     return row.name, (spoken[:1].upper() + spoken[1:]) if spoken else row.name
+
+
+def _bound_device_word(ctx: ToolContext, device_action: Any) -> str | None:
+    """The word the ledger stamps on rows this call causes (ADR-0228): the machine the port is
+    bound to, as the owner says it. A sentence that NAMED a machine binds it (``targets``: the
+    alias word); otherwise the session's own device, read through :func:`_device_named`.
+    ``None`` when nothing is bound or it cannot be read - a row without a device is still a
+    true row, never a guessed one."""
+    targets = tuple(getattr(device_action, "targets", ()) or ())
+    if targets:
+        return str(targets[0])
+    ids = tuple(getattr(device_action, "session_device_ids", ()) or ())
+    if not ids:
+        return None
+    name, spoken = _device_named(ctx, ids[0])
+    return spoken or name
 
 
 def _open_application_directly(
@@ -1104,7 +1131,13 @@ def operator_window_control(ctx: ToolContext, arguments: dict[str, Any]) -> dict
         goal=f"{action} window {window_id}",
         steps=steps,
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     if task.status == STATUS_SUCCEEDED:
         speech = f"{_WINDOW_SUCCESS_TR[action]} efendim."
     elif task.error_class == "modal_open":
@@ -1175,7 +1208,13 @@ def operator_type(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]
             window_id, text, browser=is_browser_image(str(target.get("image") or ""))
         ),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     return {**(task.action_receipt or {}), "speech": _type_speech(task)}
 
 
@@ -1219,7 +1258,13 @@ def operator_shell(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any
         goal=f"shell query {kind}",
         steps=build_shell_query_steps(kind),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     if task.status == STATUS_SUCCEEDED:
         stdout = str(task.last_observed.get("stdout") or "")
         first_line = stdout.strip().splitlines()[0].strip() if stdout.strip() else ""
@@ -1305,7 +1350,13 @@ def operator_app_close(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str,
         goal=f"close application {window_id}",
         steps=close_app(window_id, force=force),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     return {**(task.action_receipt or {}), "speech": _app_close_speech(task, name_tr)}
 
 
@@ -1361,7 +1412,13 @@ def operator_process(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     plan = Plan(
         name=PLAN_BY_PROCESS_ACTION[action], goal=f"process {action} {image or '*'}", steps=steps
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {**(task.action_receipt or {})}
     if action == "list":
         observed = task.last_observed or {}
@@ -1435,7 +1492,13 @@ def operator_service(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
     operator = _require_operator(ctx, TOOL_SERVICE)
     steps = service_status(name) if action == "status" else service_restart(name)
     plan = Plan(name=PLAN_BY_SERVICE_ACTION[action], goal=f"service {action} {name}", steps=steps)
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {**(task.action_receipt or {})}
     state = str((task.last_observed or {}).get("state") or "")
     if action == "status":
@@ -1636,7 +1699,13 @@ def operator_key(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
         success = SPEECH_SHORTCUT_SUCCESS_TR.format(
             keys="+".join(KEY_TR.get(k, k.upper()) for k in chord), times=times
         )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     return {
         **(task.action_receipt or {}),
         "repeat_count": count,
@@ -1743,7 +1812,13 @@ def operator_pointer(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         goal=f"pointer {action} x{count} at ({x},{y}) {space} in {window_id}",
         steps=steps,
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     success = SPEECH_POINTER_SUCCESS_TR[action]
     if count > 1:
         success = SPEECH_SCROLL_REPEATED_TR.format(count=count)
@@ -1884,7 +1959,13 @@ def operator_ui(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
     plan = Plan(
         name=PLAN_BY_UI_ACTION[action], goal=f"ui {action} {query} in {window_id}", steps=steps
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {
         **(task.action_receipt or {}),
         "speech": _ui_speech(
@@ -1926,7 +2007,13 @@ def operator_inspect(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
         goal=f"ui {mode} {query} in {window_id}",
         steps=ui_read(window_id, query or None),
     )
-    task = operator.start_task(ctx.db, plan, device_action, session_id=str(ctx.session_id))
+    task = operator.start_task(
+        ctx.db,
+        plan,
+        device_action,
+        session_id=str(ctx.session_id),
+        device=_bound_device_word(ctx, device_action),
+    )
     out = {**(task.action_receipt or {})}
     root = (task.last_observed or {}).get("root") if task.status == STATUS_SUCCEEDED else None
     if root is None:
