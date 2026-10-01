@@ -12,9 +12,12 @@ validation allows (and one more where the code claims to refuse it), JSONB docum
 nested Turkish text, timezone-aware timestamps that are not UTC, and a NULL in every
 nullable column.
 
-Every instant here is in 2001 on purpose. ``evaluate_due`` looks at every armed routine in
-the database, and a ``now`` in the past can only make this file's own routines due; an alarm
-"rung" in 2001 starts a display holdoff that ended long ago.
+Every instant here is in 2001, so an alarm "rung" by a test starts a display holdoff that
+ended long ago. The year protects nothing else: ``evaluate_due`` looks at every armed routine
+in the database and a weekday schedule is due at its minute in 2001 as in any year. What
+keeps these tests off a developer's own routines is ``_refuse_foreign_armed``, in front of
+every ``evaluate_due`` and every alarm ``tick`` in this file: it fails the test rather than
+run the engine while an armed routine exists that the test did not create.
 
 Rows are namespaced with a per-test token and deleted when the test ends. The ledger rows
 the services write along the way stay: the ledger is append-only.
@@ -24,13 +27,16 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import delete, func, or_, select
+from fastapi.testclient import TestClient
+from sqlalchemy import delete, event, func, or_, select
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DataError, PendingRollbackError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -49,13 +55,13 @@ from app.routines import service as routines_service
 from app.routines.actions import NoopDispatcher
 from app.routines.conditions import RoutineConditionContext
 from app.routines.dispatch import ActionDispatcher
-from app.routines.models import Routine, RoutineFiring
+from app.routines.models import ROUTINE_STATUS_ARMED, Routine, RoutineFiring
 from app.voice.errors import VoiceError
 from app.voice.providers import FakeTTSProvider
 from app.voice.realtime_sessions import tools_routines
 from app.voice.realtime_sessions.tools import ToolContext
 from tests.alarms_support import FakeDeviceAction, happy_device_results
-from tests.integration.conftest import owner_client
+from tests.integration.conftest import owner_client, shared_identity
 
 pytestmark = pytest.mark.integration
 
@@ -122,6 +128,83 @@ def made(db: sessionmaker[Session], token: str) -> Iterator[SimpleNamespace]:
             session.execute(delete(Routine).where(or_(*mine)))
             session.execute(delete(WakeAlarm).where(WakeAlarm.id.in_(created.alarms)))
             session.commit()
+
+
+def _refuse_foreign_armed(session: Session, made: SimpleNamespace, token: str) -> None:
+    """Fail, loudly, rather than run the production engine over somebody else's routine.
+
+    ``evaluate_due`` has no filter: it takes every armed routine in the database, and the
+    year of ``now`` protects none of them but a one-shot in the future. A weekday schedule
+    is due at its wall-clock minute in 2001 as in any year, a presence trigger does not look
+    at ``now`` at all, and a condition trigger answers to the context the test passes. With
+    the production dispatcher that means a developer's own 07:30 alarm rung by a test.
+
+    Compared in Python, not in the WHERE clause: ``NOT (source_ref LIKE ...)`` is NULL for a
+    NULL ``source_ref``, and a guard that loses a row to a NULL is not one.
+    """
+    armed = session.execute(
+        select(Routine.routine_id, Routine.name, Routine.source_ref).where(
+            Routine.status == ROUTINE_STATUS_ARMED
+        )
+    ).all()
+    alarm_refs = tuple(f"alarm:{alarm_id}" for alarm_id in made.alarms)
+    foreign = [
+        row
+        for row in armed
+        if row.routine_id not in made.routines
+        and not (row.name or "").startswith(f"pgcov-{token}")
+        and not (row.source_ref or "").startswith(alarm_refs or ("\x00",))
+    ]
+    if foreign:
+        listed = ", ".join(f"{row.routine_id} ({(row.name or '')[:40]!r})" for row in foreign[:5])
+        pytest.fail(
+            f"refusing to run the routine engine: {len(foreign)} armed routine(s) in this "
+            f"database are not this test's own - {listed}. evaluate_due and the alarm tick "
+            "act on every armed row whatever the year of `now`; pause or cancel them (or use "
+            "a clean dev database) and run again."
+        )
+
+
+def _evaluate_due(
+    session: Session, made: SimpleNamespace, token: str, **kwargs: Any
+) -> routines_service.EvaluateDueResult:
+    """``routines_service.evaluate_due``, the only way this file calls it."""
+    _refuse_foreign_armed(session, made, token)
+    return routines_service.evaluate_due(session, **kwargs)
+
+
+def _tick(
+    session: Session, made: SimpleNamespace, token: str, **kwargs: Any
+) -> alarms_service.TickResult:
+    """``alarms_service.tick``, the only way this file calls it."""
+    _refuse_foreign_armed(session, made, token)
+    return alarms_service.tick(session, **kwargs)
+
+
+@contextmanager
+def _client(settings: Settings) -> Iterator[TestClient]:
+    """``owner_client``, with its application's connections given back when it closes.
+
+    ``create_app`` builds a connection pool per runtime and nothing in the application
+    disposes one: every client left about four connections open until the process ended,
+    in a suite that already runs at the dev database's limit. The engines are found by
+    listening for the ones that connect while the client is open, not by naming the
+    runtimes, so a runtime added tomorrow is covered. The suite's shared identity runtime
+    is not this file's to close.
+    """
+    connected: set[Engine] = set()
+
+    def note(connection: Connection) -> None:
+        connected.add(connection.engine)
+
+    event.listen(Engine, "engine_connect", note)
+    try:
+        with owner_client(settings) as client:
+            yield client
+    finally:
+        event.remove(Engine, "engine_connect", note)
+        for engine in connected - {shared_identity(settings).engine}:
+            engine.dispose()
 
 
 def _tool_context(session: Session) -> ToolContext:
@@ -247,7 +330,7 @@ def test_one_character_too_many_is_refused_by_the_routine_surface_not_by_postgre
     settings: Settings, db: sessionmaker[Session], made: SimpleNamespace, token: str
 ) -> None:
     body = {"name": f"pgcov-{token} REST", "trigger_kind": "at", "trigger": _far_future_trigger()}
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         long_name = client.post(
             "/v1/routines", json={**body, "name": _exactly(201, f"pgcov-{token} ")}
         )
@@ -299,7 +382,7 @@ def test_a_source_longer_than_its_column_is_refused_by_the_surface_not_by_postgr
 ) -> None:
     """``POST /v1/routines`` bounds ``name`` and ``source_ref`` and says nothing about
     ``source``, which is VARCHAR(32)."""
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         answer = client.post(
             "/v1/routines",
             json={
@@ -416,15 +499,20 @@ def test_routine_firings_record_a_fired_a_skipped_and_a_failed_occurrence(
         ids = {"fired": fired.routine_id, "skipped": skipped.routine_id}
         made.routines.extend(ids.values())
 
-        result = routines_service.evaluate_due(
-            session, now=MOMENT, context=RoutineConditionContext(), dispatcher=NoopDispatcher()
+        result = _evaluate_due(
+            session,
+            made,
+            token,
+            now=MOMENT,
+            context=RoutineConditionContext(),
+            dispatcher=NoopDispatcher(),
         )
         outcomes = {o.routine_id: o for o in result.outcomes}
         assert outcomes[ids["fired"]].status == "triggered"
         assert outcomes[ids["skipped"]].status == "skipped"
 
         # The same instant again: the occurrence is resolved, the unique constraint holds.
-        repeat = routines_service.evaluate_due(session, now=MOMENT, dispatcher=NoopDispatcher())
+        repeat = _evaluate_due(session, made, token, now=MOMENT, dispatcher=NoopDispatcher())
         assert not [o for o in repeat.outcomes if o.routine_id in ids.values()]
 
         failed = routines_service.create_routine(
@@ -436,7 +524,7 @@ def test_routine_firings_record_a_fired_a_skipped_and_a_failed_occurrence(
         )
         ids["failed"] = failed.routine_id
         made.routines.append(failed.routine_id)
-        routines_service.evaluate_due(session, now=MOMENT, dispatcher=_BrokenSpeaker())
+        _evaluate_due(session, made, token, now=MOMENT, dispatcher=_BrokenSpeaker())
 
     with db() as fresh:
         rows = {
@@ -508,8 +596,8 @@ def test_a_condition_trigger_writes_its_edge_and_one_firing_per_crossing(
         made.routines.append(routine_id)
 
         def tick(moment: datetime, context: RoutineConditionContext) -> list[str]:
-            result = routines_service.evaluate_due(
-                session, now=moment, context=context, dispatcher=NoopDispatcher()
+            result = _evaluate_due(
+                session, made, token, now=moment, context=context, dispatcher=NoopDispatcher()
             )
             return [o.occurrence_key for o in result.outcomes if o.routine_id == routine_id]
 
@@ -526,6 +614,39 @@ def test_a_condition_trigger_writes_its_edge_and_one_firing_per_crossing(
         firings = routines_service.list_firings(fresh, routine_id)
         assert [f.occurrence_key for f in firings] == ["2001-09-09T04:46:40+03:00"]
         assert firings[0].dispatch_status == "none", "triggered, with nothing to dispatch"
+
+
+def test_the_engine_is_never_run_over_an_armed_routine_that_is_not_the_tests_own(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """A ``now`` in 2001 protects nobody's weekday alarm: ``check_schedule_due`` compares the
+    weekday and the wall clock and never the year. So ``_evaluate_due`` and ``_tick`` refuse
+    to start while an armed routine exists that the calling test did not create - here, the
+    same routine seen from a test that does not own it - and nothing is written for it."""
+    wednesday = datetime(2001, 9, 12, 7, 30, 20, tzinfo=ISTANBUL)
+    stranger = SimpleNamespace(routines=[], alarms=[])
+    not_mine = uuid.uuid4().hex[:10]
+    with db() as session:
+        routine = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} başkasının hafta içi alarmı",
+            trigger_kind="schedule",
+            trigger={"weekdays": [2], "time": "07:30", "timezone": "Europe/Istanbul"},
+        )
+        routine_id = routine.routine_id
+        made.routines.append(routine_id)
+
+        with pytest.raises(pytest.fail.Exception, match=str(routine_id)):
+            _evaluate_due(session, stranger, not_mine, now=wednesday, dispatcher=NoopDispatcher())
+        with pytest.raises(pytest.fail.Exception, match=str(routine_id)):
+            _tick(session, stranger, not_mine, now=wednesday)
+        assert routines_service.list_firings(session, routine_id) == []
+
+        # Why the guard exists: the test that DOES own it fires it, at an instant in 2001.
+        result = _evaluate_due(session, made, token, now=wednesday, dispatcher=NoopDispatcher())
+        assert [(o.status, o.occurrence_key) for o in result.outcomes] == [
+            ("triggered", "2001-09-12")
+        ]
 
 
 @pytest.mark.xfail(
@@ -564,8 +685,13 @@ def test_a_skip_with_many_unmet_conditions_is_still_recorded(
         )
         routine_id = routine.routine_id
         made.routines.append(routine_id)
-        result = routines_service.evaluate_due(
-            session, now=MOMENT, context=RoutineConditionContext(), dispatcher=NoopDispatcher()
+        result = _evaluate_due(
+            session,
+            made,
+            token,
+            now=MOMENT,
+            context=RoutineConditionContext(),
+            dispatcher=NoopDispatcher(),
         )
         assert [o.status for o in result.outcomes if o.routine_id == routine_id] == ["skipped"]
 
@@ -781,7 +907,7 @@ def test_the_cloud_rings_a_wake_alarm_through_the_routine_engine_on_postgres(
         )
         alarm_id, routine_id = alarm.id, alarm.routine_id
         made.alarms.append(alarm_id)
-        alarms_service.tick(session, sequence=sequence, now=armed_at)
+        _tick(session, made, token, sequence=sequence, now=armed_at)
 
     with db() as fresh:
         stored = fresh.get(WakeAlarm, alarm_id)
@@ -789,7 +915,7 @@ def test_the_cloud_rings_a_wake_alarm_through_the_routine_engine_on_postgres(
         assert stored.armed_at == armed_at and stored.armed_at.utcoffset() is not None
         assert device.payload_for("desktop.alarm_arm")["fire_at"] == "2001-09-12T04:30:00Z"
 
-        result = routines_service.evaluate_due(fresh, now=fired_at, dispatcher=dispatcher)
+        result = _evaluate_due(fresh, made, token, now=fired_at, dispatcher=dispatcher)
         assert [o.status for o in result.outcomes if o.routine_id == routine_id] == ["triggered"]
 
     with db() as fresh:
@@ -808,7 +934,7 @@ def test_the_cloud_rings_a_wake_alarm_through_the_routine_engine_on_postgres(
         assert stored.greeted_at is None
         assert "media_failure_reason" not in stored.detail_json
 
-        assert alarms_service.tick(fresh, sequence=sequence, now=greeted_at).greeted == 1
+        assert _tick(fresh, made, token, sequence=sequence, now=greeted_at).greeted == 1
 
     with db() as fresh:
         stored = fresh.get(WakeAlarm, alarm_id)
@@ -836,7 +962,7 @@ def test_one_character_too_many_is_refused_by_the_alarm_surface_not_by_postgres(
     settings: Settings, db: sessionmaker[Session], made: SimpleNamespace, token: str
 ) -> None:
     when = {"date": "2099-01-01", "time": "07:30"}
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         long_label = client.post(
             "/v1/alarms", json={"when": when, "label": _exactly(201, f"pgcov-{token} ")}
         )
@@ -921,7 +1047,7 @@ def test_a_nul_character_in_a_routine_is_refused_by_the_surface_not_by_postgres(
     """PostgreSQL stores no U+0000, in a VARCHAR or inside JSONB; SQLite stores both. JSON
     allows the character, so the request validates and the database is what says no.
     Refusing it and storing the name without it are both answers; a 500 is not."""
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         answer = client.post(
             "/v1/routines",
             json={
@@ -951,7 +1077,7 @@ def test_a_nul_character_in_an_alarm_label_is_refused_by_the_surface_not_by_post
 ) -> None:
     """The same character through ``POST /v1/alarms``: ``label`` is bounded at 200
     characters and nothing says which characters."""
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         answer = client.post(
             "/v1/alarms",
             json={

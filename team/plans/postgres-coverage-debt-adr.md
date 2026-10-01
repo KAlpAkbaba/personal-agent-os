@@ -48,19 +48,43 @@ and `greeted_at`, which the device-local path only ever leaves NULL.
    with the four attributes it reads, and the alarm history is read through
    `app.alarms.history`, so the ledger's table is not "covered" by a file that never tests it.
    The baseline lost exactly the eight tables of this slice (51 → 43).
-3. **Every instant is in the past (2001).** `evaluate_due` looks at every armed routine in the
-   database; a `now` in 2001 can only make the test's own routines due, and an alarm "rung"
-   in 2001 starts a display holdoff that ended long ago. No test leaves a routine armed while
-   an application object (and its 10-second routine clock) is open, except with a trigger in
-   2099. `alarms_service.tick` is safe for the same reason (it arms what is within twelve
-   hours of `now`). Known limit: the condition-trigger test passes `device_idle_s=900`, and a
-   developer's own armed `device_idle` routine in the dev database would get a 2001 firing
-   from it; `evaluate_due` has no filter, so the test cannot narrow it (0 armed today).
+3. **The engine is never run over a routine the test did not create; the year is not what
+   guarantees that.** `evaluate_due` has no filter: it takes every armed routine in the
+   database. A `now` in 2001 keeps it off exactly one kind, an `at` trigger in the future.
+   It does NOT protect the others: `check_schedule_due` compares the weekday and the wall
+   clock and never the year, so a 2001 instant DOES fire any armed schedule routine whose
+   weekday and time match (measured on PostgreSQL: `weekdays=[2]`, 07:30 Europe/Istanbul,
+   evaluated at 2001-09-12 07:30:20 → `('triggered', '2001-09-12')`); a presence trigger
+   does not read `now`; a condition trigger answers to the context the test passes. With the
+   production dispatcher that is a developer's own alarm driven to PLAYING by a test.
+   So every `evaluate_due` and every alarm `tick` in the file goes through a wrapper that
+   first reads the armed routines and **fails the test** (`pytest.fail`, naming the rows) if
+   one exists that the test did not create - by id, by its `pgcov-<token>` name, or by the
+   `alarm:<id>` source_ref of an alarm it made. The comparison is done in Python: `NOT
+   (source_ref LIKE …)` is NULL for a NULL `source_ref`, and that row would pass a SQL guard.
+   A test proves the guard on a weekday routine seen from a test that does not own it.
+   What 2001 is still for: an alarm "rung" in 2001 starts a display holdoff that ended long
+   ago, and `alarms_service.tick` moves no foreign alarm (it arms what is within twelve hours
+   of `now`, greets and completes by stored instants; by reading, not probed).
+   Limits, stated: the guard and the engine are two statements, not one transaction - the
+   suite's advisory lock keeps other pytest runs out, a live API on the same database is not
+   kept out (conftest warns). And the 10-second routine clock of an open application object
+   runs with the REAL `now` and is not guarded: no test leaves a routine armed while one is
+   open, except with a trigger in 2099.
 4. **Rows go when the test ends; the append-only ones stay.** Memories are forgotten through
    `service.forget_memory`; entities, routines and alarms have no production delete and are
    removed by the fixture (their children by the tables' own ON DELETE CASCADE, which only
    PostgreSQL enforces — a missing cascade fails the teardown). Memory audit rows and ledger
    rows are left, as production leaves them.
+5. **A client gives its connections back.** `create_app` builds a pool per runtime and the
+   application disposes none, so each `owner_client` left about four connections open until
+   the process ended. Both files open their clients through a local `_client` that listens
+   for the engines that connect while it is open and disposes them on exit (the suite's
+   shared identity runtime excepted). Measured on the two files, idle baseline 43: peak 125
+   without the disposal, 54 with it. The helper is duplicated in the two files because
+   `tests/integration/conftest.py` is outside this task's area; it belongs there, in
+   `owner_client` itself, where it would also relieve the rest of the suite (289 of 300
+   without this branch) - for the lead to queue.
 
 ## Defects found (not fixed here; each has a strict-xfail test with the error quoted)
 

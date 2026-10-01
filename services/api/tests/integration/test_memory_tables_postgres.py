@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import delete, func, select
+from fastapi.testclient import TestClient
+from sqlalchemy import delete, event, func, select
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DataError
 
 from app.config import Settings
@@ -51,7 +54,7 @@ from app.memory.types import ENTITY_KINDS, Actor, MemoryClass
 from app.voice.errors import VoiceError
 from app.voice.realtime_sessions import tools_memory
 from app.voice.realtime_sessions.tools import ToolContext
-from tests.integration.conftest import owner_client
+from tests.integration.conftest import owner_client, shared_identity
 
 pytestmark = pytest.mark.integration
 
@@ -102,6 +105,32 @@ def runtime(settings: Settings) -> Iterator[MemoryRuntime]:
         yield memory
     finally:
         memory.engine.dispose()
+
+
+@contextmanager
+def _client(settings: Settings) -> Iterator[TestClient]:
+    """``owner_client``, with its application's connections given back when it closes.
+
+    ``create_app`` builds a connection pool per runtime and nothing in the application
+    disposes one: every client left about four connections open until the process ended,
+    in a suite that already runs at the dev database's limit. The engines are found by
+    listening for the ones that connect while the client is open, not by naming the
+    runtimes, so a runtime added tomorrow is covered. The suite's shared identity runtime
+    is not this file's to close.
+    """
+    connected: set[Engine] = set()
+
+    def note(connection: Connection) -> None:
+        connected.add(connection.engine)
+
+    event.listen(Engine, "engine_connect", note)
+    try:
+        with owner_client(settings) as client:
+            yield client
+    finally:
+        event.remove(Engine, "engine_connect", note)
+        for engine in connected - {shared_identity(settings).engine}:
+            engine.dispose()
 
 
 @pytest.fixture()
@@ -208,7 +237,7 @@ def test_a_reason_one_character_too_long_is_refused_by_the_surface_not_by_postgr
     settings: Settings, runtime: MemoryRuntime, made: SimpleNamespace
 ) -> None:
     token = _token()
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         created = client.post(
             "/v1/memory/remember",
             json={"text": f"Çayı {token} bardağında demli içerim.", "key": f"pgcov.{token}"},
@@ -440,7 +469,7 @@ def test_the_surface_holds_the_key_and_the_trace_id_to_what_the_columns_take(
     token = _token()
     key = _exactly(256, f"pgcov.{token}.")
     trace = (f"pgcov-{token}." + "trace-id." * 30)[:200]
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         too_long = client.post(
             "/v1/memory/remember",
             json={"text": f"Balkonu {token} sabahları havalandırırım.", "key": key + "x"},
@@ -521,7 +550,7 @@ def test_an_entity_name_one_character_too_long_is_refused_by_the_surface(
 ) -> None:
     token = _token()
     name = _exactly(512, f"pgcov-{token} ")
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         refused = client.post("/v1/memory/entities", json={"kind": "project", "name": name + "x"})
         assert refused.status_code == 422, refused.text
         unknown_kind = client.post(
@@ -614,7 +643,7 @@ def test_entity_edges_take_the_longest_relation_and_go_with_their_entity(
         assert missing.value.error_class == MemoryErrorClass.NOT_FOUND
         src_id, dst_id, edge_id, bare_id = src.id, dst.id, edge.id, bare.id
 
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         refused = client.post(
             "/v1/memory/edges",
             json={"src_id": str(src_id), "dst_id": str(dst_id), "relation": relation + "x"},
@@ -673,7 +702,7 @@ def test_a_nul_character_is_refused_by_the_surface_not_by_postgres(
     Refusing it and storing the text without it are both answers; a 500 is not."""
     token = _token()
     payload = {"kind": "document", **body, "name": f"{body['name']} {token}"}
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         answer = client.post("/v1/memory/entities", json=payload)
         if answer.status_code == 201:
             made.entities.append(uuid.UUID(answer.json()["entity_id"]))
@@ -700,7 +729,7 @@ def test_a_nul_character_in_a_remembered_text_is_refused_by_the_surface_not_by_p
     and its ``memory_versions`` row store, and a 4000-character bound says nothing about
     which characters."""
     token = _token()
-    with owner_client(settings) as client:
+    with _client(settings) as client:
         answer = client.post(
             "/v1/memory/remember",
             json={"text": f"Çayı {token} sıfır\x00bayt demli içerim.", "key": f"pgcov.{token}"},
