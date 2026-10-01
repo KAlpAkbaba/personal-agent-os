@@ -1,10 +1,10 @@
 """Where the team's queue, lock and reports live: the database, or the files (pilot-02).
 
 Two stores, one contract (:class:`TeamStore`). :class:`DbStore` is the Cloud Core's
-``team_state`` table - one row per task, one lock row, the reports as text - so an approval
-can be given with the home PC off and the office PC reads the same queue. :class:`FileStore`
-is ``team/queue.json`` + ``team/lock.json`` as before: the home PC without the API keeps
-working, and the Onay Merkezi reads whichever ``app.state.team_store`` says.
+``team_state`` table - one row per task, one lock row, the reports and the proposals as text -
+so an approval can be given with the home PC off and the office PC reads the same queue.
+:class:`FileStore` is ``team/queue.json`` + ``team/lock.json`` as before: the home PC without
+the API keeps working, and the Onay Merkezi reads whichever ``app.state.team_store`` says.
 
 The rules here are the ones ``scripts/lib/TeamQueue.ps1`` states, and each is held to its
 other half by a test: a task is valid when ``team/queue.schema.json`` says so (the copy
@@ -29,7 +29,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.team.models import KIND_LOCK, KIND_REPORT, KIND_TASK, TeamStateRow
+from app.team.models import KIND_LOCK, KIND_PROPOSAL, KIND_REPORT, KIND_TASK, TeamStateRow
 
 LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
 TEXT_MAX_CHARS = 20000
@@ -38,6 +38,12 @@ KIND_STATUS = "status"  # a team_state row of its own kind (String(16)): no new 
 STATUS_KEY = "status"
 SCHEMA_PATH = Path(__file__).with_name("queue.schema.json")
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.md$")
+#: A proposal's file name under ``team/proposals/`` (``scripts/team/cycle.ps1`` posts it).
+PROPOSAL_NAME_PATTERN = r"^[a-z0-9][a-z0-9._-]{1,120}\.md$"
+PROPOSAL_MAX_CHARS = 200_000
+#: ``team_state.key`` is VARCHAR(80) (migration 0063): the name is the row's key, kept whole.
+KEY_WIDTH: int = TeamStateRow.__table__.c.key.type.length
+_PROPOSAL_NAME = re.compile(PROPOSAL_NAME_PATTERN)
 _WRITE_LOCK = threading.RLock()
 
 
@@ -203,8 +209,30 @@ def _may_release(lock: dict[str, Any] | None, machine: str) -> None:
 
 
 def _check_report_name(name: str) -> None:
-    if not _REPORT_NAME.match(name or ""):
+    if not _REPORT_NAME.fullmatch(name or ""):  # ``$`` alone also matches before a final \n
         raise Invalid([f"a report name is a file name ending in .md: {name!r}"])
+
+
+def proposal_name_problems(name: Any) -> list[str]:
+    """Why ``name`` cannot name a proposal in either store. Empty when it can.
+
+    ``fullmatch``: ``$`` also matches before a final newline. A name the key column cannot
+    hold is refused, never cut - a cut name would be another proposal's key."""
+    if not isinstance(name, str) or _PROPOSAL_NAME.fullmatch(name) is None:
+        return [f"a proposal name matches {PROPOSAL_NAME_PATTERN}: {name!r}"]
+    if len(name) > KEY_WIDTH:
+        return [f"a proposal name is at most {KEY_WIDTH} characters: this one is {len(name)}"]
+    return []
+
+
+def _check_proposal(name: Any, text: Any) -> None:
+    problems = proposal_name_problems(name)
+    if not isinstance(text, str):
+        problems.append("a proposal's text is a string")
+    elif len(text) > PROPOSAL_MAX_CHARS:
+        problems.append(f"a proposal's text is at most {PROPOSAL_MAX_CHARS} characters")
+    if problems:
+        raise Invalid(problems)
 
 
 # ------------------------------------------------------------------ the contract
@@ -228,6 +256,8 @@ class TeamStore(Protocol):
     def release_lock(self, *, machine: str, cycle_id: str, now: datetime | None = None) -> None: ...
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None: ...
     def newest_report(self) -> dict[str, str] | None: ...
+    def put_proposal(self, name: str, text: str, *, now: datetime | None = None) -> None: ...
+    def read_proposal(self, name: str) -> str | None: ...
     def read_status(self) -> dict[str, Any] | None: ...
     def put_status(self, document: dict[str, Any]) -> None: ...
 
@@ -245,7 +275,7 @@ def _check_put(
 
 
 class FileStore:
-    """``team/queue.json`` + ``team/lock.json`` + ``team/reports/*.md``."""
+    """``queue.json``, ``lock.json``, ``reports/*.md`` and ``proposals/*.md`` under ``team/``."""
 
     kind = "file"
 
@@ -333,6 +363,23 @@ class FileStore:
         except OSError:
             return None
         return {"file": reports[-1].name, "text": text}
+
+    def put_proposal(self, name: str, text: str, *, now: datetime | None = None) -> None:
+        _check_proposal(name, text)
+        folder = self.root / "proposals"
+        with _WRITE_LOCK:
+            folder.mkdir(parents=True, exist_ok=True)
+            tmp = folder / (name + ".tmp")
+            tmp.write_bytes(text.encode("utf-8"))
+            os.replace(tmp, folder / name)
+
+    def read_proposal(self, name: str) -> str | None:
+        if proposal_name_problems(name):
+            return None
+        try:
+            return (self.root / "proposals" / name).read_bytes().decode("utf-8")
+        except (OSError, ValueError):
+            return None
 
 
 class DbStore:
@@ -508,3 +555,38 @@ class DbStore:
             if row is None:
                 return None
             return {"file": row.key, "text": str(row.doc.get("text", ""))[:TEXT_MAX_CHARS]}
+
+    def put_proposal(self, name: str, text: str, *, now: datetime | None = None) -> None:
+        """One row per proposal, ``key`` = its file name; a second put replaces the text."""
+        _check_proposal(name, text)
+        at = stamp(now or utcnow())
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_PROPOSAL, name))
+            if row is None:
+                session.add(
+                    TeamStateRow(kind=KIND_PROPOSAL, key=name, doc={"text": text}, updated_at=at)
+                )
+            else:
+                row.doc = {"text": text}
+                row.updated_at = at
+            try:
+                session.commit()
+            except IntegrityError:
+                # Two first puts of one name raced and the other's row is there: ours replaces.
+                session.rollback()
+                session.execute(
+                    update(TeamStateRow)
+                    .where(TeamStateRow.kind == KIND_PROPOSAL, TeamStateRow.key == name)
+                    .values(doc={"text": text}, updated_at=at)
+                )
+                session.commit()
+
+    def read_proposal(self, name: str) -> str | None:
+        if proposal_name_problems(name):
+            return None
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_PROPOSAL, name))
+            if row is None:
+                return None
+            text = row.doc.get("text")
+            return text if isinstance(text, str) else None
