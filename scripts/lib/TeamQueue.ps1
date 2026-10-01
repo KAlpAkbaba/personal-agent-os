@@ -104,8 +104,20 @@ function Write-TeamJson {
     $json = ($json -replace "`r`n", "`n").TrimEnd() + "`n"
     $temporary = "$Path.tmp"
     [System.IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
-    Move-Item -LiteralPath $temporary -Destination $Path
+    # A reader holding the file for an instant (the lead reading lock.json while a cycle
+    # started, 2026-10-01) made the delete fail and ended the cycle with the lock half
+    # written. The swap is retried for a few seconds; the last failure is the one thrown.
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop }
+            Move-Item -LiteralPath $temporary -Destination $Path -ErrorAction Stop
+            break
+        }
+        catch {
+            if ($attempt -ge 20) { throw }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
 
 function Get-TeamTasks {

@@ -15,16 +15,26 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**BAKIM PENCERESİ ONAYLI (sahip): Çarşamba 2026-10-01 06:30–07:00 İstanbul, ADR-0223 prosedürü, lead yürütür
-(bu oturumda 06:27'ye tek seferlik uyandırma kurulu; oturum kapanırsa sahip "pencereyi yürüt" der).**
-**DÖNGÜ ÇALIŞIYOR (sahip: "döngüyü şimdi başlat", 2026-09-30 ~21:10 UTC): `cycle.ps1 -CycleId cycle-2026-10-01
--Base team/nightly/lead -MaxParallel 2`, tavansız (ADR-0214 ek 3: USD/süre tavanı yok, tek durma Max kullanım
-limiti — beklenir ve devam edilir). Kuyrukta 14 `approved`; ADR-0224 (üç katmanlı ses anlama, sahibin mimari
-şartı) en başta: `understanding-normalize`, `understanding-semantic-index` (entegratör önce), sonra `depends_on`
-ile bekleyen `understanding-threshold-policy` → `-corrections-memory`, `-stt-corpus` (katman 1-2 main'e girince
-lead açar). Rapor: `team/reports/cycle-2026-10-01.md`; ham çıktılar `team/reports/cycle-2026-10-01/`.
-Döngü bitince lead: `integrate/cycle-2026-10-01` üzerinde tam kapı → main → sahibin yayın onayı.
-Gece görevi tavansız yeniden kaydedildi (02:00; bu döngü kilidi tutarken exit 3 verir, zararsız).**
+**BAKIM PENCERESİ: BU AKŞAM 2026-10-01 22:00–22:30 İstanbul (19:00 UTC), sahip onaylı. OTURUMA BAĞLI DEĞİL:
+sunucunun kendi `pagentos-maintenance-window.timer`'ı çalıştırır (ADR-0223 eki); açılıştan 4 dk sonra
+`pagentos-maintenance-verify` doğrular; ev PC'de `PagentOS Maintenance Report 2026-10-01` görevi 22:40 ve 23:10'da
+`team/reports/maintenance-2026-10-01.md` yazar. İlk pencere (06:30) KOŞMADI: oturum uyandırmasına bağlıydı, oturum
+kapandı. KALICI KURAL (sahip): zaman bağlı her iş kalıcı göreve bağlanır, oturuma değil (TEAM_PROTOCOL 9).
+Sonraki oturum: raporu oku; sonuç iyiyse sunucudaki iki `pagentos-maintenance-*` birimini ve ev PC görevini kaldır;
+QUALIFICATION'a bakım satırını PROVEN_REAL yaz. Rapor yoksa: `collect-maintenance-report.ps1 -Date 2026-10-01`.**
+**DÖNGÜ `cycle-2026-10-01`: ilk tur 2026-09-30 21:02 → 2026-10-01 00:16 UTC normal bitti (32 koşu, tahmini 21,67 USD,
+limit yok). 8 iş `merged` (`integrate/cycle-2026-10-01`): understanding-normalize, narrative-intent-wiring,
+ledger-device-stamp, allowlist-editor, cloud-device-registry, cycle-lead-run, maintenance-reboot-script,
+operator-postcondition-uwp. 3 iş "alan dışı dosya" ile durdu — LEAD'İN KART HATASI (dar alan); alanlar genişletildi,
+2026-10-01 07:49 UTC'de aynı CycleId ile yeniden başlatıldı (iki geçiş: önce understanding-semantic-index +
+answer-mode-intent-precision, sonra `intents.py` paylaşan app-open-named-device-not-dropped; betik scratchpad'de,
+yeniden üretmek için: işi `inspecting` yap, `cycle.ps1 -CycleId cycle-2026-10-01 -Base team/nightly/lead`).
+3 iş `depends_on` ile bekliyor (threshold-policy, corrections-memory, stt-corpus): katman 1+2 MAIN'e girince açılır.
+LEAD'İN SIRADAKİ İŞİ: yeniden koşu bitince `integrate/cycle-2026-10-01` üzerinde ortak dosyaları bağla
+(`stt-confusions.json` → `protocol_files.BUNDLED` + falsification listesi; `team/plans/*-adr.md` → DECISIONS'a
+numaralı; `maintenance-reboot.tests.ps1` → quality-gate + ci.yml; THIRD_PARTY_COMPONENTS'e "değerlendirildi,
+reddedildi" kaydı; LocalEmbedder süre ölçümü), tam kapı, main'e birleştir, işleri `awaiting_release` yap, döngüyü
+yeniden başlat (3 bekleyen iş), sahibin yayın onayını iste. Tavansız (ADR-0214 ek 3). Gece görevi 02:00.**
 **Sahibin gerçek cihaz denemesi (2026-09-30 20:10 UTC, MAIL, `/voice` "Bu bilgisayar"):** QUALIFICATION 30.10
 PROVEN_REAL (aday hafıza satırı üretimde). İki kusur görüldü, kuyruğa `approved` düştü (gece döngüsü):
 `answer-mode-intent-precision` ("Türkçe oku" cümlesi cevap kipini `detail` yaptı + asistanın kendi cevabı hafıza
