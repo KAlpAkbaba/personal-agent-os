@@ -71,6 +71,18 @@ if ($snapshotDir -and $statusFile) {
     if (-not (Test-Path -LiteralPath $snapshotDir)) { [void](New-Item -ItemType Directory -Force -Path $snapshotDir) }
     if (Test-Path -LiteralPath $statusFile) { Copy-Item -LiteralPath $statusFile -Destination (Join-Path $snapshotDir "$role-$taskId.json") -Force }
 }
+#   PAGENTOS_FAKE_CLAUDE_HEARTBEAT + PAGENTOS_FAKE_CLAUDE_STATUS: a worker run stays 7 s and appends the status
+#     file's updated_at to <heartbeat> once a second - a reader's view of whether the status is refreshed.
+$heartbeat = [string]$env:PAGENTOS_FAKE_CLAUDE_HEARTBEAT
+if ($heartbeat -and $statusFile -and $role -eq "worker") {
+    for ($i = 0; $i -lt 7; $i++) {
+        if (Test-Path -LiteralPath $statusFile) {
+            $stamp = [string]((Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json).updated_at)
+            Add-Content -LiteralPath $heartbeat -Value $stamp -Encoding ASCII
+        }
+        Start-Sleep -Seconds 1
+    }
+}
 $stopFlag = [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG
 $stopRole = if ($env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE) { [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE } else { "worker" }
 if ($stopFlag -and $role -eq $stopRole) { Set-Content -LiteralPath $stopFlag -Value "stop" -Encoding ASCII }

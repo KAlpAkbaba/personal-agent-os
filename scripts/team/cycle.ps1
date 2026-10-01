@@ -157,6 +157,8 @@ $cycle = [pscustomobject]@{
 $statusPath = Join-Path $TeamRoot "status.json"
 $stopFlagPath = Join-Path $TeamRoot "stop.flag"
 $statusTickSeconds = 120
+# A test hook (the heartbeat is otherwise only visible after two minutes): a whole number of seconds.
+if ([string]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS -match '^[1-9]\d{0,3}$') { $statusTickSeconds = [int]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS }
 $liveRuns = New-Object System.Collections.ArrayList
 $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
 $statusFailed = $false

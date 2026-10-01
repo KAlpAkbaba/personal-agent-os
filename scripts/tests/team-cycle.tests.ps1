@@ -975,6 +975,27 @@ try {
         Assert-True -Condition ([double]$final.estimated_usd -gt 0) -Because "four runs at 0.25"
     }
 
+    Test-Case "the live status: a finished run is gone from the list before the next one starts, and the estimate has risen" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:seqRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected 0 -Actual $script:seqRun.ExitCode -Because ($script:seqRun.StdOut + $script:seqRun.StdErr)
+        $second = Read-TeamJson -Path (Join-Path $snapshots "worker-task-two.json")
+        Assert-Equal -Expected "task-two:worker" -Actual (@($second.runs | ForEach-Object { "$($_.task):$($_.role)" }) -join ",") -Because "only the run in flight is listed: $($second | ConvertTo-Json -Compress)"
+        Assert-True -Condition ([double]$second.estimated_usd -ge 0.25) -Because "the first run's cost is already in: $($second.estimated_usd)"
+    }
+
+    Test-Case "the live status: the heartbeat refreshes updated_at while one long run goes on" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $beat = Join-Path $root "heartbeat.txt"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_HEARTBEAT = $beat; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json"); PAGENTOS_CYCLE_STATUS_TICK_SECONDS = 1 }
+        Use-FakeHooks -Environment $hooks -Body { $script:beatRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected 0 -Actual $script:beatRun.ExitCode -Because ($script:beatRun.StdOut + $script:beatRun.StdErr)
+        $stamps = @(Get-Content -LiteralPath $beat -Encoding UTF8 | Where-Object { $_.Trim() } | Sort-Object -Unique)
+        Assert-True -Condition (@($stamps).Count -ge 3) -Because "a seven-second run with a one-second tick shows several updated_at values, not just the start's: $($stamps -join ' ')"
+    }
+
     Test-Case "the live status: the usage limit is 'stopped' with its reset time when the cycle stops for it, 'ok' when it was waited out" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
         $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -ExtraArguments '-WaitForUsageLimit:$false'
