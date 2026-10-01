@@ -44,6 +44,8 @@ def _in_list(values: Sequence[str]) -> str:
 
 
 def upgrade() -> None:
+    # compat: widening - the CHECK is replaced by a superset (the six values and one more),
+    # so every row the still-running old colour writes satisfies the new constraint.
     op.drop_constraint(_CONSTRAINT, _TABLE, type_="check")
     op.create_check_constraint(_CONSTRAINT, _TABLE, _in_list(_NEW))
 
