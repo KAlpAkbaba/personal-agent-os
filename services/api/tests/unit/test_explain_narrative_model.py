@@ -4,6 +4,10 @@ and tells the failures only when that is what was asked (ROADMAP order 2c).
 The provider is a fake: the real API is never called here. The ledger, the artifact and the
 narration rows are real (sqlite), and the end-to-end tests go through ``explain_to_briefing``
 with the production ``evidence_source_factory`` - the object the voice tool calls.
+
+The provider is the CALLER's (``narrative_chat_provider(ctx.live)``), never the process-wide
+settings: a keyed shell must not make a suite call the real API, and that is tested here
+with the key really in the environment and the transport replaced by a recorder.
 """
 
 from __future__ import annotations
@@ -126,7 +130,7 @@ def test_no_failure_never_reaches_the_provider(db):
     assert provider.questions == []
 
 
-# --------------------------------------------------------------------------- the factory
+# --------------------------------------------------------------------------- the provider seam
 
 
 class _Settings:
@@ -136,57 +140,114 @@ class _Settings:
     assistant_chat_timeout_s = 20.0
 
 
-def test_the_factory_builds_the_provider_with_the_assistant_chat_builder(db, monkeypatch):
-    seen = []
+class _KeyedSettings(_Settings):
+    anthropic_api_key = "sk-test-not-a-real-key"
+
+
+@pytest.fixture()
+def sent(monkeypatch):
+    """Every request the assistant's transport is asked to send. The real API is never
+    reached: the transport itself is replaced, and a test asserts on what it recorded."""
+    calls: list[str] = []
+
+    def record(url, headers, body, timeout_s):
+        calls.append(url)
+        return 200, {"content": [{"type": "text", "text": DROPS}], "stop_reason": "end_turn"}
+
+    monkeypatch.setattr("app.assistant_chat._http_send", record)
+    return calls
+
+
+@pytest.fixture()
+def keyed_process(monkeypatch):
+    """A shell (or ``.env``) that carries the owner's key: what the process-wide settings
+    read in a keyed terminal and in production."""
+    from app.config import get_settings
+
+    monkeypatch.setenv("PAGENTOS_ANTHROPIC_API_KEY", _KeyedSettings.anthropic_api_key)
+    get_settings.cache_clear()
+    assert get_settings().anthropic_api_key == _KeyedSettings.anthropic_api_key
+    yield
+    monkeypatch.delenv("PAGENTOS_ANTHROPIC_API_KEY")
+    get_settings.cache_clear()
+
+
+def test_a_keyed_process_does_not_make_the_factory_call_the_model(db, sent, keyed_process):
+    """The inspector's finding: the factory read the process-wide settings, so a keyed
+    shell made every suite that reaches ``explain_to_briefing`` call the real API."""
+    source = explain_service.evidence_source_factory(db)
+    assert source.narrative(WEEK, now=NOW) == tell(db, "bu hafta", None, None, now=NOW)
+    assert sent == []
+
+
+def test_a_keyed_process_does_not_make_explain_call_the_model_end_to_end(db, sent, keyed_process):
+    """The call the voice tool makes today (no provider handed over): the rule text."""
+    record = explain_to_briefing(db, "bu hafta ne oldu", now=NOW)
+    assert record.briefing.query.kind == QUERY_NARRATIVE
+    assert record.briefing.executive[0].text == tell(db, "bu hafta", None, None, now=NOW)
+    assert sent == []
+
+
+def test_the_session_provider_is_taken_before_any_settings(sent):
     provider = _Provider(DROPS)
+    live = {"chat_provider": provider, "settings": _KeyedSettings}
+    assert explain_service.narrative_chat_provider(live) is provider
+    assert sent == []
 
-    def build(settings):
-        seen.append(settings)
-        return provider
 
-    monkeypatch.setattr(explain_service, "get_settings", lambda: _Settings)
-    monkeypatch.setattr(explain_service, "build_chat_provider", build)
-    source = explain_service.evidence_source_factory(db)
+def test_the_session_settings_build_the_provider_with_the_assistant_chat_builder(db, sent):
+    provider = explain_service.narrative_chat_provider({"settings": _KeyedSettings})
+    assert isinstance(provider, AnthropicChatProvider) and provider.configured
+    assert sent == [], "building sends nothing"
+    text = LedgerEvidenceSource(db, chat_provider=provider).narrative(WEEK, now=NOW)
+    assert len(sent) == 1 and text.startswith(DROPS)
+    assert FAIL_RESEARCH in text and FAIL_MAIL in text
+
+
+@pytest.mark.parametrize("live", [None, {}, {"settings": None}, {"settings": _Settings}])
+def test_a_session_without_a_key_gives_no_provider_and_does_not_raise(live, sent, keyed_process):
+    """Not the process-wide key either: only what the session carries counts."""
+    assert explain_service.narrative_chat_provider(live) is None
+    assert sent == []
+
+
+def test_a_session_provider_that_is_not_configured_gives_no_provider():
+    live = {"chat_provider": _Provider(DROPS, configured=False)}
+    assert explain_service.narrative_chat_provider(live) is None
+
+
+def test_settings_that_cannot_be_read_give_no_provider():
+    class Broken:
+        def __getattr__(self, name):
+            raise RuntimeError("no environment")
+
+    assert explain_service.narrative_chat_provider({"settings": Broken()}) is None
+
+
+def test_the_factory_hands_the_provider_to_the_ledger_source(db):
+    provider = _Provider(DROPS)
+    source = explain_service.evidence_source_factory(db, chat_provider=provider)
     assert isinstance(source, LedgerEvidenceSource)
-    assert seen == [_Settings]
     assert source.narrative(WEEK, now=NOW).startswith(DROPS)
+    assert len(provider.questions) == 1
 
 
-def test_an_empty_key_does_not_raise_and_the_rule_narrator_answers(db, monkeypatch):
-    def no_network(*args, **kwargs):  # pragma: no cover - reaching it is the failure
-        raise AssertionError("an unconfigured provider must not send a request")
-
-    monkeypatch.setattr(explain_service, "get_settings", lambda: _Settings)
-    monkeypatch.setattr("app.assistant_chat._http_send", no_network)
-    source = explain_service.evidence_source_factory(db)
-    assert isinstance(source._chat_provider, AnthropicChatProvider)
-    assert source._chat_provider.configured is False
-    assert source.narrative(WEEK, now=NOW) == tell(db, "bu hafta", None, None, now=NOW)
-
-
-def test_settings_that_cannot_be_read_leave_the_rule_narrator(db, monkeypatch):
-    def broken():
-        raise RuntimeError("no environment")
-
-    monkeypatch.setattr(explain_service, "get_settings", broken)
-    source = explain_service.evidence_source_factory(db)
-    assert source.narrative(WEEK, now=NOW) == tell(db, "bu hafta", None, None, now=NOW)
+def test_a_one_argument_factory_still_serves_a_call_without_a_provider(db, monkeypatch):
+    """The suites that replace the factory do it with ``lambda db: source``."""
+    plain = LedgerEvidenceSource(db)
+    monkeypatch.setattr(explain_service, "evidence_source_factory", lambda db: plain)
+    record = explain_to_briefing(db, "bu hafta ne oldu", now=NOW)
+    assert record.briefing.executive[0].text == tell(db, "bu hafta", None, None, now=NOW)
 
 
 # --------------------------------------------------------------------------- end to end
 
 
-def _factory_with(monkeypatch, provider) -> None:
-    monkeypatch.setattr(explain_service, "get_settings", lambda: _Settings)
-    monkeypatch.setattr(explain_service, "build_chat_provider", lambda settings: provider)
-
-
-def test_bu_hafta_ne_oldu_end_to_end_is_narrated_by_the_model_and_audited(db, monkeypatch):
+def test_bu_hafta_ne_oldu_end_to_end_is_narrated_by_the_model_and_audited(db, sent):
     provider = _Provider(DROPS)
-    _factory_with(monkeypatch, provider)
-    record = explain_to_briefing(db, "bu hafta ne oldu", now=NOW)
+    record = explain_to_briefing(db, "bu hafta ne oldu", now=NOW, chat_provider=provider)
     assert record.briefing.query.kind == QUERY_NARRATIVE
-    assert len(provider.questions) == 1
+    assert len(provider.questions) == 1 and sent == []
     told = record.briefing.executive[0].text
     assert told.startswith(DROPS) and FAIL_RESEARCH in told and FAIL_MAIL in told
     assert FAIL_RESEARCH in record.speech and FAIL_MAIL in record.speech
@@ -197,13 +258,12 @@ def test_bu_hafta_ne_oldu_end_to_end_is_narrated_by_the_model_and_audited(db, mo
 ROUTED_FAILURE_QUESTION = "bu hafta ne basarisiz oldu"
 
 
-def test_a_failure_question_the_router_hands_over_is_told_failures_only_end_to_end(db, monkeypatch):
-    """The real router, the real query_for, the real factory: nothing is substituted but
-    the provider."""
+def test_a_failure_question_the_router_hands_over_is_told_failures_only_end_to_end(db):
+    """The real router, the real query_for, the real factory: nothing is substituted, and
+    the provider is the one the caller hands over."""
     assert resolve_intent(ROUTED_FAILURE_QUESTION).query_kind == QUERY_NARRATIVE
     provider = _Provider(f"İki iş olmadı: {FAIL_RESEARCH}; {FAIL_MAIL}.")
-    _factory_with(monkeypatch, provider)
-    record = explain_to_briefing(db, ROUTED_FAILURE_QUESTION, now=NOW)
+    record = explain_to_briefing(db, ROUTED_FAILURE_QUESTION, now=NOW, chat_provider=provider)
     assert record.briefing.query.kind == QUERY_NARRATIVE
     assert record.briefing.facts["failures_only"] is True
     assert record.briefing.executive[0].text == provider.speech
@@ -221,20 +281,48 @@ def test_the_failure_question_without_a_model_lists_no_completed_work_end_to_end
     assert FAIL_RESEARCH in record.speech and "Tamamlananlar" not in record.speech
 
 
+#: the owner's own spellings. The router gives every one of them to the explain
+#: ``failures`` family, which speaks the LATEST failure - not the narrative.
+OWNER_FAILURE_QUESTIONS = (
+    "ne başarısız oldu",
+    "bu hafta ne başarısız oldu",
+    "bugün ne başarısız oldu",
+    "neler başarısız oldu",
+)
+
+
+@pytest.mark.parametrize("question", OWNER_FAILURE_QUESTIONS)
+def test_the_owners_spelling_is_answered_without_the_model_whoever_owns_it(db, question):
+    """NOT a claim that the owner's sentence is narrated: through the real router it is
+    not (see the ADR draft; the decision is the router's, outside this task). What holds
+    on either side of that decision, and is asserted with nothing substituted: the answer
+    names a failure, lists no completed work, and a provider is asked only when the
+    router made the question a narrative - and then for the failures alone."""
+    provider = _Provider(f"İki iş olmadı: {FAIL_RESEARCH}; {FAIL_MAIL}.")
+    record = explain_to_briefing(db, question, now=NOW, chat_provider=provider)
+    assert FAIL_RESEARCH in record.speech or FAIL_MAIL in record.speech
+    assert "Tamamlananlar" not in record.speech
+    if record.briefing.query.kind == QUERY_NARRATIVE:
+        assert record.briefing.facts["failures_only"] is True
+        assert all('"tamamlanan": []' in asked for asked in provider.questions)
+    else:
+        assert provider.questions == []
+
+
 def test_ne_basarisiz_oldu_reaches_the_narrative_failures_only_once_it_is_routed_there(
     db, monkeypatch
 ):
-    """'ne başarısız oldu' with its Turkish letters is OWNED by the explain ``failures``
-    family (the router is not this task's to change), so the router's decision is the one
-    thing substituted here; everything after it - query_for, the engine, the production
-    factory, the source, ``tell`` - is the real path."""
+    """ROUTER SUBSTITUTED - this is not the owner's path today. 'ne başarısız oldu' with
+    its Turkish letters is OWNED by the explain ``failures`` family (the router is not
+    this task's to change), so the router's decision is the one thing replaced here;
+    everything after it - query_for, the engine, the factory, the source, ``tell`` - is
+    the real path. It proves what the router's decision would switch on, nothing more."""
     question = "ne başarısız oldu"
     assert recognise(question) == WEEK_FAILURES
     routed = resolve_intent(ROUTED_FAILURE_QUESTION)
     monkeypatch.setattr(explain_service, "resolve_intent", lambda text: routed)
     provider = _Provider(f"Şu iş olmadı: {FAIL_MAIL}.")  # drops the research failure
-    _factory_with(monkeypatch, provider)
-    record = explain_to_briefing(db, question, now=NOW)
+    record = explain_to_briefing(db, question, now=NOW, chat_provider=provider)
     assert record.briefing.query.kind == QUERY_NARRATIVE
     assert record.briefing.facts["failures_only"] is True
     told = record.briefing.executive[0].text
