@@ -3332,6 +3332,22 @@ def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     return canonical, canonical
 
 
+def rule_verb_words() -> tuple[frozenset[str], frozenset[str]]:
+    """(the verb forms, the verb stems) of every rule table in this module, as written -
+    read from the tables themselves (every ``_..._VERB...`` tuple; ``...STEMS`` and
+    ``...PREFIXES`` are matched by prefix here, the rest whole), so a verb added to a table
+    is in this answer without a second list. ADR-0224 corrections asks it: a word this
+    router reads as a verb is never taught as the name of a machine or an application."""
+    forms: set[str] = set()
+    stems: set[str] = set()
+    for name, value in globals().items():
+        if "_VERB" not in name or not isinstance(value, tuple | frozenset):
+            continue
+        words = [word for word in value if isinstance(word, str)]
+        (stems if name.endswith(("STEMS", "PREFIXES")) else forms).update(words)
+    return frozenset(forms), frozenset(stems)
+
+
 # --------------------------------------------- M20: File & Document Intelligence
 #
 # Built on the SAME token/stem primitives as every intent above - no second Turkish
@@ -10571,6 +10587,7 @@ __all__ = [
     "research_topic_of",
     "research_reference_for",
     "resolve_intent",
+    "rule_verb_words",
     "speech_budget",
     "speech_from",
     "turkish_casefold",

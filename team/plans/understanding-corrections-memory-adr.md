@@ -1,13 +1,18 @@
 # ADR (lead numbers it) — ADR-0224 corrections as built: the owner's correction is vocabulary memory, and the next match uses it
 
-**Status.** Accepted (worker, cycle d20261001, task `understanding-corrections-memory`). Built and
-tested inside the area; **the relay call sites and the migration are outside it and are the lead's
-at merge** (below). Until they land, nothing in production calls this module and no `vocabulary`
-row can be written on PostgreSQL.
+**Status.** Accepted (worker, cycle d20261001, task `understanding-corrections-memory`; second
+pass after the inspector's return). The module, the relay call sites, migration 0064 and
+`MemoryClass.VOCABULARY` are all on the branch. Three of those files are outside the card's
+listed area and were added because the return names them: `alembic/versions/20261001_0064_…`,
+`app/memory/types.py`, `tests/integration/test_understanding_vocabulary_postgres.py`,
+`app/voice/realtime_sessions/service.py`.
 
 **Decision.**
 
-- **The class.** `app/memory/policy.py` gains `VOCABULARY` (value `vocabulary`) and decision-table
+- **The class.** `MemoryClass.VOCABULARY` (`app/memory/types.py`), allowed by
+  `ck_memories_class` from migration `0064_memory_vocabulary_class` (expand-only: the constraint
+  gains one value; the downgrade deletes the vocabulary rows and restores the six).
+  `app/memory/policy.py` names it `VOCABULARY` and gains decision-table
   row 1a: a `vocabulary` observation WITHOUT the caller's `explicit` flag is IGNORED - no row, no
   candidate, no session stage. With the flag it is the existing row 2 (durable, explicit, 1.0,
   actor OWNER). The secret guard (row 1) still runs first. A synonym is the owner's own word or it
@@ -49,6 +54,17 @@ row can be written on PostgreSQL.
     device, words the allow-list reads as an application - and a pointing word ("diğer", "onun",
     any "…ki"). "Ofis bilgisayarında aç" then "hayır, ev bilgisayarında" is a change of mind:
     the turn is re-issued at home and "ofis" keeps meaning the office.
+  - **The router's own words name nothing** (`known_word`; the inspector's finding: "ona ofis
+    deme, hesap de" was learned as `hesap = ofis (cihaz)` and the next "hesap makinesini aç"
+    opened on ofis at HIGH). Refused for either kind: any form of the computer word
+    ("bilgisayar…") and a verb of the rule tables - `intents.rule_verb_words()` reads every
+    `_…_VERB…` table, so a verb added to a table is refused without a second list; forms are
+    matched whole, stems of three letters or more by prefix, shorter stems whole ("aç" must not
+    refuse "acer"). Refused as a MACHINE only: any word of an application alias phrase or
+    Turkish app name, bare or with one closed case ending ("hesap", "makinesini", "defteri").
+    An application may still be taught a word of another's name ("ona hesap makinesi deme,
+    hesap de"): the allow-list's own names are read first, so it cannot steal a sentence.
+    A heard word longer than 32 characters is `not_a_name` (it becomes a key and a file name).
   - **A guessed word must resemble the alias** (`not_similar`, `GUESSED_WORD_MIN` 0.6). After a
     question or a read-back the heard word is taken by POSITION (the word before
     "bilgisayar…"); "hemen bilgisayarımda … aç" answered "ev" would otherwise teach "hemen = ev"
@@ -85,6 +101,9 @@ learning from a HIGH turn. The owner can always teach a word with the pair form.
   reading can be made from words the allow-list does not know (layer-2 slots, `understanding-stt-corpus`).
 - The pair form teaches silently: it re-issues no turn, and the relay has no receipt speech for
   "öğrendim" (a `say` frame or a tool is outside this area). The audit row says it was written.
+  The refusals above close the three shapes the inspector found; an ORDINARY unknown word is
+  still learned from one sentence ("ona ofis deme, müzik de"), which is what the pair form is
+  for - a spoken receipt ("müzik artık ofis demek") is the missing guard and its own task.
 - The near-form MEDIUM number (0.67 for "ofüss") is the lexical `DeterministicEmbedder`'s; with
   `LocalEmbedder` it is NOT_RUN.
 - On the Cloud Core image there is no checkout: without `PAGENTOS_TEAM_PROPOSALS_DIR` the memory
@@ -93,126 +112,37 @@ learning from a HIGH turn. The owner can always teach a word with the pair form.
 
 ## For the lead at merge
 
-1. **Migration (required before any Postgres run; `ck_memories_class` rejects the row today).**
-   `alembic/versions/2026MMDD_0064_memory_vocabulary_class.py`, `down_revision = "0063_team_state"`,
-   expand-only (the old colour never writes the class):
-   ```python
-   _OLD = ("preference", "episodic", "project", "semantic", "procedural", "voice_preference")
-   _NEW = (*_OLD, "vocabulary")
-   def _in(values): return "memory_class IN (" + ", ".join(f"'{v}'" for v in values) + ")"
-   def upgrade():
-       op.drop_constraint("ck_memories_class", "memories", type_="check")
-       op.create_check_constraint("ck_memories_class", "memories", _in(_NEW))
-   def downgrade():
-       op.execute("DELETE FROM memories WHERE memory_class = 'vocabulary'")
-       op.drop_constraint("ck_memories_class", "memories", type_="check")
-       op.create_check_constraint("ck_memories_class", "memories", _in(_OLD))
-   ```
-   The unit suite runs on SQLite, which has no such constraint: **the unit tests cannot see this.**
-   An integration run on the dev stack's Postgres (write one vocabulary row through `learn`) is
-   the proof; NOT_RUN here.
-2. **`app/memory/types.py`** (frozen foundation, outside the area): add
-   `VOCABULARY = "vocabulary"` to `MemoryClass`. `policy.VOCABULARY` then IS that member
-   (`getattr(MemoryClass, "VOCABULARY", …)`), and `service.supersede_memory`
-   (`MemoryClass(old.memory_class)`, line 648) stops raising ValueError for a vocabulary row.
-   Check the three places that enumerate `MEMORY_CLASSES` (`tools_memory.py` schema enums,
-   `routes.py`) - the class becomes offerable to `memory.remember`; a row written that way without
-   a `{kind, heard, meant}` value is not a synonym (tested).
-3. **The relay** (`app/voice/realtime_sessions/service.py`, `record_client_events`) - the patch
-   below was applied to this tree, proved, and reverted byte-for-byte (sha256
-   `be5fbe2b…fba8ad` before and after). With it applied: the two relay tests in
-   `test_understanding_corrections.py` run (they are skipped until the relay's source names
-   `understanding_corrections`) and pass, 394 tests of the relay / understanding / memory
-   suites pass, and the Owner Utterance Suite is 2756 passed / 0 failed (917 s). Without the
-   patch (this branch as committed) the two relay tests are SKIPPED, not green.
+1. **Number the migration against the chain tip at merge.** `0064_memory_vocabulary_class`
+   chains from `0063_team_state`. If another branch of this cycle also adds a 0064, one of the
+   two is renumbered (file name, `revision`, `down_revision`, and the two `"0063_team_state"`
+   literals in `tests/integration/test_understanding_vocabulary_postgres.py`).
+2. **The release is a schema release.** `alembic upgrade head` runs before the new colour
+   serves; the old colour keeps working beside 0064 (it never writes the class). Do NOT run the
+   integration suite of this branch against the shared dev database while sibling worktrees are
+   still at 0063: their `alembic upgrade head` cannot locate revision 0064. The proof here ran
+   in a scratch database (`PAGENTOS_DATABASE_URL=…/pagentos_scratch_vocab0064`), dropped after.
+3. **`MEMORY_CLASSES` now has seven values**, so `memory.remember` / `memory.search`
+   (`tools_memory.py` schema enums) and `routes.py` offer `vocabulary`. A row written that way
+   without a `{kind, heard, meant}` value naming a real alias or app is not a synonym (tested);
+   one with such a value IS - through `remember_explicit`, i.e. the owner's own instruction.
 4. `docs/HANDOFF.md`, the ADR number, `docs/DECISIONS.md` (ADR-0224 addendum 4).
 5. Nothing for `app/protocol_files.py` or the falsification list: no protocol file is added or
    read. `PAGENTOS_TEAM_PROPOSALS_DIR` is read from the environment by this module only; if it
-   should be a `Settings` field, that is `app/config.py` (outside the area).
+   should be a `Settings` field, that is `app/config.py`.
 
-### The relay patch (5 hunks)
+## The relay as wired (`app/voice/realtime_sessions/service.py`, `record_client_events`)
 
-```diff
-@@ imports
- from app.voice.spoken_device import resolve_without_device_phrase
-+from app.voice.understanding import corrections as understanding_corrections
- from app.voice.understanding import policy as understanding_policy
-@@ record_client_events, the utterance branch, before the router reads the sentence
-             # words the subject helpers below read.
-+            # ADR-0224 corrections: the owner's synonyms as the memory rows hold them NOW (a
-+            # version check; parsed again only when a row changed), for the rule table and
-+            # the layers of this turn.
-+            understanding_corrections.vocabulary(db)
-             intent: ResolvedIntent
-             intent, subject_text, spoken_devices = resolve_without_device_phrase(
-@@ before `answered = (`
-             answered_device: str | None = None
-+            # ... and whether it CORRECTS the turn before (a MEDIUM read-back or that
-+            # question): rule first - only a sentence the tables left unrouted is looked at.
-+            correction = (
-+                understanding_corrections.correction_turn(
-+                    ctx.get(understanding_corrections.CORRECTABLE_KEY),
-+                    text or "",
-+                    now=now,
-+                    aliases=enrolled_aliases(db),
-+                )
-+                if intent.intent is Intent.NONE
-+                else None
-+            )
-+            ctx.pop(understanding_corrections.CORRECTABLE_KEY, None)  # corrected once, or not
-             answered = (
-@@ after the `if answered is not None:` block; and the read_turn call
-                     matched="understanding:answer",
-                 )
-+            elif correction is not None and correction.intent:
-+                # "Hayır, ev bilgisayarında" / "onu değil, Not Defteri": the corrected turn
-+                # is re-issued with the slot the owner named, on the machine they named.
-+                answered_device = correction.device
-+                intent = replace(
-+                    intent,
-+                    intent=Intent(correction.intent),
-+                    application=correction.application,
-+                    klass="",
-+                    capability=None,
-+                    matched="understanding:correction",
-+                )
-             machine_named = names_unbound_machine(text or "", spoken_devices)
--            decision = understanding_policy.read_turn(
-+            decision = understanding_corrections.read_turn(
-                 text or "",
-@@ after the `if decision.missing == understanding_policy.SLOT_DEVICE:` block
-                     "at": now.isoformat().replace("+00:00", "Z"),
-                 }
-+            # ADR-0224 corrections: what the owner may correct in the next sentence (the
-+            # slots and the ONE word the device slot was read from, never the sentence) ...
-+            correctable = understanding_corrections.correctable(
-+                text or "",
-+                intent=intent.intent.value,
-+                application=intent.application,
-+                decision=decision,
-+                now=now,
-+            )
-+            if correctable is not None:
-+                ctx[understanding_corrections.CORRECTABLE_KEY] = correctable
-+            # ... and the pair this sentence taught, through the memory write policy (explicit,
-+            # class vocabulary) - counts and names on the audit row, never the words.
-+            if correction is not None and correction.learnable:
-+                if memory_runtime is None:
-+                    meta["understanding_correction"] = {"written": False, "reason": "no_runtime"}
-+                else:
-+                    learned = understanding_corrections.learn(
-+                        db, memory_runtime.embedder, correction, session_id=row.id
-+                    )
-+                    meta["understanding_correction"] = {
-+                        "kind": correction.kind,
-+                        "written": learned.written,
-+                        "reason": learned.reason,
-+                        "proposed": learned.proposal_written,
-+                    }
-             reference = resolve_deictic_reference(db, intent.tokens, now=now)
-```
+Five places, all in the utterance branch: (1) `corrections.vocabulary(db)` before the router
+reads the sentence; (2) `correction_turn(...)` for a sentence the tables left unrouted, and the
+kept `understanding_correctable` popped (corrected once, or not); (3) a correction that carries
+a turn re-issues it (`matched="understanding:correction"`, the device the owner named as the
+answered device); (4) `corrections.read_turn` in place of `policy.read_turn`; (5) after the
+decision: `correctable(...)` kept on `context_json`, and a learnable pair written through
+`learn(db, memory_runtime.embedder, …)` with `understanding_correction {kind, written, reason,
+proposed}` on the audit row - no words. `learn` commits the relay's session early (the
+`_extract_memories` precedent, and for the same reason). Without a memory runtime the audit
+row says `no_runtime` and nothing is written.
 
-Notes on the patch: `learn` commits the relay's session early (the `_extract_memories` precedent,
-and for the same reason); `understanding_correctable` is one more key on `context_json`, replaced
-or removed by every utterance; the audit row gains `understanding_correction {kind, written,
-reason, proposed}` - no words.
+Still open in the relay: the turn's vocabulary stays in the ContextVar after the utterance
+(a later `resolve_intent` in the same context still reads a taught application word), and the
+pair form has no spoken receipt.

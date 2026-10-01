@@ -2,15 +2,13 @@
 
 Nothing here builds a memory row by hand: the pair goes through ``app.memory.service`` (the
 real write policy, the real tables on SQLite), the vocabulary is read back from those rows,
-and the decision is the real ``policy.read_turn`` behind ``corrections.read_turn``. The one
-relay test at the bottom runs only once the relay (outside this task's area) calls this
-module - it reads the relay's own source to know (see "For the lead at merge" in the ADR).
+and the decision is the real ``policy.read_turn`` behind ``corrections.read_turn``. The two
+relay tests at the bottom say the sentences to the real relay (``record_client_events``).
 """
 
 from __future__ import annotations
 
 import hashlib
-import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -519,6 +517,57 @@ def test_the_pair_form_teaches_the_unknown_side(db, tmp_path) -> None:
     assert corrections.correction_turn(None, "ona zımbırtı deme, dalga de", now=NOW) is None
 
 
+@pytest.mark.parametrize(
+    ("said", "sentence"),
+    [
+        # a token of an application alias phrase, bare and with its case ending
+        ("Ona ofis deme, hesap de.", "Hesap makinesini aç."),
+        ("Ona ev deme, makinesini de.", "Hesap makinesini aç."),
+        ("Ona ev deme, defteri de.", "Not defterini aç."),
+        # the computer word itself, in any form
+        ("Ona ev deme, bilgisayar de.", "Bilgisayarda hesap makinesini aç."),
+        ("Ona ofis deme, bilgisayarım de.", "Bilgisayarımda hesap makinesini aç."),
+        # a verb of the rule tables
+        ("Ona ofis deme, açsana de.", "Hesap makinesini açsana."),
+        ("Ona ofis deme, açın de.", "Hesap makinesini açın."),
+        ("Ona ev deme, kapat de.", "Hesap makinesini aç."),
+    ],
+)
+def test_the_pair_form_never_teaches_the_routers_own_words_as_a_device(
+    db, tmp_path, said, sentence
+) -> None:
+    """Red before: "ona ofis deme, hesap de" was learned as "hesap = ofis (cihaz)", and the
+    next "Hesap makinesini aç" opened on ofis at HIGH with no machine named. A word the
+    router itself reads - a token of an application's name, the computer word, a verb -
+    names no machine, whatever the owner's sentence looked like."""
+    _, before = _read(db, sentence)
+    correction = corrections.correction_turn(None, said, now=NOW)
+    assert correction is not None and correction.kind == "device"
+    assert correction.reason == "known_word" and not correction.learnable
+    learned = corrections.learn(db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path)
+    assert not learned.written
+    assert _vocabulary_rows(db) == [] and list(tmp_path.iterdir()) == []
+    _, after = _read(db, sentence)
+    assert (after.band, after.device, after.layer) == (before.band, before.device, before.layer)
+
+
+def test_a_verb_is_no_name_for_an_application_and_a_heard_word_has_a_length(db, tmp_path) -> None:
+    """ "Ona hesap makinesi deme, açsana de" would make every "... açsana" the allow-list cannot
+    read ("Kapıyı açsana") open the calculator. And a heard "word" is a word: it becomes a memory
+    key and a file name."""
+    verb = corrections.correction_turn(None, "Ona hesap makinesi deme, açsana de.", now=NOW)
+    assert verb is not None and verb.reason == "known_word" and not verb.learnable
+    long = corrections.correction_turn(None, f"Ona {'ofüs' * 53} deme, ofis de.", now=NOW)
+    assert long is not None and long.reason == "not_a_name" and not long.learnable
+    for correction in (verb, long):
+        assert not corrections.learn(
+            db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path
+        ).written
+    assert _vocabulary_rows(db) == [] and list(tmp_path.iterdir()) == []
+    corrections.vocabulary(db)
+    assert resolve_intent("Kapıyı açsana.").intent is Intent.NONE
+
+
 def test_not_that_one_names_the_application_and_reissues_the_turn(db) -> None:
     heard = "Ofisü bilgisayarında hesap makinesini açın."
     intent, decision = _read(db, heard)
@@ -566,20 +615,9 @@ def test_a_malformed_vocabulary_row_is_no_synonym(db) -> None:
     assert corrections.vocabulary(db) == ()
 
 
-# --- through the real relay (runs once the relay calls this module) ------------------------
+# --- through the real relay ----------------------------------------------------------------
 
 
-def _relay_is_wired() -> bool:
-    from app.voice.realtime_sessions import service
-
-    return "understanding_corrections" in inspect.getsource(service)
-
-
-@pytest.mark.skipif(
-    not _relay_is_wired(),
-    reason="the relay (app/voice/realtime_sessions/service.py) is outside this task's area: "
-    "the lead applies the patch in team/plans/understanding-corrections-memory-adr.md at merge",
-)
 def test_relay_the_answer_teaches_the_word_and_the_second_time_is_right(
     monkeypatch, tmp_path
 ) -> None:
@@ -628,7 +666,6 @@ def test_relay_the_answer_teaches_the_word_and_the_second_time_is_right(
     assert len(list((tmp_path / "proposals").iterdir())) == 1
 
 
-@pytest.mark.skipif(not _relay_is_wired(), reason="see the relay test above")
 def test_relay_a_no_after_the_read_back_reissues_the_turn_and_guesses_no_word(
     monkeypatch, tmp_path
 ) -> None:
@@ -678,3 +715,16 @@ def test_relay_a_no_after_the_read_back_reissues_the_turn_and_guesses_no_word(
     with world.factory() as session:
         record = session.get(RealtimeSessionRow, uuid.UUID(sid)).context_json["last_utterance"]
     assert record["device_targets"] == ["ev"] and record["understanding"]["layer"] == "vocabulary"
+
+    # The router's own words are taught to nobody: "hesap" stays a word of the calculator's
+    # name, and the next "hesap makinesini aç" names no machine.
+    assert _say(world.client, sid, "Ona ofis deme, hesap de.")["resolved_intents"][0]["intent"] == (
+        "none"
+    )
+    with world.factory() as session:
+        assert [row.text for row in _vocabulary_rows(session)] == ["ofisü = ev (cihaz)"]
+    plain = _say(world.client, sid, "Hesap makinesini aç.")["resolved_intents"][0]
+    assert plain["intent"] == "app_open"
+    with world.factory() as session:
+        record = session.get(RealtimeSessionRow, uuid.UUID(sid)).context_json["last_utterance"]
+    assert record["device_targets"] == [] and record["understanding"]["layer"] != "vocabulary"

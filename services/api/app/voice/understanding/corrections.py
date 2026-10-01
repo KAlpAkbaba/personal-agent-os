@@ -21,7 +21,9 @@ synonym and the next match uses it - the second time is right without a release.
   synonym: the next version check no longer finds it.
 
 What is never learned: a word the system already reads as something else ("ofis" must not
-come to mean the home PC because the owner changed their mind), a pointing word ("diğer",
+come to mean the home PC because the owner changed their mind), one of the router's own words
+(the computer word, a verb of the rule tables, and - as a machine - a word of an application's
+name: "ona ofis deme, hesap de" teaches nothing), a pointing word ("diğer",
 "yandaki"), and - when the heard word had to be GUESSED from its place in the sentence - a
 word that does not resemble the alias the owner answered with ("hemen bilgisayarımda ... aç"
 answered "ev" must not teach "hemen = ev"). The pair form states both sides, so nothing is
@@ -39,6 +41,7 @@ from collections.abc import Iterable, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
 
@@ -54,7 +57,7 @@ from app.memory.models import Memory
 from app.memory.policy import VOCABULARY, Observation
 from app.memory.types import MemoryStatus
 from app.operator import allowlists
-from app.voice.intents import normalize_transcript
+from app.voice.intents import normalize_transcript, rule_verb_words
 from app.voice.understanding import fuzzy, policy
 from app.voice.understanding.combine import RuleResult
 from app.voice.understanding.normalize import NOUN, normalize
@@ -87,6 +90,8 @@ GUESSED_WORD_MIN: Final = 0.6
 
 _MAX_HEARD_WORDS: Final = 3
 _MIN_HEARD_CHARS: Final = 3
+_MAX_WORD_CHARS: Final = 32
+_MIN_STEM_CHARS: Final = 3
 #: Words that point at a machine without naming it; so does any "...ki" ("yandaki").
 _NOT_A_NAME: Final[frozenset[str]] = frozenset(
     fuzzy.fold(word)
@@ -446,6 +451,31 @@ def _entity(words: Sequence[str], synonyms: Iterable[Synonym]) -> tuple[str, str
     return (KIND_DEVICE, alias) if alias else None
 
 
+@lru_cache(maxsize=1)
+def _router_words() -> tuple[frozenset[str], tuple[str, ...], frozenset[str]]:
+    """(verb forms, verb stems, the words of the applications' names), folded."""
+    forms, stems = rule_verb_words()
+    whole = {fuzzy.fold(word) for form in forms for word in form.split()}
+    # A stem shorter than this is matched whole: "aç" must not refuse "acer".
+    whole |= {fuzzy.fold(stem) for stem in stems if len(stem) < _MIN_STEM_CHARS}
+    prefixes = tuple(sorted({fuzzy.fold(s) for s in stems if len(s) >= _MIN_STEM_CHARS}))
+    names = [alias for alias, _ in allowlists.APP_ALIAS_PHRASES]
+    names.extend(allowlists.APP_NAMES_TR.values())
+    app_words = frozenset(fuzzy.fold(word) for name in names for word in name.split())
+    return frozenset(whole), prefixes, app_words
+
+
+def _is_router_word(word: str, kind: str) -> bool:
+    """``word`` is one the rule tables read themselves (see ``_why_not``)."""
+    said = _bare(word)
+    forms, stems, app_words = _router_words()
+    if said.startswith(_COMPUTER_STEM) or said in forms or said.startswith(stems):
+        return True
+    if kind != KIND_DEVICE:
+        return False
+    return any(_same_word(word, app_word) for app_word in app_words)
+
+
 def _why_not(heard: str | None, kind: str, aliases: Iterable[str]) -> str | None:
     """Why ``heard`` may not become a synonym, or None when it may."""
     if not heard or not heard.split():
@@ -458,6 +488,13 @@ def _why_not(heard: str | None, kind: str, aliases: Iterable[str]) -> str | None
         return REASON_NOT_A_NAME
     if kind == KIND_DEVICE and folded[-1].endswith("ki"):
         return REASON_NOT_A_NAME
+    if any(len(w) > _MAX_WORD_CHARS for w in folded):
+        return REASON_NOT_A_NAME  # a word: it becomes a memory key and a file name
+    # The router's own words name nothing: the computer word and a verb of the rule tables
+    # for either kind, and - as a MACHINE - any word of an application's name. "Ona ofis
+    # deme, hesap de" would otherwise send every "hesap makinesini aç" to the office.
+    if any(_is_router_word(w, kind) for w in words):
+        return REASON_KNOWN_WORD
     # A word the system already reads as something: an alias (bare, suffixed, or one the
     # owner configured on a device) or an application name. The confusion list is left out
     # on purpose - the owner's correction outranks it.

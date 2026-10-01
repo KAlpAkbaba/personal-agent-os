@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any, Final
 
 from app.memory.types import (
@@ -55,18 +54,9 @@ from app.memory.types import (
     WriteStage,
 )
 
-# ------------------------------------------------------------- the vocabulary class
-
-
-class _OwnerVocabulary(StrEnum):
-    VOCABULARY = "vocabulary"
-
-
-#: The memory class of a synonym the owner taught by a correction (ADR-0224). Explicit and
-#: owner-sourced only: `decide` gives it no candidate and no session stage. It is
-#: `MemoryClass.VOCABULARY` once `app.memory.types` (the frozen foundation, whose values a
-#: CHECK constraint mirrors) names it; until then this member stands in, with the same value.
-VOCABULARY: Final[Any] = getattr(MemoryClass, "VOCABULARY", _OwnerVocabulary.VOCABULARY)
+#: The memory class of a synonym the owner taught by a correction (ADR-0224, migration 0064).
+#: Explicit and owner-sourced only: `decide` gives it no candidate and no session stage.
+VOCABULARY: Final = MemoryClass.VOCABULARY
 
 # --------------------------------------------------------------- secrets guard
 
@@ -166,7 +156,7 @@ class Observation:
     """An incoming statement/observation submitted to the write policy."""
 
     text: str
-    memory_class: MemoryClass | _OwnerVocabulary = MemoryClass.SEMANTIC
+    memory_class: MemoryClass = MemoryClass.SEMANTIC
     key: str | None = None
     value: dict[str, Any] = field(default_factory=dict)
     explicit: bool = False  # caller-asserted explicit owner instruction
