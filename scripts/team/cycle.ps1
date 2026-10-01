@@ -148,9 +148,58 @@ $cycle = [pscustomobject]@{
     gaps       = @()
 }
 
+# ------------------------------------------------------------------ the live status
+# What the owner's 'Ofis' page reads (office-cycle-status): which runs are in flight NOW, the
+# estimate so far and the usage limit. File mode: team/status.json; API mode: PUT
+# /v1/team/queue/status. A status nobody refreshed for ten minutes reads as "no cycle", so a long
+# wait refreshes it every $statusTickSeconds seconds. A write that fails is a line under the risks,
+# once, and never a reason to stop the cycle.
+$statusPath = Join-Path $TeamRoot "status.json"
+$stopFlagPath = Join-Path $TeamRoot "stop.flag"
+$statusTickSeconds = 120
+# A test hook (the heartbeat is otherwise only visible after two minutes): a whole number of seconds.
+if ([string]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS -match '^[1-9]\d{0,3}$') { $statusTickSeconds = [int]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS }
+$liveRuns = New-Object System.Collections.ArrayList
+$usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
+$statusFailed = $false
+$stopNoted = $false
+
 function Add-CycleNote {
     param([string]$List, [string]$Text)
     $script:cycle.$List = @(@($script:cycle.$List) + $Text)
+}
+
+function Write-CycleStatus {
+    $document = [ordered]@{
+        cycle_id      = $CycleId
+        machine       = $Machine
+        pid           = $PID
+        started_at    = [string]$script:cycle.started_at
+        runs          = @($script:liveRuns | ForEach-Object { [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at } })
+        estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
+        usage_limit   = [ordered]@{ state = $script:usageLimit.state; resets_at = $script:usageLimit.resets_at }
+        updated_at    = (Get-TeamTimestamp)
+    }
+    try {
+        if ($useApi) { Save-TeamStatusApi -Store $apiStore -Status $document }
+        else { Write-TeamJson -Path $statusPath -Document $document }
+    }
+    catch {
+        if (-not $script:statusFailed) {
+            $script:statusFailed = $true
+            Add-CycleNote -List "risks" -Text "canlı durum yazılamadı (döngü sürdü): $($_.Exception.Message)"
+        }
+    }
+}
+
+function Test-StopRequested {
+    <# The owner or the lead asked for a safe stop (team/stop.flag): no NEW run starts; the ones in
+       flight finish and are recorded. #>
+    if (-not $script:stopNoted -and (Test-Path -LiteralPath $stopFlagPath)) {
+        $script:stopNoted = $true
+        Add-CycleNote -List "stops" -Text "sahip/lead durdurdu (team/stop.flag); kaldığı yerden devam eder"
+    }
+    return $script:stopNoted
 }
 
 function Save-Report {
@@ -217,10 +266,12 @@ if ($useApi) {
 else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $CycleId -Now $started) }
 
 try {
+    Write-CycleStatus
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
     $runCount = @{}
 
     function Test-CapReached {
+        if (Test-StopRequested) { return $true }
         # A cap of 0 is no cap (owner decision 2026-09-30).
         if ($MaxUsd -gt 0 -and $script:cycle.spent_usd -ge $MaxUsd) {
             Add-CycleNote -List "stops" -Text ("bütçe tavanı: {0:0.00} / {1:0.00} USD" -f $script:cycle.spent_usd, $MaxUsd)
@@ -263,13 +314,16 @@ try {
             }
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory
+        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp) }
+        [void]$script:liveRuns.Add($live)
+        Write-CycleStatus
         $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
-        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline }
+        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live }
     }
 
     function Complete-RoleRun {
         param($Started)
-        $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline
+        $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline -OnTick { Write-CycleStatus } -TickSeconds $statusTickSeconds
         $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr
         $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
         $number = 1
@@ -282,6 +336,8 @@ try {
 
         $outcome = if ($finished.TimedOut) { "süre doldu ($RunMinutes dk)" } elseif ($result.Ok) { "tamam" } else { "başarısız: $($result.Why)" }
         $script:cycle.spent_usd = [double]$script:cycle.spent_usd + [double]$result.CostUsd
+        $script:liveRuns.Remove($Started.Live)
+        Write-CycleStatus
         $script:cycle.runs = @(@($script:cycle.runs) + [pscustomobject]@{
                 task = $taskId; role = $Started.Role; cost_usd = $result.CostUsd; seconds = $finished.Seconds; outcome = $outcome
             })
@@ -298,6 +354,8 @@ try {
            out); false when it must stop here and the next cycle continues. #>
         param([string]$ResetsAt)
         if (-not $WaitForUsageLimit -or -not $ResetsAt) {
+            $script:usageLimit = [pscustomobject]@{ state = "stopped"; resets_at = $(if ($ResetsAt) { $ResetsAt } else { $null }) }
+            Write-CycleStatus
             Add-CycleNote -List "stops" -Text ("Max kullanım limiti; " + $(if ($ResetsAt) { "sıfırlanma $ResetsAt; " } else { "ne zaman açılacağı söylenmedi; " }) +
                 "limit açılınca aynı -CycleId ile yeniden başlat: kaldığı yerden devam eder")
             return $false
@@ -305,7 +363,15 @@ try {
         $until = ([datetime]::Parse($ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)).AddSeconds(90)
         $wait = $until - [datetime]::UtcNow
         Add-CycleNote -List "risks" -Text ("Max kullanım limiti: {0} sıfırlanmasına kadar beklendi ({1:0} dk)" -f $ResetsAt, [Math]::Max(0, $wait.TotalMinutes))
-        if ($wait.TotalSeconds -gt 0) { Start-Sleep -Seconds ([int][Math]::Min([int]::MaxValue, $wait.TotalSeconds)) }
+        $script:usageLimit = [pscustomobject]@{ state = "waiting"; resets_at = $ResetsAt }
+        Write-CycleStatus
+        # In slices: the status is refreshed, and a stop flag ends the wait.
+        while (($until - [datetime]::UtcNow).TotalSeconds -gt 0 -and -not (Test-Path -LiteralPath $stopFlagPath)) {
+            Start-Sleep -Seconds ([int][Math]::Max(1, [Math]::Min($statusTickSeconds, ($until - [datetime]::UtcNow).TotalSeconds)))
+            Write-CycleStatus
+        }
+        $script:usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
+        Write-CycleStatus
         return $true
     }
 
@@ -554,6 +620,9 @@ try {
         if ($limitSeen -and -not (Wait-UsageLimit -ResetsAt $limitHit)) { $capped = $true }
     }
 
+    # A flag that came up when nothing was left to stop is still the owner's word: say it, remove it.
+    [void](Test-StopRequested)
+    if (Test-Path -LiteralPath $stopFlagPath) { Remove-Item -LiteralPath $stopFlagPath -Force -ErrorAction SilentlyContinue }
     $merged = @(Get-TeamTasks -Queue $queue | Where-Object { $_.state -eq "merged" })
     if (@($merged).Count -gt 0) {
         Add-CycleNote -List "gaps" -Text "integrate/$CycleId üzerinde tam kapı ve main'e birleştirme bu betikte yok; lead yapar, sonra işler 'awaiting_release' olur"
@@ -562,6 +631,9 @@ try {
     Write-Host "cycle $CycleId ended; report: $path"
 }
 finally {
+    # Nothing is in flight any more, whatever ended the cycle.
+    $liveRuns.Clear()
+    Write-CycleStatus
     if ($useApi) {
         try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId }
         catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }

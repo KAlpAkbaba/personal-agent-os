@@ -59,6 +59,34 @@ function Invoke-Git {
     if ($LASTEXITCODE -ne 0) { throw "git $($Arguments -join ' '): $output" }
 }
 
+# office-cycle-status hooks, independent of the scenario (the run then answers as the scenario says):
+#   PAGENTOS_FAKE_CLAUDE_SNAPSHOT + PAGENTOS_FAKE_CLAUDE_STATUS: the run stays 4 s, then copies the
+#     cycle's live status file to <snapshot>\<role>-<task>.json - what a reader sees while a run is in flight;
+#   PAGENTOS_FAKE_CLAUDE_STOPFLAG (+ _ROLE, default worker): that role's run creates the stop flag, as the
+#     owner or the lead would while the cycle works.
+$snapshotDir = [string]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT
+$statusFile = [string]$env:PAGENTOS_FAKE_CLAUDE_STATUS
+if ($snapshotDir -and $statusFile) {
+    Start-Sleep -Seconds 4
+    if (-not (Test-Path -LiteralPath $snapshotDir)) { [void](New-Item -ItemType Directory -Force -Path $snapshotDir) }
+    if (Test-Path -LiteralPath $statusFile) { Copy-Item -LiteralPath $statusFile -Destination (Join-Path $snapshotDir "$role-$taskId.json") -Force }
+}
+#   PAGENTOS_FAKE_CLAUDE_HEARTBEAT + PAGENTOS_FAKE_CLAUDE_STATUS: a worker run stays 7 s and appends the status
+#     file's updated_at to <heartbeat> once a second - a reader's view of whether the status is refreshed.
+$heartbeat = [string]$env:PAGENTOS_FAKE_CLAUDE_HEARTBEAT
+if ($heartbeat -and $statusFile -and $role -eq "worker") {
+    for ($i = 0; $i -lt 7; $i++) {
+        if (Test-Path -LiteralPath $statusFile) {
+            $stamp = [string]((Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8 | ConvertFrom-Json).updated_at)
+            Add-Content -LiteralPath $heartbeat -Value $stamp -Encoding ASCII
+        }
+        Start-Sleep -Seconds 1
+    }
+}
+$stopFlag = [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG
+$stopRole = if ($env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE) { [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE } else { "worker" }
+if ($stopFlag -and $role -eq $stopRole) { Set-Content -LiteralPath $stopFlag -Value "stop" -Encoding ASCII }
+
 if ($scenario -eq "silent") {
     [Console]::Out.Write("I could not do that.")
     exit 0

@@ -781,3 +781,9 @@ function Send-TeamReportApi {
     param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
     [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/reports" -Body ([ordered]@{ name = $Name; text = $Text }))
 }
+
+function Save-TeamStatusApi {
+    <# The cycle's live status (office-cycle-status): the Cloud Core keeps the latest document. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Status)
+    [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/status" -Body $Status)
+}

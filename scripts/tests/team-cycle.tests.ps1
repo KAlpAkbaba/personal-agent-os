@@ -943,6 +943,102 @@ try {
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
     }
 
+    # ------------------------------------------------------------------ the live status and the safe stop
+    function Use-FakeHooks {
+        param([hashtable]$Environment, [scriptblock]$Body)
+        foreach ($name in @($Environment.Keys)) { Set-Item -Path "Env:\$name" -Value ([string]$Environment[$name]) }
+        try { & $Body }
+        finally { foreach ($name in @($Environment.Keys)) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue } }
+    }
+
+    Test-Case "the live status: while two runs are in flight team/status.json names the cycle and both runs; after the cycle no run is left and the estimate is the report's" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        $run = $null
+        Use-FakeHooks -Environment $hooks -Body { $script:statusRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        $run = $script:statusRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "worker-task-one.json")
+        Assert-Equal -Expected "c1" -Actual $seen.cycle_id -Because "the cycle is named"
+        Assert-Equal -Expected "MAIL" -Actual $seen.machine -Because "and its machine"
+        Assert-True -Condition ([int]$seen.pid -gt 0) -Because "and the process that holds the lock"
+        Assert-True -Condition ([string]$seen.started_at -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$') -Because "started_at: $($seen.started_at)"
+        $runs = @($seen.runs)
+        Assert-Equal -Expected "task-one:worker,task-two:worker" -Actual (@($runs | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object) -join ",") -Because "both runs in flight: $($seen | ConvertTo-Json -Compress)"
+        foreach ($item in $runs) { Assert-True -Condition ([string]$item.started_at -match '^\d{4}-') -Because "each run says when it started" }
+        Assert-Equal -Expected "ok" -Actual $seen.usage_limit.state -Because "no limit"
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected 0 -Actual @($final.runs).Count -Because "nothing in flight after the cycle"
+        $estimate = [regex]::Match($run.Report, 'tahmini (\d+[.,]\d+) USD').Groups[1].Value -replace ',', '.'
+        Assert-Equal -Expected ([double]::Parse($estimate, [System.Globalization.CultureInfo]::InvariantCulture)) -Actual ([double]$final.estimated_usd) -Because "the report's estimate: $($run.Report)"
+        Assert-True -Condition ([double]$final.estimated_usd -gt 0) -Because "four runs at 0.25"
+    }
+
+    Test-Case "the live status: a finished run is gone from the list before the next one starts, and the estimate has risen" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:seqRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected 0 -Actual $script:seqRun.ExitCode -Because ($script:seqRun.StdOut + $script:seqRun.StdErr)
+        $second = Read-TeamJson -Path (Join-Path $snapshots "worker-task-two.json")
+        Assert-Equal -Expected "task-two:worker" -Actual (@($second.runs | ForEach-Object { "$($_.task):$($_.role)" }) -join ",") -Because "only the run in flight is listed: $($second | ConvertTo-Json -Compress)"
+        Assert-True -Condition ([double]$second.estimated_usd -ge 0.25) -Because "the first run's cost is already in: $($second.estimated_usd)"
+    }
+
+    Test-Case "the live status: the heartbeat refreshes updated_at while one long run goes on" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $beat = Join-Path $root "heartbeat.txt"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_HEARTBEAT = $beat; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json"); PAGENTOS_CYCLE_STATUS_TICK_SECONDS = 1 }
+        Use-FakeHooks -Environment $hooks -Body { $script:beatRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected 0 -Actual $script:beatRun.ExitCode -Because ($script:beatRun.StdOut + $script:beatRun.StdErr)
+        $stamps = @(Get-Content -LiteralPath $beat -Encoding UTF8 | Where-Object { $_.Trim() } | Sort-Object -Unique)
+        Assert-True -Condition (@($stamps).Count -ge 3) -Because "a seven-second run with a one-second tick shows several updated_at values, not just the start's: $($stamps -join ' ')"
+    }
+
+    Test-Case "the live status: the usage limit is 'stopped' with its reset time when the cycle stops for it, 'ok' when it was waited out" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -ExtraArguments '-WaitForUsageLimit:$false'
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "stopped" -Actual $final.usage_limit.state -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition ([string]$final.usage_limit.resets_at -match '^\d{4}-') -Because "the reset time is kept: $($final | ConvertTo-Json -Compress)"
+        Assert-Equal -Expected 0 -Actual @($final.runs).Count -Because "no run left"
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "ok" -Actual $final.usage_limit.state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected $null -Actual $final.usage_limit.resets_at -Because "nothing to wait for any more"
+    }
+
+    Test-Case "the safe stop: with team/stop.flag present before the second batch the first run is recorded, nothing else starts, the stop line is in the report, the flag is gone and the lock is released" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $flag = Join-Path $root "team\stop.flag"
+        $run = $null
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_STOPFLAG = $flag } -Body { $script:stopRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:stopRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the run in flight finished; no further run started"
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "inspecting" -Actual $one.state -Because "the finished worker waits for the next cycle's inspector"
+        Assert-Equal -Expected 1 -Actual @($one.reports).Count -Because "the finished run is recorded"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the second task was only moved to assigned (no plan needed), never started"
+        Assert-True -Condition ($run.Report -match 'döngü: sahip/lead durdurdu \(team/stop\.flag\); kaldığı yerden devam eder') -Because $run.Report
+        Assert-True -Condition (-not (Test-Path -LiteralPath $flag)) -Because "the flag is removed"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "the safe stop: an inspection in flight is still merged when the flag came up during it" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $flag = Join-Path $root "team\stop.flag"
+        $run = $null
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_STOPFLAG = $flag; PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE = "inspector" } -Body { $script:stopRun2 = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:stopRun2
+        Assert-Equal -Expected "worker,inspector" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the inspection ran, nothing after it"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "an approved inspection is still merged"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the second task was only moved to assigned (no plan needed), never started"
+        Assert-True -Condition (-not (Test-Path -LiteralPath $flag)) -Because "the flag is removed"
+    }
+
     Test-Case "two tasks on two areas run side by side, each in its own worktree" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
         $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
@@ -1170,7 +1266,7 @@ try {
     Write-Host "the queue and the lock on the Cloud Core (a fake listener with the real routes' rules)"
 
     function Start-FakeApi {
-        param([object[]]$Tasks = @(), $Lock = $null)
+        param([object[]]$Tasks = @(), $Lock = $null, [switch]$FailStatus)
         $work = Join-Path $env:TEMP ("pagentos-teamapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void](New-Item -ItemType Directory -Force -Path $work)
         [void]$sandboxes.Add($work)
@@ -1182,6 +1278,7 @@ try {
         $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $repoRoot "scripts\team\fake-team-api.ps1") + '"'),
             "-Port", $port, "-Seed", ('"' + (Join-Path $work "seed.json") + '"'), "-Log", ('"' + (Join-Path $work "requests.log") + '"'),
             "-Ready", ('"' + (Join-Path $work "ready") + '"'), "-Token", "test-token")
+        if ($FailStatus) { $arguments += "-FailStatus" }
         $process = Start-Process -FilePath $powershell -ArgumentList $arguments -PassThru -WindowStyle Hidden
         [void]$fakeApis.Add($process)
         $deadline = [datetime]::UtcNow.AddSeconds(40)
@@ -1231,6 +1328,35 @@ try {
         Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the sandbox's queue.json was not written in API mode"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "nor was its lock.json ever held"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\reports\c1.md")) -Because "the report is still a file"
+    }
+
+    Test-Case "in API mode the live status goes through PUT /v1/team/queue/status: the same documents, the limit's wait included, and the end with no run" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two" -Area @("src/b")))
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two" -Area @("src/b")))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/status 200" }).Count -ge 4) -Because ($requests -join "; ")
+        $state = Get-FakeApiState -Api $api
+        $history = @($state.statuses)
+        Assert-True -Condition (@($history | Where-Object { @($_.runs).Count -eq 2 }).Count -ge 1) -Because "a document with both runs in flight"
+        Assert-True -Condition (@($history | Where-Object { $_.cycle_id -eq "c1" -and $_.machine -eq "MAIL" }).Count -eq @($history).Count) -Because "every document names the cycle and machine"
+        $waiting = @($history | Where-Object { $_.usage_limit.state -eq "waiting" })
+        Assert-True -Condition (@($waiting).Count -ge 1 -and [string]$waiting[0].usage_limit.resets_at -match '^\d{4}-') -Because "waiting, with the reset time: $($history | ConvertTo-Json -Depth 6 -Compress)"
+        $last = $history[@($history).Count - 1]
+        Assert-Equal -Expected 0 -Actual @($last.runs).Count -Because "the last document has no run"
+        Assert-Equal -Expected "ok" -Actual $last.usage_limit.state -Because "and no limit"
+        Assert-True -Condition ([double]$last.estimated_usd -gt 0) -Because "the estimate is carried"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\status.json"))) -Because "API mode writes no status file"
+    }
+
+    Test-Case "in API mode a failing status PUT is a line under the risks and never stops the cycle" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -FailStatus
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual @((Get-FakeApiState -Api $api).tasks)[0].state -Because "the work was done"
+        Assert-True -Condition ($run.Report -match "canlı durum yazılamadı") -Because "the risk line: $($run.Report)"
     }
 
     Test-Case "in API mode the other machine's fresh lock stops the cycle before it starts anything, and stays theirs" {
