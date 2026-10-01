@@ -394,6 +394,10 @@ def build_stt_report(results: list[SttResult], *, corpus_version: int) -> dict[s
         "questions": by_verdict.get(VERDICT_QUESTION, 0),
         "not_understood": by_verdict.get(VERDICT_NOT_UNDERSTOOD, 0),
         "wrong_device_actions": wrong_device,
+        # The denominator of that count: the cases run over the two enrolled devices, where a
+        # wrong machine can be SEEN. The rest run on the canonical world's single fake device,
+        # so "0 wrong-device" says nothing about them.
+        "wrong_device_observable_cases": sum(1 for r in results if r.world == "devices"),
         # A reading that is NOT the meant one, held at HIGH or MEDIUM: the shape of
         # 2026-09-30 - the wrong thing, with full confidence.
         "confident_wrong_readings": sum(
@@ -454,6 +458,7 @@ def merge_into_owner_report(owner: dict[str, Any] | None, stt: dict[str, Any]) -
                 "questions",
                 "not_understood",
                 "wrong_device_actions",
+                "wrong_device_observable_cases",
                 "confident_wrong_readings",
                 "correct_rate",
                 "acted_rate",

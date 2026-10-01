@@ -346,6 +346,14 @@ def test_the_report_counts_add_up_and_name_the_target():
         report["correct_rate"] >= TARGET_CORRECT_RATE and report["wrong_device_actions"] == 0
     )
     assert report["summary"] in ("TARGET_MET", "BELOW_TARGET", "WRONG_DEVICE")
+    # "0 wrong-device" is a claim about the cases where a wrong machine can be SEEN: the two
+    # enrolled devices. On the canonical world's single fake device it cannot, so the report
+    # carries the denominator beside the count (counted here from the corpus, not the run).
+    observable = [c for c in CASES if c.origin == ORIGIN_REAL or c.device is not None]
+    assert report["wrong_device_observable_cases"] == len(observable) == 11
+    assert report["wrong_device_observable_cases"] == sum(
+        1 for r in results if r.world == "devices"
+    )
     # The trial's own shape, counted apart: another reading, held at HIGH or MEDIUM.
     assert report["confident_wrong_readings"] == sum(
         1
@@ -395,6 +403,7 @@ def test_the_nightly_report_holds_both_corpora_numbers(tmp_path, monkeypatch):
     assert both["stt_corpus"]["total_cases"] == len(CASES)
     assert both["stt_corpus"]["correct_rate"] == stt["correct_rate"]
     assert both["stt_corpus"]["wrong_device_actions"] == stt["wrong_device_actions"]
+    assert both["stt_corpus"]["wrong_device_observable_cases"] == 11
     assert both["stt_corpus"]["target_met"] is stt["target_met"]
     assert merged["stt_corpus"]["results"] == stt["results"]
 
@@ -555,6 +564,8 @@ def test_the_collector_proposes_new_real_renderings_from_a_sample_dump(tmp_path)
     assert proposal["heard_at"] == "2026-10-01"
     assert proposal["times_heard"] == 2
     assert proposal["resolved_intent"] == "none" and proposal["band"] == "low"
+    assert proposal["candidates"] == []  # a list when empty, never {}
+    assert proposal["confirms_derived_case"] is None
     # What the owner MEANT is not in any dump: a person fills it in, the tool never guesses.
     assert proposal["status"] == "needs_owner_meaning"
     for slot in ("meant", "intent", "tool", "application", "device"):
@@ -581,3 +592,113 @@ def test_the_collector_refuses_to_write_the_corpus_itself(tmp_path):
         assert ran.returncode != 0, ran.stdout
     assert _sha256(scratch) == before
     assert not (tmp_path / "proposals.py").exists()
+
+
+def _heard(index: int, sentence: str, **turn: object) -> dict:
+    """One local-mode miss, as the dump holds it."""
+    at = f"2026-10-01T21:{index % 60:02d}:00Z"
+    return {
+        "kind": "session",
+        "session_id": f"5d1c1f5e-0000-4000-8000-{index:012d}",
+        "provider": "local-router",
+        "updated_at": at,
+        "last_utterance": {"at": at, "intent": "none", "chat_question": sentence, **turn},
+    }
+
+
+def _proposals_for(tmp_path: Path, rows: list[dict]) -> dict:
+    dump = tmp_path / "audit-dump.jsonl"
+    lines = [json.dumps(row, ensure_ascii=False) for row in rows]
+    dump.write_text("\n".join([*lines, ""]), encoding="utf-8")
+    out = tmp_path / "stt-proposals.json"
+    ran = _collect("-DumpPath", str(dump), "-OutPath", str(out))
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    return json.loads(out.read_text(encoding="utf-8-sig"))
+
+
+@pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is not on this machine")
+def test_the_collector_reads_the_corpus_as_this_suite_reads_it(tmp_path):
+    """The two halves read each other: every rendering of the corpus goes through the
+    collector. A REAL one is already there; a DERIVED one that production really heard is the
+    best proposal there is - a derived case confirmed - and names the case it confirms."""
+    report = _proposals_for(tmp_path, [_heard(i, c.rendering) for i, c in enumerate(CASES)])
+
+    assert report["corpus_seen"] == {
+        "real_renderings": len(REAL),
+        "derived_renderings": len(DERIVED),
+    }
+    assert report["skipped"]["already_in_corpus"] == len(REAL)
+    assert [(p["rendering"], p["confirms_derived_case"]) for p in report["proposals"]] == [
+        (c.rendering, c.case_id) for c in DERIVED
+    ]
+    for proposal in report["proposals"]:
+        assert proposal["origin"] == ORIGIN_REAL
+        assert proposal["status"] == "needs_owner_meaning"
+
+
+@pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is not on this machine")
+def test_the_collector_matches_whole_renderings_never_a_part_of_the_file(tmp_path):
+    """Red before: "already in the corpus" was a substring search over the file's text, so a
+    sentence inside a longer line, a docstring word or a ``meant`` was silently dropped."""
+    assert "Ofisü" in CORPUS_FILE.read_text(encoding="utf-8")
+    report = _proposals_for(
+        tmp_path,
+        [
+            _heard(1, "hesap makinesini açın"),  # the tail of the real office rendering
+            _heard(2, "Ofisü"),  # a word of the corpus's docstring
+            _heard(3, "Hesap makinesini aç"),  # a real rendering, whole: the one skip
+            _heard(4, "Hesap makinesini aç."),  # its ``meant``: no rendering of the corpus
+            _heard(5, "hesap makinesini aç.", candidates=[{"intent": "app_open"}]),
+            _heard(6, "Hesap makinesini aç."),
+        ],
+    )
+    assert report["skipped"]["already_in_corpus"] == 1
+    # A rendering is its letters: two that differ by a capital are two, heard twice and once.
+    assert [(p["rendering"], p["times_heard"]) for p in report["proposals"]] == [
+        ("hesap makinesini açın", 1),
+        ("Ofisü", 1),
+        ("Hesap makinesini aç.", 2),
+        ("hesap makinesini aç.", 1),
+    ]
+    assert [p["confirms_derived_case"] for p in report["proposals"]] == [None] * 4
+    assert [p["candidates"] for p in report["proposals"]] == [[], [], [], [{"intent": "app_open"}]]
+
+
+@pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is not on this machine")
+def test_the_collector_writes_an_empty_proposal_list_as_a_list(tmp_path):
+    report = _proposals_for(tmp_path, [_heard(1, REAL[2].rendering)])
+    assert report["proposals"] == []
+    assert report["audit"] == {"turns": 0, "by_band": {}, "by_layer": {}}
+
+
+@pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is not on this machine")
+def test_the_collector_never_writes_over_what_it_reads(tmp_path):
+    """Red before: ``-OutPath`` equal to ``-DumpPath`` replaced the dump and exited 0."""
+    dump = tmp_path / "audit-dump.jsonl"
+    dump.write_text(json.dumps(_DUMP_ROWS[0], ensure_ascii=False) + "\n", encoding="utf-8")
+    before = _sha256(dump)
+    for spelling in (str(dump), str(dump).upper(), str(tmp_path / "." / "audit-dump.jsonl")):
+        ran = _collect("-DumpPath", str(dump), "-OutPath", spelling)
+        assert ran.returncode != 0, ran.stdout
+        assert "refusing" in ran.stdout + ran.stderr
+        assert _sha256(dump) == before, spelling
+
+
+@pytest.mark.skipif(_powershell() is None, reason="Windows PowerShell is not on this machine")
+def test_the_collector_keeps_the_owners_sentences_out_of_the_tracked_tree(tmp_path):
+    """Proposals hold raw sentences (KVKK): inside the repository they go under
+    ``state/reports`` - which git ignores - or nowhere."""
+    dump = tmp_path / "audit-dump.jsonl"
+    dump.write_text(json.dumps(_DUMP_ROWS[0], ensure_ascii=False) + "\n", encoding="utf-8")
+    tracked = REPO / "docs" / "stt-corpus-proposals-test.json"
+    ran = _collect("-DumpPath", str(dump), "-OutPath", str(tracked))
+    try:
+        assert ran.returncode != 0, ran.stdout
+        assert not tracked.exists()
+    finally:
+        tracked.unlink(missing_ok=True)
+    ignored = subprocess.run(  # noqa: S603, S607 - git, on this repository
+        ["git", "-C", str(REPO), "check-ignore", "-q", "state/reports/stt-corpus-proposals.json"],
+        check=False,
+    )
+    assert ignored.returncode == 0  # the default path is one git never sees

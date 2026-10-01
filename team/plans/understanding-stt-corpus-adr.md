@@ -1,12 +1,24 @@
 ## ADR (lead numbers it) — ADR-0224 measurement as built: the STT corpus, its judge, and the first number (68.9 %, target NOT met)
 
-**Status.** Accepted (worker, cycle d20261001). Tests and one tool only; no product code changed.
+**Status.** The INSTRUMENT is delivered (worker, cycle d20261001); the TARGET is NOT MET. Tests and
+one tool only; no product code changed. The task card's acceptance "the unit test asserts >= 95 %"
+is therefore not passed, and this text must not be read as if it were: whether the task stays open
+or is re-carded as "instrument delivered, target NOT MET" with the product follow-ups queued is the
+lead's decision, not the worker's.
 
 **The number (2026-10-01, main 858c3e0b, layers 1-3, no layer-2 engine as in production).**
 106 cases: 3 real (the trial of 2026-09-30) + 103 derived. **73 correct = 68.9 %** (72 done at
 HIGH/MEDIUM + 1 question at LOW), **0 wrong-device actions**, 25 not understood (left to the model),
 8 read as ANOTHER intent at HIGH 1.0. The three real sentences: 3/3. By distortion: diacritics
 24/24, invented suffix 18/21, polite 16/29, fused 12/29. **The 95 % target of ADR-0224 is not met.**
+
+**What "0 wrong-device" covers: 11 of 106.** A wrong machine can only be SEEN where two machines
+are enrolled: the 3 real cases and the 8 derived ones that name a machine. The other 95 run on the
+canonical world's single fake device, where every command lands on "the" device - including the 8
+confident wrong readings. The report carries the denominator as `wrong_device_observable_cases`
+beside `wrong_device_actions`, in the run and in the nightly `understanding.stt_corpus` block, so
+the zero is never read as a claim about all 106. Widening it (every acting case over two devices)
+is a follow-up, not done here.
 
 **Decision.**
 - `tests/voice_corpus/stt_corpus.py`: `SttCase(rendering, meant, intent, tool, application, device,
@@ -41,8 +53,17 @@ HIGH/MEDIUM + 1 question at LOW), **0 wrong-device actions**, 25 not understood 
   the owner suite's own, never creating it - and/or writes `PAGENTOS_STT_CORPUS_REPORT`. With no
   owner report the owner number is `NOT_RUN`, never invented.
 - `scripts/voice/collect-stt-corpus.ps1`: parses a read-only JSON-lines dump into a proposals JSON
-  (`origin real`, `status needs_owner_meaning`, meaning slots null); refuses a `.py` or the corpus
-  path as output; `-ShowQuery` prints the one SELECT.
+  (`origin real`, `status needs_owner_meaning`, meaning slots null); `-ShowQuery` prints the one
+  SELECT. "Already in the corpus" is decided on WHOLE renderings, letter for letter, read out of the
+  corpus file's own tables - never a substring of its text (the first version dropped any sentence
+  that occurred inside a longer line, a docstring or a `meant`). A sentence equal to a REAL rendering
+  is skipped; one equal to a DERIVED rendering is proposed with `confirms_derived_case` = that case's
+  id, because a derived case production really heard is the best proposal there is. The reader
+  counts what it parsed against the lines that should have produced it and stops when they differ,
+  and a unit test sends every corpus rendering through the collector and compares the ids with
+  Python's - the two halves read each other. Refused as output: a `.py`, the corpus, the dump it
+  reads, and any path inside the repository outside `state/reports` (git-ignored) - proposals hold
+  raw sentences, possibly other people's (KVKK).
 
 **Found on the way (not fixable inside this task's area).**
 1. Production keeps the owner's sentence in ONE place: `last_utterance.chat_question`, local mode,

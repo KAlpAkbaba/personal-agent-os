@@ -23,14 +23,21 @@
   Output: a proposals JSON. Every proposal is origin "real", carries the day it was heard and
   what the router made of it, and has status "needs_owner_meaning": the intent, the entities
   and the device the owner MEANT are in no dump, so they are left null for a person to fill.
-  A rendering already in the corpus is skipped; the same sentence heard twice is one proposal.
+
+  "Already in the corpus" is decided on WHOLE renderings, letter for letter - never on a part
+  of the corpus file's text. A sentence equal to a REAL rendering is skipped. A sentence equal
+  to a DERIVED rendering is proposed, and names the case it confirms (confirms_derived_case):
+  a derived case production really heard is the best proposal there is. The same sentence
+  heard twice is one proposal; two that differ by a capital letter are two.
 
 .PARAMETER DumpPath
   The JSON-lines dump file (UTF-8).
 
 .PARAMETER OutPath
   Where to write the proposals. Default: state/reports/stt-corpus-proposals-<date>.json.
-  A .py path, or the corpus file itself, is refused.
+  Refused: a .py path, the corpus file, the dump file (the tool never writes over what it
+  reads), and any path inside the repository that is not under state/reports - proposals hold
+  the owner's raw sentences (KVKK) and state/reports is what git ignores.
 
 .PARAMETER CorpusPath
   The corpus file, READ to skip renderings it already holds. Never written.
@@ -63,24 +70,85 @@ select json_build_object('kind','audit','at',created_at,'metadata',metadata_json
 }
 
 if (-not $DumpPath) { throw "collect-stt-corpus: -DumpPath is required (or -ShowQuery)" }
-if (-not (Test-Path -LiteralPath $DumpPath)) { throw "collect-stt-corpus: no dump at $DumpPath" }
 if (-not $CorpusPath) { $CorpusPath = Join-Path $root "services\api\tests\voice_corpus\stt_corpus.py" }
-if (-not (Test-Path -LiteralPath $CorpusPath)) { throw "collect-stt-corpus: no corpus at $CorpusPath" }
 if (-not $OutPath) {
     $stamp = (Get-Date).ToString("yyyy-MM-dd")
     $OutPath = Join-Path $root "state\reports\stt-corpus-proposals-$stamp.json"
 }
 
-# The one thing this tool must never do: write the corpus. Decided before anything is read.
-$outFull = [System.IO.Path]::GetFullPath($OutPath)
-$corpusFull = [System.IO.Path]::GetFullPath($CorpusPath)
+# A relative path means the shell's location, typed or run with -File alike - not the process's
+# working directory, which the two disagree about.
+function Get-FullPath([string]$Path) {
+    $provider = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    return [System.IO.Path]::GetFullPath($provider)
+}
+
+function Test-Under([string]$Path, [string]$Directory) {
+    $prefix = $Directory.TrimEnd('\') + '\'
+    return $Path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+$dumpFull = Get-FullPath $DumpPath
+$corpusFull = Get-FullPath $CorpusPath
+$outFull = Get-FullPath $OutPath
+if (-not (Test-Path -LiteralPath $dumpFull)) { throw "collect-stt-corpus: no dump at $dumpFull" }
+if (-not (Test-Path -LiteralPath $corpusFull)) { throw "collect-stt-corpus: no corpus at $corpusFull" }
+
+# What this tool must never do: write the corpus, or write over what it reads. Decided before
+# anything is read.
 if ($outFull -ieq $corpusFull) { throw "collect-stt-corpus: refusing to write the corpus itself ($outFull)" }
+if ($outFull -ieq $dumpFull) { throw "collect-stt-corpus: refusing to write over the dump it reads ($outFull)" }
 if ([System.IO.Path]::GetExtension($outFull) -ieq ".py") {
     throw "collect-stt-corpus: refusing to write a .py file ($outFull); proposals are JSON, the corpus is edited by hand"
 }
+# Proposals hold the owner's raw sentences (KVKK): inside the repository, only where git ignores.
+$reportsDir = Join-Path $root "state\reports"
+if ((Test-Under $outFull $root) -and -not (Test-Under $outFull $reportsDir)) {
+    throw "collect-stt-corpus: refusing to write raw sentences into the tracked tree ($outFull); inside the repository proposals go under state\reports"
+}
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$corpusText = [System.IO.File]::ReadAllText($corpusFull, $utf8)
+$ordinal = [System.StringComparer]::Ordinal
+
+# The corpus, read as its own file writes it: the WHOLE renderings, real and derived apart.
+# Every count is checked against the lines that should have produced it, so a corpus written in
+# a shape this does not read stops the tool instead of quietly matching less.
+function Read-Corpus([string]$Text) {
+    $real = New-Object 'System.Collections.Generic.HashSet[string]' -ArgumentList $ordinal
+    foreach ($m in [regex]::Matches($Text, '(?m)^\s*rendering="([^"\\]*)",\s*$')) { [void]$real.Add($m.Groups[1].Value) }
+    $realLines = [regex]::Matches($Text, '(?m)^\s*rendering=["''(]').Count
+    if ($real.Count -eq 0 -or $real.Count -ne $realLines) {
+        throw "collect-stt-corpus: read $($real.Count) real rendering(s) from $realLines 'rendering=' line(s); the corpus is not in the shape this tool reads"
+    }
+
+    $names = @{}
+    foreach ($m in [regex]::Matches($Text, '(?m)^(DISTORTION_\w+): Final = "(\w+)"\s*$')) { $names[$m.Groups[1].Value] = $m.Groups[2].Value }
+    $block = [regex]::Match($Text, '(?ms)^_DERIVED: Final[^\n]* = \{\r?\n(.*?)^\}')
+    if (-not $block.Success) { throw "collect-stt-corpus: no _DERIVED table in the corpus" }
+    $body = $block.Groups[1].Value
+
+    $derived = New-Object 'System.Collections.Generic.Dictionary[string,string]' -ArgumentList $ordinal
+    $base = $null
+    $token = '(?m)^ {4}"([^"\\]+)": \{|^ {8}(DISTORTION_\w+): (?:"([^"\\]*)"|\(\s*((?:"[^"\\]*"\s*)+)\)),'
+    foreach ($m in [regex]::Matches($body, $token)) {
+        if ($m.Groups[1].Success) { $base = $m.Groups[1].Value; continue }
+        $name = $m.Groups[2].Value
+        if (-not $base -or -not $names.ContainsKey($name)) { throw "collect-stt-corpus: cannot place the corpus entry '$($m.Value)'" }
+        $rendering = $m.Groups[3].Value
+        if ($m.Groups[4].Success) {
+            # Python joins neighbouring literals inside the parentheses into one sentence.
+            $rendering = -join ([regex]::Matches($m.Groups[4].Value, '"([^"\\]*)"') | ForEach-Object { $_.Groups[1].Value })
+        }
+        $derived[$rendering] = "stt.derived.$base.$($names[$name])"
+    }
+    $derivedLines = [regex]::Matches($body, '(?m)^ {8}DISTORTION_\w+:').Count
+    if ($derived.Count -eq 0 -or $derived.Count -ne $derivedLines) {
+        throw "collect-stt-corpus: read $($derived.Count) derived rendering(s) from $derivedLines entry line(s); the corpus is not in the shape this tool reads"
+    }
+    return @{ real = $real; derived = $derived }
+}
+
+$corpus = Read-Corpus ([System.IO.File]::ReadAllText($corpusFull, $utf8))
 
 function Get-Day([object]$Value) {
     $text = [string]$Value
@@ -88,13 +156,15 @@ function Get-Day([object]$Value) {
     return $null
 }
 
-$proposals = [ordered]@{}
+# Keyed letter for letter: [ordered]@{} would fold "Ac" and "ac" into one rendering.
+$proposals = New-Object System.Collections.Specialized.OrderedDictionary -ArgumentList $ordinal
+$confirmed = 0
 $skipped = [ordered]@{ already_in_corpus = 0; no_sentence_kept = 0; unreadable_lines = 0 }
 $auditTurns = 0
 $byBand = [ordered]@{}
 $byLayer = [ordered]@{}
 
-foreach ($line in [System.IO.File]::ReadAllLines($DumpPath, $utf8)) {
+foreach ($line in [System.IO.File]::ReadAllLines($dumpFull, $utf8)) {
     if (-not $line.Trim()) { continue }
     $row = $null
     try { $row = $line | ConvertFrom-Json } catch { $row = $null }
@@ -114,7 +184,7 @@ foreach ($line in [System.IO.File]::ReadAllLines($DumpPath, $utf8)) {
     $turn = $row.last_utterance
     $sentence = if ($turn -and $turn.chat_question) { ([string]$turn.chat_question).Trim() } else { "" }
     if (-not $sentence) { $skipped.no_sentence_kept += 1; continue }
-    if ($corpusText.Contains($sentence)) { $skipped.already_in_corpus += 1; continue }
+    if ($corpus.real.Contains($sentence)) { $skipped.already_in_corpus += 1; continue }
 
     $day = Get-Day $turn.at
     if (-not $day) { $day = Get-Day $row.updated_at }
@@ -124,6 +194,12 @@ foreach ($line in [System.IO.File]::ReadAllLines($DumpPath, $utf8)) {
         if ($day -and (-not $known.heard_at -or $day -lt $known.heard_at)) { $known.heard_at = $day }
         continue
     }
+    # A derived rendering production really heard is NOT "already there": it is confirmed.
+    $confirms = $null
+    if ($corpus.derived.ContainsKey($sentence)) { $confirms = $corpus.derived[$sentence]; $confirmed += 1 }
+    # Assigned as a statement: an empty array out of an if-EXPRESSION is written as {}.
+    $candidates = @()
+    if ($turn.candidates) { $candidates = @($turn.candidates) }
     $proposals[$sentence] = [ordered]@{
         rendering       = $sentence
         origin          = "real"
@@ -133,7 +209,9 @@ foreach ($line in [System.IO.File]::ReadAllLines($DumpPath, $utf8)) {
         resolved_intent = $turn.intent
         band            = $turn.band
         confidence      = $turn.confidence
-        candidates      = if ($turn.candidates) { @($turn.candidates) } else { @() }
+        candidates      = $candidates
+        # The derived case this real sentence is, letter for letter; null for a new one.
+        confirms_derived_case = $confirms
         # What the owner MEANT is in no dump. A person fills these in; the tool never guesses.
         meant           = $null
         intent          = $null
@@ -147,7 +225,8 @@ foreach ($line in [System.IO.File]::ReadAllLines($DumpPath, $utf8)) {
 $report = [ordered]@{
     tool         = "collect-stt-corpus"
     generated_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    dump         = [System.IO.Path]::GetFileName($DumpPath)
+    dump         = [System.IO.Path]::GetFileName($dumpFull)
+    corpus_seen  = [ordered]@{ real_renderings = $corpus.real.Count; derived_renderings = $corpus.derived.Count }
     note         = "PROPOSALS ONLY. Nothing here is in the corpus until a person adds it to stt_corpus.py with the meaning the owner confirms."
     proposals    = @($proposals.Values)
     skipped      = $skipped
@@ -158,7 +237,7 @@ $outDir = Split-Path -Parent $outFull
 if ($outDir -and -not (Test-Path -LiteralPath $outDir)) { New-Item -ItemType Directory -Force $outDir | Out-Null }
 [System.IO.File]::WriteAllText($outFull, ($report | ConvertTo-Json -Depth 8), $utf8)
 
-Write-Output ("collect-stt-corpus: {0} proposal(s) -> {1}" -f $proposals.Count, $outFull)
+Write-Output ("collect-stt-corpus: {0} proposal(s), {1} of them a derived case confirmed -> {2}" -f $proposals.Count, $confirmed, $outFull)
 Write-Output ("   skipped: {0} already in the corpus, {1} with no sentence kept, {2} unreadable line(s); {3} audit turn(s) counted" -f `
     $skipped.already_in_corpus, $skipped.no_sentence_kept, $skipped.unreadable_lines, $auditTurns)
 exit 0
