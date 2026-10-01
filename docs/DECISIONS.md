@@ -16987,6 +16987,28 @@ showed eight idle seats.
 script; the usage limit as the one stop (with the model chain of addendum 7 once built);
 the researcher at most every six hours.
 
+### ADR-0214 addendum 9 (2026-10-01): the owner is asked about NEW ideas only; what the roadmap already names is built without asking
+
+The owner: "roadmap'deki var olan şeyler için benden onay istenmesin, sadece yeni fikirler için
+onay istenilsin; onay verilirse de roadmap'e konulsun. Araştırmacının görevi de yeni fikir bulmak."
+
+* **The idea gate is for what the roadmap does not name.** An item of ROADMAP "The order", of the
+  v1 master checklist, or of "Approved ideas" is cut into cards by the lead (or the feeder) and
+  built - no question, no entry in the Onay Merkezi's idea list. A defect found on the way is
+  part of the work it was found in.
+* **The researcher looks for what is NEW.** A proposal that restates a roadmap item, a queued
+  task or an earlier proposal is not a proposal: the researcher names it in its report as "already
+  on the roadmap: <row>" and the lead cards it. What it brings to the owner is something the
+  roadmap does not have yet - a capability, a method, a lesson turned into a mechanism - with
+  the three "Bugün -> Bununla" examples.
+* **An approved idea becomes a roadmap line** (addendum 8), and from then on it is roadmap work
+  like any other: its cards need no further approval.
+* **What still reaches the owner regardless** (CLAUDE.md "Asking the owner"): a paid account or
+  credential, a login, an irreversible or data-losing action, a new external dependency.
+* **The release gate is unchanged by this addendum** until the owner says otherwise: the lead
+  asked him whether "no approval for roadmap work" also means releasing it without his word;
+  until he answers, a release waits for him as before.
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere

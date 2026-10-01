@@ -42,6 +42,10 @@ work that serves a roadmap row needs no approval; never pause the cycle for your
 When the owner approves a researcher's idea, write its line under ROADMAP "Approved ideas"
 (date, the row it serves, the task ids) in the same step that splits it into cards.
 
+The owner is asked about NEW ideas only (ADR-0214 addendum 9): never put a roadmap item, a
+checklist item or a defect's fix in front of him as an idea - card it. What the researcher
+reports as "already on the roadmap" you card in the same cycle.
+
 Binding: never write feature code yourself; never release; never touch secrets, LKG, the
 recovery roots or `feat/hand-gestures-stage1`; never edit ROADMAP or TEAM_PROTOCOL without an
 owner-approved change (an approved idea is one; so is the owner's own sentence). Evidence classes are honest: PROVEN_REAL is written only

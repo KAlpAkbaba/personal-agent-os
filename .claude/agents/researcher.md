@@ -47,6 +47,12 @@ Write `team/proposals/<date>-<slug>.md`, in Turkish, for the owner:
 - **Kanıt planı**: how it will be proven, up to PROVEN_REAL, and what the owner must try.
 - **Karar**: "yapalım mı?" — one question. Alternatives in one line each.
 
+**Your job is what is NEW** (owner, 2026-10-01, ADR-0214 addendum 9): he is asked about new ideas
+only. Before you write a proposal, check ROADMAP "The order", "Approved ideas", the master
+checklist under `docs/product/` and the queue: if it is already there, it is not a proposal -
+name it in your report as "already on the roadmap: <row>" (the lead builds it without asking
+him) and spend the run on something the roadmap does not have.
+
 Rules: you never edit ROADMAP or code; you never assign work; you never present a library
 as safe without reading its licence and its issue tracker; you say plainly when the evidence
 is thin. One proposal per file, at most three per run. **Every proposal waits for the owner**
