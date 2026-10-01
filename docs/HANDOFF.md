@@ -15,9 +15,15 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**DİKKAT (2026-10-01 16:06): döngü görevi `PagentOS Team Nightly Cycle` lead tarafından GEÇİCİ OLARAK DEVRE DIŞI —
-`integrate/adr0224-02` üzerinde bağlama + tam kapı koşarken dev stack ve ana kopya sakin kalsın diye. Kapı bitince
-`Enable-ScheduledTask -TaskName 'PagentOS Team Nightly Cycle'`. Oturum yarıda kaldıysa: görevi yeniden etkinleştir.**
+**KURAL (sahip, 2026-10-01, ADR-0214 ek 8): hiçbir ajan durmasın, iş roadmap'ten gelsin, onaylanan fikir ROADMAP
+"Approved ideas"e yazılsın. Döngü görevi lead'in kapısı için DURAKLATILMAZ (16:06'da durdurmuştum, 16:33'te
+açtım; entegrasyon testlerinin veritabanı kilidi yan yana koşuyu zaten sıraya koyuyor). Görev: her 30 dk,
+`-MaxParallel 3 -DailyId -ResearchEveryHours 6 -Base team/nightly/lead`, veritabanı kipi. Kuyrukta çalıştırılabilir
+iş 3'ün altına düşerse lead ROADMAP "The order"dan kart keser (otomatiği: `lead-roadmap-feeder`).**
+**ŞU AN: tam kapı `integrate/adr0224-02` @ `2c509b16` üzerinde ANA KOPYADA (detached HEAD) koşuyor; lead dalı
+`.claude/worktrees/lead-docs` ağacında düzenleniyor. Kapı yeşilse: main'e al, işleri `awaiting_release` yap,
+sahibin yayın onayını iste (ADR-0224 katman 3, 'ekip ne yapıyor?', cihaz damgası). Sonra ana kopyayı
+`team/nightly/lead`'e geri al ve `lead-docs` ağacını kaldır.**
 **ÜRETİM: main `cc9ca31e274d507ad0fadaf34b54c552252124a7` (2026-10-01 11:47 UTC, api-green), LKG `0f794d97` (sahip:
 `aa35fcf3`'ün düşmesi kabul, elle dokunma), pin = RELEASE, reconcile OK, şema `0063_team_state`,
 `PAGENTOS_TEAM_STORE=database`. Kapı 35/35 (`0af001fc`). Ofis sayfası KABUL EDİLDİ: sahibin ekran görüntüsü

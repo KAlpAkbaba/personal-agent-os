@@ -16958,6 +16958,35 @@ the seat's panel, the two percentages and the fallback toggle in the top bar).
 in a form a script can read. Nobody computes or estimates one: until a real source is found
 the page says "bilinmiyor", never "%0".
 
+### ADR-0214 addendum 8 (2026-10-01): no agent idles; the roadmap is where work comes from; an approved idea becomes a roadmap line
+
+The owner: "Bundan sonra hiçbir ajan mümkün olduğunca durmasın, mümkün olduğunca roadmap'ten
+ilerleyelim ve araştırmacının yeni fikirleri onaylanırsa bu fikirler roadmap'e eklensin."
+Said an hour after the lead had paused the scheduled cycle for its own gate and the Ofis page
+showed eight idle seats.
+
+**What it binds.**
+* *Nobody idles when there is work the roadmap names.* The cycle is not paused for the
+  lead's gate (the integration suite's database lock already serialises a gate beside a
+  cycle; a gate step that loses the wait is run again - that cost is accepted). A seat is
+  empty only when the queue has nothing runnable AND the roadmap's next item cannot be cut
+  into a card without the owner (a new dependency, a paid account, an irreversible action).
+* *The queue is fed from the roadmap.* When fewer runnable tasks remain than the cycle has
+  worker seats, the lead cuts the next items of `docs/ROADMAP.md` "The order" (and the v1
+  master checklist under `docs/product/`) into cards - roadmap-serving work is approved in
+  advance (addendum 2); the card names the row. Until the feeder exists
+  (`lead-roadmap-feeder`, queued) the lead in session does it by hand.
+* *An approved idea is written into the roadmap by the lead, at approval.* The researcher's
+  proposal the owner approves gets a line under ROADMAP "Approved ideas": date, the row it
+  serves (or the new line it opens), the task ids, its state. A deferred or rejected idea is
+  not added; it stays in the queue with the owner's reason. This is the owner-approved
+  change that `lead.md` requires before ROADMAP is edited.
+* *Three worker seats are used:* the scheduled cycle runs with `-MaxParallel 3`.
+
+**What does not change.** The three owner gates; no release and no merge to main by a
+script; the usage limit as the one stop (with the model chain of addendum 7 once built);
+the researcher at most every six hours.
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere

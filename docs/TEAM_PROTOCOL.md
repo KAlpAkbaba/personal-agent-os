@@ -148,6 +148,11 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
 - **The cycle runs all day** (addendum 6): every 30 minutes, one at a time, one integration
   branch a day, the researcher at most every six hours.
 
+- **Nobody idles; the roadmap feeds the queue; an approved idea becomes a roadmap line**
+  (addendum 8): the cycle is never paused for the lead's gate; when fewer runnable tasks
+  remain than there are worker seats the lead cuts the roadmap's next items into cards; the
+  lead writes an approved idea under ROADMAP "Approved ideas" when the owner approves it.
+
 ## 10. Stop conditions
 
 A cycle stops itself when: the usage limit is hit and the tool did not say when it lifts
