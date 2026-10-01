@@ -1160,3 +1160,19 @@ browser, web 117 files / 2 041 tests. The first gate run was 33/35 and found two
 | 38.15 | Found in production: the team lock's version did not fit VARCHAR(32) on PostgreSQL (HTTP 500 on the first cycle in database mode) | `PROVEN_REAL` | fixed in `0af001fc`, released as main `cc9ca31e274d507ad0fadaf34b54c552252124a7` 2026-10-01 11:47 UTC (gate 35/35); `services/api/tests/integration/test_team_state_postgres.py` RED with production's error before the fix; the cycle `adr0224-02` then took the lock on the real Cloud Core |
 | 38.16 | A database change only SQLite has seen does not pass the gate | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_postgres_coverage_ratchet.py` (mutation: `team_state`'s Postgres test removed -> 2 RED); 51 of 87 tables are frozen debt (`postgres-coverage-debt`) |
 | 38.17 | Found on the real host: the maintenance preflight asked for the operation lock once and the minute reconcile holds it for seconds | `PROVEN_REAL` | one preflight in forty said "held" (2026-10-01 10:44 UTC); with `flock -w 45`: 45 preflights across more than a minute, 0 failures; `scripts/tests/maintenance-reboot.tests.ps1` (28) |
+
+## Stage 39 — adr0224-02: ADR-0224 layer 3, the voice summary of the team, the operator's device stamp; the first release under the standing rule
+
+Released 2026-10-01 16:27 UTC as main `858c3e0bf974f1984826f4b8f37e7dc8b9e12186` (api-blue; previous
+`cc9ca31e…` kept as last known good; recovery pin = RELEASE; reconcile `RECONCILE OK`; team store
+`database`; the maintenance preflight `PREFLIGHT OK` on the new release). Full gate 35/35 on
+`2c509b16` (the merge commit's tree is identical): 13 960 unit. The owner's word for it is the
+standing rule of the same hour: "Kapı yeşilse otomatik yayınla" (ADR-0214 addendum 9).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 39.1 | ADR-0224 layer 3: high acts, medium acts with a read-back, low asks one question and runs no tool; the model never fills a device | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_understanding_policy.py`, `test_understanding_relay.py` (through the real relay); in production the policy runs over the RULE candidate only - the semantic engine is not configured at start-up (`understanding-engine-startup`, queued) |
+| 39.2 | The owner's misheard sentence "Ofisü bilgisayarında hesap makinesini açın" launches on the office PC with a read-back | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_operator_app_open_named_device.py::test_relay_the_owners_misheard_sentence_reaches_the_office_and_is_read_back`; said from MAIL with Calculator opening on GMKADIRAKBABA: `READY_FOR_OWNER` |
+| 39.3 | "Ekip ne yapıyor?" answers one paragraph from the Ofis page's data; the tool is registered, open, and reads the database store | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_speech.py`, `test_voice_intents_team_status.py`, `test_adr022402_wiring.py`; asked by voice during a cycle: `READY_FOR_OWNER` |
+| 39.4 | The operator's ledger rows carry the device the action ran on | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_ledger_device_callers.py`; "ofiste ne yaptın" after an operator action on the office PC: `READY_FOR_OWNER` |
+| 39.5 | A release of gated roadmap work without a question, verified: RELEASE, pin, reconcile, health, last known good | `PROVEN_REAL` | 2026-10-01 16:27 UTC: `RELEASE OK: 858c3e0b… is running as api-blue`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-blue is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over; done by the lead by hand - the script (`cycle-auto-release`) is queued |

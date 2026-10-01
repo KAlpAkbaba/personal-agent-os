@@ -15,39 +15,28 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**KURAL (sahip, 2026-10-01, ADR-0214 ek 8): hiçbir ajan durmasın, iş roadmap'ten gelsin, onaylanan fikir ROADMAP
-"Approved ideas"e yazılsın. Döngü görevi lead'in kapısı için DURAKLATILMAZ (16:06'da durdurmuştum, 16:33'te
-açtım; entegrasyon testlerinin veritabanı kilidi yan yana koşuyu zaten sıraya koyuyor). Görev: her 30 dk,
-`-MaxParallel 3 -DailyId -ResearchEveryHours 6 -Base team/nightly/lead`, veritabanı kipi. Kuyrukta çalıştırılabilir
-iş 3'ün altına düşerse lead ROADMAP "The order"dan kart keser (otomatiği: `lead-roadmap-feeder`).**
-**ŞU AN: tam kapı `integrate/adr0224-02` @ `2c509b16` üzerinde ANA KOPYADA (detached HEAD) koşuyor; lead dalı
-`.claude/worktrees/lead-docs` ağacında düzenleniyor. Kapı yeşilse: main'e al, işleri `awaiting_release` yap,
-sahibin yayın onayını iste (ADR-0224 katman 3, 'ekip ne yapıyor?', cihaz damgası). Sonra ana kopyayı
-`team/nightly/lead`'e geri al ve `lead-docs` ağacını kaldır.**
-**ÜRETİM: main `cc9ca31e274d507ad0fadaf34b54c552252124a7` (2026-10-01 11:47 UTC, api-green), LKG `0f794d97` (sahip:
-`aa35fcf3`'ün düşmesi kabul, elle dokunma), pin = RELEASE, reconcile OK, şema `0063_team_state`,
-`PAGENTOS_TEAM_STORE=database`. Kapı 35/35 (`0af001fc`). Ofis sayfası KABUL EDİLDİ: sahibin ekran görüntüsü
-`docs/evidence/office-page-real-cycle-2026-10-01.png` (QUALIFICATION 38.14 PROVEN_REAL).**
-**KUYRUK ARTIK VERİTABANINDA (ADR-0222): doğrusu `GET http://100.90.158.26:8001/v1/team/queue`; `team/queue.json`
-yalnız tohum anlık görüntüsü, ESKİDİR. İş eklemek: `Invoke-TeamApi PUT /v1/team/queue/tasks/<id>` (belirteç
-`%LOCALAPPDATA%/PagentOS/team-queue.token`; `NativeProcess.ps1`+`TeamQueue.ps1`+`HttpJson.ps1` dot-source).
-Döngü: `cycle.ps1 -CycleId <id> -Base main -MaxParallel 3 -Research -QueueUrl http://100.90.158.26:8001
--QueueToken <belirteç dosyası>`. **
-**SÜREKLİ DÖNGÜ (sahip 2026-10-01, ADR-0214 ek 6): görev zamanlayıcı `cycle.ps1`'i 30 DAKİKADA BİR başlatır
-(`-DailyId -ResearchEveryHours 6 -Base team/nightly/lead`, veritabanı kipi); günün entegrasyon dalı `integrate/dYYYYMMDD`.
-Lead'in işi: o dalda bağlama + tam kapı + main (kuyruktaki `cycle-auto-integrate` bunu otomatikleştirecek). Onay
-Merkezi döngü koşarken karar reddediyor — düzeltmesi `proposals-on-cloud-core` içinde; 'Detay' görünümü
-`approvals-detail-view`. **
-**Fikir kararları (sahip, 2026-10-01, sohbetten; lead kuyruğa işledi): `real-host-rehearsal` ONAYLI + ÖNCELİKLİ;
-`stt-engines-measure` ONAYLI, YALNIZ ÖLÇÜM (Soniox hesabı/benimseme AYRI onay); Home Assistant ERTELENDİ (ev cihaz
-envanteri önce). Onay Merkezi düzeltmesi (`proposals-on-cloud-core`) kuyruğun başında; o yayınlanana kadar sahip
-kararlarını sohbetten iletir, lead `PUT /v1/team/queue/tasks/<id>` ile işler. Kuyrukta öncelik alanı yok: sıra
-`created_at`'tir (protokol boşluğu).**
-**DÖNGÜ `adr0224-02` ÇALIŞIYOR (11:48 UTC başladı, veritabanı kipi): understanding-threshold-policy (ADR-0224 katman 3),
-office-voice-summary, ledger-device-callers. Bitince LEAD: `integrate/adr0224-02` üzerinde bağlama (araç kaydı
-`team.status`, eşik dosyası paket verisi), tam kapı, main, sahibin YAYIN ONAYI. Sonra bekleyenler: -corrections-memory,
--stt-corpus (katman 3 main'e girince), researcher-every-cycle, proposals-on-cloud-core, office-page-polish,
-postgres-coverage-debt.**
+**ÜRETİM: main `858c3e0bf974f1984826f4b8f37e7dc8b9e12186` (2026-10-01 16:27 UTC, api-blue), LKG `cc9ca31e`, pin = RELEASE,
+reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`. Kapı 35/35 (`2c509b16`). QUALIFICATION Stage 39.**
+**KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
+olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
+dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
+3 çalışan koltuğu, lead'in kapısı için DURAKLATILMAZ; çalıştırılabilir iş 3'ün altına düşerse lead roadmap'ten kart keser;
+(d) araştırmacı yalnız roadmap'te OLMAYANI getirir; (e) Postgres/gerçek altyapı NOT_RUN ile merge yok.**
+**OTOMATİK ZİNCİR kuyrukta (bitene kadar lead elle yapar): `lead-roadmap-feeder` → `cycle-seat-pool` →
+`cycle-auto-integrate` → `cycle-auto-release`. DİKKAT: döngü süreci başladığı andaki koda ve ayara bağlı kalır ve iş
+oldukça bitmez; ayar/kod değişince `team/stop.flag` ile güvenli durdur, yenisi kendiliğinden başlar (2026-10-01'de 3 saat
+eski 2 koltuklu süreç böyle yenilendi).**
+**KUYRUK VERİTABANINDA (ADR-0222): doğrusu `GET http://100.90.158.26:8001/v1/team/queue`; `team/queue.json` ESKİ tohum.
+İş eklemek / karar işlemek: `Invoke-TeamApi PUT /v1/team/queue/tasks/<id>` (belirteç `%LOCALAPPDATA%/PagentOS/team-queue.token`;
+`NativeProcess.ps1`+`TeamQueue.ps1`+`HttpJson.ps1` dot-source). Sıra `created_at` (öncelik alanı yok).
+Onay Merkezi düğmeleri döngü koşarken KİLİTLİ (düzeltmesi `proposals-on-cloud-core` + `approvals-detail-view`,
+yolda): o zamana kadar sahip kararını sohbetten söyler, lead işler.**
+**BEKLEYEN: `integrate/d20261001` üzerinde merged işler (real-host-rehearsal, office-page-polish, …) → lead bağlama +
+tam kapı + main + otomatik yayın. Roadmap sıra 2'den beş ürün kartı kesiliyor (planlayıcı). Web kabuğu:
+`preview_start web-cloud` (port 3000; 3210 yerel API'ye bağlıdır, sahibin kimliğini TANIMAZ). Sahibin deneyecekleri:
+38.3-38.5 ve 39.2-39.4'ün cümleleri.**
+**BAKIM PENCERESİ bu akşam 22:00 İstanbul (19:00 UTC), sunucunun kendi zamanlayıcısında; rapor görevi 22:40/23:10;
+ayrıntı ADR-0223 eki. Ön kontrol yeni sürümle `PREFLIGHT OK`.**
 **MODEL POLİTİKASI (sahip, 2026-10-01, ADR-0214 ek 7): `team/models.json` — lead/inspector `claude-fable-5-1`,
 worker/integrator/researcher `claude-opus-5-5`; `cycle.ps1` her koşuyu `--model` ile başlatır (YÜRÜRLÜKTE). Düşüş
 zinciri (Fable→Opus→Sonnet), denetleyici ≥ işçi kuralı, Ofis'te seçici + limit yüzdeleri: kuyrukta
