@@ -114,13 +114,20 @@ try {
 
         # ----------------------------------------------------------------- 3. the run
         if (-not (Test-Path $EvidenceDir)) { New-Item -ItemType Directory -Force $EvidenceDir | Out-Null }
-        $stamp = (Get-Date).ToString("yyyy-MM-dd")
-        $evidencePath = Join-Path $EvidenceDir "stt-compare-$stamp.json"
-        if (Test-Path -LiteralPath $evidencePath) {
-            # an earlier run of the same day is evidence too: never overwritten
-            $stamp = (Get-Date).ToString("yyyy-MM-dd-HHmmss")
-            $evidencePath = Join-Path $EvidenceDir "stt-compare-$stamp.json"
+        # An earlier run is evidence too: never overwritten. The day's name first, then the
+        # second's, then a counter - two runs in one second chose the same timestamped name
+        # and the later one replaced the earlier. The .md beside it is checked as well. The
+        # comparison itself takes the name exclusively before any engine is called, so two
+        # runs racing to one free name end with one report and one refusal (exit 2).
+        $now = Get-Date
+        $name = "stt-compare-" + $now.ToString("yyyy-MM-dd")
+        $attempt = 0
+        while ((Test-Path -LiteralPath (Join-Path $EvidenceDir "$name.json")) -or (Test-Path -LiteralPath (Join-Path $EvidenceDir "$name.md"))) {
+            $attempt++
+            $name = "stt-compare-" + $now.ToString("yyyy-MM-dd-HHmmss")
+            if ($attempt -gt 1) { $name = "$name-$attempt" }
         }
+        $evidencePath = Join-Path $EvidenceDir "$name.json"
         $cliArgs = $prefix + @("--folder", $Folder, "--out", $evidencePath)
         if ($Engines) { $cliArgs += @("--engines", $Engines) }
         if ($SonioxEu) { $cliArgs += @("--soniox-url", "wss://stt-rt.eu.soniox.com/transcribe-websocket") }
@@ -138,7 +145,7 @@ finally {
 }
 
 if ($exit -ne 0) {
-    Write-Host "!! the comparison exited with code $exit (2 = bad input: the folder or its manifest)"
+    Write-Host "!! the comparison exited with code $exit (2 = bad input: the folder, its manifest, or a report name that is taken)"
     exit $exit
 }
 if (-not $evidencePath) { exit 0 }

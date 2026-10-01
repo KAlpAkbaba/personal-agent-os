@@ -242,6 +242,54 @@ def test_an_engine_that_fails_every_file_is_failed_not_zero(tmp_path: Path) -> N
     assert row["wer"] is None and row["files_failed"] == 1
 
 
+def test_an_unexpected_exception_on_one_file_keeps_the_row_and_the_report(tmp_path: Path) -> None:
+    # A model that fails to load, a 200 body that is not JSON: not a VoiceError. The engines
+    # before it already received the audio, so the report that names them must still exist.
+    refs = ["ISI İL", "Hesap makinesini aç.", OFIS_REF]
+    folder = _folder(tmp_path, refs)
+    first = ScriptedSTT({ref: ref for ref in refs})
+    broken = ScriptedSTT(
+        {
+            "ISI İL": "ısı il",
+            "Hesap makinesini aç.": RuntimeError("model download failed for key sk-not-for-print"),
+            OFIS_REF: OFIS_HEARD,
+        }
+    )
+    report = sc.run_comparison(
+        folder,
+        [sc.Engine("a:first", first, destination="A"), sc.Engine("b:broken", broken, "", "B")],
+    )
+    row = _row(report, "b:broken")
+    assert row["status"] == sc.STATUS_RAN
+    assert (row["files_ran"], row["files_failed"]) == (2, 1)
+    # the rates are over the two files that ran: 3 edits over 2 + 5 words.
+    assert (row["word_edits"], row["ref_words"]) == (3, 7)
+    assert row["errors"] == [{"id": "02.wav", "error_class": "unexpected: RuntimeError"}]
+    assert report["items"][1]["results"]["b:broken"] == {"error": "unexpected: RuntimeError"}
+    # the file after the broken one was still sent, and the engine before it is untouched
+    assert len(broken.calls) == 3
+    assert _row(report, "a:first")["files_ran"] == 3
+    assert [entry["engine"] for entry in report["audio_sent_to"]] == ["a:first", "b:broken"]
+    # the type is named; the message (a path, a key, a piece of a transcript) is not kept
+    assert "sk-not-for-print" not in json.dumps(report, ensure_ascii=False)
+
+
+def test_an_engine_that_raises_on_every_file_is_failed_and_still_named(tmp_path: Path) -> None:
+    folder = _folder(tmp_path, ["ISI İL", "iki"])
+    broken = ScriptedSTT({"ISI İL": OSError("disk"), "iki": ValueError("not json")})
+    report = sc.run_comparison(folder, [sc.Engine("a", broken, destination="Acme (acme.io)")])
+    row = _row(report, "a")
+    assert row["status"] == sc.STATUS_FAILED
+    assert (row["files_ran"], row["files_failed"], row["wer"]) == (0, 2, None)
+    assert [error["error_class"] for error in row["errors"]] == [
+        "unexpected: OSError",
+        "unexpected: ValueError",
+    ]
+    # it was handed the audio before it broke: the summary says where the audio went
+    assert report["audio_sent_to"] == [{"engine": "a", "destination": "Acme (acme.io)"}]
+    assert "Acme (acme.io)" in "\n".join(report["summary_tr"])
+
+
 def test_latency_percentiles_come_from_the_injected_clock(tmp_path: Path) -> None:
     refs = ["bir", "iki", "üç"]
     folder = _folder(tmp_path, refs)
@@ -321,6 +369,23 @@ def test_a_manifest_file_outside_the_folder_is_refused(tmp_path: Path) -> None:
     )
     with pytest.raises(sc.ManifestError, match="outside"):
         sc.load_manifest(folder)
+
+
+def test_a_manifest_saved_with_a_byte_order_mark_is_read(tmp_path: Path) -> None:
+    # Windows PowerShell 5.1 and Notepad write UTF-8 WITH a BOM; the owner edits it there.
+    folder = _folder(tmp_path, ["ISI İL", "Iğdır'ın hava durumu nasıl?"])
+    path = folder / sc.MANIFEST_NAME
+    text = path.read_text(encoding="utf-8")
+    path.write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+    assert path.read_bytes()[:3] == b"\xef\xbb\xbf"
+    language, recordings = sc.load_manifest(folder)
+    assert language == "tr-TR"
+    assert [(r.item_id, r.reference) for r in recordings] == [
+        ("01.wav", "ISI İL"),
+        ("02.wav", "Iğdır'ın hava durumu nasıl?"),
+    ]
+    engine = ScriptedSTT({"ISI İL": "ısı il", "Iğdır'ın hava durumu nasıl?": "ığdırın hava durumu"})
+    assert _row(sc.run_comparison(folder, [sc.Engine("a", engine)]), "a")["files_ran"] == 2
 
 
 def test_a_manifest_item_without_a_reference_is_refused(tmp_path: Path) -> None:
@@ -404,10 +469,12 @@ def test_cli_engine_filter_keeps_the_unselected_rows(
     report = json.loads(out.read_text(encoding="utf-8"))
     assert _row(report, "openai:whisper-1")["reason"] == "not configured"
     assert _row(report, "soniox:stt-rt-v5")["reason"] == "not selected"
+    other = tmp_path / "r2.json"
     assert (
-        sc.main(["--folder", str(folder), "--out", str(out), "--engines", "nope"])
+        sc.main(["--folder", str(folder), "--out", str(other), "--engines", "nope"])
         == sc.EXIT_BAD_INPUT
     )
+    assert not other.exists()  # the name it held is given back: no empty "report"
 
 
 def test_cli_without_a_manifest_is_bad_input_and_writes_nothing(
@@ -421,6 +488,65 @@ def test_cli_without_a_manifest_is_bad_input_and_writes_nothing(
     assert not out.exists()
     assert sc.main(["--folder", str(folder), "--write-template"]) == sc.EXIT_OK
     assert (folder / sc.TEMPLATE_NAME).exists()
+
+
+def _one_scripted_engine(monkeypatch: pytest.MonkeyPatch, engine: ScriptedSTT) -> None:
+    monkeypatch.setattr(
+        sc, "configured_engines", lambda env, **_kw: [sc.Engine("a", engine, destination="A")]
+    )
+
+
+def test_cli_out_in_a_missing_directory_is_refused_before_any_engine_is_called(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = _folder(tmp_path, ["ISI İL"])
+    engine = ScriptedSTT({"ISI İL": "ısı il"})
+    _one_scripted_engine(monkeypatch, engine)
+    out = tmp_path / "missing" / "r.json"
+    assert sc.main(["--folder", str(folder), "--out", str(out)]) == sc.EXIT_BAD_INPUT
+    # the audio went nowhere: a report that cannot be written is found out BEFORE the engines
+    assert engine.calls == []
+    assert not out.parent.exists()
+    assert "bad input" in capsys.readouterr().out
+
+
+def test_cli_never_overwrites_an_existing_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    folder = _folder(tmp_path, ["ISI İL"])
+    engine = ScriptedSTT({"ISI İL": "ısı il"})
+    _one_scripted_engine(monkeypatch, engine)
+    out = tmp_path / "stt-compare-2026-10-02-013535.json"
+    out.write_bytes(b"an earlier run's evidence")
+    assert sc.main(["--folder", str(folder), "--out", str(out)]) == sc.EXIT_BAD_INPUT
+    assert out.read_bytes() == b"an earlier run's evidence"
+    assert engine.calls == []
+    assert "already exists" in capsys.readouterr().out
+    # and the name beside it is free: the same run is accepted there
+    other = tmp_path / "stt-compare-2026-10-02-013535-2.json"
+    assert sc.main(["--folder", str(folder), "--out", str(other)]) == sc.EXIT_OK
+    assert json.loads(other.read_text(encoding="utf-8"))["engines"][0]["files_ran"] == 1
+    assert out.read_bytes() == b"an earlier run's evidence"
+
+
+def test_cli_holds_the_report_name_while_the_engines_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two runs in one second chose the same name and the second replaced the first: the name
+    # is taken (exclusively) before the first engine is called, not when the run ends.
+    folder = _folder(tmp_path, ["ISI İL"])
+    out = tmp_path / "r.json"
+    seen: list[bool] = []
+
+    class Watching(ScriptedSTT):
+        def transcribe(self, audio: bytes, *, language: str = "tr-TR") -> STTResult:
+            seen.append(out.exists())
+            return super().transcribe(audio, language=language)
+
+    _one_scripted_engine(monkeypatch, Watching({"ISI İL": "ısı il"}))
+    assert sc.main(["--folder", str(folder), "--out", str(out)]) == sc.EXIT_OK
+    assert seen == [True]
+    assert json.loads(out.read_text(encoding="utf-8"))["kind"] == "stt_compare"
 
 
 def test_the_run_writes_only_the_output_file_and_prints_no_transcript(

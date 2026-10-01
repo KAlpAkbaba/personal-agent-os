@@ -18,7 +18,9 @@ Per engine:
   engine this is processing time, not first-token latency.
 * **the ten worst sentences**, every engine's transcript side by side.
 
-An engine that cannot run is a ROW (``NOT_RUN`` and why), never an absence.
+An engine that cannot run is a ROW (``NOT_RUN`` and why), never an absence. A file an engine
+fails on - whatever it raises - is that file's error in the engine's row, never the end of
+the run: the report is what says where the audio went.
 
 Normalisation before counting (:func:`normalize_for_compare`): the repo's Turkish casefold
 (``I``→``ı``, ``İ``→``i``), apostrophes dropped, other punctuation to a space, whitespace
@@ -27,7 +29,8 @@ are kept (``ı/i``, ``ü/u`` are exactly the errors being measured).
 
 Privacy: the audio goes to the engines that ran and nowhere else, and the report names them.
 The transcripts are written to the ONE output file the caller names; nothing else is written
-and no transcript is printed.
+and no transcript is printed. That file must not exist yet (a report is never overwritten)
+and its name is taken before the first engine is called.
 
 ``python -m app.voice.stt_compare --folder <recordings> --out <report.json>``
 """
@@ -84,6 +87,10 @@ REASON_NO_RECORDING = "no usable recording"
 
 SKIP_NOT_FOUND = "file not found"
 SKIP_NOT_WAV = "unsupported container (WAV only)"
+
+#: A failure on one file that is not a ``VoiceError`` (a model that will not load, a body
+#: that is not JSON): ``"unexpected: <ExceptionType>"`` in that file's error.
+ERROR_UNEXPECTED = "unexpected"
 
 EXIT_OK = 0
 EXIT_BAD_INPUT = 2
@@ -438,14 +445,21 @@ def run_comparison(
             started = clock()
             try:
                 result = engine.provider.transcribe(audio, language=language)
-            except VoiceError as exc:
-                error_class = str(exc.error_class)
+                latency_ms = round((clock() - started) * 1000, 2)
+                score = score_pair(recording.reference, result.text)
+                changed = intent_changed(recording.reference, result.text)
+            except Exception as exc:
+                # ANY failure is this file's error, not the run's: the engines before this
+                # one already received the audio, and the report is what names them. Only
+                # the type is kept - a message can carry a path, a key or a transcript.
+                error_class = (
+                    str(exc.error_class)
+                    if isinstance(exc, VoiceError)
+                    else f"{ERROR_UNEXPECTED}: {type(exc).__name__}"
+                )
                 row["errors"].append({"id": recording.item_id, "error_class": error_class})
                 item["results"][engine.label] = {"error": error_class}
                 continue
-            latency_ms = round((clock() - started) * 1000, 2)
-            score = score_pair(recording.reference, result.text)
-            changed = intent_changed(recording.reference, result.text)
             item["results"][engine.label] = {
                 "hypothesis": result.text,
                 "word_edits": score.word_edits,
@@ -650,7 +664,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.out is None:
         _say("bad input: --out is required")
         return EXIT_BAD_INPUT
+    out: Path = args.out
+    # The report is the only record of where the audio went, so its place is settled BEFORE
+    # an engine is called: the name is taken exclusively (an earlier report is evidence and
+    # is never replaced; two runs that chose one name cannot both hold it) and a folder that
+    # is missing or not writable is found out while nothing has been sent.
+    try:
+        out.open("x", encoding="utf-8").close()
+    except FileExistsError:
+        _say(f"bad input: {out} already exists; a report is never overwritten")
+        return EXIT_BAD_INPUT
+    except OSError as exc:
+        _say(f"bad input: the report cannot be written to {out} ({type(exc).__name__})")
+        return EXIT_BAD_INPUT
+    written = False
+    try:
+        written = _measure_into(out, folder, args)
+    finally:
+        if not written:
+            out.unlink(missing_ok=True)  # nothing was measured: leave no empty "report"
+    return EXIT_OK if written else EXIT_BAD_INPUT
 
+
+def _measure_into(out: Path, folder: Path, args: argparse.Namespace) -> bool:
+    """Run the comparison into the reserved ``out``; False for bad input (said, not raised)."""
     engines = configured_engines(
         os.environ, soniox_url=args.soniox_url, soniox_model=args.soniox_model
     )
@@ -658,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
     unknown = sorted(set(selected) - {engine.label for engine in engines})
     if unknown:
         _say(f"bad input: unknown engine {unknown}; known: {[e.label for e in engines]}")
-        return EXIT_BAD_INPUT
+        return False
     if selected:
         # an engine that was left out stays in the table, saying so
         engines = [
@@ -671,13 +708,13 @@ def main(argv: list[str] | None = None) -> int:
         report = run_comparison(folder, engines)
     except ManifestError as exc:
         _say(f"bad input: {exc}")
-        return EXIT_BAD_INPUT
-    args.out.write_text(
+        return False
+    out.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
     for line in report["summary_tr"]:
         _say(line)
-    return EXIT_OK
+    return True
 
 
 if __name__ == "__main__":  # pragma: no cover - the module entry point

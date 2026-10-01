@@ -66,4 +66,26 @@ By a SEPARATE approval: a Soniox account (ask for the EU region, read the DPA in
 then `scripts\secret-store.ps1 -Set PAGENTOS_VOICE_SONIOX_API_KEY`. Unverified against the real
 service: the model name `stt-rt-v5` and the wire format (read from the documentation only).
 
+**Addendum (cycle d20261002, after the inspector's return).**
+- **A file's failure is the file's, whatever is raised.** `run_comparison` caught only `VoiceError`;
+  a `RuntimeError` from one engine (a model that will not load, a 200 body that is not JSON) ended
+  the run with no report, after earlier engines had received the audio. Now any exception in
+  transcribing or scoring one file is that file's error (`unexpected: <ExceptionType>` - the type
+  only, never the message, which can carry a path, a key or a transcript); the row keeps both
+  counts, an engine that raises on every file is `FAILED` and is still named in `audio_sent_to`.
+- **The report's place is settled before any engine is called.** `main` takes `--out` exclusively
+  (`open("x")`) first: a missing or unwritable folder and an existing file are both exit 2 with
+  nothing sent, and two runs that chose one name cannot both hold it. The held name is given back
+  (deleted) when the run ends in bad input, so no empty "report" is left. Consequence: `--out`
+  must not exist - the CLI never overwrites.
+- **The script finds a free name:** the day's, then the second's, then `-2`, `-3`, ...; the `.md`
+  beside it is checked too.
+- A manifest saved with a UTF-8 BOM (PowerShell 5.1, Notepad) is held by a test.
+- **Left for the lead to accept or queue (inspector Pass 2, items 4-8), not changed here:**
+  `--write-template` overwrites an edited `manifest.template.json`; WAV is checked by header only
+  (PCM 16-bit / mono / 16 kHz not validated, a truncated stub counts with `audio_ms` 0); a spelling
+  variant in a research sentence (`zeka`→`zekâ`) counts as an intent change; the faster-whisper row
+  would download to the default Hugging Face cache on C: if the package became importable;
+  `--soniox-url` accepts any host, `ws://` included.
+
 **Rollback.** Additive and unwired: delete the two modules, the two test files and the script.
