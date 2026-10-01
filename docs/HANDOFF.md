@@ -28,7 +28,12 @@ Döngü: `cycle.ps1 -CycleId <id> -Base main -MaxParallel 3 -Research -QueueUrl 
 (`-DailyId -ResearchEveryHours 6 -Base team/nightly/lead`, veritabanı kipi); günün entegrasyon dalı `integrate/dYYYYMMDD`.
 Lead'in işi: o dalda bağlama + tam kapı + main (kuyruktaki `cycle-auto-integrate` bunu otomatikleştirecek). Onay
 Merkezi döngü koşarken karar reddediyor — düzeltmesi `proposals-on-cloud-core` içinde; 'Detay' görünümü
-`approvals-detail-view`. Sahibi bekleyen 3 fikir: ev-home-assistant, gercek-ev-sahibi-provasi, stt-soniox-olcum.**
+`approvals-detail-view`. **
+**Fikir kararları (sahip, 2026-10-01, sohbetten; lead kuyruğa işledi): `real-host-rehearsal` ONAYLI + ÖNCELİKLİ;
+`stt-engines-measure` ONAYLI, YALNIZ ÖLÇÜM (Soniox hesabı/benimseme AYRI onay); Home Assistant ERTELENDİ (ev cihaz
+envanteri önce). Onay Merkezi düzeltmesi (`proposals-on-cloud-core`) kuyruğun başında; o yayınlanana kadar sahip
+kararlarını sohbetten iletir, lead `PUT /v1/team/queue/tasks/<id>` ile işler. Kuyrukta öncelik alanı yok: sıra
+`created_at`'tir (protokol boşluğu).**
 **DÖNGÜ `adr0224-02` ÇALIŞIYOR (11:48 UTC başladı, veritabanı kipi): understanding-threshold-policy (ADR-0224 katman 3),
 office-voice-summary, ledger-device-callers. Bitince LEAD: `integrate/adr0224-02` üzerinde bağlama (araç kaydı
 `team.status`, eşik dosyası paket verisi), tam kapı, main, sahibin YAYIN ONAYI. Sonra bekleyenler: -corrections-memory,
