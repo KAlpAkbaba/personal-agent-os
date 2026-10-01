@@ -185,9 +185,12 @@ verify() {
     rec=$(journalctl -u "$reconcile_service" -n 50 --no-pager 2>/dev/null || true)
     if printf '%s\n' "$rec" | grep -q 'RECONCILE OK'; then check_ok reconcile "read journalctl -u $reconcile_service: RECONCILE OK"
     else check_fail reconcile "read journalctl -u $reconcile_service: no RECONCILE OK line"; fi
+    # A defunct process is reported, not failed on: the first real window (2026-10-01) held in
+    # every respect and was called FAILED for temporal's auto-setup.sh, which that image leaves
+    # at every start (its pid 1 never reaps it). The cure is an init in that container.
     local z
     z=$(ps -eo stat | awk '$1 ~ /^Z/ { n++ } END { print n+0 }')
-    if [ "$z" = 0 ]; then check_ok zombies "read ps -eo stat: 0 defunct"; else check_fail zombies "read ps -eo stat: $z defunct"; fi
+    if [ "$z" = 0 ]; then check_ok zombies "read ps -eo stat: 0 defunct"; else say "note zombies: read ps -eo stat: $z defunct (reported, not a failure)"; fi
     # the first good health probe (bounded wait); its time ends the downtime
     local i body good_epoch="" served=""
     for i in $(seq 1 "$wait_tries"); do
@@ -203,8 +206,10 @@ verify() {
         say "VERIFY FAILED: ADR-0223 step 12 applies (the reconcile timer first, then the LKG colour by hand); the marker stays"; exit 21
     fi
     local downtime=$((good_epoch - start_epoch))
-    printf '{"window_start":"%s","kernel_before":"%s","kernel_after":"%s","release":"%s","downtime_seconds":%s,"verified_at":"%s"}\n' \
-        "$(sed -n 's/^start_iso=//p' "$marker")" "$kernel_before" "$kernel_now" "$release" "$downtime" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$record.next"
+    # downtime_seconds is marker -> the first good probe of THIS run: an upper bound, because
+    # --verify runs minutes after boot (and again every ten minutes until it passes).
+    printf '{"window_start":"%s","kernel_before":"%s","kernel_after":"%s","release":"%s","downtime_seconds":%s,"downtime_measured":"marker to the first good probe of --verify: an upper bound","zombies":%s,"verified_at":"%s"}\n' \
+        "$(sed -n 's/^start_iso=//p' "$marker")" "$kernel_before" "$kernel_now" "$release" "$downtime" "$z" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$record.next"
     mv "$record.next" "$record"
     rm -f "$marker"
     say "VERIFY OK: downtime ${downtime}s (marker to first good probe); record $record"

@@ -67,7 +67,10 @@ param(
     [double]$RunMaxUsd = 0,
     [double]$RunMinutes = 0,
     [int]$CycleMinutes = 0,
-    [int]$MaxRunsPerTask = 4,
+    # Eight, not four: a task with an integrator and ONE honest return is integrator + worker +
+    # inspector + worker = four runs, and was stopped before its second inspection
+    # (model-policy-cycle, 2026-10-01). Two RETURNs still stop a task; this only bounds a loop.
+    [int]$MaxRunsPerTask = 8,
     [bool]$WaitForUsageLimit = $true,
     [string]$ClaudePath = (Join-Path $env:USERPROFILE ".local\bin\claude.exe"),
     [string[]]$ClaudePrefixArguments = @(),

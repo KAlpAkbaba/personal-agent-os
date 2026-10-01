@@ -16987,6 +16987,43 @@ showed eight idle seats.
 script; the usage limit as the one stop (with the model chain of addendum 7 once built);
 the researcher at most every six hours.
 
+### ADR-0214 addendum 9 (2026-10-01): the owner is asked about NEW ideas only; what the roadmap already names is built without asking
+
+The owner: "roadmap'deki var olan şeyler için benden onay istenmesin, sadece yeni fikirler için
+onay istenilsin; onay verilirse de roadmap'e konulsun. Araştırmacının görevi de yeni fikir bulmak."
+
+* **The idea gate is for what the roadmap does not name.** An item of ROADMAP "The order", of the
+  v1 master checklist, or of "Approved ideas" is cut into cards by the lead (or the feeder) and
+  built - no question, no entry in the Onay Merkezi's idea list. A defect found on the way is
+  part of the work it was found in.
+* **The researcher looks for what is NEW.** A proposal that restates a roadmap item, a queued
+  task or an earlier proposal is not a proposal: the researcher names it in its report as "already
+  on the roadmap: <row>" and the lead cards it. What it brings to the owner is something the
+  roadmap does not have yet - a capability, a method, a lesson turned into a mechanism - with
+  the three "Bugün -> Bununla" examples.
+* **An approved idea becomes a roadmap line** (addendum 8), and from then on it is roadmap work
+  like any other: its cards need no further approval.
+* **What still reaches the owner regardless** (CLAUDE.md "Asking the owner"): a paid account or
+  credential, a login, an irreversible or data-losing action, a new external dependency.
+* **The release gate: asked, and answered the same hour - "Kapı yeşilse otomatik yayınla".**
+  Roadmap work that passed the full gate and reached main is released blue/green by the lead
+  without a question: preflight, release, the recovery pin (the full 40-hex sha), the reconcile
+  verdict, health through the edge - and a report afterwards (what, sha, colour, last known
+  good). What does NOT become automatic: a release that carries a migration which is not
+  expand-only, a change of the host's env or compose beyond the image, anything the gate did
+  not run, a release inside 30 minutes of a maintenance window, a release while health is
+  not `ok` - each of those stops and is put to the owner. A release that leaves health not
+  `ok` is rolled back by the release script's own path and reported. Until the step exists
+  as a script (`cycle-auto-release`, queued behind `cycle-auto-integrate`) the lead in session
+  does it by hand, the same way. The owner's three gates are now two for roadmap work: a NEW
+  idea, and the real-device proof.
+
+**And the same evening:** "roadmap'i otomatik olarak görev ataması oluşsun ve çalışanlar
+durmaksızın çalışsın" - the feeder (`lead-roadmap-feeder`), the seat pool (`cycle-seat-pool`),
+the automatic integration and release are one chain, queued in that order of need; until they
+land the lead cuts the roadmap's next items by hand every time fewer than three tasks are
+runnable.
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
@@ -17319,6 +17356,27 @@ host with nobody driving: the tests proved them on fakes. If a step fails before
 the script stops there (exit 11), the reconcile timer is restarted and production keeps
 serving the same release; if verification fails the marker stays and step 12 applies. The
 units are removed after the report (they name one date and are inert after it).
+
+### ADR-0223 addendum 2 (2026-10-01): the first real window - what held, and what this ADR had wrong
+
+The window ran from the host's own timer at 19:00 UTC with nobody driving: preflight 9/9, the backup, the upgrade
+(26 packages; Docker 29.7.2 -> 29.8.2, Tailscale 1.102.3 -> 1.102.4), the reboot at 19:00:56, kernel `6.8.0-142`,
+containers back at 19:01:30, the three devices reconnected by 19:01:57, the same release serving, `RECONCILE OK`.
+`team/reports/maintenance-2026-10-01.md` holds the before/after facts.
+
+**Wrong in this ADR:** "the zombie goes when the container restarts". It is `auto-setup.sh`, a child of the
+temporal container's pid 1, which never reaps it; it is back two seconds after every start. Step 11's "zombies = 0"
+therefore failed a window that had held in every respect. The check now reports a defunct process and does not
+fail on it; the cure is `init: true` on the temporal service (`temporal-init-reaper`, queued; a compose change, so
+its release is the owner's).
+
+**Also wrong:** the record's `downtime_seconds` is the time from the marker to the first good probe OF `--verify`,
+which runs minutes after boot: an upper bound (825 s here), not the outage (about one minute). The record says so
+now; a true measurement needs a probe that keeps running across the reboot from outside the host.
+
+**Three defects were found before the window, on the real host, by running the read-only half** (the colour waited
+for by name, the lock asked for once - QUALIFICATION 38.12, 38.17) **and one after it** (this one). The approved
+idea `real-host-rehearsal` is the mechanism that makes the first kind routine.
 
 ## ADR-0224 — Voice command understanding in three layers: normalisation, semantic match with a confidence, a threshold policy (owner's architectural requirement, 2026-09-30)
 
