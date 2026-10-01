@@ -112,7 +112,17 @@ class Registry:
         # so a test that expects the cloud is not passing by luck.
         kw.setdefault("seen_s_ago", 300.0)
         kw.setdefault("capabilities", CLOUD_CAPS)
-        return self.enroll("bulut-1", platform="cloud", aliases=("bulut",), **kw)
+        kw.setdefault("aliases", ("bulut",))
+        return self.enroll("bulut-1", platform="cloud", **kw)
+
+    def cloud_that_looks_like_a_machine(self, **kw) -> uuid.UUID:
+        """A cloud device ``select_device`` WOULD pick as a machine: it advertises the family
+        marker beside its operations and is the most recently seen. (The inspector's X1: with
+        the real hello - no ``browser.chrome`` - the capability check kept the cloud out of the
+        ``device`` target by accident, not the platform.)"""
+        kw.setdefault("capabilities", [*CLOUD_CAPS, research_service.RESEARCH_CAPABILITY])
+        kw.setdefault("seen_s_ago", 0.2)
+        return self.cloud(**kw)
 
     def mail(self, **kw) -> uuid.UUID:
         kw.setdefault("seen_s_ago", 1.0)
@@ -217,6 +227,60 @@ def test_a_run_that_needs_a_signed_in_session_never_goes_to_the_cloud(registry) 
         "device",
     ]
     assert "cloud" not in [d.get("target") for _, d in registry.ledger()]
+
+
+# The ``device`` target is a MACHINE. The cloud is kept out of it by its platform, at the
+# service's own pick - not by what the cloud happens to advertise.
+
+
+def test_a_signed_in_run_stays_off_a_cloud_that_advertises_the_family_marker(registry) -> None:
+    cloud = registry.cloud_that_looks_like_a_machine()
+    mail = registry.mail()
+
+    started = registry.start(needs_signed_in_session=True)
+
+    assert started.error is None
+    run = registry.run(started.task_id)
+    assert run.device_id == mail and run.device_id != cloud
+    assert started.device == {"device_id": str(mail), "name": "MAIL"}
+    assert _planned(run)["execution_target"] == "device"
+    assert "cloud" not in [d.get("target") for _, d in registry.ledger()]
+
+
+def test_a_signed_in_run_is_not_put_on_the_cloud_by_the_sessions_own_device(registry) -> None:
+    cloud = registry.cloud_that_looks_like_a_machine()
+    mail = registry.mail()
+
+    started = registry.start(needs_signed_in_session=True, session_device_ids=[cloud])
+
+    assert registry.run(started.task_id).device_id == mail
+    assert "reason" not in started.device  # not "the device you are on"
+
+
+def test_a_machine_word_that_only_the_cloud_answers_to_names_no_machine(registry) -> None:
+    registry.cloud_that_looks_like_a_machine(aliases=("bulut", "sunucu"))
+    registry.mail()
+
+    started = registry.start(named_devices=("sunucu",))
+
+    assert started.device is None
+    assert started.error == "'sunucu' adında veya takma adında kayıtlı bir cihaz bulunamadı."
+    run = registry.run(started.task_id)
+    assert run.stage == STAGE_FAILED and run.device_id is None
+    assert "execution.selected" not in [t for t, _ in registry.ledger()]
+
+
+def test_a_cloud_holding_a_machines_alias_does_not_stand_between_the_owner_and_it(
+    registry,
+) -> None:
+    cloud = registry.cloud_that_looks_like_a_machine(aliases=("bulut", "ev"))
+    mail = registry.mail()
+
+    started = registry.start(named_devices=("ev",))
+
+    run = registry.run(started.task_id)
+    assert run.device_id == mail and run.device_id != cloud
+    assert _planned(run)["execution_target"] == "device"
 
 
 def test_bulutta_with_the_cloud_offline_is_a_failed_run_and_no_device(registry) -> None:
