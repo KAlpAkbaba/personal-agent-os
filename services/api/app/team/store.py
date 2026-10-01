@@ -14,6 +14,7 @@ beside this file is compared to it byte for byte), and the lock is stale after
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -56,6 +57,26 @@ def utcnow() -> datetime:
 
 def stamp(at: datetime) -> str:
     return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+#: ``team_state.updated_at`` is VARCHAR(32) (migration 0063).
+VERSION_WIDTH = 32
+
+
+def lock_version(at: datetime, machine: str, cycle_id: str, pid: int) -> str:
+    """The lock row's write precondition: the second it was taken and WHO took it, in a
+    form that always fits the column.
+
+    It used to be ``<stamp>|<machine>|<cycle>|<pid>`` - 42 characters for ``MAIL`` and
+    ``adr0224-02`` - and PostgreSQL refused it (``value too long for type character
+    varying(32)``): the first cycle in database mode died on its first call (production,
+    2026-10-01), while every test, on SQLite, which does not enforce a VARCHAR's length,
+    was green. The taker is now a digest: two takers inside one second still differ, and
+    the lock document itself (``doc``) is what names the machine and the cycle."""
+    taker = hashlib.sha256(f"{machine}|{cycle_id}|{pid}".encode()).hexdigest()
+    version = f"{stamp(at)}|{taker[: VERSION_WIDTH - len(stamp(at)) - 1]}"
+    assert len(version) <= VERSION_WIDTH
+    return version
 
 
 def _copy(document: Any) -> Any:
@@ -417,7 +438,7 @@ class DbStore:
             result = lock_decision(current, machine, at, takeover_dead=takeover_dead)
             if not result["acquired"]:
                 return result
-            version = f"{stamp(at)}|{machine}|{cycle_id}|{pid}"
+            version = lock_version(at, machine, cycle_id, pid)
             try:
                 self._write_lock(
                     session,

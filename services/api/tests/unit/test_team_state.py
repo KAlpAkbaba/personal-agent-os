@@ -421,3 +421,56 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
         assert name in source, f"the client no longer sends {name}"
         assert name in model.model_fields, f"the server does not take {name}"
     assert "Authorization" in source and "Bearer" in source
+
+
+# ------------------------------------------------- what SQLite does not enforce (2026-10-01)
+
+
+def test_every_row_the_store_writes_fits_its_columns(engine) -> None:
+    """SQLite keeps a string longer than its VARCHAR; PostgreSQL refuses it. Production's
+    first cycle in database mode died on the lock row's 42-character version in a
+    VARCHAR(32) while this file was green. The widths are read from the model, and every
+    kind of row is written with names longer than any real machine or cycle carries."""
+    db = _db_store(engine)
+    at = datetime(2026, 10, 1, 11, 0, tzinfo=UTC)
+    machine, cycle = "GMKADIRAKBABA-OFFICE-PC", "cycle-2026-10-01-a-long-cycle-id"
+    db.put_task(_task("a" * 64), None)
+    assert db.acquire_lock(machine=machine, cycle_id=cycle, pid=4_194_304, now=at)["acquired"]
+    db.release_lock(machine=machine, cycle_id=cycle, now=at + timedelta(minutes=1))
+    assert db.acquire_lock(machine=machine, cycle_id=cycle, pid=4_194_304, now=at)["acquired"]
+    db.put_status(
+        {
+            "cycle_id": cycle,
+            "machine": machine,
+            "pid": 4_194_304,
+            "started_at": "2026-10-01T11:00:00Z",
+            "runs": [],
+            "estimated_usd": 0,
+            "usage_limit": {"state": "ok", "resets_at": None},
+            "updated_at": "2026-10-01T11:00:05Z",
+        }
+    )
+    db.put_report(f"{cycle}.md", "rapor", now=at)
+
+    widths = {
+        column.name: column.type.length
+        for column in TeamStateRow.__table__.columns
+        if getattr(column.type, "length", None)
+    }
+    assert widths["updated_at"] == team_store.VERSION_WIDTH
+    with sessionmaker(bind=engine)() as session:
+        rows = session.query(TeamStateRow).all()
+    assert {row.kind for row in rows} >= {"task", "lock", "status", "report"}
+    for row in rows:
+        for name, width in widths.items():
+            value = getattr(row, name)
+            assert len(value) <= width, f"{row.kind}/{row.key}: {name} is {len(value)} > {width}"
+
+
+def test_the_lock_version_tells_two_takers_in_one_second_apart_and_always_fits() -> None:
+    at = datetime(2026, 10, 1, 11, 0, tzinfo=UTC)
+    one = team_store.lock_version(at, "MAIL", "adr0224-02", 35472)
+    other = team_store.lock_version(at, "MAIL", "adr0224-02", 35473)
+    assert one != other and one.startswith("2026-10-01T11:00:00Z|")
+    long = team_store.lock_version(at, "M" * 200, "c" * 200, 2**31)
+    assert len(one) <= team_store.VERSION_WIDTH and len(long) <= team_store.VERSION_WIDTH

@@ -23,6 +23,10 @@ param(
     [double]$MaxUsd = 0,
     [int]$MaxParallel = 2,
     [int]$CycleMinutes = 0,
+    # ADR-0222: the queue, the lock and the live status on the Cloud Core. -QueueToken is the
+    # PATH of the file scripts/team/write-queue-token.ps1 wrote (never the token itself).
+    [string]$QueueUrl = "",
+    [string]$QueueToken = "",
     [string]$TaskName = "PagentOS Team Nightly Cycle",
     [string]$HomeMachine = "MAIL",
     [string]$Machine = $env:COMPUTERNAME,
@@ -44,7 +48,9 @@ function Get-NightlyPlan {
         [Parameter(Mandatory = $true)][double]$MaxUsd,
         [Parameter(Mandatory = $true)][int]$MaxParallel,
         [Parameter(Mandatory = $true)][int]$CycleMinutes,
-        [Parameter(Mandatory = $true)][System.TimeZoneInfo]$LocalZone
+        [Parameter(Mandatory = $true)][System.TimeZoneInfo]$LocalZone,
+        [string]$QueueUrl = "",
+        [string]$QueueToken = ""
     )
     $istanbul = [System.TimeZoneInfo]::FindSystemTimeZoneById("Turkey Standard Time")
     $two = [datetime]::SpecifyKind((Get-Date).Date.AddHours(2), [System.DateTimeKind]::Unspecified)
@@ -54,6 +60,10 @@ function Get-NightlyPlan {
     $script = Join-Path $RepoRoot "scripts\team\cycle.ps1"
     $usd = $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes"
+    if ($QueueUrl) {
+        if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken (the path of the token file)" }
+        $arguments += " -QueueUrl $QueueUrl -QueueToken `"$QueueToken`""
+    }
     return [pscustomobject]@{
         Execute          = $powershell
         Arguments        = $arguments
@@ -75,7 +85,7 @@ if ($Unregister) {
 }
 
 $plan = Get-NightlyPlan -RepoRoot $repoRoot -MaxUsd $MaxUsd -MaxParallel $MaxParallel `
-    -CycleMinutes $CycleMinutes -LocalZone ([System.TimeZoneInfo]::Local)
+    -CycleMinutes $CycleMinutes -LocalZone ([System.TimeZoneInfo]::Local) -QueueUrl $QueueUrl -QueueToken $QueueToken
 Write-Host "task      : $TaskName"
 Write-Host "when      : every day at $($plan.LocalTime) local time ($($plan.IstanbulTime) Europe/Istanbul)"
 Write-Host "runs      : $($plan.Execute) $($plan.Arguments)"

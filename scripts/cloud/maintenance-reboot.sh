@@ -37,6 +37,7 @@ disk_max=${PAGENTOS_DISK_MAX_PCT:-80}
 backup_max_age=${PAGENTOS_BACKUP_MAX_AGE_S:-86400}
 wait_tries=${PAGENTOS_WAIT_TRIES:-60}
 wait_step=${PAGENTOS_WAIT_STEP_S:-5}
+lock_wait=${PAGENTOS_LOCK_WAIT_S:-45}
 backup_script=${PAGENTOS_BACKUP_SCRIPT:-$base/app/scripts/cloud/backup-cloud-core.sh}
 marker="$base/MAINTENANCE_MARKER"
 record="$base/LAST_MAINTENANCE.json"
@@ -101,9 +102,12 @@ preflight() {
     if [ -z "$failures" ]; then check_ok failure-marker "read $backup_root/failures/: none"
     else check_fail failure-marker "read $backup_root/failures/:$failures"; fi
     # 3. a release in flight (the blue/green operation lock); the team cycle is the lead's check
+    # The minute reconcile takes this lock for a few seconds every minute; asking once (-n)
+    # let the window's own housekeeping postpone it (seen on the host, 2026-10-01). The check
+    # waits: the reconcile lets go in seconds, a release holds on for minutes and still refuses.
     local lockf="$base/.bluegreen-operation.lock"
-    if [ ! -e "$lockf" ] || flock -n "$lockf" true 2>/dev/null; then check_ok no-release "read $lockf: not held (team cycle / owner mid-task: the lead's check, home PC)"
-    else check_fail no-release "read $lockf: held, a release or recovery is running"; fi
+    if [ ! -e "$lockf" ] || flock -w "$lock_wait" "$lockf" true 2>/dev/null; then check_ok no-release "read $lockf: not held (team cycle / owner mid-task: the lead's check, home PC)"
+    else check_fail no-release "read $lockf: still held after ${lock_wait}s, a release or recovery is running"; fi
     # 4. nothing removed by the upgrade; docker-ce not held; disk under the limit
     local sim held pct
     if sim=$(apt-get -s upgrade 2>&1); then
@@ -126,9 +130,12 @@ wait_containers() {
     for i in $(seq 1 "$wait_tries"); do
         names=$(docker ps --format '{{.Names}}' 2>/dev/null || true)
         missing=""
-        for want in postgres redis minio temporal edge api-blue godseye; do
+        for want in postgres redis minio temporal edge godseye; do
             printf '%s\n' "$names" | grep -q -- "$want" || missing="$missing $want"
         done
+        # The serving colour is whichever the last release left: blue OR green, never a name
+        # written here (2026-10-01: a release made green active and this waited for api-blue).
+        printf '%s\n' "$names" | grep -Eq -- 'api-(blue|green)' || missing="$missing api-(blue|green)"
         [ -z "$missing" ] && return 0
         sleep "$wait_step"
     done
@@ -170,7 +177,7 @@ verify() {
     else check_fail kernel "read uname -r: still $kernel_now"; fi
     if [ ! -e "$reboot_required" ]; then check_ok reboot-required "read $reboot_required: gone"
     else check_fail reboot-required "read $reboot_required: still present"; fi
-    if wait_containers; then check_ok containers "read docker ps: postgres redis minio temporal edge api-blue godseye up"
+    if wait_containers; then check_ok containers "read docker ps: postgres redis minio temporal edge godseye and an api colour up"
     else check_fail containers "read docker ps: a container is missing"; fi
     if systemctl is-active "$timer" >/dev/null 2>&1; then check_ok timer "read systemctl is-active $timer: active"
     else check_fail timer "read systemctl is-active $timer: not active"; fi
