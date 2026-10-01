@@ -1178,6 +1178,12 @@ class ResolvedIntent:
     #: transcript that lost its Turkish letters matched with them folded) or both joined
     #: by "+". None for every route the words reached directly.
     route_repair: str | None = None
+    #: ADR-0224 layer 3: the band the threshold policy put this reading in (high | medium |
+    #: low) and the ranked readings it chose among, as (intent name, confidence) - never the
+    #: evidence, which carries the owner's words. ``confidence`` above is the decision's own
+    #: once the relay has run the policy. None / empty until then.
+    band: str | None = None
+    candidates: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -1237,6 +1243,8 @@ class ResolvedIntent:
             "process_name": self.process_name,
             "service_name": self.service_name,
             "route_repair": self.route_repair,
+            "band": self.band,
+            "candidates": [list(pair) for pair in self.candidates],
         }
 
     @property
