@@ -504,6 +504,10 @@ function Get-TeamVerdict {
     $detail = ""
     foreach ($line in @(([string]$Report) -split "`r?`n")) {
         $text = $line.Trim().Trim('`', '*', ' ')
+        # "**Verdict:** `RETURN (...)`" is how inspectors often write it (four reports in two
+        # cycles, 2026-10-01): the label is dropped, and the list after it reaches the worker
+        # instead of "the report did not end with a verdict".
+        $text = ($text -creplace '^(Verdict|Karar)\s*:?\s*\**\s*:?\s*', '').Trim().Trim('`', '*', ' ')
         if ($text -cmatch '^(APPROVE|RETURN|REJECT)\b\s*[:(-]?\s*(.*?)\)?\s*$') {
             $verdict = $Matches[1]
             $detail = $Matches[2].Trim()

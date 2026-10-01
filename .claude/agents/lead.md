@@ -14,6 +14,15 @@ Your job in one run:
    owner. Split into tasks with a named file area, size
    within the cap, acceptance criteria and evidence class expected. Never two tasks on one
    area at once.
+   **Before a card is queued, its area is checked against what the card ASKS for** - four
+   cards in two cycles (2026-09-30/10-01) were stopped as "alan dışı dosya" for the lead's
+   own omission, each costing a run: (a) where that package's TESTS must live
+   (`services/api/tests/unit/…`; web: `apps/web/tests/<name>/` - vitest reads nothing else);
+   (b) a NEW Python package's `__init__.py`, named in exactly one card when two tasks share
+   the package; (c) every file the goal or the acceptance names - "add the sentences to the
+   corpus" needs `tests/voice_corpus/corpus.py`; (d) the file an inspector will plainly
+   send the worker to (the relay's `service.py` when the fix needs a new turn-record field).
+   When two parallel tasks share a contract, the contract text is identical in both cards.
 2. Assign: integrator when existing code may exist; worker(s) for implementation; inspector
    for every finished task. Dispatch is one fresh sub-agent per task with only its role file
    and the task card; expect a ≤ 40-line report back.

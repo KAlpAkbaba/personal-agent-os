@@ -1,0 +1,1 @@
+Still running: the Owner Utterance Suite (2745 cases) and the LocalEmbedder timing. The 41 new tests pass and all five mutations went RED. I'll commit and send the report once both background runs finish.
