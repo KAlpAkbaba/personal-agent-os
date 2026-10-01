@@ -106,3 +106,12 @@ apps/web/CLAUDE.md
 
 # The desktop app's own output folder (owner documents; never part of the tree)
 Claude outputs/
+
+# The cycle's run-time state (scripts/team/cycle.ps1): what is in flight, which model is limited,
+# when the researcher last ran, a stop request. State of one machine's run, never committed.
+team/status.json
+team/limits.json
+team/research-last.txt
+team/stop.flag
+team/lock.json.tmp
+team/queue.json.tmp

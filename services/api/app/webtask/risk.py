@@ -36,8 +36,10 @@ from app.webtask.types import (
     RISK_EXTERNAL_COMMUNICATION,
     RISK_HIGH_IMPACT,
     RISK_NAVIGATE,
+    RISK_ORDER,
     RISK_REVERSIBLE_WRITE,
     Element,
+    risk_rank,
 )
 
 #: The run-time copy of ``packages/protocol/browser-risk-markers.json``
@@ -78,6 +80,8 @@ FIELD_ROLES: Final = frozenset(
         "spinbutton",
     }
 )
+#: Field roles where PRESSING is the write: a click on a checkbox is ``set_checked``.
+TOGGLE_ROLES: Final = frozenset({"checkbox", "radio", "switch"})
 
 
 def fold(text: str) -> str:
@@ -152,33 +156,82 @@ def classify_element(element: Element) -> str:
     return RISK_REVERSIBLE_WRITE
 
 
+def is_unnamed(name: str) -> bool:
+    """No accessible name, or one with no letter and no digit in it: a glyph says
+    nothing about what its control does."""
+    return not any(ch.isalnum() for ch in fold(name))
+
+
+def classify_write(element: Element) -> str:
+    """What CHANGING an element would be - typing into it, choosing in it, ticking it -
+    from its name and whether it submits, as a click is classified.
+
+    The contract's rule lets a field be REVERSIBLE_WRITE whatever it is called, because
+    PRESSING a field only puts the cursor in it. Changing one is another matter: a
+    ``<select>`` that buys on change and a checkbox wired to a request are named by the
+    page like any button, and are judged by that name.
+    """
+    name = element.name or ""
+    if is_high_impact(name):
+        return RISK_HIGH_IMPACT
+    if element.submits or is_external_communication(name):
+        return RISK_EXTERNAL_COMMUNICATION
+    return RISK_REVERSIBLE_WRITE
+
+
+def _unnamed_and_wired(action: str, element: Element) -> bool:
+    """A control that has no name and submits, or sits in a form: nothing says what it
+    does, and where it sits says it may send. Not a plain link (it goes somewhere and
+    does nothing else), and not text entry: typing sends nothing, and what sends the
+    form is judged when IT is pressed."""
+    if not is_unnamed(element.name) or not (element.submits or element.in_form):
+        return False
+    if element.role == "link" and element.href_host is not None:
+        return False
+    if action == ACTION_FILL:
+        return False
+    return not (action == ACTION_CLICK and element.role in FIELD_ROLES - TOGGLE_ROLES)
+
+
 def classify_step(action: str, element: Element | None) -> str:
-    """The class of one step. ``click`` is classified from its element; the others are
-    the contract's static classes. Filling a field that SUBMITS nothing is reversible."""
+    """The class of one step, read off its element. ``click`` is the contract's rule;
+    ``fill`` / ``select_option`` / ``set_checked`` - and a click on a checkbox, which is
+    ``set_checked`` by another name - are classified from the name and ``submits`` the
+    same way. Filling a field that is called nothing special and SUBMITS nothing is
+    reversible."""
     if action in (ACTION_NAVIGATE, ACTION_BACK, ACTION_SCROLL):
         return RISK_NAVIGATE
-    if action in (ACTION_FILL, ACTION_SELECT, ACTION_CHECK):
+    if action in (ACTION_FILL, ACTION_SELECT, ACTION_CHECK) and element is None:
         return RISK_REVERSIBLE_WRITE
-    if action == ACTION_CLICK and element is not None:
-        own = classify_element(element)
+    if action in (ACTION_CLICK, ACTION_FILL, ACTION_SELECT, ACTION_CHECK) and element is not None:
+        if action == ACTION_CLICK and element.role not in TOGGLE_ROLES:
+            own = classify_element(element)
+        else:
+            own = classify_write(element)
+        if _unnamed_and_wired(action, element):
+            own = _stricter(own, RISK_EXTERNAL_COMMUNICATION)
         # Never below what the worker itself hinted: two readers, the stricter one wins.
-        hinted = element.risk_hint
-        from app.webtask.types import RISK_ORDER, risk_rank
-
-        if hinted in RISK_ORDER and risk_rank(hinted) > risk_rank(own):
-            return hinted
-        return own
+        return _stricter(own, element.risk_hint)
     return RISK_HIGH_IMPACT  # an action this module does not know is not a safe one
+
+
+def _stricter(own: str, other: str) -> str:
+    if other in RISK_ORDER and risk_rank(other) > risk_rank(own):
+        return other
+    return own
 
 
 __all__ = [
     "FIELD_ROLES",
     "MARKERS_PATH",
+    "TOGGLE_ROLES",
     "classify_element",
     "classify_step",
+    "classify_write",
     "fold",
     "is_external_communication",
     "is_high_impact",
     "is_payment",
+    "is_unnamed",
     "markers",
 ]
