@@ -16920,6 +16920,44 @@ tasks it changed, each conditional on what it read), with the page's "Detay" vie
 Tests: `scripts/tests/team-cycle.tests.ps1` (119): "the continuous cycle: the researcher is
 throttled by its last run, and a day's cycles share one id".
 
+### ADR-0214 addendum 7 (2026-10-01): the model policy - a model per role, a fallback chain, the inspector never weaker than the worker
+
+The owner: "(1) rol başına model ayarı team store'da — lead/inspector varsayılan Fable,
+worker/integrator/researcher Opus 5.5; cycle.ps1 koşuyu --model ile bu ayardan başlatır.
+(2) Düşüş zinciri: koşu 'usage limit' ile dönerse aynı iş bir alt modelle (Fable→Opus
+5.5→Sonnet) hemen yeniden denenir, raporda 'model düşürüldü' yazar; tümü limitteyse bekler.
+(3) Ofis sayfasında her koltuğun detay panelinde model seçici + üst barda iki limit yüzdesi
+(Fable / tüm modeller) ve 'yedek model: açık' göstergesi; seçim team store'a yazılır.
+(4) Denetleyici asla işçiden daha zayıf modelde koşmaz."
+
+**The reason, as the lead reads it.** The strongest model's limit is the scarce thing; a
+worker's run is long and many, a lead's and an inspector's judgement is short and decides
+what merges. Spending the strong model where the judgement is, and never letting the judge
+be weaker than what it judges, is the control; the chain keeps the day's work moving when
+one limit is reached instead of waiting hours for it.
+
+**In force now (the interim form, the lead's).** `team/models.json`:
+lead and inspector `claude-fable-5-1`; worker, integrator and researcher `claude-opus-5-5`.
+`cycle.ps1` reads it and starts each run with `--model`; the report's run list names the
+model of every run; a value that is not a model name stops the cycle before it starts
+anything (the value goes onto a command line). Both ids were run through the real tool on
+2026-10-01 (`modelUsage` named each). Test: `scripts/tests/team-cycle.tests.ps1` "each role
+runs on the model the team's setting names for it" (mutation: the map ignored -> RED).
+
+**Queued, in the owner's order (right after `proposals-on-cloud-core`), one contract in
+three cards:** `model-policy-cycle` (the setting from the team store, the chain with "model
+düşürüldü" in the report, a limited model remembered until its reset, the inspector held to
+the worker's model or stronger - it WAITS rather than be lowered below it; integrator first:
+what the tool really prints when one model's limit is hit, and whether the two percentages
+exist anywhere a script can read), `model-policy-api` (GET/PUT `/v1/team/queue/models`, the
+status' `model` and `limits`, the seat's model in `/v1/team/office`; a setting whose
+inspector is weaker than its worker is refused), `model-policy-office-ui` (the selector in
+the seat's panel, the two percentages and the fallback toggle in the top bar).
+
+**One thing said plainly.** The two limit percentages are shown only if the tool gives them
+in a form a script can read. Nobody computes or estimates one: until a real source is found
+the page says "bilinmiyor", never "%0".
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere

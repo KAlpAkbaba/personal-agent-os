@@ -1,0 +1,9 @@
+{
+  "roles": {
+    "lead": "claude-fable-5-1",
+    "inspector": "claude-fable-5-1",
+    "worker": "claude-opus-5-5",
+    "integrator": "claude-opus-5-5",
+    "researcher": "claude-opus-5-5"
+  }
+}

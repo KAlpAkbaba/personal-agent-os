@@ -39,6 +39,10 @@ office-voice-summary, ledger-device-callers. Bitince LEAD: `integrate/adr0224-02
 `team.status`, eşik dosyası paket verisi), tam kapı, main, sahibin YAYIN ONAYI. Sonra bekleyenler: -corrections-memory,
 -stt-corpus (katman 3 main'e girince), researcher-every-cycle, proposals-on-cloud-core, office-page-polish,
 postgres-coverage-debt.**
+**MODEL POLİTİKASI (sahip, 2026-10-01, ADR-0214 ek 7): `team/models.json` — lead/inspector `claude-fable-5-1`,
+worker/integrator/researcher `claude-opus-5-5`; `cycle.ps1` her koşuyu `--model` ile başlatır (YÜRÜRLÜKTE). Düşüş
+zinciri (Fable→Opus→Sonnet), denetleyici ≥ işçi kuralı, Ofis'te seçici + limit yüzdeleri: kuyrukta
+`model-policy-cycle` / `-api` / `-office-ui`, `proposals-on-cloud-core`'dan hemen sonra.**
 **YENİ KALICI KURALLAR (sahip, 2026-10-01; ADR-0214 ek 4-5, TEAM_PROTOCOL 9a): (1) Postgres/gerçek altyapı iddiası
 NOT_RUN kalırsa merge yok — denetleyici dev stack'te koşar; SQLite-only DB değişikliği kapıdan geçmez
 (`test_postgres_coverage_ratchet.py`, 51 tablo dondurulmuş borç). (2) Araştırmacı HER döngüde koşar; her öneri

@@ -30,10 +30,12 @@ $log = [string]$env:PAGENTOS_FAKE_CLAUDE_LOG
 $roleFile = ""
 $budget = ""
 $tools = ""
+$model = ""
 for ($i = 0; $i -lt $Rest.Length; $i++) {
     if ($Rest[$i] -eq "--append-system-prompt-file") { $roleFile = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--max-budget-usd") { $budget = $Rest[$i + 1] }
     if ($Rest[$i] -eq "--allowedTools") { $tools = $Rest[$i + 1] }
+    if ($Rest[$i] -eq "--model") { $model = $Rest[$i + 1] }
 }
 $role = [System.IO.Path]::GetFileNameWithoutExtension($roleFile)
 $card = [Console]::In.ReadToEnd()
@@ -42,7 +44,7 @@ if ($card -match '(?m)^- id: (\S+)') { $taskId = $Matches[1] }
 $here = (Get-Location).ProviderPath
 
 if ($log) {
-    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
+    $entry = [pscustomobject]@{ role = $role; task = $taskId; cwd = $here; budget = $budget; tools = $tools; model = $model; lines = @($card -split "`n").Length; subjects = @($card -split "`n" | Where-Object { $_ -match '^- ' -and $card -match 'The subjects the lead asks for' }); came_back = ($card -match 'Why this task came back') }
     Add-Content -LiteralPath $log -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
 }
 

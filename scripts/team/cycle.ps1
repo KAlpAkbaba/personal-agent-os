@@ -120,6 +120,24 @@ if ($runResearch -and -not $ResearchOnly -and $ResearchEveryHours -gt 0 -and (Te
     if ($null -ne $lastResearch -and ([datetime]::UtcNow - $lastResearch).TotalHours -lt $ResearchEveryHours) { $runResearch = $false }
 }
 
+# The model each role runs on (owner, 2026-10-01, ADR-0214 addendum 7): team/models.json,
+# {"roles": {"worker": "<model id>", ...}}. A role it does not name runs on -Model; with neither, the
+# tool's own default. The interim form: the setting moves into the team store with the task
+# model-policy-*. A name that is not a model name stops the cycle before it starts anything -
+# the value goes onto a command line.
+$roleModels = @{}
+$modelsPath = Join-Path $TeamRoot "models.json"
+if (Test-Path -LiteralPath $modelsPath) {
+    $modelsDocument = Read-TeamJson -Path $modelsPath
+    $rolesNode = Get-TeamProperty -InputObject $modelsDocument -Name "roles"
+    if ($null -ne $rolesNode) {
+        foreach ($property in $rolesNode.PSObject.Properties) {
+            $name = [string]$property.Value
+            if ($name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw "team/models.json: '$name' is not a model name (role $($property.Name))" }
+            $roleModels[[string]$property.Name] = $name
+        }
+    }
+}
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
 $reportsRoot = Join-Path $TeamRoot "reports"
@@ -314,7 +332,8 @@ try {
                 if ($left -lt $cap) { $cap = [Math]::Max(0.01, $left) }
             }
         }
-        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $Model -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
+        $runModel = if ($roleModels.ContainsKey($Role)) { [string]$roleModels[$Role] } else { $Model }
+        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
         if ($Prompt) { $prompt = $Prompt }
         elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
         else {
@@ -331,7 +350,7 @@ try {
         [void]$script:liveRuns.Add($live)
         Write-CycleStatus
         $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
-        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live }
+        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel }
     }
 
     function Complete-RoleRun {
@@ -353,6 +372,7 @@ try {
         Write-CycleStatus
         $script:cycle.runs = @(@($script:cycle.runs) + [pscustomobject]@{
                 task = $taskId; role = $Started.Role; cost_usd = $result.CostUsd; seconds = $finished.Seconds; outcome = $outcome
+                model = [string]$Started.Model
             })
         $relative = "team/reports/$CycleId/$taskId-$($Started.Role)-$number"
         return [pscustomobject]@{

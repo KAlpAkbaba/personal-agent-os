@@ -1223,6 +1223,25 @@ try {
         Assert-Equal -Expected "integrate/$expected" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").integration_branch -Because "and one integration branch for the day"
     }
 
+    Test-Case "each role runs on the model the team's setting names for it (owner, 2026-10-01)" {
+        # Interim form of the model policy (ADR-0214 addendum 7): team/models.json maps a role to a
+        # model; a role it does not name runs on -Model, and with neither the tool's own default.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        [System.IO.File]::WriteAllText((Join-Path $root "team\models.json"), '{"roles":{"worker":"claude-opus-5-5","inspector":"claude-fable-5-1"}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        $byRole = @{}; foreach ($call in $run.Calls) { $byRole[[string]$call.role] = [string]$call.model }
+        Assert-Equal -Expected "claude-opus-5-5" -Actual $byRole["worker"] -Because "the worker's model: $($run.StdOut + $run.StdErr)"
+        Assert-Equal -Expected "claude-fable-5-1" -Actual $byRole["inspector"] -Because "the inspector's model"
+        Assert-True -Condition ($run.Report -match "task-one / worker: .*claude-opus-5-5") -Because "the report names the model of each run: $($run.Report)"
+        $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $none = Invoke-Cycle -Root $plain -Scenario "approve"
+        Assert-Equal -Expected "" -Actual ([string]$none.Calls[0].model) -Because "no setting, no --model"
+        $bad = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        [System.IO.File]::WriteAllText((Join-Path $bad "team\models.json"), '{"roles":{"worker":"--dangerously-skip-permissions"}}')
+        $refused = Invoke-Cycle -Root $bad -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual @($refused.Calls).Count -Because "a model name that is not a model name starts nothing: $($refused.StdOut + $refused.StdErr)"
+    }
+
     Test-Case "what the lead asks the researcher to study reaches it, subject by subject" {
         $root = New-Sandbox -Tasks @()
         $asked = Invoke-Cycle -Root $root -Scenario "approve" -Research -Brief @("execution in the cloud (ADR-0213)", "the narrative: bu hafta ne oldu")
