@@ -14,6 +14,7 @@ the absence of an exception.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -29,11 +30,13 @@ from app.webtask.planner import (
 )
 from app.webtask.types import (
     ACTION_ASK_OWNER,
+    ACTION_CHECK,
     ACTION_CLICK,
     ACTION_DONE,
     ACTION_FILL,
     ACTION_NAVIGATE,
     ACTION_SCROLL,
+    ACTION_SELECT,
     ASK_CANNOT_SEE,
     ASK_CHALLENGE,
     ASK_CONFIRM,
@@ -42,6 +45,7 @@ from app.webtask.types import (
     ASK_PAYMENT,
     ASK_QUESTION,
     ASK_SENSITIVE_FIELD,
+    EXPECT_CHECKED,
     EXPECT_FIELD_HAS_VALUE,
     EXPECT_PAGE_CHANGED,
     EXPECT_TEXT_PRESENT,
@@ -1093,3 +1097,267 @@ def test_cancel_stops_a_task_wherever_it_is() -> None:
     with pytest.raises(loop.OwnerWordError):
         loop.confirm(state, source="voice")
     assert "send" not in browser.done
+
+
+# ------------------------------------------------------------------ PR-C: what was binding
+#
+# ADR-0207, "Recorded for PR-C, and binding on it". The planner is still a script: what
+# these tasks hold is what a model that was fooled - or a page that waited for the
+# owner's word - cannot get past.
+
+SPA = "https://uygulama.example.org/yorum"
+SPA_POSTED = "https://yorum.example.org/gonderildi"
+SPA_COLLECTOR = "https://toplayici.kotu-site.example/al"
+SPA_GOAL = 'Yorum alanına "Güzel ürün" yaz ve yorumu yayınla'
+
+
+def spa_site(control: El) -> FakeBrowser:
+    """A single-page app: one address, one control whose NAME never changes."""
+    return FakeBrowser(
+        url=SPA,
+        pages={
+            SPA: Page(
+                title="Yorum yaz",
+                text=lambda b: "Yorumunuz." + (" Yayınlandı." if b.flags.get("published") else ""),
+                elements=[El("textbox", "Yorum", in_form=True), control],
+            ),
+            SPA_POSTED: Page(title="Yayınlandı", text="Yayınlandı.", elements=[]),
+            SPA_COLLECTOR: Page(title="x", text="Yayınlandı.", elements=[]),
+        },
+    )
+
+
+def _spa_button(**kwargs: Any) -> El:
+    return El("button", "Yorumu yayınla", does="publish", effect=set_flag("published"), **kwargs)
+
+
+def _rewire_submit(control: El) -> None:
+    control.submits = False  # the page takes the click for itself: a handler, no form
+
+
+def _rewire_form(control: El) -> None:
+    control.in_form = False  # the control was moved out of the form that was read back
+
+
+def _rewire_host(control: El) -> None:
+    control.href = SPA_COLLECTOR  # the same link, now to somewhere else
+
+
+@pytest.mark.parametrize(
+    ("control", "rewire"),
+    [
+        (_spa_button(submits=True, in_form=True), _rewire_submit),
+        (_spa_button(in_form=True), _rewire_form),
+        (El("link", "Yorumu yayınla", href=SPA_POSTED, does="publish"), _rewire_host),
+    ],
+    ids=["submits", "in_form", "host"],
+)
+def test_a_single_page_app_that_rewires_the_confirmed_control_gets_no_click(
+    control: El, rewire: Any
+) -> None:
+    control = replace(control)  # the parameter is shared between runs; the site is not
+    browser = spa_site(control)
+    script = [fill("Yorum", "Güzel ürün"), click("Yorumu yayınla", text("Yayınlandı"))]
+    state = drive(task(SPA_GOAL), browser, script)
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+    first = state.pending.message
+    assert "'Yorumu yayınla'" in first and "değişti" not in first
+    asked_round = state.round_index
+
+    rewire(control)  # between the read-back and the owner's word
+    state = loop.confirm(state, source="voice")
+    state = drive(state, browser, [])
+
+    # Nothing reached the site: not the control's effect, and not a click command at all.
+    assert browser.done == ["fill:Yorum"] and not browser.flags.get("published")
+    assert [c[0] for c in browser.commands].count(ACTION_CLICK) == 0
+    assert browser.url == SPA
+    # The grant is spent, and the owner hears a SECOND read-back that says why.
+    assert state.status == STATUS_WAITING_OWNER and state.grant is None
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+    assert state.pending.message.startswith("Onayınızdan sonra sayfa değişti; yeniden soruyorum.")
+    assert "'Yorumu yayınla'" in state.pending.message
+    assert state.pending.facts != {} and state.round_index == asked_round
+    assert [r.outcome for r in state.rounds].count("asked_owner") == 2
+
+    # His word for the page as it is NOW is a word like any other: one click, once.
+    state = loop.confirm(state, source="voice")
+    state = drive(state, browser, [done("Yorum yayınlandı.")])
+    assert state.status == STATUS_DONE and browser.done.count("publish") == 1
+    assert [c[0] for c in browser.commands].count(ACTION_CLICK) == 1
+
+
+ICONS = "https://sohbet.example.org/yaz"
+ICONS_HOME = "https://sohbet.example.org/"
+ICONS_GOAL = 'Mesaj alanına "Merhaba" yaz'
+
+
+def icon_site(*, twins: bool = False) -> FakeBrowser:
+    """A page whose controls are pictures: a paper plane in the form and a logo that is
+    a link. Neither has a name."""
+    elements = [
+        El("textbox", "Mesaj", in_form=True),
+        El("button", "", in_form=True, does="send_icon", effect=set_flag("sent")),
+        El("link", "", href=ICONS_HOME, does="logo"),
+    ]
+    if twins:
+        elements.append(El("button", "", in_form=True, does="attach_icon"))
+    return FakeBrowser(
+        url=ICONS,
+        pages={
+            ICONS: Page(
+                title="Sohbet",
+                text=lambda b: "Sohbet." + (" Gönderildi." if b.flags.get("sent") else ""),
+                elements=elements,
+            ),
+            ICONS_HOME: Page(title="Ana sayfa", text="Ana sayfa.", elements=[]),
+        },
+    )
+
+
+ICON_SCRIPT = [fill("Mesaj", "Merhaba"), click("", text("Gönderildi"), role="button")]
+
+
+def test_an_icon_only_control_in_a_form_is_read_back_as_unnamed() -> None:
+    browser = icon_site()
+    state = drive(task(ICONS_GOAL), browser, list(ICON_SCRIPT))
+
+    assert state.status == STATUS_WAITING_OWNER
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+    assert state.pending.risk == RISK_EXTERNAL_COMMUNICATION
+    assert state.pending.message.startswith("example.org sitesinde adsız bir düğmeye basacağım.")
+    assert "Sayfa bu düğmeye ad vermemiş." in state.pending.message
+    assert "Doldurulan alanlar: Mesaj." in state.pending.message
+    assert browser.done == ["fill:Mesaj"] and not browser.flags.get("sent")
+
+    state = loop.confirm(state, source="voice")
+    state = drive(state, browser, [done("Gönderdim.")])
+    assert state.status == STATUS_DONE and browser.done.count("send_icon") == 1
+    acted = [r for r in state.rounds if r.action == ACTION_CLICK]
+    assert len(acted) == 1 and acted[0].confirmed_by == "voice" and acted[0].element == ""
+
+
+def test_an_icon_only_link_is_followed_without_a_question() -> None:
+    browser = icon_site()
+    state = drive(
+        task("Ana sayfaya dön"),
+        browser,
+        [click("", Expectation(EXPECT_PAGE_CHANGED), role="link"), done("Ana sayfadayım.")],
+    )
+    assert state.status == STATUS_DONE and browser.url == ICONS_HOME
+    assert browser.done == ["logo"]
+
+
+def test_two_unnamed_controls_cannot_be_told_apart_and_neither_is_pressed() -> None:
+    """A confirmation is bound to a control by what it IS. Two buttons without a name are
+    the same thing to the loop: after the owner's word it does not pick one."""
+    browser = icon_site(twins=True)
+    state = drive(task(ICONS_GOAL), browser, list(ICON_SCRIPT))
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+
+    state = loop.confirm(state, source="voice")
+    state = drive(state, browser, [])
+    assert state.pending is not None and state.pending.kind == ASK_CANNOT_SEE
+    assert browser.done == ["fill:Mesaj"]
+    assert [c[0] for c in browser.commands].count(ACTION_CLICK) == 0
+
+
+PLAN = "https://uyelik.example.org/paket"
+
+
+def plan_site() -> FakeBrowser:
+    return FakeBrowser(
+        url=PLAN,
+        pages={
+            PLAN: Page(
+                title="Paket",
+                text="Paket seçin. Yıllık: 1.200,00 TL",
+                elements=[
+                    El("combobox", "Satın al", tag="select"),
+                    El("checkbox", "Abone ol"),
+                    El("combobox", "Hesabı sil", tag="select"),
+                    El("combobox", "Dönem", tag="select", in_form=True),
+                    El("textbox", "Kart numarası", in_form=True, sensitive=True),
+                ],
+            )
+        },
+    )
+
+
+def choose(name: str, value: str) -> Any:
+    def entry(request: PlanRequest) -> Step:
+        return Step(
+            action=ACTION_SELECT,
+            ref=by_name(request, name) or "e999",
+            value=value,
+            expect=Expectation(EXPECT_FIELD_HAS_VALUE, name),
+            why=f"select {name}",
+        )
+
+    return entry
+
+
+def tick(name: str) -> Any:
+    def entry(request: PlanRequest) -> Step:
+        return Step(
+            action=ACTION_CHECK,
+            ref=by_name(request, name) or "e999",
+            checked=True,
+            expect=Expectation(EXPECT_CHECKED, name),
+            why=f"check {name}",
+        )
+
+    return entry
+
+
+PLAN_GOAL = 'Paket sayfasında dönemi "Yıllık" seç'
+
+
+def test_a_select_that_buys_on_change_is_the_payment_boundary() -> None:
+    browser = plan_site()
+    state = drive(task(PLAN_GOAL), browser, [choose("Satın al", "Yıllık")])
+    assert state.status == STATUS_WAITING_OWNER
+    assert state.pending is not None and state.pending.kind == ASK_PAYMENT
+    assert browser.done == [] and browser.fields == {}
+    with pytest.raises(loop.OwnerWordError):
+        loop.confirm(state, source="voice")
+
+    state = loop.continue_(state, "devam")
+    state = drive(state, browser, [tick("Abone ol")])
+    assert state.pending is not None and state.pending.kind == ASK_PAYMENT
+    assert browser.done == [] and browser.checked == {}
+
+
+def test_a_select_that_cannot_be_undone_is_chosen_only_on_the_owners_word() -> None:
+    browser = plan_site()
+    state = drive(task(PLAN_GOAL), browser, [choose("Hesabı sil", "Yıllık")])
+    assert state.pending is not None and state.pending.kind == ASK_CONFIRM
+    assert state.pending.risk == RISK_HIGH_IMPACT
+    assert "bir listeden seçim yapacağım" in state.pending.message
+    assert "Yıllık" not in state.pending.message
+    assert browser.done == [] and browser.fields == {}
+
+    state = loop.decline(state)
+    state = drive(state, browser, [choose("Dönem", "Yıllık"), done("Dönemi seçtim.")])
+    assert state.status == STATUS_DONE
+    assert browser.fields == {"Dönem": "Yıllık"} and browser.done == ["fill:Dönem"]
+
+
+def test_a_card_number_field_is_never_written_by_any_of_the_three_writes() -> None:
+    def write_card(action: str) -> Any:
+        def entry(request: PlanRequest) -> Step:
+            return Step(
+                action=action,
+                ref=by_name(request, "Kart numarası") or "e999",
+                value=None if action == ACTION_CHECK else "Yıllık",
+                checked=True if action == ACTION_CHECK else None,
+                expect=Expectation(EXPECT_PAGE_CHANGED),
+            )
+
+        return entry
+
+    for action in (ACTION_FILL, ACTION_SELECT, ACTION_CHECK):
+        browser = plan_site()
+        state = drive(task(PLAN_GOAL), browser, [write_card(action)])
+        assert state.pending is not None and state.pending.kind == ASK_SENSITIVE_FIELD, action
+        assert browser.done == [] and browser.fields == {} and browser.checked == {}

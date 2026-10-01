@@ -15,11 +15,16 @@ The order of the rules is the order of what must never happen:
 5. what is typed comes from the owner - his goal or his answer - never from the page;
 6. where the loop goes comes from the owner, from a link the page really has, or is a
    public address; a denied site may be READ, so going there is allowed and acting there
-   is rule 3;
-7. a payment is never performed. Not with a confirmation either (decision 4);
+   is rule 3. A site he names by its NAME is named where a site is named ("YouTube'da",
+   "Trendyol sitesinde") - not by every word he said;
+7. a payment is never performed. Not with a confirmation either (decision 4), and not by
+   another action: a select or a checkbox the page calls "Satın al" is the same boundary
+   as a button;
 8. anything that sends or cannot be undone waits for the read-back and the owner's word
-   (decisions 1 and 2), and a page that carries instruction-like text is gated one class
-   higher than its element.
+   (decisions 1 and 2) - a click, and a fill, a choice or a tick judged from the element
+   the same way - and a page that carries instruction-like text is gated one class
+   higher than its element. The word opens the control that was READ BACK: the same
+   name wired to something else is another control, and is read back again.
 """
 
 from __future__ import annotations
@@ -92,6 +97,17 @@ _AMOUNT: Final = re.compile(
 )
 _URL_IN_TEXT: Final = re.compile(r"https?://[^\s\"'<>)\]]+", re.IGNORECASE)
 _HOST_IN_TEXT: Final = re.compile(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}\b", re.IGNORECASE)
+#: What stands after a site's name where a site is NAMED, on folded text: a locative
+#: ("YouTube'da", "YouTube'daki"), an ablative ("Trendyol'dan") or a dative
+#: ("Hepsiburada'ya"), with or without its apostrophe; the one-letter dative only WITH
+#: one ("Google'a" - "dünya" is not "düny" and an "a"); or the word "sitesi" / "sayfası"
+#: in any case ("trendyol sitesinde").
+_APOSTROPHE: Final = "['\u2019\u02bc\u2018`]"
+_SITE_POSITION: Final = (
+    rf"(?:{_APOSTROPHE}?(?:dan|den|tan|ten|(?:da|de|ta|te)(?:ki)?|ya|ye)(?![0-9a-z])"
+    rf"|{_APOSTROPHE}[ae](?![0-9a-z])"
+    r"|\s+(?:sitesi|sayfasi)[a-z]*(?![0-9a-z]))"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +163,12 @@ def read_back_facts(
         "host": host_of(observation.url),
         "element": element.name if element else "",
         "role": element.role if element else "",
+        # What the control is WIRED to, as far as an observation can see it: a page that
+        # keeps the name and the role and moves the control out of its form, or points
+        # the link elsewhere, has made another control.
+        "submits": bool(element.submits) if element else False,
+        "in_form": bool(element.in_form) if element else False,
+        "href_host": (element.href_host or "") if element else "",
         "amounts": list(amounts_in(observation.text)),
         "fields_filled": sorted(
             e.name for e in observation.elements if "has_value" in e.state and not e.sensitive
@@ -183,18 +205,32 @@ def spoken_name(name: str) -> tuple[str, bool]:
     return said, cut
 
 
+#: What the loop is about to do, said as what it IS: what is done to "bir ...", and the
+#: control in the dative for "... verdiği ad". A step that is not a click is not read
+#: back as a button being pressed.
+_SPOKEN_ACT: Final[dict[str, tuple[str, str]]] = {
+    ACTION_CLICK: ("düğmeye basacağım", "düğmeye"),
+    ACTION_FILL: ("alana yazacağım", "alana"),
+    ACTION_SELECT: ("listeden seçim yapacağım", "listeye"),
+    ACTION_CHECK: ("kutunun işaretini değiştireceğim", "kutuya"),
+}
+
+
 def read_back_sentence(facts: dict[str, Any], risk: str) -> str:
     """The Turkish read-back. Built from the facts, in a fixed shape: what the SYSTEM
     says is its own sentence, and what the PAGE calls its control is given after it,
-    named as the page's word."""
-    element, cut = spoken_name(str(facts.get("element") or ""))
+    named as the page's word. A control the page gave no name is SAID to be unnamed:
+    the owner is not asked about "a button" as if it had been identified."""
+    name = str(facts.get("element") or "")
+    element, cut = ("", False) if risk_rules.is_unnamed(name) else spoken_name(name)
     site = str(facts.get("site") or "").strip() or "bilinmeyen site"
-    parts = [f"{site} sitesinde bir düğmeye basacağım."]
+    act, control = _SPOKEN_ACT.get(str(facts.get("action") or ""), _SPOKEN_ACT[ACTION_CLICK])
+    parts = [f"{site} sitesinde {'bir' if element else 'adsız bir'} {act}."]
     if element:
         shortened = " (uzun bir ad, kısalttım)" if cut else ""
-        parts.append(f"Sayfanın bu düğmeye verdiği ad: '{element}'{shortened}.")
+        parts.append(f"Sayfanın bu {control} verdiği ad: '{element}'{shortened}.")
     else:
-        parts.append("Sayfa bu düğmeye ad vermemiş.")
+        parts.append(f"Sayfa bu {control} ad vermemiş.")
     filled = [spoken_name(str(f))[0] for f in facts.get("fields_filled") or [] if f]
     filled = [f for f in filled if f]
     if filled:
@@ -211,8 +247,10 @@ def read_back_sentence(facts: dict[str, Any], risk: str) -> str:
 
 def facts_still_hold(granted: dict[str, Any], now: dict[str, Any]) -> tuple[bool, str]:
     """Between the read-back and the act the page may have changed. The act runs only on
-    the page that was read back: the same site, the same element, the same amounts."""
-    for key in ("site", "host", "element", "role"):
+    the page that was read back: the same site, the same element - by its name, its role
+    and what it is wired to - and the same amounts. A read-back taken before a fact was
+    recorded holds only where that fact is absent now too."""
+    for key in ("site", "host", "element", "role", "submits", "in_form", "href_host"):
         if str(granted.get(key) or "") != str(now.get(key) or ""):
             return False, f"{key}_changed"
     if list(granted.get("amounts") or []) != list(now.get("amounts") or []):
@@ -258,18 +296,24 @@ def url_is_allowed(url: str, observation: Observation, context: TaskContext) -> 
     # and nothing above it: "com" is a parent of every host he could name.
     if any(host == h or host.endswith("." + h) or host == site_of(f"https://{h}/") for h in named):
         return True
-    # "YouTube'da ...", "Trendyol'dan ...": the owner names a site by its NAME. The host
-    # is allowed when the name of its registrable domain is a word he said. The suffix is
-    # not checked (youtube.com or youtube.com.tr), which is the limit of this rule: going
-    # somewhere is a NAVIGATE, and what may be DONE there is judged element by element.
+    # "YouTube'da ...", "Trendyol'dan ...", "trendyol sitesinde ...": the owner names a
+    # site by its NAME. The host is allowed when the name of its registrable domain
+    # stands where he named a site - not when it is merely a word he said: "dünya
+    # haberlerini bul" names no site, and a common word can be a registered domain. The
+    # top-level domain is not checked (youtube.com or youtube.com.tr), which is the
+    # limit of this rule: going somewhere is a NAVIGATE, and what may be DONE there is
+    # judged element by element.
     # A word that is part of an address he wrote is not a site NAME: where he named a
     # host, the host is the rule (above), and "example" inside "magaza.example.com" names
     # nothing else.
     label = site_of(url).split(".")[0]
-    spoken = " ".join((context.goal, *context.answers))
+    # Joined so that the end of one thing he said and the start of the next are not read
+    # as one phrase ("... youtube" and then "sitesi ...").
+    spoken = " | ".join((context.goal, *context.answers))
     spoken = _HOST_IN_TEXT.sub(" ", _URL_IN_TEXT.sub(" ", spoken))
     if len(label) >= 4 and re.search(
-        rf"(?<![0-9a-z]){re.escape(risk_rules.fold(label))}(?![0-9a-z])", risk_rules.fold(spoken)
+        rf"(?<![0-9a-z]){re.escape(risk_rules.fold(label))}{_SITE_POSITION}",
+        risk_rules.fold(spoken),
     ):
         return True
     linked = {e.href_host.lower() for e in observation.elements if e.href_host}
@@ -353,7 +397,7 @@ def decide(step: Step, observation: Observation, context: TaskContext) -> Decisi
             return _refuse(REFUSE_URL_NOT_FROM_OWNER_OR_PAGE)
 
     risk = risk_rules.classify_step(step.action, element)
-    if step.action == ACTION_CLICK and element is not None and risk_rules.is_payment(element.name):
+    if step.action in NEEDS_REF and element is not None and risk_rules.is_payment(element.name):
         return _ask(
             ASK_PAYMENT,
             f"Ödeme sınırındayım: {site_of(observation.url)} sitesinde '{element.name}'. "
@@ -368,6 +412,7 @@ def decide(step: Step, observation: Observation, context: TaskContext) -> Decisi
     facts = read_back_facts(step, element, observation)
     digest = step.digest(element)
     grant = context.grant
+    sentence = read_back_sentence(facts, risk)
     if grant is not None and grant.step_digest == digest:
         holds, _why = facts_still_hold(grant.facts, facts)
         if holds:
@@ -375,8 +420,9 @@ def decide(step: Step, observation: Observation, context: TaskContext) -> Decisi
                 kind=DECISION_ALLOW, risk=risk, risk_ceiling=risk, confirmed_by=grant.source
             )
         # The page is no longer the page that was read back: the grant is spent, and the
-        # owner hears the NEW facts before anything is clicked.
-    return _ask(ASK_CONFIRM, read_back_sentence(facts, risk), risk=risk, facts=facts)
+        # owner hears the NEW facts - and that they are new - before anything is clicked.
+        sentence = "Onayınızdan sonra sayfa değişti; yeniden soruyorum. " + sentence
+    return _ask(ASK_CONFIRM, sentence, risk=risk, facts=facts)
 
 
 __all__ = [
