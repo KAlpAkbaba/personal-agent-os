@@ -34,6 +34,27 @@ NAME = "2026-10-01-ev-home-assistant.md"
 TEXT = "# Ev otomasyonu\n\nIşığı sesle aç: ığüşöç İĞÜŞÖÇ.\n"
 NOW = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
 KEY_WIDTH = TeamStateRow.__table__.c.key.type.length
+REPORTS_API = "/v1/team/queue/reports"
+#: U+0000: SQLite and a file keep it, PostgreSQL's JSONB refuses it (a 500 until 2026-10-01).
+NUL = chr(0)
+#: Half of a surrogate pair: a Python string that is not UTF-8, so neither store can keep it.
+LONE_SURROGATE = chr(0xD800)
+#: Windows keeps these stems for devices whatever the extension: ``nul.md`` is the null device.
+DEVICE_NAMES = (
+    "nul.md",
+    "con.md",
+    "aux.md",
+    "prn.md",
+    "com1.md",
+    "com9.md",
+    "lpt1.md",
+    "lpt9.md",
+    "nul.fikir.md",
+)
+#: The ones a test may hand to a FileStore: were the rule missing, the write would go to the
+#: null device and fail. ``com1.md`` would OPEN a serial port and hang (it did, 2026-10-01),
+#: and a hanging test proves nothing - the other stems are asserted on the rule itself.
+NULL_DEVICE_NAMES = ("nul.md", "nul.fikir.md")
 
 
 def _task(task_id: str, state: str = "awaiting_owner", **extra: Any) -> dict[str, Any]:
@@ -152,6 +173,7 @@ def test_a_second_put_of_the_same_name_replaces_the_text_and_keeps_one_copy(
         "fikir.md\n",
         "",
         _name_of_length(KEY_WIDTH + 1),  # fits the pattern (<= 124), not the key column
+        *NULL_DEVICE_NAMES,
     ],
 )
 def test_a_name_that_breaks_the_pattern_or_the_key_column_is_refused_by_the_store(
@@ -224,6 +246,49 @@ def test_the_name_pattern_is_the_one_the_contract_states():
     assert team_store.PROPOSAL_MAX_CHARS == 200_000
 
 
+def test_a_text_no_database_can_keep_is_refused_by_both_stores_alike(store, engine, team_root):
+    """PostgreSQL's JSONB has no U+0000 and SQLite and a file keep it: the store refuses it on
+    both, so a text one machine accepts is never a 500 on the other (ADR-0214 addendum 4)."""
+    store.put_proposal(NAME, TEXT, now=NOW)
+    for bad in (NUL, "ilk" + NUL + "son", TEXT + NUL, LONE_SURROGATE, "a" + LONE_SURROGATE):
+        with pytest.raises(team_store.Invalid):
+            store.put_proposal(NAME, bad, now=NOW)
+        with pytest.raises(team_store.Invalid):
+            store.put_proposal("2026-10-01-baska.md", bad, now=NOW)
+    assert store.read_proposal(NAME) == TEXT  # the refused replace left the text as it was
+    assert _everything_written(store, engine, team_root) == [NAME]
+
+
+@pytest.mark.parametrize("device", DEVICE_NAMES)
+def test_a_windows_device_name_cannot_name_a_proposal(device):
+    # ``team/proposals/nul.md`` is not a file on the machine that runs the file store; the rule
+    # is one for both stores, so a name is never good on the Cloud Core and bad at home.
+    assert team_store.proposal_name_problems(device) != []
+    assert team_store.proposal_name_problems("2026-10-01-" + device) == []
+
+
+@pytest.mark.parametrize(
+    "near", ["null.md", "console.md", "com10.md", "lpt.md", "2026-10-01-nul.md", "nul-fikir.md"]
+)
+def test_a_name_that_only_looks_like_a_device_name_is_kept(store, engine, team_root, near):
+    store.put_proposal(near, TEXT, now=NOW)
+    assert store.read_proposal(near) == TEXT
+    assert _everything_written(store, engine, team_root) == [near]
+
+
+def test_a_report_no_database_can_keep_is_refused_by_both_stores_alike(store):
+    # Found on the way: the cycle report had the same two holes as the proposal.
+    for bad in (NUL, "rapor" + NUL, LONE_SURROGATE):
+        with pytest.raises(team_store.Invalid):
+            store.put_report("cycle-1.md", bad, now=NOW)
+    for device in ("nul.md", "NUL.md", "Nul.rapor.md"):  # the null device only: see above
+        with pytest.raises(team_store.Invalid):
+            store.put_report(device, "rapor", now=NOW)
+    assert store.newest_report() is None
+    store.put_report("null.md", "rapor", now=NOW)
+    assert store.newest_report() == {"file": "null.md", "text": "rapor"}
+
+
 # ------------------------------------------------------------------ the route
 
 
@@ -284,6 +349,9 @@ def test_the_text_shown_is_cut_at_the_listing_limit_and_the_store_keeps_all_of_i
         {"text": "x"},
         {},
         {"name": NAME, "text": "x", "path": "team/proposals"},
+        {"name": NAME, "text": "ilk" + NUL + "son"},
+        {"name": NAME, "text": NUL},
+        *({"name": device, "text": "x"} for device in NULL_DEVICE_NAMES),
     ],
 )
 def test_a_body_the_contract_does_not_allow_is_a_422_and_nothing_is_written(
@@ -309,6 +377,21 @@ def test_a_post_without_an_owner_session_is_a_401_and_nothing_is_written(
     _, client, _ = app_and_client
     assert client.post(PROPOSALS_API, json={"name": NAME, "text": TEXT}).status_code == 401
     assert _everything_written(store, engine, team_root) == []
+
+
+def test_a_refused_post_leaves_the_text_the_owner_already_reads(owner, store):
+    store.put_task(_task("ev-home-assistant", proposal=f"team/proposals/{NAME}"), None)
+    assert owner.post(PROPOSALS_API, json={"name": NAME, "text": TEXT}).status_code == 200
+    refused = owner.post(PROPOSALS_API, json={"name": NAME, "text": "yeni" + NUL})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == "invalid"
+    assert _listed(owner, "ev-home-assistant")["proposal_text"] == TEXT
+
+
+def test_a_report_with_a_nul_or_a_device_name_is_a_422_and_nothing_is_stored(owner, store):
+    assert owner.post(REPORTS_API, json={"name": "cycle-1.md", "text": NUL}).status_code == 422
+    assert owner.post(REPORTS_API, json={"name": "nul.md", "text": "rapor"}).status_code == 422
+    assert store.newest_report() is None
 
 
 # ------------------------------------------------------------------ where the text comes from

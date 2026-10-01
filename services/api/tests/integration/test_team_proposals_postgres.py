@@ -33,6 +33,8 @@ NAME = f"{PREFIX}ev-home-assistant.md"
 TASK_ID = f"{PREFIX}idea"
 TEXT = "# Ev otomasyonu\n\nIşığı sesle aç: ığüşöç İĞÜŞÖÇ.\n"
 KEY_WIDTH = TeamStateRow.__table__.c.key.type.length
+REPORT = f"{PREFIX}cycle.md"
+NUL = chr(0)  # U+0000: JSONB has no such character
 
 
 def _name_of_length(length: int) -> str:
@@ -178,3 +180,93 @@ def test_a_posted_proposal_is_what_the_onay_merkezi_lists_from_postgres(
     )
     assert refused.status_code == 422, refused.text
     assert _keys(factory) == [NAME]
+
+
+def _reports(factory) -> list[str]:
+    with factory() as session:
+        return sorted(
+            session.execute(
+                select(TeamStateRow.key).where(
+                    TeamStateRow.kind == "report", TeamStateRow.key.like(f"{PREFIX}%")
+                )
+            ).scalars()
+        )
+
+
+def test_postgres_itself_refuses_the_nul_the_store_refuses(factory) -> None:
+    """Why the rule is the store's: SQLite keeps this text, and here it was a 500."""
+    with factory() as session:
+        session.add(
+            TeamStateRow(
+                kind="proposal",
+                key=NAME,
+                doc={"text": "ilk" + NUL + "son"},
+                updated_at="2026-10-01T12:00:00Z",
+            )
+        )
+        with pytest.raises(DBAPIError, match="cannot be converted to text"):
+            session.commit()
+        session.rollback()
+    assert _keys(factory) == []
+
+
+def test_a_text_with_a_nul_is_a_422_through_the_route_and_nothing_is_written_on_postgres(
+    store: DbStore, factory, tmp_path
+) -> None:
+    settings = Settings()
+    app = create_app(settings)
+    app.state.team_store = store
+    app.state.team_root = tmp_path / "team"
+    client = TestClient(app)
+    attach_owner(app, client, settings)
+
+    for bad in (NUL, "ilk" + NUL + "son"):
+        refused = client.post("/v1/team/queue/proposals", json={"name": NAME, "text": bad})
+        assert refused.status_code == 422, refused.text
+        assert refused.json()["detail"]["code"] == "invalid"
+    assert _keys(factory) == []
+
+    assert (
+        client.post("/v1/team/queue/proposals", json={"name": NAME, "text": TEXT}).status_code
+        == 200
+    )
+    refused = client.post("/v1/team/queue/proposals", json={"name": NAME, "text": TEXT + NUL})
+    assert refused.status_code == 422, refused.text
+    assert store.read_proposal(NAME) == TEXT  # the refused replace left the row as it was
+
+    # The cycle report had the same hole (found on the way).
+    refused = client.post("/v1/team/queue/reports", json={"name": REPORT, "text": "rapor" + NUL})
+    assert refused.status_code == 422, refused.text
+    assert _reports(factory) == []
+    kept = client.post("/v1/team/queue/reports", json={"name": REPORT, "text": "rapor"})
+    assert kept.status_code == 200, kept.text
+    assert _reports(factory) == [REPORT]
+
+
+def test_a_windows_device_name_is_refused_on_postgres_as_it_is_at_home(
+    store: DbStore, factory
+) -> None:
+    """One rule for the name on both stores: a name is never good here and bad on the file store."""
+
+    def written() -> list[str]:
+        with factory() as session:
+            return list(
+                session.execute(
+                    select(TeamStateRow.key).where(
+                        TeamStateRow.kind == "proposal", TeamStateRow.key == "nul.md"
+                    )
+                ).scalars()
+            )
+
+    try:
+        with pytest.raises(Invalid):
+            store.put_proposal("nul.md", TEXT)
+        assert written() == []
+    finally:  # the one key this file writes without its prefix: were the rule gone, take it back
+        with factory() as session:
+            session.execute(
+                delete(TeamStateRow).where(
+                    TeamStateRow.kind == "proposal", TeamStateRow.key == "nul.md"
+                )
+            )
+            session.commit()

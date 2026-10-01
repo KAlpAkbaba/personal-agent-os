@@ -44,6 +44,9 @@ PROPOSAL_MAX_CHARS = 200_000
 #: ``team_state.key`` is VARCHAR(80) (migration 0063): the name is the row's key, kept whole.
 KEY_WIDTH: int = TeamStateRow.__table__.c.key.type.length
 _PROPOSAL_NAME = re.compile(PROPOSAL_NAME_PATTERN)
+#: Windows keeps these stems for devices whatever follows the first dot: ``nul.md`` is the null
+#: device there, not a file (``os.replace`` onto it fails; ``com1.md`` opens a serial port).
+_DEVICE_STEM = re.compile(r"(?:con|prn|aux|nul|com[0-9]|lpt[0-9])", re.IGNORECASE)
 _WRITE_LOCK = threading.RLock()
 
 
@@ -208,20 +211,45 @@ def _may_release(lock: dict[str, Any] | None, machine: str) -> None:
             raise Stale(f"the lock is held by {lock.get('machine')}, not {machine}")
 
 
-def _check_report_name(name: str) -> None:
-    if not _REPORT_NAME.fullmatch(name or ""):  # ``$`` alone also matches before a final \n
+def _is_device_name(name: str) -> bool:
+    return _DEVICE_STEM.fullmatch(name.split(".", 1)[0]) is not None
+
+
+def _text_problems(what: str, text: str) -> list[str]:
+    """Why neither store may keep ``text``: one rule, so SQLite and a file do not accept what
+    PostgreSQL refuses (JSONB has no U+0000 - a 500 on the Cloud Core until 2026-10-01)."""
+    if "\x00" in text:
+        return [f"{what} text has no U+0000 character"]
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return [f"{what} text is valid Unicode (it holds half of a surrogate pair)"]
+    return []
+
+
+def _check_report(name: Any, text: Any) -> None:
+    # ``fullmatch``: ``$`` alone also matches before a final \n
+    if not isinstance(name, str) or not _REPORT_NAME.fullmatch(name) or _is_device_name(name):
         raise Invalid([f"a report name is a file name ending in .md: {name!r}"])
+    if not isinstance(text, str):
+        raise Invalid(["a report's text is a string"])
+    problems = _text_problems("a report's", text)
+    if problems:
+        raise Invalid(problems)
 
 
 def proposal_name_problems(name: Any) -> list[str]:
     """Why ``name`` cannot name a proposal in either store. Empty when it can.
 
     ``fullmatch``: ``$`` also matches before a final newline. A name the key column cannot
-    hold is refused, never cut - a cut name would be another proposal's key."""
+    hold is refused, never cut - a cut name would be another proposal's key. A name the file
+    store's machine reads as a device is refused on both stores: one rule for the name."""
     if not isinstance(name, str) or _PROPOSAL_NAME.fullmatch(name) is None:
         return [f"a proposal name matches {PROPOSAL_NAME_PATTERN}: {name!r}"]
     if len(name) > KEY_WIDTH:
         return [f"a proposal name is at most {KEY_WIDTH} characters: this one is {len(name)}"]
+    if _is_device_name(name):
+        return [f"a proposal name is not a Windows device name: {name!r}"]
     return []
 
 
@@ -231,6 +259,8 @@ def _check_proposal(name: Any, text: Any) -> None:
         problems.append("a proposal's text is a string")
     elif len(text) > PROPOSAL_MAX_CHARS:
         problems.append(f"a proposal's text is at most {PROPOSAL_MAX_CHARS} characters")
+    else:
+        problems.extend(_text_problems("a proposal's", text))
     if problems:
         raise Invalid(problems)
 
@@ -347,7 +377,7 @@ class FileStore:
             self._write(self.root / "status.json", _copy(document))
 
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
-        _check_report_name(name)
+        _check_report(name, text)
         folder = self.root / "reports"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / name).write_bytes(text.encode("utf-8"))
@@ -531,7 +561,7 @@ class DbStore:
                 session.rollback()  # two first writes raced: the other one's heartbeat stands
 
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
-        _check_report_name(name)
+        _check_report(name, text)
         at = stamp(now or utcnow())
         with self._factory() as session:
             row = session.get(TeamStateRow, (KIND_REPORT, name))

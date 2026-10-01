@@ -22,6 +22,20 @@ at most 80 characters, the width of `team_state.key`, read from the model. A lon
 refused (422), never cut: a cut name is another proposal's key. The text is a string of at
 most 200 000 characters.
 
+Two more rules, both from the inspector's break pass (2026-10-01), both on BOTH stores so a
+body is never good on one machine and a 500 on the other:
+
+- **A text neither store can keep is refused (422).** U+0000: PostgreSQL's JSONB has no such
+  character (`UntranslatableCharacter`, a 500 on the Cloud Core) while SQLite and a file keep
+  it - the addendum-4 shape. Half of a surrogate pair: not UTF-8, so the file store cannot
+  write it either. The cycle report (`put_report`) had the same hole and has the same rule.
+- **A Windows device name is refused (422).** A name whose part before the first dot is
+  `con`, `prn`, `aux`, `nul`, `com0`-`com9` or `lpt0`-`lpt9` is a device on the machine that
+  runs the file store (`nul.md` is the null device: `os.replace` onto it fails; `com1.md`
+  opens a serial port). Refused in `proposal_name_problems`, and for report names too, rather
+  than turning the file store's `OSError` into `Invalid`: the database store would otherwise
+  keep a name the home PC cannot.
+
 `POST /v1/team/queue/proposals` (owner session; body `{name, text}`, no other field) answers
 `{ok: true}`; a second post of the same name replaces the text; anything else is 422 and
 nothing is written. This contract is binding with `researcher-every-cycle`, whose `cycle.ps1`
@@ -70,26 +84,24 @@ Unit (both stores) `tests/unit/test_team_proposals.py`,
 - The ledger event is recorded before the queue write (ADR-0217): a decision refused as
   `stale_write` has left an event for a decision that did not land. That was possible before;
   with decisions open during a cycle it is less rare.
+- A request body whose string holds half of a surrogate pair is refused by pydantic before the
+  route runs (nothing is written), but the app's validation-error answer then fails to encode
+  the echoed input: a 500 instead of a 422, on every route, not only this one. It is outside
+  this task's area (the error handler); the store's own rule is what this task tests.
+- `put_task` keeps a task document as JSONB: a U+0000 inside a task's string would be refused
+  by PostgreSQL the same way. Not measured here; the cycle writes those strings itself.
 - `PROVEN_REAL` needs the owner: read an idea's text and approve it with the home PC off and a
   cycle running, after the release.
 
-## For the lead at merge: two existing tests outside this task's area
+## For the lead at merge
 
-This branch changes no file outside its area, so two existing unit tests are RED on it
-(measured: 2 failed, 208 passed over the team's unit files). Both edits are in commit
-`1df514f06e8fb5c47bf6c9a7e84ec4c6eeb77427`, which is reverted on this branch and still
-reachable from it: `git cherry-pick 1df514f0` on the integration branch applies both.
-
-- `services/api/tests/unit/test_team_state.py`,
-  `test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server_has`:
-  `POST /v1/team/queue/proposals` is served and `TeamQueue.ps1` does not call it yet. The
-  task card asks for an entry in `read_by_others` with its reason; that dict is in this file.
-  `researcher-every-cycle` removes the entry when its client calls the route (if that task
-  merges first, the entry is not needed at all).
-- `services/api/tests/unit/test_team_approvals.py`,
-  `test_a_decision_is_refused_while_a_cycle_holds_the_lock_on_both_stores[db]`: it holds the
-  rule the owner changed on 2026-10-01 (409 `cycle_running` on the database store). The file
-  store half stays; the database half expects 200 and the task approved.
-
-Not done instead: serving the route from a router the contract test does not read. That
-would turn the contract test green by hiding the route from it.
+- The two existing tests the new route and the new rule change
+  (`tests/unit/test_team_state.py`: the route is in `read_by_others` with its reason, and
+  `researcher-every-cycle` removes the entry when its `cycle.ps1` calls the route;
+  `tests/unit/test_team_approvals.py`: the database half of the cycle-holds-the-lock test
+  expects the decision applied) are on this branch again: the lead put both files in the area
+  and `1df514f0` is cherry-picked. Nothing to do at merge.
+- `voice/realtime_sessions/tools_team.py` calls `approvals.list_pending(queue, root)` without
+  the store. On the Cloud Core that falls back to the file store and the spoken path gets no
+  proposal text: pass the store (the file is outside this task's area).
+- The web page reads `decisions_open` (`approvals-detail-view`).
