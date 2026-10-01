@@ -14,6 +14,10 @@ Seat rules (the contract the page is built against):
   run, take the three newest such worker tasks that are returned/stopped, newest first;
 * the owner seat is always ``waiting`` with no task (the page shows the approvals on it).
 
+``updated_at`` must be UTC in the ``YYYY-MM-DDTHH:MM:SSZ`` form (the one ``team_store.stamp``
+writes); a value without the ``Z`` (no zone, or an offset) cannot be read and is not live, and one
+more than two minutes ahead of the clock (skew) is not live either.
+
 A status is live only while its ``updated_at`` is under ten minutes old AND the lock is held
 (not stale) by the cycle that wrote it; otherwise ``running`` is false and no seat works.
 """
@@ -27,6 +31,7 @@ from app.team import store as team_store
 
 CAPACITY = 6
 STATUS_STALE_MINUTES = 10
+STATUS_FUTURE_SKEW_MINUTES = 2  # a clock a little ahead is fine; further ahead is not "live"
 SUMMARY_MAX_LINES = 40  # queue.schema.json: report.summary maxItems
 SEATS = (
     "lead",
@@ -56,6 +61,8 @@ def _is_live(lock: dict[str, Any] | None, status: dict[str, Any] | None, now: da
         return False
     written = team_store._parse(status.get("updated_at"))
     if written is None or now - written > timedelta(minutes=STATUS_STALE_MINUTES):
+        return False
+    if written - now > timedelta(minutes=STATUS_FUTURE_SKEW_MINUTES):
         return False
     if not team_store.lock_is_running(lock, now):
         return False
@@ -131,7 +138,13 @@ def office_view(
         elif role in _ROLE_SEATS and role not in placed:
             placed[role] = run
 
-    returned_workers = [t for t in _newest_by_role(tasks, "worker") if t.get("state") in _RETURNED]
+    running_ids = {str(r.get("task")) for r in runs}
+    returned_workers = [
+        t
+        for t in _newest_by_role(tasks, "worker")
+        if t.get("state") in _RETURNED and str(t.get("id")) not in running_ids
+    ]
+    free_worker_seats = [s for s in WORKER_SEATS if s not in placed]
     agents: list[dict[str, Any]] = []
     for seat in SEATS:
         role = "worker" if seat in WORKER_SEATS else seat
@@ -142,9 +155,8 @@ def office_view(
             task = by_id.get(str(run.get("task")), {"id": run.get("task"), "title": None})
             agents.append(_seat(seat, role, "working", task, run.get("started_at")))
         elif seat in WORKER_SEATS:
-            free = [t for t in returned_workers if t.get("id") not in {r.get("task") for r in runs}]
-            index = WORKER_SEATS.index(seat)
-            task = free[index] if index < len(free) else None
+            index = free_worker_seats.index(seat)  # position among the seats nobody is working
+            task = returned_workers[index] if index < len(returned_workers) else None
             state = "returned" if task is not None else "waiting"
             agents.append(_seat(seat, role, state, task, task and task.get("updated_at")))
         else:

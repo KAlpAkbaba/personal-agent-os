@@ -301,3 +301,54 @@ def test_the_file_store_keeps_the_status_beside_the_queue(tmp_path):
     on_disk = json.loads((store.root / "status.json").read_text(encoding="utf-8"))
     assert on_disk == {"cycle_id": "c1"}
     assert store.read_status() == {"cycle_id": "c1"}
+
+
+def test_a_returned_worker_task_is_shown_while_another_worker_runs():
+    tasks = [
+        _task("run-task"),
+        _task("old-task", "returned", reports=[_report("worker")]),
+    ]
+    view = _view(tasks, _status([("run-task", "worker")]))
+    assert (_seat(view, "worker-1")["state"], _seat(view, "worker-1")["task_id"]) == (
+        "working",
+        "run-task",
+    )
+    w2 = _seat(view, "worker-2")
+    assert (w2["state"], w2["task_id"]) == ("returned", "old-task")
+    assert _seat(view, "worker-3")["state"] == "waiting"
+
+
+def test_two_returned_tasks_fill_the_free_seats_newest_first_around_a_running_one():
+    tasks = [
+        _task("run-task"),
+        _task("old-a", "returned", reports=[_report("worker", "2026-10-01T09:00:00Z")]),
+        _task("old-b", "stopped", reports=[_report("worker", "2026-10-01T10:00:00Z")]),
+    ]
+    view = _view(tasks, _status([("run-task", "worker")]))
+    assert [_seat(view, f"worker-{n}")["task_id"] for n in (1, 2, 3)] == [
+        "run-task",
+        "old-b",
+        "old-a",
+    ]
+
+
+@pytest.mark.parametrize(
+    "updated_at",
+    [
+        "2026-10-01T12:00:00",  # no timezone: not the contract's UTC 'Z' form
+        "2026-10-01T15:00:00+03:00",  # an offset is not accepted either
+        "2026-10-01T12:30:00Z",  # 30 minutes in the future: clock skew, not liveness
+    ],
+)
+def test_an_updated_at_that_is_not_utc_z_or_is_far_in_the_future_is_not_live(updated_at):
+    status = _status([("alpha-task", "worker")], updated_at=updated_at)
+    view = _view([_task("alpha-task")], status)
+    assert view["cycle"]["running"] is False
+    assert _seat(view, "worker-1")["state"] != "working"
+
+
+def test_an_updated_at_a_little_ahead_of_the_clock_is_still_live():
+    status = _status(
+        [("alpha-task", "worker")], updated_at=team_store.stamp(NOW + timedelta(seconds=30))
+    )
+    assert _view([_task("alpha-task")], status)["cycle"]["running"] is True
