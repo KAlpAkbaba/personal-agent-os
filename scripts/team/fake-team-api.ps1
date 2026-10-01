@@ -19,12 +19,25 @@ param(
     [Parameter(Mandatory = $true)][string]$Ready,
     [string]$Token = "test-token",
     # Every PUT of the live status answers 500 (a failing status write must not stop a cycle).
-    [switch]$FailStatus
+    [switch]$FailStatus,
+    # A Cloud Core from before the model policy: a status that carries `limits`, or a run that
+    # carries `model`, is 422 (the real route forbids a key it does not know).
+    [switch]$LegacyStatus,
+    # A Cloud Core from before the model policy: /v1/team/queue/models is 404.
+    [switch]$NoModels
 )
 $ErrorActionPreference = "Stop"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
+# The rules of the model setting are the cycle's own (Read-TeamModelSetting): one list of models.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "lib\TeamQueue.ps1")
+# The library switches StrictMode on in the scope that dot-sources it; this listener reads
+# optional fields of whatever body came in, as it did before.
+Set-StrictMode -Off
 
 $state = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($Seed, $utf8))
+# The model setting (ADR-0214 addendum 7): what the seed holds, or nothing stored yet.
+$models = $null
+if ($null -ne $state.PSObject.Properties["models"]) { $models = $state.models }
 $tasks = [ordered]@{}
 foreach ($task in @($state.queue.tasks)) { $tasks[[string]$task.id] = $task }
 $lock = $state.lock
@@ -53,6 +66,9 @@ while ($running) {
     $context = $listener.GetContext()
     $request = $context.Request
     $path = $request.Url.AbsolutePath
+    # Read now: once a client has dropped the connection on an error answer the request no
+    # longer says what it was, and the log line came out without its method.
+    $method = [string]$request.HttpMethod
     $reader = New-Object System.IO.StreamReader($request.InputStream, $utf8)
     $raw = $reader.ReadToEnd()
     $body = $null
@@ -61,7 +77,7 @@ while ($running) {
     try {
         if ($path -eq "/__stop") { $running = $false; $status = Send-Json -Context $context -Status 200 -Body @{ stopped = $true } }
         elseif ($path -eq "/__state") {
-            $status = Send-Json -Context $context -Status 200 -Body @{ tasks = @($tasks.Values); lock = $lock; reports = $reports; status = $liveStatus; statuses = @($statusHistory) }
+            $status = Send-Json -Context $context -Status 200 -Body @{ tasks = @($tasks.Values); lock = $lock; reports = $reports; status = $liveStatus; statuses = @($statusHistory); models = $models }
         }
         elseif ($request.Headers["Authorization"] -ne "Bearer $Token") {
             $status = Send-Json -Context $context -Status 401 -Body @{ detail = "unauthorized" }
@@ -107,6 +123,9 @@ while ($running) {
             # The cycle's live status (office-cycle-status): the latest is kept, and every document
             # that came in, so a test can see what was written while the cycle waited.
             if ($FailStatus) { $status = Send-Json -Context $context -Status 500 -Body @{ detail = "status store down" } }
+            elseif ($LegacyStatus -and ($null -ne $body.PSObject.Properties["limits"] -or @($body.runs | Where-Object { $null -ne $_ -and $null -ne $_.PSObject.Properties["model"] }).Count -gt 0)) {
+                $status = Send-Json -Context $context -Status 422 -Body @{ detail = "extra fields not permitted" }
+            }
             else {
                 $liveStatus = $body
                 [void]$statusHistory.Add($body)
@@ -116,6 +135,19 @@ while ($running) {
         elseif ($path -eq "/v1/team/queue/status" -and $request.HttpMethod -eq "GET") {
             $status = Send-Json -Context $context -Status 200 -Body $(if ($null -ne $liveStatus) { $liveStatus } else { @{} })
         }
+        elseif ($path -eq "/v1/team/queue/models" -and $NoModels) {
+            $status = Send-Json -Context $context -Status 404 -Body @{ detail = "Not Found" }
+        }
+        elseif ($path -eq "/v1/team/queue/models" -and $request.HttpMethod -eq "GET") {
+            # Nothing stored: the defaults. What is stored is handed out as it is - the cycle
+            # validates what it reads, whoever wrote it.
+            $status = Send-Json -Context $context -Status 200 -Body $(if ($null -ne $models) { $models } else { Get-TeamModelDefaults })
+        }
+        elseif ($path -eq "/v1/team/queue/models" -and $request.HttpMethod -eq "PUT") {
+            $read = Read-TeamModelSetting -Document $body -Strict
+            if (-not $read.Ok) { $status = Send-Json -Context $context -Status 422 -Body @{ detail = @{ code = $read.Code; problems = @($read.Problems) } } }
+            else { $models = $read.Setting; $status = Send-Json -Context $context -Status 200 -Body $models }
+        }
         elseif ($path -eq "/v1/team/queue/reports" -and $request.HttpMethod -eq "POST") {
             $reports[[string]$body.name] = [string]$body.text
             $status = Send-Json -Context $context -Status 200 -Body @{ stored = $body.name }
@@ -123,6 +155,6 @@ while ($running) {
         else { $status = Send-Json -Context $context -Status 404 -Body @{ detail = "no such route" } }
     }
     catch { try { $status = Send-Json -Context $context -Status 500 -Body @{ detail = $_.Exception.Message } } catch { } }
-    [System.IO.File]::AppendAllText($Log, "$($request.HttpMethod) $path $status`n", $utf8)
+    [System.IO.File]::AppendAllText($Log, "$method $path $status`n", $utf8)
 }
 $listener.Stop()

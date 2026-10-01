@@ -29,6 +29,17 @@
     Idempotent: a branch, a worktree or a merge that exists is used as it is, and a task
     a killed run left `in_progress` is taken up again.
 
+    The model policy (ADR-0214 addendum 7): each role runs on the model the team store's
+    setting names for it (`GET /v1/team/queue/models`, else `team/models.json`, else the
+    defaults). A run that comes back with the usage limit is started again at once on the
+    next model down the chain (`"fallback": true`), and the report says 'model düşürüldü';
+    a limited model starts no run until its reset (`team/limits.json` keeps that across
+    cycles). The inspector is never started on a model weaker than the one the worker's run
+    really used: when every model at least that strong is limited, the inspection waits.
+
+.PARAMETER Model
+    The model of a role the setting does not name (one of the three ids). The setting wins.
+
 .PARAMETER MaxUsd
     The cycle's money cap; 0 (the default since the owner's decision of 2026-09-30, ADR-0214
     addendum 3) is NO cap: the subscription has none, and the USD the tool reports is kept
@@ -120,24 +131,8 @@ if ($runResearch -and -not $ResearchOnly -and $ResearchEveryHours -gt 0 -and (Te
     if ($null -ne $lastResearch -and ([datetime]::UtcNow - $lastResearch).TotalHours -lt $ResearchEveryHours) { $runResearch = $false }
 }
 
-# The model each role runs on (owner, 2026-10-01, ADR-0214 addendum 7): team/models.json,
-# {"roles": {"worker": "<model id>", ...}}. A role it does not name runs on -Model; with neither, the
-# tool's own default. The interim form: the setting moves into the team store with the task
-# model-policy-*. A name that is not a model name stops the cycle before it starts anything -
-# the value goes onto a command line.
-$roleModels = @{}
 $modelsPath = Join-Path $TeamRoot "models.json"
-if (Test-Path -LiteralPath $modelsPath) {
-    $modelsDocument = Read-TeamJson -Path $modelsPath
-    $rolesNode = Get-TeamProperty -InputObject $modelsDocument -Name "roles"
-    if ($null -ne $rolesNode) {
-        foreach ($property in $rolesNode.PSObject.Properties) {
-            $name = [string]$property.Value
-            if ($name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw "team/models.json: '$name' is not a model name (role $($property.Name))" }
-            $roleModels[[string]$property.Name] = $name
-        }
-    }
-}
+$limitsPath = Join-Path $TeamRoot "limits.json"
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
 $reportsRoot = Join-Path $TeamRoot "reports"
@@ -194,26 +189,95 @@ $liveRuns = New-Object System.Collections.ArrayList
 $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
 $statusFailed = $false
 $stopNoted = $false
+# The model policy (ADR-0214 addendum 7). $modelSetting is read below, once the report can be
+# written. $limitedModels is what the runs said is limited: model id -> { until, type, seen_at };
+# a model in it starts no run until its reset. It lives across cycles in team/limits.json (an
+# entry nobody dated lives for this cycle only - on disk it would bar the model for ever).
+# $limitWindows is the tool's own usage numbers as last seen: fable / all / session ->
+# { used_pct, resets_at, observed_at }. $loweredRuns is this cycle's downgrades, newest last.
+$modelSetting = $null
+$limitedModels = @{}
+$limitWindows = @{}
+$loweredRuns = New-Object System.Collections.ArrayList
+# A Cloud Core that does not know the status' model fields yet answers 422: it then gets the
+# status in the form it knows, for the rest of the cycle.
+$statusLegacy = $false
+# The usage limit ended the cycle: nothing further starts.
+$limitStop = $false
 
 function Add-CycleNote {
     param([string]$List, [string]$Text)
     $script:cycle.$List = @(@($script:cycle.$List) + $Text)
 }
 
-function Write-CycleStatus {
+function Get-LimitsDocument {
+    <# `limits` of the live status, as the contract of the three model-policy cards states it.
+       state: what the runs returned. used_pct: the tool's own number, or null - nobody
+       computes one - and null again once the window it describes has reset. #>
+    $now = [datetime]::UtcNow
+    $chain = @(Get-TeamModelChain)
+    $closed = @($chain | Where-Object { Test-TeamModelLimited -Limited $script:limitedModels -Model $_ -Now $now })
+    $entries = @{}
+    foreach ($name in @("fable", "all")) {
+        $percent = $null
+        if ($script:limitWindows.ContainsKey($name)) {
+            $window = $script:limitWindows[$name]
+            $ends = ConvertFrom-TeamTimestamp -Text ([string](Get-TeamProperty -InputObject $window -Name "resets_at" -Default ""))
+            if ($null -eq $ends -or $now -lt $ends) { $percent = Get-TeamProperty -InputObject $window -Name "used_pct" }
+        }
+        $entries[$name] = [ordered]@{ state = "ok"; resets_at = $null; used_pct = $percent }
+    }
+    if ($closed -contains $chain[0]) {
+        $entries["fable"].state = "limited"
+        $until = [string](Get-TeamProperty -InputObject $script:limitedModels[$chain[0]] -Name "until" -Default "")
+        if ($until) { $entries["fable"].resets_at = $until }
+    }
+    if (@($closed).Count -eq @($chain).Count) {
+        # Every model is closed: the limit of all. It lifts when the first of them does.
+        $entries["all"].state = "limited"
+        $first = @($closed | ForEach-Object { [string](Get-TeamProperty -InputObject $script:limitedModels[$_] -Name "until" -Default "") } | Where-Object { $_ } | Sort-Object)
+        if (@($first).Count -gt 0) { $entries["all"].resets_at = $first[0] }
+    }
+    return [ordered]@{
+        fable    = $entries["fable"]
+        all      = $entries["all"]
+        fallback = [bool](Get-TeamProperty -InputObject $script:modelSetting -Name "fallback" -Default $true)
+        lowered  = @($script:loweredRuns.ToArray())
+    }
+}
+
+function New-CycleStatus {
+    param([bool]$Legacy = $false)
     $document = [ordered]@{
         cycle_id      = $CycleId
         machine       = $Machine
         pid           = $PID
         started_at    = [string]$script:cycle.started_at
-        runs          = @($script:liveRuns | ForEach-Object { [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at } })
+        runs          = @($script:liveRuns | ForEach-Object {
+                $entry = [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at }
+                if (-not $Legacy) { $entry["model"] = $_.model }
+                $entry
+            })
         estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
         usage_limit   = [ordered]@{ state = $script:usageLimit.state; resets_at = $script:usageLimit.resets_at }
-        updated_at    = (Get-TeamTimestamp)
     }
+    if (-not $Legacy) { $document["limits"] = (Get-LimitsDocument) }
+    $document["updated_at"] = (Get-TeamTimestamp)
+    return $document
+}
+
+function Write-CycleStatus {
     try {
-        if ($useApi) { Save-TeamStatusApi -Store $apiStore -Status $document }
-        else { Write-TeamJson -Path $statusPath -Document $document }
+        if ($useApi) {
+            try { Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Legacy $script:statusLegacy) }
+            catch {
+                if ($script:statusLegacy -or $_.Exception.Message -notmatch '^HTTP 422 ') { throw }
+                $script:statusLegacy = $true
+                Add-CycleNote -List "risks" -Text "Cloud Core canlı durumun model ve limit alanlarını henüz tanımıyor (422); eski biçimde yazıldı - Ofis sayfasında model ve limit görünmez (model-policy-api yayınlanınca düzelir)"
+                Save-TeamStatusApi -Store $apiStore -Status (New-CycleStatus -Legacy $true)
+            }
+        }
+        else { Write-TeamJson -Path $statusPath -Document (New-CycleStatus) }
     }
     catch {
         if (-not $script:statusFailed) {
@@ -246,6 +310,117 @@ function Save-Report {
         catch { Write-Host "the report was not posted to the queue store: $($_.Exception.Message)" }
     }
     return $path
+}
+
+# ------------------------------------------------------------------ the model policy
+# The model each role runs on (owner, 2026-10-01, ADR-0214 addendum 7) is ONE setting in the
+# team store: API mode GET /v1/team/queue/models, file mode team/models.json. A Cloud Core
+# that does not have the route yet (404) - or cannot be read - never stops the cycle: the
+# local file is used, and without one the defaults (lead and inspector on the strongest
+# model, the rest one below, fallback on). A role the setting does not name runs on -Model
+# when given. What does stop the cycle, before the lock and before any run, is a value that
+# is not one of the three model ids: it would go onto a command line.
+if ($Model -and -not (Test-TeamModelId -Model $Model)) {
+    Write-Host "-Model '$Model' is not a model; nothing was run. One of: $((Get-TeamModelChain) -join ', ')"
+    exit 2
+}
+$modelDocument = $null
+$modelSource = "the defaults"
+if ($useApi) {
+    try {
+        $modelDocument = Get-TeamModelsApi -Store $apiStore
+        if ($null -ne $modelDocument) { $modelSource = "GET /v1/team/queue/models" }
+    }
+    catch { Add-CycleNote -List "risks" -Text "model ayarı takım deposundan okunamadı; yerel dosya ya da varsayılanlar kullanıldı: $($_.Exception.Message)" }
+}
+if ($null -eq $modelDocument -and (Test-Path -LiteralPath $modelsPath)) {
+    $modelDocument = Read-TeamJson -Path $modelsPath
+    $modelSource = "team/models.json"
+}
+$modelRead = Read-TeamModelSetting -Document $modelDocument -DefaultModel $Model
+if (-not $modelRead.Ok) {
+    Write-Host "the model setting ($modelSource) breaks the contract; nothing was run:"
+    foreach ($problem in @($modelRead.Problems)) { Write-Host "  - $problem" }
+    exit 2
+}
+$modelSetting = $modelRead.Setting
+
+# What earlier cycles on this machine learnt about the limits. A file that cannot be read is
+# no knowledge: the runs will say it again.
+if (Test-Path -LiteralPath $limitsPath) {
+    try {
+        $limitsDocument = Read-TeamJson -Path $limitsPath
+        $known = Get-TeamProperty -InputObject $limitsDocument -Name "models"
+        if ($known -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($property in $known.PSObject.Properties) {
+                $until = [string](Get-TeamProperty -InputObject $property.Value -Name "until" -Default "")
+                if (-not (Test-TeamModelId -Model ([string]$property.Name)) -or -not $until) { continue }
+                $limitedModels[[string]$property.Name] = [pscustomobject]@{
+                    until   = $until
+                    type    = [string](Get-TeamProperty -InputObject $property.Value -Name "type" -Default "")
+                    seen_at = [string](Get-TeamProperty -InputObject $property.Value -Name "seen_at" -Default "")
+                }
+            }
+        }
+        $seen = Get-TeamProperty -InputObject $limitsDocument -Name "windows"
+        if ($seen -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($property in $seen.PSObject.Properties) {
+                $percent = Get-TeamProperty -InputObject $property.Value -Name "used_pct"
+                if (@("fable", "all", "session") -cnotcontains [string]$property.Name -or $percent -isnot [ValueType] -or $percent -is [bool]) { continue }
+                $limitWindows[[string]$property.Name] = $property.Value
+            }
+        }
+    }
+    catch { Add-CycleNote -List "risks" -Text "team/limits.json okunamadı (yok sayıldı): $($_.Exception.Message)" }
+}
+
+function Save-Limits {
+    <# team/limits.json, on this machine: what the next cycle must not find out again. #>
+    $now = [datetime]::UtcNow
+    $models = [ordered]@{}
+    foreach ($id in @(Get-TeamModelChain)) {
+        if (-not $script:limitedModels.ContainsKey($id)) { continue }
+        $entry = $script:limitedModels[$id]
+        if (-not [string]$entry.until -or -not (Test-TeamModelLimited -Limited $script:limitedModels -Model $id -Now $now)) { continue }
+        $models[$id] = $entry
+    }
+    $windows = [ordered]@{}
+    foreach ($name in @("fable", "all", "session")) {
+        if ($script:limitWindows.ContainsKey($name)) { $windows[$name] = $script:limitWindows[$name] }
+    }
+    try { Write-TeamJson -Path $limitsPath -Document ([ordered]@{ models = $models; windows = $windows }) }
+    catch { }
+}
+
+function Register-Limit {
+    <# A run came back with the usage limit: remember WHAT is limited, and until when. A
+       session or weekly limit closes every model; a model's own limit closes that model; a
+       limit that does not say closes the model the run was on - which is marked in every
+       case, so the same task is never started twice on a model that just refused it. #>
+    param($Done)
+    $ids = New-Object System.Collections.ArrayList
+    if ([string]$Done.LimitScope -eq "all") { foreach ($id in @(Get-TeamModelChain)) { [void]$ids.Add($id) } }
+    elseif (Test-TeamModelId -Model ([string]$Done.LimitedModel)) { [void]$ids.Add([string]$Done.LimitedModel) }
+    if ((Test-TeamModelId -Model ([string]$Done.Model)) -and $ids -notcontains [string]$Done.Model) { [void]$ids.Add([string]$Done.Model) }
+    foreach ($id in $ids) {
+        $script:limitedModels[$id] = [pscustomobject]@{
+            until   = $(if ($Done.ResetsAt) { [string]$Done.ResetsAt } else { $null })
+            type    = [string]$Done.LimitType
+            seen_at = (Get-TeamTimestamp)
+        }
+    }
+    Save-Limits
+}
+
+function Select-RunModel {
+    <# The model a run of this role starts on now (Get-TeamRunModel); Model is $null when it
+       must wait. The inspector's floor is the model the worker's run of that task really used. #>
+    param([string]$Role, $Task = $null)
+    $configured = [string](Get-TeamProperty -InputObject $script:modelSetting.roles -Name $Role -Default "")
+    if (-not $configured) { $configured = [string]$script:modelSetting.roles.worker }
+    $floor = ""
+    if ($Role -eq "inspector" -and $null -ne $Task) { $floor = Get-TeamWorkerModel -Task $Task }
+    return (Get-TeamRunModel -Configured $configured -Limited $script:limitedModels -Fallback ([bool]$script:modelSetting.fallback) -Floor $floor)
 }
 
 # ------------------------------------------------------------------ the lock
@@ -303,6 +478,8 @@ try {
 
     function Test-CapReached {
         if (Test-StopRequested) { return $true }
+        # The usage limit already ended this cycle (its line is in the report).
+        if ($script:limitStop) { return $true }
         # A cap of 0 is no cap (owner decision 2026-09-30).
         if ($MaxUsd -gt 0 -and $script:cycle.spent_usd -ge $MaxUsd) {
             Add-CycleNote -List "stops" -Text ("bütçe tavanı: {0:0.00} / {1:0.00} USD" -f $script:cycle.spent_usd, $MaxUsd)
@@ -316,7 +493,12 @@ try {
     }
 
     function Start-RoleRun {
-        param($Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @())
+        param(
+            $Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @(),
+            # What Select-RunModel answered for this run: the model to start on, and the one it
+            # should have been (a run started below it is a lowering, and is written down).
+            [Parameter(Mandatory = $true)]$Pick
+        )
         $roleFile = Join-Path $agentsRoot "$Role.md"
         if (-not (Test-Path -LiteralPath $roleFile)) { throw "there is no role file for '$Role': $roleFile" }
         # A run cap of 0 is no cap at all: then the task's budget.max_usd is an estimate for
@@ -332,7 +514,8 @@ try {
                 if ($left -lt $cap) { $cap = [Math]::Max(0.01, $left) }
             }
         }
-        $runModel = if ($roleModels.ContainsKey($Role)) { [string]$roleModels[$Role] } else { $Model }
+        $runModel = [string]$Pick.Model
+        if (-not (Test-TeamModelId -Model $runModel)) { throw "'$runModel' is not a model: no run is started on it" }
         $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
         if ($Prompt) { $prompt = $Prompt }
         elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
@@ -346,40 +529,105 @@ try {
             }
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory
-        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp) }
+        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp); model = $runModel }
         [void]$script:liveRuns.Add($live)
+        $loweredFrom = ""
+        if ([bool]$Pick.Lowered) {
+            # 'model düşürüldü': on this run's line in the report, and in the live status
+            # (this cycle's downgrades, newest last, at most twenty).
+            $loweredFrom = [string]$Pick.Intended
+            [void]$script:loweredRuns.Add([ordered]@{ task = $live.task; role = $Role; from = $loweredFrom; to = $runModel; at = $live.started_at })
+            while (@($script:loweredRuns).Count -gt 20) { $script:loweredRuns.RemoveAt(0) }
+        }
         Write-CycleStatus
         $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
-        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel }
+        return [pscustomobject]@{
+            Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel
+            LoweredFrom = $loweredFrom; Where = $WorkingDirectory; Prompt = $Prompt; ExcludeTools = @($ExcludeTools)
+        }
     }
 
     function Complete-RoleRun {
         param($Started)
         $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline -OnTick { Write-CycleStatus } -TickSeconds $statusTickSeconds
-        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr
+        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr -Model ([string]$Started.Model)
         $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
         $number = 1
         while (Test-Path -LiteralPath (Join-Path $cycleDir "$taskId-$($Started.Role)-$number.json")) { $number++ }
         $stem = Join-Path $cycleDir "$taskId-$($Started.Role)-$number"
         $utf8 = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText("$stem.json", [string]$finished.StdOut, $utf8)
+        # The stream of a worker's run is megabytes of tool output. What is kept is what was
+        # always kept - the result document - and the limit events beside it; the raw output
+        # (its end) only when there was no result to keep.
+        $kept = [string]$result.ResultLine
+        if (-not $kept) {
+            $kept = [string]$finished.StdOut
+            if ($kept.Length -gt 200000) { $kept = $kept.Substring($kept.Length - 200000) }
+        }
+        [System.IO.File]::WriteAllText("$stem.json", $kept, $utf8)
+        if (@($result.EventLines).Count -gt 0) { [System.IO.File]::WriteAllText("$stem.limits.jsonl", ((@($result.EventLines) -join "`n") + "`n"), $utf8) }
         if ($finished.StdErr.Trim()) { [System.IO.File]::WriteAllText("$stem.stderr.txt", [string]$finished.StdErr, $utf8) }
         if ($result.Text) { [System.IO.File]::WriteAllText("$stem.md", $result.Text.TrimEnd() + "`n", $utf8) }
+
+        # The two percentages, when this run's events carried them: the tool's own numbers,
+        # kept with their reset and when they were seen. A window no event named stays as it was.
+        $sawWindow = $false
+        foreach ($name in @("fable", "all", "session")) {
+            $window = Get-TeamProperty -InputObject $result.Windows -Name $name
+            if ($null -eq $window) { continue }
+            $script:limitWindows[$name] = [pscustomobject]@{ used_pct = $window.used_pct; resets_at = $window.resets_at; observed_at = (Get-TeamTimestamp) }
+            $sawWindow = $true
+        }
+        if ($sawWindow) { Save-Limits }
 
         $outcome = if ($finished.TimedOut) { "süre doldu ($RunMinutes dk)" } elseif ($result.Ok) { "tamam" } else { "başarısız: $($result.Why)" }
         $script:cycle.spent_usd = [double]$script:cycle.spent_usd + [double]$result.CostUsd
         $script:liveRuns.Remove($Started.Live)
         Write-CycleStatus
+        $ranModel = if (Test-TeamModelId -Model ([string]$result.RanModel)) { [string]$result.RanModel } else { [string]$Started.Model }
         $script:cycle.runs = @(@($script:cycle.runs) + [pscustomobject]@{
                 task = $taskId; role = $Started.Role; cost_usd = $result.CostUsd; seconds = $finished.Seconds; outcome = $outcome
-                model = [string]$Started.Model
+                model = [string]$Started.Model; ran_model = $ranModel; lowered_from = [string]$Started.LoweredFrom
+                substituted = [bool]$result.Substituted
             })
         $relative = "team/reports/$CycleId/$taskId-$($Started.Role)-$number"
         return [pscustomobject]@{
             Ok = ($result.Ok -and -not $finished.TimedOut); Text = $result.Text; Outcome = $outcome
             File = $(if ($result.Text) { "$relative.md" } else { "$relative.json" }); CostUsd = $result.CostUsd
             UsageLimited = [bool]$result.UsageLimited; ResetsAt = [string]$result.ResetsAt
+            LimitScope = [string]$result.LimitScope; LimitedModel = [string]$result.LimitedModel; LimitType = [string]$result.LimitType
+            Model = [string]$Started.Model; RanModel = $ranModel; Substituted = [bool]$result.Substituted
         }
+    }
+
+    function Invoke-RoleRun {
+        <#
+        .SYNOPSIS
+            One run of a role that the cycle waits for by itself (the researcher, the lead's
+            split), with the model policy: started on the model its role is set to or - when
+            that one is limited and fallback is on - on the next one down; a run that comes
+            back with the usage limit is started again at once one model down, and when no
+            model is left the existing wait applies. $null when no run could be started.
+        #>
+        param($Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @())
+        $done = $null
+        # Three models and one retry after a wait: a bound, so a tool that says "limited" for
+        # ever cannot keep the cycle here.
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            $pick = Select-RunModel -Role $Role -Task $Task
+            if ($null -eq $pick.Model) {
+                if (-not (Wait-UsageLimit -ResetsAt ([string]$pick.ResetsAt))) { return $done }
+                continue
+            }
+            $done = Complete-RoleRun -Started (Start-RoleRun -Task $Task -Role $Role -WorkingDirectory $WorkingDirectory -Prompt $Prompt -ExcludeTools $ExcludeTools -Pick $pick)
+            if (-not $done.UsageLimited) { return $done }
+            Register-Limit -Done $done
+            $again = Select-RunModel -Role $Role -Task $Task
+            if ($null -ne $again.Model -and [string]$again.Model -ne [string]$done.Model) { continue }
+            $reset = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$done.ResetsAt }
+            if (-not (Wait-UsageLimit -ResetsAt $reset)) { return $done }
+        }
+        return $done
     }
 
     function Wait-UsageLimit {
@@ -387,6 +635,7 @@ try {
            out); false when it must stop here and the next cycle continues. #>
         param([string]$ResetsAt)
         if (-not $WaitForUsageLimit -or -not $ResetsAt) {
+            $script:limitStop = $true
             $script:usageLimit = [pscustomobject]@{ state = "stopped"; resets_at = $(if ($ResetsAt) { $ResetsAt } else { $null }) }
             Write-CycleStatus
             Add-CycleNote -List "stops" -Text ("Max kullanım limiti; " + $(if ($ResetsAt) { "sıfırlanma $ResetsAt; " } else { "ne zaman açılacağı söylenmedi; " }) +
@@ -416,11 +665,25 @@ try {
             at       = (Get-TeamTimestamp)
             file     = $Done.File
             cost_usd = $Done.CostUsd
-            outcome  = $Done.Outcome
+            # A finished run's entry names the model it really ran on (Get-TeamOkOutcome): the
+            # inspector of this task - in this cycle or a later one - is never started below it.
+            outcome  = $(if ($Done.Ok) { Get-TeamOkOutcome -Model ([string]$Done.RanModel) } else { $Done.Outcome })
             summary  = @(Get-TeamSummary -Text $Done.Text)
         }
         Set-TeamProperty -InputObject $Task -Name "reports" -Value @(@(Get-TeamProperty -InputObject $Task -Name "reports" -Default @()) + $entry)
         Set-TeamProperty -InputObject $Task -Name "updated_at" -Value (Get-TeamTimestamp)
+    }
+
+    function Add-InspectionWaitNote {
+        <# Why an inspection was not started: said once per task, under the risks. The
+           inspection is not lowered below the worker's model and not skipped - it waits. #>
+        param($Task, $Pick)
+        $closed = @($Pick.Candidates) -join ", "
+        $note = if ([string]$Pick.Floor) {
+            "denetim bekliyor: $($Task.id) - işçi $($Pick.Floor) ile koştu; en az o kadar güçlü modeller limitte ($closed); daha zayıf modelde denetlenmez"
+        }
+        else { "denetim bekliyor: $($Task.id) - denetleyicinin kullanabileceği modeller limitte ($closed)" }
+        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
     }
 
     function Stop-Task {
@@ -434,8 +697,10 @@ try {
     if ($runResearch -and -not (Test-CapReached)) {
         $proposals = Join-Path $TeamRoot "proposals"
         if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
-        $done = Complete-RoleRun -Started (Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot)
-        if (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
+        $done = Invoke-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot
+        # $null: no model was open and the wait was refused - the stop line is already written.
+        if ($null -eq $done) { }
+        elseif (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
         else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
         $known =@(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
         foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
@@ -472,10 +737,9 @@ try {
             $splitFolder = Split-Path -Parent $splitPath
             if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
             $card = New-TeamSplitCard -Task $proposal -Queue $queue -CycleId $CycleId -SplitFile $splitRelative
-            $done = Complete-RoleRun -Started (Start-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit"))
-            if ($done.UsageLimited -and (Wait-UsageLimit -ResetsAt $done.ResetsAt)) {
-                $done = Complete-RoleRun -Started (Start-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit"))
-            }
+            # The lead's run follows the setting and the chain like any role's.
+            $done = Invoke-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit")
+            if ($null -eq $done) { break }
             if (-not $done.Ok) {
                 Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: $($done.Outcome)"
                 continue
@@ -540,11 +804,23 @@ try {
         }
         if (Test-CapReached) { $capped = $true; break }
 
-        $batch = @($runnable | Select-Object -First $MaxParallel)
         $startedRuns = New-Object System.Collections.ArrayList
-        foreach ($item in $batch) {
+        # The earliest reset a task that could not be started is waiting for ("" = nobody said).
+        $blockedReset = ""
+        $blocked = 0
+        foreach ($item in $runnable) {
+            if (@($startedRuns).Count -ge $MaxParallel) { break }
             $task = $item.Task
             $role = [string]$item.Next.Role
+            # The model first: a task whose every allowed model is limited starts nothing -
+            # no worktree, no try spent - and the others of the queue go on.
+            $pick = Select-RunModel -Role $role -Task $task
+            if ($null -eq $pick.Model) {
+                $blocked++
+                if ($pick.ResetsAt -and (-not $blockedReset -or [string]::CompareOrdinal([string]$pick.ResetsAt, $blockedReset) -lt 0)) { $blockedReset = [string]$pick.ResetsAt }
+                if ($role -eq "inspector") { Add-InspectionWaitNote -Task $task -Pick $pick }
+                continue
+            }
             $runCount[[string]$task.id] = $runCount[[string]$task.id] + 1
             $where = $repoRoot
             try {
@@ -561,28 +837,70 @@ try {
                 }
                 if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "in_progress" }
                 Set-TeamProperty -InputObject $task -Name "assignee" -Value $role
-                [void]$startedRuns.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $where))
+                [void]$startedRuns.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $where -Pick $pick))
             }
             catch {
                 Stop-Task -Task $task -Reason "koşu başlatılamadı: $($_.Exception.Message)"
             }
         }
         Save-Queue -Document $queue
+        if (@($startedRuns).Count -eq 0 -and $blocked -gt 0) {
+            # Every task that could run waits for a model: the existing wait (known reset:
+            # wait it out; unknown: stop with the line), then the queue is looked at again.
+            if (-not (Wait-UsageLimit -ResetsAt $blockedReset)) { $capped = $true }
+            continue
+        }
 
         $limitHit = ""
         $limitSeen = $false
-        foreach ($startedRun in $startedRuns) {
+        # By index, not foreach: a run that comes back with the usage limit is started again
+        # at once one model down, and joins the end of this same list.
+        for ($runIndex = 0; $runIndex -lt @($startedRuns).Count; $runIndex++) {
+            $startedRun = $startedRuns[$runIndex]
             $task = $startedRun.Task
             $role = [string]$startedRun.Role
             $done = Complete-RoleRun -Started $startedRun
+            if ($role -eq "inspector" -and $done.Ok) {
+                # The inspector's rule holds against the tool too: an inspection the tool itself
+                # ran on a weaker model than the worker's gives no verdict. The model that was
+                # asked for is treated as limited (that is why the tool left it), and the
+                # inspection is started again on a model at least as strong, or waits.
+                $workerRank = Get-TeamModelRank -Model (Get-TeamWorkerModel -Task $task)
+                if ($workerRank -ge 0 -and (Get-TeamModelRank -Model ([string]$done.RanModel)) -gt $workerRank) {
+                    $done.Ok = $false
+                    $done.UsageLimited = $true
+                    $done.LimitScope = "model"
+                    $done.LimitedModel = [string]$done.Model
+                    $done.ResetsAt = ""
+                    $done.Outcome = "hüküm alınmadı: araç denetimi $($done.RanModel) ile koşturdu, işçi $(Get-TeamWorkerModel -Task $task) ile koşmuştu"
+                    Add-CycleNote -List "risks" -Text "$($task.id): hüküm alınmadı - araç denetimi $($done.Model) yerine $($done.RanModel) ile koşturdu; bu, işçinin modelinden ($(Get-TeamWorkerModel -Task $task)) zayıf"
+                }
+            }
             Add-TaskReport -Task $task -Role $role -Done $done
 
             if ($done.UsageLimited) {
-                # Not the task's failure and not a try spent: it goes back to where it was
-                # and is taken up again when the limit lifts (owner decision 2026-09-30).
-                $limitSeen = $true
-                if ($done.ResetsAt) { $limitHit = $done.ResetsAt }
+                # Not the task's failure and not a try spent (owner decision 2026-09-30).
+                Register-Limit -Done $done
                 $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
+                # The fallback chain (ADR-0214 addendum 7): the SAME task, at once, on the next
+                # model down - when the setting allows it, a model is open, and nobody asked the
+                # cycle to stop. The inspector is never lowered below the worker's model.
+                $again = Select-RunModel -Role $role -Task $task
+                if ($null -ne $again.Model -and [string]$again.Model -ne [string]$done.Model -and -not (Test-StopRequested)) {
+                    try {
+                        [void]$startedRuns.Add((Start-RoleRun -Task $task -Role $role -WorkingDirectory $startedRun.Where -Prompt $startedRun.Prompt -ExcludeTools $startedRun.ExcludeTools -Pick $again))
+                        $runCount[[string]$task.id] = $runCount[[string]$task.id] + 1
+                        Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+                        continue
+                    }
+                    catch { Add-CycleNote -List "risks" -Text "$($task.id): bir alt modelde yeniden başlatılamadı: $($_.Exception.Message)" }
+                }
+                # No model to go down to (or fallback is off): the task goes back to where it
+                # was and is taken up again when the limit lifts.
+                if ($role -eq "inspector" -and $null -eq $again.Model) { Add-InspectionWaitNote -Task $task -Pick $again }
+                $limitSeen = $true
+                $waitFor = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$done.ResetsAt }
+                if ($waitFor) { $limitHit = $waitFor }
                 if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
                 Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
                 continue
