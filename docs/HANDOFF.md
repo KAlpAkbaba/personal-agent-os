@@ -20,9 +20,10 @@ reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek
 Kapı 36/36 (`b8a44916`). QUALIFICATION Stage 40. Ana kopya `team/nightly/lead` üzerinde (main birleştirildi).**
 **SÜREN İŞ (lead, 2026-10-02 gece): ÜÇÜNCÜ ENTEGRASYON, dal `gate/d20261001-3` (worktree `.claude/worktrees/gate`) =
 `integrate/d20261001` @ `8d081d1b` + lead bağlaması. İçinde: understanding-stt-corpus, model-policy-cycle,
-lead-roadmap-feeder, webtask-model-planner, approvals-detail-view (Onay Merkezi düğmeleri + "Detay"). Bağlama:
+lead-roadmap-feeder, webtask-model-planner, webtask-prc-gate-bindings (`a3a9e31e`, ADR-0240), approvals-detail-view
+(Onay Merkezi düğmeleri + "Detay"). Bağlama:
 `scripts/team/tick.ps1` (önce besleyici, sonra döngü; zamanlanmış görev artık bunu çalıştırır), `team-feed.tests.ps1`
-kapıda ve ci.yml'de, kapıya web lint+vitest+tsc adımı, ADR-0237/0238/0239. İkinci entegrasyonun kapısı (`2c691585`)
+kapıda ve ci.yml'de, kapıya web lint+vitest+tsc adımı, ADR-0237…0240. İkinci entegrasyonun kapısı (`2c691585`)
 tek testte KIRMIZIYDI (`team-feed.tests.ps1` hiçbir yerde koşmuyordu) - döngü ben çalışırken entegrasyon dalına iş
 birleştirdiği için; bu yüzden kapı artık lead'in KENDİ dalında koşar. SIRA: bu commit'i ana kopyada detached aç, tam
 kapı, yeşilse main'e `--no-ff`, it, kural gereği sormadan blue/green yayınla + pin + doğrula, işleri `released` yap,

@@ -18718,3 +18718,122 @@ takes a row of its own there with an inline `flex-basis: 100%` (the card is a wr
 the parser's section titles with the file's own `## ` lines, so a new shape from the researcher
 fails a test instead of reaching the owner. Not rendered, still: code spans (backticks stay
 literal), a second benefit section (shown as an ordinary section), nested lists.
+
+## ADR-0240 — PR-C's binding limits close at the gate: a write is classified from its element, the site name is read in site position only (ADR-0207, PR-C 2/2) (2026-10-02)
+
+The worker's text (`team/plans/webtask-prc-gate-bindings-adr.md`), numbered by the lead at merge. Like ADR-0238 it is
+unreachable in production until PR-D gives `start_task_db` a caller and the home PC is installed with `-AuthorizeTasks`;
+its two "Not here" items are the next cards of roadmap item 2b (the ceiling on the wire for `fill` / `select_option` /
+`set_checked`, and the retention of the last observation).
+
+### Context
+
+ADR-0207 lists, under "Recorded for PR-C, and binding on it", what may not stay open once
+a model plans a browser task's steps. `webtask-model-planner` wires that model. This
+closes the items that live in the Cloud Core's gate (`app/webtask/gate.py`,
+`app/webtask/risk.py`). The retention of the last observation and the ceiling ON THE WIRE
+for `fill` / `select_option` / `set_checked` are not here (see "Not here").
+
+### Decisions
+
+1. **A write is classified from its element.** `fill`, `select_option` and `set_checked`
+   are judged by the element's name and `submits`, with the marker file, as a click is:
+   HIGH_IMPACT name -> HIGH_IMPACT, `submits` or an external-communication name ->
+   EXTERNAL_COMMUNICATION, otherwise REVERSIBLE_WRITE. The worker's `risk_hint` is never
+   lowered. `classify_element` is unchanged: it is the contract's section 4 and the
+   worker's rule, where a field is REVERSIBLE_WRITE because pressing it only focuses it.
+   `Decision.risk_ceiling` carries the class for these actions.
+2. **A click on a checkbox, radio or switch is `set_checked` by another name** and is
+   classified the same way. Not on the card; found on the way: without it a planner
+   reaches the wired checkbox through `click` and the rule above closes nothing.
+3. **Payment is the same boundary for every action that names an element.** A payment
+   marker in the name -> `ask_owner(payment)`, for click, fill, select_option and
+   set_checked; a grant does not change it.
+   *Where this departs from the card:* the card's examples ('Satın al' select, 'Abone ol'
+   checkbox) are asked to give a HIGH_IMPACT read-back, and both names are PAYMENT
+   markers. A read-back can be confirmed; ADR-0207 decision 4 says a payment is not
+   performed "with a confirmation either". So they are handed over (risk HIGH_IMPACT,
+   kind `payment`), and the confirmable HIGH_IMPACT read-back is shown on a non-payment
+   name ('Hesabı sil'). The stricter reading; reversible by narrowing the check.
+4. **An unnamed control that submits or sits in a form is EXTERNAL_COMMUNICATION**, and
+   the read-back says "adsız bir düğme ... Sayfa bu düğmeye ad vermemiş". Unnamed = no
+   letter and no digit after folding (an icon glyph such as "×" is not a name). Exempt:
+   a plain link (`role=link` with an href - it navigates), text entry (`fill`, and a
+   click that only focuses a text field: typing sends nothing and the control that sends
+   is gated when pressed). An unnamed control outside any form that submits nothing
+   stays REVERSIBLE_WRITE (a menu, a close box).
+5. **The site-name rule reads site position only.** The label of the registrable domain
+   (>= 4 letters) must be followed, on folded text, by: a locative / ablative / dative
+   suffix with an optional apostrophe (`da de ta te`, the same with `ki`, `dan den tan
+   ten`, `ya ye`); or the word `sitesi…` / `sayfası…`, optionally after `web` /
+   `internet`, the name before it in the genitive or not, apostrophe or not ("trendyol
+   web sitesinde", "Trendyol'un sitesinde", "trendyolun sitesinde"). Added to the
+   card's list: `tan/ten` and `-ki` ("Facebook'tan", "YouTube'daki").
+   **After an apostrophe every case ending is site position; without one, only the
+   endings above.** The apostrophe is what marks the word as a NAME. So, apostrophe
+   required: the accusative `'u 'ü 'ı 'i 'yu 'yü 'yı 'yi` ("YouTube'u aç", "Google'ı
+   aç", "Hepsiburada'yı aç" - the owner's own recorded phrasing, which the first form
+   of this rule refused; found by the inspector), the one-letter dative `'a 'e`
+   ("Google'a"), the genitive `'ın 'in 'un 'ün 'nın …` ("Trendyol'un indirimlerine
+   bak"), and the buffer n of a name ending in its own possessive: `'nde 'nda 'nden
+   'ndan 'ndeki 'ne 'na 'ni 'nı 'nu 'nü` ("Yemeksepeti'nde", "Kitapyurdu'ndan").
+   Without the apostrophe these are the endings every ordinary noun carries:
+   "dünyayı gez", "dünyanın haberleri", "yapay zeka haberlerinde" name no site.
+   The goal and each answer are separate utterances: a name at the end of one and
+   "sitesi" at the start of the next is not a phrase (held by a test).
+6. **The grant is bound to what the control is wired to.** The read-back facts now hold
+   `submits`, `in_form` and `href_host`; `facts_still_hold` compares them. The same name
+   and role rewired between the read-back and the word -> the grant is spent and the
+   owner hears a new read-back that begins "Onayınızdan sonra sayfa değişti; yeniden
+   soruyorum." A read-back stored before these facts existed opens only a control where
+   they are absent now too.
+7. **The read-back says what will be done.** `fill` / `select_option` / `set_checked`
+   now reach it, so it says "bir alana yazacağım" / "bir listeden seçim yapacağım" /
+   "bir kutunun işaretini değiştireceğim" instead of "bir düğmeye basacağım". The value
+   is never said, as it is never logged.
+8. **The non-password sensitive field** needed no code: the gate already hands over on
+   the worker's `sensitive` mark for all three writes. It now has its test, which runs
+   the worker's own `is_sensitive` from its source on a `type=text` field named
+   'Kart numarası'.
+
+### Known limits, written down
+
+* A bare name is not site position: "Trendyol aç" / "YouTube aç" name no site any more.
+  The planner's navigation is refused (`url_not_from_owner_or_page`) and the task fails
+  after three such rounds. If that phrasing matters, it needs its own rule (it cannot be
+  "any word before a verb": "şu haberi aç").
+* The apostrophe-required endings are refused when speech-to-text drops the apostrophe:
+  "youtubeu aç", "yemeksepetinde pizza ara", "trendyolun indirimleri" name no site
+  (tested as such). "yemeksepeti sitesinde" and "youtubeda" work without one.
+* An ordinary noun in the locative is still site position: "listede" and "Adana'da"
+  allow `liste.com` and `adana.com`; and since the apostrophe rule, any proper name in
+  any case does ("Ankara'yı", "Kadir'in" -> `ankara.com`, `kadir.com`), as does "haber
+  sitesi" -> `haber.com`. Navigation only; the destination policy, the deny-list and
+  the per-element gate still apply.
+* Between "X" and "sitesi" only `web` / `internet` may stand: "trendyol alışveriş
+  sitesinde" names `alisveris.com`, not trendyol.
+* A control that was read back as submitting and is rewired into one the rules call
+  FREE is clicked without the comparison: a free step never reaches the grant.
+* The second read-back for a link whose target moved does not name the new host.
+* A text field with a marker in its name ("Yanıtla", "Paylaş") is read back before it is
+  typed into. Over-asking, by the card's rule (name-based, as click).
+* `loop._rebind` says "sayfa değişmiş" when two unnamed controls cannot be told apart;
+  the outcome (no click) is right, the sentence is not exact. `loop.py` is outside this
+  task.
+
+### Not here (for the lead at merge)
+
+* **Next card: "contract v1.8: the ceiling on fill/select/set_checked"** - the worker
+  still performs these three without a ceiling; the Decision already carries it.
+* The retention rule for the last observation in `web_tasks.state_json` (PR-C list).
+
+### Evidence
+
+`tests/unit/test_webtask_gate.py`, `tests/unit/test_webtask_acceptance.py`:
+PROVEN_AUTOMATED. Seven mutations RED, each restored from a backup copy with sha256
+equal before and after. After the inspector's return: ten more on `gate.py` (answers
+joined with a space; accusative off; apostrophe made optional; genitive off, twice;
+`web` / `internet` off; buffer n off; a grant that opens a click only; and the card's
+two - payment for click only, the site rule back to every word), all RED, same restore.
+The confirm path of a HIGH_IMPACT select and checkbox (performed once, `confirmed_by`
+set, planned again -> read back again) is in the acceptance file.
