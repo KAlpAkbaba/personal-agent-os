@@ -49,7 +49,7 @@
 
 .office-floor {
   display: grid;
-  /* the 25% floor keeps eight seats at four a row at most (4+4, never 5+3) */
+  /* the 25% floor keeps the seats at four a row at most (never five) */
   grid-template-columns: repeat(auto-fill, minmax(max(7rem, calc(25% - 0.75rem)), 1fr));
   gap: 0.75rem;
   padding: 0.75rem;
@@ -113,6 +113,16 @@
   padding: 0 0.4rem;
   border: 1px solid var(--core-gold, #ffc86a);
   border-radius: 999px;
+}
+
+.office-run-count {
+  color: var(--core-gold, #ffc86a);
+  font-weight: 600;
+}
+
+.office-runs {
+  margin: 0;
+  padding-left: 1.25rem;
 }
 
 .office-panel {

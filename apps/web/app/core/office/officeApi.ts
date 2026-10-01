@@ -13,17 +13,19 @@ import type { PendingApproval } from "../approvals/approvalsApi";
 export const OFFICE_PATH = "/v1/team/office";
 export const POLL_MS = 5000;
 
-export type SeatId =
-  | "lead"
-  | "researcher"
-  | "integrator"
-  | "worker-1"
-  | "worker-2"
-  | "worker-3"
-  | "inspector"
-  | "owner";
+/**
+ * `lead`, `researcher`, `integrator`, `worker-<n>` (four, more when the cycle runs more),
+ * `inspector`, `owner` - in the order the API sends them. The page draws what it is sent.
+ */
+export type SeatId = string;
 
 export type SeatState = "working" | "waiting" | "returned";
+
+export type OfficeRun = {
+  task_id: string | null;
+  task_title: string | null;
+  since: string | null;
+};
 
 export type OfficeAgent = {
   seat: SeatId;
@@ -32,6 +34,8 @@ export type OfficeAgent = {
   task_id: string | null;
   task_title: string | null;
   since: string | null;
+  /** Every live run of the seat in start order; the fields above are the first one's. */
+  runs?: OfficeRun[];
 };
 
 export type OfficeTask = {
