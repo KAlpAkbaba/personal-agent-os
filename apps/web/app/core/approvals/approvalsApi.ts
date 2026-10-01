@@ -31,9 +31,18 @@ export type PendingApproval = {
 export type ApprovalsView = {
   approvals: PendingApproval[];
   cycle_report: { file: string; text: string } | null;
-  /** A cycle holds the queue: a decision is refused until it ends. */
   cycle_running: boolean;
+  /**
+   * Whether the Cloud Core takes a decision right now. Sent by a Cloud Core that queues a
+   * decision made during a cycle; absent from an older one, which refuses while a cycle runs.
+   */
+  decisions_open?: boolean;
 };
+
+/** `decisions_open` when the Cloud Core sends it; otherwise the old rule: not while a cycle runs. */
+export function decisionsOpen(view: Pick<ApprovalsView, "cycle_running" | "decisions_open">): boolean {
+  return view.decisions_open ?? !view.cycle_running;
+}
 
 export const GATE_TR: Record<Gate, string> = { fikir: "Fikir onayı", yayin: "Yayın onayı" };
 
