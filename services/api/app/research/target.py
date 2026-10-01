@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+import uuid
+from typing import Any, Final
 
 from sqlalchemy.orm import Session
 
 from app.devices.selection import NoCapableDeviceError
 from app.execution import wiring
-from app.execution.rule import Decision, JobKind
+from app.execution.rule import (
+    FORCED_UNAVAILABLE,
+    Decision,
+    JobKind,
+    Target,
+    forced_target_of,
+)
+
+NO_TARGET_TR: Final = "Araştırmayı çalıştıracak uygun bir hedef yok."
+#: The owner said "bulutta" and the cloud worker is not up: said as what it is.
+CLOUD_UNAVAILABLE_TR: Final = "Bulut şu anda çevrimiçi değil."
 
 
 def choose_research_target(
@@ -18,6 +29,7 @@ def choose_research_target(
     spoken_target: str | None = None,
     url: str | None = None,
     needs_signed_in_session: bool = False,
+    task_id: uuid.UUID | None = None,
 ) -> Decision:
     """The decision for a research run (read-only: research never acts).
 
@@ -32,10 +44,18 @@ def choose_research_target(
         scheduled=False,
         db=db,
         runtime=runtime,
+        research_job_id=task_id,
+        # The run's own PLANNED event carries the decision too (``start_browser_research``):
+        # a research the owner asked for is not refused because a ledger row would not write.
+        ledger_required=False,
     )
     if wiring.error_class_of(decision):
+        forced_cloud = (
+            decision.reason == FORCED_UNAVAILABLE
+            and forced_target_of(spoken_target) is Target.CLOUD
+        )
         raise NoCapableDeviceError(
-            "Araştırmayı çalıştıracak uygun bir hedef yok.",
+            CLOUD_UNAVAILABLE_TR if forced_cloud else NO_TARGET_TR,
             capability="browser.chrome",
             target=spoken_target,
             reason=decision.reason,

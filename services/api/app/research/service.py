@@ -26,6 +26,7 @@ the human-readable provenance alongside that mechanism, not a second lookup path
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -40,15 +41,20 @@ from app.artifacts import service as artifact_service
 from app.artifacts.models import TASK_STATUS_CREATED, TASK_STATUS_FAILED_TERMINAL, Task
 from app.devices import service as devices_service
 from app.devices.selection import (
+    REASON_EXPLICIT_ALIAS,
     REASON_SESSION_AFFINITY,
     NoCapableDeviceError,
+    SelectionResult,
     named_device_target,
     select_device,
 )
+from app.execution import wiring
+from app.execution.rule import Decision, Target, forced_target_of
 from app.logging import get_logger
 from app.research import runs_service
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
 from app.research.models import STAGE_FAILED, STAGE_PLANNED
+from app.research.target import choose_research_target
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -98,6 +104,71 @@ def _device_summary(view: Any, reason: str | None = None) -> dict[str, Any]:
     return summary
 
 
+#: The rule chose a target and the registry no longer shows it (it went away between the
+#: two reads). Refused rather than quietly run somewhere the rule did not choose.
+TARGET_GONE_TR: Final = "Seçilen hedef şu anda çevrimiçi değil."
+
+
+def _machines(views: Sequence[Any]) -> list[Any]:
+    """The views ``select_device`` may choose among: the cloud worker is never the
+    ``device`` target (ADR-0213)."""
+    return [v for v in views if v.platform != wiring.CLOUD_PLATFORM]
+
+
+def _select_for(
+    decision: Decision, views: list[Any], *, target: str | None, hint: dict[str, Any]
+) -> SelectionResult:
+    """The device the rule's decision names (ADR-0213). ``cloud`` and ``owner_chrome`` are
+    one registry view each; ``device`` is the selection it always was, over the machines."""
+    if decision.target is Target.DEVICE:
+        return select_device(
+            _machines(views), capability=RESEARCH_CAPABILITY, target=target, **hint
+        )
+    view = wiring.device_for(decision, views)
+    if view is None:
+        raise NoCapableDeviceError(
+            TARGET_GONE_TR, capability=RESEARCH_CAPABILITY, target=target, reason="target_gone"
+        )
+    # Still through ``select_device``: the capability and the owner's policy are checked for
+    # the cloud worker exactly as for a machine.
+    result = select_device([view], capability=RESEARCH_CAPABILITY)
+    if decision.forced:
+        return dataclasses.replace(result, reason=REASON_EXPLICIT_ALIAS, explicit=True)
+    return result
+
+
+def _refusal(
+    refusal: NoCapableDeviceError,
+    views: list[Any],
+    *,
+    spoken: str | None,
+    target: str | None,
+    hint: dict[str, Any],
+) -> NoCapableDeviceError:
+    """What a run the rule refused is reported with. A refusal about MACHINES ("'ofis'
+    cihazı şu anda çevrimiçi değil.", "Şu anda çevrimiçi bir cihaz bulunamadı.") keeps the
+    sentence the selection has always said for it; "bulutta" keeps the rule's own."""
+    if forced_target_of(spoken) is Target.CLOUD:
+        return refusal
+    try:
+        select_device(_machines(views), capability=RESEARCH_CAPABILITY, target=target, **hint)
+    except NoCapableDeviceError as precise:
+        return precise
+    return refusal
+
+
+def _execution_fields(decision: Decision | None) -> dict[str, Any]:
+    if decision is None or decision.target is None:
+        return {}
+    return {
+        "execution_target": decision.target.value,
+        "execution_chain": [t.value for t in decision.chain],
+        "execution_skipped": [
+            {"target": s.target.value, "reason": s.reason} for s in decision.skipped
+        ],
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class StartedResearch:
     """The outcome of the synchronous half (:func:`start_browser_research`).
@@ -128,6 +199,7 @@ def start_browser_research(
     tool_call_id: str | None = None,
     session_device_ids: Sequence[uuid.UUID] | None = None,
     named_devices: Sequence[str] = (),
+    needs_signed_in_session: bool = False,
 ) -> StartedResearch:
     """Create the task, pick a capable device, and record the PLANNED (or FAILED) run
     row — the synchronous DB half both callers share. Device selection happens HERE,
@@ -144,6 +216,8 @@ def start_browser_research(
     if tool_call_id is not None:
         provenance["tool_call_id"] = tool_call_id
     views = devices_service.list_device_views(db, broker)
+    decision: Decision | None = None
+    refused: str | None = None
     try:
         # The session hint is passed only when there is one: with none this is the call it
         # always was (ADR-0208).
@@ -157,7 +231,27 @@ def start_browser_research(
             if named_devices
             else target_device
         )
-        result = select_device(views, capability=RESEARCH_CAPABILITY, target=target, **hint)
+        if target_device and not named_devices:
+            # A REST caller's own ``target_device`` names a device by id, name or alias: it
+            # is that device, and the rule is not asked to overrule it.
+            result = select_device(views, capability=RESEARCH_CAPABILITY, target=target, **hint)
+        else:
+            # ADR-0213: WHERE the run executes is the execution_target rule's answer - cloud
+            # first, "bulutta" forces it, a named machine is never the cloud - decided and
+            # written to the ledger before any device is picked.
+            spoken = named_devices[0] if named_devices else None
+            try:
+                decision = choose_research_target(
+                    db,
+                    broker,
+                    spoken_target=spoken,
+                    needs_signed_in_session=needs_signed_in_session,
+                    task_id=task.id,
+                )
+            except NoCapableDeviceError as exc:
+                refused = exc.reason
+                raise _refusal(exc, views, spoken=spoken, target=target, hint=hint) from exc
+            result = _select_for(decision, views, target=target, hint=hint)
     except NoCapableDeviceError as exc:
         artifact_service.transition_task(
             db,
@@ -171,7 +265,12 @@ def start_browser_research(
             task.id,
             stage=STAGE_FAILED,
             error=exc.detail_tr,
-            event={"stage": STAGE_FAILED, "detail": exc.detail_tr, **provenance},
+            event={
+                "stage": STAGE_FAILED,
+                "detail": exc.detail_tr,
+                **({"execution_reason": refused} if refused else {}),
+                **provenance,
+            },
         )
         logger.info("research_no_capable_device", task_id=str(task.id), source=source)
         return StartedResearch(
@@ -189,6 +288,7 @@ def start_browser_research(
             "stage": STAGE_PLANNED,
             "detail": f"selected {result.device.name}",
             **({"selection_reason": result.reason} if say_why else {}),
+            **_execution_fields(decision),
             **provenance,
         },
     )

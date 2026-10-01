@@ -40,6 +40,7 @@ from app.db import build_engine, build_session_factory
 from app.devices import service as devices_service
 from app.devices.commands import DeviceCommandClient, get_broker_runtime
 from app.devices.selection import NoCapableDeviceError, select_device
+from app.execution.wiring import CLOUD_PLATFORM
 from app.ledger import briefing as ledger_briefing
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import (
@@ -160,6 +161,25 @@ def _session_factory():
 
 def _command_client() -> DeviceCommandClient:
     return DeviceCommandClient(_session_factory())
+
+
+def _runs_on_cloud(device_id: uuid.UUID) -> bool:
+    """Whether the run's device is the cloud worker: its registry ``platform`` is ``cloud``
+    (the convention ``app.execution.wiring`` reads; the device view carries the row's own
+    value). A device the registry does not know is not the cloud."""
+    with _session_factory()() as session:
+        device = broker_service.get_device(session, device_id)
+    return device is not None and device.platform == CLOUD_PLATFORM
+
+
+def _attached(mode: str, device_id: uuid.UUID) -> bool:
+    """Whether this run's browser is the owner's own Chrome, ATTACHED (ADR-0183).
+
+    The setting says so for the owner's machines. The cloud worker has no owner Chrome to
+    attach to (ADR-0213): asked for it, it refuses, and every search then wrote an
+    ``owner_chrome`` -> ``device`` fallback row for a fallback nobody chose - so a run on the
+    cloud device asks for the research profile directly."""
+    return mode == "owner_chrome" and not _runs_on_cloud(device_id)
 
 
 def _current_attempt() -> int:
@@ -510,7 +530,9 @@ def discover_activity(
                 }
 
             settings = get_settings()
-            attached = str(getattr(settings, "research_browser", "")) == "owner_chrome"
+            attached = _attached(
+                str(getattr(settings, "research_browser", "")), uuid.UUID(device_id)
+            )
             gateway = DeviceBrowserGateway(
                 _command_client(),
                 device_id=uuid.UUID(device_id),
@@ -1188,7 +1210,7 @@ def _fetch_evidence_record(
     answered ("owner_browser" | "device"), for the run's own event trail.
     """
     mode = str(getattr(settings, "research_browser", "owner_chrome"))
-    if mode == "owner_chrome":
+    if _attached(mode, device_id):
         # ADR-0183: the owner's OWN Chrome, ATTACHED - the page is opened as a tab they can
         # see and read from the DOM, which is the highest rung of CLAUDE.md's browser ladder
         # and needs no screenshot at all. Refused when the owner has not authorised the

@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Final
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.devices import selection
@@ -30,6 +31,9 @@ from app.execution import vocabulary as vocab
 from app.execution.rule import Availability, Decision, ExecutionRequest, JobKind, Target
 from app.ledger import service as ledger
 from app.ledger import vocabulary as ledger_vocab
+from app.logging import get_logger
+
+logger = get_logger("app.execution.wiring")
 
 CLOUD_PLATFORM: Final = "cloud"
 OWNER_CHROME_LABEL: Final = "owner_chrome"
@@ -103,6 +107,25 @@ def _availability(
     )
 
 
+def device_for(decision: Decision, views: list[DeviceView]) -> DeviceView | None:
+    """The registry view a decision's target IS, by the conventions above.
+
+    ``cloud`` -> the online device whose platform is ``cloud``; ``owner_chrome`` -> the online
+    machine labelled ``owner_chrome``. ``None`` for the ``device`` target (which machine is
+    ``app.devices.selection``'s question, asked over the non-cloud views) and for a decision
+    that selected nothing. Pure: it reads the views it is handed."""
+    if decision.outcome != "selected" or decision.target in (None, Target.DEVICE):
+        return None
+    live = [v for v in views if v.status != "revoked" and v.presence == PRESENCE_ONLINE]
+    if decision.target is Target.CLOUD:
+        wanted = [v for v in live if v.platform == CLOUD_PLATFORM]
+    else:
+        wanted = [
+            v for v in live if v.platform != CLOUD_PLATFORM and OWNER_CHROME_LABEL in v.labels
+        ]
+    return wanted[0] if wanted else None
+
+
 def _acting_allowed(url: str | None) -> bool:
     """The owner's allow-list for acting in the cloud. A missing module means no list has
     been written yet, which is 'not allowed': the cloud never acts by default."""
@@ -113,7 +136,9 @@ def _acting_allowed(url: str | None) -> bool:
     return bool(acting_allowed(url))
 
 
-def _write(db: Session, decision: Decision, *, run_id: str) -> None:
+def _write(
+    db: Session, decision: Decision, *, run_id: str, research_job_id: uuid.UUID | None = None
+) -> None:
     subsystem = _SUBSYSTEM.get(decision.job_kind, ledger_vocab.SUBSYSTEM_BROWSER)
     for n, body in enumerate(rule.events(decision)):
         event_type = str(body["event_type"])
@@ -128,6 +153,7 @@ def _write(db: Session, decision: Decision, *, run_id: str) -> None:
                 severity="warning" if event_type == vocab.EXECUTION_REFUSED else "info",
                 source="execution",
                 source_ref=f"execution:{run_id}:{n}",
+                research_job_id=research_job_id,
                 detail_json={k: v for k, v in body.items() if k != "event_type"},
             ),
         )
@@ -154,8 +180,16 @@ def choose(
     runtime: Any,
     involves_payment: bool = False,
     cloud_blocker: str | None = None,
+    research_job_id: uuid.UUID | None = None,
+    ledger_required: bool = True,
 ) -> Decision:
     """Decide where a job runs, record why, and return the decision.
+
+    ``research_job_id`` is the research task the decision is for: its ledger rows carry it,
+    so "why did this run go where it went" is one read by the run's own id.
+    ``ledger_required=False`` is for a caller that keeps its own record of the decision and
+    must not be stopped by the ledger: a write that fails is rolled back and logged, and the
+    decision is returned all the same.
 
     A scheduled job runs without the owner watching, so it is read-only whatever the caller
     says (ADR-0213 addendum): ``acting`` is forced False and the job is the cloud-only
@@ -186,8 +220,21 @@ def choose(
         decision = Decision(
             kind, "refused", None, decision.chain, decision.skipped, NOT_ON_OWNER_ALLOW_LIST
         )
-    _write(db, decision, run_id=str(uuid.uuid4()))
+    run_id = str(research_job_id or uuid.uuid4())
+    try:
+        _write(db, decision, run_id=run_id, research_job_id=research_job_id)
+    except SQLAlchemyError as exc:
+        if ledger_required:
+            raise
+        db.rollback()
+        logger.warning("execution_ledger_write_failed", run_id=run_id, error=repr(exc)[:300])
     return decision
 
 
-__all__ = ["NOT_ON_OWNER_ALLOW_LIST", "NO_CAPABLE_DEVICE", "choose", "error_class_of"]
+__all__ = [
+    "NOT_ON_OWNER_ALLOW_LIST",
+    "NO_CAPABLE_DEVICE",
+    "choose",
+    "device_for",
+    "error_class_of",
+]
