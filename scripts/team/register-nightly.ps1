@@ -12,15 +12,17 @@
     PC: the office PC never runs a scheduled cycle.
 
 .EXAMPLE
-    .\scripts\team\register-nightly.ps1 -MaxUsd 15
-    .\scripts\team\register-nightly.ps1 -MaxUsd 15 -Register
+    .\scripts\team\register-nightly.ps1
+    .\scripts\team\register-nightly.ps1 -Register
     .\scripts\team\register-nightly.ps1 -Unregister
 #>
 [CmdletBinding()]
 param(
-    [double]$MaxUsd = 15,
+    # 0 = no money cap and no time cap (owner decision 2026-09-30, ADR-0214 addendum 3):
+    # the subscription has none; the cycle's one stop is the usage limit, which it waits out.
+    [double]$MaxUsd = 0,
     [int]$MaxParallel = 2,
-    [int]$CycleMinutes = 240,
+    [int]$CycleMinutes = 0,
     [string]$TaskName = "PagentOS Team Nightly Cycle",
     [string]$HomeMachine = "MAIL",
     [string]$Machine = $env:COMPUTERNAME,
@@ -88,7 +90,8 @@ if ($PlanOnly -or -not $Register) {
 
 $action = New-ScheduledTaskAction -Execute $plan.Execute -Argument $plan.Arguments -WorkingDirectory $plan.WorkingDirectory
 $trigger = New-ScheduledTaskTrigger -Daily -At $plan.LocalTime
-$limit = New-TimeSpan -Minutes ($CycleMinutes + 30)
+# A zero limit is Task Scheduler's "no execution time limit".
+$limit = if ($CycleMinutes -gt 0) { New-TimeSpan -Minutes ($CycleMinutes + 30) } else { New-TimeSpan -Seconds 0 }
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit $limit -MultipleInstances IgnoreNew -StartWhenAvailable
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 [void](Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force)

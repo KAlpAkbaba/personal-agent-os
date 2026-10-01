@@ -152,6 +152,22 @@ def _executable_name(path: str) -> str:
     return path.replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
 
 
+_FRAME_HOST_IMAGE: Final[str] = "applicationframehost.exe"
+
+
+def _title_names_app(title: str, image: str) -> bool:
+    """True when ``title`` is the Turkish display name or an alias of the allowlisted
+    application whose process image is ``image`` (both from the allowlist contract)."""
+    wanted = title.strip().casefold()
+    if not wanted or not image:
+        return False
+    return any(
+        wanted in {app.name_tr.casefold(), *(a.casefold() for a in app.aliases)}
+        for app in _allowlists.APPLICATIONS
+        if app.image == image
+    )
+
+
 def _any_value_ends_with(node: Any, text: str) -> bool:
     """True when any node of a ``ui.inspect`` subtree has a ``value`` ending with ``text``.
 
@@ -210,6 +226,11 @@ def open_application(name: str) -> list[OperatorStep]:
             # ApplicationFrameHost.exe, never to the launched image - it is known by
             # its title, the one identity such a window offers.
             return str(window.get("title") or "") in UWP_HOSTED_IMAGES[image]
+        if _executable_name(str(window.get("image") or "")) == _FRAME_HOST_IMAGE:
+            # Every other Store app launched by an alias (Calculator, Photos, ...) is
+            # hosted the same way: known by its title, which must be one of the app's
+            # own names in the allowlist contract - an unrelated frame window fails.
+            return _title_names_app(str(window.get("title") or ""), image)
         return bool(image) and _executable_name(str(window.get("image") or "")) == image
 
     return [

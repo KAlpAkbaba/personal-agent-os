@@ -165,6 +165,9 @@ export default function CoreControls({
       <Link href="/core/approvals" className="core-controls-link" data-control="approvals">
         Onay Merkezi →
       </Link>
+      <Link href="/core/office" className="core-controls-link" data-control="office">
+        Ofis →
+      </Link>
     </div>
   );
 }

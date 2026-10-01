@@ -1386,6 +1386,22 @@ _INTENT_CORROBORATION: dict[str, tuple[str, ...]] = {
 }
 
 
+#: ``ResolvedIntent.query_kind`` of the narrative read (``app.explain.engine.QUERY_NARRATIVE``
+#: spells the same word; the engine cannot be imported here, it imports this module).
+QUERY_KIND_NARRATIVE: Final = "narrative"
+
+
+def _narrative_match(text: str) -> str | None:
+    """The period word of a "what happened?" question the narrative recogniser takes.
+
+    The import is local: ``app.narrative`` reaches the ledger, which this module must not
+    load at import time."""
+    from app.narrative.intent import recognise
+
+    ask = recognise(text)
+    return None if ask is None else ask.period
+
+
 def _explain_kind(tokens: tuple[str, ...], text: str = "") -> str | None:
     """The kind of question about the system's own activity, or None.
 
@@ -1469,7 +1485,18 @@ def _eye_disable_match(tokens: tuple[str, ...]) -> str | None:
 #: The imperative "open" forms. Exact, like the eye/camera nouns: "açık" (open, adj.) is
 #: the QUERY "kamera açık mı?" and must not become an action; "açar mısın" is a request
 #: and is honoured as one.
-_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar", "ac", "acsana", "acar")
+#: "açın"/"açınız" is the polite imperative the realtime STT renders a spoken "aç" as
+#: ("Ofisü bilgisayarında hesap makinesini açın.", 2026-09-30); it was in no table.
+_POLITE_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("açın", "açınız", "acın", "acınız", "aciniz")
+_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "açar",
+    "ac",
+    "acsana",
+    "acar",
+    *_POLITE_OPEN_VERB_FORMS,
+)
 #: ADR-0197: the owner's names for God's Eye View - the English name as the ASR renders
 #: it ("god's eye", "gods eye", "godseye") and the Turkish ones ("dünya gözü", "tanrı
 #: gözü", "tanrının gözü"); the word after the noun carries the case ending ("gözünü").
@@ -3190,6 +3217,11 @@ def _research_open_match(tokens: tuple[str, ...]) -> str | None:
         return None
     read_verb = _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS)
     if read_verb is not None and not _asks_for_a_register(tokens, read_verb):
+        if _is_standing_sentence(tokens):
+            # Owner's trial 2026-09-30: "Bundan sonra araştırma raporlarını her zaman
+            # Türkçe oku" is a standing LANGUAGE preference, not a request to hear the
+            # report now and not a level (no level word: _asks_for_a_register was False).
+            return None
         return "araştırmayı oku"
     if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
         return None
@@ -3198,15 +3230,20 @@ def _research_open_match(tokens: tuple[str, ...]) -> str | None:
     return "araştırmayı aç"
 
 
+def _is_standing_sentence(tokens: tuple[str, ...]) -> bool:
+    """A standing marker: "bundan sonra", "artık", "hep", "her zaman"."""
+    return _has_exact(tokens, *_ANSWER_MODE_STANDING_MARKERS) is not None and (
+        _has_exact(tokens, "sonra", "zaman", "hep", "artık", "artik") is not None
+    )
+
+
 def _answer_mode_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     """ "Bundan sonra teknik anlat." -> ("technical", ...); "Teknik modu kapat." ->
     ("executive", ...); "Artık kısa anlat." -> ("executive", ...) (B31 req 209). A
     STANDING register needs a standing marker ("bundan sonra", "artık", "hep", "her
     zaman") or the word "mod"; a one-off "teknik anlat" stays the follow-up it was."""
     has_mode_word = _has(tokens, "mod") is not None
-    standing = _has_exact(tokens, *_ANSWER_MODE_STANDING_MARKERS) is not None and (
-        _has_exact(tokens, "sonra", "zaman", "hep", "artık", "artik") is not None
-    )
+    standing = _is_standing_sentence(tokens)
     if not (has_mode_word or standing):
         return None
     if has_mode_word and _has(tokens, "teknik") and _has_exact(tokens, *_CLOSE_VERB_FORMS):
@@ -5250,6 +5287,7 @@ _APP_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
     "ac",
     "acsana",
     "acar",
+    *_POLITE_OPEN_VERB_FORMS,
 )
 _APP_LIST_QUESTION_WORDS: Final[tuple[str, ...]] = ("hangi", "neler", "ne")
 _APP_LIST_VERB_FORMS: Final[tuple[str, ...]] = (
@@ -6843,6 +6881,11 @@ def _executive_start_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     graph is built is ``app.executive.planner.RuleBasedExecutivePlanner``'s own job,
     given the SAME directive text verbatim (module comment above)."""
     if not _executive_output_requested(tokens):
+        return None
+    if _is_standing_sentence(tokens) and _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS):
+        # Owner's trial 2026-09-30: "Bundan sonra araştırma raporlarını her zaman Türkçe
+        # oku" is a standing READ preference; with RESEARCH_OPEN declining it, this branch
+        # would start a research-report MISSION from a preference sentence.
         return None
     if _has_exact(tokens, *_EXEC_MAIL_STEMS) and (
         _has(tokens, *_EXEC_MAIL_THREAD_STEMS) or _has(tokens, *_EXEC_DRAFT_STEMS)
@@ -10130,6 +10173,21 @@ def _resolve_intent_rules(
             Intent.RESUME,
             scope=_scope_for(Intent.RESUME, narration),
             matched="kaldığın yerden",
+            **base,
+        )
+
+    # 99. ADR-0216/0221 (ROADMAP order 2c): "Bu hafta ne oldu?" - the owner asking the record
+    #     to be told. A READ, answered by the explain engine's ``narrative`` kind. LAST, below
+    #     every branch, because that placement IS the guard: the recogniser's sentences
+    #     ("bugün ne yaptın", "bugün neler oldu", "ne başarısız oldu") are also taken by the
+    #     artifact-list and explain families, and what they own keeps going where it went.
+    #     Only what reaches here - no family wanted it - is the narrative.
+    if narrative_ask := _narrative_match(text):
+        return ResolvedIntent(
+            Intent.EXPLAIN,
+            scope=SCOPE_CONVERSATION,
+            matched=narrative_ask,
+            query_kind=QUERY_KIND_NARRATIVE,
             **base,
         )
 

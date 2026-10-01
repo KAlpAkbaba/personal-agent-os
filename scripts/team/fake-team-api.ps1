@@ -17,7 +17,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Seed,
     [Parameter(Mandatory = $true)][string]$Log,
     [Parameter(Mandatory = $true)][string]$Ready,
-    [string]$Token = "test-token"
+    [string]$Token = "test-token",
+    # Every PUT of the live status answers 500 (a failing status write must not stop a cycle).
+    [switch]$FailStatus
 )
 $ErrorActionPreference = "Stop"
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -27,6 +29,8 @@ $tasks = [ordered]@{}
 foreach ($task in @($state.queue.tasks)) { $tasks[[string]$task.id] = $task }
 $lock = $state.lock
 $reports = [ordered]@{}
+$liveStatus = $null
+$statusHistory = New-Object System.Collections.ArrayList
 
 function Send-Json {
     param($Context, [int]$Status, $Body)
@@ -57,7 +61,7 @@ while ($running) {
     try {
         if ($path -eq "/__stop") { $running = $false; $status = Send-Json -Context $context -Status 200 -Body @{ stopped = $true } }
         elseif ($path -eq "/__state") {
-            $status = Send-Json -Context $context -Status 200 -Body @{ tasks = @($tasks.Values); lock = $lock; reports = $reports }
+            $status = Send-Json -Context $context -Status 200 -Body @{ tasks = @($tasks.Values); lock = $lock; reports = $reports; status = $liveStatus; statuses = @($statusHistory) }
         }
         elseif ($request.Headers["Authorization"] -ne "Bearer $Token") {
             $status = Send-Json -Context $context -Status 401 -Body @{ detail = "unauthorized" }
@@ -98,6 +102,19 @@ while ($running) {
                 }
                 $status = Send-Json -Context $context -Status 200 -Body $answer
             }
+        }
+        elseif ($path -eq "/v1/team/queue/status" -and $request.HttpMethod -eq "PUT") {
+            # The cycle's live status (office-cycle-status): the latest is kept, and every document
+            # that came in, so a test can see what was written while the cycle waited.
+            if ($FailStatus) { $status = Send-Json -Context $context -Status 500 -Body @{ detail = "status store down" } }
+            else {
+                $liveStatus = $body
+                [void]$statusHistory.Add($body)
+                $status = Send-Json -Context $context -Status 200 -Body $body
+            }
+        }
+        elseif ($path -eq "/v1/team/queue/status" -and $request.HttpMethod -eq "GET") {
+            $status = Send-Json -Context $context -Status 200 -Body $(if ($null -ne $liveStatus) { $liveStatus } else { @{} })
         }
         elseif ($path -eq "/v1/team/queue/reports" -and $request.HttpMethod -eq "POST") {
             $reports[[string]$body.name] = [string]$body.text

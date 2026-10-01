@@ -1,18 +1,22 @@
 {
-  "adr": "ADR-0213 PR 2",
-  "status": "NOT_RUN",
-  "reason": "The Docker daemon is not running on this PC (docker CLI 28.3.2 present, engine pipe absent, 2026-09-30); the image was not built and no container ran. Nothing below was measured.",
-  "machine": null,
-  "date_utc": null,
-  "image_digest": null,
-  "peak_rss_bytes": null,
+  "adr": "ADR-0213 PR 2 / ADR-0219",
+  "status": "PROVEN_REAL",
+  "machine": "pagentos-core (Hetzner CPX32, 8 GB)",
+  "date_utc": "2026-09-30T18:23:40Z",
+  "release": "aa35fcf3a57e8df4ad7dfabced705848c0976377",
+  "image": "pagentos/cloud-browser:local",
+  "image_digest": "sha256:b4307513192d67d062b764721388e7c7c4b302895a91b08209f1b9c8ced665ab",
+  "container": "pagentos-prod-cloud-browser",
+  "window_s": 90,
+  "idle_rss_bytes": 121437000,
+  "peak_rss_bytes": 649697690,
   "mem_limit_bytes": 2147483648,
-  "estimate_only": "Idle Chromium 0.5-1 GB, two contexts up to about 2 GB (blog sources, medium quality). Not a measurement.",
-  "command_for_the_lead_on_the_cloud_core": [
-    "docker compose -f infra/docker/docker-compose.prod.yml -f infra/docker/cloud-browser/compose.fragment.yml build cloud-browser",
-    "docker compose -f infra/docker/docker-compose.prod.yml -f infra/docker/cloud-browser/compose.fragment.yml up -d cloud-browser",
-    "MEASURE_WINDOW_S=90 infra/docker/cloud-browser/measure-memory.sh cloud-browser docs/evidence/adr-0213-cloud-worker-memory-2026-09-30.json"
-  ],
-  "drive": "While the script samples, POST three device commands to the 'bulut' device: browser.session_open, then browser.navigate to each of the three pages of services/browser/tests/fixtures/site served from a public URL (the worker refuses private destinations), then browser.session_close.",
-  "note": "The script overwrites this file with status PROVEN_REAL and the measured numbers."
+  "host_available_after_mb": 4531,
+  "how": "The container was enrolled (device ad64617c-b1e8-465f-ac65-4c780082cc18, name bulut, platform cloud) and connected to the broker (session c044c3fc..., 18:19:50Z). While `docker stats` was sampled every second for 90 s, Chromium was launched INSIDE the container (docker exec, Playwright 1.62.0, headless) and taken to three public pages (example.com, wikipedia.org, hetzner.com) with 8 s on each, then closed. Idle = the worker without a browser open.",
+  "not_the_broker_path": "The three navigations were driven directly in the container, not as browser.* commands through the broker: a device command needs an owner session, which the lead does not hold. The memory of Chromium on this host is the same either way; the worker's own overhead per command is not in this number.",
+  "device_alias": "bulut (devices.metadata_json.aliases, written 2026-09-30 by the lead, delegated by the owner)",
+  "conclusion": "0.65 GB peak for three pages against a 2 GB cap on a host with 4.5 GB free: CPX32 holds the cloud worker at this concurrency. The blue-green switch (two api colours at once, ~1.4 GB each) plus this worker was not measured together; the next release does that measurement.",
+  "earlier": {
+    "2026-09-30 (cycle pilot-02)": "NOT_RUN on the home PC: the Docker engine was not running; the estimate then was 0.5-1 GB idle from blog sources."
+  }
 }

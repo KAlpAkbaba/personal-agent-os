@@ -16797,6 +16797,32 @@ What it changes in the machinery, and what it does not yet:
 * `awaiting_owner` remains the state for the things of item 2(b) - a new roadmap row, a new
   dependency, an irreversible action - and for nothing else.
 
+### ADR-0214 addendum 3 (2026-09-30): no money cap, no time cap; the one stop is the usage limit
+
+The owner, on seeing the queue grow past what one night's cap would cover: "Bütçe
+tavanlarını kaldır: döngü ve koşu başına USD tavanı yok (abonelik, API yok); USD sadece
+'tahmini' bilgi olarak raporda kalsın. Tek durma nedeni Max kullanım limiti; takılırsa dur,
+raporda yaz, limit açılınca kaldığı yerden devam et. Süre tavanı da kalksın; idempotent
+olduğu için yarıda kesilirse zararsız."
+
+What changed in the machinery: `cycle.ps1` defaults `-MaxUsd 0 -RunMaxUsd 0 -RunMinutes 0
+-CycleMinutes 0`, and 0 is no cap - `Get-TeamRunArguments` then passes no
+`--max-budget-usd` at all and a run's deadline is `[datetime]::MaxValue` (`Wait-TeamRun`
+waits without a timeout). A cap named by a caller still works as before (the tests keep
+theirs). `Read-TeamRunResult` reads the subscription's limit from the tool's own words
+("Claude AI usage limit reached|<epoch>", "hit your limit", on stdout or stderr) and
+returns `UsageLimited` with `ResetsAt` when the epoch was given; the cycle then puts a
+worker task back to `assigned`, does not count the run as a failure or a try, and - with
+`-WaitForUsageLimit` (the default) and a known reset - sleeps until 90 s past it and goes
+on; otherwise it stops with the line "Max kullanım limiti; ... aynı -CycleId ile yeniden
+başlat: kaldığı yerden devam eder". The report's budget section reads "tahmini X USD (tavan
+yok)". `register-nightly.ps1` registers the task without caps and without a scheduler
+execution-time limit. Tests: `scripts/tests/team-cycle.tests.ps1` (84; the `limited`
+scenario of `fake-claude.ps1`; mutation: the usage-limit branch disabled -> 2 RED).
+
+What did not change: a task's `budget.max_usd` stays in the queue as the lead's estimate;
+`MaxRunsPerTask` (4) stays - it bounds a task that never converges, which is not money.
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
@@ -16988,3 +17014,658 @@ fixed files; the released tree (`8d8d0f18`) still holds the broken ones, so the 
 is NOT started until this fix is released. The worker and the inspector had both written
 NOT_RUN for exactly these claims; the classes were honest, and the lesson is the old one - a
 claim nobody ran is where the defect is.
+
+## ADR-0223 — A maintenance window for the Cloud Core: package updates and a safe reboot on a one-host blue/green (2026-09-30)
+
+**Status.** Proposed by the lead on the owner's request ("27 güncelleme + yeniden başlatma
+gerekiyor ve 1 zombi süreç var; bakım penceresi planla"). The WINDOW is the owner's to open
+(TEAM_PROTOCOL 3a item 2b: a disruptive action); the procedure below is binding once he does.
+
+**What the host says (read 2026-09-30 17:30 UTC, nothing changed).**
+
+| Fact | Value |
+|---|---|
+| Uptime / kernel | 28 days; running `6.8.0-138-generic`, installed and waiting `6.8.0-142-generic` |
+| `/var/run/reboot-required` | yes: kernel, `linux-base`, `libc6` |
+| Pending upgrades | 27: `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-compose-plugin`, `docker-buildx-plugin`, `tailscale 1.102.3`, `netplan`, `apparmor`, `krb5`, `libaudit`, `base-files`, `python3-apt`, `ubuntu-release-upgrader-core`, `dmidecode`, `libevent`, `motd-news-config` (1 marked security) |
+| Unattended upgrades | on, security origin only, no automatic reboot - which is why the kernel waits |
+| The "zombie" | `auto-setup.sh <defunct>` (pid 1821), parent `temporal-server` (pid 1521, the temporal container's pid 1, 28 days old). Harmless: one dead entry the container's pid 1 never reaped; it goes when the container restarts |
+| Docker | no `/etc/docker/daemon.json`, so NO `live-restore`: upgrading `docker-ce`/`containerd` stops every container; all are `restart: unless-stopped` and come back with the daemon |
+| Leftover | `pagentos-prod-api` in state `created` since the 2026-09-16 single-container attempt (ADR-0033 lesson); never started |
+| Edge state | `active.txt` = blue; the release `aa35fcf3` serves as api-blue, LKG `8d8d0f18` |
+| Timers | backup 00:39 UTC daily; reconcile every minute; restore drill Sunday 01:31 UTC; apt-daily 04:42 / upgrade 06:43 UTC; the team's nightly cycle 23:00 UTC (02:00 Istanbul, up to 4 h) |
+
+**Why blue/green does not remove the outage here.** Both colours run on ONE host. A kernel
+reboot and a Docker daemon upgrade stop both. Blue/green protects a RELEASE (the old tree keeps
+serving while the new one is checked); a host maintenance is a short full outage by nature, and
+the design's job is to make it short, self-healing and honest: the devices reconnect on their
+own (their connection is outbound with backoff), the edge keeps its `active.txt` on the data
+volume, and `pagentos-bluegreen-reconcile.timer` runs after boot and puts the marked colour
+back behind the edge.
+
+**Decision - the procedure (run by the lead over Tailscale SSH; ~10 minutes of outage).**
+
+*Before (all must hold, else the window is postponed and the report says why):*
+1. Health `ok`, `failing_checks` empty; `RELEASE`, `LAST_KNOWN_GOOD` and the recovery pin agree
+   with `git` (pin = RELEASE, 40 hex).
+2. The last backup is younger than 24 h (`LAST_BACKUP.json`); no failure marker under
+   `/var/lib/pagentos-backup/failures/`.
+3. No team cycle running (`team/lock.json` released on the home PC; the nightly window is
+   avoided), no release in flight, the owner not mid-task (the window is his).
+4. `apt-get -s upgrade` lists nothing that removes a package; `docker-ce` is not held. Disk
+   `/` under 80 %.
+5. The two devices' presence is read and written down (so "reconnected" can be checked
+   afterwards).
+
+*The window:*
+6. Take a pre-maintenance snapshot: `bash /opt/pagentos/app/scripts/cloud/backup-cloud-core.sh`
+   (the same backup the release takes before a migration).
+7. Stop the reconcile timer for the window (`systemctl stop pagentos-bluegreen-reconcile.timer`)
+   so it does not fight a half-restarted Docker; the unit stays enabled and returns at boot.
+8. Remove the never-started leftover container: `docker rm pagentos-prod-api` (state
+   `created`; nothing runs in it).
+9. `apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=--force-confold upgrade`.
+   Docker restarts inside this step; every container returns by its restart policy. Wait for
+   `docker ps` to show postgres, redis, minio, temporal, edge, api-blue, godseye running
+   (api-green stays `exited`: that is the idle colour).
+10. `reboot`. Expected downtime 1-3 minutes of no edge; the devices' agents retry with backoff.
+
+*After:*
+11. Within 5 minutes of boot: `uname -r` is `6.8.0-142`; `/var/run/reboot-required` is gone;
+    `docker ps` as in step 9; the reconcile timer is active and its first run says
+    `RECONCILE OK: api-blue is canonical (release aa35fcf3...)`; the edge answers
+    `/v1/system/health` with `status ok`, the same release, `failing_checks` empty; the two
+    devices are back (`presence: online`, the same device ids); `tailscale status` shows the
+    host active; godseye up; the zombie is gone (`ps -eo stat | grep -c Z` = 0).
+12. If health is not `ok` after 10 minutes: `release-cloud-core-bluegreen.sh --rollback` is
+    NOT the tool (nothing was released); the reconcile timer is; if it cannot bring the
+    marked colour back, start the LKG colour by hand (`docker compose ... --profile bluegreen
+    up -d api-green` with `PAGENTOS_IMAGE_GREEN`/`PAGENTOS_RELEASE_GREEN` as the `.env` names
+    them) and switch the edge upstream file, then write an incident marker and stop.
+13. The report: before/after facts (kernel, packages, containers, health, devices, downtime
+    measured from the last good health probe to the first good one), in `team/reports/` and
+    HANDOFF.
+
+**The window proposed.** Wednesday 2026-10-01, **06:30-07:00 Europe/Istanbul (03:30-04:00 UTC)**:
+after the backup (00:39 UTC) and the nightly cycle's worst case (23:00-03:00 UTC), before
+apt-daily (04:42 UTC), and outside the owner's working hours. The owner opens it with one
+sentence; the lead runs it and reports. An alternative the owner may prefer: any evening
+after 22:00 Istanbul, before the nightly cycle.
+
+**What is deliberately not done.** No `daemon.json` with `live-restore` yet (it would keep
+containers running through a Docker upgrade, but changes the daemon's behaviour on every
+restart and deserves its own test on the dev stack - queued as a task). No automatic
+reboot for unattended upgrades: a kernel reboot stays a decision, not a timer.
+
+**Follow-up (queued):** `maintenance-reboot-script` - the procedure as
+`scripts/cloud/maintenance-reboot.sh` with `--preflight`, the checks of steps 1-5 as code,
+and a PowerShell test suite in the gate, so the next window is one command with the same
+report.
+
+### ADR-0223 addendum (2026-10-01): the first window did not run; the window is the host's own timer now
+
+**What happened.** The window the owner approved (2026-10-01 06:30-07:00 Istanbul) was bound
+to a wake-up of the lead's Claude session. The session ended during the night and the wake-up
+went with it: at 06:27 nothing ran, and the host stayed as it was (kernel `6.8.0-138`,
+`reboot-required`, 26 upgrades, one zombie; health `ok`). Nothing was harmed - and nothing a
+session schedules can be relied on.
+
+**The owner's rule, permanent (2026-10-01):** "Bundan sonra zaman bağlı her iş kalıcı göreve
+bağlansın, oturuma değil." A job that must happen at a time is bound to a durable scheduler -
+a systemd timer on the host it acts on, or a Windows scheduled task on the home PC - never to
+a session wake-up, a cron of the session, or "I will do it when I am woken". The session may
+ALSO watch; it is never the trigger. Written into `docs/TEAM_PROTOCOL.md` section 9.
+
+**The new window: 2026-10-01 22:00-22:30 Istanbul (19:00-19:30 UTC), owner-approved.** How it
+is bound:
+
+* On the host (the trigger and the work - no SSH, no home PC, no session in the path; the
+  Tailscale upgrade inside the window cannot cut its own branch):
+  `pagentos-maintenance-window.timer` (`OnCalendar=2026-10-01 19:00:00 UTC`, `Persistent=false`
+  so a host that was down does not run it late) starts `pagentos-maintenance-window.service`:
+  `ExecCondition` refuses outside 19:00-19:10 UTC of that date (proven: started by hand at
+  08:00 UTC -> "Skipped due to 'exec-condition'", nothing changed); `ExecStartPre` writes the
+  BEFORE facts (`/usr/local/sbin/pagentos-maintenance-facts.sh before` ->
+  `/opt/pagentos/maintenance/before-2026-10-01.txt`: kernel, uptime, upgrades, zombies,
+  release/LKG/pin, health, containers, the devices' open sessions); `ExecStart` is
+  `/usr/local/sbin/pagentos-maintenance-reboot.sh --preflight --run` - the script of the task
+  `maintenance-reboot-script` (cycle-2026-10-01, inspected; sha256 `2d0fbccf...a749a6`, read
+  line by line by the lead), whose preflight ran on the real host today: 9/9 `ok`, `PREFLIGHT
+  OK`; `ExecStopPost` starts the reconcile timer again whatever happened; `TimeoutStartSec=3600`
+  so dpkg is never killed half-way.
+* After the reboot: `pagentos-maintenance-verify.timer` (`OnBootSec=4min`, then every 10 min)
+  starts `pagentos-maintenance-verify.service`, which is inert unless
+  `/opt/pagentos/MAINTENANCE_MARKER` exists; it runs `--verify` (kernel changed,
+  reboot-required gone, containers, reconcile OK, zombies 0, health ok on the same release,
+  downtime measured) -> `/opt/pagentos/LAST_MAINTENANCE.json`, then writes the AFTER facts.
+* On the home PC (the report): the Windows task `PagentOS Maintenance Report 2026-10-01`
+  (22:40 and 23:10 Istanbul) runs `scripts/cloud/collect-maintenance-report.ps1 -Date
+  2026-10-01`, which reads those files over SSH (read-only) and writes
+  `team/reports/maintenance-2026-10-01.md` with a verdict. If Tailscale asks for its browser
+  check the report says so and the facts stay on the host.
+
+**Step 3 of the procedure, restated.** "No team cycle running" was written when the cycle
+might talk to the Cloud Core. With `PAGENTOS_TEAM_STORE=file` a cycle makes no Cloud Core
+call, so a running cycle does not postpone the window; the script checks what it can see (no
+release in flight). When the store moves to the database, the cycle must tolerate the outage
+(its API calls already retry) or the window must check the lock through the API.
+
+**What is honest about tonight.** `--run` and `--verify` run for the first time on a real
+host with nobody driving: the tests proved them on fakes. If a step fails before the reboot
+the script stops there (exit 11), the reconcile timer is restarted and production keeps
+serving the same release; if verification fails the marker stays and step 12 applies. The
+units are removed after the report (they name one date and are inert after it).
+
+## ADR-0224 — Voice command understanding in three layers: normalisation, semantic match with a confidence, a threshold policy (owner's architectural requirement, 2026-09-30)
+
+**Status.** Accepted - the owner's directive, given after the trial of 2026-09-30 20:11 UTC
+(QUALIFICATION 30.10 notes a-c). His words, kept as the contract: "sesli komut anlama üç katman
+olacak — (1) normalizasyon: Türkçe fiil kökü + ek düşürme + STT karışıklık sözlüğü; (2) anlamsal
+eşleşme: mevcut yerel embedder (potion) ile niyet + varlık (uygulama, cihaz alias) vektör
+eşleşmesi, varlıklarda ek bulanık dize; güven puanı üretir; (3) güven eşiği: yüksek→yap,
+orta→read-back ile yap, düşük→tek soru; model yalnız düşük güvende, katı şema, cihaz tahmini
+yasak. Kullanıcı düzeltmesi eşanlamlı olarak hafızaya yazılır ve sonraki eşleşmede kullanılır.
+Kural tabloları kalır ama son söz değil, ilk aday. Korpus ölçümü bu mimariyle tekrarlanır;
+hedef aynı: ≥95%."
+
+**What the trial showed, and why one more rule would not do.** Three sentences, three failures
+of the same shape: the rule tables in `app/voice/intents.py` read a sentence by exact token
+forms, so one suffix the STT chose ("açın" for "aç"), one word it invented ("ofisü" for
+"ofis"), or one sentence whose meaning the tables never listed (a language preference with a
+standing marker) either falls to the model - which then chooses a tool, fills its arguments
+from its own guess, and runs it on whichever device the session has - or is bent into the
+nearest rule (RESEARCH_OPEN for "raporlarını ... oku"). Twice today the wrong thing was DONE
+with full confidence; nothing in the path can say "I am not sure". 2745 corpus cases at 100 %
+did not predict any of the three, because the corpus is written in the forms the tables know.
+The lesson of ADR-0205 stands and is sharpened here: a stem match without a confidence is a
+guess about the suffix; a stem match WITH a confidence, checked against what the owner
+actually said, is a candidate.
+
+**Decision - the three layers, in the order a sentence passes them.**
+
+*Layer 1 - normalisation (`app/voice/understanding/normalize.py`).* Input: the STT text.
+Output: the normalised text, its tokens, and for every token a lemma with the suffixes it
+dropped. (a) A Turkish suffix stripper for verbs (imperative and polite forms: "açın",
+"açınız", "açsana", "açar mısın", "açabilir misin" -> "aç") and for nouns (case, possessive,
+plural: "bilgisayarımdan" -> "bilgisayar" + {1sg-poss, abl}; "raporlarını" -> "rapor" +
+{pl, acc}). The stripper is table-driven and closed: a suffix is dropped only when what is
+left is a known stem (the verb table, the application and device vocabularies, the
+corpus's own nouns), so "istediğim" never becomes "iş" - the ADR-0205 failure is the test
+case that guards it. (b) An STT confusion dictionary, `packages/protocol/stt-confusions.json`
+(a protocol file, bundled by `app/protocol_files.py`, registered in the falsification test):
+`{"ofisü": "ofis", ...}` - forms the realtime STT has actually produced, each entry carrying
+the date and the sentence it came from; nothing speculative. (c) Diacritic folding and the
+existing `normalize_transcript` filler removal, unchanged. Layer 1 has no opinion about
+intent; it only makes the tables and the vectors see the same word the owner said.
+
+*Layer 2 - semantic match with a confidence (`app/voice/understanding/semantic.py`).* Two
+indexes, both embedded with the LOCAL embedder that already serves memory (ADR-0200:
+`LocalEmbedder`, `minishlab/potion-multilingual-128M`, 256 dims, on this host, no network),
+so understanding costs nothing per sentence and works when the paid model is off: (a) an
+INTENT index - for every intent the router knows, its exemplar sentences (seeded from the
+corpus's canonical cases, so the two never drift: a corpus case is an exemplar); (b) an
+ENTITY index - applications (the allow-list and `_APP_TR_NAMES`), device aliases (read from
+`devices.metadata_json.aliases`, never hard-coded), and later sites and people. A sentence
+is matched as a whole against the intent index (cosine), and its normalised tokens against
+the entity index with BOTH the vector and a fuzzy string distance (Damerau-Levenshtein over
+the folded form; "ofisü" ~ "ofis" at 0.8), the fuzzy score bounding the vector one so a
+semantically near but lexically far entity cannot win. The rule tables run FIRST and their
+result enters as candidate #1 with a confidence of its own (1.0 for an exact closed form,
+lower when the match needed a dropped suffix or a confusion entry - the trace says which);
+layer 2 adds its candidates; a combiner produces ONE ranked list with a calibrated
+confidence and the evidence for each (which words, which exemplar, which distance). The
+confidence is a number the tests can assert on, not a feeling.
+
+*Layer 3 - the threshold policy (`app/voice/understanding/policy.py`,
+`packages/protocol/understanding-thresholds.json`).* HIGH (>= 0.85 to start): do it, the
+receipt as today. MEDIUM (0.60-0.85): do it AND read it back in the same breath - "Ofiste
+Hesap Makinesi'ni açıyorum" - so a wrong reading is caught while it is still cheap; the
+read-back is the receipt's speech, not a second confirmation (owner rule 2026-09-18/19: no
+second spoken confirmation). LOW (< 0.60): ONE question naming the two best candidates or
+the missing entity ("Hangi bilgisayarda: ofis mi, ev mi?"), never a guess and never a
+silent default to the session's device. The model (the realtime tool call) is consulted
+ONLY at LOW, with a strict schema (enum-typed intent and entity slots, `additionalProperties`
+false) and it is FORBIDDEN to name a device: the device slot is filled by layers 1-2 or by
+the owner's answer, never by the model - today's "ran it on MAIL because nothing said
+otherwise" is exactly the guess this forbids. The thresholds live in the protocol file so
+the corpus measurement can move them with evidence; the relay records the layer, the
+confidence and the outcome on every utterance (`voice_intent_resolved` gains
+`understanding: {layer, confidence, candidates}`), which is the data the calibration reads.
+
+*Corrections become vocabulary (`app/voice/understanding/corrections.py`).* When the owner
+corrects a reading ("hayır, ofis bilgisayarında"; "ona hesap makinesi deme, calculator de")
+the pair (what was heard/read -> what was meant) is written to memory as a SYNONYM
+observation (memory class `vocabulary`, explicit, source the session) through the existing
+write policy, and the entity index reloads it on the next match: the second time is right
+without a release. A correction is the owner's own word, so it is also an STT-confusion
+candidate; it is proposed into the protocol file by the nightly cycle, never written there
+by the relay (the file is a release artefact).
+
+**What stays.** The rule tables, every corpus case at 100 %, `ResolvedIntent`, the relay,
+the tools and their receipts. The tables become candidate #1, not the last word; a table
+that answers with an exact closed form still wins outright (its confidence is 1.0). No new
+model, no network call, no new service: the embedder is the one memory already runs, the
+fuzzy distance is a small pure function (no new dependency unless the integrator finds a
+licence-clean one the lock already resolves).
+
+**Measurement - the corpus, twice.** (1) The existing Owner Utterance Suite (2745 cases,
+`tests/voice_corpus/corpus.py`) stays a 100 % gate: the new layers may not lose a case.
+(2) A SECOND corpus, `tests/voice_corpus/stt_corpus.py`, of sentences AS THE STT RENDERED
+THEM in production (read from `realtime_sessions.context_json.last_utterance` and the
+audit rows - the owner's real sentences, starting with today's three), each with the
+intent, entities and device the owner meant and the layer/threshold expected. Target on
+this corpus: >= 95 % correct at HIGH or MEDIUM with no wrong action, and 0 wrong-device
+actions at any confidence. The nightly voice-corpus run reports both numbers; QUALIFICATION
+gains a stage for it.
+
+**The work (queued for the team, in this order; each RED-first, mutation, own tests):**
+1. `understanding-normalize` - layer 1 with the confusion dictionary (protocol file, bundle,
+   falsification test) and the closed suffix stripper; the tables read the normalised form.
+2. `understanding-semantic-index` - layer 2: the two indexes on `LocalEmbedder`
+   (`DeterministicEmbedder` in tests), the fuzzy distance, the combiner, the confidence with
+   its evidence; the integrator checks first whether a licence-clean stemmer/fuzzy library
+   already in the lock or in the world beats the hand-written one.
+3. `understanding-threshold-policy` - layer 3: thresholds file, read-back speech, the one
+   question, the model at LOW only with the strict schema and the device slot closed; the
+   audit row's `understanding` block.
+4. `understanding-corrections-memory` - corrections as vocabulary memory and the index reload.
+5. `understanding-stt-corpus` - the second corpus with today's three sentences, the report,
+   the QUALIFICATION stage, the nightly run reporting both numbers.
+The three defect tasks queued from the trial (`answer-mode-intent-precision`,
+`operator-postcondition-uwp`, `app-open-named-device-not-dropped`) stay ahead of these: they
+are the rule-table fixes the architecture keeps as candidate #1, and their sentences seed the
+STT corpus. `app-open-named-device-not-dropped` is amended by this ADR: the model gets NO
+`device` argument (device guessing by the model is forbidden here); the device the owner
+named reaches the launch through layers 1-2 or the LOW question.
+
+**Owner gates.** None before the work: this is the owner's own directive. Release approval
+per release as always; the real-device proof is the owner's three sentences said again.
+
+### ADR-0224 addendum 1 (2026-10-01): layer 1 as built - a generated, closed suffix grammar with a known-stem guard
+
+*From `team/plans/understanding-normalize-adr.md` (ADR-NNNN — Layer 1 of ADR-0224: a generated, closed suffix grammar with a known-stem guard).*
+
+**Status.** Accepted (worker, understanding-normalize).
+
+**Decision.** `app/voice/understanding/normalize.py` holds the verb table (imperative stem -> explicit
+aorist ending), a noun list drawn from the corpus, and the application / device-alias vocabulary.
+Suffix chains (noun: plural, possessive, case; verb: polite -in/-iniz, -sana, aorist, -abilir) are
+GENERATED by a harmony-aware grammar; the stripper splits a token, takes the ending from the
+generated ending table, re-attaches the chain to the candidate stem and demands the token back, and
+finally demands a KNOWN stem. A word failing any step stays whole ("istediğim", "unutma": negative
+forms are never stripped). A verb in the aorist absorbs a following mi-particle ("açar mısın" is
+one lemma, suffixes `aor, q`). Ambiguity is resolved by a fixed order: `raporlarını` reads as
+`pl + poss3sg + acc` (the `poss2sg` reading is equally valid; the owner talks about "his" reports,
+the order puts 3sg first). The confusion list is `packages/protocol/stt-confusions.json`, read
+lazily through `protocol_file`, each entry dated and carrying its sentence.
+
+**Why.** ADR-0205: a stem match without a guard read "istediğim" as "iş". A generated grammar keeps
+the table small and auditable; the re-attach check rejects harmony violations ("ofisda").
+
+**Consequences.** Adding a verb or noun is one table line. Unknown stems (kaydet, git - stem
+mutation) are not lemmatised until added with an explicit form. ASCII-folded input ("ac") is not
+stripped; layer 2's fuzzy distance covers it. `işte`/`işteki` are dropped as fillers by
+`normalize_transcript` before layer 1 sees them (unchanged here).
+
+### ADR-0224 addendum 2 (2026-10-01): layer 2 as built - the two indexes, the fuzzy bound, the combiner
+
+*From `team/plans/understanding-semantic-index-adr.md` (ADR (lead numbers it) — Layer 2 of ADR-0224: intent and entity indexes, fuzzy bound, combiner).*
+
+**Status.** Accepted (worker, cycle-2026-10-01). Additive, unwired: `resolve_intent` is untouched.
+
+**Decision.**
+- `app/voice/understanding/fuzzy.py`: local Turkish `fold` (I/İ before lower, then diacritics) and an
+  optimal-string-alignment Damerau-Levenshtein `similarity` in [0,1], pure Python, cached, and 0.0
+  when the lengths differ by more than 3. No dependency (integrator: rapidfuzz and
+  py-rust-stemmers rejected; THIRD_PARTY record is "considered and rejected").
+- `semantic.py`: `IntentIndex` (exemplars passed in; production never imports `tests/`;
+  `exemplars_from_cases` builds them from the corpus on the test/ops side; a built-in
+  `preference` family so a standing preference is not bent into an action) and `EntityIndex`
+  (allow-list apps with Turkish names, device aliases passed by the caller, vocabulary
+  synonyms). Entity confidence = `min(vector, fuzzy)`; a span under fuzzy 0.6 is dropped and a
+  device is never defaulted. Intent confidence = cosine x margin factor (0.6 with no lead to 1.0
+  at a lead of 0.10). The entity index is cached by a hash of (aliases, vocabulary) and rebuilt
+  when they change. Intent lookup is two-stage (centroid shortlist of 20 intents, then exact best
+  exemplar) to stay pure Python and under 5 ms a sentence.
+- `combine.py`: rule result is candidate #1 (exact 1.0, suffix dropped 0.9, confusion 0.75; any
+  other kind is a ValueError); a semantic candidate for the rule's own intent is folded into it
+  (rule slots win, semantic fills gaps); ranking is by confidence, the rule first among equals.
+  `understand()` needs a configured engine (`configure_default_engine`) or an `engine=`;
+  it refuses rather than silently falling back to a different embedder.
+
+**Consequences.** The shortlist can miss the own intent of a sentence (measured in the report);
+the policy task decides whether to widen it. `DeterministicEmbedder` is lexical, so semantic
+quality is only claimed for `LocalEmbedder` where measured.
+
+#### THIRD_PARTY record (lead pastes into `docs/THIRD_PARTY_COMPONENTS.md` at merge; the worker may not edit that file)
+
+#### rapidfuzz, py-rust-stemmers — considered and rejected (ADR-0224 layer 2)
+
+Role considered: Turkish-aware fuzzy matching (rapidfuzz, MIT, C++ Damerau-Levenshtein) and suffix
+stemming (py-rust-stemmers, Snowball Turkish). Neither is in `services/api/uv.lock`.
+Rejected for now, default "no new dependency":
+- rapidfuzz adds a native wheel to every device/cloud image for a 12-line optimal-string-alignment
+  routine that already meets the budget (mean 3.5 ms a sentence with the lexical embedder, 4.9 ms
+  with LocalEmbedder, most of it in the intent pass, not in fuzzy); Turkish folding (I/İ, ü/u) is ours
+  either way and rapidfuzz does not do it.
+- A Turkish stemmer over-stems (`unutma` = "remember" stems to `unut` = "forget" — the recorded
+  hard-delete trap) and layer 1 already has a closed, reviewed suffix stripper.
+Revisit only if the measured p99 of `understand()` breaks the budget; licence/security status to
+be re-verified at that time.
+
+**Decided by the lead at integration.** (a) `stt-confusions.json` lives beside its one reader
+(`app/voice/understanding/`), not under `packages/protocol`: the falsification registry refuses a
+shared file with one reader ("a contract with one reader is a file"); it moves there the day a second
+component reads it. The thresholds file of layer 3 follows the same rule. (b) Two tasks, each green
+alone, were red together: layer 2's test wanted "preference" for the language sentence, and
+`answer-mode-intent-precision` had added that sentence to the corpus with no intent, which made
+"none" its nearest exemplar. Both are non-acting readings; the test accepts either. (c) Carried into
+layer 3's card from the inspection: a device needs a confidence above 0.65 AND an alias word in the
+sentence (a bare "bilgisayarda" matched "ev bilgisayarı" at 0.62-0.64); the audit row holds no
+evidence strings (the owner's words); a negated imperative never reaches HIGH on a semantic
+candidate alone. Timing, measured by the worker on the home PC with `LocalEmbedder`: mean 4.9 ms,
+p99 8.4 ms per sentence; `DeterministicEmbedder` 34.5 ms for novel sentences (tests only).
+
+## ADR-0225 — The allow-list editor: the owner's sites are rows, the shared JSON stays the seed (2026-10-01)
+
+*From `team/plans/allowlist-editor-adr.md` (ADR (unnumbered) - The allow-list editor: owner sites in team_state rows, seed stays the JSON).*
+
+Context: ADR-0218 named the editor's API and left the store open ("a DB-backed overlay").
+
+Decision:
+- The owner's sites are `team_state` rows, `kind="allowlist"`, `key` = registrable domain, `doc` =
+  `{added_at, added_by}` (added_by = "shell"). No new table, no migration: `kind` is String(16), no CHECK.
+- `app/execution/allowlist_store.py` merges seed (`allowlist.sites()`, the shared JSON, stays empty-at-first) and
+  rows at every call; `acting_allowed(url)` keeps the seed module's contract, deny-list first. A row that is
+  deny-listed (written behind the editor) is ignored. Unbound (no `bind()`), it answers from the seed only.
+- `POST /v1/team/allowlist {site}` (200, `already_listed` when present, no second event), `GET`, and
+  `DELETE /v1/team/allowlist/{site}` (404 not listed; 409 `seed_site`). Owner session. 422 codes:
+  `empty_site`, `not_a_registrable_domain` (incl. subdomain, IP, junk, >80 chars), `bare_public_suffix`,
+  `deny_listed_site`. A bare suffix = one label, or two labels whose first is a second-level word and whose
+  last is a 2-letter ccTLD or not an open gTLD (`com.tr`, `co.uk`, `co.example` refused; `co.com`, `web.com.tr` taken).
+- Ledger events (subsystem `team`): `allowlist.site_added`, `allowlist.site_removed`; detail `{site, actor:"owner",
+  channel:"shell"}`; recorded BEFORE the row, a refusal (503 `ledger_refused`) writes nothing.
+- Shell only: no voice channel for widening the list.
+
+Consequences: adding a site applies at once in the API process. The worker still receives only what the
+dispatch sends: the lead must pass `effective_sites()` with the job.
+
+**Wired by the lead at merge (office-01).** The editor's router is mounted in `app/main.py`; the
+ledger vocabulary knows `allowlist.site_added` / `allowlist.site_removed`; the store is bound in
+the application's lifespan (not in `create_app`: it is module state, and an app merely constructed
+must not leave it pointing at its database) and unbound at shutdown, so a site the owner added is
+allowed after a restart without the editor being opened. `test_office01_wiring.py` holds each.
+
+## ADR-0226 — The cloud device and the owner's Chrome are facts of the registry, written at hello (2026-10-01)
+
+*From `team/plans/cloud-device-registry-adr.md` ().*
+
+Decision: `app/devices/cloud_registry.py` writes the two registry facts `execution.wiring` reads
+(ADR-0220). One function, `sync_registry_facts(db, device)`, is called by the broker's hello path
+right after `apply_hello`; it is idempotent and only ADDS (owner-set aliases and labels stay).
+- A device with `platform == "cloud"` gets the alias `bulut` (case-insensitive; never on another platform).
+- The label `owner_chrome` is DERIVED from the exact capability `browser.profile.owner`, never from the
+  name, never implied by the family marker `browser.chrome`, never on a cloud device. It is written to
+  `metadata_json.labels` because `wiring` reads `DeviceView.labels`; the capability stays the source.
+- Fact found while reading: NO agent advertises `browser.profile.owner` today. The owner-Chrome
+  enrollment is a file on the device (`owner-enrollment.json`, ADR-0113) and the hello carries nothing
+  about it. So the label stays unwritten until the agent side advertises that capability.
+- Add-only: a revoked enrollment does not remove the label (removal would also wipe a label the owner
+  set by hand while no agent advertises the capability). Consequence: stale label after re-enrolment off.
+Why: one writer, derived from what the device says, no second source of truth.
+
+**Wired by the lead at merge.** `app/broker/ws.py` calls `cloud_registry.sync_registry_facts` right
+after `apply_hello`, inside the hello's transaction; a failure there is logged and never refuses the
+connection. Still open (the worker's blocking fact): no agent advertises `browser.profile.owner`, so
+the `owner_chrome` label is written for no device yet - the execution call sites wait on that.
+
+## ADR-0227 — The cycle splits an approved proposal itself: a lead run inside cycle.ps1 (2026-10-01)
+
+*From `team/plans/cycle-lead-run-adr.md` (ADR (no number yet): the cycle splits an approved proposal itself).*
+
+Status: accepted by the worker of `cycle-lead-run`; the lead numbers it and moves it into
+`docs/DECISIONS.md` at merge time. Serves ADR-0214 addendum 2 (TEAM_PROTOCOL 3a).
+
+#### Context
+
+A proposal that serves a roadmap row is approved in advance, but turning it into tasks (area,
+goal, acceptance) was done by a person, so the nightly cycle stopped at every proposal.
+
+#### Decision
+
+`cycle.ps1` has a split phase between the researcher and the task loop (skipped by
+`-ResearchOnly`, which touches no task). For every task with a `proposal`, an empty `area`
+and the state `approved`, or `proposed` with a non-empty `roadmap_row`:
+
+1. ONE fresh `lead` run, tools = the role file's minus `Bash`, `Edit` and `Agent` (left out of
+   `--allowedTools` and named in `--disallowedTools`). Its card names the proposal, the areas
+   that are taken and the shape of the file; it writes only
+   `team/plans/<cycle>-split-<id>.json`, a list of task objects.
+2. THE SCRIPT judges (`Test-TeamSplit`), the model does not. Refused, whole: a missing field
+   (id, title, roadmap_row, goal, acceptance, evidence_expected, area); an id in the queue or
+   used twice; an area outside the repository; more than 25 area entries; a shared file
+   (HANDOFF, DECISIONS, BUILD_STATE, THIRD_PARTY, queue.json, lock.json) or a directory that
+   holds one; an area overlapping a task that is `approved`, `assigned`, `in_progress`,
+   `inspecting` or `returned`, or another task of the same split that does not `depends_on` it;
+   a branch `main` / `hand-gestures`, an area of hand-gestures; an unknown dependency.
+3. A sound split is appended as `approved` tasks (only the fields the script knows; no branch,
+   worktree or assignee - the cycle names them), traced by `proposal`, and the queue is
+   re-checked with `Test-TeamQueue` before it is saved. They run in the same cycle.
+4. The proposal becomes `done` with `reason: "bölündü: <ids>"` (the schema has no field for
+   it and this task may not change the schema). A refused or failed split leaves it where it
+   was and is a line under "Açık riskler" (`bölme reddedildi: <id>: <reasons>`); the next cycle
+   asks again, once.
+5. A proposal with an empty `roadmap_row` stays with the owner: `proposed` still moves to
+   `awaiting_owner`. `Get-TeamNextRole` says `rest` for a proposal that awaits its split, so
+   it is never handed to a worker without an area.
+
+#### Consequences
+
+- The lead's role file is unchanged; the split card carries the split-only instructions.
+- Approved tasks that overlap a proposed split are counted as taken (stricter than
+  `Test-TeamQueue`, which checks only tasks being worked on), because the cycle starts them
+  together and two of them would then break the queue.
+- Evidence class: PROVEN_AUTOMATED (fake model). A real lead run against the real model is
+  NOT_RUN; the first nightly cycle with a roadmap-serving proposal is its proof.
+
+## ADR-0228 — Ledger writers stamp the device, so the narrative's "ofiste" filter has something to read (2026-10-01)
+
+*From `team/plans/ledger-device-stamp-adr.md` (The ledger writers that know the machine stamp it (ADR-0221 follow-up; ledger-device-stamp)).*
+
+**Decision.** `detail_json["device"]` is written through `app.narrative.device_writer.stamp_device`
+by the writers that know which device acted: `actions.receipt.record_receipt(..., device=)`,
+`OperatorService.start_task(..., device=)` (task rows + receipt), `mission_service._ledger`
+(the one `mission.device_targets` word), and the research writers (quality gate, provider
+fallback, completed, failed) via the run's device: its owner-set alias when it has one, else its
+name. No device known = no stamp = 'bulut'. A stamp already on the detail is never overwritten.
+
+**Why.** The collector reads the device only from that key, so "ofiste ne yaptın" found nothing
+in real data.
+
+**Also fixed.** `_record_provider_fallback` built its `ActivityEvent` without the required
+`source`/`source_ref`; the TypeError was swallowed, so that ledger row was never written.
+
+**Consequence.** `record_receipt` has ten callers; only operator passes `device` here. The callers
+that know a device (voice tools holding the bound device) must pass it - see the lead's wiring list.
+
+**Not wired, on purpose.** Only the operator path can pass a device inside this task's area and
+nobody passes it yet: about twelve `operator.start_task` call sites and the `record_receipt` callers
+must hand over the bound device's alias. Queued as its own task (`ledger-device-callers`); until it
+lands, real rows of those paths stay unstamped and "ofiste ne yaptın" counts missions and research only.
+
+## ADR-0229 — The maintenance window as one command: maintenance-reboot.sh (2026-10-01)
+
+*From `team/plans/maintenance-reboot-script-adr.md` (ADR (unnumbered) - The maintenance window is one script with three modes (follow-up of ADR-0223)).*
+
+**Decision.** `scripts/cloud/maintenance-reboot.sh` carries ADR-0223 steps 1-11:
+`--preflight` (steps 1-5 as named check lines, each saying what it read; exit 10 when any
+fails; changes nothing), `--preflight --run` (steps 6-10; `--run` alone is refused, exit 64;
+the marker `$base/MAINTENANCE_MARKER` with start epoch, old kernel and release is written
+after the last container is back and BEFORE `reboot`), `--verify` (step 11; exit 20 without a
+marker, 21 when the kernel is unchanged, reboot-required remains, the reconcile journal has no
+`RECONCILE OK`, containers/timer/zombies/health are wrong; on success writes
+`$base/LAST_MAINTENANCE.json` with `downtime_seconds` = first good probe minus marker start,
+and removes the marker).
+
+**Choices.** The recovery pin is read from `$recovery_root/APPROVED_SHA`. Step 3 (team cycle,
+owner mid-task) lives on the home PC, so the script only sees a release in flight (the
+blue/green operation lock) and says the rest is the lead's check. Step 5 (device presence) is
+stored as the health body in the marker, not parsed. The downtime starts at the marker (just
+before `reboot`), so it includes the shutdown, not the last good probe of the old boot.
+
+**Evidence.** PROVEN_AUTOMATED with fakes (scripts/tests/maintenance-reboot.tests.ps1);
+PROVEN_REAL only at the first window.
+
+**Wired by the lead at merge.** `scripts/tests/maintenance-reboot.tests.ps1` (23 cases) is a step of
+`quality-gate.ps1` and of `ci.yml`. First real run: `--preflight` on the Cloud Core, 2026-10-01
+07:58 UTC, 9/9 `ok` (ADR-0223 addendum); `--run`/`--verify` at the window of 19:00 UTC that day.
+
+## ADR-0230 — The narrative's intent in the one router, and its way into activity.explain (2026-10-01)
+
+*From `team/plans/narrative-intent-wiring-adr.md` (ADR (taslak): anlatı niyeti tek yönlendiriciden geçer, explain'in `narrative` sorgu türüyle cevaplanır).*
+
+Bağlam: ADR-0216/0221 `app/narrative`'i yazdı, hiçbir şey çağırmıyordu. `resolve_intent` saf (db yok).
+Karar: (1) `resolve_intent` EN SONDA (NONE'dan hemen önce) `recognise()` eşleşirse `Intent.EXPLAIN`,
+`query_kind="narrative"` döner - okuma sınıfı, step-up/onay/cihaz komutu yok. En sonda olması gölgeleme
+korumasıdır: "bugün ne yaptın" (artifact_list), "bugün neler oldu" (explain today), "ne başarısız oldu"
+(explain failures) önceki gibi gider. (2) `explain()` `narrative` türünü, kaynağın isteğe bağlı
+`narrative(ask, *, now)` metoduyla cevaplar (mevcut opsiyonel-kaynak kalıbı); metin her seviyede aynıdır.
+Kaynakta metot yoksa "Bu konuda kayıt bulamadım." - uydurma yok.
+Sonuç: canlı bağlantı için lead'in yapacakları PR notunda. Geri alma: iki dalı silmek yeter.
+
+**Wired by the lead at merge.** `LedgerEvidenceSource.narrative` (the rule narrator: deterministic,
+audited by construction) and `explain_service.query_for`, which asks the narrative recogniser before
+the classifier - without it the router resolved "bu hafta ne oldu" as a narrative and
+`activity.explain` answered "Bu konuda kayıt bulamadım". The model narrator behind the same Protocol
+needs the chat provider in the evidence source and is not wired; real Postgres and a real voice turn:
+NOT_RUN.
+
+## ADR-0231 — A Store/UWP application is known by its window's title when ApplicationFrameHost hosts it (2026-10-01)
+
+*From `team/plans/operator-postcondition-uwp-adr.md` (ADR (unnumbered): Store/UWP windows are known by the app's own names).*
+
+Context: owner trial 2026-09-30 (MAIL): `app.launch calc` succeeded, the foreground window was
+`applicationframehost.exe` titled "Hesap Makinesi", and `open_application` failed
+`postcondition_failed` (only `systemsettings.exe` was in `UWP_HOSTED_IMAGES`, B39 req 123).
+
+Decision: when the foreground window's image is `applicationframehost.exe` and the launched
+image is not in `UWP_HOSTED_IMAGES`, the postcondition passes iff the title equals (casefolded)
+the `name_tr` or an alias of the allowlisted application whose image is the launched image -
+read from `operator-allowlists.json` through `allowlists.APPLICATIONS`, no second list.
+Settings keeps its exact tuple; classic apps still need their own image; an unrelated frame-host
+title fails.
+
+Consequence: a Store app not in the allowlist cannot be launched anyway (app.launch allowlist).
+A frame window titled with the app's name but belonging to a different document of the same app
+also passes - same as the exact-image path.
+
+## ADR-0232 — A standing language sentence is not an answer-mode change; the assistant's own line is not a memory (2026-10-01)
+
+*From `team/plans/answer-mode-intent-precision-adr.md` (ADR (no number yet): a standing language preference is not an answer level; the assistant's reply is not a memory).*
+
+Context. Owner's trial 2026-09-30 20:11 UTC: "Bundan sonra araştırma raporlarını her zaman Türkçe oku" became RESEARCH_OPEN
+(answer_level=detail), the model called research.answer_mode, the tool preferred the turn's 'detail' and the durable register
+became detail; 39 s later the summary line "| Asistan: Bundan sonra araştırmaları ayrıntılı anlatacağım efendim." was filed as a preference candidate.
+
+Decision.
+1. intents._research_open_match: a read verb with a standing marker ("bundan sonra/artık/hep/her zaman") and no level word is not
+   "araştırmayı oku"; it returns None. The marker test is one shared helper (`_is_standing_sentence`) also used by `_answer_mode_match`
+   (no second phrase table). No language-preference intent exists, so the sentence falls to the ordinary path (Intent.NONE, the
+   model/ack path); a dedicated language preference is a separate feature.
+2. research_answer_mode takes the level ONLY from a turn record whose intent is research_answer_mode and whose answer_level is a
+   level; otherwise VALIDATION_ERROR with a spoken sentence. The model's `level` argument is no longer consulted (it is a paraphrase).
+3. memory.extraction: summary is split on '|' / newline into lines; lines prefixed Asistan:/Assistant: are counted skipped and never
+   filed; Sahip:/Owner: prefixes are stripped from the owner's lines.
+4. intents._executive_start_match: a standing sentence carrying a read verb is never an executive start. With RESEARCH_OPEN declining,
+   the trial sentence would otherwise have fallen into EXEC_START (action class, exec_shape research_report) and could launch a
+   research-report mission from a preference (inspector, second pass). It now resolves to Intent.NONE (klass query).
+5. "Bundan sonra raporlari ayrintili oku" / "...teknik oku" (a level word, read verb) route the one-off narration controls
+   DETAIL / TECHNICAL, not the durable register: the answer-mode phrase needs anlat/konus/cevap/soyle. Deliberate, pinned by a test;
+   the owner who wants the standing register says "bundan sonra ayrintili anlat".
+
+Consequences. A model-only call with no owner level word now gets a question instead of a silent register change. The three
+sentences are corpus cases r.lang.1-3 (tests/voice_corpus/corpus.py, added with the lead's return note; one file outside the card's area list).
+
+## ADR-0233 — A named machine that could not be bound is asked about, never defaulted; the polite imperative opens (2026-10-01)
+
+*From `team/plans/app-open-named-device-adr.md` (ADR (number by lead): a named machine the parser could not bind is asked about, never launched elsewhere).*
+
+Context: 2026-09-30 20:11 UTC the owner said "Ofis bilgisayarımdan hesap makinesini aç"; the STT
+wrote "Ofisü bilgisayarında ... açın." "açın" (polite imperative) was in no open-verb table, so the
+router resolved NONE; the model then called `operator.app_open({application})` and the launch ran
+on the session's own device (MAIL) with no word about it.
+
+Decision:
+1. `açın`, `açınız`, `acın`, `acınız`, `aciniz` join `_OPEN_VERB_FORMS` and `_APP_OPEN_VERB_FORMS`
+   (one shared `_POLITE_OPEN_VERB_FORMS`; the other tables - screen/news/routine/bare-title - are
+   untouched: no observed need, each has its own false-positive history).
+2. Per ADR-0224 `operator.app_open` gets NO device argument. The relay (`service.py`, next to
+   `device_targets`) writes a word-free `machine_named_unbound: bool` into `last_utterance`:
+   true when the sentence holds a computer word ("bilgisayar...") or "ofis..." and no alias
+   bound ("bu/su bilgisayar" excluded: that is this machine). The owner's sentence is NEVER
+   stored (`chat_question` is local-only; the status read exposes `last_utterance`). When the
+   flag is true the tool dispatches nothing and asks one question listing the enrolled aliases.
+   A bound alias keeps the existing path (selection honours the named device; the direct-launch
+   speech names it as "Ofis cihazinda ...").
+3. Pinning: the mutation unit for the polite verbs is the whole `_POLITE_OPEN_VERB_FORMS` table.
+   `acin` is the folded form of `açın`, so dropping `açın` alone is behaviourally identical
+   (the router folds before matching); the table-wide mutation is RED (5 tests).
+
+## ADR-0234 — The Kokpit's "Ofis" page: the team at work, from a live status the cycle writes (2026-10-01)
+
+#### Part 1: `office-data-api`
+
+*From `team/plans/office-data-api-adr.md` (ADR (taslak): Ofis sayfasının veri ucu — canlı durum `team_state`'te, koltuk kuralları saf fonksiyonda).*
+
+Karar (2026-10-01, office-data-api):
+- Döngünün canlı durumu (`team/status.json` / `PUT /v1/team/queue/status`) `team_state` tablosunda `kind="status"`, `key="status"` tek satırdır (kilit satırı gibi); YENİ TABLO / MIGRATION YOK. Durum bir nabızdır: en yeni yazım kazanır, sürüm kontrolü yok.
+- `GET /v1/team/office` saf `office.office_view(queue, lock, status, approvals, now)` ile üretilir. Canlılık: durumun `updated_at`'i 10 dakikadan eski DEĞİL, kilit tutuluyor ve bayat değil, kilidin `cycle_id`'si durumunkiyle aynı. Aksi halde `running=false`, kimse `working` değil.
+- "Bir rolün en yeni görevi" = o rolün en yeni raporunu taşıyan görev. Koşusu olmayan worker koltukları, `returned`/`stopped` olan en yeni üç worker görevini sırayla alır.
+- PUT gövdesi katı (pydantic strict, extra=forbid) doğrulanır; yanlış şekil 422. Mağaza yoksa/okunamıyorsa ofis boş döner (200), 500 değil.
+Sonuç: `TeamStore` Protocol'üne `read_status`/`put_status` eklendi; tabloya dokunulmadı.
+- Koltuk dizini (düzeltme): koşusu olmayan worker koltukları, returned/stopped worker görevlerini KOŞUSU OLMAYAN koltuklar arasındaki sırayla alır (mutlak koltuk indeksiyle değil); biri çalışırken diğerinin dönen görevi düşmez.
+- `updated_at` sözleşmesi: yalnız UTC `YYYY-MM-DDTHH:MM:SSZ` (`team_store.stamp` biçimi). Saat dilimsiz ya da `+03:00` ofsetli değer okunamaz → `running=false` (hata yok); durum yazıcısı `Z` yazmak ZORUNDA (PowerShell: `(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')`). Saatten 2 dakikadan fazla ileri tarihli değer (saat kayması) canlı sayılmaz; ≤ 2 dk ileri canlıdır.
+
+#### Part 2: `office-cycle-status`
+
+*From `team/plans/office-cycle-status-adr.md` (ADR (no number yet): the cycle writes a live status and honours a stop flag).*
+
+Context: the owner's 'Ofis' page must show which agents run NOW; the queue only changes when a run
+ends. The owner also asked to stop a running cycle "at a safe point" and there was no way.
+
+Decision:
+- cycle.ps1 writes a live status (contract in the task card: cycle_id, machine, pid, started_at,
+  runs[], estimated_usd, usage_limit{state,resets_at}, updated_at) to team/status.json (file mode) or
+  PUT /v1/team/queue/status (API mode, Save-TeamStatusApi). Written after the lock, after each run
+  starts, after each run completes, on usage-limit wait/stop/lift, and at the end (finally: runs empty).
+- A heartbeat refreshes it every 120 s while a run or a limit wait lasts (Wait-TeamRun -OnTick), so
+  the reader's 10-minute staleness rule does not hide a long run.
+- A failed status write is one risk line, never a stop.
+- team/stop.flag (checked in both modes, in the team root): no NEW run starts (researcher, split, batch),
+  runs in flight finish and are recorded, an approved inspection is merged, the limit wait ends; the
+  stop line is written, the flag removed, the lock released, exit 0. The task stays where it was
+  (a finished worker is 'inspecting') and the next cycle with the same -CycleId continues.
+Consequence: a run killed by a crash leaves a status that goes stale in 10 min; the finally block clears it
+on every normal and exceptional exit.
+
+#### Part 3: `office-page`
+
+*From `team/plans/office-page-adr.md` (ADR (text; the lead numbers it) - Ofis page: own pixel drawing, pure model/poller, no DOM test library).*
+
+Decision: the /core/office page draws desks and characters as inline SVG pixel maps (officeSprites.ts)
+with CSS keyframes; no third-party art (see office-page-integration.md). The page is split so it is
+testable under vitest's node environment without jsdom: officeModel.ts (pure contract -> drawn seats,
+top bar, panel with the 40-line cap and 12-char sha), createOfficePoller in officeApi.ts (5 s interval,
+timers/visibility as ports), OfficeView/OfficeScene/OfficePanel rendered to markup, page.tsx only wiring.
+Reduced motion: the scene takes a prop (fed by matchMedia); the typing class and the second arm frame are
+not rendered, a static "çalışıyor" badge is. The owner seat is always "waiting" and shows the approval count.
+Why: no new dependency, licence-free, and every claim in the acceptance is checked on plain objects.
+Rollback: delete apps/web/app/core/office, apps/web/tests/office and the Kokpit nav link.
+
+**Wired by the lead at merge.** The Kokpit links to `/core/office` (`CoreControls.tsx`); the page's
+tests live in `apps/web/tests/office/` - the worker had moved them inside the task's area after an
+off-area return, where the gate's `vitest run` (include `tests/**`) would never have run them: the
+card's area was the lead's omission; `GET /v1/team/queue/status` is exempt, by name, from the
+PowerShell-client contract test (it is the read-back of what the cycle PUTs). Own drawing, no third
+party (`docs/THIRD_PARTY_COMPONENTS.md`). PROVEN_REAL waits for the store's move to the database and
+a screenshot during a real cycle.

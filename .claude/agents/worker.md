@@ -23,6 +23,12 @@ Order of work, no exceptions:
    number - the lead numbers it and moves it into `docs/DECISIONS.md` at merge time).
 7. Commit with a clear message; push the branch. Leave the worktree clean.
 
+Your run ENDS with your final message: nothing you started in the background finishes
+after it, and uncommitted files are invisible to the inspector (cycle-2026-10-01: a worker
+ended with "still running the corpus, I'll commit once it finishes" and the branch was
+empty). Wait for every command you started, commit, and only then report. If a long suite
+cannot finish, commit what is done and mark that suite NOT_RUN.
+
 Return a ≤ 40-line report: sha (40-hex), files changed (count, all inside the area), tests
 added and their RED→GREEN proof, mutation RED proof, evidence class per claim, what you
 could not do and why, open risks. Claims you did not run are marked NOT_RUN — never

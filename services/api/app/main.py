@@ -136,6 +136,7 @@ from app.selfhealing.runtime import SelfHealingRuntime
 from app.selfmodel.refresh import SelfModelRefresher
 from app.selfmodel.routes import router as selfmodel_router
 from app.state.routes import router as state_router
+from app.team.allowlist_routes import router as team_allowlist_router
 from app.team.routes import router as team_router
 from app.uistate import UiState
 from app.uistate import publish as publish_ui_state
@@ -667,6 +668,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         register_routine_clock(routine_clock)
         await routine_clock.start()
         await artifacts.start()
+        # The owner's cloud allow-list rows are read from the first request on: a process
+        # that never bound the store answers from the (empty) seed only, so a site the
+        # owner added would be refused after every restart until he opened the editor.
+        # Bound for the life of the PROCESS (here, not in create_app): the store is
+        # module state, and an app merely constructed must not leave it pointing at its
+        # database.
+        from app.execution import allowlist_store
+
+        allowlist_store.bind(artifacts.session)
         # B36 (req 562/563): the spoken-name catalogue is built from its rows at
         # startup - a registered interface must survive a restart. Never blocks
         # startup: a database without the table yet is an empty catalogue.
@@ -714,6 +724,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            allowlist_store.unbind()
             await retention_sweeper.stop()
             await embedded_worker.stop()
             await briefing_announcer.stop()
@@ -920,6 +931,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ADR-0217: the Onay Merkezi - the owner's two gates of the team's queue, read as
     # data from team/ (app.state.team_root overrides the repository path).
     app.include_router(team_router)
+    # The Onay Merkezi's allow-list editor (GET/POST/DELETE /v1/team/allowlist).
+    app.include_router(team_allowlist_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

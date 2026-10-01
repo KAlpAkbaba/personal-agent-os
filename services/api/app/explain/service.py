@@ -26,10 +26,12 @@ from app.artifacts.models import (
 from app.artifacts.renderers import content_hash
 from app.explain.classify import LEVEL_EXECUTIVE, ExplainQuery, classify
 from app.explain.engine import (
+    QUERY_NARRATIVE,
     Briefing,
     EventView,
     EvidenceSource,
     explain,
+    narrative_query,
     render_markdown,
     speech_for_level,
 )
@@ -39,6 +41,7 @@ from app.narration.engine import Cursor, build_plan
 from app.voice.intents import (
     PRESENTATION_FULL,
     level_section_cursor,
+    resolve_intent,
     speech_budget,
     speech_from,
 )
@@ -126,6 +129,15 @@ class LedgerEvidenceSource:
             self._db, since=since, subsystems=subsystems, statuses=statuses, limit=limit
         )
         return [_view(r) for r in rows]
+
+    def narrative(self, ask: Any, *, now: datetime) -> str:
+        """ "Bu hafta ne oldu?" (ADR-0216/0221): one audited account of the ledger for
+        the period and device the owner named. The rule narrator: its text is built
+        from the facts alone and passes the auditor by construction. A model narrator
+        behind the same Protocol is a later wiring (it needs the chat provider here)."""
+        from app.narrative import service as narrative_service
+
+        return narrative_service.tell(self._db, ask.period, ask.device, None, now=now)
 
     def research_report(self, task_id: str) -> dict[str, Any] | None:
         from app.research import runs_service
@@ -334,7 +346,6 @@ class LedgerEvidenceSource:
             for r in rows
         ]
 
-
     def recent_incidents(self, *, limit: int = 10) -> list[dict[str, Any]]:
         """B19 req 77. Every incident, newest first, whatever its status.
 
@@ -448,6 +459,23 @@ def persist_briefing(db: Session, briefing: Briefing) -> tuple[uuid.UUID, int, s
     return artifact.id, version.version, body
 
 
+def query_for(question: str, *, now: datetime) -> ExplainQuery:
+    """The query a question is answered as. A question the ONE router reads as a narrative
+    ("bu hafta ne oldu") is answered as one: ``classify`` does not know it, and without this
+    the router resolved the sentence as a narrative while ``activity.explain`` answered
+    "Bu konuda kayıt bulamadım" (found by the worker of narrative-intent-wiring).
+
+    The ROUTER decides, not the narrative recogniser alone: the recogniser also takes
+    "bugün neler yaptın", which the router keeps for the family that owned it ("today") -
+    asking the recogniser directly turned that answer into an empty narrative (the gate,
+    office-01: ``test_explain_with_no_evidence_says_so_and_still_attaches``)."""
+    if resolve_intent(question).query_kind == QUERY_NARRATIVE:
+        narrative = narrative_query(question, now=now)
+        if narrative is not None:
+            return narrative
+    return classify(question, now=now)
+
+
 def explain_to_briefing(
     db: Session,
     question: str,
@@ -466,7 +494,7 @@ def explain_to_briefing(
     passed straight through to :func:`app.explain.engine.explain`, which uses it to
     choose WHICH recorded run to read. Nothing here starts or re-runs a research."""
     now = now or datetime.now(UTC)
-    query = classify(question, now=now)
+    query = query_for(question, now=now)
     if level and level != query.level:
         query = ExplainQuery(
             kind=query.kind,

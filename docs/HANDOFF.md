@@ -15,12 +15,54 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**pilot-02 — MAIN'DE (tam kapı 34/34, uç `518de0ba`); sahibin ÖN ONAYIYLA yayınlanıyor.** ADR-0218…0222.
+**ÖNCELİK 0 (sahip, 2026-10-01): Kokpit "Ofis" sayfası `/core/office`.** Döngü `office-01` çalışıyor:
+`cycle.ps1 -CycleId office-01 -Base integrate/cycle-2026-10-01 -MaxParallel 3` (08:40 UTC başladı). İşler:
+`office-data-api` (GET /v1/team/office), `office-cycle-status` (döngü canlı durumu + `team/stop.flag`),
+`office-page` (entegratör önce: CC0/MIT sprite ya da kendi çizim), `office-voice-summary` (data-api main'e girince).
+API sözleşmesi üç kartta aynı metinle. TEK ENTEGRASYON HATTI: `integrate/cycle-2026-10-01` = lead dalı + 12 iş
+(semantic-index dahil; çakışmayı ve bir entegrasyon testini lead çözdü, `26225411`); `integrate/office-01` onun
+üstüne kurulur. Döngü bitince LEAD: `integrate/office-01` üzerinde ortak dosyaları bağla (aşağıdaki liste + Kokpit
+menü bağlantısı + `team.status` araç kaydı), TAM KAPI, main, sahibin YAYIN ONAYI. Yayından sonra: kuyruğu
+veritabanına tohumla, `PAGENTOS_TEAM_STORE=database`, gece görevini `-QueueUrl http://100.90.158.26:8001
+-QueueToken %LOCALAPPDATA%\PagentOS	eam-queue.token` ile yeniden kaydet (belirteç yazıldı, 2026-10-01 11:15;
+kabul edildiği doğrulandı), gerçek döngüde 2 çalışan "çalışıyor" ekran görüntüsü (kabul, PROVEN_REAL).
+Sonra ADR-0224 katman 3-4-5 kaldığı yerden (`depends_on` ile bekliyorlar).
+**BAKIM PENCERESİ: BU AKŞAM 2026-10-01 22:00–22:30 İstanbul (19:00 UTC), sahip onaylı. OTURUMA BAĞLI DEĞİL:
+sunucunun kendi `pagentos-maintenance-window.timer`'ı çalıştırır (ADR-0223 eki); açılıştan 4 dk sonra
+`pagentos-maintenance-verify` doğrular; ev PC'de `PagentOS Maintenance Report 2026-10-01` görevi 22:40 ve 23:10'da
+`team/reports/maintenance-2026-10-01.md` yazar. İlk pencere (06:30) KOŞMADI: oturum uyandırmasına bağlıydı, oturum
+kapandı. KALICI KURAL (sahip): zaman bağlı her iş kalıcı göreve bağlanır, oturuma değil (TEAM_PROTOCOL 9).
+Sonraki oturum: raporu oku; sonuç iyiyse sunucudaki iki `pagentos-maintenance-*` birimini ve ev PC görevini kaldır;
+QUALIFICATION'a bakım satırını PROVEN_REAL yaz. Rapor yoksa: `collect-maintenance-report.ps1 -Date 2026-10-01`.**
+**DÖNGÜ `cycle-2026-10-01`: ilk tur 2026-09-30 21:02 → 2026-10-01 00:16 UTC normal bitti (32 koşu, tahmini 21,67 USD,
+limit yok). 8 iş `merged` (`integrate/cycle-2026-10-01`): understanding-normalize, narrative-intent-wiring,
+ledger-device-stamp, allowlist-editor, cloud-device-registry, cycle-lead-run, maintenance-reboot-script,
+operator-postcondition-uwp. 3 iş "alan dışı dosya" ile durdu — LEAD'İN KART HATASI (dar alan); alanlar genişletildi,
+2026-10-01 07:49 UTC'de aynı CycleId ile yeniden başlatıldı (iki geçiş: önce understanding-semantic-index +
+answer-mode-intent-precision, sonra `intents.py` paylaşan app-open-named-device-not-dropped; betik scratchpad'de,
+yeniden üretmek için: işi `inspecting` yap, `cycle.ps1 -CycleId cycle-2026-10-01 -Base team/nightly/lead`).
+3 iş `depends_on` ile bekliyor (threshold-policy, corrections-memory, stt-corpus): katman 1+2 MAIN'e girince açılır.
+LEAD'İN SIRADAKİ İŞİ: yeniden koşu bitince `integrate/cycle-2026-10-01` üzerinde ortak dosyaları bağla
+(`stt-confusions.json` → `protocol_files.BUNDLED` + falsification listesi; `team/plans/*-adr.md` → DECISIONS'a
+numaralı; `maintenance-reboot.tests.ps1` → quality-gate + ci.yml; THIRD_PARTY_COMPONENTS'e "değerlendirildi,
+reddedildi" kaydı; LocalEmbedder süre ölçümü), tam kapı, main'e birleştir, işleri `awaiting_release` yap, döngüyü
+yeniden başlat (3 bekleyen iş), sahibin yayın onayını iste. Tavansız (ADR-0214 ek 3). Gece görevi 02:00.**
+**Sahibin gerçek cihaz denemesi (2026-09-30 20:10 UTC, MAIL, `/voice` "Bu bilgisayar"):** QUALIFICATION 30.10
+PROVEN_REAL (aday hafıza satırı üretimde). İki kusur görüldü, kuyruğa `approved` düştü (gece döngüsü):
+`answer-mode-intent-precision` ("Türkçe oku" cümlesi cevap kipini `detail` yaptı + asistanın kendi cevabı hafıza
+adayı oldu) ve `operator-postcondition-uwp` (Hesap Makinesi açıldı ama "açamadım" dendi: `UWP_HOSTED_IMAGES`
+yalnız `systemsettings.exe`). Sahibin kalıcı cevap seviyesi şu an `detail`; geri alınması sahibe soruldu.
+Üçüncü cümle ("Ofis bilgisayarımdan hesap makinesini aç") STT'de "Ofisü bilgisayarında … açın" oldu: yönlendirici
+niyet bulamadı ("açın" kipi tabloda yok), model cihazsız `operator.app_open` çağırdı (araçta cihaz alanı yok),
+Hesap Makinesi MAIL'de açıldı — `app-open-named-device-not-dropped` kuyrukta. MAIL yeniden kuruldu (verify 14/14).
+Bulut işçisi ÇALIŞIYOR (`bulut`, ölçüm evidence'ta); `/tmp/cb-watch.sh` durduruldu.
+**pilot-02 — YAYINLANDI (main `8d8d0f18`, 2026-09-30 12:38 UTC). Dal `team/nightly/lead`: gece döngüsünün
+(02:00) yazacağı kuyruk/rapor değişiklikleri buraya düşer; işçi dalları `main`'den açılır.** ADR-0218…0222.
 İlk kapı 30/34 idi: Docker Desktop yine kapanmıştı (3 adım) + sahte API günlüğünü yanıttan sonra yazan bir
 test yarışı (düzeltildi). Sonra lead'in sunucu adımları (sahip devretti): bulut işçisi imajı, profil,
 `docker stats` ölçümü, `bulut` alias'ı; `PAGENTOS_TEAM_STORE=database` geçişi sahibin oturum belirteci
 dosyasından SONRA (yoksa iki ayrı kuyruk olur). Sahipte: kayıt belirteci + oturum belirteci + MAIL kurulumu.
-Kuyrukta beş iş `approved` (gece döngüsü 02:00). Bulut kuralı seçenek 4.
+Kuyrukta on dört iş `approved` (gece döngüsü 02:00). Bulut kuralı seçenek 4.
 Önceki: pilot-01 MAIN'DE (tam kapı 34/34, uç `1c7014c3`).
 Sahip üç öneriyi onayladı (2026-09-30). Lead sekiz işe böldü (`team/plans/pilot-01-split.md`); bu
 döngüde üçü koştu ve denetleyiciden geçti: `narrative-collector` (ADR-0216), `execution-target-rule`
@@ -181,12 +223,14 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 
 ## Şu anki durum
 
-- **Üretim:** Cloud Core `2e3b1668` (api-blue, 2026-09-30 10:11 UTC; son iyi bilinen `771a9e53` —
-  yayın kendisi yazdı) + `godseye`. Sağlık **ok**, `failing_checks` boş. Recovery pini
-  `2e3b16689fdf51b6f41bc687e5afed43eac39610`; reconcile timer her dakika 0 ile çıkıyor;
-  `RECOVERY_BUNDLE_STALE` YOK. Şema `0062_web_tasks`, gerçek zamanlı sözleşme v3, iki cihaz oturumu
-  maviye taşındı. İçinde: ADR-0215 (broker tek teslim), ADR-0213 PR 1, ADR-0216, ADR-0217.
-  Yedek: host dışı kopya YOK. Tailscale SSH her yeni bağlantıda sahibin ek doğrulamasını istiyor.
+- **Üretim:** Cloud Core `aa35fcf3` (api-blue, 2026-09-30 17:05 UTC; son iyi bilinen `8d8d0f18` —
+  yayın kendisi yazdı; pin `aa35fcf3a57e8df4ad7dfabced705848c0976377`) + `godseye`. Sağlık **ok**, `failing_checks` boş. Recovery pini
+  `8d8d0f18d6ae102f0650bafc1dffad6152ea38f3`; timer 0 ile çıkıyor; `RECOVERY_BUNDLE_STALE` YOK (pin'den
+  sonra paket ile ağaç cmp ile aynı bulundu, dosya silindi). Şema `0063_team_state`, sözleşme v3.
+  `PAGENTOS_TEAM_STORE=file` (veritabanına geçiş sahibin oturum belirteci dosyasını bekliyor).
+  Bulut işçisi: dizinler hazır, imaj `aa35fcf3` ağacından derlendi ve sınandı (Playwright 1.62.0, Chromium
+  açılıyor, malzemesiz başlatma 2 ile çıkıyor); profil ÇALIŞIYOR: cihaz `bulut` (`ad64617c-b1e8-465f-ac65-4c780082cc18`, platform cloud, alias `bulut`),
+  broker'a bağlı, sağlıklı; tepe bellek 650 MB / 2 GB (kanıt dosyası). Bekçi ve yardımcı betik: `/usr/local/sbin/cloud-browser-mint.sh` kaldı, `/tmp/cb-watch.sh` durduruldu. Tailscale SSH ek doğrulaması zaman zaman isteniyor.
   Geri dönüş: `bash /opt/pagentos/app/scripts/cloud/release-cloud-core-bluegreen.sh --rollback`.
   Realtime sağlayıcıları: `local-router`, `openai-realtime`.
 - **M29 ilk adım TAMAM (2026-09-28): iki cihaz.** MAIL = `ev` (`3f60fdb5-5022-48cf-bb3c-d7192466b701`, ev
@@ -198,8 +242,10 @@ birkaç komut → "Hareketi bitir" → (ad sorulur) "Yeni mail sekmesi" → "Yen
 - **Kapı notu:** `-Fast` kapısı tarayıcı e2e, entegrasyon ve PS paketlerini KOŞMAZ; yayın
   betiklerine, `scripts/lib`'e ya da `services/browser`'a dokunan iş tam `quality-gate.ps1`
   ister (~45 dk). Sahibe verilen her betik önce çalıştırılır.
-- **Cihaz (sahibin PC'si, "MAIL"):** ajan `0.6.0`; tuşlar, sekmeler, kamera, sahibin
-  Chrome'unda araştırma (CDP 127.0.0.1:19222, `-AuthorizeResearch`) kurulu ve canlı denendi.
+- **Cihaz (sahibin PC'si, "MAIL"):** ajan 2026-09-30 20:03 UTC'de main `aa35fcf3` ağacından yeniden kuruldu
+  (`-DisplayPower -Operator`); `verify-device-service.ps1` 14/14 PROVEN_REAL (6b.4 dahil), 106 yetenek, `browser.observe`
+  duyuruluyor (`docs/evidence/verify-device-service-mail-2026-09-30.md`). Araştırma izni yerinde. Sahibin gerçek cihaz
+  denemeleri (dört cümle) hâlâ bekliyor.
 - **Hafıza (2026-09-27):** her modda sahibin cümlesi yazım politikasından geçiyor (ADR-0201), geri çağırma semantik (ADR-0200). Önceki not: 2 temizlikten sonra ~452 satır; ilk öğrenilmiş tercih durable; hafıza bloğu
   hem ücretli oturumda hem yerel moddaki serbest sohbette (ADR-0183…0193).
 - **CI yok:** GitHub Actions kapalı (sahip ödeyemiyor). Kanıt yereldir; sahip 2026-09-19'da

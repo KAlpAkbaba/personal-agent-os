@@ -33,6 +33,8 @@ from app.team.models import KIND_LOCK, KIND_REPORT, KIND_TASK, TeamStateRow
 LOCK_STALE_HOURS = 6  # TeamQueue.ps1: $script:TeamLockStaleHours
 TEXT_MAX_CHARS = 20000
 LOCK_KEY = "lock"
+KIND_STATUS = "status"  # a team_state row of its own kind (String(16)): no new table
+STATUS_KEY = "status"
 SCHEMA_PATH = Path(__file__).with_name("queue.schema.json")
 _REPORT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.md$")
 _WRITE_LOCK = threading.RLock()
@@ -205,6 +207,8 @@ class TeamStore(Protocol):
     def release_lock(self, *, machine: str, cycle_id: str, now: datetime | None = None) -> None: ...
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None: ...
     def newest_report(self) -> dict[str, str] | None: ...
+    def read_status(self) -> dict[str, Any] | None: ...
+    def put_status(self, document: dict[str, Any]) -> None: ...
 
 
 def _check_put(
@@ -278,6 +282,18 @@ class FileStore:
         with _WRITE_LOCK:
             _may_release(self.read_lock(), machine)
             self._write(self.root / "lock.json", {"held": False})
+
+    def read_status(self) -> dict[str, Any] | None:
+        try:
+            status = json.loads((self.root / "status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return status if isinstance(status, dict) else None
+
+    def put_status(self, document: dict[str, Any]) -> None:
+        with _WRITE_LOCK:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._write(self.root / "status.json", _copy(document))
 
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
         _check_report_name(name)
@@ -422,6 +438,29 @@ class DbStore:
                 return
             _may_release(row.doc, machine)
             self._write_lock(session, row.updated_at, {"held": False}, f"{stamp(at)}|released")
+
+    def read_status(self) -> dict[str, Any] | None:
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_STATUS, STATUS_KEY))
+            return None if row is None else _copy(row.doc)
+
+    def put_status(self, document: dict[str, Any]) -> None:
+        """The newest status wins: it is a heartbeat, not a versioned document."""
+        doc = _copy(document)
+        version = str(doc.get("updated_at", ""))
+        with self._factory() as session:
+            row = session.get(TeamStateRow, (KIND_STATUS, STATUS_KEY))
+            if row is None:
+                session.add(
+                    TeamStateRow(kind=KIND_STATUS, key=STATUS_KEY, doc=doc, updated_at=version)
+                )
+            else:
+                row.doc = doc
+                row.updated_at = version
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()  # two first writes raced: the other one's heartbeat stands
 
     def put_report(self, name: str, text: str, *, now: datetime | None = None) -> None:
         _check_report_name(name)

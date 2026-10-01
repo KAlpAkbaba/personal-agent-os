@@ -173,6 +173,56 @@ function New-TeamTaskCard {
     return (($lines.ToArray()) -join "`n")
 }
 
+function New-TeamSplitCard {
+    <#
+    .SYNOPSIS
+        The prompt of the lead's split run: one proposal, the areas that are taken, the shape
+        of the file to write. The run has Read and Write only; the cycle validates the file.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]$Task,
+        [Parameter(Mandatory = $true)]$Queue,
+        [Parameter(Mandatory = $true)][string]$CycleId,
+        [Parameter(Mandatory = $true)][string]$SplitFile
+    )
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add("# Split run (lead, cycle $CycleId)")
+    [void]$lines.Add("")
+    [void]$lines.Add("This run does ONE thing: split the proposal below into tasks. You have Read and Write; you run")
+    [void]$lines.Add("no command, edit no file and dispatch no agent. Write exactly one file, the one named in split_file.")
+    [void]$lines.Add("")
+    foreach ($name in @("id", "title", "roadmap_row", "proposal")) {
+        $value = Get-TeamProperty -InputObject $Task -Name $name
+        if ($null -ne $value -and ([string]$value).Trim()) { [void]$lines.Add("- ${name}: $value") }
+    }
+    [void]$lines.Add("- split_file: $SplitFile")
+    [void]$lines.Add("")
+    [void]$lines.Add("Read the proposal, docs/ROADMAP.md, docs/TEAM_PROTOCOL.md (sections 3a and 4) and the earlier splits")
+    [void]$lines.Add("under team/plans/*-split.md for the shape of a good one.")
+    [void]$lines.Add("")
+    [void]$lines.Add("split_file is a JSON list of task objects. Each has: id (a-z, 0-9, '-'; 3-64; not in the queue),")
+    [void]$lines.Add("title, roadmap_row (the row it serves), area (a list of repository-relative paths, at most 25),")
+    [void]$lines.Add("goal, acceptance, evidence_expected; optionally depends_on (ids) and needs_integration (true).")
+    [void]$lines.Add("The cycle - not you - checks the list and takes it WHOLE or refuses it whole: an area inside")
+    [void]$lines.Add("another task's in work, a shared file (docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json,")
+    [void]$lines.Add("docs/THIRD_PARTY_COMPONENTS.md, team/queue.json) or a directory holding one, a missing field, an area")
+    [void]$lines.Add("outside the repository, main or hand-gestures, all refuse it. Two tasks of yours may share an area")
+    [void]$lines.Add("only when one lists the other in depends_on.")
+    $taken = New-Object System.Collections.ArrayList
+    foreach ($other in @(Get-TeamTasks -Queue $Queue)) {
+        $state = [string](Get-TeamProperty -InputObject $other -Name "state" -Default "")
+        if (@("approved", "assigned", "in_progress", "inspecting", "returned") -notcontains $state) { continue }
+        $area = @(Get-TeamProperty -InputObject $other -Name "area" -Default @())
+        if (@($area).Count -gt 0) { [void]$taken.Add("- $($other.id) [$state]: " + (($area | ForEach-Object { [string]$_ }) -join ", ")) }
+    }
+    [void]$lines.Add("")
+    [void]$lines.Add("## Areas that are taken (do not overlap)")
+    if (@($taken).Count -eq 0) { [void]$lines.Add("- none") } else { foreach ($row in $taken) { [void]$lines.Add([string]$row) } }
+    [void]$lines.Add("")
+    [void]$lines.Add("Return your report as your final message, at most 40 lines: which tasks, and why that split.")
+    return (($lines.ToArray()) -join "`n")
+}
+
 function Get-TeamRunArguments {
     <#
     .SYNOPSIS
@@ -180,23 +230,35 @@ function Get-TeamRunArguments {
     #>
     param(
         [Parameter(Mandatory = $true)][string]$RoleFile,
-        [Parameter(Mandatory = $true)][double]$MaxUsd,
+        [double]$MaxUsd = 0,
         [string]$Model = "",
-        [string[]]$PrefixArguments = @()
+        [string[]]$PrefixArguments = @(),
+        # Tools the role file grants but THIS run must not have (the lead's split run: no
+        # Bash, no Edit). They are left out of --allowedTools and named in --disallowedTools.
+        [string[]]$ExcludeTools = @()
     )
     $tools = @(Get-TeamRoleTools -RoleFile $RoleFile)
     if (@($tools).Count -eq 0) { throw "the role file grants no tools: $RoleFile" }
     # A run never starts agents of its own: the cycle is what dispatches.
-    $tools = @($tools | Where-Object { $_ -ne "Agent" -and $_ -ne "Task" })
+    $tools = @($tools | Where-Object { $_ -ne "Agent" -and $_ -ne "Task" -and @($ExcludeTools) -notcontains $_ })
     $arguments = New-Object System.Collections.ArrayList
     foreach ($argument in @($PrefixArguments)) { [void]$arguments.Add([string]$argument) }
     foreach ($argument in @(
             "-p", "--output-format", "json", "--no-session-persistence",
             "--append-system-prompt-file", $RoleFile,
             "--allowedTools", ($tools -join ","),
-            "--permission-mode", "acceptEdits",
-            "--max-budget-usd", $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
+            "--permission-mode", "acceptEdits"
         )) { [void]$arguments.Add([string]$argument) }
+    if (@($ExcludeTools).Count -gt 0) {
+        [void]$arguments.Add("--disallowedTools")
+        [void]$arguments.Add((@($ExcludeTools) -join ","))
+    }
+    if ($MaxUsd -gt 0) {
+        # Owner decision 2026-09-30 (ADR-0214 addendum 3): the subscription has no money cap,
+        # so a run is given none by default; the flag only appears when a caller names one.
+        [void]$arguments.Add("--max-budget-usd")
+        [void]$arguments.Add($MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture))
+    }
     if ($Model) { [void]$arguments.Add("--model"); [void]$arguments.Add($Model) }
     return @($arguments.ToArray())
 }
@@ -252,9 +314,28 @@ function Wait-TeamRun {
         Wait for a run until its deadline. A run past its deadline is killed with its
         children, and what it printed is kept.
     #>
-    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline)
-    $remaining = [int][Math]::Max(0, ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds)
-    $timedOut = -not $Run.Process.WaitForExit($remaining)
+    param(
+        [Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline,
+        # Called every -TickSeconds while the run is going (the live status's heartbeat: a status
+        # nobody refreshed for ten minutes reads as "no cycle"). 0 is no tick.
+        [scriptblock]$OnTick = $null, [int]$TickSeconds = 0
+    )
+    # [datetime]::MaxValue is "no deadline" (owner decision 2026-09-30: no time cap on a
+    # run); WaitForExit(-1) waits for ever, and a span that large would not fit an int.
+    $exited = $false
+    while ($true) {
+        $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
+        $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
+        if ($null -ne $OnTick -and $TickSeconds -gt 0) {
+            $slice = $TickSeconds * 1000
+            if ($remaining -ge 0 -and $remaining -lt $slice) { $slice = $remaining }
+            if ($Run.Process.WaitForExit($slice)) { $exited = $true; break }
+            if ($remaining -ge 0 -and $remaining -le $slice) { break }
+            try { & $OnTick } catch { }
+        }
+        else { $exited = $Run.Process.WaitForExit($remaining); break }
+    }
+    $timedOut = -not $exited
     if ($timedOut) {
         Stop-TeamProcessTree -ProcessId $Run.Process.Id
         [void]$Run.Process.WaitForExit(15000)
@@ -300,7 +381,8 @@ function New-TeamCycleReport {
 
     $ready = @($tasks | Where-Object { @("merged", "awaiting_release", "released", "done") -contains $_.state } | ForEach-Object {
             $sha = [string](Get-TeamProperty -InputObject $_ -Name "sha" -Default "")
-            $shaText = if ($sha) { $sha } else { "sha yok" }
+            $reason = [string](Get-TeamProperty -InputObject $_ -Name "reason" -Default "")
+            $shaText = if ($sha) { $sha } elseif ($reason -like "bölündü:*") { $reason } else { "sha yok" }
             "$($_.id) — $($_.title) [$($_.state)] ($shaText)"
         })
     Add-Section -Title "Hazır olanlar (sha)" -Rows $ready
@@ -341,8 +423,11 @@ function New-TeamCycleReport {
     $spent = [double](Get-TeamProperty -InputObject $Cycle -Name "spent_usd" -Default 0)
     $cap = [double](Get-TeamProperty -InputObject $Cycle -Name "max_usd" -Default 0)
     $runs = @(Get-TeamProperty -InputObject $Cycle -Name "runs" -Default @())
+    # The USD is the tool's own estimate, kept as information (abonelik, API değil - owner,
+    # 2026-09-30); a cap is named only when the cycle was given one.
+    $capText = if ($cap -gt 0) { (" / tavan {0:0.00} USD" -f $cap) } else { " (tavan yok)" }
     $budget = @(
-        ("{0:0.00} USD / tavan {1:0.00} USD" -f $spent, $cap),
+        ("tahmini {0:0.00} USD{1}" -f $spent, $capText),
         "koşu sayısı: $(@($runs).Count); çakışma: $([int](Get-TeamProperty -InputObject $Cycle -Name 'conflicts' -Default 0)); geri verilen: $([int](Get-TeamProperty -InputObject $Cycle -Name 'returned' -Default 0))"
     )
     foreach ($run in $runs) {

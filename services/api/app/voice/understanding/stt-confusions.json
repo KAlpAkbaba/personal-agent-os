@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "description": "Forms the realtime STT has actually produced for a word the owner said (ADR-0224 layer 1). heard and meant are casefolded single tokens. Nothing speculative: every entry carries the date it was heard and the sentence.",
+  "entries": [
+    {
+      "heard": "ofisü",
+      "meant": "ofis",
+      "seen_at": "2026-09-30",
+      "sentence": "Ofisü bilgisayarında hesap makinesini açın."
+    }
+  ]
+}

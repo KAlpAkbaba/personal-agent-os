@@ -21,7 +21,10 @@
 #>
 
 [CmdletBinding()]
-param()
+param(
+    # Runs only the cases whose name matches this pattern (the mutation proofs re-run a slice).
+    [string]$Filter = ""
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -37,6 +40,7 @@ $script:Passes = 0
 
 function Test-Case {
     param([string]$Name, [scriptblock]$Body)
+    if ($Filter -and $Name -notmatch $Filter) { return }
     try { & $Body; $script:Passes++; Write-Host "  PASS  $Name" }
     catch {
         $script:Failures++
@@ -211,6 +215,185 @@ Test-Case "an approved task that needs a plan goes to the integrator, once" {
 }
 
 Write-Host ""
+Write-Host "the lead's split of a proposal (cycle-lead-run, ADR-0214 addendum 2)"
+
+function New-Proposal {
+    param([string]$Id = "idea-one", [string]$State = "approved", [string]$Row = "row", [string[]]$Area = @())
+    $task = New-Task -Id $Id -State $State -Area $Area
+    $task.roadmap_row = $Row
+    $task | Add-Member -NotePropertyName proposal -NotePropertyValue "team/proposals/$Id.md"
+    return $task
+}
+
+function New-SplitTask {
+    param([string]$Id = "part-one", [string[]]$Area = @("src/s1"), [hashtable]$Without = @{}, [hashtable]$With = @{})
+    $task = [ordered]@{ id = $Id; title = "the part $Id"; roadmap_row = "row"; area = @($Area); goal = "g"; acceptance = "a"; evidence_expected = "PROVEN_AUTOMATED" }
+    foreach ($name in @($Without.Keys)) { $task.Remove($name) }
+    foreach ($name in @($With.Keys)) { $task[$name] = $With[$name] }
+    return [pscustomobject]$task
+}
+
+function Get-SplitProblems {
+    param([object[]]$Split, [object[]]$Tasks = @())
+    return @(Test-TeamSplit -Split @($Split) -Queue (New-Queue -Tasks $Tasks))
+}
+
+Test-Case "split: a proposal is split when it is approved, or proposed WITH a roadmap row, and has no area yet" {
+    $ids = { param($tasks) (@(Get-TeamSplitCandidates -Queue (New-Queue -Tasks $tasks) | ForEach-Object { $_.id }) -join ",") }
+    Assert-Equal -Expected "idea-one" -Actual (& $ids @((New-Proposal))) -Because "approved, no area"
+    Assert-Equal -Expected "idea-one" -Actual (& $ids @((New-Proposal -State "proposed"))) -Because "proposed, with a roadmap row"
+    Assert-Equal -Expected "" -Actual (& $ids @((New-Proposal -State "proposed" -Row ""))) -Because "proposed without a roadmap row waits for the owner"
+    Assert-Equal -Expected "" -Actual (& $ids @((New-Proposal -State "proposed" -Row "   "))) -Because "a blank row is no row"
+    Assert-Equal -Expected "" -Actual (& $ids @((New-Proposal -State "awaiting_owner"))) -Because "the owner's gate is not crossed"
+    Assert-Equal -Expected "" -Actual (& $ids @((New-Proposal -Area @("src/x")))) -Because "it has its area already"
+    Assert-Equal -Expected "" -Actual (& $ids @((New-Proposal -State "done"))) -Because "a split one is over"
+    Assert-Equal -Expected "" -Actual (& $ids @((New-Task -Id "no-proposal" -Area @()))) -Because "a task that is not a proposal is not split"
+}
+
+Test-Case "split: a proposal that awaits its split is neither run nor moved past the owner's gate" {
+    Assert-Equal -Expected "rest" -Actual (Get-TeamNextRole -Task (New-Proposal)).Kind -Because "approved, no area: it waits for the split, never a worker without an area"
+    Assert-Equal -Expected "rest" -Actual (Get-TeamNextRole -Task (New-Proposal -State "proposed")).Kind -Because "proposed with a row waits for the split"
+    $held = Get-TeamNextRole -Task (New-Proposal -State "proposed" -Row "")
+    Assert-Equal -Expected "move" -Actual $held.Kind -Because "proposed without a row goes to the owner, as before"
+    Assert-Equal -Expected "awaiting_owner" -Actual $held.NextState -Because "the first gate"
+    Assert-Equal -Expected "move" -Actual (Get-TeamNextRole -Task (New-Proposal -Area @("src/x"))).Kind -Because "an approved proposal that has an area goes on to a worker"
+}
+
+Test-Case "split: a good split is accepted, and each task becomes an approved, queue-valid task" {
+    $split = @((New-SplitTask -Id "part-one" -Area @("src/s1")), (New-SplitTask -Id "part-two" -Area @("src/s2")))
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split $split).Count -Because ((Get-SplitProblems -Split $split) -join "; ")
+    $proposal = New-Proposal
+    $made = @(ConvertTo-TeamSplitTasks -Split $split -Proposal $proposal -MaxUsd 0)
+    Assert-Equal -Expected "approved,approved" -Actual (@($made | ForEach-Object { $_.state }) -join ",") -Because "approved in advance"
+    Assert-Equal -Expected "team/proposals/idea-one.md" -Actual $made[0].proposal -Because "traced to its proposal"
+    Assert-Equal -Expected "" -Actual $made[0].branch -Because "the cycle names the branch, not the lead"
+    Assert-Equal -Expected "" -Actual (@(Test-TeamQueue -Queue (New-Queue -Tasks $made)) -join "; ") -Because "the protocol holds"
+}
+
+Test-Case "split: a task missing a field is rejected, for each field; a full one is not" {
+    foreach ($field in @("id", "title", "roadmap_row", "area", "goal", "acceptance", "evidence_expected")) {
+        $problems = Get-SplitProblems -Split @((New-SplitTask -Without @{ $field = 1 }))
+        Assert-True -Condition (@($problems | Where-Object { $_ -match "'$field'" }).Count -ge 1) -Because "a split without '$field': $($problems -join '; ')"
+    }
+    $blank = Get-SplitProblems -Split @((New-SplitTask -With @{ acceptance = "  " }))
+    Assert-True -Condition (@($blank | Where-Object { $_ -match "'acceptance'" }).Count -ge 1) -Because "a blank field is a missing one"
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask))).Count -Because "a full task"
+    foreach ($bad in @($null, @(), "text", 5)) {
+        Assert-True -Condition (@(Test-TeamSplit -Split $bad -Queue (New-Queue)).Count -ge 1) -Because "not a list of tasks: <$bad>"
+    }
+}
+
+Test-Case "split: an area inside another task's in work is rejected; a neighbour, a gate and a finished task are not" {
+    $busy = New-Task -Id "busy-one" -State "assigned" -Area @("src/busy")
+    $hit = Get-SplitProblems -Split @((New-SplitTask -Area @("src/busy/deep"))) -Tasks @($busy)
+    Assert-True -Condition (@($hit | Where-Object { $_ -match "overlaps the area of busy-one" }).Count -eq 1) -Because ($hit -join "; ")
+    Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Area @("src"))) -Tasks @($busy)).Count -ge 1) -Because "a parent directory of the area"
+    Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Area @("src/busy/"))) -Tasks @($busy)).Count -ge 1) -Because "the same directory with a slash"
+    Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Area @("src/elsewhere", "SRC/BUSY/x"))) -Tasks @($busy)).Count -ge 1) -Because "any one of several areas, in any letter case"
+    foreach ($state in @("approved", "in_progress", "inspecting", "returned")) {
+        $other = New-Task -Id "busy-two" -State $state -Area @("src/busy")
+        Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Area @("src/busy"))) -Tasks @($other)).Count -ge 1) -Because "a task at '$state' is in work"
+    }
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -Area @("src/busy2"))) -Tasks @($busy)).Count -Because "'busy' and 'busy2' are two directories"
+    foreach ($state in @("awaiting_owner", "awaiting_release", "merged", "done", "stopped")) {
+        $rest = New-Task -Id "rest-one" -State $state -Area @("src/busy")
+        Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -Area @("src/busy"))) -Tasks @($rest)).Count -Because "a task at '$state' is not in work"
+    }
+}
+
+Test-Case "split: two tasks of one split that share an area are rejected unless one waits for the other" {
+    $clash = @((New-SplitTask -Id "part-one" -Area @("src/s1")), (New-SplitTask -Id "part-two" -Area @("src/s1/inner")))
+    Assert-True -Condition (@(Get-SplitProblems -Split $clash | Where-Object { $_ -match "overlaps the area of part-one" }).Count -eq 1) -Because "they would run side by side"
+    $ordered = @((New-SplitTask -Id "part-one" -Area @("src/s1")), (New-SplitTask -Id "part-two" -Area @("src/s1/inner") -With @{ depends_on = @("part-one") }))
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split $ordered).Count -Because "one after the other is not a clash"
+}
+
+Test-Case "split: a shared file, or an area that holds one, is rejected; its neighbours are not" {
+    foreach ($shared in @("docs/HANDOFF.md", "docs/DECISIONS.md", "state/BUILD_STATE.json", "docs/THIRD_PARTY_COMPONENTS.md", "team/queue.json", "docs", "docs/*", "state", ".", "*")) {
+        $problems = Get-SplitProblems -Split @((New-SplitTask -Area @("src/s1", $shared)))
+        Assert-True -Condition (@($problems | Where-Object { $_ -match "shared file" }).Count -ge 1) -Because "'$shared': $($problems -join '; ')"
+    }
+    foreach ($fine in @("docs/guides", "docs/HANDOFF.md.bak", "state/other.json", "docs2", "team/plans/x-adr.md", "scripts/team/cycle.ps1")) {
+        Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -Area @($fine))) | Where-Object { $_ -match "shared file" }).Count -Because "'$fine' is not a shared file"
+    }
+}
+
+Test-Case "split: an area that leaves the repository is rejected" {
+    foreach ($bad in @("../elsewhere", "C:/Windows", "/etc", "\\share\x", "a/../../b")) {
+        Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Area @($bad))) | Where-Object { $_ -match "inside the repository" }).Count -ge 1) -Because "'$bad'"
+    }
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -Area @("services/api/app/team", "apps/web/src/*")))).Count -Because "paths inside the repository, with a trailing glob"
+}
+
+Test-Case "split: a task that names more than 25 files is rejected; 25 is the limit" {
+    $twentyFive = @(1..25 | ForEach-Object { "src/many/file$_.py" })
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -Area $twentyFive))).Count -Because "25 is allowed"
+    $tooMany = @(1..26 | ForEach-Object { "src/many/file$_.py" })
+    Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Area $tooMany)) | Where-Object { $_ -match "25" }).Count -ge 1) -Because "26 is not"
+}
+
+Test-Case "split: main and the hand-gestures branch are never named; a task of its own name is fine" {
+    foreach ($branch in @("main", "feat/hand-gestures-stage1", "Main", "release/hand-gestures")) {
+        $problems = Get-SplitProblems -Split @((New-SplitTask -With @{ branch = $branch }))
+        Assert-True -Condition (@($problems | Where-Object { $_ -match "not a team branch" }).Count -ge 1) -Because "'$branch': $($problems -join '; ')"
+    }
+    $area = Get-SplitProblems -Split @((New-SplitTask -Area @("src/hand-gestures")))
+    Assert-True -Condition (@($area | Where-Object { $_ -match "hand-gestures" }).Count -ge 1) -Because "an area of the frozen work: $($area -join '; ')"
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -With @{ branch = "" }))).Count -Because "no branch named is the normal case"
+    Assert-Equal -Expected 0 -Actual @(Get-SplitProblems -Split @((New-SplitTask -Id "gestures-notes" -Area @("src/gestures"))) ).Count -Because "'gestures' alone is not the frozen branch"
+}
+
+Test-Case "split: an id that is taken, used twice, or malformed, and a dependency that does not exist, are rejected" {
+    $taken = Get-SplitProblems -Split @((New-SplitTask -Id "busy-one")) -Tasks @((New-Task -Id "busy-one" -State "done"))
+    Assert-True -Condition (@($taken | Where-Object { $_ -match "already in the queue" }).Count -eq 1) -Because ($taken -join "; ")
+    $twice = Get-SplitProblems -Split @((New-SplitTask -Id "part-one" -Area @("src/a")), (New-SplitTask -Id "part-one" -Area @("src/b")))
+    Assert-True -Condition (@($twice | Where-Object { $_ -match "used twice" }).Count -eq 1) -Because ($twice -join "; ")
+    Assert-True -Condition (@(Get-SplitProblems -Split @((New-SplitTask -Id "Bad Id"))).Count -ge 1) -Because "an id is a-z, 0-9 and '-'"
+    $orphan = Get-SplitProblems -Split @((New-SplitTask -With @{ depends_on = @("nobody") }))
+    Assert-True -Condition (@($orphan | Where-Object { $_ -match "depends on 'nobody'" }).Count -eq 1) -Because ($orphan -join "; ")
+    $known = Get-SplitProblems -Split @((New-SplitTask -With @{ depends_on = @("busy-one") })) -Tasks @((New-Task -Id "busy-one" -State "done"))
+    Assert-Equal -Expected 0 -Actual @($known).Count -Because "a dependency that is in the queue"
+}
+
+Test-Case "split: a split file is read as a list, as an object holding one, or refused with the reason" {
+    $work = Join-Path $env:TEMP ("pagentos-split-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    [void](New-Item -ItemType Directory -Force -Path $work)
+    try {
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $task = ConvertTo-Json -InputObject (New-SplitTask) -Compress
+        $cases = @(
+            @{ Name = "list.json"; Text = "[$task,$task]"; Ok = $true; Count = 2 },
+            @{ Name = "one.json"; Text = "[$task]"; Ok = $true; Count = 1 },
+            @{ Name = "object.json"; Text = "{`"tasks`":[$task]}"; Ok = $true; Count = 1 },
+            @{ Name = "broken.json"; Text = "[{`"id`":"; Ok = $false; Count = 0 },
+            @{ Name = "empty.json"; Text = ""; Ok = $false; Count = 0 })
+        foreach ($case in $cases) {
+            [System.IO.File]::WriteAllText((Join-Path $work $case.Name), $case.Text, $utf8)
+            $read = Read-TeamSplitFile -Path (Join-Path $work $case.Name)
+            Assert-Equal -Expected $case.Ok -Actual ([bool]$read.Ok) -Because "$($case.Name): $($read.Why)"
+            Assert-Equal -Expected $case.Count -Actual @($read.Split).Count -Because "$($case.Name): the tasks"
+        }
+        $missing = Read-TeamSplitFile -Path (Join-Path $work "nothing.json")
+        Assert-True -Condition ((-not $missing.Ok) -and $missing.Why) -Because "the lead wrote no file: '$($missing.Why)'"
+    }
+    finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+Test-Case "split: the lead's run holds Read and Write and neither Bash nor Edit, and the ordinary lead keeps its tools" {
+    $file = Join-Path $repoRoot ".claude\agents\lead.md"
+    $plain = @(Get-TeamRoleTools -RoleFile $file)
+    Assert-True -Condition ($plain -contains "Bash" -and $plain -contains "Edit") -Because "the role file grants them (the excluding is the cycle's)"
+    $arguments = @(Get-TeamRunArguments -RoleFile $file -ExcludeTools @("Bash", "Edit"))
+    $tools = @($arguments[[array]::IndexOf($arguments, "--allowedTools") + 1].Split(","))
+    Assert-True -Condition ($tools -contains "Read" -and $tools -contains "Write") -Because "read and write the one file: $($tools -join ',')"
+    Assert-True -Condition ($tools -notcontains "Bash" -and $tools -notcontains "Edit") -Because "no shell and no edit: $($tools -join ',')"
+    Assert-Equal -Expected "Bash,Edit" -Actual $arguments[[array]::IndexOf($arguments, "--disallowedTools") + 1] -Because "denied by name too"
+    $open = @(Get-TeamRunArguments -RoleFile $file)
+    Assert-True -Condition ($open -notcontains "--disallowedTools") -Because "without an exclusion nothing is denied"
+    Assert-True -Condition ($open[[array]::IndexOf($open, "--allowedTools") + 1] -match "Bash") -Because "the default run is as it was"
+}
+
+Write-Host ""
 Write-Host "the inspector's verdict"
 
 $verdicts = @(
@@ -220,6 +403,10 @@ $verdicts = @(
     @{ Text = "REJECT (it writes outside its area)"; Verdict = "REJECT"; Detail = "it writes outside its area" },
     @{ Text = "RETURN: two things"; Verdict = "RETURN"; Detail = "two things" },
     @{ Text = "APPROVE`nlater:`nRETURN (on reflection)"; Verdict = "RETURN"; Detail = "on reflection" },
+    @{ Text = "**Verdict:** ``RETURN (1: add a test; 2: a heartbeat test)``"; Verdict = "RETURN"; Detail = "1: add a test; 2: a heartbeat test" },
+    @{ Text = "Verdict: APPROVE"; Verdict = "APPROVE"; Detail = "" },
+    @{ Text = "**Verdict: APPROVE**"; Verdict = "APPROVE"; Detail = "" },
+    @{ Text = "The verdict could be APPROVE"; Verdict = "NONE"; Detail = "" },
     @{ Text = "I cannot APPROVE this."; Verdict = "NONE"; Detail = "" },
     @{ Text = "approve"; Verdict = "NONE"; Detail = "" },
     @{ Text = "APPROVED_BY nobody"; Verdict = "NONE"; Detail = "" },
@@ -399,6 +586,26 @@ Test-Case "a run is capped, fresh, and cannot start agents of its own" {
     Assert-True -Condition ($tools -match "Read") -Because "the role's own tools are granted"
 }
 
+Test-Case "a run without a cap is given no --max-budget-usd at all (owner, 2026-09-30: the subscription has none)" {
+    $line = @(Get-TeamRunArguments -RoleFile (Join-Path $roles "lead.md")) -join " "
+    Assert-True -Condition ($line -notmatch "max-budget") -Because "no cap named, no flag: $line"
+    $zero = @(Get-TeamRunArguments -RoleFile (Join-Path $roles "lead.md") -MaxUsd 0) -join " "
+    Assert-True -Condition ($zero -notmatch "max-budget") -Because "0 is no cap: $zero"
+}
+
+Test-Case "the usage limit is read from the tool's words, with the time it lifts" {
+    $limited = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached|1790836000","total_cost_usd":0}' -ExitCode 1
+    Assert-True -Condition (-not $limited.Ok) -Because "not a result"
+    Assert-True -Condition ([bool]$limited.UsageLimited) -Because "the one stop the team has"
+    Assert-Equal -Expected "2026-10-01T06:26:40Z" -Actual $limited.ResetsAt -Because "the epoch, as UTC"
+    Assert-Equal -Expected "Max kullanım limiti" -Actual $limited.Why -Because "named for the report"
+    $onStderr = Read-TeamRunResult -StdOut "" -ExitCode 1 -StdErr "You've hit your limit until 3pm"
+    Assert-True -Condition ([bool]$onStderr.UsageLimited) -Because "said on stderr, without a time"
+    Assert-Equal -Expected "" -Actual $onStderr.ResetsAt -Because "no epoch given"
+    $plain = Read-TeamRunResult -StdOut '{"type":"result","subtype":"success","is_error":true,"result":"Not logged in","total_cost_usd":0}' -ExitCode 1
+    Assert-True -Condition (-not [bool]$plain.UsageLimited) -Because "another failure is not the limit"
+}
+
 Test-Case "a role file without tools starts nothing" {
     $file = Join-Path $env:TEMP ("pagentos-team-role-" + [guid]::NewGuid().ToString("N") + ".md")
     try {
@@ -506,16 +713,22 @@ function Invoke-Cycle {
     param(
         [string]$Root, [string]$Scenario, [string]$CycleId = "c1", [double]$MaxUsd = 20,
         [double]$RunMinutes = 2, [int]$MaxParallel = 2, [switch]$Research, [string]$Machine = "MAIL",
-        [string[]]$Brief = @(), [switch]$ResearchOnly, [string]$QueueUrl = "", [string]$QueueTokenFile = ""
+        [string[]]$Brief = @(), [switch]$ResearchOnly, [string]$QueueUrl = "", [string]$QueueTokenFile = "",
+        # The script's own defaults (no money cap, no time cap) instead of the harness's caps.
+        [switch]$NoCaps, [string]$ExtraArguments = ""
     )
     $log = Join-Path $Root "fake.log"
     $env:PAGENTOS_FAKE_CLAUDE_SCENARIO = $Scenario
     $env:PAGENTOS_FAKE_CLAUDE_LOG = $log
+    $caps = if ($NoCaps) { "" } else {
+        " -MaxUsd $($MaxUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture))" +
+        " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture))"
+    }
     try {
         $arguments = @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-            ("& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId '$CycleId' -MaxUsd $($MaxUsd.ToString([System.Globalization.CultureInfo]::InvariantCulture))" +
-            " -RunMinutes $($RunMinutes.ToString([System.Globalization.CultureInfo]::InvariantCulture)) -MaxParallel $MaxParallel -Machine '$Machine'" +
+            ("& '" + (Join-Path $Root "scripts\team\cycle.ps1") + "' -CycleId '$CycleId'" + $caps + $(if ($ExtraArguments) { " " + $ExtraArguments } else { "" }) +
+            " -MaxParallel $MaxParallel -Machine '$Machine'" +
             " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','" +
             (Join-Path $Root "scripts\tests\lib\fake-claude.ps1") + "'" + $(if ($Research) { " -Research" } else { "" }) +
             $(if ($ResearchOnly) { " -ResearchOnly" } else { "" }) +
@@ -584,7 +797,7 @@ try {
         }
         Assert-True -Condition ($run.Report -match "FİKİR: idea-one") -Because "what waits for the owner is named"
         Assert-True -Condition ($run.Report -match "task-one .* \[merged\] \([0-9a-f]{40}\)") -Because "what is ready carries its sha"
-        Assert-True -Condition ($run.Report -match "0[.,]50 USD / tavan 20[.,]00 USD") -Because "two runs of 0.25: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "tahmini 0[.,]50 USD / tavan 20[.,]00 USD") -Because "two runs of 0.25, as an estimate: $($run.Report)"
         Assert-True -Condition ($run.Report.Contains('`state` alanını `approved` yapın')) -Because "how to approve, in one line"
         $task = Get-TaskById -Queue $run.Queue -Id "task-one"
         Assert-Equal -Expected 2 -Actual @($task.reports).Count -Because "the worker's and the inspector's"
@@ -703,6 +916,133 @@ try {
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
     }
 
+    Test-Case "without caps (the defaults) a run gets no budget flag, the report says 'tavan yok', and the work is done" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "" -Actual ([string]$run.Calls[0].budget) -Because "no --max-budget-usd was passed: $($run.Calls[0] | ConvertTo-Json -Compress)"
+        Assert-True -Condition ($run.Report -match "tahmini 0[.,]50 USD \(tavan yok\)") -Because $run.Report
+    }
+
+    Test-Case "the usage limit: the task goes back, nothing is counted against it, the cycle waits it out and finishes the work" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker,worker,inspector" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the limited run, the run after the wait, the inspection"
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0)) -Because "the limit is not the task's failure"
+        Assert-True -Condition ($run.Report -match "Max kullanım limiti: .* sıfırlanmasına kadar beklendi") -Because $run.Report
+        Assert-True -Condition ($run.Report -match "task-one / worker: .*Max kullanım limiti") -Because "the limited run is in the run list: $($run.Report)"
+    }
+
+    Test-Case "the usage limit without waiting: the cycle stops, says how to continue, and the task is where it was" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -ExtraArguments '-WaitForUsageLimit:$false'
+        $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "assigned" -Actual $task.state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "nothing after the limit"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma .*aynı -CycleId ile yeniden başlat") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
+    }
+
+    # ------------------------------------------------------------------ the live status and the safe stop
+    function Use-FakeHooks {
+        param([hashtable]$Environment, [scriptblock]$Body)
+        foreach ($name in @($Environment.Keys)) { Set-Item -Path "Env:\$name" -Value ([string]$Environment[$name]) }
+        try { & $Body }
+        finally { foreach ($name in @($Environment.Keys)) { Remove-Item -Path "Env:\$name" -ErrorAction SilentlyContinue } }
+    }
+
+    Test-Case "the live status: while two runs are in flight team/status.json names the cycle and both runs; after the cycle no run is left and the estimate is the report's" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        $run = $null
+        Use-FakeHooks -Environment $hooks -Body { $script:statusRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        $run = $script:statusRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "worker-task-one.json")
+        Assert-Equal -Expected "c1" -Actual $seen.cycle_id -Because "the cycle is named"
+        Assert-Equal -Expected "MAIL" -Actual $seen.machine -Because "and its machine"
+        Assert-True -Condition ([int]$seen.pid -gt 0) -Because "and the process that holds the lock"
+        Assert-True -Condition ([string]$seen.started_at -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$') -Because "started_at: $($seen.started_at)"
+        $runs = @($seen.runs)
+        Assert-Equal -Expected "task-one:worker,task-two:worker" -Actual (@($runs | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object) -join ",") -Because "both runs in flight: $($seen | ConvertTo-Json -Compress)"
+        foreach ($item in $runs) { Assert-True -Condition ([string]$item.started_at -match '^\d{4}-') -Because "each run says when it started" }
+        Assert-Equal -Expected "ok" -Actual $seen.usage_limit.state -Because "no limit"
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected 0 -Actual @($final.runs).Count -Because "nothing in flight after the cycle"
+        $estimate = [regex]::Match($run.Report, 'tahmini (\d+[.,]\d+) USD').Groups[1].Value -replace ',', '.'
+        Assert-Equal -Expected ([double]::Parse($estimate, [System.Globalization.CultureInfo]::InvariantCulture)) -Actual ([double]$final.estimated_usd) -Because "the report's estimate: $($run.Report)"
+        Assert-True -Condition ([double]$final.estimated_usd -gt 0) -Because "four runs at 0.25"
+    }
+
+    Test-Case "the live status: a finished run is gone from the list before the next one starts, and the estimate has risen" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:seqRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected 0 -Actual $script:seqRun.ExitCode -Because ($script:seqRun.StdOut + $script:seqRun.StdErr)
+        $second = Read-TeamJson -Path (Join-Path $snapshots "worker-task-two.json")
+        Assert-Equal -Expected "task-two:worker" -Actual (@($second.runs | ForEach-Object { "$($_.task):$($_.role)" }) -join ",") -Because "only the run in flight is listed: $($second | ConvertTo-Json -Compress)"
+        Assert-True -Condition ([double]$second.estimated_usd -ge 0.25) -Because "the first run's cost is already in: $($second.estimated_usd)"
+    }
+
+    Test-Case "the live status: the heartbeat refreshes updated_at while one long run goes on" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $beat = Join-Path $root "heartbeat.txt"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_HEARTBEAT = $beat; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json"); PAGENTOS_CYCLE_STATUS_TICK_SECONDS = 1 }
+        Use-FakeHooks -Environment $hooks -Body { $script:beatRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        Assert-Equal -Expected 0 -Actual $script:beatRun.ExitCode -Because ($script:beatRun.StdOut + $script:beatRun.StdErr)
+        $stamps = @(Get-Content -LiteralPath $beat -Encoding UTF8 | Where-Object { $_.Trim() } | Sort-Object -Unique)
+        Assert-True -Condition (@($stamps).Count -ge 3) -Because "a seven-second run with a one-second tick shows several updated_at values, not just the start's: $($stamps -join ' ')"
+    }
+
+    Test-Case "the live status: the usage limit is 'stopped' with its reset time when the cycle stops for it, 'ok' when it was waited out" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -ExtraArguments '-WaitForUsageLimit:$false'
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "stopped" -Actual $final.usage_limit.state -Because ($run.StdOut + $run.StdErr)
+        Assert-True -Condition ([string]$final.usage_limit.resets_at -match '^\d{4}-') -Because "the reset time is kept: $($final | ConvertTo-Json -Compress)"
+        Assert-Equal -Expected 0 -Actual @($final.runs).Count -Because "no run left"
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps
+        $final = Read-TeamJson -Path (Join-Path $root "team\status.json")
+        Assert-Equal -Expected "ok" -Actual $final.usage_limit.state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected $null -Actual $final.usage_limit.resets_at -Because "nothing to wait for any more"
+    }
+
+    Test-Case "the safe stop: with team/stop.flag present before the second batch the first run is recorded, nothing else starts, the stop line is in the report, the flag is gone and the lock is released" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $flag = Join-Path $root "team\stop.flag"
+        $run = $null
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_STOPFLAG = $flag } -Body { $script:stopRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:stopRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the run in flight finished; no further run started"
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "inspecting" -Actual $one.state -Because "the finished worker waits for the next cycle's inspector"
+        Assert-Equal -Expected 1 -Actual @($one.reports).Count -Because "the finished run is recorded"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the second task was only moved to assigned (no plan needed), never started"
+        Assert-True -Condition ($run.Report -match 'döngü: sahip/lead durdurdu \(team/stop\.flag\); kaldığı yerden devam eder') -Because $run.Report
+        Assert-True -Condition (-not (Test-Path -LiteralPath $flag)) -Because "the flag is removed"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "the safe stop: an inspection in flight is still merged when the flag came up during it" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $flag = Join-Path $root "team\stop.flag"
+        $run = $null
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_STOPFLAG = $flag; PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE = "inspector" } -Body { $script:stopRun2 = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1 }
+        $run = $script:stopRun2
+        Assert-Equal -Expected "worker,inspector" -Actual (@($run.Calls | ForEach-Object { $_.role }) -join ",") -Because "the inspection ran, nothing after it"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "an approved inspection is still merged"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "the second task was only moved to assigned (no plan needed), never started"
+        Assert-True -Condition (-not (Test-Path -LiteralPath $flag)) -Because "the flag is removed"
+    }
+
     Test-Case "two tasks on two areas run side by side, each in its own worktree" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
         $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2
@@ -740,6 +1080,101 @@ try {
         $run = Invoke-Cycle -Root $root -Scenario "approve"
         Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr)
         Assert-True -Condition ($run.Report -match "bayat kilit devralındı: GMKADIRAKBABA") -Because $run.Report
+    }
+
+    Test-Case "a task waits for its dependencies to be on main; the report says so; a dependency must exist" {
+        $first = New-Task -Id "layer-one" -Area @("src/one")
+        $second = New-Task -Id "layer-three" -Area @("src/three")
+        $second | Add-Member -NotePropertyName "depends_on" -NotePropertyValue @("layer-one")
+        Assert-Equal -Expected "layer-one" -Actual (@(Get-TeamUnmetDependencies -Task $second -Queue (New-Queue -Tasks @($first, $second))) -join ",") -Because "approved is not on main"
+        $first.state = "merged"
+        Assert-Equal -Expected "layer-one" -Actual (@(Get-TeamUnmetDependencies -Task $second -Queue (New-Queue -Tasks @($first, $second))) -join ",") -Because "merged is the integration branch, not main"
+        $first.state = "awaiting_release"
+        Assert-Equal -Expected 0 -Actual @(Get-TeamUnmetDependencies -Task $second -Queue (New-Queue -Tasks @($first, $second))).Count -Because "gated main is main"
+        $orphan = New-Task -Id "orphan"
+        $orphan | Add-Member -NotePropertyName "depends_on" -NotePropertyValue @("nobody")
+        $problems = @(Test-TeamQueue -Queue (New-Queue -Tasks @($orphan)))
+        Assert-True -Condition (@($problems | Where-Object { $_ -match "depends on 'nobody', which is not in the queue" }).Count -eq 1) -Because ($problems -join "; ")
+
+        $first.state = "approved"
+        $root = New-Sandbox -Tasks @($first, $second)
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "layer-one").state -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "layer-three").state -Because "it waited: $($run.Report)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.task -eq "layer-three" }).Count -Because "no run for the waiting task"
+        Assert-True -Condition ($run.Report -match "bekliyor: layer-three -> layer-one main'e girince") -Because $run.Report
+    }
+
+    Test-Case "split: a proposal that serves a roadmap row becomes its tasks and they run in the same cycle; the lead run has no Bash and no Edit" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "split" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $lead = @($run.Calls | Where-Object { $_.role -eq "lead" })
+        Assert-Equal -Expected 1 -Actual @($lead).Count -Because "one fresh lead run for the proposal"
+        $tools = @(([string]$lead[0].tools).Split(","))
+        Assert-True -Condition ($tools -contains "Read" -and $tools -contains "Write") -Because "read, and write the one file: $($tools -join ',')"
+        Assert-True -Condition ($tools -notcontains "Bash" -and $tools -notcontains "Edit" -and $tools -notcontains "Agent") -Because "the lead run's tools: $($tools -join ',')"
+        Assert-Equal -Expected ([string]$root).ToLowerInvariant() -Actual ([string]$lead[0].cwd).ToLowerInvariant() -Because "it works in the checkout, where team/plans is"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\plans\c1-split-idea-one.json")) -Because "the lead wrote the file the cycle named"
+        Assert-Equal -Expected "merged,merged" -Actual (@("idea-one-a", "idea-one-b" | ForEach-Object { (Get-TaskById -Queue $run.Queue -Id $_).state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "lead,worker,worker,inspector,inspector" -Actual (@($run.Calls | ForEach-Object { $_.role } | Sort-Object { @("lead", "worker", "inspector").IndexOf($_) }) -join ",") -Because "split first, then the work"
+        Assert-Equal -Expected "lead" -Actual $run.Calls[0].role -Because "the split is the first run of the cycle"
+        $proposal = Get-TaskById -Queue $run.Queue -Id "idea-one"
+        Assert-Equal -Expected "done" -Actual $proposal.state -Because "the proposal is over once it is its tasks"
+        Assert-True -Condition ($proposal.reason -match "bölündü: idea-one-a, idea-one-b") -Because $proposal.reason
+        Assert-Equal -Expected "team/proposals/idea-one.md" -Actual (Get-TaskById -Queue $run.Queue -Id "idea-one-a").proposal -Because "a task is traced to its proposal"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue the cycle wrote keeps the protocol"
+        Assert-True -Condition ($run.Report -match "idea-one .*bölündü") -Because "the report says where the proposal went: $($run.Report)"
+    }
+
+    Test-Case "split: a proposed proposal WITH a roadmap row is split too" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one" -State "proposed"))
+        $run = Invoke-Cycle -Root $root -Scenario "split" -NoCaps
+        Assert-Equal -Expected 1 -Actual @($run.Calls | Where-Object { $_.role -eq "lead" }).Count -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "idea-one-a").state -Because $run.Report
+    }
+
+    Test-Case "split: a proposal without a roadmap row waits for the owner and no lead is started" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one" -State "proposed" -Row ""))
+        $run = Invoke-Cycle -Root $root -Scenario "split" -NoCaps
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nobody started"
+        Assert-Equal -Expected "awaiting_owner" -Actual (Get-TaskById -Queue $run.Queue -Id "idea-one").state -Because "the first gate"
+        Assert-Equal -Expected 1 -Actual @(Get-TeamTasks -Queue $run.Queue).Count -Because "nothing was appended"
+    }
+
+    $rejected = @(
+        @{ Name = "an area that overlaps a task in work"; Scenario = "split-overlap"; Says = "overlaps the area of busy-one" },
+        @{ Name = "a shared file"; Scenario = "split-shared"; Says = "shared file" },
+        @{ Name = "a missing field"; Scenario = "split-missing"; Says = "'acceptance' is missing" },
+        @{ Name = "no file written at all"; Scenario = "approve"; Says = "wrote no split" }
+    )
+    foreach ($case in $rejected) {
+        Test-Case "split: a split with $($case.Name) is rejected whole, the reason is in the report, and the proposal stays" {
+            $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), (New-Task -Id "busy-one" -State "assigned" -Area @("src/busy")))
+            $run = Invoke-Cycle -Root $root -Scenario $case.Scenario -NoCaps
+            Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+            Assert-Equal -Expected 2 -Actual @(Get-TeamTasks -Queue $run.Queue).Count -Because "not one of the tasks was queued - the good half included: $($run.Report)"
+            $proposal = Get-TaskById -Queue $run.Queue -Id "idea-one"
+            Assert-Equal -Expected "approved" -Actual $proposal.state -Because "the proposal stays where it was"
+            Assert-Equal -Expected 1 -Actual @($run.Calls | Where-Object { $_.role -eq "lead" }).Count -Because "one try a cycle"
+            Assert-Equal -Expected 0 -Actual @($run.Calls | Where-Object { $_.task -like "idea-one*" -and $_.role -ne "lead" }).Count -Because "no worker for a proposal with no area"
+            Assert-True -Condition ($run.Report -match "bölme reddedildi: idea-one: .*$([regex]::Escape($case.Says))") -Because "the reason is in the report: $($run.Report)"
+            Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "busy-one").state -Because "the rest of the queue ran on"
+        }
+    }
+
+    Test-Case "split: a second cycle does not split the same proposal again, and a rejected one is tried once a cycle" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"))
+        $first = Invoke-Cycle -Root $root -Scenario "split" -NoCaps
+        $second = Invoke-Cycle -Root $root -Scenario "split" -NoCaps -CycleId "c2"
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because ($second.StdOut + $second.StdErr)
+        Assert-Equal -Expected @($first.Calls).Count -Actual @($second.Calls).Count -Because "nothing was started again, the lead included"
+        Assert-Equal -Expected 3 -Actual @(Get-TeamTasks -Queue $second.Queue).Count -Because "the tasks were not added twice"
+        $bad = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), (New-Task -Id "busy-one" -State "assigned" -Area @("src/busy")))
+        [void](Invoke-Cycle -Root $bad -Scenario "split-overlap" -NoCaps)
+        $again = Invoke-Cycle -Root $bad -Scenario "split" -NoCaps -CycleId "c2"
+        Assert-Equal -Expected "done" -Actual (Get-TaskById -Queue $again.Queue -Id "idea-one").state -Because "the next cycle's lead may get it right: $($again.Report)"
     }
 
     Test-Case "a queue that breaks the protocol runs nothing" {
@@ -835,7 +1270,7 @@ try {
     Write-Host "the queue and the lock on the Cloud Core (a fake listener with the real routes' rules)"
 
     function Start-FakeApi {
-        param([object[]]$Tasks = @(), $Lock = $null)
+        param([object[]]$Tasks = @(), $Lock = $null, [switch]$FailStatus)
         $work = Join-Path $env:TEMP ("pagentos-teamapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
         [void](New-Item -ItemType Directory -Force -Path $work)
         [void]$sandboxes.Add($work)
@@ -847,6 +1282,7 @@ try {
         $arguments = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + (Join-Path $repoRoot "scripts\team\fake-team-api.ps1") + '"'),
             "-Port", $port, "-Seed", ('"' + (Join-Path $work "seed.json") + '"'), "-Log", ('"' + (Join-Path $work "requests.log") + '"'),
             "-Ready", ('"' + (Join-Path $work "ready") + '"'), "-Token", "test-token")
+        if ($FailStatus) { $arguments += "-FailStatus" }
         $process = Start-Process -FilePath $powershell -ArgumentList $arguments -PassThru -WindowStyle Hidden
         [void]$fakeApis.Add($process)
         $deadline = [datetime]::UtcNow.AddSeconds(40)
@@ -896,6 +1332,35 @@ try {
         Assert-Equal -Expected "approved" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the sandbox's queue.json was not written in API mode"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "nor was its lock.json ever held"
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\reports\c1.md")) -Because "the report is still a file"
+    }
+
+    Test-Case "in API mode the live status goes through PUT /v1/team/queue/status: the same documents, the limit's wait included, and the end with no run" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two" -Area @("src/b")))
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"), (New-Task -Id "task-two" -Area @("src/b")))
+        $run = Invoke-Cycle -Root $root -Scenario "limited" -NoCaps -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^PUT /v1/team/queue/status 200" }).Count -ge 4) -Because ($requests -join "; ")
+        $state = Get-FakeApiState -Api $api
+        $history = @($state.statuses)
+        Assert-True -Condition (@($history | Where-Object { @($_.runs).Count -eq 2 }).Count -ge 1) -Because "a document with both runs in flight"
+        Assert-True -Condition (@($history | Where-Object { $_.cycle_id -eq "c1" -and $_.machine -eq "MAIL" }).Count -eq @($history).Count) -Because "every document names the cycle and machine"
+        $waiting = @($history | Where-Object { $_.usage_limit.state -eq "waiting" })
+        Assert-True -Condition (@($waiting).Count -ge 1 -and [string]$waiting[0].usage_limit.resets_at -match '^\d{4}-') -Because "waiting, with the reset time: $($history | ConvertTo-Json -Depth 6 -Compress)"
+        $last = $history[@($history).Count - 1]
+        Assert-Equal -Expected 0 -Actual @($last.runs).Count -Because "the last document has no run"
+        Assert-Equal -Expected "ok" -Actual $last.usage_limit.state -Because "and no limit"
+        Assert-True -Condition ([double]$last.estimated_usd -gt 0) -Because "the estimate is carried"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\status.json"))) -Because "API mode writes no status file"
+    }
+
+    Test-Case "in API mode a failing status PUT is a line under the risks and never stops the cycle" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -FailStatus
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual @((Get-FakeApiState -Api $api).tasks)[0].state -Because "the work was done"
+        Assert-True -Condition ($run.Report -match "canlı durum yazılamadı") -Because "the risk line: $($run.Report)"
     }
 
     Test-Case "in API mode the other machine's fresh lock stops the cycle before it starts anything, and stays theirs" {

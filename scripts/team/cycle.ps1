@@ -8,6 +8,11 @@
     the role file as its system prompt and the task card as its prompt. The run's raw output
     goes to `team/reports/<cycle-id>/`; at most forty lines of its report go into the queue.
 
+    After the researcher step, a proposal that serves a roadmap row and has no area yet is
+    split into tasks: one fresh `lead` run (Read and Write only) writes
+    `team/plans/<cycle>-split-<id>.json`, and THIS script validates it (Test-TeamSplit) and
+    queues the tasks as `approved`, or refuses the whole split and says why in the report.
+
     It never waits for a human. It ends when nothing in the queue can run - every task is at
     a gate, done or stopped - or when a cap is reached, and it writes
     `team/reports/<cycle-id>.md` in Turkish either way.
@@ -25,28 +30,45 @@
     a killed run left `in_progress` is taken up again.
 
 .PARAMETER MaxUsd
-    The cycle's money cap. No run is started once it is reached.
+    The cycle's money cap; 0 (the default since the owner's decision of 2026-09-30, ADR-0214
+    addendum 3) is NO cap: the subscription has none, and the USD the tool reports is kept
+    in the report as an estimate only.
 
 .PARAMETER RunMaxUsd
-    One run's money cap (a task's own budget.max_usd, when lower, wins).
+    One run's money cap; 0 is no cap (then a task's own budget.max_usd is an estimate too).
+
+.PARAMETER RunMinutes
+    One run's time cap in minutes; 0 is no cap. A killed run is harmless: the cycle is
+    idempotent and the next one takes the task up again.
+
+.PARAMETER CycleMinutes
+    The cycle's time cap in minutes; 0 is no cap.
+
+.PARAMETER WaitForUsageLimit
+    The one stop the team has is the subscription's usage limit (Max). When a run hits it
+    the task goes back to where it was, and with this switch (the default) the cycle WAITS
+    until the limit lifts and carries on from there; without it, or when the tool did not
+    say when, the cycle stops and says so in the report - the next cycle with the same
+    -CycleId continues where it left off.
 
 .PARAMETER ClaudePrefixArguments
     Arguments placed before the ones this script builds. The tests use it to put a fake
     in place of the model: -ClaudePath powershell.exe -ClaudePrefixArguments -File,fake.ps1
 
 .EXAMPLE
-    .\scripts\team\cycle.ps1 -CycleId pilot-01 -MaxUsd 15 -Research
+    .\scripts\team\cycle.ps1 -CycleId pilot-01 -Research
 #>
 [CmdletBinding()]
 param(
     [string]$CycleId = "",
     [string]$TeamRoot = "",
     [int]$MaxParallel = 2,
-    [double]$MaxUsd = 20,
-    [double]$RunMaxUsd = 5,
-    [double]$RunMinutes = 45,
-    [int]$CycleMinutes = 240,
+    [double]$MaxUsd = 0,
+    [double]$RunMaxUsd = 0,
+    [double]$RunMinutes = 0,
+    [int]$CycleMinutes = 0,
     [int]$MaxRunsPerTask = 4,
+    [bool]$WaitForUsageLimit = $true,
     [string]$ClaudePath = (Join-Path $env:USERPROFILE ".local\bin\claude.exe"),
     [string[]]$ClaudePrefixArguments = @(),
     [string]$Model = "",
@@ -126,9 +148,58 @@ $cycle = [pscustomobject]@{
     gaps       = @()
 }
 
+# ------------------------------------------------------------------ the live status
+# What the owner's 'Ofis' page reads (office-cycle-status): which runs are in flight NOW, the
+# estimate so far and the usage limit. File mode: team/status.json; API mode: PUT
+# /v1/team/queue/status. A status nobody refreshed for ten minutes reads as "no cycle", so a long
+# wait refreshes it every $statusTickSeconds seconds. A write that fails is a line under the risks,
+# once, and never a reason to stop the cycle.
+$statusPath = Join-Path $TeamRoot "status.json"
+$stopFlagPath = Join-Path $TeamRoot "stop.flag"
+$statusTickSeconds = 120
+# A test hook (the heartbeat is otherwise only visible after two minutes): a whole number of seconds.
+if ([string]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS -match '^[1-9]\d{0,3}$') { $statusTickSeconds = [int]$env:PAGENTOS_CYCLE_STATUS_TICK_SECONDS }
+$liveRuns = New-Object System.Collections.ArrayList
+$usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
+$statusFailed = $false
+$stopNoted = $false
+
 function Add-CycleNote {
     param([string]$List, [string]$Text)
     $script:cycle.$List = @(@($script:cycle.$List) + $Text)
+}
+
+function Write-CycleStatus {
+    $document = [ordered]@{
+        cycle_id      = $CycleId
+        machine       = $Machine
+        pid           = $PID
+        started_at    = [string]$script:cycle.started_at
+        runs          = @($script:liveRuns | ForEach-Object { [ordered]@{ task = $_.task; role = $_.role; started_at = $_.started_at } })
+        estimated_usd = [Math]::Round([double]$script:cycle.spent_usd, 4)
+        usage_limit   = [ordered]@{ state = $script:usageLimit.state; resets_at = $script:usageLimit.resets_at }
+        updated_at    = (Get-TeamTimestamp)
+    }
+    try {
+        if ($useApi) { Save-TeamStatusApi -Store $apiStore -Status $document }
+        else { Write-TeamJson -Path $statusPath -Document $document }
+    }
+    catch {
+        if (-not $script:statusFailed) {
+            $script:statusFailed = $true
+            Add-CycleNote -List "risks" -Text "canlı durum yazılamadı (döngü sürdü): $($_.Exception.Message)"
+        }
+    }
+}
+
+function Test-StopRequested {
+    <# The owner or the lead asked for a safe stop (team/stop.flag): no NEW run starts; the ones in
+       flight finish and are recorded. #>
+    if (-not $script:stopNoted -and (Test-Path -LiteralPath $stopFlagPath)) {
+        $script:stopNoted = $true
+        Add-CycleNote -List "stops" -Text "sahip/lead durdurdu (team/stop.flag); kaldığı yerden devam eder"
+    }
+    return $script:stopNoted
 }
 
 function Save-Report {
@@ -195,15 +266,18 @@ if ($useApi) {
 else { Write-TeamJson -Path $lockPath -Document (New-TeamLock -Machine $Machine -CycleId $CycleId -Now $started) }
 
 try {
+    Write-CycleStatus
     if (-not (Test-Path -LiteralPath $cycleDir)) { [void](New-Item -ItemType Directory -Force -Path $cycleDir) }
     $runCount = @{}
 
     function Test-CapReached {
-        if ($script:cycle.spent_usd -ge $MaxUsd) {
+        if (Test-StopRequested) { return $true }
+        # A cap of 0 is no cap (owner decision 2026-09-30).
+        if ($MaxUsd -gt 0 -and $script:cycle.spent_usd -ge $MaxUsd) {
             Add-CycleNote -List "stops" -Text ("bütçe tavanı: {0:0.00} / {1:0.00} USD" -f $script:cycle.spent_usd, $MaxUsd)
             return $true
         }
-        if (([datetime]::UtcNow - $started).TotalMinutes -ge $CycleMinutes) {
+        if ($CycleMinutes -gt 0 -and ([datetime]::UtcNow - $started).TotalMinutes -ge $CycleMinutes) {
             Add-CycleNote -List "stops" -Text "süre tavanı: $CycleMinutes dakika"
             return $true
         }
@@ -211,18 +285,25 @@ try {
     }
 
     function Start-RoleRun {
-        param($Task, [string]$Role, [string]$WorkingDirectory)
+        param($Task, [string]$Role, [string]$WorkingDirectory, [string]$Prompt = "", [string[]]$ExcludeTools = @())
         $roleFile = Join-Path $agentsRoot "$Role.md"
         if (-not (Test-Path -LiteralPath $roleFile)) { throw "there is no role file for '$Role': $roleFile" }
+        # A run cap of 0 is no cap at all: then the task's budget.max_usd is an estimate for
+        # the report, and the tool gets no --max-budget-usd (owner decision 2026-09-30).
         $cap = $RunMaxUsd
-        if ($null -ne $Task) {
-            $own = [double](Get-TeamProperty -InputObject (Get-TeamProperty -InputObject $Task -Name "budget") -Name "max_usd" -Default 0)
-            if ($own -gt 0 -and $own -lt $cap) { $cap = $own }
+        if ($cap -gt 0) {
+            if ($null -ne $Task) {
+                $own = [double](Get-TeamProperty -InputObject (Get-TeamProperty -InputObject $Task -Name "budget") -Name "max_usd" -Default 0)
+                if ($own -gt 0 -and $own -lt $cap) { $cap = $own }
+            }
+            if ($MaxUsd -gt 0) {
+                $left = $MaxUsd - $script:cycle.spent_usd
+                if ($left -lt $cap) { $cap = [Math]::Max(0.01, $left) }
+            }
         }
-        $left = $MaxUsd - $script:cycle.spent_usd
-        if ($left -lt $cap) { $cap = [Math]::Max(0.01, $left) }
-        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $Model -PrefixArguments $ClaudePrefixArguments
-        if ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
+        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $Model -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
+        if ($Prompt) { $prompt = $Prompt }
+        elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
         else {
             $prompt = "# Run ($Role, cycle $CycleId)`n`nWork as your role file says. Write your proposals under team/proposals/. " +
             "Return your report as your final message, at most 40 lines, naming each file you wrote."
@@ -233,13 +314,17 @@ try {
             }
         }
         $run = Start-TeamRun -FilePath $ClaudePath -Arguments $arguments -Prompt $prompt -WorkingDirectory $WorkingDirectory
-        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = ([datetime]::UtcNow.AddMinutes($RunMinutes)) }
+        $live = [pscustomobject]@{ task = $(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }); role = $Role; started_at = (Get-TeamTimestamp) }
+        [void]$script:liveRuns.Add($live)
+        Write-CycleStatus
+        $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
+        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live }
     }
 
     function Complete-RoleRun {
         param($Started)
-        $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline
-        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode
+        $finished = Wait-TeamRun -Run $Started.Run -Deadline $Started.Deadline -OnTick { Write-CycleStatus } -TickSeconds $statusTickSeconds
+        $result = Read-TeamRunResult -StdOut $finished.StdOut -ExitCode $finished.ExitCode -StdErr $finished.StdErr
         $taskId = if ($null -ne $Started.Task) { [string]$Started.Task.id } else { "cycle" }
         $number = 1
         while (Test-Path -LiteralPath (Join-Path $cycleDir "$taskId-$($Started.Role)-$number.json")) { $number++ }
@@ -251,6 +336,8 @@ try {
 
         $outcome = if ($finished.TimedOut) { "süre doldu ($RunMinutes dk)" } elseif ($result.Ok) { "tamam" } else { "başarısız: $($result.Why)" }
         $script:cycle.spent_usd = [double]$script:cycle.spent_usd + [double]$result.CostUsd
+        $script:liveRuns.Remove($Started.Live)
+        Write-CycleStatus
         $script:cycle.runs = @(@($script:cycle.runs) + [pscustomobject]@{
                 task = $taskId; role = $Started.Role; cost_usd = $result.CostUsd; seconds = $finished.Seconds; outcome = $outcome
             })
@@ -258,7 +345,34 @@ try {
         return [pscustomobject]@{
             Ok = ($result.Ok -and -not $finished.TimedOut); Text = $result.Text; Outcome = $outcome
             File = $(if ($result.Text) { "$relative.md" } else { "$relative.json" }); CostUsd = $result.CostUsd
+            UsageLimited = [bool]$result.UsageLimited; ResetsAt = [string]$result.ResetsAt
         }
+    }
+
+    function Wait-UsageLimit {
+        <# The subscription's limit was hit. True when the cycle may go on (it waited it
+           out); false when it must stop here and the next cycle continues. #>
+        param([string]$ResetsAt)
+        if (-not $WaitForUsageLimit -or -not $ResetsAt) {
+            $script:usageLimit = [pscustomobject]@{ state = "stopped"; resets_at = $(if ($ResetsAt) { $ResetsAt } else { $null }) }
+            Write-CycleStatus
+            Add-CycleNote -List "stops" -Text ("Max kullanım limiti; " + $(if ($ResetsAt) { "sıfırlanma $ResetsAt; " } else { "ne zaman açılacağı söylenmedi; " }) +
+                "limit açılınca aynı -CycleId ile yeniden başlat: kaldığı yerden devam eder")
+            return $false
+        }
+        $until = ([datetime]::Parse($ResetsAt, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal)).AddSeconds(90)
+        $wait = $until - [datetime]::UtcNow
+        Add-CycleNote -List "risks" -Text ("Max kullanım limiti: {0} sıfırlanmasına kadar beklendi ({1:0} dk)" -f $ResetsAt, [Math]::Max(0, $wait.TotalMinutes))
+        $script:usageLimit = [pscustomobject]@{ state = "waiting"; resets_at = $ResetsAt }
+        Write-CycleStatus
+        # In slices: the status is refreshed, and a stop flag ends the wait.
+        while (($until - [datetime]::UtcNow).TotalSeconds -gt 0 -and -not (Test-Path -LiteralPath $stopFlagPath)) {
+            Start-Sleep -Seconds ([int][Math]::Max(1, [Math]::Min($statusTickSeconds, ($until - [datetime]::UtcNow).TotalSeconds)))
+            Write-CycleStatus
+        }
+        $script:usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
+        Write-CycleStatus
+        return $true
     }
 
     function Add-TaskReport {
@@ -308,6 +422,51 @@ try {
         Save-Queue -Document $queue
     }
 
+    # ---------------------------------------------------------------- the lead's split
+    # A proposal that serves a roadmap row is approved in advance (TEAM_PROTOCOL 3a) but has no
+    # area yet. ONE fresh lead run per proposal writes the split; THIS script judges it
+    # (Test-TeamSplit) and takes it whole or refuses it whole. A refused split leaves the
+    # proposal where it was; the next cycle asks again.
+    if (-not $ResearchOnly) {
+        foreach ($proposal in @(Get-TeamSplitCandidates -Queue $queue)) {
+            if (Test-CapReached) { break }
+            $proposalId = [string]$proposal.id
+            $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
+            $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
+            # A file left by an earlier run is not this run's answer.
+            if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
+            $splitFolder = Split-Path -Parent $splitPath
+            if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
+            $card = New-TeamSplitCard -Task $proposal -Queue $queue -CycleId $CycleId -SplitFile $splitRelative
+            $done = Complete-RoleRun -Started (Start-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit"))
+            if ($done.UsageLimited -and (Wait-UsageLimit -ResetsAt $done.ResetsAt)) {
+                $done = Complete-RoleRun -Started (Start-RoleRun -Task $proposal -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit"))
+            }
+            if (-not $done.Ok) {
+                Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: $($done.Outcome)"
+                continue
+            }
+            $read = Read-TeamSplitFile -Path $splitPath
+            $why = @()
+            if (-not $read.Ok) { $why = @($read.Why) }
+            else { $why = @(Test-TeamSplit -Split $read.Split -Queue $queue) }
+            if (@($why).Count -eq 0) {
+                $made = @(ConvertTo-TeamSplitTasks -Split $read.Split -Proposal $proposal -MaxUsd $RunMaxUsd)
+                $trial = [pscustomobject]@{ version = 1; tasks = @(@(Get-TeamTasks -Queue $queue) + $made) }
+                $why = @(Test-TeamQueue -Queue $trial)
+                if (@($why).Count -eq 0) {
+                    Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $made)
+                    Set-TeamProperty -InputObject $proposal -Name "state" -Value "done"
+                    Set-TeamProperty -InputObject $proposal -Name "reason" -Value ("bölündü: " + ((@($made) | ForEach-Object { [string]$_.id }) -join ", "))
+                    Set-TeamProperty -InputObject $proposal -Name "updated_at" -Value (Get-TeamTimestamp)
+                    Save-Queue -Document $queue
+                    continue
+                }
+            }
+            Add-CycleNote -List "risks" -Text ("bölme reddedildi: ${proposalId}: " + ((@($why) | ForEach-Object { ([string]$_) -replace '\s+', ' ' }) -join "; "))
+        }
+    }
+
     # ---------------------------------------------------------------- the tasks
     $capped = [bool]$ResearchOnly
     while (-not $capped) {
@@ -315,6 +474,15 @@ try {
         $moved = $false
         foreach ($task in (Get-TeamTasks -Queue $queue)) {
             $next = Get-TeamNextRole -Task $task
+            if ($next.Kind -ne "rest" -and $next.Kind -ne "gate") {
+                # A task whose dependencies are not on main yet waits, and says so once.
+                $unmet = @(Get-TeamUnmetDependencies -Task $task -Queue $queue)
+                if (@($unmet).Count -gt 0) {
+                    $waitNote = "bekliyor: $($task.id) -> $($unmet -join ', ') main'e girince"
+                    if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
+                    continue
+                }
+            }
             if ($next.Kind -eq "move") {
                 Set-TeamProperty -InputObject $task -Name "state" -Value $next.NextState
                 Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
@@ -367,12 +535,24 @@ try {
         }
         Save-Queue -Document $queue
 
+        $limitHit = ""
+        $limitSeen = $false
         foreach ($startedRun in $startedRuns) {
             $task = $startedRun.Task
             $role = [string]$startedRun.Role
             $done = Complete-RoleRun -Started $startedRun
             Add-TaskReport -Task $task -Role $role -Done $done
 
+            if ($done.UsageLimited) {
+                # Not the task's failure and not a try spent: it goes back to where it was
+                # and is taken up again when the limit lifts (owner decision 2026-09-30).
+                $limitSeen = $true
+                if ($done.ResetsAt) { $limitHit = $done.ResetsAt }
+                $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
+                if ($role -eq "worker") { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
+                Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+                continue
+            }
             if (-not $done.Ok) {
                 $failures = [int](Get-TeamProperty -InputObject $task -Name "failed_runs" -Default 0) + 1
                 Set-TeamProperty -InputObject $task -Name "failed_runs" -Value $failures
@@ -437,8 +617,12 @@ try {
             Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
         }
         Save-Queue -Document $queue
+        if ($limitSeen -and -not (Wait-UsageLimit -ResetsAt $limitHit)) { $capped = $true }
     }
 
+    # A flag that came up when nothing was left to stop is still the owner's word: say it, remove it.
+    [void](Test-StopRequested)
+    if (Test-Path -LiteralPath $stopFlagPath) { Remove-Item -LiteralPath $stopFlagPath -Force -ErrorAction SilentlyContinue }
     $merged = @(Get-TeamTasks -Queue $queue | Where-Object { $_.state -eq "merged" })
     if (@($merged).Count -gt 0) {
         Add-CycleNote -List "gaps" -Text "integrate/$CycleId üzerinde tam kapı ve main'e birleştirme bu betikte yok; lead yapar, sonra işler 'awaiting_release' olur"
@@ -447,6 +631,9 @@ try {
     Write-Host "cycle $CycleId ended; report: $path"
 }
 finally {
+    # Nothing is in flight any more, whatever ended the cycle.
+    $liveRuns.Clear()
+    Write-CycleStatus
     if ($useApi) {
         try { Clear-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $CycleId }
         catch { Write-Host "the lock was not released in the queue store: $($_.Exception.Message)" }

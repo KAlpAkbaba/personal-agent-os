@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     The agent team's state on disk: the queue, the lock, the role runs (TEAM_PROTOCOL.md).
 
@@ -44,6 +44,18 @@ $script:TeamRequiredFields = @(
     "id", "title", "roadmap_row", "state", "area", "branch", "worktree", "assignee",
     "reports", "budget", "created_at", "updated_at"
 )
+
+# Files only the lead writes, at merge time (TEAM_PROTOCOL section 4) - plus the queue and the
+# lock, which are the cycle's. A split never gives a worker one of them, nor a directory
+# that holds one.
+$script:TeamSharedFiles = @(
+    "docs/HANDOFF.md", "docs/DECISIONS.md", "state/BUILD_STATE.json", "docs/THIRD_PARTY_COMPONENTS.md",
+    "team/queue.json", "team/lock.json"
+)
+$script:TeamSplitRequired = @("id", "title", "roadmap_row", "goal", "acceptance", "evidence_expected")
+$script:TeamMaxAreaEntries = 25
+# A task in these states is, or is about to be, worked on: its area is taken.
+$script:TeamStatesInWork = @("approved", "assigned", "in_progress", "inspecting", "returned")
 
 $script:TeamLockStaleHours = 6
 $script:TeamSummaryMaxLines = 40
@@ -104,8 +116,20 @@ function Write-TeamJson {
     $json = ($json -replace "`r`n", "`n").TrimEnd() + "`n"
     $temporary = "$Path.tmp"
     [System.IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
-    Move-Item -LiteralPath $temporary -Destination $Path
+    # A reader holding the file for an instant (the lead reading lock.json while a cycle
+    # started, 2026-10-01) made the delete fail and ended the cycle with the lock half
+    # written. The swap is retried for a few seconds; the last failure is the one thrown.
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force -ErrorAction Stop }
+            Move-Item -LiteralPath $temporary -Destination $Path -ErrorAction Stop
+            break
+        }
+        catch {
+            if ($attempt -ge 20) { throw }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
 
 function Get-TeamTasks {
@@ -165,6 +189,13 @@ function Test-TeamQueue {
         if ($branch -match 'hand-gestures' -or $branch -eq "main") {
             [void]$problems.Add("${label}: the branch '$branch' is not a team branch")
         }
+        foreach ($dependency in @(Get-TeamProperty -InputObject $task -Name "depends_on" -Default @())) {
+            $name = [string]$dependency
+            if ($name -eq $id) { [void]$problems.Add("${label}: a task cannot depend on itself") }
+            elseif (@(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -eq $name }).Count -eq 0) {
+                [void]$problems.Add("${label}: depends on '$name', which is not in the queue")
+            }
+        }
         $budget = Get-TeamProperty -InputObject $task -Name "budget"
         if ($null -ne $budget) {
             $cap = Get-TeamProperty -InputObject $budget -Name "max_usd" -Default 0
@@ -193,6 +224,53 @@ function Test-TeamQueue {
     return @($problems.ToArray())
 }
 
+function Get-TeamUnmetDependencies {
+    <#
+    .SYNOPSIS
+        The ids in a task's `depends_on` that are not yet ON MAIN, so the task must wait.
+
+    .DESCRIPTION
+        A worker's branch is opened from main, so a dependency serves it only once it is
+        there: `awaiting_release`, `released` or `done`. `merged` is the cycle's integration
+        branch, not main - a task that depends on it waits for the lead's merge (ADR-0224
+        needed this: layer 3 reads the code of layers 1 and 2).
+    #>
+    param([Parameter(Mandatory = $true)]$Task, [Parameter(Mandatory = $true)]$Queue)
+    $onMain = @("awaiting_release", "released", "done")
+    $unmet = New-Object System.Collections.ArrayList
+    foreach ($dependency in @(Get-TeamProperty -InputObject $Task -Name "depends_on" -Default @())) {
+        $name = [string]$dependency
+        $other = @(Get-TeamTasks -Queue $Queue | Where-Object { [string]$_.id -eq $name })
+        $state = if (@($other).Count -gt 0) { [string](Get-TeamProperty -InputObject $other[0] -Name "state" -Default "") } else { "" }
+        if ($onMain -notcontains $state) { [void]$unmet.Add($name) }
+    }
+    return @($unmet.ToArray())
+}
+
+function Test-TeamSplitCandidate {
+    <#
+    .SYNOPSIS
+        Whether a task is a proposal waiting for the lead's split into tasks with areas.
+
+    .DESCRIPTION
+        A proposal (it has a `proposal` file) with no area yet, that the owner approved, or
+        that serves a roadmap row and is therefore approved in advance (TEAM_PROTOCOL 3a).
+        A proposal with no roadmap row is the owner's to approve and is not one.
+    #>
+    param([Parameter(Mandatory = $true)]$Task)
+    if (-not ([string](Get-TeamProperty -InputObject $Task -Name "proposal" -Default "")).Trim()) { return $false }
+    if (@(Get-TeamProperty -InputObject $Task -Name "area" -Default @()).Count -gt 0) { return $false }
+    $state = [string](Get-TeamProperty -InputObject $Task -Name "state" -Default "")
+    if ($state -eq "approved") { return $true }
+    $row = [string](Get-TeamProperty -InputObject $Task -Name "roadmap_row" -Default "")
+    return ($state -eq "proposed" -and $row.Trim().Length -gt 0)
+}
+
+function Get-TeamSplitCandidates {
+    param($Queue)
+    return @(Get-TeamTasks -Queue $Queue | Where-Object { Test-TeamSplitCandidate -Task $_ })
+}
+
 function Get-TeamNextRole {
     <#
     .SYNOPSIS
@@ -209,6 +287,11 @@ function Get-TeamNextRole {
     $state = [string](Get-TeamProperty -InputObject $Task -Name "state" -Default "")
     if ($script:TeamOwnerGates.ContainsKey($state)) {
         return [pscustomobject]@{ Kind = "gate"; Role = ""; NextState = ""; Gate = $script:TeamOwnerGates[$state] }
+    }
+    # A proposal waiting for its split is the lead's, before the cycle's task loop: it is not
+    # run, and - without an area - it never becomes a worker's.
+    if (Test-TeamSplitCandidate -Task $Task) {
+        return [pscustomobject]@{ Kind = "rest"; Role = ""; NextState = ""; Gate = "" }
     }
     switch ($state) {
         "proposed" {
@@ -234,6 +317,179 @@ function Get-TeamNextRole {
     }
 }
 
+# ------------------------------------------------------------------ the lead's split
+
+function Get-TeamAreaKey {
+    <# An area as it is compared: forward slashes, no trailing glob or slash, lower case. #>
+    param([string]$Area)
+    $text = ($Area -replace '\\', '/').Trim().ToLowerInvariant()
+    while ($text.StartsWith("./")) { $text = $text.Substring(2) }
+    return $text.TrimEnd("/", "*")
+}
+
+function Test-TeamAreasOverlap {
+    param([string]$First, [string]$Second)
+    $one = Get-TeamAreaKey -Area $First
+    $two = Get-TeamAreaKey -Area $Second
+    if (-not $one -or -not $two) { return $false }
+    return ($one -eq $two -or $one.StartsWith($two + "/") -or $two.StartsWith($one + "/"))
+}
+
+function Read-TeamSplitFile {
+    <#
+    .SYNOPSIS
+        The file the lead's split run wrote: a JSON list of task objects (or an object whose
+        `tasks` is one). The answer says whether it could be read, and why not.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [pscustomobject]@{ Ok = $false; Split = @(); Why = "the lead wrote no split file: $Path" }
+    }
+    try {
+        $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+        if (-not $text.Trim()) { return [pscustomobject]@{ Ok = $false; Split = @(); Why = "the split file is empty: $Path" } }
+        $document = ConvertFrom-Json -InputObject $text
+        $list = if ($null -ne $document -and $null -ne $document.PSObject.Properties["tasks"]) { $document.tasks } else { $document }
+        return [pscustomobject]@{ Ok = $true; Split = @($list); Why = "" }
+    }
+    catch {
+        return [pscustomobject]@{ Ok = $false; Split = @(); Why = "the split file is not JSON: $($_.Exception.Message)" }
+    }
+}
+
+function Test-TeamSplit {
+    <#
+    .SYNOPSIS
+        Every reason a lead's split is refused, as sentences; empty when it is sound. The
+        SCRIPT judges, not the model: a split is taken whole or refused whole.
+
+    .DESCRIPTION
+        Per task: the fields the queue's shape needs; an id that is free; areas that are paths
+        inside the repository, at most 25 of them, none a shared file or a directory holding
+        one, none overlapping a task in work (or another task of the same split that does not
+        wait for it); never main, never the frozen hand-gestures branch; dependencies that exist.
+    #>
+    param($Split, [Parameter(Mandatory = $true)]$Queue)
+    $problems = New-Object System.Collections.ArrayList
+    $items = @($Split)
+    if (@($items).Count -eq 0) { [void]$problems.Add("the split holds no task"); return @($problems.ToArray()) }
+    $existing = @(Get-TeamTasks -Queue $Queue)
+    $inWork = @($existing | Where-Object { $script:TeamStatesInWork -contains [string](Get-TeamProperty -InputObject $_ -Name "state" -Default "") })
+    $ids = @{}
+    foreach ($item in $items) {
+        if ($item -is [System.Management.Automation.PSCustomObject]) {
+            $named = [string](Get-TeamProperty -InputObject $item -Name "id" -Default "")
+            if ($named) { $ids[$named] = $true }
+        }
+    }
+    $seen = @{}
+    $previous = New-Object System.Collections.ArrayList
+    foreach ($item in $items) {
+        if ($null -eq $item -or $item -isnot [System.Management.Automation.PSCustomObject]) {
+            [void]$problems.Add("an entry of the split is not a task object")
+            continue
+        }
+        $id = [string](Get-TeamProperty -InputObject $item -Name "id" -Default "")
+        $label = if ($id) { $id } else { "(a task without an id)" }
+        foreach ($field in $script:TeamSplitRequired) {
+            $value = Get-TeamProperty -InputObject $item -Name $field
+            if ($null -eq $value -or $value -isnot [string] -or -not $value.Trim()) {
+                [void]$problems.Add("${label}: the field '$field' is missing")
+            }
+        }
+        if ($id -and $id -cnotmatch '^[a-z0-9][a-z0-9-]{2,63}$') {
+            [void]$problems.Add("${label}: an id is 3-64 characters of a-z, 0-9 and '-'")
+        }
+        if ($id) {
+            if (@($existing | Where-Object { [string]$_.id -eq $id }).Count -gt 0) { [void]$problems.Add("${label}: the id is already in the queue") }
+            if ($seen.ContainsKey($id)) { [void]$problems.Add("${label}: the id is used twice in the split") }
+            $seen[$id] = $true
+        }
+        $areaValue = Get-TeamProperty -InputObject $item -Name "area"
+        $areas = @($areaValue | Where-Object { $null -ne $_ })
+        if (@($areas).Count -eq 0 -or @($areas | Where-Object { $_ -isnot [string] -or -not ([string]$_).Trim() }).Count -gt 0) {
+            [void]$problems.Add("${label}: the field 'area' is missing")
+            $areas = @($areas | Where-Object { $_ -is [string] -and ([string]$_).Trim() })
+        }
+        if (@($areas).Count -gt $script:TeamMaxAreaEntries) {
+            [void]$problems.Add("${label}: the area names $(@($areas).Count) files; a task is at most $script:TeamMaxAreaEntries")
+        }
+        $depends = @(Get-TeamProperty -InputObject $item -Name "depends_on" -Default @())
+        foreach ($area in $areas) {
+            $text = [string]$area
+            if ($text -match '^[\\/]' -or $text -match '\.\.' -or $text -match '^[A-Za-z]:') {
+                [void]$problems.Add("${label}: the area '$text' must be a path inside the repository")
+                continue
+            }
+            if ($text -match '(?i)hand-gestures') {
+                [void]$problems.Add("${label}: the area '$text' is the frozen hand-gestures work")
+                continue
+            }
+            $key = Get-TeamAreaKey -Area $text
+            foreach ($shared in $script:TeamSharedFiles) {
+                if (-not $key -or $key -eq "." -or $key -eq $shared -or $shared.StartsWith($key + "/")) {
+                    [void]$problems.Add("${label}: the area '$text' is, or holds, the shared file $shared (the lead writes it)")
+                    break
+                }
+            }
+            foreach ($other in $inWork) {
+                foreach ($otherArea in @(Get-TeamProperty -InputObject $other -Name "area" -Default @())) {
+                    if (Test-TeamAreasOverlap -First $text -Second ([string]$otherArea)) {
+                        [void]$problems.Add("${label}: the area '$text' overlaps the area of $($other.id)")
+                    }
+                }
+            }
+            foreach ($earlier in $previous) {
+                if (@($earlier.depends) -contains $id -or $depends -contains $earlier.id) { continue }
+                foreach ($earlierArea in @($earlier.areas)) {
+                    if (Test-TeamAreasOverlap -First $text -Second ([string]$earlierArea)) {
+                        [void]$problems.Add("${label}: the area '$text' overlaps the area of $($earlier.id)")
+                    }
+                }
+            }
+        }
+        $branch = [string](Get-TeamProperty -InputObject $item -Name "branch" -Default "")
+        if ($branch -ieq "main" -or $branch -match '(?i)hand-gestures') {
+            [void]$problems.Add("${label}: the branch '$branch' is not a team branch")
+        }
+        foreach ($dependency in $depends) {
+            $name = [string]$dependency
+            if ($name -eq $id) { [void]$problems.Add("${label}: a task cannot depend on itself") }
+            elseif (-not $ids.ContainsKey($name) -and @($existing | Where-Object { [string]$_.id -eq $name }).Count -eq 0) {
+                [void]$problems.Add("${label}: depends on '$name', which is not in the queue or the split")
+            }
+        }
+        [void]$previous.Add([pscustomobject]@{ id = $id; areas = @($areas); depends = @($depends) })
+    }
+    return @($problems.ToArray())
+}
+
+function ConvertTo-TeamSplitTasks {
+    <#
+    .SYNOPSIS
+        A sound split as queue tasks: approved in advance, traced to their proposal, named
+        by the cycle (no branch, no worktree) - only the fields the script knows are kept.
+    #>
+    param([Parameter(Mandatory = $true)]$Split, [Parameter(Mandatory = $true)]$Proposal, [double]$MaxUsd = 0, [datetime]$Now = [datetime]::UtcNow)
+    $stamp = Get-TeamTimestamp -Now $Now
+    $made = New-Object System.Collections.ArrayList
+    foreach ($item in @($Split)) {
+        $task = [ordered]@{
+            id = [string]$item.id; title = ([string]$item.title).Trim(); roadmap_row = ([string]$item.roadmap_row).Trim()
+            state = "approved"; area = @(@($item.area) | ForEach-Object { [string]$_ }); branch = ""; worktree = ""; assignee = ""
+            reports = @(); budget = [pscustomobject]@{ max_usd = $MaxUsd }; created_at = $stamp; updated_at = $stamp
+            goal = ([string]$item.goal).Trim(); acceptance = ([string]$item.acceptance).Trim()
+            evidence_expected = ([string]$item.evidence_expected).Trim()
+            proposal = [string](Get-TeamProperty -InputObject $Proposal -Name "proposal" -Default "")
+        }
+        $depends = @(Get-TeamProperty -InputObject $item -Name "depends_on" -Default @())
+        if (@($depends).Count -gt 0) { $task["depends_on"] = @($depends | ForEach-Object { [string]$_ }) }
+        if ([bool](Get-TeamProperty -InputObject $item -Name "needs_integration" -Default $false)) { $task["needs_integration"] = $true }
+        [void]$made.Add([pscustomobject]$task)
+    }
+    return @($made.ToArray())
+}
+
 function Get-TeamVerdict {
     <#
     .SYNOPSIS
@@ -248,6 +504,10 @@ function Get-TeamVerdict {
     $detail = ""
     foreach ($line in @(([string]$Report) -split "`r?`n")) {
         $text = $line.Trim().Trim('`', '*', ' ')
+        # "**Verdict:** `RETURN (...)`" is how inspectors often write it (four reports in two
+        # cycles, 2026-10-01): the label is dropped, and the list after it reaches the worker
+        # instead of "the report did not end with a verdict".
+        $text = ($text -creplace '^(Verdict|Karar)\s*:?\s*\**\s*:?\s*', '').Trim().Trim('`', '*', ' ')
         if ($text -cmatch '^(APPROVE|RETURN|REJECT)\b\s*[:(-]?\s*(.*?)\)?\s*$') {
             $verdict = $Matches[1]
             $detail = $Matches[2].Trim()
@@ -296,11 +556,13 @@ function Read-TeamRunResult {
         Output that is not the JSON document is not trusted to be a report: the run FAILED,
         and its raw output stays in its file.
     #>
-    param([string]$StdOut, [int]$ExitCode = 0)
+    param([string]$StdOut, [int]$ExitCode = 0, [string]$StdErr = "")
     $text = ""
     $cost = 0.0
     $ok = $false
     $why = ""
+    $usageLimited = $false
+    $resetsAt = ""
     try {
         $document = ConvertFrom-Json -InputObject ([string]$StdOut)
         $text = [string](Get-TeamProperty -InputObject $document -Name "result" -Default "")
@@ -325,7 +587,20 @@ function Read-TeamRunResult {
     catch {
         $why = "the run printed no result document (exit $ExitCode)"
     }
-    return [pscustomobject]@{ Ok = $ok; Text = $text; CostUsd = $cost; Why = $why }
+    if (-not $ok) {
+        # Owner decision 2026-09-30: the ONE stop the team has is the subscription's usage
+        # limit. The tool says it in its result ("Claude AI usage limit reached|<epoch>",
+        # "You've hit your limit ...") or on stderr; the epoch, when given, is when it lifts.
+        $said = ([string]$StdOut) + "`n" + ([string]$StdErr)
+        if ($said -match "(?i)usage limit|hit your (usage |rate )?limit|limit reached|out of extra usage") {
+            $usageLimited = $true
+            $why = "Max kullanım limiti"
+            if ($said -match "limit reached\|(\d{10})") {
+                $resetsAt = ([DateTimeOffset]::FromUnixTimeSeconds([long]$Matches[1])).UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ")
+            }
+        }
+    }
+    return [pscustomobject]@{ Ok = $ok; Text = $text; CostUsd = $cost; Why = $why; UsageLimited = $usageLimited; ResetsAt = $resetsAt }
 }
 
 function Get-TeamRoleTools {
@@ -509,4 +784,10 @@ function Send-TeamReportApi {
     <# The report as text, so the Onay Merkezi on the Cloud Core can show it. #>
     param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
     [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/reports" -Body ([ordered]@{ name = $Name; text = $Text }))
+}
+
+function Save-TeamStatusApi {
+    <# The cycle's live status (office-cycle-status): the Cloud Core keeps the latest document. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Status)
+    [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/status" -Body $Status)
 }

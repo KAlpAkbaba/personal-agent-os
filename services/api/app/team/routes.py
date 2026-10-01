@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.identity.dependencies import require_owner_session
 from app.ledger import service as ledger_service
 from app.ledger.vocabulary import InvalidVocabulary
-from app.team import approvals
+from app.team import approvals, office
 from app.team import store as team_store
 
 router = APIRouter(dependencies=[Depends(require_owner_session)])
@@ -226,3 +226,70 @@ async def post_report(body: ReportRequest, request: Request) -> dict[str, Any]:
     except team_store.Invalid as error:
         raise _refuse(error) from error
     return {"stored": body.name}
+
+
+# ------------------------------------------------------------------ the live status + the Ofis
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _Run(_Strict):
+    task: str
+    role: Literal["lead", "researcher", "integrator", "worker", "inspector"]
+    started_at: str
+
+
+class _UsageLimit(_Strict):
+    state: Literal["ok", "waiting", "stopped"]
+    resets_at: str | None = None
+
+
+class StatusRequest(_Strict):
+    """The cycle's live status (``scripts/lib`` writes it; the Ofis reads it)."""
+
+    cycle_id: str
+    machine: str
+    pid: int
+    started_at: str
+    runs: list[_Run]
+    estimated_usd: float
+    usage_limit: _UsageLimit
+    updated_at: str
+
+
+@router.get("/v1/team/queue/status")
+async def read_status(request: Request) -> dict[str, Any]:
+    return await asyncio.to_thread(_store(request).read_status) or {}
+
+
+@router.put("/v1/team/queue/status")
+async def put_status(body: StatusRequest, request: Request) -> dict[str, Any]:
+    store = _store(request)
+    try:
+        await asyncio.to_thread(store.put_status, body.model_dump())
+    except OSError as error:
+        raise _refuse(error) from error
+    return {"stored": True}
+
+
+@router.get("/v1/team/office")
+async def read_office(request: Request) -> dict[str, Any]:
+    root = _team_root(request)
+    store = _store(request)
+
+    def load() -> dict[str, Any]:
+        try:
+            queue = store.read_queue()
+        except (OSError, ValueError):
+            queue = {"version": 1, "tasks": []}  # no store configured: the empty office
+        return office.office_view(
+            queue,
+            store.read_lock(),
+            store.read_status(),
+            approvals.list_pending(queue, root),
+            team_store.utcnow(),
+        )
+
+    return await asyncio.to_thread(load)
