@@ -19,4 +19,10 @@ early in a wide cell and too late in a narrow one.
 
 Evidence: tests/office/layout.test.tsx asserts the markup and reads office.css itself (no browser is
 run in this suite; the picture is PROVEN_REAL only when the owner looks at the page in the next cycle).
+The four-a-row cap is tested by doing auto-fill's arithmetic on the declared track minimum, the whole
+`max(...)` term included: exactly four at the owner's 42rem box, never more than four from 17rem to
+120rem, two at 17rem. Without the 25% term five 7rem cells fit 40.5rem and the test goes RED.
+
+Not in this change: the card title's "tahmini USD koşu sürerken de güncellensin" has no acceptance
+criterion and touches the data side, not the layout; it needs its own card.
 Rollback: revert the commit; the page returns to four fixed columns.

@@ -35,6 +35,30 @@ function rule(selector: string): string {
   return found[0][1];
 }
 
+const rem = (declarations: string, property: string) =>
+  Number(declarations.match(new RegExp(`(?:^|[\\s;])${property}:\\s*([\\d.]+)rem\\s*;`))?.[1]);
+
+/**
+ * How many seats share a row when the scene's box is `boxRem` wide: the browser's own auto-fill
+ * arithmetic on the track minimum office.css declares, the whole `max(...)` term included (a
+ * percentage resolves against the floor's content box).
+ */
+function seatsPerRow(boxRem: number): number {
+  const floor = rule(".office-floor");
+  const gap = rem(floor, "gap");
+  const content = boxRem - 2 * rem(floor, "padding");
+  const track = floor.match(/repeat\(\s*auto-fill,\s*minmax\(\s*(.+),\s*1fr\s*\)\s*\)\s*;/)?.[1] ?? "";
+  const capped = track.match(
+    /^max\(\s*([\d.]+)rem,\s*calc\(\s*([\d.]+)%\s*-\s*([\d.]+)rem\s*\)\s*\)$/,
+  );
+  const plain = track.match(/^([\d.]+)rem$/);
+  expect(capped ?? plain, `a track minimum this test can read: "${track}"`).not.toBeNull();
+  const min = capped
+    ? Math.max(Number(capped[1]), (Number(capped[2]) / 100) * content - Number(capped[3]))
+    : Number(plain?.[1]);
+  return Math.max(1, Math.floor((content + gap) / (min + gap)));
+}
+
 function longTitleOffice() {
   const view = twoWorkers();
   view.agents = view.agents.map((agent) =>
@@ -106,16 +130,20 @@ describe("the scene's seats", () => {
   });
 
   it("fit two in a row at phone width, and the figure shrinks with its cell", () => {
-    const floor = rule(".office-floor");
-    const min = Number(floor.match(/minmax\(\s*(?:max\(\s*)?([\d.]+)rem/)?.[1]);
-    const gap = Number(floor.match(/gap:\s*([\d.]+)rem/)?.[1]);
-    const padding = Number(floor.match(/padding:\s*([\d.]+)rem/)?.[1]);
-    // a 320 px phone less globals.css `main`'s 1.5rem a side = 17rem: two cells, one gap and
-    // the floor's own padding fit
-    expect(2 * min + gap + 2 * padding).toBeLessThanOrEqual(17);
+    // a 320 px phone less globals.css `main`'s 1.5rem a side = 17rem
+    expect(seatsPerRow(17)).toBe(2);
     const figure = rule(".office-figure");
     expect(figure).toMatch(/(^|[\s;])width:\s*100%/);
     expect(figure).toMatch(/max-width:\s*8rem/);
+  });
+
+  it("are four a row at the owner's width and never five: eight seats are 4+4, not 5+3", () => {
+    // the owner's screenshot: globals.css `main` 720 px less its padding = a 42rem box. Five
+    // 7rem cells would fit it (5 * 7 + 4 * 0.75 = 38rem of 40.5rem) - only the 25% term stops them
+    expect(seatsPerRow(42)).toBe(4);
+    for (let box = 17; box <= 120; box += 0.5) {
+      expect(seatsPerRow(box), `${box}rem box`).toBeLessThanOrEqual(4);
+    }
   });
 
   it("scroll sideways only inside their own box", () => {
