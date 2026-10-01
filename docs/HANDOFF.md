@@ -15,14 +15,14 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ŞU AN (2026-10-01 22:35): TAM KAPI `integrate/d20261001` @ `b8a4491669a305d3b0e2d30a903e29c19178b8b0` üzerinde ANA KOPYADA
-(detached HEAD) koşuyor; içinde: real-host-rehearsal (ADR-0235, gerçek fixture toplandı), proposals-on-cloud-core (ADR-0236),
-office-page-polish. Yeşilse: O COMMIT'i (dalın ucunu değil - döngü üstüne merge ekleyebilir) main'e al, işleri
-`awaiting_release` yap, kural gereği SORMADAN blue/green yayınla + pin + doğrula + raporla; sonra bekleyen fikirlerin
-metinlerini `POST /v1/team/queue/proposals` ile gönder; ana kopyayı `team/nightly/lead`'e geri al; `lead-notes` ağacını kaldır.
-Döngü 6 yuvayla koşuyor (zamanlanmış görev, 30 dk). Model: işçi/entegratör/araştırmacı Opus 5.5, lead/denetleyici Fable.**
-**ÜRETİM: main `858c3e0bf974f1984826f4b8f37e7dc8b9e12186` (2026-10-01 16:27 UTC, api-blue), LKG `cc9ca31e`, pin = RELEASE,
-reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`. Kapı 35/35 (`2c509b16`). QUALIFICATION Stage 39.**
+**ÜRETİM: main `ca5cc79512de47574f81df471323615567122412` (2026-10-01 20:47 UTC, api-green), LKG `858c3e0b`, pin = RELEASE,
+reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek 6.8.0-142 (bakım 19:00 UTC'de koştu).
+Kapı 36/36 (`b8a44916`). QUALIFICATION Stage 40. Ana kopya `team/nightly/lead` üzerinde (main birleştirildi).**
+**SIRADAKİ ENTEGRASYON: `integrate/d20261001` üzerinde `b8a44916`'dan SONRA merged olanlar (understanding-stt-corpus,
+model-policy-cycle, …) + denetimden geçecekler (approvals-detail-view → sahibin düğmeleri açılır; roadmap 2a/2b/2c işleri).
+Lead: bağla, tam kapı, main, kural gereği sormadan yayınla (istisnalar ADR-0214 ek 9; `understanding-corrections-memory`
+0064 migration'ı taşır: expand-only testi geçiyorsa otomatik, değilse sahibe sor). Döngü 6 yuva, 30 dk'da bir.
+Öncelikli iş: `office-worker-seats` (sahip: 4. çalışan koltuğu).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
