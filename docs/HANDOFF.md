@@ -15,21 +15,27 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**YAYINLANDI (sahibin ön onayıyla): main `0f794d97` — 2026-10-01 10:30 UTC, api-green; LKG `aa35fcf3`; pin = RELEASE;
-reconcile OK. İçinde: Ofis sayfası (`/core/office`, ADR-0234), ADR-0224 katman 1-2 (bağlı değil), denemenin üç
-kusuru (ADR-0231/0232/0233), cycle-2026-10-01'in diğer işleri, lead bağlamaları (ADR-0225…0230). Tam kapı 35/35
-(`6b0bf7b4`; ilk koşu 33/35 iki gerçek kusur buldu). QUALIFICATION Stage 38.**
-**AÇIK — sırayla:** (1) VERİTABANINA GEÇİŞ: sunucu `.env`'inde `PAGENTOS_TEAM_STORE=database` satırı VAR
-(yedek `.env.bak-20261001-teamstore`) ama çalışan api-green ondan ÖNCE yaratıldı → hâlâ dosya kipi. Aynı sha'yı
-`release-cloud-core.ps1 -BlueGreen -Force` ile yeniden geçirmek kipi açar AMA LKG'yi `0f794d97` yapar (kanıtlanmış
-`aa35fcf3` düşer); lead birkaç saat bekletip (ya da bir sonraki gerçek yayınla) yapmayı seçti — sahibe bildirildi.
-Geçişten sonra: kuyruğu tohumla (`New-TeamApiStore` + `Save-TeamQueueApi`, belirteç
-`%LOCALAPPDATA%/PagentOS/team-queue.token`), gece görevini `-QueueUrl http://100.90.158.26:8001 -QueueToken <dosya>`
-ile yeniden kaydet, gerçek döngüde `/core/office` ekran görüntüsü (Stage 38.14). (2) BAKIM 22:00 (aşağıda);
-betikteki `api-blue` kusuru düzeltildi ve sunucuya kondu (38.12), düzeltme `team/nightly/lead`'de, main'e sonraki
-entegrasyonla girer. (3) Kuyrukta 5 `approved`: understanding-threshold-policy (artık açılabilir: katman 1-2
-main'de), -corrections-memory, -stt-corpus, office-voice-summary, ledger-device-callers. Sahibin gerçek cihaz
-denemeleri: üç cümle yeniden (38.3-38.5).
+**ÜRETİM: main `cc9ca31e274d507ad0fadaf34b54c552252124a7` (2026-10-01 11:47 UTC, api-green), LKG `0f794d97` (sahip:
+`aa35fcf3`'ün düşmesi kabul, elle dokunma), pin = RELEASE, reconcile OK, şema `0063_team_state`,
+`PAGENTOS_TEAM_STORE=database`. Kapı 35/35 (`0af001fc`). Ofis sayfası KABUL EDİLDİ: sahibin ekran görüntüsü
+`docs/evidence/office-page-real-cycle-2026-10-01.png` (QUALIFICATION 38.14 PROVEN_REAL).**
+**KUYRUK ARTIK VERİTABANINDA (ADR-0222): doğrusu `GET http://100.90.158.26:8001/v1/team/queue`; `team/queue.json`
+yalnız tohum anlık görüntüsü, ESKİDİR. İş eklemek: `Invoke-TeamApi PUT /v1/team/queue/tasks/<id>` (belirteç
+`%LOCALAPPDATA%/PagentOS/team-queue.token`; `NativeProcess.ps1`+`TeamQueue.ps1`+`HttpJson.ps1` dot-source).
+Döngü: `cycle.ps1 -CycleId <id> -Base main -MaxParallel 3 -Research -QueueUrl http://100.90.158.26:8001
+-QueueToken <belirteç dosyası>`. Gece görevi böyle kayıtlı (02:00).**
+**DÖNGÜ `adr0224-02` ÇALIŞIYOR (11:48 UTC başladı, veritabanı kipi): understanding-threshold-policy (ADR-0224 katman 3),
+office-voice-summary, ledger-device-callers. Bitince LEAD: `integrate/adr0224-02` üzerinde bağlama (araç kaydı
+`team.status`, eşik dosyası paket verisi), tam kapı, main, sahibin YAYIN ONAYI. Sonra bekleyenler: -corrections-memory,
+-stt-corpus (katman 3 main'e girince), researcher-every-cycle, proposals-on-cloud-core, office-page-polish,
+postgres-coverage-debt.**
+**YENİ KALICI KURALLAR (sahip, 2026-10-01; ADR-0214 ek 4-5, TEAM_PROTOCOL 9a): (1) Postgres/gerçek altyapı iddiası
+NOT_RUN kalırsa merge yok — denetleyici dev stack'te koşar; SQLite-only DB değişikliği kapıdan geçmez
+(`test_postgres_coverage_ratchet.py`, 51 tablo dondurulmuş borç). (2) Araştırmacı HER döngüde koşar; her öneri
+Onay Merkezi'nde 'fikir' olarak sahibi bekler. (3) Zaman bağlı iş kalıcı göreve bağlanır, oturuma değil.**
+**Bugün üretimde bulunan kusurlar (hepsi regresyon testli): kilit sürümü varchar(32)'ye sığmıyordu (38.15); bakım
+betiği `api-blue`'yu adıyla bekliyordu (38.12) ve kilidi bir kez soruyordu (38.17). Sahibin yeniden deneyecekleri:
+üç cümle (38.3-38.5).**
 **BAKIM PENCERESİ: BU AKŞAM 2026-10-01 22:00–22:30 İstanbul (19:00 UTC), sahip onaylı. OTURUMA BAĞLI DEĞİL:
 sunucunun kendi `pagentos-maintenance-window.timer`'ı çalıştırır (ADR-0223 eki); açılıştan 4 dk sonra
 `pagentos-maintenance-verify` doğrular; ev PC'de `PagentOS Maintenance Report 2026-10-01` görevi 22:40 ve 23:10'da

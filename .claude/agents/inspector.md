@@ -16,6 +16,15 @@ Pass 1 — run it:
   the full `quality-gate.ps1` and say what this machine could not run.
 - Where a real run is possible without the owner (dev stack, fixture site, headless
   browser, local API), do it and record the evidence.
+- **A NOT_RUN about PostgreSQL or real infrastructure is yours to run** (owner rule
+  2026-10-01, ADR-0214 addendum 4: a 42-character value into a VARCHAR(32) passed every
+  SQLite test and killed the first cycle in production). When the report - or the diff -
+  touches a table, a migration, a store, the broker, a container or a scheduler and leaves
+  the real thing NOT_RUN, run it on the dev stack (`infra/docker/docker-compose.dev.yml`;
+  `uv run pytest tests/integration -m integration` reaches its PostgreSQL). No integration
+  test for a new or changed table -> `RETURN (write the Postgres test)`. A database change
+  proven on SQLite alone is never APPROVE. If this machine cannot run it, say the command
+  that failed: the lead runs it before the merge.
 
 Pass 2 — break it (adversarial):
 - Claims without evidence; tests that pass for the wrong reason; files outside the area;

@@ -16823,6 +16823,69 @@ scenario of `fake-claude.ps1`; mutation: the usage-limit branch disabled -> 2 RE
 What did not change: a task's `budget.max_usd` stays in the queue as the lead's estimate;
 `MaxRunsPerTask` (4) stays - it bounds a task that never converges, which is not money.
 
+### ADR-0214 addendum 4 (2026-10-01): a claim about PostgreSQL or real infrastructure left NOT_RUN does not merge; a database change only SQLite has seen does not pass the gate
+
+**What happened.** The team's state moved to the Cloud Core's database on 2026-10-01 and the
+first cycle in database mode died on its first call: `POST /v1/team/queue/lock` answered 500,
+`value too long for type character varying(32)`. The lock row's version was 42 characters.
+Every test of the store ran on SQLite, which does not enforce a VARCHAR's length; the worker
+of pilot-02 had honestly written NOT_RUN beside "DbStore on Postgres"; the inspector approved;
+the lead merged; the gate, which has a real PostgreSQL, was never asked. The same shape as
+ADR-0219's addendum (an image nobody had started) and as the maintenance script that waited
+for `api-blue` by name: a claim nobody ran is where the defect is.
+
+**The owner's rule, permanent:** "NOT_RUN kalan Postgres/gerçek-altyapı iddiaları yayın öncesi
+denetleyici tarafından dev stack'te koşulmadan merge edilmez; SQLite-only testle geçen DB
+değişikliği kapıdan geçmez."
+
+**How it is held.**
+* *The inspector* (`.claude/agents/inspector.md`): a report that leaves a claim about
+  PostgreSQL, the broker, a container, a scheduler or any other real infrastructure at NOT_RUN
+  is not approved until the inspector has run that claim on the dev stack
+  (`infra/docker/docker-compose.dev.yml`: PostgreSQL, Temporal, MinIO) - or returned the task
+  with "write the integration test". "The machine could not" is said with the command that
+  failed, and is then the lead's to run before the merge, never a silent pass.
+* *The gate* (`services/api/tests/unit/test_postgres_coverage_ratchet.py`): every mapped
+  table is named by a test under `tests/integration` - which the gate runs against the dev
+  stack's PostgreSQL after the real migrations - or it is one of the 51 (of 87) tables that
+  were in that state on the day of the rule, frozen in a list that may only shrink. A new
+  table without a Postgres test fails the unit step. Naming is the floor, not the proof: the
+  proof is the inspector's run.
+* *The store that made the rule*: `tests/integration/test_team_state_postgres.py` takes the
+  lock, the live status and a report to PostgreSQL (RED with production's exact error before
+  the fix), and `test_team_state.py` holds every row the store writes to the column widths
+  read from the model, on SQLite too.
+* *The debt* is queued (`postgres-coverage-debt`): the 51 tables get named, real tests,
+  package by package.
+
+### ADR-0214 addendum 5 (2026-10-01): the researcher runs in every cycle; every proposal waits for the owner
+
+The owner: "Araştırmacı sürekli çalışsın: her döngüde (kuyruk dolu olsa da) bir araştırma
+koşusu — yeni model/kütüphane/yöntem taraması + roadmap satırlarına eşleme + benim son
+hatalarımdan öneri; çıktılar team/proposals/ altında birikir, Onay Merkezi'nde 'fikir' listesi
+olarak görünür, ben onaylayınca kuyruğa girer. Ofis sayfasında araştırmacı o sırada 'çalışıyor'
+görünsün."
+
+* The role file (`.claude/agents/researcher.md`) names the three things every run does: scan
+  (models, libraries, methods, new versions of what we carry), map (to a ROADMAP row and an
+  existing seam), learn (the newest cycle reports, the newest QUALIFICATION stage and HANDOFF:
+  a defect shape seen twice becomes a proposal). At most three proposals a run; none is an
+  honest run.
+* The nightly task passes `-Research` (`scripts/team/register-nightly.ps1`); the lead passes
+  it when starting a cycle by hand.
+* **This narrows addendum 2 (TEAM_PROTOCOL 3a item 1) for the researcher's proposals:** they
+  no longer enter the queue on the lead's word because they serve a roadmap row. Each is an
+  `awaiting_owner` idea in the Onay Merkezi and becomes work when the owner approves it; the
+  cycle's lead run then splits it into cards. Work the owner himself asks for, and defects
+  found on the way, are queued by the lead as before.
+* The Ofis page shows the researcher "çalışıyor" while its run is in the cycle's live status
+  (`office_view`: a run whose role is researcher takes the researcher's seat).
+* Two things are not built yet and are queued: `researcher-every-cycle` (the run alongside the
+  first batch instead of before it, research on by default, the proposal's text posted to the
+  queue store) and `proposals-on-cloud-core` (the Onay Merkezi on the Cloud Core reads a
+  proposal's text from the store - today it reads `team/` on the machine serving the API, so
+  in database mode an idea shows its title only).
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere

@@ -59,7 +59,9 @@ function Get-NightlyPlan {
     $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     $script = Join-Path $RepoRoot "scripts\team\cycle.ps1"
     $usd = $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes"
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes -Research"
+    # -Research: the researcher runs in EVERY cycle, whether the queue is full or not (owner,
+    # 2026-10-01); its proposals wait for him in the Onay Merkezi as ideas.
     if ($QueueUrl) {
         if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken (the path of the token file)" }
         $arguments += " -QueueUrl $QueueUrl -QueueToken `"$QueueToken`""
