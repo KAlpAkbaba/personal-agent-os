@@ -24,6 +24,8 @@ from app.artifacts.models import (
     ARTIFACT_STATE_RENDERS_PENDING,
 )
 from app.artifacts.renderers import content_hash
+from app.assistant_chat import ChatProvider, build_chat_provider
+from app.config import get_settings
 from app.explain.classify import LEVEL_EXECUTIVE, ExplainQuery, classify
 from app.explain.engine import (
     QUERY_NARRATIVE,
@@ -117,8 +119,9 @@ class LedgerEvidenceSource:
     """The production :class:`EvidenceSource`: the activity ledger plus the records it
     points at. Read-only; a missing ledger (older deployment) reads as no evidence."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, chat_provider: ChatProvider | None = None) -> None:
         self._db = db
+        self._chat_provider = chat_provider
 
     def events(self, *, since, subsystems, statuses, limit) -> list[EventView]:
         try:
@@ -132,12 +135,24 @@ class LedgerEvidenceSource:
 
     def narrative(self, ask: Any, *, now: datetime) -> str:
         """ "Bu hafta ne oldu?" (ADR-0216/0221): one audited account of the ledger for
-        the period and device the owner named. The rule narrator: its text is built
-        from the facts alone and passes the auditor by construction. A model narrator
-        behind the same Protocol is a later wiring (it needs the chat provider here)."""
+        the period and device the owner named - the failures alone when that is what
+        was asked ("ne başarısız oldu"). With a configured chat provider the model
+        writes the draft and ``tell`` audits it: a dropped failure is put
+        back, and a draft that still fails is replaced by the rule text. Without one
+        the rule narrator answers; its text passes the auditor by construction."""
         from app.narrative import service as narrative_service
+        from app.narrative.model_narrator import ModelNarrator
 
-        return narrative_service.tell(self._db, ask.period, ask.device, None, now=now)
+        provider = self._chat_provider
+        narrator = ModelNarrator(provider) if provider is not None and provider.configured else None
+        return narrative_service.tell(
+            self._db,
+            ask.period,
+            ask.device,
+            narrator,
+            now=now,
+            failures_only=bool(getattr(ask, "failures_only", False)),
+        )
 
     def research_report(self, task_id: str) -> dict[str, Any] | None:
         from app.research import runs_service
@@ -383,9 +398,22 @@ class LedgerEvidenceSource:
         ]
 
 
-#: How the service obtains evidence. Tests replace it with an in-memory source; the
-#: production value is the ledger adapter above.
-evidence_source_factory = LedgerEvidenceSource
+def _narrative_chat_provider() -> ChatProvider | None:
+    """The assistant's own chat provider (``app.assistant_chat``), for the narrative's
+    model narrator. Building it sends nothing; an empty key gives a provider that is not
+    ``configured``, which the source never calls. Never raises: an answer about the
+    record must not fail because the model's settings could not be read."""
+    try:
+        return build_chat_provider(get_settings())
+    except Exception as exc:  # noqa: BLE001 - the rule narrator answers instead
+        logger.warning("narrative_chat_provider_unavailable", detail=str(exc)[:200])
+        return None
+
+
+def evidence_source_factory(db: Session) -> EvidenceSource:
+    """How the service obtains evidence. Tests replace it with an in-memory source; the
+    production value is the ledger adapter above."""
+    return LedgerEvidenceSource(db, _narrative_chat_provider())
 
 
 # ------------------------------------------------------------------ briefing artifact
