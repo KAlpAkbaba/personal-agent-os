@@ -314,6 +314,7 @@ _TIERS: Final[dict[str, str]] = {
     # depends on: an id read out loud, then named.
     "pronunciation.list": TIER_OPEN,
     "briefing.overnight_work": TIER_OPEN,
+    "team.status": TIER_OPEN,
     "briefing.system_status": TIER_OPEN,
     "calendar.agenda": TIER_OPEN,
     "calendar.find_slot": TIER_OPEN,

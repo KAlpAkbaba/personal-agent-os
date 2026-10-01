@@ -42,6 +42,7 @@ FAMILY_TR: dict[str, str] = {
     "artifact": "Belge üretimi",
     "assistant": "Neler yapabilirim",
     "briefing": "Brifingler",
+    "team": "Ekip durumu",
     "calendar": "Takvim",
     "capability": "Yeni yetenek edinme",
     "clock": "Saat",
