@@ -149,8 +149,41 @@ if ($useApi) { $apiStore = New-TeamApiStore -Url $QueueUrl -TokenFile $QueueToke
 
 function Save-Queue {
     param($Document)
-    if ($useApi) { Save-TeamQueueApi -Store $apiStore -Queue $Document }
-    else { Write-TeamJson -Path $queuePath -Document $Document }
+    if (-not $useApi) { Write-TeamJson -Path $queuePath -Document $Document; return }
+    # A task somebody else wrote since the cycle read it (the owner in the Onay Merkezi, the
+    # lead, the feeder) is theirs: the cycle's write of THAT task is dropped, the others are
+    # written, and the next pass reads the store's version. It used to end the whole cycle.
+    foreach ($id in @(Save-TeamQueueApi -Store $apiStore -Queue $Document -SkipStale)) {
+        $note = "${id}: depoda başkası değiştirdi; döngünün yazdığı bırakıldı, depodaki hali geçerli"
+        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+    }
+}
+
+function Sync-Queue {
+    <# The store is the truth and a cycle lives for hours: the owner decides in the Onay Merkezi,
+       the lead adds a card, the feeder cuts the roadmap - while this process runs. Read once at
+       the start, none of it was seen until the NEXT cycle, and a cycle that has work does not
+       end (2026-10-02: the owner's fourth-seat card, stored nine minutes after the cycle began,
+       waited four hours beside idle seats). Before each pass the cycle's own changes are
+       written and the queue is read again. A store that does not answer, or a queue that
+       breaks the protocol now, changes nothing: the pass runs on the copy the cycle has, and
+       the report says so once. With files there is one writer, the lock's holder. #>
+    if (-not $useApi) { return }
+    Save-Queue -Document $script:queue
+    try {
+        $fresh = Get-TeamQueueApi -Store $apiStore
+        $why = @(Test-TeamQueue -Queue $fresh)
+        if (@($why).Count -gt 0) { throw ("kuyruk protokolü bozuyor: " + ($why -join "; ")) }
+    }
+    catch {
+        if (-not $script:syncNoted) {
+            $script:syncNoted = $true
+            Add-CycleNote -List "risks" -Text ("kuyruk yeniden okunamadı, döngü elindeki kopyayla sürdü: " + (([string]$_.Exception.Message) -replace '\s+', ' '))
+        }
+        return
+    }
+    Set-TeamQueueBaseline -Store $apiStore -Queue $fresh
+    $script:queue = $fresh
 }
 
 $queue = if ($useApi) { Read-TeamQueueApi -Store $apiStore } else { Read-TeamJson -Path $queuePath }
@@ -192,6 +225,8 @@ $liveRuns = New-Object System.Collections.ArrayList
 $usageLimit = [pscustomobject]@{ state = "ok"; resets_at = $null }
 $statusFailed = $false
 $stopNoted = $false
+# The store could not be read again before a pass (Sync-Queue): said once in the report.
+$syncNoted = $false
 # The model policy (ADR-0214 addendum 7). $modelSetting is read below, once the report can be
 # written. $limitedModels is what the runs said is limited: model id -> { until, type, seen_at };
 # a model in it starts no run until its reset. It lives across cycles in team/limits.json (an
@@ -797,6 +832,7 @@ try {
     # ---------------------------------------------------------------- the tasks
     $capped = [bool]$ResearchOnly
     while (-not $capped) {
+        Sync-Queue
         $runnable = New-Object System.Collections.ArrayList
         $moved = $false
         foreach ($task in (Get-TeamTasks -Queue $queue)) {
@@ -806,6 +842,16 @@ try {
                 $unmet = @(Get-TeamUnmetDependencies -Task $task -Queue $queue)
                 if (@($unmet).Count -gt 0) {
                     $waitNote = "bekliyor: $($task.id) -> $($unmet -join ', ') main'e girince"
+                    if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
+                    continue
+                }
+            }
+            if ($next.Kind -eq "move" -and [string]$next.NextState -eq "assigned") {
+                # Section 4: never into work beside a task that holds the same files. Two such
+                # tasks make a queue Test-TeamQueue refuses - and every later cycle with it.
+                $holders = @(Get-TeamAreaHolders -Task $task -Queue $queue)
+                if (@($holders).Count -gt 0) {
+                    $waitNote = "bekliyor: $($task.id) -> $($holders -join ', ') aynı dosyaları bırakınca"
                     if (@($script:cycle.gaps) -notcontains $waitNote) { Add-CycleNote -List "gaps" -Text $waitNote }
                     continue
                 }
@@ -952,7 +998,9 @@ try {
                     $plan = "team/plans/$($task.id)-integration.md"
                     if (Test-Path -LiteralPath (Join-Path $repoRoot ($plan -replace '/', '\'))) {
                         Set-TeamProperty -InputObject $task -Name "plan" -Value $plan
-                        Set-TeamProperty -InputObject $task -Name "state" -Value "assigned"
+                        # With its plan an approved task is the pass's to move into work - beside
+                        # nobody that holds its files (the same rule as every other approved task).
+                        if (@(Get-TeamAreaHolders -Task $task -Queue $queue).Count -eq 0) { Set-TeamProperty -InputObject $task -Name "state" -Value "assigned" }
                     }
                     else { Stop-Task -Task $task -Reason "entegratör plan dosyasını yazmadı ($plan)" }
                 }

@@ -8,6 +8,9 @@
     an expected_updated_at (409 when stale), POST of the lock (six-hour staleness), POST of a
     report. Every request is one line in -Log ("METHOD path status"); GET /__state prints the
     queue, the lock and the reports; GET /__stop ends it. -Ready is written once it listens.
+    A seed with `late` ({ after_task_puts, tasks }) plays ANOTHER WRITER of the store - the owner
+    in the Onay Merkezi, the lead, the feeder: once that many task PUTs have been stored, the
+    listener puts those tasks into its queue itself (new ones are added, known ones replaced).
     It is NOT the server: the Python suite holds the server to its rules, and a test in
     services/api/tests/unit/test_team_state.py holds the client's paths and fields to it.
 #>
@@ -41,6 +44,9 @@ if ($null -ne $state.PSObject.Properties["models"]) { $models = $state.models }
 $tasks = [ordered]@{}
 foreach ($task in @($state.queue.tasks)) { $tasks[[string]$task.id] = $task }
 $lock = $state.lock
+$late = $null
+if ($null -ne $state.PSObject.Properties["late"]) { $late = $state.late }
+$taskPuts = 0
 $reports = [ordered]@{}
 $liveStatus = $null
 $statusHistory = New-Object System.Collections.ArrayList
@@ -91,7 +97,14 @@ while ($running) {
             $expected = $body.expected_updated_at
             if ($null -eq $stored -and $null -ne $expected) { $status = Send-Json -Context $context -Status 409 -Body @{ detail = @{ code = "stale_write" } } }
             elseif ($null -ne $stored -and [string]$stored.updated_at -ne [string]$expected) { $status = Send-Json -Context $context -Status 409 -Body @{ detail = @{ code = "stale_write" } } }
-            else { $tasks[$id] = $body.task; $status = Send-Json -Context $context -Status 200 -Body $body.task }
+            else {
+                $tasks[$id] = $body.task
+                $status = Send-Json -Context $context -Status 200 -Body $body.task
+                $taskPuts++
+                if ($null -ne $late -and $taskPuts -eq [int]$late.after_task_puts) {
+                    foreach ($other in @($late.tasks)) { $tasks[[string]$other.id] = $other }
+                }
+            }
         }
         elseif ($path -eq "/v1/team/queue/lock" -and $request.HttpMethod -eq "GET") {
             $status = Send-Json -Context $context -Status 200 -Body $lock

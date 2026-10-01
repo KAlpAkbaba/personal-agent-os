@@ -30,6 +30,13 @@ kapı, yeşilse main'e `--no-ff`, it, kural gereği sormadan blue/green yayınla
 görevi yeniden kaydet (`register-nightly.ps1 -Register …` → tick), Stage 41, ana kopyayı `team/nightly/lead`'e geri al.
 Ana kopya şu an DETACHED (`2c691585`). Öncelikli iş: `office-worker-seats` (sahip: 4. çalışan koltuğu).
 `understanding-corrections-memory` 0064 migration'ı taşır: expand-only testi geçiyorsa otomatik, değilse sahibe sor.**
+**DÖNGÜ KUYRUĞU HER TURDA YENİDEN OKUR (ADR-0214 ek 11, dal `lead/cycle-rereads-queue` = `d93f6a2a` + düzeltme; lead dalına
+alınır, main'e DÖRDÜNCÜ entegrasyonla girer): eskiden kuyruk yalnız döngü başlarken okunuyordu ve iş oldukça döngü
+bitmediği için sonradan depoya yazılan hiçbir şey (kart, karar, besleyicinin kartı) görülmüyordu - sahibin "4. çalışan
+koltuğu" kartı 4 saat boş koltukların yanında bekledi. Artık: her turdan önce yeniden okuma, başkasının değiştirdiği
+işte döngünün yazması bırakılır (döngü ölmez), aynı dosyaları tutan iş varken yenisi işe alınmaz. 2026-10-02 01:32'de
+eski süreç `team/stop.flag` ile güvenli durduruldu; durdurulan üç iş (cycle-auto-integrate, execution-call-site-research,
+postgres-coverage-debt) denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı.**
 **BİLİNEN AÇIK: besleyici kilidi alır; döngü koşarken (iş oldukça bitmez) besleyici "kilit tutuluyor" der ve kart
 kesmez → kuyruk yalnız döngüler ARASINDA beslenir. Kapanışı `cycle-seat-pool` kartında (havuz besleyiciyi kendi çağırır).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te

@@ -18837,3 +18837,46 @@ joined with a space; accusative off; apostrophe made optional; genitive off, twi
 two - payment for click only, the site rule back to every word), all RED, same restore.
 The confirm path of a HIGH_IMPACT select and checkbox (performed once, `confirmed_by`
 set, planned again -> read back again) is in the acceptance file.
+
+### ADR-0214 addendum 11 (2026-10-02): the cycle reads the store again before every pass, a stale write is one task's, and a task never enters work beside the holder of its files
+
+**What happened.** On 2026-10-01 the owner asked for a fourth worker seat on the Ofis page; the card was put into the
+team's store at 19:40 UTC, first in the queue's order. Four hours later it had not been started, with worker seats idle on
+the page he was looking at. The cycle that was running had begun at 19:31 UTC and `cycle.ps1` read the queue ONCE, at its
+start (`$queue = Read-TeamQueueApi`, one line). A cycle that has work does not end, so nothing written to the store after
+19:31 - the lead's cards, the reset of a return, a decision in the Onay Merkezi, a card the feeder cut - existed for it.
+A test even asserted the defect ("the queue is read once"). ADR-0236 let the owner decide while a cycle runs and said
+"kararınız bir sonraki döngüde uygulanır"; with a cycle that lasts all day that was "tomorrow".
+
+**Decision.**
+1. **Before every pass** (`Sync-Queue`, API mode): the cycle's own changes are written, the queue is read again, checked
+   with `Test-TeamQueue`, and only then adopted with its versions (`Get-TeamQueueApi` + `Set-TeamQueueBaseline`; the old
+   `Read-TeamQueueApi` is the two together). A store that does not answer, or a queue that breaks the protocol at that
+   moment, changes nothing: the pass runs on the copy the cycle has and the report says so once
+   ("kuyruk yeniden okunamadı, döngü elindeki kopyayla sürdü: …"). With files there is one writer - the lock's holder -
+   and nothing is read again.
+2. **A stale write is that one task's, not the cycle's end** (`Save-TeamQueueApi -SkipStale`). Somebody else wrote the
+   task after the cycle read it: the store's version stands, the cycle's write of THAT task is dropped and said in the
+   report ("<id>: depoda başkası değiştirdi; …"), every other task is written, and the next pass reads the store's version.
+   Before, the 409 ended the cycle and the results of the tasks after it in the queue were never written. The feeder and
+   every other caller keep the strict form (no switch: a stale write throws).
+3. **An approved task is not moved into work beside a task that holds its files** (`Get-TeamAreaHolders`: assigned,
+   in_progress, inspecting, returned; the same overlap rule as the split's). It waits ("bekliyor: X -> Y aynı dosyaları
+   bırakınca") and is moved in the pass after the holder leaves. Found on the way: two approved tasks that share a file
+   and no dependency were both moved to `assigned`, which is a queue `Test-TeamQueue` refuses - so the next cycle ran
+   NOTHING ("the queue breaks the protocol"), and with decision 1 the running one would have refused every re-read. The
+   live queue held such a pair on 2026-10-02 (`researcher-every-cycle` and `model-policy-floor`, both waiting only for
+   `cycle-seat-pool`). The same rule holds for a task that comes back from its integrator with a plan.
+
+**Not here.** A pass still starts a batch and waits for all of it (`cycle-seat-pool`): a card that arrives during a
+batch is seen when the batch ends, not when a seat frees. The settings of a running cycle (`-MaxParallel`, the script
+itself) are still those it started with. The feeder still cannot cut cards while a cycle holds the lock (ADR-0237).
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, PROVEN_AUTOMATED (a fake listener with the real routes' rules, which
+now plays a second writer at a known moment: seed `late`): a task that reaches the store while the cycle runs is run by
+that cycle; a decision made in the store between the cycle's read and its write is the store's - one refused write, said
+in the report, the task run in the same cycle; a queue that breaks the protocol mid-cycle changes nothing and is said
+once; an approved task whose files a task in work holds waits and is run after it. Each RED before the change (the first
+two as written; the "read once" assertion turned into "read again before each pass"). Four mutations RED, `cycle.ps1`
+restored from a backup copy with sha256 equal before and after: the re-read removed; the stale write fatal again; a broken
+queue adopted; the holder check removed. PROVEN_REAL is the next real cycle picking up a card stored while it runs.
