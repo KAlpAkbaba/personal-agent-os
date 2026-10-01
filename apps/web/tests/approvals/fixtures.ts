@@ -86,6 +86,51 @@ export const BOLD_HEADINGS = `# Öneri: Anlatı
 **Karar**: Yapalım mı?
 `;
 
+/**
+ * The shape of the six files under `team/proposals/`: `## ` headings, and under them bullets
+ * that open with a bold lead - some of them with the very names of the rule's sections.
+ */
+export const REAL_SHAPE = `# Öneri: Anlatı satırı
+
+Tarih: 2026-09-30 · Araştırmacı
+
+## Ne
+Ledger üzerinde konuşulan bir anlatı.
+
+## Nasıl
+1. Toplayıcı yazılır.
+2. Denetçi eklenir.
+
+## Maliyet/risk
+- **Efor:** orta (toplayıcı+denetçi kod).
+- **Maliyet**: 5 USD/ay.
+- **Karar**: model seçimi sonraya kalır.
+**Karar**: bu satır da bölümün metnidir.
+
+## Kanıt planı
+\`\`\`
+## Ne
+pytest tests/narrative
+\`\`\`
+
+## Karar
+**Anlatıyı önce ledger odaklı yapalım mı?**
+`;
+
+/** Each example on ONE line - the form the rule's own summary quotes. */
+export const ONE_LINE_PAIRS = `## Faydası — örneklerle
+1. Bugün: fiyata elle bakıyorum. / Bununla: ölçümle birlikte gelir.
+2. **Bugün:** tahmin ediyoruz → **Bununla:** [tablo](https://example.com/t) raporda durur.
+3. Bugün: komut düşüyor
+   ve yeniden söylüyorum -> Bununla: ilk seferde çalışır,
+   gürültüde de.
+- Bununla: yalnızca sonucu yazılmış.
+- Bugün: yalnızca bugünü yazılmış.
+
+KAZANÇ: sayıyla görülür.
+KAZANMADIĞIMIZ: TTS değişmez.
+`;
+
 /** What a proposal must never be able to do to the page. */
 export const HOSTILE = `# Öneri: <script>alert("başlık")</script>
 

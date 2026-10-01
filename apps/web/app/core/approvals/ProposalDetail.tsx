@@ -9,6 +9,8 @@
  * benefit section each have their sentence.
  */
 
+import type { ReactNode } from "react";
+
 import {
   parseProposal,
   type Benefit,
@@ -37,6 +39,10 @@ function Inlines({ inlines }: { inlines: Inline[] }) {
   );
 }
 
+function ListTag({ ordered, children }: { ordered: boolean; children: ReactNode }) {
+  return ordered ? <ol>{children}</ol> : <ul>{children}</ul>;
+}
+
 function Blocks({ blocks }: { blocks: Block[] }) {
   return (
     <>
@@ -46,13 +52,13 @@ function Blocks({ blocks }: { blocks: Block[] }) {
             <Inlines inlines={block.inlines} />
           </p>
         ) : (
-          <ul key={index}>
+          <ListTag key={index} ordered={block.ordered}>
             {block.items.map((item, at) => (
               <li key={at}>
                 <Inlines inlines={item} />
               </li>
             ))}
-          </ul>
+          </ListTag>
         ),
       )}
     </>
@@ -60,6 +66,8 @@ function Blocks({ blocks }: { blocks: Block[] }) {
 }
 
 function BenefitSection({ benefit }: { benefit: Benefit }) {
+  // A heading over nothing is not shown.
+  if (benefit.pairs.length === 0 && !benefit.gain && !benefit.notGained && benefit.rest.length === 0) return null;
   return (
     <section data-detail-section="benefit">
       <h3>{benefit.title}</h3>
@@ -67,12 +75,17 @@ function BenefitSection({ benefit }: { benefit: Benefit }) {
         <ol>
           {benefit.pairs.map((pair, index) => (
             <li key={index} data-benefit-pair>
-              <p>
-                <strong>Bugün:</strong> <Inlines inlines={pair.today} />
-              </p>
-              <p>
-                <strong>→ Bununla:</strong> <Inlines inlines={pair.withIt} />
-              </p>
+              {/* A half pair shows the half it has: a label is never left with nothing after it. */}
+              {pair.today.length > 0 && (
+                <p>
+                  <strong>Bugün:</strong> <Inlines inlines={pair.today} />
+                </p>
+              )}
+              {pair.withIt.length > 0 && (
+                <p>
+                  <strong>→ Bununla:</strong> <Inlines inlines={pair.withIt} />
+                </p>
+              )}
             </li>
           ))}
         </ol>
@@ -112,11 +125,9 @@ export default function ProposalDetail({ text }: { text: string | null }) {
   ];
   return (
     <>
-      {parsed.benefit ? (
-        <BenefitSection benefit={parsed.benefit} />
-      ) : (
-        <p className="muted">{NO_BENEFIT_TR}</p>
-      )}
+      {/* A benefit section with no "Bugün / Bununla" example in it is still without examples. */}
+      {(parsed.benefit?.pairs.length ?? 0) === 0 && <p className="muted">{NO_BENEFIT_TR}</p>}
+      {parsed.benefit && <BenefitSection benefit={parsed.benefit} />}
       {ordered.map((section, index) => (
         <Section key={index} section={section} />
       ))}

@@ -78,7 +78,8 @@ export function ApprovalCard({
         </button>
       )}
       {hasDetail && open && (
-        <div id={detailId} data-detail={approval.task_id}>
+        // The card is a wrapping flex row (`detail-row`): the panel takes a row of its own.
+        <div id={detailId} data-detail={approval.task_id} style={{ flexBasis: "100%" }}>
           <ProposalDetail text={approval.proposal_text} />
         </div>
       )}

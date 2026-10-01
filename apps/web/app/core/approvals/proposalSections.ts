@@ -7,14 +7,20 @@
  * produces markup - the panel renders these values as text nodes - and a link exists only
  * for an http/https address; any other scheme is left in the sentence as written.
  *
- * Sections are cut at `## ` headings (any title, unknown ones kept) and at the older
- * `**Heading**:` lines - those only for the section names the rule knows, because a bold
- * lead ("**Efor**: orta") is how the same proposals write ordinary sentences.
+ * Sections are cut at `## ` headings (any title, unknown ones kept). A proposal with no `## `
+ * heading at all is the older shape and is cut at its `**Heading**:` lines - only for the
+ * section names the rule knows, and never at a list item, because a bold lead
+ * ("- **Maliyet**: 5 USD/ay") is how the same proposals write ordinary sentences.
+ *
+ * Headings and links are found by scanning, not by a backtracking expression: the text comes
+ * over the network, and one long line must not stall the page.
  */
 
 export type Inline = { kind: "text"; text: string } | { kind: "link"; text: string; href: string };
 
-export type Block = { kind: "paragraph"; inlines: Inline[] } | { kind: "list"; items: Inline[][] };
+export type Block =
+  | { kind: "paragraph"; inlines: Inline[] }
+  | { kind: "list"; ordered: boolean; items: Inline[][] };
 
 /** `benefit`: "Faydası — örneklerle". `what`: "Ne". The panel shows those two first. */
 export type SectionRole = "benefit" | "what" | "other";
@@ -22,6 +28,7 @@ export type SectionRole = "benefit" | "what" | "other";
 /** `title` is "" for what stands between the proposal's title and its first section. */
 export type ProposalSection = { title: string; role: SectionRole; blocks: Block[] };
 
+/** One example. Either half may be empty (a half pair), never both. */
 export type BenefitPair = { today: Inline[]; withIt: Inline[] };
 
 export type Benefit = {
@@ -41,14 +48,16 @@ export type ParsedProposal = {
   benefit: Benefit | null;
 };
 
-const TITLE = /^#\s+(.+?)\s*$/;
-const HASH_HEADING = /^##\s+(.+?)[\s#]*$/;
-const BOLD_HEADING = /^(?:[-*]\s+)?\*\*([^*]+?)(?::\*\*|\*\*\s*:)\s*(.*)$/;
+const BOLD_HEADING = /^\*\*([^*]+?)(?::\*\*|\*\*\s*:)\s*(.*)$/;
 const SUB_HEADING = /^\s*#{1,6}\s+(.*)$/;
-const LIST_ITEM = /^\s*(?:[-*+]\s+|\d+[.)]\s+)(.*)$/;
+const LIST_ITEM = /^\s*(?:[-*+]\s+|(\d+)[.)]\s+)(.*)$/;
+// "ı" is spelled both ways: to an expression's /i, dotless ı and ASCII's I are not one letter.
 const BENEFIT_LABEL =
-  /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*)?(Bugün|Bununla|Kazanç|Kazanmadığımız)(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.*)$/i;
-const LINK = /\[([^\]\n]+)\]\(([^()\s]+)\)/g;
+  /^\s*(?:[-*+]\s+|\d+[.)]\s+)?(?:\*\*)?(Bugün|Bununla|Kazanç|Kazanmad[ıI]ğ[ıI]m[ıI]z)(?:\*\*)?\s*:\s*(?:\*\*)?\s*(.*)$/i;
+// "Bununla:" after its "Bugün" on the same line. Capitalised only: "…, bununla: …" is a sentence.
+const WITH_IT_INLINE = /(?:\*\*)?(?:Bununla|BUNUNLA)(?:\*\*)?\s*:\s*(?:\*\*)?\s*/;
+const PAIR_SEPARATORS = ["->", "=>", "→", "/", "|", "—", "–"];
+const FENCE = /^\s*(?:```|~~~)/;
 const EMPHASIS = /\*\*([^*\n]+?)\*\*/g;
 
 // Whole names, not stems: "Faydalanılan kaynaklar" is not the benefit section.
@@ -73,8 +82,22 @@ function roleOf(title: string): SectionRole {
   return name === "ne" ? "what" : "other";
 }
 
+function isSpace(char: string): boolean {
+  return char.trim() === "";
+}
+
 function headingTitle(raw: string): string {
-  return raw.replace(EMPHASIS, "$1").trim().replace(/\s*:$/, "");
+  const title = raw.replace(EMPHASIS, "$1").trim();
+  return title.endsWith(":") ? title.slice(0, -1).trimEnd() : title;
+}
+
+/** The title of a `# ` (depth 1) or `## ` (depth 2) line, closing hashes dropped; else null. */
+function hashTitle(line: string, depth: 1 | 2): string | null {
+  if (!line.startsWith("#".repeat(depth)) || line.length <= depth || !isSpace(line[depth])) return null;
+  let end = line.length;
+  if (depth === 2) while (end > depth && (line[end - 1] === "#" || isSpace(line[end - 1]))) end -= 1;
+  const title = line.slice(depth, end).trim();
+  return title === "" ? null : title;
 }
 
 /** The address a link may carry, or null: http and https, and nothing else. */
@@ -92,22 +115,29 @@ export function safeHref(raw: string): string | null {
 export function parseInlines(source: string): Inline[] {
   const text = source.replace(EMPHASIS, "$1");
   const inlines: Inline[] = [];
-  let pending = "";
+  // Everything before `at` is already in `inlines`; `open` is the last "[" not yet closed.
   let at = 0;
-  for (const match of text.matchAll(LINK)) {
-    pending += text.slice(at, match.index);
-    at = match.index + match[0].length;
-    const href = safeHref(match[2]);
-    if (href === null) {
-      pending += match[0];
-      continue;
+  let open = -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "[") open = index;
+    if (char !== "]" && char !== "\n") continue;
+    const from = open;
+    open = -1;
+    if (char === "\n" || from < 0 || index === from + 1 || text[index + 1] !== "(") continue;
+    // The address runs to its ")" and holds no bracket and no space: read once, never again.
+    let end = index + 2;
+    while (end < text.length && text[end] !== "(" && text[end] !== ")" && !isSpace(text[end])) end += 1;
+    if (text[end] !== ")" || end === index + 2) continue;
+    const href = safeHref(text.slice(index + 2, end));
+    if (href !== null) {
+      if (from > at) inlines.push({ kind: "text", text: text.slice(at, from) });
+      inlines.push({ kind: "link", text: text.slice(from + 1, index), href });
+      at = end + 1;
     }
-    if (pending !== "") inlines.push({ kind: "text", text: pending });
-    pending = "";
-    inlines.push({ kind: "link", text: match[1], href });
+    index = end;
   }
-  pending += text.slice(at);
-  if (pending !== "") inlines.push({ kind: "text", text: pending });
+  if (at < text.length) inlines.push({ kind: "text", text: text.slice(at) });
   return inlines;
 }
 
@@ -115,9 +145,11 @@ function parseBlocks(lines: string[]): Block[] {
   const blocks: Block[] = [];
   let paragraph: string[] = [];
   let items: string[][] | null = null;
+  // A list is numbered when its first item is.
+  let ordered = false;
   const flush = () => {
     if (paragraph.length > 0) blocks.push({ kind: "paragraph", inlines: parseInlines(paragraph.join(" ")) });
-    if (items) blocks.push({ kind: "list", items: items.map((item) => parseInlines(item.join(" "))) });
+    if (items) blocks.push({ kind: "list", ordered, items: items.map((item) => parseInlines(item.join(" "))) });
     paragraph = [];
     items = null;
   };
@@ -135,9 +167,12 @@ function parseBlocks(lines: string[]): Block[] {
     }
     const item = LIST_ITEM.exec(line);
     if (item) {
-      if (!items) flush();
+      if (!items) {
+        flush();
+        ordered = item[1] !== undefined;
+      }
       items ??= [];
-      items.push([item[1].trim()]);
+      items.push([item[2].trim()]);
     } else if (items) {
       items[items.length - 1].push(line.trim());
     } else {
@@ -146,6 +181,17 @@ function parseBlocks(lines: string[]): Block[] {
   }
   flush();
   return blocks;
+}
+
+/** "… / Bununla: …" (or "→", "->", "—", "|") cut in two; null when no second half is written there. */
+function splitOneLinePair(text: string): { today: string; withIt: string } | null {
+  const match = WITH_IT_INLINE.exec(text);
+  if (!match) return null;
+  if (match.index > 0 && /[\p{L}\p{N}]/u.test(text[match.index - 1])) return null;
+  let today = text.slice(0, match.index).trimEnd();
+  const separator = PAIR_SEPARATORS.find((candidate) => today.endsWith(candidate));
+  if (separator) today = today.slice(0, -separator.length).trimEnd();
+  return { today, withIt: text.slice(match.index + match[0].length).trim() };
 }
 
 function parseBenefit(title: string, lines: string[]): Benefit {
@@ -160,7 +206,12 @@ function parseBenefit(title: string, lines: string[]): Benefit {
     if (labelled) {
       const label = fold(labelled[1]);
       const body = labelled[2].trim() === "" ? [] : [labelled[2].trim()];
-      if (label === "bugün") {
+      const oneLine = label === "bugün" ? splitOneLinePair(labelled[2].trim()) : null;
+      if (oneLine) {
+        const pair = { today: oneLine.today === "" ? [] : [oneLine.today], withIt: [oneLine.withIt], closed: true };
+        pairs.push(pair);
+        current = pair.withIt;
+      } else if (label === "bugün") {
         pairs.push({ today: body, withIt: [], closed: false });
         current = pairs[pairs.length - 1].today;
       } else if (label === "bununla") {
@@ -182,7 +233,17 @@ function parseBenefit(title: string, lines: string[]): Benefit {
     }
     const continues = current !== null && line.trim() !== "" && !LIST_ITEM.test(line) && !/^\s*(?:#|\*\*)/.test(line);
     if (continues && current) {
-      current.push(line.trim());
+      // A wrapped "Bugün" may reach its "→ Bununla:" on a later line.
+      const pair = pairs.at(-1);
+      const oneLine = pair && !pair.closed && current === pair.today ? splitOneLinePair(line.trim()) : null;
+      if (oneLine && pair) {
+        if (oneLine.today !== "") pair.today.push(oneLine.today);
+        pair.withIt = [oneLine.withIt];
+        pair.closed = true;
+        current = pair.withIt;
+      } else {
+        current.push(line.trim());
+      }
       continue;
     }
     current = null;
@@ -191,10 +252,13 @@ function parseBenefit(title: string, lines: string[]): Benefit {
   const inline = (parts: string[] | null) => (parts === null ? null : parseInlines(parts.join(" ")));
   return {
     title,
-    pairs: pairs.map((pair) => ({
-      today: parseInlines(pair.today.join(" ")),
-      withIt: parseInlines(pair.withIt.join(" ")),
-    })),
+    // A label with nothing after it on either side is not an example.
+    pairs: pairs
+      .map((pair) => ({
+        today: parseInlines(pair.today.join(" ")),
+        withIt: parseInlines(pair.withIt.join(" ")),
+      }))
+      .filter((pair) => pair.today.length > 0 || pair.withIt.length > 0),
     gain: inline(gain),
     notGained: inline(notGained),
     rest: parseBlocks(rest),
@@ -204,22 +268,33 @@ function parseBenefit(title: string, lines: string[]): Benefit {
 export function parseProposal(text: string): ParsedProposal {
   let title: string | null = null;
   const raw: { title: string; lines: string[] }[] = [{ title: "", lines: [] }];
-  for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
-    const hash = HASH_HEADING.exec(line);
-    if (hash) {
-      raw.push({ title: headingTitle(hash[1]), lines: [] });
+  // What each line is - a code fence and the lines inside it being nothing but text.
+  let fenced = false;
+  const lines = text
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => {
+      const fence = FENCE.test(line);
+      if (fence) fenced = !fenced;
+      const literal = fence || fenced;
+      return { line, literal, hash: literal ? null : hashTitle(line, 2) };
+    });
+  const olderShape = lines.every(({ hash }) => hash === null);
+  for (const { line, literal, hash } of lines) {
+    if (hash !== null) {
+      raw.push({ title: headingTitle(hash), lines: [] });
       continue;
     }
-    const bold = BOLD_HEADING.exec(line);
+    const bold = olderShape && !literal ? BOLD_HEADING.exec(line) : null;
     if (bold && KNOWN_NAMES.some((name) => name.test(fold(bold[1])))) {
       raw.push({ title: bold[1].trim(), lines: bold[2].trim() === "" ? [] : [bold[2]] });
       continue;
     }
     const current = raw[raw.length - 1];
-    if (title === null && raw.length === 1 && current.lines.every((seen) => seen.trim() === "")) {
-      const heading = TITLE.exec(line);
-      if (heading) {
-        title = heading[1];
+    if (title === null && raw.length === 1 && !literal && current.lines.every((seen) => seen.trim() === "")) {
+      const heading = hashTitle(line, 1);
+      if (heading !== null) {
+        title = heading;
         continue;
       }
     }
@@ -227,12 +302,12 @@ export function parseProposal(text: string): ParsedProposal {
   }
   const sections: ProposalSection[] = [];
   let benefit: Benefit | null = null;
-  for (const { title: name, lines } of raw) {
-    const section: ProposalSection = { title: name, role: name === "" ? "other" : roleOf(name), blocks: parseBlocks(lines) };
+  for (const { title: name, lines: body } of raw) {
+    const section: ProposalSection = { title: name, role: name === "" ? "other" : roleOf(name), blocks: parseBlocks(body) };
     // The untitled lead exists only when something was written there.
     if (name === "" && section.blocks.length === 0) continue;
     sections.push(section);
-    if (section.role === "benefit" && benefit === null) benefit = parseBenefit(name, lines);
+    if (section.role === "benefit" && benefit === null) benefit = parseBenefit(name, body);
   }
   return { title, sections, benefit };
 }

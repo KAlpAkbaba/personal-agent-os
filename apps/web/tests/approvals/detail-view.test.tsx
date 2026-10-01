@@ -17,7 +17,16 @@ vi.mock("../../app/lib/session", () => ({
 import ApprovalsList, { ApprovalCard, cardButtons } from "../../app/core/approvals/ApprovalsList";
 import ProposalDetail from "../../app/core/approvals/ProposalDetail";
 import { decisionsOpen, type ApprovalsView } from "../../app/core/approvals/approvalsApi";
-import { BOLD_HEADINGS, HOSTILE, WITHOUT_BENEFIT, WITH_BENEFIT, approval, view } from "./fixtures";
+import {
+  BOLD_HEADINGS,
+  HOSTILE,
+  ONE_LINE_PAIRS,
+  REAL_SHAPE,
+  WITHOUT_BENEFIT,
+  WITH_BENEFIT,
+  approval,
+  view,
+} from "./fixtures";
 
 const NO_BENEFIT = "Bu öneri fayda örnekleri olmadan yazılmış; araştırmacı bir sonraki koşuda ekleyecek.";
 const NO_TEXT = "Bu fikrin metni henüz sunucuya ulaşmadı.";
@@ -141,6 +150,43 @@ describe("the opened proposal", () => {
     expect(markup).toContain("Home Assistant&#x27;ı salt-okuma ile bağlamak.");
     expect(markup).toContain("<h3>Karar</h3>");
     expect(markup).not.toContain(NO_TEXT);
+  });
+
+  it("shows a one-line pair as its two halves, and never a label with nothing after it", () => {
+    const markup = renderToStaticMarkup(<ProposalDetail text={ONE_LINE_PAIRS} />);
+    const pairs = markup.split("data-benefit-pair").slice(1);
+    expect(pairs).toHaveLength(5);
+    expect(pairs[0]).toContain("<strong>Bugün:</strong> fiyata elle bakıyorum.</p>");
+    expect(pairs[0]).toContain("<strong>→ Bununla:</strong> ölçümle birlikte gelir.</p>");
+    expect(pairs[3]).not.toContain("Bugün:");
+    expect(pairs[3]).toContain("<strong>→ Bununla:</strong> yalnızca sonucu yazılmış.</p>");
+    expect(pairs[4].slice(0, pairs[4].indexOf("</ol>"))).not.toContain("Bununla:");
+    expect(markup).not.toMatch(/<\/strong>\s*<\/p>/);
+  });
+
+  it("says so when the benefit section holds no example, and still shows what it does hold", () => {
+    const markup = renderToStaticMarkup(
+      <ProposalDetail text={"## Faydası — örneklerle\nDaha hızlı olur.\n\n## Ne\nBir şey.\n"} />,
+    );
+    expect(markup).toContain(NO_BENEFIT);
+    expect(markup).toContain("Daha hızlı olur.");
+    expect(markup.indexOf(NO_BENEFIT)).toBeLessThan(markup.indexOf("Daha hızlı olur."));
+    expect(markup).not.toContain("data-benefit-pair");
+    const bare = renderToStaticMarkup(<ProposalDetail text={"## Faydası\n\n## Ne\nBir şey.\n"} />);
+    expect(bare).toContain(NO_BENEFIT);
+    expect(bare).not.toContain("<h3>Faydası</h3>");
+  });
+
+  it("keeps numbered steps numbered, and a bullet's bold lead inside its section", () => {
+    const markup = renderToStaticMarkup(<ProposalDetail text={REAL_SHAPE} />);
+    expect(markup).toContain("<ol><li>Toplayıcı yazılır.</li><li>Denetçi eklenir.</li></ol>");
+    expect(markup).toContain("<ul><li>Efor: orta (toplayıcı+denetçi kod).</li><li>Maliyet: 5 USD/ay.</li>");
+    expect(markup.match(/<h3>/g)).toHaveLength(5);
+    expect(markup.split("<h3>Karar</h3>")).toHaveLength(2);
+  });
+
+  it("gives the panel a row of its own inside the card", () => {
+    expect(card()).toMatch(/<div id="approval-detail-stt-soniox-olcum"[^>]*style="flex-basis:100%"/);
   });
 
   it("says the text has not reached the server - never an empty panel", () => {
