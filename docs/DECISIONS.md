@@ -16958,6 +16958,72 @@ the seat's panel, the two percentages and the fallback toggle in the top bar).
 in a form a script can read. Nobody computes or estimates one: until a real source is found
 the page says "bilinmiyor", never "%0".
 
+### ADR-0214 addendum 8 (2026-10-01): no agent idles; the roadmap is where work comes from; an approved idea becomes a roadmap line
+
+The owner: "Bundan sonra hiçbir ajan mümkün olduğunca durmasın, mümkün olduğunca roadmap'ten
+ilerleyelim ve araştırmacının yeni fikirleri onaylanırsa bu fikirler roadmap'e eklensin."
+Said an hour after the lead had paused the scheduled cycle for its own gate and the Ofis page
+showed eight idle seats.
+
+**What it binds.**
+* *Nobody idles when there is work the roadmap names.* The cycle is not paused for the
+  lead's gate (the integration suite's database lock already serialises a gate beside a
+  cycle; a gate step that loses the wait is run again - that cost is accepted). A seat is
+  empty only when the queue has nothing runnable AND the roadmap's next item cannot be cut
+  into a card without the owner (a new dependency, a paid account, an irreversible action).
+* *The queue is fed from the roadmap.* When fewer runnable tasks remain than the cycle has
+  worker seats, the lead cuts the next items of `docs/ROADMAP.md` "The order" (and the v1
+  master checklist under `docs/product/`) into cards - roadmap-serving work is approved in
+  advance (addendum 2); the card names the row. Until the feeder exists
+  (`lead-roadmap-feeder`, queued) the lead in session does it by hand.
+* *An approved idea is written into the roadmap by the lead, at approval.* The researcher's
+  proposal the owner approves gets a line under ROADMAP "Approved ideas": date, the row it
+  serves (or the new line it opens), the task ids, its state. A deferred or rejected idea is
+  not added; it stays in the queue with the owner's reason. This is the owner-approved
+  change that `lead.md` requires before ROADMAP is edited.
+* *Three worker seats are used:* the scheduled cycle runs with `-MaxParallel 3`.
+
+**What does not change.** The three owner gates; no release and no merge to main by a
+script; the usage limit as the one stop (with the model chain of addendum 7 once built);
+the researcher at most every six hours.
+
+### ADR-0214 addendum 9 (2026-10-01): the owner is asked about NEW ideas only; what the roadmap already names is built without asking
+
+The owner: "roadmap'deki var olan şeyler için benden onay istenmesin, sadece yeni fikirler için
+onay istenilsin; onay verilirse de roadmap'e konulsun. Araştırmacının görevi de yeni fikir bulmak."
+
+* **The idea gate is for what the roadmap does not name.** An item of ROADMAP "The order", of the
+  v1 master checklist, or of "Approved ideas" is cut into cards by the lead (or the feeder) and
+  built - no question, no entry in the Onay Merkezi's idea list. A defect found on the way is
+  part of the work it was found in.
+* **The researcher looks for what is NEW.** A proposal that restates a roadmap item, a queued
+  task or an earlier proposal is not a proposal: the researcher names it in its report as "already
+  on the roadmap: <row>" and the lead cards it. What it brings to the owner is something the
+  roadmap does not have yet - a capability, a method, a lesson turned into a mechanism - with
+  the three "Bugün -> Bununla" examples.
+* **An approved idea becomes a roadmap line** (addendum 8), and from then on it is roadmap work
+  like any other: its cards need no further approval.
+* **What still reaches the owner regardless** (CLAUDE.md "Asking the owner"): a paid account or
+  credential, a login, an irreversible or data-losing action, a new external dependency.
+* **The release gate: asked, and answered the same hour - "Kapı yeşilse otomatik yayınla".**
+  Roadmap work that passed the full gate and reached main is released blue/green by the lead
+  without a question: preflight, release, the recovery pin (the full 40-hex sha), the reconcile
+  verdict, health through the edge - and a report afterwards (what, sha, colour, last known
+  good). What does NOT become automatic: a release that carries a migration which is not
+  expand-only, a change of the host's env or compose beyond the image, anything the gate did
+  not run, a release inside 30 minutes of a maintenance window, a release while health is
+  not `ok` - each of those stops and is put to the owner. A release that leaves health not
+  `ok` is rolled back by the release script's own path and reported. Until the step exists
+  as a script (`cycle-auto-release`, queued behind `cycle-auto-integrate`) the lead in session
+  does it by hand, the same way. The owner's three gates are now two for roadmap work: a NEW
+  idea, and the real-device proof.
+
+**And the same evening:** "roadmap'i otomatik olarak görev ataması oluşsun ve çalışanlar
+durmaksızın çalışsın" - the feeder (`lead-roadmap-feeder`), the seat pool (`cycle-seat-pool`),
+the automatic integration and release are one chain, queued in that order of need; until they
+land the lead cuts the roadmap's next items by hand every time fewer than three tasks are
+runnable.
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
@@ -17290,6 +17356,27 @@ host with nobody driving: the tests proved them on fakes. If a step fails before
 the script stops there (exit 11), the reconcile timer is restarted and production keeps
 serving the same release; if verification fails the marker stays and step 12 applies. The
 units are removed after the report (they name one date and are inert after it).
+
+### ADR-0223 addendum 2 (2026-10-01): the first real window - what held, and what this ADR had wrong
+
+The window ran from the host's own timer at 19:00 UTC with nobody driving: preflight 9/9, the backup, the upgrade
+(26 packages; Docker 29.7.2 -> 29.8.2, Tailscale 1.102.3 -> 1.102.4), the reboot at 19:00:56, kernel `6.8.0-142`,
+containers back at 19:01:30, the three devices reconnected by 19:01:57, the same release serving, `RECONCILE OK`.
+`team/reports/maintenance-2026-10-01.md` holds the before/after facts.
+
+**Wrong in this ADR:** "the zombie goes when the container restarts". It is `auto-setup.sh`, a child of the
+temporal container's pid 1, which never reaps it; it is back two seconds after every start. Step 11's "zombies = 0"
+therefore failed a window that had held in every respect. The check now reports a defunct process and does not
+fail on it; the cure is `init: true` on the temporal service (`temporal-init-reaper`, queued; a compose change, so
+its release is the owner's).
+
+**Also wrong:** the record's `downtime_seconds` is the time from the marker to the first good probe OF `--verify`,
+which runs minutes after boot: an upper bound (825 s here), not the outage (about one minute). The record says so
+now; a true measurement needs a probe that keeps running across the reboot from outside the host.
+
+**Three defects were found before the window, on the real host, by running the read-only half** (the colour waited
+for by name, the lock asked for once - QUALIFICATION 38.12, 38.17) **and one after it** (this one). The approved
+idea `real-host-rehearsal` is the mechanism that makes the first kind routine.
 
 ## ADR-0224 — Voice command understanding in three layers: normalisation, semantic match with a confidence, a threshold policy (owner's architectural requirement, 2026-09-30)
 
@@ -17942,3 +18029,247 @@ needs the owner asking after an operator action on the office PC.
 The ten `operator.start_task` calls hand over the bound device's word; `record_receipt`'s callers in
 `actions.py` needed no change per the worker's reading. "Ofiste ne yaptın" after an operator action on the office
 PC: `READY_FOR_OWNER`.
+
+## ADR-0235 — Rehearsal against the real host's shape: a read-only snapshot feeds the fake hosts and the schema check (2026-10-01)
+
+*From `team/plans/real-host-rehearsal-adr.md` (ADR (unnumbered - the lead numbers it at merge): the fake hosts are built from a read-only snapshot of the real one).*
+
+Date: 2026-10-01 · Task: `real-host-rehearsal` · Status: proposed by the worker, PROVEN_AUTOMATED
+
+#### Context
+
+Three defects in one day were green on a fake and red on the Cloud Core, each because the fake
+did not model one property of the host: the serving colour (QUALIFICATION 38.12), how long the
+blue/green operation lock is held (38.17), a column's width (38.15). The fakes were written
+from what the author believed the host looked like.
+
+#### Decision
+
+1. **One snapshot, one file.** `scripts/cloud/host-snapshot.sh` runs on the host and prints one
+   JSON document; `scripts/cloud/collect-host-snapshot.ps1` (the LEAD, home PC) sends it on the
+   stdin of `ssh ... bash -s`, validates it and writes `scripts/tests/fixtures/host-snapshot.json`.
+   Workers and inspectors never reach the host; they read the file.
+2. **The schema is closed** (version 1, held by the collector): a member it does not name is
+   refused, so an environment dump or a file's content cannot ride along. A marker is 40 hex,
+   `missing`, or `invalid` (present but not 40 hex - the content is never printed; `invalid` is
+   an addition to the task card's "40-hex or missing", because calling a damaged marker
+   "missing" would be untrue).
+3. **Read-only is proven by recording, not by reading the source.** The suite runs the script
+   under `bash -x` (every command word, builtins included) with fakes that log exact arguments,
+   and fails on anything outside an allow-list. bash's trace does not show redirections, so the
+   script may hold none (`<<<`, `>&2`, `2>/dev/null` only) - files are read with `cat`. The
+   schema query runs in a session the server itself holds read-only
+   (`PGOPTIONS=-c default_transaction_read_only=on`); the allow-list requires that flag.
+   **The recorder cannot be switched off** (the inspector's return, cycle d20261001: `set +x;
+   touch ...; set -x` left the suite green). `set` is allowed only as `set -eu -o pipefail`; a
+   variable that is not the script's own lower-case one (`PS4`, `BASH_XTRACEFD`, `PATH`) may not
+   be assigned - plainly or through `local` / `read` / `for` / `printf -v` - nor named anywhere
+   in the source (an arithmetic expansion assigns one and is traced as its value only); and the
+   trace must reach the script's last command. **`docker inspect` is not on the list** (the card
+   named it; the script never needed it and `{{json .Config.Env}}` prints every secret of a
+   container), and `docker ps` is allowed only with a `--format` of `.Names` and `.State`.
+   The limit, stated: this is a guard against an honest change that does harm, not a sandbox
+   against an author who hides a name on purpose (`x=PS; (( ${x}4 = 1 ))`).
+4. **Consumers keep explicit cases beside the snapshot's.** The maintenance suite takes its
+   container list, serving colour and lock-hold from the fixture, and still runs GREEN, BLUE and
+   the measured 2 s hold as named cases: a later collection that samples the lock free sixty
+   times, or finds blue serving, must not take the proof of 38.12 / 38.17 away.
+5. **A column production does not have fails - unless a migration the serving release does
+   not contain adds it.** The task card said "fails"; taken literally the gate would block the
+   very release that creates the column (the fixture can only gain it after that release).
+   `markers.release` is asked of git (`git ls-tree <release> services/api/alembic/versions`);
+   a table/column named by a migration outside that tree is reported as waiting, not failed.
+   ONE migration file must name both the table and the column: a column of that name on
+   another table, in another unreleased migration, does not make this one wait.
+   When git cannot answer, nothing waits: it fails. The width rule has no exception.
+6. **Patterns that decide what is allowed are culture-invariant.** On this machine (tr-TR) a
+   case-insensitive `INTO` does not match `into`; found while writing the allow-list, covered by
+   a refused lower-case `select ... into` case.
+
+#### Consequences and open risks
+
+- `flock -n <lock> true` takes the operation lock for the life of `true`, sixty times. A release
+  or the minute reconcile that asks in that instant is told "another operation is running"
+  (exit 82; the reconcile runs again a minute later). The maintenance preflight already probes
+  the same way. A probe that takes nothing (`/proc/locks` by inode) is possible and was not
+  built: the task card names `flock -n ... true` as the allowed command. So: the lead does not
+  collect while a release is running.
+- The column listing is larger than a pipe, so bash keeps the here-string in a temp file under
+  `/tmp` on the host for the life of the loop. Nothing is written under `/opt/pagentos`.
+- A missing lock file is not probed (flock would create it): the snapshot says `present: false`.
+- The first real collection may turn `test_host_snapshot_schema.py` RED: 86 of 87 mapped tables
+  are not in the hand-written fixture. Each failure then is a real difference between a model
+  and production, not a test defect.
+- The fixture is only as fresh as its `collected_at`. Freshness is the inspector's rule, not a test.
+
+#### For the lead at merge
+
+- Register `scripts\tests\host-snapshot.tests.ps1` in `.github/workflows/ci.yml` and
+  `scripts/quality-gate.ps1`, IN THE MERGE COMMIT:
+  `services/api/tests/unit/test_ci_covers_every_suite.py::test_ci_runs_every_powershell_suite`
+  is RED on this branch (`['host-snapshot.tests.ps1']`) until it is named there, and with it
+  `quality-gate.ps1 -Fast` as a whole. Both files are outside the worker's area.
+- Run `scripts\cloud\collect-host-snapshot.ps1` (it replaces the hand-written fixture; exit 4 =
+  Tailscale's browser check, nothing changed), then the three consumer suites.
+- Inspector rule (`.claude/agents/inspector.md`): a task whose diff touches `scripts/cloud/*.sh`,
+  `infra/docker` or a migration is inspected against a fixture collected after the last release.
+- QUALIFICATION: this work is PROVEN_AUTOMATED; PROVEN_REAL when the first real collection
+  replaces the fixture and the next maintenance window (38.13) passes without a fix on the host.
+
+**Wired by the lead at merge.** `host-snapshot.tests.ps1` is a step of the gate and of `ci.yml`; the inspector's rule is in
+`.claude/agents/inspector.md`. **The first real collection replaced the hand-written fixture** (2026-10-01 19:18 UTC, after the
+maintenance window): serving colour blue, kernel `6.8.0-142`, the operation lock held 2 of 60 samples (longest run 2), 1126
+columns of 88 tables. Against it: the maintenance suite 35/35, the model-width check 11/11 (every `String(n)` of the models
+equals production's width), the snapshot suite 95/95 after two of its cases were made independent of one collection's values
+(they replaced literals of the hand-written fixture - `"serving_colour": "green"` - and matched nothing in the real one).
+The script was read line by line by the lead before it ran on the host: `docker ps`, `cat` of four markers, `uname`,
+`systemctl list-timers`, `flock -n ... true`, one `information_schema` SELECT in a read-only session.
+
+## ADR-0236 — An idea's text lives in the team's store, and the owner decides while a cycle runs (2026-10-01)
+
+*From `team/plans/proposals-on-cloud-core-adr.md` (ADR (unnumbered - the lead numbers it) — An idea's text lives in the team's store, and the owner decides while a cycle runs (2026-10-01)).*
+
+Task: `proposals-on-cloud-core`. Amends ADR-0222 ("the Onay Merkezi's proposal text still
+comes from `team/` on the machine serving the API") and ADR-0217 (the `cycle_running` refusal).
+
+#### Context
+
+1. Since 2026-10-01 the team's state is in the Cloud Core's PostgreSQL. There is no `team/`
+   folder there, so an idea in the Onay Merkezi showed its title and nothing to read.
+2. Owner, 2026-10-01, three ideas waiting and a cycle running: "neden onaylayamıyorum?" The
+   decision was refused while a cycle held the lock - and the cycle now runs all day
+   (ADR-0214 addendum 6), so the owner could almost never decide.
+
+#### Decision
+
+**Proposals.** `TeamStore` gains `put_proposal(name, text)` / `read_proposal(name)`.
+`DbStore` keeps a row `kind='proposal'`, `key=<file name>`, `doc={'text': ...}` in the existing
+`team_state` table - no new table, no migration. `FileStore` writes and reads
+`team/proposals/<name>`. One rule for the name on both stores:
+`^[a-z0-9][a-z0-9._-]{1,120}\.md$` (matched whole - `$` alone accepts a trailing newline) AND
+at most 80 characters, the width of `team_state.key`, read from the model. A longer name is
+refused (422), never cut: a cut name is another proposal's key. The text is a string of at
+most 200 000 characters.
+
+Two more rules, both from the inspector's break pass (2026-10-01), both on BOTH stores so a
+body is never good on one machine and a 500 on the other:
+
+- **A text neither store can keep is refused (422).** U+0000: PostgreSQL's JSONB has no such
+  character (`UntranslatableCharacter`, a 500 on the Cloud Core) while SQLite and a file keep
+  it - the addendum-4 shape. Half of a surrogate pair: not UTF-8, so the file store cannot
+  write it either. The cycle report (`put_report`) had the same hole and has the same rule.
+- **A Windows device name is refused (422).** A name whose part before the first dot is
+  `con`, `prn`, `aux`, `nul`, `com0`-`com9` or `lpt0`-`lpt9` is a device on the machine that
+  runs the file store (`nul.md` is the null device: `os.replace` onto it fails; `com1.md`
+  opens a serial port). Refused in `proposal_name_problems`, and for report names too, rather
+  than turning the file store's `OSError` into `Invalid`: the database store would otherwise
+  keep a name the home PC cannot.
+
+`POST /v1/team/queue/proposals` (owner session; body `{name, text}`, no other field) answers
+`{ok: true}`; a second post of the same name replaces the text; anything else is 422 and
+nothing is written. This contract is binding with `researcher-every-cycle`, whose `cycle.ps1`
+posts each proposal file.
+
+`GET /v1/team/approvals` reads `proposal_text` through the store: the task's `proposal`
+`team/proposals/<name>` -> `read_proposal(<name>)`. The file under `team/` is the fallback of
+the FileStore only (a hand-written file, a name the route would refuse, a path under `team/`
+that is not a proposal). On the DbStore a file on the serving machine is never shown: the two
+machines must read the same text. The listing still cuts the text at 20 000 characters
+(unchanged); the store keeps all of it.
+
+**Decisions while a cycle runs.** One function, `approvals.decisions_open(store, lock, at)`,
+is what the listing says (`decisions_open`, beside `cycle_running`, which stays for
+information) and what `decide()` enforces: always true on the DbStore; `not cycle_running` on
+the FileStore. The refusal was made for the file store, where the cycle rewrites the whole
+queue file at its end. On the database store the cycle writes back only the tasks it changed,
+each conditional on the `updated_at` it read, and does not touch a task waiting at a gate; the
+decision's own write stays conditional on the `updated_at` it read (a task changed meanwhile
+-> 409 `stale_write`), and a cycle holding the older version is refused the same way. Only a
+task at one of the two gates can be decided, cycle or not (`not_at_a_gate` otherwise). The
+answer now carries `cycle_running` and a `message` saying the decision takes effect in the
+next cycle.
+
+#### Alternatives rejected
+
+- A `team_proposals` table: a migration and a release step for what one more `kind` holds.
+- Truncating a long name to 80 characters: two proposals could share a key.
+- Sending the text inside the task (`proposal` as prose): the queue schema and every queue
+  read would carry up to 200 000 characters per idea.
+- Opening decisions on the FileStore too: the cycle's whole-file rewrite would overwrite them.
+
+#### Evidence
+
+Unit (both stores) `tests/unit/test_team_proposals.py`,
+`tests/unit/test_team_approvals_while_running.py`; real PostgreSQL (dev stack)
+`tests/integration/test_team_proposals_postgres.py`,
+`tests/integration/test_team_approvals_postgres.py`.
+
+#### Open
+
+- The proposals already waiting in production have their text only on the home PC: they show
+  no text until `cycle.ps1` posts them (`researcher-every-cycle`), or the lead posts them once.
+- The web page still disables its buttons on `cycle_running`; it must read `decisions_open`
+  (`approvals-detail-view`). The Ofis view (`office.py`) is unchanged.
+- The ledger event is recorded before the queue write (ADR-0217): a decision refused as
+  `stale_write` has left an event for a decision that did not land. That was possible before;
+  with decisions open during a cycle it is less rare.
+- A request body whose string holds half of a surrogate pair is refused by pydantic before the
+  route runs (nothing is written), but the app's validation-error answer then fails to encode
+  the echoed input: a 500 instead of a 422, on every route, not only this one. It is outside
+  this task's area (the error handler); the store's own rule is what this task tests.
+- `put_task` keeps a task document as JSONB: a U+0000 inside a task's string would be refused
+  by PostgreSQL the same way. Not measured here; the cycle writes those strings itself.
+- `PROVEN_REAL` needs the owner: read an idea's text and approve it with the home PC off and a
+  cycle running, after the release.
+
+#### For the lead at merge
+
+- The two existing tests the new route and the new rule change
+  (`tests/unit/test_team_state.py`: the route is in `read_by_others` with its reason, and
+  `researcher-every-cycle` removes the entry when its `cycle.ps1` calls the route;
+  `tests/unit/test_team_approvals.py`: the database half of the cycle-holds-the-lock test
+  expects the decision applied) are on this branch again: the lead put both files in the area
+  and `1df514f0` is cherry-picked. Nothing to do at merge.
+- `voice/realtime_sessions/tools_team.py` calls `approvals.list_pending(queue, root)` without
+  the store. On the Cloud Core that falls back to the file store and the spoken path gets no
+  proposal text: pass the store (the file is outside this task's area).
+- The web page reads `decisions_open` (`approvals-detail-view`).
+
+**For the owner's page.** The API now answers `decisions_open`; the Onay Merkezi page still reads `cycle_running` until
+`approvals-detail-view` (inspected next) reaches main - until then the buttons stay locked and the owner relays decisions
+through the lead. The cycle does not post proposal texts yet (`researcher-every-cycle`); the lead posts the texts of the
+waiting ideas by hand after the release.
+
+### ADR-0234 addendum 2 (2026-10-01): the Ofis page's labels stay inside their seat and the scene wraps
+
+*From `team/plans/office-page-polish-adr.md` (ADR (text; the lead numbers it) - Ofis page: seats wrap, a label is cut inside its own cell).*
+
+Context: the owner's screenshot of a real cycle (docs/evidence/office-page-real-cycle-2026-10-01.png,
+a ~670 px column = globals.css `main` 720 px less its padding) showed the floor as four fixed 10rem
+columns with `min-width: 43rem` inside a sideways-scrolling box: one rem too wide for the column, so a
+scrollbar appeared and the rightmost seat's task title was cut by the scene's edge.
+
+Decision: `.office-floor` is `repeat(auto-fill, minmax(max(7rem, calc(25% - 0.75rem)), 1fr))` with no
+width of its own. The 25% floor caps a row at four seats (eight seats = 4+4, never 5+3); the 7rem
+minimum lets two seats share a row on a 320 px phone (17rem of content). `.office-scroll` keeps
+`overflow-x: auto`, which now only acts when one cell alone is wider than the box. `.office-seat` gets
+`min-width: 0` and `.office-figure` is `width: 100%; max-width: 8rem`, so a cell can shrink below the
+drawing's natural size. The label keeps its ellipsis at the cell's width and carries the full title in
+its `title` attribute (only when the seat has a task); the right panel shows the full title as before.
+No new class names, no model change: states, top bar, panel, approvals and the 5 s poll are untouched.
+
+Why not truncate in the model: the width is the browser's to know; a character count would cut too
+early in a wide cell and too late in a narrow one.
+
+Evidence: tests/office/layout.test.tsx asserts the markup and reads office.css itself (no browser is
+run in this suite; the picture is PROVEN_REAL only when the owner looks at the page in the next cycle).
+The four-a-row cap is tested by doing auto-fill's arithmetic on the declared track minimum, the whole
+`max(...)` term included: exactly four at the owner's 42rem box, never more than four from 17rem to
+120rem, two at 17rem. Without the 25% term five 7rem cells fit 40.5rem and the test goes RED.
+
+Not in this change: the card title's "tahmini USD koşu sürerken de güncellensin" has no acceptance
+criterion and touches the data side, not the layout; it needs its own card.
+Rollback: revert the commit; the page returns to four fixed columns.
+
+The title's second half ("tahmini USD koşu sürerken de güncellensin") was not built and had no acceptance criterion: the
+estimate is updated by the cycle when a run ENDS (the tool reports cost at the end of a run), which is what the page shows.

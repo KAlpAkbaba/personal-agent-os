@@ -979,6 +979,24 @@ try {
         Assert-True -Condition ([double]$final.estimated_usd -gt 0) -Because "four runs at 0.25"
     }
 
+    Test-Case "an approved task's worker starts in the SAME batch as another task's integrator: nobody waits a round for a state change" {
+        # 2026-10-01, the owner looking at the Ofis page: one integrator working, three worker seats
+        # empty, eight approved tasks ready. The loop moved 'approved' to 'assigned' and only
+        # looked at the task again in the NEXT round - after the integrators of that round had
+        # finished (web research: minutes). A task is looked at again in the pass that moved it.
+        $plain = New-Task -Id "task-plain" -Area @("src/area")
+        $withPlan = New-Task -Id "task-study" -Area @("src/area2")
+        $withPlan | Add-Member -NotePropertyName "needs_integration" -NotePropertyValue $true
+        $root = New-Sandbox -Tasks @($withPlan, $plain)
+        $snapshots = Join-Path $root "snapshots"
+        $hooks = @{ PAGENTOS_FAKE_CLAUDE_SNAPSHOT = $snapshots; PAGENTOS_FAKE_CLAUDE_STATUS = (Join-Path $root "team\status.json") }
+        Use-FakeHooks -Environment $hooks -Body { $script:sameBatch = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        Assert-Equal -Expected 0 -Actual $script:sameBatch.ExitCode -Because ($script:sameBatch.StdOut + $script:sameBatch.StdErr)
+        $seen = Read-TeamJson -Path (Join-Path $snapshots "integrator-task-study.json")
+        Assert-Equal -Expected "task-plain:worker,task-study:integrator" -Actual (@(@($seen.runs) | ForEach-Object { "$($_.task):$($_.role)" } | Sort-Object) -join ",") -Because "while the integrator studies, the other task's worker is already at work: $($seen | ConvertTo-Json -Depth 5 -Compress)"
+        Assert-Equal -Expected "merged,merged" -Actual (@(Get-TeamTasks -Queue $script:sameBatch.Queue | ForEach-Object { $_.state }) -join ",") -Because "and both end merged"
+    }
+
     Test-Case "the live status: a finished run is gone from the list before the next one starts, and the estimate has risen" {
         $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
         $snapshots = Join-Path $root "snapshots"

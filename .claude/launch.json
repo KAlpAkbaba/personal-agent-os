@@ -2,18 +2,6 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "web",
-      "runtimeExecutable": "C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd",
-      "runtimeArgs": [
-        "--dir",
-        "apps/web",
-        "dev",
-        "--port",
-        "3210"
-      ],
-      "port": 3210
-    },
-    {
       "name": "web-cloud",
       "runtimeExecutable": "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe",
       "runtimeArgs": [
@@ -26,6 +14,18 @@
         "C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd"
       ],
       "port": 3000
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "C:/Users/alpak/AppData/Roaming/npm/pnpm.cmd",
+      "runtimeArgs": [
+        "--dir",
+        "apps/web",
+        "dev",
+        "--port",
+        "3210"
+      ],
+      "port": 3210
     }
   ]
 }

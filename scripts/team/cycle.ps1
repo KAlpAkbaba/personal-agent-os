@@ -67,7 +67,10 @@ param(
     [double]$RunMaxUsd = 0,
     [double]$RunMinutes = 0,
     [int]$CycleMinutes = 0,
-    [int]$MaxRunsPerTask = 4,
+    # Eight, not four: a task with an integrator and ONE honest return is integrator + worker +
+    # inspector + worker = four runs, and was stopped before its second inspection
+    # (model-policy-cycle, 2026-10-01). Two RETURNs still stop a task; this only bounds a loop.
+    [int]$MaxRunsPerTask = 8,
     [bool]$WaitForUsageLimit = $true,
     [string]$ClaudePath = (Join-Path $env:USERPROFILE ".local\bin\claude.exe"),
     [string[]]$ClaudePrefixArguments = @(),
@@ -521,7 +524,11 @@ try {
                 Set-TeamProperty -InputObject $task -Name "state" -Value $next.NextState
                 Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
                 $moved = $true
-                continue
+                # Looked at again in THIS pass: an 'approved' task that just became 'assigned' is
+                # runnable now. It used to wait a whole round - behind that round's integrators -
+                # with its worker seat empty (the owner saw it on the Ofis page, 2026-10-01).
+                $next = Get-TeamNextRole -Task $task
+                if ($next.Kind -eq "move") { continue }
             }
             if ($next.Kind -ne "run") { continue }
             $id = [string]$task.id
