@@ -37,6 +37,7 @@ disk_max=${PAGENTOS_DISK_MAX_PCT:-80}
 backup_max_age=${PAGENTOS_BACKUP_MAX_AGE_S:-86400}
 wait_tries=${PAGENTOS_WAIT_TRIES:-60}
 wait_step=${PAGENTOS_WAIT_STEP_S:-5}
+lock_wait=${PAGENTOS_LOCK_WAIT_S:-45}
 backup_script=${PAGENTOS_BACKUP_SCRIPT:-$base/app/scripts/cloud/backup-cloud-core.sh}
 marker="$base/MAINTENANCE_MARKER"
 record="$base/LAST_MAINTENANCE.json"
@@ -101,9 +102,12 @@ preflight() {
     if [ -z "$failures" ]; then check_ok failure-marker "read $backup_root/failures/: none"
     else check_fail failure-marker "read $backup_root/failures/:$failures"; fi
     # 3. a release in flight (the blue/green operation lock); the team cycle is the lead's check
+    # The minute reconcile takes this lock for a few seconds every minute; asking once (-n)
+    # let the window's own housekeeping postpone it (seen on the host, 2026-10-01). The check
+    # waits: the reconcile lets go in seconds, a release holds on for minutes and still refuses.
     local lockf="$base/.bluegreen-operation.lock"
-    if [ ! -e "$lockf" ] || flock -n "$lockf" true 2>/dev/null; then check_ok no-release "read $lockf: not held (team cycle / owner mid-task: the lead's check, home PC)"
-    else check_fail no-release "read $lockf: held, a release or recovery is running"; fi
+    if [ ! -e "$lockf" ] || flock -w "$lock_wait" "$lockf" true 2>/dev/null; then check_ok no-release "read $lockf: not held (team cycle / owner mid-task: the lead's check, home PC)"
+    else check_fail no-release "read $lockf: still held after ${lock_wait}s, a release or recovery is running"; fi
     # 4. nothing removed by the upgrade; docker-ce not held; disk under the limit
     local sim held pct
     if sim=$(apt-get -s upgrade 2>&1); then

@@ -92,7 +92,7 @@ $fakes = @{
         'if [ -f "$FAKE_MARKER" ]; then m=yes; else m=no; fi',
         'echo "reboot marker=$m" >> "$FAKE_STATE/calls.log"',
         'exit 0')
-    flock = @('#!/usr/bin/env bash', 'exit 0')
+    flock = @('#!/usr/bin/env bash', 'echo "flock $*" >> "$FAKE_STATE/calls.log"', 'exit "${FAKE_FLOCK_EXIT:-0}"')
 }
 foreach ($k in $fakes.Keys) { [IO.File]::WriteAllText((Join-Path $fakeBin $k), (($fakes[$k] -join "`n") + "`n")) }
 
@@ -186,6 +186,19 @@ try {
         Assert-True (($c -contains "reboot marker=yes") -and (Test-Path (Join-Path $hostBase "MAINTENANCE_MARKER"))) "the maintenance marker exists when reboot is called"
         $mk = if (Test-Path (Join-Path $hostBase "MAINTENANCE_MARKER")) { Get-Content (Join-Path $hostBase "MAINTENANCE_MARKER") -Raw } else { "" }
         Assert-True ($mk -match "start_epoch=\d+" -and $mk -match "kernel_before=6.8.0-138") "the marker carries the start time and the old kernel"
+
+        # The operation lock: the minute reconcile holds it for a few seconds every minute
+        # (measured on the host, 2026-10-01: one preflight in forty said "held"). A one-shot
+        # window that asked without waiting would be postponed by its own housekeeping, so the
+        # check WAITS for the lock; a release, which holds it for minutes, still refuses.
+        Reset-Host
+        [IO.File]::WriteAllText((Join-Path $hostBase ".bluegreen-operation.lock"), "")
+        $r = Invoke-Maint
+        Assert-True ($r.Exit -eq 0 -and @($r.Calls | Where-Object { $_ -match "^flock -w 45 " }).Count -eq 1 -and @($r.Calls | Where-Object { $_ -match "^flock -n" }).Count -eq 0) "the lock check waits (flock -w 45), it does not ask once"
+        Reset-Host
+        [IO.File]::WriteAllText((Join-Path $hostBase ".bluegreen-operation.lock"), "")
+        $r = Invoke-Maint -Env @{ FAKE_FLOCK_EXIT = "1" }
+        Assert-True ($r.Exit -eq 10 -and $r.Output -match "FAIL no-release") "a lock still held after the wait refuses the window (10)"
 
         # The serving colour is whichever the last release left (found 2026-10-01: the release of
         # that afternoon made GREEN the active colour, and the script waited for api-blue by name -
