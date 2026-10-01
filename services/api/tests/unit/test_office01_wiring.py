@@ -89,6 +89,12 @@ def test_a_what_happened_question_is_asked_of_the_narrative_before_the_classifie
     )
     ordinary = "dün hangi araştırmalar başarısız oldu"
     assert explain_service.query_for(ordinary, now=NOW) == classify(ordinary, now=NOW)
+    # The router decides, not the recogniser alone: the recogniser takes this sentence too,
+    # and the family that owned it ("today") keeps it.
+    owned = "Bugün neler yaptın"
+    assert recognise(owned) is not None
+    assert explain_service.query_for(owned, now=NOW) == classify(owned, now=NOW)
+    assert explain_service.query_for(owned, now=NOW).kind == "today"
     body = (API / "app" / "explain" / "service.py").read_text("utf-8")
     inside = body.split("def explain_to_briefing(", 1)[1].split("\ndef ", 1)[0]
     assert "query = query_for(question, now=now)" in inside

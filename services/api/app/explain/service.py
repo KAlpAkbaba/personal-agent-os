@@ -26,6 +26,7 @@ from app.artifacts.models import (
 from app.artifacts.renderers import content_hash
 from app.explain.classify import LEVEL_EXECUTIVE, ExplainQuery, classify
 from app.explain.engine import (
+    QUERY_NARRATIVE,
     Briefing,
     EventView,
     EvidenceSource,
@@ -40,6 +41,7 @@ from app.narration.engine import Cursor, build_plan
 from app.voice.intents import (
     PRESENTATION_FULL,
     level_section_cursor,
+    resolve_intent,
     speech_budget,
     speech_from,
 )
@@ -458,11 +460,20 @@ def persist_briefing(db: Session, briefing: Briefing) -> tuple[uuid.UUID, int, s
 
 
 def query_for(question: str, *, now: datetime) -> ExplainQuery:
-    """The query a question is answered as. The narrative recogniser is asked FIRST:
-    ``classify`` does not know "bu hafta ne oldu", and without this line the router
-    resolved the sentence as a narrative while ``activity.explain`` answered
-    "Bu konuda kayıt bulamadım" (found by the worker of narrative-intent-wiring)."""
-    return narrative_query(question, now=now) or classify(question, now=now)
+    """The query a question is answered as. A question the ONE router reads as a narrative
+    ("bu hafta ne oldu") is answered as one: ``classify`` does not know it, and without this
+    the router resolved the sentence as a narrative while ``activity.explain`` answered
+    "Bu konuda kayıt bulamadım" (found by the worker of narrative-intent-wiring).
+
+    The ROUTER decides, not the narrative recogniser alone: the recogniser also takes
+    "bugün neler yaptın", which the router keeps for the family that owned it ("today") -
+    asking the recogniser directly turned that answer into an empty narrative (the gate,
+    office-01: ``test_explain_with_no_evidence_says_so_and_still_attaches``)."""
+    if resolve_intent(question).query_kind == QUERY_NARRATIVE:
+        narrative = narrative_query(question, now=now)
+        if narrative is not None:
+            return narrative
+    return classify(question, now=now)
 
 
 def explain_to_briefing(
