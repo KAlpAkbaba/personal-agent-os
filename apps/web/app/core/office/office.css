@@ -1,0 +1,180 @@
+/* The Ofis page. Own class prefix `office-`; the palette is the Kokpit's warm family. */
+
+.office {
+  --office-hair: #3a2a1a;
+  --office-skin: #e8b98a;
+  --office-shirt: var(--core-amber, #f0a53a);
+  --office-trousers: #3b4a63;
+  --office-desk: #7a5a3a;
+  --office-desk-edge: #4d3823;
+  --office-monitor: #20202a;
+  --office-screen: #6fb7d9;
+  --office-chair: #55505e;
+  --office-key: #c9c2b4;
+  --office-warn: var(--core-amber, #f0a53a);
+  --office-warn-text: var(--core-ground, #06050a);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.office-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--core-amber, #f0a53a);
+  border-radius: 6px;
+}
+
+.office-offline {
+  color: var(--core-ember, #e0623c);
+  font-weight: 600;
+}
+
+.office-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+/* The office scrolls sideways inside its own box at phone width; the panel wraps below. */
+.office-scroll {
+  flex: 1 1 28rem;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.office-floor {
+  display: grid;
+  grid-template-columns: repeat(4, 10rem);
+  gap: 0.75rem;
+  min-width: 43rem;
+  padding: 0.75rem;
+  background: #1b1710;
+  border-radius: 6px;
+}
+
+.office-seat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 0.25rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.office-seat:hover,
+.office-seat[aria-pressed="true"] {
+  border-color: var(--core-gold, #ffc86a);
+}
+
+.office-seat:focus-visible {
+  outline: 2px solid var(--core-warm-white, #fff1d0);
+  outline-offset: 2px;
+}
+
+.office-label {
+  min-height: 1.2em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--core-gold, #ffc86a);
+}
+
+.office-figure {
+  width: 8rem;
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.office-name {
+  font-size: 0.8rem;
+}
+
+.office-count {
+  color: var(--core-amber, #f0a53a);
+}
+
+.office-badge-static {
+  font-size: 0.7rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--core-gold, #ffc86a);
+  border-radius: 999px;
+}
+
+.office-panel {
+  flex: 1 1 18rem;
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--core-amber, #f0a53a);
+  border-radius: 6px;
+}
+
+.office-report {
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+/* typing: the two arm frames alternate; without motion preference they never move */
+.office-arms-b {
+  visibility: hidden;
+}
+
+.office-typing .office-arms-a {
+  animation: office-frame-a 0.5s steps(1) infinite;
+}
+
+.office-typing .office-arms-b {
+  animation: office-frame-b 0.5s steps(1) infinite;
+}
+
+@keyframes office-frame-a {
+  0% {
+    visibility: visible;
+  }
+  50% {
+    visibility: hidden;
+  }
+}
+
+@keyframes office-frame-b {
+  0% {
+    visibility: hidden;
+  }
+  50% {
+    visibility: visible;
+  }
+}
+
+.office-warning {
+  animation: office-blink 1.2s steps(1) infinite;
+}
+
+@keyframes office-blink {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .office-typing .office-arms-a,
+  .office-typing .office-arms-b,
+  .office-warning {
+    animation: none;
+  }
+}
