@@ -3,7 +3,7 @@
     "note":  "The agent team\u0027s queue (docs/TEAM_PROTOCOL.md). Until the Onay Merkezi exists, the owner approves by setting a task\u0027s state to \"approved\" here.",
     "tasks":  [
                   {
-                      "state":  "merged",
+                      "state":  "released",
                       "branch":  "team/office-01/worker-office-data-api",
                       "worktree":  ".claude/worktrees/team/office-01/worker-office-data-api",
                       "assignee":  "inspector",
@@ -210,7 +210,7 @@
                                       }
                                   ],
                       "created_at":  "2026-10-01T08:30:00Z",
-                      "updated_at":  "2026-10-01T08:51:07Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "roadmap_row":  "How it is built from here (TEAM_PROTOCOL 3a)",
                       "id":  "office-data-api",
                       "title":  "Ofis sayfasının veri ucu: GET /v1/team/office — canlı kuyruk + koşan ajanlar + döngü özeti (dosya ve veritabanı deposu)",
@@ -231,10 +231,13 @@
                       "sha":  "dc17cedd7641e6b61e79f9257827f8fb53d8c791",
                       "returns":  1,
                       "reason":  "fix the dropped returned-worker-task seat indexing, with a mixed working/returned regression test and RED; add the future-dated and no-timezone `updated_at` decision to the ADR or the code",
-                      "integration_branch":  "integrate/office-01"
+                      "integration_branch":  "integrate/office-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
-                      "state":  "merged",
+                      "state":  "released",
                       "branch":  "team/office-01/worker-office-cycle-status",
                       "worktree":  ".claude/worktrees/team/office-01/worker-office-cycle-status",
                       "assignee":  "inspector",
@@ -428,7 +431,7 @@
                                       }
                                   ],
                       "created_at":  "2026-10-01T08:30:00Z",
-                      "updated_at":  "2026-10-01T08:54:34Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "roadmap_row":  "How it is built from here (TEAM_PROTOCOL 3a)",
                       "id":  "office-cycle-status",
                       "title":  "Döngü canlı durumunu yazar (koşan koşular, tahmini USD, Max limit) + güvenli durdurma bayrağı",
@@ -451,10 +454,13 @@
                       "sha":  "680c59dd1867056c4db1a8b614c7a3e0498efd8a",
                       "returns":  1,
                       "reason":  "rapor bir hukumle bitmedi",
-                      "integration_branch":  "integrate/office-01"
+                      "integration_branch":  "integrate/office-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
-                      "state":  "merged",
+                      "state":  "released",
                       "branch":  "team/office-01/worker-office-page",
                       "worktree":  ".claude/worktrees/team/office-01/worker-office-page",
                       "assignee":  "inspector",
@@ -639,7 +645,7 @@
                                       }
                                   ],
                       "created_at":  "2026-10-01T08:30:00Z",
-                      "updated_at":  "2026-10-01T08:49:11Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "roadmap_row":  "How it is built from here (TEAM_PROTOCOL 3a)",
                       "id":  "office-page",
                       "title":  "Kokpit \u0027Ofis\u0027 sayfası (/core/office): 2D piksel ofis, rol başına masa+karakter, üst bar, sağ panel, Onay Merkezi bekleyenleri, 5 sn yenileme",
@@ -660,7 +666,10 @@
                       "returns":  1,
                       "reason":  "alan dışı dosya: apps/web/tests/office/fixtures.ts, apps/web/tests/office/model.test.ts, apps/web/tests/office/poller.test.ts, apps/web/tests/office/view.test.tsx",
                       "sha":  "7f98647738701b92230e0007bef7954009b9155a",
-                      "integration_branch":  "integrate/office-01"
+                      "integration_branch":  "integrate/office-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "state":  "approved",
@@ -696,7 +705,7 @@
                       "needs_integration":  false
                   },
                   {
-                      "state":  "merged",
+                      "state":  "released",
                       "branch":  "team/cycle-2026-10-01/worker-understanding-normalize",
                       "worktree":  ".claude/worktrees/team/cycle-2026-10-01/worker-understanding-normalize",
                       "assignee":  "inspector",
@@ -864,7 +873,7 @@
                                       }
                                   ],
                       "created_at":  "2026-09-30T21:30:00Z",
-                      "updated_at":  "2026-09-30T22:04:19Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
                       "id":  "understanding-normalize",
                       "title":  "ADR-0224 katman 1: Türkçe ek düşürme (kapalı tablo) + STT karışıklık sözlüğü (protokol dosyası)",
@@ -885,10 +894,13 @@
                       "sha":  "af22cac6a2d66fc7cb68781f9f0a72497f648514",
                       "returns":  1,
                       "reason":  "rapor bir hukumle bitmedi",
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
-                      "state":  "merged",
+                      "state":  "released",
                       "branch":  "team/cycle-2026-10-01/worker-understanding-semantic-index",
                       "worktree":  ".claude/worktrees/team/cycle-2026-10-01/worker-understanding-semantic-index",
                       "assignee":  "inspector",
@@ -1098,7 +1110,7 @@
                                       }
                                   ],
                       "created_at":  "2026-09-30T21:30:00Z",
-                      "updated_at":  "2026-10-01T08:35:00Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
                       "id":  "understanding-semantic-index",
                       "title":  "ADR-0224 katman 2: niyet + varlık vektör dizini (yerel potion embedder), bulanık dize, güven puanı ve birleştirici",
@@ -1122,7 +1134,10 @@
                       "sha":  "7f778f2cf6a1d9a22691e312e95b8b4c48cf2287",
                       "returns":  2,
                       "reason":  "denetleyici APPROVE; entegrasyon çakışmasını (understanding/__init__.py) lead çözdü (c8263c8a)",
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "state":  "approved",
@@ -2918,7 +2933,7 @@
                       "id":  "narrative-intent-wiring",
                       "title":  "Anlatı niyetinin bağlanması: tek yönlendiricide \u0027bu hafta ne oldu\u0027 → app.narrative.tell; explain\u0027e sorgu türü",
                       "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/voice/intents.py",
                                    "services/api/app/explain/engine.py",
@@ -3130,7 +3145,7 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T11:30:00Z",
-                      "updated_at":  "2026-09-30T22:20:12Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "ADR-0216 and ADR-0221: app/narrative has recognise(), tell() and ModelNarrator, called by nothing. Read how app/voice/intents.py resolves an utterance to an intent and how a READ intent answers in words (the ONE router; local mode and the paid mode both pass through it), and how app/explain/engine.py dispatches a query type. Add (1) a narrative intent: when app.narrative.intent.recognise(text) matches, the answer is app.narrative.service.tell(db, ask.period, ask.device, narrator) spoken through the existing answer path; the narrator is ModelNarrator over the chat provider the router already has, RuleNarrator when there is none; (2) the explain query type that returns the same text. The narrative is a READ: no step-up, no confirmation, no device command. It must not shadow an existing intent: an utterance another intent already takes keeps going where it went (test with the corpus phrases near it). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
                       "acceptance":  "Tests through the real router function with a fake db/provider: \u0027bu hafta ne oldu\u0027 answers with the narrative; \u0027hafta sonu ne yapalım\u0027 does not; an utterance an existing intent owns is unchanged (at least five near phrases from the existing intent tests); the answer names every failure in a fixed ledger fixture. Mutations: the recogniser call removed -\u003e RED; the narrative placed before an existing intent it would shadow -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED; READY_FOR_OWNER (the owner says \u0027bu hafta ne oldu\u0027)",
@@ -3138,13 +3153,16 @@
                       "sha":  "07d8fb1e02b4202516d388d96b77504eda74ffc1",
                       "returns":  1,
                       "reason":  "rapor bir hukumle bitmedi",
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "ledger-device-stamp",
                       "title":  "Ledger yazarları cihazı damgalar: detail_json[\u0027device\u0027] (anlatının \u0027ofiste\u0027 süzgeci gerçek veride çalışsın)",
                       "roadmap_row":  "Records everything and tells him, whenever he asks (order 2c)",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/actions/receipt.py",
                                    "services/api/app/operator/service.py",
@@ -3259,20 +3277,23 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T11:30:00Z",
-                      "updated_at":  "2026-09-30T22:18:13Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "ADR-0221 ships app/narrative/device_writer.stamp_device(detail, device_word_or_alias) and lists the ledger writers that know which device acted. For each of the four files in the area: find where it records a ledger event for something a DEVICE did, and pass the device\u0027s alias (or name) through stamp_device into detail_json. Do not change what is recorded otherwise, do not add a device where the writer does not know one (a cloud-side event stays unstamped = \u0027bulut\u0027). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
                       "acceptance":  "Tests per writer with the writer\u0027s own fakes: an event for the home device carries device \u0027ev\u0027, for the office device \u0027ofis\u0027; an event with no device carries no stamp; an existing stamp is not overwritten; the collector (app.narrative.collector) then selects the office rows for \u0027ofiste\u0027 from rows these writers produced. Mutation per writer: the stamp removed -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED",
                       "needs_integration":  false,
                       "sha":  "463d8043b6cc180641722d10cb5c073af03a9cf9",
                       "returns":  0,
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "allowlist-editor",
                       "title":  "Onay Merkezi\u0027nden izin listesine site ekleme/çıkarma: POST /v1/team/allowlist, ledger olayı, listenin işle birlikte işçiye gitmesi",
                       "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/team/allowlist_routes.py",
                                    "services/api/app/execution/allowlist_store.py",
@@ -3387,20 +3408,23 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T11:30:00Z",
-                      "updated_at":  "2026-09-30T22:24:41Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "ADR-0218: the cloud allow-list is a shared JSON that starts empty, and its ADR names the editor\u0027s API shape. Build it: the owner\u0027s list lives in the database (one row per registrable domain, added_at, added_by channel) - the shared JSON stays the SEED and the schema; allowlist_store merges seed + rows and exposes the same acting_allowed() contract (deny-list first, always). POST /v1/team/allowlist {site} and DELETE, owner-session-gated; a site that is not a registrable domain, is a bare public suffix, or is deny-listed is refused with a reason; every change is a ledger event (name the two event types for the lead). A small page under the Onay Merkezi lists the sites with add/remove. If a migration is needed, STOP at the model and write the migration\u0027s content under \u0027For the lead at merge\u0027 (alembic/versions is not in the area). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
                       "acceptance":  "Tests: add, list, remove; a deny-listed site is refused even when asked twice; a bare suffix is refused; acting_allowed() follows the store at once; without a session 401/403. Mutations: the deny-list check removed from the editor -\u003e RED; the suffix check removed -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED; READY_FOR_OWNER (the page)",
                       "needs_integration":  false,
                       "sha":  "d50b632c8385a50876838262a76fe89915355ad1",
                       "returns":  0,
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "cloud-device-registry",
                       "title":  "Bulut cihazı ve sahibin Chrome\u0027u kayıtta görünür: platform=cloud cihazın \u0027bulut\u0027 alias\u0027ı, owner_chrome etiketi — execution_target\u0027ın okuduğu gerçekler yazılır",
                       "roadmap_row":  "browser-use, anywhere (order 2b, ADR-0213)",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/devices/cloud_registry.py",
                                    "services/api/tests/unit/test_cloud_device_registry.py",
@@ -3509,20 +3533,23 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T11:30:00Z",
-                      "updated_at":  "2026-09-30T22:27:26Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "ADR-0220: app/execution/wiring.py reads the device registry for a device with platform \u0027cloud\u0027 and for an `owner_chrome` label, and nothing writes either. Read app/devices (types, aliases, the enrollment and hello handling) and ADR-0113/0183 (how the owner\u0027s Chrome enrollment is known to the Cloud Core today - the capability the device advertises). Write cloud_registry.py: (1) `ensure_cloud_alias(db, device)` - a device whose platform is \u0027cloud\u0027 gets the alias \u0027bulut\u0027 in metadata_json.aliases (idempotent; never on another platform); (2) `owner_chrome_label(view)` - derive the label from what the device ALREADY advertises (the owner-profile capability / enrollment fact), so no second source of truth is written; (3) the one function the broker\u0027s hello path should call. Name the call site for the lead; do not edit app/broker. Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
                       "acceptance":  "Tests with the devices package\u0027s own fakes: a cloud device gains \u0027bulut\u0027 once; a Windows device never does; a device advertising the owner profile is labelled, one that does not is not; wiring.choose (imported) then selects cloud / owner_chrome from these facts. Mutations: the platform check removed -\u003e RED; the label derived from the name instead of the capability -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED",
                       "needs_integration":  false,
                       "sha":  "9cb3f9fa1b237b7a538b9885f5eaada9a14639cc",
                       "returns":  0,
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "cycle-lead-run",
                       "title":  "Döngüde lead koşusu: onaylı öneriler (roadmap\u0027e hizmet eden) alanlı iş kartlarına bölünür — gece döngüsü insansız ilerler",
                       "roadmap_row":  "How it is built from here (TEAM_PROTOCOL 3a)",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "scripts/team/cycle.ps1",
                                    "scripts/lib/TeamQueue.ps1",
@@ -3632,20 +3659,23 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T11:30:00Z",
-                      "updated_at":  "2026-09-30T22:55:20Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "ADR-0214 addendum 2: a proposal that serves a roadmap row is approved in advance, but splitting it into tasks (area, goal, acceptance) is done by a person today. Add a lead run to cycle.ps1: after the researcher step, for every task that has a `proposal`, is at `approved` (or at `proposed` with a non-empty roadmap_row) and has an empty area, start ONE fresh run of the `lead` role with the proposal and team/plans/*-split.md; the lead writes team/plans/\u003ccycle\u003e-split-\u003cid\u003e.json: a list of task objects (the queue schema\u0027s shape). The SCRIPT, not the model, validates each (schema fields, area inside the repository, no overlap with a task in work, not a shared file, at most 25 files named, never main / hand-gestures) and appends the valid ones as `approved`; an invalid split is rejected whole with the reasons in the report and the proposal stays where it was. A proposal with an empty roadmap_row goes to awaiting_owner as before. The lead run gets no Bash and no Edit (read, write the one file). Work only inside the area. Do not edit docs/HANDOFF.md, docs/DECISIONS.md, state/BUILD_STATE.json or docs/THIRD_PARTY_COMPONENTS.md; put what the lead must wire under \u0027For the lead at merge\u0027. No new dependency. Tests first (keep the RED output), a near miss beside every hit, one mutation per rule RED with the file restored by full 64-hex sha256 (never git checkout --). The worktree has no venv: run pytest from services/api with the main checkout\u0027s .venv and check app.__file__.",
                       "acceptance":  "team-cycle.tests.ps1 (fake model): a roadmap-serving proposal becomes its tasks and runs in the same cycle; a split with an overlapping area, a shared file or a missing field is rejected whole; a proposal without a roadmap row waits for the owner; the lead run\u0027s tools hold no Bash/Edit; a second cycle does not split the same proposal again. Mutations: the overlap check removed -\u003e RED; the roadmap_row condition removed -\u003e RED. script-syntax and provision suites stay green.",
                       "evidence_expected":  "PROVEN_AUTOMATED (fake model)",
                       "needs_integration":  false,
                       "sha":  "3f11bcf4fd2394fa7246f895ff708e08f8269a19",
                       "returns":  0,
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "maintenance-reboot-script",
                       "title":  "Bakım penceresi betiği: ADR-0223 prosedürü (ön kontroller, güncelleme, yeniden başlatma, doğrulama, rapor) tek komut + kapıda test",
                       "roadmap_row":  "Repairs and improves itself (kept controlled)",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "scripts/cloud/maintenance-reboot.sh",
                                    "scripts/tests/maintenance-reboot.tests.ps1",
@@ -3758,20 +3788,23 @@
                                      "max_usd":  5
                                  },
                       "created_at":  "2026-09-30T17:45:00Z",
-                      "updated_at":  "2026-09-30T22:57:13Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "Read ADR-0223 in docs/DECISIONS.md (the procedure, steps 1-13) and the existing scripts/cloud/release-cloud-core-bluegreen.sh and backup-cloud-core.sh for the house style (set -eu -o pipefail, numbered exit codes, no pipe into a truncating reader, status lines to stderr). Write scripts/cloud/maintenance-reboot.sh with --preflight (steps 1-5 as checks, each a named line, exit 0 only when all hold; never changes anything), --run (steps 6-10; refuses unless --preflight passed in the same invocation; writes a maintenance marker file with the start time before the reboot), and --verify (step 11 after boot, reads the marker, measures downtime from the marker to the first good health probe, writes /opt/pagentos/LAST_MAINTENANCE.json and removes the marker). Every check names what it read. The PowerShell test suite drives the script with a fake docker/apt/systemctl/curl on PATH (the pattern of scripts/tests/cloud-release-bluegreen.tests.ps1) and is added to quality-gate.ps1 and .github/workflows/ci.yml by the LEAD (name it under \u0027For the lead at merge\u0027). Work only inside the area; no new dependency; mutation per rule RED with sha256.",
                       "acceptance":  "Tests: preflight refuses on each of: health not ok, backup older than 24 h, a failure marker, pin != RELEASE, disk over 80 %, a held docker-ce; passes when all hold. --run refuses without preflight; stops the timer before upgrading and the marker exists before the reboot command; --verify refuses when the kernel is still the old one or the reconcile did not say OK, and writes the downtime. Mutations: the pin check removed -\u003e RED; the marker written after the reboot -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED (fakes); PROVEN_REAL at the first window",
                       "needs_integration":  false,
                       "sha":  "f1b5193b6e88b94af9d9fa131d3d95a725923fa4",
                       "returns":  0,
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "answer-mode-intent-precision",
                       "title":  "Dil tercihi cümlesi cevap kipi değişikliğine dönüşmesin; asistanın kendi cevabı hafıza adayı olmasın",
                       "roadmap_row":  "Always-listening natural conversation, interruptible, in the owner\u0027s language",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/voice/intents.py",
                                    "services/api/app/voice/realtime_sessions/tools.py",
@@ -3978,7 +4011,7 @@
                                      "max_usd":  6
                                  },
                       "created_at":  "2026-09-30T20:45:00Z",
-                      "updated_at":  "2026-10-01T08:06:37Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "Owner\u0027s real trial 2026-09-30 20:11 UTC (MAIL, /voice, release aa35fcf3): the sentence \u0027Bundan sonra araştırma raporlarını her zaman Türkçe oku\u0027 is a standing LANGUAGE preference. What happened: (1) the router (app/voice/intents.py, the RESEARCH_OPEN branch near \u0027ADR-0188: reading a research out loud\u0027) resolved it as RESEARCH_OPEN \u0027araştırmayı oku\u0027 with answer_level=detail - a sentence with a standing marker (\u0027bundan sonra\u0027, \u0027her zaman\u0027) and a plural object (\u0027raporlarını\u0027) is not \u0027read me the research\u0027; (2) the realtime model called research.answer_mode with level=executive; (3) research_answer_mode in realtime_sessions/tools.py preferred the turn record\u0027s answer_level (\u0027detail\u0027) over the model\u0027s argument and set the durable register to detail, speaking \u0027Bundan sonra araştırmaları ayrıntılı anlatacağım efendim\u0027. Nothing in the sentence names a level. (4) 39 s later app/memory/extraction.py extract_from_summary filed the assistant\u0027s reply line \u0027| Asistan: Bundan sonra araştırmaları ayrıntılı anlatacağım efendim.\u0027 as a preference CANDIDATE: the summary carries speaker-prefixed lines and the splitter treats every sentence as the owner\u0027s. Fix, RED first: (a) the router does not resolve a standing-marker sentence without a level word as RESEARCH_OPEN or RESEARCH_ANSWER_MODE; a language word (türkçe/ingilizce/almanca…) with a standing marker resolves to the existing preference/memory intent if one exists, else to a plain acknowledgement path - read intents.py before choosing, do not add a second phrase table; (b) research_answer_mode refuses (VALIDATION_ERROR with a spoken sentence) when the resolved utterance carries no level word, instead of blending the router\u0027s level with the model\u0027s; (c) extract_from_summary skips lines whose speaker prefix is the assistant (\u0027Asistan:\u0027 and the English form, with or without a leading \u0027|\u0027), counts them as skipped, and never files them. Keep the corpus tests green (tests/unit/test_voice_corpus*.py); add the three sentences to the corpus. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: production realtime_tool_calls 20:11:00Z (research.answer_mode, arguments level=executive, result level=detail), memories rows 20:11:00Z and 20:11:39Z (both preference/candidate). QUALIFICATION row 30.10. The owner\u0027s durable answer level is now \u0027detail\u0027; the lead asked him whether to revert it.",
                       "acceptance":  "Tests: the trial sentence resolves to the preference/acknowledgement path, not RESEARCH_OPEN and not RESEARCH_ANSWER_MODE (RED before); \u0027Bundan sonra teknik anlat\u0027, \u0027Teknik modu kapat\u0027, \u0027Araştırmayı oku\u0027 keep their intents; research_answer_mode with a turn record whose utterance has no level word raises VALIDATION_ERROR and the durable level is unchanged (RED before); extract_from_summary on a summary with \u0027| Sahip: …\u0027 and \u0027| Asistan: …\u0027 lines files only the owner\u0027s sentence (RED before). Mutations: the speaker-prefix skip removed -\u003e RED; the standing-marker guard removed -\u003e RED. Corpus suite green.",
                       "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner repeats the sentence after the release",
@@ -3986,13 +4019,16 @@
                       "sha":  "d01ed7308adfcb504d7fbe3ae097d39500eb03b8",
                       "returns":  1,
                       "reason":  "LEAD (kart hatası): alan genişletildi (tests/voice_corpus/corpus.py - kart korpus satırlarını istiyordu ama dosyayı alana yazmamıştı). İşçinin ikinci turu (d01ed730) denetlenmedi; denetle.",
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "operator-postcondition-uwp",
                       "title":  "Store/UWP uygulamaları (Hesap Makinesi vb.) açıldığında operatör \u0027açamadım\u0027 demesin",
                       "roadmap_row":  "Runs the workshop by voice: machines, files, fabrication",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/operator/plans.py",
                                    "services/api/tests/unit/test_operator_plans_uwp.py",
@@ -4180,7 +4216,7 @@
                                      "max_usd":  4
                                  },
                       "created_at":  "2026-09-30T20:45:00Z",
-                      "updated_at":  "2026-10-01T00:00:18Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "Owner\u0027s real trial 2026-09-30 20:10:29 and 20:11:20 UTC (MAIL, release aa35fcf3): \u0027Hesap makinesini aç\u0027 -\u003e operator.app_open \u0027Hesap Makinesi\u0027 -\u003e device app.launch calc SUCCEEDED, then window.current reported foreground=true, title \u0027Hesap Makinesi\u0027, image applicationframehost.exe, owned=false - and the task ended postcondition_failed, spoken \u0027Hesap Makinesi açamadım efendim\u0027, twice. Cause: in app/operator/plans.py open_application\u0027s _window_ok accepts an ApplicationFrameHost-hosted window only for images in UWP_HOSTED_IMAGES, which lists systemsettings.exe alone (B39 req 123); Calculator, and every other Store app launched by an alias (calc.exe, Photos, Clock, Terminal in some builds), is hosted the same way. Fix, RED first: a launched image whose window is hosted by applicationframehost.exe passes when the window is foreground AND its title is one of the app\u0027s own display names - take those from the existing alias table (_APP_ALIAS_PHRASES / the Turkish display label the tool speaks) rather than a second hand-written list; keep the exact-image path for classic apps; a foreground ApplicationFrameHost window with an UNRELATED title still fails (the Settings case of B39 stays). Read the existing test file for open_application before writing the new one. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: production device_commands 20:10:29Z/20:11:20Z (app.launch calc succeeded; window.current result as above), realtime_tool_calls operator.app_open error_class postcondition_failed. QUALIFICATION row 30.10 note (b).",
                       "acceptance":  "Tests: the trial\u0027s real window.current payload (foreground true, title \u0027Hesap Makinesi\u0027, image applicationframehost.exe, pid != launched pid) satisfies the observe_window postcondition for a launch of calc (RED before); the same payload with title \u0027Ayarlar\u0027 for a calc launch FAILS; Settings keeps its B39 behaviour; a classic app (notepad.exe) still needs its own image. Mutation: the title check removed -\u003e RED (an unrelated title would pass).",
                       "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner says \u0027Hesap makinesini aç\u0027 on MAIL after the release",
@@ -4188,13 +4224,16 @@
                       "sha":  "c02fee81eacdd1fc7918ac03f7669c3e2a466c88",
                       "returns":  1,
                       "reason":  "rapor bir hukumle bitmedi",
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "app-open-named-device-not-dropped",
                       "title":  "\u0027Ofis bilgisayarımdan hesap makinesini aç\u0027 kendi cihazda açılmasın: \u0027açın\u0027 kipi + adlandırılmış cihaz bağlanamazsa soru",
                       "roadmap_row":  "The same JARVIS in the house, the car, the suit, the phone",
-                      "state":  "merged",
+                      "state":  "released",
                       "area":  [
                                    "services/api/app/voice/intents.py",
                                    "services/api/app/voice/realtime_sessions/tools_operator.py",
@@ -4403,7 +4442,7 @@
                                      "max_usd":  6
                                  },
                       "created_at":  "2026-09-30T21:05:00Z",
-                      "updated_at":  "2026-10-01T08:18:56Z",
+                      "updated_at":  "2026-10-01T10:40:00Z",
                       "goal":  "Owner\u0027s real trial 2026-09-30 20:11:19 UTC (MAIL, /voice, release aa35fcf3): he said \u0027Ofis bilgisayarımdan hesap makinesini aç\u0027; the realtime STT rendered it \u0027Ofisü bilgisayarında hesap makinesini açın.\u0027 (43 chars; content_words in realtime_sessions.context_json.last_utterance). Two things then went wrong. (1) The router (app/voice/intents.py) resolved intent NONE, klass query: \u0027açın\u0027 (the polite imperative, which the STT produces often) is in neither _OPEN_VERB_FORMS nor _APP_OPEN_VERB_FORMS - \u0027açar mısın\u0027 is, \u0027açın\u0027/\u0027açınız\u0027/\u0027acın\u0027 are not. With a correct verb the same sentence resolves to app_open calc and the alias parser (app/devices/aliases.py extract_aliases) reads \u0027ofis\u0027 from \u0027ofis bilgisayarında\u0027 (verified locally; \u0027ofisü\u0027 itself is STT noise nobody can parse). (2) With no router record the model called operator.app_open({application: \u0027Hesap Makinesi\u0027}) - the tool\u0027s schema has only \u0027application\u0027, so the machine the owner NAMED had nowhere to go, and operator_app_open in realtime_sessions/tools_operator.py launched on the SESSION\u0027s device (MAIL) and said nothing about it. Fix, RED first: (a) add the polite imperative forms (\u0027açın\u0027, \u0027açınız\u0027, \u0027acın\u0027, \u0027aciniz\u0027) to the open-verb tables that the app_open and the generic open paths read - check every table that lists \u0027açsana\u0027 and add the forms there, not a new table; corpus tests stay green; (b) AMENDED BY ADR-0224 (the model may not guess a device): operator.app_open gets NO device argument. Instead, when the owner\u0027s sentence (the turn record\u0027s raw text) contains a computer word (\u0027bilgisayar\u0027 with a case suffix) or a place word the alias parser could not bind, the tool does NOT launch on the session\u0027s device: it answers with ONE question (\u0027Hangi bilgisayarda: ofis mi, ev mi?\u0027, the aliases read from the devices\u0027 metadata) and no dispatch. When the alias IS bound (ADR-0212 targets) the launch goes there and the receipt\u0027s speech names the device (\u0027Ofiste Hesap Makinesi açtım efendim\u0027) via the existing _device_named helper. Do not touch STT. Mutation per rule RED with sha256 (restore from the backup copy, never git checkout --). Evidence: audit_events voice_intent_resolved 20:11:19.59Z (turn 3, intent none, klass query, 43 chars), realtime_tool_calls 20:11:20.23Z (operator.app_open, arguments {application: \u0027Hesap Makinesi\u0027} - no device), device_commands app.launch on MAIL 3f60fdb5; the office PC GMKADIRAKBABA 9efa9d8b (aliases ofis, iş) had an open device session since 17:12 UTC.",
                       "acceptance":  "Tests: \u0027Ofis bilgisayarında hesap makinesini açın.\u0027 resolves to app_open calc with the device alias \u0027ofis\u0027 (RED before); \u0027Hesap makinesini açın.\u0027 -\u003e app_open calc; \u0027açın\u0027 inside a question (\u0027neden açın?\u0027) does not become an open. operator_app_open with a turn record whose raw text names a computer the alias parser did not bind (\u0027Ofisü bilgisayarında ...\u0027) dispatches NOTHING and speaks one question naming the enrolled aliases (RED before: today it launches on the session device); with a bound \u0027ofis\u0027 target it dispatches to that device and the speech names it; a sentence without any computer word keeps today\u0027s behaviour. Mutations: the unbound-computer guard removed -\u003e RED; \u0027açın\u0027 removed from the table -\u003e RED.",
                       "evidence_expected":  "PROVEN_AUTOMATED; PROVEN_REAL when the owner says the sentence again from MAIL and Calculator opens on GMKADIRAKBABA",
@@ -4411,7 +4450,10 @@
                       "sha":  "2d1ba0214b83964e9f38f28ff2bd693a48ef58ee",
                       "returns":  1,
                       "reason":  "LEAD (kart hatası): alan genişletildi (realtime_sessions/service.py - denetleyicinin kendi isteği). İşçinin ikinci turu (2d1ba021) denetlenmedi; denetle.",
-                      "integration_branch":  "integrate/cycle-2026-10-01"
+                      "integration_branch":  "integrate/cycle-2026-10-01",
+                      "release_approved":  true,
+                      "release_approved_at":  "2026-10-01T10:05:00Z",
+                      "release_approved_by":  "owner"
                   },
                   {
                       "id":  "ledger-device-callers",

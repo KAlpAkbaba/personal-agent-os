@@ -126,9 +126,12 @@ wait_containers() {
     for i in $(seq 1 "$wait_tries"); do
         names=$(docker ps --format '{{.Names}}' 2>/dev/null || true)
         missing=""
-        for want in postgres redis minio temporal edge api-blue godseye; do
+        for want in postgres redis minio temporal edge godseye; do
             printf '%s\n' "$names" | grep -q -- "$want" || missing="$missing $want"
         done
+        # The serving colour is whichever the last release left: blue OR green, never a name
+        # written here (2026-10-01: a release made green active and this waited for api-blue).
+        printf '%s\n' "$names" | grep -Eq -- 'api-(blue|green)' || missing="$missing api-(blue|green)"
         [ -z "$missing" ] && return 0
         sleep "$wait_step"
     done
@@ -170,7 +173,7 @@ verify() {
     else check_fail kernel "read uname -r: still $kernel_now"; fi
     if [ ! -e "$reboot_required" ]; then check_ok reboot-required "read $reboot_required: gone"
     else check_fail reboot-required "read $reboot_required: still present"; fi
-    if wait_containers; then check_ok containers "read docker ps: postgres redis minio temporal edge api-blue godseye up"
+    if wait_containers; then check_ok containers "read docker ps: postgres redis minio temporal edge godseye and an api colour up"
     else check_fail containers "read docker ps: a container is missing"; fi
     if systemctl is-active "$timer" >/dev/null 2>&1; then check_ok timer "read systemctl is-active $timer: active"
     else check_fail timer "read systemctl is-active $timer: not active"; fi
