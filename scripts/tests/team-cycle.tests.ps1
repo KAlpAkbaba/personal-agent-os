@@ -758,8 +758,15 @@ Test-Case "model policy: the worker's real model is read back from its report en
     $task.reports = @($task.reports) + (& $entry "worker" (Get-TeamOkOutcome -Model $opus))
     Assert-Equal -Expected $opus -Actual (Get-TeamWorkerModel -Task $task) -Because "the newest finished worker run"
     $task.reports = @((& $entry "worker" "tamam"), (& $entry "worker" "tamam (model claude-haiku-4-5-20251001)"))
-    Assert-Equal -Expected "" -Actual (Get-TeamWorkerModel -Task $task) -Because "a run from before the policy, or a model outside the chain, sets no floor"
+    Assert-Equal -Expected "" -Actual (Get-TeamWorkerModel -Task $task) -Because "a run from before the policy, or a model outside the chain, names no model"
     Assert-Equal -Expected "tamam" -Actual (Get-TeamOkOutcome -Model "") -Because "no model known, the outcome is as before"
+    # The floor of the inspection: what the entry says, else the configured worker model.
+    $setting = (Read-TeamModelSetting -Document ([pscustomobject]@{ roles = [pscustomobject]@{ worker = $sonnet; inspector = $opus } })).Setting
+    $floor = Get-TeamInspectionFloor -Task $task -Setting $setting
+    Assert-Equal -Expected "$sonnet/False" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "an entry that names no model: the floor is the model the setting gives the worker, and it says it was not recorded"
+    $task.reports = @((& $entry "worker" (Get-TeamOkOutcome -Model $fable)))
+    $floor = Get-TeamInspectionFloor -Task $task -Setting $setting
+    Assert-Equal -Expected "$fable/True" -Actual "$($floor.Model)/$($floor.Recorded)" -Because "a recorded model wins over the setting"
 }
 
 Test-Case "model policy: the real stream is read line by line - the result, the model that really ran, the two percentages and their reset" {
@@ -1605,6 +1612,84 @@ try {
         Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $one -Name "failed_runs" -Default 0)) -Because "neither limited run is the task's failure"
         Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma \d{4}-") -Because $run.Report
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
+    }
+
+    Test-Case "a limit whose reset is already past is believed once: the second time the same model refuses the same task it is closed for the cycle - lowered with fallback on, the stop line with it off - and the cycle never spins" {
+        # The inspector's probe (2026-10-01): "Opus limited, reset ten minutes ago" gave 123 worker
+        # runs in a minute - the model is not marked (its reset has passed), the wait is 0 s and the
+        # try is handed back. -CycleMinutes is the hang guard only; what is asserted is the run list.
+        $stale = @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus; PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS = "-600" }
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment $stale -Body { $script:staleRun = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments "-CycleMinutes 2" }
+        $run = $script:staleRun
+        Assert-Equal -Expected "worker=$opus,worker=$opus,worker=$sonnet,inspector=$fable" -Actual (Get-CallModels -Calls $run.Calls) `
+            -Because "one retry after the reset it named, then Opus is closed and the task goes one model down: $(@($run.Calls).Count) runs"
+        $one = Get-TaskById -Queue $run.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $one.state -Because $run.Report
+        Assert-Equal -Expected 0 -Actual ([int](Get-TeamProperty -InputObject $one -Name "failed_runs" -Default 0)) -Because "the limit is not the task's failure"
+        Assert-True -Condition ($run.Report -match "task-one / worker: [^\r\n]*model düşürüldü: $opus -> $sonnet") -Because $run.Report
+        Assert-True -Condition ($run.Report -match "$opus[^\r\n]*sıfırlanma saati geçmişte[^\r\n]*bu döngüde kapalı sayıldı") -Because "the report says why Opus was closed: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "süre tavanı") -Because "the hang guard did not end it: $($run.Report)"
+        $kept = Read-TeamJson -Path (Join-Path $root "team\limits.json")
+        Assert-True -Condition ($null -eq $kept.models.PSObject.Properties[$opus]) -Because "a limit nobody dated believably is not carried to the next cycle: $($kept | ConvertTo-Json -Depth 6 -Compress)"
+
+        $off = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Set-SandboxFile -Root $off -Name "models.json" -Json ('{"roles":{},"fallback":false}')
+        Use-FakeHooks -Environment $stale -Body { $script:staleOff = Invoke-Cycle -Root $off -Scenario "approve" -NoCaps -ExtraArguments "-CycleMinutes 2" }
+        $run = $script:staleOff
+        Assert-Equal -Expected "worker=$opus,worker=$opus" -Actual (Get-CallModels -Calls $run.Calls) -Because "fallback off: the retry, and then nothing: $(@($run.Calls).Count) runs"
+        Assert-Equal -Expected "assigned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because $run.Report
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; ne zaman açılacağı söylenmedi") -Because "the stop line of a limit nobody dated: $($run.Report)"
+        Assert-True -Condition ($run.Report -notmatch "süre tavanı") -Because $run.Report
+
+        $all = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $every = @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = "$fable,$opus,$sonnet"; PAGENTOS_FAKE_CLAUDE_LIMIT_RESET_SECONDS = "-600" }
+        Use-FakeHooks -Environment $every -Body { $script:staleAll = Invoke-Cycle -Root $all -Scenario "approve" -NoCaps -ExtraArguments "-CycleMinutes 2" }
+        $run = $script:staleAll
+        Assert-Equal -Expected "worker=$opus,worker=$opus,worker=$sonnet,worker=$sonnet" -Actual (Get-CallModels -Calls $run.Calls) -Because "two tries a model, down the chain, and no further: $(@($run.Calls).Count) runs"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; ne zaman açılacağı söylenmedi") -Because $run.Report
+        Assert-True -Condition ($run.Report -notmatch "süre tavanı") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "a stopped cycle releases the lock"
+
+        # The researcher's path (Invoke-RoleRun) closes the model the same way.
+        $research = New-Sandbox -Tasks @()
+        Use-FakeHooks -Environment $stale -Body { $script:staleResearch = Invoke-Cycle -Root $research -Scenario "approve" -NoCaps -Research -ExtraArguments "-CycleMinutes 2" }
+        Assert-Equal -Expected "researcher=$opus,researcher=$opus,researcher=$sonnet" -Actual (Get-CallModels -Calls $script:staleResearch.Calls) -Because "the same bound for a run the cycle waits for by itself"
+    }
+
+    Test-Case "the inspector's rule for a worker entry that names no model (a run from before the policy): the floor is the configured worker model - no inspection on Sonnet, and no verdict from a tool that ran it there" {
+        # The inspector's probe (2026-10-01): plain 'tamam', Fable and Opus limited - the
+        # inspection ran on Sonnet and the task was merged.
+        $entry = [pscustomobject]@{ cycle = "c0"; role = "worker"; at = "2026-10-01T09:00:00Z"; file = "team/reports/c0/task-one-worker-1.md"; cost_usd = 0.25; outcome = "tamam"; summary = @("sha: see the branch") }
+        $task = New-Task -Id "task-one" -State "inspecting"
+        $task.reports = @($entry)
+        $root = New-Sandbox -Tasks @($task)
+        $until = Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(1))
+        $closed = '{"until":"' + $until + '","type":"seven_day","seen_at":"2026-10-01T09:30:00Z"}'
+        Set-SandboxFile -Root $root -Name "limits.json" -Json ('{"models":{"' + $fable + '":' + $closed + ',"' + $opus + '":' + $closed + '},"windows":{}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "the worker is set to Opus: no inspector run on Sonnet: $(Get-CallModels -Calls $run.Calls)"
+        Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the inspection waits; it is not skipped: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "denetim bekliyor: task-one[^\r\n]*işçinin modeli kayıtlı değil[^\r\n]*$opus[^\r\n]*daha zayıf modelde denetlenmez") -Because "the report says which floor and why: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "döngü: Max kullanım limiti; sıfırlanma $until") -Because $run.Report
+
+        # Only Fable limited: Opus is at least as strong as the configured worker model, so it runs there.
+        $open = New-Task -Id "task-one" -State "inspecting"
+        $open.reports = @($entry)
+        $openRoot = New-Sandbox -Tasks @($open)
+        Set-SandboxFile -Root $openRoot -Name "limits.json" -Json ('{"models":{"' + $fable + '":' + $closed + '},"windows":{}}')
+        $ran = Invoke-Cycle -Root $openRoot -Scenario "approve" -NoCaps -ExtraArguments $noWait
+        Assert-Equal -Expected "inspector=$opus" -Actual (Get-CallModels -Calls $ran.Calls) -Because "the floor is a floor, not a wait: $($ran.StdOut + $ran.StdErr)"
+
+        # The tool-substitution check uses the same floor.
+        $swapped = New-Task -Id "task-one" -State "inspecting"
+        $swapped.reports = @($entry)
+        $swapRoot = New-Sandbox -Tasks @($swapped)
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_RAN_MODEL = "inspector=$sonnet" } -Body { $script:plainSwap = Invoke-Cycle -Root $swapRoot -Scenario "approve" -NoCaps -ExtraArguments $noWait }
+        $swap = $script:plainSwap
+        Assert-Equal -Expected "inspecting" -Actual (Get-TaskById -Queue $swap.Queue -Id "task-one").state -Because "an APPROVE the tool ran on Sonnet is not an approval of an Opus-configured worker's task: $($swap.Report)"
+        Assert-True -Condition ($swap.Report -match "hüküm alınmadı") -Because $swap.Report
+        Assert-True -Condition (@($swap.Calls | Where-Object { $_.model -eq $sonnet }).Count -eq 0) -Because "and no inspector run was STARTED on Sonnet either: $(Get-CallModels -Calls $swap.Calls)"
     }
 
     Test-Case "a session limit closes every model: no lowered run is started, the status says 'all' is limited, and the existing stop line follows" {

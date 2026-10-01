@@ -66,6 +66,26 @@ is unchanged. Integration plan: `team/plans/model-policy-cycle-integration.md` (
 8. *`team/limits.json` is machine-local*, written beside the queue files in both store modes. A
    limit nobody dated is not written to it: on disk it would bar the model for ever.
 
+9. *A limit whose reset is already past is believed once per task.* Such a limit marks nothing
+   (its reset has passed), the wait is 0 s and the try is handed back, so the main loop had no
+   bound: the inspector's probe gave 123 worker runs in a minute. The old detector matched none
+   of the real sentences, so the real tool could not reach this; the new one can (a PC clock
+   ahead of the tool's, a stale `resetsAt`). The first such answer is today's "waited out, run
+   again". When the SAME run (task and role) gets it a second time on the same model, the hour
+   it names is not taken as the truth: what the limit closed is closed for the rest of the
+   cycle, undated, with a line under the risks. From there the existing paths apply - the chain
+   goes one model down, or (fallback off, nothing left) the stop line of a limit nobody dated.
+   Counted per task, so parallel runs that each meet a limit which has just lifted are each
+   retried once. Undated is not written to `team/limits.json`: the next cycle asks again, at
+   most two runs. `Invoke-RoleRun` (researcher, the lead's split) goes through the same count.
+10. *A worker entry that names no model gives the floor of the configured worker model.* Every
+   task whose worker finished before this merges has a plain `tamam`; "no floor" let its
+   inspection run on Sonnet with Fable and Opus limited, and skipped the tool-substitution
+   check. One function (`Get-TeamInspectionFloor`) now answers both the start and that check;
+   the wait line says which floor it is (`işçinin modeli kayıtlı değil, ayarlı işçi modeli ...`).
+   If the old worker really ran on something stronger than the setting says today, nobody
+   knows it: the setting is the best statement there is.
+
 **Found on the way.** `scripts/tests/lib/fake-claude.ps1` never received `--output-format`:
 PowerShell bound the tool's `-p` to its own `-PipelineVariable` and swallowed the next
 argument. Nothing read it until now. The fake takes `$args`. `fake-team-api.ps1` logged an

@@ -937,8 +937,9 @@ function Get-TeamOkOutcome {
 }
 
 function Get-TeamWorkerModel {
-    <# The model the task's last FINISHED worker run really used ("" when no entry says:
-       a run from before the policy sets no floor). The reader of Get-TeamOkOutcome. #>
+    <# The model the task's last FINISHED worker run really used ("" when no entry says: a
+       run from before the policy - Get-TeamInspectionFloor then takes the configured worker
+       model). The reader of Get-TeamOkOutcome. #>
     param($Task)
     $model = ""
     foreach ($report in @(Get-TeamProperty -InputObject $Task -Name "reports" -Default @())) {
@@ -947,6 +948,17 @@ function Get-TeamWorkerModel {
         if ($outcome -cmatch '^tamam \(model ([A-Za-z0-9._-]+)\)$' -and (Test-TeamModelId -Model $Matches[1])) { $model = $Matches[1] }
     }
     return $model
+}
+
+function Get-TeamInspectionFloor {
+    <# The model an inspection of this task is never started below, and never takes a verdict
+       below: the one the worker's run really used; when no entry says (a worker that finished
+       before the policy, a task queued by hand), the model the setting gives the worker -
+       an unknown is not "any model will do". Recorded says which of the two it is. #>
+    param($Task, [Parameter(Mandatory = $true)]$Setting)
+    $recorded = Get-TeamWorkerModel -Task $Task
+    if ($recorded) { return [pscustomobject]@{ Model = $recorded; Recorded = $true } }
+    return [pscustomobject]@{ Model = [string]$Setting.roles.worker; Recorded = $false }
 }
 
 function Get-TeamRoleTools {

@@ -197,6 +197,8 @@ $stopNoted = $false
 # { used_pct, resets_at, observed_at }. $loweredRuns is this cycle's downgrades, newest last.
 $modelSetting = $null
 $limitedModels = @{}
+# "<task>/<role>|<model>" -> how often that run came back limited with a reset already past.
+$staleLimits = @{}
 $limitWindows = @{}
 $loweredRuns = New-Object System.Collections.ArrayList
 # A Cloud Core that does not know the status' model fields yet answers 422: it then gets the
@@ -397,7 +399,12 @@ function Register-Limit {
        session or weekly limit closes every model; a model's own limit closes that model; a
        limit that does not say closes the model the run was on - which is marked in every
        case, so the same task is never started twice on a model that just refused it. #>
-    param($Done)
+    param(
+        $Done,
+        # Whose run it was ("<task>/<role>"): the bound below counts per task, so three parallel
+        # runs that each meet a limit which has just lifted are each retried once.
+        [string]$Key = ""
+    )
     $ids = New-Object System.Collections.ArrayList
     if ([string]$Done.LimitScope -eq "all") { foreach ($id in @(Get-TeamModelChain)) { [void]$ids.Add($id) } }
     elseif (Test-TeamModelId -Model ([string]$Done.LimitedModel)) { [void]$ids.Add([string]$Done.LimitedModel) }
@@ -409,17 +416,33 @@ function Register-Limit {
             seen_at = (Get-TeamTimestamp)
         }
     }
+    # A reset that is already past marks nothing: the model is picked again, the wait is 0 s and
+    # the try is handed back - without a bound the cycle starts runs for ever (a PC clock ahead
+    # of the tool's, a stale resetsAt). Such a limit is believed ONCE per task: the run after it
+    # is today's "waited out, run again". The second time, the hour it names is not the truth:
+    # what it closed is closed for the rest of this cycle, undated - the chain goes down, or
+    # the stop line of a limit nobody dated follows. Undated is not written to team/limits.json.
+    $own = [string]$Done.Model
+    if ((Test-TeamModelId -Model $own) -and -not (Test-TeamModelLimited -Limited $script:limitedModels -Model $own)) {
+        $staleKey = "$Key|$own"
+        $script:staleLimits[$staleKey] = 1 + [int]$script:staleLimits[$staleKey]
+        if ($script:staleLimits[$staleKey] -ge 2) {
+            foreach ($id in $ids) { $script:limitedModels[$id].until = $null }
+            Add-CycleNote -List "risks" -Text "limit: $own aynı koşuya ($Key) ikinci kez limitli döndü ve bildirdiği sıfırlanma saati geçmişte ($($Done.ResetsAt)); saate güvenilmedi, model bu döngüde kapalı sayıldı"
+        }
+    }
     Save-Limits
 }
 
 function Select-RunModel {
     <# The model a run of this role starts on now (Get-TeamRunModel); Model is $null when it
-       must wait. The inspector's floor is the model the worker's run of that task really used. #>
+       must wait. The inspector's floor is the model the worker's run of that task really used,
+       and the configured worker model when its entry does not say (Get-TeamInspectionFloor). #>
     param([string]$Role, $Task = $null)
     $configured = [string](Get-TeamProperty -InputObject $script:modelSetting.roles -Name $Role -Default "")
     if (-not $configured) { $configured = [string]$script:modelSetting.roles.worker }
     $floor = ""
-    if ($Role -eq "inspector" -and $null -ne $Task) { $floor = Get-TeamWorkerModel -Task $Task }
+    if ($Role -eq "inspector" -and $null -ne $Task) { $floor = [string](Get-TeamInspectionFloor -Task $Task -Setting $script:modelSetting).Model }
     return (Get-TeamRunModel -Configured $configured -Limited $script:limitedModels -Fallback ([bool]$script:modelSetting.fallback) -Floor $floor)
 }
 
@@ -621,7 +644,7 @@ try {
             }
             $done = Complete-RoleRun -Started (Start-RoleRun -Task $Task -Role $Role -WorkingDirectory $WorkingDirectory -Prompt $Prompt -ExcludeTools $ExcludeTools -Pick $pick)
             if (-not $done.UsageLimited) { return $done }
-            Register-Limit -Done $done
+            Register-Limit -Done $done -Key ($(if ($null -ne $Task) { [string]$Task.id } else { "cycle" }) + "/$Role")
             $again = Select-RunModel -Role $Role -Task $Task
             if ($null -ne $again.Model -and [string]$again.Model -ne [string]$done.Model) { continue }
             $reset = if ($null -eq $again.Model) { [string]$again.ResetsAt } else { [string]$done.ResetsAt }
@@ -679,8 +702,11 @@ try {
            inspection is not lowered below the worker's model and not skipped - it waits. #>
         param($Task, $Pick)
         $closed = @($Pick.Candidates) -join ", "
-        $note = if ([string]$Pick.Floor) {
+        $note = if ([string]$Pick.Floor -and (Get-TeamInspectionFloor -Task $Task -Setting $script:modelSetting).Recorded) {
             "denetim bekliyor: $($Task.id) - işçi $($Pick.Floor) ile koştu; en az o kadar güçlü modeller limitte ($closed); daha zayıf modelde denetlenmez"
+        }
+        elseif ([string]$Pick.Floor) {
+            "denetim bekliyor: $($Task.id) - işçinin modeli kayıtlı değil, ayarlı işçi modeli $($Pick.Floor) taban alındı; en az o kadar güçlü modeller limitte ($closed); daha zayıf modelde denetlenmez"
         }
         else { "denetim bekliyor: $($Task.id) - denetleyicinin kullanabileceği modeller limitte ($closed)" }
         if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
@@ -865,22 +891,24 @@ try {
                 # ran on a weaker model than the worker's gives no verdict. The model that was
                 # asked for is treated as limited (that is why the tool left it), and the
                 # inspection is started again on a model at least as strong, or waits.
-                $workerRank = Get-TeamModelRank -Model (Get-TeamWorkerModel -Task $task)
+                $floor = Get-TeamInspectionFloor -Task $task -Setting $script:modelSetting
+                $workerRank = Get-TeamModelRank -Model ([string]$floor.Model)
                 if ($workerRank -ge 0 -and (Get-TeamModelRank -Model ([string]$done.RanModel)) -gt $workerRank) {
+                    $workerSaid = if ($floor.Recorded) { "işçi $($floor.Model) ile koşmuştu" } else { "işçinin modeli kayıtlı değil, ayarlı işçi modeli $($floor.Model)" }
                     $done.Ok = $false
                     $done.UsageLimited = $true
                     $done.LimitScope = "model"
                     $done.LimitedModel = [string]$done.Model
                     $done.ResetsAt = ""
-                    $done.Outcome = "hüküm alınmadı: araç denetimi $($done.RanModel) ile koşturdu, işçi $(Get-TeamWorkerModel -Task $task) ile koşmuştu"
-                    Add-CycleNote -List "risks" -Text "$($task.id): hüküm alınmadı - araç denetimi $($done.Model) yerine $($done.RanModel) ile koşturdu; bu, işçinin modelinden ($(Get-TeamWorkerModel -Task $task)) zayıf"
+                    $done.Outcome = "hüküm alınmadı: araç denetimi $($done.RanModel) ile koşturdu, $workerSaid"
+                    Add-CycleNote -List "risks" -Text "$($task.id): hüküm alınmadı - araç denetimi $($done.Model) yerine $($done.RanModel) ile koşturdu; bu, işçinin modelinden ($($floor.Model)) zayıf"
                 }
             }
             Add-TaskReport -Task $task -Role $role -Done $done
 
             if ($done.UsageLimited) {
                 # Not the task's failure and not a try spent (owner decision 2026-09-30).
-                Register-Limit -Done $done
+                Register-Limit -Done $done -Key "$($task.id)/$role"
                 $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
                 # The fallback chain (ADR-0214 addendum 7): the SAME task, at once, on the next
                 # model down - when the setting allows it, a model is open, and nobody asked the
