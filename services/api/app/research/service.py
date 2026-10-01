@@ -26,7 +26,6 @@ the human-readable provenance alongside that mechanism, not a second lookup path
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -41,6 +40,7 @@ from app.artifacts import service as artifact_service
 from app.artifacts.models import TASK_STATUS_CREATED, TASK_STATUS_FAILED_TERMINAL, Task
 from app.devices import service as devices_service
 from app.devices.selection import (
+    REASON_AUTO,
     REASON_EXPLICIT_ALIAS,
     REASON_SESSION_AFFINITY,
     NoCapableDeviceError,
@@ -54,7 +54,7 @@ from app.logging import get_logger
 from app.research import runs_service
 from app.research.browser_workflow import BrowserResearchRequest, BrowserResearchWorkflow
 from app.research.models import STAGE_FAILED, STAGE_PLANNED
-from app.research.target import choose_research_target
+from app.research.target import RESEARCH_OPERATIONS, choose_research_target
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -124,17 +124,18 @@ def _select_for(
         return select_device(
             _machines(views), capability=RESEARCH_CAPABILITY, target=target, **hint
         )
-    view = wiring.device_for(decision, views)
+    # The same test the rule applied when it called the target available (the operations
+    # research sends, advertised and policy-allowed), over the same views: a target the rule
+    # selected has a view here. Not ``select_device``'s family marker - the cloud worker
+    # advertises its operations by name and no ``browser.chrome``.
+    view = wiring.device_for(decision, views, capabilities=RESEARCH_OPERATIONS)
     if view is None:
         raise NoCapableDeviceError(
             TARGET_GONE_TR, capability=RESEARCH_CAPABILITY, target=target, reason="target_gone"
         )
-    # Still through ``select_device``: the capability and the owner's policy are checked for
-    # the cloud worker exactly as for a machine.
-    result = select_device([view], capability=RESEARCH_CAPABILITY)
     if decision.forced:
-        return dataclasses.replace(result, reason=REASON_EXPLICIT_ALIAS, explicit=True)
-    return result
+        return SelectionResult(device=view, reason=REASON_EXPLICIT_ALIAS, explicit=True)
+    return SelectionResult(device=view, reason=REASON_AUTO, explicit=False)
 
 
 def _refusal(
@@ -247,6 +248,7 @@ def start_browser_research(
                     spoken_target=spoken,
                     needs_signed_in_session=needs_signed_in_session,
                     task_id=task.id,
+                    views=views,
                 )
             except NoCapableDeviceError as exc:
                 refused = exc.reason

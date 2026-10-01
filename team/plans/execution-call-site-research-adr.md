@@ -16,9 +16,8 @@ Chrome, was refused, and wrote an `owner_chrome -> device` fallback row on every
    first named word (or none), and maps the decision with the new pure
    `wiring.device_for(decision, views)`: `cloud` -> the online, non-revoked view whose platform is
    `cloud`; `owner_chrome` -> the online, non-revoked, non-cloud view labelled `owner_chrome`;
-   `device` -> `None`, meaning the unchanged `select_device` call over the NON-cloud views. The
-   chosen cloud / owner_chrome view still passes through `select_device([view], ...)`, so the
-   capability and the owner's policy are checked for it as for any machine.
+   `device` -> `None`, meaning the unchanged `select_device` call over the NON-cloud views.
+   (Capability and policy: see "Addendum - a target that cannot serve is not available".)
 2. The PLANNED event carries `execution_target`, `execution_chain`, `execution_skipped`; a FAILED
    event after a refusal carries `execution_reason` (the decision's reason). The keys are
    prefixed because the event is a flat dict shared with other writers.
@@ -38,6 +37,42 @@ Chrome, was refused, and wrote an `owner_chrome -> device` fallback row on every
    directly (the view copies the same column; a view needs the broker runtime, the fact does not).
 8. `start_browser_research` gains `needs_signed_in_session` (default False); no caller passes it yet.
 
+## Addendum (2026-10-02, after the inspector's return) - a target that cannot serve is not available
+
+Found: the cloud worker's hello is `browser_agent/policy.CAPABILITIES` - 30 operation names and
+NO family marker `browser.chrome`. The first version chose the cloud by presence and then put it
+through `select_device([view], capability="browser.chrome")`: every unnamed research would have
+been a FAILED run with MAIL online, under an `execution.selected target=cloud` ledger row.
+
+9. `wiring.choose` takes `capabilities` (the operations the job sends). With them a target is
+   available only when one of its devices is online, advertises every one (by name or through
+   the family marker, `has_capability`) and is allowed each by the owner's policy. The answer per
+   device is `select_device([view], capability=op)`'s own, so there is one definition of
+   "capable" and "policy-allowed". Without `capabilities` the rule decides by presence as before
+   (the routine adapter is unchanged).
+10. Research passes `RESEARCH_OPERATIONS` = `browser.session_open`, `browser.search`,
+    `browser.wait`, `browser.fetch_evidence`, `browser.session_close` - exactly what
+    `browser_gateway` sends (a test reads the gateway's source). The cloud worker advertises all
+    five, so with its REAL hello it is chosen; the machines advertise `browser.chrome`, which
+    implies them. The cloud is NOT asked for the family marker: selection may ask for either
+    shape (`app.devices.capabilities`), and the operation names are the precise one.
+11. A target that is up and cannot serve is skipped for the next in the chain, and the fallback
+    row says why: `cloud_capability_missing`, `cloud_policy_denied`,
+    `owner_chrome_capability_missing`, `owner_chrome_policy_denied`, `device_capability_missing`,
+    `device_policy_denied`. These are written by `wiring` over the rule's `*_offline` skip; the
+    rule table is not changed (it still knows only up / down).
+12. The `device` target is available exactly when the caller's own
+    `select_device(machines, "browser.chrome", ...)` would succeed, and `choose` takes the
+    caller's `views`, so the decision and the pick read ONE registry snapshot with ONE test.
+    Consequence: a FAILED run never sits under an `execution.selected` row (tested over five
+    refusal shapes); `device_for(decision, views, capabilities=)` applies the same test.
+13. "bulutta" with the cloud up but unable: FAILED, `forced_target_unavailable`, skip
+    `cloud_capability_missing` / `cloud_policy_denied`, said as "Bulut bu işi şu anda yapamıyor."
+    (not "çevrimiçi değil", which would be false).
+14. The integration test's cleanup no longer trusts the code under test: every ledger write the
+    process makes is noted by `source_ref` at write time and the tasks are found by the test's own
+    intent text; one test proves a row with no `research_job_id` is removed.
+
 ## Not changed
 
 The rule table, `select_device`, the workflow, the gateway, any schema. The cloud worker is not probed.
@@ -51,5 +86,12 @@ The rule table, `select_device`, the workflow, the gateway, any schema. The clou
 - `research_browser == "owner"` (keyboard/OCR) on the cloud device is untouched: it would still
   try the owner path and fall back per page. The plan activity's serial-fetch clamp
   (`startswith("owner")`) also still applies to a cloud run.
+- A REST caller's own `target_device="bulut"` still goes through `select_device(...,
+  "browser.chrome")` and is refused for the real cloud worker (`capability_missing`, a FAILED run
+  with no execution row). The rule is not asked on that path (decision 5); left as it is.
+- Releasing this sends every unnamed research to the cloud worker while it is online. That the
+  worker really completes a research run is not proven here (the card forbids probing it): the
+  first production run is the proof.
+- "bulutta" still does not arrive from voice (`devices/aliases.py`, outside this area).
 - The workflow's replay-only re-select (`select_device_activity`) still uses `select_device` over
   all views; it is reached only when the planned device went offline.

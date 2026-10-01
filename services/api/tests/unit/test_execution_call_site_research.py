@@ -9,8 +9,11 @@ and read the run row and the ledger back; the ``attached`` half drives the real 
 
 from __future__ import annotations
 
+import ast
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -26,12 +29,31 @@ from app.ledger.models import ActivityEventRow
 from app.research import browser_activities as ba
 from app.research import destination, runs_service
 from app.research import service as research_service
+from app.research import target as research_target
 from app.research.models import STAGE_FAILED, STAGE_PLANNED
 from tests.device_command_support import FakeDeviceCommandClient
 from tests.unit.test_research_browser_activities import ALL_TABLES
 
 NOW = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
 CAPS = ["browser.chrome"]
+REPO = Path(__file__).resolve().parents[4]
+
+
+def _cloud_hello_capabilities() -> list[str]:
+    """What the cloud worker's hello REALLY advertises: ``browser_agent/policy.CAPABILITIES``,
+    read from the worker's own source (the api cannot import that package). The cloud
+    companion sends exactly this list (``browser_agent/cloud/broker.py``)."""
+    browser = REPO / "services" / "browser" / "browser_agent"
+    hello = (browser / "cloud" / "broker.py").read_text(encoding="utf-8")
+    assert '"capabilities": list(policy.CAPABILITIES)' in hello
+    for node in ast.parse((browser / "policy.py").read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "CAPABILITIES":
+            return list(ast.literal_eval(node.value))
+    raise AssertionError("browser_agent/policy.py has no CAPABILITIES")  # pragma: no cover
+
+
+#: The cloud fixture advertises what the worker advertises - never a hand-written list.
+CLOUD_CAPS = _cloud_hello_capabilities()
 
 
 class FakeBroker:
@@ -61,16 +83,22 @@ class Registry:
         labels: tuple[str, ...] = (),
         aliases: tuple[str, ...] = (),
         status: str = DEVICE_STATUS_ENROLLED,
+        capabilities: list[str] | None = None,
+        policy: dict | None = None,
     ) -> uuid.UUID:
         with self.factory() as db:
             device = Device(
                 name=name,
                 platform=platform,
                 public_key_spki_b64="unit",
-                capabilities_json=list(CAPS),
+                capabilities_json=list(CAPS if capabilities is None else capabilities),
                 status=status,
                 last_seen_at=datetime.now(UTC) - timedelta(seconds=seen_s_ago),
-                metadata_json={"labels": list(labels), "aliases": list(aliases)},
+                metadata_json={
+                    "labels": list(labels),
+                    "aliases": list(aliases),
+                    **({"policy": policy} if policy else {}),
+                },
             )
             db.add(device)
             db.commit()
@@ -83,6 +111,7 @@ class Registry:
         # Seen LONGER ago than any machine: the old rule (health order) never prefers it,
         # so a test that expects the cloud is not passing by luck.
         kw.setdefault("seen_s_ago", 300.0)
+        kw.setdefault("capabilities", CLOUD_CAPS)
         return self.enroll("bulut-1", platform="cloud", aliases=("bulut",), **kw)
 
     def mail(self, **kw) -> uuid.UUID:
@@ -337,17 +366,27 @@ def test_the_rule_itself_still_insists_on_its_ledger(tmp_path) -> None:
 # ------------------------------------------------------------------- wiring.device_for
 
 
-def _view(name, *, platform="windows", presence="online", labels=(), status="enrolled"):
+def _view(
+    name,
+    *,
+    platform="windows",
+    presence="online",
+    labels=(),
+    status="enrolled",
+    capabilities=None,
+    policy=None,
+):
     return DeviceView(
         id=uuid.uuid4(),
         name=name,
         platform=platform,
         status=status,
         presence=presence,
-        capabilities=tuple(CAPS),
+        capabilities=tuple(CAPS if capabilities is None else capabilities),
         enrolled_at=NOW,
         last_seen_at=NOW,
         labels=tuple(labels),
+        policy=dict(policy or {}),
     )
 
 
@@ -388,6 +427,221 @@ def test_device_for_a_device_decision_or_a_refusal_names_no_view() -> None:
         "forced_target_unavailable",
     )
     assert wiring.device_for(refused, views) is None
+
+
+def test_device_for_names_only_a_view_that_can_serve_what_was_asked() -> None:
+    operations = research_target.RESEARCH_OPERATIONS
+    real = _view("bulut-1", platform="cloud", capabilities=CLOUD_CAPS)
+    partial = _view("bulut-0", platform="cloud", capabilities=["browser.navigate"])
+    denied = _view(
+        "bulut-2", platform="cloud", capabilities=CLOUD_CAPS, policy={"deny": ["browser.wait"]}
+    )
+    cloud = _decision(Target.CLOUD)
+    assert wiring.device_for(cloud, [partial, denied, real], capabilities=operations) is real
+    assert wiring.device_for(cloud, [partial, denied], capabilities=operations) is None
+    # Nothing asked: presence alone, as before.
+    assert wiring.device_for(cloud, [partial, denied]) is partial
+    bare = _view("GMKADIRAKBABA", labels=("owner_chrome",), capabilities=[])
+    office = _view("OFIS", labels=("owner_chrome",))
+    chrome = _decision(Target.OWNER_CHROME)
+    assert wiring.device_for(chrome, [bare, office], capabilities=operations) is office
+
+
+# ------------------------------------------- a target that cannot serve is not "available"
+#
+# The inspector's return (2026-10-01): the cloud worker's hello carries no ``browser.chrome``,
+# so the first version chose the cloud by presence, failed the capability check afterwards,
+# and left a FAILED run under an ``execution.selected target=cloud`` row with MAIL online.
+
+
+def _types(registry) -> list[str]:
+    return [t for t, _ in registry.ledger()]
+
+
+def _skips(registry) -> dict[str, str]:
+    return {
+        d["skipped_target"]: d["reason"] for t, d in registry.ledger() if t == "execution.fallback"
+    }
+
+
+def test_the_cloud_workers_real_hello_has_no_family_marker_and_every_research_operation() -> None:
+    assert "browser.chrome" not in CLOUD_CAPS
+    assert set(research_target.RESEARCH_OPERATIONS) <= set(CLOUD_CAPS)
+
+
+def test_the_research_operations_are_the_ones_the_gateway_sends() -> None:
+    gateway = Path(research_service.__file__).with_name("browser_gateway.py")
+    sent = set(re.findall(r'"(browser\.[a-z_]+)"', gateway.read_text(encoding="utf-8")))
+    assert sent == set(research_target.RESEARCH_OPERATIONS)
+
+
+def test_the_cloud_with_its_real_hello_capabilities_serves_the_run(registry) -> None:
+    registry.mail()
+    cloud = registry.cloud(capabilities=CLOUD_CAPS)
+
+    started = registry.start()
+
+    assert started.error is None
+    run = registry.run(started.task_id)
+    assert run.stage == STAGE_PLANNED and run.device_id == cloud
+    assert _types(registry) == ["execution.selected"]
+
+
+def test_a_cloud_that_lacks_a_research_operation_is_skipped_for_the_machine(registry) -> None:
+    registry.cloud(capabilities=[c for c in CLOUD_CAPS if c != "browser.search"])
+    mail = registry.mail()
+
+    started = registry.start()
+
+    assert started.error is None
+    run = registry.run(started.task_id)
+    assert run.stage == STAGE_PLANNED and run.device_id == mail
+    assert _skips(registry)["cloud"] == "cloud_capability_missing"
+    assert registry.ledger()[-1][1]["target"] == "device"
+    assert _planned(run)["execution_skipped"][0] == {
+        "target": "cloud",
+        "reason": "cloud_capability_missing",
+    }
+
+
+def test_a_cloud_the_owners_policy_denies_is_skipped_for_the_machine(registry) -> None:
+    registry.cloud(policy={"deny": ["browser.search"]})
+    mail = registry.mail()
+
+    started = registry.start()
+
+    assert started.error is None and registry.run(started.task_id).device_id == mail
+    assert _skips(registry)["cloud"] == "cloud_policy_denied"
+    assert registry.ledger()[-1][1]["target"] == "device"
+
+
+@pytest.mark.parametrize(
+    ("chrome_kw", "reason"),
+    [
+        ({"capabilities": ["desktop.screenshot"]}, "owner_chrome_capability_missing"),
+        ({"policy": {"deny": ["browser.chrome"]}}, "owner_chrome_policy_denied"),
+    ],
+)
+def test_an_owner_chrome_machine_that_cannot_serve_is_skipped_for_the_next(
+    registry, chrome_kw, reason
+) -> None:
+    registry.cloud(online=False)
+    registry.enroll("GMKADIRAKBABA", labels=("owner_chrome",), seen_s_ago=0.5, **chrome_kw)
+    mail = registry.mail()
+
+    started = registry.start()
+
+    assert started.error is None
+    run = registry.run(started.task_id)
+    assert run.stage == STAGE_PLANNED and run.device_id == mail
+    assert _skips(registry) == {"cloud": "cloud_offline", "owner_chrome": reason}
+    selected = [d for t, d in registry.ledger() if t == "execution.selected"]
+    assert [d["target"] for d in selected] == ["device"]
+
+
+def test_bulutta_with_a_cloud_that_cannot_serve_is_refused_as_what_it_is(registry) -> None:
+    registry.cloud(capabilities=["browser.navigate"])
+    registry.mail()
+
+    started = registry.start(named_devices=("bulutta",))
+
+    assert started.device is None
+    assert started.error == research_target.CLOUD_CANNOT_SERVE_TR
+    run = registry.run(started.task_id)
+    assert run.stage == STAGE_FAILED and run.device_id is None
+    assert _types(registry) == ["execution.fallback", "execution.refused"]
+    assert _skips(registry) == {"cloud": "cloud_capability_missing"}
+
+
+def _only_an_incapable_machine(registry) -> dict:
+    registry.cloud(online=False)
+    registry.mail(capabilities=["desktop.screenshot"])
+    return {}
+
+
+def _a_named_incapable_machine(registry) -> dict:
+    registry.cloud()
+    registry.mail(capabilities=["desktop.screenshot"])
+    return {"named_devices": ("ev",)}
+
+
+def _a_named_policy_denied_machine(registry) -> dict:
+    registry.cloud()
+    registry.mail(policy={"deny": ["browser.chrome"]})
+    return {"named_devices": ("ev",)}
+
+
+def _nothing_can_serve(registry) -> dict:
+    registry.cloud(capabilities=["browser.navigate"])
+    registry.enroll("GMKADIRAKBABA", labels=("owner_chrome",), capabilities=[])
+    registry.mail(policy={"deny": ["browser.chrome"]})
+    return {}
+
+
+def _bulutta_policy_denied(registry) -> dict:
+    registry.cloud(policy={"deny": ["browser.fetch_evidence"]})
+    registry.mail()
+    return {"named_devices": ("bulutta",)}
+
+
+@pytest.mark.parametrize(
+    ("arrange", "sentence", "skip"),
+    [
+        (
+            _only_an_incapable_machine,
+            "'browser.chrome' yeteneğine sahip çevrimiçi bir cihaz bulunamadı.",
+            ("device", "device_capability_missing"),
+        ),
+        (
+            _a_named_incapable_machine,
+            "'ev' cihazı 'browser.chrome' yeteneğine sahip değil.",
+            ("device", "device_capability_missing"),
+        ),
+        (
+            _a_named_policy_denied_machine,
+            "Politika 'ev' cihazında bu işleme izin vermiyor.",
+            ("device", "device_policy_denied"),
+        ),
+        (
+            _nothing_can_serve,
+            "Politika hiçbir cihazda bu işleme izin vermiyor.",
+            ("owner_chrome", "owner_chrome_capability_missing"),
+        ),
+        (
+            _bulutta_policy_denied,
+            "Bulut bu işi şu anda yapamıyor.",
+            ("cloud", "cloud_policy_denied"),
+        ),
+    ],
+)
+def test_a_failed_run_never_sits_under_a_selected_ledger_row(
+    registry, arrange, sentence, skip
+) -> None:
+    started = registry.start(**arrange(registry))
+
+    assert started.device is None and started.error == sentence
+    run = registry.run(started.task_id)
+    assert run.stage == STAGE_FAILED and run.device_id is None
+    types = _types(registry)
+    assert "execution.selected" not in types and types[-1] == "execution.refused"
+    assert _skips(registry)[skip[0]] == skip[1]
+
+
+def test_the_rule_without_a_capability_list_decides_by_presence_as_it_always_did(registry) -> None:
+    """``wiring.choose`` callers that say nothing about capabilities (routines) are unchanged."""
+    registry.cloud(capabilities=[])
+    with registry.factory() as db:
+        decision = wiring.choose(
+            JobKind.RESEARCH,
+            spoken_target=None,
+            url=None,
+            needs_signed_in_session=False,
+            acting=False,
+            scheduled=False,
+            db=db,
+            runtime=registry.broker,
+        )
+    assert decision.target is Target.CLOUD
 
 
 # ------------------------------------------------------- 'attached' on the cloud device

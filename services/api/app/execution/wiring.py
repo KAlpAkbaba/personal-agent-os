@@ -17,6 +17,8 @@ Registry conventions read here (nothing new is stored):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any, Final
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -28,7 +30,7 @@ from app.devices.service import list_device_views
 from app.devices.types import DeviceView
 from app.execution import rule
 from app.execution import vocabulary as vocab
-from app.execution.rule import Availability, Decision, ExecutionRequest, JobKind, Target
+from app.execution.rule import Availability, Decision, ExecutionRequest, JobKind, Skip, Target
 from app.ledger import service as ledger
 from app.ledger import vocabulary as ledger_vocab
 from app.logging import get_logger
@@ -39,6 +41,14 @@ CLOUD_PLATFORM: Final = "cloud"
 OWNER_CHROME_LABEL: Final = "owner_chrome"
 #: Capability the device target is asked for when an alias is resolved.
 _DEVICE_CAPABILITY: Final = "browser.chrome"
+
+#: ``select_device``'s reasons for a device that is up and still cannot serve. A skip for one
+#: of them is written as ``<target>_<reason>`` (``cloud_capability_missing``, ...).
+_PRECISE_REASONS: Final = ("capability_missing", "policy_denied")
+#: The rule's "it is down" skips - the only ones a more precise reason may replace.
+_DOWN_REASONS: Final = frozenset(
+    {rule.CLOUD_OFFLINE, rule.CHROME_DEVICE_OFFLINE, rule.DEVICE_OFFLINE}
+)
 
 NOT_ON_OWNER_ALLOW_LIST: Final = "not_on_owner_allow_list"
 #: The error class every reader of a device failure already knows.
@@ -74,56 +84,118 @@ def error_class_of(decision: Decision) -> str | None:
     return None
 
 
+def _why_not(view: DeviceView, capabilities: Sequence[str]) -> str | None:
+    """Why this one device cannot serve ``capabilities`` right now - ``offline``,
+    ``capability_missing`` or ``policy_denied``, in ``select_device``'s own words because it
+    IS ``select_device``'s answer for that device - or ``None`` when it can. With nothing
+    asked, it is presence alone."""
+    if view.status == "revoked" or view.presence != PRESENCE_ONLINE:
+        return "offline"
+    for capability in capabilities:
+        try:
+            selection.select_device([view], capability=capability)
+        except selection.NoCapableDeviceError as exc:
+            return exc.reason
+    return None
+
+
+def _target_state(
+    target: Target, views: list[DeviceView], capabilities: Sequence[str]
+) -> tuple[bool, str | None]:
+    """(some view of ``target`` can serve, the precise skip reason when none can and one is
+    online). A target that is up and cannot do the job is as unavailable as one that is
+    down, and the ledger says which it was."""
+    reasons = [_why_not(v, capabilities) for v in views]
+    if None in reasons:
+        return True, None
+    precise = [r for r in reasons if r in _PRECISE_REASONS]
+    return False, f"{target.value}_{precise[0]}" if precise else None
+
+
 def _availability(
-    views: list[DeviceView], spoken_target: str | None
-) -> tuple[Availability, str | None]:
+    views: list[DeviceView], spoken_target: str | None, capabilities: Sequence[str] | None = None
+) -> tuple[Availability, str | None, dict[Target, str]]:
     live = [v for v in views if v.status != "revoked"]
     cloud = [v for v in live if v.platform == CLOUD_PLATFORM]
     machines = [v for v in live if v.platform != CLOUD_PLATFORM]
     chrome = [v for v in machines if OWNER_CHROME_LABEL in v.labels]
 
+    precise: dict[Target, str] = {}
+    cloud_up, precise_cloud = _target_state(Target.CLOUD, cloud, capabilities or ())
+    chrome_up, precise_chrome = _target_state(Target.OWNER_CHROME, chrome, capabilities or ())
+    if precise_cloud:
+        precise[Target.CLOUD] = precise_cloud
+    if precise_chrome:
+        precise[Target.OWNER_CHROME] = precise_chrome
+
     resolved: str | None = None
     device_online = any(v.presence == PRESENCE_ONLINE for v in machines)
-    if spoken_target and spoken_target.strip() and rule.forced_target_of(spoken_target) is (
-        Target.DEVICE
-    ):
+    named = bool(spoken_target and spoken_target.strip()) and (
+        rule.forced_target_of(spoken_target) is Target.DEVICE
+    )
+    if named or (capabilities is not None and rule.forced_target_of(spoken_target) is None):
+        # The same question the caller's own ``select_device`` will ask over the machines:
+        # the ``device`` target is available exactly when that call would succeed.
         device_online = False
         try:
             match = selection.select_device(
-                machines, capability=_DEVICE_CAPABILITY, target=spoken_target
+                machines, capability=_DEVICE_CAPABILITY, target=spoken_target if named else None
             )
-            resolved, device_online = str(match.device.id), True
+            device_online = True
+            if named:
+                resolved = str(match.device.id)
         except selection.NoCapableDeviceError as exc:
-            if exc.reason in ("offline", "capability_missing", "policy_denied"):
+            if named and exc.reason in ("offline", *_PRECISE_REASONS):
                 resolved = "named-but-unavailable"
+            if exc.reason in _PRECISE_REASONS:
+                precise[Target.DEVICE] = f"{Target.DEVICE.value}_{exc.reason}"
     return (
         Availability(
-            cloud_online=any(v.presence == PRESENCE_ONLINE for v in cloud),
+            cloud_online=cloud_up,
             owner_chrome_enrolled=bool(chrome),
-            owner_chrome_device_online=any(v.presence == PRESENCE_ONLINE for v in chrome),
+            owner_chrome_device_online=chrome_up,
             device_online=device_online,
         ),
         resolved,
+        precise,
     )
 
 
-def device_for(decision: Decision, views: list[DeviceView]) -> DeviceView | None:
+def _say_why(decision: Decision, precise: dict[Target, str]) -> Decision:
+    """The rule knows 'up' and 'down'. Where a target was skipped as down and the registry
+    shows it online but unable to serve, the skip carries that reason instead."""
+    skipped = tuple(
+        Skip(s.target, precise[s.target])
+        if s.target in precise and s.reason in _DOWN_REASONS
+        else s
+        for s in decision.skipped
+    )
+    return decision if skipped == decision.skipped else replace(decision, skipped=skipped)
+
+
+def device_for(
+    decision: Decision, views: list[DeviceView], *, capabilities: Sequence[str] | None = None
+) -> DeviceView | None:
     """The registry view a decision's target IS, by the conventions above.
 
     ``cloud`` -> the online device whose platform is ``cloud``; ``owner_chrome`` -> the online
-    machine labelled ``owner_chrome``. ``None`` for the ``device`` target (which machine is
+    machine labelled ``owner_chrome``; with ``capabilities``, the first of them that can serve
+    every one (advertised and policy-allowed) - the same test ``choose`` applied when it
+    called the target available. ``None`` for the ``device`` target (which machine is
     ``app.devices.selection``'s question, asked over the non-cloud views) and for a decision
     that selected nothing. Pure: it reads the views it is handed."""
     if decision.outcome != "selected" or decision.target in (None, Target.DEVICE):
         return None
-    live = [v for v in views if v.status != "revoked" and v.presence == PRESENCE_ONLINE]
     if decision.target is Target.CLOUD:
-        wanted = [v for v in live if v.platform == CLOUD_PLATFORM]
+        wanted = [v for v in views if v.platform == CLOUD_PLATFORM]
     else:
         wanted = [
-            v for v in live if v.platform != CLOUD_PLATFORM and OWNER_CHROME_LABEL in v.labels
+            v for v in views if v.platform != CLOUD_PLATFORM and OWNER_CHROME_LABEL in v.labels
         ]
-    return wanted[0] if wanted else None
+    for view in wanted:
+        if _why_not(view, capabilities or ()) is None:
+            return view
+    return None
 
 
 def _acting_allowed(url: str | None) -> bool:
@@ -182,8 +254,17 @@ def choose(
     cloud_blocker: str | None = None,
     research_job_id: uuid.UUID | None = None,
     ledger_required: bool = True,
+    capabilities: Sequence[str] | None = None,
+    views: list[DeviceView] | None = None,
 ) -> Decision:
     """Decide where a job runs, record why, and return the decision.
+
+    ``capabilities`` are the operations the job will send. With them, a target counts as
+    available only when a device of it is online, advertises every one and is allowed them
+    by the owner's policy - so a target that is up and cannot do the job is skipped (with
+    its own reason) for the next in the chain, never selected and failed afterwards.
+    Without them the rule decides by presence, as it did. ``views`` is the registry snapshot
+    to decide over, for a caller that goes on to pick the device from the same one.
 
     ``research_job_id`` is the research task the decision is for: its ledger rows carry it,
     so "why did this run go where it went" is one read by the run's own id.
@@ -197,19 +278,24 @@ def choose(
     allow-list; if not, the decision is replaced by a refusal."""
     kind = JobKind.SCHEDULED if scheduled else JobKind(job_kind)
     acting = False if scheduled else acting
-    availability, resolved = _availability(list_device_views(db, runtime), spoken_target)
-    decision = rule.decide(
-        ExecutionRequest(
-            job_kind=kind,
-            availability=availability,
-            spoken_target=spoken_target,
-            resolved_device=resolved,
-            needs_signed_in_session=needs_signed_in_session,
-            url=url,
-            acting=acting,
-            involves_payment=involves_payment,
-            cloud_blocker=cloud_blocker,
-        )
+    if views is None:
+        views = list_device_views(db, runtime)
+    availability, resolved, precise = _availability(views, spoken_target, capabilities)
+    decision = _say_why(
+        rule.decide(
+            ExecutionRequest(
+                job_kind=kind,
+                availability=availability,
+                spoken_target=spoken_target,
+                resolved_device=resolved,
+                needs_signed_in_session=needs_signed_in_session,
+                url=url,
+                acting=acting,
+                involves_payment=involves_payment,
+                cloud_blocker=cloud_blocker,
+            )
+        ),
+        precise,
     )
     if (
         acting
