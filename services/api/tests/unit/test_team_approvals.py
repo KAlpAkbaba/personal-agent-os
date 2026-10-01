@@ -592,10 +592,16 @@ def test_a_rejection_needs_its_reason_and_keeps_it_on_both_stores(both):
     assert _tasks(reader)["fikir-a"]["reason"] == "gerek yok"
 
 
-def test_a_decision_is_refused_while_a_cycle_holds_the_lock_on_both_stores(both):
+def test_a_decision_is_refused_while_a_cycle_holds_the_lock_on_the_file_store_only(both):
     test_client, reader, _ = both
     reader.acquire_lock(machine="MAIL", cycle_id="c1", pid=1)
     refused = _decide(test_client, task_id="fikir-a", decision="approve")
+    if reader.kind == "db":
+        # Owner, 2026-10-01: on the database store the owner decides while a cycle runs
+        # (tests/unit/test_team_approvals_while_running.py holds that rule).
+        assert refused.status_code == 200, refused.text
+        assert _tasks(reader)["fikir-a"]["state"] == "approved"
+        return
     assert refused.status_code == 409
     assert refused.json()["detail"]["code"] == "cycle_running"
     assert _tasks(reader)["fikir-a"]["state"] == "awaiting_owner"
