@@ -93,6 +93,7 @@ from app.voice.realtime_sessions.tools import (
     research_followup_refusal,
     terminal_status_for,
 )
+from app.voice.realtime_sessions.tools_operator import names_unbound_machine
 from app.voice.spoken_device import resolve_without_device_phrase
 
 logger = get_logger("app.voice.realtime_sessions.service")
@@ -2008,6 +2009,11 @@ def record_client_events(
                 # ``handle_tool_call`` binds it into the call's device port. Overwritten by
                 # every utterance, so a device named once is not named for the next sentence.
                 "device_targets": list(spoken_devices),
+                # ADR-0224: the sentence named a machine ("bilgisayarında", "ofis...") and no alias
+                # bound - a yes/no, never the words. ``operator.app_open`` asks instead of
+                # launching on the session's own device. Written here, beside the targets, so
+                # both halves of the contract live in one place.
+                "machine_named_unbound": names_unbound_machine(text or "", spoken_devices),
             }
             resolved.append(
                 {

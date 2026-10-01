@@ -1485,7 +1485,18 @@ def _eye_disable_match(tokens: tuple[str, ...]) -> str | None:
 #: The imperative "open" forms. Exact, like the eye/camera nouns: "açık" (open, adj.) is
 #: the QUERY "kamera açık mı?" and must not become an action; "açar mısın" is a request
 #: and is honoured as one.
-_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("aç", "açsana", "açar", "ac", "acsana", "acar")
+#: "açın"/"açınız" is the polite imperative the realtime STT renders a spoken "aç" as
+#: ("Ofisü bilgisayarında hesap makinesini açın.", 2026-09-30); it was in no table.
+_POLITE_OPEN_VERB_FORMS: Final[tuple[str, ...]] = ("açın", "açınız", "acın", "acınız", "aciniz")
+_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
+    "aç",
+    "açsana",
+    "açar",
+    "ac",
+    "acsana",
+    "acar",
+    *_POLITE_OPEN_VERB_FORMS,
+)
 #: ADR-0197: the owner's names for God's Eye View - the English name as the ASR renders
 #: it ("god's eye", "gods eye", "godseye") and the Turkish ones ("dünya gözü", "tanrı
 #: gözü", "tanrının gözü"); the word after the noun carries the case ending ("gözünü").
@@ -5276,6 +5287,7 @@ _APP_OPEN_VERB_FORMS: Final[tuple[str, ...]] = (
     "ac",
     "acsana",
     "acar",
+    *_POLITE_OPEN_VERB_FORMS,
 )
 _APP_LIST_QUESTION_WORDS: Final[tuple[str, ...]] = ("hangi", "neler", "ne")
 _APP_LIST_VERB_FORMS: Final[tuple[str, ...]] = (
