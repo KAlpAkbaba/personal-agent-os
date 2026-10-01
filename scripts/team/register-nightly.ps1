@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     The nightly cycle as a Windows scheduled task: 02:00 Europe/Istanbul, home PC only.
 
@@ -27,6 +27,15 @@ param(
     # PATH of the file scripts/team/write-queue-token.ps1 wrote (never the token itself).
     [string]$QueueUrl = "",
     [string]$QueueToken = "",
+    # The continuous cycle (owner, 2026-10-01: "sürekli, kontrollü"): with -EveryMinutes N the task
+    # starts a cycle every N minutes all day instead of once at 02:00. The lock keeps two from
+    # running at once, a cycle with nothing to do ends in seconds, the day's cycles share one
+    # integration branch (-DailyId) and the researcher runs at most every -ResearchEveryHours.
+    [int]$EveryMinutes = 0,
+    # The branch the workers' branches are opened from (cycle.ps1 -Base). The lead's branch
+    # while it carries machinery main does not have yet; empty = the cycle's own default (main).
+    [string]$Base = "",
+    [double]$ResearchEveryHours = 6,
     [string]$TaskName = "PagentOS Team Nightly Cycle",
     [string]$HomeMachine = "MAIL",
     [string]$Machine = $env:COMPUTERNAME,
@@ -59,7 +68,9 @@ function Get-NightlyPlan {
     $powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     $script = Join-Path $RepoRoot "scripts\team\cycle.ps1"
     $usd = $MaxUsd.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes"
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -MaxUsd $usd -MaxParallel $MaxParallel -CycleMinutes $CycleMinutes -Research"
+    # -Research: the researcher runs in EVERY cycle, whether the queue is full or not (owner,
+    # 2026-10-01); its proposals wait for him in the Onay Merkezi as ideas.
     if ($QueueUrl) {
         if (-not $QueueToken) { throw "-QueueUrl needs -QueueToken (the path of the token file)" }
         $arguments += " -QueueUrl $QueueUrl -QueueToken `"$QueueToken`""
@@ -86,8 +97,16 @@ if ($Unregister) {
 
 $plan = Get-NightlyPlan -RepoRoot $repoRoot -MaxUsd $MaxUsd -MaxParallel $MaxParallel `
     -CycleMinutes $CycleMinutes -LocalZone ([System.TimeZoneInfo]::Local) -QueueUrl $QueueUrl -QueueToken $QueueToken
+if ($EveryMinutes -gt 0) {
+    $hours = $ResearchEveryHours.ToString("0.##", [System.Globalization.CultureInfo]::InvariantCulture)
+    $plan.Arguments += " -DailyId -ResearchEveryHours $hours"
+}
+if ($Base) {
+    if ($Base -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._/-]{0,80}$') { throw "-Base is a branch name" }
+    $plan.Arguments += " -Base $Base"
+}
 Write-Host "task      : $TaskName"
-Write-Host "when      : every day at $($plan.LocalTime) local time ($($plan.IstanbulTime) Europe/Istanbul)"
+Write-Host $(if ($EveryMinutes -gt 0) { "when      : every $EveryMinutes minutes, all day (one cycle at a time: the lock)" } else { "when      : every day at $($plan.LocalTime) local time ($($plan.IstanbulTime) Europe/Istanbul)" })
 Write-Host "runs      : $($plan.Execute) $($plan.Arguments)"
 Write-Host "in        : $($plan.WorkingDirectory)"
 Write-Host "as        : $env:USERNAME, only while logged on; no stored password, not elevated"
@@ -99,7 +118,11 @@ if ($PlanOnly -or -not $Register) {
 }
 
 $action = New-ScheduledTaskAction -Execute $plan.Execute -Argument $plan.Arguments -WorkingDirectory $plan.WorkingDirectory
-$trigger = New-ScheduledTaskTrigger -Daily -At $plan.LocalTime
+if ($EveryMinutes -gt 0) {
+    # From today's midnight, every N minutes, for ten years (Windows 10 wants a duration).
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes $EveryMinutes) -RepetitionDuration (New-TimeSpan -Days 3650)
+}
+else { $trigger = New-ScheduledTaskTrigger -Daily -At $plan.LocalTime }
 # A zero limit is Task Scheduler's "no execution time limit".
 $limit = if ($CycleMinutes -gt 0) { New-TimeSpan -Minutes ($CycleMinutes + 30) } else { New-TimeSpan -Seconds 0 }
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit $limit -MultipleInstances IgnoreNew -StartWhenAvailable

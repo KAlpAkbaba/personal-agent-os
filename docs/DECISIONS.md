@@ -16823,6 +16823,141 @@ scenario of `fake-claude.ps1`; mutation: the usage-limit branch disabled -> 2 RE
 What did not change: a task's `budget.max_usd` stays in the queue as the lead's estimate;
 `MaxRunsPerTask` (4) stays - it bounds a task that never converges, which is not money.
 
+### ADR-0214 addendum 4 (2026-10-01): a claim about PostgreSQL or real infrastructure left NOT_RUN does not merge; a database change only SQLite has seen does not pass the gate
+
+**What happened.** The team's state moved to the Cloud Core's database on 2026-10-01 and the
+first cycle in database mode died on its first call: `POST /v1/team/queue/lock` answered 500,
+`value too long for type character varying(32)`. The lock row's version was 42 characters.
+Every test of the store ran on SQLite, which does not enforce a VARCHAR's length; the worker
+of pilot-02 had honestly written NOT_RUN beside "DbStore on Postgres"; the inspector approved;
+the lead merged; the gate, which has a real PostgreSQL, was never asked. The same shape as
+ADR-0219's addendum (an image nobody had started) and as the maintenance script that waited
+for `api-blue` by name: a claim nobody ran is where the defect is.
+
+**The owner's rule, permanent:** "NOT_RUN kalan Postgres/gerçek-altyapı iddiaları yayın öncesi
+denetleyici tarafından dev stack'te koşulmadan merge edilmez; SQLite-only testle geçen DB
+değişikliği kapıdan geçmez."
+
+**How it is held.**
+* *The inspector* (`.claude/agents/inspector.md`): a report that leaves a claim about
+  PostgreSQL, the broker, a container, a scheduler or any other real infrastructure at NOT_RUN
+  is not approved until the inspector has run that claim on the dev stack
+  (`infra/docker/docker-compose.dev.yml`: PostgreSQL, Temporal, MinIO) - or returned the task
+  with "write the integration test". "The machine could not" is said with the command that
+  failed, and is then the lead's to run before the merge, never a silent pass.
+* *The gate* (`services/api/tests/unit/test_postgres_coverage_ratchet.py`): every mapped
+  table is named by a test under `tests/integration` - which the gate runs against the dev
+  stack's PostgreSQL after the real migrations - or it is one of the 51 (of 87) tables that
+  were in that state on the day of the rule, frozen in a list that may only shrink. A new
+  table without a Postgres test fails the unit step. Naming is the floor, not the proof: the
+  proof is the inspector's run.
+* *The store that made the rule*: `tests/integration/test_team_state_postgres.py` takes the
+  lock, the live status and a report to PostgreSQL (RED with production's exact error before
+  the fix), and `test_team_state.py` holds every row the store writes to the column widths
+  read from the model, on SQLite too.
+* *The debt* is queued (`postgres-coverage-debt`): the 51 tables get named, real tests,
+  package by package.
+
+### ADR-0214 addendum 5 (2026-10-01): the researcher runs in every cycle; every proposal waits for the owner
+
+The owner: "Araştırmacı sürekli çalışsın: her döngüde (kuyruk dolu olsa da) bir araştırma
+koşusu — yeni model/kütüphane/yöntem taraması + roadmap satırlarına eşleme + benim son
+hatalarımdan öneri; çıktılar team/proposals/ altında birikir, Onay Merkezi'nde 'fikir' listesi
+olarak görünür, ben onaylayınca kuyruğa girer. Ofis sayfasında araştırmacı o sırada 'çalışıyor'
+görünsün."
+
+* The role file (`.claude/agents/researcher.md`) names the three things every run does: scan
+  (models, libraries, methods, new versions of what we carry), map (to a ROADMAP row and an
+  existing seam), learn (the newest cycle reports, the newest QUALIFICATION stage and HANDOFF:
+  a defect shape seen twice becomes a proposal). At most three proposals a run; none is an
+  honest run.
+* The nightly task passes `-Research` (`scripts/team/register-nightly.ps1`); the lead passes
+  it when starting a cycle by hand.
+* **This narrows addendum 2 (TEAM_PROTOCOL 3a item 1) for the researcher's proposals:** they
+  no longer enter the queue on the lead's word because they serve a roadmap row. Each is an
+  `awaiting_owner` idea in the Onay Merkezi and becomes work when the owner approves it; the
+  cycle's lead run then splits it into cards. Work the owner himself asks for, and defects
+  found on the way, are queued by the lead as before.
+* The Ofis page shows the researcher "çalışıyor" while its run is in the cycle's live status
+  (`office_view`: a run whose role is researcher takes the researcher's seat).
+* Two things are not built yet and are queued: `researcher-every-cycle` (the run alongside the
+  first batch instead of before it, research on by default, the proposal's text posted to the
+  queue store) and `proposals-on-cloud-core` (the Onay Merkezi on the Cloud Core reads a
+  proposal's text from the store - today it reads `team/` on the machine serving the API, so
+  in database mode an idea shows its title only).
+
+### ADR-0214 addendum 6 (2026-10-01): the cycle runs all day - "sürekli, kontrollü"
+
+The owner, on the day the cycle ran once a night: "gün içerisinde bozulmalar, iş bitmeleri
+diğerlerine yansımayacak çünkü günde 1 kere döngüye giriyor ... sürekli, kontrollü olması
+gerekiyor." A task finished at noon reached nobody until 02:00; an idea approved in the
+morning waited for the night.
+
+**What runs now.** The scheduled task (`scripts/team/register-nightly.ps1 -EveryMinutes 30`;
+its name is still "PagentOS Team Nightly Cycle") starts `cycle.ps1` every thirty minutes, all
+day, in database mode. What keeps that under control:
+* one cycle at a time - the lock (and the scheduler's `IgnoreNew`); a cycle with nothing to
+  run ends in seconds;
+* `-DailyId`: a day's cycles share one id (`dYYYYMMDD`), so one integration branch and one
+  report a day, not forty-eight;
+* `-ResearchEveryHours 6`: the researcher runs when its last finished run is more than six
+  hours old (`team/research-last.txt`) - "in every cycle" was said of a nightly cycle; a web
+  scan every half hour is not control. The owner can change the number;
+* the stops that were already there: the usage limit (waited out), `MaxRunsPerTask`, two
+  RETURNs, `team/stop.flag`, no release and no merge to main by any script;
+* everything visible on the Ofis page while it happens.
+
+**What is still by hand, and queued.** The cycle ends at "merged into the integration
+branch". The gate on that branch and the merge to main are the lead's, so a task whose
+dependency must be on main still waits for a person: `cycle-auto-integrate` (a lead run for
+the shared files, the full gate in a worktree of its own, main only when green, never a
+release). And the Onay Merkezi refused every decision while a cycle ran - right for the file
+store, wrong for a cycle that runs all day: the fix is part of `proposals-on-cloud-core`
+(in the database store a decision on a task at a gate is safe: the cycle writes only the
+tasks it changed, each conditional on what it read), with the page's "Detay" view in
+`approvals-detail-view`.
+
+Tests: `scripts/tests/team-cycle.tests.ps1` (119): "the continuous cycle: the researcher is
+throttled by its last run, and a day's cycles share one id".
+
+### ADR-0214 addendum 7 (2026-10-01): the model policy - a model per role, a fallback chain, the inspector never weaker than the worker
+
+The owner: "(1) rol başına model ayarı team store'da — lead/inspector varsayılan Fable,
+worker/integrator/researcher Opus 5.5; cycle.ps1 koşuyu --model ile bu ayardan başlatır.
+(2) Düşüş zinciri: koşu 'usage limit' ile dönerse aynı iş bir alt modelle (Fable→Opus
+5.5→Sonnet) hemen yeniden denenir, raporda 'model düşürüldü' yazar; tümü limitteyse bekler.
+(3) Ofis sayfasında her koltuğun detay panelinde model seçici + üst barda iki limit yüzdesi
+(Fable / tüm modeller) ve 'yedek model: açık' göstergesi; seçim team store'a yazılır.
+(4) Denetleyici asla işçiden daha zayıf modelde koşmaz."
+
+**The reason, as the lead reads it.** The strongest model's limit is the scarce thing; a
+worker's run is long and many, a lead's and an inspector's judgement is short and decides
+what merges. Spending the strong model where the judgement is, and never letting the judge
+be weaker than what it judges, is the control; the chain keeps the day's work moving when
+one limit is reached instead of waiting hours for it.
+
+**In force now (the interim form, the lead's).** `team/models.json`:
+lead and inspector `claude-fable-5-1`; worker, integrator and researcher `claude-opus-5-5`.
+`cycle.ps1` reads it and starts each run with `--model`; the report's run list names the
+model of every run; a value that is not a model name stops the cycle before it starts
+anything (the value goes onto a command line). Both ids were run through the real tool on
+2026-10-01 (`modelUsage` named each). Test: `scripts/tests/team-cycle.tests.ps1` "each role
+runs on the model the team's setting names for it" (mutation: the map ignored -> RED).
+
+**Queued, in the owner's order (right after `proposals-on-cloud-core`), one contract in
+three cards:** `model-policy-cycle` (the setting from the team store, the chain with "model
+düşürüldü" in the report, a limited model remembered until its reset, the inspector held to
+the worker's model or stronger - it WAITS rather than be lowered below it; integrator first:
+what the tool really prints when one model's limit is hit, and whether the two percentages
+exist anywhere a script can read), `model-policy-api` (GET/PUT `/v1/team/queue/models`, the
+status' `model` and `limits`, the seat's model in `/v1/team/office`; a setting whose
+inspector is weaker than its worker is refused), `model-policy-office-ui` (the selector in
+the seat's panel, the two percentages and the fallback toggle in the top bar).
+
+**One thing said plainly.** The two limit percentages are shown only if the tool gives them
+in a form a script can read. Nobody computes or estimates one: until a real source is found
+the page says "bilinmiyor", never "%0".
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere
@@ -17669,3 +17804,141 @@ card's area was the lead's omission; `GET /v1/team/queue/status` is exempt, by n
 PowerShell-client contract test (it is the read-back of what the cycle PUTs). Own drawing, no third
 party (`docs/THIRD_PARTY_COMPONENTS.md`). PROVEN_REAL waits for the store's move to the database and
 a screenshot during a real cycle.
+
+### ADR-0224 addendum 3 (2026-10-01): layer 3 as built - the threshold policy, the read-back, the one question
+
+*From `team/plans/understanding-threshold-policy-adr.md` (ADR (lead numbers it) — Layer 3 of ADR-0224 as built: the threshold policy, wired into the relay).*
+
+**Status.** Accepted (worker, cycle adr0224-02). `resolve_intent` itself is untouched; the policy
+runs in the relay (`record_client_events`), on the result the rule tables and the B51 router give.
+
+**Decision.**
+- `app/voice/understanding/policy.py` + `thresholds.json` beside it (package data, one reader, read
+  with `Path(__file__).with_name`; `COPY app ./app` ships it): `high 0.85`, `medium 0.60`,
+  `device_min 0.65`. A file with a missing key, a non-number or crossed bands is refused.
+- `decide(candidates, *, device, device_missing, device_aliases, negated) -> Decision(band,
+  candidate, question, confidence, layer, ranked, device, acts, missing)`.
+  HIGH: act, receipt unchanged. MEDIUM: act and read back. LOW: one question, no action.
+- **The rule candidate is the only one acted on.** A reading no rule matched is recorded (band,
+  confidence, intent names) and never dispatched: the relay has no slots for it, and the lexical
+  embedder scores "Bugün nasılsın" weather_query 0.60. Promotion needs slot extraction and the STT
+  corpus numbers (task `understanding-stt-corpus`). The model path for such a sentence is as today.
+- A repaired rule route (0.9) outranked by an acting semantic reading at HIGH is LOW: one question
+  naming the two families ("Hangisi efendim: medya mı, araştırma mı?"), never a guess. An exact
+  rule (1.0) is never contested.
+- **Device slot** (`DEVICE_SLOT_INTENTS = {app_open}`, closed on purpose: "ofis bilgisayarları
+  hakkında araştır" matches the alias at 1.0 and names no machine). Sources, in order: the owner's
+  own closed form (rule parser, 1.0); the owner's answer to the question (1.0, layer `answer`);
+  layer 1 (`ofisü`->`ofis` through the confusion list 0.75; a suffixed alias before the computer
+  word, "ofisi bilgisayarında", 0.9); layer 2 - only ABOVE 0.65, only when an alias word is in the
+  sentence (exact, or distance >= 0.75 for words of 4+ letters), never HIGH (capped at high-0.01,
+  0.75 when a confusion entry was applied), and only as a canonical alias word the device port can
+  bind. Anything else: `device_missing` -> the question "Hangi bilgisayarda: ev mi, ofis mi, iş mi?"
+  (particle in vowel harmony). Never the session's device by default.
+- A bare, unpossessed "bilgisayarda/-dan/-a" with no picking word before it ("mutfaktaki", "diğer")
+  is this machine, like "bu bilgisayarda" (`names_unbound_machine`).
+- A negative imperative of a known verb caps a rule-less reading just under HIGH.
+- **Relay.** `ResolvedIntent` gains `band`, `candidates`; `confidence` becomes the decision's (the
+  B51 model route keeps its own). The turn record gains `confidence`, `band`, `candidates`,
+  `understanding {layer, band, confidence, candidates[:3], question}`; `device_targets` carries the
+  alias the layers bound. The audit row `voice_intent_resolved` gains `understanding {layer, band,
+  confidence, candidates[:3]}` - intent names and numbers only, never `Candidate.evidence` (KVKK).
+- **Two refusals before any handler** (`handle_tool_call`, beside step-up and ADR-0075): (1) a call
+  whose arguments carry a device-like key (`device`, `device_id`, `cihaz`, `bilgisayar`, `machine`,
+  `computer`, `hostname`) is refused whole, `device_slot_forbidden`; (2) while a LOW turn with a
+  question is fresh (60 s), EVERY tool call of that turn returns the question and runs nothing
+  (`understanding_low`). The relay never speaks the question itself (no `say` frame): it rides the
+  tool result once, in the paid and in the local mode alike.
+- **The answer.** A device question leaves `understanding_pending {intent, application, at}` on the
+  session; the next sentence, if it is ONLY an alias phrase ("Ofis.", "ev bilgisayarında") within
+  120 s, re-issues that intent with the device bound. Any other sentence closes the question.
+- **MEDIUM read-back** (`operator.app_open`, both launch paths): the receipt speech opens with
+  "Ofis cihazında Hesap Makinesi açıyorum efendim." and continues with the outcome; no question
+  mark, no second confirmation (owner rule 2026-09-18/19).
+
+**Not changed, on purpose.** `operator.app_open.application` stays a free string resolved against
+the allow-list on the server (unknown name -> a refusal naming the list). An `enum` would make a
+model that heard "Spotify" pick the nearest allowed value - a guess. Every registered tool schema
+already has `additionalProperties: false` and none declares a device slot (pinned by a test over
+`default_registry()`).
+
+**Consequences.** With no layer-2 engine configured the rule tables and layer 1 decide (this is
+production until start-up calls `configure_default_engine`). Other MEDIUM tools do not read back
+yet: only `operator.app_open` can be MEDIUM today (the device slot is the only layer-filled slot).
+`CANONICAL_ALIASES` has no "bulut": such an alias ends as the question.
+
+#### For the lead at merge
+1. `tests/unit/test_operator_app_open_named_device.py::test_relay_unbound_machine_word_asks_and_dispatches_nothing`
+   (outside this task's area) pins ADR-0233's stopgap for the very sentence this card moves to
+   MEDIUM and is RED on this branch by design. Replace its body with: commands went to
+   `world.ids["GMKADIRAKBABA"]` only; `call["result"]["speech"]` starts with
+   "Ofis cihazında Hesap Makinesi açıyorum efendim."; record `machine_named_unbound is False`,
+   `device_targets == ["ofis"]`. (The same assertions live in `test_understanding_relay.py`.)
+2. Start-up wiring (not in this area): `combine.configure_default_engine(LocalEmbedder, exemplars)`
+   in `create_app`. Production may not import `tests/`: the exemplars need a shipped source.
+   Until then `understanding.layer` is never `semantic` in production.
+3. Nothing to register in `app/protocol_files.py` or the falsification list: `thresholds.json` is
+   package data. A one-line "ships beside its reader" pin may join `test_office01_wiring.py`.
+4. `docs/HANDOFF.md`, the ADR number, `docs/DECISIONS.md`.
+
+**Wired by the lead at merge (adr0224-02).** The test of ADR-0233 that expected a QUESTION for "Ofisü bilgisayarında
+hesap makinesini açın" was rewritten: with layers 1 and 3 the confusion list binds "ofisü" to the office PC and
+the launch goes there with a read-back (`test_relay_the_owners_misheard_sentence_reaches_the_office_and_is_read_back`).
+**Not wired, and queued (`understanding-engine-startup`):** the semantic engine is not configured at start-up -
+production cannot import `tests/`, so the exemplars need a shipped source. Until that lands production runs the
+rule tables, layer 1 and the policy over the RULE candidate only; the semantic candidates of layer 2 exist in tests.
+The worker's open risk stands: after a LOW question every tool is blocked for 60 s, including one the model calls
+for an unrelated reason.
+
+### ADR-0234 addendum 1 (2026-10-01): "ekip ne yapıyor?" - one paragraph from the Ofis page's data
+
+*From `team/plans/office-voice-summary-adr.md` (The Ofis page can be asked by voice: "ekip ne yapıyor?" (office-voice-summary)).*
+
+Context: the Ofis page (ADR-0234) shows who works on what; the owner wants the same answer by voice,
+as one paragraph, without opening the page.
+
+Decision:
+- `app/team/speech.py::office_paragraph(view)` is a pure function over `office_view`'s answer, so
+  the page and the voice cannot disagree. At most ~60 words: how many of six work and on what
+  (titles cut at the first clause, at most three), how many tasks came back, how many approvals
+  wait, the usage-limit state when it is not ok, "tahmini" before any dollar figure. Task ids are
+  never read. Nothing running: "Ekip şu an çalışmıyor efendim." (waiting approvals / returned
+  tasks are still appended).
+- One router (`app/voice/intents.py`): new intent `TEAM_STATUS`, a query (tool `team.status`, no
+  side effect). Nouns are EXACT words ("ekip", "ajanlar"), never the stem "ajan" (= "ajanda",
+  the calendar). "ofiste" counts only with "kim" + "çalış"; "ofiste ne yaptın" (device alias) and
+  "bu hafta ne oldu" (narrative) keep their intents.
+- Tool `team.status` (`tools_team.py`): empty argument object (the relay filters argument keys),
+  result `{status, speech}`; reads `ctx.live["team_store"]`/`["team_root"]`, else a `FileStore` on
+  the repository `team/` exactly as the route does.
+
+Consequences: the lead registers the tool (`register_team_tools(reg)` in `default_registry`) and
+adds `"team.status": TIER_OPEN` to `app/security/step_up.py`; without the tier the step-up policy
+(shadow mode) logs it as `sensitive`. The service should inject `team_store`/`team_root` into
+`ctx.live` from `app.state`; until then the FileStore fallback applies (correct only where the
+`team/` directory is the queue's home, i.e. not in database mode).
+
+**Wired by the lead at merge.** `register_team_tools` in the default registry, `team.status` at `TIER_OPEN`, and in
+database mode the voice runtime is handed `app.state.team_store` (`register_live`) - without it the tool read
+`team/` files, which the Cloud Core does not have. `test_adr022402_wiring.py` holds the three.
+
+### ADR-0228 addendum 1 (2026-10-01): the operator's callers pass the device
+
+*From `team/plans/ledger-device-callers-adr.md` (ADR (unnumbered): operator ledger rows name the bound device).*
+
+Context: ADR-0228 added the device stamp to the ledger writers (`start_task(device=)`,
+`record_receipt(device=)`) but no caller passed it, so real operator rows stayed unstamped.
+
+Decision: one helper, `_bound_device_word(ctx, device_action)` in `tools_operator.py`, returns the
+word to stamp: the first `targets` entry when the sentence named a machine, else the first alias
+(or name) of `session_device_ids[0]` via the existing `_device_named`; `None` when nothing is
+bound or unreadable. Every `operator.start_task(...)` in `tools_operator.py` and its `_receipt`
+`record_receipt` pass it. `actions.py` is unchanged: its receipts (eye, release.promote) are
+cloud-side facts with no device, and stay `bulut` on purpose.
+
+Consequence: "ofiste ne yaptın" now counts operator tasks and receipts. Evidence PROVEN_REAL
+needs the owner asking after an operator action on the office PC.
+
+The ten `operator.start_task` calls hand over the bound device's word; `record_receipt`'s callers in
+`actions.py` needed no change per the worker's reading. "Ofiste ne yaptın" after an operator action on the office
+PC: `READY_FOR_OWNER`.

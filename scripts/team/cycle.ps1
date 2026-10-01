@@ -75,6 +75,13 @@ param(
     [string]$Machine = $env:COMPUTERNAME,
     [string]$Base = "main",
     [switch]$Research,
+    # The continuous cycle (owner, 2026-10-01: "sürekli, kontrollü"): the scheduled task starts a
+    # cycle every half hour, so what broke or finished at noon reaches the others at noon. With
+    # -DailyId every one of a day's cycles shares ONE id ("dYYYYMMDD") and so ONE integration
+    # branch; with -ResearchEveryHours N the researcher runs only when its last run ended more
+    # than N hours ago (0 = in every cycle) - a web scan forty-eight times a day is not control.
+    [switch]$DailyId,
+    [double]$ResearchEveryHours = 0,
     # What the lead asks the researcher to study, one line per subject. It is placed in the
     # researcher's prompt under a heading of its own; the role file stays the role.
     [string[]]$ResearchBrief = @(),
@@ -101,12 +108,36 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $repoRoot "scripts\lib\HttpJson.ps1")
 
 if (-not $TeamRoot) { $TeamRoot = Join-Path $repoRoot "team" }
-if (-not $CycleId) { $CycleId = "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }
+if (-not $CycleId) { $CycleId = $(if ($DailyId) { "d" + (Get-Date).ToString("yyyyMMdd") } else { "c" + (Get-Date).ToString("yyyyMMdd-HHmm") }) }
 if ($CycleId -cnotmatch '^[a-z0-9][a-z0-9.-]{0,40}$') { throw "a cycle id is lower-case letters, digits, '.' and '-': '$CycleId'" }
 if ($MaxParallel -lt 1) { throw "-MaxParallel is at least 1" }
 # A parameter is never assigned over (provision.tests.ps1 holds every script to it).
 $runResearch = [bool]$Research -or [bool]$ResearchOnly
+# The researcher's last finished run, on this machine: the throttle of -ResearchEveryHours.
+$researchMarker = Join-Path $TeamRoot "research-last.txt"
+if ($runResearch -and -not $ResearchOnly -and $ResearchEveryHours -gt 0 -and (Test-Path -LiteralPath $researchMarker)) {
+    $lastResearch = ConvertFrom-TeamTimestamp -Text ([System.IO.File]::ReadAllText($researchMarker).Trim())
+    if ($null -ne $lastResearch -and ([datetime]::UtcNow - $lastResearch).TotalHours -lt $ResearchEveryHours) { $runResearch = $false }
+}
 
+# The model each role runs on (owner, 2026-10-01, ADR-0214 addendum 7): team/models.json,
+# {"roles": {"worker": "<model id>", ...}}. A role it does not name runs on -Model; with neither, the
+# tool's own default. The interim form: the setting moves into the team store with the task
+# model-policy-*. A name that is not a model name stops the cycle before it starts anything -
+# the value goes onto a command line.
+$roleModels = @{}
+$modelsPath = Join-Path $TeamRoot "models.json"
+if (Test-Path -LiteralPath $modelsPath) {
+    $modelsDocument = Read-TeamJson -Path $modelsPath
+    $rolesNode = Get-TeamProperty -InputObject $modelsDocument -Name "roles"
+    if ($null -ne $rolesNode) {
+        foreach ($property in $rolesNode.PSObject.Properties) {
+            $name = [string]$property.Value
+            if ($name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw "team/models.json: '$name' is not a model name (role $($property.Name))" }
+            $roleModels[[string]$property.Name] = $name
+        }
+    }
+}
 $queuePath = Join-Path $TeamRoot "queue.json"
 $lockPath = Join-Path $TeamRoot "lock.json"
 $reportsRoot = Join-Path $TeamRoot "reports"
@@ -301,7 +332,8 @@ try {
                 if ($left -lt $cap) { $cap = [Math]::Max(0.01, $left) }
             }
         }
-        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $Model -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
+        $runModel = if ($roleModels.ContainsKey($Role)) { [string]$roleModels[$Role] } else { $Model }
+        $arguments = Get-TeamRunArguments -RoleFile $roleFile -MaxUsd $cap -Model $runModel -PrefixArguments $ClaudePrefixArguments -ExcludeTools $ExcludeTools
         if ($Prompt) { $prompt = $Prompt }
         elseif ($null -ne $Task) { $prompt = New-TeamTaskCard -Task $Task -Role $Role -CycleId $CycleId }
         else {
@@ -318,7 +350,7 @@ try {
         [void]$script:liveRuns.Add($live)
         Write-CycleStatus
         $deadline = if ($RunMinutes -gt 0) { [datetime]::UtcNow.AddMinutes($RunMinutes) } else { [datetime]::MaxValue }
-        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live }
+        return [pscustomobject]@{ Task = $Task; Role = $Role; Run = $run; Deadline = $deadline; Live = $live; Model = $runModel }
     }
 
     function Complete-RoleRun {
@@ -340,6 +372,7 @@ try {
         Write-CycleStatus
         $script:cycle.runs = @(@($script:cycle.runs) + [pscustomobject]@{
                 task = $taskId; role = $Started.Role; cost_usd = $result.CostUsd; seconds = $finished.Seconds; outcome = $outcome
+                model = [string]$Started.Model
             })
         $relative = "team/reports/$CycleId/$taskId-$($Started.Role)-$number"
         return [pscustomobject]@{
@@ -403,7 +436,8 @@ try {
         if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
         $done = Complete-RoleRun -Started (Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot)
         if (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
-        $known = @(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
+        else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
+        $known =@(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
         foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
             $relative = "team/proposals/$($file.Name)"
             if ($known -contains $relative) { continue }

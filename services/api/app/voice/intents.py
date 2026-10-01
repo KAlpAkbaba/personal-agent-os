@@ -353,6 +353,7 @@ class Intent(StrEnum):
     MORNING_BRIEFING = "morning_briefing"  # Günaydın. / Sabah özetimi ver. / ... bekliyor?
     SYSTEM_STATUS_QUERY = "system_status_query"  # Sistem durumu nasıl?
     OVERNIGHT_WORK_QUERY = "overnight_work_query"  # Gece neler yaptın?
+    TEAM_STATUS = "team_status"  # Ekip ne yapıyor? / Ofiste kim çalışıyor? (the Ofis page, aloud)
     # M26 addendum (docs/M26_LATEST_NEWS_MODE_SPEC.md §6): Latest News Mode. Two distinct
     # operations, deterministic — NEWS_OPEN plays the latest eligible video (a real
     # mutation: a browser opens, a video plays), NEWS_SUMMARIZE routes a current-events
@@ -735,6 +736,8 @@ QUERY_TOOL_BY_INTENT: dict[Intent, str] = {
     Intent.MORNING_BRIEFING: "briefing.morning",
     Intent.SYSTEM_STATUS_QUERY: "briefing.system_status",
     Intent.OVERNIGHT_WORK_QUERY: "briefing.overnight_work",
+    # The agent team's Ofis page, spoken: reads the team stores, changes nothing.
+    Intent.TEAM_STATUS: "team.status",
     # M26 addendum (spec §6): the resolver's own decision, read without opening anything -
     # mutates nothing the owner can see, the same query class every other family's
     # own status/explain entry above already gets.
@@ -1178,6 +1181,12 @@ class ResolvedIntent:
     #: transcript that lost its Turkish letters matched with them folded) or both joined
     #: by "+". None for every route the words reached directly.
     route_repair: str | None = None
+    #: ADR-0224 layer 3: the band the threshold policy put this reading in (high | medium |
+    #: low) and the ranked readings it chose among, as (intent name, confidence) - never the
+    #: evidence, which carries the owner's words. ``confidence`` above is the decision's own
+    #: once the relay has run the policy. None / empty until then.
+    band: str | None = None
+    candidates: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.klass:
@@ -1237,6 +1246,8 @@ class ResolvedIntent:
             "process_name": self.process_name,
             "service_name": self.service_name,
             "route_repair": self.route_repair,
+            "band": self.band,
+            "candidates": [list(pair) for pair in self.candidates],
         }
 
     @property
@@ -4401,6 +4412,21 @@ def _overnight_work_query_match(tokens: tuple[str, ...]) -> str | None:
         return None
     if _has_exact(tokens, "ne", "neler") and _has(tokens, "yap"):
         return "gece neler yaptın"
+    return None
+
+
+def _team_status_match(tokens: tuple[str, ...]) -> str | None:
+    """ "Ekip ne yapıyor?" / "Ekip ne durumda?" / "Ajanlar ne yapıyor?" / "Ofiste kim
+    çalışıyor?" — the agent team's Ofis page, spoken. The nouns are EXACT words, never stems:
+    "ajan" would swallow "ajanda" (the calendar). "Ofiste ne yaptın?" stays the narrative
+    ("ofiste" there is the DEVICE alias); only "ofiste" + "kim" + "çalış" is this intent."""
+    if _has_exact(tokens, "ekip", "ekibin", "ekibim", "ajanlar", "ajanların", "ajanlarım"):
+        if _has_exact(tokens, "ne", "neler") and _has(tokens, "yap", "durum"):
+            return "ekip ne yapıyor"
+        return None
+    if _has_exact(tokens, "ofiste", "ofis") and _has_exact(tokens, "kim", "kimler"):
+        if _has(tokens, "çalış", "calis"):
+            return "ofiste kim çalışıyor"
     return None
 
 
@@ -9844,6 +9870,10 @@ def _resolve_intent_rules(
             scope=SCOPE_CONVERSATION,
             matched=overnight_matched,
             **base,
+        )
+    if team_matched := _team_status_match(tokens):
+        return ResolvedIntent(
+            Intent.TEAM_STATUS, scope=SCOPE_CONVERSATION, matched=team_matched, **base
         )
     if morning_matched := _morning_briefing_match(tokens):
         return ResolvedIntent(
