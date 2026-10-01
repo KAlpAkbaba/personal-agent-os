@@ -15,6 +15,18 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
+**ÖNCELİK 0 (sahip, 2026-10-01): Kokpit "Ofis" sayfası `/core/office`.** Döngü `office-01` çalışıyor:
+`cycle.ps1 -CycleId office-01 -Base integrate/cycle-2026-10-01 -MaxParallel 3` (08:40 UTC başladı). İşler:
+`office-data-api` (GET /v1/team/office), `office-cycle-status` (döngü canlı durumu + `team/stop.flag`),
+`office-page` (entegratör önce: CC0/MIT sprite ya da kendi çizim), `office-voice-summary` (data-api main'e girince).
+API sözleşmesi üç kartta aynı metinle. TEK ENTEGRASYON HATTI: `integrate/cycle-2026-10-01` = lead dalı + 12 iş
+(semantic-index dahil; çakışmayı ve bir entegrasyon testini lead çözdü, `26225411`); `integrate/office-01` onun
+üstüne kurulur. Döngü bitince LEAD: `integrate/office-01` üzerinde ortak dosyaları bağla (aşağıdaki liste + Kokpit
+menü bağlantısı + `team.status` araç kaydı), TAM KAPI, main, sahibin YAYIN ONAYI. Yayından sonra: kuyruğu
+veritabanına tohumla, `PAGENTOS_TEAM_STORE=database`, gece görevini `-QueueUrl http://100.90.158.26:8001
+-QueueToken %LOCALAPPDATA%\PagentOS	eam-queue.token` ile yeniden kaydet (belirteç yazıldı, 2026-10-01 11:15;
+kabul edildiği doğrulandı), gerçek döngüde 2 çalışan "çalışıyor" ekran görüntüsü (kabul, PROVEN_REAL).
+Sonra ADR-0224 katman 3-4-5 kaldığı yerden (`depends_on` ile bekliyorlar).
 **BAKIM PENCERESİ: BU AKŞAM 2026-10-01 22:00–22:30 İstanbul (19:00 UTC), sahip onaylı. OTURUMA BAĞLI DEĞİL:
 sunucunun kendi `pagentos-maintenance-window.timer`'ı çalıştırır (ADR-0223 eki); açılıştan 4 dk sonra
 `pagentos-maintenance-verify` doğrular; ev PC'de `PagentOS Maintenance Report 2026-10-01` görevi 22:40 ve 23:10'da

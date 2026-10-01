@@ -1,0 +1,35 @@
+**Inspector — app-open-named-device-not-dropped @ a908d00c**
+
+Part (a) is real and works. Part (b) passes its tests but can never fire in production: the bug the owner hit on 2026-09-30 would happen again exactly the same way.
+
+**Pass 1 — run (clean worktree, the worktree's own `app` confirmed via `__file__`)**
+- The two new test files: 11 passed. Related suites (voice intents ×4, operator tools, window_ref, spoken alias ×2, the new files): 334 passed. Corpus plus realtime sessions: 2828 passed in 591 s. ruff check and format are clean.
+- Router on the real STT sentence "Ofisü bilgisayarında hesap makinesini açın.": `app_open`, action, calc, aliases `()`. The verb is fixed, but no device is bound, so the tool guard is the only defence left.
+- "Ofis bilgisayarında … açın." gives app_open calc with alias ('ofis'). "Kapıyı/Neden/Pencereyi/Dosyayı açın" are not opens. "Müziği açın" gives media_play and "Kamerayı açın" gives eye_enable, the same as "aç". "Neden hesap makinesini açın?" still gives app_open, as the worker disclosed.
+- My mutations, each restored from a backup copy; the sha256 values below match before and after, and git status is clean:
+  - M1: drop only `"açın"` from the polite table. 11 passed, **survived**. The folded `acın` covers it, so the card's mutation "'açın' removed → RED" holds only when every polite form is removed.
+  - M2: remove the `targets_of_turn` early return. RED (the bound-target test fails).
+  - M3a/M3b: drop either the `bilgisayar` or the `ofis` branch of `_MACHINE_WORD_RE`. Both **survived**, because the one guarded sentence contains both words.
+  - M4: drop the this-computer exclusion. RED.
+- Hashes: intents.py `ed2b69c3…`, tools_operator.py `3cb22349…`. The worker quoted `92637f0f…` for intents.py; that is probably the hash before the `ruff format` they mention, so it is not the committed file.
+- Not run: the full unit suite, integration, and quality-gate.ps1 (this is a task branch, not integration).
+
+**Pass 2 — break it**
+1. **The guard can never fire.** There are zero writers of `utterance_text` in `app/`; `service.py` builds `last_utterance` without it. The tests pass only because they build the turn record by hand. `service.py:1877-1881` describes this exact failure ("the tool's own unit test builds the turn record by hand and so cannot prove the field travels"). Replaying the real trial today would still launch Calculator on MAIL. The goal is not met, and part (b) is half-done, which is not done.
+2. **The proposed fix is a privacy problem.** The suggested `"utterance_text": text[:300]` would put the owner's raw sentence into `realtime_sessions.context_json` on paid sessions. `chat_question` is deliberately local-only, and the status read at `service.py:644` exposes `last_utterance`. The key also matches `FORBIDDEN_KEY_PARTS` ("text"). A word-free signal, computed where `device_targets` is computed (`service.py:2010`), avoids storing the transcript and keeps both halves in one place. Example: `machine_named_unbound: bool`, or the unbound machine word itself.
+3. "Dispatches to that device" is shown only through a fake port: `_DeviceAction.targets` is never read, and the fake always returns OFFICE_ID. The real binding (`service.py:893-899`) is not exercised here, so that part is PROVEN_PROXY at best.
+4. Weak pinning: M1 and M3a/M3b survive.
+5. Minor: the speech is "Ofis cihazında …", not "Ofiste …" as the card wanted. A bare `ofis\w*` would also catch an "ofis programı" style sentence; low risk, since Office is not on the launch allowlist.
+
+Nothing outside the area, no secrets, no contract drift, and the tool has no device argument as ADR-0224 requires.
+
+**Evidence classes**
+- (a) Polite open verbs: PROVEN_AUTOMATED.
+- (b) The guard: NOT_RUN for the production path. The guard function alone is PROVEN_AUTOMATED. The bound-device dispatch is PROVEN_PROXY.
+- The real check is not READY_FOR_OWNER until the turn record carries the signal.
+
+**RETURN**
+1. Widen the area to `services/api/app/voice/realtime_sessions/service.py`. Write a word-free signal (unbound machine named, yes/no) next to `device_targets`, not the raw sentence, and have the tool read that.
+2. Add a relay test through the real session (utterance → `handle_tool_call` → `operator.app_open`) with "Ofisü bilgisayarında hesap makinesini açın.". It must show no dispatch plus one question, and be RED before the fix.
+3. Pin each machine-word branch with its own sentence, for example "evdeki bilgisayarda …" and "ofiste … açın" with no "bilgisayar". Pin `açın` itself, or say in the ADR that the mutation unit is the whole polite table.
+4. Fix the sha256 quoted in the report.
