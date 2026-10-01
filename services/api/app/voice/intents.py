@@ -3313,12 +3313,20 @@ def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     """ "Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" (spec §2's ``app.launch``
     allowlist, spec §3's APP_OPEN). Requires an open-imperative verb (module: "açık" the
     adjective/query stays a query) AND a name the allowlist alias table actually knows -
-    "Kapıyı aç" (open the door) names nothing on the list and resolves to nothing here."""
+    "Kapıyı aç" (open the door) names nothing on the list and resolves to nothing here.
+
+    ADR-0224: a word the owner taught by a correction ("ona hesap makinesi deme,
+    hesaplayıcı de") is such a name too - asked only when the table's own found none, and
+    only among the synonyms the relay loaded for this turn (none outside one)."""
     if not _has_exact(tokens, *_OPEN_VERB_FORMS):
         return None
     from app.operator.plans import resolve_app_alias
 
     canonical = resolve_app_alias(tokens)
+    if canonical is None:
+        from app.voice.understanding import corrections
+
+        canonical = corrections.app_for(tokens)
     if canonical is None:
         return None
     return canonical, canonical
