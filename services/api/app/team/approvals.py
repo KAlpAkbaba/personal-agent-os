@@ -6,10 +6,17 @@ owner. Onayla on the idea writes ``approved``; Onayla on the release leaves the 
 worker", so a release approval must not use it); Reddet writes ``stopped`` with the owner's
 reason at either gate. All of it is
 written where the NEXT cycle reads it (the :class:`app.team.store.TeamStore` the app is wired
-with: the Cloud Core's database, or ``team/queue.json``): a decision is refused while a cycle
-holds the queue
-(its own read-modify-write would overwrite ours), and it starts nothing - approving a release
-changes one file and does not run a release.
+with: the Cloud Core's database, or ``team/queue.json``), and it starts nothing - approving a
+release changes one task and does not run a release.
+
+A running cycle closes the gates only on the file store (:func:`decisions_open`): there the
+cycle rewrites the whole queue file at its end and would overwrite ours. On the database store
+the cycle writes back only the tasks it changed, each conditional on the ``updated_at`` it
+read, and it does not touch a task waiting at a gate - so the owner decides while it runs, and
+a task that did change meanwhile is a ``stale_write``, never an overwrite.
+
+An idea's text is read through the same store (``read_proposal``): on the Cloud Core there is
+no ``team/`` folder. The file under ``team/`` is the fallback of the file store only.
 
 Every decision is a ledger event, recorded BEFORE the queue is written: if the ledger refuses,
 the queue is untouched and the owner is told, so no decision exists that the ledger does not
@@ -98,20 +105,44 @@ def _read_inside(team_root: Path, relative: str) -> str | None:
         return None
 
 
-def _proposal_text(team_root: Path, proposal: str) -> str | None:
+def decisions_open(store: team_store.TeamStore, lock: dict[str, Any] | None, at: datetime) -> bool:
+    """Whether the owner can decide now. The listing says it and :func:`decide` enforces it.
+
+    Always on the database store: its writes are per task and conditional (module docstring).
+    On the file store only while no cycle holds the queue."""
+    if store.kind == "db":
+        return True
+    return not team_store.lock_is_running(lock, at)
+
+
+PROPOSALS_PREFIX = "team/proposals/"
+
+
+def _proposal_text(store: team_store.TeamStore, team_root: Path, proposal: str) -> str | None:
     if not proposal:
         return None
     normalized = proposal.replace("\\", "/")
-    if normalized.startswith("team/"):
-        return _read_inside(team_root, normalized)  # a path: its file, or nothing
-    return proposal  # prose
+    if not normalized.startswith("team/"):
+        return proposal  # prose
+    # A path: its text from the store (the file name is the store's key), or nothing.
+    text = None
+    if normalized.startswith(PROPOSALS_PREFIX):
+        text = store.read_proposal(normalized[len(PROPOSALS_PREFIX) :])
+    if text is None and store.kind == "file":
+        return _read_inside(team_root, normalized)  # written by hand under team/
+    return None if text is None else text[:TEXT_MAX_CHARS]
 
 
 def newest_cycle_report(team_root: Path) -> dict[str, str] | None:
     return team_store.FileStore(team_root).newest_report()
 
 
-def list_pending(queue: dict[str, Any], team_root: Path) -> list[dict[str, Any]]:
+def list_pending(
+    queue: dict[str, Any], team_root: Path, store: team_store.TeamStore | None = None
+) -> list[dict[str, Any]]:
+    """What waits at the owner's two gates. ``store`` is where a proposal's text is read
+    (default: the files under ``team_root``)."""
+    store = store or team_store.FileStore(team_root)
     out = []
     for task in queue.get("tasks", []):
         gate = gate_of(task)
@@ -127,7 +158,7 @@ def list_pending(queue: dict[str, Any], team_root: Path) -> list[dict[str, Any]]
                 "goal": task.get("goal", ""),
                 "acceptance": task.get("acceptance", ""),
                 "proposal": proposal or None,
-                "proposal_text": _proposal_text(team_root, proposal),
+                "proposal_text": _proposal_text(store, team_root, proposal),
                 "sha": task.get("sha"),
                 "reports": task.get("reports", []),
                 "updated_at": task.get("updated_at"),
@@ -208,8 +239,10 @@ def decide(
     with _WRITE_LOCK:
         queue = store.read_queue()
         task, actual_gate = _resolve(queue, task_id=task_id, gate=gate, channel=channel)
-        if team_store.lock_is_running(store.read_lock(), at):
+        lock = store.read_lock()
+        if not decisions_open(store, lock, at):
             raise Refused(409, "cycle_running", "Bir döngü kuyruğu tutuyor; bitince tekrar dene.")
+        running = team_store.lock_is_running(lock, at)
         from_state = task["state"]
         seen_updated_at = task.get("updated_at")
         release_approval = decision == "approve" and from_state == RELEASE_GATE_STATE
@@ -254,4 +287,10 @@ def decide(
         "decision": decision,
         "state": to_state,
         "applied": "next_cycle",
+        "cycle_running": running,
+        "message": (
+            "Karar kaydedildi; çalışan döngü bunu görmez, bir sonraki döngüde uygulanır."
+            if running
+            else "Karar kaydedildi; bir sonraki döngüde uygulanır."
+        ),
     }

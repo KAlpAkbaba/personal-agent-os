@@ -7,7 +7,8 @@ Reddet. The voice path ("fikri onayla" / "yayını onayla") calls the same POST 
 
 Queue: the cycle's own surface (pilot-02). GET the whole queue; PUT one task by id with the
 ``updated_at`` the writer last saw (409 when it is stale); POST the lock (acquire / release,
-the six-hour staleness rule) and the cycle report as text. All of it under the owner session,
+the six-hour staleness rule), the cycle report as text and a proposal's text (what the Onay
+Merkezi shows for the idea that names it). All of it under the owner session,
 over whichever store ``app.state.team_store`` is: the database on the Cloud Core, otherwise
 the files under ``app.state.team_root``.
 """
@@ -64,10 +65,13 @@ async def list_approvals(request: Request) -> dict[str, Any]:
             queue = store.read_queue()
         except (OSError, ValueError) as error:
             raise HTTPException(503, {"code": "queue_unreadable", "message": str(error)}) from error
+        lock, at = store.read_lock(), team_store.utcnow()
         return {
-            "approvals": approvals.list_pending(queue, root),
+            "approvals": approvals.list_pending(queue, root, store),
             "cycle_report": store.newest_report(),
-            "cycle_running": team_store.lock_is_running(store.read_lock(), team_store.utcnow()),
+            # For information; whether a decision is taken now is ``decisions_open``.
+            "cycle_running": team_store.lock_is_running(lock, at),
+            "decisions_open": approvals.decisions_open(store, lock, at),
         }
 
     return await asyncio.to_thread(load)
@@ -152,6 +156,15 @@ class ReportRequest(BaseModel):
     text: str = Field(max_length=200_000)
 
 
+class ProposalRequest(BaseModel):
+    """One file of ``team/proposals/``. The name's rules are the store's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    text: str = Field(max_length=team_store.PROPOSAL_MAX_CHARS)
+
+
 def _refuse(error: Exception) -> HTTPException:
     if isinstance(error, team_store.Stale):
         return HTTPException(409, {"code": "stale_write", "message": str(error)})
@@ -228,6 +241,17 @@ async def post_report(body: ReportRequest, request: Request) -> dict[str, Any]:
     return {"stored": body.name}
 
 
+@router.post("/v1/team/queue/proposals")
+async def post_proposal(body: ProposalRequest, request: Request) -> dict[str, Any]:
+    """Keep (or replace) a proposal's text where the queue is kept."""
+    store = _store(request)
+    try:
+        await asyncio.to_thread(store.put_proposal, body.name, body.text)
+    except team_store.Invalid as error:
+        raise _refuse(error) from error
+    return {"ok": True}
+
+
 # ------------------------------------------------------------------ the live status + the Ofis
 
 
@@ -288,7 +312,7 @@ async def read_office(request: Request) -> dict[str, Any]:
             queue,
             store.read_lock(),
             store.read_status(),
-            approvals.list_pending(queue, root),
+            approvals.list_pending(queue, root, store),
             team_store.utcnow(),
         )
 

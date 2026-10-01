@@ -16,6 +16,13 @@
         not say RECONCILE OK, or reboot-required remains; on success it writes
         LAST_MAINTENANCE.json with the downtime measured from the marker and removes the
         marker; without a marker it refuses (20).
+    The fake host has the REAL host's shape: its container list, its serving colour and how
+    long its operation lock is held come from scripts/tests/fixtures/host-snapshot.json (a
+    read-only snapshot of the Cloud Core, scripts/cloud/host-snapshot.sh), not from constants
+    written here. Two defects of 2026-10-01 were green on this fake and red on the host
+    because it listed api-blue only and its flock always answered "free" (QUALIFICATION
+    38.12, 38.17). Both colours and the measured 2 s hold stay as explicit cases too, so the
+    suite keeps its teeth whatever a later collection finds.
     Run: powershell -NoProfile -File scripts\tests\maintenance-reboot.tests.ps1
 #>
 [CmdletBinding()]
@@ -44,14 +51,40 @@ $u = { param($p) ($p -replace '\\', '/') }
 $posix = { param($p) $p = ($p -replace '\\', '/'); if ($p -match '^([A-Za-z]):(.*)$') { '/' + $Matches[1].ToLower() + $Matches[2] } else { $p } }
 $sha = "3333333333333333333333333333333333333333"
 
-# Fakes. Every one logs its call to $FAKE_STATE/calls.log; knobs are env variables.
+# The host's shape, from the snapshot. A fixture this suite cannot build a host from stops it
+# here, by name, rather than as twenty unrelated failures.
+$snapshotPath = Join-Path $repoRoot "scripts\tests\fixtures\host-snapshot.json"
+$snapshot = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+$servingColour = [string]$snapshot.serving_colour
+if ($servingColour -cnotmatch '^(blue|green)$') { throw "the host snapshot names no serving colour ('$servingColour'): $snapshotPath" }
+$upNames = @($snapshot.containers | Where-Object { $_.state -eq "running" } | ForEach-Object { [string]$_.name })
+$upApi = @($upNames | Where-Object { $_ -cmatch 'api-(blue|green)' })
+$upOther = @($upNames | Where-Object { $_ -cnotmatch 'api-(blue|green)' })
+$lockPresent = [bool]$snapshot.operation_lock.present
+# How long the lock stays held when the window asks for it at the worst moment: the longest
+# run of "held" samples, in seconds.
+$lockHeldS = [int]$snapshot.operation_lock.longest_run * [Math]::Max(1, [int]$snapshot.operation_lock.interval_s)
+$fixtureDir = Join-Path $script:Sandbox "fixture"
+New-Item -ItemType Directory -Force -Path $fixtureDir | Out-Null
+[IO.File]::WriteAllText((Join-Path $fixtureDir "up-other.txt"), (($upOther -join "`n") + "`n"))
+[IO.File]::WriteAllText((Join-Path $fixtureDir "up-api.txt"), (($upApi -join "`n") + "`n"))
+[IO.File]::WriteAllText((Join-Path $fixtureDir "lock-held-s.txt"), "$lockHeldS`n")
+
+# Fakes. Every one logs its call to $FAKE_STATE/calls.log; knobs are env variables. What a
+# knob does not override is the snapshot's: $FAKE_FIXTURE holds the running containers, the
+# serving api container and the seconds the operation lock is held.
 $fakes = @{
     docker = @(
         '#!/usr/bin/env bash',
         'echo "docker $*" >> "$FAKE_STATE/calls.log"',
         'case "$*" in',
         '  inspect*) echo "${FAKE_LEFTOVER_STATE:-created}"; exit 0;;',
-        '  ps*) printf "pagentos-prod-postgres-1\npagentos-prod-redis-1\npagentos-prod-minio-1\npagentos-prod-temporal-1\npagentos-prod-edge-1\n${FAKE_API_LINE-pagentos-prod-api-blue-1\n}pagentos-prod-godseye-1\n"; exit 0;;',
+        '  ps*) printf "%s\n" "$(<"$FAKE_FIXTURE/up-other.txt")"',
+        '       case "${FAKE_API_COLOUR:-snapshot}" in',
+        '         snapshot) printf "%s\n" "$(<"$FAKE_FIXTURE/up-api.txt")";;',
+        '         none) ;;',
+        '         *) echo "pagentos-prod-api-$FAKE_API_COLOUR";;',
+        '       esac; exit 0;;',
         'esac',
         'exit 0')
     curl = @(
@@ -77,7 +110,7 @@ $fakes = @{
     journalctl = @(
         '#!/usr/bin/env bash',
         'echo "journalctl $*" >> "$FAKE_STATE/calls.log"',
-        'echo "${FAKE_RECONCILE_LINE:-RECONCILE OK: api-blue is canonical (release 3333)}"')
+        'echo "${FAKE_RECONCILE_LINE:-RECONCILE OK: api-$FAKE_SERVING is canonical (release 3333)}"')
     df = @(
         '#!/usr/bin/env bash',
         'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100 50 50 %s%% /\n" "${FAKE_DISK_PCT:-40}"')
@@ -92,7 +125,17 @@ $fakes = @{
         'if [ -f "$FAKE_MARKER" ]; then m=yes; else m=no; fi',
         'echo "reboot marker=$m" >> "$FAKE_STATE/calls.log"',
         'exit 0')
-    flock = @('#!/usr/bin/env bash', 'echo "flock $*" >> "$FAKE_STATE/calls.log"', 'exit "${FAKE_FLOCK_EXIT:-0}"')
+    # The lock is held for the first N seconds after it is asked for (N from the snapshot, or
+    # FAKE_LOCK_HELD_S): asking once (-n) finds it held; waiting (-w T) gets it when N < T.
+    flock = @(
+        '#!/usr/bin/env bash',
+        'echo "flock $*" >> "$FAKE_STATE/calls.log"',
+        'held=${FAKE_LOCK_HELD_S:-$(<"$FAKE_FIXTURE/lock-held-s.txt")}',
+        'case "$1" in',
+        '  -n) if [ "$held" -gt 0 ]; then exit 1; fi;;',
+        '  -w) if [ "$held" -ge "$2" ]; then exit 1; fi;;',
+        'esac',
+        'exit 0')
 }
 foreach ($k in $fakes.Keys) { [IO.File]::WriteAllText((Join-Path $fakeBin $k), (($fakes[$k] -join "`n") + "`n")) }
 
@@ -106,13 +149,16 @@ function Reset-Host {
     $fin = [DateTime]::UtcNow.AddHours(-3).ToString("yyyy-MM-ddTHH:mm:ssZ")
     [IO.File]::WriteAllText((Join-Path $hostBase "backup\LAST_BACKUP.json"), "{`"snapshot`":`"abc`",`"finished_at`":`"$fin`"}`n")
     [IO.File]::WriteAllText((Join-Path $hostBase "app\scripts\cloud\backup-cloud-core.sh"), "#!/usr/bin/env bash`necho `"backup-script`" >> `"`$FAKE_STATE/calls.log`"`n")
+    # The host has the lock file (every release and every minute's reconcile opens it), so
+    # every preflight here meets the lock the way the host's does.
+    if ($lockPresent) { [IO.File]::WriteAllText((Join-Path $hostBase ".bluegreen-operation.lock"), "") }
 }
 
 function Invoke-Maint {
     param([string[]]$Flags = @("--preflight"), [hashtable]$Env = @{})
     $cmd = "PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_BACKUP_ROOT='$(& $u (Join-Path $hostBase 'backup'))' PAGENTOS_RECOVERY_ROOT='$(& $u (Join-Path $hostBase 'recovery'))' " +
            "PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_REBOOT_REQUIRED='$(& $u (Join-Path $hostBase 'state\reboot-required'))' PAGENTOS_WAIT_STEP_S=0 PAGENTOS_WAIT_TRIES=2 " +
-           "FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_MARKER='$(& $u (Join-Path $hostBase 'MAINTENANCE_MARKER'))' " +
+           "FAKE_FIXTURE='$(& $u $fixtureDir)' FAKE_SERVING='$servingColour' FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_MARKER='$(& $u (Join-Path $hostBase 'MAINTENANCE_MARKER'))' " +
            (($Env.GetEnumerator() | ForEach-Object { "$($_.Key)='$($_.Value)' " }) -join "") +
            "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $($Flags -join ' ') 2>&1"
     $previous = $ErrorActionPreference
@@ -133,6 +179,8 @@ try {
     if (-not (Test-Path $bash)) { Write-Host "  SKIP  maintenance tests: Git Bash not found at $bash" }
     else {
         Write-Host "maintenance window (maintenance-reboot.sh under Git Bash, fakes)"
+        Write-Host "  host shape from $(Split-Path -Leaf $snapshotPath) ($($snapshot.source); collected_at $($snapshot.collected_at)): api-$servingColour serves, $($upNames.Count) containers up, operation lock held ${lockHeldS}s when asked"
+        Assert-True ($upApi.Count -eq 1 -and $upApi[0] -cmatch "api-$servingColour" -and $upOther.Count -ge 6) "the snapshot is a host this suite can build: one api colour up, and it is the serving one ($servingColour)"
         Reset-Host
         $p = Invoke-Maint
         if ($p.Exit -ne 0 -or $env:PAGENTOS_MAINT_VERBOSE) { Write-Host $p.Output }
@@ -186,6 +234,7 @@ try {
         Assert-True (($c -contains "reboot marker=yes") -and (Test-Path (Join-Path $hostBase "MAINTENANCE_MARKER"))) "the maintenance marker exists when reboot is called"
         $mk = if (Test-Path (Join-Path $hostBase "MAINTENANCE_MARKER")) { Get-Content (Join-Path $hostBase "MAINTENANCE_MARKER") -Raw } else { "" }
         Assert-True ($mk -match "start_epoch=\d+" -and $mk -match "kernel_before=6.8.0-138") "the marker carries the start time and the old kernel"
+        Assert-True ($r.Exit -eq 0 -and ($c -contains "reboot marker=yes") -and @($c | Where-Object { $_ -match "^flock " }).Count -eq 1) "--run reboots on the host's own shape: api-$servingColour serving and the lock held ${lockHeldS}s when asked"
 
         # A defunct process does not fail a window (2026-10-01, the first real window: everything
         # held - kernel, containers, reconcile, health - and --verify said FAILED for one zombie,
@@ -209,22 +258,34 @@ try {
         Assert-True ($r.Exit -eq 0 -and @($r.Calls | Where-Object { $_ -match "^flock -w 45 " }).Count -eq 1 -and @($r.Calls | Where-Object { $_ -match "^flock -n" }).Count -eq 0) "the lock check waits (flock -w 45), it does not ask once"
         Reset-Host
         [IO.File]::WriteAllText((Join-Path $hostBase ".bluegreen-operation.lock"), "")
-        $r = Invoke-Maint -Env @{ FAKE_FLOCK_EXIT = "1" }
+        $r = Invoke-Maint -Env @{ FAKE_LOCK_HELD_S = "600" }
         Assert-True ($r.Exit -eq 10 -and $r.Output -match "FAIL no-release") "a lock still held after the wait refuses the window (10)"
+        # The measured hold as an explicit case: a later snapshot that happens to sample the
+        # lock free sixty times must not take this proof away.
+        Reset-Host
+        [IO.File]::WriteAllText((Join-Path $hostBase ".bluegreen-operation.lock"), "")
+        $r = Invoke-Maint -Env @{ FAKE_LOCK_HELD_S = "2" }
+        Assert-True ($r.Exit -eq 0 -and $r.Output -match "ok   no-release") "the reconcile's 2 s hold does not postpone the window"
 
         # The serving colour is whichever the last release left (found 2026-10-01: the release of
         # that afternoon made GREEN the active colour, and the script waited for api-blue by name -
         # that evening's window would have upgraded, waited five minutes and not rebooted).
         Reset-Host
-        $r = Invoke-Maint -Flags @("--preflight", "--run") -Env @{ FAKE_API_LINE = "pagentos-prod-api-green-1\n" }
+        $r = Invoke-Maint -Flags @("--preflight", "--run") -Env @{ FAKE_API_COLOUR = "green" }
         if ($r.Exit -ne 0 -or $env:PAGENTOS_MAINT_VERBOSE) { Write-Host $r.Output }
         Assert-True ($r.Exit -eq 0 -and ($r.Calls -contains "reboot marker=yes")) "--run reboots when GREEN is the serving colour"
         Reset-Host
-        $r = Invoke-Maint -Flags @("--preflight", "--run") -Env @{ FAKE_API_LINE = "" }
+        $r = Invoke-Maint -Flags @("--preflight", "--run") -Env @{ FAKE_API_COLOUR = "blue" }
+        Assert-True ($r.Exit -eq 0 -and ($r.Calls -contains "reboot marker=yes")) "--run reboots when BLUE is the serving colour"
+        Reset-Host
+        $r = Invoke-Maint -Flags @("--preflight", "--run") -Env @{ FAKE_API_COLOUR = "none" }
         Assert-True ($r.Exit -eq 11 -and $r.Output -match "containers still missing: api" -and @($r.Calls | Where-Object { $_ -match "^reboot" }).Count -eq 0) "--run does not reboot when NO api colour came back"
         Reset-Host; Write-Marker -AgoS 60
-        $r = Invoke-Maint -Flags @("--verify") -Env @{ FAKE_KERNEL = "6.8.0-142-generic"; FAKE_API_LINE = "pagentos-prod-api-green-1\n"; FAKE_RECONCILE_LINE = "RECONCILE OK: api-green is canonical (release 3333)" }
+        $r = Invoke-Maint -Flags @("--verify") -Env @{ FAKE_KERNEL = "6.8.0-142-generic"; FAKE_API_COLOUR = "green"; FAKE_RECONCILE_LINE = "RECONCILE OK: api-green is canonical (release 3333)" }
         Assert-True ($r.Exit -eq 0 -and $r.Output -match "VERIFY OK") "--verify passes when GREEN is the serving colour"
+        Reset-Host; Write-Marker -AgoS 60
+        $r = Invoke-Maint -Flags @("--verify") -Env @{ FAKE_KERNEL = "6.8.0-142-generic"; FAKE_API_COLOUR = "blue"; FAKE_RECONCILE_LINE = "RECONCILE OK: api-blue is canonical (release 3333)" }
+        Assert-True ($r.Exit -eq 0 -and $r.Output -match "VERIFY OK") "--verify passes when BLUE is the serving colour"
 
         # --verify
         Reset-Host
