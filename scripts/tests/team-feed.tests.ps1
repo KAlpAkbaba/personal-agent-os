@@ -400,6 +400,8 @@ $fakeApis = New-Object System.Collections.ArrayList
 #   raise_stop    with limited_first: that first call also writes team/stop.flag
 #   limited_first the FIRST call answers with the subscription's usage-limit error
 #   silent        the run prints something that is not the result document
+#   fail_after    the run does everything above (the feed file is on disk), THEN fails
+#   hang_after    the run does everything above, then never ends: the feeder's deadline kills it
 $fakeText = @'
 [CmdletBinding()]
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
@@ -461,7 +463,9 @@ if ($stray) {
     if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
     [System.IO.File]::AppendAllText($target, "the lead run was here`n", $utf8)
 }
-$document = [pscustomobject]@{ type = "result"; subtype = "success"; is_error = $false; result = "feed written: $feedFile"; total_cost_usd = 0.25 }
+if (Get-Plan "fail_after") { [Console]::Out.Write("I wrote the file and then broke."); exit 1 }
+if (Get-Plan "hang_after") { Start-Sleep -Seconds 600 }
+$document =[pscustomobject]@{ type = "result"; subtype = "success"; is_error = $false; result = "feed written: $feedFile"; total_cost_usd = 0.25 }
 [Console]::Out.Write(($document | ConvertTo-Json -Compress))
 exit 0
 '@
@@ -671,6 +675,34 @@ try {
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "released"
     }
 
+    Test-Case "refused: a lead run that FAILS AFTER writing a valid feed file queues nothing - the file on disk is not used" {
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Feed -Sandbox $box -Plan @{ fail_after = $true; feed_text = (Get-FeedText -Cards $twoCards) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "one run, and a failure is not tried again"
+        # The file is there and it is sound: the judge of the first 'fed' case would queue both cards.
+        $left = Read-TeamSplitFile -Path (Join-Path $box.Root "team\plans\feed-$feedDate-1.json")
+        Assert-True -Condition ([bool]$left.Ok -and @($left.Split).Count -eq 2) -Because "the failed run left a valid feed file of two cards: $($left.Why)"
+        Assert-Equal -Expected "task-one" -Actual (Get-QueueIds -Queue $run.Queue) -Because "a run that did not end well is not trusted with the queue: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "lead koşusu: başarısız" -and $run.Report -match "kuyruğa hiçbir şey eklenmedi") -Because $run.Report
+        Assert-True -Condition ($run.Report -notmatch "kuyruğa eklendi") -Because "the report claims no card: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "released"
+    }
+
+    Test-Case "refused: a lead run killed at its deadline AFTER writing a valid feed file queues nothing" {
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one"))
+        # 0.3 minutes is the hang guard, not the claim: the fake writes the file and then never
+        # ends, and the assertion below fails the case if the file was not there in time.
+        $run = Invoke-Feed -Sandbox $box -Plan @{ hang_after = $true; feed_text = (Get-FeedText -Cards $twoCards) } -ExtraArguments "-RunMinutes 0.3"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "one run"
+        $left = Read-TeamSplitFile -Path (Join-Path $box.Root "team\plans\feed-$feedDate-1.json")
+        Assert-True -Condition ([bool]$left.Ok -and @($left.Split).Count -eq 2) -Because "the killed run had written a valid feed file of two cards: $($left.Why)"
+        Assert-Equal -Expected "task-one" -Actual (Get-QueueIds -Queue $run.Queue) -Because "a run that was killed is not trusted with the queue: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "lead koşusu: süre doldu" -and $run.Report -match "kuyruğa hiçbir şey eklenmedi") -Because $run.Report
+        Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "released"
+    }
+
     Test-Case "owner: a 'needs_owner' item becomes an awaiting_owner idea with a proposal file, never a task; the card beside it is queued" {
         $owner = New-Card -Id "home-assistant" -Row "The house"
         $owner["needs_owner"] = "It needs a Home Assistant install and an account the owner must open."
@@ -724,6 +756,41 @@ try {
         Assert-True -Condition ($run.Report -match "main") -Because "the report says why the line was not written: $($run.Report)"
     }
 
+    Test-Case "ideas: on a detached HEAD the idea line is not asked for and nothing is committed; the cards are still queued" {
+        $box = New-FeedSandbox -Tasks @((New-ApprovedIdea -Id "idea-one"), (New-Task -Id "task-one"))
+        [void](Invoke-SandboxGit -Root $box.Root -Arguments @("checkout", "-q", "--detach"))
+        Assert-Equal -Expected "HEAD" -Actual (Invoke-SandboxGit -Root $box.Root -Arguments @("rev-parse", "--abbrev-ref", "HEAD")) -Because "the sandbox is on no branch"
+        $head = Invoke-SandboxGit -Root $box.Root -Arguments @("rev-parse", "HEAD")
+        $run = Invoke-Feed -Sandbox $box -Plan @{ feed_text = (Get-FeedText -Cards @((New-Card -Id "card-a"))); roadmap_rows = @($ideaRow) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "the cards are still asked for: $($run.Said)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls[0].ideas).Count -Because "a commit on no branch belongs to nobody: the line waits for the lead's branch"
+        Assert-True -Condition (([string]$run.Calls[0].tools).Split(",") -notcontains "Edit") -Because "and the run cannot edit: $($run.Calls[0].tools)"
+        Assert-Equal -Expected $head -Actual $run.Head -Because "nothing was committed on the detached HEAD"
+        Assert-Equal -Expected $roadmapFixture -Actual $run.Roadmap -Because "the roadmap is as it was"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $box.Root -Arguments @("status", "--porcelain", "--", "docs")) -Because "and not left dirty"
+        Assert-True -Condition ($null -ne (Get-TaskById -Queue $run.Queue -Id "card-a")) -Because "feeding the queue does not need a branch: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "onaylanan fikir satırı bu koşuda yazılmadı \(idea-one\)" -and $run.Report -match "ayrık HEAD") -Because "the report says why the line was not written: $($run.Report)"
+    }
+
+    Test-Case "ideas: with an uncommitted edit in docs/ROADMAP.md the idea line is not asked for, nothing is committed, and the edit is left as found" {
+        $box = New-FeedSandbox -Tasks @((New-ApprovedIdea -Id "idea-one"), (New-Task -Id "task-one"))
+        $head = Invoke-SandboxGit -Root $box.Root -Arguments @("rev-parse", "HEAD")
+        # Somebody's work in progress: a sentence under "Definition of done", not committed.
+        $theirs = $roadmapFixture.Replace("Every row says HAVE.`n", "Every row says HAVE.`nA sentence somebody is still writing.`n")
+        [System.IO.File]::WriteAllText((Join-Path $box.Root "docs\ROADMAP.md"), $theirs, $utf8)
+        $run = Invoke-Feed -Sandbox $box -Plan @{ feed_text = (Get-FeedText -Cards @((New-Card -Id "card-a"))); roadmap_rows = @($ideaRow) }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 1 -Actual @($run.Calls).Count -Because "the cards are still asked for: $($run.Said)"
+        Assert-Equal -Expected 0 -Actual @($run.Calls[0].ideas).Count -Because "a row committed now would carry somebody's unfinished edit with it"
+        Assert-True -Condition (([string]$run.Calls[0].tools).Split(",") -notcontains "Edit") -Because "and the run cannot edit: $($run.Calls[0].tools)"
+        Assert-Equal -Expected $head -Actual $run.Head -Because "nothing was committed"
+        Assert-Equal -Expected $theirs -Actual $run.Roadmap -Because "the edit is left exactly as it was found"
+        Assert-Equal -Expected "M docs/ROADMAP.md" -Actual (Invoke-SandboxGit -Root $box.Root -Arguments @("status", "--porcelain", "--", "docs")) -Because "still uncommitted, still unstaged"
+        Assert-True -Condition ($null -ne (Get-TaskById -Queue $run.Queue -Id "card-a")) -Because "feeding the queue does not need a clean roadmap: $($run.Report)"
+        Assert-True -Condition ($run.Report -match "onaylanan fikir satırı bu koşuda yazılmadı \(idea-one\)" -and $run.Report -match "kaydedilmemiş değişiklik") -Because "the report says why the line was not written: $($run.Report)"
+    }
+
     $strays = @(
         @{ Name = "a file outside the feed file"; Plan = @{ stray = "src/area/README.txt" }; Says = "src/area/README.txt" },
         @{ Name = "a NEW file somewhere else"; Plan = @{ stray = "docs/notes.md" }; Says = "docs/notes.md" },
@@ -763,7 +830,11 @@ try {
         Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
         Assert-Equal -Expected "task-one" -Actual (Get-QueueIds -Queue $run.Queue) -Because "the queue was not written"
         Assert-Equal -Expected "GMKADIRAKBABA" -Actual $run.Lock.machine -Because "the lock is still theirs"
-        Assert-True -Condition ($run.Report -match "kilit GMKADIRAKBABA makinesinde") -Because "the stop is a line in the report: $($run.Report)"
+        Assert-True -Condition ($run.Said -match "GMKADIRAKBABA") -Because "it says who holds the lock: $($run.Said)"
+        # A report is of a run. The Onay Merkezi shows the newest report: one written here, every
+        # 30 minutes while a cycle runs, would stand in the place of the cycle's.
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $box.Root "team\reports"))) -Because "nothing was started, so there is no report: $($run.Report)"
+        Assert-Equal -Expected "" -Actual (Invoke-SandboxGit -Root $box.Root -Arguments @("status", "--porcelain")) -Because "not a file was written"
     }
 
     Test-Case "a lock the other machine held for seven hours is taken over, and the report says so" {
@@ -786,6 +857,8 @@ try {
         Assert-True -Condition (Test-Path -LiteralPath $flag) -Because "the flag is the cycle's to remove"
         Assert-True -Condition ($run.Said -match "stop\.flag") -Because "it says why: $($run.Said)"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "the lock was never taken"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $box.Root "team\reports"))) -Because "nothing was started, so there is no report: $($run.Report)"
+        Assert-Equal -Expected "?? team/stop.flag" -Actual (Invoke-SandboxGit -Root $box.Root -Arguments @("status", "--porcelain")) -Because "the flag the test wrote is the only change"
     }
 
     Test-Case "-DryRun changes nothing: no run, no lock, no file, and it prints what it would do" {
@@ -905,7 +978,21 @@ try {
         Assert-Equal -Expected 3 -Actual $run.ExitCode -Because $run.Said
         Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
         Assert-Equal -Expected "GMKADIRAKBABA" -Actual (Get-FakeApiState -Api $api).lock.machine -Because "the lock is still theirs"
-        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT" }).Count -Because "no write at all"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(PUT|POST|DELETE|PATCH) " }).Count -Because "no write at all: $((Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-Equal -Expected 0 -Actual @((Get-FakeApiState -Api $api).reports.PSObject.Properties).Count -Because "no report in the store: the Onay Merkezi keeps the report of the cycle that holds the lock"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $box.Root "team\reports"))) -Because "and none on disk"
+    }
+
+    Test-Case "in API mode team/stop.flag stops it, and no report is posted to the store" {
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"))
+        $box = New-FeedSandbox -Tasks @((New-Task -Id "task-one"))
+        [System.IO.File]::WriteAllText((Join-Path $box.Root "team\stop.flag"), "stop`n", $utf8)
+        $run = Invoke-Feed -Sandbox $box -Plan @{ feed_text = (Get-FeedText -Cards $twoCards) } -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Said
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing ran"
+        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(PUT|POST|DELETE|PATCH) " }).Count -Because "no write at all: $((Get-FakeApiRequests -Api $api) -join '; ')"
+        Assert-Equal -Expected 0 -Actual @((Get-FakeApiState -Api $api).reports.PSObject.Properties).Count -Because "no report in the store"
+        Assert-True -Condition ($run.Said -match "stop\.flag") -Because "it says why: $($run.Said)"
     }
 }
 finally {

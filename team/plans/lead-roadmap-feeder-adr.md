@@ -67,7 +67,14 @@ runs BEFORE `cycle.ps1`, on the same store (files, or `-QueueUrl`/`-QueueToken`)
    so). `team/stop.flag`: nothing starts and the flag is LEFT - it is the cycle's to remove.
    Usage limit: waited out and asked once more when the tool says when it lifts, else stop.
    `-DryRun` prints the plan and writes nothing. Report: `team/reports/feed-<date>.md`
-   (Turkish, a section per run that did something; posted to the store in API mode).
+   (Turkish, a section per lead run that was STARTED; posted to the store in API mode).
+9. **No run, no report.** When nothing was started - the seats are full, `team/stop.flag`, a
+   lock somebody holds (read, or lost in the race of the API's acquire) - the feeder says so
+   on standard output and neither writes nor posts a report. The Onay Merkezi shows the
+   newest report in the store; a "the lock is held" section posted every 30 minutes while a
+   cycle runs took the place of that cycle's report (inspector, on the real routes).
+   A run that fails or is killed at its deadline is not trusted either, whatever it left on
+   disk: a valid feed file written before the failure is not read.
 
 ## Consequences / what is deliberately not here
 

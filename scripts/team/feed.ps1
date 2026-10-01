@@ -37,8 +37,11 @@
     the lead on the model `team/models.json` names for it, and treats the subscription's
     usage limit as the cycle does: wait it out when the tool says when it lifts, else stop.
 
-    It writes `team/reports/feed-<date>.md` in Turkish, one section per run that did
-    something. It does not release, merge, push, or write main.
+    It writes `team/reports/feed-<date>.md` in Turkish, one section per lead run it started.
+    When nothing was started - the seats are full, the stop flag, a lock somebody holds - it
+    says so on standard output and writes and posts NO report: the Onay Merkezi shows the
+    newest report, and that must stay the cycle's. It does not release, merge, push, or
+    write main.
 
 .PARAMETER FeedDate
     The day, YYYY-MM-DD; today when empty. It names the lock's cycle, the feed file and the
@@ -175,9 +178,9 @@ Write-Host "feed ${feedId}:"
 # ------------------------------------------------------------------ is there anything to do
 if (Test-Path -LiteralPath $stopFlagPath) {
     # The flag is addressed to the cycle, which removes it; a feed run started under it would
-    # be a new run after the owner said stop.
-    Add-FeedNote -Text "sahip/lead durdurdu (team/stop.flag): lead koşusu başlatılmadı, bayrak döngüye bırakıldı"
-    if (-not $DryRun) { Save-FeedReport }
+    # be a new run after the owner said stop. No report either: a report is of a run, and the
+    # Onay Merkezi shows the newest one - this line would stand in the place of the cycle's.
+    Write-Host "  the owner/lead stopped the team (team/stop.flag): no lead run was started, the flag is left for the cycle"
     exit 0
 }
 
@@ -203,9 +206,10 @@ if ($decision.Kind -eq "ours") {
     }
 }
 if (-not $decision.MayRun) {
-    Add-FeedNote -Text "kilit $($decision.Holder) makinesinde ($($decision.Since)); besleme hiçbir şey çalıştırmadı"
+    # Said, not reported: the lock is a cycle's, every 30 minutes while it runs, and the report
+    # the Onay Merkezi shows must stay that cycle's.
+    Write-Host "  the lock is held by $($decision.Holder) ($($decision.Since)); the feeder started nothing"
     if ($DryRun) { exit 0 }
-    Save-FeedReport
     exit 3
 }
 
@@ -248,9 +252,8 @@ if ($DryRun) {
 if ($useApi) {
     $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $feedId -TakeoverDead ($decision.Kind -eq "dead")
     if (-not [bool]$taken.acquired) {
-        # The other machine took it between our read and our write.
-        Add-FeedNote -Text "kilit $($taken.holder) makinesinde ($($taken.since)); besleme hiçbir şey çalıştırmadı"
-        Save-FeedReport
+        # The other machine took it between our read and our write. Said, not reported, as above.
+        Write-Host "  the lock is held by $($taken.holder) ($($taken.since)); the feeder started nothing"
         exit 3
     }
 }
