@@ -506,7 +506,8 @@ in the queue with the owner's reason).
 |---|---|---|---|---|
 | 2026-10-01 | **Rehearsal against the real host's shape** — a read-only snapshot of the Cloud Core feeds the fake-host tests and the schema check, so "green on the fake, red on the real host" is caught at the gate (`team/proposals/2026-10-01-gercek-ev-sahibi-provasi.md`). Priority. | "Repairs and improves itself" (the PROVEN_REAL condition) | `real-host-rehearsal` | queued |
 | 2026-10-01 | **Measure Turkish STT engines side by side** — the same recordings through three engines, word error rate AND how many sentences would change intent. Measurement only: adopting an engine or opening a Soniox account is a separate approval (`team/proposals/2026-10-01-stt-soniox-olcum.md`). | Order 6, "Voice and character"; the conversation row's Turkish quality | `stt-engines-measure` | queued |
-
+| 2026-10-01 | **The trial list** — the owner's third gate in the Onay Merkezi: for every released task the sentence to say, the machine, what he must see; "Oldu" readies the PROVEN_REAL line, "Olmadı" queues a fix in his own words (`team/proposals/2026-10-01-deneme-listesi.md`). | "Definition of done" itself (every row is HAVE only with PROVEN_REAL) | `owner-trials-api`, `owner-trials-page` | queued |
+| 2026-10-01 | **Chrome's on-device Turkish recognition in the free local mode**, with our own words as hints and the engine recorded per utterance - behind a setting, OFF by default; turning it on is a separate decision after measurement (`team/proposals/2026-10-01-chrome-cihaz-ici-tanima.md`). | The conversation row's Turkish quality; the "cheap always-on layer" limit; order 6 | `chrome-on-device-stt` | queued |
 Deferred by the owner, not listed above: Home Assistant as the `smart_home` provider
 (2026-10-01: "evde bağlanabilir cihaz envanteri çıkarmadan erken") - it is order 4 already.
 
