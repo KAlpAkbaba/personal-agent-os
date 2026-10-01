@@ -73,9 +73,46 @@ been a FAILED run with MAIL online, under an `execution.selected target=cloud` l
     process makes is noted by `source_ref` at write time and the tasks are found by the test's own
     intent text; one test proves a row with no `research_job_id` is removed.
 
+## Addendum 2 (2026-10-02, the inspector's second return) - the cloud device decides its own window
+
+Found by reading, then reproduced in the image: `browser_gateway` sends ONE `session_open` for
+every device - `channel: "chrome"`, `policy.visible: true` - the cloud companion's clamp passed
+both through, and the worker takes them from the payload ahead of its own
+`--channel chromium --headless`. The cloud image has no Google Chrome and no display.
+
+15. `browser_agent.cloud.policy.clamp_command` forces `channel = "chromium"` and
+    `policy.visible = false` on every `session_open` (`CLOUD_CHANNEL`, `CLOUD_VISIBLE`), whatever
+    the payload says and also when it says nothing. Decided where the device decides: the
+    gateway stays one payload for all devices (the owner's machines keep their visible Chrome)
+    and no other caller can ask the cloud for a window either. The gateway is not changed.
+16. The `session_open` result already reports what was launched (`channel`, `policy.visible`),
+    so the caller is told, not surprised.
+17. The test does not retype the payload: it compiles the gateway's own `_open_session` from
+    `services/api/app/research/browser_gateway.py`, runs it against a recording client, puts
+    what it sent through the real clamp and the real worker's `session_open`, and reads the
+    arguments the worker hands `ManagedBackend` (headless, chromium, the dedicated profile).
+    A second test keeps the reason visible: without the clamp the same worker launches a
+    visible `chrome`.
+18. "The `device` target is a machine" is the service's own platform filter (`_machines`), and
+    is now held by tests with a cloud view that advertises `browser.chrome` and is the
+    healthiest device: a signed-in run, the session's own device being the cloud, a machine
+    word only the cloud answers to, and a cloud holding a machine's alias.
+
+Run in the image built from this branch (`pagentos-cloud-browser:call-site-research`, compose's
+limits, no broker: the bridge is driven over an in-process socket, everything else is the
+image's own code), 2026-10-02 on the dev machine:
+
+- the gateway's payload WITHOUT the clamp: `dependency_unavailable`, "Chromium distribution
+  'chrome' is not found at /opt/google/chrome/chrome";
+- the same payload through the bridge: `session_open` succeeded, `channel chromium`,
+  `visible false`, Chromium 151.0.7922.34; `browser.search` on bing returned 10 results;
+- `browser.search` on duckduckgo - the gateway's default engine - ended in the provider's
+  captcha page twice out of two (`provider_rate_limited`). See "Consequences / open".
+
 ## Not changed
 
-The rule table, `select_device`, the workflow, the gateway, any schema. The cloud worker is not probed.
+The rule table, `select_device`, the workflow, the gateway, any schema. The production cloud
+worker is not probed.
 
 ## Consequences / open
 
@@ -89,9 +126,15 @@ The rule table, `select_device`, the workflow, the gateway, any schema. The clou
 - A REST caller's own `target_device="bulut"` still goes through `select_device(...,
   "browser.chrome")` and is refused for the real cloud worker (`capability_missing`, a FAILED run
   with no execution row). The rule is not asked on that path (decision 5); left as it is.
-- Releasing this sends every unnamed research to the cloud worker while it is online. That the
-  worker really completes a research run is not proven here (the card forbids probing it): the
-  first production run is the proof.
+- Releasing this sends every unnamed research to the cloud worker while it is online. A whole
+  research run on the production worker is not proven here (the card forbids probing it).
+- OPEN, found by the image run and outside this area: headless Chromium got DuckDuckGo's captcha
+  page on both searches tried (from the dev machine's address; whether the Cloud Core's address
+  gets the same is not measured). DuckDuckGo is the gateway's default engine and a request that
+  names one engine tries only that one, so a cloud run's discovery can end in
+  `provider_rate_limited` while the same search on bing works. Nothing falls back to a machine
+  mid-run. Decide before the release: another engine (or `auto`) for a run on the cloud device,
+  or a mid-run fallback.
 - "bulutta" still does not arrive from voice (`devices/aliases.py`, outside this area).
 - The workflow's replay-only re-select (`select_device_activity`) still uses `select_device` over
   all views; it is reached only when the planned device went offline.
