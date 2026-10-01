@@ -59,6 +59,22 @@ function Invoke-Git {
     if ($LASTEXITCODE -ne 0) { throw "git $($Arguments -join ' '): $output" }
 }
 
+# office-cycle-status hooks, independent of the scenario (the run then answers as the scenario says):
+#   PAGENTOS_FAKE_CLAUDE_SNAPSHOT + PAGENTOS_FAKE_CLAUDE_STATUS: the run stays 4 s, then copies the
+#     cycle's live status file to <snapshot>\<role>-<task>.json - what a reader sees while a run is in flight;
+#   PAGENTOS_FAKE_CLAUDE_STOPFLAG (+ _ROLE, default worker): that role's run creates the stop flag, as the
+#     owner or the lead would while the cycle works.
+$snapshotDir = [string]$env:PAGENTOS_FAKE_CLAUDE_SNAPSHOT
+$statusFile = [string]$env:PAGENTOS_FAKE_CLAUDE_STATUS
+if ($snapshotDir -and $statusFile) {
+    Start-Sleep -Seconds 4
+    if (-not (Test-Path -LiteralPath $snapshotDir)) { [void](New-Item -ItemType Directory -Force -Path $snapshotDir) }
+    if (Test-Path -LiteralPath $statusFile) { Copy-Item -LiteralPath $statusFile -Destination (Join-Path $snapshotDir "$role-$taskId.json") -Force }
+}
+$stopFlag = [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG
+$stopRole = if ($env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE) { [string]$env:PAGENTOS_FAKE_CLAUDE_STOPFLAG_ROLE } else { "worker" }
+if ($stopFlag -and $role -eq $stopRole) { Set-Content -LiteralPath $stopFlag -Value "stop" -Encoding ASCII }
+
 if ($scenario -eq "silent") {
     [Console]::Out.Write("I could not do that.")
     exit 0

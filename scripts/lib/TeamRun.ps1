@@ -314,12 +314,28 @@ function Wait-TeamRun {
         Wait for a run until its deadline. A run past its deadline is killed with its
         children, and what it printed is kept.
     #>
-    param([Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline)
+    param(
+        [Parameter(Mandatory = $true)]$Run, [Parameter(Mandatory = $true)][datetime]$Deadline,
+        # Called every -TickSeconds while the run is going (the live status's heartbeat: a status
+        # nobody refreshed for ten minutes reads as "no cycle"). 0 is no tick.
+        [scriptblock]$OnTick = $null, [int]$TickSeconds = 0
+    )
     # [datetime]::MaxValue is "no deadline" (owner decision 2026-09-30: no time cap on a
     # run); WaitForExit(-1) waits for ever, and a span that large would not fit an int.
-    $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
-    $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
-    $timedOut = -not $Run.Process.WaitForExit($remaining)
+    $exited = $false
+    while ($true) {
+        $remainingMs = ($Deadline.ToUniversalTime() - [datetime]::UtcNow).TotalMilliseconds
+        $remaining = if ($remainingMs -ge [int]::MaxValue) { -1 } else { [int][Math]::Max(0, $remainingMs) }
+        if ($null -ne $OnTick -and $TickSeconds -gt 0) {
+            $slice = $TickSeconds * 1000
+            if ($remaining -ge 0 -and $remaining -lt $slice) { $slice = $remaining }
+            if ($Run.Process.WaitForExit($slice)) { $exited = $true; break }
+            if ($remaining -ge 0 -and $remaining -le $slice) { break }
+            try { & $OnTick } catch { }
+        }
+        else { $exited = $Run.Process.WaitForExit($remaining); break }
+    }
+    $timedOut = -not $exited
     if ($timedOut) {
         Stop-TeamProcessTree -ProcessId $Run.Process.Id
         [void]$Run.Process.WaitForExit(15000)
