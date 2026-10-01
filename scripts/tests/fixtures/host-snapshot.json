@@ -1,0 +1,36 @@
+{
+  "collected_at": "2026-10-01",
+  "source": "hand-written from the lead's facts, to be replaced by the first real collection",
+  "notes": [
+    "the lead's facts of 2026-10-01: serving colour, containers, kernel, reboot-required, the operation lock's 2 of 60, team_state's three widths",
+    "not in the lead's facts, taken from docs/HANDOFF.md of 2026-10-01: markers (RELEASE cc9ca31e, LAST_KNOWN_GOOD 0f794d97, pin = RELEASE)",
+    "not in the lead's facts, taken from the repository's unit files and ADR-0223: timers and their state; team_state.doc as jsonb (migration 0063)"
+  ],
+  "schema_version": 1,
+  "host": {"kernel": "6.8.0-138-generic", "reboot_required": true},
+  "serving_colour": "green",
+  "markers": {"release": "cc9ca31e274d507ad0fadaf34b54c552252124a7", "last_known_good": "0f794d97b1b2bdd764e3b90354e487656023cdc4", "recovery_pin": "cc9ca31e274d507ad0fadaf34b54c552252124a7"},
+  "containers": [
+    {"name": "pagentos-prod-postgres", "state": "running"},
+    {"name": "pagentos-prod-redis", "state": "running"},
+    {"name": "pagentos-prod-minio", "state": "running"},
+    {"name": "pagentos-prod-temporal", "state": "running"},
+    {"name": "pagentos-prod-edge", "state": "running"},
+    {"name": "pagentos-prod-godseye", "state": "running"},
+    {"name": "pagentos-prod-cloud-browser", "state": "running"},
+    {"name": "pagentos-prod-api-green", "state": "running"},
+    {"name": "pagentos-prod-api-blue", "state": "exited"}
+  ],
+  "timers": [
+    {"name": "pagentos-backup.timer", "active": "active"},
+    {"name": "pagentos-bluegreen-reconcile.timer", "active": "active"},
+    {"name": "pagentos-maintenance-window.timer", "active": "active"}
+  ],
+  "operation_lock": {"present": true, "samples": 60, "interval_s": 1, "held": 2, "longest_run": 2},
+  "columns": [
+    {"table": "team_state", "column": "kind", "data_type": "character varying", "character_maximum_length": 16},
+    {"table": "team_state", "column": "key", "data_type": "character varying", "character_maximum_length": 80},
+    {"table": "team_state", "column": "doc", "data_type": "jsonb", "character_maximum_length": null},
+    {"table": "team_state", "column": "updated_at", "data_type": "character varying", "character_maximum_length": 32}
+  ]
+}
