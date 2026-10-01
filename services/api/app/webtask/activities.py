@@ -6,9 +6,10 @@ the row's outcome. The round itself is synchronous (device commands poll), so it
 a worker thread and the heartbeat is handed back to the activity's loop - Temporal is
 never touched from that thread (the operator mission's lesson, production 2026-09-19).
 
-The planner in PR-B is the rule table and ``NoModelPlanner``: a round the rules cannot
-answer is handed to the owner in words. The model planners are PR-C, behind the same
-``TaskPlanner`` interface; nothing here changes when they arrive.
+The planner is the rule table, then the model planner (PR-C, ``app.webtask.model_planner``)
+behind the same ``TaskPlanner`` interface - when a model key is configured. Without one it
+is ``NoModelPlanner``, as in PR-B: a round the rules cannot answer is handed to the owner
+in words rather than planned by something that is not there.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from app.devices.commands import DeviceCommandClient
 from app.webtask import service
 from app.webtask.device_port import DeviceTaskBrowser
 from app.webtask.loop import Ports
+from app.webtask.model_planner import ModelPlanner
 from app.webtask.planner import ChainPlanner, NoModelPlanner, RuleTablePlanner, TaskPlanner
 
 #: Tests replace this to drive a real workflow over a fake browser and a scripted planner.
@@ -44,7 +46,16 @@ def _factory() -> Any:
 
 
 def default_planner() -> TaskPlanner:
-    return ChainPlanner([RuleTablePlanner(), NoModelPlanner()])
+    """The rules first - a round they answer costs nothing. Then the model, when there is
+    a key to ask it with; otherwise the owner is asked, in words."""
+    settings = get_settings()
+    model = ModelPlanner(
+        settings.anthropic_api_key,
+        model=settings.research_anthropic_model,
+        capable_model=settings.executive_planner_model,
+        base_url=settings.research_anthropic_base_url,
+    )
+    return ChainPlanner([RuleTablePlanner(), model if model.configured else NoModelPlanner()])
 
 
 def _default_ports(
