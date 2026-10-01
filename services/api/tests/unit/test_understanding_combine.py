@@ -131,7 +131,11 @@ def test_the_language_preference_is_not_a_research_command(engine: SemanticEngin
     wrong = {"research_open", "research_answer_mode"}
     # Either a preference reading leads, or the wrong reading is not confident enough to act.
     assert top.intent not in wrong or top.confidence < HIGH
-    assert top.intent == "preference"
+    # A NON-ACTING reading leads. Which one depends on what the corpus says about the sentence:
+    # the preference family seeded here, or - once answer-mode-intent-precision added the
+    # sentence itself as corpus case r.lang.1 with no intent - "none", its exact exemplar
+    # (found at integration, 2026-10-01: each branch was green alone).
+    assert top.intent in {"preference", "none"}
 
 
 def test_every_candidate_carries_evidence_and_a_bounded_confidence(engine: SemanticEngine) -> None:
