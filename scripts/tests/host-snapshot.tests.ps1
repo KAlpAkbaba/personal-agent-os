@@ -495,17 +495,21 @@ try {
         Assert-True ($val.Exit -eq 0) "the committed fixture holds the collector's schema"
         $fixtureText = [IO.File]::ReadAllText($fixture)
         $broken = Join-Path $state "broken.json"
+        # Each break is a PATTERN, not a literal of one collection: the fixture is replaced by a real
+        # snapshot at every collection (the first one, 2026-10-01, said blue where the hand-written
+        # fixture said green, and two of these cases stopped matching anything).
         $breaks = @(
-            @{ Why = "a member the schema does not know (an environment dump)"; From = '"schema_version": 1,'; To = '"schema_version": 1, "environment": {"PAGENTOS_OWNER_TOKEN": "x"},' },
-            @{ Why = "held more often than sampled"; From = '"held": 2,'; To = '"held": 61,' },
-            @{ Why = "a serving colour that is not a colour"; From = '"serving_colour": "green"'; To = '"serving_colour": "teal"' },
-            @{ Why = "a width that is not a number"; From = '"character_maximum_length": 32'; To = '"character_maximum_length": "32"' },
-            @{ Why = "no collected_at"; From = '"collected_at": "2026-10-01",'; To = '' }
+            @{ Why = "a member the schema does not know (an environment dump)"; Pattern = '"schema_version":\s*1,'; To = '"schema_version": 1, "environment": {"PAGENTOS_OWNER_TOKEN": "x"},' },
+            @{ Why = "held more often than sampled"; Pattern = '"held":\s*\d+,'; To = '"held": 100000,' },
+            @{ Why = "a serving colour that is not a colour"; Pattern = '"serving_colour":\s*"[a-z]+"'; To = '"serving_colour": "teal"' },
+            @{ Why = "a width that is not a number"; Pattern = '"character_maximum_length":\s*(\d+)'; To = '"character_maximum_length": "$1"' },
+            @{ Why = "no collected_at"; Pattern = '"collected_at":\s*"[^"]*",\s*'; To = '' }
         )
         foreach ($b in $breaks) {
-            [IO.File]::WriteAllText($broken, $fixtureText.Replace($b.From, $b.To))
+            $pattern = New-Object System.Text.RegularExpressions.Regex($b.Pattern)
+            [IO.File]::WriteAllText($broken, $pattern.Replace($fixtureText, [string]$b.To, 1))
             $val = Invoke-Collector -Arguments @("-ValidateFile", $broken)
-            Assert-True ($fixtureText.Contains($b.From) -and $val.Exit -eq 3) "the schema refuses (3): $($b.Why)"
+            Assert-True ($pattern.IsMatch($fixtureText) -and $val.Exit -eq 3) "the schema refuses (3): $($b.Why)"
         }
 
         Reset-Host -Colour green

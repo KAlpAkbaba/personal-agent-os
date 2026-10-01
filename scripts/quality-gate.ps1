@@ -504,6 +504,15 @@ if (-not $Fast) {
     Assert-ExitCode "maintenance-reboot tests"
   }
 
+  Invoke-Step "Cloud Core host snapshot (PS5.1 + bash, fakes; the real fixture)" {
+    # The read-only snapshot script, its allow-list of commands, the collector and the schema,
+    # against fakes; the fixture the fake hosts are built from was collected from the real host.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\host-snapshot.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "host-snapshot tests"
+  }
+
   Invoke-Step "Web shell build" {
     $pnpm = Resolve-Tool "pnpm" @("%APPDATA%\npm\pnpm.cmd", "%LOCALAPPDATA%\pnpm\pnpm.exe")
     if (-not $pnpm) { throw "pnpm not found" }
