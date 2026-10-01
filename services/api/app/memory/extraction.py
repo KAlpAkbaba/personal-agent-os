@@ -51,6 +51,14 @@ logger = get_logger("app.memory.extraction")
 #: cost than the duplication.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
+#: The summary carries speaker-prefixed lines ("| Sahip: ..." / "| Asistan: ..."). Only the
+#: owner's sentences are candidates: the assistant's own reply is not something the owner
+#: said (2026-09-30: "Bundan sonra araştırmaları ayrıntılı anlatacağım efendim" was filed as
+#: a preference 39 s after the owner's sentence).
+_LINE_BREAK = re.compile(r"\s*(?:\||\n)\s*")
+_ASSISTANT_PREFIX = re.compile(r"^(?:asistan|assistant)\s*:\s*", re.IGNORECASE)
+_OWNER_PREFIX = re.compile(r"^(?:sahip|owner)\s*:\s*", re.IGNORECASE)
+
 #: A sentence longer than this is a paragraph the summariser did not punctuate; a memory is
 #: a fact, and one this long is not a fact.
 MAX_SENTENCE_CHARS = 300
@@ -152,7 +160,15 @@ def extract_from_summary(
     result = ExtractionResult()
     seen = set(already or ())
 
-    for raw in _SENTENCE_END.split((summary or "").strip()):
+    candidates: list[str] = []
+    for line in _LINE_BREAK.split((summary or "").strip()):
+        line = line.strip()
+        if _ASSISTANT_PREFIX.match(line):
+            result.skipped += len(_SENTENCE_END.split(_ASSISTANT_PREFIX.sub("", line))) or 1
+            continue
+        candidates.extend(_SENTENCE_END.split(_OWNER_PREFIX.sub("", line)))
+
+    for raw in candidates:
         sentence = raw.strip()
         if not sentence or len(sentence) > MAX_SENTENCE_CHARS:
             continue

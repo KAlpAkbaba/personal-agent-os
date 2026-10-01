@@ -766,6 +766,28 @@ def _research_cases() -> list[UtteranceCase]:
                 source=source,
             )
         )
+    # Owner's trial 2026-09-30 20:11 UTC: a standing LANGUAGE preference names no level and
+    # is no read and no mission - it reaches no intent, and none of the three tools.
+    for case_id, text in (
+        ("r.lang.1", "Bundan sonra araştırma raporlarını her zaman Türkçe oku."),
+        ("r.lang.2", "Bundan sonra araştırma raporlarını her zaman İngilizce oku."),
+        ("r.lang.3", "Artık raporları hep Almanca anlat."),
+    ):
+        cases.append(
+            UtteranceCase(
+                case_id=case_id,
+                utterance=text,
+                expected_intent="none",
+                expected_tool=None,
+                expected_response=RESPONSE_NONE,
+                forbidden_tools=("research.open", "research.answer_mode", "executive.start"),
+                side_effects=SIDE_EFFECTS_NONE,
+                context=CTX_RESEARCH_FOCUS_B,
+                category="research",
+                source="regression",
+                regression_issue_id="owner trial 2026-09-30: language preference became detail",
+            )
+        )
     # A question about the system itself stays with the ledger even with a research in focus.
     cases.append(
         UtteranceCase(

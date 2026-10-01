@@ -3206,6 +3206,11 @@ def _research_open_match(tokens: tuple[str, ...]) -> str | None:
         return None
     read_verb = _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS)
     if read_verb is not None and not _asks_for_a_register(tokens, read_verb):
+        if _is_standing_sentence(tokens):
+            # Owner's trial 2026-09-30: "Bundan sonra araştırma raporlarını her zaman
+            # Türkçe oku" is a standing LANGUAGE preference, not a request to hear the
+            # report now and not a level (no level word: _asks_for_a_register was False).
+            return None
         return "araştırmayı oku"
     if _has_exact(tokens, *_ARTIFACT_OPEN_VERB_FORMS) is None:
         return None
@@ -3214,15 +3219,20 @@ def _research_open_match(tokens: tuple[str, ...]) -> str | None:
     return "araştırmayı aç"
 
 
+def _is_standing_sentence(tokens: tuple[str, ...]) -> bool:
+    """A standing marker: "bundan sonra", "artık", "hep", "her zaman"."""
+    return _has_exact(tokens, *_ANSWER_MODE_STANDING_MARKERS) is not None and (
+        _has_exact(tokens, "sonra", "zaman", "hep", "artık", "artik") is not None
+    )
+
+
 def _answer_mode_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     """ "Bundan sonra teknik anlat." -> ("technical", ...); "Teknik modu kapat." ->
     ("executive", ...); "Artık kısa anlat." -> ("executive", ...) (B31 req 209). A
     STANDING register needs a standing marker ("bundan sonra", "artık", "hep", "her
     zaman") or the word "mod"; a one-off "teknik anlat" stays the follow-up it was."""
     has_mode_word = _has(tokens, "mod") is not None
-    standing = _has_exact(tokens, *_ANSWER_MODE_STANDING_MARKERS) is not None and (
-        _has_exact(tokens, "sonra", "zaman", "hep", "artık", "artik") is not None
-    )
+    standing = _is_standing_sentence(tokens)
     if not (has_mode_word or standing):
         return None
     if has_mode_word and _has(tokens, "teknik") and _has_exact(tokens, *_CLOSE_VERB_FORMS):
@@ -6859,6 +6869,11 @@ def _executive_start_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     graph is built is ``app.executive.planner.RuleBasedExecutivePlanner``'s own job,
     given the SAME directive text verbatim (module comment above)."""
     if not _executive_output_requested(tokens):
+        return None
+    if _is_standing_sentence(tokens) and _has_exact(tokens, *_RESEARCH_READ_VERB_FORMS):
+        # Owner's trial 2026-09-30: "Bundan sonra araştırma raporlarını her zaman Türkçe
+        # oku" is a standing READ preference; with RESEARCH_OPEN declining it, this branch
+        # would start a research-report MISSION from a preference sentence.
         return None
     if _has_exact(tokens, *_EXEC_MAIL_STEMS) and (
         _has(tokens, *_EXEC_MAIL_THREAD_STEMS) or _has(tokens, *_EXEC_DRAFT_STEMS)
