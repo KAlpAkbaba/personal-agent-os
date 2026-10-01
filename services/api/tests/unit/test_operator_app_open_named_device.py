@@ -5,8 +5,10 @@ back from the STT as "Ofisü bilgisayarında hesap makinesini açın."; the alia
 read "ofisü", the model called ``operator.app_open({application})`` - no device argument - and
 Calculator opened on MAIL, the session's own machine, with not a word about it.
 
-The turn record's ``utterance_text`` is the owner's own sentence (ADR-0224: the model may not
-guess a device, so the tool reads the words, not an argument).
+The turn record's ``machine_named_unbound`` is a word-free yes/no the relay writes beside
+``device_targets`` (ADR-0224: the model may not guess a device, so the tool reads the record, not
+an argument; the sentence itself is never stored). The first half of this file builds the record
+by hand; the second half goes through the real session so the field provably travels.
 """
 
 from __future__ import annotations
@@ -96,7 +98,7 @@ def test_unbound_computer_word_asks_and_dispatches_nothing(db) -> None:
         db,
         {
             "application": "calc",
-            "utterance_text": "Ofisü bilgisayarında hesap makinesini açın.",
+            "machine_named_unbound": True,
             "device_targets": [],
         },
         action,
@@ -114,7 +116,7 @@ def test_bound_ofis_target_launches_and_speech_names_the_device(db) -> None:
         db,
         {
             "application": "calc",
-            "utterance_text": "Ofis bilgisayarında hesap makinesini açın.",
+            "machine_named_unbound": False,
             "device_targets": ["ofis"],
         },
         action,
@@ -127,7 +129,7 @@ def test_sentence_without_a_computer_word_keeps_todays_behaviour(db) -> None:
     action = _DeviceAction()
     out = _run(
         db,
-        {"application": "calc", "utterance_text": "Hesap makinesini açın.", "device_targets": []},
+        {"application": "calc", "machine_named_unbound": False, "device_targets": []},
         action,
     )
     assert len(action.calls) == 1
@@ -140,9 +142,89 @@ def test_this_computer_is_not_an_unbound_machine(db) -> None:
         db,
         {
             "application": "calc",
-            "utterance_text": "Bu bilgisayarda hesap makinesini aç.",
+            "machine_named_unbound": False,
             "device_targets": [],
         },
         action,
     )
     assert len(action.calls) == 1
+
+
+# ------------------------------------------------ through the real session (ADR-0224)
+# The tests above build the turn record by hand, which is exactly how this guard once passed
+# while nothing wrote the field it reads. These go: utterance -> router -> relay -> tool.
+
+
+def _relay(monkeypatch, tmp_path, sentence: str):
+    from tests.unit.test_operator_open_application_fallback import (
+        _both_online,
+        _bound_session,
+        _say,
+        _tool,
+    )
+
+    world = _both_online(monkeypatch, tmp_path)
+    sid = _bound_session(world, "MAIL")
+    _say(world.client, sid, sentence)
+    call = _tool(world.client, sid, "operator.app_open", {"application": "Hesap Makinesi"})
+    return world, sid, call
+
+
+def _record(world: Any, sid: str) -> dict[str, Any]:
+    from app.voice.realtime_sessions.models import RealtimeSessionRow
+
+    with world.factory() as session:
+        row = session.get(RealtimeSessionRow, uuid.UUID(sid))
+        return dict((row.context_json or {}).get("last_utterance") or {})
+
+
+def test_relay_unbound_machine_word_asks_and_dispatches_nothing(monkeypatch, tmp_path) -> None:
+    """The owner's real sentence, as the STT rendered it. Red before: launched on MAIL."""
+    world, sid, call = _relay(monkeypatch, tmp_path, "Ofisü bilgisayarında hesap makinesini açın.")
+    assert world.commands.calls == []
+    assert call["result"]["status"] == "needs_clarification", call
+    assert call["result"]["speech"].count("?") == 1
+    record = _record(world, sid)
+    assert record["machine_named_unbound"] is True
+    # word-free: the owner's sentence is never kept on the session (privacy)
+    assert "utterance_text" not in record
+    assert "hesap" not in str(record.get("machine_named_unbound")).lower()
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Mutfaktaki bilgisayarda hesap makinesini aç.",  # the 'bilgisayar' branch alone
+        "Ofisü hesap makinesini açın.",  # an 'ofis...' branch alone, no 'bilgisayar'
+    ],
+)
+def test_relay_each_machine_word_branch_is_pinned(monkeypatch, tmp_path, sentence) -> None:
+    world, sid, call = _relay(monkeypatch, tmp_path, sentence)
+    assert _record(world, sid)["machine_named_unbound"] is True
+    assert world.commands.calls == []
+    assert call["result"]["status"] == "needs_clarification", call
+
+
+def test_relay_bound_office_launches_there_and_the_flag_is_false(monkeypatch, tmp_path) -> None:
+    world, sid, call = _relay(monkeypatch, tmp_path, "Ofis bilgisayarında hesap makinesini açın.")
+    assert _record(world, sid)["machine_named_unbound"] is False
+    assert {c["device_id"] for c in world.commands.calls} == {world.ids["GMKADIRAKBABA"]}
+    assert call["result"]["execution_status"] == "executed", call
+
+
+def test_relay_no_machine_word_launches_on_the_session_device(monkeypatch, tmp_path) -> None:
+    world, sid, call = _relay(monkeypatch, tmp_path, "Hesap makinesini açın.")
+    assert _record(world, sid)["machine_named_unbound"] is False
+    assert {c["device_id"] for c in world.commands.calls} == {world.ids["MAIL"]}
+
+
+def test_names_unbound_machine_pure_function() -> None:
+    from app.voice.realtime_sessions.tools_operator import names_unbound_machine
+
+    assert names_unbound_machine("Ofisü bilgisayarında hesap makinesini açın.", ()) is True
+    assert names_unbound_machine("Mutfaktaki bilgisayarda hesap makinesini aç.", ()) is True
+    assert names_unbound_machine("Ofisü hesap makinesini açın.", ()) is True
+    assert names_unbound_machine("Ofis bilgisayarında hesap makinesini açın.", ("ofis",)) is False
+    assert names_unbound_machine("Bu bilgisayarda hesap makinesini aç.", ()) is False
+    assert names_unbound_machine("Hesap makinesini açın.", ()) is False
+    assert names_unbound_machine("", ()) is False

@@ -747,16 +747,22 @@ _MACHINE_WORD_RE: Final = re.compile(r"\bbilgisayar\w*|\bofis\w*")
 _THIS_COMPUTER_RE: Final = re.compile(r"\b(?:bu|şu|su)\s+bilgisayar\w*")
 
 
-def _names_an_unbound_machine(turn: dict[str, Any]) -> bool:
-    """The turn record's ``utterance_text`` names a machine ("bilgisayarında", "ofis...") and
-    the alias parser bound no device for it (``device_targets`` empty)."""
-    text = turn.get("utterance_text")
-    if not isinstance(text, str) or not text.strip():
-        return False
-    if device_aliases.targets_of_turn(turn):
+def names_unbound_machine(text: str, bound: tuple[str, ...] | list[str]) -> bool:
+    """The owner's sentence names a machine ("bilgisayarında", "ofis...") and the alias parser
+    bound no device for it. Pure: the relay calls it where ``device_targets`` is computed and
+    records only the yes/no, never the sentence."""
+    if not text.strip() or bound:
         return False
     folded = _THIS_COMPUTER_RE.sub(" ", device_aliases.normalize(text))
     return _MACHINE_WORD_RE.search(folded) is not None
+
+
+def _names_an_unbound_machine(turn: dict[str, Any]) -> bool:
+    """The turn record says the latest utterance named a machine nothing was bound for, and
+    no device target was recorded either."""
+    if device_aliases.targets_of_turn(turn):
+        return False
+    return turn.get("machine_named_unbound") is True
 
 
 def _which_computer_question(ctx: ToolContext) -> str:
