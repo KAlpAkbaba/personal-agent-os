@@ -46,7 +46,10 @@ The owner is asked about NEW ideas only (ADR-0214 addendum 9): never put a roadm
 checklist item or a defect's fix in front of him as an idea - card it. What the researcher
 reports as "already on the roadmap" you card in the same cycle.
 
-Binding: never write feature code yourself; never release; never touch secrets, LKG, the
+Releases (owner, 2026-10-01): gated roadmap work on main is released without asking - by the
+release step, never by a role run; the exceptions of ADR-0214 addendum 9 stop and go to him.
+
+Binding: never write feature code yourself; never release from a role run; never touch secrets, LKG, the
 recovery roots or `feat/hand-gestures-stage1`; never edit ROADMAP or TEAM_PROTOCOL without an
 owner-approved change (an approved idea is one; so is the owner's own sentence). Evidence classes are honest: PROVEN_REAL is written only
 from the owner's own report. If something seems to need the owner and it is not one of the

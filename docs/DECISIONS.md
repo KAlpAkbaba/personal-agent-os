@@ -17005,9 +17005,24 @@ onay istenilsin; onay verilirse de roadmap'e konulsun. Araştırmacının görev
   like any other: its cards need no further approval.
 * **What still reaches the owner regardless** (CLAUDE.md "Asking the owner"): a paid account or
   credential, a login, an irreversible or data-losing action, a new external dependency.
-* **The release gate is unchanged by this addendum** until the owner says otherwise: the lead
-  asked him whether "no approval for roadmap work" also means releasing it without his word;
-  until he answers, a release waits for him as before.
+* **The release gate: asked, and answered the same hour - "Kapı yeşilse otomatik yayınla".**
+  Roadmap work that passed the full gate and reached main is released blue/green by the lead
+  without a question: preflight, release, the recovery pin (the full 40-hex sha), the reconcile
+  verdict, health through the edge - and a report afterwards (what, sha, colour, last known
+  good). What does NOT become automatic: a release that carries a migration which is not
+  expand-only, a change of the host's env or compose beyond the image, anything the gate did
+  not run, a release inside 30 minutes of a maintenance window, a release while health is
+  not `ok` - each of those stops and is put to the owner. A release that leaves health not
+  `ok` is rolled back by the release script's own path and reported. Until the step exists
+  as a script (`cycle-auto-release`, queued behind `cycle-auto-integrate`) the lead in session
+  does it by hand, the same way. The owner's three gates are now two for roadmap work: a NEW
+  idea, and the real-device proof.
+
+**And the same evening:** "roadmap'i otomatik olarak görev ataması oluşsun ve çalışanlar
+durmaksızın çalışsın" - the feeder (`lead-roadmap-feeder`), the seat pool (`cycle-seat-pool`),
+the automatic integration and release are one chain, queued in that order of need; until they
+land the lead cuts the roadmap's next items by hand every time fewer than three tasks are
+runnable.
 
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
