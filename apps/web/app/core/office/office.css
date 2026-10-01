@@ -39,7 +39,8 @@
   align-items: flex-start;
 }
 
-/* The office scrolls sideways inside its own box at phone width; the panel wraps below. */
+/* The seats wrap: four a row where they fit, down to two at phone width. The box scrolls
+ * sideways only when one cell alone is wider than it; the panel wraps below. */
 .office-scroll {
   flex: 1 1 28rem;
   min-width: 0;
@@ -48,9 +49,9 @@
 
 .office-floor {
   display: grid;
-  grid-template-columns: repeat(4, 10rem);
+  /* the 25% floor keeps eight seats at four a row at most (4+4, never 5+3) */
+  grid-template-columns: repeat(auto-fill, minmax(max(7rem, calc(25% - 0.75rem)), 1fr));
   gap: 0.75rem;
-  min-width: 43rem;
   padding: 0.75rem;
   background: #1b1710;
   border-radius: 6px;
@@ -61,6 +62,8 @@
   flex-direction: column;
   align-items: center;
   gap: 0.25rem;
+  /* a long title may not widen the cell: the label is cut inside it */
+  min-width: 0;
   padding: 0.5rem 0.25rem;
   color: inherit;
   background: transparent;
@@ -91,7 +94,8 @@
 }
 
 .office-figure {
-  width: 8rem;
+  width: 100%;
+  max-width: 8rem;
   height: auto;
   image-rendering: pixelated;
 }

@@ -1176,3 +1176,20 @@ standing rule of the same hour: "Kapı yeşilse otomatik yayınla" (ADR-0214 add
 | 39.3 | "Ekip ne yapıyor?" answers one paragraph from the Ofis page's data; the tool is registered, open, and reads the database store | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_speech.py`, `test_voice_intents_team_status.py`, `test_adr022402_wiring.py`; asked by voice during a cycle: `READY_FOR_OWNER` |
 | 39.4 | The operator's ledger rows carry the device the action ran on | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_ledger_device_callers.py`; "ofiste ne yaptın" after an operator action on the office PC: `READY_FOR_OWNER` |
 | 39.5 | A release of gated roadmap work without a question, verified: RELEASE, pin, reconcile, health, last known good | `PROVEN_REAL` | 2026-10-01 16:27 UTC: `RELEASE OK: 858c3e0b… is running as api-blue`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-blue is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over; done by the lead by hand - the script (`cycle-auto-release`) is queued |
+
+## Stage 40 — d20261001: the rehearsal against the real host, an idea's text and decisions while a cycle runs, the Ofis page's layout (ADR-0235, ADR-0236)
+
+Released 2026-10-01 20:47 UTC as main `ca5cc79512de47574f81df471323615567122412` (api-green; previous
+`858c3e0b…` kept as last known good; recovery pin = RELEASE; reconcile `RECONCILE OK`). Full gate 36/36
+on `b8a44916` (the merge commit's tree is identical): 14 119 unit. Released under the standing rule
+(ADR-0214 addendum 9): the diff held no migration and no compose or edge change, health was `ok`,
+no maintenance was near.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 40.1 | A read-only snapshot of the Cloud Core feeds the fake hosts: the serving colour, the lock's hold time, every column's width | `PROVEN_REAL` | `scripts/tests/fixtures/host-snapshot.json`, collected 2026-10-01 19:18 UTC by `scripts/cloud/collect-host-snapshot.ps1` (blue, kernel `6.8.0-142`, the lock held 2 of 60 samples, 1126 columns of 88 tables); `scripts/tests/host-snapshot.tests.ps1` (95) holds the script to an allow-list of read-only commands |
+| 40.2 | Every `String(n)` of the models equals production's column width | `PROVEN_REAL` | `services/api/tests/unit/test_host_snapshot_schema.py` (11) against the real fixture: no drift (the class of 38.15 exists nowhere else today) |
+| 40.3 | The maintenance script's fakes are built from the fixture; the defects of 38.12 and 38.17 go RED when put back | `PROVEN_AUTOMATED` | `scripts/tests/maintenance-reboot.tests.ps1` (35 on the integration commit), the worker's two mutations quoted in `team/reports/d20261001/` |
+| 40.4 | An idea's text is kept in the team's store and returned with the approval | `PROVEN_REAL` | `services/api/tests/unit/test_team_proposals.py`, `tests/integration/test_team_proposals_postgres.py` (real PostgreSQL); on the Cloud Core 2026-10-01 20:50 UTC: `POST /v1/team/queue/proposals` -> `{"ok": true}` |
+| 40.5 | The owner may decide while a cycle runs (database store); the file store still refuses | `PROVEN_AUTOMATED` | `services/api/tests/unit/test_team_approvals_while_running.py`, `tests/integration/test_team_approvals_postgres.py`; on the Cloud Core `GET /v1/team/approvals` answers `cycle_running: true, decisions_open: true`. The PAGE still locks its buttons until `approvals-detail-view` is released: `NOT_YET_PROVEN` for the owner's click |
+| 40.6 | The Ofis page's task label stays inside its seat and the scene wraps instead of scrolling | `PROVEN_AUTOMATED` | `apps/web/tests/office/layout.test.tsx`; the owner's look at the page: `READY_FOR_OWNER` |

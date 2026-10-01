@@ -83,7 +83,8 @@ export default function OfficeScene({
             {...(seat.badge !== null ? { "data-count": seat.badge } : {})}
             onClick={() => onSelect(seat.seat)}
           >
-            <span className="office-label" aria-hidden="true">
+            {/* cut with an ellipsis at the cell's width; the title attribute keeps it whole */}
+            <span className="office-label" title={seat.label ?? undefined} aria-hidden="true">
               {seat.label ?? " "}
             </span>
             <Figure seat={seat} reducedMotion={reducedMotion} />

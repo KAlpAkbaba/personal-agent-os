@@ -25,6 +25,13 @@ Pass 1 — run it:
   test for a new or changed table -> `RETURN (write the Postgres test)`. A database change
   proven on SQLite alone is never APPROVE. If this machine cannot run it, say the command
   that failed: the lead runs it before the merge.
+- **A diff that touches `scripts/cloud/*.sh`, `infra/docker/` or a migration is judged against the
+  real host's shape** (the owner-approved idea of 2026-10-01): `scripts/tests/fixtures/host-snapshot.json`
+  is a read-only snapshot of the Cloud Core (serving colour, containers, how long the operation
+  lock is held, every column's width). Check its `collected_at` is after the last release
+  (`docs/HANDOFF.md` names it); if it is older, say so - the lead collects a new one
+  (`scripts/cloud/collect-host-snapshot.ps1`; you never reach the host). A fake that hard-codes
+  what the fixture knows (a colour, a container name, a width) is a RETURN.
 
 Pass 2 — break it (adversarial):
 - Claims without evidence; tests that pass for the wrong reason; files outside the area;
