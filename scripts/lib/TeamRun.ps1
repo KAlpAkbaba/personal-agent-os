@@ -431,7 +431,10 @@ function New-TeamCycleReport {
         "koşu sayısı: $(@($runs).Count); çakışma: $([int](Get-TeamProperty -InputObject $Cycle -Name 'conflicts' -Default 0)); geri verilen: $([int](Get-TeamProperty -InputObject $Cycle -Name 'returned' -Default 0))"
     )
     foreach ($run in $runs) {
-        $budget += ("{0} / {1}: {2:0.00} USD, {3} sn, {4}" -f $run.task, $run.role, [double]$run.cost_usd, [int]$run.seconds, $run.outcome)
+        $line = ("{0} / {1}: {2:0.00} USD, {3} sn, {4}" -f $run.task, $run.role, [double]$run.cost_usd, [int]$run.seconds, $run.outcome)
+        $ranOn = [string](Get-TeamProperty -InputObject $run -Name "model" -Default "")
+        if ($ranOn) { $line += ", model $ranOn" }
+        $budget += $line
     }
     Add-Section -Title "Harcanan bütçe" -Rows $budget
     Add-Section -Title "Açık riskler" -Rows @(Get-TeamProperty -InputObject $Cycle -Name "risks" -Default @())

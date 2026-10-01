@@ -16823,6 +16823,141 @@ scenario of `fake-claude.ps1`; mutation: the usage-limit branch disabled -> 2 RE
 What did not change: a task's `budget.max_usd` stays in the queue as the lead's estimate;
 `MaxRunsPerTask` (4) stays - it bounds a task that never converges, which is not money.
 
+### ADR-0214 addendum 4 (2026-10-01): a claim about PostgreSQL or real infrastructure left NOT_RUN does not merge; a database change only SQLite has seen does not pass the gate
+
+**What happened.** The team's state moved to the Cloud Core's database on 2026-10-01 and the
+first cycle in database mode died on its first call: `POST /v1/team/queue/lock` answered 500,
+`value too long for type character varying(32)`. The lock row's version was 42 characters.
+Every test of the store ran on SQLite, which does not enforce a VARCHAR's length; the worker
+of pilot-02 had honestly written NOT_RUN beside "DbStore on Postgres"; the inspector approved;
+the lead merged; the gate, which has a real PostgreSQL, was never asked. The same shape as
+ADR-0219's addendum (an image nobody had started) and as the maintenance script that waited
+for `api-blue` by name: a claim nobody ran is where the defect is.
+
+**The owner's rule, permanent:** "NOT_RUN kalan Postgres/gerçek-altyapı iddiaları yayın öncesi
+denetleyici tarafından dev stack'te koşulmadan merge edilmez; SQLite-only testle geçen DB
+değişikliği kapıdan geçmez."
+
+**How it is held.**
+* *The inspector* (`.claude/agents/inspector.md`): a report that leaves a claim about
+  PostgreSQL, the broker, a container, a scheduler or any other real infrastructure at NOT_RUN
+  is not approved until the inspector has run that claim on the dev stack
+  (`infra/docker/docker-compose.dev.yml`: PostgreSQL, Temporal, MinIO) - or returned the task
+  with "write the integration test". "The machine could not" is said with the command that
+  failed, and is then the lead's to run before the merge, never a silent pass.
+* *The gate* (`services/api/tests/unit/test_postgres_coverage_ratchet.py`): every mapped
+  table is named by a test under `tests/integration` - which the gate runs against the dev
+  stack's PostgreSQL after the real migrations - or it is one of the 51 (of 87) tables that
+  were in that state on the day of the rule, frozen in a list that may only shrink. A new
+  table without a Postgres test fails the unit step. Naming is the floor, not the proof: the
+  proof is the inspector's run.
+* *The store that made the rule*: `tests/integration/test_team_state_postgres.py` takes the
+  lock, the live status and a report to PostgreSQL (RED with production's exact error before
+  the fix), and `test_team_state.py` holds every row the store writes to the column widths
+  read from the model, on SQLite too.
+* *The debt* is queued (`postgres-coverage-debt`): the 51 tables get named, real tests,
+  package by package.
+
+### ADR-0214 addendum 5 (2026-10-01): the researcher runs in every cycle; every proposal waits for the owner
+
+The owner: "Araştırmacı sürekli çalışsın: her döngüde (kuyruk dolu olsa da) bir araştırma
+koşusu — yeni model/kütüphane/yöntem taraması + roadmap satırlarına eşleme + benim son
+hatalarımdan öneri; çıktılar team/proposals/ altında birikir, Onay Merkezi'nde 'fikir' listesi
+olarak görünür, ben onaylayınca kuyruğa girer. Ofis sayfasında araştırmacı o sırada 'çalışıyor'
+görünsün."
+
+* The role file (`.claude/agents/researcher.md`) names the three things every run does: scan
+  (models, libraries, methods, new versions of what we carry), map (to a ROADMAP row and an
+  existing seam), learn (the newest cycle reports, the newest QUALIFICATION stage and HANDOFF:
+  a defect shape seen twice becomes a proposal). At most three proposals a run; none is an
+  honest run.
+* The nightly task passes `-Research` (`scripts/team/register-nightly.ps1`); the lead passes
+  it when starting a cycle by hand.
+* **This narrows addendum 2 (TEAM_PROTOCOL 3a item 1) for the researcher's proposals:** they
+  no longer enter the queue on the lead's word because they serve a roadmap row. Each is an
+  `awaiting_owner` idea in the Onay Merkezi and becomes work when the owner approves it; the
+  cycle's lead run then splits it into cards. Work the owner himself asks for, and defects
+  found on the way, are queued by the lead as before.
+* The Ofis page shows the researcher "çalışıyor" while its run is in the cycle's live status
+  (`office_view`: a run whose role is researcher takes the researcher's seat).
+* Two things are not built yet and are queued: `researcher-every-cycle` (the run alongside the
+  first batch instead of before it, research on by default, the proposal's text posted to the
+  queue store) and `proposals-on-cloud-core` (the Onay Merkezi on the Cloud Core reads a
+  proposal's text from the store - today it reads `team/` on the machine serving the API, so
+  in database mode an idea shows its title only).
+
+### ADR-0214 addendum 6 (2026-10-01): the cycle runs all day - "sürekli, kontrollü"
+
+The owner, on the day the cycle ran once a night: "gün içerisinde bozulmalar, iş bitmeleri
+diğerlerine yansımayacak çünkü günde 1 kere döngüye giriyor ... sürekli, kontrollü olması
+gerekiyor." A task finished at noon reached nobody until 02:00; an idea approved in the
+morning waited for the night.
+
+**What runs now.** The scheduled task (`scripts/team/register-nightly.ps1 -EveryMinutes 30`;
+its name is still "PagentOS Team Nightly Cycle") starts `cycle.ps1` every thirty minutes, all
+day, in database mode. What keeps that under control:
+* one cycle at a time - the lock (and the scheduler's `IgnoreNew`); a cycle with nothing to
+  run ends in seconds;
+* `-DailyId`: a day's cycles share one id (`dYYYYMMDD`), so one integration branch and one
+  report a day, not forty-eight;
+* `-ResearchEveryHours 6`: the researcher runs when its last finished run is more than six
+  hours old (`team/research-last.txt`) - "in every cycle" was said of a nightly cycle; a web
+  scan every half hour is not control. The owner can change the number;
+* the stops that were already there: the usage limit (waited out), `MaxRunsPerTask`, two
+  RETURNs, `team/stop.flag`, no release and no merge to main by any script;
+* everything visible on the Ofis page while it happens.
+
+**What is still by hand, and queued.** The cycle ends at "merged into the integration
+branch". The gate on that branch and the merge to main are the lead's, so a task whose
+dependency must be on main still waits for a person: `cycle-auto-integrate` (a lead run for
+the shared files, the full gate in a worktree of its own, main only when green, never a
+release). And the Onay Merkezi refused every decision while a cycle ran - right for the file
+store, wrong for a cycle that runs all day: the fix is part of `proposals-on-cloud-core`
+(in the database store a decision on a task at a gate is safe: the cycle writes only the
+tasks it changed, each conditional on what it read), with the page's "Detay" view in
+`approvals-detail-view`.
+
+Tests: `scripts/tests/team-cycle.tests.ps1` (119): "the continuous cycle: the researcher is
+throttled by its last run, and a day's cycles share one id".
+
+### ADR-0214 addendum 7 (2026-10-01): the model policy - a model per role, a fallback chain, the inspector never weaker than the worker
+
+The owner: "(1) rol başına model ayarı team store'da — lead/inspector varsayılan Fable,
+worker/integrator/researcher Opus 5.5; cycle.ps1 koşuyu --model ile bu ayardan başlatır.
+(2) Düşüş zinciri: koşu 'usage limit' ile dönerse aynı iş bir alt modelle (Fable→Opus
+5.5→Sonnet) hemen yeniden denenir, raporda 'model düşürüldü' yazar; tümü limitteyse bekler.
+(3) Ofis sayfasında her koltuğun detay panelinde model seçici + üst barda iki limit yüzdesi
+(Fable / tüm modeller) ve 'yedek model: açık' göstergesi; seçim team store'a yazılır.
+(4) Denetleyici asla işçiden daha zayıf modelde koşmaz."
+
+**The reason, as the lead reads it.** The strongest model's limit is the scarce thing; a
+worker's run is long and many, a lead's and an inspector's judgement is short and decides
+what merges. Spending the strong model where the judgement is, and never letting the judge
+be weaker than what it judges, is the control; the chain keeps the day's work moving when
+one limit is reached instead of waiting hours for it.
+
+**In force now (the interim form, the lead's).** `team/models.json`:
+lead and inspector `claude-fable-5-1`; worker, integrator and researcher `claude-opus-5-5`.
+`cycle.ps1` reads it and starts each run with `--model`; the report's run list names the
+model of every run; a value that is not a model name stops the cycle before it starts
+anything (the value goes onto a command line). Both ids were run through the real tool on
+2026-10-01 (`modelUsage` named each). Test: `scripts/tests/team-cycle.tests.ps1` "each role
+runs on the model the team's setting names for it" (mutation: the map ignored -> RED).
+
+**Queued, in the owner's order (right after `proposals-on-cloud-core`), one contract in
+three cards:** `model-policy-cycle` (the setting from the team store, the chain with "model
+düşürüldü" in the report, a limited model remembered until its reset, the inspector held to
+the worker's model or stronger - it WAITS rather than be lowered below it; integrator first:
+what the tool really prints when one model's limit is hit, and whether the two percentages
+exist anywhere a script can read), `model-policy-api` (GET/PUT `/v1/team/queue/models`, the
+status' `model` and `limits`, the seat's model in `/v1/team/office`; a setting whose
+inspector is weaker than its worker is refused), `model-policy-office-ui` (the selector in
+the seat's panel, the two percentages and the fallback toggle in the top bar).
+
+**One thing said plainly.** The two limit percentages are shown only if the tool gives them
+in a form a script can read. Nobody computes or estimates one: until a real source is found
+the page says "bilinmiyor", never "%0".
+
 ### ADR-0213 addendum (2026-09-30): the cloud reading of "no unattended task" - option 4
 
 The owner decided: **a cloud job ACTS only on sites in his allow-list and READS everywhere

@@ -129,6 +129,25 @@ Researcher proposes → owner approves → lead writes and commits. Nobody else 
   path allows, as one spoken paragraph: what is ready, what needs his approval, what he must
   try on a real device.
 
+## 9a. What does not merge (owner rules, 2026-10-01)
+
+- **A claim about PostgreSQL or real infrastructure left NOT_RUN does not merge.** The
+  inspector runs it on the dev stack before APPROVE, or returns the task for the
+  integration test (ADR-0214 addendum 4).
+- **A database change only SQLite has seen does not pass the gate.** Every mapped table is
+  named by a test under `tests/integration` (real PostgreSQL in the gate);
+  `test_postgres_coverage_ratchet.py` holds it, and its frozen list only shrinks.
+- **The researcher runs in every cycle, and every proposal waits for the owner** in the
+  Onay Merkezi as an idea (ADR-0214 addendum 5; this narrows section 3a item 1 for the
+  researcher's proposals).
+
+- **Models (ADR-0214 addendum 7):** a model per role from the team's setting (lead and inspector
+  the strongest, worker / integrator / researcher the next); a run that hits a usage limit is
+  retried one model down and the report says so; the inspector never runs on a model weaker
+  than the worker's.
+- **The cycle runs all day** (addendum 6): every 30 minutes, one at a time, one integration
+  branch a day, the researcher at most every six hours.
+
 ## 10. Stop conditions
 
 A cycle stops itself when: the usage limit is hit and the tool did not say when it lifts

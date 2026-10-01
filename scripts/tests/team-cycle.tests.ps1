@@ -1199,6 +1199,49 @@ try {
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $second.Queue).Count -Because "the queue keeps the protocol"
     }
 
+    Test-Case "the continuous cycle: the researcher is throttled by its last run, and a day's cycles share one id" {
+        # Owner, 2026-10-01: the cycle runs all day ("sürekli, kontrollü"), not once a night. A
+        # web scan in every half-hourly cycle is not control: with -ResearchEveryHours the
+        # researcher runs only when its last finished run is older than that.
+        $root = New-Sandbox -Tasks @()
+        $first = Invoke-Cycle -Root $root -Scenario "approve" -Research -ExtraArguments "-ResearchEveryHours 6"
+        Assert-Equal -Expected "researcher" -Actual (@($first.Calls | ForEach-Object { $_.role }) -join ",") -Because "no marker yet: it runs"
+        $marker = Join-Path $root "team\research-last.txt"
+        Assert-True -Condition (Test-Path -LiteralPath $marker) -Because "its finished run is recorded"
+        $second = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -Research -ExtraArguments "-ResearchEveryHours 6"
+        Assert-Equal -Expected 1 -Actual @($second.Calls).Count -Because "a run minutes ago: the researcher is not started again"
+        [System.IO.File]::WriteAllText($marker, (Get-TeamTimestamp -Now ([datetime]::UtcNow.AddHours(-7))))
+        $third = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c3" -Research -ExtraArguments "-ResearchEveryHours 6"
+        Assert-Equal -Expected 2 -Actual @($third.Calls).Count -Because "seven hours later it runs again"
+        $always = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c4" -Research
+        Assert-Equal -Expected 3 -Actual @($always.Calls).Count -Because "without the throttle it runs in every cycle"
+
+        $daily = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $daily -Scenario "approve" -CycleId "" -ExtraArguments "-DailyId"
+        $expected = "d" + (Get-Date).ToString("yyyyMMdd")
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $daily "team\reports\$expected.md")) -Because "the day's id names the report: $($run.StdOut + $run.StdErr)"
+        Assert-Equal -Expected "integrate/$expected" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").integration_branch -Because "and one integration branch for the day"
+    }
+
+    Test-Case "each role runs on the model the team's setting names for it (owner, 2026-10-01)" {
+        # Interim form of the model policy (ADR-0214 addendum 7): team/models.json maps a role to a
+        # model; a role it does not name runs on -Model, and with neither the tool's own default.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        [System.IO.File]::WriteAllText((Join-Path $root "team\models.json"), '{"roles":{"worker":"claude-opus-5-5","inspector":"claude-fable-5-1"}}')
+        $run = Invoke-Cycle -Root $root -Scenario "approve"
+        $byRole = @{}; foreach ($call in $run.Calls) { $byRole[[string]$call.role] = [string]$call.model }
+        Assert-Equal -Expected "claude-opus-5-5" -Actual $byRole["worker"] -Because "the worker's model: $($run.StdOut + $run.StdErr)"
+        Assert-Equal -Expected "claude-fable-5-1" -Actual $byRole["inspector"] -Because "the inspector's model"
+        Assert-True -Condition ($run.Report -match "task-one / worker: .*claude-opus-5-5") -Because "the report names the model of each run: $($run.Report)"
+        $plain = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $none = Invoke-Cycle -Root $plain -Scenario "approve"
+        Assert-Equal -Expected "" -Actual ([string]$none.Calls[0].model) -Because "no setting, no --model"
+        $bad = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        [System.IO.File]::WriteAllText((Join-Path $bad "team\models.json"), '{"roles":{"worker":"--dangerously-skip-permissions"}}')
+        $refused = Invoke-Cycle -Root $bad -Scenario "approve"
+        Assert-Equal -Expected 0 -Actual @($refused.Calls).Count -Because "a model name that is not a model name starts nothing: $($refused.StdOut + $refused.StdErr)"
+    }
+
     Test-Case "what the lead asks the researcher to study reaches it, subject by subject" {
         $root = New-Sandbox -Tasks @()
         $asked = Invoke-Cycle -Root $root -Scenario "approve" -Research -Brief @("execution in the cloud (ADR-0213)", "the narrative: bu hafta ne oldu")
