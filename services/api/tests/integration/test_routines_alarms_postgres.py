@@ -1,0 +1,820 @@
+"""Routines, their firings and the wake alarms on the REAL database (ADR-0214 addendum 4).
+
+``routines``, ``routine_firings`` and ``wake_alarms`` are what the owner's mornings are
+written to, and until 2026-10-01 no test under ``tests/integration`` named any of them:
+every write had only met SQLite, which does not enforce a VARCHAR's length, has no JSONB and
+hands back naive datetimes. These tests take the same writes to the dev stack's PostgreSQL
+through the production functions that make them - ``app.routines.service``,
+``app.alarms.service``, the voice tools and the REST surface in front of them, never
+hand-written SQL - with the values SQLite forgives: the longest string each column's own
+validation allows (and one more where the code claims to refuse it), JSONB documents with
+nested Turkish text, timezone-aware timestamps that are not UTC, and a NULL in every
+nullable column.
+
+Every instant here is in 2001 on purpose. ``evaluate_due`` looks at every armed routine in
+the database, and a ``now`` in the past can only make this file's own routines due; an alarm
+"rung" in 2001 starts a display holdoff that ended long ago.
+
+Rows are namespaced with a per-test token and deleted when the test ends. The ledger rows
+the services write along the way stay: the ledger is append-only.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Iterator
+from datetime import datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import pytest
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.exc import DataError, PendingRollbackError
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.alarms import history as alarm_history
+from app.alarms import service as alarms_service
+from app.alarms.models import WakeAlarm
+from app.alarms.tr_time import ParsedWhen
+from app.config import Settings
+from app.db import build_engine, build_session_factory
+from app.ledger.vocabulary import EVENT_TYPE_ALARM_CLEANED_UP
+from app.routines import conditions as conditions_mod
+from app.routines import service as routines_service
+from app.routines.actions import NoopDispatcher
+from app.routines.conditions import RoutineConditionContext
+from app.routines.models import Routine, RoutineFiring
+from app.voice.errors import VoiceError
+from app.voice.realtime_sessions import tools_routines
+from app.voice.realtime_sessions.tools import ToolContext
+from tests.integration.conftest import owner_client
+
+pytestmark = pytest.mark.integration
+
+ISTANBUL = ZoneInfo("Europe/Istanbul")
+#: Aware, and three hours from UTC: 04:46:40 in Istanbul is 01:46:40Z.
+MOMENT = datetime(2001, 9, 9, 4, 46, 40, tzinfo=ISTANBUL)
+
+NESTED = {
+    "başlık": "Sabah rutini — İstanbul",
+    "ayrıntı": {
+        "şehir": "Iğdır",
+        "ölçü": [1, 2.5, None, True],
+        "notlar": ["ğ", {"iç içe": "öğle üstü, çay demli"}],
+    },
+    "boş": None,
+}
+
+
+def _exactly(length: int, prefix: str) -> str:
+    """Exactly ``length`` CHARACTERS, most of them Turkish (two bytes each in UTF-8, so a
+    column or a validation that counted bytes would not survive this)."""
+    filler = "ığüşöçİĞÜŞÖÇ"
+    text = (prefix + filler * (length // len(filler) + 1))[:length]
+    assert len(text) == length
+    return text
+
+
+@pytest.fixture(scope="module")
+def settings() -> Settings:
+    return Settings()
+
+
+@pytest.fixture(scope="module")
+def db(settings: Settings) -> Iterator[sessionmaker[Session]]:
+    engine = build_engine(settings.database_url)
+    # The whole point of this file. A run that reached SQLite would prove nothing here.
+    assert engine.dialect.name == "postgresql"
+    try:
+        yield build_session_factory(engine)
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture()
+def token() -> str:
+    return uuid.uuid4().hex[:10]
+
+
+@pytest.fixture()
+def made(db: sessionmaker[Session], token: str) -> Iterator[SimpleNamespace]:
+    """What a test created, gone afterwards whether it passed or not.
+
+    No production path deletes a routine or an alarm. The firings go with their routine by
+    the table's own ON DELETE CASCADE - which only PostgreSQL enforces, so a missing cascade
+    fails here, loudly, as a foreign-key error.
+    """
+    created = SimpleNamespace(routines=[], alarms=[])
+    try:
+        yield created
+    finally:
+        with db() as session:
+            mine = [Routine.name.like(f"pgcov-{token}%"), Routine.routine_id.in_(created.routines)]
+            mine += [Routine.source_ref.like(f"alarm:{alarm_id}%") for alarm_id in created.alarms]
+            session.execute(delete(Routine).where(or_(*mine)))
+            session.execute(delete(WakeAlarm).where(WakeAlarm.id.in_(created.alarms)))
+            session.commit()
+
+
+def _tool_context(session: Session) -> ToolContext:
+    return ToolContext(
+        session_id=uuid.uuid4(),
+        owner_session_id=uuid.uuid4(),
+        device_id=None,
+        client_kind="web",
+        context={},
+        db=session,
+    )
+
+
+def _far_future_trigger() -> dict[str, Any]:
+    return {"at": "2099-01-01T07:30:00+03:00"}
+
+
+# ---------------------------------------------------------------------- routines
+
+
+def test_a_routine_is_written_at_the_longest_values_its_surface_allows(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``routines_service.create_routine`` / ``pause_routine`` / ``resume_routine`` /
+    ``cancel_routine``. ``name`` VARCHAR(200), ``source`` VARCHAR(32), ``source_ref``
+    VARCHAR(256), the two reasons VARCHAR(500): each at exactly the length the REST surface
+    allows (``source`` at what the column holds - the surface names no limit for it)."""
+    name = _exactly(200, f"pgcov-{token} sabah rutini: ")
+    source = _exactly(32, "pgcov-")
+    source_ref = _exactly(256, f"pgcov-{token}:")
+    reason = _exactly(500, f"{token} bu hafta tatildeyim: ")
+    trigger = {"weekdays": [4, 0, 2], "time": "07:30", "timezone": "Europe/Istanbul"}
+    conditions = [{"kind": "policy_permission", "detail": {"policy": "sabah.brifingi", **NESTED}}]
+    actions = [
+        {"kind": "voice_briefing", "detail": {"text": "Günaydın efendim; çayınız demlendi."}}
+    ]
+    with db() as session:
+        routine = routines_service.create_routine(
+            session,
+            name=name,
+            trigger_kind="schedule",
+            trigger=trigger,
+            conditions=conditions,
+            actions=actions,
+            source=source,
+            source_ref=source_ref,
+            detail_json=NESTED,
+        )
+        routine_id = routine.routine_id
+        made.routines.append(routine_id)
+        again = routines_service.create_routine(
+            session,
+            name="pgcov başka bir ad",
+            trigger_kind="schedule",
+            trigger=trigger,
+            source=source,
+            source_ref=source_ref,
+        )
+        assert again.routine_id == routine_id, "idempotent on (source, source_ref)"
+
+    with db() as fresh:
+        stored = fresh.get(Routine, routine_id)
+        assert stored.name == name and len(stored.name) == 200
+        assert stored.source == source and stored.source_ref == source_ref
+        assert (stored.status, stored.trigger_kind) == ("armed", "schedule")
+        assert stored.trigger_json == {
+            "weekdays": [0, 2, 4],
+            "time": "07:30",
+            "timezone": "Europe/Istanbul",
+            "grace_minutes": 5,
+        }
+        assert stored.conditions_json == conditions
+        assert stored.actions_json == actions
+        assert stored.detail_json == NESTED
+        assert stored.armed_at.utcoffset() is not None
+        assert stored.created_at.utcoffset() is not None
+        # A NULL in every nullable column but armed_at, and the two server-side defaults.
+        assert (
+            stored.last_condition_at,
+            stored.paused_at,
+            stored.pause_reason,
+            stored.cancelled_at,
+            stored.cancel_reason,
+        ) == (None,) * 5
+        assert (stored.last_condition_met, stored.last_presence_sequence) == (False, 0)
+
+        paused = routines_service.pause_routine(fresh, routine_id, reason=reason)
+        assert paused.status == "paused"
+
+    with db() as fresh:
+        stored = fresh.get(Routine, routine_id)
+        assert stored.pause_reason == reason and len(stored.pause_reason) == 500
+        assert stored.paused_at.utcoffset() is not None
+        # The subtraction SQLite could not do without help: a stored instant against now.
+        resumed = routines_service.resume_routine(fresh, routine_id)
+        assert resumed.status == "armed"
+
+    with db() as fresh:
+        stored = fresh.get(Routine, routine_id)
+        assert (stored.paused_at, stored.pause_reason) == (None, None), "a value, then NULL"
+        routines_service.cancel_routine(fresh, routine_id, reason=reason)
+
+    with db() as fresh:
+        stored = fresh.get(Routine, routine_id)
+        assert stored.status == "cancelled"
+        assert stored.cancel_reason == reason and len(stored.cancel_reason) == 500
+        assert stored.cancelled_at.utcoffset() is not None
+
+        # A routine cancelled without a word: the reason stays NULL.
+        silent = routines_service.create_routine(
+            fresh,
+            name=f"pgcov-{token} sessiz",
+            trigger_kind="at",
+            trigger=_far_future_trigger(),
+        )
+        made.routines.append(silent.routine_id)
+        routines_service.cancel_routine(fresh, silent.routine_id)
+        fresh.expire_all()
+        assert fresh.get(Routine, silent.routine_id).cancel_reason is None
+
+
+def test_one_character_too_many_is_refused_by_the_routine_surface_not_by_postgres(
+    settings: Settings, db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    body = {"name": f"pgcov-{token} REST", "trigger_kind": "at", "trigger": _far_future_trigger()}
+    with owner_client(settings) as client:
+        long_name = client.post(
+            "/v1/routines", json={**body, "name": _exactly(201, f"pgcov-{token} ")}
+        )
+        assert long_name.status_code == 422, long_name.text
+        long_ref = client.post(
+            "/v1/routines", json={**body, "source_ref": _exactly(257, f"pgcov-{token}:")}
+        )
+        assert long_ref.status_code == 422, long_ref.text
+
+        created = client.post(
+            "/v1/routines",
+            json={
+                **body,
+                "name": _exactly(200, f"pgcov-{token} "),
+                "source_ref": _exactly(256, f"pgcov-{token}:"),
+                "detail_json": NESTED,
+            },
+        )
+        assert created.status_code == 201, created.text
+        routine_id = created.json()["routine_id"]
+        made.routines.append(uuid.UUID(routine_id))
+        assert created.json()["detail_json"] == NESTED
+
+        for step in ("pause", "cancel"):
+            refused = client.post(
+                f"/v1/routines/{routine_id}/{step}", json={"reason": _exactly(501, token)}
+            )
+            assert refused.status_code == 422, (step, refused.text)
+        assert client.get(f"/v1/routines/{routine_id}").json()["status"] == "armed"
+
+    with db() as fresh:
+        count = fresh.scalar(
+            select(func.count()).select_from(Routine).where(Routine.name.like(f"pgcov-{token}%"))
+        )
+        assert count == 1, "only the accepted routine was written"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): POST /v1/routines answers 500 for a 33-character "
+        "source - psycopg.errors.StringDataRightTruncation: value too long for type "
+        "character varying(32)"
+    ),
+)
+def test_a_source_longer_than_its_column_is_refused_by_the_surface_not_by_postgres(
+    settings: Settings, made: SimpleNamespace, token: str
+) -> None:
+    """``POST /v1/routines`` bounds ``name`` and ``source_ref`` and says nothing about
+    ``source``, which is VARCHAR(32)."""
+    with owner_client(settings) as client:
+        answer = client.post(
+            "/v1/routines",
+            json={
+                "name": f"pgcov-{token} kaynak",
+                "trigger_kind": "at",
+                "trigger": _far_future_trigger(),
+                "source": _exactly(33, "pgcov-"),
+            },
+        )
+        assert answer.status_code == 422, answer.text
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): the routine.create voice tool raises for a "
+        "201-character name - psycopg.errors.StringDataRightTruncation: value too long for "
+        "type character varying(200)"
+    ),
+)
+def test_a_spoken_routine_name_longer_than_its_column_is_refused_in_words(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``routine.create`` by voice passes the model's ``name`` straight to the service; the
+    column is VARCHAR(200). Either answer is the owner's to hear - a refusal in the tool's
+    own words, or a routine whose name fits - but not a database error."""
+    with db() as session:
+        try:
+            created = tools_routines.routine_create(
+                _tool_context(session),
+                {
+                    "name": _exactly(201, f"pgcov-{token} her sabah haberleri oku ve "),
+                    "trigger_kind": "at",
+                    "trigger": _far_future_trigger(),
+                },
+            )
+        except VoiceError:
+            return
+        made.routines.append(uuid.UUID(created["routine_id"]))
+        assert len(created["name"]) <= 200
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): the routine.pause voice tool (and routine.cancel, the "
+        "same code path) raises for a 501-character reason - "
+        "psycopg.errors.StringDataRightTruncation: value too long for type character "
+        "varying(500)"
+    ),
+)
+def test_a_spoken_pause_reason_longer_than_its_column_is_refused_in_words(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``routine.pause`` / ``routine.cancel`` by voice pass the model's ``reason`` straight
+    to the service; both columns are VARCHAR(500)."""
+    with db() as session:
+        routine = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} sesle duraklat",
+            trigger_kind="at",
+            trigger=_far_future_trigger(),
+            source="voice",
+        )
+        made.routines.append(routine.routine_id)
+        try:
+            paused = tools_routines.routine_pause(
+                _tool_context(session),
+                {
+                    "routine_id": str(routine.routine_id),
+                    "reason": _exactly(501, f"{token} sahibi tatilde: "),
+                },
+            )
+        except VoiceError:
+            return
+        assert paused["status"] == "paused"
+        session.expire_all()
+        assert len(session.get(Routine, routine.routine_id).pause_reason) <= 500
+
+
+# --------------------------------------------------------------- routine_firings
+
+
+class _BrokenSpeaker:
+    def dispatch(self, *, routine_id, firing_id, action, now=None):
+        raise RuntimeError("hoparlör yanıt vermedi: çıkış aygıtı bulunamadı")
+
+
+def test_routine_firings_record_a_fired_a_skipped_and_a_failed_occurrence(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``routines_service.evaluate_due`` is the only writer. Three one-shot routines due at
+    the same aware instant: one fires, one is skipped with its reason, one's action fails."""
+    at = {"at": (MOMENT - timedelta(minutes=1)).isoformat()}
+    briefing = [{"kind": "voice_briefing", "detail": {"text": "Günaydın; İstanbul'da hava açık."}}]
+    with db() as session:
+        fired = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} çalışan",
+            trigger_kind="at",
+            trigger=at,
+            actions=briefing,
+        )
+        skipped = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} atlanan",
+            trigger_kind="at",
+            trigger=at,
+            conditions=[{"kind": "quiet_hours", "detail": {}}],
+            actions=briefing,
+        )
+        ids = {"fired": fired.routine_id, "skipped": skipped.routine_id}
+        made.routines.extend(ids.values())
+
+        result = routines_service.evaluate_due(
+            session, now=MOMENT, context=RoutineConditionContext(), dispatcher=NoopDispatcher()
+        )
+        outcomes = {o.routine_id: o for o in result.outcomes}
+        assert outcomes[ids["fired"]].status == "triggered"
+        assert outcomes[ids["skipped"]].status == "skipped"
+
+        # The same instant again: the occurrence is resolved, the unique constraint holds.
+        repeat = routines_service.evaluate_due(session, now=MOMENT, dispatcher=NoopDispatcher())
+        assert not [o for o in repeat.outcomes if o.routine_id in ids.values()]
+
+        failed = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} bozulan",
+            trigger_kind="at",
+            trigger=at,
+            actions=briefing,
+        )
+        ids["failed"] = failed.routine_id
+        made.routines.append(failed.routine_id)
+        routines_service.evaluate_due(session, now=MOMENT, dispatcher=_BrokenSpeaker())
+
+    with db() as fresh:
+        rows = {
+            name: routines_service.list_firings(fresh, routine_id)
+            for name, routine_id in ids.items()
+        }
+        assert {name: len(found) for name, found in rows.items()} == {
+            "fired": 1,
+            "skipped": 1,
+            "failed": 1,
+        }
+        for found in rows.values():
+            assert isinstance(found[0], RoutineFiring)
+            assert found[0].occurrence_key == "once"
+            # The engine's own instant, stored as an instant: equal across the two zones.
+            assert found[0].occurred_at == MOMENT
+            assert found[0].occurred_at.utcoffset() is not None
+            assert found[0].created_at.utcoffset() is not None
+
+        triggered = rows["fired"][0]
+        assert (triggered.status, triggered.dispatch_status) == ("triggered", "succeeded")
+        assert triggered.skip_reason is None
+        assert triggered.conditions_result == []
+        assert triggered.actions_snapshot == briefing
+        assert triggered.dispatch_results == [
+            {
+                "kind": "voice_briefing",
+                "status": "succeeded",
+                "ok": True,
+                "reason": "",
+                "detail": {"dispatched": False, "reason": "noop_dispatcher"},
+            }
+        ]
+
+        skip = rows["skipped"][0]
+        assert (skip.status, skip.skip_reason) == ("skipped", "quiet_hours:quiet_hours_unknown")
+        assert skip.dispatch_status is None, "never dispatched is NULL, not 'none'"
+        assert skip.actions_snapshot == [] and skip.dispatch_results == []
+        assert skip.conditions_result == [
+            {"kind": "quiet_hours", "passed": False, "reason": "quiet_hours_unknown"}
+        ]
+
+        broken = rows["failed"][0]
+        assert (broken.status, broken.dispatch_status) == ("triggered", "failed")
+        assert broken.dispatch_results[0]["reason"] == "dispatcher_exception:RuntimeError"
+        assert broken.dispatch_results[0]["detail"] == {
+            "error": "RuntimeError: hoparlör yanıt vermedi: çıkış aygıtı bulunamadı"
+        }
+
+        # A one-shot whose moment was decided is completed, whichever way it went.
+        statuses = {fresh.get(Routine, routine_id).status for routine_id in ids.values()}
+        assert statuses == {"completed"}
+
+
+def test_a_condition_trigger_writes_its_edge_and_one_firing_per_crossing(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """The occurrence key of a condition trigger is the crossing instant itself, offset and
+    all; ``routines.last_condition_at`` is the same instant, in a timestamptz."""
+    idle = RoutineConditionContext(device_idle_s=900.0)
+    with db() as session:
+        routine = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} boşta kalınca",
+            trigger_kind="condition",
+            trigger={"kind": "device_idle", "min_seconds": 600},
+        )
+        routine_id = routine.routine_id
+        made.routines.append(routine_id)
+
+        def tick(moment: datetime, context: RoutineConditionContext) -> list[str]:
+            result = routines_service.evaluate_due(
+                session, now=moment, context=context, dispatcher=NoopDispatcher()
+            )
+            return [o.occurrence_key for o in result.outcomes if o.routine_id == routine_id]
+
+        assert tick(MOMENT, idle) == [MOMENT.isoformat()]
+        assert tick(MOMENT + timedelta(minutes=1), idle) == [], "still idle is not a crossing"
+        assert tick(MOMENT + timedelta(minutes=2), RoutineConditionContext(device_idle_s=5.0)) == []
+
+    with db() as fresh:
+        stored = fresh.get(Routine, routine_id)
+        assert stored.status == "armed"
+        assert stored.last_condition_met is False, "the falling edge was written too"
+        assert stored.last_condition_at == MOMENT
+        assert stored.last_condition_at.utcoffset() is not None
+        firings = routines_service.list_firings(fresh, routine_id)
+        assert [f.occurrence_key for f in firings] == ["2001-09-09T04:46:40+03:00"]
+        assert firings[0].dispatch_status == "none", "triggered, with nothing to dispatch"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): evaluate_due raises out of the tick when the joined "
+        "skip reason passes 500 characters, on the INSERT into routine_firings - "
+        "psycopg.errors.StringDataRightTruncation: value too long for type character "
+        "varying(500)"
+    ),
+)
+def test_a_skip_with_many_unmet_conditions_is_still_recorded(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``skip_reason`` names EVERY unmet condition, joined; the column is VARCHAR(500) and
+    nothing bounds the join. A skip must be recorded - "never silently dropped" - and one
+    routine's reason must not be what stops the tick for every routine after it."""
+    conditions = [
+        {
+            "kind": "policy_permission",
+            "detail": {"policy": f"ev.otomasyonu.{n:02d}.gece_modunda_sesli_bildirim_izni"},
+        }
+        for n in range(8)
+    ]
+    _, verdicts = conditions_mod.evaluate_conditions(conditions, RoutineConditionContext())
+    assert len("; ".join(f"{v['kind']}:{v['reason']}" for v in verdicts)) > 500
+
+    with db() as session:
+        routine = routines_service.create_routine(
+            session,
+            name=f"pgcov-{token} sekiz koşullu",
+            trigger_kind="at",
+            trigger={"at": (MOMENT - timedelta(minutes=1)).isoformat()},
+            conditions=conditions,
+        )
+        routine_id = routine.routine_id
+        made.routines.append(routine_id)
+        result = routines_service.evaluate_due(
+            session, now=MOMENT, context=RoutineConditionContext(), dispatcher=NoopDispatcher()
+        )
+        assert [o.status for o in result.outcomes if o.routine_id == routine_id] == ["skipped"]
+
+    with db() as fresh:
+        firings = routines_service.list_firings(fresh, routine_id)
+        assert [f.status for f in firings] == ["skipped"]
+        assert len(firings[0].conditions_result) == 8
+        assert firings[0].skip_reason
+
+
+# -------------------------------------------------------------------- wake_alarms
+
+
+def _when(moment: datetime, weekdays: tuple[int, ...] = ()) -> ParsedWhen:
+    return ParsedWhen(
+        at=moment,
+        local_time=moment.strftime("%H:%M"),
+        timezone="Europe/Istanbul",
+        weekdays=weekdays,
+    )
+
+
+def test_wake_alarms_are_written_with_their_documents_and_a_null_everywhere_else(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``alarms_service.create_alarm``: ``label`` VARCHAR(200) at the length the REST surface
+    and the voice tool both allow, four JSONB documents with Turkish text, an aware
+    ``scheduled_for`` that is not UTC, and every column the alarm has not reached yet NULL."""
+    ring_at = datetime(2001, 9, 10, 7, 30, tzinfo=ISTANBUL)
+    label = _exactly(200, f"pgcov-{token} sabah: ")
+    media = {"url": "https://www.youtube.com/watch?v=pgcov", "title": "Güneş Doğarken — şarkı"}
+    with db() as session:
+        alarm = alarms_service.create_alarm(
+            session,
+            when=_when(ring_at),
+            media=media,
+            label=label,
+            greeting_policy={"enabled": True, "text": "Günaydın efendim, çay hazır."},
+            display_wake_policy={"enabled": False, "not": {"oda": "çalışma odası"}},
+            snooze_minutes=7,
+        )
+        alarm_id = alarm.id
+        made.alarms.append(alarm_id)
+        recurring = alarms_service.create_alarm(
+            session, when=_when(ring_at, weekdays=(0, 1, 2, 3, 4)), is_test=True
+        )
+        recurring_id = recurring.id
+        made.alarms.append(recurring_id)
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert stored.label == label and len(stored.label) == 200
+        assert stored.scheduled_for == ring_at and stored.scheduled_for.utcoffset() is not None
+        assert (stored.local_time, stored.timezone) == ("07:30", "Europe/Istanbul")
+        assert (stored.state, stored.owner_id, stored.is_test) == ("SCHEDULED", "owner", False)
+        assert stored.media_source == {"kind": "youtube", **media}
+        assert stored.resolved_media_identity == {"kind": "youtube", **media}
+        assert stored.greeting_policy["text"] == "Günaydın efendim, çay hazır."
+        assert stored.display_wake_policy["not"] == {"oda": "çalışma odası"}
+        assert stored.display_wake_policy["enabled"] is False
+        assert (stored.snooze_minutes, stored.snooze_count, stored.max_play_seconds) == (7, 0, 600)
+        assert stored.detail_json == {}
+        assert stored.created_at.utcoffset() is not None
+        assert (
+            stored.device_id,
+            stored.recurrence,
+            stored.armed_at,
+            stored.triggered_at,
+            stored.terminal_at,
+            stored.terminal_state,
+            stored.terminal_reason,
+            stored.last_firing_id,
+            stored.media_session_id,
+            stored.media_kind,
+            stored.greeting_due_at,
+            stored.greeted_at,
+            stored.playing_since,
+        ) == (None,) * 13
+
+        # The trigger is a first-class routine, written by the same call.
+        routine = fresh.get(Routine, stored.routine_id)
+        assert (routine.name, routine.source, routine.trigger_kind) == (
+            "Alarm 07:30",
+            "alarm",
+            "at",
+        )
+        assert routine.source_ref == f"alarm:{alarm_id}:0"
+        assert routine.trigger_json == {"at": "2001-09-10T04:30:00+00:00"}
+        assert routine.actions_json == [
+            {"kind": "wake_alarm", "detail": {"alarm_id": str(alarm_id)}}
+        ]
+
+        every_weekday = fresh.get(WakeAlarm, recurring_id)
+        assert every_weekday.label is None
+        assert every_weekday.recurrence == {"weekdays": [0, 1, 2, 3, 4]}
+        assert every_weekday.media_source == {"kind": "tone"}
+        assert (every_weekday.is_test, every_weekday.max_play_seconds) == (True, 120)
+        schedule = fresh.get(Routine, every_weekday.routine_id)
+        assert (schedule.name, schedule.trigger_kind) == ("Test alarmı 07:30", "schedule")
+        assert schedule.trigger_json["timezone"] == "Europe/Istanbul"
+
+
+def test_a_wake_alarm_rings_is_snoozed_and_is_cancelled_on_postgres(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``reconcile_local_fired`` -> ``snooze_alarm`` -> ``cancel_alarm``: every column the
+    lifecycle writes, set and then NULL again, with instants the device chose in its own
+    zone. (``terminal_reason`` at its full VARCHAR(200) is the last alarm test's.)"""
+    ring_at = datetime(2001, 9, 10, 7, 30, tzinfo=ISTANBUL)
+    with db() as session:
+        alarm = alarms_service.create_alarm(
+            session, when=_when(ring_at), label=f"pgcov-{token} yaşam döngüsü"
+        )
+        alarm_id = alarm.id
+        made.alarms.append(alarm_id)
+        first_routine = alarm.routine_id
+
+        rang = alarms_service.reconcile_local_fired(session, [str(alarm_id)], now=ring_at)
+        assert [a.id for a in rang] == [alarm_id]
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert (stored.state, stored.media_kind) == ("PLAYING", "local_fallback")
+        assert stored.triggered_at == ring_at and stored.playing_since == ring_at
+        assert stored.playing_since.utcoffset() is not None
+
+        until = ring_at + timedelta(minutes=10)
+        alarms_service.snooze_alarm(
+            fresh, alarm_id, now=ring_at + timedelta(minutes=1), resume_at=until
+        )
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert (stored.state, stored.snooze_count, stored.local_time) == ("SCHEDULED", 1, "07:40")
+        assert stored.scheduled_for == until, "the device's instant, not one derived from now"
+        assert (
+            stored.media_kind,
+            stored.playing_since,
+            stored.triggered_at,
+            stored.armed_at,
+            stored.last_firing_id,
+        ) == (None,) * 5
+        assert stored.routine_id != first_routine
+        assert fresh.get(Routine, stored.routine_id).source_ref == f"alarm:{alarm_id}:snooze:1"
+
+        reason = f"{token} sahibi çoktan uyandı, İstanbul'da gün ağarmıştı"
+        alarms_service.cancel_alarm(
+            fresh, alarm_id, reason=reason, now=ring_at + timedelta(minutes=2)
+        )
+
+    with db() as fresh:
+        stored = fresh.get(WakeAlarm, alarm_id)
+        assert (stored.state, stored.terminal_state) == ("CANCELLED", "CANCELLED")
+        assert stored.terminal_reason == reason
+        assert stored.terminal_at == ring_at + timedelta(minutes=2)
+        assert stored.terminal_at.utcoffset() is not None
+        trigger = fresh.get(Routine, stored.routine_id)
+        assert (trigger.status, trigger.cancel_reason) == ("cancelled", "alarm_cancelled")
+
+
+def test_one_character_too_many_is_refused_by_the_alarm_surface_not_by_postgres(
+    settings: Settings, db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    when = {"date": "2099-01-01", "time": "07:30"}
+    with owner_client(settings) as client:
+        long_label = client.post(
+            "/v1/alarms", json={"when": when, "label": _exactly(201, f"pgcov-{token} ")}
+        )
+        assert long_label.status_code == 422, long_label.text
+        long_zone = client.post("/v1/alarms", json={"when": when, "timezone": "Europe/" + "x" * 58})
+        assert long_zone.status_code == 422, long_zone.text
+
+        created = client.post(
+            "/v1/alarms",
+            json={"when": when, "test": True, "label": _exactly(200, f"pgcov-{token} ")},
+        )
+        assert created.status_code == 201, created.text
+        alarm_id = uuid.UUID(created.json()["alarm_id"])
+        made.alarms.append(alarm_id)
+
+        long_reason = client.post(
+            f"/v1/alarms/{alarm_id}/cancel", json={"reason": _exactly(201, token)}
+        )
+        assert long_reason.status_code == 422, long_reason.text
+        assert client.get(f"/v1/alarms/{alarm_id}").json()["state"] == "SCHEDULED"
+
+    with db() as fresh:
+        count = fresh.scalar(
+            select(func.count())
+            .select_from(WakeAlarm)
+            .where(WakeAlarm.label.like(f"pgcov-{token}%"))
+        )
+        assert count == 1, "only the accepted alarm was written"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=PendingRollbackError,
+    reason=(
+        "DEFECT (queued for the lead): cancel_alarm raises for a reason of 189 characters or "
+        "more (the surface allows 200). The alarm.cleaned_up ledger row's source_ref carries "
+        "the reason and is VARCHAR(256) - psycopg.errors.StringDataRightTruncation: value too "
+        "long for type character varying(256) - and the handler that swallows that then reads "
+        "alarm.id on the rolled-back session: sqlalchemy.exc.PendingRollbackError. The alarm "
+        "is already CANCELLED; the caller gets a 500 and the cleanup row is never written"
+    ),
+)
+def test_a_cancel_at_the_longest_reason_the_surface_allows_keeps_its_cleanup_record(
+    db: sessionmaker[Session], made: SimpleNamespace, token: str
+) -> None:
+    """``POST /v1/alarms/{id}/cancel`` allows a 200-character reason. The alarm's story is
+    read back from the ledger (``app.alarms.history``), and "cleaned up" is the row that says
+    the device was released: it must be there for the longest reason the surface accepts."""
+    ring_at = datetime(2001, 9, 11, 7, 30, tzinfo=ISTANBUL)
+    reason = _exactly(200, f"{token} iptal: ")
+    with db() as session:
+        alarm = alarms_service.create_alarm(session, when=_when(ring_at))
+        alarm_id = alarm.id
+        made.alarms.append(alarm_id)
+        cancelled = alarms_service.cancel_alarm(session, alarm_id, reason=reason, now=ring_at)
+        assert cancelled.state == "CANCELLED"
+
+    with db() as fresh:
+        assert fresh.get(WakeAlarm, alarm_id).terminal_reason == reason
+        story = alarm_history.alarm_history(fresh, alarm_id=alarm_id)
+        assert EVENT_TYPE_ALARM_CLEANED_UP in [entry["event_type"] for entry in story], story
+
+
+# --------------------------------------------------- what PostgreSQL refuses alone
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DataError,
+    reason=(
+        "DEFECT (queued for the lead): POST /v1/routines answers 500 for a U+0000 in the "
+        "name - psycopg.DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes"
+    ),
+)
+def test_a_nul_character_in_a_routine_is_refused_by_the_surface_not_by_postgres(
+    settings: Settings, made: SimpleNamespace, token: str
+) -> None:
+    """PostgreSQL stores no U+0000, in a VARCHAR or inside JSONB; SQLite stores both. JSON
+    allows the character, so the request validates and the database is what says no.
+    Refusing it and storing the name without it are both answers; a 500 is not."""
+    with owner_client(settings) as client:
+        answer = client.post(
+            "/v1/routines",
+            json={
+                "name": f"pgcov-{token} sıfır\x00bayt",
+                "trigger_kind": "at",
+                "trigger": _far_future_trigger(),
+            },
+        )
+        if answer.status_code == 201:
+            made.routines.append(uuid.UUID(answer.json()["routine_id"]))
+            assert "\x00" not in answer.json()["name"]
+        else:
+            assert answer.status_code == 422, answer.text
