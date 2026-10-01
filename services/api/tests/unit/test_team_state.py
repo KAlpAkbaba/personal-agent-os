@@ -397,7 +397,22 @@ def test_every_route_and_body_field_the_powershell_client_uses_is_one_the_server
     ):
         used.add((method, re.sub(r"/tasks/\$id$", "/tasks/{task_id}", path)))
     assert used, "the client's calls were not found: did the call shape change?"
-    assert used <= served, f"the client calls what the server does not serve: {used - served}"
+    # Called by the client BEFORE the server serves it, each with why that is safe. The entry
+    # is removed by the task that adds the route - the second assertion makes that a failure
+    # to forget.
+    called_ahead = {
+        ("GET", "/v1/team/queue/models"): "model-policy-cycle landed before model-policy-api; "
+        "a 404 is 'no such route yet': the cycle falls back to team/models.json and then the "
+        "defaults (team-cycle.tests.ps1: 'a Cloud Core without the models route (404) does "
+        "not stop the cycle')",
+    }
+    assert used - set(called_ahead) <= served, (
+        f"the client calls what the server does not serve: {used - set(called_ahead) - served}"
+    )
+    assert not (set(called_ahead) & served), (
+        f"the server serves it now - remove the entry: {set(called_ahead) & served}"
+    )
+    used = used - set(called_ahead)
     # Served for a reader that is not the PowerShell client, each with the reader named:
     # a route nobody reads does not get in here.
     read_by_others = {
