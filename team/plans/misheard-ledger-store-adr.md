@@ -82,9 +82,23 @@ themselves, so the relay card cannot disagree with it about the type.
 
 **Three purge triggers, none of them a session (TEAM_PROTOCOL 9).** A 30-day promise kept by
 a conversation's wake-up is not kept. (1) `record()` purges on every write. (2) The owner's
-GET purges before it lists. (3) `PurgeLoop` in the application's lifespan purges when the
-process starts and every 24 h after, and is cancelled at shutdown. And `list_items` never
-returns an expired row even when none of the three has run.
+GET purges before it lists. (3) The application's lifespan purges when the process starts
+(every release and every restart). And `list_items` never returns an expired row even when
+none of the three has run.
+
+**The 24-hour tick is built and NOT started - ALAN_ISTEGI.** `service.PurgeLoop` is the
+card's loop (a pass at start, one every 24 h, cancelled cleanly; tested in
+`test_misheard_store.py`). The lifespan runs its one pass and does not call `start()`,
+because a loop the lifespan starts must answer in `/v1/system/health`
+(`tests/unit/test_bounded_delivery.py::test_every_background_loop_the_app_starts_can_be_seen_in_health`
+reads the lifespan's source and holds a hand-written map of loop -> health key; it went RED
+on the first full run with the loop started), and the map and the health endpoint's key
+list (`tests/unit/test_health_endpoint.py`) are outside this card's area. The rule is right:
+a loop nothing can see can die quietly. To finish it, with those two files in the area:
+`PurgeLoop.health_check()`, `checks["misheard_purge"]` in `system_health`,
+`await misheard_purge.start()` / `.stop()` in the lifespan instead of the one pass, and the
+key in both tests. Until then a process that runs for more than 30 days with no write and no
+GET keeps expired rows on disk (never listed) until its next restart.
 
 **The owner's API** (owner session; a refusal is `{detail: {code, message}}`, Turkish):
 `GET /v1/voice/misheard` -> `{items, open, retention_days: 30}`, newest first;

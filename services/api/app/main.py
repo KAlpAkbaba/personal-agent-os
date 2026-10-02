@@ -702,11 +702,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await embedded_worker.start()
         await retention_sweeper.start()
         # The misheard notebook's 30 days are kept by the process, not by a session: one
-        # purge now and one every 24 h. It asks for the runtime the routes read
-        # (app.state.artifacts) at each pass, and a pass that fails is logged and retried.
+        # purge at every start, through the runtime the routes read (app.state.artifacts).
+        # Never blocks startup: a pass that fails is logged by its error's type. The loop
+        # itself (PurgeLoop.start, every 24 h) is NOT started here: a loop this lifespan
+        # starts must answer in /v1/system/health (tests/unit/test_bounded_delivery.py),
+        # and it has no health key yet.
         misheard_purge = misheard_service.PurgeLoop(lambda: app.state.artifacts.session())
         app.state.misheard_purge = misheard_purge
-        await misheard_purge.start()
+        await asyncio.to_thread(misheard_purge.purge_once)
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -738,7 +741,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
-            await misheard_purge.stop()
             await retention_sweeper.stop()
             await embedded_worker.stop()
             await briefing_announcer.stop()

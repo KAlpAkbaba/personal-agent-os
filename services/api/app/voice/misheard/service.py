@@ -16,7 +16,7 @@ about, and the audit row and the route telemetry are wordless on purpose. The ho
 written to disk, the database, the session's ``context_json`` or a log.
 
 Three things delete an expired row, none of them a session: ``record`` (every write), the
-owner's GET, and ``PurgeLoop`` in the application's lifespan (at start, then every 24 h).
+owner's GET, and the application's start (one ``PurgeLoop.purge_once`` in the lifespan).
 ``list_items`` hides an expired row even when none of them has run yet.
 """
 

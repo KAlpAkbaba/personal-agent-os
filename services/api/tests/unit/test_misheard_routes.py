@@ -8,7 +8,6 @@ The router is NOT included by the test: ``create_app`` registers it, or these ar
 
 from __future__ import annotations
 
-import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -180,20 +179,33 @@ def test_get_purges_before_it_lists(owner, engine) -> None:
 # ------------------------------------------------------------------- the lifespan's purge
 
 
-def test_the_lifespan_purges_at_start_and_cancels_its_loop_at_shutdown(api, engine) -> None:
-    """No request is made: the application's own start is what deletes the expired row."""
+def test_the_lifespan_purges_at_start(api, engine) -> None:
+    """No request is made: the application's own start is what deletes the expired row, and
+    it has done so by the time the application serves.
+
+    The lifespan starts no loop of its own for this (``PurgeLoop.start`` and its clean
+    cancel are held in test_misheard_store.py): nothing is left running at shutdown."""
     app, _, _ = api
     _seed_one_fresh_and_one_expired(engine)
     with TestClient(app):
-        loop = app.state.misheard_purge
-        deadline = time.monotonic() + 60  # a hang guard; the claim is the row count below
-        while loop.passes < 1 and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert loop.passes == 1
-        assert loop.running is True
+        purge = app.state.misheard_purge
+        assert purge.passes == 1
+        assert purge.last_removed == 1
         assert _count(engine) == 1
-    assert loop.running is False
-    assert loop.passes == 1  # the second pass was 24 h away and never ran
+        assert purge.running is False
+    assert purge.passes == 1
+    assert purge.running is False
+
+
+def test_a_lifespan_purge_that_cannot_reach_the_table_does_not_stop_the_start(api) -> None:
+    app, _, _ = api
+    with sessionmaker(bind=app.state.artifacts._engine)() as session:
+        session.execute(MisheardUtterance.__table__.delete())
+        session.commit()
+    MisheardUtterance.__table__.drop(app.state.artifacts._engine)
+    with TestClient(app):
+        assert app.state.misheard_purge.passes == 1
+        assert app.state.misheard_purge.last_removed is None
 
 
 def test_post_meaning_answers_the_row_and_open_counts_unanswered_only(owner, engine) -> None:
