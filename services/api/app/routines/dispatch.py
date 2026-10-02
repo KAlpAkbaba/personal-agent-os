@@ -27,8 +27,12 @@ capability that does not exist on the device side yet:
   building in parallel on another branch of this same worktree. Until it advertises that
   capability, dispatch fails honestly with ``no_capable_device`` rather than pretending to
   have rung anything.
-* ``media_playback`` / ``browser_action`` — execute end to end against any device that
-  advertises the ``browser.chrome`` family (already real and qualified, M13).
+* ``media_playback`` — executes end to end against any device that advertises the
+  ``browser.chrome`` family (already real and qualified, M13).
+* ``browser_action`` — runs where the execution_target rule says a scheduled job runs
+  (ADR-0213 row 1): on the cloud worker, or nowhere. It is sent through the port's
+  ``scheduled()`` view; with the cloud down it fails as ``no_capable_device`` and is never
+  sent to a home or office machine.
 * ``display_action`` — refused, always, on purpose (see ``DISPLAY_ACTION_QUALIFIED`` below).
   This is not "not implemented yet"; it is "built but deliberately unreachable" until its
   own separate owner qualification exists (M18 spec §4, §7's last line).
@@ -82,6 +86,7 @@ from app.routines.actions import (
     DispatchOutcome,
     RoutineDispatcher,
 )
+from app.routines.target import probe_routine_device, select_routine_device
 from app.voice.realtime_sessions.models import (
     REALTIME_STATE_ACTIVE,
     REALTIME_STATE_CREATED,
@@ -395,6 +400,23 @@ def _select_for(
     return select_device(views, capability=capability)
 
 
+#: ``SelectionResult.reason`` for a device the execution_target rule chose (ADR-0213).
+REASON_EXECUTION_RULE: Final = "execution_rule"
+
+
+def _is_browser_capability(capability: str) -> bool:
+    """A ``browser.<operation>`` of the contract (``BROWSER_ACTION_ALLOWLIST``): what the
+    scheduled view asks the execution_target rule about. Everything else - ``app.launch``,
+    ``desktop.*`` - is a machine's and keeps ``_select_for``."""
+    family, _, operation = capability.partition(".")
+    return family == "browser" and operation in BROWSER_ACTION_ALLOWLIST
+
+
+def _payload_url(payload: dict[str, Any]) -> str | None:
+    url = payload.get("url")
+    return url if isinstance(url, str) and url else None
+
+
 class BrokerDeviceAction:
     """Runs one device command over the SAME proven device/broker path
     ``app.research.browser_activities.select_device_activity`` uses: select a device by
@@ -431,6 +453,17 @@ class BrokerDeviceAction:
             return self
         return _SessionBoundDeviceAction(self, ids, named)
 
+    def scheduled(self, *, targets: Sequence[str] = ()) -> _ScheduledDeviceAction:
+        """This port for a job nobody is watching (ADR-0213 row 1): a ``browser.*`` operation
+        goes to the device the execution_target rule selects - the cloud worker - or is
+        refused; it is never sent to a home or office machine, named (``targets``) or not.
+        Every other capability is selected exactly as this port selects it.
+
+        A view, like ``bound_to``'s: this object itself is shared with the wake sequence,
+        the operator and the voice path (``app.main``), whose ``browser.*`` commands are for
+        an owner who is in the room and do not ask the rule."""
+        return _ScheduledDeviceAction(self, tuple(targets))
+
     def run(
         self,
         *,
@@ -457,6 +490,7 @@ class BrokerDeviceAction:
         timeout_s: float,
         session_device_ids: Sequence[UUID],
         targets: Sequence[str],
+        scheduled: bool = False,
     ) -> DeviceRunResult:
         runtime = get_broker_runtime()
         if runtime is None:
@@ -467,20 +501,33 @@ class BrokerDeviceAction:
         session = self._session_factory()
         try:
             views = list_device_views(session, runtime)
+            try:
+                if scheduled and _is_browser_capability(capability):
+                    # The rule decides and writes its ledger rows (through this session). A
+                    # refusal is the SAME failed result as any other "no device" - it never
+                    # falls through to ``_select_for``, which would pick a machine.
+                    cloud = select_routine_device(
+                        session,
+                        runtime,
+                        views,
+                        capability=capability,
+                        url=_payload_url(payload),
+                        targets=targets,
+                    )
+                    selection = SelectionResult(cloud, REASON_EXECUTION_RULE, explicit=False)
+                else:
+                    selection = _select_for(views, capability, session_device_ids, targets)
+            except NoCapableDeviceError as exc:
+                if targets or scheduled:
+                    logger.info(
+                        "broker_device_action_refused",
+                        capability=capability,
+                        device_alias=",".join(targets),
+                        reason=exc.reason,
+                    )
+                return DeviceRunResult(False, "no_capable_device", exc.detail_tr)
         finally:
             session.close()
-
-        try:
-            selection = _select_for(views, capability, session_device_ids, targets)
-        except NoCapableDeviceError as exc:
-            if targets:
-                logger.info(
-                    "broker_device_action_refused",
-                    capability=capability,
-                    device_alias=",".join(targets),
-                    reason=exc.reason,
-                )
-            return DeviceRunResult(False, "no_capable_device", exc.detail_tr)
         # Said only when the session's own device was chosen or the owner named one: a result
         # for any other choice is exactly what it was before ADR-0208.
         why = ""
@@ -532,6 +579,8 @@ class BrokerDeviceAction:
         capability: str,
         session_device_ids: Sequence[UUID] = (),
         targets: Sequence[str] = (),
+        *,
+        scheduled: bool = False,
     ) -> SelectionResult | None:
         """The device ``run`` would pick for ``capability`` right now, or ``None`` - and
         nothing else: no command is created, nothing is sent (ADR-0209).
@@ -541,6 +590,10 @@ class BrokerDeviceAction:
         run said no_capable_device would route an owner's sentence down a path that cannot
         happen. Until 2026-09-29 the two were separate copies, and the per-session view
         ADR-0208 added had no probe at all.
+
+        For the scheduled view's ``browser.*`` the run asks the execution_target rule, which
+        writes ledger rows; the probe asks the same rule through its pure twin
+        (``probe_routine_device``) and writes none.
         """
         runtime = get_broker_runtime()
         if runtime is None:
@@ -550,6 +603,11 @@ class BrokerDeviceAction:
             views = list_device_views(session, runtime)
         finally:
             session.close()
+        if scheduled and _is_browser_capability(capability):
+            cloud = probe_routine_device(views, capability=capability, targets=targets)
+            if cloud is None:
+                return None
+            return SelectionResult(cloud, REASON_EXECUTION_RULE, explicit=False)
         try:
             return _select_for(views, capability, session_device_ids, targets)
         except NoCapableDeviceError:
@@ -606,6 +664,40 @@ class _SessionBoundDeviceAction:
     ) -> DeviceActionPort:
         # Binding again re-binds the one underlying port; ids and targets never accumulate.
         return self._inner.bound_to(session_device_ids, targets=targets)
+
+
+class _ScheduledDeviceAction:
+    """A :class:`BrokerDeviceAction` seen from a scheduled job (ADR-0213 row 1): satisfies
+    :class:`DeviceActionPort` and holds nothing of its own but the device words the job
+    named. ``run`` and ``selection_for`` are the inner port's, told the job is scheduled."""
+
+    def __init__(self, inner: BrokerDeviceAction, targets: Sequence[str] = ()) -> None:
+        self._inner = inner
+        self.targets: tuple[str, ...] = tuple(targets)
+
+    def run(
+        self,
+        *,
+        capability: str,
+        payload: dict[str, Any],
+        idempotency_key: str,
+        timeout_s: float,
+    ) -> DeviceRunResult:
+        return self._inner._run(
+            capability=capability,
+            payload=payload,
+            idempotency_key=idempotency_key,
+            timeout_s=timeout_s,
+            session_device_ids=(),
+            targets=self.targets,
+            scheduled=True,
+        )
+
+    def selection_for(self, capability: str) -> SelectionResult | None:
+        return self._inner.selection_for(capability, (), self.targets, scheduled=True)
+
+    def can_run(self, capability: str) -> bool:
+        return self.selection_for(capability) is not None
 
 
 # ------------------------------------------------------------------------ browser allowlist
@@ -894,7 +986,12 @@ class ActionDispatcher:
         if action_name not in self._browser_allowlist:
             return DispatchOutcome.refused(f"browser_action_not_allowed:{action_name}")
         payload = {k: v for k, v in detail.items() if k != "action"}
-        result = self._device_action.run(
+        # A routine's browser action is a scheduled job: it asks the execution_target rule
+        # (ADR-0213 row 1) through the port's scheduled view. A port with no such view (a
+        # test's fake) is used as it is.
+        scheduled = getattr(self._device_action, "scheduled", None)
+        port: DeviceActionPort = scheduled() if callable(scheduled) else self._device_action
+        result = port.run(
             capability=f"browser.{action_name}",
             payload=payload,
             idempotency_key=f"routine-browser-action:{firing_id}",
