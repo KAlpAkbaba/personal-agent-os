@@ -25,8 +25,18 @@ giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md
 `docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
 korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
 ONAYSIZ yayınlanır. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
-limitleri 'şu tarih itibarıyla' gösterilir" notu. KAPI ana kopyada bu dalın ucunda DETACHED koşar (17:35'te başladı);
-günlük `scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it → ön kontrol → yayın → pin → doğrula → `released` → Stage 45.**
+limitleri 'şu tarih itibarıyla' gösterilir" notu. KAPI ana kopyada bu dalın ucunda DETACHED koşar; günlük
+`scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it → ön kontrol → yayın → pin → doğrula → `released` → Stage 45.**
+**17:25 KAPISI (`8425c6d9`) KIRMIZIYDI ve 3,5 SAAT sürdü (lead 21:05'te durdurdu); üç adım: (1) GERÇEK - `installer-strictmode`:
+`scripts/lib/TeamArea.ps1`'de yedi çıplak `.Count` (denetleyici o paketi koşmamıştı, lead'in ön kontrolü de) → `@( ).Count`,
+paket 24/0; (2) TEST YARIŞI - `test_mobile_push::test_the_announcer_fires…`: uygulamanın kendi 5 sn'lik duyuru döngüsü testin
+taramasından önce işi alıyordu; modül tek başına, yüksüz de düşüyordu (lead yeniden üretti) → test döngüyü durdurur, cihazı
+önce kaydeder, kendi işini READY yapar: 4/4 geçti; (3) YÜK - `SceneUnityProductionTests` Unity'de 600 sn'yi aştı (13 dk;
+öğleden sonraki kapıda Agent testlerinin TAMAMI 2 dk 40 sn). O saatlerde makinede kapı + üç denetleyici + sahip derlemini
+60+ dk koşturan bir çalışan vardı: birim paketi 56 dk yerine 2 sa 02 dk sürdü. ALTI AJAN + KAPI BU MAKİNEYE SIĞMIYOR:
+`cycle-seat-pool`'un çalışma zamanı ayarı gelince kapı koşarken koltuk sayısı düşürülecek (lead kararı, sahibe söylendi).
+AYRICA: döngü 6 saati geçince kilit "bayat" sayılıyor (`TeamLockStaleHours = 6`, yalnız `acquired_at`'e bakar): 20:05'ten
+beri Ofis "0/6, çalışmıyor" gösterdi ve başka bir makine kilidi DEVRALABİLİRDİ - kart `team-lock-heartbeat`.**
 **16:48 DENETİM SONUÇLARI: `cycle-seat-pool` GERİ DÖNDÜ (gerçek kusur: başlatılamayan bir iş, sırada iş varken döngüyü
 bitiriyordu; çalışanda - sahibin önceliği, onaylanınca BEKLETMEDEN ayrı kapı). `cycle-auto-integrate` beşinci denetimde
 onaylandı, lead bu tura ekledi ve GERİ ÇIKARDI: birleşik ağaçta paketin ön koşusu yük altında 77 geçti / 1 KALDI ("a process

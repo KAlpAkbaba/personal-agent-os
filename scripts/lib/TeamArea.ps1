@@ -197,7 +197,7 @@ function Get-TeamAreaRequest {
         }
     }
     return [pscustomobject]@{
-        Asked = [bool]($files.Count -gt 0 -or $bad.Count -gt 0)
+        Asked = [bool](@($files).Count -gt 0 -or @($bad).Count -gt 0)
         Files = [string[]]$files.ToArray()
         Bad   = [string[]]$bad.ToArray()
     }
@@ -222,7 +222,7 @@ function Test-TeamAreaWaitsFor {
     $seen = @{}
     $next = New-Object System.Collections.Generic.Queue[string]
     $next.Enqueue($From)
-    while ($next.Count -gt 0) {
+    while (@($next).Count -gt 0) {
         $id = $next.Dequeue()
         if ($seen.ContainsKey($id)) { continue }
         $seen[$id] = $true
@@ -287,7 +287,7 @@ function Resolve-TeamAreaRequest {
         $asked.Add($path.Path)
         if (-not (Test-TeamPathInsideArea -Path $path.Path -Area $area)) { $add.Add($path.Path) }
     }
-    if ($add.Count -eq 0) {
+    if (@($add).Count -eq 0) {
         return (New-TeamAreaResolution -Decision "refuse" -Why "İstenen dosyaların hepsi zaten kartın alanında; genişletilecek bir şey yok.")
     }
 
@@ -303,7 +303,7 @@ function Resolve-TeamAreaRequest {
         return (New-TeamAreaResolution -Decision "refuse" -Why "Bu kartın alanı zaten $widenings kez genişletildi (tavan $script:TeamAreaMaxWidenings); yenisi lead'in kararı.")
     }
 
-    $total = @($area).Count + $add.Count
+    $total = @($area).Count + @($add).Count
     if ($total -gt $script:TeamMaxAreaEntries) {
         return (New-TeamAreaResolution -Decision "refuse" -Why "Alan $total girdiye çıkardı; bir kart en çok $script:TeamMaxAreaEntries girdi tutar. Kartı lead bölmeli.")
     }
@@ -321,7 +321,7 @@ function Resolve-TeamAreaRequest {
         }
         if ($held) { $holders.Add($otherId) }
     }
-    if ($holders.Count -gt 0) {
+    if (@($holders).Count -gt 0) {
         foreach ($holder in $holders) {
             if (Test-TeamAreaWaitsFor -Queue $Queue -From $holder -For $id) {
                 return (New-TeamAreaResolution -Decision "refuse" -Why "İstenen dosya '$holder' kartının alanında ve o kart bu kartı bekliyor; beklemek ikisini de kilitlerdi. Karar lead'in.")
@@ -372,7 +372,7 @@ function Add-TeamAreaWidening {
             $area.Add($file)
             $added.Add($file)
         }
-        if ($added.Count -eq 0) { return $Task }
+        if (@($added).Count -eq 0) { return $Task }
         $history.Add([pscustomobject]@{ at = (Get-TeamTimestamp -Now $Now); by = $By; why = $reason; files = [string[]]$added.ToArray() })
         Set-TeamProperty -InputObject $Task -Name "area" -Value ([string[]]$area.ToArray())
         Set-TeamProperty -InputObject $Task -Name "area_widenings" -Value ([int](Get-TeamProperty -InputObject $Task -Name "area_widenings" -Default 0) + 1)
@@ -391,7 +391,7 @@ function Add-TeamAreaWidening {
             $depends.Add($name)
             $added.Add($name)
         }
-        if ($added.Count -eq 0) { return $Task }
+        if (@($added).Count -eq 0) { return $Task }
         $history.Add([pscustomobject]@{ at = (Get-TeamTimestamp -Now $Now); by = $By; why = $reason; files = $files; waits_for = [string[]]$added.ToArray() })
         Set-TeamProperty -InputObject $Task -Name "depends_on" -Value ([string[]]$depends.ToArray())
         Set-TeamProperty -InputObject $Task -Name "area_history" -Value ([object[]]$history.ToArray())
