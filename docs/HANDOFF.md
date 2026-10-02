@@ -32,7 +32,12 @@ Temporal adımı: önce salt-okuma `docker info --format '{{.InitBinary}}'`, son
 yeni host snapshot → işleri `released` → Stage 44 → ana kopyayı `team/nightly/lead`'e al.**
 **DÖNGÜ: 14:05'te YENİ KODLA başladı (yeniden okuma + besleyici düzeltmesi). Fable'ın haftalık limiti 2026-10-05 16:00 UTC'ye
 kadar DOLU; koşular Opus 5.5'te. Sahip bugün dört fikri onayladı (ikisi sayfadan, ikisi sohbetten): alan dışı geri verme,
-yanlış anlaşılanlar defteri (bölündü, yazılıyor), koruyucu testler iş dalında, ölçüm kaydı (bölünüyor).**
+yanlış anlaşılanlar defteri, koruyucu testler iş dalında, ölçüm kaydı - dördü de bölündü ve ROADMAP "Approved ideas"
+tablosunda (lead yazdı). `misheard-ledger-store` "alan dışı dosya" ile durmuştu (dal `integrate/d20261002` üstündeydi;
+çalışanın suçu değil): lead dalı `team/nightly/lead` üstüne taşıdı (`b9415e90`, 11 dosya), alana iki sağlık testi eklendi,
+iş `returned` (tek eksik: 24 saatlik süpürme döngüsü + sağlık anahtarı). `measure-recordings-api` aynı `main.py`'yi
+istediği için sıraya geri alındı (`approved`); alan boşalınca döngü kendisi başlatır. Altı takip kartı (stt_engine,
+paket sorusu düğmesi, webtask tavanı, bulut arama ölçümü, katman 2 ile yeniden ölçüm, besleyici kilidi) hazırlanıyor.**
 **SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 42.1 (Ofis'te 4 koltuk - sekmeyi F5 ile
 yenile); 43.1 ("Bugün nasılsın" de: denetim satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de");
 STT ölçümü için yirmi cümle (ölçüm kaydı fikri bunu sayfaya getiriyor).**
