@@ -18,8 +18,9 @@ renders them) is **still not met**: 98 of 106 = **92.5 %**. This step's own bar 
 | confident wrong readings | 8 | 6 |
 | not understood | 25 | 2 |
 
-`KNOWN_GAPS` lost 25 cases and gained none (33 -> 8). The Owner Utterance Suite: see the worker's
-report for the run on this branch.
+`KNOWN_GAPS` lost 25 cases and gained none (33 -> 8). The Owner Utterance Suite, run on commit
+1d30ee3c: **2754 / 2754** (`HEALTHY`, 0 failed routing; 2756 tests passed). About 300 of its
+sentences carry a polite form layer 1 now reads; none changed its route.
 
 **Decision.**
 
