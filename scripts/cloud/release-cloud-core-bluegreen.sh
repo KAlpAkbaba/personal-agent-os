@@ -14,6 +14,9 @@
 #   (--rollback / --reconcile also work as the only argument)
 #
 # Transaction, in order:
+#   PAGENTOS_LOCK_WAIT_S a whole number 0..600 (not asked of --reconcile)  64
+#   the operation lock: release, preflight and rollback wait for it up to
+#     PAGENTOS_LOCK_WAIT_S (default 45; 0 = ask once); --reconcile asks once   82
 #   env-file present + posture 600:root                                  66 / 72
 #   docker compose config validation on the NEW tree                     71
 #   (--preflight stops here: reports, removes app.next, changes nothing)
@@ -99,10 +102,37 @@ recovery_input_tree=""
 # legitimate release would otherwise classify its idle colour as an interrupted candidate
 # and stop it. The production host's util-linux `flock` holds the kernel lock on fd 9 for
 # this shell's lifetime; there is no create/write ownership window and SIGKILL releases it.
+#
+# A release, a preflight and a rollback WAIT for the lock (ADR-0223 addendum 2, as the
+# maintenance window does): the recovery timer's reconcile takes it for about two seconds
+# every minute, and asking once made a release fall on its own housekeeping (2026-10-01
+# 23:48 UTC, the preflight of main 5f250e5b: exit 82 with nothing else running).
+# The reconcile does NOT wait, and does not read the variable: queued behind a release it
+# would get the lock the moment the release ends; it steps aside at once (82, which its unit
+# counts as success) and runs again a minute later. It is known by its mode and nothing else.
+lock_wait_s=0
+if [ "$mode" != "--reconcile" ]; then
+    lock_wait_s=${PAGENTOS_LOCK_WAIT_S:-45}
+    case "$lock_wait_s" in
+        0|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;;
+        *) lock_wait_s=601;;
+    esac
+    if [ "$lock_wait_s" -gt 600 ]; then
+        echo "PAGENTOS_LOCK_WAIT_S must be a whole number of seconds, 0..600 (got '${PAGENTOS_LOCK_WAIT_S:-}'); nothing was touched" >&2
+        exit 64
+    fi
+fi
 exec 9>"$lock_file"
 if ! flock -n 9; then
-    echo "another blue/green release or recovery operation is running; retry later" >&2
-    exit 82
+    if [ "$lock_wait_s" -eq 0 ]; then
+        echo "another blue/green release or recovery operation is running; retry later" >&2
+        exit 82
+    fi
+    echo "waiting for the release lock (held by another operation), up to $lock_wait_s s" >&2
+    if ! flock -w "$lock_wait_s" 9; then
+        echo "another blue/green release or recovery operation is still running after waiting $lock_wait_s s; retry later" >&2
+        exit 82
+    fi
 fi
 
 # The root timer may use only deployment inputs approved with its own pinned bundle. The
