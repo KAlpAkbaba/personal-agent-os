@@ -1277,3 +1277,24 @@ sha one minute later.
 | 44.4 | The api and its embedded worker came back by themselves | `PROVEN_REAL` | health `ok`, `temporal` ok and `temporal_worker` ok at 13:03:59; the api's own log shows ONE `degraded` health sample inside the seven seconds and `ok` on both sides of it; no container other than temporal was recreated (`docker ps`: every other container's uptime unchanged) |
 | 44.5 | The fake hosts are built from the host as it is now | `PROVEN_AUTOMATED` | `scripts/tests/fixtures/host-snapshot.json` collected 2026-10-02 13:05:42 UTC (serving colour green, 1126 columns); `cloud-release-bluegreen.tests.ps1` 112, `host-snapshot.tests.ps1` 95, `maintenance-reboot.tests.ps1` 35, `test_host_snapshot_schema.py` green on it |
 | 44.6 | `docker stop` of the temporal container behaves as before under tini | `NOT_RUN` | ADR-0252 says so: tini forwards SIGTERM (documented), the stop time was not measured on the host; the next maintenance window measures it |
+
+## Stage 45 — d20261002, fourth integration: the area-widening rules, the model policy on the Cloud Core (ADR-0253, ADR-0214 addendum 14)
+
+Released 2026-10-02 20:55 UTC as main `86e6fde9b64682885591dfe0ad7b365285a79cc9` (api-blue; previous `f60e02e4…` kept
+as last known good; schema unchanged, `0064_memory_vocabulary_class`). Full gate 39/39 on `c18dacd7` (the merge
+commit's tree is identical): 14 806 unit, 156 integration, 2 162 web, team-cycle 184, team-feed 65, team-area 117.
+Released under the standing rule (ADR-0214 addendum 9): no migration, no compose, edge or environment change, health
+`ok`. Two earlier gates of this integration were stopped: `742d4f51` by the lead at minute 35, when the pre-run of
+`team-integrate.tests.ps1` on the merged tree was 77/1 (`cycle-auto-integrate` was taken out and returned - the run is
+put into its job object only after it has started); `8425c6d9` RED after 3.5 hours on three steps: a real lint
+finding (seven bare `.Count` in `scripts/lib/TeamArea.ps1`), a test that raced the application's own announcer loop
+(`test_mobile_push`, reproduced alone and fixed), and the Unity scene test past its 600 s - the owner was playing a VR
+game on the machine at the time; it passed in this gate (the Agent tests took 4 min 16 s).
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 45.1 | The release, verified | `PROVEN_REAL` | 20:55 UTC: `RELEASE OK: 86e6fde9… is running as api-blue`, 2/2 device sessions handed over after 1 s, health `ok` through the edge and over the tailnet; `APPROVED_SHA` = RELEASE; `RECONCILE OK: api-blue is canonical`; 0 defunct processes on the host; no error line in the api's log of the first five minutes |
+| 45.2 | The model setting is served by the Cloud Core and is the one the owner's file names | `PROVEN_REAL` | `GET /v1/team/queue/models` on production answers lead and inspector `claude-fable-5-1`, worker, integrator and researcher `claude-opus-5-5`, fallback true - the roles of `team/models.json`; `tests/unit/test_team_models_setting.py`, `tests/integration/test_team_models_postgres.py`. The owner changing it from the Ofis page: `NOT_RUN` (`model-policy-office-ui`) |
+| 45.3 | A fix outside a card's area is judged by rules: widen / wait / refuse, protected paths never widened into | `PROVEN_AUTOMATED` | `scripts/tests/team-area.tests.ps1` (117, in the gate and the CI file), ADR-0253 with the lead's nine protected entries (RED first: 10 failed before them). Wired into the cycle: `NOT_RUN` (`area-widen-cycle-wiring`) |
+| 45.4 | The announcer test decides with one sweeper | `PROVEN_AUTOMATED` | `tests/integration/test_mobile_push.py`: alone, before the fix, 1 failed of 16; after, 16 passed four times in a row and 156 in the gate |
+| 45.5 | The gate's own speed on this machine | `PROVEN_REAL` (measured) | the unit step took 1 h 48 min (56 min on the afternoon's gate) with 92 % of 28 threads idle: the user's temp folder held 2 671 896 entries, 2.66 million of them empty folders the voice-corpus harness never removed (card `corpus-temp-dirs-leak`); the owner removed the 2 312 840 older than a day with the lead's script at about 23:05-23:30 local time, while this gate ran (0 failures, 24 minutes). The next gate's time is the measurement of what that bought |
