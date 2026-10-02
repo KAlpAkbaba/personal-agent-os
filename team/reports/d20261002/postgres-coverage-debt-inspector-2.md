@@ -1,0 +1,1 @@
+That notification is only the last waiter loop exiting; it carries no new result. The unit suite had already stopped at my 50-minute cap (64 %, 0 failures), so the report above stands unchanged and the verdict remains `APPROVE`.

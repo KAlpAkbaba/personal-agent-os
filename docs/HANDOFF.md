@@ -15,79 +15,63 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `5f250e5bbd460c419950d9ad80286a456f2921d5` (2026-10-01 23:50 UTC, api-blue), LKG `ca5cc795`, pin = RELEASE,
-reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`, çekirdek 6.8.0-142. Kapı 38/38 (`d93f6a2a`; 14 401 birim,
-2 087 web). QUALIFICATION Stage 41. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
-**YAYINDA OLAN (üçüncü entegrasyon): Onay Merkezi "Detay" + döngü koşarken açık düğmeler (ADR-0239), döngüde model
-politikası (ADR-0214 ek 10), roadmap besleyici + `scripts/team/tick.ps1` (ADR-0237; zamanlanmış görev artık tick'i
-çalıştırır: önce besleyici, sonra döngü), tarayıcı görev planlayıcısı ve kapısı (ADR-0238, ADR-0240; üretimde henüz
-ULAŞILAMAZ: `start_task_db`'nin çağıranı yok, MAIL'de `-AuthorizeTasks` yok), STT ölçümü (%68,9 - hedef %95 TUTMADI).
-Kapı artık web lint+vitest+tsc ve `team-feed.tests.ps1` koşuyor. Kapı LEAD'İN KENDİ DALINDA koşar (döngü, lead
-çalışırken `integrate/<id>`'ye iş birleştirir; ikinci entegrasyonun kapısı bu yüzden kırmızıydı).**
-**SÜREN İŞ (lead, 2026-10-02 gece): `lead/cycle-rereads-queue` dalı (worktree `.claude/worktrees/gate`, tabanı `d93f6a2a`),
-ADR-0214 ek 11: döngü kuyruğu HER TURDA yeniden okur. Kusur: kuyruk yalnız döngü başlarken okunuyordu, iş oldukça döngü
-bitmediği için sonradan depoya yazılan hiçbir şey (kart, karar, besleyici kartı) görülmüyordu - sahibin "4. çalışan
-koltuğu" kartı 4 saat boş koltukların yanında bekledi. İlk commit `3d52902e` denetleyiciden GERİ DÖNDÜ (6 bulgu: reddedilen
-yazmanın işi yine koşuyordu; depoda durdurulan iş yine birleştiriliyordu; iki alan kuralı ayrıydı; üç iddia testsizdi);
-ikinci tur `3d1be9fc` ve üçüncü tur `91c70543` de GERİ DÖNDÜ (her seferinde gerçek bulgu: sonsuz dönen tur; koşu
-sürerken deponun cevap vermemesi döngüyü yarıda kesiyordu; düşen koşuların sınırı yoktu). Dördüncü tur: koşu sürerken
-yapılan yazma başarısız olursa döngü ÖLMEZ (satır yazar, toplu iş sonunda yeniden dener); deponun reddettiği taze
-birleştirme GERİ ALINIR (`Undo-TeamMerge`), alınamayan adıyla söylenir; bir işin düşen koşusu en çok 3; boş tur
-sınırı 3; yalnız `team/proposals` dosyası fikir metni olarak gönderilir. Dördüncü tur `3ce11180` de döndü (3 dar bulgu);
-beşinci tur: ret anında bilinir (aynı yazmada başka iş hata verse de), reddedilen sonuçtan sonra döngünün kopyası eski
-haline döner (rapor "merged" demez), fikir dosyası `-TeamRoot`tan okunur. **BAĞIMSIZ DENETLEYİCİ BEŞİNCİ TURDA `dbacc280`'i
-ONAYLADI** (gerçek rotalarla da koşturdu); istediği iki test eklendi, `team-cycle` 177, 35+2 mutasyon RED. SIRA:
-ONAYLI → `gate/d20261002-1` (worktree `.claude/worktrees/gate4`: 4. koltuk,
-STT ölçüm aracı, Postgres testleri, anlatı tesisatı, sesli özetin koşu sayması, hüküm ayrıştırıcısı) üstüne
-birleştir → tam kapı → main → kural gereği yayın → lead dalı → `team/stop.flag` ile döngüyü yenile. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
-BAŞLAMAMALI (şu an koşan döngü eski kuyruğu gördüğü için başlatmıyor; döngüyü düzeltmeden önce yenileme).**
-**DÖRDÜNCÜ ENTEGRASYON KAPIDA (lead, 2026-10-02 05:50): dal `gate/d20261002-1` (worktree `.claude/worktrees/gate4`) =
-lead + `integrate/d20261002` @ `03981422` (office-worker-seats: 4 çalışan koltuğu, sayı koşuyu sayar; stt-engines-measure:
-STT karşılaştırma aracı, ölçülecek kayıt YOK) + postgres-coverage-debt (denetleyici ONAYLADI; hüküm satırı okunamadığı
-için döngü durdurmuştu) + narrative-failures-only-model ("tesisat" olarak; sahibin cümlesi DEĞİŞMEZ). Lead bağlaması:
-`app/team/speech.py` sesli özet artık sayfanın saydığını (koşu) söyler; `Get-TeamVerdict` kapanış cümlesindeki hükmü
-okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. İLK KAPI (`b35c6ddb`) TEK TESTTE KIRMIZIYDI:
-`test_every_error_class_has_turkish` - STT ölçüm aracı `ERROR_UNEXPECTED = "unexpected"` tanımlamış, Türkçe sözlükte
-(`app/errors/catalog.py`) karşılığı yoktu; eklendi. İKİNCİ KAPI (`614dedb4`) da TEK TESTTE KIRMIZIYDI: tarayıcı ajanında yük altında çıkan gerçek bir
-yarış (öksüz Chrome öldürülünce profil kilidi bir an daha tutuluyor; ADR-0246: kurtarma başlatması kilidi bekler).
-AYRICA 09:30'da BESLEYİCİ Fable limitini ÜÇ GÜN beklemeye geçip kilidi tuttu, döngü başlayamadı (sahip "0/6" gördü):
-süreç elle durduruldu, `feed.ps1` artık model zincirini izler ve 20 dk'dan uzun beklemez (ADR-0214 ek 13). SIRA: tam kapı (ana kopya
-detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compose YOK) → pin → doğrula → işleri `released`
-yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue` @ `4093a958`, denetleyici ONAYLI) ÜÇÜNCÜ KAPI için bu dala
-birleştirildi: main'e girince `cycle-rereads-queue` -> released, `cycle-seat-pool` zinciri açılır; döngü yeni kodu
-bir sonraki başlangıcında alır (ana kopyadaki betikler).**
-**İKİNCİ ENTEGRASYON HAZIR (lead, 2026-10-02 10:25): dal `gate/d20261002-2` (worktree `.claude/worktrees/gate5`) = birinci
-entegrasyon (`6f3d9f6f`, kapıda) + understanding-engine-startup (lead satırı `main.py`'de: `configure_understanding`;
-kapatma ayarı `understanding_semantic_enabled`) + understanding-corrections-memory (0064 migration: CHECK genişletme,
-expand-only; denetleyicinin istediği iki test eklendi) + execution-call-site-research (ayar KAPALI) + chrome-on-device-stt
-(ayar KAPALI) + release-lock-waits (taze host snapshot alındı) + web-voice-test-flakes. ADR-0245, 0247…0251. Ön kontrolde
-çıkan: `test_postgres_coverage_ratchet` - `activity_events` artık Postgres testinde, taban listesinden düşüldü.
-`temporal-init-reaper` BU DALDA YOK (compose değişikliği: sahibin yayın onayı bekleniyor); bulutta-araştırma ayarının
-compose satırı da YOK (aynı soru sahibe soruldu). SIRA: birinci entegrasyonun kapısı yeşil → main → yayın → bu dalı
-ana kopyada detached aç → tam kapı → main → yayın (0064 expand-only: kural gereği sormadan). İLK KAPI (`786dec9d`) TEK TESTTE KIRMIZIYDI:
-`test_task_id_defaults_to_none_in_logs` - `test_execution_call_site_research.py` görev kimliğini sonraki testlere sızdırıyordu
-(sıra bağımlı; tek başına yeşil). `tests/conftest.py`'ye autouse fixture eklendi; kapı yeniden koşuyor.**
-**ÜÇÜNCÜ ENTEGRASYON HAZIR (lead, 2026-10-02 13:50): dal `gate/d20261002-3` (worktree `.claude/worktrees/gate6`) = ikinci
-entegrasyon + İKİ COMPOSE DEĞİŞİKLİĞİ, sahip 2026-10-02 13:38'de İKİSİNİ DE ONAYLADI (sohbetten, dört sorunun dördü):
-(1) `temporal-init-reaper` (`init: true`, ADR-0252) - yayından SONRA host'ta tek adım: önce salt-okuma `docker info
---format '{{.InitBinary}}'`, sonra `compose up -d --no-deps --wait temporal` (Temporal ~10 sn kapanır), doğrula, yeni
-host snapshot; (2) `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` compose satırı (ADR-0248 ek 1; ayar KAPALI kalır).
-Sahip ayrıca iki fikri onayladı (koruyucu testler iş dalında, ölçüm kaydı) - kuyruğa `approved` işlendi.
-SIRA: ikinci entegrasyonun kapısı yeşil → main → yayın → bu dalı kapıya sok → main → yayın → Temporal adımı.**
-**DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
-execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
-denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:
-kod doğru, ama kartın kabulü alanın dışında (yönlendirici `app/voice/intents.py`); karar: "tesisat" olarak dördüncü
-entegrasyonda birleştir + iki kart kes (yönlendirici: intents.py boşalınca; kablolama: `tools.py::activity_explain`'e
-`chat_provider`, ayar arkasında KAPALI - defter özetleri Anthropic'e gider, açmak sahibin kararı).**
-**SAHİBİ BEKLEYEN: Onay Merkezi'nde iki yeni fikir (metinleri depoda): "alan dışı geri verme" ve "yanlış anlaşılanlar
-defteri". Ertelenen: Home Assistant (cihaz envanteri). Denemeler: 38.3-38.5, 39.2-39.4 cümleleri; 41.1 (Detay + düğme).
-`temporal-init-reaper` compose değiştirir → yayını SAHİP onaylar. Soniox hesabı / ses verisinin yeni üçüncü tarafa
-gitmesi ayrı onay.**
-**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez → kuyruk yalnız döngüler ARASINDA beslenir
-(`cycle-seat-pool` sonrası ayrı kart). (2) Yayın betiğinin kilidi `flock -n`: dakikalık reconcile ile çakışınca exit 82
-(2026-10-02'de bir kez; hiçbir şey değişmedi, ikinci deneme geçti) - bakım betiği gibi beklemeli; kart kesilecek.
-(3) Ofis sayfası koltuğu sayıyor, koşuyu değil (`office-worker-seats` koşuyor).**
+**ÜRETİM: main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (2026-10-02 13:02 UTC, api-green), LKG `f91ad1e3`, pin = RELEASE,
+reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`d71a0bac`; 14 699 birim,
+2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**DÖRDÜNCÜ ENTEGRASYON HAZIRLANDI (lead, 2026-10-02 16:40): dal `gate/d20261002-4` (worktree `.claude/worktrees/gate7`) = lead
+dalı + `area-widen-rules` (ADR-0253) + `model-policy-api` (ADR-0214 ek 14) + lead'in bağlaması: `test_team_state.py`'nin iki
+düzenlemesi, `team-area.tests.ps1` CI dosyasına eklendi, QUALIFICATION 41.7'ye izlenebilir kanıt adı, korunan yollara dokuz
+giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md`, `PROJECT_CONSTITUTION.md`,
+`docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
+korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
+ONAYSIZ yayınlanır. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
+limitleri 'şu tarih itibarıyla' gösterilir" notu. KAPI ana kopyada bu dalın ucunda DETACHED koşar; günlük
+`scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it → ön kontrol → yayın → pin → doğrula → `released` → Stage 45.**
+**17:25 KAPISI (`8425c6d9`) KIRMIZIYDI ve 3,5 SAAT sürdü (lead 21:05'te durdurdu); üç adım: (1) GERÇEK - `installer-strictmode`:
+`scripts/lib/TeamArea.ps1`'de yedi çıplak `.Count` (denetleyici o paketi koşmamıştı, lead'in ön kontrolü de) → `@( ).Count`,
+paket 24/0; (2) TEST YARIŞI - `test_mobile_push::test_the_announcer_fires…`: uygulamanın kendi 5 sn'lik duyuru döngüsü testin
+taramasından önce işi alıyordu; modül tek başına, yüksüz de düşüyordu (lead yeniden üretti) → test döngüyü durdurur, cihazı
+önce kaydeder, kendi işini READY yapar: 4/4 geçti; (3) YÜK - `SceneUnityProductionTests` Unity'de 600 sn'yi aştı (13 dk;
+öğleden sonraki kapıda Agent testlerinin TAMAMI 2 dk 40 sn). O saatlerde makinede kapı + üç denetleyici + sahip derlemini
+60+ dk koşturan bir çalışan vardı: birim paketi 56 dk yerine 2 sa 02 dk sürdü. ALTI AJAN + KAPI BU MAKİNEYE SIĞMIYOR:
+`cycle-seat-pool`'un çalışma zamanı ayarı gelince kapı koşarken koltuk sayısı düşürülecek (lead kararı, sahibe söylendi).
+AYRICA: döngü 6 saati geçince kilit "bayat" sayılıyor (`TeamLockStaleHours = 6`, yalnız `acquired_at`'e bakar): 20:05'ten
+beri Ofis "0/6, çalışmıyor" gösterdi ve başka bir makine kilidi DEVRALABİLİRDİ - kart `team-lock-heartbeat`.**
+**16:48 DENETİM SONUÇLARI: `cycle-seat-pool` GERİ DÖNDÜ (gerçek kusur: başlatılamayan bir iş, sırada iş varken döngüyü
+bitiriyordu; çalışanda - sahibin önceliği, onaylanınca BEKLETMEDEN ayrı kapı). `cycle-auto-integrate` beşinci denetimde
+onaylandı, lead bu tura ekledi ve GERİ ÇIKARDI: birleşik ağaçta paketin ön koşusu yük altında 77 geçti / 1 KALDI ("a process
+the lead's run leaves behind is stopped BEFORE its diff is read": geride kalan süreç YAZDI). Neden (lead'in okuması):
+`New-TeamRunJob` koşu BAŞLADIKTAN SONRA iş nesnesine alıyor; yük altında koşu, atamadan önce çocuğunu başlatıyor ya da
+bitiyor (`Held=false`), çocuk hiçbir iş nesnesinde değil. İş bulguyla çalışana döndü; lead'in bağlaması (ADR-0254 metni,
+kapı adımı, CI satırı) `lead/auto-integrate-wiring` @ `742d4f51` dalında SAKLI, yeniden kullanılacak. ADR-0254'ün açık
+kararları için beş kart kuyrukta: `integrate-own-lock`, `gate-own-database`, `gate-parallel-suites`,
+`integrate-skips-visible`, `run-liveness-visible` (sahip: "takılmalar var mı öğrenelim" - koşuların süre sınırı YOK ve
+çıktı ancak koşu bitince okunuyor; bugün takılan bir koşu görünmezdi).**
+**YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
+`f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
+Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
+araştırma kuralının anahtarı api'ye iletiliyor ve KAPALI (`printenv` -> `false`); temporal kabı Docker init altında
+(ADR-0252). TEMPORAL HOST ADIMI YAPILDI 13:03:44-13:03:51 UTC (7 sn): `HostConfig.Init` true, host'ta 0 zombi, sağlık ok.
+Host snapshot 13:05 UTC'de yenilendi.**
+**DÖNGÜ: `d20261002`, 14:05'te başladı (pid 36220), 6/6; 15:51'de ikinci tur. Fable'ın haftalık limiti 2026-10-05 16:00
+UTC'ye kadar DOLU; koşular Opus 5.5'te. DENETİMDE: `model-policy-api`, `cycle-auto-integrate`, `cycle-seat-pool`,
+`web-voice-session-storm-flake`, `local-embedder-lru-lock`. `area-widen-rules` MERGED (integrate/d20261002). SIRADAKİ
+ENTEGRASYON (dördüncü): `integrate/d20261002`'de birleşenler + lead dalındaki kayıtlar; `cycle-seat-pool` onaylanırsa
+ÖNCELİKLİ (sahip: "sürekli tur bekliyoruz?") - yayından sonra döngü `team/stop.flag` ile yeni koda alınır.**
+**BUGÜN KUYRUĞA EKLENEN (lead): `misheard-ledger-store` yeniden açıldı (dal `b9415e90`, lead dalı üstünde; alan +2 sağlık
+testi; tek eksik 24 saatlik süpürme döngüsü); `measure-recordings-api` aynı `main.py` yüzünden `approved`'a geri alındı.
+Yedi yeni kart: `stt-engine-on-turn-audit`, `pack-question-button`, `webtask-write-ceiling-retention`,
+`cloud-search-engines-probe`, `stt-corpus-layer2-remeasure`, `feeder-own-lock` (cycle-seat-pool'u bekler),
+`office-stable-seats` (sahibin gözlemi: biri bitince çalışanlar koltuk değiştiriyor GİBİ görünüyor, sırada bekleyen iş
+uyarı işaretiyle çiziliyor; cycle-seat-pool'u bekler). Dört onaylı fikir ROADMAP "Approved ideas" tablosunda.**
+**SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 43.1 ("Bugün nasılsın" de: denetim
+satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de"); STT ölçümü için yirmi cümle (ölçüm kaydı
+fikri bunu sayfaya getiriyor). 42.1 GÖRÜLDÜ: sahip 2026-10-02'de Ofis'te "Çalışan 4" ve "Çalışan 5"i ekran görüntüsüyle
+gösterdi (yenilemeden önce eski sayfa kodu "worker" yazıyordu).**
+**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`feeder-own-lock`). (2) kapı ~90 dk ve tek sıra
+("koruyucu testler iş dalında" bunu hedefliyor). (3) döngü, turdaki en uzun koşu bitene kadar boş koltukları doldurmaz
+(`cycle-seat-pool` denetimde). (4) `LocalEmbedder` önbelleği kilitsiz (düzeltmesi denetimde). (5) tarayıcı görev zinciri
+üretimde ulaşılamaz (PR-D). (6) Ofis koltukları koşu bitince yeniden numaralanıyor (`office-stable-seats`).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
