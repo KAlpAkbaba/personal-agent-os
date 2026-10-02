@@ -22,7 +22,10 @@ The judge is a pure function over what was observed, so its rules are tested on 
 * a sentence the layers left to the model is ``not_understood`` - even when the harness's
   model then guesses right, because a guess is what the layers exist to replace.
 
-Layer 2 runs as production runs it today: no engine configured (ADR-0224 addendum 3).
+Layer 2 runs with no engine configured unless ``run_stt_case(engine=...)`` is given one (the
+measurement of ADR-0224 addendum 4). ``production_engine()`` builds the engine production has
+since ADR-0245 - the local embedder, the shipped exemplars - so the corpus can be measured
+with it too, and ``compare_runs`` / ``failure_classes`` read the two runs side by side.
 """
 
 from __future__ import annotations
@@ -31,7 +34,8 @@ import json
 import os
 import tempfile
 import uuid
-from dataclasses import dataclass, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -39,8 +43,19 @@ from unittest.mock import patch
 
 import pytest
 
+from app.config import Settings
+from app.memory.embedding import Embedder
+from app.memory.providers import (
+    DEFAULT_LOCAL_MODEL,
+    PROVIDER_LOCAL,
+    EmbedderReport,
+    ModelFactory,
+    build_embedder,
+)
 from app.voice.realtime_sessions.models import RealtimeSessionRow
 from app.voice.understanding import combine
+from app.voice.understanding.semantic import SemanticEngine
+from app.voice.understanding.startup import configure_understanding
 from tests.unit.test_operator_open_application_fallback import (
     HOME_CAPABILITIES,
     OFFICE_CAPABILITIES,
@@ -117,6 +132,10 @@ class Observation:
     guess_ran: bool = False
     speech: str = ""
     problems: tuple[str, ...] = ()
+    #: The layer that decided (``policy.LAYER_*``), from the turn record; None when it has none.
+    layer: str | None = None
+    #: The decision's top candidates as ``(intent, confidence)``, from the turn record.
+    candidates: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +225,14 @@ def _question_of(record: dict[str, Any]) -> str | None:
     return (record.get("understanding") or {}).get("question") or None
 
 
+def _layer_of(record: dict[str, Any]) -> str | None:
+    return (record.get("understanding") or {}).get("layer") or None
+
+
+def _candidates_of(record: dict[str, Any]) -> tuple[tuple[str, float], ...]:
+    return tuple((str(pair[0]), float(pair[1])) for pair in record.get("candidates") or ())
+
+
 def _observe_in_device_world(case: SttCase) -> Observation:
     patcher = pytest.MonkeyPatch()
     with tempfile.TemporaryDirectory(prefix="stt-corpus-", ignore_cleanup_errors=True) as tmp:
@@ -239,6 +266,8 @@ def _observe_in_device_world(case: SttCase) -> Observation:
                 mode_changed=bool(record.get("answer_level") or record.get("policy_changes")),
                 guess_ran=guess_ran,
                 speech=speech,
+                layer=_layer_of(record),
+                candidates=_candidates_of(record),
             )
         finally:
             world.client.close()
@@ -275,6 +304,8 @@ def _observe_in_canonical_world(case: SttCase) -> Observation:
         canonical_verdict=result.verdict,
         speech=result.speech,
         problems=tuple(result.problems),
+        layer=_layer_of(record),
+        candidates=_candidates_of(record),
     )
 
 
@@ -331,6 +362,8 @@ class SttResult:
             "resolved_intent": seen.intent if seen else None,
             "resolved_application": seen.application if seen else None,
             "band": seen.band if seen else None,
+            "layer": seen.layer if seen else None,
+            "candidates": [list(pair) for pair in seen.candidates] if seen else [],
             "confidence": seen.confidence if seen else None,
             "question": seen.question if seen else None,
             "acted_on": list(seen.acted_on) if seen else [],
@@ -340,12 +373,13 @@ class SttResult:
         }
 
 
-def run_stt_case(case: SttCase) -> SttResult:
-    """One rendering, with layer 2 as production has it today: no engine configured."""
+def run_stt_case(case: SttCase, *, engine: SemanticEngine | None = None) -> SttResult:
+    """One rendering. ``engine`` None: no layer-2 engine (ADR-0224 addendum 4's run); a built
+    engine (``production_engine()``) is put where the policy reads it for this case only."""
     device_world = _uses_device_world(case)
     world = "devices" if device_world else "canonical"
     try:
-        with patch.object(combine, "_default_engine", None):
+        with patch.object(combine, "_default_engine", engine):
             seen = (
                 _observe_in_device_world(case)
                 if device_world
@@ -359,6 +393,86 @@ def run_stt_case(case: SttCase) -> SttResult:
     return SttResult(case, seen, verdict.verdict, verdict.problems, world)
 
 
+# --------------------------------------------------------- the engine production builds
+
+
+class ProductionEngineUnavailable(RuntimeError):
+    """The local semantic engine could not be built on this machine. Never answered with the
+    deterministic embedder: a lexical hash would give a number that means nothing."""
+
+
+@dataclass(slots=True)
+class _CountingEmbedder:
+    """The real embedder, unchanged, with every text it is asked for recorded - so a run can
+    show the engine was really consulted. Vectors pass through untouched."""
+
+    inner: Embedder
+    asked: list[str] = field(default_factory=list)
+
+    @property
+    def model_id(self) -> str:
+        return self.inner.model_id
+
+    @property
+    def model_version(self) -> str:
+        return self.inner.model_version
+
+    @property
+    def dim(self) -> int:
+        return self.inner.dim
+
+    def embed(self, text: str) -> list[float]:
+        self.asked.append(text)
+        return self.inner.embed(text)
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltEngine:
+    engine: SemanticEngine
+    report: EmbedderReport
+    exemplars: int
+    build_ms: float | None
+    #: Every text the engine's embedder was asked for AFTER the index was built.
+    asked: list[str]
+
+
+def production_engine(*, model_factory: ModelFactory | None = None) -> BuiltEngine:
+    """The engine ``create_app`` configures (ADR-0245): ``build_embedder`` with the provider
+    'local' and the default local model, then ``configure_understanding`` with the SHIPPED
+    exemplars, built inline. The default engine the process had before is restored, so the
+    engine reaches a case only through ``run_stt_case(engine=...)``.
+
+    ``model_factory`` is the model loader's seam (a test makes it raise); a refusal raises
+    ``ProductionEngineUnavailable`` with the reason.
+    """
+    settings = Settings(
+        memory_embedding_provider=PROVIDER_LOCAL,
+        memory_local_embedding_model=DEFAULT_LOCAL_MODEL,
+        understanding_semantic_enabled=True,
+    )
+    embedder, report = build_embedder(settings, model_factory=model_factory)
+    if report.active != PROVIDER_LOCAL or not report.semantic:
+        raise ProductionEngineUnavailable(
+            f"the local embedder could not be built (the deterministic one would serve): "
+            f"{report.fallback_reason}"
+        )
+    counting = _CountingEmbedder(embedder)
+    previous = combine._default_engine
+    try:
+        state = configure_understanding(
+            settings, counting, report=report, spawn=lambda build: build()
+        )
+        if not state.configured:
+            raise ProductionEngineUnavailable(f"layer 2 was not configured: {state.reason}")
+        engine = combine.default_engine()
+    finally:
+        combine.reset_default_engine()
+        if previous is not None:
+            combine._default_engine = previous
+    counting.asked.clear()  # the exemplars' own embeddings are the build, not a case
+    return BuiltEngine(engine, report, state.exemplars, state.build_ms, counting.asked)
+
+
 # ------------------------------------------------------------------------ the report
 
 
@@ -367,13 +481,29 @@ def _tally(results: list[SttResult]) -> dict[str, int]:
     return {"total": len(results), "correct": correct}
 
 
-def build_stt_report(results: list[SttResult], *, corpus_version: int) -> dict[str, Any]:
+#: ``by_layer``'s key for a case whose turn record names no layer (an error, a lost session).
+LAYER_UNRECORDED: Final = "unrecorded"
+_NO_ENGINE_TEXT: Final = "none (production as of ADR-0224 addendum 3)"
+
+
+def _layer_key(result: SttResult) -> str:
+    return (result.seen.layer if result.seen else None) or LAYER_UNRECORDED
+
+
+def build_stt_report(
+    results: list[SttResult], *, corpus_version: int, layer_two_engine: str | None = None
+) -> dict[str, Any]:
     by_verdict: dict[str, int] = {}
     by_band: dict[str, int] = {}
+    by_layer: dict[str, dict[str, Any]] = {}
     for r in results:
         by_verdict[r.verdict] = by_verdict.get(r.verdict, 0) + 1
         band = r.band or "none"
         by_band[band] = by_band.get(band, 0) + 1
+        row = by_layer.setdefault(_layer_key(r), {"total": 0, "correct": 0, "by_verdict": {}})
+        row["total"] += 1
+        row["correct"] += 1 if r.correct else 0
+        row["by_verdict"][r.verdict] = row["by_verdict"].get(r.verdict, 0) + 1
     total = len(results)
     correct = sum(1 for r in results if r.correct)
     wrong_device = by_verdict.get(VERDICT_WRONG_DEVICE, 0)
@@ -410,9 +540,10 @@ def build_stt_report(results: list[SttResult], *, corpus_version: int) -> dict[s
         "target_correct_rate": TARGET_CORRECT_RATE,
         "target_met": target_met,
         "summary": summary,
-        "layer_two_engine": "none (production as of ADR-0224 addendum 3)",
+        "layer_two_engine": layer_two_engine or _NO_ENGINE_TEXT,
         "by_verdict": by_verdict,
         "by_band": by_band,
+        "by_layer": {layer: by_layer[layer] for layer in sorted(by_layer)},
         "by_origin": {
             origin: _tally([r for r in results if r.case.origin == origin])
             for origin in sorted({r.case.origin for r in results})
@@ -424,6 +555,245 @@ def build_stt_report(results: list[SttResult], *, corpus_version: int) -> dict[s
         "failures": [r.as_dict() for r in results if not r.correct],
         "results": [r.as_dict() for r in results],
     }
+
+
+# ------------------------------------------------------- two runs, side by side (layer 2)
+
+_Row = Mapping[str, Any]
+
+
+def _rows(results: Sequence[SttResult | _Row]) -> list[_Row]:
+    return [r.as_dict() if isinstance(r, SttResult) else r for r in results]
+
+
+def compare_runs(
+    before: Sequence[SttResult | _Row], after: Sequence[SttResult | _Row]
+) -> dict[str, Any]:
+    """Every case whose verdict differs between two runs, in ``before``'s order, with the
+    layer that decided each time; the counts by ``"from -> to"``; and the cases a run made
+    worse (correct before, not after) and better, apart."""
+    later = {row["case_id"]: row for row in _rows(after)}
+    moved: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    worse: list[str] = []
+    better: list[str] = []
+    for row in _rows(before):
+        other = later.get(row["case_id"])
+        if other is None or other["verdict"] == row["verdict"]:
+            continue
+        moved.append(
+            {
+                "case_id": row["case_id"],
+                "from": row["verdict"],
+                "to": other["verdict"],
+                "layer_before": row.get("layer"),
+                "layer_after": other.get("layer"),
+            }
+        )
+        key = f"{row['verdict']} -> {other['verdict']}"
+        counts[key] = counts.get(key, 0) + 1
+        was, now = row["verdict"] in _CORRECT, other["verdict"] in _CORRECT
+        if was and not now:
+            worse.append(row["case_id"])
+        elif now and not was:
+            better.append(row["case_id"])
+    return {
+        "moved": moved,
+        "counts": {key: counts[key] for key in sorted(counts)},
+        "made_worse": worse,
+        "made_better": better,
+    }
+
+
+def failure_classes(results: Sequence[SttResult | _Row]) -> list[dict[str, Any]]:
+    """The failing cases grouped by (verdict, distortion, layer): count, case ids and the
+    ``expected -> resolved`` intent pairs inside each. Largest first, then by key."""
+    groups: dict[tuple[str, str | None, str | None], list[_Row]] = {}
+    for row in _rows(results):
+        if row["verdict"] in _CORRECT:
+            continue
+        key = (row["verdict"], row.get("distortion"), row.get("layer"))
+        groups.setdefault(key, []).append(row)
+    out: list[dict[str, Any]] = []
+    for (verdict, distortion, layer), rows in groups.items():
+        pairs: dict[str, int] = {}
+        for row in rows:
+            pair = f"{row.get('expected_intent')} -> {row.get('resolved_intent')}"
+            pairs[pair] = pairs.get(pair, 0) + 1
+        out.append(
+            {
+                "verdict": verdict,
+                "distortion": distortion,
+                "layer": layer,
+                "count": len(rows),
+                "case_ids": [row["case_id"] for row in rows],
+                "pairs": {pair: pairs[pair] for pair in sorted(pairs)},
+            }
+        )
+    out.sort(key=lambda c: (-c["count"], c["verdict"], c["distortion"] or "", c["layer"] or ""))
+    return out
+
+
+#: The keys of the layer-2 measurement's report - and no others.
+LAYER2_REPORT_KEYS: Final[tuple[str, ...]] = (
+    "suite",
+    "generated_at",
+    "no_engine",
+    "production_engine",
+    "moved",
+    "failure_classes",
+    "failure_classes_total",
+    "engine",
+    "repeat_run",
+)
+LAYER2_SUITE: Final = "SttLayer2Remeasure"
+_TOP_CLASSES: Final = 10
+
+
+def build_layer2_report(
+    no_engine: list[SttResult],
+    with_engine: list[SttResult],
+    *,
+    engine: BuiltEngine,
+    corpus_version: int,
+    repeat_differing: list[str] | None = None,
+    layer2_seconds: float | None = None,
+) -> dict[str, Any]:
+    """The two runs of the corpus, the cases that moved, the largest failure classes of the
+    production-engine run, and how the engine was built."""
+    classes = failure_classes(with_engine)
+    return {
+        "suite": LAYER2_SUITE,
+        "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "no_engine": build_stt_report(no_engine, corpus_version=corpus_version),
+        "production_engine": build_stt_report(
+            with_engine, corpus_version=corpus_version, layer_two_engine=engine.report.model_id
+        ),
+        "moved": compare_runs(no_engine, with_engine),
+        "failure_classes": classes[:_TOP_CLASSES],
+        "failure_classes_total": len(classes),
+        "engine": {
+            "provider": engine.report.active,
+            "semantic": engine.report.semantic,
+            "model_id": engine.report.model_id,
+            "exemplars": engine.exemplars,
+            "build_ms": engine.build_ms,
+            "corpus_seconds": layer2_seconds,
+        },
+        # The determinism check's second run: NOT_RUN unless it was made in this process.
+        "repeat_run": (
+            {"status": "NOT_RUN"}
+            if repeat_differing is None
+            else {"status": "RUN", "differing_case_ids": list(repeat_differing)}
+        ),
+    }
+
+
+def _pct(report: Mapping[str, Any]) -> str:
+    return f"{report['correct']} / {report['total_cases']} = {report['correct_rate'] * 100:.1f} %"
+
+
+def _top(row: Mapping[str, Any]) -> str:
+    candidates = row.get("candidates") or []
+    return f"{candidates[0][0]} {candidates[0][1]}" if candidates else "-"
+
+
+def layer2_markdown(report: Mapping[str, Any]) -> str:
+    """The report in prose: the headline first, whichever way it falls."""
+    before, after = report["no_engine"], report["production_engine"]
+    moved = report["moved"]
+    rows = {row["case_id"]: row for row in after["results"]}
+    target = after["target_correct_rate"] * 100
+    lines = [
+        "# STT corpus, layer 2 as production configures it",
+        "",
+        f"Generated {report['generated_at']}. Engine: {report['engine']['model_id']} "
+        f"({report['engine']['provider']}, {report['engine']['exemplars']} exemplars, "
+        f"index built in {report['engine']['build_ms']} ms).",
+        "",
+        f"- without the engine: **{_pct(before)}**",
+        f"- with the engine:    **{_pct(after)}**",
+        f"- target {target:.0f} %: **{'met' if after['target_met'] else 'NOT met'}**",
+        f"- layer 2 made {len(moved['made_worse'])} case(s) worse and "
+        f"{len(moved['made_better'])} better",
+        f"- wrong-device actions with the engine: {after['wrong_device_actions']} over "
+        f"{after['wrong_device_observable_cases']} observable cases",
+        f"- confident wrong readings: {before['confident_wrong_readings']} -> "
+        f"{after['confident_wrong_readings']}",
+        "",
+        "## Made worse",
+        "",
+        *([f"- {c}" for c in moved["made_worse"]] or ["- none"]),
+        "",
+        "## Made better",
+        "",
+        *([f"- {c}" for c in moved["made_better"]] or ["- none"]),
+        "",
+        "## Every moved case",
+        "",
+        "| case | from | to | layer before | layer after | meant | top candidate after |",
+        "|---|---|---|---|---|---|---|",
+        *(
+            f"| {m['case_id']} | {m['from']} | {m['to']} | {m['layer_before']} | "
+            f"{m['layer_after']} | {rows[m['case_id']]['expected_intent']} | "
+            f"{_top(rows[m['case_id']])} |"
+            for m in moved["moved"]
+        ),
+        "",
+        "## By layer (with the engine / without)",
+        "",
+        "| layer | with: correct / total | without: correct / total |",
+        "|---|---|---|",
+    ]
+    for layer in sorted(set(after["by_layer"]) | set(before["by_layer"])):
+        a = after["by_layer"].get(layer, {"correct": 0, "total": 0})
+        b = before["by_layer"].get(layer, {"correct": 0, "total": 0})
+        lines.append(f"| {layer} | {a['correct']} / {a['total']} | {b['correct']} / {b['total']} |")
+    lines += [
+        "",
+        "## By distortion (with the engine / without)",
+        "",
+        "| distortion | with | without |",
+        "|---|---|---|",
+    ]
+    for distortion, a in after["by_distortion"].items():
+        b = before["by_distortion"][distortion]
+        lines.append(
+            f"| {distortion} | {a['correct']} / {a['total']} | {b['correct']} / {b['total']} |"
+        )
+    lines += [
+        "",
+        f"## The {len(report['failure_classes'])} largest failure classes "
+        f"(of {report['failure_classes_total']}), with the engine",
+        "",
+        "| verdict | distortion | layer | count | expected -> resolved | cases |",
+        "|---|---|---|---|---|---|",
+        *(
+            f"| {c['verdict']} | {c['distortion'] or 'real'} | {c['layer']} | {c['count']} | "
+            + ", ".join(f"{p} x{n}" for p, n in c["pairs"].items())
+            + f" | {', '.join(c['case_ids'])} |"
+            for c in report["failure_classes"]
+        ),
+        "",
+        "## Every failure with the engine",
+        "",
+        "| case | verdict | layer | band | meant | resolved | top candidate | rendering |",
+        "|---|---|---|---|---|---|---|---|",
+        *(
+            f"| {r['case_id']} | {r['verdict']} | {r['layer']} | {r['band']} | "
+            f"{r['expected_intent']} | {r['resolved_intent']} | {_top(r)} | {r['rendering']} |"
+            for r in after["failures"]
+        ),
+        "",
+        f"Repeat run: {report['repeat_run']['status']}"
+        + (
+            f", differing cases: {report['repeat_run']['differing_case_ids'] or 'none'}"
+            if report["repeat_run"]["status"] == "RUN"
+            else ""
+        ),
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _owner_numbers(owner: dict[str, Any] | None) -> dict[str, Any]:
@@ -508,6 +878,8 @@ def write_reports(stt: dict[str, Any]) -> list[Path]:
 
 __all__ = [
     "DEVICE_OF_ALIAS",
+    "LAYER2_REPORT_KEYS",
+    "LAYER_UNRECORDED",
     "OFFICE_DEVICE",
     "SESSION_DEVICE",
     "VERDICT_CORRECT",
@@ -518,12 +890,19 @@ __all__ = [
     "VERDICT_WRONG_BAND",
     "VERDICT_WRONG_DEVICE",
     "VERDICT_WRONG_READING",
+    "BuiltEngine",
     "Observation",
+    "ProductionEngineUnavailable",
     "SttResult",
     "Verdict",
+    "build_layer2_report",
     "build_stt_report",
+    "compare_runs",
+    "failure_classes",
     "judge",
+    "layer2_markdown",
     "merge_into_owner_report",
+    "production_engine",
     "run_stt_case",
     "session_device_for",
     "write_reports",
