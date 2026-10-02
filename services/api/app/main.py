@@ -146,6 +146,8 @@ from app.voice.intent_router import (
     CompositeIntentRouter,
     set_intent_router,
 )
+from app.voice.misheard import service as misheard_service
+from app.voice.misheard.routes import router as voice_misheard_router
 from app.voice.qualification.routes import router as voice_qualification_router
 from app.voice.realtime_sessions import service as realtime_service
 from app.voice.realtime_sessions.research_announcer import ResearchToolCallAnnouncer
@@ -699,6 +701,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await briefing_announcer.start()
         await embedded_worker.start()
         await retention_sweeper.start()
+        # The misheard notebook's 30 days are kept by the process, not by a session: one
+        # purge now and one every 24 h. It asks for the runtime the routes read
+        # (app.state.artifacts) at each pass, and a pass that fails is logged and retried.
+        misheard_purge = misheard_service.PurgeLoop(lambda: app.state.artifacts.session())
+        app.state.misheard_purge = misheard_purge
+        await misheard_purge.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -730,6 +738,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await misheard_purge.stop()
             await retention_sweeper.stop()
             await embedded_worker.stop()
             await briefing_announcer.stop()
@@ -941,6 +950,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(team_router)
     # The Onay Merkezi's allow-list editor (GET/POST/DELETE /v1/team/allowlist).
     app.include_router(team_allowlist_router)
+    # The misheard notebook: the owner reads, answers and forgets the sentences that were
+    # not understood (GET/POST/DELETE /v1/voice/misheard).
+    app.include_router(voice_misheard_router)
 
     @app.get("/v1/system/health")
     async def system_health() -> dict[str, Any]:

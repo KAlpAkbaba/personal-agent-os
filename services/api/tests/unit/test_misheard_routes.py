@@ -8,6 +8,7 @@ The router is NOT included by the test: ``create_app`` registers it, or these ar
 
 from __future__ import annotations
 
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -74,7 +75,7 @@ def owner(api) -> TestClient:
     return client
 
 
-def _seed(engine, sentence: str, *, minutes_ago: int = 0, **overrides) -> uuid.UUID:
+def _seed(db_engine, sentence: str, /, *, minutes_ago: int = 0, **overrides) -> uuid.UUID:
     heard_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     arguments = {
         "sentence": sentence,
@@ -85,7 +86,7 @@ def _seed(engine, sentence: str, *, minutes_ago: int = 0, **overrides) -> uuid.U
         "now": heard_at,
     }
     arguments.update(overrides)
-    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+    with sessionmaker(bind=db_engine, expire_on_commit=False)() as session:
         row = service.record(session, **arguments)
         session.commit()
         assert row is not None
@@ -161,12 +162,38 @@ def test_get_lists_newest_first_with_exactly_the_contract_columns(owner, engine)
     assert datetime.fromisoformat(first["expires_at"]) - heard == timedelta(days=30)
 
 
-def test_get_purges_before_it_lists(owner, engine) -> None:
-    _seed(engine, "eski cümle", minutes_ago=31 * 24 * 60)
+def _seed_one_fresh_and_one_expired(engine) -> None:
+    """The expired row LAST: ``record`` purges as of its own ``now``, so a fresh row written
+    after it would delete it and leave nothing for the purge under test to do."""
     _seed(engine, "yeni cümle")
+    _seed(engine, "eski cümle", minutes_ago=31 * 24 * 60)
+    assert _count(engine) == 2
+
+
+def test_get_purges_before_it_lists(owner, engine) -> None:
+    _seed_one_fresh_and_one_expired(engine)
     body = owner.get(BASE).json()
     assert [item["sentence"] for item in body["items"]] == ["yeni cümle"]
     assert _count(engine) == 1
+
+
+# ------------------------------------------------------------------- the lifespan's purge
+
+
+def test_the_lifespan_purges_at_start_and_cancels_its_loop_at_shutdown(api, engine) -> None:
+    """No request is made: the application's own start is what deletes the expired row."""
+    app, _, _ = api
+    _seed_one_fresh_and_one_expired(engine)
+    with TestClient(app):
+        loop = app.state.misheard_purge
+        deadline = time.monotonic() + 60  # a hang guard; the claim is the row count below
+        while loop.passes < 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert loop.passes == 1
+        assert loop.running is True
+        assert _count(engine) == 1
+    assert loop.running is False
+    assert loop.passes == 1  # the second pass was 24 h away and never ran
 
 
 def test_post_meaning_answers_the_row_and_open_counts_unanswered_only(owner, engine) -> None:
@@ -192,6 +219,25 @@ def test_an_empty_or_2001_character_meant_is_422_in_turkish(owner, engine, meant
     assert response.status_code == 422, response.text
     _refusal(response)
     assert owner.get(BASE).json()["items"][0]["meant"] is None
+
+
+@pytest.mark.parametrize("body", [{}, {"meant": 7}, {"meaning": "postamı oku"}, ["postamı oku"]])
+def test_a_body_without_a_written_meant_is_422_in_turkish(owner, engine, body) -> None:
+    row_id = _seed(engine, "Maillerime bakın")
+    response = owner.post(f"{BASE}/{row_id}/meaning", json=body)
+    assert response.status_code == 422, response.text
+    _refusal(response)
+
+
+def test_an_id_that_is_no_uuid_is_404_in_turkish(owner, engine) -> None:
+    _seed(engine, "Maillerime bakın")
+    answer = owner.post(f"{BASE}/defter/meaning", json={"meant": "postamı oku"})
+    assert answer.status_code == 404, answer.text
+    _refusal(answer)
+    forget = owner.delete(f"{BASE}/defter")
+    assert forget.status_code == 404, forget.text
+    _refusal(forget)
+    assert _count(engine) == 1
 
 
 def test_a_2000_character_meant_is_accepted(owner, engine) -> None:

@@ -9,11 +9,16 @@ The clock is always passed in; nothing sleeps.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import io
 import logging
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import structlog
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -22,6 +27,7 @@ from app.voice.misheard import service
 from app.voice.misheard.models import MisheardUtterance
 
 HEARD = datetime(2026, 10, 2, 9, 0, tzinfo=UTC)
+SECOND = timedelta(seconds=1)
 SENTENCE = "Ofisü bilgisayarında hesap makinesini açın"
 REASONS = ("no_intent", "asked_question", "objected", "tool_failed")
 #: Exactly the CONTRACT's columns - the same list in the four misheard-* cards.
@@ -185,8 +191,41 @@ def test_a_database_fault_never_reaches_the_caller(
     def broken(*args: object, **kwargs: object) -> None:
         raise RuntimeError("the database is away")
 
-    monkeypatch.setattr(db, "flush", broken)
-    assert _record(db) is None
+    with monkeypatch.context() as patch:
+        patch.setattr(db, "flush", broken)
+        assert _record(db) is None
+    # The session is the caller's: it writes again once the fault is over (that PostgreSQL
+    # keeps the TRANSACTION usable is tests/integration/test_misheard_postgres.py's claim).
+    assert _record(db) is not None
+    assert _count(db) == 1
+
+
+def test_a_200_character_tool_is_stored_as_64(db: Session) -> None:
+    row = _record(db, reason="tool_failed", tool="t" * 200)
+    assert row is not None
+    assert db.execute(select(MisheardUtterance.tool)).scalar_one() == "t" * 64
+
+
+@pytest.mark.parametrize("reason", ["no_intent", "asked_question", "objected"])
+def test_a_tool_is_kept_for_tool_failed_only(db: Session, reason: str) -> None:
+    assert _record(db, reason=reason, tool="app.launch") is not None
+    assert db.execute(select(MisheardUtterance.tool)).scalar_one() is None
+
+
+def test_an_unknown_band_and_a_confidence_that_is_no_number_are_stored_as_null(
+    db: Session,
+) -> None:
+    row = _record(db, band="certain", confidence=float("nan"))
+    assert row is not None
+    stored = db.execute(select(MisheardUtterance)).scalar_one()
+    assert stored.band is None
+    assert stored.confidence is None
+    assert stored.sentence == SENTENCE  # the sentence is what the notebook is for
+
+
+def test_without_a_session_nothing_is_written(db: Session) -> None:
+    assert _record(db, session_id=None) is None
+    assert _count(db) == 0
 
 
 # ------------------------------------------------------------------- is_request
@@ -199,10 +238,15 @@ def test_a_database_fault_never_reaches_the_caller(
         (1, False, True),
         (0, True, True),
         (2, True, True),
+        # The relay may hand the readings themselves instead of their count.
+        ([], False, False),
+        (["app.launch"], False, True),
+        ((), True, True),
+        (("app.launch", "mail.read"), True, True),
     ],
 )
 def test_is_request_needs_a_candidate_reading_or_a_named_machine(
-    candidates: int, machine_named: bool, expected: bool
+    candidates: object, machine_named: bool, expected: bool
 ) -> None:
     assert service.is_request(candidates, machine_named) is expected
 
@@ -231,6 +275,25 @@ def test_the_hold_keeps_the_latest_sentence_of_a_session_for_120_seconds() -> No
     assert service.held(session_id, HEARD + timedelta(seconds=121)) is None
     # Gone, not merely hidden: an earlier clock does not bring it back.
     assert service.held(session_id, HEARD) is None
+
+
+def test_the_hold_is_gone_at_exactly_120_seconds() -> None:
+    session_id = uuid.uuid4()
+    service.hold(session_id, _entry(), HEARD)
+    assert service.held(session_id, HEARD + timedelta(seconds=120)) is None
+
+
+def test_an_expired_hold_leaves_memory_for_every_session_not_only_the_one_asking() -> None:
+    silent, talking = uuid.uuid4(), uuid.uuid4()
+    service.hold(silent, _entry(), HEARD)
+    service.hold(talking, _entry("Ekranları kapatın"), HEARD + timedelta(seconds=300))
+    assert list(service._hold) == [str(talking)]
+
+
+def test_a_held_sentence_does_not_show_its_words_when_printed() -> None:
+    entry = _entry()
+    assert SENTENCE not in repr(entry) and SENTENCE not in str(entry)
+    assert "medium" in repr(entry)
 
 
 def test_the_hold_answers_nothing_for_another_session() -> None:
@@ -344,34 +407,178 @@ def test_forget_all_returns_the_count_and_leaves_zero_rows(db: Session) -> None:
     assert service.forget_all(db) == 0
 
 
+# ------------------------------------------------------------------- the lifespan's purge
+
+
+def _scope(db: Session):
+    @contextlib.contextmanager
+    def scope() -> Iterator[Session]:
+        yield db
+
+    return scope
+
+
+class _NoRows:
+    """A session that deletes nothing: the loop's cadence without a database under it."""
+
+    rowcount = 0
+
+    def execute(self, *args: object, **kwargs: object) -> _NoRows:
+        return self
+
+    def commit(self) -> None:
+        return None
+
+
+async def _until(condition) -> None:
+    """Wait for an event the loop produces; the ceiling is a hang guard, not the claim."""
+    async with asyncio.timeout(30):
+        while not condition():
+            await asyncio.sleep(0.005)
+
+
+async def test_the_purge_loop_purges_once_at_start_and_is_cancelled_cleanly(db: Session) -> None:
+    assert service.PURGE_INTERVAL_SECONDS == 24 * 60 * 60
+    _record(db)
+    _record(db, sentence="Maillerime bakın", heard_at=HEARD + timedelta(days=10))
+    loop = service.PurgeLoop(_scope(db), clock=lambda: HEARD + timedelta(days=31))
+    assert loop._interval_s == service.PURGE_INTERVAL_SECONDS
+    await loop.start()
+    await _until(lambda: loop.passes >= 1)
+    # The next pass is 24 h away, so the session is this thread's again.
+    assert loop.running is True
+    assert loop.last_removed == 1
+    assert [r.sentence for r in db.execute(select(MisheardUtterance)).scalars()] == [
+        "Maillerime bakın"
+    ]
+    task = loop._task
+    await loop.stop()
+    assert loop.running is False
+    assert task is not None and task.cancelled()
+    assert loop.passes == 1
+    await loop.stop()  # a second stop is nothing
+
+
+async def test_the_purge_loop_passes_again_after_its_interval() -> None:
+    @contextlib.contextmanager
+    def scope() -> Iterator[_NoRows]:
+        yield _NoRows()
+
+    loop = service.PurgeLoop(scope, interval_s=0)
+    await loop.start()
+    try:
+        await _until(lambda: loop.passes >= 3)
+        assert loop.running is True
+    finally:
+        await loop.stop()
+    assert loop.running is False
+
+
+async def test_a_purge_pass_that_fails_does_not_end_the_loop() -> None:
+    def scope():
+        raise RuntimeError("the database is away")
+
+    loop = service.PurgeLoop(scope, interval_s=0)
+    await loop.start()
+    try:
+        await _until(lambda: loop.passes >= 2)
+        assert loop.running is True
+        assert loop.last_removed is None
+    finally:
+        await loop.stop()
+
+
+def test_a_purge_pass_drops_the_holds_that_have_expired() -> None:
+    session_id = uuid.uuid4()
+    service.hold(session_id, _entry(), HEARD)
+
+    @contextlib.contextmanager
+    def scope() -> Iterator[_NoRows]:
+        yield _NoRows()
+
+    service.PurgeLoop(scope, clock=lambda: HEARD + timedelta(seconds=121)).purge_once()
+    assert service._hold == {}
+
+
 # ------------------------------------------------------------------- wordless logs
 
+#: ASCII on purpose: the house renderer is JSON, which writes "ü" as "ü" - a Turkish
+#: marker would be invisible in the printed line even when the sentence is right there.
+MARKER = "GIZLICUMLE7F3A"
+MEANT_MARKER = "GIZLIANLAM9C1D"
 
-def test_no_log_record_of_any_path_contains_the_sentence(
+
+def _walk_every_path(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    sentence = f"Ofisü bilgisayarında {MARKER} açın"
+    meant = f"ofis bilgisayarımda {MEANT_MARKER} aç"
+    session_id = uuid.uuid4()
+    row = _record(db, sentence=sentence, session_id=session_id)
+    assert row is not None
+    _record(db, sentence=sentence, session_id=session_id, reason="objected")
+    _record(db, sentence=sentence, listen_only=True)
+    _record(db, sentence=sentence, reason="misheard")
+    _record(db, sentence=sentence, mode="free")
+    _record(db, sentence=sentence, reason="tool_failed", tool=MARKER, heard_at=HEARD + SECOND)
+    entry = _entry(sentence)
+    service.hold(session_id, entry, HEARD)
+    service.held(session_id, HEARD)
+    service.held(session_id, HEARD + timedelta(seconds=500))
+    service.list_items(db, HEARD)
+    service.answer(db, row.id, meant, HEARD)
+    service.purge(db, HEARD)
+    service.PurgeLoop(_scope(db), clock=lambda: HEARD + timedelta(days=31)).purge_once()
+
+    def away():
+        raise RuntimeError(sentence)
+
+    service.PurgeLoop(away).purge_once()
+    service.forget_one(db, row.id)
+    service.forget_all(db)
+    with monkeypatch.context() as patch:
+        # A database error's text carries the statement's parameters - here, the sentence.
+        patch.setattr(db, "flush", lambda *a, **k: (_ for _ in ()).throw(RuntimeError(sentence)))
+        assert _record(db, sentence=sentence, heard_at=HEARD + timedelta(minutes=9)) is None
+
+
+def test_no_structured_log_event_of_any_path_contains_the_sentence(
     db: Session, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    marker = "kimsenin görmemesi gereken cümle"
-    meant = "kimsenin görmemesi gereken anlam"
-    session_id = uuid.uuid4()
-    with caplog.at_level(logging.DEBUG):
-        row = _record(db, sentence=marker, session_id=session_id)
-        assert row is not None
-        _record(db, sentence=marker, session_id=session_id, reason="objected")
-        _record(db, sentence=marker, listen_only=True)
-        _record(db, sentence=marker, reason="misheard")
-        _record(db, sentence=marker, mode="free")
-        service.hold(session_id, _entry(marker), HEARD)
-        service.held(session_id, HEARD)
-        service.held(session_id, HEARD + timedelta(seconds=500))
-        service.list_items(db, HEARD)
-        service.answer(db, row.id, meant, HEARD)
-        service.purge(db, HEARD)
-        service.forget_one(db, row.id)
-        service.forget_all(db)
-        with monkeypatch.context() as patch:
-            patch.setattr(db, "flush", lambda *a, **k: (_ for _ in ()).throw(RuntimeError(marker)))
-            assert _record(db, sentence=marker, heard_at=HEARD + timedelta(minutes=9)) is None
-    for entry in caplog.records:
-        rendered = f"{entry.getMessage()} {entry.__dict__!r} {entry.exc_text or ''}"
-        assert marker not in rendered, entry
-        assert meant not in rendered, entry
+    """The house logger is structlog (``app.logging.get_logger``), which a stdlib handler
+    never sees; both are read here."""
+    with structlog.testing.capture_logs() as events, caplog.at_level(logging.DEBUG):
+        _walk_every_path(db, monkeypatch)
+    # Not vacuous: the fault and the failed pass DID log, through the logger that is read.
+    names = [event["event"] for event in events]
+    assert "misheard_record_failed" in names and "misheard_purge_failed" in names, names
+    rendered = repr(events) + "".join(
+        f"{entry.getMessage()} {entry.__dict__!r} {entry.exc_text or ''}"
+        for entry in caplog.records
+    )
+    assert MARKER not in rendered
+    assert MEANT_MARKER not in rendered
+
+
+def test_no_printed_log_line_of_any_path_contains_the_sentence(
+    db: Session, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same paths as production prints them: the house configuration's processors and
+    renderer, writing to a buffer instead of the process's stdout."""
+    import app.logging as house
+
+    printed = io.StringIO()
+    was_configured, before = structlog.is_configured(), structlog.get_config()
+    house.configure_logging()
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(printed))
+    try:
+        _walk_every_path(db, monkeypatch)
+    finally:
+        if was_configured:
+            structlog.configure(**before)
+        else:
+            structlog.reset_defaults()
+    lines = printed.getvalue()
+    assert "misheard_record_failed" in lines and "misheard_purge_failed" in lines, lines
+    captured = capsys.readouterr()
+    everything = lines + captured.out + captured.err
+    assert MARKER not in everything
+    assert MEANT_MARKER not in everything
