@@ -184,6 +184,12 @@ function Test-TeamQueue {
             if ($text -match '^[\\/]' -or $text -match '\.\.' -or $text -match '^[A-Za-z]:') {
                 [void]$problems.Add("${label}: the area '$text' must be a path inside the repository")
             }
+            elseif (@("", ".") -contains (Get-TeamAreaKey -Area $text)) {
+                # '*', '.', './': everything. An area names files or folders; "the whole
+                # repository" would hold every other task out of work, or - compared by another
+                # key - none (the two rules disagreed on exactly these, 2026-10-02).
+                [void]$problems.Add("${label}: the area '$text' is the whole repository; an area names files or folders inside it")
+            }
         }
         $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
         if ($branch -match 'hand-gestures' -or $branch -eq "main") {
@@ -207,17 +213,18 @@ function Test-TeamQueue {
             if (@($taskAreas).Count -eq 0) {
                 [void]$problems.Add("${label}: a task that is being worked on names its file area")
             }
-            # Section 4: two concurrent tasks never share an area.
+            # Section 4: two concurrent tasks never share an area. ONE rule for it
+            # (Test-TeamAreasOverlap): the split's judge, the cycle's holder check
+            # (Get-TeamAreaHolders) and this one compare the same key.
             foreach ($area in $taskAreas) {
-                $key = ([string]$area).TrimEnd("/", "*").ToLowerInvariant()
                 foreach ($other in @($areas.Keys)) {
-                    if ($key -eq $other -or $key.StartsWith($other + "/") -or $other.StartsWith($key + "/")) {
+                    if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$other)) {
                         [void]$problems.Add("${label}: the area '$area' overlaps the area of $($areas[$other])")
                     }
                 }
             }
             foreach ($area in $taskAreas) {
-                $areas[([string]$area).TrimEnd("/", "*").ToLowerInvariant()] = $label
+                $areas[(Get-TeamAreaKey -Area ([string]$area))] = $label
             }
         }
     }
@@ -315,6 +322,30 @@ function Get-TeamNextRole {
         "inspecting" { return [pscustomobject]@{ Kind = "run"; Role = "inspector"; NextState = ""; Gate = "" } }
         default { return [pscustomobject]@{ Kind = "rest"; Role = ""; NextState = ""; Gate = "" } }
     }
+}
+
+function Get-TeamAreaHolders {
+    <# The ids of the tasks IN WORK (assigned, in_progress, inspecting, returned) whose area
+       overlaps this task's. Section 4: two concurrent tasks never share an area - Test-TeamQueue
+       refuses a queue that has two such tasks, so a task is not moved into work beside one. #>
+    param([Parameter(Mandatory = $true)]$Task, [Parameter(Mandatory = $true)]$Queue)
+    $id = [string](Get-TeamProperty -InputObject $Task -Name "id" -Default "")
+    $mine = @(Get-TeamProperty -InputObject $Task -Name "area" -Default @())
+    $holders = New-Object System.Collections.ArrayList
+    foreach ($other in (Get-TeamTasks -Queue $Queue)) {
+        $otherId = [string](Get-TeamProperty -InputObject $other -Name "id" -Default "")
+        if ($otherId -eq $id) { continue }
+        $state = [string](Get-TeamProperty -InputObject $other -Name "state" -Default "")
+        if (@("assigned", "in_progress", "inspecting", "returned") -notcontains $state) { continue }
+        $shared = $false
+        foreach ($theirs in @(Get-TeamProperty -InputObject $other -Name "area" -Default @())) {
+            foreach ($area in $mine) {
+                if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$theirs)) { $shared = $true }
+            }
+        }
+        if ($shared) { [void]$holders.Add($otherId) }
+    }
+    return @($holders.ToArray())
 }
 
 # ------------------------------------------------------------------ the lead's split
@@ -1077,7 +1108,14 @@ function New-TeamApiStore {
     if (-not (Test-Path -LiteralPath $TokenFile)) { throw "the queue token file does not exist: $TokenFile" }
     $token = [System.IO.File]::ReadAllText($TokenFile, [System.Text.Encoding]::UTF8).Trim()
     if (-not $token) { throw "the queue token file is empty: $TokenFile" }
-    return [pscustomobject]@{ Base = $Url.TrimEnd("/"); Token = $token; Baseline = @{} }
+    return [pscustomobject]@{
+        Base     = $Url.TrimEnd("/")
+        Token    = $token
+        Baseline = @{}
+        # The ids Save-TeamQueueApi -SkipStale was refused (409), AS THEY HAPPEN: a caller that
+        # catches a later task's error in the same save still learns of them.
+        Refused  = New-Object System.Collections.ArrayList
+    }
 }
 
 function Invoke-TeamApi {
@@ -1093,24 +1131,42 @@ function Invoke-TeamApi {
     return (Invoke-JsonUtf8 -Uri ($Store.Base + $Path) -Method $Method -Headers @{ Authorization = ("Bearer " + $Store.Token) } -Body $json)
 }
 
-function Read-TeamQueueApi {
-    <# The whole queue, and a note of each task as it was read. #>
+function Get-TeamQueueApi {
+    <# The whole queue as the store has it now. Nothing is noted: a caller that may still refuse
+       what it read (a queue that breaks the protocol) keeps the versions it was working from. #>
     param([Parameter(Mandatory = $true)]$Store)
-    $queue = Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue"
+    return (Invoke-TeamApi -Store $Store -Method "GET" -Path "/v1/team/queue")
+}
+
+function Set-TeamQueueBaseline {
+    <# Notes each task of a queue as it was read: the version a later write is made from. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue)
     $Store.Baseline.Clear()
-    foreach ($task in (Get-TeamTasks -Queue $queue)) {
+    foreach ($task in (Get-TeamTasks -Queue $Queue)) {
         $Store.Baseline[[string]$task.id] = [pscustomobject]@{
             Updated = [string]$task.updated_at
             Json    = (ConvertTo-Json -InputObject $task -Depth 12 -Compress)
         }
     }
+}
+
+function Read-TeamQueueApi {
+    <# The whole queue, and a note of each task as it was read. #>
+    param([Parameter(Mandatory = $true)]$Store)
+    $queue = Get-TeamQueueApi -Store $Store
+    Set-TeamQueueBaseline -Store $Store -Queue $queue
     return $queue
 }
 
 function Save-TeamQueueApi {
     <# Writes back the tasks that changed (or are new), each with the version it was read at.
-       A stale write throws: the queue moved under us and the cycle must not overwrite it. #>
-    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue)
+       A stale write throws: the queue moved under us and the cycle must not overwrite it.
+       With -SkipStale a stale write (409) is that ONE task's: it is left as the store has it,
+       the other tasks are still written, and the ids that were left are returned - somebody
+       else decided about that task while we worked, and their word stands. Without the switch
+       nothing is returned. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Queue, [switch]$SkipStale)
+    $stale = New-Object System.Collections.ArrayList
     foreach ($task in (Get-TeamTasks -Queue $Queue)) {
         $id = [string]$task.id
         $json = ConvertTo-Json -InputObject $task -Depth 12 -Compress
@@ -1119,9 +1175,32 @@ function Save-TeamQueueApi {
         $expected = $null
         if ($null -ne $known) { $expected = $known.Updated }
         $body = [ordered]@{ task = $task; expected_updated_at = $expected }
-        [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/tasks/$id" -Body $body)
+        try { [void](Invoke-TeamApi -Store $Store -Method "PUT" -Path "/v1/team/queue/tasks/$id" -Body $body) }
+        catch {
+            if ($SkipStale -and ([string]$_.Exception.Message) -match '^HTTP 409 ') {
+                [void]$stale.Add($id)
+                [void]$Store.Refused.Add($id)
+                # Noted as "nothing new to write", so the same refused write is not sent again by
+                # every later save of the pass; the version stays the stale one, so a further
+                # change of ours to this task is refused as well, until the queue is read again.
+                $Store.Baseline[$id] = [pscustomobject]@{ Updated = $expected; Json = $json }
+                continue
+            }
+            throw
+        }
         $Store.Baseline[$id] = [pscustomobject]@{ Updated = [string]$task.updated_at; Json = $json }
     }
+    if ($SkipStale) { return @($stale.ToArray()) }
+}
+
+function Set-TeamTaskWritten {
+    <# Notes a task's present content as "nothing new to write" WITHOUT touching its version:
+       for a copy the caller put back after the store refused its write. #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)]$Task)
+    $id = [string]$Task.id
+    $known = $Store.Baseline[$id]
+    $version = if ($null -ne $known) { $known.Updated } else { $null }
+    $Store.Baseline[$id] = [pscustomobject]@{ Updated = $version; Json = (ConvertTo-Json -InputObject $Task -Depth 12 -Compress) }
 }
 
 function Get-TeamLockApi {
@@ -1151,6 +1230,12 @@ function Send-TeamReportApi {
     <# The report as text, so the Onay Merkezi on the Cloud Core can show it. #>
     param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
     [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/reports" -Body ([ordered]@{ name = $Name; text = $Text }))
+}
+
+function Send-TeamProposalApi {
+    <# One file of team/proposals/ as text, so the Onay Merkezi's "Detay" has it (ADR-0236). #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
+    [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/proposals" -Body ([ordered]@{ name = $Name; text = $Text }))
 }
 
 function Get-TeamModelsApi {

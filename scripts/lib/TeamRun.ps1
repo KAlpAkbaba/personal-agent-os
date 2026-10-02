@@ -137,6 +137,39 @@ function Merge-TeamBranch {
     return [pscustomobject]@{ Merged = $false; Already = $false; Conflict = $true; Integration = $integration; Detail = $detail }
 }
 
+function Undo-TeamMerge {
+    <#
+    .SYNOPSIS
+        Take back the merge Merge-TeamBranch just made - when, and only when, it is still the
+        integration branch's last commit.
+
+    .DESCRIPTION
+        For the one case where the team's store refuses the task's "merged" right after the
+        merge (somebody stopped the task in that moment). The integration branch is written by
+        the lock's holder alone, so its HEAD is that merge unless something else was merged
+        since. Checked, all three: HEAD has two parents, the second is the task branch's tip,
+        and the worktree is clean. Then the branch is put back on the first parent (a reset,
+        not a revert: after a revert the task's branch would still be an ancestor, and a later
+        merge of it would answer "already merged" for content that is gone). Returns $true
+        when the merge was taken back; anything else leaves everything as it is.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$RepoRoot,
+        [Parameter(Mandatory = $true)][string]$CycleId,
+        [Parameter(Mandatory = $true)][string]$Branch
+    )
+    $path = Join-Path $RepoRoot (".claude\worktrees\integrate\" + $CycleId)
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    $second = Invoke-TeamGit -WorkingDirectory $path -Arguments @("rev-parse", "--verify", "--quiet", "HEAD^2")
+    $tip = Invoke-TeamGit -WorkingDirectory $path -Arguments @("rev-parse", "--verify", "--quiet", "refs/heads/$Branch")
+    if (-not $second.Success -or -not $tip.Success) { return $false }
+    if ($second.StdOut.Trim() -ne $tip.StdOut.Trim()) { return $false }
+    $dirty = Invoke-TeamGit -WorkingDirectory $path -Arguments @("status", "--porcelain")
+    if (-not $dirty.Success -or $dirty.StdOut.Trim()) { return $false }
+    $reset = Invoke-TeamGit -WorkingDirectory $path -Arguments @("reset", "--hard", "--quiet", "HEAD^1")
+    return [bool]$reset.Success
+}
+
 # ---------------------------------------------------------------------------- a role run
 
 function New-TeamTaskCard {

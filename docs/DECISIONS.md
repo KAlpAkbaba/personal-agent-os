@@ -18838,6 +18838,210 @@ two - payment for click only, the site rule back to every word), all RED, same r
 The confirm path of a HIGH_IMPACT select and checkbox (performed once, `confirmed_by`
 set, planned again -> read back again) is in the acceptance file.
 
+### ADR-0214 addendum 11 (2026-10-02): the cycle reads the store again before every pass, a stale write is one task's, and a task never enters work beside the holder of its files
+
+**What happened.** On 2026-10-01 the owner asked for a fourth worker seat on the Ofis page; the card was put into the
+team's store at 19:40 UTC, first in the queue's order. Four hours later it had not been started, with worker seats idle on
+the page he was looking at. The cycle that was running had begun at 19:31 UTC and `cycle.ps1` read the queue ONCE, at its
+start (`$queue = Read-TeamQueueApi`, one line). A cycle that has work does not end, so nothing written to the store after
+19:31 - the lead's cards, the reset of a return, a decision in the Onay Merkezi, a card the feeder cut - existed for it.
+A test even asserted the defect ("the queue is read once"). ADR-0236 let the owner decide while a cycle runs and said
+"kararınız bir sonraki döngüde uygulanır"; with a cycle that lasts all day that was "tomorrow".
+
+**Decision.**
+1. **Before every pass** (`Sync-Queue`, API mode): the cycle's own changes are written, the queue is read again, checked
+   with `Test-TeamQueue`, and only then adopted with its versions (`Get-TeamQueueApi` + `Set-TeamQueueBaseline`; the old
+   `Read-TeamQueueApi` is the two together). A store that does not answer, or a queue that breaks the protocol at that
+   moment, changes nothing: the pass runs on the copy the cycle has and the report says so once
+   ("kuyruk yeniden okunamadı, döngü elindeki kopyayla sürdü: …"). With files there is one writer - the lock's holder -
+   and nothing is read again.
+2. **A stale write is that one task's, not the cycle's end** (`Save-TeamQueueApi -SkipStale`). Somebody else wrote the
+   task after the cycle read it: the store's version stands, the cycle's write of THAT task is dropped and said in the
+   report ("<id>: depoda başkası değiştirdi; …"), every other task is written, and the next pass reads the store's version.
+   Before, the 409 ended the cycle and the results of the tasks after it in the queue were never written. The feeder and
+   every other caller keep the strict form (no switch: a stale write throws).
+3. **An approved task is not moved into work beside a task that holds its files** (`Get-TeamAreaHolders`: assigned,
+   in_progress, inspecting, returned; the same overlap rule as the split's). It waits ("bekliyor: X -> Y aynı dosyaları
+   bırakınca") and is moved in the pass after the holder leaves. Found on the way: two approved tasks that share a file
+   and no dependency were both moved to `assigned`, which is a queue `Test-TeamQueue` refuses - so the next cycle ran
+   NOTHING ("the queue breaks the protocol"), and with decision 1 the running one would have refused every re-read. The
+   live queue held such a pair on 2026-10-02 (`researcher-every-cycle` and `model-policy-floor`, both waiting only for
+   `cycle-seat-pool`). The same rule holds for a task that comes back from its integrator with a plan.
+
+**Not here.** A pass still starts a batch and waits for all of it (`cycle-seat-pool`): a card that arrives during a
+batch is seen when the batch ends, not when a seat frees. The settings of a running cycle (`-MaxParallel`, the script
+itself) are still those it started with. The feeder still cannot cut cards while a cycle holds the lock (ADR-0237).
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, PROVEN_AUTOMATED (a fake listener with the real routes' rules, which
+now plays a second writer at a known moment: seed `late`): a task that reaches the store while the cycle runs is run by
+that cycle; a decision made in the store between the cycle's read and its write is the store's - one refused write, said
+in the report, the task run in the same cycle; a queue that breaks the protocol mid-cycle changes nothing and is said
+once; an approved task whose files a task in work holds waits and is run after it. Each RED before the change (the first
+two as written; the "read once" assertion turned into "read again before each pass"). Four mutations RED, `cycle.ps1`
+restored from a backup copy with sha256 equal before and after: the re-read removed; the stale write fatal again; a broken
+queue adopted; the holder check removed. PROVEN_REAL is the next real cycle picking up a card stored while it runs.
+
+**Addendum 11 after the inspector's return of `3d52902e` (2026-10-02).** The first form held for the ROW and not for the
+RUN, and three of its claims had no test. What changed:
+
+4. **A task whose write the store refused is not the cycle's until the store is read again** (`$staleIds`). It leaves the
+   pass's runnable tasks at once - the lead stopped a task between the cycle's read and its first save, the write was
+   refused, and a worker was started on the stale copy all the same - and it is not looked at again in any pass before a
+   re-read succeeds. One refused write per change, not one per save.
+5. **When a run ends, the store is asked before the result is applied** (`Test-TaskMovedInStore`: the whole queue is read
+   and NOT judged, so a broken card elsewhere cannot hide this task's stop; the task's `updated_at` is compared with the
+   version the cycle wrote from). If somebody else wrote the task while its run was in flight, the result is NOT applied:
+   no merge, no state, no report entry - the report stays in its file and the report of the cycle names it. The merge into
+   the integration branch used to run BEFORE the write the store then refused: a task the lead stopped while its inspector
+   ran was merged, and the lead gates and merges that branch. What the run said about a MODEL's limit is still registered.
+   **The price, accepted:** a card the lead edits while its worker runs loses that run - the worker is started again from
+   the store's version (the edit may have changed what is asked). An edit to a running task costs one run.
+   A store that does not answer at that moment says nothing: the result is applied and its write fails as before.
+6. **One area rule.** `Test-TeamQueue` compared areas with its own key and disagreed with `Get-TeamAreaHolders` on 4 of 17
+   pairs - in the dangerous direction: the cycle moved the task and the judge refused the queue it had made. Both now use
+   `Get-TeamAreaKey` / `Test-TeamAreasOverlap`, the split's rule. An area that is the whole repository (`*`, `.`, `./`)
+   is refused as an area: compared by one key it held every task out of work, by the other none. (The server's schema
+   still accepts any non-empty string: the protocol's meaning is judged by the cycle, as the path rule beside it is.)
+7. **Only a 409 is "somebody else's"**: any other answer to a task's write still ends the cycle (held by a test now).
+8. **The researcher's ideas reach the store with their text** (`Send-TeamProposalApi` after the idea is queued; a failed
+   post is a line in the report, not a stop). ADR-0236 gave the store the place and the page the "Detay"; nothing posted
+   the text, and on 2026-10-02 two ideas waited for the owner with `proposal_text` of 0 characters (posted by hand).
+
+**Evidence, second form.** Thirteen tests in `scripts/tests/team-cycle.tests.ps1` (the fake listener's second writer now
+also acts "when the live status names run X", and the store can be broken on purpose: `faults`): the four of the first
+form; a refused move is not run (RED before); a stop during the inspection is not merged (RED before); a card edited
+during the worker's run; only a 409 is skipped; a store that stops answering; an idea's text is posted (RED before); a
+returned task and an inspecting task hold their files - proven by WHAT WAS IN FLIGHT during each run (the status
+snapshot), because the order of the starts is the same when the second worker starts beside the first's inspector; the
+holder rule after the integrator; the two area rules agree on fourteen pairs and refuse five spellings of "everything"
+(RED before). Thirteen mutations, the inspector's three survivors among them, each restored from a backup copy with
+sha256 equal: all RED.
+
+**Addendum 11 after the inspector's second return, of `3d1be9fc` (2026-10-02).** Five findings; the second form's
+reasoning about the endless pass was wrong.
+
+9. **Each applied result is written at once**, not when the batch's last run ends. The store was asked when a run ended
+   and the merge was made, but nothing was written until every run of the batch had ended: with six seats the window in
+   which a stop could arrive unseen was the rest of the batch. It is now what lies between this task's look at the store
+   and its own write - the merge, seconds. A merge the store then refuses is **named** in the report
+   ("X: entegrasyon dalına (integrate/…) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti … lead geri alır ya da işi yeniden
+   açar"): the cycle does not take a merge back by itself, and the lead gates that branch.
+10. **A pass that only had refused moves is bounded.** The second form said a stale task is skipped at the top of the
+    pass, so the pass cannot move it again. False: a good re-read clears the stale set (rightly), and a store that refuses
+    the same write after every read then made the pass go round without end - 13 578 reads in 100 seconds on the fake,
+    past the stop flag and the caps, the lock held (the inspector's PROBE-N). Three passes in a row that moved a state,
+    started nothing and had a write refused end the task loop with a line ("depo aynı yazmayı üst üste reddetti (…)");
+    ten such passes of any kind, or a cap or the stop flag, end it too. The real routes keep row and document versions
+    equal, so this is not reachable today; it is bounded because a held lock and 270 requests a second are not a price
+    to learn it at.
+11. **A dropped run is not a try.** The run whose result was not applied (decision 5) is handed back to
+    `-MaxRunsPerTask`, as a usage-limited run is: with the cap at 2 an edited card was stopped by the cycle itself and
+    never inspected. So "an edit costs one run" is the whole price.
+12. **Every waiting idea's text is posted in every cycle**, whether a researcher ran or not (the route keeps or replaces).
+    The second form posted only the ideas queued in that run: one failed POST and the idea stayed without its text for
+    ever - the incident this was written for. A failed POST is a line in the report, never a stop.
+13. The exemption for `POST /v1/team/queue/proposals` in `test_team_state.py` ("served before its caller lands") is
+    gone: the client calls it. The card `researcher-every-cycle` no longer has that step to do.
+
+**Evidence, third form.** Twenty tests for this addendum in `scripts/tests/team-cycle.tests.ps1` (seven new: the order
+of reads and writes of two inspections in one batch; the merge named when the stop lands between the look and the
+write; the store that refuses for ever - the cycle ends after four reads; a stale task not looked at while re-reads fail;
+a task taken out of the store during its inspection; a dropped run that came back limited - the limit registered, the
+try handed back; the idea whose POST failed posted by the next cycle). The fake listener's second writer can now wait
+for the cycle's own look at the store, take a task out, and fail a proposal's POST a given number of times.
+Twenty-two mutations, each restored from a backup copy with sha256 equal - the inspector's survivors of both passes
+(M1, M2, M5, N1, N2, N8, N10) among them: all RED.
+
+**Addendum 11 after the inspector's third return, of `91c70543` (2026-10-02).** Three findings, two of them things the
+third form itself had opened.
+
+14. **A write made while runs are in flight never ends the cycle** (`Save-QueueNow`: the write after the starts, and the
+    write of each applied result). The third form wrote each result at once - and one 503 at that moment ended the cycle
+    with the other run still working: both tasks left `in_progress`, the lock released, the finished worker's result
+    lost, and the next tick free to start workers in the same worktrees. The form before it had lived through the same
+    outage, because it wrote only when nothing was in flight. Now such a write that fails (anything but the 409, which
+    is somebody else's word and handled as before) is a line in the report, and the batch's LAST write - made when
+    nothing is in flight - is the strict one that writes what is pending.
+15. **A refused fresh merge is taken back; a merge that cannot be is named** (`Undo-TeamMerge`, the inspector's own
+    suggestion). When the store refuses "merged" right after the merge this iteration made, that merge is still the
+    integration branch's last commit: checked (HEAD has two parents, the second is the task branch's tip, the worktree
+    is clean) and then reset to its first parent - a reset, not a revert, so the branch can be merged again later and
+    "already merged" never answers for content that is gone. NOT taken back: a branch that was already on the
+    integration branch (that commit is not this run's), and a merge whose write had to wait for the batch's end and
+    was refused there (other merges may stand on it) - those are named, for the lead.
+16. **Dropped runs are bounded: three per task per cycle.** Decision 11 handed the try of a dropped run back, and
+    nothing else then bounded a store that takes the move and refuses every later write: 133 paid worker runs in 61
+    seconds on the fake, with no budget cap. After three runs of a task whose result could not be applied the cycle
+    starts nothing more for it and says so; it does not write the task (it is not the cycle's).
+17. **One bound on idle passes, with its line.** Three passes in a row that moved a state and started nothing end the
+    task loop, whatever the reason, and the report says so. (Nothing is runnable in such a pass, so nothing is lost. The
+    separate bound of ten passes, which ended the cycle without a word and had no test, is gone.)
+18. **An idea's file is a file OF `team/proposals`**: the card's `proposal` must be exactly `team/proposals/<name>.md`,
+    and the file is read from the proposals folder of `-TeamRoot`. A card naming a plan, a source file or a path that
+    climbs out is not posted. Known and left: this PC's file replaces the store's text in every cycle (one PC runs
+    cycles); the real route refuses more than 200 000 characters and an upper-case name, which is then a line in every
+    cycle's report until the file is fixed.
+
+**Evidence, fourth form.** Twenty-eight tests for this addendum (eight new: the outage in the middle of a batch; the
+outage as a run starts; the refused fresh merge taken back; the "already there" branch not taken back; `Undo-TeamMerge`
+by itself - an older merge, a dirty tree, a plain commit, and merging again after it; the merge named when its write
+could only be tried at the batch's end; three dropped runs and no fourth; only a file of `team/proposals`, for a
+proposed idea as for a waiting one). Thirty-two mutations, each restored from a backup copy with sha256 equal.
+
+19. **The harness's own race, found as a test of this addendum that failed one run in three on a loaded machine.**
+    The fakes of one batch appended to the suite's call log with `Add-Content`; two that started in the same instant
+    met on the file, the second died on the sharing violation before it did anything, the cycle counted a failed run
+    and ran the task again - one run more than the test expected and no line for the one that died. Not the product:
+    the cycle did what it does with a failed run. But a gate-only failure is a defect until it is explained, and this
+    one could turn any test with two runs in a batch red. `scripts/tests/lib/fake-claude.ps1` now opens the log for
+    append with a retry (a writer waits for the other, it does not die), held by a test that keeps the log open while a
+    fake writes (the mutation that lets it die again is RED). Suite: 173 tests.
+
+**Addendum 11 after the inspector's fourth return, of `3ce11180` (2026-10-02).** Three narrow findings, the first
+against decision 15's own guarantee.
+
+20. **A refusal is known the moment it happens, not at the end of the save.** `Save-TeamQueueApi -SkipStale` returned the
+    refused ids when it finished; a save that was refused one task and then FAILED on another threw first, and
+    `Save-QueueNow` swallowed the throw - so the stopped task's merge stayed on the integration branch, neither taken
+    back nor named. The store object now keeps the refusals as they happen (`Refused`), and the cycle reads them in a
+    `finally`.
+21. **After a refused write the cycle's own copy goes back to what it was before that result** (`Restore-TaskCopy`).
+    The merge was taken back, and the copy still said `merged`: when the store could not be read again (a broken card
+    elsewhere), the report listed the task as merged and sent the lead to gate a branch that did not hold the work. The
+    put-back copy is noted as written, so it is not sent.
+22. The idle bound's line says what happened: "depo aynı yazmayı üst üste reddetti (…)" only when something was
+    refused; otherwise that three passes in a row only moved a state.
+
+**Known and left, said so.** (a) "Three dropped runs" is per CYCLE: a store that refuses for ever costs three runs in
+every cycle, with its line in every report - a mark in the store is impossible by construction (the store refuses the
+cycle's writes), and a local file would bound it across cycles; not built. (b) A store that is away from a batch's
+start to its end still ends the cycle at the batch's last, strict write: exit 1, the lock released, no report file
+(its lines are lost), and the next cycle repeats one run - as before this addendum. (c) This PC's proposal file
+replaces the store's text in every cycle; one PC runs cycles.
+
+**Evidence, fifth form.** Thirty-one tests for this addendum (three new: a refusal and a failure in one save; the report
+after a merge that was taken back when the store cannot be read again; an idea's file from a `-TeamRoot` elsewhere).
+Thirty-five mutations plus the fake's, each restored from a backup copy with sha256 equal. The inspector's own
+experiment on the harness race: two fakes started together on one log, forty rounds - 29 died with the old fake, none
+with the new.
+
+**Addendum 11, approved (2026-10-02).** The independent inspector approved `dbacc280` on its FIFTH pass (four returns:
+six, five, three and three findings - every one real, two of them opened by the fix of the pass before). Its last pass
+also ran the cycle against the REAL routes (`app/team/routes.py` with the real `DbStore`, over SQLite on a local port):
+a stop written through the real PUT while an inspector runs is not merged, and the report says so (PROVEN_PROXY).
+After the approval, tests only: the two shapes it named are in the suite - the refusal acted on in the SAME iteration
+when the save then fails on another task (the merge is taken back, not only named), and the copy put back at the
+batch's end when the store cannot be read again - each held by a mutation that is RED (no `finally`; no put-back at
+the batch's end). Suite: 177.
+
+**Known and left, (d).** A lost ANSWER raises a false alarm: the store applies the cycle's "merged" and answers 503;
+the batch's last write is then refused against the cycle's own earlier write. Nothing is reset or re-run and the
+store and the branch are right - but the report says "depoda başkası değiştirdi" and "lead geri alır ya da işi
+yeniden açar" of a task nobody else touched. The lead reads the store before acting on that line.
+
+What is still `NOT_RUN`: the full gate on the integration branch, and a real cycle on the Cloud Core picking up a card
+stored while it runs - the PROVEN_REAL this addendum is for.
+
 ## ADR-0241 — The Ofis counts runs, not seats: four worker seats (more when the cycle runs more), every run of a seat, and the voice says the same number (2026-10-02)
 
 The owner, 2026-10-01, looking at the page during a cycle: "4. çalışan koltuğunu da sayfaya ekle" - four workers ran
