@@ -3174,6 +3174,75 @@ try {
         Assert-True -Condition (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt")) -Because "and its finished run is recorded"
         Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
     }
+
+    function Set-WorktreeBlocked {
+        <# A file stands where the task's worktree folder goes: its run cannot be started. #>
+        param([string]$Root, [string]$Id, [string]$CycleId = "c1")
+        $folder = Join-Path $Root ".claude\worktrees\team\$CycleId"
+        [void](New-Item -ItemType Directory -Force -Path $folder)
+        Set-Content -LiteralPath (Join-Path $folder "worker-$Id") -Value "not a folder" -Encoding ASCII
+    }
+
+    Test-Case "the pool: a start that fails with nothing else in flight does not end the cycle - the task is stopped with the reason and the next ones take the seat" {
+        # The inspector's finding on the first pool: Start-PoolRun answered $false, nothing was
+        # started and nothing was in flight, and the loop read that as "nothing can be started":
+        # exit 0 with two assigned tasks never run. The batch loop went on to them.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Area @("src/a1")), (New-Task -Id "task-two" -State "assigned" -Area @("src/a2")), (New-Task -Id "task-three" -State "assigned" -Area @("src/a3")))
+        Set-WorktreeBlocked -Root $root -Id "task-one"
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "stopped,merged,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-True -Condition ([string](Get-TaskById -Queue $run.Queue -Id "task-one").reason -match "koşu başlatılamadı") -Because "the stop says why: $((Get-TaskById -Queue $run.Queue -Id 'task-one').reason)"
+        Assert-Equal -Expected "worker:task-two,inspector:task-two,worker:task-three,inspector:task-three" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "one worker seat: the two that could start, one after the other, and no run for the one that could not"
+        Assert-Equal -Expected 0 -Actual @(Test-TeamQueue -Queue $run.Queue).Count -Because "the queue keeps the protocol"
+    }
+
+    Test-Case "the pool: four starts that fail in a row are four stopped tasks, not the end of the cycle - the fifth task is run" {
+        # A failed start is not an idle pass: three of those in a row end the cycle's work.
+        $tasks = @(1..5 | ForEach-Object { New-Task -Id "task-$_" -State "assigned" -Area @("src/f$_") })
+        $root = New-Sandbox -Tasks $tasks
+        foreach ($number in 1..4) { Set-WorktreeBlocked -Root $root -Id "task-$number" }
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 1
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "stopped,stopped,stopped,stopped,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker:task-5,inspector:task-5" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "only the task that could start was run"
+    }
+
+    Test-Case "the pool: a start that fails beside a run in flight leaves its seat to the next task at once - not when that run ends" {
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned" -Area @("src/a1")), (New-Task -Id "task-two" -State "assigned" -Area @("src/a2")), (New-Task -Id "task-three" -State "assigned" -Area @("src/a3")))
+        Set-WorktreeBlocked -Root $root -Id "task-two"
+        $hooks = Get-PoolHooks -Root $root -Seconds "worker:task-one=8"
+        Use-FakeHooks -Environment $hooks -Body { $script:failBesideRun = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 }
+        $run = $script:failBesideRun
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $third = Get-SnapshotRuns -Folder (Join-Path $root "snapshots") -Name "worker-task-three"
+        Assert-Equal -Expected "task-one:worker,task-three:worker" -Actual $third -Because "task-three's worker took the seat task-two could not use, while task-one's was still running"
+        Assert-Equal -Expected "merged,stopped,merged" -Actual (@(Get-TeamTasks -Queue $run.Queue | ForEach-Object { $_.state }) -join ",") -Because ($run.StdOut + $run.StdErr + $run.Report)
+    }
+
+    Test-Case "the pool: a researcher that cannot be started is a line in the report, not the end of the cycle - the task beside it is worked and merged" {
+        # It used to throw out of the refill: the cycle died, and its 'finally' killed every run in flight.
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one" -State "assigned"))
+        Remove-Item -LiteralPath (Join-Path $root ".claude\agents\researcher.md") -Force
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -Research
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "no researcher ran, and it was tried once"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "araştırmacı: koşu başlatılamadı")).Count -Because "said once, under the stops: $($run.Report)"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "team\research-last.txt"))) -Because "a run that never started is not the researcher's last run: the next cycle tries again"
+    }
+
+    Test-Case "the pool: a lead split that cannot be started is a line in the report, not the end of the cycle - the proposal stays, the task beside it is merged" {
+        $root = New-Sandbox -Tasks @((New-Proposal -Id "idea-one"), (New-Task -Id "task-one" -State "assigned"))
+        $before = (Get-TaskById -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")) -Id "idea-one").state
+        Remove-Item -LiteralPath (Join-Path $root ".claude\agents\lead.md") -Force
+        $run = Invoke-Cycle -Root $root -Scenario "split" -NoCaps
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because ($run.StdOut + $run.StdErr + $run.Report)
+        Assert-Equal -Expected $before -Actual (Get-TaskById -Queue $run.Queue -Id "idea-one").state -Because "the proposal is where it was: the next cycle asks again"
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "no lead ran"
+        Assert-Equal -Expected 1 -Actual ([regex]::Matches($run.Report, "bölme koşusu: idea-one: koşu başlatılamadı")).Count -Because "said once, under the risks - one try a cycle: $($run.Report)"
+    }
 }
 finally {
     foreach ($api in $fakeApis) { try { if (-not $api.HasExited) { $api.Kill() } } catch { } }

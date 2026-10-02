@@ -70,6 +70,20 @@ the arguments it started with, and a cycle that has work does not end.
 * *The seat counts are this PC's file*, also in API mode ("file store" in the card). A setting
   in the team store would need a route; not built.
 
+* *A start that fails is a change, never the end* (added after the inspector's return,
+  2026-10-02). The first pool read "nothing started, nothing in flight, no state moved" as
+  "nothing can be started" - but a start that fails (a worktree that cannot be made) stops its
+  task, and with one worker seat the cycle ended with two assigned tasks never run; the batch
+  loop went on to them. A refill now counts its failed starts (`Failed`): the seat is still
+  free, so the next refill is due at once - beside runs in flight too, not at the next run's
+  end or `-RefillSeconds` later - and it is not an idle pass. It ends: each failed start stops
+  its task. A researcher or a lead split that cannot be started (no role file, a model that is
+  none) is caught as well: it used to throw out of the refill, which ended the cycle and let
+  the `finally` kill every run in flight. Now it is that run's one try of the cycle and a line
+  in the report (`araştırmacı: koşu başlatılamadı` under the stops, without the marker of a
+  finished research run; `bölme koşusu: <id>: koşu başlatılamadı` under the risks, the
+  proposal where it was), and the next cycle tries again.
+
 **What changed in the tests that were there.** Three assert the old meaning of `-MaxParallel 1`
 ("one run of any role at a time") and now state the new one; four that replay a store outage in
 the shape of a batch pin that shape with `-PollMilliseconds` (both runs end in one poll). Each
@@ -96,6 +110,12 @@ replacing the task of a run in flight; a finished run waiting for every other ru
 the stop flag not asked at a refill; runs started during the limit's wait; a second run for a
 task in flight; the stop line once per limited run; runs left alive when the cycle dies; the
 researcher alone again; a late merge refusal not named; no heartbeat from the pool.
+After the return, five more tests, each RED on the first pool: three assigned tasks on one worker
+seat with the first worktree blocked (the other two end merged); four failed starts in a row and
+a fifth task run; a failed start beside a run in flight leaving its seat at once; a researcher
+and a lead split that cannot be started (the cycle died with exit 1). Four more mutations, RED
+and restored the same way: failed starts not counted against the idle pass; no refill after a
+failed start; the researcher's failed start thrown again; the lead's thrown again.
 PROVEN_REAL is the Ofis page showing a worker seat refilled while another worker of the same
 cycle is still running: NOT_RUN here.
 

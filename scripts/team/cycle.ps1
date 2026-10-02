@@ -1067,7 +1067,10 @@ try {
 
     function Start-PoolRun {
         <# One candidate of a refill, started in the seat it was given. $false when it could
-           not be started (the task is stopped, with the reason). #>
+           not be started: a task is stopped with the reason, a run the cycle makes for itself
+           (the researcher, a lead's split) is over for this cycle and a line in the report.
+           Never an error out of the refill - that would end the cycle, and its 'finally' kills
+           every run in flight. #>
         param($Item)
         $task = $Item.Task
         $role = [string]$Item.Role
@@ -1075,26 +1078,44 @@ try {
             $proposals = Join-Path $TeamRoot "proposals"
             if (-not (Test-Path -LiteralPath $proposals)) { [void](New-Item -ItemType Directory -Force -Path $proposals) }
             $script:ownTries["cycle/researcher"] = 1 + [int]$script:ownTries["cycle/researcher"]
-            [void]$script:pool.Add((Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot -Pick $Item.Pick))
-            return $true
+            try {
+                [void]$script:pool.Add((Start-RoleRun -Task $null -Role "researcher" -WorkingDirectory $repoRoot -Pick $Item.Pick))
+                return $true
+            }
+            catch {
+                # As a researcher's run that failed (Complete-Research), without the marker of a
+                # finished run: the next cycle tries again.
+                $script:researchPending = $false
+                Add-CycleNote -List "stops" -Text "araştırmacı: koşu başlatılamadı: $($_.Exception.Message)"
+                Add-ResearchProposals
+                return $false
+            }
         }
         if ($role -eq "lead") {
             # The lead's split. A proposal that serves a roadmap row is approved in advance
             # (TEAM_PROTOCOL 3a) but has no area yet. ONE fresh lead run per proposal writes the
             # split; THIS script judges it when the run ends (Complete-Split).
             $proposalId = [string]$task.id
-            $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
-            $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
-            # A file left by an earlier run is not this run's answer.
-            if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
-            $splitFolder = Split-Path -Parent $splitPath
-            if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
-            $card = New-TeamSplitCard -Task $task -Queue $script:queue -CycleId $CycleId -SplitFile $splitRelative
+            # One try a cycle, whether the run could be started or not.
             $script:splitTried[$proposalId] = $true
             $script:ownTries["$proposalId/lead"] = 1 + [int]$script:ownTries["$proposalId/lead"]
-            # The lead's run follows the setting and the chain like any role's.
-            [void]$script:pool.Add((Start-RoleRun -Task $task -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit") -Pick $Item.Pick))
-            return $true
+            try {
+                $splitRelative = "team/plans/$CycleId-split-$proposalId.json"
+                $splitPath = Join-Path $repoRoot ($splitRelative -replace '/', '\')
+                # A file left by an earlier run is not this run's answer.
+                if (Test-Path -LiteralPath $splitPath) { Remove-Item -LiteralPath $splitPath -Force }
+                $splitFolder = Split-Path -Parent $splitPath
+                if (-not (Test-Path -LiteralPath $splitFolder)) { [void](New-Item -ItemType Directory -Force -Path $splitFolder) }
+                $card = New-TeamSplitCard -Task $task -Queue $script:queue -CycleId $CycleId -SplitFile $splitRelative
+                # The lead's run follows the setting and the chain like any role's.
+                [void]$script:pool.Add((Start-RoleRun -Task $task -Role "lead" -WorkingDirectory $repoRoot -Prompt $card -ExcludeTools @("Bash", "Edit") -Pick $Item.Pick))
+                return $true
+            }
+            catch {
+                # The proposal stays where it was; the next cycle asks again.
+                Add-CycleNote -List "risks" -Text "bölme koşusu: ${proposalId}: koşu başlatılamadı: $($_.Exception.Message)"
+                return $false
+            }
         }
         $script:runCount[[string]$task.id] = $script:runCount[[string]$task.id] + 1
         $where = $repoRoot
@@ -1123,9 +1144,11 @@ try {
 
     function Start-PoolRuns {
         <# A refill: the seats that are free are given to what can run now. Returns what it did:
-           Started (runs), Moved (a state was moved), Blocked (candidates no model is open for)
-           and the earliest reset those wait for ("" = nobody said). #>
-        $pass = [pscustomobject]@{ Started = 0; Moved = $false; Blocked = 0; BlockedReset = "" }
+           Started (runs), Failed (starts that failed: each is over - a stopped task, a line in
+           the report - and its seat is still free), Moved (a state was moved), Blocked
+           (candidates no model is open for) and the earliest reset those wait for ("" = nobody
+           said). #>
+        $pass = [pscustomobject]@{ Started = 0; Failed = 0; Moved = $false; Blocked = 0; BlockedReset = "" }
         if ($script:capped) { return $pass }
         Read-SeatSettings
         Sync-Queue
@@ -1172,7 +1195,9 @@ try {
             [void]$open.Add($item)
         }
         $fill = @(Select-TeamSeatFill -Candidates @($open.ToArray()) -InFlight @($script:pool.ToArray()) -Seats $script:seats)
-        foreach ($item in $fill) { if (Start-PoolRun -Item $item) { $pass.Started = $pass.Started + 1 } }
+        foreach ($item in $fill) {
+            if (Start-PoolRun -Item $item) { $pass.Started = $pass.Started + 1 } else { $pass.Failed = $pass.Failed + 1 }
+        }
         if (@($fill).Count -gt 0) { [void](Save-QueueNow -What "koşuların başlangıcı") }
         return $pass
     }
@@ -1445,7 +1470,13 @@ try {
             $refillDue = $false
             $nextRefill = [datetime]::UtcNow.AddSeconds($RefillSeconds)
             $pass = Start-PoolRuns
-            if ($pass.Started -gt 0) { $idlePasses = 0 }
+            # A start that failed is a change, not "nothing can be started": the seat it was given
+            # is still free and the next of the queue takes it in the next refill, at once - with
+            # nothing else in flight too (the first pool ended there, two assigned tasks never
+            # run; the batch loop went on). It ends: every failed start stops its task, or is the
+            # one try of the researcher or of a split.
+            if ($pass.Failed -gt 0) { $refillDue = $true }
+            if ($pass.Started -gt 0 -or $pass.Failed -gt 0) { $idlePasses = 0 }
             elseif (@($pool).Count -eq 0 -and $null -eq $limitWaitUntil) {
                 # Nothing is in flight and this refill started nothing.
                 if ($pass.Moved -and -not $capped) {
