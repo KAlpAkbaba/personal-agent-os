@@ -882,16 +882,82 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   stops = 0;
   aborts = 0;
   running = false;
+  /**
+   * Every write to the two on-device properties, in order. They are accessors and not
+   * fields so that "the default setting never touches them" is an assertion on this list
+   * (empty), not on a value that happens to still be `undefined`.
+   */
+  readonly assignments: Array<{ key: "processLocally" | "phrases"; value: unknown }> = [];
+  /** What the recogniser was configured with at each `start()` that succeeded. */
+  readonly startedWith: Array<{ processLocally: boolean | undefined; phrases: unknown }> = [];
+  /** Thrown by the next `start()` instead of starting (Chrome's `NotAllowedError` for a blocked policy). */
+  failNextStart: Error | null = null;
+  /**
+   * Chrome's real order: `stop()` returns at once and `end` is an event that arrives LATER
+   * (a final for what was already heard can still come in between, and a `start()` before
+   * it is an InvalidStateError). When true, `stop()` only arms the end; the test delivers it
+   * with `deliverEnd()`. The default keeps the synchronous `onend` the older tests rely on.
+   */
+  delayEnd = false;
+  endPending = false;
+  private processLocallyValue: boolean | undefined = undefined;
+  private phrasesValue: unknown = undefined;
+
+  get processLocally(): boolean | undefined {
+    return this.processLocallyValue;
+  }
+
+  set processLocally(value: boolean | undefined) {
+    this.assignments.push({ key: "processLocally", value });
+    this.processLocallyValue = value;
+  }
+
+  get phrases(): unknown {
+    return this.phrasesValue;
+  }
+
+  set phrases(value: unknown) {
+    this.assignments.push({ key: "phrases", value });
+    this.phrasesValue = value;
+  }
 
   start(): void {
     if (this.running) throw new DOMException("already started", "InvalidStateError");
+    const refused = this.failNextStart;
+    if (refused) {
+      this.failNextStart = null;
+      throw refused;
+    }
     this.running = true;
     this.starts += 1;
+    this.startedWith.push({ processLocally: this.processLocallyValue, phrases: this.phrasesValue });
+  }
+
+  /**
+   * Chrome refused the run it had just been asked for: `onerror` and NO `onend`
+   * (`language-not-supported` with `processLocally` and no pack, read in Chromium's
+   * `speech_recognition.cc`). A mode that waits for `onend` to restart stays deaf.
+   */
+  refuse(error: string): void {
+    this.running = false;
+    this.onerror?.({ error });
   }
 
   stop(): void {
     this.stops += 1;
     if (!this.running) return;
+    if (this.delayEnd) {
+      this.endPending = true; // still "started" as far as Chrome is concerned
+      return;
+    }
+    this.running = false;
+    this.onend?.();
+  }
+
+  /** The `end` a `stop()` armed under `delayEnd` arrives now. */
+  deliverEnd(): void {
+    if (!this.endPending) return;
+    this.endPending = false;
     this.running = false;
     this.onend?.();
   }
@@ -899,6 +965,7 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
   abort(): void {
     this.aborts += 1;
     if (!this.running) return;
+    this.endPending = false;
     this.running = false;
     this.onend?.();
   }
@@ -927,6 +994,45 @@ export class FakeSpeechRecognition implements SpeechRecognitionLike {
 
   fail(error: string): void {
     this.onerror?.({ error });
+  }
+}
+
+/**
+ * What a scripted on-device call does: resolve with a value, reject with an error, never
+ * settle, or - a function, given the call's 0-based index - whatever promise the test holds
+ * (an answer that arrives after the session that asked is gone).
+ */
+export type FakeOnDeviceScript<T> = T | Error | "hang" | ((call: number) => Promise<T>);
+
+/**
+ * A scripted `SpeechRecognition.available()` / `.install()` (Chrome 139's static pair).
+ * It records every options object it was given, so a test can prove that nothing was
+ * installed, and that what was asked for carried `processLocally: true`.
+ */
+export class FakeOnDevice {
+  readonly availableCalls: Array<Record<string, unknown>> = [];
+  readonly installCalls: Array<Record<string, unknown>> = [];
+
+  constructor(
+    public status: FakeOnDeviceScript<string> = "available",
+    public installResult: FakeOnDeviceScript<boolean> = true,
+  ) {}
+
+  private static play<T>(script: FakeOnDeviceScript<T>, call: number): Promise<T> {
+    if (typeof script === "function") return (script as (call: number) => Promise<T>)(call);
+    if (script === "hang") return new Promise<T>(() => {});
+    if (script instanceof Error) return Promise.reject(script);
+    return Promise.resolve(script);
+  }
+
+  available(options: Record<string, unknown>): Promise<string> {
+    this.availableCalls.push(options);
+    return FakeOnDevice.play(this.status, this.availableCalls.length - 1);
+  }
+
+  install(options: Record<string, unknown>): Promise<boolean> {
+    this.installCalls.push(options);
+    return FakeOnDevice.play(this.installResult, this.installCalls.length - 1);
   }
 }
 

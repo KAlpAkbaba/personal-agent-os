@@ -9,7 +9,7 @@
  * Every test would fail on the defect it names (see the comments); the last
  * one sweeps every payload key through the server's forbidden-key rule.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { VoiceSessionApi } from "../../app/lib/voice/api";
 import { STATE_EVENT_KINDS, isForbiddenKey } from "../../app/lib/voice/contract";
@@ -26,8 +26,17 @@ import {
 } from "../../app/lib/voice/fake";
 import type { OutboundAudioStats } from "../../app/lib/voice/transport";
 
+/**
+ * Let what is already queued run: one whole event-loop turn per round, and NO timer.
+ *
+ * Everything this file waits for is a promise chain that is already resolving (the fake
+ * Cloud Core's answer, the probe's next poll after `advance()` fired its sleep), so a turn
+ * of the loop is the event. It used to be `setTimeout(resolve, 0)`, which waits for the
+ * wall clock instead: a timer period per round, and a 5 s runner limit that a loaded
+ * gate reached (the first test below).
+ */
 const tick = async (rounds = 4): Promise<void> => {
-  for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < rounds; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 };
 
 /** A continuously streaming Opus track: one RTP packet every 20 ms. */
@@ -95,6 +104,34 @@ function assertServerSafe(core: FakeCloudCore): void {
     for (const key of Object.keys(event.payload ?? {})) expect(isForbiddenKey(key)).toBe(false);
   }
 }
+
+describe("the clock of this file", () => {
+  it("a pumped session arms no real timer: the injected scheduler is the only clock, for the controller and for this file's helpers", async () => {
+    // What this file used to do: every `tick` round was a real `setTimeout(0)`, which
+    // costs a whole timer period (15.6 ms on Windows), and the fallback test below
+    // pumps a hundred of them - 1.6 s idle, 3.5 s measured under a loaded gate, 5 s is
+    // the runner's limit. A test of a manual clock that finishes when the wall clock
+    // lets it is the flake; this pins that neither side waits on one.
+    const armed = vi.spyOn(globalThis, "setTimeout");
+    const repeating = vi.spyOn(globalThis, "setInterval");
+    try {
+      const t = await setup({ transport: { uplinkStats: silent }, probe: { maxMs: 200 } });
+      t.scheduler.advance(1000);
+      t.localSpeech.speechStart(880, { candidateAt: 930, decidedAt: 1000, preRollMs: 50 });
+      await t.pump(250);
+      await t.controller.flushEvents();
+      // The probe ran its whole bound on the manual clock: it polled, and gave up at 200.
+      expect(t.transport.statsPolls).toBeGreaterThan(10);
+      expect(t.log).toContain("uplink.rtp:none");
+      expect(t.core.events.some((e) => e.kind === "mic_speech_start")).toBe(true);
+      expect(armed.mock.calls.length).toBe(0);
+      expect(repeating.mock.calls.length).toBe(0);
+    } finally {
+      armed.mockRestore();
+      repeating.mockRestore();
+    }
+  });
+});
 
 describe("§1 mic→uplink from the transport's counters", () => {
   it("measures the first RTP packet after the gate's decision and reports the split, basis 1", async () => {

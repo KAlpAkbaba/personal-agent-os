@@ -17,7 +17,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { VoiceSessionApi } from "../../app/lib/voice/api";
+import { type Fetcher, VoiceSessionApi } from "../../app/lib/voice/api";
 import {
   FakeCloudCore,
   FakeMicrophone,
@@ -32,9 +32,19 @@ import { type VoiceRigBuilder, voiceInstances } from "../../app/lib/voice/rig";
 import { VoiceStore, getVoiceStore, installVoiceStore } from "../../app/lib/voice/store";
 import { useVoiceSession } from "../../app/lib/voice/useVoiceSession";
 
+/**
+ * Let what is already queued run: one whole event-loop turn per round, and NO timer.
+ *
+ * The rig's controller runs on the REAL scheduler here (a rig has no scheduler port), so
+ * its reporter's 250 ms flush timer is a real one, and this used to be six rounds of
+ * `setTimeout(resolve, 0)` - about 95 ms idle on Windows, more than 250 under a loaded
+ * gate. Nothing in this file may depend on which of the two fires first.
+ */
 const tick = async (rounds = 6): Promise<void> => {
-  for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  for (let i = 0; i < rounds; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
 };
+
+const SESSIONS = "/v1/voice/realtime/sessions";
 
 class MemoryStorage {
   private items = new Map<string, string>();
@@ -55,11 +65,25 @@ function fakeRig() {
   const microphone = new FakeMicrophone();
   const playback = new FakePlayback(scheduler.now);
   const transports: FakeTransport[] = [];
+  /**
+   * A create is a NEW session, as it is on the Cloud Core.
+   *
+   * `FakeCloudCore` has one session id and one `closed` marker for its whole life, so the
+   * session a second `POST /sessions` hands back is the one it closed, and its first
+   * report is answered 410 - the controller then says "closed", truthfully, about a
+   * server that does not exist. That was the 'closed' where 'listening' was expected:
+   * the report goes out on a real 250 ms timer, and the assertion only held while it ran
+   * first. The real server mints a session per create; so does this one.
+   */
+  const fetcher: Fetcher = (path, init) => {
+    if (path === SESSIONS && init?.method?.toUpperCase() === "POST") core.closed = null;
+    return core.fetcher(path, init);
+  };
   let builds = 0;
   const build: VoiceRigBuilder = () => {
     builds += 1;
     return {
-      api: new VoiceSessionApi(core.fetcher),
+      api: new VoiceSessionApi(fetcher),
       profiles: new MemoryProfileStore(),
       playback,
       microphone,
@@ -102,8 +126,9 @@ function fakeRig() {
     get builds() {
       return builds;
     },
-    sessionsCreated: () =>
-      core.requests.filter((r) => r.method === "POST" && r.path === "/v1/voice/realtime/sessions").length,
+    sessionsCreated: () => core.requests.filter((r) => r.method === "POST" && r.path === SESSIONS).length,
+    /** `LISTENING` reports the Cloud Core ACCEPTED: one per session that got as far as listening. */
+    listeningReports: () => core.events.filter((e) => e.kind === "state" && e.payload?.state === "LISTENING").length,
   };
 }
 
@@ -204,6 +229,10 @@ describe("one controller per tab, however many views read it", () => {
     expect(t.microphone.opened).toHaveLength(2);
     expect(voiceInstances.snapshot().controllers).toBe(1);
     expect(t.store.peekRig()?.controller).toBe(controller);
+    // And it STAYS listening once the new session's first report has been answered.
+    await controller?.flushEvents();
+    expect(t.store.getSnapshot().controller).toMatchObject({ state: "listening", lastError: null });
+    expect(t.listeningReports()).toBe(2);
   });
 
   it("disconnect leaves the controller in place for the next connect: closed, then listening again", async () => {
@@ -218,6 +247,11 @@ describe("one controller per tab, however many views read it", () => {
     await tick();
     expect(t.store.getSnapshot().controller.state).toBe("listening");
     expect(voiceInstances.snapshot().controllers).toBe(1);
+    // Listening again is not a state that lasts until the next report: the second
+    // session's events are accepted, and the controller is still listening after them.
+    await t.store.peekRig()?.controller.flushEvents();
+    expect(t.store.getSnapshot().controller).toMatchObject({ state: "listening", lastError: null });
+    expect(t.listeningReports()).toBe(2);
   });
 });
 

@@ -3313,7 +3313,11 @@ def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     """ "Not Defteri'ni aç" / "Chrome'u aç" / "Tarayıcıyı aç" (spec §2's ``app.launch``
     allowlist, spec §3's APP_OPEN). Requires an open-imperative verb (module: "açık" the
     adjective/query stays a query) AND a name the allowlist alias table actually knows -
-    "Kapıyı aç" (open the door) names nothing on the list and resolves to nothing here."""
+    "Kapıyı aç" (open the door) names nothing on the list and resolves to nothing here.
+
+    A word the owner TAUGHT (ADR-0224) is not asked here: this table stands before the
+    document, artifact and media tables, and a taught word must never take a sentence one
+    of them owns (:func:`_taught_app_open`)."""
     if not _has_exact(tokens, *_OPEN_VERB_FORMS):
         return None
     from app.operator.plans import resolve_app_alias
@@ -3322,6 +3326,84 @@ def _app_open_match(tokens: tuple[str, ...]) -> tuple[str, str] | None:
     if canonical is None:
         return None
     return canonical, canonical
+
+
+#: ``ResolvedIntent.matched`` of an APP_OPEN a taught word decided: "vocabulary:calc".
+MATCHED_VOCABULARY_PREFIX: Final = "vocabulary:"
+
+
+def owned_by_a_table(resolved: ResolvedIntent) -> bool:
+    """A rule table claimed the sentence for words it knows. False for an unrouted sentence
+    and for the media table's bare-title last resort (:func:`_bare_title_media_match`: "a
+    play verb and a name nothing else in this resolver wanted") - a guess about words no
+    table knows, which a word the owner taught outranks."""
+    if resolved.intent is Intent.NONE:
+        return False
+    return not (resolved.intent is Intent.MEDIA_PLAY and resolved.matched == _BARE_TITLE_MATCHED)
+
+
+def _taught_app_open(
+    text: str, unowned: ResolvedIntent, polite: Sequence[str]
+) -> ResolvedIntent | None:
+    """ADR-0224 corrections: a word the owner taught by a correction ("ona hesap makinesi
+    deme, hesaplayıcı de") names an application too - asked LAST, only for a sentence no
+    table owns after the words as heard and every repair reading (:func:`owned_by_a_table`),
+    and only among the synonyms the relay loaded for this turn (none outside one). The
+    readings are the repair's own: as heard, the polite request as its imperative, the
+    letters folded."""
+    from app.voice.understanding import corrections
+
+    if not corrections.active():
+        return None
+    for label, readings, folded in (
+        (None, (text,), False),
+        (ROUTE_REPAIR_POLITE, polite, False),
+        (ROUTE_REPAIR_ASCII_FOLD, (text,), True),
+        (f"{ROUTE_REPAIR_POLITE}+{ROUTE_REPAIR_ASCII_FOLD}", polite, True),
+    ):
+        token = _FOLD_MATCHING.set(folded)
+        try:
+            for reading in readings:
+                tokens = normalize_transcript(reading)[1]
+                if not _has_exact(tokens, *_OPEN_VERB_FORMS):
+                    continue
+                canonical = corrections.app_for(tokens)
+                if canonical is not None:
+                    # A new reading, not the unowned one edited: nothing of a guessed
+                    # title (``media_query``) rides along.
+                    return ResolvedIntent(
+                        Intent.APP_OPEN,
+                        scope=SCOPE_CONVERSATION,
+                        matched=f"{MATCHED_VOCABULARY_PREFIX}{canonical}",
+                        application=canonical,
+                        normalized_text=unowned.normalized_text,
+                        tokens=unowned.tokens,
+                        fillers_removed=unowned.fillers_removed,
+                        confidence=1.0 if unowned.fillers_removed == 0 else 0.9,
+                        research_class=unowned.research_class,
+                        reference=unowned.reference,
+                        research_mode=unowned.research_mode,
+                        route_repair=label or unowned.route_repair,
+                    )
+        finally:
+            _FOLD_MATCHING.reset(token)
+    return None
+
+
+def rule_verb_words() -> tuple[frozenset[str], frozenset[str]]:
+    """(the verb forms, the verb stems) of every rule table in this module, as written -
+    read from the tables themselves (every ``_..._VERB...`` tuple; ``...STEMS`` and
+    ``...PREFIXES`` are matched by prefix here, the rest whole), so a verb added to a table
+    is in this answer without a second list. ADR-0224 corrections asks it: a word this
+    router reads as a verb is never taught as the name of a machine or an application."""
+    forms: set[str] = set()
+    stems: set[str] = set()
+    for name, value in globals().items():
+        if "_VERB" not in name or not isinstance(value, tuple | frozenset):
+            continue
+        words = [word for word in value if isinstance(word, str)]
+        (stems if name.endswith(("STEMS", "PREFIXES")) else forms).update(words)
+    return frozenset(forms), frozenset(stems)
 
 
 # --------------------------------------------- M20: File & Document Intelligence
@@ -7472,6 +7554,8 @@ _BARE_TITLE_VERB_FORMS: Final[tuple[str, ...]] = (
 #: The cost is stated rather than hidden: "Gülümse aç." (a one-word song) still needs a
 #: marker -- "Gülümse şarkısını aç." -- and always will under this rule.
 _MIN_BARE_TITLE_WORDS: Final[int] = 2
+#: ``ResolvedIntent.matched`` of the bare-title reading (:func:`owned_by_a_table` asks it).
+_BARE_TITLE_MATCHED: Final = "adıyla aç"
 
 
 def _bare_title_media_match(
@@ -7513,7 +7597,7 @@ def _bare_title_media_match(
     query = _extract_media_query(utterance)
     if query is None or len(query.split()) < _MIN_BARE_TITLE_WORDS:
         return None
-    return Intent.MEDIA_PLAY, "adıyla aç", query
+    return Intent.MEDIA_PLAY, _BARE_TITLE_MATCHED, query
 
 
 def _media_match(tokens: tuple[str, ...], utterance: str = "") -> tuple[Intent, str] | None:
@@ -8352,6 +8436,12 @@ def resolve_intent(
     A repair is taken only when its readings agree on one intent, and never into the mail
     or calendar families (deferred by the owner; their routes stay exactly as they are).
 
+    Last of all - when no table owns the sentence after both repairs - an application word
+    the owner taught is read (ADR-0224 corrections, :func:`_taught_app_open`): a lesson
+    fills a gap the router has, and never takes a sentence a table owns. The one reading
+    it outranks is the media table's bare-title guess, which claims only "a name nothing
+    else wanted" (:func:`owned_by_a_table`).
+
     The one exception to "the words as heard first" is an ALL-CAPS transcript whose "I"
     cannot say which i it is (``caps_fold``, :func:`_is_ambiguous_caps`): it is read
     folded first, because its exact reading is not the words as heard at all.
@@ -8385,20 +8475,27 @@ def resolve_intent(
         # which really had a dotless i, still meets "kapat") - from the start.
         capped = _repair_reading((text.replace("I", "i"),), state, folded=True)
         if capped is not None:
-            return replace(capped, route_repair=ROUTE_REPAIR_CAPS_FOLD)
+            capped = replace(capped, route_repair=ROUTE_REPAIR_CAPS_FOLD)
+            if owned_by_a_table(capped):
+                return capped
+            return _taught_app_open(text, capped, ()) or capped
     first = _resolve_intent_rules(text, **state)
-    if first.intent is not Intent.NONE or not first.tokens:
+    if owned_by_a_table(first) or not first.tokens:
         return first
     polite = polite_imperative_readings(text)
-    for label, readings, folded in (
-        (ROUTE_REPAIR_POLITE, polite, False),
-        (ROUTE_REPAIR_ASCII_FOLD, (text,), True),
-        (f"{ROUTE_REPAIR_POLITE}+{ROUTE_REPAIR_ASCII_FOLD}", polite, True),
-    ):
-        repaired = _repair_reading(readings, state, folded=folded)
-        if repaired is not None:
-            return replace(repaired, route_repair=label)
-    return first
+    if first.intent is Intent.NONE:
+        for label, readings, folded in (
+            (ROUTE_REPAIR_POLITE, polite, False),
+            (ROUTE_REPAIR_ASCII_FOLD, (text,), True),
+            (f"{ROUTE_REPAIR_POLITE}+{ROUTE_REPAIR_ASCII_FOLD}", polite, True),
+        ):
+            repaired = _repair_reading(readings, state, folded=folded)
+            if repaired is not None:
+                first = replace(repaired, route_repair=label)
+                break
+        if owned_by_a_table(first):
+            return first
+    return _taught_app_open(text, first, polite) or first
 
 
 ROUTE_REPAIR_POLITE: Final = "polite"
@@ -10560,9 +10657,11 @@ __all__ = [
     "classify_research_reference",
     "classify_research_shape",
     "research_class_for",
+    "owned_by_a_table",
     "research_topic_of",
     "research_reference_for",
     "resolve_intent",
+    "rule_verb_words",
     "speech_budget",
     "speech_from",
     "turkish_casefold",

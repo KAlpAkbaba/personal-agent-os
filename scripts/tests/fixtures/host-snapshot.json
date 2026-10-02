@@ -1,15 +1,15 @@
 {
-  "collected_at": "2026-10-01T19:18:51Z",
+  "collected_at": "2026-10-02T06:54:28Z",
   "source": "host-snapshot.sh over ssh (collect-host-snapshot.ps1)",
   "schema_version": 1,
   "host": {"kernel": "6.8.0-142-generic", "reboot_required": false},
   "serving_colour": "blue",
-  "markers": {"release": "858c3e0bf974f1984826f4b8f37e7dc8b9e12186", "last_known_good": "cc9ca31e274d507ad0fadaf34b54c552252124a7", "recovery_pin": "858c3e0bf974f1984826f4b8f37e7dc8b9e12186"},
+  "markers": {"release": "5f250e5bbd460c419950d9ad80286a456f2921d5", "last_known_good": "ca5cc79512de47574f81df471323615567122412", "recovery_pin": "5f250e5bbd460c419950d9ad80286a456f2921d5"},
   "containers": [
     {"name": "pagentos-prod-api-blue", "state": "running"},
+    {"name": "pagentos-prod-godseye", "state": "running"},
     {"name": "pagentos-prod-api-green", "state": "exited"},
     {"name": "pagentos-prod-cloud-browser", "state": "running"},
-    {"name": "pagentos-prod-godseye", "state": "running"},
     {"name": "pagentos-prod-edge", "state": "running"},
     {"name": "pagentos-prod-postgres", "state": "running"},
     {"name": "pagentos-prod-temporal", "state": "running"},

@@ -35,7 +35,6 @@ INTEGRATION = API / "tests" / "integration"
 #: ``test_memory_tables_postgres.py`` and ``test_routines_alarms_postgres.py``); 43 remain.
 UNEXERCISED_BASELINE = frozenset(
     {
-        "activity_events",
         "app_projects",
         "authorization_events",
         "briefing_preferences",

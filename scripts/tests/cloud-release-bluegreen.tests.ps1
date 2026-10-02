@@ -22,7 +22,13 @@
         after the old colour is stopped, followed by --reconcile, ends with the last
         COMPLETED promotion live and the half-promoted candidate stopped - never live
         silently; a consistent state reconciles to itself; a canonical colour that cannot
-        come up makes the reconcile fall back loudly (81).
+        come up makes the reconcile fall back loudly (81);
+      * a release, a preflight and a rollback WAIT for the operation lock (up to
+        PAGENTOS_LOCK_WAIT_S, default 45) and only then answer 82; the reconcile never waits.
+    The fake flock has the REAL host's shape: how long the lock is held when a release asks
+    comes from scripts/tests/fixtures/host-snapshot.json (ADR-0235), so every release case
+    here meets the minute reconcile the way the host's does; 3 s, 600 s and a free lock stay
+    as explicit cases whatever a later collection finds.
     Run: powershell -NoProfile -File scripts\tests\cloud-release-bluegreen.tests.ps1
 #>
 [CmdletBinding()]
@@ -170,7 +176,32 @@ $curl = @(
 )
 [IO.File]::WriteAllText((Join-Path $fakeBin "docker"), (($docker -join "`n") + "`n"))
 [IO.File]::WriteAllText((Join-Path $fakeBin "curl"), (($curl -join "`n") + "`n"))
-[IO.File]::WriteAllText((Join-Path $fakeBin "flock"), "#!/usr/bin/env bash`nexit 0`n")
+# flock = the operation lock, with the REAL host's shape (ADR-0235): how long it is held when
+# a release asks for it comes from scripts/tests/fixtures/host-snapshot.json, not from a
+# constant written here. Until 2026-10-02 this fake answered "free" always, so no case could
+# see that the release asked once (`flock -n`) and fell with 82 on the minute reconcile's two
+# seconds (2026-10-01 23:48 UTC, the preflight of main 5f250e5b). The lock is held for the
+# first N seconds after it is asked for (N from the snapshot, or FAKE_LOCK_HELD_S): asking
+# once (-n) finds it held; waiting (-w T) gets it when N < T. Every call goes to
+# state/flock.log - its own log, so the docker order assertions below read docker only.
+$snapshotPath = Join-Path $repoRoot "scripts\tests\fixtures\host-snapshot.json"
+$snapshot = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+if (-not [bool]$snapshot.operation_lock.present) { throw "the host snapshot has no operation lock: $snapshotPath" }
+$lockHeldS = [int]$snapshot.operation_lock.longest_run * [Math]::Max(1, [int]$snapshot.operation_lock.interval_s)
+$fixtureDir = Join-Path $script:Sandbox "fixture"
+New-Item -ItemType Directory -Force -Path $fixtureDir | Out-Null
+[IO.File]::WriteAllText((Join-Path $fixtureDir "lock-held-s.txt"), "$lockHeldS`n")
+$flock = @(
+    '#!/usr/bin/env bash',
+    'echo "flock $*" >> "$FAKE_STATE/flock.log"',
+    'held=${FAKE_LOCK_HELD_S:-$(<"$FAKE_FIXTURE/lock-held-s.txt")}',
+    'case "$1" in',
+    '  -n) if [ "$held" -gt 0 ]; then exit 1; fi;;',
+    '  -w) if [ "$held" -ge "$2" ]; then exit 1; fi;;',
+    'esac',
+    'exit 0'
+)
+[IO.File]::WriteAllText((Join-Path $fakeBin "flock"), (($flock -join "`n") + "`n"))
 
 function Get-UpstreamText { param([string]$Http, [string]$Devices = $Http) "upstream pagentos_api { server api-$Http`:8001; }`nupstream pagentos_devices { server api-$Devices`:8001; }`n" }
 
@@ -207,8 +238,14 @@ function Reset-Host {
 
 function Invoke-Release {
     param([string]$Sha = "2222222222222222222222222222222222222222", [string]$Mode = "", [hashtable]$Env = @{})
+    # The snapshot's held seconds ARE the minute reconcile: a release, a preflight and a
+    # rollback meet them; the reconcile is that holder and does not meet itself (the unit is
+    # a oneshot). A case that puts a reconcile behind a held lock says so with FAKE_LOCK_HELD_S.
+    $lockDefault = if ($Sha -eq "--reconcile" -or $Mode -eq "--reconcile") { "FAKE_LOCK_HELD_S=0 " } else { "" }
+    $lockLog = Join-Path $hostBase "state\flock.log"
+    Remove-Item -LiteralPath $lockLog -Force -ErrorAction SilentlyContinue
     $cmd = "PAGENTOS_ALLOW_NONROOT_ENV=1 PAGENTOS_BASE='$(& $u $hostBase)' PAGENTOS_EDGE_DIR='$(& $u (Join-Path $hostBase 'edge'))' PAGENTOS_MODELS_DIR='$(& $u (Join-Path $hostBase 'models'))' PAGENTOS_HEALTH_URL=http://fake/health PAGENTOS_DRAIN_S=0 PAGENTOS_WAIT_STEP_S=0 PAGENTOS_HANDOFF_WAIT_S=1 PAGENTOS_EDGE_SETTLE_TRIES=2 PAGENTOS_EDGE_SETTLE_STEP_S=0 " +
-           "FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_ENV='$(& $u (Join-Path $hostBase '.env'))' FAKE_EDGE='$(& $u (Join-Path $hostBase 'edge'))' " +
+           "FAKE_STATE='$(& $u (Join-Path $hostBase 'state'))' FAKE_ENV='$(& $u (Join-Path $hostBase '.env'))' FAKE_EDGE='$(& $u (Join-Path $hostBase 'edge'))' FAKE_FIXTURE='$(& $u $fixtureDir)' $lockDefault" +
            (($Env.GetEnumerator() | ForEach-Object { "$($_.Key)='$($_.Value)' " }) -join "") +
            "PATH='$(& $posix $fakeBin):'`"`$PATH`" bash '$(& $u $hostScript)' $Sha $Mode 2>&1"
     $previous = $ErrorActionPreference
@@ -219,10 +256,11 @@ function Invoke-Release {
     }
     finally { $ErrorActionPreference = $previous }
     $calls = if (Test-Path (Join-Path $hostBase "state\calls.log")) { @(Get-Content (Join-Path $hostBase "state\calls.log")) } else { @() }
-    return [pscustomobject]@{ Output = $out; Exit = $exit; Calls = $calls }
+    $lockCalls = @(if (Test-Path $lockLog) { Get-Content $lockLog })
+    return [pscustomobject]@{ Output = $out; Exit = $exit; Calls = $calls; LockCalls = $lockCalls }
 }
 
-function Get-Upstream { (Get-Content (Join-Path $hostBase "edge\upstream.conf") -Raw).Trim() }
+function Get-Upstream{ (Get-Content (Join-Path $hostBase "edge\upstream.conf") -Raw).Trim() }
 function Get-Active { (Get-Content (Join-Path $hostBase "edge\active.txt") -Raw).Trim() }
 function Get-Release { (Get-Content (Join-Path $hostBase "RELEASE") -Raw).Trim() }
 function Test-Up { param([string]$Colour) Test-Path (Join-Path $hostBase "state\up-$Colour") }
@@ -495,6 +533,80 @@ try {
         [IO.File]::WriteAllText((Join-Path $hostBase ".env"), "PAGENTOS_BIND_IP=100.64.0.1`n")
         $rf = Invoke-Release
         Assert-True ($rf.Exit -eq 0 -and $rf.Output -match "first cutover: stopping the legacy" -and (Get-Active) -eq "blue" -and ($rf.Calls -match "^docker stop pagentos-prod-api").Count -eq 1 -and ($rf.Calls -match " up -d --no-deps --wait edge").Count -eq 1) "the first cutover stops the legacy api, starts the edge and lands on blue"
+
+        # The operation lock. 2026-10-01 23:48 UTC, the release of main 5f250e5b: the preflight
+        # answered "another blue/green release or recovery operation is running; retry later"
+        # (82) while nothing ran but the recovery timer's minute reconcile, which holds the same
+        # lock for about two seconds every minute (the snapshot: 2 of 60 one-second samples).
+        # The maintenance window met the same thing and waits (ADR-0223 addendum 2). A release,
+        # a preflight and a rollback now wait too, up to PAGENTOS_LOCK_WAIT_S (default 45);
+        # the reconcile does NOT: queued behind a release it would run the moment the release
+        # ends - it must step aside at once, as it always has.
+        Write-Host "the operation lock: a release waits for the minute reconcile; the reconcile never waits"
+        $waited = { param($r, [int]$S) @([regex]::Matches($r.Output, "waiting for the release lock \(held by another operation\), up to $S s")).Count }
+        $anyWait = "waiting for the release lock"
+        $onlyAsked = { param($r) $r.LockCalls.Count -eq 1 -and $r.LockCalls[0] -ceq "flock -n 9" }
+        $askedThenWaited = { param($r, [int]$S) $r.LockCalls.Count -eq 2 -and $r.LockCalls[0] -ceq "flock -n 9" -and $r.LockCalls[1] -ceq "flock -w $S 9" }
+
+        Assert-True ($lockHeldS -eq 0 -or ($p.Exit -eq 0 -and (& $waited $p 45) -eq 1 -and $r.Exit -eq 0 -and (& $waited $r 45) -eq 1)) "on the host's own shape (the snapshot: the lock held ${lockHeldS}s when asked) the preflight and the release above went through, each saying once that it waited"
+
+        Reset-Host
+        $lp = Invoke-Release -Mode "--preflight" -Env @{ FAKE_LOCK_HELD_S = "3" }
+        if ($lp.Exit -ne 0 -or $env:PAGENTOS_BG_VERBOSE) { Write-Host "--- preflight behind a 3 s lock (exit $($lp.Exit)) ---"; Write-Host $lp.Output }
+        Assert-True ($lp.Exit -eq 0 -and $lp.Output -match "preflight only; nothing changed" -and (& $waited $lp 45) -eq 1 -and (& $askedThenWaited $lp 45)) "a preflight started while the lock is held for 3 s succeeds after the wait and says once that it waited (up to 45 s, the default)"
+
+        Reset-Host
+        $lr = Invoke-Release -Env @{ FAKE_LOCK_HELD_S = "3" }
+        if ($lr.Exit -ne 0 -or $env:PAGENTOS_BG_VERBOSE) { Write-Host "--- release behind a 3 s lock (exit $($lr.Exit)) ---"; Write-Host $lr.Output }
+        Assert-True ($lr.Exit -eq 0 -and $lr.Output -match "RELEASE OK: $sha is running as api-green behind the edge" -and (Get-Active) -eq "green" -and (Get-Release) -eq $sha -and (& $waited $lr 45) -eq 1 -and (& $askedThenWaited $lr 45)) "a release started while the lock is held for 3 s succeeds after the wait and says once that it waited"
+
+        Reset-Host
+        Set-RecordedRelease -Colour "green" -Sha "0000000000000000000000000000000000000000"
+        $lb = Invoke-Release -Mode "--rollback" -Env @{ FAKE_LOCK_HELD_S = "3" }
+        Assert-True ($lb.Exit -eq 0 -and $lb.Output -match "ROLLBACK OK: api-green is active" -and (& $waited $lb 45) -eq 1 -and (& $askedThenWaited $lb 45)) "a rollback started while the lock is held for 3 s waits the same way (given with the sha)"
+        Reset-Host
+        Set-RecordedRelease -Colour "green" -Sha "0000000000000000000000000000000000000000"
+        $lb1 = Invoke-Release -Sha "--rollback" -Env @{ FAKE_LOCK_HELD_S = "3" }
+        Assert-True ($lb1.Exit -eq 0 -and $lb1.Output -match "ROLLBACK OK: api-green is active" -and (& $waited $lb1 45) -eq 1) "...and as the only argument"
+
+        Reset-Host
+        $free = Invoke-Release -Mode "--preflight" -Env @{ FAKE_LOCK_HELD_S = "0" }
+        Assert-True ($free.Exit -eq 0 -and $free.Output -notmatch $anyWait -and (& $onlyAsked $free)) "a free lock is taken at once: nothing is said about waiting, and nothing waits"
+
+        foreach ($m in @(@{ Mode = "--preflight"; Name = "a preflight" }, @{ Mode = ""; Name = "a release" })) {
+            Reset-Host
+            $past = Invoke-Release -Mode $m.Mode -Env @{ FAKE_LOCK_HELD_S = "600"; PAGENTOS_LOCK_WAIT_S = "2" }
+            Assert-True ($past.Exit -eq 82 -and $past.Output -match "another blue/green release or recovery operation is still running after waiting 2 s; retry later" -and (& $waited $past 2) -eq 1 -and (& $askedThenWaited $past 2)) "$($m.Name) behind a lock held past the wait answers 82 and names the seconds it waited"
+            Assert-True (@($past.Calls).Count -eq 0 -and (Test-Path (Join-Path $hostBase "app.next\NEW_TREE")) -and (Test-Path (Join-Path $hostBase "app\OLD_TREE")) -and (Get-Active) -eq "blue" -and (Get-Release) -eq $old) "...and has touched nothing: no docker call, the staged tree and the serving one where they were"
+        }
+
+        Reset-Host
+        $zero = Invoke-Release -Mode "--preflight" -Env @{ FAKE_LOCK_HELD_S = "3"; PAGENTOS_LOCK_WAIT_S = "0" }
+        Assert-True ($zero.Exit -eq 82 -and $zero.Output -match "another blue/green release or recovery operation is running; retry later" -and $zero.Output -notmatch $anyWait -and (& $onlyAsked $zero) -and @($zero.Calls).Count -eq 0) "PAGENTOS_LOCK_WAIT_S=0 answers 82 at once, in yesterday's words: asked once, never waited"
+
+        Reset-Host
+        $edge = Invoke-Release -Mode "--preflight" -Env @{ FAKE_LOCK_HELD_S = "3"; PAGENTOS_LOCK_WAIT_S = "600" }
+        Assert-True ($edge.Exit -eq 0 -and (& $waited $edge 600) -eq 1 -and (& $askedThenWaited $edge 600)) "600 is the largest wait accepted"
+
+        foreach ($bad in @("abc", "-1", "601", "4.5", "1e2", "045", "45 s")) {
+            Reset-Host
+            $refused = Invoke-Release -Mode "--preflight" -Env @{ FAKE_LOCK_HELD_S = "3"; PAGENTOS_LOCK_WAIT_S = $bad }
+            Assert-True ($refused.Exit -eq 64 -and $refused.Output -match "PAGENTOS_LOCK_WAIT_S must be a whole number of seconds, 0\.\.600" -and $refused.LockCalls.Count -eq 0 -and @($refused.Calls).Count -eq 0 -and -not (Test-Path (Join-Path $hostBase ".bluegreen-operation.lock")) -and (Test-Path (Join-Path $hostBase "app.next\NEW_TREE"))) "PAGENTOS_LOCK_WAIT_S='$bad' is refused (64) before anything is touched: the lock is not asked for, its file not created, the staged tree untouched"
+        }
+
+        # The reconcile is known by its mode and by nothing else: `--reconcile`, as the timer
+        # gives it (the only argument) or after a sha. It keeps `flock -n` whatever the wait
+        # says - a value that would be refused for a release is not even read.
+        foreach ($form in @(@{ Sha = "--reconcile"; Mode = ""; Name = "the timer's form (--reconcile alone)" }, @{ Sha = $sha; Mode = "--reconcile"; Name = "SHA --reconcile" })) {
+            foreach ($wait in @($null, "45", "600", "abc")) {
+                Reset-Host
+                $lockEnv = @{ FAKE_LOCK_HELD_S = "3" }
+                if ($null -ne $wait) { $lockEnv.PAGENTOS_LOCK_WAIT_S = $wait }
+                $aside = Invoke-Release -Sha $form.Sha -Mode $form.Mode -Env $lockEnv
+                $said = if ($null -eq $wait) { "unset" } else { "'$wait'" }
+                Assert-True ($aside.Exit -eq 82 -and $aside.Output -match "another blue/green release or recovery operation is running; retry later" -and $aside.Output -notmatch $anyWait -and (& $onlyAsked $aside) -and @($aside.Calls).Count -eq 0 -and -not (Test-Path (Join-Path $hostBase "LAST_RECONCILE"))) "a reconcile ($($form.Name)) that meets a held lock answers 82 AT ONCE with PAGENTOS_LOCK_WAIT_S ${said}: asked once, never queued behind the release"
+            }
+        }
 
         Write-Host "interrupted promotions (SIGKILL at a chosen point) and --reconcile"
 
