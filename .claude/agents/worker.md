@@ -15,6 +15,14 @@ Order of work, no exceptions:
    (task id, area, machine). `docs/HANDOFF.md` is a shared file: the lead writes it from
    your report at merge time (TEAM_PROTOCOL section 4); you never touch it.
 2. Write the failing test first; run it; keep the RED output.
+   If turning it green needs a file outside the area: commit the red test, do NOT implement
+   and do NOT touch that file, and return at once. The report carries the red test's name,
+   one sentence of why, and, alone on its own line, the key `ALAN_ISTEGI:` with a bracketed,
+   comma-separated list of exactly those files (repository-relative, forward slashes):
+
+   ```
+   ALAN_ISTEGI: [services/api/app/voice/intents.py]
+   ```
 3. Implement, inside the file area only. Keep it as small as the acceptance allows.
 4. Run the tests; then mutation proof: break the change, show the test go RED, restore the
    file byte-for-byte (sha256 before/after; never `git checkout --`).
