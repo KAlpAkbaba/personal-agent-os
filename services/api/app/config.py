@@ -406,6 +406,14 @@ class Settings(BaseSettings):
     #: with an older image every unnamed research would be sent there and fail.
     research_execution_rule_enabled: bool = False
 
+    #: Whether "bu hafta ne oldu" is told by the model narrator (ADR-0244 B: the voice
+    #: tool hands the session's chat provider to the narrative). OFF by default: on, every
+    #: such ask makes ONE synchronous model request on the tool thread (nominally up to
+    #: 2 x `assistant_chat_timeout_s` + 1.5 s) and SUMMARIES OF THE OWNER'S LEDGER leave
+    #: for the model's provider. Switching it on is the owner's decision. Off, the rule
+    #: narrator answers and no provider is built.
+    narrative_model_enabled: bool = False
+
     # Owner identity / API authentication (M9, ADR-0027).
     #
     # There is NO default credential. `identity_root_dir` holds the SHA-256 hash
