@@ -24,9 +24,19 @@ düzenlemesi, `team-area.tests.ps1` CI dosyasına eklendi, QUALIFICATION 41.7'ye
 giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md`, `PROJECT_CONSTITUTION.md`,
 `docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
 korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
-ONAYSIZ yayınlanır. `cycle-seat-pool` denetimde: onaylanırsa bu dala eklenir (sahibin önceliği), sonra kapı ana kopyada
-detached koşar. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
-limitleri 'şu tarih itibarıyla' gösterilir" notu.**
+ONAYSIZ yayınlanır. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
+limitleri 'şu tarih itibarıyla' gösterilir" notu. KAPI ana kopyada bu dalın ucunda DETACHED koşar (17:35'te başladı);
+günlük `scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it → ön kontrol → yayın → pin → doğrula → `released` → Stage 45.**
+**16:48 DENETİM SONUÇLARI: `cycle-seat-pool` GERİ DÖNDÜ (gerçek kusur: başlatılamayan bir iş, sırada iş varken döngüyü
+bitiriyordu; çalışanda - sahibin önceliği, onaylanınca BEKLETMEDEN ayrı kapı). `cycle-auto-integrate` beşinci denetimde
+onaylandı, lead bu tura ekledi ve GERİ ÇIKARDI: birleşik ağaçta paketin ön koşusu yük altında 77 geçti / 1 KALDI ("a process
+the lead's run leaves behind is stopped BEFORE its diff is read": geride kalan süreç YAZDI). Neden (lead'in okuması):
+`New-TeamRunJob` koşu BAŞLADIKTAN SONRA iş nesnesine alıyor; yük altında koşu, atamadan önce çocuğunu başlatıyor ya da
+bitiyor (`Held=false`), çocuk hiçbir iş nesnesinde değil. İş bulguyla çalışana döndü; lead'in bağlaması (ADR-0254 metni,
+kapı adımı, CI satırı) `lead/auto-integrate-wiring` @ `742d4f51` dalında SAKLI, yeniden kullanılacak. ADR-0254'ün açık
+kararları için beş kart kuyrukta: `integrate-own-lock`, `gate-own-database`, `gate-parallel-suites`,
+`integrate-skips-visible`, `run-liveness-visible` (sahip: "takılmalar var mı öğrenelim" - koşuların süre sınırı YOK ve
+çıktı ancak koşu bitince okunuyor; bugün takılan bir koşu görünmezdi).**
 **YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
 `f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
 Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
