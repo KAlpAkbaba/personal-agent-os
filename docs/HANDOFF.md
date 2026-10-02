@@ -17,7 +17,18 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 
 **ÜRETİM: main `86e6fde9b64682885591dfe0ad7b365285a79cc9` (2026-10-02 20:55 UTC, api-blue), LKG `f60e02e4`, pin = RELEASE,
 reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 39/39 (`c18dacd7`; 14 806 birim, 156
-entegrasyon, 2 162 web). QUALIFICATION Stage 45. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+entegrasyon, 2 162 web). QUALIFICATION Stage 45. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**KAPIDA (lead, 2026-10-03 00:30): BEŞİNCİ ENTEGRASYON, dal `gate/d20261003-1` (worktree `.claude/worktrees/gate8`) = lead dalı +
+`cycle-seat-pool` @ `9ed17633` (ADR-0214 ek 15: döngü artık HAVUZ - koltuk boşalınca dolar, koltuklar role göre, her dolumda
+depo ve `team/cycle-settings.json` okunur, `-MaxHours 4` sonra döngü kendini güncel betiğe bırakır) + `web-voice-session-storm-flake`
+(ADR-0251 ek 1). SAHİP 2026-10-02 gece: "Geceyi bekleme, kapı yeşilse hemen devreye al." SIRA: kapı ana kopyada DETACHED →
+yeşilse main `--no-ff` → it → yayın → pin → doğrula → `team/stop.flag` YAZ (eski döngü yeni koşu başlatmaz, koşuları bitince
+biter) → bir sonraki tick HAVUZU başlatır (zamanlanmış görev DEĞİŞMEDİ: `-MaxParallel 6` artık ALTI ÇALIŞAN koltuğu + 2
+denetleyici + 1 entegratör + araştırmacı + lead = en çok 11 koşu; sahibin isteği. Kapı yanında yavaşlarsa `team/cycle-settings.json`
+yazılır) → Ofis'te "bir çalışan bitince koltuğu hemen doluyor" görülünce QUALIFICATION'a PROVEN_REAL → Stage 46.
+`misheard-ledger-store` lead'in alan hatasıyla durmuştu (alan listesinde 0064 adı kalmıştı): alan düzeltildi, lead'in ELLE
+başlattığı denetim sürüyor (rapor `team/reports/d20261002/misheard-ledger-store-inspector-2.md`); onaylanırsa lead elle
+birleştirir. Yeni kartlar: `cycle-pool-test-barriers`, `voice-gone-is-terminal`.**
 **YAYINDA (bugün dört yayın): `e5c4d1f3` 4 çalışan koltuğu, döngü kuyruğu her turda okur; `f91ad1e3` ADR-0224 katman 2 üretimde,
 düzeltmeler hafızaya; `f60e02e4` iki onaylı compose değişikliği (araştırma kuralı anahtarı KAPALI iletiliyor, temporal Docker
 init altında - host adımı yapıldı); `86e6fde9` alan genişletme kuralları (ADR-0253, kablosuz) + model politikası Cloud Core'da

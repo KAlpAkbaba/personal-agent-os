@@ -17,7 +17,7 @@
  *   * timers still armed when the dust settles: 0
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { VoiceSessionApi, type Fetcher } from "../../app/lib/voice/api";
 import { VoiceSessionController } from "../../app/lib/voice/controller";
@@ -32,9 +32,37 @@ import {
   settle,
 } from "../../app/lib/voice/fake";
 
-const settleMacrotasks = async (rounds = 6): Promise<void> => {
-  for (let i = 0; i < rounds; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
-};
+/**
+ * Requests the client has put on the wire that the server has not answered yet.
+ *
+ * Every wait in this file is for the same thing - the server's answer, and what the
+ * controller does with it - and an answer is an event. The file used to wait for it with
+ * `setTimeout(0)` instead, which is not "the next turn" but a timer period (15.6 ms on
+ * Windows): 156 of them in the rate-limiter test, 2.4 s of a 5 s limit spent idle, and
+ * under three suites at once the runner's limit was what failed (ADR-0251 names the same
+ * cause in two other voice files). Nothing here was ever waiting for time to pass: the
+ * controller's only clock is the injected `FakeScheduler`.
+ */
+const wire = { open: 0 };
+
+beforeEach(() => {
+  wire.open = 0;
+});
+
+/**
+ * Wait until every request on the wire has been answered and the answer acted on.
+ *
+ * One turn of the event loop runs every promise callback that is ready, and the ones
+ * those queue: the fake's answer, the body read (microtasks, not a macrotask) and the
+ * controller's reaction to it, including any request that reaction starts. The loop is the
+ * event itself rather than an assumption about how many turns an answer takes. No timer:
+ * if an answer never comes, the runner's own limit is the hang guard.
+ */
+async function answered(): Promise<void> {
+  do {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } while (wire.open > 0);
+}
 
 /**
  * A Cloud Core behind a rate limiter, so a client that storms is punished the way the real
@@ -44,8 +72,7 @@ function limitedCore(limit: number) {
   const core = new FakeCloudCore({ transport: "webrtc" });
   const seen: string[] = [];
   let rateLimited = 0;
-  const fetcher: Fetcher = (path, init = {}) => {
-    seen.push(path);
+  const answer: Fetcher = (path, init = {}) => {
     if (seen.length > limit) {
       rateLimited += 1;
       return Promise.resolve(
@@ -56,6 +83,18 @@ function limitedCore(limit: number) {
       );
     }
     return core.fetcher(path, init);
+  };
+  const fetcher: Fetcher = (path, init = {}) => {
+    seen.push(path);
+    wire.open += 1;
+    const response = answer(path, init);
+    const done = (): void => {
+      wire.open -= 1;
+    };
+    // Beside the answer, not in front of it: the client gets the very promise the server
+    // returned, so counting adds no turn to what the controller sees.
+    void response.then(done, done);
+    return response;
   };
   return {
     core,
@@ -90,7 +129,7 @@ async function setup(fetcher: Fetcher) {
     log: (op) => log.push(op),
   });
   await controller.connect();
-  await settleMacrotasks();
+  await answered();
   return {
     controller,
     scheduler,
@@ -114,21 +153,20 @@ async function setup(fetcher: Fetcher) {
 }
 
 /**
- * Advance the fake clock and let every promise it started settle.
+ * Advance the fake clock and let every request it started be answered.
  *
- * Microtasks between rounds and a real macrotask only every so often: a `Response` body is
- * read on a macrotask, so a POST needs one to resolve, but paying Windows' ~16ms timer
- * granularity two hundred times over would make the stress rounds cost seconds of real
- * time for nothing. The fake clock does not advance on a real wait, so nothing about the
- * ordering changes - only how long the test takes to say so.
+ * A few microtask turns between steps and the full wait only every twentieth: the clock
+ * moves on while a POST is still on the wire, which is the harder schedule and the one
+ * this file has always run. The waits changed from a timer to the answer itself; when
+ * they happen did not, so the server's request log is the same, request for request.
  */
 async function run(scheduler: FakeScheduler, ms: number, times: number): Promise<void> {
   for (let i = 0; i < times; i += 1) {
     scheduler.advance(ms);
     await settle();
-    if (i % 20 === 19) await settleMacrotasks(2);
+    if (i % 20 === 19) await answered();
   }
-  await settleMacrotasks(3);
+  await answered();
 }
 
 const eventPosts = (paths: readonly string[]): number =>
@@ -209,7 +247,7 @@ describe("the controller against a session the server has closed", () => {
     }
     await run(t.scheduler, 100, 40);
     await t.controller.flushEvents();
-    await settleMacrotasks();
+    await answered();
 
     const listening = limited.core.events
       .slice(before)
@@ -249,14 +287,14 @@ describe("the controller against a session the server has closed", () => {
     // and starts reclaiming it. That attach parks on the wire.
     limited.core.stealLeg();
     t.toolCall("call-race");
-    await settleMacrotasks(10);
+    await answered();
     expect(attachesStarted()).toBe(1);
 
     // While it is parked, the network drops and comes back - so the reconnect series
     // decides it needs an attach too. There is one already in flight; it must join it.
     t.network.set(false);
     t.network.set(true);
-    await settleMacrotasks(10);
+    await answered();
 
     // The second caller must not have started one of its own.
     expect(attachesStarted()).toBe(1);
@@ -298,7 +336,7 @@ describe("closing a session for real", () => {
     const t = await setup(limited.fetcher);
 
     await t.controller.disconnect("client_closed");
-    await settleMacrotasks();
+    await answered();
     const afterClose = limited.requests.length;
 
     // Anything the page does after the close - a late playback callback, a stray report -
@@ -309,5 +347,57 @@ describe("closing a session for real", () => {
 
     expect(limited.requests.length).toBe(afterClose);
     expect(t.scheduler.pendingTimers).toBe(0);
+  });
+});
+
+describe("how this file waits", () => {
+  it("a wait ends when the answer has been acted on", async () => {
+    const limited = limitedCore(10_000);
+    const t = await setup(limited.fetcher);
+    limited.core.closed = "expired";
+    const before = eventPosts(limited.requests);
+
+    t.speak(1_000);
+    // The flush timer fires on the fake clock: the POST is on the wire, unanswered.
+    t.scheduler.advance(250);
+    expect(wire.open).toBe(1);
+    expect(t.controller.getSnapshot().state).not.toBe("closed");
+
+    await answered();
+
+    // Not "some turns later": the 410 has arrived AND the controller has drawn its
+    // conclusion from it. This is what every `run()` above relies on.
+    expect(wire.open).toBe(0);
+    expect(eventPosts(limited.requests) - before).toBe(1);
+    expect(t.controller.getSnapshot().state).toBe("closed");
+  });
+
+  it("the full incident arms no real timer: the injected clock is the only clock", async () => {
+    // The pin on the cause. 156 real timers ran here when the waits were `setTimeout(0)`,
+    // and the runner's limit - not an assertion - is what failed under load. A real timer
+    // from the controller would be the same defect from the other side: something the
+    // fake clock cannot drive, which a test can then only wait for.
+    const armed = vi.spyOn(globalThis, "setTimeout");
+    const repeating = vi.spyOn(globalThis, "setInterval");
+    try {
+      const limited = limitedCore(30);
+      const t = await setup(limited.fetcher);
+      limited.core.closed = "expired";
+      for (let round = 0; round < 50; round += 1) {
+        t.speak(1_000 + round);
+        if (round % 10 === 0) {
+          t.network.set(false);
+          t.network.set(true);
+        }
+        await run(t.scheduler, 250, 4);
+      }
+      // The incident ran to its end, so a zero below is not the zero of a test that did nothing.
+      expect(t.controller.getSnapshot().state).toBe("closed");
+      expect(armed).toHaveBeenCalledTimes(0);
+      expect(repeating).toHaveBeenCalledTimes(0);
+    } finally {
+      armed.mockRestore();
+      repeating.mockRestore();
+    }
   });
 });

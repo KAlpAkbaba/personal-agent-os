@@ -20657,3 +20657,295 @@ closed here: `team-status-bounds` (no test holds the 64-character bound of a sta
 of addendum 4; `used_pct: 1e999` is a 500 instead of a 422; `used_pct` has no range), and one line added to
 `model-policy-office-ui`: a dead cycle's limits stay in the answer, so the page shows them "as of" the status'
 `updated_at` and never as the present.
+
+### ADR-0214 addendum 15 (2026-10-03): the cycle is a pool, not batches - a seat is filled when it is free, the seats are per role, the store and the settings are read at every refill
+
+Task `cycle-seat-pool`. Implements the owner's rule of 2026-10-01 (addendum 8: no agent idles
+while there is work) inside one cycle; keeps addendum 11 whole and makes its re-read finer.
+
+**What happened.** `scripts/team/cycle.ps1` started up to `-MaxParallel` runs and then waited for
+ALL of them before it looked at the queue again. A seat whose run ended after five minutes stayed
+empty until the slowest run of its batch ended (cycle adr0224-02: three workers of 3310 / 3295 /
+3275 seconds - the two short ones waited for the long one), a finished worker's inspection waited
+for the whole batch, and the researcher ran alone before any task. On 2026-10-01 22:15 the owner
+saw three inspections hold the cycle's three slots while every WORKER seat was empty and eight
+tasks were assigned. A setting changed at 16:45 took effect at 19:35: a cycle process is bound to
+the arguments it started with, and a cycle that has work does not end.
+
+**Decision.**
+1. **A pool.** The runs in flight are polled (`-PollMilliseconds`, 250), never waited for one by
+   one (`Test-TeamRunOver`; `Wait-TeamRun` only collects a run that is over). A run that ends is
+   completed at once - its report, the task's state, the merge of an approved inspection, the
+   write (`Complete-PoolRun`) - and then the free seats are filled from the queue as it is NOW,
+   in its order (`Start-PoolRuns`). The pool replaces the batch loop; `Invoke-RoleRun` and the
+   blocking `Wait-UsageLimit` are gone.
+2. **Seats are per role.** `-MaxParallel` is the number of WORKER seats; beside them
+   `-MaxInspectors` (2) inspections and `-MaxIntegrators` (1) integrators; the researcher and
+   one lead split run beside those. A role never takes another role's seat
+   (`Select-TeamSeatFill`, a function of the candidates, the runs in flight and the seat
+   counts). The next role of a task follows its state exactly as before, so a finished worker's
+   inspection starts while other workers are still running.
+3. **Two runs never share an area.** The queue's own rules still hold (`Test-TeamQueue`,
+   `Get-TeamAreaHolders`: an approved task is not moved into work beside the holder of its
+   files). They judge the copy they look at; a run in flight is the cycle's OWN copy of its
+   task. So the seat fill has the rule too: a worker or an inspector whose task's area overlaps
+   the area of another task whose worker or inspector is in flight waits until that run ends
+   (`Test-TeamAreasOverlap`, the one rule). An integrator's study holds no files (it writes a
+   plan), and is neither held back nor a holder. Merges into the integration branch are made
+   by the one thread that completes runs, one after the other.
+4. **Every refill reads the store again** (addendum 11's `Sync-Queue`, now whenever a run ends
+   and at least every `-RefillSeconds`, 120, while nothing ends). The task of a run in flight
+   stays the cycle's copy, with the version that copy was read at: a re-read never replaces
+   it. Its result is written when the run ends; if the store's copy changed meanwhile that
+   write is the stale one and is dropped (`Test-TaskMovedInStore`, as before). A task the
+   store took out stays in the cycle's copy until its run ends. Beside runs in flight the
+   write before the read is the soft one (`Save-QueueNow`), and the queue is not read again
+   over what could not be written; with nothing in flight it is the strict one, as before.
+5. **The settings of a running cycle.** `team/cycle-settings.json`
+   (`{ "max_parallel", "max_inspectors", "max_integrators" }`, each optional, 1..16) is read at
+   every refill when it is there (`Read-TeamCycleSettings`); a file that is no setting changes
+   nothing - the parameters stand, not half of the file - and is one line in the report. A
+   count lowered below what is in flight starts nothing and stops nothing. After `-MaxHours`
+   (4; 0 = never) the cycle starts nothing new and ends when its runs do: the scheduler's next
+   start runs the current script.
+6. **The usage limit does not block.** A run that comes back limited is started again at once
+   one model down, as before. When no model is left, the wait is a time the pool starts
+   nothing until (`Set-LimitWait`); the runs in flight go on and are completed as they end.
+   Without `-WaitForUsageLimit`, or when nobody said when, the stop line - once, however many
+   runs met the limit - and nothing new starts.
+7. **What the batch loop guaranteed still holds**, by the tests that held it: `-MaxRunsPerTask`,
+   two failed runs stop a task, the stop flag starts nothing new and lets the runs in flight
+   finish, the dependency rule, the conditional writes (a stale write is that one task's), a
+   refused fresh merge taken back, the heartbeat (now from the pool's loop), the report's run
+   list. The cycle ends when nothing is in flight and nothing can be started.
+
+**Decisions made on the way, each reversible.**
+* *The periodic refill.* "Whenever a run ends" does not see a card that arrives beside ONE long
+  run with every other seat free. The pool also refills every `-RefillSeconds`; 120 s is one
+  GET of the queue every two minutes while a cycle lives (the queue is ~0.6 MB today).
+* *A cap is checked at every refill that has something to start*, not once per batch: with
+  `-MaxUsd`, fewer runs start after the money is spent, never more.
+* *A cycle that dies with runs in flight kills them* (the `finally`): a run must not write to a
+  worktree after the lock is released. The task is taken up again by the next cycle.
+* *The seat counts are this PC's file*, also in API mode ("file store" in the card). A setting
+  in the team store would need a route; not built.
+
+* *A start that fails is a change, never the end* (added after the inspector's return,
+  2026-10-02). The first pool read "nothing started, nothing in flight, no state moved" as
+  "nothing can be started" - but a start that fails (a worktree that cannot be made) stops its
+  task, and with one worker seat the cycle ended with two assigned tasks never run; the batch
+  loop went on to them. A refill now counts its failed starts (`Failed`): the seat is still
+  free, so the next refill is due at once - beside runs in flight too, not at the next run's
+  end or `-RefillSeconds` later - and it is not an idle pass. It ends: each failed start stops
+  its task. A researcher or a lead split that cannot be started (no role file, a model that is
+  none) is caught as well: it used to throw out of the refill, which ended the cycle and let
+  the `finally` kill every run in flight. Now it is that run's one try of the cycle and a line
+  in the report (`araştırmacı: koşu başlatılamadı` under the stops, without the marker of a
+  finished research run; `bölme koşusu: <id>: koşu başlatılamadı` under the risks, the
+  proposal where it was), and the next cycle tries again.
+
+**What changed in the tests that were there.** Three assert the old meaning of `-MaxParallel 1`
+("one run of any role at a time") and now state the new one; four that replay a store outage in
+the shape of a batch pin that shape with `-PollMilliseconds` (both runs end in one poll). Each
+is named in the worker's report; no assertion about the store's rules was loosened.
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, PROVEN_AUTOMATED (the fake in place of the
+model now takes per-run durations, `PAGENTOS_FAKE_CLAUDE_SECONDS`; the fake listener is unchanged).
+Nineteen new tests. RED on the batch loop, as behaviour: the third task's worker and the first
+task's inspector start while the second task's worker still runs; both worker seats in use beside
+an inspection; three workers and two inspectors in flight together and the third inspection
+starting when one ends; a changed `cycle-settings.json` honoured at the next refill; a card
+stored beside one long run started before that run ends; a task the store put into work on
+the files of a run in flight held back while one on other files starts at once; the researcher
+beside the worker. RED by the missing function or parameter only: the four unit tests of the
+seat fill and the settings, `-MaxHours`, `-RefillSeconds`, `-PollMilliseconds` (two merges in
+one poll). Green before and after, as "still holds": two approved tasks with overlapping areas
+never in flight together on any status the cycle wrote; the stop flag with a run in flight.
+Written after the pool: the limit waited out without blocking; one stop line for two limited
+runs; a cycle that dies kills its runs. Seventeen mutations, each restored from a backup copy
+with sha256 equal before and after, all RED: the area check removed from the seat fill; the
+seat count ignored; one pool of seats for every role; no re-read while runs are in flight; no
+refill unless a run ends; the settings file not read; `-MaxHours` not checked; a re-read
+replacing the task of a run in flight; a finished run waiting for every other run; caps and
+the stop flag not asked at a refill; runs started during the limit's wait; a second run for a
+task in flight; the stop line once per limited run; runs left alive when the cycle dies; the
+researcher alone again; a late merge refusal not named; no heartbeat from the pool.
+After the return, five more tests, each RED on the first pool: three assigned tasks on one worker
+seat with the first worktree blocked (the other two end merged); four failed starts in a row and
+a fifth task run; a failed start beside a run in flight leaving its seat at once; a researcher
+and a lead split that cannot be started (the cycle died with exit 1). Four more mutations, RED
+and restored the same way: failed starts not counted against the idle pass; no refill after a
+failed start; the researcher's failed start thrown again; the lead's thrown again.
+PROVEN_REAL is the Ofis page showing a worker seat refilled while another worker of the same
+cycle is still running: NOT_RUN here.
+
+**Known and left.** (a) The Ofis page's capacity is still the server's own number; it does not
+read `cycle-settings.json`. (b) `tick.ps1` / `register-nightly.ps1` pass `-MaxParallel` only
+(outside this task's area): the new seats take their defaults until the lead passes them or
+writes the settings file. (c) A lead split is judged against the queue as it is when the run
+ENDS; a task that was in work when the split was written and merged meanwhile no longer
+refuses an overlapping split - which is right, and different from the batch loop, where
+nothing else ran during a split.
+
+**At merge (the lead, integration d20261003, first).** The owner, 2026-10-02: "Sürekli tur mu bekliyoruz?" and, the
+same night, "Geceyi bekleme, kapı yeşilse hemen devreye al." This addendum is that. The inspector approved `9ed17633`
+at its second pass (208 of 208 on the final sha, under load; its first pass had found that a failed start with nothing
+else in flight ended the cycle with runnable work left - fixed, with its test). What the lead decides here:
+- *The seats.* The scheduled task passes `-MaxParallel 6` and is NOT re-registered: under the pool that is six WORKER
+  seats beside two inspections, one integrator, the researcher and the lead's split - up to eleven runs where the batch
+  loop ran six. That is the owner's own wish of 2026-10-02 ("çalışan sayımızı da arttıralım") and the machine has room
+  (20 cores, 48 GB; measured at 92 % idle beside a gate once the temp folder was cleaned). If a gate beside the pool is
+  slow again, the lead writes `team/cycle-settings.json` (it is read at every refill, no restart) and says so; the
+  durable answer is the owner's test queue (`test-slots`).
+- *Taking it into service.* A running cycle keeps the code it started with. After the release the lead writes
+  `team/stop.flag`: the old cycle starts nothing new and ends when its runs do; the scheduler's next tick starts the
+  pool. From then on `-MaxHours` (4) hands the cycle to the current script by itself.
+- *Carded, not closed here:* the five timing-shaped cases of the suite (one failed once in six runs at the heaviest
+  load: the snapshot was read ten seconds late) get a barrier hook in the fake, and the inspector's probe of
+  `-MaxRunsPerTask` under the pool is committed (`cycle-pool-test-barriers`); a cycle that dies kills every run in
+  flight (deliberate and tested - `run-liveness-visible` is what will show a cycle that died). `docs/TEAM_PROTOCOL.md`
+  does not name the per-role seats: it is the owner's document, the sentence is proposed to him, not written.
+
+### ADR-0251 addendum 1 (2026-10-03): `voice/session-storm` waited on the wall clock for the server's answer
+
+Task `web-voice-session-storm-flake`: the third voice test of the web shell that waited on a timer (ADR-0251 named it
+and carded it). The test change is merged; the product finding its author made on the way is NOT fixed here.
+
+**Context.**
+
+The web suite is a gate step (ADR-0237). The inspector of `web-voice-test-flakes` saw
+`apps/web/tests/voice/session-storm.test.ts` ("under a rate limiter, a dead session costs
+the client nothing at all") fail 2 of 60 and 7 of 60 full-suite runs under three suites at
+once, 0 of 10 alone. The card asks which it is: (a) the test waits on time for something
+that has an event, or (b) the product has a race.
+
+**Finding: (a). The test waited on a timer; what failed was the runner's limit..**
+
+Reproduced on the unchanged file, 30 full-suite runs, three vitest processes at once:
+1 red on this test, at **5011 ms** - the runner's 5 s timeout (`STACK_TRACE_ERROR` from
+`@vitest/runner` `chunk-artifact.js:1784`, the timeout's stack), not an assertion. The
+same test over those 30 runs: min 2271 ms, median 2365 ms. Alone: 2347 ms.
+
+The lines that show it (base file):
+
+- `:35-37` `settleMacrotasks` is `await new Promise(r => setTimeout(r, 0))` per round.
+- `:125-132` `run()` ends every call with `settleMacrotasks(3)`.
+- `:280-287` the test calls `run(t.scheduler, 250, 4)` fifty times, after a setup (`:93`)
+  that waits six more.
+
+That is 156 real timers (counted: `expected "setTimeout" to be called +0 times, but got
+156 times`). `setTimeout(0)` is a timer period, not a turn - 20 of them measured 295 ms
+on this machine, 14.8 ms each - so the test spends 2.3 s of its 5 s idle before any load.
+The other six tests in the file arm 13 to 31 timers each (read off the same helpers) and
+stayed under 720 ms in those runs.
+
+Nothing was waiting for time. The controller's only clock is the injected `FakeScheduler`
+(the new pin: 0 real timers over the whole incident). What the waits were FOR is the
+server's answer and the controller's reaction to it, and that is a promise chain: the
+fake's `Response`, the body read, `VoiceApiError`, `onReportFailure`. The old comment on
+`run()` said "a `Response` body is read on a macrotask"; measured on Node 24.15 it
+resolves in 3 microtask turns and needs no macrotask at all.
+
+**Not a product race.** With the timers out, no step of the file depends on real time or
+on load. The server's request log and event log of all seven original tests, recorded
+under the old waits and under the new ones, are identical request for request (paths in
+order, events with payloads, legs, credentials minted).
+
+**Decisions.**
+
+1. Every wait in the file is `answered()`: one event-loop turn (`setImmediate`), repeated
+   while a request the client put on the wire is still unanswered (`wire.open`, counted
+   beside the fake's answer so the client receives the very promise the server returned).
+   No timer anywhere; no timeout added or lengthened; the runner's 5 s stays the hang
+   guard it is.
+2. When the waits happen did not change (`run()` still gives a few microtask turns per
+   step and the full wait every twentieth step and at the end), so what the controller is
+   put through is the same.
+3. Two tests pin the cause: "the full incident arms no real timer" (`setTimeout` and
+   `setInterval` called 0 times over the incident; RED before, 156) and "a wait ends when
+   the answer has been acted on" (one request open after the flush fires; after one
+   `answered()` none open, one POST, state `closed`).
+4. No assertion of the seven original tests was changed.
+
+**Evidence (PROVEN_AUTOMATED; this machine, other workers running on it).**
+
+Command, from `apps/web`, three at once, ten rounds:
+`node node_modules/vitest/vitest.mjs run --reporter=json --outputFile=<run>.json`
+
+| measurement | BEFORE (`982dc4fb`) | AFTER |
+| --- | --- | --- |
+| 30 loaded full-suite runs: `session-storm` red | 1 (timeout at 5011 ms) | 0 |
+| the rate-limiter test, 30 loaded runs | min 2271, median 2365, max 5011 ms | min 3, median 4, max 95 ms |
+| slowest test of the file, 30 loaded runs | 5011 ms | 122 ms |
+| the file alone | 7 tests, 4.20 s | 9 tests, 42 ms |
+| full suite, 10 runs in a row | not measured | 10 of 10 green, 2106 tests |
+
+1 of 30 is a small count (the inspector's were 2 and 7 of 60); the durations are the
+stronger evidence: before, the median run of this test used 47 % of the limit; after, the
+slowest test of the file used under 3 %.
+
+Other reds in the same loaded runs, in files outside this card's area: BEFORE
+`cockpit/quiet-families` 3 (7.1-8.7 s, all in the first, cold round), `preview/core-preview`
+1 (8.7 s), `voice/latency` 1 (5019 ms; ADR-0251 cures it, not yet on this branch's base);
+AFTER `voice/store` 1 (`'closed'` vs `'listening'`; ADR-0251 again). The first two are
+timeouts too and have no card that I know of.
+
+Mutations of the subject, in a scratch copy of `app/lib` plus the cured test (the subject
+is outside the area; the real files' sha256 is unchanged before and after):
+
+- M1 `events.ts`, a 410 no longer ends the reporter (the 2026-09-09 incident): 4 RED,
+  among them the rate-limiter test (`expected 8 to be +0`: the limiter is reached) and
+  `expected 200 to be 1`.
+- M3 `controller.ts`, `reattachLoop` loses its join guard: RED, `expected 21 to be 2`.
+- M4 `controller.ts`, `reattach` loses its single flight: RED, `expected 2 to be 1`.
+- M5 `events.ts`, the reporter flushes on the real clock: 4 RED, among them both pins.
+- M2 `controller.ts`, the 410 is announced through the reporter (`viaReporter: true`):
+  NOT RED, 9 of 9. The reporter has ended itself by then; this is the "second wall" the
+  comment on `fail()` describes, and no test in this file observes it alone.
+- M6 `controller.ts`, `disconnect` flushes but does not dispose the reporter: NOT RED.
+- The cure itself, `answered()` back on `setTimeout(0)`: the pin goes RED (51 calls).
+
+**Finding for the lead: a product defect this file does not assert (NOT the flake).**
+
+It is deterministic, it is in `app/lib/voice/controller.ts` (outside the area), and
+nothing here papers over it or asserts it.
+
+After the server has answered 410, a network flap takes the controller back out of
+`closed`, and every flap costs one `POST .../attach` to the session the server declared
+gone. Probe (scratch test, removed):
+
+```
+after the 410 on /events         state=closed        requests=3
+network offline                  state=reconnecting  requests=3
+still offline, one minute later  state=reconnecting  requests=3
+network back                     state=closed        requests=4   (POST attach -> 410)
+second flap                      state=closed        requests=5   (POST attach -> 410)
+```
+
+- `controller.ts:2853-2869` (`onReportFailure`, the `gone` branch) patches `state:
+  "closed"` but does not set `closing`; neither does `:2788-2791` (`runReattachLoop`).
+- `:2739-2748` `onNetworkChange` and `:2750-2762` `onNetworkLost` guard on `closing` and
+  on `state === "reconnecting"` only, so a `closed` controller enters `reconnecting`
+  (`:2760`) and `reattachLoop` runs when the network returns.
+
+Two consequences: the owner is shown "reconnecting" for a dead session for as long as the
+network is down; and the file header's "retries against a session the server declared
+gone: 0" holds for `/events` only. In the rate-limiter test the server's log is `contract,
+sessions, attach, events, attach, attach, attach, attach`: four attaches after the 410,
+one per flap. The test counts `/events` posts and the limiter, so it is green, before and
+after this change alike. Bounded by the number of flaps, so not a storm. A card would make
+`gone` terminal for the network handlers and add the assertion (attaches after the 410:
+0) to this file.
+
+**Known limits.**
+
+- `answered()` counts a request as answered when the fake's promise settles; the body read
+  and the controller's reaction are covered by the event-loop turn, not counted. If a
+  later Node reads a body across several turns, the second pin fails rather than flakes.
+- `wire` is one counter for the file; tests in a file run one at a time and `beforeEach`
+  resets it.
+
+**At merge (the lead).** The finding above is a product defect and gets its own card, `voice-gone-is-terminal`:
+after the server's 410 the controller is `closed` but not `closing`, so a network flap takes it to `reconnecting` and
+costs one `POST .../attach` to a session the server declared gone, and the owner is shown "reconnecting" for a dead
+session. Bounded by the number of flaps; no storm.
