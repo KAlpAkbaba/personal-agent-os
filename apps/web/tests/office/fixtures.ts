@@ -1,4 +1,4 @@
-import type { OfficeView } from "../../app/core/office/officeApi";
+import type { OfficeAgent, OfficeView } from "../../app/core/office/officeApi";
 
 export const SEAT_ORDER = [
   "lead",
@@ -7,6 +7,7 @@ export const SEAT_ORDER = [
   "worker-1",
   "worker-2",
   "worker-3",
+  "worker-4",
   "inspector",
   "owner",
 ] as const;
@@ -118,4 +119,43 @@ export function twoWorkers(): OfficeView {
       },
     ],
   };
+}
+
+const stamp = (minute: number) => `2026-10-01T10:${String(minute).padStart(2, "0")}:00Z`;
+
+function working(agent: OfficeAgent, titles: string[], firstMinute: number): OfficeAgent {
+  const runs = titles.map((title, i) => ({
+    task_id: `t-${agent.seat}-${i + 1}`,
+    task_title: title,
+    since: stamp(firstMinute + i),
+  }));
+  return { ...agent, state: "working", ...runs[0], runs };
+}
+
+/** A cycle with `workers` worker runs and `inspections` inspector runs, as the API sends it. */
+export function busyCycle(workers: number, inspections: number): OfficeView {
+  const view = twoWorkers();
+  const seats = Math.max(4, workers);
+  const workerSeats = Array.from({ length: seats }, (_, i) => `worker-${i + 1}`);
+  const order = ["lead", "researcher", "integrator", ...workerSeats, "inspector", "owner"];
+  view.agents = order.map((seat) => {
+    const role = seat.startsWith("worker-") ? "worker" : seat;
+    const idle: OfficeAgent = { seat, role, ...NO_RUN, runs: [] };
+    const n = Number(seat.split("-")[1]);
+    if (role === "worker" && n <= workers) return working(idle, [`Çalışan işi ${n}`], n);
+    if (seat === "inspector" && inspections > 0) {
+      const titles = Array.from({ length: inspections }, (_, i) => `Denetim ${i + 1}`);
+      return working(idle, titles, 20);
+    }
+    return idle;
+  });
+  const running = workers + inspections;
+  view.cycle = { ...view.cycle, running_agents: running, capacity: Math.max(6, running) };
+  view.tasks["t-inspector-1"] = {
+    ...view.tasks["t-one"],
+    title: "Denetim 1",
+    goal: "ilk denetimin hedefi",
+    branch: "team/cycle/inspect-one",
+  };
+  return view;
 }

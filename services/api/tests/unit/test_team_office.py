@@ -32,6 +32,7 @@ SEATS = [
     "worker-1",
     "worker-2",
     "worker-3",
+    "worker-4",
     "inspector",
     "owner",
 ]
@@ -195,6 +196,140 @@ def test_no_status_is_the_empty_office():
     assert view["tasks"] == {}
 
 
+def _workers(view):
+    return [s for s in view["agents"] if s["role"] == "worker"]
+
+
+def _order(view):
+    """The seat ids, with the worker block checked and folded into one name."""
+    seats = [s["seat"] for s in view["agents"]]
+    workers = [s for s in seats if s.startswith("worker-")]
+    assert workers == [f"worker-{n}" for n in range(1, len(workers) + 1)]
+    first = seats.index("worker-1")
+    assert seats[first : first + len(workers)] == workers  # one unbroken block
+    return seats[:first] + ["workers"] + seats[first + len(workers) :]
+
+
+ORDER = ["lead", "researcher", "integrator", "workers", "inspector", "owner"]
+
+
+def test_with_no_cycle_there_are_exactly_four_worker_seats_all_waiting():
+    view = _view([], None, lock=None)
+    assert [s["seat"] for s in _workers(view)] == ["worker-1", "worker-2", "worker-3", "worker-4"]
+    assert {s["state"] for s in _workers(view)} == {"waiting"}
+    assert all(s["runs"] == [] for s in view["agents"])
+    assert _order(view) == ORDER
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (0, 6)
+
+
+def test_four_live_worker_runs_are_four_working_seats_with_their_tasks():
+    names = ["a-task", "b-task", "c-task", "d-task"]
+    view = _view([_task(n) for n in names], _status([(n, "worker") for n in names]))
+    assert [(s["seat"], s["state"], s["task_id"]) for s in _workers(view)] == [
+        (f"worker-{i + 1}", "working", n) for i, n in enumerate(names)
+    ]
+    fourth = _seat(view, "worker-4")
+    assert fourth["task_title"] == "Başlık d-task"
+    assert fourth["runs"] == [
+        {"task_id": "d-task", "task_title": "Başlık d-task", "since": fourth["since"]}
+    ]
+    assert view["cycle"]["running_agents"] == 4
+    assert _order(view) == ORDER
+
+
+@pytest.mark.parametrize(("live", "seats"), [(0, 4), (3, 4), (4, 4), (5, 5), (6, 6)])
+def test_the_worker_seats_are_four_or_as_many_as_the_live_worker_runs(live, seats):
+    names = [f"task-{n}" for n in range(live)]
+    view = _view([_task(n) for n in names], _status([(n, "worker") for n in names]))
+    assert len(_workers(view)) == seats
+    assert [s["state"] for s in _workers(view)] == ["working"] * live + ["waiting"] * (seats - live)
+    assert _order(view) == ORDER
+    assert len({s["seat"] for s in view["agents"]}) == len(view["agents"])
+
+
+def test_one_inspector_run_and_four_worker_runs_are_five_running_of_six():
+    names = ["a-task", "b-task", "c-task", "d-task"]
+    runs = [(n, "worker") for n in names] + [("e-task", "inspector")]
+    view = _view([_task(n) for n in [*names, "e-task"]], _status(runs))
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (5, 6)
+    assert _seat(view, "inspector")["task_id"] == "e-task"
+    assert _seat(view, "worker-4")["task_id"] == "d-task"
+    assert _order(view) == ORDER
+
+
+def test_three_live_inspector_runs_are_one_working_seat_listing_all_three_in_start_order():
+    status = _status([("a-task", "inspector"), ("b-task", "inspector"), ("c-task", "inspector")])
+    status["runs"].reverse()  # the store's order is not the start order
+    view = _view([_task(n, "inspecting") for n in ("a-task", "b-task", "c-task")], status)
+    seat = _seat(view, "inspector")
+    assert seat["state"] == "working"
+    assert [r["task_id"] for r in seat["runs"]] == ["a-task", "b-task", "c-task"]
+    assert [r["task_title"] for r in seat["runs"]] == [f"Başlık {n}-task" for n in "abc"]
+    assert [r["since"] for r in seat["runs"]] == sorted(r["since"] for r in seat["runs"])
+    assert len({r["since"] for r in seat["runs"]}) == 3
+    # an old-shape reader's fields are the first run's
+    assert (seat["task_id"], seat["task_title"], seat["since"]) == (
+        "a-task",
+        "Başlık a-task",
+        seat["runs"][0]["since"],
+    )
+    assert set(seat["runs"][0]) == {"task_id", "task_title", "since"}
+    assert view["cycle"]["running_agents"] == 3
+    assert view["cycle"]["capacity"] == 6
+    assert {s["state"] for s in _workers(view)} == {"waiting"}
+    assert _order(view) == ORDER
+
+
+@pytest.mark.parametrize("role", ["lead", "researcher", "integrator"])
+def test_every_live_run_of_a_single_seat_role_is_listed_on_its_seat(role):
+    view = _view([_task("a-task"), _task("b-task")], _status([("a-task", role), ("b-task", role)]))
+    assert [r["task_id"] for r in _seat(view, role)["runs"]] == ["a-task", "b-task"]
+    assert view["cycle"]["running_agents"] == 2
+
+
+def test_seven_live_runs_raise_the_capacity_to_seven():
+    names = [f"task-{n}" for n in range(5)]
+    runs = [(n, "worker") for n in names] + [("x-task", "inspector"), ("y-task", "inspector")]
+    view = _view([_task(n) for n in [*names, "x-task", "y-task"]], _status(runs))
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (7, 7)
+    assert len(_workers(view)) == 5
+    assert _order(view) == ORDER
+
+
+def test_a_run_whose_task_left_the_queue_is_still_a_run_with_its_id():
+    view = _view([], _status([("gone-task", "worker"), ("gone-too", "inspector")]))
+    assert _seat(view, "worker-1")["runs"] == [
+        {"task_id": "gone-task", "task_title": None, "since": _seat(view, "worker-1")["since"]}
+    ]
+    assert view["cycle"]["running_agents"] == 2
+
+
+def test_a_stale_status_with_six_worker_runs_is_four_waiting_seats_and_nothing_running():
+    names = [f"task-{n}" for n in range(6)]
+    old = _status([(n, "worker") for n in names], at=NOW - timedelta(minutes=11))
+    view = _view([_task(n) for n in names], old)
+    assert len(_workers(view)) == 4
+    assert (view["cycle"]["running_agents"], view["cycle"]["capacity"]) == (0, 6)
+    assert all(s["runs"] == [] for s in view["agents"])
+
+
+def test_returned_worker_tasks_fill_the_free_seats_up_to_the_fourth():
+    stamps = ["2026-10-01T07:00:00Z", "2026-10-01T08:00:00Z", "2026-10-01T09:00:00Z"]
+    tasks = [_task("run-task")] + [
+        _task(f"old-{i}", "returned", reports=[_report("worker", at)])
+        for i, at in enumerate(stamps)
+    ]
+    view = _view(tasks, _status([("run-task", "worker")]))
+    assert [(s["state"], s["task_id"]) for s in _workers(view)] == [
+        ("working", "run-task"),
+        ("returned", "old-2"),
+        ("returned", "old-1"),
+        ("returned", "old-0"),
+    ]
+    assert _seat(view, "worker-4")["runs"] == []
+    assert view["cycle"]["running_agents"] == 1
+
+
 # ------------------------------------------------------------------ the routes
 
 
@@ -252,6 +387,20 @@ def test_the_status_round_trips_and_the_office_shows_the_runs(owner):
     assert body["approvals"] == owner.get("/v1/team/approvals").json()["approvals"]
 
 
+def test_the_office_route_shows_every_run_of_a_cycle_wider_than_its_seats(owner):
+    owner.team_store.acquire_lock(machine="MAIL", cycle_id="c1", pid=7)
+    runs = [(f"task-{n}", "worker") for n in range(5)] + [("x-task", "inspector")] * 2
+    assert owner.put(STATUS, json=_live_status(runs)).status_code == 200
+    body = owner.get(OFFICE).json()
+    workers = [s for s in body["agents"] if s["role"] == "worker"]
+    assert [(s["seat"], s["task_id"]) for s in workers] == [
+        (f"worker-{n + 1}", f"task-{n}") for n in range(5)
+    ]
+    assert [r["task_id"] for r in _seat(body, "inspector")["runs"]] == ["x-task", "x-task"]
+    assert (body["cycle"]["running_agents"], body["cycle"]["capacity"]) == (7, 7)
+    assert [s["seat"] for s in body["agents"]][-2:] == ["inspector", "owner"]
+
+
 def test_a_status_with_an_unknown_key_or_a_wrong_type_is_a_422(owner):
     good = _live_status([("alpha-task", "worker")])
     assert owner.put(STATUS, json={**good, "surprise": 1}).status_code == 422
@@ -290,7 +439,7 @@ def test_with_no_store_and_no_team_root_the_office_is_empty_not_a_500(tmp_path):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["cycle"]["running"] is False
-    assert [s["state"] for s in body["agents"]] == ["waiting"] * 8
+    assert [s["state"] for s in body["agents"]] == ["waiting"] * 9
     assert body["tasks"] == {}
 
 

@@ -6,13 +6,21 @@ string in the answer is one the queue or the status already carries.
 
 Seat rules (the contract the page is built against):
 
-* a live run whose role is ``worker`` takes ``worker-1..3`` in start order; the other roles
-  take their own seat; a seat with a live run is ``working`` with that run's task;
-* a seat with no live run is ``returned`` when the newest task of that role is ``returned`` or
-  ``stopped`` (the task is the seat's), else ``waiting``. "Newest task of a role" is the task
-  whose latest report by that role is the most recent; the three worker seats, with no live
-  run, take the three newest such worker tasks that are returned/stopped, newest first;
+* the seats are ``lead``, ``researcher``, ``integrator``, ``worker-1..N``, ``inspector``,
+  ``owner`` in that order, where N is four or the number of live worker runs, whichever is
+  larger: a run is never left without a seat;
+* a live run whose role is ``worker`` takes a worker seat of its own, in start order; EVERY live
+  run of another role sits on that role's one seat. A seat with a live run is ``working``; its
+  ``runs`` lists them in start order (``task_id``, ``task_title``, ``since``) and the seat's own
+  ``task_id`` / ``task_title`` / ``since`` are the first run's;
+* a seat with no live run has no ``runs`` and is ``returned`` when the newest task of that role
+  is ``returned`` or ``stopped`` (the task is the seat's), else ``waiting``. "Newest task of a
+  role" is the task whose latest report by that role is the most recent; the worker seats with
+  no live run take the newest such worker tasks that are returned/stopped, newest first;
 * the owner seat is always ``waiting`` with no task (the page shows the approvals on it).
+
+``running_agents`` counts the live RUNS on the seats, not the seats that work (three inspector
+runs are three); ``capacity`` is six, or the number of runs when more than six are in flight.
 
 ``updated_at`` must be UTC in the ``YYYY-MM-DDTHH:MM:SSZ`` form (the one ``team_store.stamp``
 writes); a value without the ``Z`` (no zone, or an offset) cannot be read and is not live, and one
@@ -33,17 +41,7 @@ CAPACITY = 6
 STATUS_STALE_MINUTES = 10
 STATUS_FUTURE_SKEW_MINUTES = 2  # a clock a little ahead is fine; further ahead is not "live"
 SUMMARY_MAX_LINES = 40  # queue.schema.json: report.summary maxItems
-SEATS = (
-    "lead",
-    "researcher",
-    "integrator",
-    "worker-1",
-    "worker-2",
-    "worker-3",
-    "inspector",
-    "owner",
-)
-WORKER_SEATS = ("worker-1", "worker-2", "worker-3")
+MIN_WORKER_SEATS = 4
 _ROLE_SEATS = ("lead", "researcher", "integrator", "inspector")
 _FINISHED = ("released", "done")
 _RETURNED = ("returned", "stopped")
@@ -103,6 +101,11 @@ def _task_report(task: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _worker_seats(live_worker_runs: int) -> list[str]:
+    count = max(MIN_WORKER_SEATS, live_worker_runs)
+    return [f"worker-{n}" for n in range(1, count + 1)]
+
+
 def _seat(seat: str, role: str, state: str, task: dict[str, Any] | None, since: Any) -> dict:
     return {
         "seat": seat,
@@ -111,7 +114,22 @@ def _seat(seat: str, role: str, state: str, task: dict[str, Any] | None, since: 
         "task_id": None if task is None else task.get("id"),
         "task_title": None if task is None else task.get("title"),
         "since": since if task is not None else None,
+        "runs": [],
     }
+
+
+def _working_seat(seat: str, role: str, runs: list[dict], by_id: dict[str, dict]) -> dict:
+    listed = []
+    for run in runs:
+        task = by_id.get(str(run.get("task")), {})
+        listed.append(
+            {
+                "task_id": task.get("id", run.get("task")),
+                "task_title": task.get("title"),
+                "since": run.get("started_at"),
+            }
+        )
+    return {"seat": seat, "role": role, "state": "working", **listed[0], "runs": listed}
 
 
 def office_view(
@@ -126,35 +144,33 @@ def office_view(
     live = _is_live(lock, status, now)
     runs = _live_runs(status) if live and status else []
 
-    placed: dict[str, dict[str, Any]] = {}
+    worker_seats = _worker_seats(sum(1 for r in runs if r.get("role") == "worker"))
+    placed: dict[str, list[dict[str, Any]]] = {}
     workers = 0
     for run in runs:
         role = str(run.get("role", ""))
         if role == "worker":
-            if workers >= len(WORKER_SEATS):
-                continue
-            placed[WORKER_SEATS[workers]] = run
+            placed[worker_seats[workers]] = [run]
             workers += 1
-        elif role in _ROLE_SEATS and role not in placed:
-            placed[role] = run
+        elif role in _ROLE_SEATS:
+            placed.setdefault(role, []).append(run)
 
+    running_agents = sum(len(seated) for seated in placed.values())
     running_ids = {str(r.get("task")) for r in runs}
     returned_workers = [
         t
         for t in _newest_by_role(tasks, "worker")
         if t.get("state") in _RETURNED and str(t.get("id")) not in running_ids
     ]
-    free_worker_seats = [s for s in WORKER_SEATS if s not in placed]
+    free_worker_seats = [s for s in worker_seats if s not in placed]
     agents: list[dict[str, Any]] = []
-    for seat in SEATS:
-        role = "worker" if seat in WORKER_SEATS else seat
+    for seat in ("lead", "researcher", "integrator", *worker_seats, "inspector", "owner"):
+        role = "worker" if seat in worker_seats else seat
         if seat == "owner":
             agents.append(_seat(seat, "owner", "waiting", None, None))
         elif seat in placed:
-            run = placed[seat]
-            task = by_id.get(str(run.get("task")), {"id": run.get("task"), "title": None})
-            agents.append(_seat(seat, role, "working", task, run.get("started_at")))
-        elif seat in WORKER_SEATS:
+            agents.append(_working_seat(seat, role, placed[seat], by_id))
+        elif seat in worker_seats:
             index = free_worker_seats.index(seat)  # position among the seats nobody is working
             task = returned_workers[index] if index < len(returned_workers) else None
             state = "returned" if task is not None else "waiting"
@@ -173,8 +189,8 @@ def office_view(
             "machine": document.get("machine"),
             "started_at": document.get("started_at"),
             "running": live,
-            "running_agents": len(placed) if live else 0,
-            "capacity": CAPACITY,
+            "running_agents": running_agents,
+            "capacity": max(CAPACITY, running_agents),
             "estimated_usd": document.get("estimated_usd") or 0,
             "usage_limit": _usage_limit(status),
             "updated_at": document.get("updated_at"),
