@@ -1298,3 +1298,19 @@ game on the machine at the time; it passed in this gate (the Agent tests took 4 
 | 45.3 | A fix outside a card's area is judged by rules: widen / wait / refuse, protected paths never widened into | `PROVEN_AUTOMATED` | `scripts/tests/team-area.tests.ps1` (117, in the gate and the CI file), ADR-0253 with the lead's nine protected entries (RED first: 10 failed before them). Wired into the cycle: `NOT_RUN` (`area-widen-cycle-wiring`) |
 | 45.4 | The announcer test decides with one sweeper | `PROVEN_AUTOMATED` | `tests/integration/test_mobile_push.py`: alone, before the fix, 1 failed of 16; after, 16 passed four times in a row and 156 in the gate |
 | 45.5 | The gate's own speed on this machine | `PROVEN_REAL` (measured) | the unit step took 1 h 48 min (56 min on the afternoon's gate) with 92 % of 28 threads idle: the user's temp folder held 2 671 896 entries, 2.66 million of them empty folders the voice-corpus harness never removed (card `corpus-temp-dirs-leak`); the owner removed the 2 312 840 older than a day with the lead's script at about 23:05-23:30 local time, while this gate ran (0 failures, 24 minutes). The next gate's time is the measurement of what that bought |
+
+## Stage 46 — d20261003, first integration: the cycle is a pool - a seat is filled when it is free (ADR-0214 addendum 15, ADR-0251 addendum 1)
+
+Released 2026-10-02 22:14 UTC as main `65cd94fffcaaa1028cdfc751729a9238b69102b9` (api-green; previous `86e6fde9…` kept
+as last known good; schema unchanged). Full gate 39/39 on `1fec640b` (the merge commit's tree is identical) in 66
+minutes: 14 806 unit, 156 integration, 2 164 web, team-cycle 208, team-feed 65, team-area 117. Released under the
+standing rule; the owner that night: "Geceyi bekleme, kapı yeşilse hemen devreye al" and "bundan sonra kapısı yeşil
+olanlar otomatik canlıya geçsin, beklemesinler".
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 46.1 | The release, verified | `PROVEN_REAL` | 22:14 UTC: `RELEASE OK: 65cd94ff… is running as api-green`, 2/2 device sessions handed over after 1 s, health `ok` through the edge and over the tailnet; `APPROVED_SHA` = RELEASE; `RECONCILE OK: api-green is canonical` |
+| 46.2 | A free seat is filled while other runs are still in flight; seats are per role; the store and `team/cycle-settings.json` are read at every refill | `PROVEN_AUTOMATED` | `scripts/tests/team-cycle.tests.ps1` 208 of 208, in the gate and in a pre-run on the merged tree (14 minutes); the inspector's two own mutations RED. One case failed once in six runs under the heaviest load for the inspector (a snapshot read late): `cycle-pool-test-barriers` |
+| 46.3 | The pool in service on the home PC | `NOT_YET_PROVEN` | `team/stop.flag` written 22:15 UTC: the cycle `d20261002` (started 11:05 UTC on the batch loop) starts nothing new and ends when its one run in flight does; the scheduler's next tick starts the pool from the lead branch. `PROVEN_REAL` is the Ofis page - or the status document - showing a worker seat refilled while another worker of the same cycle is still running |
+| 46.4 | What cleaning the temp folder bought (Stage 45.5) | `PROVEN_REAL` (measured) | the same unit step: 1 h 48 min 35 s on `c18dacd7` (the folder held 2.67 million entries), 29 min 42 s on `1fec640b` after the owner removed 2 312 840 of them; 56 min 28 s on the afternoon's gate. The whole gate: 66 minutes. The leak itself is still open (`corpus-temp-dirs-leak`): each corpus run adds about eleven thousand folders |
+| 46.5 | `voice/session-storm` awaits its events | `PROVEN_AUTOMATED` | `apps/web/tests/voice/session-storm.test.ts`; web suite 2 164. The product finding its author made (a network flap after a 410 costs one attach) is `voice-gone-is-terminal` |
