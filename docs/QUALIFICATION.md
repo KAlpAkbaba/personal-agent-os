@@ -1236,3 +1236,25 @@ on one real-Chrome test under load (ADR-0246). Each cost about eighty minutes.
 | 42.8 | After an orphan Chrome is reaped the recovery launch waits for the profile's lock | `PROVEN_AUTOMATED` | `services/browser/tests/unit/test_lifecycle_profile_lock.py` (6); the gate on `6f3d9f6f` ran the real-Chrome suite under the same load and passed - one run, not a proof |
 | 42.9 | The STT comparison instrument; the Postgres tests of the memory and routine tables; the narrative's failures-only plumbing | `PROVEN_AUTOMATED` | ADR-0242 (no recording exists: nothing measured, `READY_FOR_OWNER` twenty sentences), ADR-0243, ADR-0244 (nothing the owner says changes with it) |
 | 42.10 | A release of gated roadmap work without a question, verified | `PROVEN_REAL` | 2026-10-02 08:19 UTC: `RELEASE OK: e5c4d1f3… is running as api-green`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-green is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over; the preflight passed at its first try |
+
+## Stage 43 — d20261002, second integration: ADR-0224 layer 2 starts in production, the owner's corrections become memory, the release waits for the operation lock (ADR-0245, ADR-0247 … ADR-0251)
+
+Released 2026-10-02 11:30 UTC as main `f91ad1e32414a6ce2f1db511e084ea8959fee280` (api-blue; previous
+`e5c4d1f3…` kept as last known good; recovery pin = RELEASE; reconcile `RECONCILE OK`; schema
+`0064_memory_vocabulary_class`). Full gate 38/38 on `2a61b80e` (the merge commit's tree is identical):
+14 693 unit, 2 162 web. Released under the standing rule (ADR-0214 addendum 9): the one migration widens
+a CHECK constraint (expand-only, held by `test_migration_compatibility.py`), no compose, edge or
+environment change, health `ok`. The first gate of this integration (`786dec9d`) was RED on one
+order-dependent unit test (a task id left in the test process's context by a file merged that day);
+nothing was released from it.
+
+| Id | Criterion | Status | Evidence |
+|---|---|---|---|
+| 43.1 | ADR-0224 layer 2 is configured at start-up from the local embedder, off the start-up path | `PROVEN_REAL` | the released api's own log, 2026-10-02 11:29:43 UTC: `understanding_engine_configured`, provider `local`, model `local-minishlab/potion-multilingual-128M`, 1427 exemplars, build 859 ms; `tests/unit/test_understanding_startup.py`, `test_understanding_startup_wiring.py` (5). A turn whose audit row says layer `semantic` ("Bugün nasılsın" - recorded, not acted on): `READY_FOR_OWNER` |
+| 43.2 | The owner's correction is stored as vocabulary memory and used at the next match; a taught word never takes a sentence another table owns; a secret is refused and said | `PROVEN_AUTOMATED` | `tests/unit/test_understanding_corrections.py`, `tests/integration/test_understanding_vocabulary_postgres.py` (real PostgreSQL); migration 0064 applied in production (`Running upgrade 0063_team_state -> 0064_memory_vocabulary_class`). The owner's first correction by voice: `READY_FOR_OWNER` |
+| 43.3 | The research start asks the execution_target rule only behind a setting, which is OFF | `PROVEN_AUTOMATED` | `tests/unit/test_execution_call_site_research.py`, `tests/integration/test_research_execution_target.py`: with the setting off the choice is main's, on PostgreSQL. The cloud image opening the gateway's session and searching on bing: `PROVEN_PROXY` (a local build). The rule on in production: `NOT_RUN` (needs the compose line, the cloud-browser rebuild and the engines measured from the Cloud Core) |
+| 43.4 | Chrome's on-device Turkish recognition in the local mode, behind a setting that is OFF | `PROVEN_AUTOMATED` | `apps/web/tests/voice/`; the owner's measurement with it on: `READY_FOR_OWNER`, and it records nothing until the server keeps the engine's name (carded) |
+| 43.5 | A release, a preflight and a rollback wait for the operation lock; the reconcile never does | `PROVEN_AUTOMATED` | `scripts/tests/cloud-release-bluegreen.tests.ps1` on the fake host built from the real snapshot (collected 2026-10-02 06:54 UTC); real `flock` in a container: `PROVEN_PROXY`. This release's preflight passed at its first try and did not meet the reconcile: the real case is still `NOT_YET_PROVEN` |
+| 43.6 | Two voice tests of the web shell await their events instead of the wall clock | `PROVEN_AUTOMATED` | ADR-0251; `voice/session-storm` still fails under three suites at once and is carded |
+| 43.7 | Correlation ids do not leak between tests | `PROVEN_AUTOMATED` | `tests/conftest.py` (autouse); the pair `test_execution_call_site_research.py` + `test_logging_middleware.py` is RED without it |
+| 43.8 | A release of gated roadmap work without a question, verified | `PROVEN_REAL` | 2026-10-02 11:30 UTC: `RELEASE OK: f91ad1e3… is running as api-blue`, `APPROVED_SHA` = RELEASE, `RECONCILE OK: api-blue is canonical`, health `ok` over the tailnet, 3/3 device sessions handed over, pre-migration backup `f67703a3…` |

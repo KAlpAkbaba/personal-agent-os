@@ -15,32 +15,31 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 <!-- session-start:begin -->
 ## Şu an üzerinde çalışılan
 
-**ÜRETİM: main `e5c4d1f3ce550eae7e5e2edb0aa696ce329b3cae` (2026-10-02 08:19 UTC, api-green), LKG `5f250e5b`, pin = RELEASE,
-reconcile OK, şema `0063_team_state`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`6f3d9f6f`; 14 509 birim, 2 104 web).
-QUALIFICATION Stage 42. Lead dalı = main + yayın kaydı.**
-**YAYINDA: 4 çalışan koltuğu + Ofis koşuyu sayar (ADR-0241), döngü kuyruğu her turda yeniden okur (ADR-0214 ek 11, bağımsız
-denetleyici 5. turda onayladı), besleyici model zincirini izler ve 20 dk'dan uzun beklemez (ek 13), hüküm kapanış
-cümlesinden okunur (ek 12), tarayıcı kurtarma başlatması profil kilidini bekler (ADR-0246), STT ölçüm aracı (ADR-0242;
-ölçülecek KAYIT YOK), Postgres testleri (ADR-0243), anlatı tesisatı (ADR-0244). Önceki yayın (`5f250e5b`): Onay Merkezi
-"Detay" + açık düğmeler, döngüde model politikası, roadmap besleyici + tick, tarayıcı görev planlayıcısı/kapısı.**
-**KAPIDA (lead, 2026-10-02 11:20): İKİNCİ ENTEGRASYON, dal `gate/d20261002-2` @ `786dec9d` (worktree `.claude/worktrees/gate5`),
-ana kopya o commit'te DETACHED: understanding-engine-startup (lead satırı `main.py`: `configure_understanding`; kapatma ayarı
-`understanding_semantic_enabled`) + understanding-corrections-memory (0064: CHECK genişletme, expand-only) +
-execution-call-site-research (ayar KAPALI) + chrome-on-device-stt (ayar KAPALI) + release-lock-waits + web-voice-test-flakes;
-ADR-0245, 0247…0251. SIRA: kapı yeşilse main `--no-ff` → it → kural gereği yayın (istisna yok: 0064 expand-only, compose
-YOK) → pin → doğrula → işleri `released` yap → Stage 43 → ana kopyayı `team/nightly/lead`'e al.**
-**SAHİBE SORULDU, YANIT BEKLİYOR (ikisi de compose değişikliği, sormadan yayınlanmaz): (1) `temporal-init-reaper`
-(`init: true`; uygulanırken Temporal ~10 sn kapanır; dalı `integrate/d20261002`'de, `gate/…-2`'de YOK); (2) bulutta-araştırma
-ayarının compose satırı (`PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED`; satır olmadan ayar üretimde açılamaz - ADR-0248).
-Onay Merkezi'nde iki fikir bekliyor: "koruyucu testler iş dalında", "ölçüm kaydı" (metinleri depoda).**
-**DÖNGÜ: 11:25'te `team/stop.flag` kondu (koşan süreç eski kodla başlamıştı); bir sonraki tick yeni kodla (yeniden okuma +
-besleyici düzeltmesi) başlar. Fable'ın haftalık limiti 2026-10-05 16:00 UTC'ye kadar DOLU: denetimler ve lead koşuları
-Opus 5.5'te ("model düşürüldü"). Lead'in bakacağı: `cycle-auto-integrate` yine DURDU (returns 2) - son denetçi raporunu oku,
-bulgularıyla yeniden aç ya da kartı böl. Kuyrukta yeni kartlar: web-voice-session-storm-flake, local-embedder-lru-lock,
-narrative-model-wiring, narrative-failures-router; sahibin onayladığı iki fikir bölündü (area-widen-*, misheard-*).**
-**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez (`cycle-seat-pool` sonrası ayrı kart). (2) kapı
-~80 dk ve tek sıra: iki kırmızı kapı bu sabah ~3 saat götürdü - araştırmacının "koruyucu testler iş dalında" fikri tam bunu
-hedefliyor. (3) `LocalEmbedder` önbelleği kilitsiz (kart kuyrukta). (4) tarayıcı görev zinciri üretimde ulaşılamaz (PR-D).**
+**ÜRETİM: main `f91ad1e32414a6ce2f1db511e084ea8959fee280` (2026-10-02 11:30 UTC, api-blue), LKG `e5c4d1f3`, pin = RELEASE,
+reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`2a61b80e`; 14 693 birim,
+2 162 web). QUALIFICATION Stage 43. Lead dalı = main + yayın kaydı.**
+**YAYINDA (bugün iki yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler,
+hüküm kapanış cümlesinden okunur, tarayıcı kurtarması profil kilidini bekler. `f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK
+(günlük: `understanding_engine_configured`, 1427 örnek, 859 ms; kapatma: `understanding_semantic_enabled` - compose satırı YOK),
+düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ayar arkasında KAPALI, Chrome cihaz-içi tanıma ayar arkasında
+KAPALI, yayın kilidi bekler, iki ses testi.**
+**KAPIDA (lead, 2026-10-02 14:30): ÜÇÜNCÜ ENTEGRASYON, dal `gate/d20261002-3` @ `d71a0bac` (worktree `.claude/worktrees/gate6`),
+ana kopya o commit'te DETACHED = ikinci entegrasyon + SAHİBİN 13:38'DE ONAYLADIĞI İKİ COMPOSE DEĞİŞİKLİĞİ: (1)
+`temporal-init-reaper` (`init: true`, ADR-0252); (2) `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` satırı (ADR-0248 ek 1; ayar
+KAPALI kalır). SIRA: kapı yeşilse main `--no-ff` → it → yayın (compose değişikliği ONAYLI) → pin → doğrula → SONRA host'ta
+Temporal adımı: önce salt-okuma `docker info --format '{{.InitBinary}}'`, sonra yayınlanan ağaçtan `compose up -d --no-deps
+--wait temporal` (Temporal ~10 sn kapanır; sahip biliyor ve onayladı), doğrula (`HostConfig.Init` true, zombi yok, sağlık ok),
+yeni host snapshot → işleri `released` → Stage 44 → ana kopyayı `team/nightly/lead`'e al.**
+**DÖNGÜ: 14:05'te YENİ KODLA başladı (yeniden okuma + besleyici düzeltmesi). Fable'ın haftalık limiti 2026-10-05 16:00 UTC'ye
+kadar DOLU; koşular Opus 5.5'te. Sahip bugün dört fikri onayladı (ikisi sayfadan, ikisi sohbetten): alan dışı geri verme,
+yanlış anlaşılanlar defteri (bölündü, yazılıyor), koruyucu testler iş dalında, ölçüm kaydı (bölünüyor).**
+**SAHİBİ BEKLEYEN (hepsi deneme/karar, acil değil): 38.3-38.5, 39.2-39.4 cümleleri; 42.1 (Ofis'te 4 koltuk - sekmeyi F5 ile
+yenile); 43.1 ("Bugün nasılsın" de: denetim satırında katman `semantic`); 43.2 (bir düzeltme öğret: "ona X deme, Y de");
+STT ölçümü için yirmi cümle (ölçüm kaydı fikri bunu sayfaya getiriyor).**
+**BİLİNEN AÇIKLAR: (1) besleyici kilidi alır; döngü koşarken kart kesmez. (2) kapı ~80 dk ve tek sıra; bugün beş kırmızı kapı
+(her biri gerçek kusur) ~6 saat götürdü - "koruyucu testler iş dalında" fikri bunu hedefliyor. (3) döngü, tek uzun koşu
+bitene kadar boş koltukları doldurmaz (`cycle-seat-pool` artık çalıştırılabilir). (4) `LocalEmbedder` önbelleği kilitsiz
+(kart kuyrukta; katman 2 artık üretimde, önem kazandı). (5) tarayıcı görev zinciri üretimde ulaşılamaz (PR-D).**
 **KURALLAR (sahip, 2026-10-01; ADR-0214 ek 3-9): (a) sahibe yalnız YENİ FİKİR ve gerçek cihaz denemesi sorulur; roadmap'te
 olan iş onaysız kartlanır, kapıdan geçince ONAYSIZ YAYINLANIR ('kapı yeşilse otomatik yayınla'; ek 9'daki istisnalarda
 dur ve sor); (b) onaylanan fikir ROADMAP 'Approved ideas'e yazılır; (c) hiçbir ajan durmasın: döngü 30 dk'da bir,
