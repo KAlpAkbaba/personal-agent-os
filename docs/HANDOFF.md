@@ -26,11 +26,14 @@ iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü
 30 dk) HAVUZU başlatır: `-MaxParallel 6` = 6 çalışan + 2 denetleyici + 1 entegratör + araştırmacı + lead. YAPILACAK: yeni döngü
 başlayınca durum belgesinde bir çalışan koltuğunun başka çalışan koşarken dolduğunu gör → 46.3'ü PROVEN_REAL yap. Kapı yanında
 yavaşlarsa `team/cycle-settings.json` (her dolumda okunur).**
-**SIRADAKİ ENTEGRASYON (altıncı, hemen): `misheard-ledger-store` @ `90063e75` - lead'in elle başlattığı denetim ONAYLADI (rapor
-inspector-2), depoda `merged`; migration 0065 tek CREATE TABLE (genişleme) → kural gereği onaysız yayınlanır. Bağlama: ADR
-numarası (0254; `lead/auto-integrate-wiring`'deki 0254 sonra 0255 olur), YENİ HOST SNAPSHOT (migration var, snapshot son yayından
-eski), `tool` = 64 diğer üç kartta (yapıldı), `is_request` daraltması sahibin incelemesini bekliyor. O sırada depoda başka
-`merged` iş varsa aynı tura.**
+**KAPIDA (lead, 2026-10-03 01:40 yerel): ALTINCI ENTEGRASYON, dal `gate/d20261003-2` (worktree `.claude/worktrees/gate9`) = lead dalı +
+`misheard-ledger-store` @ `90063e75` (ADR-0254; migration 0065 tek CREATE TABLE - genişleme, kural gereği onaysız yayınlanır; lead'in
+elle başlattığı denetim onayladı) + `narrative-model-wiring` @ `e71b9e14` (ADR-0255; ayar KAPALI, compose satırı YOK) + yeni host
+snapshot (2026-10-02 22:19 UTC). Koruyucu testler 1762 yeşil. Yeşilse: main `--no-ff` → it → yayın (migration 0065 uygulanır) → pin →
+doğrula → `released` → Stage 47. `execution-call-site-routines` onaylanmıştı ama TURA ALINMADI: kapatma ayarı yok ve yayınlanınca
+çalışan rutinlerin `browser_action`'ını buluta seçip orada düşürürdü - `routines_execution_rule_enabled` (varsayılan KAPALI) için
+çalışana döndü (alanına `config.py` eklendi). `understanding-rules-read-lemmas` ikinci dönüşte durmuştu, yeniden açıldı (sahibin
+1. önceliği). Yeni kartlar: `misheard-purge-start-bounded` (defterin yazan kartından ÖNCE), `narrative-timeout-class`.**
 **YAYINDA (2 Ekim'de dört, 3 Ekim 01:14'te beşinci yayın: `65cd94ff` döngü havuzu + bir web testi): `e5c4d1f3` 4 çalışan koltuğu, döngü kuyruğu her turda okur; `f91ad1e3` ADR-0224 katman 2 üretimde,
 düzeltmeler hafızaya; `f60e02e4` iki onaylı compose değişikliği (araştırma kuralı anahtarı KAPALI iletiliyor, temporal Docker
 init altında - host adımı yapıldı); `86e6fde9` alan genişletme kuralları (ADR-0253, kablosuz) + model politikası Cloud Core'da

@@ -279,6 +279,8 @@ def test_every_background_loop_the_app_starts_can_be_seen_in_health() -> None:
         "briefing_announcer": "briefing_announcer",
         "embedded_worker": "temporal_worker",
         "retention_sweeper": "retention",
+        # misheard-ledger-store: the notebook's 24-hour purge.
+        "misheard_purge": "misheard_purge",
     }
     started = _started_loops()
 
@@ -299,6 +301,7 @@ def test_the_health_map_actually_carries_those_keys() -> None:
         "briefing_announcer",
         "research_tool_call_announcer",
         "selfmodel_refresher",
+        "misheard_purge",
     ):
         assert key in ALL_CHECKS
 
