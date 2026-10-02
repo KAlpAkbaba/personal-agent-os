@@ -56,6 +56,15 @@ detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compos
 yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue` @ `4093a958`, denetleyici ONAYLI) ÜÇÜNCÜ KAPI için bu dala
 birleştirildi: main'e girince `cycle-rereads-queue` -> released, `cycle-seat-pool` zinciri açılır; döngü yeni kodu
 bir sonraki başlangıcında alır (ana kopyadaki betikler).**
+**İKİNCİ ENTEGRASYON HAZIR (lead, 2026-10-02 10:25): dal `gate/d20261002-2` (worktree `.claude/worktrees/gate5`) = birinci
+entegrasyon (`6f3d9f6f`, kapıda) + understanding-engine-startup (lead satırı `main.py`'de: `configure_understanding`;
+kapatma ayarı `understanding_semantic_enabled`) + understanding-corrections-memory (0064 migration: CHECK genişletme,
+expand-only; denetleyicinin istediği iki test eklendi) + execution-call-site-research (ayar KAPALI) + chrome-on-device-stt
+(ayar KAPALI) + release-lock-waits (taze host snapshot alındı) + web-voice-test-flakes. ADR-0245, 0247…0251. Ön kontrolde
+çıkan: `test_postgres_coverage_ratchet` - `activity_events` artık Postgres testinde, taban listesinden düşüldü.
+`temporal-init-reaper` BU DALDA YOK (compose değişikliği: sahibin yayın onayı bekleniyor); bulutta-araştırma ayarının
+compose satırı da YOK (aynı soru sahibe soruldu). SIRA: birinci entegrasyonun kapısı yeşil → main → yayın → bu dalı
+ana kopyada detached aç → tam kapı → main → yayın (0064 expand-only: kural gereği sormadan).**
 **DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
 execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
 denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:

@@ -157,6 +157,11 @@ id). A session is one Playwright context in one Chrome instance with its own tab
 - `policy.visible`: headful (default true — the owner sees the real Chrome window) or headless.
 - `channel`: `chrome` (installed Google Chrome; the qualification target) or `chromium`
   (Playwright's bundled build, CI only). Missing channel → `dependency_unavailable`.
+- **On the cloud device** (`device_kind=cloud`, alias `bulut`) the companion decides its own
+  window: its clamp (`browser_agent/cloud/policy.py::clamp_command`) forces `channel: chromium`
+  and `policy.visible: false` on every `session_open`, whatever the payload says (ADR-0248). The
+  cloud image has no Google Chrome and no display; the gateway's default payload
+  (`channel: chrome`, `visible: true`) is for the owner's own machines and is not changed.
 
 Result: `{"session_id":"…","created":true|false,"profile":"research","session_kind":"research","channel":"chrome","browser_version":"…","idle_timeout_s":600,"policy":{…},"lifecycle":{…}}`
 (`profile`/`session_kind` are v1.2 additions; every other key is unchanged).

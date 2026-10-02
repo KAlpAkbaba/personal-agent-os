@@ -1155,6 +1155,32 @@ def test_relay_a_taught_application_word_never_takes_over_an_owned_sentence(
     assert record["device_targets"] == ["ev"]
 
 
+def test_relay_an_all_caps_owned_sentence_keeps_its_intent_whatever_the_rows_hold(
+    monkeypatch, tmp_path
+) -> None:
+    """An ALL-CAPS transcript whose "I" cannot say which i it is takes its own path through
+    the router (``caps_fold``), with its own "a table owns it" guard. Mutation: that guard
+    removed -> the three with an "I" are ``app_open`` here ("MÜZİK AÇ." says its İ and is
+    read as heard, by the other guard)."""
+    from tests.unit.test_operator_open_application_fallback import _bound_session, _say
+
+    world = _relay_world(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")
+    capitals = ("DOSYAYI AÇ.", "DOSYAYI AÇ VE OKU.", "MÜZİK AÇ.", "ŞARKIYI AÇ.")
+    owners = [owner for _, owner in OWNED_SENTENCES]
+
+    def heard() -> list[str]:
+        return [_say(world.client, sid, s)["resolved_intents"][0]["intent"] for s in capitals]
+
+    assert heard() == owners
+    with world.factory() as session:
+        for word, app_id in OWNED_WORDS:
+            planted = corrections.Correction(kind="app", heard=word, meant=app_id)
+            assert corrections.learn(session, EMBEDDER, planted, session_id=sid).written
+    assert heard() == owners
+    assert world.commands.calls == []
+
+
 def test_relay_a_spoken_secret_is_never_written_and_never_a_file_name(
     monkeypatch, tmp_path
 ) -> None:
@@ -1169,3 +1195,29 @@ def test_relay_a_spoken_secret_is_never_written_and_never_a_file_name(
         texts = session.execute(select(Memory.text)).scalars().all()
         assert not any("abcdefghijklmnopqrstuvwxyz" in text for text in texts)
     assert list((tmp_path / "proposals").iterdir()) == []
+
+
+def test_relay_the_audit_row_of_a_spoken_secret_says_secret_rejected_and_none_of_its_words(
+    monkeypatch, tmp_path
+) -> None:
+    """A lesson refused for a secret is said, not hidden: the turn's audit row names the
+    outcome and the kind - never the sentence. Mutation: the relay's branch off -> the row
+    carries no ``understanding_correction`` at all."""
+    from app.broker.models import AuditEvent
+    from app.voice.realtime_sessions.service import ACTION_INTENT_RESOLVED
+    from tests.unit.test_operator_open_application_fallback import _bound_session, _say
+
+    world = _relay_world(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")
+    _say(world.client, sid, f"Ona chrome deme, {SPOKEN_SECRET} de.")
+    with world.factory() as session:
+        turns = select(AuditEvent).where(AuditEvent.action == ACTION_INTENT_RESOLVED)
+        (row,) = session.execute(turns.where(AuditEvent.subject_ref == sid)).scalars().all()
+    assert row.metadata_json.get("understanding_correction") == {
+        "kind": "app",
+        "written": False,
+        "reason": "secret_rejected",
+        "proposed": False,
+    }
+    stored = f"{row.metadata_json} {row.subject_ref} {row.trace_id}".casefold()
+    assert "abcdefghijklmnopqrstuvwxyz" not in stored and "sk-proj" not in stored

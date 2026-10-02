@@ -19477,3 +19477,836 @@ limit met in the run goes one model down at once; every model limited for days -
 released; a reset days away is not waited for whatever the model) beside the three old ones; four mutations RED,
 `feed.ps1` restored from a backup copy with sha256 equal. `PROVEN_AUTOMATED`. PROVEN_REAL is the next tick with Fable
 still limited: a feed run on Opus.
+
+## ADR-0245 — ADR-0224 layer 2 in production: shipped exemplars, and the start-up that configures the semantic engine from the local embedder (2026-10-02)
+
+The worker's text (`team/plans/understanding-engine-startup-adr.md`) follows; what the lead did at merge, and the two
+corrections the inspector asked for, are at the end.
+
+**Status.** Accepted (worker, cycle d20261001, task `understanding-engine-startup`). Additive:
+nothing calls it until the lead adds the one line in `app/main.py` (below).
+
+**Context.** `combine.configure_default_engine(embedder, exemplars)` was called by tests only: the
+exemplars come from `tests/voice_corpus` and production cannot import `tests/`. Production
+therefore ran the rule tables, layer 1 and the policy over the RULE candidate alone.
+
+**Decision.**
+- **The exemplars ship as package data.** `scripts/export_understanding_exemplars.py` writes
+  `app/voice/understanding/exemplars.json` from `exemplars_from_cases(all_cases())` - the SAME call
+  the layer-2/3 tests build their engine from (all corpus sources, one entry per distinct folded
+  sentence; 1427 today), so production indexes what the tests measured. `{"version": 1,
+  "exemplars": [{"intent", "sentence"}]}`, sorted by (intent, sentence), one entry per line, UTF-8
+  unescaped, LF, no case id / context / tool. `--check` exits 1 on drift.
+  `tests/unit/test_understanding_startup.py` holds the committed file BYTE-equal to today's export
+  and names the command; a corpus change without a re-export is RED.
+- **The file lives beside its one reader** (`exemplars.py`), like `stt-confusions.json` and
+  `thresholds.json` - not a protocol file: no second component reads it; `COPY app ./app` ships it.
+- **The loader refuses a file that cannot be right**: wrong version, empty list, an entry with a
+  missing or EXTRA key, an empty sentence, an intent that is not a value of the router's `Intent`
+  enum. Refused whole (ValueError) - a typo never becomes an intent the policy can rank.
+- **`startup.configure_understanding(settings, embedder, *, report)`** configures the default
+  engine only when the memory runtime's embedder is the LOCAL semantic one (`report.active ==
+  "local"` and `report.semantic`, and the object is not a `DeterministicEmbedder`). Otherwise it
+  configures NOTHING and logs one line, `understanding_engine_not_configured`, with the reason:
+  - the deterministic fallback is a lexical hash (the provider's own `fallback_reason` is carried);
+  - a semantic provider that is not on this host (`openai`) is refused too: ADR-0224 says "no
+    network call", the build would bill 1433 embeddings and every sentence would wait on HTTP;
+  - `settings.understanding_semantic_enabled` false (read with `getattr`, default True) is an
+    off-switch. `config.py` is outside this task's area; it becomes real when the lead declares the
+    field (optional, below).
+  The `report` is a required keyword because the provider report is the ONE place that says
+  "semantic" (B37); deriving it again here would be a second opinion.
+- **The index is built off the start-up path**, always, on a daemon thread; the function returns
+  before the first embedding. Until the build is done `default_engine()` raises, which
+  `policy.configured_engine()` already reads as "rule tables and layer 1 decide" - no new state in
+  the policy. A build that fails logs `understanding_engine_not_configured` (reason: the exception
+  type) and leaves it so. Success logs `understanding_engine_configured` (exemplars, build_ms).
+  Measured on the home PC with the real `LocalEmbedder` (potion-multilingual-128M), two sessions
+  (2026-10-01 and 2026-10-02, the second beside a running corpus suite): build 299-427 ms for 1427
+  exemplars, return 0.5 ms, 7-8 ms per sentence afterwards. That is under the card's two
+  seconds, but the Cloud Core's CPU is not this one and a thread costs nothing, so it is not
+  conditional.
+- **No new field on `/v1/system/health`.** The `memory` check already publishes the embedder's
+  `provider`, `semantic` and `fallback_reason`, and the engine is configured exactly when that says
+  `local` / `true` (and the switch is on): a second field would be the same fact with a second
+  clock. What health cannot say - "the build finished" - is a start-up event, and it is in the log
+  (`understanding_engine_configured` / `_not_configured`) and on every audit row
+  (`understanding.layer`).
+
+**For the lead at merge** (`services/api/app/main.py`, in `create_app`, directly after
+`memory = MemoryRuntime(settings)`, today line 218):
+
+    configure_understanding(settings, memory.embedder, report=memory.embedder_report)
+
+with `from app.voice.understanding.startup import configure_understanding` among the imports.
+Optional, for the off-switch: `understanding_semantic_enabled: bool = True` in `app/config.py`.
+
+**Consequences / what the measurement showed.**
+- The guard's two example sentences are NOT fixed by the real embedder: with `LocalEmbedder`
+  "Bugün nasılsın" reads weather_query 0.62 (MEDIUM) and "Araştırmayı iptal etme" research_cancel
+  0.93, capped to 0.84 by the negation rule. Neither is acted on - a reading no rule matched is
+  recorded only (addendum 3) - and that rule must stay until the STT corpus says otherwise.
+- With the engine live, a REPAIRED rule route (0.9) can now be contested by a HIGH semantic
+  reading and become one question. Over the 2754 corpus sentences, treating every route as
+  repaired (the upper bound), exactly one would: "Araştırmayı tekrar dene." (repeat 0.9 vs
+  exec_retry 0.92). The Owner Utterance Suite does not see this: its apps run the deterministic
+  provider, so the engine is not configured there.
+- The build embeds 1433 texts through the memory runtime's embedder from a second thread;
+  `LocalEmbedder`'s LRU (512) is not locked. The same object is already shared by request threads;
+  a lock belongs in `app/memory/providers.py` (outside this area).
+- A corpus change now needs the export re-run in the same commit (the test says so).
+
+**At merge (the lead, integration d20261002, second).**
+- The line is in `create_app` (`app/main.py`), directly after the memory runtime:
+  `configure_understanding(settings, memory.embedder, report=memory.embedder_report)`; and the off-switch is a declared
+  setting, `understanding_semantic_enabled` (default true; `PAGENTOS_UNDERSTANDING_SEMANTIC_ENABLED=false` puts the
+  rule tables and layer 1 back alone). `tests/unit/test_understanding_startup_wiring.py` (5; 4 RED before the line):
+  one call, with the memory runtime's OWN embedder and report; with the suites' deterministic embedder nothing is
+  configured and one line says why; the off-switch is honoured by `create_app`.
+- **Correction 1 (inspector).** The start-up tests' "sentence no rule matches" was "Dışarıda hava nasıl bugün" - which
+  the real router answers with the weather table: the mechanism was right and the label wrong, and an owner who tried
+  it would have seen layer `rule` on the audit row and read a failure. The constant is "Bugün nasılsın" now (the real
+  router: none), and a test holds the label to the real router. The sentence to try in production for a `semantic`
+  audit row is that one: it is RECORDED as weather_query 0.62 and NOT acted on.
+- **Correction 2 (inspector; plausible, not measured).** The text above says a reading no rule matched is "recorded
+  only". One behaviour does change: a turn with no rule match used to be band LOW; with the engine live it can be
+  MEDIUM, and `tools_operator._read_back` then adds "… açıyorum efendim" to a MODEL-routed `app_open` receipt. Harmless
+  - the action is the model's, as before - but it is a sentence the owner did not hear yesterday.
+- **What this release changes for the owner.** Production's embedder is the local one, so from this release layer 2
+  runs: a route the rules reached only through a repair (0.9) can now be contested by a HIGH semantic reading and
+  become ONE question instead of an action (over the corpus, treating every route as repaired: one sentence,
+  "Araştırmayı tekrar dene."); 0 decisions changed where a rule matched exactly (2591 sentences, the inspector's
+  pass). The STT measurement (ADR-0224 addendum 4: 68.9 %) was taken WITHOUT layer 2 configured: it is to be taken
+  again on this release - that number, not this ADR, says whether the 25 "not understood" moved.
+- Known and carded by nobody yet: `LocalEmbedder`'s LRU is not locked (the build thread and request threads share
+  it; 0 errors in 11 concurrent builds; a lost race leaves the engine unconfigured for the life of the process, in
+  the log only); the global engine is never un-configured (one app per process in production).
+
+## ADR-0247 — ADR-0224 corrections as built: the owner's correction is vocabulary memory, and the next match uses it (2026-10-02)
+
+**Status.** Accepted (worker, cycle d20261001, task `understanding-corrections-memory`; fourth
+pass after the inspector's third return, 2026-10-02). The module, the relay call sites, migration 0064 and
+`MemoryClass.VOCABULARY` are all on the branch. Three of those files are outside the card's
+listed area and were added because the return names them: `alembic/versions/20261001_0064_…`,
+`app/memory/types.py`, `tests/integration/test_understanding_vocabulary_postgres.py`,
+`app/voice/realtime_sessions/service.py`.
+
+**Decision.**
+
+- **The class.** `MemoryClass.VOCABULARY` (`app/memory/types.py`), allowed by
+  `ck_memories_class` from migration `0064_memory_vocabulary_class` (expand-only: the constraint
+  gains one value; the downgrade deletes the vocabulary rows and restores the six).
+  `app/memory/policy.py` names it `VOCABULARY` and gains decision-table
+  row 1a: a `vocabulary` observation WITHOUT the caller's `explicit` flag is IGNORED - no row, no
+  candidate, no session stage. With the flag it is the existing row 2 (durable, explicit, 1.0,
+  actor OWNER). The secret guard (row 1) still runs first. A synonym is the owner's own word or it
+  is nothing: an inferred one would be matched as if the owner had said it.
+- **The row.** text `ofüs = ofis (cihaz)` / `hesaplayıcı = Hesap Makinesi (uygulama)`; key
+  `<kind>:<folded heard>` (one row per heard word: teaching it again corroborates, teaching it
+  differently supersedes - the memory service's own keyed path); value
+  `{kind, heard, meant}` with `meant` a canonical alias word or an allow-listed app id; source
+  `{kind: voice_correction, session_id}`. A vocabulary row whose value names no such entity (a
+  model handing `memory.remember` the class) is not a synonym.
+- **`app/voice/understanding/corrections.py`.**
+  - `vocabulary(session)`: one query for (id, version) of the active vocabulary rows; the rows
+    are read and parsed only when that changed (another process's write included). It also sets
+    the turn's vocabulary (a ContextVar, the `_FOLD_MATCHING` precedent) which the rule table
+    reads. A store that cannot be read is an empty vocabulary; the read runs in a savepoint so a
+    failure cannot abort the relay's transaction. The layer-2 `EntityIndex` gets the rows as
+    `(kind, value, surface)` through `policy.read_turn(vocabulary=...)` and is rebuilt only when
+    they change (`SemanticEngine` caches by content).
+  - `read_turn(...)`: `policy.read_turn` with the vocabulary in it. A device word the owner
+    taught, said as taught (bare or with ONE closed case ending - accusative, locative, -ki,
+    ablative; never a prefix), binds at 1.0, layer `vocabulary`, BEFORE the confusion list - the
+    owner's word outranks a release artefact - unless the sentence already names a machine in a
+    closed form. A NEAR form goes to layer 2 through the index and is read back (MEDIUM). The
+    candidate's evidence names the synonym (`vocabulary: ofüs = ofis (cihaz)`); the audit block
+    still carries names and numbers only.
+  - `correctable(...)`: what the relay keeps of a MEDIUM read-back or a LOW device question -
+    intent, application, device, band, time and the ONE word the device slot was read from
+    (the word before "bilgisayar…"), never the sentence. A HIGH turn keeps nothing.
+  - `correction_turn(kept, text)`: called only for a sentence the rule tables left unrouted
+    (rule first). After a LOW question the bare answer corrects ("ofis bilgisayarında"); after
+    a MEDIUM read-back a correction says no first ("hayır, ev bilgisayarında") - a bare device
+    phrase there is a new sentence. "Onu değil, Not Defteri" re-issues the turn with the
+    application (no word to learn: the application was read from words the allow-list knows).
+    "Ona X deme, Y de" needs no turn before it: the side the system knows is the entity, the
+    other is the new word; both known and equal -> `already_known`; both known and different ->
+    refused; neither known -> not a correction.
+  - **What is never learned** (`known_word`, `not_a_name`): a word the system already reads -
+    an alias phrase, a suffixed alias ("ofisi", "evim"), an alias the owner configured on a
+    device, words the allow-list reads as an application - and a pointing word ("diğer", "onun",
+    any "…ki"). "Ofis bilgisayarında aç" then "hayır, ev bilgisayarında" is a change of mind:
+    the turn is re-issued at home and "ofis" keeps meaning the office.
+  - **The router's own words name nothing** (`known_word`; the inspector's finding: "ona ofis
+    deme, hesap de" was learned as `hesap = ofis (cihaz)` and the next "hesap makinesini aç"
+    opened on ofis at HIGH). Refused for either kind: any form of the computer word
+    ("bilgisayar…") and a verb of the rule tables - `intents.rule_verb_words()` reads every
+    `_…_VERB…` table, so a verb added to a table is refused without a second list; forms are
+    matched whole, stems of three letters or more by prefix, shorter stems whole ("aç" must not
+    refuse "acer"). Refused as a MACHINE only: any word of an application alias phrase or
+    Turkish app name, bare or with one closed case ending ("hesap", "makinesini", "defteri").
+    An application may still be taught a word of another's name ("ona hesap makinesi deme,
+    hesap de"): the allow-list's own names are read first, so it cannot steal a sentence.
+    A heard word longer than 32 characters is `not_a_name` (it becomes a key and a file name).
+  - **A guessed word must resemble the alias** (`not_similar`, `GUESSED_WORD_MIN` 0.6). After a
+    question or a read-back the heard word is taken by POSITION (the word before
+    "bilgisayar…"); "hemen bilgisayarımda … aç" answered "ev" would otherwise teach "hemen = ev"
+    and the next "hemen hesap makinesini aç" would launch at home at HIGH. So "ofüs" -> "ofis"
+    (0.75) and "evü" -> "ev" (0.67) are learned, "hemen"/"şirket" -> "ev" and "ofisü" -> "ev"
+    are not (the turn is still re-issued). The pair form states both sides - nothing is guessed -
+    and may teach an unlike word ("ona şirket deme, iş de").
+  - **The pair form is a sentence about a name, and ordinary speech is not** (third pass; the
+    inspector's finding: in an office session "Bunu bana deme, evde de." was stored as
+    `bana = ev (cihaz)` and the next "Bana hesap makinesini aç." ran on the home PC at HIGH).
+    Four rules, each with its own RED mutation:
+    1. **The address word is required**: `ona` / `buna` / `şuna`. "Onu/bunu … deme" is the thing
+       SAID, not the thing named; "Şirket deme, iş de." without it is not a correction.
+    2. **The known side is a bare name**: "ev", "iş bilgisayarı", "Not Defteri". A word in a case
+       ("evde de", "ofisteki de", "Chrome'da de") says WHERE to say it and names nothing, so
+       "Ona aptal deme, evde de." is not a correction.
+    3. **A pronoun, an adverb or a politeness word is `not_a_name`**, for either kind (closed
+       lists `_PRONOUNS`, `_ADVERBS`, `_POLITENESS` beside the pointing words): "Ona ev deme,
+       hemen de." teaches nothing. The lists are a first refusal, not the guarantee.
+    4. **A taught machine word binds only where the sentence names a machine**
+       (`_machine_named`): followed by the computer word ("ofüs bilgisayarında") or carrying a
+       place ending ("ofüste", "ofüsteki", "ofüsten"). This is how the device grammar reads its
+       own aliases (ADR-0205/0212: a lone "ev" is left alone). So whatever a vocabulary row
+       holds - a word no list knew, a row written by `memory.remember` - "Bana hesap makinesini
+       aç" names no machine. Cost: "ofüs hesap makinesini aç" (bare) no longer binds; the
+       grammar never bound a bare alias either.
+  - **Rule first is the relay's guard, and it is tested there.** "Ona dur deme, ev de." (STOP)
+    and "Ona devam et deme, ev de." (RESUME) are sentences the module alone would learn - its
+    lists know the operator's verbs, not every word of every rule table - and the relay never
+    hands them to it.
+  - `learn(...)`: `memory_service.record_observation` with the explicit observation (the existing
+    write policy, dedup and audit; it commits on the session it is given, as `_extract_memories`
+    does), then the proposal. Never raises; a refusal is a reason (`secret_rejected`, …).
+  - **The proposal.** `team/proposals/stt-karisiklik-<kind>-<heard>-<meant>-<hash8>.md`, created
+    with exclusive create: once per synonym across sessions and workers. It carries the two
+    words, the fuzzy similarity and the candidate entry; never the sentence. The module never
+    opens `stt-confusions.json` (a test pins its sha256). Directory: `PAGENTOS_TEAM_PROPOSALS_DIR`,
+    else the checkout's `team/proposals`, else none - reported (`proposal_reason:
+    no_proposals_dir`), not hidden.
+- **`app/voice/intents.py` (fourth pass: a taught application word is the LAST reading).** The
+  inspector's finding: `app_for` was asked inside the application table, which stands before the
+  document, artifact and media tables, so a row `dosya = Not Defteri` turned "Dosyayı aç"
+  (`artifact_open`), "Dosyayı aç ve oku" (`document_read`), "Müzik aç" and "Şarkıyı aç"
+  (`media_play`) into `app_open` at HIGH. Now:
+  - `_app_open_match` reads the allow-list only. `resolve_intent` asks `_taught_app_open`
+    after the words as heard AND both repair readings (polite, ascii-fold) - only for a sentence
+    no table owns (`owned_by_a_table`). Asking it inside `_resolve_intent_rules` would not do:
+    "sarkiyi ac" is unrouted as heard and the media table's through the fold repair, and a
+    taught word matches folded.
+  - **The one reading a taught word outranks** is the media table's bare-title last resort
+    (`_bare_title_media_match`, matched `adıyla aç`): it reads ANY two unknown words and "aç"
+    as a title, so a strict "only when the router answers NONE" made "Ofis bilgisayarında
+    hesaplayıcıyı aç" a YouTube search for "hesaplayıcıyı" - the device-slot sentence this ADR
+    exists for. That rule's own contract is "a name nothing else in this resolver wanted"; the
+    owner's lesson wants it. A media WORD ("müzik", "şarkı", a play verb with a marker) is the
+    table's own and is never outranked. Cost, stated: "<taught word> <unknown word> aç" opens
+    the application where it was a title search before the lesson.
+  - A turn it decided has `matched = "vocabulary:<app id>"` and `corrections.read_turn`
+    records **layer `vocabulary`** (was `rule`) when the allow-list's own names do not name the
+    application in the sentence. Only a `rule` layer is replaced: a LOW device question, an
+    answered or layer-2 device keep their own layer, and the evidence line names the synonym.
+  - **Refused at teach time too** (`known_word`): as an APPLICATION, a word whose open sentence
+    a table owns - `corrections._router_opens` asks the router itself ("<word> aç" and its
+    accusative, no vocabulary active), no list. "Ona not defteri deme, dosya de." writes nothing.
+    A word the router leaves unrouted ("kapı", "rapor", "alarm") is still teachable: that is
+    what the pair form is for, and it can only fill a gap.
+  - Outside a turn the vocabulary is empty: the corpus reads exactly as before.
+- **The secret guard reads the sentence as SPOKEN** (fourth pass). Normalised, "sk-proj-abc…" is
+  three plain words no pattern matches, so the key became a memory row and a proposal file
+  name. `correction_turn` runs `memory.policy.find_secret` on the raw sentence of the pair form
+  (`secret_rejected`, `heard=None`: nothing of it is carried on) and `correctable` keeps no
+  heard word of a sentence that carries one. The relay puts `reason: secret_rejected` on the
+  audit row (no words).
+- **Deletion.** `memory.forget` on the row is all it takes: the next version check drops the
+  synonym. "ofüs'ü unut" already routes to MEMORY_FORGET; `named_synonym(vocabulary, text)` gives
+  the row a forget sentence names by its heard word.
+
+**Why not a wider match.** A wrong synonym is a wrong-device launch at HIGH - exactly what ADR-0224
+forbids - so every doubt resolves to "ask again": closed endings, the known-word refusals, no
+learning from a HIGH turn. The owner can always teach a word with the pair form.
+
+**Consequences / open.**
+- `memory.forget` still takes an id from a `memory.search` read-back (B18): "ofüs'ü unut" as ONE
+  sentence deleting the row needs `tools_memory.py` to call `named_synonym` - not in this area,
+  not wired. Today: "ofüs hakkında ne biliyorsun" -> read-back -> "bunu unut".
+- A taught application word is only read with an open verb (`app_open`); other intents do not ask
+  the vocabulary yet. Application corrections after a read-back re-issue but teach nothing until a
+  reading can be made from words the allow-list does not know (layer-2 slots, `understanding-stt-corpus`).
+- The pair form teaches silently: it re-issues no turn, and the relay has no receipt speech for
+  "öğrendim" (a `say` frame or a tool is outside this area). The audit row says it was written.
+  The refusals above close the shapes the inspector found; an ORDINARY unknown word is
+  still learned from one sentence ("ona ofis deme, müzik de"), which is what the pair form is
+  for - a spoken receipt ("müzik artık ofis demek") is the missing guard and its own task.
+  Since the third pass such a row binds only in "müzik bilgisayarında" / "müzikte", never in
+  "müzik aç". An APPLICATION word is read only in an open sentence no rule table owns (fourth
+  pass), and a word a table owns is refused at teach time; an unowned common noun ("kapı")
+  taught as an application still opens it on "kapıyı aç" - the owner's own lesson.
+- The teach-time probe asks the router in its DEFAULT state: a word only a focus-dependent
+  table reads is caught by the router at read time (asked last), not at teach time.
+- Layer 2's entity index still receives every device synonym as a surface form (a NEAR form is
+  read back at MEDIUM, never run at HIGH); the positional rule is on the HIGH path only.
+- The near-form MEDIUM number (0.67 for "ofüss") is the lexical `DeterministicEmbedder`'s; with
+  `LocalEmbedder` it is NOT_RUN.
+- On the Cloud Core image there is no checkout: without `PAGENTOS_TEAM_PROPOSALS_DIR` the memory
+  row is written and the proposal is not (`no_proposals_dir`). `proposals-on-cloud-core` decides
+  where the directory is.
+
+### For the lead at merge
+
+1. **Number the migration against the chain tip at merge.** `0064_memory_vocabulary_class`
+   chains from `0063_team_state`. If another branch of this cycle also adds a 0064, one of the
+   two is renumbered (file name, `revision`, `down_revision`, and the two `"0063_team_state"`
+   literals in `tests/integration/test_understanding_vocabulary_postgres.py`).
+2. **The release is a schema release.** `alembic upgrade head` runs before the new colour
+   serves; the old colour keeps working beside 0064 (it never writes the class). Do NOT run the
+   integration suite of this branch against the shared dev database while sibling worktrees are
+   still at 0063: their `alembic upgrade head` cannot locate revision 0064. The proof here ran
+   in a scratch database (`PAGENTOS_DATABASE_URL=…/pagentos_scratch_vocab0064`), dropped after.
+3. **`MEMORY_CLASSES` now has seven values**, so `memory.remember` / `memory.search`
+   (`tools_memory.py` schema enums) and `routes.py` offer `vocabulary`. A row written that way
+   without a `{kind, heard, meant}` value naming a real alias or app is not a synonym (tested);
+   one with such a value IS - through `remember_explicit`, i.e. the owner's own instruction.
+4. `docs/HANDOFF.md`, the ADR number, `docs/DECISIONS.md` (ADR-0224 addendum 4).
+5. Nothing for `app/protocol_files.py` or the falsification list: no protocol file is added or
+   read. `PAGENTOS_TEAM_PROPOSALS_DIR` is read from the environment by this module only; if it
+   should be a `Settings` field, that is `app/config.py`.
+6. **The relay-on-PostgreSQL tests are committed** (fourth pass): two tests at the bottom of
+   `tests/integration/test_understanding_vocabulary_postgres.py` drive `create_app` on the real
+   database. They teach FIXED words (`device:ofus`, `app:hesaplayici`, `app:dosya`) and forget
+   them before and after; on a database where the owner really taught one of those, the test
+   would forget it - run them on the dev stack or a scratch database, never on production.
+7. **One reading changes for existing sentences only with a row present**: `resolve_intent`
+   may now return `app_open` (matched `vocabulary:<id>`) where the media bare-title rule
+   answered. With no vocabulary active nothing changes (the corpus proves it).
+
+### The relay as wired (`app/voice/realtime_sessions/service.py`, `record_client_events`)
+
+Five places, all in the utterance branch: (1) `corrections.vocabulary(db)` before the router
+reads the sentence; (2) `correction_turn(...)` for a sentence the tables left unrouted, and the
+kept `understanding_correctable` popped (corrected once, or not); (3) a correction that carries
+a turn re-issues it (`matched="understanding:correction"`, the device the owner named as the
+answered device); (4) `corrections.read_turn` in place of `policy.read_turn`; (5) after the
+decision: `correctable(...)` kept on `context_json`, and a learnable pair written through
+`learn(db, memory_runtime.embedder, …)` with `understanding_correction {kind, written, reason,
+proposed}` on the audit row - no words. `learn` commits the relay's session early (the
+`_extract_memories` precedent, and for the same reason). Without a memory runtime the audit
+row says `no_runtime` and nothing is written.
+
+Still open in the relay: the turn's vocabulary stays in the ContextVar after the utterance
+(a later `resolve_intent` in the same context still reads a taught application word), and the
+pair form has no spoken receipt.
+
+**At merge (the lead, integration d20261002, second).** The inspector approved on its third pass of this cycle (four
+returns in all, a new real defect each time; the last: a taught application word must never take over a sentence
+another table owns). Asked of the lead and done: the two tests it named (an ALL-CAPS owned sentence with a planted row
+keeps its intent; the relay's audit row says `secret_rejected`), and `docs/DATA_MODEL.md` names the seventh memory
+class. Migration `0064_memory_vocabulary_class` widens one CHECK constraint (the six classes and `vocabulary`): every
+row the old colour writes still satisfies it - expand-only, so it releases under the standing rule. The owner's first
+correction by voice in production: `READY_FOR_OWNER`.
+
+## ADR-0248 — The research start asks the execution_target rule - behind a setting that is OFF (2026-10-02)
+
+Task: `execution-call-site-research` (roadmap 2b, ADR-0213 / ADR-0220 lead addition 1). 2026-10-01.
+
+### Context
+
+`app.execution.wiring.choose` was built and had no caller. `start_browser_research` picked its
+device with `select_device` alone, which knows no platform, so the cloud worker (`bulut`,
+platform `cloud`) was chosen or skipped by health order. In the activities, `attached` was read
+from `Settings.research_browser` alone, so a run on the cloud device asked for the owner's
+Chrome, was refused, and wrote an `owner_chrome -> device` fallback row on every search.
+
+### Decision
+
+1. `start_browser_research` calls `choose_research_target` before any device is picked, with the
+   first named word (or none), and maps the decision with the new pure
+   `wiring.device_for(decision, views)`: `cloud` -> the online, non-revoked view whose platform is
+   `cloud`; `owner_chrome` -> the online, non-revoked, non-cloud view labelled `owner_chrome`;
+   `device` -> `None`, meaning the unchanged `select_device` call over the NON-cloud views.
+   (Capability and policy: see "Addendum - a target that cannot serve is not available".)
+2. The PLANNED event carries `execution_target`, `execution_chain`, `execution_skipped`; a FAILED
+   event after a refusal carries `execution_reason` (the decision's reason). The keys are
+   prefixed because the event is a flat dict shared with other writers.
+3. The ledger rows carry the research task: `wiring.choose(..., research_job_id=)` writes
+   `research_job_id` and `source_ref = execution:<task id>:<n>` (default unchanged: a random id).
+4. A refusal about MACHINES keeps the sentence the selection always said ("'ofis' cihazı şu anda
+   çevrimiçi değil.", "Şu anda çevrimiçi bir cihaz bulunamadı."): voice speaks that text and the
+   REST 409 returns it. "bulutta" with the cloud down says "Bulut şu anda çevrimiçi değil.".
+5. A REST caller's own `target_device` (no spoken word) is NOT put to the rule: it names a device
+   by id, name or alias and stays that device. No execution ledger row is written for it.
+6. The research start passes `ledger_required=False`: a ledger write that fails is rolled back
+   and logged (`execution_ledger_write_failed`) and the run starts; the decision is still in the
+   PLANNED event. `wiring.choose` itself stays strict by default (routines unchanged). Same stance
+   as the `task.failed` notification on this path.
+7. `browser_activities._attached(mode, device_id)` is the one place both the search and the fetch
+   path decide "attached": false when the device row's `platform` is `cloud`. The row is read
+   directly (the view copies the same column; a view needs the broker runtime, the fact does not).
+8. `start_browser_research` gains `needs_signed_in_session` (default False); no caller passes it yet.
+
+### Addendum (2026-10-02, after the inspector's return) - a target that cannot serve is not available
+
+Found: the cloud worker's hello is `browser_agent/policy.CAPABILITIES` - 30 operation names and
+NO family marker `browser.chrome`. The first version chose the cloud by presence and then put it
+through `select_device([view], capability="browser.chrome")`: every unnamed research would have
+been a FAILED run with MAIL online, under an `execution.selected target=cloud` ledger row.
+
+9. `wiring.choose` takes `capabilities` (the operations the job sends). With them a target is
+   available only when one of its devices is online, advertises every one (by name or through
+   the family marker, `has_capability`) and is allowed each by the owner's policy. The answer per
+   device is `select_device([view], capability=op)`'s own, so there is one definition of
+   "capable" and "policy-allowed". Without `capabilities` the rule decides by presence as before
+   (the routine adapter is unchanged).
+10. Research passes `RESEARCH_OPERATIONS` = `browser.session_open`, `browser.search`,
+    `browser.wait`, `browser.fetch_evidence`, `browser.session_close` - exactly what
+    `browser_gateway` sends (a test reads the gateway's source). The cloud worker advertises all
+    five, so with its REAL hello it is chosen; the machines advertise `browser.chrome`, which
+    implies them. The cloud is NOT asked for the family marker: selection may ask for either
+    shape (`app.devices.capabilities`), and the operation names are the precise one.
+11. A target that is up and cannot serve is skipped for the next in the chain, and the fallback
+    row says why: `cloud_capability_missing`, `cloud_policy_denied`,
+    `owner_chrome_capability_missing`, `owner_chrome_policy_denied`, `device_capability_missing`,
+    `device_policy_denied`. These are written by `wiring` over the rule's `*_offline` skip; the
+    rule table is not changed (it still knows only up / down).
+12. The `device` target is available exactly when the caller's own
+    `select_device(machines, "browser.chrome", ...)` would succeed, and `choose` takes the
+    caller's `views`, so the decision and the pick read ONE registry snapshot with ONE test.
+    Consequence: a FAILED run never sits under an `execution.selected` row (tested over five
+    refusal shapes); `device_for(decision, views, capabilities=)` applies the same test.
+13. "bulutta" with the cloud up but unable: FAILED, `forced_target_unavailable`, skip
+    `cloud_capability_missing` / `cloud_policy_denied`, said as "Bulut bu işi şu anda yapamıyor."
+    (not "çevrimiçi değil", which would be false).
+14. The integration test's cleanup no longer trusts the code under test: every ledger write the
+    process makes is noted by `source_ref` at write time and the tasks are found by the test's own
+    intent text; one test proves a row with no `research_job_id` is removed.
+
+### Addendum 2 (2026-10-02, the inspector's second return) - the cloud device decides its own window
+
+Found by reading, then reproduced in the image: `browser_gateway` sends ONE `session_open` for
+every device - `channel: "chrome"`, `policy.visible: true` - the cloud companion's clamp passed
+both through, and the worker takes them from the payload ahead of its own
+`--channel chromium --headless`. The cloud image has no Google Chrome and no display.
+
+15. `browser_agent.cloud.policy.clamp_command` forces `channel = "chromium"` and
+    `policy.visible = false` on every `session_open` (`CLOUD_CHANNEL`, `CLOUD_VISIBLE`), whatever
+    the payload says and also when it says nothing. Decided where the device decides: the
+    gateway stays one payload for all devices (the owner's machines keep their visible Chrome)
+    and no other caller can ask the cloud for a window either. The gateway is not changed.
+16. The `session_open` result already reports what was launched (`channel`, `policy.visible`),
+    so the caller is told, not surprised.
+17. The test does not retype the payload: it compiles the gateway's own `_open_session` from
+    `services/api/app/research/browser_gateway.py`, runs it against a recording client, puts
+    what it sent through the real clamp and the real worker's `session_open`, and reads the
+    arguments the worker hands `ManagedBackend` (headless, chromium, the dedicated profile).
+    A second test keeps the reason visible: without the clamp the same worker launches a
+    visible `chrome`.
+18. "The `device` target is a machine" is the service's own platform filter (`_machines`), and
+    is now held by tests with a cloud view that advertises `browser.chrome` and is the
+    healthiest device: a signed-in run, the session's own device being the cloud, a machine
+    word only the cloud answers to, and a cloud holding a machine's alias.
+
+Run in the image built from this branch (`pagentos-cloud-browser:call-site-research`, compose's
+limits, no broker: the bridge is driven over an in-process socket, everything else is the
+image's own code), 2026-10-02 on the dev machine:
+
+- the gateway's payload WITHOUT the clamp: `dependency_unavailable`, "Chromium distribution
+  'chrome' is not found at /opt/google/chrome/chrome";
+- the same payload through the bridge: `session_open` succeeded, `channel chromium`,
+  `visible false`, Chromium 151.0.7922.34; `browser.search` on bing returned 10 results;
+- `browser.search` on duckduckgo - the gateway's default engine - ended in the provider's
+  captcha page twice out of two (`provider_rate_limited`). See "Consequences / open".
+
+### Addendum 3 (2026-10-02, the lead's decision after the third inspection) - release safety
+
+No defect was found in the code; two things made the release unsafe, and the lead decided both.
+
+19. THE CALL SITE IS BEHIND A SETTING, DEFAULT OFF: `Settings.research_execution_rule_enabled`
+    (env `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED`, default `false`). Off, `start_browser_research`
+    makes the one call main makes - `select_device(views, capability="browser.chrome",
+    target=..., **hint)` over ALL views - the rule is not asked, no ledger row is written, the
+    PLANNED / FAILED events carry no `execution_*` key, "bulutta" is an ordinary alias word and
+    `needs_signed_in_session` is not read. Held by tests (SQLite and PostgreSQL), including a
+    recording `select_device` and a `choose_research_target` that raises if called. On, it is
+    everything above. `_attached` and the cloud clamp are not behind the setting: with it off no
+    run reaches the cloud device, and they change nothing for a machine.
+20. RELEASE ORDER (why 19 exists). `cloud-browser` is "NOT part of the release transaction"
+    (`docker-compose.prod.yml`, profile `cloud-browser`) and no release script rebuilds it, so a
+    blue/green release ships the api half only. Production's `pagentos-prod-cloud-browser` still
+    runs an image WITHOUT the clamp of decision 15: sent the gateway's `session_open`
+    (`channel: chrome`, `visible: true`) it fails `dependency_unavailable`. With the rule on,
+    every unnamed research would be sent there and fail. So, in this order:
+    1. release the api as usual (the setting is off: research behaves as on main);
+    2. on the host, from the released commit, rebuild and restart the `cloud-browser` service
+       of `infra/docker/docker-compose.prod.yml` (profile `cloud-browser`; `build`, then
+       `up -d`), and wait for its healthcheck and for `bulut` to be online in the registry;
+    3. verify ONE `browser.session_open` on `bulut` succeeds and reports `channel chromium`,
+       `visible false` (then `session_close`);
+    4. only THEN set `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED=true` in the api's environment and
+       restart the api. This is its own owner-visible step, not a side effect of a release;
+    5. verify: one research with nothing named has a PLANNED event with
+       `execution_target=cloud` and its `search` events name the provider that answered.
+    Back out by unsetting the variable (no schema, no data to undo).
+21. A CLOUD RUN SEARCHES IN AN ORDER, BING FIRST. Read first: the worker's `engine` is ONE name
+    of `google, duckduckgo, bing, brave`, or `auto` (= google, then duckduckgo); a named engine
+    is tried alone, and there is no order parameter (`browser_agent.search_engines.run_search`).
+    The worker is outside this area, so the order is walked in the gateway:
+    `browser_gateway.CLOUD_SEARCH_ORDER = ("bing", "auto", "brave")` - bing, then every other
+    engine the worker has, none asked twice (a test reads the worker's `ENGINES` / `AUTO_ORDER`
+    from its source). `DeviceBrowserGateway(search_order=...)` sends one `browser.search` per
+    entry until one answers with results; the next is asked when this one was refused, failed
+    or answered nothing. `browser_activities._search_order(device_id)` gives the order to a run
+    whose device row has platform `cloud` and `None` to every other device, whose search is the
+    single request, payload and idempotency key it always was (held by a test, key for key).
+22. Details of the walk, each held by a test:
+    - the session is opened once, before the walk: a browser that cannot open is not asked
+      once per engine;
+    - every request is `interstitial="fallback"`, whatever the workflow asked: the cloud window
+      is headless, so an owner handoff (`auto` reaching Google's captcha in an interactive run)
+      would only be waited out for the handoff timeout;
+    - the first request keeps the single search's idempotency key; each further engine has its
+      own (`...:<engine>`), so it is a dispatch and not a replay;
+    - a time budget: `SEARCH_ORDER_BUDGET_S = 75` (the discover activity has 90 s,
+      `browser_workflow._MEDIUM`; the workflow is not changed). No further engine is started
+      with less than 15 s left and a started one gets only what is left as its timeout;
+    - the evidence in the run's `search` event says what was tried: `requested_provider` is the
+      first of the order, `fallback` true, `attempts` leads with the engines that did not
+      answer (`{"provider": "bing", "outcome": "provider_rate_limited", ...}`);
+    - with no answer at all the last refusal is raised, as a single search's is (the activity
+      writes its `search_failed` event and the workflow lets one query fail).
+    On the cloud device the workflow's own `search_provider` does not decide the engine.
+
+### Not changed
+
+The rule table, `select_device`, the workflow, any schema, the worker's search code. The
+gateway's `session_open` payload is not changed (decision 15); its `search` is, for a gateway
+given an order (decision 21). The production cloud worker is not probed.
+
+### Consequences / open
+
+- With the setting ON, research with nothing named runs on the cloud worker whenever it is
+  online, ahead of the session's own machine (ADR-0208 affinity applies only once the rule says
+  `device`). With it off (the default) nothing below about the cloud applies.
+- The order is NOT run in the image by this task (the walk is proven against a scripted
+  worker; bing answering and duckduckgo / `auto` ending in the captcha are the earlier image
+  measurements, from the dev machine's address). brave in headless Chromium is not measured,
+  and neither is any engine from the Cloud Core's address. If every engine is blocked there the
+  query fails with `provider_rate_limited` and nothing falls back to a machine mid-run.
+- A worst-case walk is 75 s of the activity's 90 s; a retry of the activity (3 attempts) walks
+  again, and its first request replays bing's terminal answer (the same key, as today).
+- With two online `owner_chrome` machines, `device_for` takes the first in registry order; the
+  session's own machine is not preferred there.
+- `research_browser == "owner"` (keyboard/OCR) on the cloud device is untouched: it would still
+  try the owner path and fall back per page. The plan activity's serial-fetch clamp
+  (`startswith("owner")`) also still applies to a cloud run.
+- A REST caller's own `target_device="bulut"` still goes through `select_device(...,
+  "browser.chrome")` and is refused for the real cloud worker (`capability_missing`, a FAILED run
+  with no execution row). The rule is not asked on that path (decision 5); left as it is.
+- A whole research run on the production worker is not proven here (the card forbids probing
+  it); step 5 of the release order is where it is.
+- "bulutta" still does not arrive from voice (`devices/aliases.py`, outside this area).
+- The workflow's replay-only re-select (`select_device_activity`) still uses `select_device` over
+  all views; it is reached only when the planned device went offline.
+
+**At merge (the lead).** Merged with the setting OFF: research chooses its device exactly as on main (held on
+PostgreSQL), so this release changes nothing the owner can meet.
+- **Release-order step 4 is corrected.** As written it would silently do nothing: `infra/docker/docker-compose.prod.yml`
+  forwards only the variables it names, and `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` is not one of them (the
+  inspector rendered `docker compose config` with it set: 0 occurrences). Turning the rule on therefore needs a line
+  in the compose file - a compose change, which by ADR-0214 addendum 9 is the owner's to approve - and then steps 2-5.
+  That line is NOT in this release.
+- Before it is turned on: measure the search engines FROM THE CLOUD CORE's address (the worker measured from the home
+  PC: duckduckgo ended in a captcha twice, bing answered); and `docs/BROWSER_CAPABILITIES.md` names the cloud clamp.
+- Still open, carried: unnamed research would bypass session affinity (ADR-0208) with the rule on; REST
+  `target_device="bulut"` is refused; "bulutta" does not arrive from voice.
+
+## ADR-0249 — Chrome's on-device Turkish recognition in the local mode, behind a setting that is OFF (2026-10-02)
+
+Task `chrome-on-device-stt`, cycle d20261002. Owner approval 2026-10-01: behind a setting, default
+KAPALI; turning it on is a separate decision after measurement. Plan and sources:
+`team/plans/chrome-on-device-stt-integration.md`. Builds on ADR-0173 (free local mode).
+
+### Decision
+
+1. **Setting, three values, per browser** (`apps/web/app/lib/voice/sttSetting.ts`): `localStorage`
+   key `pagentos.core.localStt` = `kapali` (default) / `acik` / `olc`, beside the "Yerel mod" key
+   `usePreferences.ts` already keeps there. Anything that is not literally one of the three, or a
+   storage that throws, is `kapali`. There is no switch in the UI; `sttSettingUiEnabled()` reads the
+   flag `pagentos.core.localSttUi = "1"` for the shell to use when the owner decides to adopt.
+2. **`kapali` writes nothing on the recogniser.** `processLocally` and `phrases` are never assigned,
+   nothing is installed, no question is shown, the start does not wait for anything. It is NOT
+   byte for byte what it was: the one read-only `available()` of decision 3 runs, un-awaited, so
+   that the engine name is honest. It writes nothing, fetches no phrase source and delays nothing.
+3. **Engine name on every utterance** (plan D1, taken as recommended): `payload.stt_engine` of the
+   existing `utterance` event, captured when the final ARRIVES (finals queue behind speech).
+   `chrome-cihaz-ici` = the run was started with `processLocally = true`; `chrome-bulut` = started
+   as always AND no pack can be in use (no `available()` in the browser, or it answered
+   `unavailable` / `downloadable`); `bilinmiyor` = started as always while a pack is or may be
+   installed (answer `available` / `downloading` / unknown / thrown / timed out / not yet answered,
+   or after a yes to the download). For this, ONE read-only
+   `available({langs:['tr-TR'], processLocally:true})` runs per start in all three settings; in
+   `kapali` it is not awaited.
+4. **`acik`**: `available` -> `processLocally = true`, then `phrases`, both written before `start()`.
+   `downloadable` -> one line in the snapshot (`packQuestion`) and today's path; `install()` is
+   called only from `answerPackQuestion(true)`, synchronously (Chrome needs the click's user
+   activation), with `processLocally: true` (without it Chrome resolves false). Everything else -
+   `unavailable`, `downloading`, an unknown status, a throw, a hang (3 s guard on the injected
+   timer), no API - is today's path with a reason code in `sttFallback` and in the log.
+5. **`olc`**: only with a usable pack. First run is today's path; after each final the next
+   recogniser run uses the other leg. The leg changes only between runs: Chrome's `end` arrives
+   after `stop()` returns, and until it does nothing is written on the recogniser and a final that
+   still arrives carries the old run's name. Phrases ride only with `processLocally` and are
+   cleared (`phrases = []`, then `processLocally = false`) on the other leg. A turn that speaks
+   nothing (a tool result with no `speech`) never pauses the recogniser, so in `olc` - and only
+   there - the run is ended with `stop()` when such a turn finishes; `onend` starts the next run on
+   the other leg. `kapali`, `acik` and an `olc` without a usable pack never stop it for this.
+6. **A device run Chrome refuses falls back once and stays there**: `language-not-supported`,
+   `phrases-not-supported`, `service-not-allowed`, `not-allowed` while on the device leg, or a
+   `start()` that throws anything but `InvalidStateError`. The restart is issued from the error
+   handler (no `onend` follows `language-not-supported`). On today's path the same errors mean what
+   they always meant (a denied microphone is still fatal).
+7. **Phrase list** (`sttPhrases.ts`, pure, cap 64, each at most 60 characters, Turkish-aware dedupe):
+   the session's device aliases (`/v1/devices`) at boost 2.0, then the four spoken names the server
+   always knows (`ev`, `iş`, `laptop`, `ofis`); the application names at 1.5; the open-verb forms
+   (`aç, açsana, açar, açın, açınız`) at 1.0. `/v1/voice/capabilities` has no application-name field,
+   so a name is **what stands before an open verb in the capability list's example sentences**
+   ("Hesap makinesini aç" -> "Hesap makinesini"), in the case the owner says it in - no constant
+   list to drift. The list goes to the recogniser only: not to the log, the snapshot or the wire.
+   `quality` is never set.
+
+### What differs from the plan, and why
+
+- The consent line carries **no size**: "Türkçe paketi indirilsin mi? (C: sürücüsüne iner, boyutu
+  ölçülmedi; indikten sonra Chrome onu bu ayar kapalıyken de kullanır.)" The plan's "~60 MB" is a
+  figure nobody measured.
+- After a yes, the device leg begins at the recogniser's **next restart**, not at once: stopping a
+  running recogniser would cut the owner's sentence.
+- `olc` + `downloadable` also shows the question (same code path as `acik`).
+
+### Not done here - for the LEAD at merge
+
+- **Server (plan D4)**: `services/api/app/voice/realtime_sessions/service.py`, the utterance branch
+  (`meta.update(...)` before `_audit(db, ACTION_INTENT_RESOLVED, ...)`) drops the payload. One
+  allow-listed line (`stt_engine` only when it is one of the three names) plus a server test; and
+  `services/api/tests/unit/test_voice_local_mode.py` `_say` should post the payload. Until then the
+  value is accepted and not recorded: checked ad hoc - that test file with the payload added to
+  `_say` passes 9/9 against the unchanged server.
+- **Shell (plan D3)**: `apps/web/app/core/VoiceControlView.tsx` must draw `snapshot.packQuestion`
+  with a yes/no BUTTON that calls `answerPackQuestion(yes)` (exposed by `useLocalVoiceMode`'s
+  handle; `VoiceControl.tsx` passes it down). Until that exists, `acik` on a machine without the
+  pack is a recorded fallback and nothing can be installed from our page.
+
+### Known limits
+
+- The probe runs before the recogniser's first `start()`. On a first-ever session, before the
+  origin has the microphone permission, an installed pack reads `downloadable` and the run is named
+  `chrome-bulut` although Chrome may hear on-device. The name is right from the next session on.
+- `olc` after a silent turn restarts the recogniser: the same short gap a spoken answer always
+  causes, now also where nothing is said. A sentence begun inside it may arrive cut, under the
+  ending run's name. That is a cost of measuring, and of `olc` only.
+- An install the owner started in one session and that finishes in a LATER session of the same
+  page is not adopted by that later session (an answer for a session that is gone writes nothing):
+  its engine name is whatever its own probe said (Chrome answers `downloading` meanwhile ->
+  `bilinmiyor`), and the device leg begins at the next start.
+- `downloadable` is named `chrome-bulut`, but Chromium masks an installed pack as `downloadable`
+  for an origin that never installed it unless the origin has the microphone permission and `tr-TR`
+  is an accept-language. On a Chrome without `tr-TR` in its languages the name could be wrong.
+- On today's path a `start()` that throws something other than `InvalidStateError` is still
+  swallowed, exactly as before (`kapali` is unchanged on purpose).
+- Behaviour was read in Chromium source, not observed in the owner's Chrome 154: no real browser
+  ran any of this.
+
+### Rollback
+
+Remove the key (or set `kapali`). The language pack, once installed, is removed in Chrome itself.
+
+**At merge (the lead).** The owner approved this as an idea on 2026-10-01: behind a setting, default OFF; switching it
+on after a measurement is a separate decision. Two things are not in this release and are carded: the server line
+that keeps the `stt_engine` name of a turn (until it lands the name is accepted and dropped, so the owner's `olc`
+measurement would record nothing - it must merge before that READY_FOR_OWNER step), and the shell button that calls
+`answerPackQuestion` with its test (the path is unreachable today).
+
+## ADR-0250 — The release waits for the operation lock; the reconcile never does (2026-10-02)
+
+Date: 2026-10-02 · Task: `release-lock-waits` · Status: proposed by the worker, PROVEN_AUTOMATED
+Proposed as an addendum to ADR-0223 addendum 2 (the same lock, the same holder, the other caller).
+
+#### Context
+
+2026-10-01 23:48 UTC, the release of main `5f250e5b`: the preflight answered "another blue/green
+release or recovery operation is running; retry later" and exit 82. Nothing ran but the recovery
+timer's minute reconcile, which takes `/opt/pagentos/.bluegreen-operation.lock` for about two
+seconds every minute (the host snapshot: held in 2 of 60 one-second samples).
+`release-cloud-core-bluegreen.sh` asked once (`flock -n 9`) in every mode, so about one release
+in thirty fell on its own housekeeping (QUALIFICATION 41.8). The maintenance window met the same
+thing and waits (ADR-0223 addendum 2). The suite's fake `flock` answered "free" always, so no
+case could see it - the third defect of this shape (38.12, 38.17).
+
+#### Decision
+
+1. **A release, a preflight and a rollback wait.** The lock is asked for once (`flock -n 9`);
+   when it is held, the script says once on stderr `waiting for the release lock (held by
+   another operation), up to N s` and waits (`flock -w N 9`). Only after that does it answer
+   82, in words that name the wait: `... is still running after waiting N s; retry later`.
+   `N` is `PAGENTOS_LOCK_WAIT_S`, default 45 (the maintenance script's number and variable).
+2. **`PAGENTOS_LOCK_WAIT_S=0` is yesterday's behaviour**, message included: asked once, 82.
+3. **A value that is not a whole number 0..600 is refused with exit 64 before the lock file is
+   opened** - nothing is created, nothing is asked. A leading zero (`045`) is refused too: a
+   number bash would read as octal is not a number an operator meant. 64 was free in this
+   script's exit vocabulary; 82 keeps its one meaning ("the lock is held; retry later"), said
+   at two moments, with the `exit` on its own line as `test_release_exit_codes.py` requires.
+4. **The reconcile keeps `flock -n`, and is known by its mode alone**: `--reconcile`, as the
+   timer's unit gives it (`reconcile.sh --reconcile`) or after a sha. In that mode the variable
+   is not read at all - a value that would be refused for a release cannot fail the timer.
+   Why it may not wait: queued behind a release it would get the lock the moment the release
+   ends or dies, and before that it would hold a oneshot unit "activating" for the release's
+   length; stepping aside (82, which the unit counts as success) and running a minute later is
+   what it has always done. `PAGENTOS_RECOVERY_BUNDLE` was NOT used as the mark: restore
+   (`restore-cloud-core.sh`) and an operator also run `--reconcile`, without the bundle, and
+   they must step aside the same way.
+5. **Stage-only does not reach this script** (`release-cloud-core.ps1 -StageOnly` extracts the
+   tree and runs no host transaction), so it takes no lock and has nothing to wait for. The
+   task card lists it among the waiting modes; there is no code path to change.
+6. **The fake flock has the host's shape** (ADR-0235): the seconds the lock is held when a
+   release asks come from `scripts/tests/fixtures/host-snapshot.json`, so every release,
+   preflight and rollback case of the suite meets the minute reconcile. The reconcile cases
+   default to a free lock - the snapshot's holder IS the reconcile, and the unit is a oneshot -
+   and say so explicitly when they put a reconcile behind a held lock. 3 s, 600 s and a free
+   lock stay as named cases whatever a later collection finds.
+
+#### Consequences and open risks
+
+- The fake does not sleep and holds no kernel lock: it answers by arithmetic (held `K` s:
+  `-n` fails when `K > 0`, `-w T` fails when `K >= T`), as the maintenance suite's does. That
+  `flock -n 9` followed by `flock -w N 9` on the same descriptor behaves so on util-linux is
+  PROVEN_AUTOMATED only by reading; PROVEN_REAL is the next release whose preflight meets the
+  reconcile and passes. `services/recovery-supervisor/tests/test_systemd_install.py` exercises
+  the real kernel lock for the reconcile half on Linux and is unchanged.
+- The message on a wait that ran out names the configured bound, not a stopwatch: `flock -w N`
+  fails after N seconds by definition, and a second clock for the same fact is this repo's
+  most recurrent defect.
+- A release that waits 45 s behind ANOTHER release then answers 82 as before, 45 s later. The
+  driver's ssh session stays open for that time; nothing on the host has been touched.
+- Only the lock is taken from the snapshot in this suite. Its `Reset-Host` still starts from
+  `blue` by default (the snapshot's serving colour today, and a constant there since before
+  ADR-0235), with `green` as explicit cases; moving that default to the fixture rewrites the
+  suite's eighty-odd colour assertions and was not part of this task.
+- The suite takes about 25 minutes on the home PC under a running team cycle (measured twice,
+  2026-10-02); the 27 new assertions add about a minute.
+- The pinned recovery copy (`/opt/pagentos-recovery/reconcile.sh`) is this same file. The
+  reconcile path through it is unchanged byte-for-byte in behaviour, but its sha256 changes,
+  so the pin must be renewed at the release that carries this (the owner's step, as always).
+
+**At merge (the lead).** The defect is QUALIFICATION 41.8: the preflight of the release of `5f250e5b` met the minute
+reconcile's lock and answered 82. A fresh host snapshot was collected before the merge (2026-10-02 06:54 UTC: serving
+blue, the lock held in 2 of 60 samples, 1126 columns), as the inspector's rule for `scripts/cloud` asks. The recovery
+supervisor's pinned `reconcile.sh` changes with this release; the pin is renewed by the lead's usual step after it
+(`install-recovery-supervisor.sh <sha>`). PROVEN_REAL is the first release whose preflight meets the reconcile and
+passes - it cannot be arranged, only noticed.
+
+## ADR-0251 — Two voice tests of the web shell waited on the wall clock (2026-10-02)
+
+Status: proposed by worker `web-voice-test-flakes`; the lead numbers it at merge.
+
+### Context
+
+The web suite is a gate step since ADR-0237. The inspector of `office-worker-seats` saw 3
+red runs in 17, one failure each: `tests/voice/latency.test.ts` (5 s timeout) and
+`tests/voice/store.test.tsx` ('closed' where 'listening' was expected). The card asks which
+it is for each: (a) the test waits on wall-clock time for something that has an event, or
+(b) the product has an ordering race.
+
+### Finding: both are (a). Neither is a product race.
+
+**One shared cause.** Both files had `tick = await new Promise(r => setTimeout(r, 0))`. A
+`setTimeout(0)` is not "the next turn": it waits a timer period, 15.6 ms on Windows. What
+the tests wait for is a promise chain that is already resolving (the fake Cloud Core's
+answer, the probe's next poll after `FakeScheduler.advance()` fired its sleep) - an event,
+not a time.
+
+**latency.test.ts.** `pump()` is `advance(10)` + `tick(4)` per step. The fallback test pumps
+250 ms: 104 real timers, 1.6 s idle, 3.47 s measured under three suites at once; the
+runner's limit is 5 s. The controller itself is on the injected `FakeScheduler` and was
+never the one waiting. I did NOT reproduce the timeout itself (0 failures in 108 runs of
+this file before the change); the cause is the measured duration, 69 % of the limit, and
+the count of real timers, not an observed failure.
+
+**store.test.tsx.** Two things had to line up:
+1. A rig has no scheduler port, so in this file the controller runs on the REAL scheduler
+   and its `EventReporter` flushes on a real 250 ms timer.
+2. `FakeCloudCore` (`app/lib/voice/fake.ts`) has one session id and one `closed` marker for
+   its whole life. After disconnect + connect, the "new" session is the closed one, and its
+   first report is answered 410; `onReportFailure` then sets `state: "closed"`.
+The test asserted 'listening' after `tick()` (six timers, ~95 ms idle). It held only while
+the assertion ran before the 250 ms flush. Reproduced: 1 of 30 full-suite runs under load
+(`reconnect closes the open leg...`, 646 ms), and deterministically, with no load, by
+flushing explicitly before the assertion (2 tests RED: `expected { state: 'closed' } to
+match { state: 'listening' }`).
+The product is not wrong here: the Cloud Core mints an id per create
+(`RealtimeSessionRow.id default=uuid.uuid4`), so a new session's report is not answered
+410, and a controller that says "closed" on a 410 is the designed behaviour. The fake was
+unlike the server, and the timer decided whether the test noticed.
+
+### Decisions
+
+1. `tick` in both files is one event-loop turn (`setImmediate`), no timer. No timeout was
+   added or lengthened anywhere; the runner's 5 s stays as the hang guard it is.
+2. `latency.test.ts` gains a test that pins the cause: over a pumped session with a probe
+   that runs its whole bound, `setTimeout` and `setInterval` are called 0 times - by the
+   controller (the injected scheduler is the only clock) and by the file's own helpers.
+   RED before (104 calls).
+3. `store.test.tsx`: the rig's fetcher starts a NEW session on `POST /sessions` (clears the
+   fake's `closed`), as the server does; and the two reconnect tests flush the new
+   session's first report and assert it was ACCEPTED (2 `LISTENING` reports on the server)
+   and that the controller is still listening with no error. The assertion no longer
+   depends on which timer fires first, and it is stronger than before: mutation S2 below is
+   caught only by the new lines.
+
+### Evidence (PROVEN_AUTOMATED; this machine, other workers running on it)
+
+| measurement | BEFORE | AFTER |
+| --- | --- | --- |
+| latency file, 30 runs, 3 vitest at once | 0 failed; slowest test 1597 ms | 0 failed; slowest test 37 ms |
+| store file, 30 runs, 3 vitest at once | 0 failed; slowest test 373 ms | 0 failed; slowest test 27 ms |
+| full suite, 30 runs, 3 at once: latency | 0 failed; slowest 3470 ms, 2 runs over 2 s | 0 failed; slowest 136 ms |
+| full suite, 30 runs, 3 at once: store | 1 failed ('closed' vs 'listening') | 0 failed; slowest 104 ms |
+| full suite, 10 runs in a row | not measured | 10 of 10 green, 2088 tests |
+
+The card's load (three processes on one file) does not reproduce either flake: a single
+file is one worker, which is no load. The failures need the whole suite three times over.
+
+Mutations of the subjects, in a scratch copy of `apps/web` (the subjects are outside the
+area; the real tree's sha256 is unchanged):
+- L1 `timing.ts`, the probe sleeps on the real clock: latency 5 RED of 16.
+- L2 `controller.ts`, `basis` always 0: latency 2 RED.
+- S1 `controller.ts`, `connect()` refuses a closed controller: store 2 RED.
+- S2 `controller.ts`, the next session keeps the ended reporter: store 2 RED (`expected 1
+  to be 2`), by the new assertions only.
+- S3 `store.ts`, `connect()` loses its live/busy guard: NOT RED, 12 of 12 pass. The
+  controller's own guard makes the same refusal, so the store's is unobserved.
+
+### For the lead (outside this card's area; nothing was changed there)
+
+1. **`FakeCloudCore.closed` outlives the session** (`app/lib/voice/fake.ts`). The fix
+   belongs there (a create clears it, or mints an id); the wrapper in `store.test.tsx` can
+   then go. `session-storm.test.ts` sets `core.closed` by hand and must be read first.
+2. **The same `setTimeout(0)` tick is in 20 more test files** (18 under `tests/voice`,
+   plus `eye/browser-frame-source`, `research/poll`). `voice/session-storm.test.ts`
+   ("under a rate limiter...") took 2.3-3.0 s in 9 of 10 solo runs and hit the 5 s limit
+   once under load. It is the next one.
+3. **Other files still fail under three suites at once**, all on the 5 s runner limit, none
+   investigated: `preview/core-preview.test.tsx` (4 of 30 before, 3 of 30 after; up to
+   17.9 s), `cockpit/creative-panel.test.tsx` (2 of 30), `uistate/accessibility.test.ts`
+   (1 of 30), `pages/discoverability.test.tsx` (2 of 18). The suite is NOT flake-free
+   under that load after this card: 6 red runs of 30 before, 5 of 30 after.
+4. **A rig has no scheduler port** (`VoiceRigParts`), so every store test leaves real
+   250 ms timers behind. With one, the store tests could run on the `FakeScheduler`.
+5. Mutation S3 above: the store's connect guard has no test of its own.
+
+**At merge (the lead).** The web suite became a gate step on 2026-10-02 (ADR-0237), so its flakes became red gates.
+One remains and is carded: `voice/session-storm` ("under a rate limiter…") failed 7 of 60 loaded runs after this
+change and 2 of 60 before it, 0 of 10 alone - the file is unchanged, and 7 against 2 is not enough to call an
+increase; it needs its own look.
