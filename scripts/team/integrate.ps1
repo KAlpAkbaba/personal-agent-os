@@ -54,7 +54,11 @@
     Move-TeamBranchForward).
 
     Idempotent: a run that was killed is finished by the next one - a gate that was green on the
-    branch's tip is not run again.
+    branch's tip is not run again. A gate worktree whose folder was deleted by hand is made again.
+
+    A run that STARTED NOTHING (exit 3, exit 4) writes and posts no report: the branch's report
+    keeps what the last run that did something found. It leaves one line in
+    team/reports/integrate-skipped.log (this machine only; the newest 200 are kept).
 
     Exit codes: 0 done or nothing to do; 2 the queue breaks the protocol; 3 the lock is held;
     4 Docker is down; 5 conflict with main; 6 the gate is red; 7 the lead's run was refused or
@@ -242,6 +246,19 @@ function Save-Reports {
     }
 }
 
+function Write-Skipped {
+    <#
+        A run that STARTED NOTHING (the lock is somebody's, Docker is down) writes no report for
+        the branch and posts none: team/reports/<cycle>-integrate.md and the store's copy keep what
+        the last run that did something found (a red gate's words are not replaced by "kilit başka
+        koşuda" half an hour later). What it says is one line in team/reports/integrate-skipped.log.
+    #>
+    param([string]$Sentence)
+    $branches = (@($pending) | ForEach-Object { [string]$_.Branch }) -join ", "
+    try { Add-TeamSkippedLine -Path (Join-Path $reportsRoot "integrate-skipped.log") -Line "$(Get-TeamTimestamp) $Machine ${branches}: $Sentence" }
+    catch { Write-Host "the line was not written to integrate-skipped.log: $($_.Exception.Message)" }
+}
+
 # ------------------------------------------------------------------ the lock (as the cycle takes it)
 
 $lock = $null
@@ -278,9 +295,7 @@ if ($DryRun) {
 }
 
 if (-not $decision.MayRun) {
-    [void]$stops.Add("kilit $($decision.Holder) makinesinde ($($decision.Since)); bu adım hiçbir şey çalıştırmadı")
-    foreach ($item in $pending) { (New-Outcome -Item $item).Result = "kilit başka koşuda" }
-    Save-Reports
+    Write-Skipped -Sentence "kilit $($decision.Holder) makinesinde ($($decision.Since)); bu adım hiçbir şey çalıştırmadı"
     Write-Host "the lock is held by $($decision.Holder) since $($decision.Since); nothing was done"
     exit 3
 }
@@ -295,9 +310,7 @@ if (@($pending | Where-Object { $_.Ahead -and $null -eq $_.Unapplied }).Count -g
         try { $dockerUp = [bool](Invoke-NativeProcess -FilePath $dockerTool -Arguments @("info") -TimeoutSeconds 90).Success } catch { $dockerUp = $false }
     }
     if (-not $dockerUp) {
-        [void]$stops.Add("Docker çalışmıyor; kapı koşmadı, hiçbir şey değişmedi (Docker Desktop açılınca bir sonraki adım dener)")
-        foreach ($item in $pending) { (New-Outcome -Item $item).Result = "Docker çalışmıyor" }
-        Save-Reports
+        Write-Skipped -Sentence "Docker çalışmıyor; kapı koşmadı, hiçbir şey değişmedi (Docker Desktop açılınca bir sonraki adım dener)"
         Write-Host "Docker is not running (Docker calismiyor); nothing was done"
         exit 4
     }
@@ -307,9 +320,7 @@ $lockCycle = "integrate-" + [string]$pending[0].Branch
 if ($useApi) {
     $taken = Set-TeamLockApi -Store $apiStore -Machine $Machine -CycleId $lockCycle -TakeoverDead ($decision.Kind -eq "dead")
     if (-not [bool]$taken.acquired) {
-        [void]$stops.Add("kilit $($taken.holder) makinesinde ($($taken.since)); bu adım hiçbir şey çalıştırmadı")
-        foreach ($item in $pending) { (New-Outcome -Item $item).Result = "kilit başka koşuda" }
-        Save-Reports
+        Write-Skipped -Sentence "kilit $($taken.holder) makinesinde ($($taken.since)); bu adım hiçbir şey çalıştırmadı"
         Write-Host "the lock was taken by $($taken.holder); nothing was done"
         exit 3
     }
@@ -676,7 +687,7 @@ function Invoke-BranchIntegration {
         $merged = Invoke-TreeGit -Tree $tree -Arguments @("rev-parse", "HEAD")
     }
     finally { [void](Invoke-TeamGit -WorkingDirectory $tree -Arguments @("checkout", "--detach", "--quiet", $candidate)) }
-    if ((Get-TeamRevision -RepoRoot $repoRoot -Revision "$merged^{tree}") -ne (Get-TeamRevision -RepoRoot $repoRoot -Revision "$candidate^{tree}")) {
+    if (-not (Test-TeamSameTree -RepoRoot $repoRoot -A $merged -B $candidate)) {
         throw "the merge for $Base does not hold exactly what was gated ($candidate); nothing was moved"
     }
     $forward = Move-TeamBranchForward -RepoRoot $repoRoot -Branch $Base -To $merged -Expected $baseNow

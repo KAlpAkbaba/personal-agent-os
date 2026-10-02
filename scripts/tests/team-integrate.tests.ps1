@@ -640,6 +640,8 @@ function Invoke-Integrate {
         GateCalls = @(& $lines (Join-Path $tools "gate.log")); ToolCalls = @(& $lines (Join-Path $tools "tools.log"))
         LeadCalls = @(& $lines (Join-Path $tools "lead.log") | ForEach-Object { ConvertFrom-Json -InputObject $_ })
         Report = $(if (Test-Path -LiteralPath $report) { [System.IO.File]::ReadAllText($report, [System.Text.Encoding]::UTF8) } else { "" })
+        # What the runs that started NOTHING said (the lock, Docker): one line each, beside the reports.
+        Skipped = @(& $lines (Join-Path $Root "team\reports\integrate-skipped.log"))
     }
 }
 
@@ -1038,15 +1040,35 @@ try {
         Assert-True -Condition ($run.Output -match "integrate/c1" -and $run.Output -match "task-one" -and $run.Output -match "task-two" -and $run.Output -match "DRY RUN") -Because "it says what it would do: $($run.Output)"
     }
 
-    Test-Case "Docker down stops the step with the sentence and changes nothing" {
+    Test-Case "Docker down stops the step with the sentence and changes nothing - not even the branch's report of the last run that did something" {
         $root = New-Sandbox -Work $one
+        # The report the last red gate left: it is what the lead reads until a run DOES something again.
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\reports"))
+        $reportFile = Join-Path $root "team\reports\c1-integrate.md"
+        [System.IO.File]::WriteAllText($reportFile, "# Entegrasyon raporu`n`nkapı kırmızı: API unit tests`n", $utf8)
         $before = Get-SandboxState -Root $root
         $run = Invoke-Integrate -Root $root -Gate "green" -Docker "down"
         Assert-Equal -Expected 4 -Actual $run.ExitCode -Because $run.Output
         Assert-Equal -Expected $before -Actual (Get-SandboxState -Root $root) -Because "no ref, worktree, queue or lock changed"
         Assert-Equal -Expected 0 -Actual (@($run.GateCalls).Count + @($run.LeadCalls).Count) -Because "nothing was started"
-        Assert-True -Condition ($run.Report.Contains("Docker çalışmıyor")) -Because "the sentence is in the report: $($run.Report)"
+        Assert-Equal -Expected "# Entegrasyon raporu`n`nkapı kırmızı: API unit tests`n" -Actual $run.Report -Because "a run that started nothing does not overwrite the report of one that did"
+        Assert-Equal -Expected 1 -Actual @($run.Skipped).Count -Because "it leaves one line of its own: $($run.Skipped -join ' / ')"
+        Assert-True -Condition ($run.Skipped[0].Contains("Docker çalışmıyor") -and $run.Skipped[0].Contains("integrate/c1") -and $run.Skipped[0].Contains("MAIL")) -Because "the sentence, the branch and the machine: $($run.Skipped[0])"
         Assert-True -Condition ($run.Output -match "Docker") -Because "and on the console: $($run.Output)"
+        $again = Invoke-Integrate -Root $root -Gate "green" -Docker "down"
+        Assert-Equal -Expected 2 -Actual @($again.Skipped).Count -Because "a line a run, appended"
+    }
+
+    Test-Case "the lines of the runs that started nothing are bounded: the oldest go" {
+        $work = Join-Path $env:TEMP ("pagentos-skipped-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+        try {
+            $file = Join-Path $work "reports\integrate-skipped.log"
+            foreach ($n in 1..205) { Add-TeamSkippedLine -Path $file -Line "line $n çalışmıyor" -Keep 200 }
+            $kept = @(Get-Content -LiteralPath $file -Encoding UTF8)
+            Assert-Equal -Expected 200 -Actual @($kept).Count -Because "the last two hundred"
+            Assert-Equal -Expected "line 6 çalışmıyor|line 205 çalışmıyor" -Actual ($kept[0] + "|" + $kept[199]) -Because "the oldest five went, Turkish text is whole"
+        }
+        finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
     Test-Case "with nothing merged there is nothing to do: no lock, no gate, no report" {
@@ -1244,6 +1266,103 @@ try {
         Assert-Equal -Expected $main -Actual (Get-Sha -Root $root -Revision "main") -Because "main did not move again"
     }
 
+    Test-Case "main moving WHILE the gate runs: nothing is merged, the tasks stay merged, and the next run gates again - on a commit that holds the new main" {
+        $root = New-Sandbox -Work $two
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        # What somebody else does during the gate's hour: a commit on main, in the main checkout.
+        $hook = Join-Path "$root-tools" "move-main.ps1"
+        $marker = Join-Path "$root-tools" "main-moved-once"
+        [System.IO.File]::WriteAllText($hook, (@(
+                    "`$ErrorActionPreference = 'Continue'",
+                    "if (Test-Path -LiteralPath '$marker') { return }",
+                    "Set-Content -LiteralPath '$marker' -Value 'done' -Encoding ASCII",
+                    "Set-Content -LiteralPath '$(Join-Path $root 'docs\moved.txt')' -Value 'main moved while the gate ran' -Encoding ASCII",
+                    "& git.exe -C '$root' add docs/moved.txt 2>&1 | Out-Null",
+                    "& git.exe -C '$root' commit -q -m 'main moved while the gate ran' -- docs/moved.txt 2>&1 | Out-Null") -join "`r`n"), $utf8)
+        $first = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_GATE_HOOK = $hook }
+        $moved = Get-Sha -Root $root -Revision "main"
+        Assert-True -Condition ((Test-Path -LiteralPath $marker) -and $moved -ne $mainBefore) -Because "main moved while the gate ran (else this case proves nothing): $($first.Output)"
+        Assert-Equal -Expected "main moved while the gate ran" -Actual (Invoke-SandboxGit -Root $root -Arguments @("log", "-1", "--format=%s", "main")) -Because "main is the other writer's commit and nothing else: no merge was put on it"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main^1") -Because "one commit past where it was"
+        Assert-Equal -Expected 11 -Actual $first.ExitCode -Because "the gate was green on a commit that does not hold the new main: $($first.Output)"
+        Assert-Equal -Expected 1 -Actual @($first.GateCalls).Count -Because "the gate did run"
+        $gatedFirst = @($first.GateCalls[0] -split "\|")[1]
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root "src\a\task-one.txt"))) -Because "the tasks' files did not reach the main checkout"
+        Assert-Equal -Expected $mainBefore -Actual (Invoke-SandboxGit -Root "$root-origin.git" -Arguments @("rev-parse", "main")) -Because "nothing was pushed"
+        foreach ($id in @("task-one", "task-two")) {
+            $task = Get-TaskById -Queue $first.Queue -Id $id
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "$id stays merged: it neither passed onto main nor failed"
+            Assert-True -Condition ($task.reason -match "main ilerledi") -Because "and says why it waits: $($task.reason)"
+        }
+        Assert-Equal -Expected $false -Actual ([bool]$first.Lock.held) -Because "the lock was released"
+
+        # The next run: the green of the first is NOT taken for this main. main is merged in, and the gate runs again.
+        $second = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_GATE_HOOK = $hook }
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because $second.Output
+        Assert-Equal -Expected 2 -Actual @($second.GateCalls).Count -Because "a second gate: the first judged a commit without the new main"
+        $gatedSecond = @($second.GateCalls[1] -split "\|")[1]
+        Assert-True -Condition ($gatedSecond -ne $gatedFirst) -Because "on another commit"
+        Assert-True -Condition ((Invoke-TeamGit -WorkingDirectory $root -Arguments @("merge-base", "--is-ancestor", $moved, $gatedSecond)).ExitCode -eq 0) -Because "one that holds the commit main moved to"
+        Assert-Equal -Expected $moved -Actual (Get-Sha -Root $root -Revision "main^1") -Because "main went forward from where the other writer left it"
+        Assert-Equal -Expected $gatedSecond -Actual (Get-Sha -Root $root -Revision "main^2") -Because "by a merge of exactly what the second gate ran on"
+        Assert-Equal -Expected (Get-Sha -Root $root -Revision "$gatedSecond^{tree}") -Actual (Get-Sha -Root $root -Revision "main^{tree}") -Because "file for file"
+        foreach ($id in @("task-one", "task-two")) { Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $second.Queue -Id $id).state -Because "$id is on main now" }
+        Assert-True -Condition ((Test-Path -LiteralPath (Join-Path $root "docs\moved.txt")) -and (Test-Path -LiteralPath (Join-Path $root "src\a\task-one.txt"))) -Because "main holds both the other writer's commit and the tasks"
+    }
+
+    Test-Case "a gate worktree whose folder was deleted by hand is made again: the registration git still holds does not stop the branch" {
+        $root = New-Sandbox -Work $one
+        # A run that gets as far as the worktree and no further (the usage limit: nothing is counted).
+        $first = Invoke-Integrate -Root $root -Lead "stand-in" -Environment @{ PAGENTOS_FAKE_LEAD_FAIL = "limit" }
+        Assert-Equal -Expected 7 -Actual $first.ExitCode -Because $first.Output
+        $gateTree = Join-Path $root ".claude\worktrees\gate\integrate\c1"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $gateTree ".git")) -Because "the gate worktree was made"
+        # Somebody frees the disk: the folder goes, git's record of the worktree stays.
+        Remove-Item -LiteralPath $gateTree -Recurse -Force
+        Assert-True -Condition ((Invoke-SandboxGit -Root $root -Arguments @("worktree", "list", "--porcelain")) -match "gate/integrate/c1") -Because "git still has it registered (else this case proves nothing)"
+        $other = Join-Path "$root-tools" "wt-other"
+        [void](Invoke-SandboxGit -Root $root -Arguments @("worktree", "add", "-q", "--detach", $other, "main"))
+        Remove-Item -LiteralPath $other -Recurse -Force
+
+        $second = Invoke-Integrate -Root $root -Gate "green"
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because "the tree is made again and the branch goes on: $($second.Output)"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $second.Queue -Id "task-one").state -Because "the task reached main"
+        Assert-Equal -Expected 1 -Actual @($second.GateCalls).Count -Because "the gate ran"
+        Assert-Equal -Expected $gateTree.ToLowerInvariant() -Actual (@($second.GateCalls[0] -split "\|")[0]).ToLowerInvariant() -Because "in the worktree that was made again"
+        $listed = Invoke-SandboxGit -Root $root -Arguments @("worktree", "list", "--porcelain")
+        Assert-Equal -Expected 1 -Actual @([regex]::Matches($listed, "(?m)^worktree .*gate/integrate/c1\s*$")).Count -Because "registered once: $listed"
+        Assert-True -Condition ($listed -match "wt-other") -Because "another worktree's record, missing too, is not this step's to clear: $listed"
+    }
+
+    Test-Case "the merge for main is held to the gated commit's files: the same tree is the same, another file is not, and a commit that cannot be read is never 'the same'" {
+        $root = New-Sandbox -Work $one
+        $main = Get-Sha -Root $root -Revision "main"
+        $tip = Get-Sha -Root $root -Revision "integrate/c1"
+        Assert-True -Condition (-not (Test-TeamSameTree -RepoRoot $root -A $main -B $tip)) -Because "the branch holds a file main does not"
+        Assert-True -Condition (Test-TeamSameTree -RepoRoot $root -A $tip -B $tip) -Because "a commit holds what it holds"
+        # Another commit with exactly the branch's files (what a --no-ff merge of the branch onto its own ancestor is).
+        $twin = Invoke-SandboxGit -Root $root -Arguments @("commit-tree", "$tip^{tree}", "-p", $main, "-m", "the same files, another commit")
+        Assert-True -Condition ($twin -ne $tip -and (Test-TeamSameTree -RepoRoot $root -A $twin -B $tip)) -Because "two commits, one tree"
+        Assert-True -Condition (-not (Test-TeamSameTree -RepoRoot $root -A ("0" * 40) -B ("0" * 40))) -Because "two commits that cannot be read are not known to be the same"
+        Assert-True -Condition (-not (Test-TeamSameTree -RepoRoot $root -A $tip -B "no-such-revision")) -Because "nor is one"
+    }
+
+    Test-Case "what is left of a gate worktree without its .git (a folder half deleted) is not deleted by the step: it stops with the folder's name" {
+        $root = New-Sandbox -Work $one
+        $gateTree = Reset-TeamGateWorktree -RepoRoot $root -Branch "integrate/c1" -At (Get-Sha -Root $root -Revision "integrate/c1")
+        Remove-Item -LiteralPath (Join-Path $gateTree ".git") -Force
+        Set-Content -LiteralPath (Join-Path $gateTree "left-behind.txt") -Value "a file that was open" -Encoding ASCII
+        $said = ""
+        try { [void](Reset-TeamGateWorktree -RepoRoot $root -Branch "integrate/c1" -At (Get-Sha -Root $root -Revision "integrate/c1")) } catch { $said = [string]$_.Exception.Message }
+        Assert-True -Condition ($said -match "gate\\integrate\\c1" -and $said -match "delete") -Because "the error names the folder and what to do with it: $said"
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $gateTree "left-behind.txt")) -Because "nothing was deleted"
+        # An EMPTY folder that is left is nothing to keep: the tree is made in it.
+        Remove-Item -Path (Join-Path $gateTree "*") -Recurse -Force
+        $again = Reset-TeamGateWorktree -RepoRoot $root -Branch "integrate/c1" -At (Get-Sha -Root $root -Revision "integrate/c1")
+        Assert-True -Condition (Test-Path -LiteralPath (Join-Path $again ".git")) -Because "an empty folder is taken"
+        Assert-Equal -Expected (Get-Sha -Root $root -Revision "integrate/c1") -Actual (Invoke-SandboxGit -Root $again -Arguments @("rev-parse", "HEAD")) -Because "at the commit"
+    }
+
     Test-Case "without an origin the step still merges, and says in the report that nothing was pushed" {
         $root = New-Sandbox -Work $one -NoOrigin
         $run = Invoke-Integrate -Root $root -Gate "green"
@@ -1404,6 +1523,12 @@ try {
         $tasks = @(Get-TeamTasks -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")))
         $held = New-TeamLock -Machine "GMKADIRAKBABA" -CycleId "office" -Now ([datetime]::UtcNow.AddHours(-1))
         $api = Start-FakeApi -Tasks $tasks -Lock $held
+        # The branch's report as its last red gate left it: in the store (the Onay Merkezi shows it) and beside the queue.
+        $lastReport = "# Entegrasyon raporu`n`nkapı kırmızı: API unit tests"
+        Send-TeamReportApi -Store (New-TeamApiStore -Url $api.Url -TokenFile $api.TokenFile) -Name "c1-integrate.md" -Text $lastReport
+        [void](New-Item -ItemType Directory -Force -Path (Join-Path $root "team\reports"))
+        [System.IO.File]::WriteAllText((Join-Path $root "team\reports\c1-integrate.md"), $lastReport, $utf8)
+        $requestsBefore = @(Get-FakeApiRequests -Api $api).Count
         $before = Get-SandboxState -Root $root
         $run = Invoke-Integrate -Root $root -Gate "green" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
         Assert-Equal -Expected 3 -Actual $run.ExitCode -Because $run.Output
@@ -1412,8 +1537,13 @@ try {
         $state = Get-FakeApiState -Api $api
         Assert-Equal -Expected "GMKADIRAKBABA" -Actual $state.lock.machine -Because "the lock is still theirs"
         Assert-Equal -Expected "merged" -Actual @($state.tasks)[0].state -Because "the queue was not written"
-        Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(PUT|DELETE)" -or $_ -match "^POST /v1/team/queue/lock" }).Count -Because "no write at all"
-        Assert-True -Condition ($run.Report -match "kilit GMKADIRAKBABA makinesinde") -Because "the stop is a line in the report: $($run.Report)"
+        $requests = @(Get-FakeApiRequests -Api $api | Select-Object -Skip $requestsBefore)
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^GET " }).Count -ge 1) -Because "the step did ask the store (else this case proves nothing): $($requests -join '; ')"
+        Assert-Equal -Expected 0 -Actual @($requests | Where-Object { $_ -notmatch "^GET " }).Count -Because "no write at all - the lock, a task, a report: $($requests -join '; ')"
+        Assert-Equal -Expected $lastReport -Actual ([string]$state.reports.PSObject.Properties["c1-integrate.md"].Value) -Because "the store's report still says what the last run that DID something found"
+        Assert-Equal -Expected $lastReport -Actual $run.Report -Because "and so does the file"
+        Assert-Equal -Expected 1 -Actual @($run.Skipped).Count -Because "the stop is one line of its own: $($run.Skipped -join ' / ')"
+        Assert-True -Condition ($run.Skipped[0] -match "kilit GMKADIRAKBABA makinesinde" -and $run.Skipped[0].Contains("integrate/c1")) -Because $run.Skipped[0]
     }
 
     Test-Case "the other machine's lock in the FILE stops it too, and stays theirs" {
@@ -1425,6 +1555,8 @@ try {
         Assert-Equal -Expected $before -Actual (Get-SandboxState -Root $root) -Because "nothing changed"
         Assert-Equal -Expected "GMKADIRAKBABA" -Actual $run.Lock.machine -Because "the lock is still theirs"
         Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate"
+        Assert-Equal -Expected "" -Actual $run.Report -Because "a run that started nothing writes no report for the branch"
+        Assert-True -Condition (@($run.Skipped).Count -eq 1 -and $run.Skipped[0] -match "kilit GMKADIRAKBABA makinesinde") -Because "it says so in its own line: $($run.Skipped -join ' / ')"
     }
 }
 finally {

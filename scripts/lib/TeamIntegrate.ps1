@@ -685,6 +685,23 @@ function Test-TeamAncestor {
     return ($result.ExitCode -eq 0)
 }
 
+function Test-TeamSameTree {
+    <#
+    .SYNOPSIS
+        Whether two commits hold exactly the same files. False when either cannot be read: an
+        answer that is not known is not "the same" (Get-TeamRevision asks for a COMMIT, so a
+        tree asked through it is "" on both sides - and "" equals "").
+    #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string]$A, [Parameter(Mandatory = $true)][string]$B)
+    $trees = New-Object System.Collections.ArrayList
+    foreach ($revision in @($A, $B)) {
+        $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("rev-parse", "--verify", "--quiet", "$revision^{tree}")
+        if (-not $result.Success -or $result.StdOut.Trim() -notmatch '^[0-9a-f]{40}$') { return $false }
+        [void]$trees.Add($result.StdOut.Trim())
+    }
+    return ($trees[0] -eq $trees[1])
+}
+
 function Get-TeamRefValues {
     <# name -> 40-hex sha ("" when the ref does not exist), for the refs a run may not move. #>
     param([Parameter(Mandatory = $true)][string]$RepoRoot, [string[]]$Names = @())
@@ -759,6 +776,18 @@ function Move-TeamBranchForward {
     return [pscustomobject]@{ Moved = $true; Detail = "the ref was moved" }
 }
 
+function Test-TeamWorktreeRegistered {
+    <# Whether git has a worktree recorded at a path - whether or not the folder is still there. #>
+    param([Parameter(Mandatory = $true)][string]$RepoRoot, [Parameter(Mandatory = $true)][string]$Path)
+    $result = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "list", "--porcelain")
+    if (-not $result.Success) { throw "git worktree list failed: $($result.StdErr.Trim())" }
+    $wanted = ($Path -replace '/', '\').TrimEnd('\')
+    foreach ($line in @($result.StdOut -split "`r?`n")) {
+        if ($line -match '^worktree (.+)$' -and (($Matches[1].Trim() -replace '/', '\').TrimEnd('\') -ieq $wanted)) { return $true }
+    }
+    return $false
+}
+
 function Reset-TeamGateWorktree {
     <#
     .SYNOPSIS
@@ -774,6 +803,19 @@ function Reset-TeamGateWorktree {
             if (-not $step.Success) { throw "the gate worktree could not be prepared (git $($arguments -join ' ')): $($step.StdErr.Trim())" }
         }
         return $path
+    }
+    # The tree is not there. A folder somebody deleted by hand (each tree is a gigabyte) leaves git's
+    # record of the worktree behind, and `git worktree add` refuses a path it still has registered:
+    # THIS path's record is removed first - no other worktree's, which `git worktree prune` would do.
+    if (Test-Path -LiteralPath $path) {
+        if (@(Get-ChildItem -LiteralPath $path -Force).Count -gt 0) {
+            throw "what is left of the gate worktree of $Branch has no .git and is not empty: $path - this step does not delete a folder it cannot tell is its own; delete it by hand and the next run makes the tree again"
+        }
+        [System.IO.Directory]::Delete($path, $false)
+    }
+    if (Test-TeamWorktreeRegistered -RepoRoot $RepoRoot -Path $path) {
+        $remove = Invoke-TeamGit -WorkingDirectory $RepoRoot -Arguments @("worktree", "remove", $path)
+        if (-not $remove.Success) { throw "git's record of the missing gate worktree of $Branch could not be removed: $($remove.StdErr.Trim())" }
     }
     $parent = Split-Path -Parent $path
     if (-not (Test-Path -LiteralPath $parent)) { [void](New-Item -ItemType Directory -Force -Path $parent) }
@@ -853,6 +895,25 @@ function Invoke-TeamGate {
 }
 
 # ---------------------------------------------------------------------------- the report
+
+function Add-TeamSkippedLine {
+    <#
+    .SYNOPSIS
+        One line for a run that started nothing (the lock is somebody's, Docker is down), appended
+        to a file that keeps the newest -Keep lines. Such a run writes no report for the branch:
+        the branch's report still says what the last run that DID something found.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Line, [int]$Keep = 200)
+    $folder = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $folder)) { [void](New-Item -ItemType Directory -Force -Path $folder) }
+    $lines = New-Object System.Collections.ArrayList
+    if (Test-Path -LiteralPath $Path) {
+        foreach ($old in @([System.IO.File]::ReadAllLines($Path, [System.Text.Encoding]::UTF8))) { if ($old.Trim()) { [void]$lines.Add($old) } }
+    }
+    [void]$lines.Add(($Line -replace '\s+', ' ').Trim())
+    $kept = @($lines.ToArray() | Select-Object -Last ([Math]::Max(1, $Keep)))
+    [System.IO.File]::WriteAllText($Path, ($kept -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+}
 
 function New-TeamIntegrateReport {
     <#

@@ -133,13 +133,70 @@ production, the recovery supervisor or the last-known-good record (a test reads 
      cap on a run" (owner, 2026-09-30) for this step only, because this step holds the team
      lock while it waits; a gate killed at its cap is red, names nobody, and is said.
 
+10. **Fourth round (inspector's third return, 2026-10-02).**
+    - **A gate worktree deleted by hand is made again.** The step never removes its trees (a
+      gigabyte each), so somebody will; git keeps the record and `git worktree add` then refuses
+      the path - every run ended 12, with no strike and no reason on the task. Now
+      `Reset-TeamGateWorktree` removes THAT path's record (`git worktree remove <path>`, which
+      git allows for a missing folder) and adds the tree again. Not `git worktree prune`: that
+      clears every missing worktree's record in the repository, and the others are not this
+      step's (a test holds that another missing worktree stays registered). An EMPTY folder
+      that is left is taken. A folder that is left WITHOUT its `.git` and not empty (a delete
+      that stopped at an open file) is not deleted by the step - it cannot tell the folder is
+      its own - and the run stops with the folder's name and "delete it by hand".
+    - **A run that started nothing writes no report.** Stopped by the lock (exit 3) or by Docker
+      (exit 4), the step used to write `team/reports/<cycle>-integrate.md` and post it: half an
+      hour after a red gate the Onay Merkezi showed "kilit başka koşuda" in place of the gate's
+      words. Now such a run writes and posts nothing for the branch - in API mode it sends GETs
+      only - and leaves one line (time, machine, branches, the sentence) in
+      `team/reports/integrate-skipped.log`, local, newest 200 kept. `cycle.ps1` still overwrites
+      its own report in the same case (outside this task's area).
+    - **main moving while the gate runs** was right and untested: both guards (the "main is
+      contained in what was gated" check and the tree-equality throw) could be removed with the
+      suite green. A test now moves main from the fake gate's hook: exit 11, main is the other
+      writer's commit and nothing else, nothing pushed, the tasks stay `merged` with the reason,
+      and the next run merges the new main in and gates AGAIN.
+    - **The tree-equality guard was dead, and is not any more.** Writing that test's mutations
+      showed it: with the first guard removed, the merge still reached main. The guard compared
+      `Get-TeamRevision "<sha>^{tree}"` on both sides, and that function asks git for a COMMIT -
+      a tree is "" through it, and "" equals "". `Test-TeamSameTree` reads the trees themselves
+      and answers false when either cannot be read. Given the first guard the second cannot
+      fire (a merge of a descendant onto its ancestor has the descendant's tree), so it is
+      proven by its own test and by the mutation: first guard removed, the step now ends 12 with
+      main untouched instead of merging.
+
+## Open decisions for the lead (not built by this task)
+
+1. **The lock is held for the whole gate** (up to 150 minutes by default), as the card asks, so
+   no cycle starts on this machine while a gate runs - against rule (c), "the cycle is never
+   paused for the lead's gate" (ADR-0214 addendum 8). Options: (a) keep it, and accept that a
+   gate pauses the cycle; (b) release the lock after the wiring commit and take it again for
+   the merge - safe only in API mode (per-task versioned writes; a stale write is already
+   recovered by the next run), in file mode the step would overwrite the cycle's queue; (c) a
+   lock of the step's own, so two gates never overlap but the cycle is not held. The worker's
+   reading: (b) or (c), API mode only, as a task of its own with its own tests.
+2. **`-Base main` while worker branches open from `team/nightly/lead`.** `-Base` is the branch
+   that RECEIVES the gated work. An integration branch carries the lead branch's commits too,
+   so the first green gate puts them on main with the tasks, unreviewed as a set. Options: (a)
+   schedule the step only once the cycle's `-Base` is main; (b) schedule it with
+   `-Base team/nightly/lead` and keep the merge to main the lead's; (c) accept it - the lead
+   branch's commits pass the same full gate. The step does not choose; the default stays main.
+3. **The wiring run may edit the `scripts/quality-gate.ps1` it is then judged by.** The file is
+   on the allowed list because adding a suite to the gate is the wiring. Nothing stops a run
+   from REMOVING a step: the gate would be green on less. Options: (a) accept it and read the
+   wiring commit's diff of that file in the report (it is listed under "lead'in bağladığı
+   dosyalar"); (b) run the gate script of `-Base` (main's copy) plus the suites the reports
+   name; (c) refuse a wiring diff of `quality-gate.ps1` that deletes a line holding
+   `Invoke-Step`. The worker's reading: (c) is small and closes the cheap way out.
+4. **`.claude/worktrees/gate` is the lead's own worktree on this machine**
+   (`lead/cycle-rereads-queue`). The step's trees would nest inside it: `git add -A` there
+   stages `integrate/<cycle>` as an embedded repository, and removing that worktree deletes the
+   gate trees under it (recovered now, point 10, at the price of a new environment build).
+   Move the worktree, or the step's folder, before scheduling.
+
 ## Consequences
 
 - A dependency reaches main, and its dependants start, without the lead's hands.
-- **Known tension, for the lead to decide:** the lock is held for the whole gate, as the card
-  asks, so no cycle starts on this machine while a gate runs - against "the cycle is never
-  paused for the lead's gate" (addendum 8). Releasing it during the gate is safe only in API
-  mode (per-task versioned writes); in file mode the step would overwrite the cycle's queue.
 - The suite must be added to `scripts/quality-gate.ps1` and `.github/workflows/ci.yml`, and the
   call to `scripts/team/register-nightly.ps1`, by the lead (outside this task's area). The
   scheduled call need not pass the caps (the defaults are caps); it may pass smaller ones.
@@ -148,10 +205,6 @@ production, the recovery supervisor or the last-known-good record (a test reads 
   not prevented); gate worktrees, each with its `.venv` and `node_modules`, are never removed;
   the `gate-<n>.json` records are local to the machine, so strikes, the moved-ref stop and an
   unapplied verdict are per machine.
-- `-Base` (default `main`) is the branch that RECEIVES the gated work. While the cycle opens
-  worker branches from `team/nightly/lead`, an integration branch carries that branch's commits
-  too, and the first green gate puts them on main with the tasks. The lead decides whether that
-  is wanted before scheduling the step.
 - One slow task holds its whole branch: with one integration branch a day, a task returned by
   the gate at noon keeps the day's other merged tasks off main until it is fixed and merged
   again. That is the price of never putting unpassed code on main; the lead can take a task out
