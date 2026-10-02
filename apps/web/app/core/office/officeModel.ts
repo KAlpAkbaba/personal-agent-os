@@ -5,21 +5,32 @@
  */
 
 import { GATE_TR } from "../approvals/approvalsApi";
-import type { OfficeAgent, OfficeTask, OfficeView, SeatId, SeatState } from "./officeApi";
+import type {
+  OfficeAgent,
+  OfficeRun,
+  OfficeTask,
+  OfficeView,
+  SeatId,
+  SeatState,
+} from "./officeApi";
 
 export const REPORT_LINE_CAP = 40;
 export const SHA_SHORT = 12;
 
-export const SEAT_NAME_TR: Record<SeatId, string> = {
-  lead: "Hakim",
-  researcher: "Araştırmacı",
-  integrator: "Entegratör",
-  "worker-1": "Çalışan 1",
-  "worker-2": "Çalışan 2",
-  "worker-3": "Çalışan 3",
-  inspector: "Denetleyici",
-  owner: "Sahip",
-};
+const SEAT_NAME_TR = new Map<SeatId, string>([
+  ["lead", "Hakim"],
+  ["researcher", "Araştırmacı"],
+  ["integrator", "Entegratör"],
+  ["inspector", "Denetleyici"],
+  ["owner", "Sahip"],
+]);
+const WORKER_SEAT = /^worker-([1-9]\d*)$/;
+
+/** The seat's Turkish name by its id pattern; `null` for an id this page does not know. */
+export function seatName(seat: SeatId): string | null {
+  const worker = WORKER_SEAT.exec(seat);
+  return worker ? `Çalışan ${worker[1]}` : (SEAT_NAME_TR.get(seat) ?? null);
+}
 
 export const STATE_TR: Record<SeatState, string> = {
   working: "çalışıyor",
@@ -34,11 +45,15 @@ export type DrawnSeat = {
   name: string;
   state: SeatState;
   pose: Pose;
+  /** A seat id the page does not know: a desk with its id, nobody at it. */
+  plain: boolean;
   warning: boolean;
   /** The task title above the head; only a working seat has one. */
   label: string | null;
   /** The owner's approval count. */
   badge: string | null;
+  /** `×3` when the seat has more than one live run. */
+  runCount: string | null;
   ariaLabel: string;
 };
 
@@ -54,6 +69,8 @@ export type Panel = {
   seat: SeatId;
   role: string;
   stateText: string;
+  /** Every live run of a seat that has more than one; the card below is the first one's. */
+  runs: { title: string; since: string }[];
   task: { title: string; state: string; goal: string; acceptance: string } | null;
   reason: string | null;
   reportLines: string[];
@@ -89,19 +106,29 @@ function limitText(limit: OfficeView["cycle"]["usage_limit"]): string {
   return "Açık";
 }
 
+/** The seat's runs when there is more than one to tell apart, else none. */
+function severalRuns(agent: OfficeAgent): OfficeRun[] {
+  const runs = agent.runs ?? [];
+  return runs.length > 1 ? runs : [];
+}
+
 function drawSeat(agent: OfficeAgent, ownerCount: number): DrawnSeat {
-  const name = SEAT_NAME_TR[agent.seat] ?? agent.role;
+  const known = seatName(agent.seat);
+  const name = known ?? agent.seat;
   const owner = agent.seat === "owner";
   const state: SeatState = owner ? "waiting" : agent.state;
+  const runs = state === "working" ? severalRuns(agent).length : 0;
   return {
     seat: agent.seat,
     name,
     state,
     pose: POSE[state],
+    plain: known === null,
     warning: state === "returned",
     label: state === "working" ? (agent.task_title ?? agent.task_id) : null,
     badge: owner ? String(ownerCount) : null,
-    ariaLabel: `${name}, ${STATE_TR[state]}`,
+    runCount: runs > 0 ? `×${runs}` : null,
+    ariaLabel: `${name}, ${STATE_TR[state]}${runs > 0 ? `, ${runs} koşu` : ""}`,
   };
 }
 
@@ -140,6 +167,10 @@ export function buildPanel(view: OfficeView, seat: string): Panel | null {
     seat: agent.seat,
     role: drawn.name,
     stateText: STATE_TR[drawn.state],
+    runs: (drawn.runCount === null ? [] : severalRuns(agent)).map((run) => ({
+      title: run.task_title ?? run.task_id ?? "-",
+      since: clock(run.since),
+    })),
     task: task
       ? { title: task.title, state: task.state, goal: task.goal, acceptance: task.acceptance }
       : null,
