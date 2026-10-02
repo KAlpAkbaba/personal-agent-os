@@ -29,13 +29,14 @@ ADR-0214 ek 11: döngü kuyruğu HER TURDA yeniden okur. Kusur: kuyruk yalnız d
 bitmediği için sonradan depoya yazılan hiçbir şey (kart, karar, besleyici kartı) görülmüyordu - sahibin "4. çalışan
 koltuğu" kartı 4 saat boş koltukların yanında bekledi. İlk commit `3d52902e` denetleyiciden GERİ DÖNDÜ (6 bulgu: reddedilen
 yazmanın işi yine koşuyordu; depoda durdurulan iş yine birleştiriliyordu; iki alan kuralı ayrıydı; üç iddia testsizdi);
-ikinci tur `3d1be9fc` de GERİ DÖNDÜ (5 bulgu; en önemlisi: deponun aynı yazmayı hep reddettiği durumda döngü sonsuz
-dönüyordu - "reddedilen iş atlanır, o yüzden dönmez" akıl yürütmem YANLIŞTI). Üçüncü tur: her koşunun sonucu uygulanır
-uygulanmaz yazılır (toplu iş sonunda değil), depo birleştirmeden sonra reddederse rapor birleştirmeyi ADIYLA söyler,
-reddedilen-taşıma turları 3 ile sınırlı, düşen koşu "hak" sayılmaz, bekleyen HER fikrin metni HER döngüde depoya
-yazılır; `team-cycle` 165, 22 mutasyon RED (denetleyicinin iki turdaki sağ kalanları dahil). SIRA: denetleyici üçüncü
-tura bakıyor → APPROVE ise lead dalına merge → `team/stop.flag` ile döngüyü yenile (yeni kod ancak yeni süreçte
-çalışır) → dördüncü entegrasyonda main'e. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
+ikinci tur `3d1be9fc` ve üçüncü tur `91c70543` de GERİ DÖNDÜ (her seferinde gerçek bulgu: sonsuz dönen tur; koşu
+sürerken deponun cevap vermemesi döngüyü yarıda kesiyordu; düşen koşuların sınırı yoktu). Dördüncü tur: koşu sürerken
+yapılan yazma başarısız olursa döngü ÖLMEZ (satır yazar, toplu iş sonunda yeniden dener); deponun reddettiği taze
+birleştirme GERİ ALINIR (`Undo-TeamMerge`), alınamayan adıyla söylenir; bir işin düşen koşusu en çok 3; boş tur
+sınırı 3; yalnız `team/proposals` dosyası fikir metni olarak gönderilir. `team-cycle` 173, 32 mutasyon. SIRA:
+denetleyici dördüncü tura bakıyor → APPROVE ise `gate/d20261002-1` (worktree `.claude/worktrees/gate4`: 4. koltuk,
+STT ölçüm aracı, Postgres testleri, anlatı tesisatı, sesli özetin koşu sayması, hüküm ayrıştırıcısı) üstüne
+birleştir → tam kapı → main → kural gereği yayın → lead dalı → `team/stop.flag` ile döngüyü yenile. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
 BAŞLAMAMALI (şu an koşan döngü eski kuyruğu gördüğü için başlatmıyor; döngüyü düzeltmeden önce yenileme).**
 **DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
 execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)

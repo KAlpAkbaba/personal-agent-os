@@ -18951,3 +18951,48 @@ try handed back; the idea whose POST failed posted by the next cycle). The fake 
 for the cycle's own look at the store, take a task out, and fail a proposal's POST a given number of times.
 Twenty-two mutations, each restored from a backup copy with sha256 equal - the inspector's survivors of both passes
 (M1, M2, M5, N1, N2, N8, N10) among them: all RED.
+
+**Addendum 11 after the inspector's third return, of `91c70543` (2026-10-02).** Three findings, two of them things the
+third form itself had opened.
+
+14. **A write made while runs are in flight never ends the cycle** (`Save-QueueNow`: the write after the starts, and the
+    write of each applied result). The third form wrote each result at once - and one 503 at that moment ended the cycle
+    with the other run still working: both tasks left `in_progress`, the lock released, the finished worker's result
+    lost, and the next tick free to start workers in the same worktrees. The form before it had lived through the same
+    outage, because it wrote only when nothing was in flight. Now such a write that fails (anything but the 409, which
+    is somebody else's word and handled as before) is a line in the report, and the batch's LAST write - made when
+    nothing is in flight - is the strict one that writes what is pending.
+15. **A refused fresh merge is taken back; a merge that cannot be is named** (`Undo-TeamMerge`, the inspector's own
+    suggestion). When the store refuses "merged" right after the merge this iteration made, that merge is still the
+    integration branch's last commit: checked (HEAD has two parents, the second is the task branch's tip, the worktree
+    is clean) and then reset to its first parent - a reset, not a revert, so the branch can be merged again later and
+    "already merged" never answers for content that is gone. NOT taken back: a branch that was already on the
+    integration branch (that commit is not this run's), and a merge whose write had to wait for the batch's end and
+    was refused there (other merges may stand on it) - those are named, for the lead.
+16. **Dropped runs are bounded: three per task per cycle.** Decision 11 handed the try of a dropped run back, and
+    nothing else then bounded a store that takes the move and refuses every later write: 133 paid worker runs in 61
+    seconds on the fake, with no budget cap. After three runs of a task whose result could not be applied the cycle
+    starts nothing more for it and says so; it does not write the task (it is not the cycle's).
+17. **One bound on idle passes, with its line.** Three passes in a row that moved a state and started nothing end the
+    task loop, whatever the reason, and the report says so. (Nothing is runnable in such a pass, so nothing is lost. The
+    separate bound of ten passes, which ended the cycle without a word and had no test, is gone.)
+18. **An idea's file is a file OF `team/proposals`**: the card's `proposal` must be exactly `team/proposals/<name>.md`,
+    and the file is read from the proposals folder of `-TeamRoot`. A card naming a plan, a source file or a path that
+    climbs out is not posted. Known and left: this PC's file replaces the store's text in every cycle (one PC runs
+    cycles); the real route refuses more than 200 000 characters and an upper-case name, which is then a line in every
+    cycle's report until the file is fixed.
+
+**Evidence, fourth form.** Twenty-eight tests for this addendum (eight new: the outage in the middle of a batch; the
+outage as a run starts; the refused fresh merge taken back; the "already there" branch not taken back; `Undo-TeamMerge`
+by itself - an older merge, a dirty tree, a plain commit, and merging again after it; the merge named when its write
+could only be tried at the batch's end; three dropped runs and no fourth; only a file of `team/proposals`, for a
+proposed idea as for a waiting one). Thirty-two mutations, each restored from a backup copy with sha256 equal.
+
+19. **The harness's own race, found as a test of this addendum that failed one run in three on a loaded machine.**
+    The fakes of one batch appended to the suite's call log with `Add-Content`; two that started in the same instant
+    met on the file, the second died on the sharing violation before it did anything, the cycle counted a failed run
+    and ran the task again - one run more than the test expected and no line for the one that died. Not the product:
+    the cycle did what it does with a failed run. But a gate-only failure is a defect until it is explained, and this
+    one could turn any test with two runs in a batch red. `scripts/tests/lib/fake-claude.ps1` now opens the log for
+    append with a retry (a writer waits for the other, it does not die), held by a test that keeps the log open while a
+    fake writes (the mutation that lets it die again is RED). Suite: 173 tests.

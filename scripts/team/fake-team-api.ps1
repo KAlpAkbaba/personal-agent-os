@@ -18,8 +18,11 @@
     that run ends). `late.remove` is a list of ids the writer takes OUT of the queue.
     A seed with `faults` breaks the store on purpose: `queue_get_after` N answers 503 to every
     GET of the queue after the N-th; `task_put` { id, status } answers that status to every PUT
-    of that task; `proposal_post` { status, times } answers that status to the first `times`
-    POSTs of a proposal (every one when `times` is absent).
+    of that task - only when the written state is `state`, if that is given;
+    `task_put_when_runs` { runs, status } answers that status to EVERY task PUT while the last
+    live status names exactly that many runs in flight (an outage in the middle of a batch);
+    `proposal_post` { status, times } answers that status to the first `times` POSTs of a
+    proposal (every one when `times` is absent).
     POST /v1/team/queue/proposals keeps a proposal's text (shown by /__state).
     It is NOT the server: the Python suite holds the server to its rules, and a test in
     services/api/tests/unit/test_team_state.py holds the client's paths and fields to it.
@@ -142,8 +145,11 @@ while ($running) {
             $id = $Matches[1]
             $stored = $tasks[$id]
             $expected = $body.expected_updated_at
-            if ($null -ne $faults -and $null -ne $faults.task_put -and [string]$faults.task_put.id -eq $id) {
+            if ($null -ne $faults -and $null -ne $faults.task_put -and [string]$faults.task_put.id -eq $id -and ($null -eq $faults.task_put.state -or [string]$faults.task_put.state -eq [string]$body.task.state)) {
                 $status = Send-Json -Context $context -Status ([int]$faults.task_put.status) -Body @{ detail = "the store refused the write" }
+            }
+            elseif ($null -ne $faults -and $null -ne $faults.task_put_when_runs -and $null -ne $liveStatus -and @($liveStatus.runs).Count -eq [int]$faults.task_put_when_runs.runs) {
+                $status = Send-Json -Context $context -Status ([int]$faults.task_put_when_runs.status) -Body @{ detail = "the store is away" }
             }
             elseif ($null -eq $stored -and $null -ne $expected) { $status = Send-Json -Context $context -Status 409 -Body @{ detail = @{ code = "stale_write" } } }
             elseif ($null -ne $stored -and [string]$stored.updated_at -ne [string]$expected) { $status = Send-Json -Context $context -Status 409 -Body @{ detail = @{ code = "stale_write" } } }

@@ -180,6 +180,30 @@ function Test-TaskMovedInStore {
     return ([string]$theirs[0].updated_at -ne [string]$known.Updated)
 }
 
+function Save-QueueNow {
+    <# A write made while runs are in flight (after the starts; after each applied result). A
+       store that is away at that moment must not end the cycle with runs still working - the
+       tasks would stay in_progress, the lock would be released, and the next tick would start
+       workers in the same worktrees. It is a line, and the batch's last write - made when
+       nothing is in flight, and strict - writes what is pending. $false = not written now. #>
+    param([string]$What)
+    try { Save-Queue -Document $script:queue; return $true }
+    catch {
+        $note = "${What}: sonuç depoya şimdi yazılamadı (" + ((([string]$_.Exception.Message) -replace '\s+', ' ').Trim()) + "); toplu işin sonunda yeniden denenecek"
+        if ($note.Length -gt 300) { $note = $note.Substring(0, 300) }
+        if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+        return $false
+    }
+}
+
+function Add-RefusedMergeNote {
+    param($Task, [bool]$Undone)
+    $where = [string](Get-TeamProperty -InputObject $Task -Name "integration_branch" -Default "")
+    $end = if ($Undone) { "birleştirme GERİ ALINDI (dal önceki commit'inde)" } else { "o birleştirme dalda duruyor - lead geri alır ya da işi yeniden açar" }
+    $note = "$($Task.id): entegrasyon dalına ($where) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti (başkası değiştirdi); $end"
+    if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
+}
+
 function Sync-Queue {
     <# The store is the truth and a cycle lives for hours: the owner decides in the Onay Merkezi,
        the lead adds a card, the feeder cuts the roadmap - while this process runs. Read once at
@@ -253,6 +277,10 @@ $syncNoted = $false
 # The tasks whose write the store refused (somebody else wrote them) since the queue was last
 # read: nothing is started for them, and a run's result is not applied, until it is read again.
 $staleIds = @{}
+# Runs whose result was not applied, per task, in this cycle; and the tasks left alone after
+# three of them (the try of a dropped run is handed back, so nothing else would end it).
+$droppedRuns = @{}
+$abandoned = @{}
 # The model policy (ADR-0214 addendum 7). $modelSetting is read below, once the report can be
 # written. $limitedModels is what the runs said is limited: model id -> { until, type, seen_at };
 # a model in it starts no run until its reset. It lives across cycles in team/limits.json (an
@@ -818,8 +846,11 @@ try {
     if ($useApi) {
         foreach ($idea in @(Get-TeamTasks -Queue $queue | Where-Object { @("awaiting_owner", "proposed") -contains [string]$_.state })) {
             $relative = [string](Get-TeamProperty -InputObject $idea -Name "proposal" -Default "")
-            if ($relative -cnotmatch '^team/proposals/[A-Za-z0-9._-]+\.md$') { continue }
-            $ideaFile = Join-Path $repoRoot ($relative -replace '/', '\')
+            $ideaName = [System.IO.Path]::GetFileName($relative)
+            # Only a file OF team/proposals (the folder of -TeamRoot), named as the store names one:
+            # an idea's card must not make the cycle post a plan, a source file or a path that climbs.
+            if ($relative -cne "team/proposals/$ideaName" -or $ideaName -cnotmatch '^[A-Za-z0-9._-]+\.md$') { continue }
+            $ideaFile = Join-Path (Join-Path $TeamRoot "proposals") $ideaName
             if (-not (Test-Path -LiteralPath $ideaFile)) { continue }
             try { Send-TeamProposalApi -Store $apiStore -Name ([System.IO.Path]::GetFileName($ideaFile)) -Text ([System.IO.File]::ReadAllText($ideaFile, [System.Text.Encoding]::UTF8)) }
             catch { Add-CycleNote -List "risks" -Text ("fikrin metni depoya yazılamadı ($([System.IO.Path]::GetFileName($ideaFile))): " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
@@ -881,7 +912,8 @@ try {
         $moved = $false
         foreach ($task in (Get-TeamTasks -Queue $queue)) {
             # Its write was refused and the store could not be read again yet: it is not ours.
-            if ($staleIds.ContainsKey([string]$task.id)) { continue }
+            # Or three of its runs were dropped: this cycle starts nothing more for it.
+            if ($staleIds.ContainsKey([string]$task.id) -or $abandoned.ContainsKey([string]$task.id)) { continue }
             $next = Get-TeamNextRole -Task $task
             if ($next.Kind -ne "rest" -and $next.Kind -ne "gate") {
                 # A task whose dependencies are not on main yet waits, and says so once.
@@ -935,11 +967,13 @@ try {
             # It used to be a bare 'continue': a store that refused the same move after every read
             # made thousands of requests a minute, past the stop flag and the caps, the lock held.
             $idlePasses++
-            if ($idlePasses -ge 3 -and @($staleIds.Keys).Count -gt 0) {
-                Add-CycleNote -List "risks" -Text ("depo aynı yazmayı üst üste reddetti (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + "); döngü bu işleri bırakıp bitti")
+            if ($idlePasses -ge 3) {
+                # Nothing is runnable in such a pass, so ending here loses no work - and it is said.
+                $refused = if (@($staleIds.Keys).Count -gt 0) { " (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + ")" } else { "" }
+                Add-CycleNote -List "risks" -Text ("depo aynı yazmayı üst üste reddetti" + $refused + "; üç tur yalnız durum taşındı, döngü bu işleri bırakıp bitti")
                 break
             }
-            if ($idlePasses -ge 10 -or (Test-CapReached)) { $capped = $true; break }
+            if (Test-CapReached) { $capped = $true; break }
             continue
         }
         $idlePasses = 0
@@ -984,7 +1018,7 @@ try {
                 Stop-Task -Task $task -Reason "koşu başlatılamadı: $($_.Exception.Message)"
             }
         }
-        Save-Queue -Document $queue
+        [void](Save-QueueNow -What "koşuların başlangıcı")
         if (@($startedRuns).Count -eq 0 -and $blocked -gt 0) {
             # Every task that could run waits for a model: the existing wait (known reset:
             # wait it out; unknown: stop with the line), then the queue is looked at again.
@@ -996,10 +1030,13 @@ try {
         $limitSeen = $false
         # By index, not foreach: a run that comes back with the usage limit is started again
         # at once one model down, and joins the end of this same list.
+        $unwrittenMerges = New-Object System.Collections.ArrayList
         for ($runIndex = 0; $runIndex -lt @($startedRuns).Count; $runIndex++) {
             $startedRun = $startedRuns[$runIndex]
             $task = $startedRun.Task
             $role = [string]$startedRun.Role
+            # Did THIS iteration make a new merge commit (the only one that may be taken back)?
+            $freshMerge = $false
             $done = Complete-RoleRun -Started $startedRun
             if (Test-TaskMovedInStore -Task $task) {
                 # Their word stands for the RUN too, not only for the row: no merge, no state, no
@@ -1010,6 +1047,13 @@ try {
                 $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
                 $staleIds[[string]$task.id] = $true
                 Add-CycleNote -List "risks" -Text "$($task.id): koşu ($role) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı (raporu: $($done.File))"
+                # The hand-back must not become a way to run a task for ever (a store that takes
+                # the move and refuses every later write: 133 paid runs in a minute on the fake).
+                $droppedRuns[[string]$task.id] = [int]$droppedRuns[[string]$task.id] + 1
+                if ([int]$droppedRuns[[string]$task.id] -ge 3 -and -not $abandoned.ContainsKey([string]$task.id)) {
+                    $abandoned[[string]$task.id] = $true
+                    Add-CycleNote -List "risks" -Text "$($task.id): üç koşusunun sonucu uygulanamadı (depoda her seferinde başkası değiştirmiş); bu döngü bu işe bir daha koşu başlatmıyor"
+                }
                 continue
             }
             if ($role -eq "inspector" -and $done.Ok) {
@@ -1103,6 +1147,7 @@ try {
                     if ($after.State -eq "merged") {
                         $merge = Merge-TeamBranch -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) -Base $Base
                         if ($merge.Merged) {
+                            $freshMerge = -not [bool]$merge.Already
                             Set-TeamProperty -InputObject $task -Name "state" -Value "merged"
                             Set-TeamProperty -InputObject $task -Name "integration_branch" -Value $merge.Integration
                         }
@@ -1127,12 +1172,22 @@ try {
             # store and this write there is only what was just done (a merge: seconds), not the
             # rest of the batch (six seats: an hour). If the store refuses it all the same, the
             # row is theirs - and a merge that was made is said by name, for the lead to take back.
-            Save-Queue -Document $queue
+            $writtenNow = Save-QueueNow -What ([string]$task.id)
             if ($staleIds.ContainsKey([string]$task.id) -and [string]$task.state -eq "merged") {
-                Add-CycleNote -List "risks" -Text "$($task.id): entegrasyon dalına ($([string](Get-TeamProperty -InputObject $task -Name 'integration_branch' -Default ''))) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti (başkası değiştirdi); o birleştirme dalda duruyor - lead geri alır ya da işi yeniden açar"
+                # Refused right after the merge: it is still the branch's last commit, and it is
+                # taken back. (Not when the merge was "already there": that commit is not ours.)
+                $undone = $false
+                if ($freshMerge) { $undone = Undo-TeamMerge -RepoRoot $repoRoot -CycleId $CycleId -Branch ([string]$task.branch) }
+                Add-RefusedMergeNote -Task $task -Undone $undone
             }
+            elseif (-not $writtenNow -and [string]$task.state -eq "merged") { [void]$unwrittenMerges.Add($task) }
         }
         Save-Queue -Document $queue
+        # A merge whose write had to wait for the batch's end and was refused THERE: other merges
+        # may stand on it by now, so nothing is reset - it is named, for the lead.
+        foreach ($late in $unwrittenMerges) {
+            if ($staleIds.ContainsKey([string]$late.id)) { Add-RefusedMergeNote -Task $late -Undone $false }
+        }
         if ($limitSeen -and -not (Wait-UsageLimit -ResetsAt $limitHit)) { $capped = $true }
     }
 
