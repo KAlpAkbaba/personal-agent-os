@@ -94,6 +94,45 @@ production, the recovery supervisor or the last-known-good record (a test reads 
    The count lives in `team/reports/<cycle>/gate-<n>.json`
    because the queue's schema has no field for it and this task may not change the schema.
 
+9. **Third round (inspector's second return, 2026-10-02) - five rules that replace what points
+   4, 5, 7 and 8 said where they differ.**
+   - **The lead-diff check reads moves as what they are.** `git diff --name-only --no-renames`:
+     with rename detection a file moved out of a task's area into `docs/` was listed by its new,
+     allowed name only and the deletion in the area rode to main on a green gate.
+   - **A red verdict survives a failed queue write.** The attempt's record now carries the
+     verdict (`blamed`, `reason`, `waits`) and `applied: false`; it is set to `true` only after
+     the queue was written. A run that finds the LAST record red on the branch's tip and not
+     applied writes the verdict (under the lock, no Docker probe, no lead run, no gate) and
+     exits 6 or 8 - before the "held" and "already red" waits are even asked. The write stays
+     the STRICT one (`Save-TeamQueueApi` without `-SkipStale`): the next run reads the store
+     again, so its write is on the fresh version and the other writer's change is kept. A record
+     without the mark (made before it existed) is never re-applied. `-ClearGateStop` asks for a
+     new gate instead.
+   - **The environment is built BEFORE the lead's run**, so a broken `uv`/`pnpm` costs no model
+     run however often the step comes back (exit 10, nothing counted - nothing was paid for).
+     The tree is then put back on the commit: what a build scribbles on a tracked file (a lock
+     file) is neither held against the lead's run nor gated. When the wiring changes a file the
+     environment is built from (`pyproject.toml`, `uv.lock`, `pnpm-lock.yaml`, `package.json`,
+     `pnpm-workspace.yaml`) it is built again on the wired commit; a failure THERE is a
+     `lead_failed` attempt, counted, and the integration branch is not moved. Any other error
+     after a lead run was started is recorded as `error` and counted too: two stop the branch.
+   - **Blame comes from FAILING lines of FAILING steps only** (`Get-TeamGateFailingLines`): a
+     line that begins with a failure's mark and the indented lines under it, a line holding a
+     place in a file (`path:line`, `path(line,col)`), a compiler's `error`, pytest's progress
+     line with an F or an E. A line that says PASS is never one. A gate that died (no step said
+     `FAILED: `, a timeout) names NOBODY: its tasks stay `merged` with the reason, and the
+     commit waits for a new tip or the lead's `-ClearGateStop`. The price is the other
+     direction: a failure whose lines carry no mark this reader knows returns nobody, and the
+     lead looks. That is the cheaper error - a wrong return costs a worker run and an inspector
+     run per innocent task.
+   - **The step never runs uncapped.** `-GateMinutes` (default 150) and `-LeadMinutes` (default
+     30) must be more than 0 and at most 240 together; each of the three parts of the
+     environment's build is capped at 15 minutes (built twice at most). Worst case 5.5 hours,
+     inside the lock's six-hour takeover - a
+     later run can no longer reset the worktree under a live gate. This departs from "no time
+     cap on a run" (owner, 2026-09-30) for this step only, because this step holds the team
+     lock while it waits; a gate killed at its cap is red, names nobody, and is said.
+
 ## Consequences
 
 - A dependency reaches main, and its dependants start, without the lead's hands.
@@ -102,7 +141,13 @@ production, the recovery supervisor or the last-known-good record (a test reads 
   paused for the lead's gate" (addendum 8). Releasing it during the gate is safe only in API
   mode (per-task versioned writes); in file mode the step would overwrite the cycle's queue.
 - The suite must be added to `scripts/quality-gate.ps1` and `.github/workflows/ci.yml`, and the
-  call to `scripts/team/register-nightly.ps1`, by the lead (outside this task's area).
+  call to `scripts/team/register-nightly.ps1`, by the lead (outside this task's area). The
+  scheduled call need not pass the caps (the defaults are caps); it may pass smaller ones.
+- Still open after the third round (the inspector's minors): the queue is read before the lock
+  is taken and not again after the gate's hour (a stale write is now recovered by the next run,
+  not prevented); gate worktrees, each with its `.venv` and `node_modules`, are never removed;
+  the `gate-<n>.json` records are local to the machine, so strikes, the moved-ref stop and an
+  unapplied verdict are per machine.
 - `-Base` (default `main`) is the branch that RECEIVES the gated work. While the cycle opens
   worker branches from `team/nightly/lead`, an integration branch carries that branch's commits
   too, and the first green gate puts them on main with the tasks. The lead decides whether that

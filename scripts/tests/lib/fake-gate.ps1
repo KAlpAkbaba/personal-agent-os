@@ -15,6 +15,13 @@
       pass-exit-1   prints "QUALITY GATE: PASS" and exits 1 (a gate that died after its last word)
       fail-exit-0   prints "QUALITY GATE: FAIL" and exits 0
       silent        prints two steps and no last word; exit 0 (a script that is not the gate)
+      hang          prints one step and then waits two minutes: a gate that never ends
+
+    PAGENTOS_FAKE_GATE_PASSES names a file (a path) that only PASS lines print: one in the step
+    that passes and one in the step that fails ("  PASS  <path>", as the script-syntax suite
+    prints every script it parsed). A passing line names nobody.
+    PAGENTOS_FAKE_GATE_HOOK is the path of a script the gate runs while it runs: what somebody
+    else did during the gate's hour (a task changed in the queue's store).
 
     Every call appends one line to PAGENTOS_FAKE_GATE_LOG: "<working directory>|<HEAD sha>|<scenario>",
     so a test can see WHERE the gate ran and on WHICH commit - and that it ran at all.
@@ -39,12 +46,18 @@ if ($log) {
 # A gate that leaves a tracked file changed behind it (a formatter, a regenerated lock file).
 $touch = [string]$env:PAGENTOS_FAKE_GATE_TOUCH
 if ($touch) { Add-Content -LiteralPath (Join-Path $here ($touch -replace "/", "\")) -Value "left by the gate" -Encoding ASCII }
+$hook = [string]$env:PAGENTOS_FAKE_GATE_HOOK
+if ($hook) { try { & $hook | Out-Null } catch { Write-Host "the hook failed: $($_.Exception.Message)" } }
+$passes = [string]$env:PAGENTOS_FAKE_GATE_PASSES
 
 Write-Host ""
 Write-Host "=== Required files ==="
 Write-Host "all present"
+if ($passes) { Write-Host "  PASS  $passes" }
+if ($scenario -eq "hang") { Start-Sleep -Seconds 120; exit 1 }
 Write-Host ""
 Write-Host "=== API unit tests ==="
+if ($passes) { Write-Host "  PASS  $passes" }
 $unit = "PASS"
 if ($scenario -eq "red") {
     $unit = "FAIL"

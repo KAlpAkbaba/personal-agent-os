@@ -31,8 +31,17 @@ $script:TeamLeadOpenFiles = @("scripts/quality-gate.ps1", "state/build_state.jso
 # every cycle for six hours.
 $script:TeamLeadClosedFiles = @("team/queue.json", "team/lock.json")
 # The results of an attempt that count towards "two red gates on the same branch" (section 10).
-$script:TeamGateStrikeResults = @("red", "lead_refused", "lead_failed")
+# "error" is an attempt that broke AFTER its lead run was paid for: uncounted, it would be
+# repeated every half hour, a lead run each time.
+$script:TeamGateStrikeResults = @("red", "lead_refused", "lead_failed", "error")
 $script:TeamGateMaxStrikes = 2
+# The step holds the team lock while the lead's run and the gate go, and a lock is taken over
+# after six hours: together with the environment's build (three parts, a quarter of an hour each, twice at
+# most) the caps must end well before that, or a later run resets the worktree under a gate.
+$script:TeamGateMaxCapMinutes = 240
+$script:TeamEnvironmentStepSeconds = 900
+# The files the gate worktree's environment is built from.
+$script:TeamEnvironmentInputs = @("pyproject.toml", "uv.lock", "pnpm-lock.yaml", "package.json", "pnpm-workspace.yaml")
 # An attempt that stops the branch AT ONCE: a ref moved under the lead's run. A second try would
 # merge the moved main into the branch, gate it and push it - the move would ride out on a green gate.
 $script:TeamGateStopNowResults = @("refs_moved")
@@ -290,11 +299,59 @@ function Get-TeamRoleModel {
 
 # ---------------------------------------------------------------------------- the gate's words
 
+function Test-TeamCapMinutes {
+    <#
+    .SYNOPSIS
+        Why these caps may not be run with; "" when they may. No cap (0) is refused: a gate that
+        hangs would hold the team lock until the six-hour takeover.
+    #>
+    param([double]$GateMinutes, [double]$LeadMinutes)
+    if ($GateMinutes -le 0) { return "-GateMinutes must be more than 0: a gate that hangs would hold the team lock until the six-hour takeover" }
+    if ($LeadMinutes -le 0) { return "-LeadMinutes must be more than 0: a lead run that hangs would hold the team lock until the six-hour takeover" }
+    if (($GateMinutes + $LeadMinutes) -gt $script:TeamGateMaxCapMinutes) {
+        return "-GateMinutes + -LeadMinutes may be $($script:TeamGateMaxCapMinutes) at most: the lock is taken over after six hours, and the step must have ended by then"
+    }
+    return ""
+}
+
+function Get-TeamGateFailingLines {
+    <#
+    .SYNOPSIS
+        The lines of a step that SAY a failure: a line that begins with a failure's mark (and
+        the indented lines under it), a line with a place in a file (path:line, path(line,col)),
+        a compiler's "error", pytest's progress line with an F or an E.
+
+    .DESCRIPTION
+        A line that says PASS is never one, whatever else it holds: the script-syntax suite
+        prints "PASS  scripts\..." for every script it parsed, inside the step that one bad
+        script fails - and each of those lines names a file of some task.
+    #>
+    param([string[]]$Lines = @())
+    $kept = New-Object System.Collections.ArrayList
+    $under = -1
+    foreach ($raw in @($Lines)) {
+        $line = [string]$raw
+        if (-not $line.Trim()) { $under = -1; continue }
+        $indent = $line.Length - $line.TrimStart().Length
+        if ($line -cmatch '\bPASS(ED)?\b' -or $line -cmatch '^\s*(Passed|Ge\S{1,2}ti|ok)\s' -or $line -match '^\s*[✓√]') { $under = -1; continue }
+        if ($line -cmatch '^\s*(FAILED|FAIL|ERROR|Failed|Error|Ba\S{1,2}ar\S{1,2}s\S{1,2}z|×|✗|✘|❯)(\s|:|$)' -or $line -cmatch '^E\s{2,}') {
+            [void]$kept.Add($line); $under = $indent; continue
+        }
+        if ($under -ge 0 -and $indent -gt $under) { [void]$kept.Add($line); continue }
+        $under = -1
+        if ($line -match '[\w./\\-]+\.\w{1,8}(:\d+|\(\d+(,\d+)?\))' -or $line -match '\berror\b' -or
+            $line -cmatch '^\S+\.py\s+[.sxXFE]*[FE][.sxXFE]*(\s|$)') { [void]$kept.Add($line) }
+    }
+    return @($kept.ToArray())
+}
+
 function Read-TeamGateLog {
     <#
     .SYNOPSIS
         What a run of scripts/quality-gate.ps1 said: green or not, which steps failed, the first
-        failing test, and the text of the failing steps.
+        failing test, and the FAILING LINES of the failing steps (Get-TeamGateFailingLines):
+        what a red gate names. A gate that died without a step saying it failed names nothing -
+        its whole log is not a failure, and a task named in a step that passed did not break it.
 
     .DESCRIPTION
         GREEN needs BOTH the exit code 0 and the gate's own last word, "QUALITY GATE: PASS": a
@@ -344,8 +401,8 @@ function Read-TeamGateLog {
     $failing = New-Object System.Collections.ArrayList
     foreach ($step in $steps) {
         if (-not $sections.ContainsKey($step)) { continue }
+        foreach ($line in @(Get-TeamGateFailingLines -Lines @($sections[$step].ToArray()))) { [void]$failing.Add([string]$line) }
         foreach ($line in $sections[$step]) {
-            [void]$failing.Add([string]$line)
             if ($first) { continue }
             if ($line -match '^\s*FAILED\s+(\S+::\S+)') { $first = $Matches[1] }                       # pytest
             elseif ($line -match '^\s*FAIL\s{2,}(\S.*)$') { $first = $Matches[1].Trim() }              # the PowerShell suites
@@ -365,8 +422,8 @@ function Read-TeamGateLog {
         elseif ($saidFail) { $why = "kapı FAIL dedi, adım adı okunamadı (çıkış kodu $ExitCode)" }
         else { $why = "kapı son sözünü söylemedi (çıkış kodu $ExitCode)" }
     }
-    # With no step to point at, the whole log is what the failure "names".
-    $failureText = if (@($failing).Count -gt 0) { (($failing.ToArray()) -join "`n") } elseif (-not $green) { ($lines -join "`n") } else { "" }
+    # With no step to point at, the failure names nothing: nobody is blamed from the whole log.
+    $failureText = if (@($failing).Count -gt 0) { (($failing.ToArray()) -join "`n") } else { "" }
     return [pscustomobject]@{
         Green = $green; FailedSteps = @($steps); FirstFailure = $first; FailureText = $failureText; Why = $why
     }
@@ -500,6 +557,30 @@ function Test-TeamGateAlreadyRed {
         [string](Get-TeamProperty -InputObject $last -Name "sha" -Default "") -eq $Sha)
 }
 
+function Get-TeamGateUnappliedVerdict {
+    <#
+    .SYNOPSIS
+        The record of a red gate whose verdict never reached the queue: the LAST attempt on the
+        branch, red, on exactly this commit, and marked `applied: false`. $null otherwise.
+
+    .DESCRIPTION
+        The record is written before the queue is (the gate's hour must not be lost), and the
+        queue's write can fail: a task changed in the store while the gate ran (a stale write),
+        the Cloud Core restarting. The record keeps who was named and the words, so the next
+        run writes them instead of waiting in silence on "the gate was red on this commit". A
+        record without the mark is from before it existed: its verdict was written, or lost.
+    #>
+    param([object[]]$Records = @(), [string]$Sha = "")
+    $all = @($Records)
+    if (-not $Sha -or @($all).Count -eq 0) { return $null }
+    $last = $all[@($all).Count - 1]
+    if ([string](Get-TeamProperty -InputObject $last -Name "result" -Default "") -ne "red") { return $null }
+    if ([string](Get-TeamProperty -InputObject $last -Name "sha" -Default "") -ne $Sha) { return $null }
+    $applied = Get-TeamProperty -InputObject $last -Name "applied" -Default $null
+    if ($null -eq $applied -or [bool]$applied) { return $null }
+    return $last
+}
+
 function Write-TeamGateRecord {
     param([Parameter(Mandatory = $true)][string]$Directory, [Parameter(Mandatory = $true)][int]$Number, [Parameter(Mandatory = $true)]$Record)
     if (-not (Test-Path -LiteralPath $Directory)) { [void](New-Item -ItemType Directory -Force -Path $Directory) }
@@ -550,6 +631,14 @@ function Resolve-TeamToolPath {
         if (Test-Path -LiteralPath $expanded -PathType Leaf) { return $expanded }
     }
     return ""
+}
+
+function Test-TeamEnvironmentInput {
+    <# Whether a changed file decides what the worktree's environment holds (a project file, a lock file). #>
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Path)
+    $file = ($Path -replace '\\', '/').Trim().ToLowerInvariant()
+    if (-not $file) { return $false }
+    return ($script:TeamEnvironmentInputs -contains $file.Substring($file.LastIndexOf('/') + 1))
 }
 
 function Get-TeamGateEnvironmentPlan {
@@ -694,10 +783,18 @@ function Reset-TeamGateWorktree {
 }
 
 function Get-TeamWorktreeChanges {
-    <# Every file a worktree differs in from a commit: committed since, staged, unstaged, new. #>
+    <#
+    .SYNOPSIS
+        Every file a worktree differs in from a commit: committed since, staged, unstaged, new.
+
+    .DESCRIPTION
+        --no-renames: with git's rename detection a file MOVED out of a task's area into docs/
+        is listed by its new name only - an allowed one - and the deletion inside the area is
+        never seen. Without it a move is what it is: one file gone, one file new.
+    #>
     param([Parameter(Mandatory = $true)][string]$Worktree, [Parameter(Mandatory = $true)][string]$Since)
     $files = New-Object System.Collections.ArrayList
-    foreach ($arguments in @(@("diff", "--name-only", $Since), @("diff", "--name-only", $Since, "HEAD"), @("ls-files", "--others", "--exclude-standard"))) {
+    foreach ($arguments in @(@("diff", "--name-only", "--no-renames", $Since), @("diff", "--name-only", "--no-renames", $Since, "HEAD"), @("ls-files", "--others", "--exclude-standard"))) {
         $result = Invoke-TeamGit -WorkingDirectory $Worktree -Arguments $arguments
         if (-not $result.Success) { throw "git $($arguments -join ' ') failed: $($result.StdErr.Trim())" }
         foreach ($line in @($result.StdOut -split "`r?`n")) {
@@ -724,8 +821,10 @@ function Invoke-TeamGate {
         [Parameter(Mandatory = $true)][string]$GatePath,
         [Parameter(Mandatory = $true)][string]$WorkingDirectory,
         [Parameter(Mandatory = $true)][string]$LogPath,
-        [double]$TimeoutMinutes = 0
+        # Never without a cap: the caller holds the team lock while this waits.
+        [Parameter(Mandatory = $true)][double]$TimeoutMinutes
     )
+    if ($TimeoutMinutes -le 0) { throw "the gate is not run without a cap on its minutes" }
     foreach ($path in @($GatePath, $LogPath)) {
         if ($path -match '["&|<>^%!]') { throw "a path the gate is started with holds a character cmd.exe would read: $path" }
     }
@@ -743,14 +842,11 @@ function Invoke-TeamGate {
     $started = [datetime]::UtcNow
     $process = [System.Diagnostics.Process]::Start($psi)
     $timedOut = $false
-    if ($TimeoutMinutes -gt 0) {
-        if (-not $process.WaitForExit([int]($TimeoutMinutes * 60000))) {
-            $timedOut = $true
-            Stop-TeamProcessTree -ProcessId $process.Id
-            [void]$process.WaitForExit(15000)
-        }
+    if (-not $process.WaitForExit([int]($TimeoutMinutes * 60000))) {
+        $timedOut = $true
+        Stop-TeamProcessTree -ProcessId $process.Id
+        [void]$process.WaitForExit(15000)
     }
-    else { $process.WaitForExit() }
     $exitCode = if ($timedOut) { -1 } else { $process.ExitCode }
     $process.Dispose()
     return [pscustomobject]@{ ExitCode = $exitCode; TimedOut = $timedOut; Seconds = [int]([datetime]::UtcNow - $started).TotalSeconds }

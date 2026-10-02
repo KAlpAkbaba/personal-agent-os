@@ -214,6 +214,55 @@ Test-Case "a failure names the task whose file it holds - the whole path or its 
     Assert-Equal -Expected 0 -Actual @(Get-TeamGateBlamedTasks -FailureText "app/a.py" -TaskFiles @{}).Count -Because "no tasks, nobody"
 }
 
+Test-Case "only the FAILING lines of a failing step are the failure's text: a PASS line names nobody, and neither does a gate that died" {
+    $log = "=== Required files ===`n  PASS  src/c/three.ps1`n`n=== Script syntax (PowerShell 5.1) ===`n  PASS  scripts\lib\One.ps1`n  FAIL  scripts\lib\Two.ps1`n        unexpected token in scripts\lib\Five.ps1 at line 3`n  PASS  scripts\lib\Four.ps1`nFAILED: script syntax tests exited with code 1`n`n" +
+    "=== API unit tests ===`ntests/unit/test_b.py ....                 [ 50%]`ntests/unit/test_a.py ..F.                 [100%]`ntests/unit/test_c.py::test_error_path PASSED       [ 60%]`nE   AssertionError in app/e.py`napp/d.py:12: AssertionError`nFAILED tests/unit/test_a.py::test_it - AssertionError`nFAILED: pytest (unit) exited with code 1`nQUALITY GATE: FAIL"
+    $gate = Read-TeamGateLog -Text $log -ExitCode 1
+    foreach ($named in @("Two\.ps1", "Five\.ps1", "test_a\.py", "app/e\.py", "app/d\.py")) { Assert-True -Condition ($gate.FailureText -match $named) -Because "'$named' is on a failing line: $($gate.FailureText)" }
+    foreach ($passing in @("One\.ps1", "Four\.ps1", "three\.ps1", "test_b\.py", "test_c\.py")) { Assert-True -Condition ($gate.FailureText -notmatch $passing) -Because "'$passing' is only on a passing line: $($gate.FailureText)" }
+    $files = @{
+        "task-one" = @("scripts/lib/One.ps1"); "task-two" = @("scripts/lib/Two.ps1"); "task-three" = @("src/c/three.ps1")
+        "task-a" = @("services/api/tests/unit/test_a.py"); "task-b" = @("services/api/tests/unit/test_b.py"); "task-c" = @("services/api/tests/unit/test_c.py")
+    }
+    Assert-Equal -Expected "task-a,task-two" -Actual (@(Get-TeamGateBlamedTasks -FailureText $gate.FailureText -TaskFiles $files) -join ",") -Because "one bad script does not return every task that touched a script"
+    $died = Read-TeamGateLog -Text "=== Required files ===`n  PASS  scripts\lib\One.ps1`n=== API unit tests ===`ntests/unit/test_a.py ..F" -ExitCode 1
+    Assert-True -Condition (-not [bool]$died.Green -and $died.Why -match "son sözünü") -Because "a gate that died is red"
+    Assert-Equal -Expected "" -Actual $died.FailureText -Because "and it names nobody: no step said it failed, and the whole log is not a failure"
+    Assert-Equal -Expected "" -Actual (Read-TeamGateLog -Text "=== Required files ===`n  PASS  scripts\lib\One.ps1`n" -ExitCode -1 -TimedOut $true).FailureText -Because "nor does a gate that was killed at its cap"
+}
+
+Test-Case "which lines of a step are failing lines: the marks of pytest, the PowerShell suites, tsc, ruff, vitest and dotnet - and never a line that says PASS" {
+    $failing = @(
+        "  FAIL  scripts\lib\Two.ps1", "FAILED tests/unit/test_a.py::test_it - AssertionError", "ERROR tests/unit/test_x.py - ImportError",
+        "E   AssertionError: app/a.py", "tests/unit/test_a.py ..F.   [100%]", "app/d.py:12: AssertionError", "app/a.py:3:1: F401 unused import",
+        "apps/web/src/b/page.tsx(12,3): error TS2322: no", " FAIL  src/b/page.test.tsx > renders", "  Failed Foo.Baz [2 ms]",
+        "X.cs(3,4): error CS1002: ; expected [E:\x\Y.csproj]", "FAILED: pytest (unit) exited with code 1")
+    foreach ($line in $failing) { Assert-Equal -Expected 1 -Actual @(Get-TeamGateFailingLines -Lines @($line)).Count -Because "'$line' is a failing line" }
+    $passing = @(
+        "  PASS  scripts\lib\ErrorHandling.ps1", "tests/unit/test_b.py ....   [ 50%]", "tests/unit/test_error.py::test_fail_path PASSED [ 5%]",
+        " ✓ src/b/ok.test.tsx (3 tests)", "  Passed Foo.Bar [1 ms]", "all present", "5400 passed", "", "collected 12 items from tests/unit/test_a.py")
+    foreach ($line in $passing) { Assert-Equal -Expected 0 -Actual @(Get-TeamGateFailingLines -Lines @($line)).Count -Because "'$line' is not a failing line" }
+    $block = @(Get-TeamGateFailingLines -Lines @("  PASS  a", "  FAIL  the lock is released", "        expected: <False> in src/a/x.txt", "          actual  : <True>", "  PASS  src/b/y.txt", "        not a failure's line: src/c/z.txt"))
+    Assert-Equal -Expected 3 -Actual @($block).Count -Because "a failing case and the indented lines under it, until the next case: $($block -join ' / ')"
+    Assert-True -Condition (($block -join "`n") -match "src/a/x\.txt" -and ($block -join "`n") -notmatch "src/b/y\.txt|src/c/z\.txt") -Because "what follows a PASS line is not the failure's"
+}
+
+Test-Case "a red verdict that was not written to the queue is found again: the LAST attempt, red, on this commit, marked not applied" {
+    $rec = { param([string]$Result, [string]$Sha, $Applied) $r = [pscustomobject]@{ n = 1; branch = "integrate/c1"; result = $Result; sha = $Sha }; if ($null -ne $Applied) { $r | Add-Member -NotePropertyName applied -NotePropertyValue $Applied }; $r }
+    $a = "a" * 40; $b = "b" * 40
+    Assert-True -Condition ($null -ne (Get-TeamGateUnappliedVerdict -Records @((& $rec "red" $a $false)) -Sha $a)) -Because "red on this commit and the queue never got it"
+    Assert-True -Condition ($null -eq (Get-TeamGateUnappliedVerdict -Records @((& $rec "red" $a $true)) -Sha $a)) -Because "the queue has it"
+    Assert-True -Condition ($null -eq (Get-TeamGateUnappliedVerdict -Records @((& $rec "red" $a $null)) -Sha $a)) -Because "a record from before the mark existed is not written twice"
+    Assert-True -Condition ($null -eq (Get-TeamGateUnappliedVerdict -Records @((& $rec "red" $a $false)) -Sha $b)) -Because "a new tip gets a new gate, not an old verdict"
+    Assert-True -Condition ($null -eq (Get-TeamGateUnappliedVerdict -Records @((& $rec "red" $a $false), (& $rec "cleared" "" $null)) -Sha $a)) -Because "the lead looked"
+    Assert-True -Condition ($null -eq (Get-TeamGateUnappliedVerdict -Records @() -Sha $a)) -Because "no attempt yet"
+}
+
+Test-Case "the files the worktree's environment is built from: when the lead's wiring changes one, the environment is built again" {
+    foreach ($file in @("services/api/pyproject.toml", "services\api\uv.lock", "pnpm-lock.yaml", "apps/web/package.json", "pnpm-workspace.yaml")) { Assert-True -Condition (Test-TeamEnvironmentInput -Path $file) -Because "'$file' decides what is installed" }
+    foreach ($file in @("docs/DECISIONS.md", "services/api/app/main.py", "docs/pyproject.toml.md", "scripts/quality-gate.ps1", "")) { Assert-True -Condition (-not (Test-TeamEnvironmentInput -Path $file)) -Because "'$file' does not" }
+}
+
 Test-Case "two failed attempts in a row stop a branch; a green gate or the lead's look starts the count again" {
     $r = { param([string[]]$Results) $n = 0; @($Results | ForEach-Object { $n++; [pscustomobject]@{ n = $n; branch = "integrate/c1"; result = $_ } }) }
     Assert-Equal -Expected 0 -Actual (Get-TeamGateStrikes -Records @()) -Because "no attempt yet"
@@ -225,6 +274,7 @@ Test-Case "two failed attempts in a row stop a branch; a green gate or the lead'
     Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("red", "red", "cleared")))) -Because "the lead looked"
     Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("red", "red", "cleared", "red")))) -Because "one red after the lead looked"
     Assert-True -Condition (-not (Test-TeamGateStopped -Records (& $r @("red", "conflict", "environment")))) -Because "what is not the gate's verdict is not counted"
+    Assert-True -Condition (Test-TeamGateStopped -Records (& $r @("error", "error"))) -Because "an attempt that broke AFTER its lead run was paid for is counted: it is not repeated every half hour"
     Assert-True -Condition (Test-TeamGateStopped -Records (& $r @("refs_moved"))) -Because "a ref that moved under the lead's run stops the branch at once, not at the second time"
     Assert-Equal -Expected "refs_moved" -Actual (Get-TeamGateStopKind -Records (& $r @("red", "refs_moved"))) -Because "and the stop says which kind it is"
     Assert-Equal -Expected "strikes" -Actual (Get-TeamGateStopKind -Records (& $r @("red", "red"))) -Because "two failed attempts"
@@ -523,7 +573,11 @@ function New-Sandbox {
     foreach ($tool in @("uv", "pnpm")) {
         $upper = $tool.ToUpperInvariant()
         Set-Content -LiteralPath (Join-Path $tools "$tool.cmd") -Encoding ASCII -Value (
-            "@echo off`r`necho %CD%^|$tool %*>>`"%PAGENTOS_FAKE_TOOL_LOG%`"`r`nif `"%PAGENTOS_FAKE_${upper}_EXIT%`"==`"`" exit /b 0`r`nexit /b %PAGENTOS_FAKE_${upper}_EXIT%")
+            "@echo off`r`necho %CD%^|$tool %*>>`"%PAGENTOS_FAKE_TOOL_LOG%`"`r`n" +
+            # A tool that rewrites a tracked file where it runs (uv sync and its lock file), and one that fails once a file is there.
+            "if not `"%PAGENTOS_FAKE_${upper}_TOUCH%`"==`"`" echo scribbled by $tool>>`"%PAGENTOS_FAKE_${upper}_TOUCH%`"`r`n" +
+            "if not `"%PAGENTOS_FAKE_${upper}_FAIL_IF%`"==`"`" if exist `"%PAGENTOS_FAKE_${upper}_FAIL_IF%`" exit /b 3`r`n" +
+            "if `"%PAGENTOS_FAKE_${upper}_EXIT%`"==`"`" exit /b 0`r`nexit /b %PAGENTOS_FAKE_${upper}_EXIT%")
     }
     [System.IO.File]::WriteAllText((Join-Path $tools "lead-stand-in.ps1"), $leadStandIn, $utf8)
     return $root
@@ -548,7 +602,9 @@ function Invoke-Integrate {
         [string]$Lead = "fake-claude", [string]$LeadWrites = "", [hashtable]$Environment = @{},
         [string]$QueueUrl = "", [string]$QueueTokenFile = "", [string]$Machine = "MAIL", [string]$ExtraArguments = "",
         # -ToolsFromPath passes NO -UvPath and NO -PnpmPath: the step finds them itself, on a PATH that begins with -PathPrefix.
-        [switch]$ToolsFromPath, [string]$PathPrefix = ""
+        [switch]$ToolsFromPath, [string]$PathPrefix = "",
+        # The caps as the call gives them ("" = none given: the step's own defaults), and a gate script other than the fake.
+        [string]$Caps = "-GateMinutes 3 -LeadMinutes 3", [string]$GateScript = ""
     )
     $tools = "$Root-tools"
     $leadScript = if ($Lead -eq "stand-in") { Join-Path $tools "lead-stand-in.ps1" } else { Join-Path $Root "scripts\tests\lib\fake-claude.ps1" }
@@ -563,7 +619,7 @@ function Invoke-Integrate {
     if ($PathPrefix) { $env:PATH = $PathPrefix + ";" + $pathBefore }
     try {
         $command = "& '" + (Join-Path $Root "scripts\team\integrate.ps1") + "' -Machine '$Machine'" +
-        " -GatePath '" + (Join-Path $Root "scripts\tests\lib\fake-gate.ps1") + "' -GateMinutes 3 -LeadMinutes 3" +
+        " -GatePath '" + $(if ($GateScript) { $GateScript } else { Join-Path $Root "scripts\tests\lib\fake-gate.ps1" }) + "'" + $(if ($Caps) { " " + $Caps } else { "" }) +
         " -DockerPath '" + (Join-Path $tools "docker-$Docker.cmd") + "'" +
         $(if ($ToolsFromPath) { "" } else { " -UvPath '" + (Join-Path $tools "uv.cmd") + "' -PnpmPath '" + (Join-Path $tools "pnpm.cmd") + "'" }) +
         " -ClaudePath '$powershell' -ClaudePrefixArguments '-NoProfile','-ExecutionPolicy','Bypass','-File','$leadScript'" +
@@ -1025,6 +1081,121 @@ try {
         $task = Get-TaskById -Queue $broken.Queue -Id "task-one"
         Assert-Equal -Expected "merged" -Actual $task.state -Because "it waits for the next attempt"
         Assert-True -Condition ($task.reason -match "ortam kurulamadı.*services/api") -Because $task.reason
+        # The environment is built BEFORE the lead's run: a broken uv costs no model run, however often the step comes back.
+        foreach ($n in 2..3) {
+            $broken = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_UV_EXIT = "3" }
+            Assert-Equal -Expected 10 -Actual $broken.ExitCode -Because "run ${n}: $($broken.Output)"
+        }
+        Assert-Equal -Expected 0 -Actual @($broken.LeadCalls).Count -Because "three runs that could not build the environment started no lead run"
+        Assert-Equal -Expected 0 -Actual @($broken.GateCalls).Count -Because "and no gate"
+    }
+
+    Test-Case "what the environment's build scribbles on a tracked file is not held against the lead's run, and is not what is gated" {
+        $root = New-Sandbox -Work $one -Services
+        $run = Invoke-Integrate -Root $root -Gate "green" -Environment @{ PAGENTOS_FAKE_UV_TOUCH = "pyproject.toml" }
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the lead's run changed nothing and was not refused"
+        Assert-Equal -Expected "[project]" -Actual (Invoke-SandboxGit -Root $root -Arguments @("show", "main:services/api/pyproject.toml")) -Because "the scribble did not reach main"
+    }
+
+    $envReports = @([pscustomobject]@{ cycle = "c1"; role = "worker"; at = "2026-10-01T01:00:00Z"; file = ""; cost_usd = 0; outcome = "tamam"
+            summary = @("## For the lead at merge", "- add the dependency line to services/api/pyproject.toml", "- and the marker services/api/break.cfg") })
+
+    Test-Case "when the lead's wiring changes a file the environment is built from, it is built again before the gate; a build that then fails is a failed attempt, counted" {
+        $root = New-Sandbox -Work @(@{ Id = "task-one"; Area = "src/a"; Reports = $envReports }) -Services
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "services/api/pyproject.toml"
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 6 -Actual @($run.ToolCalls).Count -Because "built before the lead's run and again after it: $($run.ToolCalls -join '; ')"
+        Assert-Equal -Expected "awaiting_release" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "and the gate was green"
+
+        $root = New-Sandbox -Work @(@{ Id = "task-one"; Area = "src/a"; Reports = $envReports }) -Services
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
+        $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -LeadWrites "services/api/pyproject.toml;services/api/break.cfg" -Environment @{ PAGENTOS_FAKE_UV_FAIL_IF = "break.cfg" }
+        Assert-Equal -Expected 7 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "no gate in an environment the wiring broke"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $root -Revision "integrate/c1") -Because "and the wiring that broke the environment is not on the integration branch"
+        Assert-Equal -Expected "lead_failed" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "a lead run was paid for: the attempt is counted"
+        Assert-True -Condition ((Get-TaskById -Queue $run.Queue -Id "task-one").reason -match "ortam") -Because "the reason says what broke: $((Get-TaskById -Queue $run.Queue -Id 'task-one').reason)"
+    }
+
+    Test-Case "a lead run that MOVES a file out of a task's area into docs/ is refused: a rename is a deletion in the area, and nothing reaches main" {
+        foreach ($commits in @("", "1")) {
+            $root = New-Sandbox -Work $two
+            $mainBefore = Get-Sha -Root $root -Revision "main"
+            $tipBefore = Get-Sha -Root $root -Revision "integrate/c1"
+            $run = Invoke-Integrate -Root $root -Gate "green" -Lead "stand-in" -Environment @{ PAGENTOS_FAKE_LEAD_GIT_AFTER = "mv src/a/task-one.txt docs/task-one.txt"; PAGENTOS_FAKE_LEAD_COMMIT = $commits }
+            $how = if ($commits) { "committed by the lead itself" } else { "left staged" }
+            Assert-Equal -Expected 7 -Actual $run.ExitCode -Because "${how}: $($run.Output)"
+            Assert-Equal -Expected 0 -Actual @($run.GateCalls).Count -Because "${how}: the gate did not run"
+            Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "${how}: nothing reached main"
+            Assert-Equal -Expected $tipBefore -Actual (Get-Sha -Root $root -Revision "integrate/c1") -Because "${how}: nor the integration branch"
+            $task = Get-TaskById -Queue $run.Queue -Id "task-one"
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "${how}: the task did not pass"
+            Assert-True -Condition ($task.reason -match "src/a/task-one\.txt") -Because "${how}: the reason names the file that left the area: $($task.reason)"
+            Assert-Equal -Expected "work on task-one" -Actual (Invoke-SandboxGit -Root $root -Arguments @("show", "integrate/c1:src/a/task-one.txt")) -Because "${how}: the task's file is where the worker put it"
+        }
+    }
+
+    Test-Case "a PASS line names nobody, inside a failing step or in the log of a gate that died: only the task on a failing line goes back" {
+        $root = New-Sandbox -Work $two
+        $run = Invoke-Integrate -Root $root -Gate "red" -Names "src/a/task-one.txt" -Environment @{ PAGENTOS_FAKE_GATE_PASSES = "src/b/task-two.txt" }
+        Assert-Equal -Expected 6 -Actual $run.ExitCode -Because $run.Output
+        Assert-Equal -Expected "returned" -Actual (Get-TaskById -Queue $run.Queue -Id "task-one").state -Because "the failing line names its file"
+        Assert-Equal -Expected "merged" -Actual (Get-TaskById -Queue $run.Queue -Id "task-two").state -Because "task-two's file is only on PASS lines"
+        $root = New-Sandbox -Work $two
+        $died = Invoke-Integrate -Root $root -Gate "silent" -Environment @{ PAGENTOS_FAKE_GATE_PASSES = "src/a/task-one.txt" }
+        Assert-Equal -Expected 6 -Actual $died.ExitCode -Because $died.Output
+        foreach ($id in @("task-one", "task-two")) {
+            $task = Get-TaskById -Queue $died.Queue -Id $id
+            Assert-Equal -Expected "merged" -Actual $task.state -Because "a gate that died names nobody: $id stays"
+            Assert-True -Condition ($task.reason -match "son sözünü") -Because "and says what happened: $($task.reason)"
+        }
+        Assert-True -Condition ($died.Report -match "geri verilen: yok") -Because "the report says nobody was returned: $($died.Report)"
+    }
+
+    Test-Case "the step never runs uncapped: its own defaults are caps, a cap of 0 is refused before anything, and a gate that hangs is killed at the cap with the lock released" {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($integrateScript, [ref]$tokens, [ref]$errors)
+        foreach ($name in @("GateMinutes", "LeadMinutes")) {
+            $parameter = @($ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq $name })[0]
+            Assert-True -Condition ($null -ne $parameter.DefaultValue -and [double]$parameter.DefaultValue.Extent.Text -gt 0) -Because "-$name has a default cap: the scheduled call need not remember it"
+        }
+        $root = New-Sandbox -Work $one
+        $before = Get-SandboxState -Root $root
+        foreach ($caps in @("-GateMinutes 0 -LeadMinutes 3", "-GateMinutes 3 -LeadMinutes 0", "-GateMinutes 300 -LeadMinutes 100")) {
+            $refused = Invoke-Integrate -Root $root -Gate "green" -Caps $caps
+            Assert-True -Condition ($refused.ExitCode -ne 0) -Because "'$caps' is refused: $($refused.Output)"
+            Assert-True -Condition ($refused.Output -match "GateMinutes|LeadMinutes") -Because "'$caps': it says which: $($refused.Output)"
+            Assert-Equal -Expected $before -Actual (Get-SandboxState -Root $root) -Because "'$caps': nothing changed"
+            Assert-Equal -Expected 0 -Actual (@($refused.GateCalls).Count + @($refused.LeadCalls).Count) -Because "'$caps': nothing was started"
+        }
+        $defaults = Invoke-Integrate -Root $root -Gate "green" -Caps "" -ExtraArguments "-DryRun"
+        Assert-Equal -Expected 0 -Actual $defaults.ExitCode -Because "with no cap given the defaults are taken: $($defaults.Output)"
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $hung = Invoke-Integrate -Root $root -Gate "hang" -Caps "-GateMinutes 0.05 -LeadMinutes 3"
+        Assert-Equal -Expected 6 -Actual $hung.ExitCode -Because $hung.Output
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        $task = Get-TaskById -Queue $hung.Queue -Id "task-one"
+        Assert-Equal -Expected "merged" -Actual $task.state -Because "a gate that was killed names nobody"
+        Assert-True -Condition ($task.reason -match "süresinde bitmedi") -Because "the reason says the gate did not end in its time: $($task.reason)"
+        Assert-Equal -Expected $false -Actual ([bool]$hung.Lock.held) -Because "the lock is not held by a gate that hung"
+    }
+
+    Test-Case "an attempt that breaks after its lead run is counted: the second stops the branch, and no third lead run is paid for" {
+        $root = New-Sandbox -Work $one
+        $missing = Join-Path "$root-tools" "no-such-gate.ps1"
+        $first = Invoke-Integrate -Root $root -Gate "green" -GateScript $missing
+        Assert-Equal -Expected 12 -Actual $first.ExitCode -Because $first.Output
+        Assert-Equal -Expected "error" -Actual (Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).result -Because "the attempt is recorded"
+        $second = Invoke-Integrate -Root $root -Gate "green" -GateScript $missing
+        Assert-Equal -Expected 8 -Actual $second.ExitCode -Because $second.Output
+        Assert-True -Condition ($second.Report -match "TEAM_PROTOCOL 10") -Because "the stop is in the report: $($second.Report)"
+        $third = Invoke-Integrate -Root $root -Gate "green" -GateScript $missing
+        Assert-Equal -Expected 8 -Actual $third.ExitCode -Because $third.Output
+        Assert-Equal -Expected 2 -Actual @($third.LeadCalls).Count -Because "two lead runs were paid for, not one every half hour"
+        Assert-Equal -Expected $false -Actual ([bool]$third.Lock.held) -Because "the lock was released"
     }
 
     Test-Case "with main checked out nowhere it is moved as a ref, and the owner's checkout is not touched" {
@@ -1173,6 +1344,59 @@ try {
         Assert-True -Condition ($state.reports.PSObject.Properties["c1-integrate.md"].Value -match "yayın bekliyor") -Because "the report text is in the store"
         Assert-Equal -Expected 0 -Actual @(Get-TeamTasks -Queue $run.Queue).Count -Because "the sandbox's queue.json was not written in API mode"
         Assert-Equal -Expected $false -Actual ([bool]$run.Lock.held) -Because "nor was its lock.json ever held"
+    }
+
+    Test-Case "a red gate whose verdict could not be written to the store (a task changed while the gate ran) is not a silent wait: the next run writes it, without a second gate" {
+        $root = New-Sandbox -Work $two
+        $tasks = @(Get-TeamTasks -Queue (Read-TeamJson -Path (Join-Path $root "team\queue.json")))
+        $api = Start-FakeApi -Tasks $tasks
+        Write-TeamJson -Path (Join-Path $root "team\queue.json") -Document (New-Queue)
+        # What somebody else does during the gate's hour: task-one is written in the store, so the step's copy of it is stale.
+        $hook = Join-Path "$root-tools" "change-task-one.ps1"
+        $marker = Join-Path "$root-tools" "changed-once"
+        [System.IO.File]::WriteAllText($hook, (@(
+                    "if (Test-Path -LiteralPath '$marker') { return }",
+                    ". '$(Join-Path $repoRoot 'scripts\lib\HttpJson.ps1')'", ". '$(Join-Path $repoRoot 'scripts\lib\TeamQueue.ps1')'",
+                    "`$store = New-TeamApiStore -Url '$($api.Url)' -TokenFile '$($api.TokenFile)'",
+                    "`$queue = Read-TeamQueueApi -Store `$store",
+                    "`$task = @(Get-TeamTasks -Queue `$queue | Where-Object { `$_.id -eq 'task-one' })[0]",
+                    "`$task.title = 'changed while the gate ran'; `$task.updated_at = '2026-10-02T09:00:00Z'",
+                    "Save-TeamQueueApi -Store `$store -Queue `$queue",
+                    "Set-Content -LiteralPath '$marker' -Value 'done' -Encoding ASCII") -join "`r`n"), $utf8)
+        $mainBefore = Get-Sha -Root $root -Revision "main"
+        $first = Invoke-Integrate -Root $root -Gate "red" -Names "src/a/task-one.txt" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile -Environment @{ PAGENTOS_FAKE_GATE_HOOK = $hook }
+        Assert-True -Condition (Test-Path -LiteralPath $marker) -Because "the task was changed while the gate ran (else this case proves nothing): $($first.Output)"
+        Assert-Equal -Expected 12 -Actual $first.ExitCode -Because $first.Output
+        $state = Get-FakeApiState -Api $api
+        $stored = @($state.tasks | Where-Object { $_.id -eq "task-one" })[0]
+        Assert-Equal -Expected "merged" -Actual $stored.state -Because "the stale write was refused: the store does not have the verdict yet"
+        Assert-Equal -Expected "changed while the gate ran" -Actual $stored.title -Because "and the other writer's change was not overwritten"
+        Assert-True -Condition ($first.Report -match "kuyruk yazılamadı") -Because "the report says the queue was not written: $($first.Report)"
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock was released"
+
+        # The next run: a gate that WOULD be green is not started; the verdict the gate gave is written.
+        $second = Invoke-Integrate -Root $root -Gate "green" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 6 -Actual $second.ExitCode -Because "the red gate is said again, not waited on in silence: $($second.Output)"
+        Assert-Equal -Expected 1 -Actual @($second.GateCalls).Count -Because "the gate was not run a second time on the same commit"
+        Assert-Equal -Expected 1 -Actual @($second.LeadCalls).Count -Because "nor a second lead run paid for"
+        $state = Get-FakeApiState -Api $api
+        $named = @($state.tasks | Where-Object { $_.id -eq "task-one" })[0]
+        $other = @($state.tasks | Where-Object { $_.id -eq "task-two" })[0]
+        Assert-Equal -Expected "returned" -Actual $named.state -Because "the gate named its file: it goes back to the worker"
+        Assert-Equal -Expected "changed while the gate ran" -Actual $named.title -Because "on top of what the other writer wrote"
+        Assert-Equal -Expected "merged" -Actual $other.state -Because "the gate did not name task-two"
+        foreach ($task in @($named, $other)) {
+            Assert-True -Condition ($task.reason -match "API unit tests" -and $task.reason -match "test_the_change_holds" -and $task.reason -match "team/reports/c1/gate-1\.log") -Because "the gate's words are in the reason of $($task.id): $($task.reason)"
+        }
+        Assert-True -Condition ($other.reason -match "task-one") -Because "the task that stays says whom it waits for: $($other.reason)"
+        Assert-Equal -Expected $true -Actual ([bool](Read-TeamJson -Path (Join-Path $root "team\reports\c1\gate-1.json")).applied) -Because "the attempt's record says the queue has the verdict now"
+        Assert-Equal -Expected $mainBefore -Actual (Get-Sha -Root $root -Revision "main") -Because "main is where it was"
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "the lock was released"
+
+        $third = Invoke-Integrate -Root $root -Gate "green" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $third.ExitCode -Because $third.Output
+        Assert-True -Condition ($third.Output -match "held by task-one \(returned\)") -Because "from here the branch waits for the worker, and says so: $($third.Output)"
+        Assert-Equal -Expected 1 -Actual @($third.GateCalls).Count -Because "still one gate"
     }
 
     Test-Case "the other machine's lock stops the step before anything: no gate, no worktree, no write" {
