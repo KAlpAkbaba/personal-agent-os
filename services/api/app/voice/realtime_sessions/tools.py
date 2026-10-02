@@ -2128,12 +2128,17 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             "routed": "state.now",
         }
 
+    # ADR-0244 B: the narrative's model narrator, behind `narrative_model_enabled` (default
+    # OFF). Off, the call is today's: no provider is built and none is handed over.
+    witness = _narrator_witness(ctx)
+    handed: dict[str, Any] = {} if witness is None else {"chat_provider": witness}
     record = explain_to_briefing(
         ctx.db,
         question,
         level=level,
         now=ctx.now,
         device_id=ctx.device_id,
+        **handed,
     )
     row = ctx.db.get(RealtimeSessionRow, ctx.session_id)
     if row is not None and record.narration_session_id is not None:
@@ -2168,8 +2173,93 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
             "action": "explain",
         },
     )
-    _explained_note(ctx, record)
+    _explained_note(ctx, record, narrator=_narrator_of(ctx, record, witness))
     return {**record.as_dict(), "intent": resolved.to_dict()}
+
+
+NARRATOR_MODEL = "model"
+NARRATOR_RULE = "rule"
+
+
+class _NarratorWitness:
+    """The session's chat provider as the narrative is handed it, remembering HOW the one
+    ask ended - a class of outcome, never the provider's words (they are compared with
+    what was spoken and dropped). ``narrative.service.tell`` returns text alone, so this
+    is where "which narrator spoke, and why the rule one did" can be read."""
+
+    def __init__(self, provider: Any) -> None:
+        self._provider = provider
+        self.name = getattr(provider, "name", "chat")
+        self.asked = 0
+        #: why the model's words cannot have been spoken, when the ask itself failed.
+        self.failure: str | None = None
+        self.draft = ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._provider.configured)
+
+    def answer(self, question: str, **kwargs: Any) -> Any:
+        self.asked += 1
+        self.failure, self.draft = None, ""
+        try:
+            answer = self._provider.answer(question, **kwargs)
+        except Exception as exc:
+            import httpx
+
+            timed_out = isinstance(exc, TimeoutError | httpx.TimeoutException)
+            self.failure = "timeout" if timed_out else "provider_error"
+            raise  # the model narrator falls back to the rule text
+        self.draft = (answer.speech or "").strip() if answer.ok else ""
+        if not self.draft:
+            # The provider's own error CLASS (chat_unavailable, chat_busy, ...): the real
+            # provider reports a transport timeout as chat_unavailable, not by raising.
+            self.failure = str(getattr(answer, "error_class", None) or "model_unavailable")
+        return answer
+
+
+def _narrator_witness(ctx: ToolContext) -> _NarratorWitness | None:
+    """The provider to hand the narrative, or None: the setting is off (nothing is built),
+    or the session carries no usable key. The switch is the SESSION's settings, as the
+    provider is (ADR-0244 item 4) - never the process's."""
+    if not _narrative_model_enabled(ctx):
+        return None
+    from app.explain.service import narrative_chat_provider
+
+    provider = narrative_chat_provider(ctx.live)
+    return _NarratorWitness(provider) if provider is not None else None
+
+
+def _narrative_model_enabled(ctx: ToolContext) -> bool:
+    try:
+        return bool(getattr(ctx.live.get("settings"), "narrative_model_enabled", False))
+    except Exception:  # noqa: BLE001 - settings that cannot be read are "off"
+        return False
+
+
+def _narrator_of(
+    ctx: ToolContext, record: Any, witness: _NarratorWitness | None
+) -> tuple[str, str | None] | None:
+    """(narrator, reason) for a narrative answer; None for any other explain - no narrator
+    spoke. ``model`` only when the spoken account IS the model's draft (alone, or with the
+    failures the auditor put back after it); every other outcome is the rule narrator's,
+    with the reason."""
+    from app.explain.engine import QUERY_NARRATIVE
+
+    if record.briefing.query.kind != QUERY_NARRATIVE:
+        return None
+    if witness is None:
+        enabled = _narrative_model_enabled(ctx)
+        return NARRATOR_RULE, "no_provider" if enabled else "setting_off"
+    if not witness.asked:
+        # An empty period, or "no failures": a constant, no narrator is asked to phrase it.
+        return NARRATOR_RULE, "not_asked"
+    if witness.failure is not None:
+        return NARRATOR_RULE, witness.failure
+    told = record.briefing.executive[0].text if record.briefing.executive else ""
+    if told == witness.draft or told.startswith(witness.draft + " "):
+        return NARRATOR_MODEL, None
+    return NARRATOR_RULE, "audit_rejected"
 
 
 def _level_for(presentation: Any) -> str:
@@ -2181,7 +2271,9 @@ def _level_for(presentation: Any) -> str:
     }.get(str(presentation or "summary"), "executive")
 
 
-def _explained_note(ctx: ToolContext, record: Any) -> None:
+def _explained_note(
+    ctx: ToolContext, record: Any, *, narrator: tuple[str, str | None] | None = None
+) -> None:
     if ctx.db is None:
         return
     try:
@@ -2189,6 +2281,12 @@ def _explained_note(ctx: ToolContext, record: Any) -> None:
         from app.ledger.service import ActivityEvent
     except ImportError:
         return
+    # Which narrator told a narrative and why the rule one did (ADR-0244 B) - two words,
+    # never the provider's text.
+    told_by: dict[str, Any] = {}
+    if narrator is not None:
+        told_by = {"narrator": narrator[0], "narrator_reason": narrator[1]}
+        logger.info("narrative_narrator", narrator=narrator[0], reason=narrator[1])
     try:
         counts = record.briefing.counts()
         ledger_service.record(
@@ -2204,7 +2302,12 @@ def _explained_note(ctx: ToolContext, record: Any) -> None:
                     f"Sahibe {record.level} düzeyinde etkinlik özeti anlatıldı: "
                     f"{counts['facts']} olgu, {counts['uncertainties']} belirsizlik."
                 ),
-                detail_json={"kind": record.briefing.query.kind, "level": record.level, **counts},
+                detail_json={
+                    "kind": record.briefing.query.kind,
+                    "level": record.level,
+                    **counts,
+                    **told_by,
+                },
                 source="live",
                 source_ref=f"voice_explained:{ctx.session_id}:{record.artifact_id}",
                 evidence_refs=[
