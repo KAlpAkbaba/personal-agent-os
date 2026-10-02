@@ -21197,3 +21197,28 @@ does not change. Of the four items the task left open: A (a timeout over the rea
 `chat_unavailable`) is card `narrative-timeout-class`; B (the compose line) is asked of the owner together with the
 decision to switch the narrator on, not before; C is card `narrative-failures-router`, already queued; D is not
 built until somebody needs the number.
+
+### ADR-0214 addendum 16 (2026-10-03): a run of the cycle has no background commands, and one foreground command may last an hour
+
+**What happened.** The first night of the pool (cycle `d20261003`), five of its first runs - two workers, two inspectors,
+one worker of a lead card - ended with a last message like "the full suite is running in the background; I'll report once
+it finishes" or "a background watcher will wake me when it finishes". A run of the cycle is `claude -p`: nothing wakes it,
+its last message IS its result. So the cycle read empty work: `cycle-auto-integrate` was stopped as "returned twice", an
+inspection was read as "no verdict" and returned an approved branch, and a worker's empty run went to inspection. The role
+files already said "wait for every command you started" (worker.md, inspector.md since 2026-10-02); the runs did not.
+
+**Decision.** The cycle takes the means away instead of asking again: `Start-TeamRun` (`scripts/lib/TeamRun.ps1`) sets, for
+every run it starts (the cycle's, the feeder's, the integrate step's), `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` - proven by
+the lead on claude 2.1.285: a Bash call with `run_in_background` is then refused ("An unexpected parameter
+`run_in_background` was provided"), where without it the command is started in the background - and
+`BASH_MAX_TIMEOUT_MS=3600000`, because a suite must now fit one foreground call and the tool cuts a call at ten minutes by
+default (measured both ways: "Command timed out after 10m 0s" by default; an eleven-minute command finished with the limit
+raised). A longer suite runs in slices; the role files say so in three lines each.
+
+**Evidence.** `scripts/tests/team-cycle.tests.ps1`, case "each role runs on the model the team's setting names for it": the
+fake claude records both variables of every run; RED without each line (0 passed, 1 failed, twice), GREEN with them. The
+real behaviour of the two switches: the lead's four probe runs above. The tasks hit that night were put back by the lead
+without counting the return (`cycle-auto-integrate`, `stt-engine-on-turn-audit`, `branch-guards-runner`).
+
+**Taking it into service.** A running cycle keeps the functions it loaded: `team/stop.flag` is written so the pool cycle
+`d20261003` ends when its runs do and the next tick starts the corrected code from the lead branch.

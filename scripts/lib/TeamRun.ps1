@@ -325,6 +325,16 @@ function Start-TeamRun {
     # 2.1.285 binary; the variable is not on the documented page - best effort). The proof
     # that a run was not lowered is its modelUsage, which the cycle compares after every run.
     $psi.EnvironmentVariables["CLAUDE_CODE_NO_MODEL_FALLBACK"] = "1"
+    # A run of the cycle is never woken again: its final message is its result. On 2026-10-03
+    # five runs of one night started their suites in the background, ended with "I will report
+    # when it finishes", and were judged as empty work. The tool's own switch takes the
+    # background parameter out of the run's Bash tool (proven by the lead on 2.1.285: the call
+    # is refused as an unexpected parameter), so a long command runs in the foreground.
+    $psi.EnvironmentVariables["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
+    # ... which needs a foreground call that may last as long as a suite: the tool cuts a call at
+    # ten minutes by default (measured: 'Command timed out after 10m 0s'; an 11-minute command
+    # finished with this limit). An hour; a longer suite runs in slices.
+    $psi.EnvironmentVariables["BASH_MAX_TIMEOUT_MS"] = "3600000"
     $process = [System.Diagnostics.Process]::Start($psi)
     $stdout = $process.StandardOutput.ReadToEndAsync()
     $stderr = $process.StandardError.ReadToEndAsync()
