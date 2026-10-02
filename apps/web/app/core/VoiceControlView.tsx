@@ -37,6 +37,13 @@ export type LocalModeViewProps = {
   onToggle: (on: boolean) => void;
   onStart: () => void;
   onStop: () => void;
+  /**
+   * The owner's answer to `snapshot.packQuestion` (ADR-0249 D3). Called directly and
+   * synchronously from the button's click: Chrome's `install()` needs the click's user
+   * activation. Optional so every earlier caller and test renders unchanged; without it the
+   * question is shown with no button.
+   */
+  onAnswerPack?: (yes: boolean) => void;
 };
 
 export type VoiceControlViewProps = {
@@ -208,6 +215,30 @@ function LocalModeBlock({ local }: { local: LocalModeViewProps }) {
       {snap.lastError && (
         <span className="muted" data-local-error="yes">
           {snap.lastError}
+        </span>
+      )}
+      {snap.packQuestion !== null && <PackQuestion question={snap.packQuestion} answer={local.onAnswerPack} />}
+    </>
+  );
+}
+
+/**
+ * The Turkish pack question, in the snapshot's own words. Each button calls `answer` in its
+ * click's own stack - no promise, no timer, no state update first - because Chrome's
+ * `install()` consumes that click's user activation. No handler, no buttons.
+ */
+function PackQuestion({ question, answer }: { question: string; answer?: (yes: boolean) => void }) {
+  return (
+    <>
+      <span data-local-pack-question>{question}</span>
+      {answer && (
+        <span>
+          <button type="button" className="core-chip" data-local-pack-answer="yes" onClick={() => answer(true)}>
+            Evet, indir
+          </button>{" "}
+          <button type="button" className="core-chip" data-local-pack-answer="no" onClick={() => answer(false)}>
+            Hayır
+          </button>
         </span>
       )}
     </>
