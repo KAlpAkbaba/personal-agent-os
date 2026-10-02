@@ -17,7 +17,16 @@ Token ortada biterse bir sonraki oturum kaldığı yeri buradan ve `git diff`'te
 
 **ÜRETİM: main `f60e02e4c6f68bbd92aea6fbb574c9432982ad45` (2026-10-02 13:02 UTC, api-green), LKG `f91ad1e3`, pin = RELEASE,
 reconcile OK, şema `0064_memory_vocabulary_class`, `PAGENTOS_TEAM_STORE=database`. Kapı 38/38 (`d71a0bac`; 14 699 birim,
-2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı). Kapıda bekleyen YOK.**
+2 162 web). QUALIFICATION Stage 44. Ana kopya `team/nightly/lead` üzerinde (= main + yayın kaydı).**
+**DÖRDÜNCÜ ENTEGRASYON HAZIRLANDI (lead, 2026-10-02 16:40): dal `gate/d20261002-4` (worktree `.claude/worktrees/gate7`) = lead
+dalı + `area-widen-rules` (ADR-0253) + `model-policy-api` (ADR-0214 ek 14) + lead'in bağlaması: `test_team_state.py`'nin iki
+düzenlemesi, `team-area.tests.ps1` CI dosyasına eklendi, QUALIFICATION 41.7'ye izlenebilir kanıt adı, korunan yollara dokuz
+giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md`, `PROJECT_CONSTITUTION.md`,
+`docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
+korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
+ONAYSIZ yayınlanır. `cycle-seat-pool` denetimde: onaylanırsa bu dala eklenir (sahibin önceliği), sonra kapı ana kopyada
+detached koşar. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
+limitleri 'şu tarih itibarıyla' gösterilir" notu.**
 **YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
 `f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
 Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:

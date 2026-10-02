@@ -500,6 +500,33 @@ $protectedSamples = @{
     "scripts/cloud/uninstall-recovery-supervisor.sh" = "scripts/cloud/uninstall-recovery-supervisor.sh"
     "scripts/cloud/backup-cloud-core.sh"           = "scripts/cloud/backup-cloud-core.sh"
     "scripts/cloud/restore-cloud-core.sh"          = "scripts/cloud/restore-cloud-core.sh"
+    # The lead's ruling at merge (the inspector's finding: each of these answered `widen`).
+    "scripts/lib/TeamArea.ps1"                     = "scripts/lib/TeamArea.ps1"
+    ".claude/hooks"                                = ".claude/hooks/session-start.ps1"
+    "claude-settings"                              = ".claude/settings.local.json"
+    "claude-md"                                    = "apps/web/CLAUDE.md"
+    "PROJECT_CONSTITUTION.md"                      = "PROJECT_CONSTITUTION.md"
+    "docs/DEVELOPMENT_POLICY.md"                   = "docs/DEVELOPMENT_POLICY.md"
+    "git-internals"                                = ".git/hooks/pre-commit"
+    "gitignore"                                    = "services/api/.gitignore"
+    "scripts/cloud/release-cloud-core.ps1"         = "scripts/cloud/release-cloud-core.ps1"
+}
+
+# The same ruling, the other half: shared code that cards are given every day is NOT
+# protected - a holder in work makes the request wait, and the inspector reads the diff.
+foreach ($ordinary in @("scripts/quality-gate.ps1", ".github/workflows/ci.yml", "scripts/team/cycle.ps1", "scripts/lib/TeamQueue.ps1")) {
+    Test-Case "protected: '$ordinary' is ordinary shared code, not a protected path" {
+        $task = New-Task -Id "card-one" -Area @("src/a.py")
+        $resolution = Resolve-TeamAreaRequest -Task $task -Queue (New-Queue -Tasks @($task)) -Files @($ordinary)
+        Assert-Equal -Expected "widen" -Actual $resolution.Decision -Because "nobody holds it and it is not protected: $($resolution.Why)"
+        Assert-List -Expected @($ordinary) -Actual @($resolution.Add) -Because "the one file asked for is what is added"
+    }
+}
+
+foreach ($rootSpelling in @("CLAUDE.md", "claude.md", ".gitignore", ".git", ".claude/settings.json")) {
+    Test-Case "protected: '$rootSpelling' at the root is refused" {
+        Assert-Refused -Path $rootSpelling -Because "the lead's ruling at merge"
+    }
 }
 
 $protectedEntries = @(Get-TeamAreaProtected)

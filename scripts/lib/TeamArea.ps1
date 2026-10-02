@@ -88,6 +88,22 @@ $script:TeamAreaProtected = @(
     New-TeamAreaProtectedEntry -Name "scripts/cloud/uninstall-recovery-supervisor.sh" -Kind "path" -Value "scripts/cloud/uninstall-recovery-supervisor.sh" -Source "removes the recovery root"
     New-TeamAreaProtectedEntry -Name "scripts/cloud/backup-cloud-core.sh" -Kind "path" -Value "scripts/cloud/backup-cloud-core.sh" -Source "PROJECT_CONSTITUTION.md section 6 'backup/restore primitives'"
     New-TeamAreaProtectedEntry -Name "scripts/cloud/restore-cloud-core.sh" -Kind "path" -Value "scripts/cloud/restore-cloud-core.sh" -Source "PROJECT_CONSTITUTION.md section 6 'backup/restore primitives'"
+
+    # The lead's ruling at merge (ADR-0253, 'Protected by the lead'): what governs the agents
+    # themselves and what sends a tree to production is never widened into by a request.
+    # Shared code that cards hold every day (the gate, the CI file, cycle.ps1, TeamQueue.ps1)
+    # is deliberately NOT here: a holder in work makes the request wait, the inspector reads
+    # the diff, and a new suite needs its gate line - refusing that would stop the very
+    # cards this file exists for.
+    New-TeamAreaProtectedEntry -Name "scripts/lib/TeamArea.ps1" -Kind "path" -Value "scripts/lib/TeamArea.ps1" -Source "this list: a request must not be able to shorten it"
+    New-TeamAreaProtectedEntry -Name ".claude/hooks" -Kind "path" -Value ".claude/hooks" -Source "CLAUDE.md 'Session continuity': the hook that hands every session its handoff"
+    New-TeamAreaProtectedEntry -Name "claude-settings" -Kind "pattern" -Value "(^|/)\.claude/settings(\.[^/]*)?\.json$" -Source "the agents' own permissions and hooks"
+    New-TeamAreaProtectedEntry -Name "claude-md" -Kind "pattern" -Value "(^|/)claude\.md$" -Source "the engineering contract every agent is given, in any directory"
+    New-TeamAreaProtectedEntry -Name "PROJECT_CONSTITUTION.md" -Kind "path" -Value "PROJECT_CONSTITUTION.md" -Source "the product's constitution: the owner's"
+    New-TeamAreaProtectedEntry -Name "docs/DEVELOPMENT_POLICY.md" -Kind "path" -Value "docs/DEVELOPMENT_POLICY.md" -Source "the owner's permanent directive of 2026-09-07 (CLAUDE.md 'Engineering operating mode')"
+    New-TeamAreaProtectedEntry -Name "git-internals" -Kind "pattern" -Value "(^|/)\.git(/|$)" -Source "the repository's own files and hooks are not source"
+    New-TeamAreaProtectedEntry -Name "gitignore" -Kind "pattern" -Value "(^|/)\.gitignore$" -Source "its '# Secrets' block is what keeps secrets out of git"
+    New-TeamAreaProtectedEntry -Name "scripts/cloud/release-cloud-core.ps1" -Kind "path" -Value "scripts/cloud/release-cloud-core.ps1" -Source "sends a tree to the production host (ADR-0214 addendum 9: the release is the lead's)"
 )
 
 function Get-TeamAreaProtected { return @($script:TeamAreaProtected) }
