@@ -8535,9 +8535,12 @@ def _layer_one_route(
       açın." are exact closed forms and are not re-read.
     * A polite form no table lists is the imperative it asks for, at the suffix-dropped
       confidence. Where the words as heard already reached that intent (a stem table read
-      "kopyalayın" by its prefix) the surface reading keeps the owner's slots; where they
-      reached another one, they reached it WITHOUT the verb, and the imperative decides
-      ("Kendi kendini geliştirmeyi duraklatın." is a pause, not a question about it).
+      "yazar mısın" by its prefix) the surface reading keeps the owner's slots.
+    * Where the words as heard reached ANOTHER intent, a table owns the sentence and it
+      stands: the polite form or the fused word is inside what the owner dictated ("Şunu
+      hatırla: ışıkları söndürün." is a memory, not a window closed). The one exception is
+      a question read with no verb at all (:func:`_asks_with_no_verb_of_its_own`):
+      "Kendi kendini geliştirmeyi duraklatın." is a pause, not a question about it.
     * A split reading carries the slots: the surface ones were read off the fused token.
     * Never into a mail or calendar ACTION (deferred by the owner, B45/B46: "Gönderir
       misin?" is not newly a send); reading mail changes nothing the owner can see.
@@ -8559,6 +8562,12 @@ def _layer_one_route(
         return None
     if second.intent.value.startswith(_REPAIR_NEVER_PREFIXES) and second.klass != KLASS_QUERY:
         return None
+    if (
+        owned
+        and second.intent is not first.intent
+        and not _asks_with_no_verb_of_its_own(text, first, reading)
+    ):
+        return None
     labels = [
         label
         for label, used in (
@@ -8572,6 +8581,29 @@ def _layer_one_route(
     chosen = first if keeps_slots else second
     return replace(
         chosen, route_repair="+".join(labels), confidence=min(chosen.confidence, ceiling)
+    )
+
+
+#: A clause ends inside the sentence: what stands beside it may be the owner's dictated words.
+_CLAUSE_BREAK_RE: Final[re.Pattern[str]] = re.compile(r"[,;:.!?…]\s+\S")
+
+
+def _asks_with_no_verb_of_its_own(text: str, first: ResolvedIntent, reading: Any) -> bool:
+    """The words as heard were read as a QUESTION, in one clause, and no word of theirs but
+    the polite form is a verb - a noun table read the sentence without its verb. Only then
+    may layer 1's imperative take a sentence a table owns. A command a table read ("hatırla",
+    "yaz", "durdur"), a verb the tables list or layer 1 knows, or a second clause, each say
+    the rewritten words may be content - and the sentence stays as heard."""
+    from app.voice.understanding import normalize as layer_one  # it imports this module
+
+    if first.klass != KLASS_QUERY:
+        return False
+    if _CLAUSE_BREAK_RE.search(text):
+        return False
+    polite = {word for said, _ in reading.dropped for word in said.split()}
+    listed = _listed_verb_forms()
+    return not any(
+        token in listed or layer_one.is_verb(token) for token in first.tokens if token not in polite
     )
 
 

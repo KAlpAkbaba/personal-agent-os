@@ -18,9 +18,12 @@ renders them) is **still not met**: 98 of 106 = **92.5 %**. This step's own bar 
 | confident wrong readings | 8 | 6 |
 | not understood | 25 | 2 |
 
-`KNOWN_GAPS` lost 25 cases and gained none (33 -> 8). The Owner Utterance Suite, run on commit
-1d30ee3c: **2754 / 2754** (`HEALTHY`, 0 failed routing; 2756 tests passed). About 300 of its
-sentences carry a polite form layer 1 now reads; none changed its route.
+`KNOWN_GAPS` lost 25 cases and gained none (33 -> 8). The Owner Utterance Suite, run again after
+the second pass (decision 2's owned-sentence rule) in ONE process on the committed sources
+(`intents.py` sha256 `d9c42028…`, `normalize.py` `3f582858…`): **2754 / 2754** (2756 tests
+passed, 0 failed, 22 min 24 s on a busy machine). The STT numbers above did not move with the
+second pass. About 300 of the owner sentences carry a polite form layer 1 now reads; none
+changed its route.
 
 **Decision.**
 
@@ -37,12 +40,31 @@ sentences carry a polite form layer 1 now reads; none changed its route.
    - A polite form no table lists: the imperative reading decides, at the suffix-dropped
      confidence (0.9, `route_repair="polite"`, which the relay's `policy.rule_reading` already
      maps to `MATCH_SUFFIX_DROPPED`). Where the words as heard reached the SAME intent (a stem
-     table read "kopyalayın" by its prefix), the surface reading is returned - the owner's slots
-     are untouched, only the confidence says a suffix was dropped. Where they reached ANOTHER
-     intent they reached it without the verb, and the imperative wins: "Kendi kendini geliştirmeyi
-     duraklatın." was `explain` at 1.0 and is `evolution_pause` now.
-   - A split reading is returned whole (`route_repair="fused"`, `confidence` 0.75 - a repaired
-     word, the confidence of a confusion): the surface slots were read off the fused token.
+     table read "yazar mısın" by its prefix), the surface reading is returned - the owner's slots
+     are untouched ("Şuraya ışıkları söndürün yazar mısın?" types "ışıkları söndürün", not layer
+     1's rewrite of it), only the confidence says a suffix was dropped.
+   - **Where the words as heard reached ANOTHER intent, the table that owns the sentence keeps
+     it, exactly as heard (1.0, no repair) - polite form or fused word alike.** The first build
+     said "they reached it without the verb, so the imperative wins"; that premise is false for
+     dictated content and was a regression against main (inspector, 2026-10-02): "Şunu hatırla:
+     ışıkları söndürün." went from `memory_remember` to `window_close` at 0.9, "Şunu yaz: sabah
+     alarmı kurun." from `type_text` to `alarm_create`, "Yarın bana hatırlat: müziği durdurun."
+     from `memory_remember` to `stop`. The premise is now CHECKED instead of assumed
+     (`intents._asks_with_no_verb_of_its_own`); the imperative takes an owned sentence only when
+     all three hold: (a) the words as heard were read as a QUESTION (class `query`) - a table
+     that read a command keeps its sentence; (b) the sentence is one clause (no `, ; : . ! ?`
+     with words after it); (c) no word but the polite form is a verb - neither a form a router
+     table lists nor a form of a verb layer 1 knows. That leaves "Kendi kendini geliştirmeyi
+     duraklatın." (`explain` by the noun alone -> `evolution_pause`, 0.9) and nothing else in
+     either corpus. Each of the three guards has its own sentence and its own RED mutation.
+   - A split reading of the SAME intent, or of a sentence no table owns, is returned whole
+     (`route_repair="fused"`, `confidence` 0.75 - a repaired word, the confidence of a
+     confusion): the surface slots were read off the fused token.
+   - **Not covered, and not new:** a sentence NO table owns as heard is read as its bare
+     imperative is, the bare rule's own weakness included - "Şunu not et: ekranları kapatın." is
+     `display_off` at 0.9 because "Şunu not et: ekranları kapat." is `display_off` on main;
+     likewise "Ekranları kapatın demedim.". Dictation after a verb no table knows is a gap of
+     the tables, not of this mechanism.
 3. **The fused split** (`normalize._split`, applied in `normalize()` too and recorded as
    `Normalized.applied_splits`, like a confusion): a token is split when, and only when, it is two
    words layer 1 knows (a stem, a stem with its suffix chain, or one of the closed `_WORDS`).
@@ -57,13 +79,15 @@ sentences carry a polite form layer 1 now reads; none changed its route.
 5. **Mail and calendar.** The older repairs never route into `mail_*` / `calendar_*` (B45/B46).
    This reading is narrower, not wider, about ACTIONS - "Gönderir misin?", "Gönderin." after a
    read-back are still not a send, and a sentence a mail/calendar table already owns is never
-   re-read - but it does route into the QUERY class of those families: "Maillerime bakın." ->
+   re-read (not even its confidence moves: "Bunu bir saat erteleyin." with an event in focus,
+   "Son maili okur musun?" - held by a test since the second pass) - but it does route into the QUERY class of those families: "Maillerime bakın." ->
    `mail_inbox`, "Fatura maillerini bulun." -> `mail_search`. Reading mail changes nothing the owner
    can see (the table's own comment at `QUERY_TOOL_BY_INTENT`), and the card's polite 29/29 cannot
    be reached without these two. **This is the one judgement the lead should look at.**
 6. **Vocabulary.** `_VERBS` is unchanged (it also feeds layer 3's negation cap, which this task
-   must not move). `_TABLE_VERBS` (27) adds the verbs of the router's exact-form tables so the
-   mechanism covers them; left out on purpose: mutating stems (et, kaydet, git) and verbs whose
+   must not move). `_TABLE_VERBS` (28) adds the verbs of the router's exact-form tables so the
+   mechanism covers them ("açıkla" joined in the second pass: the router reads it inline, and
+   guard (c) above must know it is a verb - "Şunu açıkla gözünü kapatınız"); left out on purpose: mutating stems (et, kaydet, git) and verbs whose
    polite form is a common word (alın, basın, kesin, koyun, sayın). `_WORDS` (28: determiners,
    pronouns, small numbers) and six nouns (göz, hareket, teknik, gün, bugün, buçuk) exist for the
    split. **Honest note:** these words were chosen knowing the corpus; the corpus cannot be tuned,

@@ -160,6 +160,7 @@ _TABLE_VERBS: Final[dict[str, str]] = {
     "betimle": "r",
     "yetkilendir": "ir",
     "yönlendir": "ir",
+    "açıkla": "r",
 }
 _ALL_VERBS: Final[dict[str, str]] = {**_VERBS, **_TABLE_VERBS}
 
@@ -456,6 +457,12 @@ def is_negative(token: str) -> bool:
     return token in _NEGATIVE_FORMS
 
 
+def is_verb(token: str) -> bool:
+    """The token is a form of a verb this module knows ("kapat", "kapatın", "kapatır"). A
+    negative form is not one here ("kapatma"): it is never stripped."""
+    return _lemma(token).kind == VERB
+
+
 # ------------------------------------------------------------------ the fused word
 
 #: A half shorter than this is not a word a split may rest on.
@@ -649,6 +656,7 @@ __all__ = [
     "LemmaReading",
     "Normalized",
     "is_negative",
+    "is_verb",
     "lemma_reading",
     "lemma_tokens",
     "load_confusions",

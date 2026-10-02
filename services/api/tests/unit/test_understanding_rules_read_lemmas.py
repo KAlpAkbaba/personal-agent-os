@@ -132,11 +132,106 @@ def test_the_mechanism_is_one_and_no_table_gained_a_list_of_forms():
         assert unlisted not in forms, unlisted
 
 
-def test_a_polite_reading_keeps_the_owners_own_words_where_the_surface_routes():
-    """The surface reading decides the slots; layer 1 only says how sure the route is."""
+def test_a_polite_reading_supplies_the_route_and_the_slots_where_the_surface_reaches_nothing():
     resolved = resolve_intent("Bu dosyanın sonuna toplantı notu ekler misin?")
     assert resolved.intent is Intent.DOCUMENT_APPEND
     assert resolved.text_to_type == "toplantı notu"
+
+
+def test_a_polite_reading_keeps_the_owners_own_words_where_the_surface_routes():
+    """The surface reading decides the slots; layer 1 only says how sure the route is. The
+    write table reads "yazar" by its stem, so the words as heard are owned - and the text to
+    type is what the owner dictated, not layer 1's rewrite of it ("ışıkları söndür")."""
+    said = "Şuraya ışıkları söndürün yazar mısın?"
+    surface = intents_module._resolve_intent_rules(said)
+    assert surface.intent is Intent.TYPE_TEXT and surface.text_to_type == "ışıkları söndürün"
+    resolved = resolve_intent(said)
+    assert resolved.intent is Intent.TYPE_TEXT
+    assert resolved.text_to_type == "ışıkları söndürün"
+    assert resolved.normalized_text == surface.normalized_text
+    assert (resolved.confidence, resolved.route_repair) == (SUFFIX_DROPPED, "polite")
+
+
+# --- a sentence a table owns: its content is not a command ------------------------------------
+
+#: The words as heard are a command or a question a table already owns, with a verb of their
+#: own; the polite form or the fused word is inside what the owner dictated. The base intents
+#: are the ones main e1543a97 gave (inspector, 2026-10-02: 23 of 176 probes flipped to a device
+#: action at 0.9).
+OWNED_WITH_CONTENT = [
+    ("Şunu hatırla: ışıkları söndürün.", Intent.MEMORY_REMEMBER),
+    ("Şunu yaz: sabah alarmı kurun.", Intent.TYPE_TEXT),
+    ("Yarın bana hatırlat: müziği durdurun.", Intent.MEMORY_REMEMBER),
+    ("Şunu kaydet: maillerime bakın", Intent.MEMORY_REMEMBER),
+    ("Aklında tut: araştırmayı durdurabilir misiniz", Intent.MEMORY_REMEMBER),
+    ("Buraya ekranları kapatın yaz.", Intent.TYPE_TEXT),
+    ("Müziği durdur ve ekranları kapatın.", Intent.MEDIA_STOP),
+    ("Şunu açıkla: gözünü kapatınız", Intent.EXPLAIN),
+    # ... and the fused word: the same sentence, the same owner.
+    ("Şunu hatırla: alarmkur", Intent.MEMORY_REMEMBER),
+    ("Şunu yaz: ekranlarıkapat", Intent.TYPE_TEXT),
+    ("Müziği durdur ve ekranlarıkapat", Intent.MEDIA_STOP),
+]
+
+
+@pytest.mark.parametrize(("said", "owner"), OWNED_WITH_CONTENT)
+def test_a_sentence_a_table_owns_is_not_turned_into_another_action_by_its_content(said, owner):
+    resolved = resolve_intent(said)
+    assert resolved.intent is owner, f"{said!r} -> {resolved.intent.value}"
+    assert resolved == intents_module._resolve_intent_rules(said), said
+    assert (resolved.confidence, resolved.route_repair) == (1.0, None), said
+
+
+def test_a_question_with_no_verb_of_its_own_is_the_command_its_polite_form_asks_for():
+    """The one case the imperative reading takes a sentence a table owns: the words as heard
+    were read as a question ABOUT self-development, by the noun alone - the only verb the
+    owner said is the polite one."""
+    for said in (
+        "Kendi kendini geliştirmeyi duraklatın.",
+        "Kendi kendini geliştirmeyi duraklatır mısın?",
+        "Duraklatın kendi kendini geliştirmeyi.",
+    ):
+        assert intents_module._resolve_intent_rules(said).intent is Intent.EXPLAIN, said
+        resolved = resolve_intent(said)
+        assert resolved.intent is Intent.EVOLUTION_PAUSE, said
+        assert resolved.evolution_action == "pause"
+        assert (resolved.confidence, resolved.route_repair) == (SUFFIX_DROPPED, "polite")
+
+
+@pytest.mark.parametrize(
+    ("said", "owner", "guard"),
+    [
+        # Each sentence passes the two other guards, so each guard is held by its own case.
+        ("Bunu unutma ışıkları söndürün", Intent.MEMORY_REMEMBER, "a command, not a question"),
+        ("Bana anlat ekranları kapatın", Intent.SCREEN_DESCRIBE, "a verb of its own"),
+        ("Şunu açıkla gözünü kapatınız", Intent.EXPLAIN, "a verb of its own"),
+        # "tarif" is a verb form only the router's own table lists; layer 1 does not know it.
+        ("Ekranı tarif et ekranları kapatın", Intent.SCREEN_DESCRIBE, "a verb a table lists"),
+        ("Kendi kendini geliştirme nedir, duraklatın.", Intent.EXPLAIN, "a second clause"),
+    ],
+)
+def test_the_three_guards_of_an_owned_sentence_each_hold_alone(said, owner, guard):
+    resolved = resolve_intent(said)
+    assert resolved.intent is owner, f"{guard}: {said!r} -> {resolved.intent.value}"
+    assert resolved == intents_module._resolve_intent_rules(said), guard
+
+
+def test_a_sentence_a_mail_or_calendar_table_owns_is_never_re_read():
+    """B45/B46: their routes stay exactly as they are - not even the confidence moves. Each
+    sentence holds a polite form no table lists, and its imperative reading reaches the very
+    same intent; the reading is still not taken."""
+    for said, state, owner in (
+        ("Bunu bir saat erteleyin.", {"event_focused": True}, Intent.CALENDAR_PROPOSE),
+        ("Bugün takvimimde ne var söyler misin?", {}, Intent.CALENDAR_AGENDA),
+        ("Son maili okur musun?", {}, Intent.MAIL_READ),
+    ):
+        reading = layer_one.lemma_reading(said)
+        assert reading is not None and reading.dropped, said
+        assert intents_module._resolve_intent_rules(reading.text, **state).intent is owner, said
+        resolved = resolve_intent(said, **state)
+        assert resolved == intents_module._resolve_intent_rules(said, **state), said
+        assert resolved.intent is owner
+        assert (resolved.confidence, resolved.route_repair) == (1.0, None), said
 
 
 def test_a_quoted_title_is_never_rewritten():
