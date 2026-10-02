@@ -9,7 +9,8 @@ from enum import StrEnum
 
 
 class MemoryClass(StrEnum):
-    """The six first-class memory classes (M5 brief + MEMORY_SPEC §2)."""
+    """The six first-class memory classes (M5 brief + MEMORY_SPEC §2), and the owner's
+    vocabulary (ADR-0224, migration 0064)."""
 
     PREFERENCE = "preference"  # owner/profile: explicit + inferred
     EPISODIC = "episodic"  # what happened, when, where
@@ -17,6 +18,7 @@ class MemoryClass(StrEnum):
     SEMANTIC = "semantic"  # learned facts with provenance/validity
     PROCEDURAL = "procedural"  # repeated workflows / proposed procedures
     VOICE_PREFERENCE = "voice_preference"  # narration/pronunciation/style
+    VOCABULARY = "vocabulary"  # a synonym the owner taught by a correction; explicit only
 
 
 class WriteStage(StrEnum):
