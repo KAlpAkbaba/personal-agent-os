@@ -64,7 +64,9 @@ expand-only; denetleyicinin istediği iki test eklendi) + execution-call-site-re
 çıkan: `test_postgres_coverage_ratchet` - `activity_events` artık Postgres testinde, taban listesinden düşüldü.
 `temporal-init-reaper` BU DALDA YOK (compose değişikliği: sahibin yayın onayı bekleniyor); bulutta-araştırma ayarının
 compose satırı da YOK (aynı soru sahibe soruldu). SIRA: birinci entegrasyonun kapısı yeşil → main → yayın → bu dalı
-ana kopyada detached aç → tam kapı → main → yayın (0064 expand-only: kural gereği sormadan).**
+ana kopyada detached aç → tam kapı → main → yayın (0064 expand-only: kural gereği sormadan). İLK KAPI (`786dec9d`) TEK TESTTE KIRMIZIYDI:
+`test_task_id_defaults_to_none_in_logs` - `test_execution_call_site_research.py` görev kimliğini sonraki testlere sızdırıyordu
+(sıra bağımlı; tek başına yeşil). `tests/conftest.py`'ye autouse fixture eklendi; kapı yeniden koşuyor.**
 **DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
 execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
 denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:

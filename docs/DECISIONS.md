@@ -20310,3 +20310,13 @@ area; the real tree's sha256 is unchanged):
 One remains and is carded: `voice/session-storm` ("under a rate limiter…") failed 7 of 60 loaded runs after this
 change and 2 of 60 before it, 0 of 10 alone - the file is unchanged, and 7 against 2 is not enough to call an
 increase; it needs its own look.
+
+**The first gate of this integration (`786dec9d`) was RED on one unit test**, `test_task_id_defaults_to_none_in_logs`:
+green alone, red after `test_execution_call_site_research.py` (merged in this integration), whose tests call research
+activities directly - and those SET `app.logging.task_id_var` and never reset it (in production an activity runs in its
+own task, so nothing leaks). The id stayed in the test process for every later test. Nobody's run of their own area
+could see it; the pre-check of the guard files did not either. Closed at merge: `tests/conftest.py` gains an autouse
+fixture, the correlation ids do not leak between tests (both unset before and after every test) - the pair of files
+is RED without it and green with it. The lesson for the pre-check: an order-dependent failure needs the whole unit
+suite, which is forty minutes; the researcher's idea of 2026-10-02 ("koruyucu testler iş dalında") is about exactly
+this cost.
