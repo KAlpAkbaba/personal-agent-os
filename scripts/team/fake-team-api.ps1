@@ -12,10 +12,15 @@
     in the Onay Merkezi, the lead, the feeder: once that many task PUTs have been stored, the
     listener puts those tasks into its queue itself (new ones are added, known ones replaced).
     `late.on_status_run` ("<role>:<task>") does the same at another moment: when a live status
-    naming that run in flight comes in - somebody decides WHILE that run works.
+    naming that run in flight comes in - somebody decides WHILE that run works. With
+    `late.after_queue_gets` N beside it, the writer then waits for N more GETs of the queue to be
+    answered first (N = 1: the change lands right AFTER the cycle's own look at the store when
+    that run ends). `late.remove` is a list of ids the writer takes OUT of the queue.
     A seed with `faults` breaks the store on purpose: `queue_get_after` N answers 503 to every
     GET of the queue after the N-th; `task_put` { id, status } answers that status to every PUT
-    of that task. POST /v1/team/queue/proposals keeps a proposal's text (shown by /__state).
+    of that task; `proposal_post` { status, times } answers that status to the first `times`
+    POSTs of a proposal (every one when `times` is absent).
+    POST /v1/team/queue/proposals keeps a proposal's text (shown by /__state).
     It is NOT the server: the Python suite holds the server to its rules, and a test in
     services/api/tests/unit/test_team_state.py holds the client's paths and fields to it.
 #>
@@ -58,11 +63,16 @@ if ($null -ne $state.PSObject.Properties["faults"]) { $faults = $state.faults }
 $queueGets = 0
 $proposals = [ordered]@{}
 
+$lateArmed = $false
+$lateGetsLeft = 0
+$proposalPosts = 0
+
 function Add-LateTasks {
     # The second writer's moment has come: once.
     if ($script:lateDone -or $null -eq $script:late) { return }
     $script:lateDone = $true
-    foreach ($other in @($script:late.tasks)) { $script:tasks[[string]$other.id] = $other }
+    foreach ($other in @($script:late.tasks)) { if ($null -ne $other) { $script:tasks[[string]$other.id] = $other } }
+    foreach ($gone in @($script:late.remove)) { if ($gone) { $script:tasks.Remove([string]$gone) } }
 }
 $reports = [ordered]@{}
 $liveStatus = $null
@@ -110,11 +120,23 @@ while ($running) {
             if ($null -ne $faults -and $null -ne $faults.queue_get_after -and $queueGets -gt [int]$faults.queue_get_after) {
                 $status = Send-Json -Context $context -Status 503 -Body @{ detail = "the store is away" }
             }
-            else { $status = Send-Json -Context $context -Status 200 -Body @{ version = 1; tasks = @($tasks.Values) } }
+            else {
+                $status = Send-Json -Context $context -Status 200 -Body @{ version = 1; tasks = @($tasks.Values) }
+                # The writer that waits for the cycle's own look: it writes AFTER this answer.
+                if ($lateArmed -and -not $lateDone) {
+                    $lateGetsLeft--
+                    if ($lateGetsLeft -le 0) { Add-LateTasks }
+                }
+            }
         }
         elseif ($path -eq "/v1/team/queue/proposals" -and $request.HttpMethod -eq "POST") {
-            $proposals[[string]$body.name] = [string]$body.text
-            $status = Send-Json -Context $context -Status 200 -Body @{ ok = $true }
+            $proposalPosts++
+            $broken = ($null -ne $faults -and $null -ne $faults.proposal_post -and ($null -eq $faults.proposal_post.times -or $proposalPosts -le [int]$faults.proposal_post.times))
+            if ($broken) { $status = Send-Json -Context $context -Status ([int]$faults.proposal_post.status) -Body @{ detail = "the store did not keep the text" } }
+            else {
+                $proposals[[string]$body.name] = [string]$body.text
+                $status = Send-Json -Context $context -Status 200 -Body @{ ok = $true }
+            }
         }
         elseif ($path -match '^/v1/team/queue/tasks/([a-z0-9-]+)$' -and $request.HttpMethod -eq "PUT") {
             $id = $Matches[1]
@@ -171,7 +193,12 @@ while ($running) {
                 $status = Send-Json -Context $context -Status 200 -Body $body
                 if ($null -ne $late -and $null -ne $late.on_status_run) {
                     foreach ($live in @($body.runs)) {
-                        if ($null -ne $live -and ("$($live.role):$($live.task)" -eq [string]$late.on_status_run)) { Add-LateTasks }
+                        if ($null -ne $live -and ("$($live.role):$($live.task)" -eq [string]$late.on_status_run)) {
+                            if ($null -ne $late.after_queue_gets -and [int]$late.after_queue_gets -gt 0) {
+                                if (-not $lateArmed) { $lateArmed = $true; $lateGetsLeft = [int]$late.after_queue_gets }
+                            }
+                            else { Add-LateTasks }
+                        }
                     }
                 }
             }

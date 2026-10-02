@@ -793,7 +793,6 @@ try {
         elseif (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
         else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
         $known =@(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
-        $newIdeas = New-Object System.Collections.ArrayList
         foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
             $relative = "team/proposals/$($file.Name)"
             if ($known -contains $relative) { continue }
@@ -808,16 +807,22 @@ try {
                 created_at = $now; updated_at = $now; proposal = $relative
             }
             Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $task)
-            [void]$newIdeas.Add($file)
         }
         Save-Queue -Document $queue
-        # The idea's text goes where the queue is kept (ADR-0236): the Onay Merkezi's "Detay"
-        # shows it. Two ideas waited for the owner with no text on 2026-10-02 - nothing posted it.
-        if ($useApi) {
-            foreach ($file in $newIdeas) {
-                try { Send-TeamProposalApi -Store $apiStore -Name $file.Name -Text ([System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)) }
-                catch { Add-CycleNote -List "risks" -Text ("fikrin metni depoya yazılamadı ($($file.Name)): " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
-            }
+    }
+
+    # The text of every idea that waits for the owner goes where the queue is kept (ADR-0236):
+    # the Onay Merkezi's "Detay" shows it. EVERY cycle, for every waiting idea whose file is
+    # here, whether a researcher ran or not: the route keeps or replaces, so a text the store
+    # did not take once (two ideas waited with none on 2026-10-02) is there after the next cycle.
+    if ($useApi) {
+        foreach ($idea in @(Get-TeamTasks -Queue $queue | Where-Object { @("awaiting_owner", "proposed") -contains [string]$_.state })) {
+            $relative = [string](Get-TeamProperty -InputObject $idea -Name "proposal" -Default "")
+            if ($relative -cnotmatch '^team/proposals/[A-Za-z0-9._-]+\.md$') { continue }
+            $ideaFile = Join-Path $repoRoot ($relative -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $ideaFile)) { continue }
+            try { Send-TeamProposalApi -Store $apiStore -Name ([System.IO.Path]::GetFileName($ideaFile)) -Text ([System.IO.File]::ReadAllText($ideaFile, [System.Text.Encoding]::UTF8)) }
+            catch { Add-CycleNote -List "risks" -Text ("fikrin metni depoya yazılamadı ($([System.IO.Path]::GetFileName($ideaFile))): " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
         }
     }
 
@@ -867,6 +872,9 @@ try {
 
     # ---------------------------------------------------------------- the tasks
     $capped = [bool]$ResearchOnly
+    # Passes in a row that moved a state and started nothing. One or two is ordinary (a proposal
+    # moved to the owner's gate); more means the store refuses the same move after every read.
+    $idlePasses = 0
     while (-not $capped) {
         Sync-Queue
         $runnable = New-Object System.Collections.ArrayList
@@ -923,9 +931,18 @@ try {
             $runnable = $ours
         }
         if (@($runnable).Count -eq 0) {
-            if ($moved) { continue }
-            break
+            if (-not $moved) { break }
+            # It used to be a bare 'continue': a store that refused the same move after every read
+            # made thousands of requests a minute, past the stop flag and the caps, the lock held.
+            $idlePasses++
+            if ($idlePasses -ge 3 -and @($staleIds.Keys).Count -gt 0) {
+                Add-CycleNote -List "risks" -Text ("depo aynı yazmayı üst üste reddetti (" + ((@($staleIds.Keys) | Sort-Object) -join ", ") + "); döngü bu işleri bırakıp bitti")
+                break
+            }
+            if ($idlePasses -ge 10 -or (Test-CapReached)) { $capped = $true; break }
+            continue
         }
+        $idlePasses = 0
         if (Test-CapReached) { $capped = $true; break }
 
         $startedRuns = New-Object System.Collections.ArrayList
@@ -989,6 +1006,8 @@ try {
                 # report entry (the report is in its file). What the run said about a MODEL's
                 # limit is still true. The next pass reads the store's version of the task.
                 if ($done.UsageLimited) { Register-Limit -Done $done -Key "$($task.id)/$role" }
+                # Not the task's try either: -MaxRunsPerTask counts the runs whose result counted.
+                $runCount[[string]$task.id] = [Math]::Max(0, $runCount[[string]$task.id] - 1)
                 $staleIds[[string]$task.id] = $true
                 Add-CycleNote -List "risks" -Text "$($task.id): koşu ($role) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı (raporu: $($done.File))"
                 continue
@@ -1104,6 +1123,14 @@ try {
                 }
             }
             Set-TeamProperty -InputObject $task -Name "updated_at" -Value (Get-TeamTimestamp)
+            # Written NOW, not when the batch's last run ends: between this task's look at the
+            # store and this write there is only what was just done (a merge: seconds), not the
+            # rest of the batch (six seats: an hour). If the store refuses it all the same, the
+            # row is theirs - and a merge that was made is said by name, for the lead to take back.
+            Save-Queue -Document $queue
+            if ($staleIds.ContainsKey([string]$task.id) -and [string]$task.state -eq "merged") {
+                Add-CycleNote -List "risks" -Text "$($task.id): entegrasyon dalına ($([string](Get-TeamProperty -InputObject $task -Name 'integration_branch' -Default ''))) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti (başkası değiştirdi); o birleştirme dalda duruyor - lead geri alır ya da işi yeniden açar"
+            }
         }
         Save-Queue -Document $queue
         if ($limitSeen -and -not (Wait-UsageLimit -ResetsAt $limitHit)) { $capped = $true }

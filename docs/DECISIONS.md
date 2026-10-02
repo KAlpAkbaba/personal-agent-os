@@ -18916,3 +18916,38 @@ snapshot), because the order of the starts is the same when the second worker st
 holder rule after the integrator; the two area rules agree on fourteen pairs and refuse five spellings of "everything"
 (RED before). Thirteen mutations, the inspector's three survivors among them, each restored from a backup copy with
 sha256 equal: all RED.
+
+**Addendum 11 after the inspector's second return, of `3d1be9fc` (2026-10-02).** Five findings; the second form's
+reasoning about the endless pass was wrong.
+
+9. **Each applied result is written at once**, not when the batch's last run ends. The store was asked when a run ended
+   and the merge was made, but nothing was written until every run of the batch had ended: with six seats the window in
+   which a stop could arrive unseen was the rest of the batch. It is now what lies between this task's look at the store
+   and its own write - the merge, seconds. A merge the store then refuses is **named** in the report
+   ("X: entegrasyon dalına (integrate/…) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti … lead geri alır ya da işi yeniden
+   açar"): the cycle does not take a merge back by itself, and the lead gates that branch.
+10. **A pass that only had refused moves is bounded.** The second form said a stale task is skipped at the top of the
+    pass, so the pass cannot move it again. False: a good re-read clears the stale set (rightly), and a store that refuses
+    the same write after every read then made the pass go round without end - 13 578 reads in 100 seconds on the fake,
+    past the stop flag and the caps, the lock held (the inspector's PROBE-N). Three passes in a row that moved a state,
+    started nothing and had a write refused end the task loop with a line ("depo aynı yazmayı üst üste reddetti (…)");
+    ten such passes of any kind, or a cap or the stop flag, end it too. The real routes keep row and document versions
+    equal, so this is not reachable today; it is bounded because a held lock and 270 requests a second are not a price
+    to learn it at.
+11. **A dropped run is not a try.** The run whose result was not applied (decision 5) is handed back to
+    `-MaxRunsPerTask`, as a usage-limited run is: with the cap at 2 an edited card was stopped by the cycle itself and
+    never inspected. So "an edit costs one run" is the whole price.
+12. **Every waiting idea's text is posted in every cycle**, whether a researcher ran or not (the route keeps or replaces).
+    The second form posted only the ideas queued in that run: one failed POST and the idea stayed without its text for
+    ever - the incident this was written for. A failed POST is a line in the report, never a stop.
+13. The exemption for `POST /v1/team/queue/proposals` in `test_team_state.py` ("served before its caller lands") is
+    gone: the client calls it. The card `researcher-every-cycle` no longer has that step to do.
+
+**Evidence, third form.** Twenty tests for this addendum in `scripts/tests/team-cycle.tests.ps1` (seven new: the order
+of reads and writes of two inspections in one batch; the merge named when the stop lands between the look and the
+write; the store that refuses for ever - the cycle ends after four reads; a stale task not looked at while re-reads fail;
+a task taken out of the store during its inspection; a dropped run that came back limited - the limit registered, the
+try handed back; the idea whose POST failed posted by the next cycle). The fake listener's second writer can now wait
+for the cycle's own look at the store, take a task out, and fail a proposal's POST a given number of times.
+Twenty-two mutations, each restored from a backup copy with sha256 equal - the inspector's survivors of both passes
+(M1, M2, M5, N1, N2, N8, N10) among them: all RED.

@@ -1949,6 +1949,8 @@ try {
             # Another writer of the store: these tasks are put into it once -LateAfter task PUTs came in,
             # or - with -LateOnRun "<role>:<task>" - when the live status names that run in flight.
             [object[]]$Late = @(), [int]$LateAfter = 1, [string]$LateOnRun = "",
+            # With -LateOnRun: wait for this many more GETs of the queue first; and ids to take out.
+            [int]$LateAfterGets = 0, [string[]]$LateRemove = @(),
             # The store broken on purpose: @{ queue_get_after = N } and/or @{ task_put = @{ id; status } }.
             $Faults = $null)
         $work = Join-Path $env:TEMP ("pagentos-teamapi-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
@@ -1957,9 +1959,10 @@ try {
         $lockDocument = if ($null -ne $Lock) { $Lock } else { New-TeamLockReleased }
         $seed = [pscustomobject]@{ queue = (New-Queue -Tasks $Tasks); lock = $lockDocument }
         if ($null -ne $Models) { $seed | Add-Member -NotePropertyName models -NotePropertyValue $Models }
-        if (@($Late).Count -gt 0) {
-            $second = [pscustomobject]@{ after_task_puts = $LateAfter; tasks = @($Late) }
+        if (@($Late).Count -gt 0 -or @($LateRemove).Count -gt 0) {
+            $second = [pscustomobject]@{ after_task_puts = $LateAfter; tasks = @($Late); remove = @($LateRemove) }
             if ($LateOnRun) { $second | Add-Member -NotePropertyName on_status_run -NotePropertyValue $LateOnRun }
+            if ($LateAfterGets -gt 0) { $second | Add-Member -NotePropertyName after_queue_gets -NotePropertyValue $LateAfterGets }
             $seed | Add-Member -NotePropertyName late -NotePropertyValue $second
         }
         if ($null -ne $Faults) { $seed | Add-Member -NotePropertyName faults -NotePropertyValue $Faults }
@@ -2120,6 +2123,106 @@ try {
         Assert-Equal -Expected "the lead's new wording" -Actual ([string]$task.goal) -Because "the edit was not written over"
         Assert-Equal -Expected 0 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match " 409$" }).Count -Because "the first run's result was never sent: $((Get-FakeApiRequests -Api $api) -join '; ')"
         Assert-True -Condition ($run.Report -match "task-one: koşu \(worker\) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı") -Because "the report says it: $($run.Report)"
+    }
+
+    Test-Case "each run's result is written when it is applied, not when the batch ends: the store has the first task's merge while the second inspection still runs" {
+        # The inspector of 3d1be9fc, PROBE-I: the store was asked when a run ended, the merge was
+        # made, and NOTHING was written until the last run of the batch ended - with six seats, the
+        # window in which a stop could arrive unseen was the rest of the batch.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one" -Area @("src/area")), (New-Task -Id "task-two" -Area @("src/area2")))
+        $root = New-Sandbox -Tasks @()
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -MaxParallel 2 -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        $lines = @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^(GET /v1/team/queue|PUT /v1/team/queue/tasks/task-(one|two)) 200" } | ForEach-Object { ($_ -replace '^(\w+) /v1/team/queue/?(tasks/)?', '$1 ') -replace ' 200$', '' })
+        $tail = @($lines)[(@($lines).Count - 5)..(@($lines).Count - 1)] -join " | "
+        Assert-Equal -Expected "GET  | PUT task-one | GET  | PUT task-two | GET " -Actual $tail -Because "asked, written; asked, written; then the next pass's read: $($lines -join ' | ')"
+    }
+
+    Test-Case "a stop that lands between the cycle's look at the store and its merge: the write is refused at once, and the report NAMES the merge" {
+        $stopped = New-Task -Id "task-one" -State "stopped"
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($stopped) -LateOnRun "inspector:task-one" -LateAfterGets 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "stopped" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "the store's word stands"
+        Assert-Equal -Expected 1 -Actual @(Get-FakeApiRequests -Api $api | Where-Object { $_ -match "^PUT /v1/team/queue/tasks/task-one 409" }).Count -Because "the merged state was refused, once"
+        Assert-True -Condition ($run.Report -match "task-one: entegrasyon dalına \(integrate/c1\) BİRLEŞTİRİLDİ, sonra depo yazmayı reddetti") -Because "the lead is told there is a merge to take back: $($run.Report)"
+    }
+
+    Test-Case "a store that refuses the same write after every read does not spin the cycle: it ends, says so, and the stop flag and the lock are honoured" {
+        # The inspector of 3d1be9fc, PROBE-N: 13 578 reads and 13 576 refused writes in 100 seconds,
+        # the stop flag and the time cap ignored, the lock held.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Faults ([pscustomobject]@{ task_put = [pscustomobject]@{ id = "task-one"; status = 409 } })
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @($run.Calls).Count -Because "nothing was started for a task the store will not let the cycle take"
+        $requests = @(Get-FakeApiRequests -Api $api)
+        Assert-True -Condition (@($requests | Where-Object { $_ -match "^GET /v1/team/queue 200" }).Count -le 6) -Because "a handful of reads, not thousands: $(@($requests).Count) requests"
+        Assert-True -Condition ($run.Report -match "depo aynı yazmayı üst üste reddetti") -Because "the report says why it ended: $($run.Report)"
+        Assert-Equal -Expected $false -Actual ([bool](Get-FakeApiState -Api $api).lock.held) -Because "the lock is released"
+    }
+
+    Test-Case "a task whose write was refused is not looked at again while the store cannot be read: no run on the stale copy in any later pass" {
+        $stopped = New-Task -Id "task-two" -State "stopped" -Area @("src/other")
+        $stopped.updated_at = "2026-09-30T09:00:00Z"
+        $broken = New-Task -Id "task-three" -Area @("src/third")
+        $broken | Add-Member -NotePropertyName depends_on -NotePropertyValue @("no-such-task")
+        $second = New-Task -Id "task-two" -Area @("src/other")
+        $second.created_at = "2026-09-30T00:00:01Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one"), $second) -Late @($stopped, $broken) -LateAfter 1
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker:task-one,inspector:task-one" -Actual (@($run.Calls | ForEach-Object { "$($_.role):$($_.task)" }) -join ",") -Because "the stopped task was never run, in the first pass or after"
+        Assert-Equal -Expected "stopped" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-two" })[0]).state -Because "the store's word stands"
+    }
+
+    Test-Case "a task taken out of the store while its inspector runs is not merged" {
+        # Taken out right AFTER the cycle's own "an inspector took it" write (its fourth write of the task):
+        # nothing of the cycle's is refused, so only the look at the store when the run ends can see it.
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -LateRemove @("task-one") -LateAfter 4
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        $run = Invoke-Cycle -Root $root -Scenario "approve" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected 0 -Actual @((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" }).Count -Because "it is not written back into the store"
+        Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $root ".claude\worktrees\integrate\c1\src\area\task-one.txt"))) -Because "and its work is not on the integration branch"
+        Assert-True -Condition ($run.Report -match "task-one: koşu \(inspector\) sürerken depoda başkası değiştirdi") -Because "the report says it: $($run.Report)"
+    }
+
+    Test-Case "a dropped run that came back limited: the model's limit is still registered, and the try is handed back" {
+        $edited = New-Task -Id "task-one" -State "in_progress" -Branch "team/c1/worker-task-one"
+        $edited.assignee = "worker"; $edited.worktree = ".claude/worktrees/team/c1/worker-task-one"
+        $edited.updated_at = "2026-09-30T09:00:00Z"
+        $api = Start-FakeApi -Tasks @((New-Task -Id "task-one")) -Late @($edited) -LateAfter 2
+        $root = New-Sandbox -Tasks @((New-Task -Id "task-one"))
+        Use-FakeHooks -Environment @{ PAGENTOS_FAKE_CLAUDE_LIMITED_MODELS = $opus; PAGENTOS_FAKE_CLAUDE_LIMITED_ROLES = "worker" } -Body {
+            $script:droppedLimited = Invoke-Cycle -Root $root -Scenario "approve" -NoCaps -ExtraArguments ($noWait + " -MaxRunsPerTask 2") -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        }
+        $run = $script:droppedLimited
+        Assert-Equal -Expected 0 -Actual $run.ExitCode -Because ($run.StdOut + $run.StdErr)
+        Assert-Equal -Expected "worker=$opus,worker=$sonnet,inspector=$fable" -Actual (Get-CallModels -Calls $run.Calls) -Because "the second worker did not try the limited model again: the limit was registered though the run was dropped"
+        Assert-Equal -Expected "merged" -Actual (@((Get-FakeApiState -Api $api).tasks | Where-Object { $_.id -eq "task-one" })[0]).state -Because "with two tries allowed the task still finished: the dropped run was not counted"
+    }
+
+    Test-Case "a store that does not keep an idea's text does not stop the cycle; the NEXT cycle posts it - an idea never stays without its text" {
+        # The inspector of 3d1be9fc, PROBE-L: only the ideas queued in that run were posted, so one
+        # failed POST left the idea without text for ever - the incident of 2026-10-02 again.
+        $api = Start-FakeApi -Tasks @() -Faults ([pscustomobject]@{ proposal_post = [pscustomobject]@{ status = 500; times = 1 } })
+        $root = New-Sandbox -Tasks @()
+        $first = Invoke-Cycle -Root $root -Scenario "approve" -Research -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $first.ExitCode -Because ($first.StdOut + $first.StdErr)
+        Assert-True -Condition ($first.Report -match "fikrin metni depoya yazılamadı") -Because "a line in the report, not a stop: $($first.Report)"
+        $state = Get-FakeApiState -Api $api
+        Assert-Equal -Expected 0 -Actual @($state.proposals.PSObject.Properties).Count -Because "the store did not keep it"
+        Assert-Equal -Expected $false -Actual ([bool]$state.lock.held) -Because "and the lock is released"
+        $second = Invoke-Cycle -Root $root -Scenario "approve" -CycleId "c2" -QueueUrl $api.Url -QueueTokenFile $api.TokenFile
+        Assert-Equal -Expected 0 -Actual $second.ExitCode -Because ($second.StdOut + $second.StdErr)
+        $state = Get-FakeApiState -Api $api
+        $idea = @($state.tasks | Where-Object { $_.state -eq "awaiting_owner" })[0]
+        $name = [System.IO.Path]::GetFileName([string]$idea.proposal)
+        Assert-True -Condition ($null -ne $state.proposals.PSObject.Properties[$name]) -Because "the next cycle - with no researcher run of its own - posted the waiting idea's text"
     }
 
     Test-Case "only a stale write is one task's: a write the store answers with an error ends the cycle as before" {
