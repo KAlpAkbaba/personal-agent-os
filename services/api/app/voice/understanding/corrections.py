@@ -15,7 +15,13 @@ synonym and the next match uses it - the second time is right without a release.
   ``EntityIndex`` is rebuilt only then too (``SemanticEngine`` caches it by content).
 * ``read_turn`` is ``policy.read_turn`` with the vocabulary in it: the exact word the owner
   taught binds the device as the owner's own word (1.0); a NEAR form of it is layer 2's, read
-  back. The rule table for applications asks ``app_for`` (``intents._app_open_match``).
+  back. An application word is asked of ``app_for`` by the router LAST
+  (``intents._taught_app_open``): only for a sentence no rule table owns after every
+  repair reading, so a lesson fills a gap and never takes a sentence a table owns
+  ("dosyayı aç" stays the artifact table's, whatever the rows hold). The one reading it
+  outranks is the media table's bare-title guess, which by its own contract claims only
+  "a name nothing else wanted" - else "ofis bilgisayarında hesaplayıcıyı aç" would be a
+  YouTube search. A turn it decided is recorded as layer ``vocabulary``, not ``rule``.
 * Every new synonym is PROPOSED as an STT-confusion candidate, one file under
   ``team/proposals/`` per synonym. ``stt-confusions.json`` is a release artefact: this module
   never writes it.
@@ -25,8 +31,11 @@ synonym and the next match uses it - the second time is right without a release.
 What is never learned: a word the system already reads as something else ("ofis" must not
 come to mean the home PC because the owner changed their mind), one of the router's own words
 (the computer word, a verb of the rule tables, and - as a machine - a word of an application's
-name: "ona ofis deme, hesap de" teaches nothing), a pointing word ("diğer",
-"yandaki"), a pronoun, an adverb or a politeness word ("ona ev deme, hemen de"), and -
+name: "ona ofis deme, hesap de" teaches nothing; as an application, a word whose open
+sentence a rule table routes: "ona not defteri deme, dosya de" - the router is asked, no
+list is kept), a pointing word ("diğer", "yandaki"), a pronoun, an adverb or a politeness
+word ("ona ev deme, hemen de"), any word of a sentence that carries a secret AS SPOKEN
+(normalised, "sk-proj-..." is three plain words no pattern matches), and -
 when the heard word had to be GUESSED from its place in the sentence - a
 word that does not resemble the alias the owner answered with ("hemen bilgisayarımda ... aç"
 answered "ev" must not teach "hemen = ev"). The pair form states both sides, so nothing is
@@ -58,10 +67,15 @@ from app.memory import service as memory_service
 from app.memory.embedding import Embedder
 from app.memory.errors import MemoryErrorClass, MemorySubsystemError
 from app.memory.models import Memory
-from app.memory.policy import VOCABULARY, Observation
+from app.memory.policy import VOCABULARY, Observation, find_secret
 from app.memory.types import MemoryStatus
 from app.operator import allowlists
-from app.voice.intents import normalize_transcript, rule_verb_words
+from app.voice.intents import (
+    normalize_transcript,
+    owned_by_a_table,
+    resolve_intent,
+    rule_verb_words,
+)
 from app.voice.understanding import fuzzy, policy
 from app.voice.understanding.combine import RuleResult
 from app.voice.understanding.normalize import NOUN, normalize
@@ -88,6 +102,7 @@ REASON_NOT_A_NAME: Final = "not_a_name"
 REASON_KNOWN_WORD: Final = "known_word"
 REASON_ALREADY_KNOWN: Final = "already_known"
 REASON_NOT_SIMILAR: Final = "not_similar"
+REASON_SECRET: Final = "secret_rejected"
 #: A heard word taken by POSITION is the mishearing only when it is at least this near the
 #: alias the owner answered with ("ofüs" ~ "ofis" 0.75, "evü" ~ "ev" 0.67; "hemen" ~ "ev" 0).
 GUESSED_WORD_MIN: Final = 0.6
@@ -341,7 +356,7 @@ def _machine_named(synonyms: Iterable[Synonym], tokens: Sequence[str]) -> Synony
 
 def app_for(tokens: Sequence[str]) -> str | None:
     """The application a word the owner taught names in this sentence, or None. Asked by the
-    rule table (``intents._app_open_match``) after the allow-list's own names found none."""
+    router (``intents._taught_app_open``) only for a sentence it left unrouted."""
     synonyms = active()
     if not synonyms:
         return None
@@ -376,7 +391,8 @@ def read_turn(
     before the confusion list, which is only a release artefact's opinion - unless the
     sentence already names a machine in a form the rule parser reads. Any other form goes to
     the layers with the vocabulary in the entity index. The evidence names the synonym that
-    was used."""
+    was used, and a turn whose APPLICATION only a taught word names is the vocabulary's
+    turn, not the rule tables': its layer says so."""
     synonyms = active() if vocabulary is None else tuple(vocabulary)
     tokens = normalize_transcript(text)[1]
     taught: Synonym | None = None
@@ -400,10 +416,15 @@ def read_turn(
     )
     used = [taught] if taught is not None else []
     application = rule.entities.get("app") if rule is not None else None
+    decided_app = False
     if application:
         named = _find(synonyms, tokens, KIND_APP)
         if named is not None and named.meant == application:
             used.append(named)
+            from app.operator.plans import resolve_app_alias
+
+            # The allow-list's own names say nothing of it: the taught word decided.
+            decided_app = resolve_app_alias(tuple(tokens)) != application
     if not used or decision.candidate is None:
         return decision
     candidate = replace(
@@ -413,6 +434,8 @@ def read_turn(
     device, layer = decision.device, decision.layer
     if taught is not None and device is not None and device.alias == taught.meant:
         device = DeviceBinding(device.alias, device.confidence, LAYER_VOCABULARY)
+        layer = LAYER_VOCABULARY
+    if decided_app and layer == policy.LAYER_RULE:
         layer = LAYER_VOCABULARY
     return replace(
         decision,
@@ -478,7 +501,9 @@ def correctable(
         "application": application,
         "band": decision.band,
         "device": decision.device.alias if decision.device is not None else None,
-        "heard_device": heard_device_word(text),
+        # The guard reads the sentence as SPOKEN: a key's pieces are plain words once
+        # normalised, and one of them would be kept here.
+        "heard_device": None if find_secret(text) is not None else heard_device_word(text),
         "at": now.isoformat().replace("+00:00", "Z"),
     }
 
@@ -546,6 +571,35 @@ def _is_router_word(word: str, kind: str) -> bool:
     return any(_same_word(word, app_word) for app_word in app_words)
 
 
+_VOWELS: Final = "aeıioöuü"
+_ACCUSATIVE: Final[dict[str, str]] = dict(zip(_VOWELS, "ıiıiuüuü", strict=True))
+
+
+def _accusative(word: str) -> str:
+    """ "dosya" -> "dosyayı", "şarkı" -> "şarkıyı"; "müzik" -> "müziki" (the softened
+    consonant is not needed: the tables match by stem). A word without a vowel as it is."""
+    vowels = [ch for ch in word if ch in _VOWELS]
+    if not vowels:
+        return word
+    return word + ("y" if word[-1] in _VOWELS else "") + _ACCUSATIVE[vowels[-1]]
+
+
+def _router_opens(heard: str) -> bool:
+    """A rule table owns the open sentence of ``heard`` ("dosya aç", "dosyayı aç" -> the
+    artifact table; "müzik aç" -> the media table). The router itself is asked - its tables
+    as they are today, no list beside them - and with no vocabulary, so a word the owner
+    taught is not what answers. The media table's guess at a title of two unknown words is
+    no ownership (``intents.owned_by_a_table``)."""
+    token = _active.set(())
+    try:
+        return any(
+            owned_by_a_table(resolve_intent(f"{form} aç"))
+            for form in dict.fromkeys((heard, _accusative(heard)))
+        )
+    finally:
+        _active.reset(token)
+
+
 def _why_not(heard: str | None, kind: str, aliases: Iterable[str]) -> str | None:
     """Why ``heard`` may not become a synonym, or None when it may."""
     if not heard or not heard.split():
@@ -578,6 +632,11 @@ def _why_not(heard: str | None, kind: str, aliases: Iterable[str]) -> str | None
     from app.operator.plans import resolve_app_alias
 
     if resolve_app_alias(tuple(words)) is not None:
+        return REASON_KNOWN_WORD
+    # As an APPLICATION, a word whose open sentence a rule table already routes ("dosya",
+    # "müzik", "şarkı"): the lesson would never be read there (the router asks a taught
+    # word last), and where the table steps aside it would open the wrong thing.
+    if kind == KIND_APP and _router_opens(" ".join(words)):
         return REASON_KNOWN_WORD
     return None
 
@@ -644,9 +703,15 @@ def correction_turn(
         return None
     pair = _PAIR.match(" ".join(tokens))
     if pair is not None:
-        return _pair_correction(
+        stated = _pair_correction(
             pair.group("said").split(), pair.group("meant").split(), synonyms, aliases
         )
+        if stated is not None and find_secret(text) is not None:
+            # Read off the sentence as SPOKEN: normalised, "sk-proj-..." is three plain
+            # words no pattern matches. Nothing of it is carried on - no word, no row, no
+            # proposal file name.
+            return replace(stated, heard=None, reason=REASON_SECRET)
+        return stated
     if not _fresh(kept, now):
         return None
     refused = False
@@ -829,6 +894,7 @@ __all__ = [
     "KIND_DEVICE",
     "LAYER_VOCABULARY",
     "PROPOSALS_DIR_ENV",
+    "REASON_SECRET",
     "Correction",
     "Learned",
     "Synonym",

@@ -32,7 +32,7 @@ from app.memory.models import (
 )
 from app.memory.policy import ACTION_IGNORE, Observation, decide
 from app.memory.types import Actor, MemoryClass, WriteStage
-from app.voice.intents import Intent, resolve_intent
+from app.voice.intents import Intent, owned_by_a_table, resolve_intent
 from app.voice.understanding import corrections, normalize
 from app.voice.understanding import policy as understanding_policy
 from app.voice.understanding.semantic import SemanticEngine
@@ -919,3 +919,253 @@ def test_relay_a_sentence_the_rule_tables_route_is_never_read_as_a_correction(
     )
     with world.factory() as session:
         assert [row.text for row in _vocabulary_rows(session)] == ["şirket = iş (cihaz)"]
+
+
+# --- a taught application word never takes a sentence another table owns ---------------------
+
+#: The inspector's four (2026-10-02): each is another rule table's sentence, HIGH, and each
+#: was ``app_open`` HIGH 1.0 after "ona not defteri deme, dosya de" (and müzik, şarkı).
+OWNED_SENTENCES = (
+    ("Dosyayı aç.", "artifact_open"),
+    ("Dosyayı aç ve oku.", "document_read"),
+    ("Müzik aç.", "media_play"),
+    ("Şarkıyı aç.", "media_play"),
+)
+OWNED_WORDS = (("dosya", "notepad"), ("müzik", "calc"), ("şarkı", "mspaint"))
+
+
+def test_a_taught_application_word_is_asked_only_when_the_whole_router_answers_none() -> None:
+    """Red before: ``app_for`` was asked inside the application table, which stands BEFORE
+    the document, artifact and media tables - so a row "dosya = Not Defteri" turned "Dosyayı
+    aç" into ``app_open``. Whatever the rows hold, a taught word is the LAST reading."""
+    before = [resolve_intent(sentence) for sentence, _ in OWNED_SENTENCES]
+    assert [r.intent.value for r in before] == [owner for _, owner in OWNED_SENTENCES]
+    token = corrections.activate(
+        (
+            *(corrections.Synonym("app", heard, meant) for heard, meant in OWNED_WORDS),
+            corrections.Synonym("app", "hesaplayıcı", "calc"),
+            corrections.Synonym("app", "kapı", "notepad"),
+        )
+    )
+    try:
+        after = [resolve_intent(sentence) for sentence, _ in OWNED_SENTENCES]
+        assert [(r.intent, r.matched, r.application) for r in after] == [
+            (r.intent, r.matched, r.application) for r in before
+        ]
+        # ... and a sentence the whole router leaves unrouted is still read by the lesson:
+        # the words as heard, the polite request and the all-caps transcript.
+        for sentence in ("Hesaplayıcıyı aç.", "Kapıyı aç.", "HESAPLAYICIYI AÇ"):
+            taught = resolve_intent(sentence)
+            assert taught.intent is Intent.APP_OPEN, sentence
+            assert taught.matched.startswith("vocabulary:"), sentence
+        assert resolve_intent("Kapıyı aç.").application == "notepad"
+        asked = resolve_intent("Hesaplayıcıyı açar mısın?")
+        assert (asked.intent, asked.application) == (Intent.APP_OPEN, "calc")
+        polite = resolve_intent("Hesaplayıcıyı açabilir misin?")
+        assert (polite.intent, polite.application) == (Intent.APP_OPEN, "calc")
+        assert polite.route_repair == "polite"
+        # No open verb, no application: the word alone opens nothing.
+        assert resolve_intent("Hesaplayıcı nerede?").intent is not Intent.APP_OPEN
+    finally:
+        corrections.deactivate(token)
+
+
+def test_a_taught_word_outranks_only_the_guess_at_a_title_nothing_else_wanted() -> None:
+    """The media table's last resort reads ANY two unknown words and "aç" as a title, so a
+    strict "only when the router answers nothing" would make "Ofis bilgisayarında
+    hesaplayıcıyı aç" a YouTube search - the very sentence ADR-0224 is about. That guess
+    claims only "a name nothing else wanted"; the owner's lesson wants it. Nothing else is
+    outranked: a title with no taught word in it stays the media table's."""
+    named = "Ofis bilgisayarında hesaplayıcıyı aç."
+    guessed = resolve_intent(named)
+    assert guessed.intent is Intent.MEDIA_PLAY and not owned_by_a_table(guessed)
+    assert owned_by_a_table(resolve_intent("Müzik aç.")), "a media WORD is the table's own"
+    assert not owned_by_a_table(resolve_intent("Kapıyı aç."))
+    token = corrections.activate((corrections.Synonym("app", "hesaplayıcı", "calc"),))
+    try:
+        taught = resolve_intent(named)
+        assert (taught.intent, taught.application) == (Intent.APP_OPEN, "calc")
+        assert taught.media_query is None and taught.confidence == 1.0
+        assert taught.capability == resolve_intent("Hesap makinesini aç.").capability
+        title = resolve_intent("Güldür Güldür aç.")
+        assert title.intent is Intent.MEDIA_PLAY and title.media_query
+        played = resolve_intent("Hesaplayıcı şarkısını çal.")  # a media word and a play verb
+        assert played.intent is Intent.MEDIA_PLAY
+    finally:
+        corrections.deactivate(token)
+
+
+@pytest.mark.parametrize("word", ["dosya", "müzik", "şarkı", "dosyayı", "müziği"])
+def test_a_word_another_rule_table_routes_is_no_name_for_an_application(db, tmp_path, word) -> None:
+    """Red before: "Ona not defteri deme, dosya de." was written, silently and durably. A
+    word the router already reads in an open sentence is a known word - asked of the router
+    itself (the sentence "<word> aç" and its accusative), not of a list."""
+    correction = corrections.correction_turn(None, f"Ona not defteri deme, {word} de.", now=NOW)
+    assert correction is not None and (correction.kind, correction.meant) == ("app", "notepad")
+    assert correction.reason == "known_word" and not correction.learnable
+    learned = corrections.learn(db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path)
+    assert not learned.written
+    assert _vocabulary_rows(db) == [] and list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("word", ["hesaplayıcı", "kapı", "karalama"])
+def test_a_word_no_rule_table_routes_is_still_taught(db, tmp_path, word) -> None:
+    """The refusal above asks the router, so a word it leaves unrouted stays teachable - and
+    it asks the rule TABLES: a word the owner already taught is not what answers."""
+    correction = corrections.correction_turn(None, f"Ona not defteri deme, {word} de.", now=NOW)
+    assert correction is not None and correction.learnable, (word, correction)
+    assert corrections.learn(
+        db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path
+    ).written
+    assert len(corrections.vocabulary(db)) == 1
+    longer = corrections.correction_turn(
+        None, f"Ona hesap makinesi deme, {word} zımbırtısı de.", now=NOW
+    )
+    assert longer is not None and longer.learnable, longer
+    assert (longer.heard, longer.meant) == (f"{word} zımbırtısı", "calc")
+
+
+# --- a turn an application synonym decided is the vocabulary's, not the rule's --------------
+
+
+def test_a_turn_decided_by_an_application_synonym_records_the_vocabulary_layer(
+    db, tmp_path
+) -> None:
+    """Red before: layer ``rule``, confidence 1.0 - the calibration data could not tell that
+    a word the owner taught, not a rule table, decided the turn."""
+    correction = corrections.correction_turn(
+        None, "Ona hesap makinesi deme, hesaplayıcı de.", now=NOW
+    )
+    assert corrections.learn(
+        db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path
+    ).written
+    intent, decision = _read(db, "Hesaplayıcıyı aç.")
+    assert intent.intent is Intent.APP_OPEN and decision.band == "high" and decision.acts
+    assert decision.layer == corrections.LAYER_VOCABULARY
+    assert decision.audit_block()["layer"] == "vocabulary"
+    # The allow-list's own name is the rule's, with or without the row ...
+    _, plain = _read(db, "Hesap makinesini aç.")
+    assert plain.layer == understanding_policy.LAYER_RULE
+    assert not any("vocabulary" in line for line in plain.candidate.evidence)
+    # ... and a device the sentence did not name is still asked for, by its own layer.
+    _, asked = _read(db, "Ofüs bilgisayarında hesaplayıcıyı aç.")
+    assert asked.band == "low" and asked.layer != corrections.LAYER_VOCABULARY
+
+
+# --- the secret guard reads the sentence as it was SPOKEN -----------------------------------
+
+SPOKEN_SECRET = "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        f"Ona chrome deme, {SPOKEN_SECRET} de.",
+        f"Ona {SPOKEN_SECRET} deme, chrome de.",
+        f"Ona ofis deme, {SPOKEN_SECRET} de.",
+    ],
+)
+def test_a_secret_in_the_spoken_sentence_is_refused_before_it_is_a_word(
+    db, tmp_path, sentence
+) -> None:
+    """Red before: the guard saw the NORMALISED word ("sk proj abc..."), which no secret
+    pattern matches, so the key became a memory row and a proposal file name."""
+    correction = corrections.correction_turn(None, sentence, now=NOW)
+    assert correction is not None
+    assert correction.reason == "secret_rejected" and not correction.learnable
+    assert correction.heard is None  # nothing of it is carried any further
+    learned = corrections.learn(db, EMBEDDER, correction, session_id="s", proposals_dir=tmp_path)
+    assert (learned.written, learned.reason) == (False, "secret_rejected")
+    assert _vocabulary_rows(db) == [] and list(tmp_path.iterdir()) == []
+    assert corrections.vocabulary(db) == ()
+
+
+def test_the_word_kept_for_a_correction_is_never_part_of_a_secret(db) -> None:
+    """The other way a heard word reaches ``learn``: kept from the sentence before, by
+    position. A sentence carrying a secret keeps no word at all."""
+    sentence = f"{SPOKEN_SECRET} bilgisayarında hesap makinesini aç."
+    assert corrections.heard_device_word(sentence) == "abcdefghijklmnopqrstuvwxyz123456"
+    intent, decision = _read(db, sentence)
+    kept = _kept(sentence, intent, decision)
+    assert kept is not None and kept["heard_device"] is None
+    correction = corrections.correction_turn(kept, "ofis bilgisayarında", now=NOW)
+    assert correction is not None and correction.device == "ofis" and not correction.learnable
+    plain = _kept(MISHEARD, *_read(db, MISHEARD))
+    assert plain["heard_device"] == "ofüs"
+
+
+def test_relay_a_taught_application_word_never_takes_over_an_owned_sentence(
+    monkeypatch, tmp_path
+) -> None:
+    """Red before, through the real relay: after "Ona not defteri deme, dosya de." (and
+    müzik, şarkı) the four sentences were ``app_open`` HIGH 1.0 and the tool call ran
+    ``desktop.open_application``."""
+    from app.voice.realtime_sessions.models import RealtimeSessionRow
+    from tests.unit.test_operator_open_application_fallback import _bound_session, _say, _tool
+
+    world = _relay_world(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")
+
+    def heard(sentence: str) -> tuple[Any, ...]:
+        said = _say(world.client, sid, sentence)["resolved_intents"][0]
+        with world.factory() as session:
+            record = session.get(RealtimeSessionRow, uuid.UUID(sid)).context_json["last_utterance"]
+        return said["intent"], said["band"], said["tool"], record["understanding"]["layer"]
+
+    before = {sentence: heard(sentence) for sentence, _ in OWNED_SENTENCES}
+    assert [reading[0] for reading in before.values()] == [owner for _, owner in OWNED_SENTENCES]
+
+    # 1. The lesson itself is refused: the router already reads the word.
+    for word in ("dosya", "müzik", "şarkı"):
+        said = _say(world.client, sid, f"Ona not defteri deme, {word} de.")["resolved_intents"][0]
+        assert said["intent"] == "none", word
+        with world.factory() as session:
+            assert _vocabulary_rows(session) == [], word
+    assert list((tmp_path / "proposals").iterdir()) == []
+    assert {sentence: heard(sentence) for sentence, _ in OWNED_SENTENCES} == before
+
+    # 2. ... and whatever the rows hold (an older release wrote them, an owner edit): a
+    #    taught word is read only where the whole router answered nothing.
+    with world.factory() as session:
+        for word, app_id in OWNED_WORDS:
+            assert corrections.learn(
+                session,
+                EMBEDDER,
+                corrections.Correction(kind="app", heard=word, meant=app_id),
+                session_id=sid,
+            ).written
+        assert len(_vocabulary_rows(session)) == 3
+    assert {sentence: heard(sentence) for sentence, _ in OWNED_SENTENCES} == before
+    assert world.commands.calls == []
+
+    # 3. A word no table owns is taught, opens its application - and says which layer did.
+    taught = _say(world.client, sid, "Ona hesap makinesi deme, hesaplayıcı de.")
+    assert taught["resolved_intents"][0]["intent"] == "none"
+    assert heard("Hesaplayıcıyı aç.") == ("app_open", "high", "operator.app_open", "vocabulary")
+    call = _tool(world.client, sid, "operator.app_open", {"application": "Hesap Makinesi"})
+    assert call["status"] == "succeeded", call
+    assert [c["payload"].get("application") for c in world.commands.calls] == ["calc"]
+    assert heard("Hesap makinesini aç.")[3] == "rule"
+    # ... on the machine the sentence names too (the media table's bare-title guess would
+    # have made this a search for "hesaplayıcıyı").
+    named = heard("Ev bilgisayarında hesaplayıcıyı aç.")
+    assert named == ("app_open", "high", "operator.app_open", "vocabulary")
+    with world.factory() as session:
+        record = session.get(RealtimeSessionRow, uuid.UUID(sid)).context_json["last_utterance"]
+    assert record["device_targets"] == ["ev"]
+
+
+def test_relay_a_spoken_secret_is_never_written_and_never_a_file_name(
+    monkeypatch, tmp_path
+) -> None:
+    from tests.unit.test_operator_open_application_fallback import _bound_session, _say
+
+    world = _relay_world(monkeypatch, tmp_path)
+    sid = _bound_session(world, "GMKADIRAKBABA")
+    said = _say(world.client, sid, f"Ona chrome deme, {SPOKEN_SECRET} de.")["resolved_intents"][0]
+    assert said["intent"] == "none"
+    with world.factory() as session:
+        assert _vocabulary_rows(session) == []
+        texts = session.execute(select(Memory.text)).scalars().all()
+        assert not any("abcdefghijklmnopqrstuvwxyz" in text for text in texts)
+    assert list((tmp_path / "proposals").iterdir()) == []

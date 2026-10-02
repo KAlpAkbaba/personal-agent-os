@@ -1978,6 +1978,17 @@ def record_client_events(
                         "reason": learned.reason,
                         "proposed": learned.proposal_written,
                     }
+            elif (
+                correction is not None
+                and correction.reason == understanding_corrections.REASON_SECRET
+            ):
+                # A lesson refused for a secret in the spoken sentence is said, not hidden.
+                meta["understanding_correction"] = {
+                    "kind": correction.kind,
+                    "written": False,
+                    "reason": correction.reason,
+                    "proposed": False,
+                }
             reference = resolve_deictic_reference(db, intent.tokens, now=now)
             ctx["last_intent"] = intent.intent.value
             # B26 req 749/750: what the router decided, recorded without the owner's words,
