@@ -154,9 +154,30 @@ function Save-Queue {
     # lead, the feeder) is theirs: the cycle's write of THAT task is dropped, the others are
     # written, and the next pass reads the store's version. It used to end the whole cycle.
     foreach ($id in @(Save-TeamQueueApi -Store $apiStore -Queue $Document -SkipStale)) {
+        # Theirs until the store is read again: nothing is started for it on the copy we have.
+        $script:staleIds[[string]$id] = $true
         $note = "${id}: depoda başkası değiştirdi; döngünün yazdığı bırakıldı, depodaki hali geçerli"
         if (@($script:cycle.risks) -notcontains $note) { Add-CycleNote -List "risks" -Text $note }
     }
+}
+
+function Test-TaskMovedInStore {
+    <# Did somebody else write this task since the cycle read it? Asked when a run of the task
+       ends, BEFORE its result is applied: a merge into the integration branch cannot be taken
+       back by a write the store then refuses (a task the lead stopped while its inspector ran
+       was merged, 2026-10-02). The whole queue is read and NOT judged: a card that breaks the
+       protocol somewhere else must not hide this task's stop. A store that does not answer
+       says nothing: the result is applied and its write fails or is refused as before. #>
+    param($Task)
+    if (-not $useApi) { return $false }
+    $id = [string]$Task.id
+    if ($script:staleIds.ContainsKey($id)) { return $true }
+    $known = $apiStore.Baseline[$id]
+    if ($null -eq $known) { return $false }
+    try { $now = Get-TeamQueueApi -Store $apiStore } catch { return $false }
+    $theirs = @(Get-TeamTasks -Queue $now | Where-Object { [string]$_.id -eq $id })
+    if (@($theirs).Count -eq 0) { return $true }
+    return ([string]$theirs[0].updated_at -ne [string]$known.Updated)
 }
 
 function Sync-Queue {
@@ -184,6 +205,8 @@ function Sync-Queue {
     }
     Set-TeamQueueBaseline -Store $apiStore -Queue $fresh
     $script:queue = $fresh
+    # Every task is the store's version again: nothing is "theirs" any more.
+    $script:staleIds.Clear()
 }
 
 $queue = if ($useApi) { Read-TeamQueueApi -Store $apiStore } else { Read-TeamJson -Path $queuePath }
@@ -227,6 +250,9 @@ $statusFailed = $false
 $stopNoted = $false
 # The store could not be read again before a pass (Sync-Queue): said once in the report.
 $syncNoted = $false
+# The tasks whose write the store refused (somebody else wrote them) since the queue was last
+# read: nothing is started for them, and a run's result is not applied, until it is read again.
+$staleIds = @{}
 # The model policy (ADR-0214 addendum 7). $modelSetting is read below, once the report can be
 # written. $limitedModels is what the runs said is limited: model id -> { until, type, seen_at };
 # a model in it starts no run until its reset. It lives across cycles in team/limits.json (an
@@ -767,6 +793,7 @@ try {
         elseif (-not $done.Ok) { Add-CycleNote -List "stops" -Text "araştırmacı: $($done.Outcome)" }
         else { [System.IO.File]::WriteAllText($researchMarker, (Get-TeamTimestamp), (New-Object System.Text.UTF8Encoding($false))) }
         $known =@(Get-TeamTasks -Queue $queue | ForEach-Object { [string](Get-TeamProperty -InputObject $_ -Name "proposal" -Default "") })
+        $newIdeas = New-Object System.Collections.ArrayList
         foreach ($file in @(Get-ChildItem -LiteralPath $proposals -Filter *.md -File | Sort-Object -Property Name)) {
             $relative = "team/proposals/$($file.Name)"
             if ($known -contains $relative) { continue }
@@ -781,8 +808,17 @@ try {
                 created_at = $now; updated_at = $now; proposal = $relative
             }
             Set-TeamProperty -InputObject $queue -Name "tasks" -Value @(@(Get-TeamTasks -Queue $queue) + $task)
+            [void]$newIdeas.Add($file)
         }
         Save-Queue -Document $queue
+        # The idea's text goes where the queue is kept (ADR-0236): the Onay Merkezi's "Detay"
+        # shows it. Two ideas waited for the owner with no text on 2026-10-02 - nothing posted it.
+        if ($useApi) {
+            foreach ($file in $newIdeas) {
+                try { Send-TeamProposalApi -Store $apiStore -Name $file.Name -Text ([System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8)) }
+                catch { Add-CycleNote -List "risks" -Text ("fikrin metni depoya yazılamadı ($($file.Name)): " + (([string]$_.Exception.Message) -replace '\s+', ' ')) }
+            }
+        }
     }
 
     # ---------------------------------------------------------------- the lead's split
@@ -836,6 +872,8 @@ try {
         $runnable = New-Object System.Collections.ArrayList
         $moved = $false
         foreach ($task in (Get-TeamTasks -Queue $queue)) {
+            # Its write was refused and the store could not be read again yet: it is not ours.
+            if ($staleIds.ContainsKey([string]$task.id)) { continue }
             $next = Get-TeamNextRole -Task $task
             if ($next.Kind -ne "rest" -and $next.Kind -ne "gate") {
                 # A task whose dependencies are not on main yet waits, and says so once.
@@ -876,7 +914,14 @@ try {
             }
             [void]$runnable.Add([pscustomobject]@{ Task = $task; Next = $next })
         }
-        if ($moved) { Save-Queue -Document $queue }
+        if ($moved) {
+            Save-Queue -Document $queue
+            # A move the store refused: the task was written by somebody else between our read
+            # and this write (the lead stopped it, the owner decided). It is not run on our copy.
+            $ours = New-Object System.Collections.ArrayList
+            foreach ($item in $runnable) { if (-not $staleIds.ContainsKey([string]$item.Task.id)) { [void]$ours.Add($item) } }
+            $runnable = $ours
+        }
         if (@($runnable).Count -eq 0) {
             if ($moved) { continue }
             break
@@ -939,6 +984,15 @@ try {
             $task = $startedRun.Task
             $role = [string]$startedRun.Role
             $done = Complete-RoleRun -Started $startedRun
+            if (Test-TaskMovedInStore -Task $task) {
+                # Their word stands for the RUN too, not only for the row: no merge, no state, no
+                # report entry (the report is in its file). What the run said about a MODEL's
+                # limit is still true. The next pass reads the store's version of the task.
+                if ($done.UsageLimited) { Register-Limit -Done $done -Key "$($task.id)/$role" }
+                $staleIds[[string]$task.id] = $true
+                Add-CycleNote -List "risks" -Text "$($task.id): koşu ($role) sürerken depoda başkası değiştirdi; koşunun sonucu uygulanmadı (raporu: $($done.File))"
+                continue
+            }
             if ($role -eq "inspector" -and $done.Ok) {
                 # The inspector's rule holds against the tool too: an inspection the tool itself
                 # ran on a weaker model than the worker's gives no verdict. The model that was

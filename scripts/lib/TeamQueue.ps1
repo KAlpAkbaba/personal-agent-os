@@ -184,6 +184,12 @@ function Test-TeamQueue {
             if ($text -match '^[\\/]' -or $text -match '\.\.' -or $text -match '^[A-Za-z]:') {
                 [void]$problems.Add("${label}: the area '$text' must be a path inside the repository")
             }
+            elseif (@("", ".") -contains (Get-TeamAreaKey -Area $text)) {
+                # '*', '.', './': everything. An area names files or folders; "the whole
+                # repository" would hold every other task out of work, or - compared by another
+                # key - none (the two rules disagreed on exactly these, 2026-10-02).
+                [void]$problems.Add("${label}: the area '$text' is the whole repository; an area names files or folders inside it")
+            }
         }
         $branch = [string](Get-TeamProperty -InputObject $task -Name "branch" -Default "")
         if ($branch -match 'hand-gestures' -or $branch -eq "main") {
@@ -207,17 +213,18 @@ function Test-TeamQueue {
             if (@($taskAreas).Count -eq 0) {
                 [void]$problems.Add("${label}: a task that is being worked on names its file area")
             }
-            # Section 4: two concurrent tasks never share an area.
+            # Section 4: two concurrent tasks never share an area. ONE rule for it
+            # (Test-TeamAreasOverlap): the split's judge, the cycle's holder check
+            # (Get-TeamAreaHolders) and this one compare the same key.
             foreach ($area in $taskAreas) {
-                $key = ([string]$area).TrimEnd("/", "*").ToLowerInvariant()
                 foreach ($other in @($areas.Keys)) {
-                    if ($key -eq $other -or $key.StartsWith($other + "/") -or $other.StartsWith($key + "/")) {
+                    if (Test-TeamAreasOverlap -First ([string]$area) -Second ([string]$other)) {
                         [void]$problems.Add("${label}: the area '$area' overlaps the area of $($areas[$other])")
                     }
                 }
             }
             foreach ($area in $taskAreas) {
-                $areas[([string]$area).TrimEnd("/", "*").ToLowerInvariant()] = $label
+                $areas[(Get-TeamAreaKey -Area ([string]$area))] = $label
             }
         }
     }
@@ -1196,6 +1203,12 @@ function Send-TeamReportApi {
     <# The report as text, so the Onay Merkezi on the Cloud Core can show it. #>
     param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
     [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/reports" -Body ([ordered]@{ name = $Name; text = $Text }))
+}
+
+function Send-TeamProposalApi {
+    <# One file of team/proposals/ as text, so the Onay Merkezi's "Detay" has it (ADR-0236). #>
+    param([Parameter(Mandatory = $true)]$Store, [Parameter(Mandatory = $true)][string]$Name, [Parameter(Mandatory = $true)][string]$Text)
+    [void](Invoke-TeamApi -Store $Store -Method "POST" -Path "/v1/team/queue/proposals" -Body ([ordered]@{ name = $Name; text = $Text }))
 }
 
 function Get-TeamModelsApi {

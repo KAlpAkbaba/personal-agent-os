@@ -18880,3 +18880,39 @@ once; an approved task whose files a task in work holds waits and is run after i
 two as written; the "read once" assertion turned into "read again before each pass"). Four mutations RED, `cycle.ps1`
 restored from a backup copy with sha256 equal before and after: the re-read removed; the stale write fatal again; a broken
 queue adopted; the holder check removed. PROVEN_REAL is the next real cycle picking up a card stored while it runs.
+
+**Addendum 11 after the inspector's return of `3d52902e` (2026-10-02).** The first form held for the ROW and not for the
+RUN, and three of its claims had no test. What changed:
+
+4. **A task whose write the store refused is not the cycle's until the store is read again** (`$staleIds`). It leaves the
+   pass's runnable tasks at once - the lead stopped a task between the cycle's read and its first save, the write was
+   refused, and a worker was started on the stale copy all the same - and it is not looked at again in any pass before a
+   re-read succeeds. One refused write per change, not one per save.
+5. **When a run ends, the store is asked before the result is applied** (`Test-TaskMovedInStore`: the whole queue is read
+   and NOT judged, so a broken card elsewhere cannot hide this task's stop; the task's `updated_at` is compared with the
+   version the cycle wrote from). If somebody else wrote the task while its run was in flight, the result is NOT applied:
+   no merge, no state, no report entry - the report stays in its file and the report of the cycle names it. The merge into
+   the integration branch used to run BEFORE the write the store then refused: a task the lead stopped while its inspector
+   ran was merged, and the lead gates and merges that branch. What the run said about a MODEL's limit is still registered.
+   **The price, accepted:** a card the lead edits while its worker runs loses that run - the worker is started again from
+   the store's version (the edit may have changed what is asked). An edit to a running task costs one run.
+   A store that does not answer at that moment says nothing: the result is applied and its write fails as before.
+6. **One area rule.** `Test-TeamQueue` compared areas with its own key and disagreed with `Get-TeamAreaHolders` on 4 of 17
+   pairs - in the dangerous direction: the cycle moved the task and the judge refused the queue it had made. Both now use
+   `Get-TeamAreaKey` / `Test-TeamAreasOverlap`, the split's rule. An area that is the whole repository (`*`, `.`, `./`)
+   is refused as an area: compared by one key it held every task out of work, by the other none. (The server's schema
+   still accepts any non-empty string: the protocol's meaning is judged by the cycle, as the path rule beside it is.)
+7. **Only a 409 is "somebody else's"**: any other answer to a task's write still ends the cycle (held by a test now).
+8. **The researcher's ideas reach the store with their text** (`Send-TeamProposalApi` after the idea is queued; a failed
+   post is a line in the report, not a stop). ADR-0236 gave the store the place and the page the "Detay"; nothing posted
+   the text, and on 2026-10-02 two ideas waited for the owner with `proposal_text` of 0 characters (posted by hand).
+
+**Evidence, second form.** Thirteen tests in `scripts/tests/team-cycle.tests.ps1` (the fake listener's second writer now
+also acts "when the live status names run X", and the store can be broken on purpose: `faults`): the four of the first
+form; a refused move is not run (RED before); a stop during the inspection is not merged (RED before); a card edited
+during the worker's run; only a 409 is skipped; a store that stops answering; an idea's text is posted (RED before); a
+returned task and an inspecting task hold their files - proven by WHAT WAS IN FLIGHT during each run (the status
+snapshot), because the order of the starts is the same when the second worker starts beside the first's inspector; the
+holder rule after the integrator; the two area rules agree on fourteen pairs and refuse five spellings of "everything"
+(RED before). Thirteen mutations, the inspector's three survivors among them, each restored from a backup copy with
+sha256 equal: all RED.
