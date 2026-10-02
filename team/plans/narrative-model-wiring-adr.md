@@ -24,10 +24,16 @@ spoke.
    session has no usable key), `not_asked` (an empty window or "no failures" - a constant, no
    narrator phrases it), `timeout`, `provider_error`, the provider's own error class
    (`chat_unavailable`, `chat_busy`, `chat_refused`, `chat_model_retired`), `model_unavailable`,
-   `audit_rejected`. `model` is recorded only when the stored account IS the model's draft,
-   alone or followed by the failures the auditor put back. The provider's text is compared
-   in memory and never written: the detail holds two words. The same pair is logged as
-   `narrative_narrator`.
+   `audit_rejected`. `model` is recorded only when the stored account is exactly the model's
+   draft, or the draft followed by the auditor's own repair (the draft, then
+   `" Ayrıca başarısız: "` - `auditor.repair`'s marker). A bare prefix match is NOT enough: a
+   rejected draft can be the opening of the rule text that replaced it ("2 iş başarısız
+   oldu."), and that is `rule` / `audit_rejected` (inspector's finding on `f4da5aeb`, fixed
+   and pinned by a test). The inference is from text because `tell()` returns text alone;
+   one case stays open: a rejected draft that the rule text continues with that same
+   marker, which needs a failed row whose own ledger summary contains the marker. The
+   provider's text is compared in memory and never written: the detail holds two words. The
+   same pair is logged as `narrative_narrator`.
 
 **What switching it on means - why the default is off and the switch is the owner's.**
 - Every "bu hafta ne oldu" / "ne başarısız oldu"-as-narrative ask makes ONE synchronous
@@ -61,7 +67,7 @@ spoke.
 difference is the two new keys on narrative `voice.explained` rows (`rule`, `setting_off`).
 A test factory replaced as `lambda db: source` keeps working while the setting is off.
 
-**Evidence.** `tests/unit/test_narrative_model_wiring.py`, 15 cases through the real
+**Evidence.** `tests/unit/test_narrative_model_wiring.py`, 17 cases through the real
 application object's tool-call route: PROVEN_AUTOMATED (fake provider; the real
 `AnthropicChatProvider` over a replaced transport). The real model: NOT_RUN. The owner's
 voice with the setting on: READY_FOR_OWNER (the decision to switch it on, and line B).

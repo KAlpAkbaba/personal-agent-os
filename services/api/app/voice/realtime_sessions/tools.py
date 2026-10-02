@@ -2179,6 +2179,8 @@ def activity_explain(ctx: ToolContext, arguments: dict[str, Any]) -> dict[str, A
 
 NARRATOR_MODEL = "model"
 NARRATOR_RULE = "rule"
+#: how ``narrative.auditor.repair`` continues a draft it put a failure back into.
+_NARRATIVE_REPAIR_MARKER = " Ayrıca başarısız: "
 
 
 class _NarratorWitness:
@@ -2241,8 +2243,9 @@ def _narrator_of(
     ctx: ToolContext, record: Any, witness: _NarratorWitness | None
 ) -> tuple[str, str | None] | None:
     """(narrator, reason) for a narrative answer; None for any other explain - no narrator
-    spoke. ``model`` only when the spoken account IS the model's draft (alone, or with the
-    failures the auditor put back after it); every other outcome is the rule narrator's,
+    spoke. ``model`` only when the spoken account IS the model's draft: alone, or followed
+    by the auditor's own repair (its marker, not any text - a rejected draft can be the
+    opening of the rule text that replaced it). Every other outcome is the rule narrator's,
     with the reason."""
     from app.explain.engine import QUERY_NARRATIVE
 
@@ -2257,7 +2260,7 @@ def _narrator_of(
     if witness.failure is not None:
         return NARRATOR_RULE, witness.failure
     told = record.briefing.executive[0].text if record.briefing.executive else ""
-    if told == witness.draft or told.startswith(witness.draft + " "):
+    if told == witness.draft or told.startswith(witness.draft + _NARRATIVE_REPAIR_MARKER):
         return NARRATOR_MODEL, None
     return NARRATOR_RULE, "audit_rejected"
 

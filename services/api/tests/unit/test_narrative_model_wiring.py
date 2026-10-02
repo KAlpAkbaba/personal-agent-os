@@ -283,6 +283,31 @@ def test_on_a_draft_that_invents_a_number_is_replaced_by_the_rule_text(wired):
     assert "silindi" not in json.dumps(note, ensure_ascii=False)
 
 
+@pytest.mark.parametrize("upto", [". ", " Tamamlananlar:"], ids=["first-sentence", "failures"])
+def test_on_a_rejected_draft_that_opens_the_rule_text_is_still_the_rule_narrators(wired, upto):
+    """The draft IS the opening of the rule text ("2 iş başarısız oldu.", or that plus the
+    failure sentences) and skips the completed areas, so the auditor rejects it and the rule
+    text is spoken. What was spoken then starts with the draft - and the note must still say
+    the rule narrator spoke: only the auditor's own repair may follow a model's draft."""
+    client, _identity, runtime, _sideband, _issued, engine = wired
+    provider = _Provider()
+    runtime.register_live(settings=_settings(enabled=True), chat_provider=provider)
+    _seed(engine)
+    sid = _create(client)["session_id"]
+    expected = _rule_text(engine)
+    assert expected.startswith("2 iş başarısız oldu. ")
+    provider.speech = expected[: expected.index(upto)].rstrip() + ("." if upto == ". " else "")
+    assert expected.startswith(provider.speech + " "), "the trap is set"
+    _ask(client, sid)
+
+    assert len(provider.questions) == 1
+    told = _told(engine)
+    assert expected in told
+    assert "Ayrıca başarısız" not in told, "the rule text, not a repaired draft"
+    note = _note(engine)
+    assert (note["narrator"], note["narrator_reason"]) == ("rule", "audit_rejected")
+
+
 @pytest.mark.parametrize(
     "error",
     [TimeoutError("timed out"), httpx.ReadTimeout("timed out")],
