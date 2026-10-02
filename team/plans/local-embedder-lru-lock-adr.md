@@ -46,12 +46,19 @@ Sakin makinede kilitsiz kod (ayrı süreç, iki koşu): önbellekte 762-771 ns, 
 
 ## Kanıt
 
-`tests/unit/test_memory_local_embedder.py` (4 yeni test). Sıra zorlanır, uyku yoktur: kapılı
-sahte model B'yi model çağrısının içinde tutar, önbelleğin `get`'i A'yı okuma ile tazeleme
-arasında tutar, kilidin gözlemcisi "bu iş parçacığı kilitte bekliyor"u olay yapar. Kilitsiz
-kodda (HEAD) 3/3 koşu `KeyError('metin 0')`. Mutasyonlar: kilit yok / yalnız arama kilitsiz /
-yalnız yazma kilitsiz → zorlanmış test KIRMIZI; model çağrısı kilidin içinde → "önbellekteki
-metin o sırada döner" ve "ikisi de hesaplar" KIRMIZI.
+`tests/unit/test_memory_local_embedder.py` (6 yeni test). Sıra zorlanır, uyku yoktur: kapılı
+sahte model B'yi model çağrısının içinde tutar; önbellek A'yı `move_to_end`'in TAM ÖNÜNDE
+(okuma yapıldı, tazeleme yapılmadı) ya da B'yi `popitem`'in önünde (yazdı, atmadı) tutar;
+kilidin gözlemcisi "bu iş parçacığı kilitte bekliyor"u olay yapar. Her kilit bölümünün
+bütünlüğü ayrı bir zorlanmış testle sabitlenir (denetleyici 2. tur bulgusu 1):
+
+- kilit yok (önceki kod) → üç zorlanmış test KIRMIZI, 2/2;
+- yalnız `get` kilitli, isabetin `move_to_end`'i dışarıda → "isabet ile tazeleme arası" KIRMIZI 3/3;
+- `popitem` kilidin dışında → "yazma ile atma arası" KIRMIZI 3/3 (`KeyError('metin 0')`);
+- model çağrısı kilidin içinde → "önbellekteki metin o sırada döner" ve "ikisi de hesaplar" KIRMIZI;
+- yazma yolundaki `move_to_end(key)` silindi → "iki kez hesaplanan metin en yeni giriş olur"
+  KIRMIZI 2/2. Satırın anlamı: aynı metni iki iş parçacığı hesapladıysa geç gelen yazma o
+  metnin en son kullanımıdır; yerinde bırakılsa ondan sonra kullanılan metinlerden önce atılırdı.
 
 ## Bilinen sınırlar
 

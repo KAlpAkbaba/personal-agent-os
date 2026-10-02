@@ -324,7 +324,7 @@ def test_the_provider_list_and_the_exports_carry_local() -> None:
 # ------------------------------------------------- one cache, several threads
 #
 # ADR-0245 builds the understanding index on a daemon thread through the memory runtime's
-# embedder while request threads embed with the same object. The three forced tests below
+# embedder while request threads embed with the same object. The five forced tests below
 # decide the interleaving themselves (events, never a sleep): each one fails or passes the
 # same way on every run. The stress run after them is the second opinion, never the proof.
 
@@ -340,12 +340,16 @@ def _text_vector(text: str, width: int) -> list[float]:
 
 class _GatedModel:
     """A model whose answer for the texts in ``held`` waits for ``release``: the test
-    decides how many threads are inside the model call, and when they leave it."""
+    decides how many threads are inside the model call, and when they leave it. With
+    ``once`` only the FIRST call for a held text waits; later calls answer at once."""
 
-    def __init__(self, width: int, *, held: Iterable[str] = (), expect: int = 1) -> None:
+    def __init__(
+        self, width: int, *, held: Iterable[str] = (), expect: int = 1, once: bool = False
+    ) -> None:
         self.width = width
-        self.held = frozenset(held)
+        self.held = set(held)
         self.expect = expect
+        self.once = once
         self.inside = 0
         self.first_inside = threading.Event()
         self.all_inside = threading.Event()
@@ -357,6 +361,8 @@ class _GatedModel:
         for text in documents:
             if text in self.held:
                 with self._guard:
+                    if self.once:
+                        self.held.discard(text)
                     self.inside += 1
                     self.first_inside.set()
                     if self.inside >= self.expect:
@@ -435,21 +441,53 @@ def _observe_lock(embedder: LocalEmbedder, waiting: threading.Event) -> _Observe
     return observed
 
 
-class _HeldLookupCache(OrderedDict):  # type: ignore[type-arg]
-    """The embedder's cache, with the FIRST lookup of ``hold_key`` kept from returning
-    until ``until`` is set: the caller has read the entry and has not refreshed its place
-    in the order yet - the one point where another thread's eviction can reach it."""
+class _HeldCache(OrderedDict):  # type: ignore[type-arg]
+    """The embedder's cache, able to stop a thread at the two mutations a concurrent
+    eviction can collide with, each at most once:
 
-    hold_key: str
-    until: threading.Event
-    holding: threading.Event
+    * the FIRST ``move_to_end(refresh_key)`` sets ``at_refresh`` and waits for
+      ``refresh_until`` before moving: the caller has read the entry and not yet refreshed
+      its place;
+    * the FIRST ``popitem`` sets ``at_pop`` and waits for ``pop_until`` before evicting: the
+      caller has inserted its entry and not yet evicted the oldest. ``popped`` is set once
+      that eviction has happened."""
 
-    def get(self, key: Any, default: Any = None) -> Any:
-        value = super().get(key, default)
-        if key == self.hold_key and not self.holding.is_set():
-            self.holding.set()
-            self.until.wait(_HANG_GUARD_S)
-        return value
+    def __init__(
+        self,
+        entries: OrderedDict,  # type: ignore[type-arg]
+        *,
+        refresh_key: str | None = None,
+        refresh_until: threading.Event | None = None,
+        at_refresh: threading.Event | None = None,
+        pop_until: threading.Event | None = None,
+        popped: threading.Event | None = None,
+    ) -> None:
+        super().__init__(entries)
+        self.refresh_key = refresh_key
+        self.refresh_until = refresh_until
+        self.at_refresh = at_refresh or threading.Event()
+        self.pop_until = pop_until
+        self.at_pop = threading.Event()
+        self.popped = popped or threading.Event()
+        self._refresh_held = False
+        self._pop_held = False
+
+    def move_to_end(self, key: Any, last: bool = True) -> None:
+        if key == self.refresh_key and self.refresh_until is not None and not self._refresh_held:
+            self._refresh_held = True
+            self.at_refresh.set()
+            self.refresh_until.wait(_HANG_GUARD_S)
+        super().move_to_end(key, last)
+
+    def popitem(self, last: bool = True) -> Any:
+        if self.pop_until is not None and not self._pop_held:
+            self._pop_held = True
+            self.at_pop.set()
+            self.pop_until.wait(_HANG_GUARD_S)
+        try:
+            return super().popitem(last)
+        finally:
+            self.popped.set()
 
 
 def _join(*calls: _Call) -> None:
@@ -462,13 +500,14 @@ def test_an_eviction_cannot_land_between_a_hit_and_the_refresh_of_its_place() ->
     """The interleaving this test forces, on a FULL cache whose oldest entry is ``oldest``:
 
         B  embed(new)     lookup: miss | model ...(gated)........ | store, evict the oldest
-        A  embed(oldest)                    lookup: hit ...(held)............ refresh its place
+        A  embed(oldest)                lookup: hit | (held AT move_to_end) ...... refresh
 
-    B is let out of the model while A is held between reading the entry and refreshing it.
-    Unlocked, B stores and evicts - the entry it evicts is the one A just read - and A's
-    refresh raises KeyError: on the index-build thread that is "engine not configured" for
-    the life of the process. Locked, B waits at the lock until A has refreshed the entry,
-    and what B then evicts is the entry that really is the oldest."""
+    A has read its entry and is stopped at ``move_to_end`` - after the lookup, before the
+    refresh - while B is let out of the model. Unlocked (or with only the lookup locked),
+    B stores and evicts - the entry it evicts is the one A just read - and A's refresh
+    raises KeyError: on the index-build thread that is "engine not configured" for the life
+    of the process. Locked, lookup and refresh are one section: B waits at the lock until A
+    has refreshed the entry, and what B then evicts is the entry that really is the oldest."""
     texts = [f"metin {i}" for i in range(CACHE_SIZE)]
     oldest, runner_up, new = texts[0], texts[1], "önbellekte olmayan metin"
     expected = _single_threaded([oldest, new])
@@ -480,8 +519,7 @@ def test_an_eviction_cannot_land_between_a_hit_and_the_refresh_of_its_place() ->
 
     b_stopped = threading.Event()  # B returned, or B is waiting at the lock
     observed = _observe_lock(embedder, b_stopped)
-    cache = _HeldLookupCache(embedder._cache)
-    cache.hold_key, cache.until, cache.holding = oldest, b_stopped, threading.Event()
+    cache = _HeldCache(embedder._cache, refresh_key=oldest, refresh_until=b_stopped)
     embedder._cache = cache
 
     b = _Call(embedder, new, stopped=b_stopped)
@@ -489,7 +527,7 @@ def test_an_eviction_cannot_land_between_a_hit_and_the_refresh_of_its_place() ->
     assert model.first_inside.wait(_HANG_GUARD_S), "B never reached the model"
     a = _Call(embedder, oldest)
     a.start()
-    assert cache.holding.wait(_HANG_GUARD_S), "A never reached the lookup"
+    assert cache.at_refresh.wait(_HANG_GUARD_S), "A never reached the refresh of its hit"
     assert not b_stopped.is_set(), "nobody waits at the lock while B is inside the model"
     model.release.set()
     _join(a, b)
@@ -502,6 +540,81 @@ def test_an_eviction_cannot_land_between_a_hit_and_the_refresh_of_its_place() ->
     assert list(embedder._cache)[-2:] == [oldest, new], "A's hit made its entry the newest"
     assert runner_up not in embedder._cache, "the entry evicted is the least recently used"
     assert embedder.calls == CACHE_SIZE + 1
+
+
+def test_a_hit_cannot_land_between_a_store_and_its_eviction() -> None:
+    """The other side of the same window, on a FULL cache whose oldest entry is ``oldest``:
+
+        B  embed(new)     lookup: miss | model | store new | (held AT popitem) ... evict
+        A  embed(oldest)                                     lookup: hit | (held AT move_to_end)
+
+    B has inserted its entry and is stopped before it evicts; A then asks for the oldest
+    entry. Unlocked (or with only the store locked, the eviction outside it), A's lookup
+    hits, B evicts that very entry, and A's refresh raises KeyError. Locked, store and
+    eviction are one section: A waits at the lock, B evicts ``oldest`` whole, and A finds
+    it gone - a miss, computed again, and stored as the newest entry."""
+    texts = [f"metin {i}" for i in range(CACHE_SIZE)]
+    oldest, runner_up, new = texts[0], texts[1], "önbellekte olmayan metin"
+    expected = _single_threaded([oldest, new])
+    embedder = _gated(_GatedModel(EMBEDDING_DIM))
+    for text in texts:
+        embedder.embed(text)
+    assert len(embedder._cache) == CACHE_SIZE and next(iter(embedder._cache)) == oldest
+
+    a_stopped = threading.Event()  # A waits at the lock, or A is held at its refresh
+    observed = _observe_lock(embedder, a_stopped)
+    popped = threading.Event()
+    cache = _HeldCache(
+        embedder._cache,
+        refresh_key=oldest,
+        refresh_until=popped,
+        at_refresh=a_stopped,
+        pop_until=a_stopped,
+        popped=popped,
+    )
+    embedder._cache = cache
+
+    b = _Call(embedder, new)
+    b.start()
+    assert cache.at_pop.wait(_HANG_GUARD_S), "B never reached its eviction"
+    assert new in cache and len(cache) == CACHE_SIZE + 1, "B is between its store and evict"
+    a = _Call(embedder, oldest)
+    a.start()
+    _join(a, b)
+
+    assert a.error is None, f"A's hit lost its entry to B's eviction: {a.error!r}"
+    assert b.error is None
+    assert a.result == expected[oldest] and b.result == expected[new]
+    assert observed is not None and observed.waited, "A was never kept out of the cache"
+    assert len(embedder._cache) == CACHE_SIZE
+    assert list(embedder._cache)[-2:] == [new, oldest], "A missed, and stored it again"
+    assert runner_up not in embedder._cache, "A's store evicted the next least recently used"
+    assert embedder.calls == CACHE_SIZE + 2
+
+
+def test_a_text_computed_twice_ends_as_the_newest_entry() -> None:
+    """The store refreshes the place of an entry that is already there - which only
+    happens when two threads computed the same text. The late store is that text's most
+    recent use; left where the first store put it, it would be evicted before texts used
+    after it."""
+    text, other = "iki kez hesaplanan metin", "arada sorulan metin"
+    expected = _single_threaded([text, other])
+    model = _GatedModel(EMBEDDING_DIM, held=[text], once=True)
+    embedder = _gated(model)
+
+    first = _Call(embedder, text)
+    first.start()
+    assert model.first_inside.wait(_HANG_GUARD_S), "the first call never reached the model"
+    assert embedder.embed(text) == expected[text]  # not held: computed and stored at once
+    assert embedder.embed(other) == expected[other]
+    assert list(embedder._cache) == [text, other]
+    model.release.set()
+    _join(first)
+
+    assert first.error is None and first.result == expected[text]
+    assert list(embedder._cache) == [other, text], "the late store made its entry the newest"
+    assert embedder._cache[text] == expected[text]
+    assert embedder.calls == 3
 
 
 def test_a_cached_text_returns_while_another_thread_is_inside_the_model() -> None:
