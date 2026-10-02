@@ -24,6 +24,8 @@ iş HEMEN kapıya, yeşil kapı HEMEN yayına, döngü kodu değiştiyse döngü
 **HAVUZ ÇALIŞIYOR (PROVEN_REAL, 47.4): döngü `d20261003` 23:00 UTC'de (02:00 yerel) havuz koduyla başladı (pid 46484): 6 çalışan +
 2 denetleyici aynı anda, biten koşunun koltuğu diğerleri sürerken doluyor. `-MaxHours 4`: döngü 4 saatte bir kendini güncel betiğe
 bırakır (kilit de böylece 6 saate yaklaşmaz). Kapı yanında yavaşlarsa `team/cycle-settings.json`.**
+**KAPIDA (lead, 03:05 yerel): YEDİNCİ ENTEGRASYON, dal `gate/d20261003-3` (worktree `.claude/worktrees/gate10`) = lead dalı (ADR-0214
+ek 16 dahil) + `local-embedder-lru-lock` (ADR-0256). Yeşilse onaysız yayın.**
 **03:00 yerel - ERKEN BİTEN KOŞULAR (ADR-0214 ek 16): havuzun ilk saatinde beş koşu "test arka planda koşuyor, bitince
 raporlarım" diyerek bitti; `claude -p` hiç uyandırılmaz, iş boş sayıldı (görevler yanlışlıkla durdu/döndü - lead üçünü sayılmadan
 geri koydu). DÜZELTME lead dalında (`Start-TeamRun`: `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `BASH_MAX_TIMEOUT_MS=3600000`;
