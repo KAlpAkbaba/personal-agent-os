@@ -513,6 +513,17 @@ if (-not $Fast) {
     Assert-ExitCode "team-area tests"
   }
 
+  Invoke-Step "Agent team integrate step (PS5.1 + git, fake gate, no model)" {
+    # ADR-0254: scripts/team/integrate.ps1 gates a merged integration branch and puts exactly
+    # the gated commit on main - against a sandbox repository, a fake gate, a fake lead and
+    # the fake team API. The step is on main and NOT scheduled; this suite is what keeps it
+    # honest until it is. About 25 minutes: the longest PowerShell step of the gate.
+    if (-not $powershell5) { throw "Windows PowerShell 5.1 not found" }
+    $script = Join-Path $repoRoot "scripts\tests\team-integrate.tests.ps1"
+    & $powershell5 -NoProfile -ExecutionPolicy Bypass -File $script
+    Assert-ExitCode "team-integrate tests"
+  }
+
   Invoke-Step "Cloud Core maintenance window script (PS5.1 + bash, fakes)" {
     # ADR-0223: preflight / run / verify of scripts/cloud/maintenance-reboot.sh against a
     # fake docker, apt, systemctl and curl. Nothing here touches a host.

@@ -24,9 +24,14 @@ düzenlemesi, `team-area.tests.ps1` CI dosyasına eklendi, QUALIFICATION 41.7'ye
 giriş (liste kendisi, `.claude/hooks`, `.claude/settings*.json`, her `CLAUDE.md`, `PROJECT_CONSTITUTION.md`,
 `docs/DEVELOPMENT_POLICY.md`, `.git`, her `.gitignore`, `release-cloud-core.ps1`; kapı/CI/cycle.ps1/TeamQueue.ps1 BİLEREK
 korunmadı). ÖN KONTROL İKİ KIRMIZI YAKALADI (CI listesi, 41.7) - ikisi de kapandı. Compose/migration YOK → kapı yeşilse
-ONAYSIZ yayınlanır. `cycle-seat-pool` denetimde: onaylanırsa bu dala eklenir (sahibin önceliği), sonra kapı ana kopyada
-detached koşar. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
-limitleri 'şu tarih itibarıyla' gösterilir" notu.**
+ONAYSIZ yayınlanır. Yeni kartlar: `team-status-bounds`, `area-widen-cycle-wiring`; `model-policy-office-ui`'ye "ölü döngünün
+limitleri 'şu tarih itibarıyla' gösterilir" notu. 16:48: `cycle-seat-pool` denetimden GERİ DÖNDÜ (gerçek kusur: başlatılamayan
+bir iş, sırada iş varken döngüyü bitiriyordu; çalışana döndü - sahibin önceliği, onaylanınca BEKLETMEDEN ayrı kapı);
+`cycle-auto-integrate` beşinci denetimde ONAYLANDI ve bu dala eklendi: ADR-0254, `team-integrate.tests.ps1` kapıda ve CI'da
+(~25 dk - kapının en uzun PS adımı), ADIM ZAMANLANMADI (`register-nightly.ps1` değişmedi; altı açık kararın hükmü ADR'de,
+dört kart kesilecek: `integrate-own-lock`, `gate-own-database`, `integrate-skips-visible`, kapıda PS paketleri yan yana).
+KAPI: ana kopya bu dalın ucunda DETACHED koşar; günlük `scratchpad/gate/gate-<sha>.log`. Yeşilse main `--no-ff` → it →
+ön kontrol → yayın → pin (compose değişmedi; pin yine de RELEASE'e eşitlenir) → doğrula → işler `released` → Stage 45.**
 **YAYINDA (bugün üç yayın): `e5c4d1f3` - 4 çalışan koltuğu, döngü kuyruğu her turda okur, besleyici model zincirini izler.
 `f91ad1e3` - ADR-0224 katman 2 ÜRETİMDE AÇIK (1427 örnek), düzeltmeler hafızaya yazılır (0064), araştırma kural çağrısı ve
 Chrome cihaz-içi tanıma ayar arkasında KAPALI, yayın kilidi bekler. `f60e02e4` - sahibin onayladığı iki compose değişikliği:
