@@ -181,10 +181,7 @@ def test_get_purges_before_it_lists(owner, engine) -> None:
 
 def test_the_lifespan_purges_at_start(api, engine) -> None:
     """No request is made: the application's own start is what deletes the expired row, and
-    it has done so by the time the application serves.
-
-    The lifespan starts no loop of its own for this (``PurgeLoop.start`` and its clean
-    cancel are held in test_misheard_store.py): nothing is left running at shutdown."""
+    it has done so by the time the application serves."""
     app, _, _ = api
     _seed_one_fresh_and_one_expired(engine)
     with TestClient(app):
@@ -192,8 +189,34 @@ def test_the_lifespan_purges_at_start(api, engine) -> None:
         assert purge.passes == 1
         assert purge.last_removed == 1
         assert _count(engine) == 1
-        assert purge.running is False
+
+
+def test_the_lifespan_starts_the_purge_loop_and_cancels_it_at_shutdown(api) -> None:
+    """The 24-hour tick is the application's own: it runs while the application serves and
+    is cancelled - not left to die with the process - when the application stops."""
+    app, _, _ = api
+    with TestClient(app):
+        purge = app.state.misheard_purge
+        assert purge.running is True
+        assert purge._interval_s == service.PURGE_INTERVAL_SECONDS
+        task = purge._task
+        assert task is not None and not task.done()
+        # The pass at start was the loop's own; the next one is 24 h away.
+        assert purge.passes == 1
+    assert purge.running is False
+    assert task.cancelled()
+    assert purge._task is None
     assert purge.passes == 1
+
+
+def test_a_second_start_of_the_application_starts_the_loop_again(api) -> None:
+    app, _, _ = api
+    with TestClient(app):
+        first = app.state.misheard_purge._task
+    with TestClient(app):
+        purge = app.state.misheard_purge
+        assert purge.running is True
+        assert purge._task is not first
     assert purge.running is False
 
 

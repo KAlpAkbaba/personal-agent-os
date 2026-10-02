@@ -660,6 +660,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         interval_s=settings.retention_sweep_interval_s,
         initial_delay_s=settings.retention_sweep_initial_delay_s,
     )
+    # The misheard notebook's 30 days are kept by the process, not by a session: a purge
+    # when the application starts and one every 24 h, through the runtime the routes read
+    # (app.state.artifacts, looked up at each pass).
+    misheard_purge = misheard_service.PurgeLoop(lambda: app.state.artifacts.session())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -701,15 +705,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await briefing_announcer.start()
         await embedded_worker.start()
         await retention_sweeper.start()
-        # The misheard notebook's 30 days are kept by the process, not by a session: one
-        # purge at every start, through the runtime the routes read (app.state.artifacts).
-        # Never blocks startup: a pass that fails is logged by its error's type. The loop
-        # itself (PurgeLoop.start, every 24 h) is NOT started here: a loop this lifespan
-        # starts must answer in /v1/system/health (tests/unit/test_bounded_delivery.py),
-        # and it has no health key yet.
-        misheard_purge = misheard_service.PurgeLoop(lambda: app.state.artifacts.session())
-        app.state.misheard_purge = misheard_purge
-        await asyncio.to_thread(misheard_purge.purge_once)
+        # The first pass is done when this returns (an application that serves has purged);
+        # a pass that fails is logged by its error's type and never stops the start.
+        await misheard_purge.start()
         # M16 track A: re-derive activity_events from canonical tables on every
         # start (spec §1.4, safe to call twice). Never blocks startup — an older
         # DB without the ledger tables yet, or any other backfill failure, is
@@ -741,6 +739,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             allowlist_store.unbind()
+            await misheard_purge.stop()
             await retention_sweeper.stop()
             await embedded_worker.stop()
             await briefing_announcer.stop()
@@ -796,6 +795,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.selfmodel_refresher = selfmodel_refresher
     app.state.briefing_announcer = briefing_announcer
     app.state.retention_sweeper = retention_sweeper
+    app.state.misheard_purge = misheard_purge
     app.state.experience_scheduler = experience_scheduler
     app.state.mail_poller = mail_poller
     app.state.calendar_syncer = calendar_syncer
@@ -1023,6 +1023,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         checks["briefing_announcer"] = briefing_announcer.health_check()
         checks["research_tool_call_announcer"] = research_tool_call_announcer.health_check()
         checks["selfmodel_refresher"] = selfmodel_refresher.health_check()
+        # The misheard notebook's 24-hour purge: advisory like the four above. A loop that
+        # is behind is reported here and does not turn health red.
+        checks["misheard_purge"] = misheard_purge.health_check()
         # B08 req 646/648/649/650: the safety net answers for itself. Both records have
         # been written for weeks and nothing read either of them; a backup nobody checks is
         # one you find out about on the day you need it.

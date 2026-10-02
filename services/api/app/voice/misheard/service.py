@@ -16,8 +16,9 @@ about, and the audit row and the route telemetry are wordless on purpose. The ho
 written to disk, the database, the session's ``context_json`` or a log.
 
 Three things delete an expired row, none of them a session: ``record`` (every write), the
-owner's GET, and the application's start (one ``PurgeLoop.purge_once`` in the lifespan).
-``list_items`` hides an expired row even when none of them has run yet.
+owner's GET, and the application's own ``PurgeLoop`` (a pass when it starts, then one every
+24 h; it answers for itself in ``/v1/system/health``). ``list_items`` hides an expired row
+even when none of them has run yet.
 """
 
 from __future__ import annotations
@@ -30,11 +31,13 @@ from collections.abc import Callable, Sized
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.logging import get_logger
+from app.loops import LoopHeartbeat
 from app.voice.misheard.models import (
     ENGINE_WIDTH,
     INTENT_WIDTH,
@@ -282,6 +285,10 @@ class PurgeLoop:
     ``session_scope`` is asked for a session at each pass (never held between passes), the
     pass commits its own delete, and a pass that fails is logged by its error's type and
     tried again at the next interval - it never raises into the application.
+
+    ``start`` waits for the first pass before it returns: an application that serves has
+    purged, and no pass runs beside a request that has just begun. One clock - the one
+    passed in - decides both what has expired and whether the loop is behind.
     """
 
     def __init__(
@@ -295,12 +302,18 @@ class PurgeLoop:
         self._interval_s = interval_s
         self._clock = clock
         self._task: asyncio.Task[None] | None = None
-        self.passes = 0
+        self._beat = LoopHeartbeat(name="misheard_purge", interval_s=interval_s)
         self.last_removed: int | None = None
+
+    @property
+    def passes(self) -> int:
+        """Every pass that was tried, whether or not it could reach the table."""
+        return self._beat.passes + self._beat.failures
 
     def purge_once(self) -> int | None:
         """One pass; the count, or None when it could not run."""
         removed: int | None = None
+        failure: str | None = None
         moment = self._clock()
         try:
             with self._session_scope() as db:
@@ -308,23 +321,34 @@ class PurgeLoop:
                 db.commit()
         except Exception as exc:  # noqa: BLE001 - housekeeping never takes the process down
             removed = None
-            logger.warning("misheard_purge_failed", error=type(exc).__name__, trigger="lifespan")
+            failure = type(exc).__name__
+            logger.warning("misheard_purge_failed", error=failure, trigger="lifespan")
         with _hold_lock:
             _drop_expired_holds(_utc(moment) or datetime.now(UTC))
         self.last_removed = removed
-        self.passes += 1
+        if failure is None:
+            self._beat.record_pass(now=_utc(moment))
+        else:
+            # Not LoopHeartbeat.record_failure: it keeps the exception's TEXT, and health is
+            # the one endpoint that answers without an owner session.
+            self._beat.failures += 1
+            self._beat.last_error = failure
+            self._beat.last_pass_at = _utc(moment)
         if removed:
             logger.info("misheard_purged", removed=removed, trigger="lifespan")
         return removed
 
     async def _loop(self) -> None:
         while True:
-            await asyncio.to_thread(self.purge_once)
             await asyncio.sleep(self._interval_s)
+            await asyncio.to_thread(self.purge_once)
 
     async def start(self) -> None:
-        if self._task is None:
-            self._task = asyncio.create_task(self._loop())
+        if self._task is not None:
+            return
+        await asyncio.to_thread(self.purge_once)
+        self._task = asyncio.create_task(self._loop())
+        self._beat.bind(self._task, now=_utc(self._clock()))
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -334,6 +358,15 @@ class PurgeLoop:
             except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
+            self._beat.bind(None)
+
+    def health_check(self) -> dict[str, Any]:
+        """Advisory, like every loop: "fail" says the loop is behind (or has died), and it
+        never turns the application's health red. Wordless - counts, times, an error's type."""
+        health = self._beat.health_check(now=_utc(self._clock()))
+        health["last_removed"] = self.last_removed
+        health["retention_days"] = RETENTION_DAYS
+        return health
 
     @property
     def running(self) -> bool:

@@ -488,6 +488,79 @@ async def test_a_purge_pass_that_fails_does_not_end_the_loop() -> None:
         await loop.stop()
 
 
+HEALTH_KEYS = {
+    "status",
+    "running",
+    "interval_s",
+    "passes",
+    "failures",
+    "last_pass_at",
+    "last_error",
+    "required",
+    "last_removed",
+    "retention_days",
+}
+
+
+def test_a_purge_loop_that_was_never_started_is_skipped_in_health() -> None:
+    @contextlib.contextmanager
+    def scope() -> Iterator[_NoRows]:
+        yield _NoRows()
+
+    health = service.PurgeLoop(scope).health_check()
+    assert set(health) == HEALTH_KEYS
+    assert health["status"] == "skipped"
+    assert health["running"] is False
+    assert health["required"] is False
+    assert health["retention_days"] == 30
+    assert health["interval_s"] == 24 * 60 * 60
+
+
+async def test_a_started_purge_loop_answers_ok_and_one_that_is_behind_is_reported(
+    db: Session,
+) -> None:
+    """Advisory: three missed intervals are said out loud ("fail") and never required."""
+    moment = [HEARD + timedelta(days=31)]
+    _record(db)
+    loop = service.PurgeLoop(_scope(db), clock=lambda: moment[0])
+    await loop.start()
+    try:
+        health = loop.health_check()
+        assert set(health) == HEALTH_KEYS
+        assert health["status"] == "ok"
+        assert health["running"] is True
+        assert health["passes"] == 1 and health["failures"] == 0
+        assert health["last_removed"] == 1
+        assert health["last_pass_at"] == "2026-11-02T09:00:00Z"
+        assert health["last_error"] is None
+        moment[0] += timedelta(hours=71)
+        assert loop.health_check()["status"] == "ok"
+        moment[0] += timedelta(hours=2)
+        behind = loop.health_check()
+        assert behind["status"] == "fail"
+        assert behind["required"] is False
+    finally:
+        await loop.stop()
+    stopped = loop.health_check()
+    assert stopped["status"] == "skipped" and stopped["running"] is False
+
+
+def test_a_failed_pass_is_counted_in_health_by_its_type_and_never_by_its_text() -> None:
+    """A database error's text carries the statement's parameters - here, the sentence -
+    and /v1/system/health is the one endpoint that answers without an owner session."""
+
+    def away():
+        raise RuntimeError(f"DELETE ... {MARKER}")
+
+    loop = service.PurgeLoop(away)
+    loop.purge_once()
+    health = loop.health_check()
+    assert health["failures"] == 1 and health["passes"] == 0
+    assert health["last_error"] == "RuntimeError"
+    assert health["last_removed"] is None
+    assert MARKER not in repr(health)
+
+
 def test_a_purge_pass_drops_the_holds_that_have_expired() -> None:
     session_id = uuid.uuid4()
     service.hold(session_id, _entry(), HEARD)

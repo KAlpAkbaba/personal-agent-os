@@ -82,23 +82,27 @@ themselves, so the relay card cannot disagree with it about the type.
 
 **Three purge triggers, none of them a session (TEAM_PROTOCOL 9).** A 30-day promise kept by
 a conversation's wake-up is not kept. (1) `record()` purges on every write. (2) The owner's
-GET purges before it lists. (3) The application's lifespan purges when the process starts
-(every release and every restart). And `list_items` never returns an expired row even when
+GET purges before it lists. (3) The application's own loop, `service.PurgeLoop`, started in
+the lifespan: a pass when the process starts (every release and every restart), then one
+every 24 h, cancelled at shutdown. And `list_items` never returns an expired row even when
 none of the three has run.
 
-**The 24-hour tick is built and NOT started - ALAN_ISTEGI.** `service.PurgeLoop` is the
-card's loop (a pass at start, one every 24 h, cancelled cleanly; tested in
-`test_misheard_store.py`). The lifespan runs its one pass and does not call `start()`,
-because a loop the lifespan starts must answer in `/v1/system/health`
-(`tests/unit/test_bounded_delivery.py::test_every_background_loop_the_app_starts_can_be_seen_in_health`
-reads the lifespan's source and holds a hand-written map of loop -> health key; it went RED
-on the first full run with the loop started), and the map and the health endpoint's key
-list (`tests/unit/test_health_endpoint.py`) are outside this card's area. The rule is right:
-a loop nothing can see can die quietly. To finish it, with those two files in the area:
-`PurgeLoop.health_check()`, `checks["misheard_purge"]` in `system_health`,
-`await misheard_purge.start()` / `.stop()` in the lifespan instead of the one pass, and the
-key in both tests. Until then a process that runs for more than 30 days with no write and no
-GET keeps expired rows on disk (never listed) until its next restart.
+**The loop is started, and it answers for itself.** `await misheard_purge.start()` /
+`.stop()` in the lifespan; `checks["misheard_purge"]` in `/v1/system/health`
+(`PurgeLoop.health_check()`, built on `app.loops.LoopHeartbeat`: status, running, interval,
+passes, failures, last pass, last error, plus `last_removed` and `retention_days`). It is
+advisory like the other loops (`required: false`): a loop that has missed three of its
+intervals, or has died, reads "fail" there and does NOT turn the application's health red or
+enter `failing_checks` - late housekeeping is no reason to refuse a release. Two choices:
+- `start()` WAITS for the first pass and only then creates the task (which sleeps 24 h before
+  its next pass). The application that serves has already purged, and no pass runs in a
+  worker thread beside a request that has just begun - the retention sweeper avoids the same
+  thing with an initial delay. A first pass that fails is logged and does not stop the start.
+- A failed pass is kept in health by its error's TYPE only. `LoopHeartbeat.record_failure`
+  keeps the exception's text, a database error's text carries the statement's parameters,
+  and health is the one endpoint that answers without an owner session - so the loop writes
+  its own failure fields. One clock (the one passed in) decides both what has expired and
+  whether the loop is behind.
 
 **The owner's API** (owner session; a refusal is `{detail: {code, message}}`, Turkish):
 `GET /v1/voice/misheard` -> `{items, open, retention_days: 30}`, newest first;
@@ -117,16 +121,21 @@ retention, "unut" (one row or all), the list being the owner's alone, nothing wr
 
 ## Release
 
-**This change carries a migration**, so it is the exception to the automatic release rule:
-its release is asked of the owner (ADR-0214 addendum 9). The migration is expand-only (one
-new table, one index) and its downgrade drops the table; the old colour of a blue-green
-release never writes to it, and a `record()` against a schema without the table answers
-`None` and leaves the turn's transaction usable (proven on PostgreSQL).
+**This change carries a migration, and the migration is expand-only**: one CREATE TABLE with
+its index and unique constraint, nothing altered or dropped, a downgrade that drops the
+table. By the lead's ruling (2026-10-02) the standing rule therefore releases it when the
+gate is green; it is not asked of the owner. The old colour of a blue-green release never
+writes to the table, and a `record()` against a schema without it answers `None` and leaves
+the turn's transaction usable (proven on PostgreSQL). The same holds for the loop: a purge
+pass against a schema without the table is one logged failure, counted in health.
 
 ## Evidence
 
 `tests/unit/test_misheard_store.py`, `tests/unit/test_misheard_routes.py` (the real
-application object, and its lifespan), `tests/integration/test_misheard_postgres.py` (the
+application object, and its lifespan: the loop is started, and cancelled at shutdown),
+`tests/unit/test_health_endpoint.py` and `tests/unit/test_bounded_delivery.py` (the loop's
+health key; behind is reported and degrades nothing),
+`tests/integration/test_misheard_postgres.py` (the
 dev stack's PostgreSQL after `alembic upgrade head`: columns and widths from
 `information_schema`, the round trip with an over-long `tool`, the savepoint, the
 downgrade). Counts and the mutation proofs are in the worker's report.
