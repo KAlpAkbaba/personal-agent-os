@@ -20949,3 +20949,251 @@ after this change alike. Bounded by the number of flaps, so not a storm. A card 
 after the server's 410 the controller is `closed` but not `closing`, so a network flap takes it to `reconnecting` and
 costs one `POST .../attach` to a session the server declared gone, and the owner is shown "reconnecting" for a dead
 session. Bounded by the number of flaps; no storm.
+
+## ADR-0254 — The notebook of misunderstood sentences, the store: one table, one writer, thirty days (2026-10-03)
+
+The owner approved the idea on 2026-10-02 (`team/proposals/2026-10-02-yanlis-anlasilan-cumle-defteri.md`); this is its
+storage half, card `misheard-ledger-store`. Nothing writes to the table yet: the relay's wiring, the collector, the
+page and the "defteri unut" intent are the other three cards.
+
+**Sahip incelemesi bekliyor:** the `is_request` narrowing (a sentence with no intent is a notebook row only when the
+understanding policy saw at least one candidate reading or the sentence named a machine; plain conversation is never
+stored). It is the most restrictive safe reading; the owner may widen it.
+
+**Context.**
+
+ADR-0224's target is 95 % on the sentences the recogniser WROTE; the measurement stands at
+68.9 % on a corpus that holds three sentences the owner really said. A sentence the system
+did not understand is kept nowhere in a paid session and for one turn in a local one. This
+card builds where such a sentence is kept. Nothing writes to it yet: the relay is wired by
+`misheard-relay-wiring`, and no intent, tool or page is added here.
+
+**Decision.**
+
+**One table, `misheard_utterances` (migration `0065_misheard_utterances`, on
+`0064_memory_vocabulary_class`).** Text only, never audio.
+
+| column | type | note |
+| --- | --- | --- |
+| id | uuid, pk | |
+| heard_at | timestamptz | UTC |
+| sentence | varchar(2000) | the recogniser's written words |
+| mode | varchar(8) | `paid` / `local` |
+| engine | varchar(64), null | the recogniser's name when the client sent one |
+| device_id | uuid, null | the session's device |
+| band | varchar(8), null | `high` / `medium` / `low` |
+| confidence | double precision, null | |
+| reason | varchar(16) | exactly one of the four below |
+| resolved_intent | varchar(64), null | what the router made of it |
+| tool | varchar(64), null | the failed tool's name, for `tool_failed` only |
+| session_id | uuid | |
+| meant | varchar(2000), null | the owner's answer |
+| answered_at | timestamptz, null | |
+| expires_at | timestamptz | `heard_at` + 30 days; indexed |
+
+Unique on `(session_id, heard_at)`. No foreign keys: a row outlives the session it was heard
+in and leaves by its own doors only. No CHECK on `reason` / `mode` / `band`: the one writer
+refuses what the CONTRACT does not name, and a CHECK is what refused the seventh memory class
+in production (migration 0064 exists to widen one).
+
+**The four reasons:** `no_intent` (the router found none), `asked_question` (layer 3 asked its
+one question), `objected` (the owner said "hayır / dur" right after an action), `tool_failed`
+(a tool answered that it could not).
+
+**`tool` is 64 wide and `record()` cuts it** (the first inspection's finding 2). The CONTRACT
+gave it no width; 64 is `resolved_intent`'s, and a tool's name is the same kind of name. The
+other three misheard-* cards must carry the same width - the lead's to propagate.
+
+**`record()` is the one writer.** It writes nothing and answers `None` for `listen_only`, an
+empty sentence, a missing session, an unknown reason or mode. It cuts sentence / engine /
+resolved_intent / tool to their widths. An unknown `band` or a confidence that is no finite
+number is stored as null and the sentence is still kept (the sentence is what the notebook
+is for). It is idempotent on `(session_id, heard_at)`: the second call returns the first row
+and the first reason stays. Its database work runs in a SAVEPOINT, so a fault never reaches
+the caller and never aborts the caller's transaction; it never commits. Under a true race
+the unique constraint refuses the loser, which answers `None` - the row exists either way.
+
+**Nothing logs the sentence, and nothing logs an exception's text.** A database error's
+message carries the statement's parameters, which here are the sentence; a log line names
+the event, the reason, the mode and the error's TYPE. The audit row and the route telemetry
+stay wordless, as they are.
+
+**The hold is in process.** An objection and a failed tool arrive AFTER the sentence they
+are about, and the only records of that sentence (the audit row, the route telemetry) are
+wordless on purpose. `hold` / `held` keep the latest sentence per session in a dict in this
+process for `HOLD_TTL_SECONDS` = 120: never on disk, in the database, in the session's
+`context_json` or in a log; a restart or the other colour of a release simply has nothing
+(the row is then not written - a lost notebook line, never a wrong one). At exactly 120 s it
+is gone. An expired entry is dropped at the next `hold` / `held` of ANY session and at each
+purge pass, so an abandoned session's sentence does not stay in memory until the process
+ends. `HeldSentence`'s repr leaves the sentence out.
+
+**`is_request` - the narrowing (sahip incelemesi bekliyor).** The proposal's first condition
+is "the router found no intent". Taken literally, every sentence of plain conversation in a
+paid session would be stored. The lead narrowed it to the most restrictive safe option: a
+sentence with no intent is a notebook row only when the understanding policy saw at least
+one candidate reading, or the sentence named a machine. Plain conversation is never stored.
+The owner may widen it; it is one function. It takes the count of readings or the readings
+themselves, so the relay card cannot disagree with it about the type.
+
+**Three purge triggers, none of them a session (TEAM_PROTOCOL 9).** A 30-day promise kept by
+a conversation's wake-up is not kept. (1) `record()` purges on every write. (2) The owner's
+GET purges before it lists. (3) The application's own loop, `service.PurgeLoop`, started in
+the lifespan: a pass when the process starts (every release and every restart), then one
+every 24 h, cancelled at shutdown. And `list_items` never returns an expired row even when
+none of the three has run.
+
+**The loop is started, and it answers for itself.** `await misheard_purge.start()` /
+`.stop()` in the lifespan; `checks["misheard_purge"]` in `/v1/system/health`
+(`PurgeLoop.health_check()`, built on `app.loops.LoopHeartbeat`: status, running, interval,
+passes, failures, last pass, last error, plus `last_removed` and `retention_days`). It is
+advisory like the other loops (`required: false`): a loop that has missed three of its
+intervals, or has died, reads "fail" there and does NOT turn the application's health red or
+enter `failing_checks` - late housekeeping is no reason to refuse a release. Two choices:
+- `start()` WAITS for the first pass and only then creates the task (which sleeps 24 h before
+  its next pass). The application that serves has already purged, and no pass runs in a
+  worker thread beside a request that has just begun - the retention sweeper avoids the same
+  thing with an initial delay. A first pass that fails is logged and does not stop the start.
+- A failed pass is kept in health by its error's TYPE only. `LoopHeartbeat.record_failure`
+  keeps the exception's text, a database error's text carries the statement's parameters,
+  and health is the one endpoint that answers without an owner session - so the loop writes
+  its own failure fields. One clock (the one passed in) decides both what has expired and
+  whether the loop is behind.
+
+**The owner's API** (owner session; a refusal is `{detail: {code, message}}`, Turkish):
+`GET /v1/voice/misheard` -> `{items, open, retention_days: 30}`, newest first;
+`POST /v1/voice/misheard/{id}/meaning` `{meant: 1..2000}` -> the item (422 `meant_empty` /
+`meant_too_long`, 404 `not_found`); `DELETE /v1/voice/misheard/{id}` -> `{deleted: 1}`;
+`DELETE /v1/voice/misheard` -> `{deleted: n}` ("defteri unut").
+
+**KVKK.**
+
+Text only; no audio is stored anywhere. 30 days, then deleted. The rows live in the owner's
+own PostgreSQL (Hetzner NBG1) and go to no third party. There is no voice identity
+(ADR-0171: confirmation instead of a voiceprint), so **another person's sentence can land
+here** when it is said in the room and not understood. What stands against that: the short
+retention, "unut" (one row or all), the list being the owner's alone, nothing written in
+"sadece dinle", and the `is_request` narrowing.
+
+**Release.**
+
+**This change carries a migration, and the migration is expand-only**: one CREATE TABLE with
+its index and unique constraint, nothing altered or dropped, a downgrade that drops the
+table. By the lead's ruling (2026-10-02) the standing rule therefore releases it when the
+gate is green; it is not asked of the owner. The old colour of a blue-green release never
+writes to the table, and a `record()` against a schema without it answers `None` and leaves
+the turn's transaction usable (proven on PostgreSQL). The same holds for the loop: a purge
+pass against a schema without the table is one logged failure, counted in health.
+
+**Evidence.**
+
+`tests/unit/test_misheard_store.py`, `tests/unit/test_misheard_routes.py` (the real
+application object, and its lifespan: the loop is started, and cancelled at shutdown),
+`tests/unit/test_health_endpoint.py` and `tests/unit/test_bounded_delivery.py` (the loop's
+health key; behind is reported and degrades nothing),
+`tests/integration/test_misheard_postgres.py` (the
+dev stack's PostgreSQL after `alembic upgrade head`: columns and widths from
+`information_schema`, the round trip with an over-long `tool`, the savepoint, the
+downgrade). Counts and the mutation proofs are in the worker's report.
+
+**Not done here.**
+
+No sentence reaches the table until `misheard-relay-wiring`; the "defteri unut" intent, the
+collector and the Onay Merkezi list are the other misheard-* cards.
+
+**At merge (the lead, integration d20261003, second).** The card was stopped twice by the cycle's area check and
+neither time for the worker's work: once because the branch stood on `integrate/d20261002`, once because the lead had
+told the worker the migration is 0065 and left the old file name in the area list. The second inspection was started
+by the lead by hand (the queue could not put the task back into work beside another holder of `app/main.py`) and
+approved `90063e75`: on a scratch PostgreSQL migrated from empty to 0065, 30 of 30 races on one `(session_id,
+heard_at)` left one row, 2001 characters are stored as 2000, an over-long `tool` as 64, and a secret-looking sentence
+appears in no log line of any path. Its findings are carded, not closed here: `misheard-purge-start-bounded` (the
+loop's `start()` waits for its first pass with no bound - with an expired row locked by another transaction the
+application did not start within eight seconds; unreachable until something writes a row, and that card comes before
+the relay's; plus two surviving mutants and two refusals that are not in the contract's shape) and three notes carried
+into `misheard-relay-wiring` (flush before `record()`, never call it inside a transaction held across awaits, the
+types). Health reads `ok` for a loop whose every pass fails - the house heartbeat's behaviour, advisory - and
+`failures` / `last_error` say so. The host snapshot was collected again after the release before this one
+(2026-10-02 22:19 UTC): the table "waits for a release", which this one is.
+
+## ADR-0255 — The narrative's model narrator is wired to `activity.explain` behind a setting that is OFF; the turn's ledger note says which narrator spoke (ADR-0244 B) (2026-10-02)
+
+Task: `narrative-model-wiring` (roadmap order 2c). Follows ADR-0216 / 0221 / 0230 / 0244.
+
+**Context.** ADR-0244 put the plumbing on main: the explain source narrates with the model
+when the CALLER hands it a chat provider. Nothing in production handed one -
+`tools.py::activity_explain` called `explain_to_briefing` without `chat_provider` - so the rule
+narrator always answered, and `tell()` returns text alone, so nothing recorded which narrator
+spoke.
+
+**Decision.**
+1. `Settings.narrative_model_enabled` (env `PAGENTOS_NARRATIVE_MODEL_ENABLED`), default
+   **False**.
+2. `activity_explain` reads the switch from the SESSION's settings (`ctx.live["settings"]`,
+   the same place the provider comes from - ADR-0244 item 4; never `get_settings()`). Off, or
+   no settings on the session: the call to `explain_to_briefing` is today's - no
+   `chat_provider` argument, `narrative_chat_provider` is not called, no provider is built,
+   no request is sent. On: `narrative_chat_provider(ctx.live)` is handed on, wrapped in a
+   witness (`_NarratorWitness`) that passes the ask through unchanged and remembers how it
+   ended.
+3. The turn's `voice.explained` ledger row carries two more detail keys for a NARRATIVE
+   answer (no other explain gets them - no narrator spoke): `narrator` (`model` / `rule`) and
+   `narrator_reason` (`null` for `model`). Reasons: `setting_off`, `no_provider` (on, but the
+   session has no usable key), `not_asked` (an empty window or "no failures" - a constant, no
+   narrator phrases it), `timeout`, `provider_error`, the provider's own error class
+   (`chat_unavailable`, `chat_busy`, `chat_refused`, `chat_model_retired`), `model_unavailable`,
+   `audit_rejected`. `model` is recorded only when the stored account is exactly the model's
+   draft, or the draft followed by the auditor's own repair (the draft, then
+   `" Ayrıca başarısız: "` - `auditor.repair`'s marker). A bare prefix match is NOT enough: a
+   rejected draft can be the opening of the rule text that replaced it ("2 iş başarısız
+   oldu."), and that is `rule` / `audit_rejected` (inspector's finding on `f4da5aeb`, fixed
+   and pinned by a test). The inference is from text because `tell()` returns text alone;
+   one case stays open: a rejected draft that the rule text continues with that same
+   marker, which needs a failed row whose own ledger summary contains the marker. The
+   provider's text is compared in memory and never written: the detail holds two words. The
+   same pair is logged as `narrative_narrator`.
+
+**What switching it on means - why the default is off and the switch is the owner's.**
+- Every "bu hafta ne oldu" / "ne başarısız oldu"-as-narrative ask makes ONE synchronous
+  model call on the tool thread, inside the tool call's DB transaction. Nominal worst case
+  with the shipped defaults: `assistant_chat_timeout_s` 20 s + one retry after 1.5 s on
+  429/529 + 20 s = **41.5 s** before the rule text is spoken instead. A transport error or
+  timeout is not retried (20 s). This bound is NOT a total deadline: httpx applies the
+  20 s per phase (connect, write, read-gap, pool), so a response that trickles can run
+  longer. A hard wall-clock ceiling would be `app/assistant_chat.py`'s to add.
+- SUMMARIES OF THE OWNER'S LEDGER leave for the model's provider (Anthropic, the
+  assistant-chat model): the failed rows' summaries, reasons and devices, per-subsystem
+  counts and the device distribution (`model_narrator.facts_payload`) - no ids, no
+  timestamps. Ledger summaries can carry text that came off the web; they go inside the
+  untrusted block (ADR-0221).
+- Cost: one Haiku-class request per ask (prompt = the facts, answer <= 600 tokens).
+
+**Not closed here (outside this task's area).**
+- A. `AnthropicChatProvider.answer` catches every `httpx.HTTPError`, a timeout among them,
+  and returns `chat_unavailable`. So over the REAL provider a timeout is recorded as
+  `narrator_reason=chat_unavailable`; `timeout` is recorded only for a provider that raises
+  it. Pinned by a test. Telling them apart needs a timeout error class in
+  `app/assistant_chat.py`.
+- B. No compose line: `PAGENTOS_NARRATIVE_MODEL_ENABLED` is not passed to the api container,
+  so production cannot switch it on yet. The line is a compose change the owner approves
+  (as ADR-0248 addendum 1 did for the research rule), together with the decision itself.
+- C. The router (ADR-0244 A, card `narrative-failures-router`): the owner's "ne başarısız
+  oldu" with Turkish letters still goes to the explain `failures` family, not the narrative.
+- D. Tokens / model id of the ask are not recorded (the card asked for narrator and reason).
+
+**Consequences.** With the default, production's spoken behaviour does not change; the only
+difference is the two new keys on narrative `voice.explained` rows (`rule`, `setting_off`).
+A test factory replaced as `lambda db: source` keeps working while the setting is off.
+
+**Evidence.** `tests/unit/test_narrative_model_wiring.py`, 17 cases through the real
+application object's tool-call route: PROVEN_AUTOMATED (fake provider; the real
+`AnthropicChatProvider` over a replaced transport). The real model: NOT_RUN. The owner's
+voice with the setting on: READY_FOR_OWNER (the decision to switch it on, and line B).
+
+**Rollback.** Leave the setting off (the default); or revert the commit - no schema, no data.
+
+**At merge (the lead, integration d20261003, second).** Released with the setting OFF: production's spoken behaviour
+does not change. Of the four items the task left open: A (a timeout over the real provider is recorded as
+`chat_unavailable`) is card `narrative-timeout-class`; B (the compose line) is asked of the owner together with the
+decision to switch the narrator on, not before; C is card `narrative-failures-router`, already queued; D is not
+built until somebody needs the number.
