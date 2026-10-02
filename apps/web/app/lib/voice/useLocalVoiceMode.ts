@@ -35,10 +35,15 @@ export type LocalVoiceHandle = {
   local: LocalModeSnapshot;
   start: () => Promise<void>;
   stop: () => Promise<void>;
+  /** The owner's answer to `local.packQuestion`. Call it from a click handler, never from speech. */
+  answerPackQuestion: (yes: boolean) => void;
 };
 
 export function useLocalVoiceMode(mode: LocalVoiceMode = getLocalVoiceMode()): LocalVoiceHandle {
   const local = useSyncExternalStore(mode.subscribe, mode.getSnapshot, mode.getServerSnapshot);
-  const actions = useMemo(() => ({ start: () => mode.start(), stop: () => mode.stop() }), [mode]);
+  const actions = useMemo(
+    () => ({ start: () => mode.start(), stop: () => mode.stop(), answerPackQuestion: (yes: boolean) => mode.answerPackQuestion(yes) }),
+    [mode],
+  );
   return { local, ...actions };
 }

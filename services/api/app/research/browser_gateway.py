@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 from urllib.parse import quote
 
 from app.devices.commands import (
@@ -64,6 +65,21 @@ PROFILE_OWNER = "owner"
 #: The engine an ATTACHED session searches with: the owner's own Google, in the browser
 #: they are signed into, which is what they asked for (ADR-0183).
 SEARCH_PROVIDER_GOOGLE = "google"
+
+#: The engines a run on the CLOUD device searches with, in order (ADR-0213). Measured in the
+#: cloud image on 2026-10-02: headless Chromium got DuckDuckGo's captcha page twice out of
+#: two and ``auto`` (the worker's google, then duckduckgo) once out of one, while bing
+#: answered ten results. The worker's ``engine`` is ONE name or ``auto``
+#: (``browser_agent.search_engines``: a named engine is tried alone, with no fallover), so the
+#: order is walked HERE, one ``browser.search`` per entry, until one answers with results.
+#: bing first, then every other engine the worker has; a test reads the worker's own list.
+CLOUD_SEARCH_ORDER: Final[tuple[str, ...]] = ("bing", "auto", "brave")
+
+#: How long one walk may take. The discover activity has 90 s
+#: (``browser_workflow._MEDIUM``), so the walk stays under it: no further engine is started
+#: with less than the slice left, and a started one is given only what is left.
+SEARCH_ORDER_BUDGET_S: Final = 75.0
+SEARCH_ORDER_MIN_SLICE_S: Final = 15.0
 
 # Fixed fallback "now" so FakeBrowserGateway is deterministic even when the
 # caller does not pass `now` explicitly (mirrors DeterministicResearchProvider's
@@ -379,6 +395,15 @@ def _outcome_or_raise(outcome: CommandOutcome) -> dict[str, Any]:
     )
 
 
+def _attempts_of(result: dict[str, Any], engine: str) -> list[dict[str, Any]]:
+    """The attempts a search that answered NOTHING reported, or - from a worker that sends
+    none - one saying which engine it was and how its page ended."""
+    attempts = [a for a in (result.get("attempts") or []) if isinstance(a, dict)]
+    if attempts:
+        return attempts
+    return [{"provider": engine, "outcome": str(result.get("page_kind") or "empty"), "detail": ""}]
+
+
 def _reject_forbidden_keys(result: dict[str, Any]) -> None:
     """Cloud-Core-side half of the forbidden-key scan (finding HIGH-3): any
     device command result that becomes evidence is scanned again here, even
@@ -465,6 +490,8 @@ class DeviceBrowserGateway:
         excerpt_chars: int = DEFAULT_EXCERPT_CHARS,
         search_provider: str = "duckduckgo",
         profile: str = PROFILE_RESEARCH,
+        search_order: Sequence[str] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._client = command_client
         self._device_id = device_id
@@ -483,6 +510,11 @@ class DeviceBrowserGateway:
         #: (``scripts/browser/enroll-owner-chrome.ps1``) - so a caller that asks for it must
         #: be ready for ``capability_missing`` and have somewhere else to go.
         self._profile = profile
+        #: The engines to walk instead of the one ``search_provider`` (a run on the cloud
+        #: device: :data:`CLOUD_SEARCH_ORDER`). Empty for the owner's own machines, whose
+        #: search is the single request it always was.
+        self._search_order = tuple(search_order or ())
+        self._clock = clock
         self._session_opened = False
         self._session_open_attempt = 0
 
@@ -530,6 +562,7 @@ class DeviceBrowserGateway:
         idempotency_key: str,
         *,
         heartbeat: Callable[[], None] | None = None,
+        timeout_s: float | None = None,
     ) -> tuple[dict[str, Any], uuid.UUID | None]:
         """Dispatch one ``browser.*`` command, opening the session first
         (no-op after the first call in this process, spec §5a). A single
@@ -537,14 +570,16 @@ class DeviceBrowserGateway:
         a fresh idempotency key (so the reopen is a real dispatch, not a
         replay of the stale terminal ack), and retries this SAME command
         exactly once with a distinct idempotency key of its own — never more
-        than one retry."""
+        than one retry. ``timeout_s`` shortens the gateway's own for this one
+        command (the engine walk's remaining budget)."""
+        timeout = self._timeout_s if timeout_s is None else timeout_s
         self.ensure_session()
         outcome = self._client.run(
             device_id=self._device_id,
             capability=capability,
             payload=payload,
             idempotency_key=idempotency_key,
-            timeout_s=self._timeout_s,
+            timeout_s=timeout,
             trace_id=self._trace_id,
             heartbeat=heartbeat,
         )
@@ -560,7 +595,7 @@ class DeviceBrowserGateway:
                 capability=capability,
                 payload=payload,
                 idempotency_key=f"{idempotency_key}:session-retry",
-                timeout_s=self._timeout_s,
+                timeout_s=timeout,
                 trace_id=self._trace_id,
                 heartbeat=heartbeat,
             )
@@ -606,12 +641,12 @@ class DeviceBrowserGateway:
         }
         if looks_turkish(query):
             payload["region"] = SEARCH_REGION_TURKISH
-        result, _command_id = self._run(
-            "browser.search",
-            payload,
-            f"{self._session_id}:search:{digest}",
-        )
-        self.last_search_evidence = SearchEvidence.from_result(query, result)
+        key = f"{self._session_id}:search:{digest}"
+        if engine is None and self._search_order:
+            result = self._search_in_order(query, payload, key)
+        else:
+            result, _command_id = self._run("browser.search", payload, key)
+            self.last_search_evidence = SearchEvidence.from_result(query, result)
         # A malformed hit is skipped with its reason, never fatal: one bad row in a provider's
         # result list must not lose the other nine (owner incident, 2026-09-04).
         hits: list[SearchHit] = []
@@ -640,6 +675,66 @@ class DeviceBrowserGateway:
             except ContractViolation as violation:
                 logger.warning("research_search_hit_skipped", **violation.as_dict())
         return hits
+
+    def _search_in_order(self, query: str, payload: dict[str, Any], key: str) -> dict[str, Any]:
+        """One ``browser.search`` per entry of the gateway's engine order until one answers
+        with results (a run on the cloud device, :data:`CLOUD_SEARCH_ORDER`).
+
+        The next engine is asked when this one's search was refused or failed, or answered
+        nothing. Every request is ``interstitial="fallback"``: the cloud browser is headless,
+        so there is no window to hand the owner and a handoff would only be waited out. The
+        session is opened once, before the walk - a browser that cannot open fails the same
+        way for every engine. The walk has a time budget (:data:`SEARCH_ORDER_BUDGET_S`).
+
+        The evidence says what was really tried: ``requested_provider`` is the first engine
+        of the order and ``attempts`` leads with the engines that did not answer. With no
+        answer at all the last refusal is raised, as a single search's would be.
+        """
+        self.ensure_session()
+        deadline = self._clock() + SEARCH_ORDER_BUDGET_S
+        earlier: list[dict[str, Any]] = []
+        answer: dict[str, Any] | None = None
+        asked = ""
+        error: BrowserDispatchError | None = None
+        for position, name in enumerate(self._search_order):
+            remaining = deadline - self._clock()
+            if position and remaining < SEARCH_ORDER_MIN_SLICE_S:
+                break
+            if answer is not None:  # the engine before this one answered nothing
+                earlier.extend(_attempts_of(answer, asked))
+                answer = None
+            asked = name
+            try:
+                answer, _command_id = self._run(
+                    "browser.search",
+                    {**payload, "engine": name, "interstitial": "fallback"},
+                    # The first request keeps the key a single search has; each further
+                    # engine is its own dispatch, not a replay of the one before it.
+                    key if position == 0 else f"{key}:{name}",
+                    timeout_s=min(self._timeout_s, remaining),
+                )
+            except BrowserDispatchError as exc:
+                error = exc
+                earlier.append(
+                    {"provider": name, "outcome": exc.error_class, "detail": exc.message}
+                )
+                continue
+            error = None
+            if answer.get("results"):
+                break
+        if answer is None:
+            raise error or BrowserDispatchError("internal_bug", "empty search order", False)
+        evidence = SearchEvidence.from_result(query, answer)
+        if earlier:
+            evidence = replace(
+                evidence,
+                requested_provider=self._search_order[0],
+                fallback=True,
+                fallback_reason=evidence.fallback_reason or str(earlier[0]["outcome"]),
+                attempts=(*earlier, *evidence.attempts),
+            )
+        self.last_search_evidence = evidence
+        return answer
 
     def await_verification(
         self,

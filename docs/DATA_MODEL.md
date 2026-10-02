@@ -141,7 +141,9 @@ sketch:
 ### memories
 
 - id
-- memory_class (preference | episodic | project | semantic | procedural | voice_preference)
+- memory_class (preference | episodic | project | semantic | procedural | voice_preference |
+  vocabulary - a synonym the owner taught by a correction, ADR-0247; migration 0064 widened the
+  CHECK constraint)
 - key nullable
 - text (canonical statement; what gets embedded)
 - value_json

@@ -126,6 +126,23 @@ def _reset_route_telemetry():
     reset_telemetry()
 
 
+@pytest.fixture(autouse=True)
+def _correlation_ids_do_not_leak_between_tests():
+    """``app.logging``'s ``task_id_var`` / ``trace_id_var`` are context variables that product
+    code SETS and never resets (an activity runs in its own task, so nothing leaks there). A
+    test that calls such a function directly, in the test's own context, leaves the id behind
+    for every later test of the process: measured 2026-10-02, when the full gate was red on
+    ``test_task_id_defaults_to_none_in_logs`` - green alone, red after
+    ``test_execution_call_site_research.py``, a file merged that day. Nobody's own run of
+    their own area could have seen it. Every test starts and ends with both unset."""
+    from app.logging import task_id_var, trace_id_var
+
+    tokens = (task_id_var.set(None), trace_id_var.set(None))
+    yield
+    task_id_var.reset(tokens[0])
+    trace_id_var.reset(tokens[1])
+
+
 @pytest.fixture()
 def owner_auth() -> Callable[..., object]:
     """M9: `owner_auth(app, client)` bootstraps identity and authenticates.
