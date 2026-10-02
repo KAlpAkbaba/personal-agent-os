@@ -20,6 +20,15 @@ Decision:
    commits ledger rows and a probe is not a run. One parametrized test holds probe == run.
 4. The ledger rows are the record, not the decision (`ledger_required=False`, as the research
    start): a ledger that will not write is logged and the action is still sent.
+5. **Behind a setting, OFF by default** (lead ruling 2026-10-03):
+   `routines_execution_rule_enabled: bool = False` (`PAGENTOS_ROUTINES_EXECUTION_RULE_ENABLED`),
+   read by `ActionDispatcher._browser_action` at each firing. OFF: the dispatcher calls the
+   plain port exactly as main does (`self._device_action.run(...)`, same arguments) - the
+   machine `_select_for` picks, and the rule writes no row, not even a probe's. ON: points 1-4.
+   No compose line: turning it on is its own owner decision, after the cloud worker can keep a
+   session across firings (next section). Tests through the object `create_app` builds (the
+   routine dispatcher over `app.state.device_action`), off and on, unit and dev-stack
+   PostgreSQL. `get_settings` is `lru_cache`d: the value is the process's at start.
 
 **Where the build departs from the card - the lead decides each.**
 - **The card put the check in `_select_for` for every caller, by capability. Not built that way.**
@@ -35,16 +44,20 @@ Decision:
   `media_playback` routine would fail for ever. If the owner wants row 1 to cover it, it is one
   line (`_media_playback` takes the same view) and the feature is then dead until a cloud audio
   path exists. OPEN - an owner/lead decision.
-- **"A deny-listed url -> refused deny_listed_site" is not what the rule answers, and is not built.**
-  ADR-0213's table: "acting on a deny-listed site -> refused; reading is not refused"; the addendum
-  and `wiring.choose` force `acting=False` for every scheduled job;
-  `test_execution_wiring.py::test_the_routine_adapter_is_read_only_and_cloud_only` (outside the area)
-  asserts a deny-listed url is SELECTED cloud. Built: the mapping (a refusal the rule RETURNS -
-  deny-list, payment, ask_owner - is the same failed result with its reason, never sent), tested
-  with a stubbed decision; and a test that pins the real answer (selected cloud). Refusing scheduled
-  reads of deny-listed sites is a change to the rule (`app/execution/`, outside the area).
+- **Deny-listed site: the rule's own answer is the cloud, and a routine inherits it** (the card's
+  acceptance line "a deny-listed url -> refused deny_listed_site" is WITHDRAWN by the lead,
+  2026-10-03). The deny-list is the machines' allow-list concern, not the cloud's: ADR-0213's
+  table says "acting on a deny-listed site -> refused; reading is not refused", and the addendum
+  and `wiring.choose` force `acting=False` for every scheduled job, so
+  `test_execution_wiring.py::test_the_routine_adapter_is_read_only_and_cloud_only` (outside the
+  area) asserts a deny-listed url is SELECTED cloud. A scheduled routine reading a deny-listed
+  site is therefore sent to the cloud worker (no owner session there; READ+NAVIGATE policy).
+  Built: the mapping (a refusal the rule RETURNS - payment, ask_owner, or a future deny-list
+  refusal - is the same failed result with its reason, never sent), tested with a stubbed
+  decision, and a test pinning the real answer (selected cloud). Whether scheduled reads of such
+  sites should be refused is a rule question the lead cards separately (`app/execution/`).
 
-Consequences (not softened):
+Consequences (not softened; every one below holds with the setting ON - OFF, nothing changes):
 - A scheduled browser action runs in the cloud or fails. Cloud offline, revoked, not advertising
   the operation or denied it by policy -> `no_capable_device`, with a machine online and able.
 - A routine that names a machine for a browser action is refused (`forced_target_not_allowed`),
@@ -68,9 +81,13 @@ Consequences (not softened):
   ledger row says target=cloud") is not sufficient: PROVEN_REAL needs that row AND a succeeded
   command result from the cloud device for the same firing. Until a routine can open a cloud
   session (one action = one operation today), the only `browser_action` that can succeed there
-  is `session_open` itself. Before release: count production routines whose action kind is
-  `browser_action` - each one that works today through a machine's session stops working.
-- No setting guards this (the research call site has one, ADR-0248). With the cloud worker's
-  image not rebuilt, every routine `browser_action` fails `no_capable_device` from the release on.
-  If the lead wants the research order (image first), a setting is the lead's to add: `config.py`
-  is outside the area.
+  is `session_open` itself. Before turning the setting on: count production routines whose
+  action kind is `browser_action` - each one that works today through a machine's session stops
+  working.
+- Whether production's cloud worker advertises `browser.navigate` today is UNVERIFIED (the last
+  host snapshot predates the 2026-10-02 release and holds no device capabilities). If it does
+  not, every routine `browser_action` fails `no_capable_device` with the setting on.
+- **READY_FOR_OWNER, not part of the merge:** the first production evidence needs the setting
+  ON (an owner decision, after the cloud worker keeps a session across firings) and is a firing
+  whose ledger row says `execution.selected target=cloud` AND whose cloud device command
+  succeeded. The merge itself changes nothing in production (the setting is off).

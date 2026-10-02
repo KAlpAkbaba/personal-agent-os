@@ -19,6 +19,8 @@ import uuid
 import pytest
 from sqlalchemy import create_engine
 
+from app import main as main_mod
+from app.config import Settings
 from app.devices.commands import CommandSucceeded
 from app.execution.rule import Decision, JobKind, Target
 from app.ledger.models import ActivityEventRow
@@ -41,6 +43,7 @@ PUBLIC = "https://example.com/haber"
 DENIED = "https://www.turkiye.gov.tr/giris"
 MACHINE_CAPS = ["browser.chrome", CAPABILITY_APP_LAUNCH, CAPABILITY_DESKTOP_ALARM_START]
 FIRING = uuid.uuid4()
+RULE_VARIABLE = "PAGENTOS_ROUTINES_EXECUTION_RULE_ENABLED"
 
 
 class _Briefing:
@@ -89,6 +92,18 @@ class Stage:
         return self.registry.ledger()
 
 
+def rule(monkeypatch, value: str | None) -> None:
+    """What the dispatcher reads for ``routines_execution_rule_enabled``: the variable as
+    the process environment holds it (``None``: unset, the setting's own default).
+    ``get_settings`` is cached per process, so the dispatcher's reference is replaced."""
+    if value is None:
+        monkeypatch.delenv(RULE_VARIABLE, raising=False)
+    else:
+        monkeypatch.setenv(RULE_VARIABLE, value)
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr(dispatch_mod, "get_settings", lambda: settings)
+
+
 @pytest.fixture()
 def stage(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path / f'routine_target_{uuid.uuid4().hex}.db'}"
@@ -98,6 +113,9 @@ def stage(tmp_path, monkeypatch):
     bootstrap.dispose()
     registry = Registry(url)
     monkeypatch.setattr(dispatch_mod, "get_broker_runtime", lambda: registry.broker)
+    # The dispatcher's call site is behind a setting that is off by default; these tests are
+    # the rule ON unless they say otherwise (the "off switch" section).
+    rule(monkeypatch, "true")
     try:
         yield Stage(registry)
     finally:
@@ -364,6 +382,7 @@ def test_a_ledger_that_cannot_be_written_does_not_stop_the_action(tmp_path, monk
     bootstrap.dispose()
     registry = Registry(url)
     monkeypatch.setattr(dispatch_mod, "get_broker_runtime", lambda: registry.broker)
+    rule(monkeypatch, "true")
     try:
         stage = Stage(registry)
         cloud = stage.cloud()
@@ -437,3 +456,118 @@ def test_a_port_that_has_no_scheduled_view_is_used_as_it_is() -> None:
         action={"kind": "browser_action", "detail": {"action": "navigate", "url": PUBLIC}},
     )
     assert outcome.ok is True and plain.calls == [CAPABILITY_BROWSER_NAVIGATE]
+
+
+# ------------------------------------------------- the off switch (lead, 2026-10-03)
+#
+# ``routines_execution_rule_enabled`` is OFF by default: a routine's browser action keeps
+# the device main gives it (``_select_for``, the healthiest machine) and the rule writes no
+# row. A routine ``browser_action`` today runs in a session opened on that machine; on the
+# cloud worker every operation but ``session_open`` needs a session opened THERE, so the
+# rule is turned on as its own owner step (the ADR), never by a release.
+
+
+def _real_routine_dispatcher(monkeypatch, stage: Stage) -> tuple[ActionDispatcher, object]:
+    """The routine dispatcher ``create_app`` itself builds, over the very port it puts on
+    ``app.state``; only that port's database and command client are this test's."""
+    built: list[ActionDispatcher] = []
+
+    class Capturing(ActionDispatcher):
+        def __init__(self, *a, **kw) -> None:
+            super().__init__(*a, **kw)
+            built.append(self)
+
+    monkeypatch.setattr(main_mod, "ActionDispatcher", Capturing)
+    app = main_mod.create_app(Settings(_env_file=None))
+    port = app.state.device_action
+    assert type(port) is BrokerDeviceAction
+    mine = [d for d in built if d._device_action is port]
+    assert mine, "create_app built no routine dispatcher over app.state.device_action"
+    port._session_factory = stage.registry.factory
+    port._command_client = stage.commands
+    return mine[0], port
+
+
+def _navigate(dispatcher: ActionDispatcher):
+    return dispatcher.dispatch(
+        routine_id=uuid.uuid4(),
+        firing_id=FIRING,
+        action={"kind": "browser_action", "detail": {"action": "navigate", "url": PUBLIC}},
+    )
+
+
+def test_the_setting_is_off_by_default() -> None:
+    assert Settings(_env_file=None).routines_execution_rule_enabled is False
+    assert RULE_VARIABLE == "PAGENTOS_" + "routines_execution_rule_enabled".upper()
+
+
+def test_off_the_real_apps_routine_browser_action_goes_where_main_sends_it(
+    stage, monkeypatch
+) -> None:
+    """Main's choice, captured: the healthiest machine (``_select_for``) over the plain
+    port - and not one execution row, not even a probe's."""
+    rule(monkeypatch, None)
+    dispatcher, port = _real_routine_dispatcher(monkeypatch, stage)
+    mail = stage.mail()  # seen a second ago: health order takes IT
+    stage.cloud()  # online, advertises browser.navigate: the rule WOULD take it
+
+    def never(*_a, **_kw):
+        raise AssertionError("the rule was asked with the setting off")
+
+    monkeypatch.setattr(dispatch_mod, "select_routine_device", never)
+    monkeypatch.setattr(dispatch_mod, "probe_routine_device", never)
+
+    outcome = _navigate(dispatcher)
+
+    assert outcome.ok is True
+    assert stage.sent() == [(mail, CAPABILITY_BROWSER_NAVIGATE)]
+    assert stage.ledger() == []
+    # Exactly what the plain port (main's call) picks for the same capability.
+    assert port.selection_for(CAPABILITY_BROWSER_NAVIGATE).device.id == mail
+
+
+@pytest.mark.parametrize("value", ["false", "0"])
+def test_off_said_explicitly_is_off_too(stage, monkeypatch, value) -> None:
+    rule(monkeypatch, value)
+    mail = stage.mail()
+    stage.cloud()
+
+    assert stage.browser_action("navigate").ok is True
+    assert stage.sent() == [(mail, CAPABILITY_BROWSER_NAVIGATE)]
+    assert stage.ledger() == []
+
+
+def test_off_with_the_cloud_down_the_machine_still_runs_it_as_on_main(stage, monkeypatch) -> None:
+    rule(monkeypatch, None)
+    stage.cloud(online=False)
+    mail = stage.mail()
+
+    assert stage.browser_action("navigate").ok is True
+    assert stage.sent() == [(mail, CAPABILITY_BROWSER_NAVIGATE)]
+    assert stage.ledger() == []
+
+
+def test_on_the_real_apps_routine_browser_action_goes_to_the_cloud(stage, monkeypatch) -> None:
+    dispatcher, _port = _real_routine_dispatcher(monkeypatch, stage)
+    stage.mail()
+    cloud = stage.cloud()
+
+    outcome = _navigate(dispatcher)
+
+    assert outcome.ok is True
+    assert stage.sent() == [(cloud, CAPABILITY_BROWSER_NAVIGATE)]
+    assert [(t, d["target"]) for t, d in stage.ledger()] == [("execution.selected", "cloud")]
+
+
+def test_on_the_real_apps_routine_browser_action_with_the_cloud_down_is_refused(
+    stage, monkeypatch
+) -> None:
+    dispatcher, _port = _real_routine_dispatcher(monkeypatch, stage)
+    stage.cloud(online=False)
+    stage.mail()
+
+    outcome = _navigate(dispatcher)
+
+    assert stage.sent() == [] and outcome.ok is False
+    assert outcome.detail == {"error_class": "no_capable_device"}
+    assert [t for t, _ in stage.ledger()] == ["execution.fallback", "execution.refused"]

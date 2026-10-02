@@ -20,6 +20,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import delete, func, select
 
+from app import main as main_mod
 from app.broker.models import DEVICE_STATUS_ENROLLED, Device
 from app.config import Settings
 from app.db import build_engine, build_session_factory
@@ -34,6 +35,7 @@ from tests.unit.test_execution_call_site_research import CLOUD_CAPS
 pytestmark = pytest.mark.integration
 
 URL = "https://example.com/haber"
+RULE_VARIABLE = "PAGENTOS_ROUTINES_EXECUTION_RULE_ENABLED"
 
 
 class FakeBroker:
@@ -120,6 +122,18 @@ class Stack:
             db.commit()
 
 
+def rule(monkeypatch, value: str | None) -> None:
+    """What the dispatcher reads for ``routines_execution_rule_enabled`` (``None``: unset,
+    the setting's own default), on the dev stack's settings otherwise. ``get_settings`` is
+    cached per process, so the dispatcher's reference is replaced."""
+    if value is None:
+        monkeypatch.delenv(RULE_VARIABLE, raising=False)
+    else:
+        monkeypatch.setenv(RULE_VARIABLE, value)
+    settings = Settings()
+    monkeypatch.setattr(dispatch_mod, "get_settings", lambda: settings)
+
+
 @pytest.fixture()
 def stack(monkeypatch) -> Iterator[Stack]:
     engine = build_engine(Settings().database_url)
@@ -133,6 +147,9 @@ def stack(monkeypatch) -> Iterator[Stack]:
 
     monkeypatch.setattr(ledger_service, "record", noting)
     monkeypatch.setattr(dispatch_mod, "get_broker_runtime", lambda: s.broker)
+    # The call site is behind a setting that is off by default; these tests are the rule ON
+    # unless they say otherwise.
+    rule(monkeypatch, "true")
     try:
         yield s
     finally:
@@ -182,3 +199,72 @@ def test_with_the_cloud_down_nothing_is_sent_and_postgres_holds_the_refusal(
     )
     assert ledger[1].detail_json["reason"] == "no_target_available"
     assert ledger[1].status == "failed"
+
+
+# ------------------------------------- the real application object, the setting off and on
+
+
+@pytest.fixture()
+def real_app(stack: Stack, monkeypatch) -> Iterator[ActionDispatcher]:
+    """The routine dispatcher ``create_app`` builds, over the port it puts on ``app.state``
+    and that port's OWN session factory (the dev stack's PostgreSQL): only the command
+    client is this test's."""
+    built: list[ActionDispatcher] = []
+
+    class Capturing(ActionDispatcher):
+        def __init__(self, *a, **kw) -> None:
+            super().__init__(*a, **kw)
+            built.append(self)
+
+    monkeypatch.setattr(main_mod, "ActionDispatcher", Capturing)
+    app = main_mod.create_app(Settings())
+    port = app.state.device_action
+    assert type(port) is BrokerDeviceAction
+    mine = [d for d in built if d._device_action is port]
+    assert mine, "create_app built no routine dispatcher over app.state.device_action"
+    port._command_client = stack.commands
+    try:
+        yield mine[0]
+    finally:
+        port._session_factory.kw["bind"].dispose()
+
+
+def _navigate(dispatcher: ActionDispatcher):
+    return dispatcher.dispatch(
+        routine_id=uuid.uuid4(),
+        firing_id=uuid.uuid4(),
+        action={"kind": "browser_action", "detail": {"action": "navigate", "url": URL}},
+    )
+
+
+def test_off_the_real_app_sends_it_where_main_does_and_postgres_holds_no_row(
+    stack: Stack, real_app: ActionDispatcher, monkeypatch
+) -> None:
+    rule(monkeypatch, None)
+    mail = stack.enroll("MAIL", platform="windows", online=True, seen_s_ago=1.0)
+    stack.enroll("bulut", platform="cloud", online=True, seen_s_ago=300.0)
+
+    outcome = _navigate(real_app)
+
+    assert outcome.ok is True
+    assert [(c.device_id, c.capability) for c in stack.commands.calls] == [
+        (mail, "browser.navigate")
+    ]
+    assert stack.ledger_refs == [] and stack.ledger() == []
+
+
+def test_on_the_real_app_sends_it_to_the_cloud_and_postgres_holds_the_row(
+    stack: Stack, real_app: ActionDispatcher
+) -> None:
+    stack.enroll("MAIL", platform="windows", online=True, seen_s_ago=1.0)
+    cloud = stack.enroll("bulut", platform="cloud", online=True, seen_s_ago=300.0)
+
+    outcome = _navigate(real_app)
+
+    assert outcome.ok is True
+    assert [(c.device_id, c.capability) for c in stack.commands.calls] == [
+        (cloud, "browser.navigate")
+    ]
+    assert [(r.event_type, r.detail_json["target"]) for r in stack.ledger()] == [
+        ("execution.selected", "cloud")
+    ]

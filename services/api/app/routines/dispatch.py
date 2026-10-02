@@ -29,10 +29,11 @@ capability that does not exist on the device side yet:
   have rung anything.
 * ``media_playback`` — executes end to end against any device that advertises the
   ``browser.chrome`` family (already real and qualified, M13).
-* ``browser_action`` — runs where the execution_target rule says a scheduled job runs
-  (ADR-0213 row 1): on the cloud worker, or nowhere. It is sent through the port's
-  ``scheduled()`` view; with the cloud down it fails as ``no_capable_device`` and is never
-  sent to a home or office machine.
+* ``browser_action`` — with ``routines_execution_rule_enabled`` on, runs where the
+  execution_target rule says a scheduled job runs (ADR-0213 row 1): on the cloud worker, or
+  nowhere. It is sent through the port's ``scheduled()`` view; with the cloud down it fails
+  as ``no_capable_device`` and is never sent to a home or office machine. Off (the
+  default) it executes like ``media_playback``, on the device the port picks.
 * ``display_action`` — refused, always, on purpose (see ``DISPLAY_ACTION_QUALIFIED`` below).
   This is not "not implemented yet"; it is "built but deliberately unreachable" until its
   own separate owner qualification exists (M18 spec §4, §7's last line).
@@ -52,6 +53,7 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import get_settings
 from app.devices.commands import (
     CommandExpired,
     CommandFailed,
@@ -986,11 +988,15 @@ class ActionDispatcher:
         if action_name not in self._browser_allowlist:
             return DispatchOutcome.refused(f"browser_action_not_allowed:{action_name}")
         payload = {k: v for k, v in detail.items() if k != "action"}
-        # A routine's browser action is a scheduled job: it asks the execution_target rule
-        # (ADR-0213 row 1) through the port's scheduled view. A port with no such view (a
-        # test's fake) is used as it is.
+        # A routine's browser action is a scheduled job: with the setting on it asks the
+        # execution_target rule (ADR-0213 row 1) through the port's scheduled view. Off (the
+        # default) - and for a port with no such view (a test's fake) - the port is used as
+        # it is: main's choice, no ledger row.
         scheduled = getattr(self._device_action, "scheduled", None)
-        port: DeviceActionPort = scheduled() if callable(scheduled) else self._device_action
+        rule_enabled = get_settings().routines_execution_rule_enabled
+        port: DeviceActionPort = (
+            scheduled() if rule_enabled and callable(scheduled) else self._device_action
+        )
         result = port.run(
             capability=f"browser.{action_name}",
             payload=payload,
