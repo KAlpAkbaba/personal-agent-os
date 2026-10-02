@@ -28,6 +28,13 @@ more than two minutes ahead of the clock (skew) is not live either.
 
 A status is live only while its ``updated_at`` is under ten minutes old AND the lock is held
 (not stale) by the cycle that wrote it; otherwise ``running`` is false and no seat works.
+
+The model policy (ADR-0214 addendum 7): every seat carries ``model``, the model its role is set
+to (the owner seat: none), and ``running_model`` only while a live run of the seat is on another
+one (lowered by the chain, or raised to the inspector's floor); a run entry carries ``model``
+when the status named one. ``cycle.limits`` is the status' ``limits`` - ``ok`` with null
+percentages when no status gave any: nobody computes a percentage here - and ``models`` is the
+setting document itself.
 """
 
 from __future__ import annotations
@@ -35,9 +42,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from app.team import models_setting
 from app.team import store as team_store
 
 CAPACITY = 6
+LOWERED_MAX = 20  # limits.lowered: this cycle's downgrades, newest last
 STATUS_STALE_MINUTES = 10
 STATUS_FUTURE_SKEW_MINUTES = 2  # a clock a little ahead is fine; further ahead is not "live"
 SUMMARY_MAX_LINES = 40  # queue.schema.json: report.summary maxItems
@@ -52,6 +61,34 @@ def _usage_limit(status: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(raw, dict) and raw.get("state") in ("ok", "waiting", "stopped"):
         return {"state": raw["state"], "resets_at": raw.get("resets_at")}
     return {"state": "ok", "resets_at": None}
+
+
+def _limit_window(raw: Any, now: datetime) -> dict[str, Any]:
+    clear = {"state": "ok", "resets_at": None, "used_pct": None}
+    if not isinstance(raw, dict) or raw.get("state") not in ("ok", "limited"):
+        return clear
+    resets_at = raw.get("resets_at") if isinstance(raw.get("resets_at"), str) else None
+    lifted = team_store._parse(resets_at) if resets_at else None
+    if lifted is not None and lifted <= now:
+        # The cycle that wrote it may be gone: a limit whose reset has passed is not a limit,
+        # and the number measured before the reset is not this window's.
+        return clear
+    used = raw.get("used_pct")
+    known = isinstance(used, (int, float)) and not isinstance(used, bool)
+    return {"state": raw["state"], "resets_at": resets_at, "used_pct": used if known else None}
+
+
+def _limits(status: dict[str, Any] | None, setting: dict[str, Any], now: datetime) -> dict:
+    raw = (status or {}).get("limits")
+    raw = raw if isinstance(raw, dict) else {}
+    lowered = raw.get("lowered") if isinstance(raw.get("lowered"), list) else []
+    fallback = raw.get("fallback")
+    return {
+        "fable": _limit_window(raw.get("fable"), now),
+        "all": _limit_window(raw.get("all"), now),
+        "fallback": fallback if isinstance(fallback, bool) else setting["fallback"],
+        "lowered": [entry for entry in lowered if isinstance(entry, dict)][-LOWERED_MAX:],
+    }
 
 
 def _is_live(lock: dict[str, Any] | None, status: dict[str, Any] | None, now: datetime) -> bool:
@@ -122,14 +159,27 @@ def _working_seat(seat: str, role: str, runs: list[dict], by_id: dict[str, dict]
     listed = []
     for run in runs:
         task = by_id.get(str(run.get("task")), {})
-        listed.append(
-            {
-                "task_id": task.get("id", run.get("task")),
-                "task_title": task.get("title"),
-                "since": run.get("started_at"),
-            }
-        )
+        entry = {
+            "task_id": task.get("id", run.get("task")),
+            "task_title": task.get("title"),
+            "since": run.get("started_at"),
+        }
+        if isinstance(run.get("model"), str) and run["model"]:
+            entry["model"] = run["model"]  # a cycle older than the policy names none
+        listed.append(entry)
     return {"seat": seat, "role": role, "state": "working", **listed[0], "runs": listed}
+
+
+def _with_models(agent: dict[str, Any], roles: dict[str, str]) -> dict[str, Any]:
+    """The seat with the model its role is set to, and the other model a live run is on."""
+    configured = roles.get(agent["role"])
+    agent["model"] = configured
+    other = next(
+        (r["model"] for r in agent["runs"] if r.get("model", configured) != configured), None
+    )
+    if other is not None:
+        agent["running_model"] = other
+    return agent
 
 
 def office_view(
@@ -138,7 +188,11 @@ def office_view(
     status: dict[str, Any] | None,
     approvals: list[dict[str, Any]],
     now: datetime,
+    *,
+    models: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """``models`` is the setting in force (``models_setting.effective``); the defaults without."""
+    setting = models if models is not None else models_setting.defaults(team_store.stamp(now))
     tasks = [t for t in queue.get("tasks", []) if isinstance(t, dict)]
     by_id = {str(t.get("id")): t for t in tasks}
     live = _is_live(lock, status, now)
@@ -193,9 +247,11 @@ def office_view(
             "capacity": max(CAPACITY, running_agents),
             "estimated_usd": document.get("estimated_usd") or 0,
             "usage_limit": _usage_limit(status),
+            "limits": _limits(status, setting, now),
             "updated_at": document.get("updated_at"),
         },
-        "agents": agents,
+        "agents": [_with_models(agent, setting["roles"]) for agent in agents],
+        "models": setting,
         "tasks": {
             str(t["id"]): {
                 "title": t.get("title", ""),
