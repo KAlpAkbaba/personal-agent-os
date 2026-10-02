@@ -35,6 +35,15 @@ tam `team-cycle` + `team-feed` + strictmode + syntax + `test_team_state` → com
 lead dalına merge → `team/stop.flag` ile döngüyü yenile (yeni kod ancak yeni süreçte çalışır) → dördüncü entegrasyonda
 main'e. `cycle-seat-pool` kartı bu dalın üstüne yazılacak şekilde güncellendi: DÜZELTME LEAD DALINA GİRMEDEN O KART
 BAŞLAMAMALI (şu an koşan döngü eski kuyruğu gördüğü için başlatmıyor; döngüyü düzeltmeden önce yenileme).**
+**DÖRDÜNCÜ ENTEGRASYON KAPIDA (lead, 2026-10-02 05:50): dal `gate/d20261002-1` (worktree `.claude/worktrees/gate4`) =
+lead + `integrate/d20261002` @ `03981422` (office-worker-seats: 4 çalışan koltuğu, sayı koşuyu sayar; stt-engines-measure:
+STT karşılaştırma aracı, ölçülecek kayıt YOK) + postgres-coverage-debt (denetleyici ONAYLADI; hüküm satırı okunamadığı
+için döngü durdurmuştu) + narrative-failures-only-model ("tesisat" olarak; sahibin cümlesi DEĞİŞMEZ). Lead bağlaması:
+`app/team/speech.py` sesli özet artık sayfanın saydığını (koşu) söyler; `Get-TeamVerdict` kapanış cümlesindeki hükmü
+okur ve `inspector.md` "son mesajın hükümle bitsin" der (ADR-0214 ek 12); ADR-0241…0244. SIRA: tam kapı (ana kopya
+detached) → yeşilse main `--no-ff` → kural gereği yayın (migration/compose YOK) → pin → doğrula → işleri `released`
+yap → ana kopyayı lead'e al. Döngü düzeltmesi (`lead/cycle-rereads-queue`) bu entegrasyonda YOK: yayın gerektirmez,
+denetleyici onaylayınca lead dalına girer ve döngü `team/stop.flag` ile yenilenir.**
 **DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
 execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
 denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:

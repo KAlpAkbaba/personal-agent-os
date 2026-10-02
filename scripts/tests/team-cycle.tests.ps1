@@ -407,6 +407,15 @@ $verdicts = @(
     @{ Text = "Verdict: APPROVE"; Verdict = "APPROVE"; Detail = "" },
     @{ Text = "**Verdict: APPROVE**"; Verdict = "APPROVE"; Detail = "" },
     @{ Text = "The verdict could be APPROVE"; Verdict = "NONE"; Detail = "" },
+    # 2026-10-02: an inspector that had left a command running was woken after its report, and
+    # its LAST message - all the cycle reads - was one sentence. An approved task was stopped.
+    @{ Text = "That notification is only the last waiter loop exiting; the report above stands unchanged and the verdict remains ``APPROVE``."; Verdict = "APPROVE"; Detail = "" },
+    @{ Text = "Nothing new. The verdict is ``RETURN (1: add the test; 2: fix the ADR)``."; Verdict = "RETURN"; Detail = "1: add the test; 2: fix the ADR" },
+    @{ Text = "The verdict stands: ``REJECT (it writes outside its area)``"; Verdict = "REJECT"; Detail = "it writes outside its area" },
+    @{ Text = "Hüküm değişmedi: ``APPROVE``."; Verdict = "APPROVE"; Detail = "" },
+    @{ Text = "The verdict could be ``APPROVE`` if the test is added."; Verdict = "NONE"; Detail = "" },
+    @{ Text = "The verdict remains APPROVE."; Verdict = "NONE"; Detail = "" },
+    @{ Text = "the worker wrote that the verdict is ``APPROVE``, which I do not share"; Verdict = "NONE"; Detail = "" },
     @{ Text = "I cannot APPROVE this."; Verdict = "NONE"; Detail = "" },
     @{ Text = "approve"; Verdict = "NONE"; Detail = "" },
     @{ Text = "APPROVED_BY nobody"; Verdict = "NONE"; Detail = "" },

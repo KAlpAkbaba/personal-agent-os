@@ -512,6 +512,15 @@ function Get-TeamVerdict {
             $verdict = $Matches[1]
             $detail = $Matches[2].Trim()
         }
+        # A closing SENTENCE that restates the verdict: an inspector woken after its report (a
+        # command it left running reported back) ends on one, and the last message is all the
+        # cycle reads. Only this shape: "... verdict is / remains / stands [unchanged][:] `X`"
+        # (hüküm / karar değişmedi / aynı / geçerli) with the verdict in backticks and NOTHING
+        # after it but a full stop - not "could be", not a quotation of somebody else's verdict.
+        elseif ($line -cmatch '(?i:\b(?:verdict|karar|hüküm)\s+(?:is|remains|stands|stays|değişmedi|aynı|geçerli)(?:\s+unchanged)?)\s*:?\s*`(APPROVE|RETURN|REJECT)\b\s*[:(-]?\s*([^`]*?)\)?\s*`\s*\.?\s*$') {
+            $verdict = $Matches[1]
+            $detail = $Matches[2].Trim()
+        }
     }
     return [pscustomobject]@{ Verdict = $verdict; Detail = $detail }
 }
