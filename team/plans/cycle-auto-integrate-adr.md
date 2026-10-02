@@ -243,6 +243,16 @@ production, the recovery supervisor or the last-known-good record (a test reads 
       cannot create the file).
     - Rules (b) and (c) are unchanged and still hold what no job can (a WMI-started writer): the
       three cases of round five are unedited.
+    - **Evidence of this round.** The three new cases were RED on the old code with the seam
+      between its two lines, and are RED again under two mutations (the command resumed before
+      the assignment: both held cases; a failed assignment ignored: the refusal case). The case
+      that failed at the merge ran 30 times beside three other suites in a loop (and, for most
+      of it, the whole of this suite and other workers' suites): 30 of 30 green. The real
+      `claude.exe` (`--version` only) starts suspended, is in its job before it runs, and its
+      pipes and exit code are read: PROVEN_PROXY for the start; a real wiring run through the
+      new start has NOT been run by this task.
+    - Not closed here: the job has no kill-on-close limit, so a step that is itself killed
+      mid-run leaves the lead's run going (as before this round).
 
 ## Open decisions for the lead (not built by this task)
 
