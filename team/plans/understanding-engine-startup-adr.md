@@ -38,8 +38,9 @@ therefore ran the rule tables, layer 1 and the policy over the RULE candidate al
   `policy.configured_engine()` already reads as "rule tables and layer 1 decide" - no new state in
   the policy. A build that fails logs `understanding_engine_not_configured` (reason: the exception
   type) and leaves it so. Success logs `understanding_engine_configured` (exemplars, build_ms).
-  Measured on the home PC with the real `LocalEmbedder` (potion-multilingual-128M): build 414-427 ms
-  for 1427 exemplars, return 0.5 ms, 7-8 ms per sentence afterwards. That is under the card's two
+  Measured on the home PC with the real `LocalEmbedder` (potion-multilingual-128M), two sessions
+  (2026-10-01 and 2026-10-02, the second beside a running corpus suite): build 299-427 ms for 1427
+  exemplars, return 0.5 ms, 7-8 ms per sentence afterwards. That is under the card's two
   seconds, but the Cloud Core's CPU is not this one and a thread costs nothing, so it is not
   conditional.
 - **No new field on `/v1/system/health`.** The `memory` check already publishes the embedder's
