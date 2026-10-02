@@ -67,6 +67,13 @@ compose satırı da YOK (aynı soru sahibe soruldu). SIRA: birinci entegrasyonun
 ana kopyada detached aç → tam kapı → main → yayın (0064 expand-only: kural gereği sormadan). İLK KAPI (`786dec9d`) TEK TESTTE KIRMIZIYDI:
 `test_task_id_defaults_to_none_in_logs` - `test_execution_call_site_research.py` görev kimliğini sonraki testlere sızdırıyordu
 (sıra bağımlı; tek başına yeşil). `tests/conftest.py`'ye autouse fixture eklendi; kapı yeniden koşuyor.**
+**ÜÇÜNCÜ ENTEGRASYON HAZIR (lead, 2026-10-02 13:50): dal `gate/d20261002-3` (worktree `.claude/worktrees/gate6`) = ikinci
+entegrasyon + İKİ COMPOSE DEĞİŞİKLİĞİ, sahip 2026-10-02 13:38'de İKİSİNİ DE ONAYLADI (sohbetten, dört sorunun dördü):
+(1) `temporal-init-reaper` (`init: true`, ADR-0252) - yayından SONRA host'ta tek adım: önce salt-okuma `docker info
+--format '{{.InitBinary}}'`, sonra `compose up -d --no-deps --wait temporal` (Temporal ~10 sn kapanır), doğrula, yeni
+host snapshot; (2) `PAGENTOS_RESEARCH_EXECUTION_RULE_ENABLED` compose satırı (ADR-0248 ek 1; ayar KAPALI kalır).
+Sahip ayrıca iki fikri onayladı (koruyucu testler iş dalında, ölçüm kaydı) - kuyruğa `approved` işlendi.
+SIRA: ikinci entegrasyonun kapısı yeşil → main → yayın → bu dalı kapıya sok → main → yayın → Temporal adımı.**
 **DÖNGÜ: `d20261002` 02:30'da başladı, 6 çalışan koştu (office-worker-seats dahil). Durdurulan üç iş (cycle-auto-integrate,
 execution-call-site-research [alan genişletildi: `services/browser/browser_agent/cloud/policy.py`], postgres-coverage-debt)
 denetleyici bulgularıyla `returned` (returns 1) olarak yeniden açıldı. `narrative-failures-only-model` DURDU ve lead'de:
